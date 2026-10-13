@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { bestLabel } from './command-groups.js';
 import { agentBudget, decideAction, desktopReserve, nudgeNote, stopNote } from './resource-guard.js';
-import { parsePs, parseVmStat, parseWindowsProcesses, processProbe, tableInventory, type TableEntry, type Unit } from './resource-probes.js';
+import { parsePs, parseVmStat, parseWindowsProcesses, processProbe, tableInventory, workerPidFromEnv, type TableEntry, type Unit } from './resource-probes.js';
 
 const GIB = 2 ** 30;
 const entry = (pid: number, ppid: number, size: number, exe: string, command: string): TableEntry => ({ pid, ppid, bytes: size * GIB, exe, command });
@@ -40,7 +41,8 @@ describe('resource guard', () => {
       expect(stopNote(over, 2, action.unit)).toContain('do not rerun');
     }
     const sleepOnly = tableInventory(processes.filter((item) => ![102, 103, 104].includes(item.pid)));
-    expect(decideAction(over, sleepOnly)).toMatchObject({ kind: 'nudge', worker: 200 });
+    expect(decideAction(over, sleepOnly)).toEqual({ kind: 'nudge', worker: 200 });
+    expect(nudgeNote(over, 2)).not.toContain('sleep');
     expect(nudgeNote(over, 2, sleepOnly.units[0])).toContain('Prefer targeted tests');
     const agentOnly = tableInventory(processes.filter((item) => [100, 101, 200, 201].includes(item.pid)));
     expect(decideAction(over, agentOnly)).toEqual({ kind: 'nudge', worker: 100 });
@@ -82,6 +84,22 @@ describe('resource guard', () => {
     expect(decideAction(macBudget, macInventory)).toMatchObject({ kind: 'stop', worker: 100 });
     expect(await macProbe.stop(macUnit.target)).toBe(true);
     expect(stopped).toBe(2);
+  });
+
+  it('stops a tagged scope the guard can see, and reads only the shim tag', () => {
+    expect(workerPidFromEnv('HOME=/\0CLIKCODE_WORKER_PID=42\0PATH=/bin')).toBe(42);
+    expect(workerPidFromEnv('CLIKCODE_WORKER_PID=nope')).toBeUndefined();
+    const scope: Unit = { kind: 'command', target: { cgroup: '/run' }, label: 'vitest run', freeable: 8 * GIB };
+    const over = { used: 40 * GIB, limit: 30 * GIB, ratio: 40 / 30 };
+    expect(decideAction(over, { units: [scope], workers: [100, 200] })).toMatchObject({ kind: 'stop', worker: 100, unit: scope });
+  });
+
+  it('names the program the agent started, including after its shell wrapper is gone', () => {
+    const shell = { pid: 1, ppid: 0, exe: 'bash', command: "/bin/bash -O extglob -c IFS= builtin read -r -d '' __grok_user_cmd" };
+    const child = { pid: 2, ppid: 1, exe: 'node', command: 'node vitest run src/a.ts' };
+    expect(bestLabel(shell, [child])).toBe('node vitest run src/a.ts');
+    expect(bestLabel(undefined, [], 'bash /tmp/seqpush.sh')).toBe('bash /tmp/seqpush.sh');
+    expect(bestLabel(undefined, [], "/bin/bash -c IFS= builtin read __grok_user_cmd")).toBe('');
   });
 
   it('counts reclaimable macOS pages as available', () => {

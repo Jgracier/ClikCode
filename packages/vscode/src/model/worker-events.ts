@@ -141,7 +141,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       // An idle worker retiring (a newer build, an idle timeout) is invisible:
       // the bridge attaches to its replacement. Only a cut-off turn is news.
       if (!model.running) return model;
-      return { ...endTurn(withNote(model, { kind: 'notice', level: 'warning', text: `The conversation's worker stopped: ${event.reason}` })), ...NO_TRANSIENT };
+      return { ...endTurn(withNote(model, { kind: 'notice', level: 'info', text: 'Stopped' })), ...NO_TRANSIENT };
     default:
       // suspend/resume, sign-in-request (the bridge handles it), restore-draft
       // (arrives separately) and anything a newer worker says.

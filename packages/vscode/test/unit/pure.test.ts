@@ -199,7 +199,7 @@ describe('chat model', () => {
     expect(retired).toBe(open);
     const cut = run([{ type: 'turn-start', sessionId: 's1', prompt: 'hi' }, worker({ type: 'shutdown', reason: 'killed' })], open);
     expect(cut.running).toBe(false);
-    expect(cut.notes.at(-1)?.text).toContain('killed');
+    expect(cut.notes.at(-1)?.text).toBe('Stopped');
   });
 
   it('streams a turn and ends on the worker transcript', () => {

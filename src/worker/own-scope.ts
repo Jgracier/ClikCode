@@ -20,11 +20,12 @@
  * changes whether work runs, only who yields when both want the CPU.
  * CLIKCODE_OWN_SCOPE=0 turns both off. */
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { constants, setPriority, totalmem } from 'node:os';
+import { constants, homedir, setPriority, totalmem } from 'node:os';
 import { join } from 'node:path';
 import { lifecycle } from '../runtime/lifecycle-log.js';
+import { stateDirectory } from '../session/store/paths.js';
 import { divideScope } from './command-groups.js';
 
 /** Top level, BESIDE app.slice -- not inside it. A slice over its MemoryHigh
@@ -73,8 +74,22 @@ export function adoptArgs(unit: string, pid: number): string[] {
  * kill took VS Code's GPU process -- the editor quit -- while 4G vitest runs
  * lived. At the slice's own MemoryMax the kernel picks inside the slice
  * instead, normally the largest test run, and the editor never gets chosen.
- * Swap is bounded too: swapped agent pages count toward neither RAM limit. */
-export const AGENT_MEMORY_SHARES = { high: 0.7, max: 0.8, swap: 0.1 } as const;
+ * Swap is bounded too: swapped agent pages count toward neither RAM limit.
+ * No MemoryHigh. A soft cap throttles every agent while the guard, which
+ * stops only the one large command, is what should react (2026-10-13). */
+export const AGENT_MEMORY_SHARES = { max: 0.8, swap: 0.1 } as const;
+
+/** What to set on a slice that is already running with no cap. A finite value
+ * is a user's choice and is left alone. Nothing is set when the slice is
+ * already past the cap: setting it then would make the kernel kill at once,
+ * and the guard handles that case. No MemoryHigh. */
+export function ceilingUpdate(maxText: string, swapText: string, ramBytes: number, usedBytes: number): { max?: number; swap?: number } | undefined {
+  const open = (value: string): boolean => value.trim() === 'max';
+  const max = open(maxText) ? Math.floor(ramBytes * AGENT_MEMORY_SHARES.max) : undefined;
+  const swap = open(swapText) ? Math.floor(ramBytes * AGENT_MEMORY_SHARES.swap) : undefined;
+  if ((max === undefined && swap === undefined) || (max !== undefined && usedBytes > max)) return undefined;
+  return { ...(max !== undefined ? { max } : {}), ...(swap !== undefined ? { swap } : {}) };
+}
 
 /** Creates the agent slice with the default limits. systemd refuses when a
  * unit file for it exists -- a host's own limits win, untouched. */
@@ -83,9 +98,8 @@ export function sliceArgs(ramBytes: number): string[] {
   return [
     '--user', 'call', 'org.freedesktop.systemd1', '/org/freedesktop/systemd1',
     'org.freedesktop.systemd1.Manager', 'StartTransientUnit', 'ssa(sv)a(sa(sv))',
-    AGENT_SLICE, 'fail', '4',
+    AGENT_SLICE, 'fail', '3',
     'Description', 's', 'ClikCode agent work',
-    'MemoryHigh', 't', bytes(AGENT_MEMORY_SHARES.high),
     'MemoryMax', 't', bytes(AGENT_MEMORY_SHARES.max),
     'MemorySwapMax', 't', bytes(AGENT_MEMORY_SHARES.swap),
     '0',
@@ -146,10 +160,35 @@ function busctl(args: string[]): Promise<boolean> {
   });
 }
 
+async function applyDefaultCeiling(sliceDir: string): Promise<void> {
+  const unitFile = join(homedir(), '.config/systemd/user', AGENT_SLICE);
+  if (existsSync(unitFile)) return;
+  let update: { max?: number; swap?: number } | undefined;
+  try {
+    update = ceilingUpdate(
+      readFileSync(join(sliceDir, 'memory.max'), 'utf8'),
+      readFileSync(join(sliceDir, 'memory.swap.max'), 'utf8'),
+      totalmem(),
+      Number(readFileSync(join(sliceDir, 'memory.current'), 'utf8')),
+    );
+  } catch { return; }
+  if (!update) return;
+  const props: string[] = [];
+  if (update.max !== undefined) props.push('MemoryMax', 't', String(update.max));
+  if (update.swap !== undefined) props.push('MemorySwapMax', 't', String(update.swap));
+  const applied = await busctl([
+    '--user', 'call', 'org.freedesktop.systemd1', '/org/freedesktop/systemd1',
+    'org.freedesktop.systemd1.Manager', 'SetUnitProperties', 'sba(sv)',
+    AGENT_SLICE, 'true', String(props.length / 3), ...props,
+  ]);
+  lifecycle('worker.ceiling', { applied, ...(update.max !== undefined ? { max: update.max } : {}), ...(update.swap !== undefined ? { swap: update.swap } : {}) });
+}
+
 async function moveToOwnScope(sessionId: string, cgroup: string): Promise<string | undefined> {
   const slice = agentSliceDirectory(cgroup);
   // Only the first worker on a boot finds no slice; every later one skips this call.
   if (slice && !existsSync(slice)) await busctl(sliceArgs(totalmem()));
+  if (slice) await applyDefaultCeiling(slice);
   const unit = scopeUnitName(sessionId, process.pid);
   const adopted = await busctl(adoptArgs(unit, process.pid));
   if (adopted) {
@@ -172,6 +211,38 @@ function lowerOwnPriority(sessionId: string): void {
   let lowered = true;
   try { setPriority(constants.priority.PRIORITY_BELOW_NORMAL); } catch { lowered = false; }
   lifecycle('worker.priority', { worker: sessionId, lowered });
+}
+
+export const WORKER_PID_ENV = 'CLIKCODE_WORKER_PID';
+
+/** Args added so an agent's `systemd-run --user` stays in the agent slice and
+ * carries this worker's pid. A call that names its own slice, or is not
+ * `--user`, is returned unchanged. Placement only: no extra cap. */
+export function systemdRunArgs(argv: readonly string[], workerPid: number): string[] {
+  const namesSlice = argv.some((arg) => arg === '--slice' || arg.startsWith('--slice='));
+  if (!argv.includes('--user') || namesSlice) return [...argv];
+  return [`--slice=${AGENT_SLICE}`, `--setenv=${WORKER_PID_ENV}=${workerPid}`, ...argv];
+}
+
+/** A `systemd-run` ahead of the system one, for this worker's children only. */
+export function installSystemdRunShim(): void {
+  const dir = join(stateDirectory(), 'bin');
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const script = `#!/bin/bash
+args=("$@")
+user=0; slice=0
+for arg in "\${args[@]}"; do
+  [[ "$arg" == "--user" ]] && user=1
+  [[ "$arg" == "--slice" || "$arg" == --slice=* ]] && slice=1
+done
+if [[ $user -eq 1 && $slice -eq 0 && -n "\${${WORKER_PID_ENV}:-}" ]]; then
+  exec "\${SYSTEMD_RUN:-/usr/bin/systemd-run}" --slice=${AGENT_SLICE} --setenv=${WORKER_PID_ENV}="\${${WORKER_PID_ENV}}" "$@"
+fi
+exec "\${SYSTEMD_RUN:-/usr/bin/systemd-run}" "$@"
+`;
+  writeFileSync(join(dir, 'systemd-run'), script, { mode: 0o700 });
+  process.env.PATH = `${dir}:${process.env.PATH ?? ''}`;
+  process.env[WORKER_PID_ENV] = String(process.pid);
 }
 
 /** Where a worker ended up: the agent slice, and its own scope there --
