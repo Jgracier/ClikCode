@@ -6,35 +6,48 @@ import type { HarnessSession } from '../../session/model';
 const call = (id: string, extra: Record<string, unknown> = {}) => ({ event: { kind: 'tool-done' as const, label: 'Bash', id, ...extra }, responseOffset: 0 });
 
 describe('the line a saved turn ends on', () => {
-  it('says how long a turn that ran a tool worked, from the answer it ended on', () => {
+  const edit = (path: string) => call(`e-${path}`, { diff: [{ path, additions: 5, removals: 1, lines: [] }] });
+
+  it('says how long a turn that changed files worked, from the answer it ended on', () => {
     const messages = [
       { role: 'user' as const, content: 'check' },
-      { role: 'assistant' as const, content: 'Done.', activities: [call('a')], turnEnd: { ms: 4_000 } },
+      { role: 'assistant' as const, content: 'Done.', activities: [edit('a.ts')], turnEnd: { ms: 4_000 } },
     ];
-    expect(turnEndLine(messages, 1)).toBe('Worked for 4s');
+    expect(turnEndLine(messages, 1)).toBe('Worked for 4s · 1 file changed +5 −1');
     expect(turnEndLine(messages, 0)).toBeUndefined();
+  });
+
+  it('says nothing for a short turn that only ran calls, and says it for a long one', () => {
+    const turn = (ms: number) => [
+      { role: 'user' as const, content: 'check' },
+      { role: 'assistant' as const, content: 'Done.', activities: [call('a')], turnEnd: { ms } },
+    ];
+    expect(turnEndLine(turn(9_000), 1)).toBeUndefined();
+    expect(turnEndLine(turn(12_000), 1)).toBe('Worked for 12s');
   });
 
   it('counts the calls of every answer a steer split the turn into', () => {
     const messages = [
       { role: 'user' as const, content: 'check' },
-      { role: 'assistant' as const, content: 'First.', activities: [call('a')] },
+      { role: 'assistant' as const, content: 'First.', activities: [edit('a.ts')] },
       { role: 'user' as const, content: 'also this', id: 'steer-1' },
       { role: 'assistant' as const, content: 'Second.', turnEnd: { ms: 2_000 } },
     ];
-    expect(turnEndLine(messages, 3)).toBe('Worked for 2s');
+    expect(turnEndLine(messages, 3)).toBe('Worked for 2s · 1 file changed +5 −1');
   });
 
   it('draws nothing for a quick answer that called nothing', () => {
     expect(turnEndLine([{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'Hello.', turnEnd: { ms: 900 } }], 1)).toBeUndefined();
   });
 
-  it('adds what the turn spent where the harness reported it: tokens and cost, in the extension\'s words', () => {
-    const messages = [
+  it('adds what the turn spent only for a large or costly turn', () => {
+    const spent = (usage: Record<string, number>) => [
       { role: 'user' as const, content: 'check' },
-      { role: 'assistant' as const, content: 'Done.', activities: [call('a')], turnEnd: { ms: 4_000, usage: { input: 1_200, output: 340, cacheRead: 37_000, contextUsed: 20_000, costUsd: 0.0231 } } },
+      { role: 'assistant' as const, content: 'Done.', activities: [edit('a.ts')], turnEnd: { ms: 4_000, usage } },
     ];
-    expect(turnEndLine(messages, 1)).toBe('Worked for 4s · ↑ 1.2k ↓ 340 tokens · $0.02');
+    expect(turnEndLine(spent({ input: 1_200, output: 340, costUsd: 0.0231 }), 1)).toBe('Worked for 4s · 1 file changed +5 −1');
+    expect(turnEndLine(spent({ input: 21_200, output: 340, costUsd: 0.0231 }), 1)).toBe('Worked for 4s · 1 file changed +5 −1 · ↑ 21k ↓ 340 tokens · $0.02');
+    expect(turnEndLine(spent({ input: 1_200, output: 340, costUsd: 0.06 }), 1)).toBe('Worked for 4s · 1 file changed +5 −1 · ↑ 1.2k ↓ 340 tokens · $0.06');
   });
 
   it('says it is waiting for background agents, even for a quick answer', () => {

@@ -9,6 +9,7 @@ import type { ToolCategory } from '../../../../src/harness/prompter';
 import type { FileDiff } from '../protocol';
 import type { Activity, LiveTurn, TurnTrace } from '../model';
 import { formatElapsed } from '../../../../src/harness/protocol/format';
+import { changedFileCount, endLineUsageShown } from '../../../../src/harness/protocol/lean';
 import { formatTurnUsage } from '../../../../src/tui/render/usage-line';
 import type { TurnUsage } from '../../../../src/harness/protocol/turn-usage';
 import { titleCase } from './format';
@@ -111,9 +112,9 @@ export function traceSummaryLine(
     const ms = trace.endedAt - trace.startedAt;
     const background = trace.pendingBackground ?? 0;
     const workflows = trace.pendingWorkflows ?? 0;
-    if (!trace.stopped && !background && !workflows && !endsWithSummary(ms, trace.activities.length)) return undefined;
+    if (!trace.stopped && !background && !workflows && !endsWithSummary(ms, changedFileCount(diffs))) return undefined;
     // What it spent, in the terminal's own words (formatTurnUsage, brief).
-    const usage = formatTurnUsage(trace.usage, { brief: true });
+    const usage = endLineUsageShown(trace.usage) ? formatTurnUsage(trace.usage, { brief: true }) : '';
     return turnSummary({
       ms, diffs, ...(trace.stopped ? { stopped: true } : {}), ...(usage ? { usage } : {}), ...(background ? { pendingBackground: background } : {}),
       ...(workflows ? { pendingWorkflows: workflows } : {}),

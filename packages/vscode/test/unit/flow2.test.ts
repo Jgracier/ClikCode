@@ -399,7 +399,9 @@ describe('the token meter and the summary (X2)', () => {
 
   it('a finished turn\'s line carries what it spent, live and on reopen', () => {
     const trace = { startedAt: 0, endedAt: 62_000, activities: [{ key: 'a', kind: 'tool-done' as const, label: 'x' }], usage: { input: 18, output: 164, costUsd: 0.0237 } };
-    expect(traceSummaryLine(trace, [])).toBe('Worked for 1m 2s · ↑ 18 ↓ 164 tokens · $0.02');
+    // A small, cheap turn leaves its spend to /usage; a large or costly one carries it.
+    expect(traceSummaryLine(trace, [])).toBe('Worked for 1m 2s');
+    expect(traceSummaryLine({ ...trace, usage: { input: 21_000, output: 164, costUsd: 0.0237 } }, [])).toBe('Worked for 1m 2s · ↑ 21k ↓ 164 tokens · $0.02');
   });
 
   it('says it is waiting on background agents instead of "Worked for"', () => {
@@ -422,7 +424,7 @@ describe('the token meter and the summary (X2)', () => {
         activities: [{ event: { kind: 'tool-done', id: 'a', label: 'Read a.ts', category: 'read' }, responseOffset: 0 }] } as never],
     }) });
     expect(opened.traces[0]).toMatchObject({ usage: { output: 164 }, pendingBackground: 1 });
-    expect(traceSummaryLine(opened.traces[0]!, [])).toBe('Waiting for 1 background agent · ↓ 164 tokens');
+    expect(traceSummaryLine(opened.traces[0]!, [])).toBe('Waiting for 1 background agent');
   });
 });
 
