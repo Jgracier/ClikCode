@@ -1,0 +1,1702 @@
+{
+ "aider": {
+  "ask": {
+   "acp": null,
+   "turn": [
+    "--no-show-model-warnings",
+    "--no-check-update",
+    "--no-show-release-notes",
+    "--no-analytics",
+    "--no-pretty",
+    "--no-fancy-input",
+    "--no-detect-urls",
+    "--message",
+    "hi"
+   ]
+  },
+  "auto": {
+   "acp": null,
+   "turn": [
+    "--no-show-model-warnings",
+    "--no-check-update",
+    "--no-show-release-notes",
+    "--no-analytics",
+    "--no-pretty",
+    "--no-fancy-input",
+    "--no-detect-urls",
+    "--message",
+    "hi"
+   ]
+  },
+  "bypass": {
+   "acp": null,
+   "turn": [
+    "--no-show-model-warnings",
+    "--no-check-update",
+    "--no-show-release-notes",
+    "--no-analytics",
+    "--no-pretty",
+    "--no-fancy-input",
+    "--no-detect-urls",
+    "--yes-always",
+    "--message",
+    "hi"
+   ]
+  }
+ },
+ "amp": {
+  "ask": {
+   "acp": null,
+   "turn": [
+    "--stream-json",
+    "-x",
+    "hi"
+   ]
+  },
+  "auto": {
+   "acp": null,
+   "turn": [
+    "--stream-json",
+    "-x",
+    "hi"
+   ]
+  },
+  "bypass": {
+   "acp": null,
+   "turn": [
+    "--stream-json",
+    "-x",
+    "hi"
+   ]
+  }
+ },
+ "antigravity": {
+  "ask": {
+   "acp": null,
+   "turn": [
+    "--output-format",
+    "stream-json",
+    "-p",
+    "hi"
+   ]
+  },
+  "auto": {
+   "acp": null,
+   "turn": [
+    "--output-format",
+    "stream-json",
+    "-p",
+    "hi"
+   ]
+  },
+  "bypass": {
+   "acp": null,
+   "turn": [
+    "--output-format",
+    "stream-json",
+    "--dangerously-skip-permissions",
+    "-p",
+    "hi"
+   ]
+  }
+ },
+ "auggie": {
+  "ask": {
+   "acp": {
+    "argv": [
+     "--acp"
+    ],
+    "binary": "auggie",
+    "env": {},
+    "modeArgv": [
+     "--acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "turn": [
+    "--print",
+    "--output-format",
+    "json",
+    "hi"
+   ]
+  },
+  "auto": {
+   "acp": {
+    "argv": [
+     "--acp"
+    ],
+    "binary": "auggie",
+    "env": {},
+    "modeArgv": [
+     "--acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "turn": [
+    "--print",
+    "--output-format",
+    "json",
+    "hi"
+   ]
+  },
+  "bypass": {
+   "acp": {
+    "argv": [
+     "--acp"
+    ],
+    "binary": "auggie",
+    "env": {},
+    "modeArgv": [
+     "--acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "turn": [
+    "--print",
+    "--output-format",
+    "json",
+    "hi"
+   ]
+  }
+ },
+ "claude": {
+  "ask": {
+   "acp": {
+    "argv": [],
+    "binary": "claude-agent-acp",
+    "env": {},
+    "modeArgv": [],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "ids": "default",
+   "turn": [
+    "-p",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--include-partial-messages",
+    "--permission-mode",
+    "manual",
+    "--permission-prompts",
+    "none"
+   ]
+  },
+  "auto": {
+   "acp": {
+    "argv": [],
+    "binary": "claude-agent-acp",
+    "env": {},
+    "modeArgv": [],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "ids": "auto",
+   "turn": [
+    "-p",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--include-partial-messages",
+    "--permission-mode",
+    "auto",
+    "--permission-prompts",
+    "none"
+   ]
+  },
+  "bypass": {
+   "acp": {
+    "argv": [],
+    "binary": "claude-agent-acp",
+    "env": {},
+    "modeArgv": [],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "ids": "bypassPermissions",
+   "turn": [
+    "-p",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--include-partial-messages",
+    "--permission-mode",
+    "bypassPermissions",
+    "--permission-prompts",
+    "none",
+    "--allow-dangerously-skip-permissions"
+   ]
+  }
+ },
+ "cline": {
+  "ask": {
+   "acp": {
+    "argv": [
+     "--acp"
+    ],
+    "binary": "cline",
+    "env": {},
+    "modeArgv": [
+     "--acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "ids": "act",
+   "turn": [
+    "--json",
+    "--auto-approve",
+    "false",
+    "hi"
+   ]
+  },
+  "auto": {
+   "acp": {
+    "argv": [
+     "--acp"
+    ],
+    "binary": "cline",
+    "env": {},
+    "modeArgv": [
+     "--acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "turn": [
+    "--json",
+    "hi"
+   ]
+  },
+  "bypass": {
+   "acp": {
+    "argv": [
+     "--auto-approve",
+     "true",
+     "--acp"
+    ],
+    "binary": "cline",
+    "env": {},
+    "modeArgv": [
+     "--acp"
+    ],
+    "optionArgv": [
+     "--auto-approve",
+     "true"
+    ],
+    "optionPlacement": "before"
+   },
+   "ids": "act",
+   "turn": [
+    "--json",
+    "--auto-approve",
+    "true",
+    "hi"
+   ]
+  }
+ },
+ "cn": {
+  "ask": {
+   "acp": null,
+   "turn": [
+    "-p",
+    "hi"
+   ]
+  },
+  "auto": {
+   "acp": null,
+   "turn": [
+    "-p",
+    "hi"
+   ]
+  },
+  "bypass": {
+   "acp": null,
+   "turn": [
+    "--auto",
+    "-p",
+    "hi"
+   ]
+  }
+ },
+ "codex": {
+  "ask": {
+   "acp": null,
+   "turn": [
+    "--sandbox",
+    "workspace-write",
+    "--ask-for-approval",
+    "on-request",
+    "exec",
+    "--json",
+    "--skip-git-repo-check",
+    "-"
+   ]
+  },
+  "auto": {
+   "acp": null,
+   "turn": [
+    "--approve-for-me",
+    "exec",
+    "--json",
+    "--skip-git-repo-check",
+    "-"
+   ]
+  },
+  "bypass": {
+   "acp": null,
+   "turn": [
+    "--sandbox",
+    "danger-full-access",
+    "--ask-for-approval",
+    "never",
+    "exec",
+    "--json",
+    "--skip-git-repo-check",
+    "-"
+   ]
+  }
+ },
+ "command": {
+  "ask": {
+   "acp": {
+    "argv": [
+     "acp"
+    ],
+    "binary": "cmdc",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "ids": "default",
+   "turn": [
+    "--print",
+    "--output-format",
+    "json",
+    "--skip-onboarding",
+    "--no-auto-update",
+    "--permission-mode",
+    "standard",
+    "hi"
+   ]
+  },
+  "auto": {
+   "acp": {
+    "argv": [
+     "acp"
+    ],
+    "binary": "cmdc",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "ids": "auto-accept",
+   "turn": [
+    "--print",
+    "--output-format",
+    "json",
+    "--skip-onboarding",
+    "--no-auto-update",
+    "--permission-mode",
+    "auto-accept",
+    "hi"
+   ]
+  },
+  "bypass": {
+   "acp": {
+    "argv": [
+     "acp"
+    ],
+    "binary": "cmdc",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "ids": "bypass",
+   "turn": [
+    "--print",
+    "--output-format",
+    "json",
+    "--skip-onboarding",
+    "--no-auto-update",
+    "--yolo",
+    "hi"
+   ]
+  }
+ },
+ "copilot": {
+  "ask": {
+   "acp": {
+    "argv": [
+     "--acp",
+     "--stdio"
+    ],
+    "binary": "copilot",
+    "env": {},
+    "modeArgv": [
+     "--acp",
+     "--stdio"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "turn": [
+    "-s",
+    "-p",
+    "hi"
+   ]
+  },
+  "auto": {
+   "acp": {
+    "argv": [
+     "--acp",
+     "--stdio"
+    ],
+    "binary": "copilot",
+    "env": {},
+    "modeArgv": [
+     "--acp",
+     "--stdio"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "turn": [
+    "-s",
+    "-p",
+    "hi"
+   ]
+  },
+  "bypass": {
+   "acp": {
+    "argv": [
+     "--allow-all",
+     "--acp",
+     "--stdio"
+    ],
+    "binary": "copilot",
+    "env": {},
+    "modeArgv": [
+     "--acp",
+     "--stdio"
+    ],
+    "optionArgv": [
+     "--allow-all"
+    ],
+    "optionPlacement": "before"
+   },
+   "turn": [
+    "-s",
+    "--allow-all",
+    "-p",
+    "hi"
+   ]
+  }
+ },
+ "cursor": {
+  "ask": {
+   "acp": {
+    "argv": [
+     "acp"
+    ],
+    "binary": "cursor-agent",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "turn": [
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--stream-partial-output",
+    "hi"
+   ]
+  },
+  "auto": {
+   "acp": {
+    "argv": [
+     "acp"
+    ],
+    "binary": "cursor-agent",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "turn": [
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--stream-partial-output",
+    "--auto-review",
+    "hi"
+   ]
+  },
+  "bypass": {
+   "acp": {
+    "argv": [
+     "acp"
+    ],
+    "binary": "cursor-agent",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "turn": [
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--stream-partial-output",
+    "--force",
+    "hi"
+   ]
+  }
+ },
+ "dcode": {
+  "ask": {
+   "acp": {
+    "argv": [
+     "--acp"
+    ],
+    "binary": "dcode",
+    "env": {},
+    "modeArgv": [
+     "--acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "after"
+   },
+   "turn": null
+  },
+  "auto": {
+   "acp": {
+    "argv": [
+     "--acp",
+     "-y"
+    ],
+    "binary": "dcode",
+    "env": {},
+    "modeArgv": [
+     "--acp"
+    ],
+    "optionArgv": [
+     "-y"
+    ],
+    "optionPlacement": "after"
+   },
+   "turn": null
+  },
+  "bypass": {
+   "acp": {
+    "argv": [
+     "--acp"
+    ],
+    "binary": "dcode",
+    "env": {},
+    "modeArgv": [
+     "--acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "after"
+   },
+   "turn": null
+  }
+ },
+ "devin": {
+  "ask": {
+   "acp": {
+    "argv": [
+     "acp"
+    ],
+    "binary": "devin",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "after"
+   },
+   "ids": "ask",
+   "turn": null
+  },
+  "auto": {
+   "acp": {
+    "argv": [
+     "acp"
+    ],
+    "binary": "devin",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "after"
+   },
+   "ids": "smart",
+   "turn": null
+  },
+  "bypass": {
+   "acp": {
+    "argv": [
+     "acp"
+    ],
+    "binary": "devin",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "after"
+   },
+   "ids": "bypass",
+   "turn": null
+  }
+ },
+ "droid": {
+  "ask": {
+   "acp": {
+    "argv": [
+     "exec",
+     "--output-format",
+     "acp"
+    ],
+    "binary": "droid",
+    "env": {},
+    "modeArgv": [
+     "exec",
+     "--output-format",
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "ids": "normal",
+   "turn": [
+    "exec",
+    "--output-format",
+    "stream-json",
+    "hi"
+   ]
+  },
+  "auto": {
+   "acp": {
+    "argv": [
+     "exec",
+     "--output-format",
+     "acp"
+    ],
+    "binary": "droid",
+    "env": {},
+    "modeArgv": [
+     "exec",
+     "--output-format",
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "ids": "auto-low",
+   "turn": [
+    "exec",
+    "--output-format",
+    "stream-json",
+    "--auto",
+    "low",
+    "hi"
+   ]
+  },
+  "bypass": {
+   "acp": {
+    "argv": [
+     "exec",
+     "--output-format",
+     "acp"
+    ],
+    "binary": "droid",
+    "env": {},
+    "modeArgv": [
+     "exec",
+     "--output-format",
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "ids": "auto-high",
+   "turn": [
+    "exec",
+    "--output-format",
+    "stream-json",
+    "--skip-permissions-unsafe",
+    "hi"
+   ]
+  }
+ },
+ "gemini": {
+  "ask": {
+   "acp": {
+    "argv": [
+     "--acp"
+    ],
+    "binary": "gemini",
+    "env": {},
+    "modeArgv": [
+     "--acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "turn": [
+    "--skip-trust",
+    "--output-format",
+    "stream-json",
+    "--approval-mode",
+    "default",
+    "--prompt",
+    "hi"
+   ]
+  },
+  "auto": {
+   "acp": {
+    "argv": [
+     "--approval-mode",
+     "auto_edit",
+     "--acp"
+    ],
+    "binary": "gemini",
+    "env": {},
+    "modeArgv": [
+     "--acp"
+    ],
+    "optionArgv": [
+     "--approval-mode",
+     "auto_edit"
+    ],
+    "optionPlacement": "before"
+   },
+   "turn": [
+    "--skip-trust",
+    "--output-format",
+    "stream-json",
+    "--approval-mode",
+    "auto_edit",
+    "--prompt",
+    "hi"
+   ]
+  },
+  "bypass": {
+   "acp": {
+    "argv": [
+     "--approval-mode",
+     "yolo",
+     "--acp"
+    ],
+    "binary": "gemini",
+    "env": {},
+    "modeArgv": [
+     "--acp"
+    ],
+    "optionArgv": [
+     "--approval-mode",
+     "yolo"
+    ],
+    "optionPlacement": "before"
+   },
+   "turn": [
+    "--skip-trust",
+    "--output-format",
+    "stream-json",
+    "--approval-mode",
+    "yolo",
+    "--prompt",
+    "hi"
+   ]
+  }
+ },
+ "goose": {
+  "ask": {
+   "acp": {
+    "argv": [
+     "acp"
+    ],
+    "binary": "goose",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "ids": "approve",
+   "turn": [
+    "run",
+    "--output-format",
+    "stream-json",
+    "--text",
+    "hi"
+   ]
+  },
+  "auto": {
+   "acp": {
+    "argv": [
+     "acp"
+    ],
+    "binary": "goose",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "ids": "smart_approve",
+   "turn": [
+    "run",
+    "--output-format",
+    "stream-json",
+    "--text",
+    "hi"
+   ]
+  },
+  "bypass": {
+   "acp": {
+    "argv": [
+     "acp"
+    ],
+    "binary": "goose",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "ids": "auto",
+   "turn": [
+    "run",
+    "--output-format",
+    "stream-json",
+    "--text",
+    "hi"
+   ]
+  }
+ },
+ "grok": {
+  "ask": {
+   "acp": {
+    "argv": [
+     "agent",
+     "stdio"
+    ],
+    "binary": "grok",
+    "env": {},
+    "modeArgv": [
+     "agent",
+     "stdio"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "turn": [
+    "--output-format",
+    "streaming-messages-json",
+    "--include-partial-messages",
+    "--permission-mode",
+    "default",
+    "-p",
+    "hi"
+   ]
+  },
+  "auto": {
+   "acp": {
+    "argv": [
+     "agent",
+     "stdio"
+    ],
+    "binary": "grok",
+    "env": {},
+    "modeArgv": [
+     "agent",
+     "stdio"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "turn": [
+    "--output-format",
+    "streaming-messages-json",
+    "--include-partial-messages",
+    "--permission-mode",
+    "auto",
+    "-p",
+    "hi"
+   ]
+  },
+  "bypass": {
+   "acp": {
+    "argv": [
+     "agent",
+     "stdio"
+    ],
+    "binary": "grok",
+    "env": {},
+    "modeArgv": [
+     "agent",
+     "stdio"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "turn": [
+    "--output-format",
+    "streaming-messages-json",
+    "--include-partial-messages",
+    "--permission-mode",
+    "bypassPermissions",
+    "-p",
+    "hi"
+   ]
+  }
+ },
+ "hermes": {
+  "ask": {
+   "acp": {
+    "argv": [
+     "acp"
+    ],
+    "binary": "hermes",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "turn": [
+    "chat",
+    "--quiet",
+    "--query",
+    "hi"
+   ]
+  },
+  "auto": {
+   "acp": {
+    "argv": [
+     "acp"
+    ],
+    "binary": "hermes",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "turn": [
+    "chat",
+    "--quiet",
+    "--query",
+    "hi"
+   ]
+  },
+  "bypass": {
+   "acp": {
+    "argv": [
+     "--yolo",
+     "acp"
+    ],
+    "binary": "hermes",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [
+     "--yolo"
+    ],
+    "optionPlacement": "before"
+   },
+   "turn": [
+    "chat",
+    "--quiet",
+    "--yolo",
+    "--query",
+    "hi"
+   ]
+  }
+ },
+ "junie": {
+  "ask": {
+   "acp": {
+    "argv": [
+     "--acp",
+     "true"
+    ],
+    "binary": "junie",
+    "env": {},
+    "modeArgv": [
+     "--acp",
+     "true"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "turn": null
+  },
+  "auto": {
+   "acp": {
+    "argv": [
+     "--acp",
+     "true"
+    ],
+    "binary": "junie",
+    "env": {},
+    "modeArgv": [
+     "--acp",
+     "true"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "turn": null
+  },
+  "bypass": {
+   "acp": {
+    "argv": [
+     "--acp",
+     "true"
+    ],
+    "binary": "junie",
+    "env": {},
+    "modeArgv": [
+     "--acp",
+     "true"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "turn": null
+  }
+ },
+ "kilo": {
+  "ask": {
+   "acp": {
+    "argv": [
+     "acp"
+    ],
+    "binary": "kilo",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "turn": [
+    "run",
+    "--format",
+    "json",
+    "--thinking",
+    "hi"
+   ]
+  },
+  "auto": {
+   "acp": {
+    "argv": [
+     "acp"
+    ],
+    "binary": "kilo",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "turn": [
+    "run",
+    "--format",
+    "json",
+    "--thinking",
+    "--auto",
+    "hi"
+   ]
+  },
+  "bypass": {
+   "acp": {
+    "argv": [
+     "acp"
+    ],
+    "binary": "kilo",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "turn": [
+    "run",
+    "--format",
+    "json",
+    "--thinking",
+    "hi"
+   ]
+  }
+ },
+ "kimi": {
+  "ask": {
+   "acp": {
+    "argv": [
+     "acp"
+    ],
+    "binary": "kimi",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "ids": "default",
+   "turn": [
+    "--output-format",
+    "stream-json",
+    "--prompt",
+    "hi"
+   ]
+  },
+  "auto": {
+   "acp": {
+    "argv": [
+     "acp"
+    ],
+    "binary": "kimi",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "ids": "yolo",
+   "turn": [
+    "--output-format",
+    "stream-json",
+    "--yolo",
+    "--prompt",
+    "hi"
+   ]
+  },
+  "bypass": {
+   "acp": {
+    "argv": [
+     "acp"
+    ],
+    "binary": "kimi",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "ids": "auto",
+   "turn": [
+    "--output-format",
+    "stream-json",
+    "--auto",
+    "--prompt",
+    "hi"
+   ]
+  }
+ },
+ "kiro": {
+  "ask": {
+   "acp": {
+    "argv": [
+     "acp"
+    ],
+    "binary": "kiro-cli",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "after"
+   },
+   "turn": [
+    "chat",
+    "--no-interactive",
+    "--agent-engine",
+    "v3",
+    "--output-format",
+    "stream-json",
+    "hi"
+   ]
+  },
+  "auto": {
+   "acp": {
+    "argv": [
+     "acp"
+    ],
+    "binary": "kiro-cli",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "after"
+   },
+   "turn": [
+    "chat",
+    "--no-interactive",
+    "--agent-engine",
+    "v3",
+    "--output-format",
+    "stream-json",
+    "hi"
+   ]
+  },
+  "bypass": {
+   "acp": {
+    "argv": [
+     "acp",
+     "--trust-all-tools"
+    ],
+    "binary": "kiro-cli",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [
+     "--trust-all-tools"
+    ],
+    "optionPlacement": "after"
+   },
+   "turn": [
+    "chat",
+    "--no-interactive",
+    "--agent-engine",
+    "v3",
+    "--output-format",
+    "stream-json",
+    "--trust-all-tools",
+    "hi"
+   ]
+  }
+ },
+ "mcode": {
+  "ask": {
+   "acp": {
+    "argv": [
+     "acp"
+    ],
+    "binary": "mcode",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "turn": null
+  },
+  "auto": {
+   "acp": {
+    "argv": [
+     "acp"
+    ],
+    "binary": "mcode",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "turn": null
+  },
+  "bypass": {
+   "acp": {
+    "argv": [
+     "acp"
+    ],
+    "binary": "mcode",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "turn": null
+  }
+ },
+ "openclaw": {
+  "ask": {
+   "acp": null,
+   "turn": [
+    "agent",
+    "--local",
+    "--json",
+    "--agent",
+    "main",
+    "--message",
+    "hi"
+   ]
+  },
+  "auto": {
+   "acp": null,
+   "turn": [
+    "agent",
+    "--local",
+    "--json",
+    "--agent",
+    "main",
+    "--message",
+    "hi"
+   ]
+  },
+  "bypass": {
+   "acp": null,
+   "turn": [
+    "agent",
+    "--local",
+    "--json",
+    "--agent",
+    "main",
+    "--message",
+    "hi"
+   ]
+  }
+ },
+ "opencode": {
+  "ask": {
+   "acp": {
+    "argv": [
+     "acp"
+    ],
+    "binary": "opencode",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "turn": [
+    "run",
+    "--format",
+    "json",
+    "--thinking",
+    "hi"
+   ]
+  },
+  "auto": {
+   "acp": {
+    "argv": [
+     "acp"
+    ],
+    "binary": "opencode",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "turn": [
+    "run",
+    "--format",
+    "json",
+    "--thinking",
+    "hi"
+   ]
+  },
+  "bypass": {
+   "acp": {
+    "argv": [
+     "acp"
+    ],
+    "binary": "opencode",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "turn": [
+    "run",
+    "--format",
+    "json",
+    "--thinking",
+    "--auto",
+    "hi"
+   ]
+  }
+ },
+ "openhands": {
+  "ask": {
+   "acp": {
+    "argv": [
+     "acp"
+    ],
+    "binary": "openhands",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "turn": [
+    "--headless",
+    "--json",
+    "-t",
+    "hi"
+   ]
+  },
+  "auto": {
+   "acp": {
+    "argv": [
+     "--llm-approve",
+     "acp"
+    ],
+    "binary": "openhands",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [
+     "--llm-approve"
+    ],
+    "optionPlacement": "before"
+   },
+   "turn": [
+    "--headless",
+    "--json",
+    "--llm-approve",
+    "-t",
+    "hi"
+   ]
+  },
+  "bypass": {
+   "acp": {
+    "argv": [
+     "--always-approve",
+     "acp"
+    ],
+    "binary": "openhands",
+    "env": {},
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [
+     "--always-approve"
+    ],
+    "optionPlacement": "before"
+   },
+   "turn": [
+    "--headless",
+    "--json",
+    "--always-approve",
+    "-t",
+    "hi"
+   ]
+  }
+ },
+ "pi": {
+  "ask": {
+   "acp": null,
+   "turn": [
+    "-p",
+    "--mode",
+    "json",
+    "hi"
+   ]
+  },
+  "auto": {
+   "acp": null,
+   "turn": [
+    "-p",
+    "--mode",
+    "json",
+    "hi"
+   ]
+  },
+  "bypass": {
+   "acp": null,
+   "turn": [
+    "-p",
+    "--mode",
+    "json",
+    "hi"
+   ]
+  }
+ },
+ "qwen": {
+  "ask": {
+   "acp": {
+    "argv": [
+     "--acp"
+    ],
+    "binary": "qwen",
+    "env": {},
+    "modeArgv": [
+     "--acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "ids": "default",
+   "turn": [
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--include-partial-messages",
+    "--approval-mode",
+    "default",
+    "hi"
+   ]
+  },
+  "auto": {
+   "acp": {
+    "argv": [
+     "--approval-mode",
+     "auto",
+     "--acp"
+    ],
+    "binary": "qwen",
+    "env": {},
+    "modeArgv": [
+     "--acp"
+    ],
+    "optionArgv": [
+     "--approval-mode",
+     "auto"
+    ],
+    "optionPlacement": "before"
+   },
+   "ids": "auto",
+   "turn": [
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--include-partial-messages",
+    "--approval-mode",
+    "auto",
+    "hi"
+   ]
+  },
+  "bypass": {
+   "acp": {
+    "argv": [
+     "--approval-mode",
+     "yolo",
+     "--acp"
+    ],
+    "binary": "qwen",
+    "env": {},
+    "modeArgv": [
+     "--acp"
+    ],
+    "optionArgv": [
+     "--approval-mode",
+     "yolo"
+    ],
+    "optionPlacement": "before"
+   },
+   "ids": "yolo",
+   "turn": [
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--include-partial-messages",
+    "--approval-mode",
+    "yolo",
+    "hi"
+   ]
+  }
+ },
+ "vibe": {
+  "ask": {
+   "acp": {
+    "argv": [],
+    "binary": "vibe-acp",
+    "env": {},
+    "modeArgv": [],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "turn": [
+    "--output",
+    "streaming",
+    "--agent",
+    "ask",
+    "--prompt",
+    "hi"
+   ]
+  },
+  "auto": {
+   "acp": {
+    "argv": [],
+    "binary": "vibe-acp",
+    "env": {},
+    "modeArgv": [],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "turn": [
+    "--output",
+    "streaming",
+    "--smart-approve",
+    "--prompt",
+    "hi"
+   ]
+  },
+  "bypass": {
+   "acp": {
+    "argv": [],
+    "binary": "vibe-acp",
+    "env": {},
+    "modeArgv": [],
+    "optionArgv": [],
+    "optionPlacement": "before"
+   },
+   "turn": [
+    "--output",
+    "streaming",
+    "--auto-approve",
+    "--prompt",
+    "hi"
+   ]
+  }
+ }
+}
