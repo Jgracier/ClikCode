@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as vscode from 'vscode';
 import type { ClikCodeApi } from '../../../src/extension';
-import { activate, click, key, openProviderList, paste, pickProviderModel, query, screenshot, sleep, type, until, VendorRefused, vendorRefusalSince, waitFor } from './helpers';
+import { activate, click, clikcodeEntry, key, openProviderList, paste, pickProviderModel, query, screenshot, sleep, type, until, VendorRefused, vendorRefusalSince, waitFor } from './helpers';
 
 export function chatSuite(): void {
   /** The three tests that send a real turn to a vendor's free model run only with CLIKCODE_IT_VENDOR=on.
@@ -52,7 +52,7 @@ export function chatSuite(): void {
       await waitFor(api, '#history-list [data-key], #history-list .keylist-empty', 'the conversation list, loaded');
       await sleep(500);
       // Another process: the CLI this extension runs, against the same home.
-      const entry = vscode.workspace.getConfiguration('clikcode').get<string>('path')!;
+      const entry = clikcodeEntry();
       const clikcode = (...args: string[]): string => execFileSync('node', [entry, ...args], { encoding: 'utf8', env: process.env });
       const id = (JSON.parse(clikcode('sessions', 'create', '--route', 'gateway')) as { session: { id: string } }).session.id;
       clikcode('sessions', 'command', id, '/rename', 'Named in another window');
@@ -68,7 +68,7 @@ export function chatSuite(): void {
     });
 
     it('walks /search mention by mention, as the terminal does', async () => {
-      const entry = vscode.workspace.getConfiguration('clikcode').get<string>('path')!;
+      const entry = clikcodeEntry();
       const clikcode = (...args: string[]): string => execFileSync('node', [entry, ...args], { encoding: 'utf8', env: process.env });
       const id = (JSON.parse(clikcode('sessions', 'create', '--route', 'gateway')) as { session: { id: string } }).session.id;
       clikcode('sessions', 'command', id, '/rename', 'Zanzibar parser notes');
@@ -477,7 +477,7 @@ export function chatSuite(): void {
       await until(api, (state) => state.connection === 'ready' && !state.running, 'an idle chat', 60_000);
       const before = bridges();
       // A reinstall: the entry the bridge runs changes on disk.
-      const entry = vscode.workspace.getConfiguration('clikcode').get<string>('path')!;
+      const entry = clikcodeEntry();
       const now = new Date();
       utimesSync(entry, now, now);
       const deadline = Date.now() + 30_000;

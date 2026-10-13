@@ -285,7 +285,7 @@ export class ClikCodeController implements vscode.Disposable {
       this.setModel({ ...this.model, connection: 'error', connectionError: message, remedy: error instanceof RuntimeError && error.kind === 'clikcode-missing' ? 'install' : undefined });
       return;
     }
-    log.appendLine(`[${this.label}] Starting ${runtime.entry} with ${runtime.node} (${runtime.nodeSource})`);
+    log.appendLine(`[${this.label}] Starting ${runtime.entry} (${runtime.entrySource}) with ${runtime.node} (${runtime.nodeSource})`);
     const bridge = BridgeClient.start(runtime, this.workspaceFolder());
     this.bridge = bridge;
     this.builds.watch(runtime.entry);

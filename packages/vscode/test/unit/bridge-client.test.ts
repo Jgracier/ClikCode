@@ -23,7 +23,7 @@ describe('BridgeClient', () => {
     const dir = mkdtempSync(join(tmpdir(), 'clikcode-fake-bridge-'));
     const entry = join(dir, 'index.js');
     writeFileSync(entry, FAKE);
-    const client = BridgeClient.start({ node: process.execPath, env: {}, entry, nodeSource: 'path' }, dir);
+    const client = BridgeClient.start({ node: process.execPath, env: {}, entry, nodeSource: 'path', entrySource: 'path' }, dir);
     const events: IdeEvent[] = [];
     const logs: string[] = [];
     client.on('log', (line) => logs.push(line));

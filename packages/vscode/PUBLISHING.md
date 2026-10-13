@@ -73,8 +73,13 @@ allowlist).
 
 ## Extension ↔ ClikCode compatibility
 
-The extension runs the user's installed ClikCode (`clikcode ide-bridge`), never a bundled copy. The
-bridge protocol's version and the oldest one the extension accepts are in one place,
+The extension runs the user's installed ClikCode (`clikcode ide-bridge`) when there is one, and the
+copy it ships with (`bundled/clikcode`, staged by `scripts/package.mjs` from the repository's `dist`
+plus the runtime packages `dist` imports) only when there is none. The order matters: a worker is
+retired by any client whose build differs, so two builds in play on one machine would retire each
+other's workers. Test the shipped shape with `CLIKCODE_IT_BUNDLED=1 CLIKCODE_IT_EXTENSION_PATH=<an
+unpacked .vsix> xvfb-run -a pnpm run test:integration` (no `clikcode.path`, no `clikcode` on PATH).
+The bridge protocol's version and the oldest one the extension accepts are in one place,
 `src/ide/protocol-version.ts`; the bridge sends its version in the `ready` event and the extension
 checks it (`packages/vscode/src/compat.ts`):
 

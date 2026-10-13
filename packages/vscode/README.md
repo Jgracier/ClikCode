@@ -74,18 +74,14 @@ and its tools and MCP servers. Every slash command works from the message box.
 
 ## Requirements
 
-- **ClikCode** installed and on your `PATH`:
+- **Nothing else to install.** The extension ships with its own copy of ClikCode and runs it when
+  there is no `clikcode` on your `PATH`.
 
-  ```sh
-  npm install -g clikcode
-  ```
-
-  The extension runs *your* installed ClikCode rather than a copy of its own, so the editor and the
-  terminal always share one version, one set of accounts and one history. If ClikCode is missing, the
-  chat offers to install it; if it is too old for this extension, the chat says so and offers
-  *Update ClikCode* (`npm install -g clikcode@latest`). Without access to the npm registry, install the
-  same release from GitHub:
-  `npm install -g https://github.com/Jgracier/ClikCode/releases/latest/download/clikcode.tgz`.
+  If you *do* have ClikCode installed (`npm install -g clikcode`), the extension runs yours
+  instead, so the editor and the terminal share one version, one set of accounts and one history.
+  An installed ClikCode that is too old for this extension is reported in the chat, with
+  *Update ClikCode* (`npm install -g clikcode@latest`; without the npm registry:
+  `npm install -g https://github.com/Jgracier/ClikCode/releases/latest/download/clikcode.tgz`).
 - **Node.js 22.12 or newer** for ClikCode. The extension uses `node` from your `PATH`, or VS Code's
   built-in Node.js when that is new enough, or the `clikcode.nodePath` setting.
 - An account with at least one provider — or none: OpenCode's free models need no sign-in. The chat

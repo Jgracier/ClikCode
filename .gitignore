@@ -8,3 +8,6 @@ clikcode-*.tgz
 .tmp/
 llama.log
 __pycache__/
+
+# staged by packages/vscode/scripts/package.mjs
+packages/vscode/bundled/
