@@ -168,6 +168,10 @@ function track(sessionId: string, client: WorkerClient): void {
       if (tracker.running) tracker.usage = event.usage;
     } else if (event.type === 'background') {
       if (tracker.running) tracker.background = backgroundWorkOf({ background: event.work, pendingBackground: event.pending });
+    } else if (event.type === 'out-of-turn') {
+      // Said with no turn open: an idle prompt reads the conversation again to show it.
+      tracker.queueVersion++;
+      tracker.wake?.('queue');
     } else if (event.type === 'queue-changed') {
       tracker.queueVersion++;
       tracker.wake?.('queue');

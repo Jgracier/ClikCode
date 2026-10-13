@@ -21,7 +21,7 @@ import { statSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
 import Conf from 'conf';
 import { readState } from '../session/state/read.js';
-import { setVendorBackgroundTurnHandler } from '../turn/vendor-process.js';
+import { setOutOfTurnHandler, setVendorBackgroundTurnHandler } from '../turn/vendor-process.js';
 import { BroadcastObserver } from './broadcast-observer.js';
 import { createVendorBackgroundRunner } from './vendor-background.js';
 import { createResumeWaiter } from './resume-wait.js';
@@ -41,6 +41,7 @@ import { createTurnRunner } from './worker-turn.js';
 import { createCommandHandler } from './worker-commands.js';
 import { createWorkerServer } from './worker-server.js';
 import { createShutdown } from './worker-shutdown.js';
+import { createOutOfTurnRelay } from './out-of-turn.js';
 
 /** This conversation for this worker, or undefined when another worker has
  * it. A scripted turn running in-process (worker/scripted-send.ts) is waited
@@ -110,6 +111,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     sessionId, observer, userTurnRunning: () => ctx.turnRunning, changed: () => { ctx.idle.vendorUsed(); ctx.idle.scheduleIdleExit(); },
   });
   setVendorBackgroundTurnHandler(sessionId, ctx.vendorBackground.handle);
+  setOutOfTurnHandler(sessionId, createOutOfTurnRelay(ctx));
   // -------------------------------------------------------------------------
   ctx.idle = createIdleControl(ctx);
 

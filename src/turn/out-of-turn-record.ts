@@ -12,8 +12,8 @@ import type { OutOfTurnRelay } from '../harness/transport/background-turn.js';
 const last = new Map<string, { kind: 'message' | 'thought'; content: string }>();
 const writing = new Map<string, Promise<unknown>>();
 
-/** A relay that appends into `sessionId`'s conversation. */
-export function outOfTurnRecorder(sessionId: string): OutOfTurnRelay {
+/** A relay that appends into `sessionId`'s conversation; its promise settles once the record is written. */
+export function outOfTurnRecorder(sessionId: string): (said: Parameters<OutOfTurnRelay>[0]) => Promise<unknown> {
   return (said) => {
     const previous = writing.get(sessionId) ?? Promise.resolve();
     const next = previous.then(async () => {
@@ -33,5 +33,6 @@ export function outOfTurnRecorder(sessionId: string): OutOfTurnRelay {
       await writeState(state);
     }).catch(() => undefined);
     writing.set(sessionId, next);
+    return next;
   };
 }
