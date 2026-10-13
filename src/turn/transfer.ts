@@ -239,7 +239,7 @@ export function transferPrompt(record: CanonicalRecord, request: string, options
   if (turns.length) {
     const total = turns.length + (record.summary?.through ?? 0);
     const opening = record.summary ? `, the first ${record.summary.through} summarized` : '';
-    add(`This chat has ${total} earlier turn${total === 1 ? '' : 's'}${opening} (${runs.join('; ')}). Below: every request in order, a digest of the tool calls and the files changed, then the most recent turns in full and older answers condensed.`);
+    add(`This chat has ${total} earlier turn${total === 1 ? '' : 's'}${opening} (${runs.join('; ')}).`);
   }
   // A summary a harness already made of the opening turns stands for them:
   // they are not retold (session/conversation-summary.ts).
@@ -268,7 +268,7 @@ export function transferPrompt(record: CanonicalRecord, request: string, options
   if (record.touchedFiles.length) {
     const last = turns.at(-1);
     const partial = options.interrupted && last?.touchedFiles.length
-      ? `\nThe interrupted turn had started changing ${last.touchedFiles.map(escapeFailoverContent).join(', ')}; they may be partially edited. Check each before editing again.`
+      ? `\nThe interrupted turn had started changing ${last.touchedFiles.map(escapeFailoverContent).join(', ')}.`
       : '';
     const fit = fitNewestFirst(record.touchedFiles.map((file) => ({ full: `- ${escapeFailoverContent(file)}` })), Math.floor(room * 0.06));
     const note = fit.dropped ? `(+${fit.dropped} more)\n` : '';
@@ -278,7 +278,7 @@ export function transferPrompt(record: CanonicalRecord, request: string, options
   // 3. Earlier attachments by path, and what is still open.
   if (record.attachments.length) {
     const fit = fitNewestFirst(record.attachments.map((file) => ({ full: `- ${escapeFailoverContent(file)}` })), Math.floor(room * 0.04));
-    add(`<attachments>\nFiles attached to earlier requests (read them if they matter now):\n${fit.dropped ? `(+${fit.dropped} more)\n` : ''}${fit.lines.join('\n')}\n</attachments>`);
+    add(`<attachments>\nFiles attached to earlier requests:\n${fit.dropped ? `(+${fit.dropped} more)\n` : ''}${fit.lines.join('\n')}\n</attachments>`);
   }
   if (record.openTodos.length) {
     const fit = fitNewestFirst(record.openTodos.map((todo) => ({ full: `- [${todo.status ?? 'pending'}] ${escapeFailoverContent(clipLine(todo.content, 200))}` })), Math.floor(room * 0.04));

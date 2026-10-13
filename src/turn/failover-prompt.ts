@@ -17,18 +17,15 @@
 import { carriesTitleRequest } from '../session/title.js';
 import { stripResourceNotes } from './resource-notes.js';
 
-/** Opening line of every rehydration prompt; the marker that identifies one.
- *
- * Written as context, not as a task. The earlier wording ("Continue the same
- * ClikCode conversation after an account or provider failover…") read to a
- * small model as the thing to do: handed a chat moved from Aider, a free
- * OpenRouter model on Goose answered "test" with a "Failover Continuity
- * Confirmed" status report, tables and all. */
-export const FAILOVER_PREAMBLE = 'The conversation below took place earlier in this chat; you are continuing it. Treat it as what you already know, answer only the current request, and do not mention this note or that the chat moved.';
+/** Opening line of every transfer prompt; the marker that identifies one. A
+ * statement of fact about the text that follows, not an instruction: the
+ * model is told nothing about what to do with the conversation. */
+export const FAILOVER_PREAMBLE = 'Earlier in this chat (carried over from another account or provider):';
 
 /** Preambles ClikCode wrote before, still recognized in vendor transcripts
  * recorded with them. */
 const EARLIER_PREAMBLES = [
+  'The conversation below took place earlier in this chat; you are continuing it. Treat it as what you already know, answer only the current request, and do not mention this note or that the chat moved.',
   'Continue the same ClikCode conversation after an account or provider failover. Preserve all prior decisions, files, and task state. Do not repeat completed work.',
 ];
 
