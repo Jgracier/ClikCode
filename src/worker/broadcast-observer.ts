@@ -10,6 +10,7 @@
  * drift from it, which is the entire point of this architecture (see
  * clikcode-worker-client-split project memory for why that matters).
  */
+import { normalizeActivityEvent } from '../harness/protocol/activity-normalize.js';
 import { mergeBackgroundWork, type BackgroundWork } from '../harness/protocol/background-agents.js';
 import type { HarnessQuestionRequest, HarnessQuestionResult } from '../harness/events/question.js';
 import { setUserWaiting } from '../turn/user-wait.js';
@@ -309,7 +310,7 @@ export class BroadcastObserver implements TurnObserver {
   activityEvent(raw: HarnessActivityEvent): void {
     // Numbered once, here or already in the journal: the same object, so
     // whichever saw it first gave the number.
-    const event = this.sequencer.stamp(raw);
+    const event = this.sequencer.stamp(normalizeActivityEvent(raw));
     if (event.id) {
       const key = `${event.id}\0${event.kind}\0${event.parentId ?? ''}\0${event.label}`;
       const value = JSON.stringify(event);

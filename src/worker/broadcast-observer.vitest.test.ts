@@ -132,8 +132,8 @@ describe('a window joining a running turn', () => {
       // A thought is never an activity row, so it is not one here either
       // (it is a mark: see `marks`). Each row carries the worker's seq.
       activities: [
-        { event: { kind: 'tool-start', id: 't1', label: 'Bash(npm test)', seq: 2 }, responseOffset: 14 },
-        { event: { kind: 'tool-done', id: 't1', label: 'Bash(npm test)', seq: 2 }, responseOffset: 27 },
+        { event: { kind: 'tool-start', id: 't1', label: '$ npm test', category: 'run', seq: 2 }, responseOffset: 14 },
+        { event: { kind: 'tool-done', id: 't1', label: '$ npm test', category: 'run', seq: 2 }, responseOffset: 27 },
       ],
       plan: [{ content: 'fix it', status: 'in_progress' }],
       marks: [{ kind: 'thought', seq: 1, responseOffset: 14 }, { kind: 'plan', seq: 3 }],

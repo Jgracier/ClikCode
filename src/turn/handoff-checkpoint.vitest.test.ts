@@ -34,7 +34,7 @@ describe('reopening a vendor thread after an interrupted turn', () => {
       const state = { accounts: [{ id: 'account', nativeProfile: { env: 'CLAUDE_CONFIG_DIR', path: config } }] } as HarnessState;
       expect(await synchronizeNativeTranscript(state, session)).toBe(true);
       expect(session.pendingTurn).toBeUndefined();
-      expect(session.messages?.at(-1)?.activities?.map((activity) => activity.event.label)).toEqual(['Agent(inspect)', 'Read(a.ts)']);
+      expect(session.messages?.at(-1)?.activities?.map((activity) => activity.event.label)).toEqual(['Agent(inspect)', 'Read a.ts']);
       expect(session.messages?.at(-1)?.activities?.[1]?.event.output).toEqual(['found clue']);
       // The thought the journal kept goes with the answer it was had for.
       expect(session.messages?.at(-1)?.marks).toMatchObject([{ kind: 'thought', heading: 'Reading first', durationMs: 2500 }]);
