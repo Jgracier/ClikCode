@@ -106,7 +106,10 @@ export function writeDenyReason(resolved: ResolvedPath, scope: PathScope): strin
     for (const dir of ['.ssh', '.gnupg', '.aws', '.kube', path.join('.config', 'gcloud'), path.join('.config', 'gh')]) {
       if (isInside(candidate, path.join(home, dir))) return `writes under ~/${dir} are never allowed`;
     }
-    if (isInside(candidate, realpathNearest(path.resolve(scope.stateDir)))) return 'the ClikCode state directory is managed by ClikCode itself';
+    // `t/` under it is where ClikCode puts its own temp dirs and the git
+    // worktrees of the agents it starts: the workspace of those agents.
+    const state = realpathNearest(path.resolve(scope.stateDir));
+    if (isInside(candidate, state) && !isInside(candidate, path.join(state, 't'))) return 'the ClikCode state directory is managed by ClikCode itself';
     const name = path.basename(candidate);
     // The model must not be able to grant itself permissions, or write a
     // command that ClikCode or a harness it fronts runs without asking.

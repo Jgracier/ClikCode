@@ -77,6 +77,7 @@ describe('deny lists', () => {
     expect(denied('~/.ssh/authorized_keys')).toMatch(/\.ssh/);
     expect(denied('~/.gnupg/x')).toMatch(/\.gnupg/);
     expect(denied(path.join(scope.stateDir, 'sessions', 's', 'harness.jsonl'))).toMatch(/state directory/);
+    expect(denied(path.join(scope.stateDir, 't', 'abc', 'worktree', 'file.ts'))).toBeUndefined();
     expect(denied('.clikcode/settings.local.json')).toMatch(/permission settings/);
     expect(denied('~/.bashrc')).toMatch(/startup file/);
     expect(denied('~/.zshrc')).toMatch(/startup file/);
