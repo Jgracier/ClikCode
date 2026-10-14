@@ -95,12 +95,12 @@ describe('stop: "stopping" is the worker\'s word, shown until the turn ends', ()
     expect(applyEvent(stopping, worker({ type: 'delta', text: 'more', mode: 'append' })).live!.stopping).toBe(true);
   });
 
-  it('a Stop the worker accepted before the turn started lands on the turn when it starts', () => {
+  it('a Stop announced before the turn started does not make the next turn start as stopping', () => {
     const early = applyEvent(emptyModel(), worker({ type: 'stopping' }));
     expect(early.running).toBe(false);
     expect(early.live).toBeUndefined();
     const started = applyEvent(early, worker({ type: 'waiting-start', message: 'thinking' }));
-    expect(started.live!.stopping).toBe(true);
+    expect(started.live!.stopping).toBeUndefined();
     expect(started.stopPending).toBeUndefined();
   });
 

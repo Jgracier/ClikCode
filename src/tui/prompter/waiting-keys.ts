@@ -38,6 +38,8 @@ export function onWaitingKey(this: TerminalHarnessPrompter, key: string): void {
   let stopWithApproval = false;
   if (this.pendingApproval && (key === '\u001b' || key === '\u0003')) {
     this.restoreTellingDraft();
+    // The ones queued behind it are denied with it, not shown one by one.
+    for (const queued of this.approvalQueue.splice(0)) queued.resolve(false);
     this.answerApproval(this.pendingApproval, false);
     stopWithApproval = true;
   } else if (this.pendingApproval) {
