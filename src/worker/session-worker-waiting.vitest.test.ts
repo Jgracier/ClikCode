@@ -813,4 +813,36 @@ describe('the model after its worker was stopped mid-turn', () => {
       expect(said.filter((line) => line.includes('second question'))).toHaveLength(1);
     }, 60_000);
   }
+
+describe('a worker that retires as its turn ends', () => {
+  it('delivers the end of the turn to a window even when the conversation is large', async () => {
+    // The end of a turn sends each window the whole conversation. A worker
+    // that exited right after (a newer build was waiting for it to go idle)
+    // dropped what it had not yet written: the window got a closed socket,
+    // never the turn's end, and showed the turn running until reopened.
+    const session = await gatewaySession();
+    const state = await readState();
+    const stored = state.sessions.find((item) => item.id === session.id)!;
+    const filler = 'x'.repeat(1_000_000);
+    stored.messages = Array.from({ length: 10 }, (_, index) => ({ role: index % 2 ? 'assistant' : 'user', content: `${index} ${filler}` })) as never;
+    await writeState(state);
+    const driver = await attach(session.id);
+    const follower = await attach(session.id);
+    await follower.initialSnapshot;
+    const seen: string[] = [];
+    follower.on('event', (event: WorkerEvent) => { seen.push(event.type); });
+    follower.on('close', () => seen.push('close'));
+    const turn = eventsUntil(driver, 'waiting-stop');
+    driver.send({ type: 'submit', text: 'long job', echo: true });
+    const held = await gateway!.next();
+    const before = (await readWorkerRecord(session.id))!;
+    // A window on a newer build asks it to step down mid-turn: declined, it goes when the turn ends.
+    await writeWorkerRecord({ ...before, build: 'a-different-build' });
+    await attach(session.id);
+    held.respond(text('done'));
+    await turn;
+    await processExit(before.pid);
+    for (let tries = 0; tries < 100 && !seen.includes('close'); tries += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(seen.slice(-3)).toEqual(['waiting-stop', 'shutdown', 'close']);
+  }, 90_000);
 });
