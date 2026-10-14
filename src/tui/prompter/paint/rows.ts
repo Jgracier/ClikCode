@@ -6,7 +6,7 @@ import type { SettlingTool } from '../../../turn/transcript.js';
 import type { HarnessActivityEvent, ToolCategory } from '../../../harness/prompter.js';
 import type { TranscriptMessage, HarnessSession } from '../../../session/model.js';
 import { ActivityEntry, collapseToolRuns, settleDecisionEntry, upsertActivityEvent } from '../../render/activity-log.js';
-import { toolUses, liveWaitKind, waitingSpinnerGlyph } from '../../../harness/protocol/activity-view.js';
+import { agentProgress, toolUses, liveWaitKind, waitingSpinnerGlyph } from '../../../harness/protocol/activity-view.js';
 import { outputPreviewRows, renderActivityLine } from '../../../harness/protocol/activity-line.js';
 import { tensedLabel } from '../../../harness/protocol/turn-flow.js';
 import { CallGrouping, LIVE_SHOWN_CALLS, liveItemLine, type CallRun, type GroupRow } from '../../render/call-groups.js';
@@ -104,9 +104,18 @@ export function createToolRows(p: TerminalHarnessPrompter, builders: RowBuilders
     }
     const kind = liveWaitKind(entry.event!) ?? 'tool';
     const frame = p.reducedMotion ? 0 : p.waitingFrame;
-    const row = runningChatLine(
+    const progress = (() => {
+      const event = entry.event;
+      if (!event?.agent || !event.id) return '';
+      const since = p.agentStarts.get(event.id) ?? Date.now();
+      p.agentStarts.set(event.id, since);
+      // Its live child rows already say what it does now and carry the count.
+      const shown = p.liveChildren.latest(event.id) !== undefined;
+      return ` ${chalk.dim(`· ${agentProgress({ ...(!shown && event.childTools ? { tools: event.childTools } : {}), ...(event.childTokens ? { tokens: event.childTokens } : {}), elapsedMs: Date.now() - since })}`)}`;
+    })();
+    const row = `${runningChatLine(
       tensedLabel(entry.event?.label ?? '', true), frame, kind,
-    ).trim();
+    ).trim()}${progress}`;
     // What it has printed so far, newest last, under the spinner -- a long
     // build or test run is visibly working instead of a bare timer.
     const live = entry.event ? outputPreviewRows({ ...entry.event, outputTail: true }, LIVE_OUTPUT_LINES).map(underCall) : [];

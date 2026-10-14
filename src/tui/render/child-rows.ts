@@ -66,6 +66,13 @@ export class LiveChildren {
     return { counted };
   }
 
+  /** What a parent's newest live child is doing now. */
+  latest(parentId: string): string | undefined {
+    let found: Slot | undefined;
+    for (const slot of this.slots.values()) if (slot.parentId === parentId && (!found || slot.seq > found.seq)) found = slot;
+    return found?.label;
+  }
+
   /** The parent finished: nothing under it is live any more. */
   parentEnded(parentId: string): void {
     for (const [key, slot] of this.slots) if (slot.parentId === parentId) this.slots.delete(key);

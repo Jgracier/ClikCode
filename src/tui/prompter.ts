@@ -91,6 +91,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** The calls inside running sub-agents, one live slot each
    * (render/child-rows.ts). Drawn nested under the agent, never retired. */
   readonly liveChildren = new LiveChildren();
+  /** When each running sub-agent's row was first drawn, for its clock. */
+  readonly agentStarts = new Map<string, number>();
   /** Which of this turn's calls and thoughts are one group (call-groups.ts). */
   readonly callGrouping = new CallGrouping();
   /** The groups of this view, kept so one can be opened (call-groups.ts). */

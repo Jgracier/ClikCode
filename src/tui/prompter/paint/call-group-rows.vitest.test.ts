@@ -11,7 +11,7 @@ import { createRowBuilders, createToolRows } from './rows.js';
 const strip = (text: string): string => text.replace(/\u001b\[[0-9;]*m/g, '');
 
 function kit(overrides: Record<string, unknown> = {}) {
-  const p = { callGroups: new GroupRegistry(), groupExpansion: new GroupExpansion(), viewportRows: () => 30, reducedMotion: true, waitingFrame: 0, liveResponse: '', approvalQueue: [], childEntries: [], ...overrides };
+  const p = { callGroups: new GroupRegistry(), groupExpansion: new GroupExpansion(), agentStarts: new Map(), liveChildren: { latest: () => undefined, rows: () => [] }, viewportRows: () => 30, reducedMotion: true, waitingFrame: 0, liveResponse: '', approvalQueue: [], childEntries: [], ...overrides };
   return { p, rows: createToolRows(p as never, createRowBuilders(p as never, 80)) };
 }
 
