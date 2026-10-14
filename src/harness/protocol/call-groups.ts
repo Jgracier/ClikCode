@@ -16,6 +16,21 @@ export type GroupItem = { id: string; event?: HarnessActivityEvent; thought?: Gr
 
 /** Output lines an expanded call shows. */
 export const DETAIL_OUTPUT_LINES = 20;
+/** Output lines an expanded call that failed shows: all that was kept. */
+export const FAILED_OUTPUT_LINES = 60;
+/** Lines of a sub-agent's answer an expansion shows. */
+export const AGENT_RESULT_LINES = 20;
+/** Diff lines an expanded edit shows before `+N more lines`. */
+export const DETAIL_DIFF_LINES = 30;
+/** Calls a sub-agent keeps for its expansion: the last of them (the same
+ * bound the saved turn keeps, turn/turn-activities.ts). */
+export const AGENT_CHILDREN_KEPT = 40;
+
+/** Whether tapping a call shows more: every call does, down to its full
+ * words; a thought or a note is not a call. */
+export function isExpandable(event: Pick<HarnessActivityEvent, 'kind'> | undefined): boolean {
+  return event !== undefined && event.kind !== 'thinking';
+}
 
 /** Items a group row folds away, as opposed to the ones that stay visible as
  * rows of their own: a failed or stopped call (errors must not hide), a
@@ -35,6 +50,7 @@ const KINDS = {
   run: (n: number, now: boolean) => `${now ? 'running' : 'ran'} ${plural(n, 'command')}`,
   edit: (n: number, now: boolean) => `${now ? 'editing' : 'edited'} ${plural(n, 'file')}`,
   fetch: (n: number, now: boolean) => `${now ? 'fetching' : 'fetched'} ${plural(n, 'page')}`,
+  agent: (n: number) => plural(n, 'agent'),
   other: (n: number, now: boolean) => `${now ? 'calling' : 'called'} ${plural(n, 'tool')}`,
 } as const;
 
@@ -52,7 +68,7 @@ export type GroupSummary = {
  * exploreSummary's, as in Claude Code). `running`: present tense. */
 export function groupSummary(items: readonly GroupItem[], running: boolean, waiting?: (event: HarnessActivityEvent) => boolean): GroupSummary {
   const order: Array<'look' | keyof typeof KINDS> = [];
-  const counts = { run: 0, edit: 0, fetch: 0, other: 0 };
+  const counts = { run: 0, edit: 0, fetch: 0, other: 0, agent: 0 };
   const looking: HarnessActivityEvent[] = [];
   let thoughts = 0;
   let failed = 0;
@@ -64,6 +80,8 @@ export function groupSummary(items: readonly GroupItem[], running: boolean, wait
     if (!event) continue;
     if (standsAlone(item, waiting)) {
       if (event.kind === 'tool-error') { if (event.stopped) stopped += 1; else failed += 1; }
+      // A sub-agent in the run stays a row of its own and counts here too.
+      else if (event.agent) { seen('agent'); counts.agent += 1; }
       continue;
     }
     if (event.category === 'read' || event.category === 'search') { seen('look'); looking.push(event); continue; }
@@ -100,8 +118,37 @@ export function callCommand(event: HarnessActivityEvent): string {
   return event.label;
 }
 
+/** Words of the task a sub-agent was given, where its call carries them. */
+export function agentTask(event: HarnessActivityEvent): string | undefined {
+  const input = event.call?.input;
+  if (!input) return undefined;
+  for (const key of ['prompt', 'task', 'message', 'instructions', 'description']) {
+    const value = input[key];
+    if (typeof value === 'string' && value.trim()) return value.replace(/\s+/g, ' ').trim();
+  }
+  return undefined;
+}
+
+/** The arguments of a call that is neither a command, a read nor an edit,
+ * one `name: value` each (bounded): what an MCP tool, a search or a fetch was
+ * asked. Nothing for a call recorded without its input. */
+export function callArgs(event: HarnessActivityEvent): string[] {
+  const input = event.call?.input;
+  if (!input || event.agent || event.category === 'run' || event.category === 'edit' || event.category === 'read') return [];
+  const rows: string[] = [];
+  for (const [name, value] of Object.entries(input)) {
+    if (value === undefined || value === null || value === '') continue;
+    const text = typeof value === 'string' ? value : JSON.stringify(value);
+    rows.push(`${name}: ${text.length > 200 ? `${text.slice(0, 199)}…` : text}`);
+    if (rows.length >= 6) break;
+  }
+  return rows;
+}
+
 export type CallDetail = {
   command: string;
+  /** What the call was asked, for a call that is not a command. */
+  args: string[];
   /** `exit 2 · 3.4s`, where the call reported either. */
   outcome?: string;
   /** Lines of output, the last ones, as many as `DETAIL_OUTPUT_LINES`. */
@@ -112,12 +159,12 @@ export type CallDetail = {
 
 /** What an expanded call shows: its full command, how it ended, and the tail
  * of its output. A call recorded without output has the command only. */
-export function callDetail(event: HarnessActivityEvent, lines = DETAIL_OUTPUT_LINES): CallDetail {
+export function callDetail(event: HarnessActivityEvent, lines = event.kind === 'tool-error' ? FAILED_OUTPUT_LINES : DETAIL_OUTPUT_LINES): CallDetail {
   const all = event.output ?? [];
   const shown = event.outputTail === true || event.category === 'run' ? all.slice(-lines) : all.slice(0, lines);
   const outcome = activityOutcome(event)?.parts.join(' · ');
   return {
-    command: callCommand(event), ...(outcome ? { outcome } : {}), output: shown,
+    command: callCommand(event), args: callArgs(event), ...(outcome ? { outcome } : {}), output: shown,
     earlier: all.length - shown.length + (event.outputOmitted ?? 0),
   };
 }

@@ -5,7 +5,7 @@
  * (row-tags.ts) so a tap on it can be told which group and item it meant. */
 
 import chalk from 'chalk';
-import { callDetail } from '../../harness/protocol/call-groups.js';
+import { agentTask, callDetail, AGENT_RESULT_LINES, DETAIL_DIFF_LINES } from '../../harness/protocol/call-groups.js';
 import { TOOL_ROW_TEXT } from '../../harness/protocol/tool-category-style.js';
 import { fileDiffRows } from '../../harness/protocol/activity-line.js';
 import { visibleSlice } from './width.js';
@@ -55,11 +55,16 @@ export function itemDetailRows(entry: ActivityEntry, room: number): string[] {
     if (thought.text) for (const row of wrapWords(thought.text.replace(/\s+/g, ' ').trim(), room)) rows.push(chalk.dim(chalk.italic(row)));
     return rows;
   }
-  if (!event) return rows;
+  if (!event) {
+    for (const row of wrapWords(entry.decision?.detail ?? '', room)) rows.push(chalk.dim(row));
+    return rows;
+  }
   const detail = callDetail(event);
   for (const row of wrapWords(detail.command, room)) rows.push(TOOL_ROW_TEXT(row));
+  if (entry.decision?.detail && entry.decision.detail !== detail.command) for (const row of wrapWords(entry.decision.detail, room)) rows.push(chalk.dim(row));
+  for (const arg of detail.args) for (const row of wrapWords(arg, room)) rows.push(chalk.dim(row));
   if (detail.outcome) rows.push(chalk.dim(detail.outcome));
-  if (event.diff?.length) for (const row of fileDiffRows(event.diff, 12)) rows.push(row.trim());
+  if (event.diff?.length) for (const row of fileDiffRows(event.diff, DETAIL_DIFF_LINES)) rows.push(visibleSlice(row.slice(4), room));
   if (detail.earlier > 0 && detail.output.length) rows.push(chalk.dim(`… ${detail.earlier} earlier line${detail.earlier === 1 ? '' : 's'}`));
   for (const row of detail.output) rows.push(chalk.dim(visibleSlice(row, room)));
   return rows;
@@ -86,4 +91,49 @@ export function capOpenRows(rows: readonly string[], id: string, max: number): s
   if (rows.length <= max) return [...rows];
   const keep = Math.max(1, max - 2);
   return [rows[0]!, tagRow(`    ${chalk.dim(`+${rows.length - 1 - keep} earlier`)}`, { group: id, item: '' }), ...rows.slice(rows.length - keep)];
+}
+
+/** A sub-agent's expansion under its row: the task it was given, the calls it
+ * made (each a row of its own, one level in, that opens to its detail), and
+ * what it answered -- only what the call and its calls carry. */
+function agentDetailRows(input: { id: string; entry: ActivityEntry; children: readonly ActivityEntry[]; state: GroupOpenState; width: number }): string[] {
+  const { id, entry, children, state, width } = input;
+  const event = entry.event!;
+  const rows: string[] = [];
+  const room = Math.max(1, width - 8);
+  const task = agentTask(event);
+  if (task) {
+    const wrapped = wrapWords(task, room);
+    for (const row of wrapped.slice(0, 4)) rows.push(tagRow(`    ${chalk.dim(row)}`, { group: id, item: '' }));
+    if (wrapped.length > 4) rows.push(tagRow(`    ${chalk.dim('…')}`, { group: id, item: '' }));
+  }
+  const earlier = (event.childTools ?? 0) - children.length;
+  if (earlier > 0) rows.push(tagRow(`      ${chalk.dim(`+${earlier} earlier`)}`, { group: id, item: '' }));
+  for (const [index, child] of children.entries()) {
+    const childId = child.event?.id ?? `child#${index}`;
+    rows.push(tagRow(`      ${visibleSlice((child.lines[0] ?? '').trim(), Math.max(1, width - 6))}`, { group: id, item: childId, depth: 1 }));
+    if (!state.items.has(childId)) continue;
+    for (const row of itemDetailRows(child, Math.max(1, width - 12))) rows.push(tagRow(`          ${row}`, { group: id, item: childId, depth: 1 }));
+  }
+  const output = event.output ?? [];
+  const shown = output.slice(0, AGENT_RESULT_LINES);
+  for (const row of shown) rows.push(tagRow(`    ${chalk.dim(visibleSlice(row, room))}`, { group: id, item: '' }));
+  const more = output.length - shown.length + (event.outputOmitted ?? 0);
+  if (more > 0) rows.push(tagRow(`    ${chalk.dim(`… ${more} more line${more === 1 ? '' : 's'}`)}`, { group: id, item: '' }));
+  return rows;
+}
+
+/** A call that opens on its own: its rows (blank rows left as they are), each
+ * tagged with the call's id; opened, its detail under them -- a sub-agent's
+ * task, calls and result, any other call's command, arguments, diff and
+ * output. The same rows live and reopened. */
+export function soloRows(input: {
+  id: string; lines: readonly string[]; entry: ActivityEntry; children: readonly ActivityEntry[]; state: GroupOpenState; width: number;
+}): string[] {
+  const { id, lines, entry, children, state, width } = input;
+  const rows = lines.map((line) => (line.trim() ? tagRow(line, { group: id, item: '' }) : line));
+  if (!state.open) return rows;
+  if (entry.event?.agent) return [...rows, ...agentDetailRows({ id, entry, children, state, width })];
+  for (const row of itemDetailRows(entry, Math.max(1, width - 8))) rows.push(tagRow(`    ${row}`, { group: id, item: '' }));
+  return rows;
 }

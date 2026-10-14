@@ -6,6 +6,7 @@ import type { HarnessActivityEvent } from '../../harness/prompter.js';
 import type { HarnessSession, TurnMark } from '../../session/model.js';
 import { ActivityEntry, entryLines, settleDecisionEntry, stopEntries, upsertActivityEvent } from '../render/activity-log.js';
 import { activityLifecyclePhase, withChildTool, appendThought, sameCall } from '../../harness/protocol/activity-view.js';
+import { AGENT_CHILDREN_KEPT } from '../../harness/protocol/call-groups.js';
 import { decisionRow, reasoningHeading } from '../../harness/protocol/turn-flow.js';
 import { PlanEntry } from '../render/plan-block.js';
 import { thoughtRow } from '../render/tool-rows.js';
@@ -83,6 +84,7 @@ export function activityEvent(this: TerminalHarnessPrompter, event: HarnessActiv
     const { counted } = this.liveChildren.apply(event, { offset, seq: ++this.timelineSequence });
     // And how much it has done, as Claude Code counts it: the agent row
     // ends "(12 tool uses, 1m 5s)". Once per call, not once per frame.
+    if (event.kind !== 'thinking') this.childEntries = capChildEntries(upsertActivityEvent(this.childEntries, 0, offset, event, 0), event.parentId);
     if (counted) {
       this.activityEntries = this.activityEntries.map((entry) => {
         const parent = entry.event;
@@ -217,4 +219,19 @@ export function settleSavedStops(this: TerminalHarnessPrompter, session: Harness
     : []));
   if (!stopped.length) return;
   this.activityEntries = stopEntries(this.activityEntries, (entry) => this.ofThisTurn(entry) && stopped.some((event) => sameCall(entry.event!, event)));
+}
+
+/** Calls of all agents kept, across a long session. */
+const CHILDREN_ALL_KEPT = 400;
+
+/** At most AGENT_CHILDREN_KEPT calls of `parentId`: the oldest settled ones go first. */
+function capChildEntries(entries: ActivityEntry[], parentId: string): ActivityEntry[] {
+  let drop = entries.filter((entry) => entry.event?.parentId === parentId).length - AGENT_CHILDREN_KEPT;
+  if (drop <= 0) return entries.length > CHILDREN_ALL_KEPT ? entries.slice(-CHILDREN_ALL_KEPT) : entries;
+  const next = [...entries];
+  for (let index = 0; index < next.length && drop > 0;) {
+    const event = next[index]!.event;
+    if (event?.parentId === parentId && event.kind !== 'tool-start') { next.splice(index, 1); drop -= 1; } else index += 1;
+  }
+  return next;
 }

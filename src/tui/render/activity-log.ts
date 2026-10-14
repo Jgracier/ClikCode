@@ -39,6 +39,8 @@ export type EntryDecision = {
   row: string;
   /** What an approved call's own first line carries instead. */
   suffix: string;
+  /** What was asked, in full (the row is cut to the width). */
+  detail?: string;
 };
 
 const paintDecision = (text: string, tone: 'ok' | 'no' | 'told'): string => {
@@ -54,6 +56,8 @@ export function entryLines(event: HarnessActivityEvent, decision?: EntryDecision
   return lines.length ? [`${lines[0]}${decision.suffix}`, ...lines.slice(1)] : [decision.row];
 }
 
+const detailOf = (decision: Decision): string => (decision.kind === 'told' ? decision.text : decision.label);
+
 /** Settle a decision where it belongs: on the row of the call it was about
  * when there is one (kept where the call began), else as a row of its own at
  * the answer's current place. One event is one row. */
@@ -62,7 +66,7 @@ export function settleDecisionEntry(entries: readonly ActivityEntry[], at: {
 }): ActivityEntry[] {
   const { text, tone } = decisionRow(at.decision);
   const decision: EntryDecision = {
-    kind: at.decision.kind, row: paintDecision(text, tone),
+    kind: at.decision.kind, row: paintDecision(text, tone), ...(detailOf(at.decision) ? { detail: detailOf(at.decision) } : {}),
     suffix: chalk.dim(` · approved${at.decision.kind === 'approved' && at.decision.always ? ' (always)' : ''}`),
   };
   const next = [...entries];

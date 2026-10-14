@@ -65,6 +65,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** Whether the pending tick is the spinner's (true) or the clock's. */
   waitingTickFast = false;
   activityEntries: ActivityEntry[] = [];
+  /** The calls sub-agents of this turn made (parentId), bounded per agent, kept so an agent's row can open to them. */
+  childEntries: ActivityEntry[] = [];
   /** A link sign-in's link and code, drawn above the waiting band while it
    * runs (linkWait). */
   signInLines: string[] = [];
@@ -424,6 +426,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // A /search mention belongs to the conversation it was found in.
       if (this.mentionFocus?.sessionId !== session.id) this.mentionFocus = undefined;
       this.activityEntries = [];
+      this.childEntries = [];
       this.planEntries = [];
       this.planStart = undefined;
       this.panelState = undefined;
