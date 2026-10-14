@@ -312,12 +312,12 @@ describe('the working line', () => {
   });
 
   it('says it waits for you, in the permission colour, while an approval is up', () => {
-    expect(workingStatus(live(), true, 60_000)).toMatchObject({ label: 'Waiting for you…', tone: 'asking', toneClass: 'tone-permission' });
+    expect(workingStatus(live(), true, 60_000)).toMatchObject({ label: 'Waiting for you…', tone: 'asking', toneClass: 'tone-accent' });
   });
 
   it("names the open call's work in its category's colour", () => {
     const status = workingStatus(live({ toolPhase: 'running tests', openTools: [['t', { label: 'npm test', category: 'run' }]] }), false, 30_000);
-    expect(status).toMatchObject({ label: 'Running tests…', tone: 'tool', toneClass: 'tone-yellow' });
+    expect(status).toMatchObject({ label: 'Running tests…', tone: 'tool', toneClass: 'tone-accent' });
   });
 
   it("shows the reasoning's own heading, else writing, else thinking", () => {
@@ -330,11 +330,11 @@ describe('the working line', () => {
     expect(workingStatus(live({ writingAt: 1, callAt: 2 }), false, 3_000).label).toBe('Thinking…');
     expect(workingStatus(live({ writingAt: 3, callAt: 2 }), false, 3_000).label).toBe('Writing…');
     expect(workingStatus(live({ thinkingSince: 0 }), false, 25_000).label).toBe('Thinking…');
-    expect(workingStatus(live(), false, 3_000)).toMatchObject({ label: 'Thinking…', toneClass: 'tone-cyan' });
+    expect(workingStatus(live(), false, 3_000)).toMatchObject({ label: 'Thinking…', toneClass: 'tone-accent' });
   });
 
   it('never turns toward red or says nothing arrived, however long it is quiet', () => {
-    expect(workingStatus(live(), false, 600_000)).toMatchObject({ tone: 'thinking', toneClass: 'tone-cyan' });
+    expect(workingStatus(live(), false, 600_000)).toMatchObject({ tone: 'thinking', toneClass: 'tone-accent' });
   });
 
 });

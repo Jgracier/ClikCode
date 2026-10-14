@@ -3,10 +3,9 @@ import type { JSX } from 'preact';
 import { useContext, useState } from 'preact/hooks';
 import { activityOutcome, commandOutputPreview, diffPreview, diffTotals, DIFF_PREVIEW_LINES, LIVE_OUTPUT_LINES, liveWaitKind, outputPreview, previewLinesFor, toolUses } from '../../../../src/harness/protocol/activity-view';
 import { activityResult, decisionRow, exploreRuns, exploreSummary, reasoningBody, reasoningHeading, tensedLabel, thoughtRow } from '../../../../src/harness/protocol/turn-flow';
-import { TOOL_CATEGORY } from '../../../../src/harness/protocol/tool-category';
+import { LOOK } from './look';
 import { useNow } from './clock';
 import { formatElapsed } from '../../../../src/harness/protocol/format';
-import type { ToolCategory } from '../../../../src/harness/prompter';
 import { liveChildren, type Activity, type DecisionEntry, type LiveChild, type ThoughtEntry } from '../model';
 import type { FileDiff } from '../protocol';
 import { post } from './bus';
@@ -14,18 +13,18 @@ import { pathIn, relative } from './format';
 import { Animating, Icon, Spinner } from './ui';
 import { activityMore, decisionBadge, foldedSummary, runGroupSummary, runGroupView, runItemKey, runItemStandsAlone, shimmerStyle, type RunItem } from './flow';
 
-export const CATEGORY_ICON: Record<ToolCategory, string> = { read: 'file', edit: 'edit', run: 'terminal', search: 'search', fetch: 'globe' };
-
-/** A call's icon and colour come from what it is (its category, or being a
- * sub-agent), the same facts the terminal's glyph and colour come from. */
-export function activityIcon(activity: Activity): string {
-  if (activity.agent || liveWaitKind({ ...activity, kind: 'tool-start' }) === 'agent') return 'hubot';
-  return activity.category ? CATEGORY_ICON[activity.category] : 'tools';
+/** The mark at a row's start: the terminal's own glyphs (look.ts), one for every
+ * tool whatever its category and whichever harness made it. A running row
+ * spins (the callers draw a Spinner); a failure keeps the glyph in red, a
+ * stopped call is the stop mark in yellow. */
+export function ActivityGlyph({ status }: { status: 'done' | 'error' | 'stopped' }): JSX.Element {
+  return <span class="tool-glyph" aria-hidden="true">{status === 'stopped' ? LOOK.glyph.stopped : LOOK.glyph.tool}</span>;
 }
 
-export function toneOf(activity: Activity): string {
-  if (activity.agent) return 'tone-cyan';
-  return activity.category ? `tone-${TOOL_CATEGORY[activity.category].colour}` : '';
+/** The glyph's colour role: the same blue for every tool, red for a failure,
+ * yellow once stopped. */
+export function toneOf(status: 'running' | 'done' | 'error' | 'stopped'): string {
+  return status === 'error' ? 'tone-failed' : status === 'stopped' ? 'tone-stopped' : status === 'running' ? 'tone-accent' : 'tone-tool';
 }
 
 
@@ -125,7 +124,7 @@ export function ChildLine({ live }: { live: LiveChild }): JSX.Element {
   const uses = live.newest ? live.parent.childTools : undefined;
   return (
     <div class="activity-child" title={live.child.label}>
-      <Spinner tone="tone-cyan" /><span>{tensedLabel(live.child.label, true)}</span>{uses ? <span class="muted">{toolUses(uses)}</span> : null}
+      <Spinner tone="tone-accent" /><span>{tensedLabel(live.child.label, true)}</span>{uses ? <span class="muted">{toolUses(uses)}</span> : null}
     </div>
   );
 }
@@ -164,12 +163,12 @@ export function ActivityRow({ activity, workspace, userIndex }: { activity: Acti
       <div class="activity-line">
         {/* Every running row spins for itself, in its category's colour, on
             the page's one clock (the working line spins for the turn). */}
-        <span class={`activity-status ${toneOf(activity)}`} aria-label={status}>
-          {status === 'error' ? <Icon name="error" /> : status === 'stopped' ? <Icon name="debug-stop" />
-            : status === 'running' ? <Spinner tone={agentRunning ? 'tone-cyan' : toneOf(activity)} /> : <Icon name={activityIcon(activity)} />}
+        <span class={`activity-status ${toneOf(status)}`} aria-label={status}>
+          {status === 'running' ? <Spinner tone="tone-accent" /> : <ActivityGlyph status={status} />}
         </span>
         <ActivityLabel label={status === 'stopped' ? activity.label : tensedLabel(activity.label, status === 'running')} workspace={workspace} shimmer={agentRunning && animating} />
         {status === 'stopped' ? <span class="activity-outcome stopped">stopped</span> : null}
+        {status === 'error' ? <span class="activity-outcome failed-word">failed</span> : null}
         {activity.decision ? <span class={`activity-outcome activity-decision ${decisionBadge(activity.decision).tone}`}>{decisionBadge(activity.decision).text}</span> : null}
         {totals ? <span class="activity-counts"><Counts additions={totals.additions} removals={totals.removals} /></span> : null}
         {status === 'running' && activity.startedAt ? <Clock since={activity.startedAt} /> : null}
@@ -189,7 +188,7 @@ export function ActivityRow({ activity, workspace, userIndex }: { activity: Acti
       </div>
       {beside.map((entry) => <ChildLine key={entry.child.key} live={entry} />)}
       {/* A harness that sent no child calls, only what it is doing now. */}
-      {status === 'running' && activity.child && !activity.children?.length ? <div class="activity-child" title={activity.child}><Spinner tone="tone-cyan" /><span>{activity.child}</span>{activity.childTools ? <span class="muted">{toolUses(activity.childTools)}</span> : null}</div> : null}
+      {status === 'running' && activity.child && !activity.children?.length ? <div class="activity-child" title={activity.child}><Spinner tone="tone-accent" /><span>{activity.child}</span>{activity.childTools ? <span class="muted">{toolUses(activity.childTools)}</span> : null}</div> : null}
       {/* The children stay available once it settles, one click away. */}
       {open && activity.children?.length ? (
         <div class="activities nested">{activity.children.map((child) => <ActivityRow key={child.key} activity={child} workspace={workspace} userIndex={userIndex} />)}</div>
@@ -231,7 +230,8 @@ export function FoldedRun({ items, workspace, userIndex }: { items: RunItem[]; w
     <div class="trace">
       <button type="button" class="trace-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
         <Icon name={open ? 'chevron-down' : 'chevron-right'} />
-        <span>{single ? foldedSummary(calls) : runGroupSummary(items)}</span>
+        <span class="tone-tool tool-glyph" aria-hidden="true">{LOOK.glyph.tool}</span>
+        <span class="group-summary">{single ? foldedSummary(calls) : runGroupSummary(items)}</span>
         {totals.additions || totals.removals ? <span class="activity-counts"><Counts additions={totals.additions} removals={totals.removals} /></span> : null}
       </button>
       {open ? <div class="activities">{items.map(row)}</div> : alone.length ? <div class="activities">{alone.map(row)}</div> : null}
@@ -264,7 +264,7 @@ export function ExploredRow({ activities, workspace, userIndex }: { activities: 
     <div class={`explored${running ? ' running' : ''}`}>
       <button type="button" class="trace-toggle explored-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
         <Icon name={open ? 'chevron-down' : 'chevron-right'} />
-        {running ? <Spinner tone="tone-blue" /> : null}
+        {running ? <Spinner tone="tone-accent" /> : null}
         <span class="explored-title">{running ? 'Exploring' : 'Explored'}</span>
         <span class="muted explored-summary">{exploreSummary(activities)}</span>
       </button>
@@ -274,7 +274,7 @@ export function ExploredRow({ activities, workspace, userIndex }: { activities: 
             const result = activityResult(activity);
             return (
               <div key={activity.key} class="explored-call">
-                <span class={`activity-status ${toneOf(activity)}`}>{activity.kind === 'tool-start' ? <Spinner tone={toneOf(activity)} /> : <Icon name={activityIcon(activity)} />}</span>
+                <span class={`activity-status ${toneOf(activity.kind === 'tool-start' ? 'running' : 'done')}`}>{activity.kind === 'tool-start' ? <Spinner tone="tone-accent" /> : <ActivityGlyph status="done" />}</span>
                 <ActivityLabel label={activity.stopped ? activity.label : tensedLabel(activity.label, activity.kind === 'tool-start')} workspace={workspace} />
                 {activity.stopped ? <span class="activity-outcome stopped">stopped</span> : null}
                 {result ? <span class="activity-outcome activity-result">{result}</span> : null}
@@ -298,9 +298,9 @@ export function ThoughtRow({ thought }: { thought: ThoughtEntry }): JSX.Element 
     <div class="trace thought-row">
       {body ? (
         <button type="button" class="trace-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
-          <Icon name={open ? 'chevron-down' : 'chevron-right'} /><span>{row}</span>
+          <Icon name={open ? 'chevron-down' : 'chevron-right'} /><span class="thought-glyph" aria-hidden="true">{LOOK.glyph.thought}</span><span class="thought-text">{row}</span>
         </button>
-      ) : <div class="trace-toggle static"><Icon name="lightbulb" /><span>{row}</span></div>}
+      ) : <div class="trace-toggle static"><span class="thought-glyph" aria-hidden="true">{LOOK.glyph.thought}</span><span class="thought-text">{row}</span></div>}
       {open && body ? <Reasoning text={body} /> : null}
     </div>
   );

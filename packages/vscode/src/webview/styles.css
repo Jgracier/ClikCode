@@ -170,8 +170,13 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
 .activity-status { flex: none; width: 16px; display: inline-flex; justify-content: center; }
 .activity-status .codicon { font-size: 14px; }
 .activity.running .activity-line { color: var(--vscode-foreground); }
-.activity.error .activity-status { color: var(--err); }
-.activity.stopped .activity-status, .activity-outcome.stopped { color: var(--warn); }
+/* A row's words are the tool-row blue; a failure is red whole, a stopped call's name recedes (the terminal's rows). */
+.activity .activity-text, .explored-call .activity-text { color: var(--look-tool-text); }
+.activity.error .activity-text { color: var(--look-failed); }
+.activity.stopped .activity-text { color: var(--muted); }
+.activity.error .activity-status { color: var(--look-failed); }
+.activity.stopped .activity-status, .activity-outcome.stopped { color: var(--look-stopped); }
+.activity-outcome.failed, .activity-outcome.failed-word { color: var(--look-failed); }
 .activity-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .composer-box.dropping { border-color: var(--focus); border-style: dashed; }
 .drop-hint {
@@ -197,7 +202,6 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
 .context-meter.high .context-fill { stroke: var(--err); }
 .context-problems { display: inline-flex; gap: 2px; align-items: center; color: var(--warn); }
 .activity-outcome { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
-.activity-outcome.failed { color: var(--err); }
 .activity-output {
   margin: 2px 0 6px 24px; padding: 6px 8px; max-height: 14em; overflow: auto; font-size: 0.92em; white-space: pre;
   background: var(--vscode-textCodeBlock-background); border-radius: var(--radius-small);
@@ -213,8 +217,8 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
 .activity-output.diff .mark { display: inline-block; width: 1.4ch; user-select: none; }
 .activity-output.diff .file { opacity: 0.85; padding: 4px 8px 2px; font-family: var(--vscode-font-family); }
 .activity-counts { flex: none; font-size: 0.92em; font-variant-numeric: tabular-nums; }
-.activity-counts .add { color: var(--vscode-gitDecoration-addedResourceForeground, var(--ok)); }
-.activity-counts .del { color: var(--vscode-gitDecoration-deletedResourceForeground, var(--err)); }
+.activity-counts .add { color: var(--look-success); }
+.activity-counts .del { color: var(--look-failed); }
 .activity-actions { display: inline-flex; gap: 2px; opacity: 0; transition: opacity 0.12s; }
 .activity-line:hover .activity-actions, .activity-line:focus-within .activity-actions { opacity: 1; }
 .activity-child { display: flex; gap: 6px; align-items: center; margin: 0 0 2px 24px; color: var(--muted); font-size: 0.93em; min-width: 0; }
@@ -228,6 +232,8 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
 }
 .more-steps:hover, .trace-toggle:hover { color: var(--vscode-foreground); }
 .trace { margin: 2px 0 6px; }
+.trace-toggle .group-summary { color: var(--look-summary); }
+.thought-text, .thought-glyph { color: var(--muted); font-style: italic; }
 .trace-toggle.static { cursor: default; }
 .trace-toggle.static:hover { color: var(--muted); }
 /* What the user decided at an approval, where it was asked. */
@@ -563,16 +569,16 @@ body.vscode-high-contrast .keylist-row.active { outline: 1px dashed var(--vscode
 /* The terminal's spinner and its tool colours, in the theme's own palette.
    Each tone names its colour (--tone) so the working line can mix it. */
 .spinner { display: inline-block; width: 2ch; font-family: var(--vscode-editor-font-family); line-height: 1; color: var(--muted); }
-/* Each tool category's colour (TOOL_CATEGORY in src/harness/protocol/tool-category.ts)
- * is the theme's own terminal colour of that name, so the panel and the terminal agree. */
-.tone-blue { --tone: var(--vscode-terminal-ansiBlue, var(--vscode-charts-blue, #3794ff)); color: var(--tone); }
-.tone-magenta { --tone: var(--vscode-terminal-ansiMagenta, var(--vscode-charts-purple, #b180d7)); color: var(--tone); }
-.tone-yellow { --tone: var(--vscode-terminal-ansiYellow, var(--vscode-charts-yellow, #cca700)); color: var(--tone); }
-.tone-cyan { --tone: var(--vscode-terminal-ansiCyan, #29b8db); color: var(--tone); }
-.tone-green { --tone: var(--vscode-terminal-ansiGreen, var(--vscode-charts-green, #89d185)); color: var(--tone); }
-.tone-permission { --tone: var(--vscode-textLink-foreground, #3794ff); color: var(--tone); }
+/* One look for every harness and every tool (src/harness/protocol/look.ts,
+ * set on the root as --look-* by webview/look.ts): the terminal's colours, the
+ * same xterm indexes. No per-category colour. */
+.tone-accent { --tone: var(--look-accent); color: var(--tone); }
+.tone-tool { --tone: var(--look-tool-glyph); color: var(--tone); }
+.tone-failed { --tone: var(--look-failed); color: var(--tone); }
+.tone-stopped { --tone: var(--look-stopped); color: var(--tone); }
+.tone-success { --tone: var(--look-success); color: var(--tone); }
 .tone-plain { --tone: var(--vscode-foreground); color: var(--tone); }
-.activity.done .activity-status:not(.tone-cyan):not(.tone-yellow):not(.tone-blue):not(.tone-magenta):not(.tone-green) { color: var(--muted); }
+.tool-glyph { font-family: var(--vscode-editor-font-family); line-height: 1; }
 .working .spinner { width: 2.2ch; }
 /* The working line: its tone, and a highlight sweeping across the words at
    the terminal's pace (--shimmer-cycle, set per label from shimmerCycleMs)
