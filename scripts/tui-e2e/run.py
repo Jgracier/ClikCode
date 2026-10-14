@@ -867,6 +867,52 @@ SCENARIOS = {
         'final_once': ['Read 2 files, searched 1 pattern'],
         'never': ['build step 15 of 30', 'lines hidden'],
     },
+    # A run of calls and thoughts with no prose between them settles as ONE
+    # summary row (counts by kind), and the items stay reachable: Ctrl+O opens
+    # a panel above the composer listing them, a tap on an item opens its full
+    # command and output, Esc closes it.
+    'call-group-collapses': {
+        'turns': [{'emits': [
+            {'op': 'thought', 'heading': 'Planning the work', 'text': 'First look around.', 'ms': 20},
+            {'op': 'tool', 'id': 'g1', 'title': 'echo alpha-one', 'ms': 200, 'result': 'alpha-one'},
+            {'op': 'tool-start', 'id': 'g2', 'title': 'Read src/beta.ts', 'kind': 'read', 'input': {'path': 'src/beta.ts'}},
+            {'op': 'tool-end', 'id': 'g2', 'result': 'b0\nb1'},
+            {'op': 'tool', 'id': 'g3', 'title': 'echo gamma-three', 'ms': 200, 'result': 'gamma-three'},
+            {'op': 'thought', 'text': 'Now conclude.', 'ms': 20},
+            {'op': 'tool', 'id': 'g4', 'title': 'echo delta-four', 'ms': 200, 'result': 'delta-four'},
+            {'op': 'text', 'text': 'The calls are all done.'},
+        ]}],
+        'steps': [('type', 'run the calls'), ('wait_for', 'The calls are all done.', 40), ('settle', 2), ('snap', 'final')],
+        'watch': ['run the calls', 'The calls are all done.'],
+        'final_once': ['Ran 3 commands, read 1 file', '2 thoughts'],
+        # The calls are inside the group, not rows of their own.
+        'snap_lacks': {'final': ['echo alpha-one', 'echo gamma-three', 'Thought for']},
+    },
+    'call-group-panel': {
+        'turns': [{'emits': [
+            {'op': 'tool', 'id': 'g1', 'title': 'echo alpha-one', 'ms': 200, 'result': 'alpha-one'},
+            {'op': 'tool-start', 'id': 'g2', 'title': 'Read src/beta.ts', 'kind': 'read', 'input': {'path': 'src/beta.ts'}},
+            {'op': 'tool-end', 'id': 'g2', 'result': 'b0\nb1'},
+            {'op': 'tool', 'id': 'g3', 'title': 'echo gamma-three', 'ms': 200, 'result': 'gamma-three\nline two of gamma'},
+            {'op': 'text', 'text': 'The calls are all done.'},
+        ]}],
+        'steps': [
+            ('type', 'run the calls'), ('wait_for', 'The calls are all done.', 40), ('settle', 2),
+            ('keys', '\x0f'), ('settle', 0.8), ('snap', 'panel'),
+            ('click', 'echo gamma-three'), ('settle', 0.8), ('snap', 'expanded'),
+            ('click', 'echo gamma-three'), ('settle', 0.8), ('snap', 'collapsed'),
+            ('keys', '\x0f'), ('settle', 0.8), ('snap', 'closed'),
+            ('click', 'Ran 2 commands'), ('settle', 0.8), ('snap', 'tapped'),
+            ('keys', '\x1b'), ('settle', 0.8), ('snap', 'escaped'),
+        ],
+        'watch': ['run the calls', 'The calls are all done.'],
+        'snap_contains': {
+            'panel': ['tap or Esc to close', 'echo alpha-one', 'Read src/beta.ts', 'echo gamma-three'],
+            'expanded': ['line two of gamma'],
+            'tapped': ['tap or Esc to close', 'echo alpha-one'],
+        },
+        'snap_lacks': {'panel': ['line two of gamma'], 'collapsed': ['line two of gamma'], 'closed': ['tap or Esc to close'], 'escaped': ['tap or Esc to close', 'echo alpha-one']},
+    },
     # Two approvals at once say which is which; the second is answered "no,
     # and do this instead": the call is denied and the words go to the turn.
     'approval-tell-instead': {
@@ -2135,6 +2181,15 @@ def run(name, spec, entry, keep):
             fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', step[1], step[2], 0, 0))
             screen.resize(lines=step[1], columns=step[2])
             pump(0.5)
+        elif step[0] == 'click':
+            # A tap: press and release on the same cell, on the LAST row that
+            # shows the phrase (the middle of its first cell's word).
+            where = [(row, line.find(step[1])) for row, line in enumerate(screen.display) if step[1] in line]
+            if not where:
+                problems.append(f'could not find {step[1]!r} on screen to click'); continue
+            row, col = where[-1]
+            os.write(fd, f'\x1b[<0;{col + 1};{row + 1}M'.encode()); pump(0.05)
+            os.write(fd, f'\x1b[<0;{col + 1};{row + 1}m'.encode()); pump(0.4)
         elif step[0] == 'select':
             # Press on the phrase's first cell, drag across it, release on its
             # last -- the mouse reports a terminal sends with SGR reporting on.

@@ -69,7 +69,7 @@ export function groupPanelRows(data: GroupData, state: GroupPanelState, width: n
     return [header, ...body.map((row) => tagRow(row.text, { kind: 'gp', group: data.id, item: row.item }))];
   }
   const anchorAt = state.anchor === undefined ? -1 : body.findIndex((row) => row.item === state.anchor);
-  let start = state.start ?? (anchorAt >= 0 ? anchorAt : body.length - space);
+  let start = state.start ?? (anchorAt >= 0 ? anchorAt : body.length - Math.max(1, space - 1));
   start = Math.max(0, Math.min(start, body.length - Math.max(1, space - 1)));
   const earlier = start > 0;
   const slots = space - (earlier ? 1 : 0);
