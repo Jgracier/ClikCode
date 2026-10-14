@@ -55,12 +55,9 @@ export async function runVendorSessionAttempt(input: {
   // (acp-client.ts). Recorded under the id the composer shows it by, so the
   // durable steer matches its row by identity.
   const onSteerReady: HarnessTurnObserver['onSteerReady'] = (handler) => run.liveInput?.setSteerHandler(handler ? async (steerText, submission, hold) => {
-    let held = false;
-    await handler(steerText, (withdraw) => { held = true; return hold(withdraw); });
-    // A held message was queued as the fallback: take that copy out in the
-    // same write that records the steer, so no snapshot shows it twice.
+    await handler(steerText, hold);
+    // A held message's queued fallback copy is taken out by the same write that records the steer.
     if (submission.kind === 'note') return;
-    if (held) checkpoint.unqueueSoon(submission);
     await checkpoint.steer(submission);
   } : undefined);
   const persistent = run.persistentTransports

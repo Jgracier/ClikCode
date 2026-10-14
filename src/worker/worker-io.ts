@@ -31,7 +31,14 @@ export function createWorkerIo(ctx: WorkerContext) {
    * steers, the queue); each window already draws them from there. */
   const showEveryWindow = (): void => {
     if (!ctx.turnRunning) return;
-    void currentSessionAndAccount().then(({ session: current, account }) => observer.render(current, account)).catch(() => undefined);
+    // The read is async: one that resolves after this turn ended holds an
+    // older session (still with its pendingTurn), and drawing it would undo
+    // the turn's final snapshot.
+    const controller = ctx.activeController;
+    void currentSessionAndAccount().then(({ session: current, account }) => {
+      if (!ctx.turnRunning || ctx.activeController !== controller) return;
+      observer.render(current, account);
+    }).catch(() => undefined);
   };
 
   /** Shell notifications become a queued turn the model alone reads: run

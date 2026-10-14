@@ -596,11 +596,12 @@ async function driveWorkerTurn(
           });
           client.send({ type: 'steer', text, id });
           // The worker answers every steer; a lost connection is the only other
-          // end, and says queued: it never claims a delivery that did not happen.
+          // end, and is an error: nothing is known to be queued, so the text is restored.
           const outcome = await answeredOrClosed<Extract<WorkerEvent, { type: 'submission' }> | undefined>(client, answered, undefined);
           pendingSubmissions.delete(id);
-          if (outcome?.disposition === 'error') throw new Error(outcome.message ?? 'message not sent');
-          return { disposition: outcome?.disposition ?? 'queued', submission, ...(outcome?.unsteered ? { unsteered: true as const } : {}) };
+          if (!outcome) throw new Error('connection to the worker was lost');
+          if (outcome.disposition === 'error') throw new Error(outcome.message ?? 'message not sent');
+          return { disposition: outcome.disposition, submission, ...(outcome.unsteered ? { unsteered: true as const } : {}) };
         },
         // A slash line is never the worker's business: it is ClikCode's own
         // command, and it runs here when the turn ends.

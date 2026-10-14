@@ -109,3 +109,21 @@ describe('a streaming turn, read by a build that knows only <id>.json', () => {
     await checkpoint.complete('done');
   });
 });
+
+describe('steering a turn', () => {
+  it('records the steer and drops its queued copy in one write', async () => {
+    const { checkpoint, session } = await started();
+    const submission = { id: 'held', text: 'steer me', submittedAt: new Date().toISOString() };
+    await checkpoint.queue(submission, { held: true });
+    await checkpoint.steer(submission);
+    const disk = await oldRead() as { queuedTurns?: unknown[]; pendingTurn?: { steers?: unknown[] } };
+    expect(disk.pendingTurn?.steers).toHaveLength(1);
+    expect(session.queuedTurns ?? []).toHaveLength(0);
+  });
+
+  it('rejects once the turn is over, so the message is queued instead of lost', async () => {
+    const { checkpoint } = await started();
+    await checkpoint.complete('done');
+    await expect(checkpoint.steer({ id: 'late', text: 'too late', submittedAt: new Date().toISOString() })).rejects.toThrow('turn is finishing');
+  });
+});

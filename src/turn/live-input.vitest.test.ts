@@ -108,3 +108,20 @@ describe('a message the transport holds for the next safe moment', () => {
     expect(String(holdOutcome)).toContain('disk full');
   });
 });
+
+describe('a steer that timed out is still in flight', () => {
+  it('cannot be taken back or sent again while its attempt is unsettled', async () => {
+    let land!: () => void;
+    const broker = new LiveTurnInputBroker({ steerTimeoutMs: 10 });
+    broker.bindQueue(async () => undefined);
+    broker.setSteerHandler(() => new Promise<void>((resolve) => { land = resolve; }));
+    const result = await broker.submit('slow', 'id-1');
+    expect(result.disposition).toBe('queued');
+    expect(broker.withdraw('id-1')).toBe(false);
+    expect(broker.holding('id-1')).toBe(true);
+    land();
+    await broker.settled();
+    expect(broker.holding('id-1')).toBe(false);
+    expect(broker.withdraw('id-1')).toBeUndefined();
+  });
+});

@@ -10,6 +10,9 @@ import { isUsageExhaustedMessage } from '../turn/usage-exhausted.js';
 import { runSessionTurn } from '../turn/session-turn.js';
 import { LiveTurnInputBroker } from '../turn/live-input.js';
 import { discardInterruptedTurn, markFailedTurn, preserveInterruptedTurn } from '../turn/turn-journal.js';
+import { readState } from '../session/state/read.js';
+import { writeState } from '../session/state/write.js';
+import { consumeSessionTurn } from '../turn/checkpoint.js';
 import { releaseMcp } from '../agent/mcp/manager.js';
 import { consumeQueuedTurn } from './consume-queued.js';
 import { sendEvent } from './broadcast-observer.js';
@@ -17,6 +20,27 @@ import type { ClientCommand } from './protocol.js';
 import type { WorkerContext } from './worker-context.js';
 
 type SubmitCommand = Extract<ClientCommand, { type: 'submit' }>;
+
+async function pendingSteerCount(sessionId: string): Promise<number> {
+  const state = await readState({ transcripts: [sessionId] }).catch(() => undefined);
+  return state?.sessions.find((entry) => entry.id === sessionId)?.pendingTurn?.steers?.length ?? 0;
+}
+
+/** A message the turn was holding to steer in at its next pause (queued only
+ * as a fallback, heldForTurn) that never went in: a stopped or failed turn
+ * must not run it on its own as the next turn. It is taken off the queue and
+ * its text is handed back to the composer, as a take-back does. */
+async function takeUnsentHeldSteers(sessionId: string): Promise<string[]> {
+  const state = await readState({ transcripts: [sessionId] }).catch(() => undefined);
+  const session = state?.sessions.find((entry) => entry.id === sessionId);
+  const startedAt = session?.pendingTurn?.startedAt;
+  if (!state || !session || !startedAt) return [];
+  const held = (session.queuedTurns ?? []).filter((entry) => entry.heldForTurn === startedAt && entry.kind !== 'command' && entry.kind !== 'notification');
+  if (!held.length) return [];
+  for (const entry of held) consumeSessionTurn(session, entry.id);
+  await writeState(state);
+  return held.map((entry) => entry.text);
+}
 
 export function createTurnRunner(ctx: WorkerContext) {
   const { observer, sessionId, config, agentSession } = ctx;
@@ -33,7 +57,11 @@ export function createTurnRunner(ctx: WorkerContext) {
     // Text or a tool row is an answer. Thinking, and a notice, are not:
     // the prompt comes back when the client asked, and the turn is not
     // kept. An answer is kept even when the client asked for the draft.
-    const answered = observer.turnHasAnswer;
+    // A steer the turn recorded is the user's words already part of it: it
+    // is kept like an answer, not discarded with the turn.
+    const steered = await pendingSteerCount(sessionId) > 0;
+    const answered = observer.turnHasAnswer || steered;
+    const heldBack = await takeUnsentHeldSteers(sessionId).catch(() => []);
     // The draft goes back to the window that took it back, and only
     // there: every other window is only told the turn stopped.
     const restoreTo = answered ? undefined : ctx.activeRestoreDraft;
@@ -42,12 +70,19 @@ export function createTurnRunner(ctx: WorkerContext) {
     // Nothing is said: a stopped turn that kept an answer ends on its own
     // "Stopped" row (the saved turn's end), one that gave the prompt back
     // simply has it back.
-    if (restoreTo && !restoreTo.destroyed) sendEvent(restoreTo, { type: 'restore-draft', text: command.text });
+    const target = ctx.activeRestoreDraft;
+    const back = [...(restoreTo ? [command.text] : []), ...heldBack].join('\n');
+    if (back) {
+      if (target && !target.destroyed) sendEvent(target, { type: 'restore-draft', text: back });
+      else if (heldBack.length) observer.broadcast({ type: 'restore-draft', text: heldBack.join('\n') });
+    }
   };
 
   /** A turn that failed: journaled as failed, told to the windows, and its queue entry taken out. */
   const settleFailedTurn = async (command: SubmitCommand, error: unknown, resumed: boolean): Promise<void> => {
     const message = error instanceof Error ? error.message : String(error);
+    const heldBack = await takeUnsentHeldSteers(sessionId).catch(() => []);
+    if (heldBack.length) observer.broadcast({ type: 'restore-draft', text: heldBack.join('\n') });
     await markFailedTurn(sessionId, command.text).catch((saveError: unknown) => {
       lifecycle('worker.turn.failed-journal-error', { message: saveError instanceof Error ? saveError.message : String(saveError) });
     });
