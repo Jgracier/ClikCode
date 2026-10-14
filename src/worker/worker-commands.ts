@@ -118,5 +118,6 @@ export function createCommandHandler(ctx: WorkerContext) {
     if (command.type === 'send-queued') { await live.handleSendQueued(socket, command); return; }
     if (command.type === 'cancel') { await live.handleCancel(socket, command); return; }
     if (command.type === 'steer') { await live.handleSteer(socket, command); return; }
+    if (command.type === 'steer-subagent') { await live.handleSteerSubagent(socket, command); return; }
   };
 }

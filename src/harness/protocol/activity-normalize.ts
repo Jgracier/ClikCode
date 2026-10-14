@@ -196,3 +196,13 @@ export function subAgentRelayText(ref: SubAgentRef, text: string): string {
   const to = ref.agentId ? `${ref.label} (${ref.agentId})` : ref.label;
   return `Send this to your sub-agent ${to}: ${text}`;
 }
+
+/** What typing `text` into a sub-agent's view does: a message for the main
+ * agent (a visible relay), or the one line saying why nothing can be sent. */
+export function subAgentSteerPlan(ref: SubAgentRef, vendor: string, mainRunning: boolean, text: string): { steer: string } | { refuse: string } {
+  const block = subAgentSteerBlock(ref, vendor);
+  if (block) return { refuse: block };
+  if (!mainRunning) return { refuse: 'The main agent is not running, so there is nothing to carry the message to the sub-agent.' };
+  if (ref.steer !== 'relay') return { refuse: `ClikCode does not send to a ${vendor} sub-agent by ${ref.steer} yet.` };
+  return { steer: subAgentRelayText(ref, text) };
+}

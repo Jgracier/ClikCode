@@ -10,6 +10,8 @@ import { deliverTyped } from '../turn/send-mode.js';
 import { closePersistentTransport, persistentWorkRunning } from '../turn/vendor-process.js';
 import { hasHeldVendorProcess, stopHeldVendorProcess } from '../harness/transport/native/held-vendor.js';
 import { sendEvent } from './broadcast-observer.js';
+import { localHarnessForCommand } from '@clikcode/router/ai-local-harness';
+import { subAgentSteerPlan, type SubAgentRef } from '../harness/protocol/activity-normalize.js';
 import type { ClientCommand } from './protocol.js';
 import type { WorkerContext } from './worker-context.js';
 
@@ -230,5 +232,22 @@ export function createLiveCommands(ctx: WorkerContext) {
     await handled;
     return;
   };
-  return { handleUnqueue, handleSendQueued, handleCancel, handleSteer };
+  /** `steer-subagent`: what the harness allows (docs/SUBAGENTS.md), and nothing else. */
+  const handleSteerSubagent = async (socket: Socket, command: Extract<ClientCommand, { type: 'steer-subagent' }>): Promise<void> => {
+    const refuse = (message: string): void => {
+      if (command.id) sendEvent(socket, { type: 'submission', id: command.id, disposition: 'error', message });
+      else note(message);
+    };
+    const { session } = await currentSessionAndAccount();
+    const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+    const ref: SubAgentRef = {
+      id: command.parentId, label: command.label ?? command.parentId, status: 'running', harness: harness?.command ?? 'unknown',
+      ...(command.agentId ? { agentId: command.agentId } : {}),
+      read: harness?.subagents?.read ?? 'none', steer: harness?.subagents?.steer ?? 'none',
+    };
+    const plan = subAgentSteerPlan(ref, harness?.displayName ?? 'This harness', ctx.activeLiveInput !== undefined, command.text);
+    if ('refuse' in plan) { refuse(plan.refuse); return; }
+    await handleSteer(socket, { type: 'steer', text: plan.steer, ...(command.id ? { id: command.id } : {}) });
+  };
+  return { handleUnqueue, handleSendQueued, handleCancel, handleSteer, handleSteerSubagent };
 }

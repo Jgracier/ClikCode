@@ -37,6 +37,12 @@ export type ClientCommand =
   /** A message typed while a turn runs. `id` is echoed back on the
    * `submission` event that says what actually happened to it. */
   | { type: 'steer'; text: string; id?: string }
+  /** A message typed into a sub-agent's own view. `parentId` is the sub-agent
+   * row's call id; `label` and `agentId` are the row's (the client has it).
+   * What happens depends on the harness's declared `subagents.steer`
+   * (docs/SUBAGENTS.md): a `relay` is a visible steer to the main agent; where
+   * the harness gives no way the `submission` answer says exactly why. */
+  | { type: 'steer-subagent'; parentId: string; text: string; label?: string; agentId?: string; id?: string }
   | { type: 'cancel'; restoreDraft: boolean }
   /** Enter again: the oldest queued user message goes into the running
    *  turn at its next pause. The turn is not cancelled. */
