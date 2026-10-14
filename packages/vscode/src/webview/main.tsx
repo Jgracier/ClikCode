@@ -17,6 +17,7 @@ import { choose } from './picker';
 import { ConversationMark, HistoryMenu, rowState, useConversations } from './screens';
 import { afterVisibleFor, useNow } from './clock';
 import { followsBottom } from './flow';
+import { applyLook } from './look';
 import { markMention, SearchBar } from './search';
 import { Sheet, type OpenQuestion } from './sheet';
 import { focusHere, Icon, IconButton, KeyList, Logo, Popover, Spinner, type ListRow } from './ui';
@@ -427,4 +428,5 @@ function App(): JSX.Element {
 
 window.addEventListener('error', (event) => post({ type: 'log', text: `${event.message} ${event.filename}:${event.lineno}` }));
 window.addEventListener('unhandledrejection', (event) => post({ type: 'log', text: `unhandled: ${String((event.reason as Error)?.stack ?? event.reason)}` }));
+applyLook();
 render(<App />, document.getElementById('app')!);

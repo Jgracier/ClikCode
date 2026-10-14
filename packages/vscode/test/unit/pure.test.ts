@@ -131,7 +131,7 @@ describe('chat model', () => {
     const model = run([{ type: 'ready', version: '1', pid: 1 }, { type: 'session', session: saved }]);
     expect(model.messages).toEqual([{ role: 'user', content: 'run it' }, { role: 'assistant', content: 'Running. Done.' }]);
     expect(model.traces).toEqual([expect.objectContaining({ userIndex: 0, text: 'Running. Done.', saved: true })]);
-    expect(model.traces[0]!.activities).toEqual([expect.objectContaining({ key: 'b', kind: 'tool-done', label: 'Bash(npm test)', output: ['ok'], offset: 9 })]);
+    expect(model.traces[0]!.activities).toEqual([expect.objectContaining({ key: 'b', kind: 'tool-done', label: '$ npm test', output: ['ok'], offset: 9 })]);
     // The same snapshot again changes nothing the page would redraw.
     expect(run([{ type: 'session', session: saved }], model).traces).toBe(model.traces);
   });

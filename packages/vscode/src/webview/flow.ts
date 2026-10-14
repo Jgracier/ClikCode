@@ -29,7 +29,7 @@ export interface WorkingStatus {
  * text arrives, else "thinking". */
 export function workingStatus(live: LiveTurn | undefined, asking: boolean, now: number, reconnecting = false): WorkingStatus {
   // The bridge is coming back: not working, not waiting on the user.
-  if (reconnecting) return { label: 'Reconnecting…', tone: 'thinking', toneClass: 'tone-yellow' };
+  if (reconnecting) return { label: 'Reconnecting…', tone: 'thinking', toneClass: 'tone-stopped' };
   // Stopping, it says so, whatever call is still open (the terminal's rule).
   const stopping = Boolean(live?.stopping);
   const status = turnStatus({
@@ -39,10 +39,8 @@ export function workingStatus(live: LiveTurn | undefined, asking: boolean, now: 
     asking,
     writing: answerWriting({ writingAt: live?.writingAt, callAt: live?.callAt }),
   });
-  const open = live?.openTools[live.openTools.length - 1]?.[1];
-  const toneClass = status.tone === 'asking' ? 'tone-permission'
-    : status.tone !== 'tool' ? 'tone-cyan'
-      : open?.agent ? 'tone-cyan' : open?.category ? `tone-${TOOL_CATEGORY[open.category].colour}` : 'tone-plain';
+  // One running accent for every tone, tool and harness (look.ts).
+  const toneClass = 'tone-accent';
   return { ...status, label: `${titleCase(status.label.replace(/(…|\.\.\.)$/, '').trim() || 'working')}…`, toneClass };
 }
 
