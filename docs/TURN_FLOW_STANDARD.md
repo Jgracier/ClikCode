@@ -192,6 +192,11 @@ approval.
 
 ## 12. What an adapter owes
 
+**Adapters supply facts only.** A tool's name, its input, its status, its
+output, its exit code, its diff, its parent. They do not decide what a row
+says, which category it is, or how it is coloured: that is one normalizer and
+one token file, the same for every harness (section 13).
+
 For every tool call the vendor makes with an id: a start frame, any number of
 progress frames, and exactly one `done` or `error` frame (a late terminal frame may only fill
 fields, e.g. an edit's diff arriving after its `done`). `parentId` for a
@@ -207,3 +212,30 @@ backgroundAgents, backgroundTerminals, workflows) are held per harness by
 produced, through the real adapter, by a fixture of the wire shape that
 harness publishes. A CLI parser that reads reasoning is only wired when the
 turn argv asks for it (opencode/kilo `run --thinking`).
+
+## 13. Look
+
+One look for every harness, in the CLI and in the VS Code extension.
+
+- **Normalizer.** `normalizeActivityEvent`
+  (`src/harness/protocol/activity-normalize.ts`) is the one place an event's
+  category, label shape, lifecycle, output bound and thought shape are decided:
+  `$ <command>`, `<Verb> <path>`, `Agent <task>`, `server › tool`; a command
+  with a non-zero exit is an error; output is at most 60 clipped lines (a
+  command keeps its tail); a thought is folded and capped once. It is pure and
+  idempotent and is applied at the turn sink (saved turn and observer), in the
+  worker's observer (both surfaces, every producer) and when a saved turn is
+  read (old turns read the same). A tool nothing classifies (an MCP tool) has no
+  category -- never a guessed one -- and is still drawn with the shared glyph.
+- **Tokens.** `src/harness/protocol/look.ts` holds the tool glyph `‣`, the
+  thought glyph `✻`, the colour roles (tool glyph, tool text, summary, running
+  accent, failed, stopped, success; thoughts are dim italic) as xterm-256
+  indexes with their hex derived from the standard palette, and the spinner
+  and shimmer timing (`timings.ts`). The terminal paints from it
+  (`tool-category-style.ts`); the webview sets the same values as `--look-*`
+  custom properties (`webview/look.ts`) and its stylesheet only reads those.
+  There is no per-category or per-harness colour, glyph or animation.
+- **Held by tests.** `look-conformance.vitest.test.ts` feeds one logical turn
+  through each harness's real adapter and requires identical normalized
+  events and rows; `look-guard.vitest.test.ts` fails on a colour or a tool-row
+  glyph typed outside `look.ts`.
