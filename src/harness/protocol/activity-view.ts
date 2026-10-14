@@ -388,7 +388,10 @@ export function waitingSpinnerFrame(frame: number): [boolean[], boolean[], boole
  * cell is itself a 2x4 dot matrix, so this preserves all sixteen positions in
  * one terminal row without the four-row gap shown by ordinary periods. */
 export function waitingSpinnerGlyph(frame: number): string {
-  const grid = waitingSpinnerFrame(frame);
+  return packSpinnerGrid(waitingSpinnerFrame(frame));
+}
+
+function packSpinnerGrid(grid: readonly (readonly boolean[] | readonly number[])[]): string {
   const bit = (column: number, row: number): number => {
     const positions = [[0, 1, 2, 6], [3, 4, 5, 7]] as const;
     return grid[row]![column] ? 1 << positions[column % 2]![row] : 0;
@@ -396,6 +399,26 @@ export function waitingSpinnerGlyph(frame: number): string {
   return [0, 2].map((start) => String.fromCodePoint(0x2800
     | bit(start, 0) | bit(start, 1) | bit(start, 2) | bit(start, 3)
     | bit(start + 1, 0) | bit(start + 1, 1) | bit(start + 1, 2) | bit(start + 1, 3))).join('');
+}
+
+/** The twelve dots round the edge of the 4x4 grid, clockwise from the top left. */
+const RING: ReadonlyArray<readonly [number, number]> = [
+  [0, 0], [1, 0], [2, 0], [3, 0], [3, 1], [3, 2], [3, 3], [2, 3], [1, 3], [0, 3], [0, 2], [0, 1],
+];
+
+/** A sub-agent's spinner: a group of dots circling a ring while the centre
+ * pulses -- alive and working, as against the turn's own square of dots. */
+export function agentSpinnerGlyph(frame: number): string {
+  const grid = Array.from({ length: 4 }, () => [false, false, false, false]);
+  const head = ((frame % RING.length) + RING.length) % RING.length;
+  for (let tail = 0; tail < 4; tail += 1) {
+    const [column, row] = RING[(head - tail + RING.length) % RING.length]!;
+    grid[row]![column] = true;
+  }
+  // The centre breathes: one dot, then two, then none.
+  const pulse = Math.floor(frame / 3) % 3;
+  if (pulse > 0) { grid[1]![1] = true; if (pulse > 1) grid[2]![2] = true; }
+  return packSpinnerGrid(grid);
 }
 
 /** How a running call is drawn: a command and a sub-agent say so (and spin
