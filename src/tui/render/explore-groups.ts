@@ -17,7 +17,7 @@
 import chalk from 'chalk';
 import type { HarnessActivityEvent } from '../../harness/prompter.js';
 import { activityResult, explores, exploreSummary, tensedLabel } from '../../harness/protocol/turn-flow.js';
-import { TOOL_CATEGORY_STYLE } from '../../harness/protocol/tool-category-style.js';
+import { TOOL_CATEGORY_STYLE, TOOL_ROW_TEXT } from '../../harness/protocol/tool-category-style.js';
 
 /** Calls listed under a merged row. */
 const EXPLORE_SHOWN_CALLS = 3;
@@ -129,5 +129,5 @@ export function mergedExploreLines(events: readonly HarnessActivityEvent[], ende
 export function mergedExploreSummaryLine(events: readonly HarnessActivityEvent[], summary: string): { line: string; category: 'read' | 'search' } {
   const category = events.some((event) => event.category === 'read') ? 'read' : 'search';
   const style = TOOL_CATEGORY_STYLE[category];
-  return { line: `${style.paint(style.glyph)} ${chalk.dim(summary)}`, category };
+  return { line: `${style.paint(style.glyph)} ${TOOL_ROW_TEXT(summary)}`, category };
 }
