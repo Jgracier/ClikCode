@@ -32,6 +32,18 @@ describe('sandbox argv', () => {
     expect(args).not.toContain('--unshare-pid');
   });
 
+  it('bwrap: the ssh drop-in directory is masked by an empty private one, so ssh does not refuse nobody-owned config', () => {
+    const wrapped = wrapForSandbox({ mode: 'workspace', platform: 'linux', command: shell, writable, cwd: '/work', available: () => true, exists: (p) => p === '/etc/ssh/ssh_config.d' });
+    expect(wrapped.invocation.args.slice(0, 8)).toEqual(['--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--tmpfs']);
+    expect(wrapped.invocation.args).toContain('/etc/ssh/ssh_config.d');
+    // The mask comes before the writable binds, so a writable dir under it is not hidden.
+    const args = wrapped.invocation.args;
+    expect(args.indexOf('--tmpfs')).toBeLessThan(args.indexOf('--bind-try'));
+    // A machine without the directory gets the plain argv.
+    const plain = wrapForSandbox({ mode: 'workspace', platform: 'linux', command: shell, writable, cwd: '/work', available: () => true, exists: () => false });
+    expect(plain.invocation.args).not.toContain('--tmpfs');
+  });
+
   it('sandbox-exec: writes denied except /dev and each dir, passed as parameters', () => {
     const { file, args } = sandboxExecInvocation(shell, writable);
     expect(file).toBe('/usr/bin/sandbox-exec');
