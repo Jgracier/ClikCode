@@ -452,6 +452,7 @@ export function stopWaiting(this: TerminalHarnessPrompter, refresh = true, why?:
   // Stopped: what was still running did not finish. Its row says so, as
   // the worker's saved copy of the turn does (turn-journal.ts).
   if (turn?.cancelled) this.activityEntries = stopEntries(this.activityEntries, (entry) => this.ofThisTurn(entry));
+  if (turn?.cancelled) this.childEntries = stopEntries(this.childEntries, () => true);
   // A real turn's end -- one that took messages, not a wait on a download
   // or a shell command -- and not stepping out of it. A stopped turn did
   // not finish, and whoever stopped it knows. (Its closing line is drawn

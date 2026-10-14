@@ -10,9 +10,9 @@ import { toolUses, liveWaitKind, waitingSpinnerGlyph } from '../../../harness/pr
 import { outputPreviewRows, renderActivityLine } from '../../../harness/protocol/activity-line.js';
 import { tensedLabel } from '../../../harness/protocol/turn-flow.js';
 import { CallGrouping, LIVE_SHOWN_CALLS, liveItemLine, type CallRun, type GroupRow } from '../../render/call-groups.js';
-import { groupSummary, groupSummaryText, standsAlone } from '../../../harness/protocol/call-groups.js';
+import { groupSummary, groupSummaryText, isExpandable, standsAlone } from '../../../harness/protocol/call-groups.js';
 import { tagRow } from '../../render/row-tags.js';
-import { capOpenRows, openGroupRows } from '../../render/group-rows.js';
+import { capOpenRows, openGroupRows, soloRows } from '../../render/group-rows.js';
 import { TOOL_CATEGORY_STYLE, TOOL_ROW_TEXT } from '../../../harness/protocol/tool-category-style.js';
 import { terminalCellWidth } from '../../render/width.js';
 import { STEER_WORDS, steerTranscriptRows } from '../../render/steer-rows.js';
@@ -80,15 +80,26 @@ export function createToolRows(p: TerminalHarnessPrompter, builders: RowBuilders
    * changes the glyph rather than moving the row. At the end of the turn
    * a tool that never reported completion settles anyway. */
   const refused = (entry: ActivityEntry): boolean => entry.decision !== undefined && entry.decision.kind !== 'approved';
+  /** The calls a sub-agent made, for its expansion: the live turn's, or the saved turn's. */
+  const liveChildrenOf = (id: string): ActivityEntry[] => p.childEntries.filter((child) => child.event?.parentId === id);
+  let childrenOf = liveChildrenOf;
   const toolRow = (entry: ActivityEntry, ended: boolean): SettlingTool => {
     const id = entry.event?.id ?? `activity#${entry.sequence ?? entry.responseOffset}`;
+    // A call that opens on its own: a tap or Ctrl+O shows more of it, in place.
+    const expandable = isExpandable(entry.event) || Boolean(entry.decision?.detail);
+    const solo = `call:${id}`;
+    const state = p.groupExpansion.get(solo);
+    const open = (lines: readonly string[], row: ActivityEntry = entry): string[] => (expandable
+      ? soloRows({ id: solo, lines, entry: row, children: entry.event?.agent ? childrenOf(entry.event.id ?? '') : [], state, width: conversationInner })
+      : [...lines]);
+    if (expandable) p.callGroups.set({ id: solo, items: [{ id: solo, entry }], running: entry.event?.kind === 'tool-start' });
     // A refused call is over, whatever the vendor has yet to say about it.
     const running = !ended && entry.event?.kind === 'tool-start' && !refused(entry);
     const order = { ...(entry.sequence === undefined ? {} : { seq: entry.sequence }), ...(entry.event?.agent ? { agent: true } : {}) };
     if (!running) {
       return {
         id, done: true, responseOffset: entry.responseOffset, ...order,
-        lines: activityRows(entry.lines, entry.event?.category),
+        lines: open(activityRows(entry.lines, entry.event?.category)),
       };
     }
     const kind = liveWaitKind(entry.event!) ?? 'tool';
@@ -107,14 +118,14 @@ export function createToolRows(p: TerminalHarnessPrompter, builders: RowBuilders
       const label = tensedLabel(entry.event.label, true);
       const settled = renderActivityLine({ ...entry.event, kind: 'tool-done' })[0]?.trim() ?? label;
       return {
-        released: ['', `  ${runningChatLine(label, 0, kind, entry.event.category).trim()} ${chalk.dim('· running')}`],
-        completed: ['', `  ${chalk.green('✓')} ${settled}`],
+        released: open(['', `  ${runningChatLine(label, 0, kind, entry.event.category).trim()} ${chalk.dim('· running')}`]),
+        completed: open(['', `  ${chalk.green('✓')} ${settled}`]),
         childHeader: [`    ${chalk.dim(`↳ ${entry.event.label}`)}`],
       };
     })() : {};
     return {
       id, done: false, responseOffset: entry.responseOffset, ...order, ...agentRows,
-      lines: ['', `  ${row}`, ...live],
+      lines: open(['', `  ${row}`, ...live]),
     };
   };
   /** The waiting-for-approval calls: they stay visible, never folded. */
@@ -181,13 +192,16 @@ export function createToolRows(p: TerminalHarnessPrompter, builders: RowBuilders
       return { ...row, ...(held && row.done ? { done: false } : {}) };
     };
     if (folded.length < 2) return run.items.map((item) => single(item, !run.done && !alones.includes(item)));
+    // The calls that stand alone register first: the group is the run's latest, for Ctrl+O.
+    const aloneRows = alones.map((item) => single(item, false));
     const gid = groupIdOf(run);
     p.callGroups.set({ id: gid, items: folded.map((item, index) => ({ id: itemIdOf(item, index), entry: item })), running: !run.done && run.items.some((item) => item.event.kind === 'tool-start') });
-    return [groupRow(run, folded, ended, `grp:${run.key}`, gid), ...alones.map((item) => single(item, false))];
+    return [groupRow(run, folded, ended, `grp:${run.key}`, gid), ...aloneRows];
   };
   /** The turn's rows, runs of calls and thoughts grouped. A finished call
    * waits in the live region while its run is open: the next may join it. */
-  const groupedRows = (entries: readonly ActivityEntry[], ended: boolean, grouping: CallGrouping, breaks: readonly number[] = []): SettlingTool[] => {
+  const groupedRows = (entries: readonly ActivityEntry[], ended: boolean, grouping: CallGrouping, breaks: readonly number[] = [], children?: (id: string) => ActivityEntry[]): SettlingTool[] => {
+    childrenOf = children ?? liveChildrenOf;
     // A row of its own that never joins a run: a note (lines and no event,
     // from activity()), a plan or notice, or a call the user refused, whose
     // row says so.
@@ -244,7 +258,10 @@ export function createTurnTools(
         ...(mark.kind === 'thought' ? { thought: markThought(mark) } : {}),
       });
     }
-    return groupedRows(entries, true, new CallGrouping());
+    const kept = readTurnActivities(message.activities, message.content.length).filter((activity) => activity.event.parentId);
+    let subCalls: ActivityEntry[] = [];
+    for (const activity of kept) subCalls = upsertActivityEvent(subCalls, index, 0, activity.event, 0, 0);
+    return groupedRows(entries, true, new CallGrouping(), [], (id) => subCalls.filter((child) => child.event?.parentId === id));
   };
   const turnTools = (ended: boolean): SettlingTool[] => {
     // One row on each side, matching every other message: a steer is a

@@ -9,18 +9,22 @@
 const OPEN = '\uE000';
 const CLOSE = '\uE001';
 
-export type RowTag = { group: string; item: string };
+/** `group`: a group's id, or the id of a call that is expandable on its own (a
+ * lone call, a sub-agent). `item`: empty for the row itself, else the item
+ * (a group's call, a sub-agent's child call) opened under it. `depth`: how far
+ * in the row is drawn, 0 for the row of the group or call. */
+export type RowTag = { group: string; item: string; depth?: number };
 
 /** A conversation row of a group (`item` empty: its header row). */
 export function tagRow(row: string, tag: RowTag): string {
-  return `${OPEN}g:${encodeURIComponent(tag.group)}|${encodeURIComponent(tag.item)}${CLOSE}${row}`;
+  return `${OPEN}g:${encodeURIComponent(tag.group)}|${encodeURIComponent(tag.item)}${tag.depth ? `|${tag.depth}` : ''}${CLOSE}${row}`;
 }
 
 export function parseTag(raw: string | undefined): RowTag | undefined {
-  const match = raw ? /^g:([^|]*)\|(.*)$/.exec(raw) : null;
+  const match = raw ? /^g:([^|]*)\|([^|]*)(?:\|(\d+))?$/.exec(raw) : null;
   if (!match) return undefined;
   try {
-    return { group: decodeURIComponent(match[1]!), item: decodeURIComponent(match[2]!) };
+    return { group: decodeURIComponent(match[1]!), item: decodeURIComponent(match[2]!), ...(match[3] ? { depth: Number(match[3]) } : {}) };
   } catch {
     return undefined;
   }

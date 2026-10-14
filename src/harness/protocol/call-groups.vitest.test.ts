@@ -33,7 +33,7 @@ describe('a group of calls and thoughts, in words', () => {
     const stopped = call('4', 'run', '$ sleep', { kind: 'tool-error', stopped: true });
     const agent = call('5', undefined, 'Task(x)', { agent: true });
     const summary = groupSummary([call('1', 'run', '$ a'), call('2', 'run', '$ b'), failed, stopped, agent], false);
-    expect(groupSummaryText(summary)).toBe('Ran 2 commands · 1 failed · 1 stopped');
+    expect(groupSummaryText(summary)).toBe('Ran 2 commands, 1 agent · 1 failed · 1 stopped');
     expect([failed, stopped, agent, call('1', 'run', '$ a')].map((item) => standsAlone(item))).toEqual([true, true, true, false]);
   });
 
@@ -60,7 +60,7 @@ describe('what an expanded call shows', () => {
   });
 
   it('is the command only where the saved call has no output', () => {
-    expect(callDetail({ kind: 'tool-done', label: 'Read a.ts', category: 'read' })).toEqual({ command: 'Read a.ts', output: [], earlier: 0 });
+    expect(callDetail({ kind: 'tool-done', label: 'Read a.ts', category: 'read' })).toEqual({ command: 'Read a.ts', args: [], output: [], earlier: 0 });
   });
 });
 
