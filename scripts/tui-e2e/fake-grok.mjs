@@ -97,7 +97,7 @@ if (argv[0] === 'mcp') {
 
 // `grok agent stdio`: the ACP agent ClikCode starts for Grok since it moved
 // to ACP. Same recorded turns, as session/update notifications.
-if (argv[0] === 'agent' && argv.includes('stdio')) {
+if ((argv[0] === 'agent' && argv.includes('stdio')) || argv.includes('--acp')) {
   const send = (message) => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`);
   const models = 'models' in profile ? profile.models : { currentModelId: 'grok-4', availableModels: [{ modelId: 'grok-4', name: 'Grok 4' }, { modelId: 'grok-4-fast', name: 'Grok 4 Fast' }] };
   // What session/new and session/load answer with, as the catalog entry's
