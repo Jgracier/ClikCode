@@ -16,6 +16,8 @@ import { buildFooter } from './footer.js';
 export function paint(this: TerminalHarnessPrompter, composer: string, options: readonly PickerOption<string>[], selected: number, prompt: string, cursor: number, palette?: PaletteLayout): void {
   const session = this.currentSession;
   if (!session || this.suspended) return;
+  if (this.subView && !this.turn) this.closeSubView();
+  if (this.subView) { this.paintSubView(); return; }
   if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
   this.responsePaintTimer = undefined;
   this.composer = {

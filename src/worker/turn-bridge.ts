@@ -636,6 +636,17 @@ async function driveWorkerTurn(
         // cancel the turn, so a sub-agent it started keeps running.
         () => { client.send({ type: 'send-queued' }); },
       );
+      // A message typed into a sub-agent's own view: the worker decides what the harness allows
+      // (relay, or exactly why not) and answers on a `submission` event, as for a steer.
+      rl.subAgentSteer = async (ref, text) => {
+        const id = randomUUID();
+        const answered = new Promise<Extract<WorkerEvent, { type: 'submission' }>>((resolveAnswer) => { pendingSubmissions.set(id, resolveAnswer); });
+        client.send({ type: 'steer-subagent', parentId: ref.id, text, label: ref.label, ...(ref.agentId ? { agentId: ref.agentId } : {}), id });
+        const outcome = await answeredOrClosed<Extract<WorkerEvent, { type: 'submission' }> | undefined>(client, answered, undefined);
+        pendingSubmissions.delete(id);
+        if (!outcome) return 'The connection to the worker was lost; nothing was sent.';
+        return outcome.disposition === 'error' ? outcome.message ?? 'Not sent.' : undefined;
+      };
       // What this window follows is the vendor's own background work: Esc leaves it, Ctrl+C stops it.
       if (tracker.vendorWork === true) rl.markVendorWork?.();
       // This follow lasts exactly as long as the display it drives: ended
