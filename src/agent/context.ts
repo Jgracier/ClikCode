@@ -213,6 +213,7 @@ async function loadMemoryChain(input: { cwd: string; userConfigDir: string; home
 export async function buildSystemPrompt(input: SystemPromptInput): Promise<string> {
   const git = input.git ?? runGit;
   const repoRoot = (await git(['rev-parse', '--show-toplevel'], input.cwd))?.trim() || undefined;
+  const hasCommit = !repoRoot || Boolean((await git(['rev-parse', '--verify', 'HEAD^{commit}'], input.cwd))?.trim());
   const memory = await loadMemoryChain({ cwd: input.cwd, userConfigDir: input.userConfigDir, homeDir: input.homeDir ?? os.homedir(), repoRoot });
 
   const sections: string[] = [staticInstructions(input.toolUsageGuidance ?? true)];
@@ -233,7 +234,7 @@ export async function buildSystemPrompt(input: SystemPromptInput): Promise<strin
     `Working directory: ${input.cwd}`,
     ...(input.addDirs?.length ? [`Additional directories: ${input.addDirs.join(', ')}`] : []),
     `Platform: ${process.platform} (${os.release()})`,
-    repoRoot ? `Git repository: ${repoRoot}` : 'Git repository: no',
+    repoRoot ? `Git repository: ${repoRoot}${hasCommit ? '' : ' (no commits yet: isolated and background agents need `repo`)'}` : 'Git repository: no',
   ].join('\n'));
   if (input.planMode) sections.push(PLAN_MODE_INSTRUCTIONS);
   return sections.join('\n\n');
