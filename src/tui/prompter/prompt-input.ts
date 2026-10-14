@@ -245,13 +245,14 @@ class PromptSession {
     }
     // Ctrl+O: the held pastes back in the draft as text, to read or edit.
     if (key === '\u000f') {
-      if (!this.held.length) return true;
+      if (!this.held.length) { p.handleScrollKey(key); return true; }
       this.cursor = expandPastes(this.value.slice(0, this.cursor), this.held).length;
       this.value = expandPastes(this.value, this.held);
       this.held = [];
       this.draw();
       return true;
     }
+    if (key === '\u001b' && p.groupPanel) { p.closeGroupPanel(); return true; }
     if (key === '\u001a') { p.suspendToShell(); return true; }
     // Esc on an empty composer, no panel open, stops a turn parked for
     // the quota reset.

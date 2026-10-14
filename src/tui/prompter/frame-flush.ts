@@ -16,6 +16,7 @@ import { ALTERNATE_TRANSCRIPT_ROWS } from './state.js';
 export function renderFrame(
   this: TerminalHarnessPrompter,
   finished: readonly string[], live: readonly string[], cursorRow: number, cursorColumn: number, hideCursor: boolean,
+  liveTags: ReadonlyArray<string | undefined> = [],
 ): void {
   // Last line of defence: whatever produced a row, the only escape sequences
   // that reach the terminal are SGR colors, no row contains a control
@@ -42,7 +43,7 @@ export function renderFrame(
   // instead of replacing them. A live row dropped here is drawn again by the
   // frame that replaces it; a retired row would simply be lost.
   this.pendingFinished.push(...finished.map(safeRow));
-  this.pendingLive = { live: safeLive, cursorRow, cursorColumn, hideCursor };
+  this.pendingLive = { live: safeLive, cursorRow, cursorColumn, hideCursor, tags: [...liveTags] };
   if (!this.frameInFlight) this.flushFrame();
 }
 
@@ -73,7 +74,7 @@ export function flushFrame(this: TerminalHarnessPrompter): void {
 export function flushAlternateFrame(
   this: TerminalHarnessPrompter,
   finished: readonly string[],
-  pending: { live: string[]; cursorRow: number; cursorColumn: number; hideCursor: boolean },
+  pending: { live: string[]; cursorRow: number; cursorColumn: number; hideCursor: boolean; tags?: Array<string | undefined> },
 ): void {
   if (finished.length) {
     this.alternateTranscript.push(...finished);
@@ -118,7 +119,7 @@ export function flushAlternateFrame(
   const shownLive = scrolled > 0 ? live.slice(0, Math.max(0, height - above)) : live;
   let rows = [...shownTranscript, ...shownLive];
   while (rows.length < height) rows.unshift('');
-  this.frameLayout = { live: [...live] };
+  this.frameLayout = { live: [...live], tags: (pending.tags ?? []).slice(-height) };
   if (this.mentionFocus?.words.length) {
     const words = this.mentionFocus.words;
     const transcriptRows = rows.length - shownLive.length;

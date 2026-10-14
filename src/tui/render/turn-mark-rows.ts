@@ -10,6 +10,7 @@ import chalk from 'chalk';
 import { orderMarks } from '../../harness/protocol/activity-view.js';
 import { decisionRow, thoughtRow, type Decision } from '../../harness/protocol/turn-flow.js';
 import type { TurnActivity, TurnMark } from '../../session/model.js';
+import type { GroupThought } from '../../harness/protocol/call-groups.js';
 import { sanitizeTerminalText } from './text.js';
 
 /** Steps of a plan drawn before the rest are counted. */
@@ -45,6 +46,11 @@ export function turnMarkLines(mark: TurnMark): string[] {
       ];
     }
   }
+}
+
+/** What a saved thought keeps for expansion. */
+export function markThought(mark: Extract<TurnMark, { kind: 'thought' }>): GroupThought {
+  return { durationMs: mark.durationMs, ...(mark.heading ? { heading: mark.heading } : {}), ...(mark.text ? { text: mark.text } : {}) };
 }
 
 /** The decision an outcome mark that names its call stands for: settled onto

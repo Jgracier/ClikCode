@@ -16,7 +16,9 @@ import type { HarnessSession } from '../session/model.js';
 import { ActivityEntry, commonPrefixLength, rebaseActivityOffsets } from './render/activity-log.js';
 import type { OpenTool, Thought } from '../harness/protocol/activity-view.js';
 import { logProcessWarnings } from './warnings.js';
-import { ExploreGrouping } from './render/explore-groups.js';
+import { CallGrouping, GroupRegistry } from './render/call-groups.js';
+import type { GroupPanelState } from './render/group-panel.js';
+import { toggleGroupPanel, closeGroupPanel, tapGroupRow } from './prompter/group-panel-actions.js';
 import { ApprovalRequest } from './render/approval-block.js';
 import { EmittedTranscript } from './render/emitted-transcript.js';
 import { LiveChildren } from './render/child-rows.js';
@@ -87,8 +89,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** The calls inside running sub-agents, one live slot each
    * (render/child-rows.ts). Drawn nested under the agent, never retired. */
   readonly liveChildren = new LiveChildren();
-  /** Which of this turn's reads and searches share a row (explore-groups.ts). */
-  readonly exploreGrouping = new ExploreGrouping();
+  /** Which of this turn's calls and thoughts are one group (call-groups.ts). */
+  readonly callGrouping = new CallGrouping();
+  /** The groups of this view, kept so one can be opened (call-groups.ts). */
+  readonly callGroups = new GroupRegistry();
+  /** The open expansion panel, if any (render/group-panel.ts). */
+  groupPanel?: GroupPanelState;
+  /** The tag of each transcript line that belongs to a group, by line
+   * number (alternateTrimmed + index), taken out of the row text where the
+   * frame is built (render/row-tags.ts). */
+  readonly lineTags = new Map<number, string>();
   liveResponse = '';
   responsePaintTimer?: NodeJS.Timeout;
   frameInFlight = false;
@@ -128,7 +138,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** Rows retired since the last frame reached the terminal, and the live
    * region that frame will draw below them. */
   pendingFinished: string[] = [];
-  pendingLive?: { live: string[]; cursorRow: number; cursorColumn: number; hideCursor: boolean };
+  pendingLive?: { live: string[]; cursorRow: number; cursorColumn: number; hideCursor: boolean; tags: Array<string | undefined> };
   /** The last row retired, so a blank separator is never doubled across the
    * boundary between one frame and the next. */
   lastFinishedRow?: string;
@@ -173,7 +183,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   mentionFocus?: MentionFocus & { sessionId: string; jumped: boolean };
   /** The live rows below the transcript in the last frame: the text a
    * selection copies from them. */
-  frameLayout = { live: [] as string[] };
+  frameLayout = { live: [] as string[], tags: [] as Array<string | undefined> };
   /** What the composer's slash palette offers, remembered from the last
    * question() so a turn in flight can offer the same commands. A turn does
    * not change which commands exist; each is re-checked when it runs. */
@@ -691,6 +701,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   /** True while the reader is looking at something other than the live end. */
   get scrolledBack(): boolean { return this.alternateScrollback > 0; }
+
+  toggleGroupPanel(...args: Parameters<typeof toggleGroupPanel>): ReturnType<typeof toggleGroupPanel> { return toggleGroupPanel.apply(this, args); }
+
+  closeGroupPanel(...args: Parameters<typeof closeGroupPanel>): ReturnType<typeof closeGroupPanel> { return closeGroupPanel.apply(this, args); }
+
+  tapGroupRow(...args: Parameters<typeof tapGroupRow>): ReturnType<typeof tapGroupRow> { return tapGroupRow.apply(this, args); }
 
   handleScrollKey(...args: Parameters<typeof handleScrollKey>): ReturnType<typeof handleScrollKey> { return handleScrollKey.apply(this, args); }
 

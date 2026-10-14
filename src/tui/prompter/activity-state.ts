@@ -9,7 +9,7 @@ import { activityLifecyclePhase, withChildTool, appendThought, sameCall } from '
 import { decisionRow, reasoningHeading } from '../../harness/protocol/turn-flow.js';
 import { PlanEntry } from '../render/plan-block.js';
 import { thoughtRow } from '../render/tool-rows.js';
-import { callDecision, turnMarkLines } from '../render/turn-mark-rows.js';
+import { callDecision, markThought, turnMarkLines } from '../render/turn-mark-rows.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
 
 export function activity(this: TerminalHarnessPrompter, message: string, markId?: string): void {
@@ -140,6 +140,7 @@ export function settleThought(this: TerminalHarnessPrompter): void {
   this.activityEntries = [...this.activityEntries, {
     anchor: this.activityAnchor, responseOffset: Math.min(start.offset, this.liveResponse.length), sequence: ++this.timelineSequence,
     event: { kind: 'thinking', label: thought.text },
+    thought: { durationMs: Date.now() - start.at, text: thought.text, ...(reasoningHeading(thought.text) ? { heading: reasoningHeading(thought.text)! } : {}) },
     lines: [thoughtRow(Date.now() - start.at, reasoningHeading(thought.text))],
   }];
 }
@@ -175,6 +176,7 @@ export function joinMark(this: TerminalHarnessPrompter, mark: TurnMark): void {
   this.activityEntries = [...this.activityEntries, {
     anchor: this.activityAnchor, responseOffset: Math.min(mark.responseOffset, this.liveResponse.length), sequence: ++this.timelineSequence,
     event: { kind: 'thinking', label: mark.id, id: mark.id }, lines,
+    ...(mark.kind === 'thought' ? { thought: markThought(mark) } : {}),
   }];
   this.schedulePaint();
 }

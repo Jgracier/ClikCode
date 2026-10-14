@@ -4,6 +4,7 @@ import { terminalCellWidth } from '../../render/width.js';
 import type { PickerOption } from '../../../harness/prompter.js';
 import type { PaletteLayout } from '../../option-picker.js';
 import { markTurn, turnMarkOpen } from '../../../runtime/turn-latency.js';
+import { extractTags } from '../../render/row-tags.js';
 import { liveConversationLines } from '../../render/waiting.js';
 import type { TerminalHarnessPrompter } from '../../prompter.js';
 import { frameBands } from './bands.js';
@@ -46,9 +47,17 @@ export function paint(this: TerminalHarnessPrompter, composer: string, options: 
   const { pending, pendingPrompt, persistedMessages, hasTransientAssistant } = frameMessages(this, session);
   const bands = frameBands(this, { composer, options, prompt, cursor, palette, width, inner });
   const { targetHeight, maxComposerRows, composerRows } = bands;
-  const { finished, liveConversation, userRows, materializedPendingTurn } = writeTranscript(this, {
+  const written = writeTranscript(this, {
     session, pending, persistedMessages, hasTransientAssistant, conversationInner, maxComposerRows,
   });
+  const { liveConversation, userRows, materializedPendingTurn } = written;
+  // Which rows belong to a group, taken off the text here (render/row-tags.ts):
+  // the transcript, the selection and the clipboard only ever see clean rows.
+  const retired = extractTags(written.finished);
+  const finished = retired.rows;
+  const firstLine = this.alternateTrimmed + this.alternateTranscript.length + this.pendingFinished.length;
+  for (const [index, tag] of retired.tags.entries()) if (tag) this.lineTags.set(firstLine + index, tag);
+  if (this.lineTags.size > 4000) for (const line of this.lineTags.keys()) if (line < this.alternateTrimmed) this.lineTags.delete(line);
   // Decided from the rows this frame built: a steer leaves the bottom only
   // once its own row is in the answer.
   const { queuedMessages, enterAt, escAt } = queuedMessagesOf(this, session, pending, {
@@ -87,7 +96,8 @@ export function paint(this: TerminalHarnessPrompter, composer: string, options: 
   // top row and the cursor stays that many rows low. Dropping from the top
   // costs context; not dropping costs a working cursor.
   const overflow = Math.max(0, unbounded.length - targetHeight);
-  const live = overflow ? unbounded.slice(overflow) : unbounded;
+  const shown = extractTags(overflow ? unbounded.slice(overflow) : unbounded);
+  const live = shown.rows;
   // The composer's own row and column, whether or not the frame shows the
   // cursor: a phone client draws its caret wherever it was left, hidden or
   // not (see flushAlternateFrame). The block's last row is the status line, and a
@@ -96,7 +106,7 @@ export function paint(this: TerminalHarnessPrompter, composer: string, options: 
   const cursorRow = Math.max(0, liveConversationRows + composerStart + composerRows.cursorRow - overflow);
   const cursorColumn = 3 + terminalCellWidth(prompt) + composerRows.cursorWidth;
   this.pendingSignals += this.terminalSignals();
-  this.renderFrame(finished, live, cursorRow, cursorColumn, Boolean(palette?.hideCursor));
+  this.renderFrame(finished, live, cursorRow, cursorColumn, Boolean(palette?.hideCursor), shown.tags);
   // The two moments a user feels, once per turn each (runtime/turn-latency.ts):
   // their message on screen, and the first of the answer.
   if (pendingPrompt && turnMarkOpen('first-paint')) markTurn('first-paint');

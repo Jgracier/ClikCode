@@ -87,6 +87,8 @@ export function clearTranscript(this: TerminalHarnessPrompter): void {
   this.secondLastFinishedRow = undefined;
   this.alternateScrollback = 0;
   this.messageLines.clear();
+  this.lineTags.clear();
+  this.callGroups.clear();
   this.stopSelectionScroll();
   this.selection = undefined;
 }

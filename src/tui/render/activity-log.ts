@@ -10,6 +10,7 @@ import { mergeActivity, sameCall, stoppedCall } from '../../harness/protocol/act
 import type { HarnessActivityEvent } from '../../harness/prompter.js';
 import { TOOL_CATEGORY_STYLE } from '../../harness/protocol/tool-category-style.js';
 import { decisionRow, type Decision } from '../../harness/protocol/turn-flow.js';
+import type { GroupThought } from '../../harness/protocol/call-groups.js';
 
 /** One rendered activity row and where it belongs: the message index it was
  * reported under, and -- for a row produced inside a turn -- the response
@@ -19,6 +20,9 @@ export type ActivityEntry = {
   anchor: number; responseOffset?: number; sequence?: number; startedAt?: number;
   /** Absent for a note: a row that is only its `lines` (activity()). */
   event?: HarnessActivityEvent; lines: string[];
+  /** A settled thought: its duration, heading and text, kept so a group can
+   * show it expanded (harness/protocol/call-groups.ts). */
+  thought?: GroupThought;
   /** What the user decided about this call (standard section 8). It is the
    * call's row that says so, not a second row: a refusal replaces the call's
    * own failure line, an approval is said once on the call that then runs. */
