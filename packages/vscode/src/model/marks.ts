@@ -125,7 +125,7 @@ export function turnNoticeNotes(notes: readonly Note[] | undefined, trace: Pick<
  * acknowledged. A steer with no seq (a saved turn's) goes after whatever was
  * already at its place. */
 export function turnMarks(
-  text: string, activities: readonly Activity[], thoughts: readonly ThoughtEntry[], steers: ReadonlyArray<{ text: string; offset: number; seq?: number }>,
+  text: string, activities: readonly Activity[], thoughts: readonly ThoughtEntry[], steers: ReadonlyArray<{ id?: string; text: string; offset: number; seq?: number }>,
   extra: { plan?: PlanAt; notes?: ReadonlyArray<{ offset: number; seq: number; note: Note }>; decisions?: readonly DecisionEntry[] } = {},
 ): TurnMark[] {
   const at = (offset: number): number => Math.min(offset, text.length);
@@ -150,7 +150,7 @@ export function turnMarks(
     ...activities.flatMap((activity, index) => liveChildren(activity).flatMap((live, rank) => (live.beside ? [] : [{
       offset: at(live.child.offset ?? 0), seq: live.child.seq ?? (activity.seq ?? index) + (rank + 1) / 1000, child: live,
     }]))),
-    ...steers.map((steer, steerIndex) => ({ offset: at(steer.offset), seq: steer.seq ?? Number.MAX_SAFE_INTEGER, steer: steer.text, steerIndex })),
+    ...steers.map((steer, steerIndex) => ({ offset: at(steer.offset), seq: steer.seq ?? Number.MAX_SAFE_INTEGER, steer: steer.text, steerIndex, ...(steer.id ? { steerId: steer.id } : {}) })),
     ...(extra.plan ? [{ offset: at(extra.plan.offset), seq: extra.plan.seq, plan: true as const }] : []),
     ...(extra.notes ?? []).map(({ offset, seq, note }) => ({ offset: at(offset), seq, note })),
   ], (mark) => ({ responseOffset: mark.offset, seq: mark.seq }));

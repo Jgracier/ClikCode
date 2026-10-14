@@ -64,12 +64,16 @@ export function applySession(model: ChatModel, session: HarnessSession, account?
     messages: sameMessages(model.messages, session.messages ?? []) ? model.messages : (session.messages ?? []).map(({ role, content }) => ({ role, content })),
     traces: withSavedTraces(model.traces, session.messages ?? []),
     // What ClikCode owes the model (a finished background shell) is not the user's to see.
-    queued: (session.queuedTurns ?? []).filter((item) => item.kind !== 'notification').map((item) => ({
+    // One the turn already took in (its steered acknowledgement, or the live
+    // turn's own record of it) is not queued any more, whatever an older
+    // snapshot says.
+    queued: (session.queuedTurns ?? []).filter((item) => item.kind !== 'notification' && !tookIn(model, item.id)).map((item) => ({
       id: item.id, text: item.text, command: item.kind === 'command',
       // The running turn is holding it to send in once no tool call is open
       // (acp-client.ts); queued only in case that moment never comes.
       ...(item.heldForTurn && item.heldForTurn === pending?.startedAt ? { held: true } : {}),
     })),
+    submissions: confirmedSubmissions(model, session),
     // The worker's journal of the running turn has the prompt from here on.
     // A send is drawn before the bridge prepares a worker. A snapshot taken
     // during that preparation has no pendingTurn yet; keep the local prompt
@@ -85,6 +89,29 @@ export function applySession(model: ChatModel, session: HarnessSession, account?
       lastMessage: session.messages?.[model.turnUserIndex ?? model.messages.length],
     }),
   };
+}
+
+/** The turn took this message into itself: its steered acknowledgement came, or the live turn holds it. */
+function tookIn(model: ChatModel, id: string): boolean {
+  return model.submissions.some((item) => item.id === id && item.disposition === 'steered') || Boolean(model.live?.steers.some((steer) => steer.id === id));
+}
+
+/** The submissions still owed a row. A steered message the turn took in is
+ * drawn until the saved transcript holds it (its turn's end must not take it
+ * off the screen before the messages that replace it arrive); once a
+ * snapshot with no running turn carries it as a message, it is that message.
+ * By count, not by text alone: two steers that say "yes" are two messages. */
+function confirmedSubmissions(model: ChatModel, session: HarnessSession): ChatModel['submissions'] {
+  if (session.pendingTurn || !model.submissions.length) return model.submissions;
+  const saved = (session.messages ?? []).slice(model.messages.length).filter((message) => message.role === 'user').map((message) => message.content.trim());
+  const kept = model.submissions.filter((item) => {
+    if (item.disposition !== 'steered') return false;
+    const at = saved.indexOf(item.text.trim());
+    if (at < 0) return true;
+    saved.splice(at, 1);
+    return false;
+  });
+  return kept.length === model.submissions.length ? model.submissions : kept;
 }
 
 /** Every snapshot carries the whole transcript as a new array; the one the
