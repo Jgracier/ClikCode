@@ -936,6 +936,68 @@ SCENARIOS = {
         # Nothing of the group appears at the bottom, above the composer.
         'snap_bottom_lacks': {'opened': ['echo alpha-one', 'echo gamma-three', 'tap to collapse'], 'item': ['line two of gamma']},
     },
+    # A sub-agent is a row that opens in place: its task, each call it made
+    # (a row of its own, one level in, that opens to its output), and its answer.
+    'subagent-expands-in-place': {
+        'turns': [{'emits': [
+            *[{'op': 'text', 'text': f'earlier paragraph {n} came first.\n\n', 'ms': 5} for n in range(1, 13)],
+            {'op': 'agent-start', 'id': 'ag1', 'title': 'Task: scan the parser', 'description': 'scan the parser for tokens'},
+            {'op': 'child-start', 'id': 'c1', 'parent': 'ag1', 'title': 'Read src/lexer.ts', 'kind': 'read', 'input': {'file_path': 'src/lexer.ts'}},
+            {'op': 'child-end', 'id': 'c1', 'parent': 'ag1', 'result': 'lexer-body'},
+            {'op': 'child-start', 'id': 'c2', 'parent': 'ag1', 'title': 'echo child-two', 'kind': 'execute', 'input': {'command': 'echo child-two'}},
+            {'op': 'child-end', 'id': 'c2', 'parent': 'ag1', 'result': 'child-two-output'},
+            {'op': 'agent-end', 'id': 'ag1', 'result': 'The scan found lexer.ts'},
+            *[{'op': 'text', 'text': f'prose paragraph {n} follows.\n\n', 'ms': 5} for n in range(1, 4)],
+            {'op': 'text', 'text': 'The agent is done.'},
+        ]}],
+        'rows': 24,
+        'steps': [
+            ('type', 'scan the parser'), ('wait_for', 'The agent is done.', 40), ('settle', 2), ('snap', 'closed'),
+            ('click', 'Agent scan'), ('settle', 0.8), ('snap', 'opened'),
+            ('click', 'echo child-two'), ('settle', 0.8), ('snap', 'child'),
+            ('click', 'echo child-two'), ('settle', 0.8), ('snap', 'child-closed'),
+            ('click', 'Agent scan'), ('settle', 0.8), ('snap', 'minimised'),
+        ],
+        'watch': [],
+        'snap_contains': {
+            'opened': ['Read src/lexer.ts', 'echo child-two', 'The scan found lexer.ts'],
+            'child': ['child-two-output'],
+            'child-closed': ['echo child-two'],
+        },
+        'snap_lacks': {
+            'closed': ['Read src/lexer.ts', 'child-two', 'The scan found lexer.ts'], 'opened': ['child-two-output'],
+            'child-closed': ['child-two-output'], 'minimised': ['Read src/lexer.ts', 'child-two', 'The scan found lexer.ts'],
+        },
+        'snap_same_row': [(name, 'Agent scan') for name in ('opened', 'child', 'child-closed', 'minimised')],
+        'snap_rows_after': {'opened': ('Agent scan', ['scan the parser for tokens', 'Read src/lexer.ts', 'echo child-two'])},
+    },
+    # A lone command opens too: its full command and the tail of its output.
+    'lone-call-expands': {
+        'turns': [{'emits': [
+            {'op': 'tool', 'id': 'l1', 'title': 'echo lone-one && echo the-rest-of-the-command', 'ms': 200, 'result': 'lone-one\nlone-two-output'},
+            {'op': 'text', 'text': 'The command is done.'},
+        ]}],
+        'steps': [
+            ('type', 'run it'), ('wait_for', 'The command is done.', 40), ('settle', 2), ('snap', 'closed'),
+            ('click', 'echo lone-one'), ('settle', 0.8), ('snap', 'opened'),
+            ('click', 'echo lone-one'), ('settle', 0.8), ('snap', 'minimised'),
+        ],
+        'watch': [],
+        'snap_contains': {'closed': ['echo lone-one'], 'opened': ['lone-two-output', 'the-rest-of-the-command']},
+        'snap_lacks': {'closed': ['lone-two-output'], 'minimised': ['lone-two-output']},
+    },
+    # An edit is one row; tapped, it shows its diff.
+    'edit-diff-on-tap': {
+        'turns': [{'edits': [{'path': 'notes.txt', 'old': 'alpha\nbeta\n', 'new': 'alpha\nGAMMA\n'}], 'blocks': ['Edited the notes.']}],
+        'steps': [
+            ('type', 'edit the notes'), ('wait_for', 'Edited the notes.', 30), ('settle', 2), ('snap', 'closed'),
+            ('click', 'notes.txt'), ('settle', 0.8), ('snap', 'opened'),
+            ('click', 'notes.txt'), ('settle', 0.8), ('snap', 'minimised'),
+        ],
+        'watch': [],
+        'snap_contains': {'opened': ['+ GAMMA', '- beta']},
+        'snap_lacks': {'closed': ['+ GAMMA'], 'minimised': ['+ GAMMA']},
+    },
     # Two approvals at once say which is which; the second is answered "no,
     # and do this instead": the call is denied and the words go to the turn.
     'approval-tell-instead': {
