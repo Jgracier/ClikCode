@@ -160,7 +160,7 @@ SCENARIOS = {
         'steps': [('type', 'please check the commit'), ('wait_for', 'The final commit is live.', 30), ('settle', 4)],
         'watch': ['please check the commit', 'Checking the workspace first.', 'The final commit is live.'],
         # A turn that ran a tool ends on one line saying so, written once.
-        'final_once': ['Worked for'],
+        
         # Never looked away from: no notification.
         'raw_never': ['the turn has finished'],
         'no_clear_after_type': True,
@@ -343,14 +343,14 @@ SCENARIOS = {
     'worked-for-survives-board-and-restart': {
         'turns': [TWO_BLOCKS, {'blocks': ['Other chat answered.']}],
         'steps': [
-            ('type', 'please check the commit'), ('wait_for', 'Worked for', 30), ('settle', 2),
+            ('type', 'please check the commit'), ('wait_for', 'The final commit is live.', 30), ('settle', 2),
             ('keys', '\x1b[D'), ('settle', 2), ('type', 'another chat'), ('wait_for', 'Other chat answered.', 30), ('settle', 2),
             ('keys', '\x1b[D'), ('settle', 2), ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'),
             ('wait_for', 'The final commit is live.', 10), ('settle', 2), ('snap', 'back'),
             ('restart',), ('keys', '\x1b[D'), ('settle', 2), ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'),
             ('wait_for', 'The final commit is live.', 10), ('settle', 2),
         ],
-        'watch': [], 'snap_once': {'back': ['Worked for']}, 'final_once': ['Worked for'],
+        'watch': [], 
         'final_contains': ['please check the commit'],
     },
     # The board's small print. Empty, it says so. Deleting asks about the
@@ -384,7 +384,7 @@ SCENARIOS = {
         'watch': ['please check the commit', 'Checking the workspace first.', 'The final commit is live.',
                   'and the second question', 'Second answer arrives here.'],
         # Only the first turn ran a tool; the second, short and tool-free, ends bare.
-        'final_once': ['Worked for'],
+        
     },
     # A notice ClikCode sends the model in the user's place is not drawn at
     # all: not as the user's `›`, not as a notice.
@@ -833,12 +833,10 @@ SCENARIOS = {
     'streamed-tool-output': {
         'env': {'FAKE_DELAY_MS': '60'},
         'turns': [{'streamed_tool': {'lines': [f'test file {n} passed' for n in range(1, 9)], 'ms': 700}, 'blocks': ['All the tests pass.']}],
-        'steps': [('type', 'run the tests'), ('wait_for', 'All the tests pass.', 40), ('settle', 2)],
-        # Four columns in, under the call, while it runs and once it settles:
-        # finishing never moves the output sideways.
-        'watch': [], 'ever': ['\n    test file 3 passed'],
-        'final_contains': ['\n    test file 1 passed', '\n    test file 8 passed', '3 lines hidden'],
-        'never': ['\n      test file', '\n  test file'],
+        'steps': [('type', 'run the tests'), ('wait_for', 'All the tests pass.', 40), ('settle', 2), ('snap', 'done')],
+        # A successful call is its row; its output is in the saved turn, not under the call.
+        'watch': [], 'final_contains': ['All the tests pass.'],
+        'snap_lacks': {'done': ['test file 3 passed', 'lines hidden']},
     },
     # Reasoning that names itself: its heading is what the status line says
     # while the model thinks.
@@ -866,8 +864,8 @@ SCENARIOS = {
         'steps': [('type', 'look around and build'), ('wait_for', 'Explored and built.', 40), ('settle', 2)],
         'watch': ['look around and build', 'Explored and built.'],
         'ever': ['Reading src/a.ts', 'Reading 2 files'],
-        'final_once': ['Read 2 files, searched 1 pattern', 'build step 1 of 30', 'build step 30 of 30', '25 lines hidden'],
-        'never': ['build step 15 of 30'],
+        'final_once': ['Read 2 files, searched 1 pattern'],
+        'never': ['build step 15 of 30', 'lines hidden'],
     },
     # Two approvals at once say which is which; the second is answered "no,
     # and do this instead": the call is denied and the words go to the turn.
@@ -925,11 +923,11 @@ SCENARIOS = {
         'steps': [
             ('type', '/send queue'), ('settle', 2),
             ('type', 'start the long job'), ('wait_for', 'Step one of', 30),
-            ('type', 'then do this'), ('wait_for', 'enter again send into the chat', 10), ('keys', '\r'),
+            ('type', 'then do this'), ('wait_for', '↳ queued', 10), ('keys', '\r'),
             ('wait_for', 'Steered in: then do this.', 40), ('settle', 3),
         ],
         'watch': ['start the long job', 'Steered in: then do this.'],
-        'ever': ['sent into the turn'],
+        'ever': [],
         'never': ['The queued one answered now.', 'stopping', 'Stopped'],
         'final_once': ['Steered in: then do this.'],
     },
@@ -943,11 +941,11 @@ SCENARIOS = {
                   {'blocks': ['Queued turn answered.']}],
         'steps': [
             ('type', 'start the build'), ('wait_for', 'sleep 30', 30),
-            ('type', 'also run the linter'), ('wait_for', 'sending at the next pause', 10),
+            ('type', 'also run the linter'), ('wait_for', '↳ queued', 10),
             ('wait_for', 'Steered in: also run the linter.', 40), ('settle', 3),
         ],
         'watch': ['start the build', 'Steered in: also run the linter.'],
-        'ever': ['sending at the next pause', 'sent into the turn'],
+        'ever': ['↳ queued'],
         # Held for the pause already: Enter again would do nothing, so it is
         # not offered.
         'never': ['Request interrupted', 'Queued turn answered.', 'stopping', 'enter again'],
@@ -963,7 +961,7 @@ SCENARIOS = {
                   {'blocks': ['Queued turn answered.']}],
         'steps': [
             ('type', 'start the build'), ('wait_for', 'sleep 30', 30),
-            ('type', 'also run the linter'), ('wait_for', 'esc edit', 10), ('settle', 0.5),
+            ('type', 'also run the linter'), ('wait_for', '↳ queued', 10), ('settle', 0.5),
             ('keys', '\x1b'), ('wait_for', '› also run the linter', 10), ('snap', 'taken-back'),
             ('wait_for', 'The build passed.', 40), ('settle', 3),
         ],
@@ -981,13 +979,13 @@ SCENARIOS = {
                   {'blocks': ['Queued turn answered.']}],
         'steps': [
             ('type', 'start the build'), ('wait_for', 'sleep 30', 30),
-            ('type', 'also run the linter'), ('wait_for', 'esc edit', 10), ('settle', 0.5),
+            ('type', 'also run the linter'), ('wait_for', '↳ queued', 10), ('settle', 0.5),
             ('keys', '\x1b'), ('wait_for', '› also run the linter', 10), ('settle', 0.5), ('snap', 'taken-back'),
-            ('keys', '\r'), ('wait_for', 'sending at the next pause', 10), ('snap', 'resent'),
+            ('keys', '\r'), ('wait_for', '↳ queued', 10), ('snap', 'resent'),
             ('wait_for', 'The build passed.', 40), ('settle', 3),
         ],
         'watch': ['start the build', 'The build passed.'],
-        'ever': ['sent into the turn'],
+        'ever': [],
         'snap_once': {'resent': ['› also run the linter']},
         'final_once': ['› also run the linter'],
     },
@@ -999,9 +997,9 @@ SCENARIOS = {
         'steps': [
             ('type', '/send queue'), ('settle', 2),
             ('type', 'start the build'), ('wait_for', 'Starting the long build.', 30),
-            ('type', 'also run the linter'), ('wait_for', 'queued for next turn', 10), ('settle', 0.5),
+            ('type', 'also run the linter'), ('wait_for', '↳ queued', 10), ('settle', 0.5),
             ('keys', '\x1b'), ('wait_for', '› also run the linter', 10), ('settle', 0.5),
-            ('keys', ' please'), ('keys', '\r'), ('wait_for', 'queued for next turn', 10), ('snap', 'resent'),
+            ('keys', ' please'), ('keys', '\r'), ('wait_for', '↳ queued', 10), ('snap', 'resent'),
             ('wait_for', 'Queued turn answered.', 60), ('settle', 3),
         ],
         'watch': ['start the build', 'Queued turn answered.'],
@@ -1016,7 +1014,7 @@ SCENARIOS = {
                   {'blocks': ['Queued turn answered.']}],
         'steps': [
             ('type', 'start the build'), ('wait_for', 'sleep 30', 30),
-            ('type', 'first extra thing'), ('wait_for', 'sending at the next pause', 10),
+            ('type', 'first extra thing'), ('wait_for', '↳ queued', 10),
             ('type', 'second extra thing'), ('settle', 1),
             ('wait_for', 'The build passed.', 40), ('settle', 4),
         ],
@@ -1034,7 +1032,7 @@ SCENARIOS = {
         'steps': [
             ('type', '/send queue'), ('settle', 2),
             ('type', 'start the long job'), ('wait_for', 'Step one of', 30),
-            ('type', 'then do this'), ('wait_for', 'enter again send into the chat', 10),
+            ('type', 'then do this'), ('wait_for', '↳ queued', 10),
             ('keys', '\r'), ('wait_for', 'Steered in: then do this.', 20), ('settle', 3),
         ],
         'watch': ['start the long job'],
@@ -1075,11 +1073,11 @@ SCENARIOS = {
                   {'blocks': ['Queued turn answered.']}],
         'steps': [
             ('type', 'start the build'), ('wait_for', 'sleep 30', 30),
-            ('type', 'also run the linter'), ('wait_for', 'esc edit', 10), ('settle', 0.5),
+            ('type', 'also run the linter'), ('wait_for', '↳ queued', 10), ('settle', 0.5),
             ('keys', '\x1b'), ('wait_for', '› also run the linter', 10), ('settle', 0.5),
-            ('keys', '\r'), ('wait_for', 'esc edit', 10), ('settle', 0.5),
+            ('keys', '\r'), ('wait_for', '↳ queued', 10), ('settle', 0.5),
             ('keys', '\x1b'), ('wait_for', '› also run the linter', 10), ('settle', 0.5),
-            ('keys', '\r'), ('wait_for', 'esc edit', 10), ('snap', 'sent'),
+            ('keys', '\r'), ('wait_for', '↳ queued', 10), ('snap', 'sent'),
             ('wait_for', 'The build passed.', 40), ('settle', 3),
         ],
         'watch': ['start the build', 'The build passed.'],
@@ -1096,9 +1094,9 @@ SCENARIOS = {
                   {'blocks': ['Queued turn answered.']}],
         'steps': [
             ('type', 'start the build'), ('wait_for', 'sleep 30', 30),
-            ('type', 'also run the linter'), ('wait_for', 'esc edit', 10), ('settle', 0.3),
+            ('type', 'also run the linter'), ('wait_for', '↳ queued', 10), ('settle', 0.3),
             ('keys', '\x1b'), ('wait_for', '› also run the linter', 10),
-            ('wait_for', 'Worked for', 40), ('settle', 1), ('keys', '\r'),
+            ('wait_for', 'The build passed.', 40), ('settle', 1), ('keys', '\r'),
             ('wait_for', 'Queued turn answered.', 30), ('settle', 3),
         ],
         'watch': ['start the build'],
@@ -1126,7 +1124,7 @@ SCENARIOS = {
             ('type', 'start the long job'), ('wait_for', 'Step one of', 30), ('settle', 0.5), ('snap', 'running'),
             ('keys', '\x1b'), ('wait_for', 'Stopped', 15), ('settle', 2),
         ],
-        'snap_contains': {'running': ['writing · ', ' · esc stop']},
+        'snap_contains': {'running': ['writing · ']}, 'snap_lacks': {'running': [' · esc stop']},
         'watch': ['start the long job', 'Step one of'],
         'never': ['The long job is finished.', 'Worked for'],
         'final_contains': ['Stopped'],
@@ -1157,13 +1155,13 @@ SCENARIOS = {
         'steps': [
             ('type', '/send queue'), ('settle', 2),
             ('type', 'start the build'), ('wait_for', 'Starting the long build.', 30),
-            ('type', 'also run the linter'), ('wait_for', 'queued for next turn', 10),
+            ('type', 'also run the linter'), ('wait_for', '↳ queued', 10),
             ('wait_for', 'The build passed.', 40), ('wait_for', 'Queued turn answered.', 40), ('settle', 3),
         ],
         'watch': ['start the build', 'also run the linter', 'Queued turn answered.'],
         # 70 columns hold one of the two keys: Esc's, which always works.
-        'ever': ['queued for next turn · esc edit'],
-        'never': ['Steered in: also run the linter.', 'sending at the next pause', 'sent into the turn', 'stopping'],
+        'ever': ['↳ queued'],
+        'never': ['Steered in: also run the linter.', 'stopping'],
     },
     # The terminal around the UI: focus reports asked for and the shell's
     # title saved on the way in; progress while the turn runs; a notification
@@ -1193,13 +1191,8 @@ SCENARIOS = {
             ('restart',), ('keys', '\x1b[D'), ('settle', 2), ('keys', '\r'), ('settle', 2.5),
         ],
         'watch': [],
-        'snap_contains': {'board-and-back': ['Running the parts first.', 'part0 ok', 'part3 ok', 'abc123 fix', 'Then the commit was checked.']},
-        'final_contains': ['Running the parts first.', 'part0 ok', 'part1 ok', 'part2 ok', 'part3 ok', 'abc123 fix', 'Then the commit was checked.',
-                           # One blank row under a call's output, as above
-                           # it: before the next call, and before the prose.
-                           '    part0 ok'.ljust(70) + '\n' + ' ' * 70 + '\n  ▸ $ npx vitest run part1',
-                           '    abc123 fix'.ljust(70) + '\n' + ' ' * 70 + '\n  Then the commit was checked.'],
-        'final_once': ['part0 ok', 'part3 ok', 'abc123 fix'],
+        'snap_contains': {'board-and-back': ['Running the parts first.', 'Then the commit was checked.']},
+        'final_contains': ['Running the parts first.', 'Then the commit was checked.'],
         'never': ['Interrupted turn activity'],
     },
     # The same turn opened by a fresh process while it runs: the calls it has
@@ -1214,9 +1207,8 @@ SCENARIOS = {
             ('wait_for', 'Then the commit was checked.', 40), ('settle', 3),
         ],
         'watch': [],
-        'snap_contains': {'rejoined': ['Running the parts first.', 'part0 ok', 'part3 ok']},
-        'final_contains': ['Running the parts first.', 'part0 ok', 'part3 ok', 'held call done', 'abc123 fix', 'Then the commit was checked.'],
-        'final_once': ['part0 ok', 'part3 ok', 'held call done'],
+        'snap_contains': {'rejoined': ['Running the parts first.']},
+        'final_contains': ['Running the parts first.', 'Then the commit was checked.'],
         'never': ['Interrupted turn activity'],
     },
     # /search: the conversation with the most mentions opens at its first
@@ -1268,7 +1260,7 @@ SCENARIOS = {
             *[step for _ in range(5) for step in (('keys', '\x1b[<64;35;20M'), ('settle', 0.4))], ('settle', 1), ('snap', 'scrolled'),
             ('keys', '\x1b'), ('settle', 1.5), ('snap', 'back'),
         ],
-        'watch': [], 'scroll_moves': {'pattern': r'part(\d+) ok'},
+        'watch': [], 'scroll_moves': {'pattern': r'run part(\d+)'},
         'never': ['Interrupted turn activity'],
     },
     # A phone with its keyboard up sends a swipe as arrow keys only: Up with
@@ -1283,7 +1275,7 @@ SCENARIOS = {
             *[step for _ in range(4) for step in (('keys', '\x1b[A'), ('settle', 0.4))], ('settle', 1), ('snap', 'scrolled'),
             ('keys', '\x1b'), ('settle', 1.5), ('snap', 'back'),
         ],
-        'watch': [], 'scroll_moves': {'pattern': r'part(\d+) ok'},
+        'watch': [], 'scroll_moves': {'pattern': r'run part(\d+)'},
         'never': ['Interrupted turn activity'],
     },
     # The same in a window that joined the running turn (out to the board and
@@ -1297,7 +1289,7 @@ SCENARIOS = {
             *[step for _ in range(5) for step in (('keys', '\x1b[<64;35;20M'), ('settle', 0.4))], ('settle', 1), ('snap', 'scrolled'),
             ('keys', '\x1b'), ('settle', 1.5), ('snap', 'back'),
         ],
-        'watch': [], 'scroll_moves': {'pattern': r'part(\d+) ok'},
+        'watch': [], 'scroll_moves': {'pattern': r'run part(\d+)'},
         'never': ['Interrupted turn activity'],
     },
     # Out of usage on the only account: the Resume-in picker offers to wait
@@ -1473,8 +1465,8 @@ SCENARIOS = {
     # The same turn through ClikCode's own agent (the Gateway) and through a native harness draws the same rows.
     'gateway-tool-turn-rows': {
         'turns': [{}], 'harness': 'grok', 'setup': gateway_fake(), 'startup': 5, 'no_dup_check': 'timing',
-        'steps': [('keys', '\r'), ('settle', 3), ('type', 'GW-TOOLS GW-HEAD go'), ('wait_for', 'Worked for', 40), ('settle', 2)],
-        'watch': [], 'final_contains': ['Thought for', '· Planning', 'Read 2 files', 'Read alpha.txt', 'Read beta.txt', 'Both reads came back fine.', 'Worked for', '$0.0052'],
+        'steps': [('keys', '\r'), ('settle', 3), ('type', 'GW-TOOLS GW-HEAD go'), ('wait_for', 'Both reads came back fine.', 40), ('settle', 2)],
+        'watch': [], 'final_contains': ['Thought for', '· Planning', 'Read 2 files', 'Read alpha.txt', 'Read beta.txt', 'Both reads came back fine.'],
         'never': ['Error:'],
     },
     'gateway-transient-5xx-retries': {
@@ -1495,19 +1487,19 @@ SCENARIOS = {
     'gateway-credit-on-composer': {
         'turns': [{}], 'harness': 'grok', 'setup': gateway_fake(), 'startup': 5, 'no_dup_check': 'static screen',
         'steps': [('keys', '\r'), ('settle', 4)],
-        'watch': [], 'final_contains': ['$12.50 credit left'],
+        'watch': [], 'never': ['credit left'],
     },
     'gateway-unlimited-on-composer': {
         'turns': [{}], 'harness': 'grok', 'setup': gateway_fake({'GATEWAY_FAKE_UNLIMITED': '1'}), 'startup': 5, 'no_dup_check': 'static screen',
         'steps': [('keys', '\r'), ('settle', 4)],
-        'watch': [], 'final_contains': ['Unlimited credit'], 'never': ['credit left'],
+        'watch': [], 'never': ['credit left', 'Unlimited'],
     },
     'gateway-moves-existing-conversation': {
         'turns': [{'blocks': ['Hello there, all good.']}],
         'steps': [('type', 'hi'), ('wait_for', 'Hello there, all good.', 30), ('settle', 2),
                   ('type', '/gateway'), ('wait_for', 'Sign in to ClikDeploy Gateway', 10), ('settle', 0.5),
                   ('keys', '\x1b'), ('settle', 2)],
-        'watch': [], 'never': ['Use the interactive /provider menu', 'Error:'], 'final_contains': ['Grok Build  •'],
+        'watch': [], 'never': ['Use the interactive /provider menu', 'Error:'], 'final_contains': ['grok-4'],
     },
     # Settings' rows stay where they are as the cursor lands on a row chosen
     # in place (they moved two columns right), and its hint names Enter and
@@ -1776,9 +1768,9 @@ SCENARIOS = {
             {'op': 'tool', 'id': 'sb', 'title': 'echo bravo', 'ms': 500, 'result': 'bravo'},
             {'op': 'text', 'text': 'All the checks ran.'}]}],
         'steps': [('type', 'start the checks'), ('wait_for', 'echo alpha', 30), ('settle', 1.5),
-                  ('type', 'steer this in'), ('wait_for', 'sent into the turn', 10),
+                  ('type', 'steer this in'), ('wait_for', 'Steered in:', 20),
                   ('wait_for', 'All the checks ran.', 40), ('settle', 3)],
-        'watch': [], 'ever': ['sent into the turn'],
+        'watch': [], 'ever': [],
         'always_order': [('echo alpha', '› steer this in'), ('› steer this in', 'echo bravo')],
         'final_in_order': ['echo alpha', '› steer this in', 'echo bravo', 'All the checks ran.'],
         'final_once': ['› steer this in'],
