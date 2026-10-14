@@ -101,6 +101,14 @@ export async function ensureWorkersDirectory(): Promise<void> {
   await mkdir(workersDirectory(), { recursive: true, mode: 0o700 });
 }
 
+/** The temp directory this process started with. A worker re-points TMPDIR at
+ * a directory inside the state directory for everything its agent runs
+ * (conversation-tmp.ts); a socket falls back here only because the state
+ * directory's own path is too long, and a fallback inside that directory is
+ * longer still. Read once, at import, so the path every process derives for a
+ * session is the same one. */
+const STARTUP_TMPDIR = tmpdir();
+
 /** Windows has no Unix domain sockets on a path a client can find by name the
  * way every other platform does: a worker listens on a named pipe instead,
  * which `net` treats identically. Pipe names share one machine-wide namespace,
@@ -113,7 +121,7 @@ export function socketPathFor(sessionId: string, platform: NodeJS.Platform = pro
   }
   const standard = join(workersDirectory(), socketFileName(sessionId));
   if (standard.length < 100) return standard;
-  return join(tmpdir(), `cc-${socketFileName(sessionId)}`);
+  return join(STARTUP_TMPDIR, `cc-${socketFileName(sessionId)}`);
 }
 
 export async function readWorkerRecord(sessionId: string): Promise<WorkerRuntimeRecord | undefined> {
