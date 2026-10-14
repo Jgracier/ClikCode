@@ -7,7 +7,7 @@
  * session, and the model may run one command with `sandbox: false`, under
  * the session's own permission mode. The argv builders are pure. */
 import { spawnSync } from 'node:child_process';
-import { accessSync, constants, realpathSync } from 'node:fs';
+import { accessSync, constants, existsSync, realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -75,15 +75,29 @@ export function sandboxWritableDirs(input: WritableInput): string[] {
 
 interface Invocation { file: string; args: string[] }
 
+/** The system's ssh drop-in directory. The sandbox's user namespace maps only the caller's own uid, so every
+ * root-owned file reads as owned by `nobody`, and ssh refuses an included config it does not trust
+ * ("Bad owner or permissions on /etc/ssh/ssh_config.d/..."): every `ssh`, `scp`, `git` over ssh and
+ * `tailscale ssh` then failed inside the sandbox. An empty private directory has no such file to refuse, and
+ * the system's own ssh_config still applies; what is lost is only the distribution's drop-ins (on Ubuntu, the
+ * systemd `vsock/` and `unix/` host proxies). */
+export const SSH_CONFIG_DROPINS = '/etc/ssh/ssh_config.d';
+
+function maskedDirs(request: WrapRequest): string[] {
+  return request.exists?.(SSH_CONFIG_DROPINS) ? [SSH_CONFIG_DROPINS] : [];
+}
+
 /** bwrap: the whole filesystem read-only, the writable dirs bound back
  * read-write (`--bind-try`: a cache that does not exist is skipped, not an
- * error), a private /dev and /proc. No --new-session and no pid namespace:
+ * error), a private /dev and /proc. `masked` directories are replaced by an
+ * empty private one: see SSH_CONFIG_DROPINS. No --new-session and no pid namespace:
  * the command stays in the process group a timeout or cancel signals. */
-export function bwrapInvocation(command: Invocation, writable: readonly string[], cwd: string): Invocation {
+export function bwrapInvocation(command: Invocation, writable: readonly string[], cwd: string, masked: readonly string[] = []): Invocation {
   return {
     file: 'bwrap',
     args: [
       '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc',
+      ...masked.flatMap((dir) => ['--tmpfs', dir]),
       ...writable.flatMap((dir) => ['--bind-try', dir, dir]),
       '--die-with-parent', '--chdir', cwd, '--', command.file, ...command.args,
     ],
@@ -113,6 +127,8 @@ interface WrapRequest {
   cwd: string;
   /** Whether a sandbox binary is installed (an injected lookup, for tests). */
   available(binary: string): boolean;
+  /** Whether a path exists on this machine (an injected lookup, for tests); absent: nothing is masked. */
+  exists?(path: string): boolean;
 }
 
 export type SandboxWrap =
@@ -126,7 +142,7 @@ export function wrapForSandbox(request: WrapRequest): SandboxWrap {
   if (request.mode !== 'workspace') return { sandboxed: false, invocation: request.command };
   if (request.platform === 'linux') {
     return request.available('bwrap')
-      ? { sandboxed: true, invocation: bwrapInvocation(request.command, request.writable, request.cwd) }
+      ? { sandboxed: true, invocation: bwrapInvocation(request.command, request.writable, request.cwd, maskedDirs(request)) }
       : { sandboxed: false, invocation: request.command, missing: 'bubblewrap (bwrap)' };
   }
   if (request.platform === 'darwin') {
@@ -216,5 +232,5 @@ function platformDirs(): string[] {
 export function sandboxCommand(mode: SandboxMode, command: Invocation, scope: { cwd: string; addDirs: readonly string[]; homeDir: string }): SandboxWrap & { writable: string[] } {
   const named = sandboxWritableDirs({ ...scope, tmpDir: os.tmpdir(), env: process.env, platformDirs: platformDirs() });
   const resolved = [...new Set(named.map(realOrSame))];
-  return { ...wrapForSandbox({ mode, platform: process.platform, command, writable: resolved, cwd: scope.cwd, available: sandboxAvailable }), writable: [...new Set([...resolved, ...named])] };
+  return { ...wrapForSandbox({ mode, platform: process.platform, command, writable: resolved, cwd: scope.cwd, available: sandboxAvailable, exists: existsSync }), writable: [...new Set([...resolved, ...named])] };
 }
