@@ -14,7 +14,6 @@ export const COST_INLINE_MIN_USD = 0.05;
 /** A call's `(exit N · duration)` shows a duration only from this long. */
 export const CALL_DURATION_MIN_MS = 5_000;
 /** The usage figure sits in the footer when this much or less is left. */
-export const USAGE_LOW_PERCENT = 25;
 /** Under a failed call: the last this many lines of its output. */
 export const FAILED_OUTPUT_LINES = 3;
 /** One `Edited path +N −M` line per file, this many files, then `+K more files`. */
@@ -44,11 +43,6 @@ export function callOutcomeParts(exitCode: number | undefined, ms: number | unde
   const slow = ms !== undefined && ms >= CALL_DURATION_MIN_MS;
   if (!failed && !slow) return [];
   return [...(failed ? [`exit ${exitCode}`] : []), ...(ms !== undefined && ms >= 1000 ? [words(ms)] : [])];
-}
-
-/** Whether the usage figure belongs in the footer: only when it is low or spent. */
-export function usageIsLow(remainingPercent: number | undefined, spent: boolean): boolean {
-  return spent || (remainingPercent !== undefined && remainingPercent <= USAGE_LOW_PERCENT);
 }
 
 /** The last lines of a failed call's output: that is the error. */

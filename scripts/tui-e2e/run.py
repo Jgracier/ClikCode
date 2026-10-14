@@ -1487,19 +1487,19 @@ SCENARIOS = {
     'gateway-credit-on-composer': {
         'turns': [{}], 'harness': 'grok', 'setup': gateway_fake(), 'startup': 5, 'no_dup_check': 'static screen',
         'steps': [('keys', '\r'), ('settle', 4)],
-        'watch': [], 'never': ['credit left'],
+        'watch': [], 'final_contains': ['$12.50 credit left'],
     },
     'gateway-unlimited-on-composer': {
         'turns': [{}], 'harness': 'grok', 'setup': gateway_fake({'GATEWAY_FAKE_UNLIMITED': '1'}), 'startup': 5, 'no_dup_check': 'static screen',
         'steps': [('keys', '\r'), ('settle', 4)],
-        'watch': [], 'never': ['credit left', 'Unlimited'],
+        'watch': [], 'final_contains': ['Unlimited credit'], 'never': ['credit left'],
     },
     'gateway-moves-existing-conversation': {
         'turns': [{'blocks': ['Hello there, all good.']}],
         'steps': [('type', 'hi'), ('wait_for', 'Hello there, all good.', 30), ('settle', 2),
                   ('type', '/gateway'), ('wait_for', 'Sign in to ClikDeploy Gateway', 10), ('settle', 0.5),
                   ('keys', '\x1b'), ('settle', 2)],
-        'watch': [], 'never': ['Use the interactive /provider menu', 'Error:'], 'final_contains': ['grok-4'],
+        'watch': [], 'never': ['Use the interactive /provider menu', 'Error:'], 'final_contains': ['Grok Build  •'],
     },
     # Settings' rows stay where they are as the cursor lands on a row chosen
     # in place (they moved two columns right), and its hint names Enter and

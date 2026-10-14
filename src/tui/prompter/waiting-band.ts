@@ -2,11 +2,8 @@
 import chalk from 'chalk';
 import { isKeyShaped } from '../../gateway/login/vendor-sign-in.js';
 import { commandPaletteMatches } from '../command-palette.js';
-import { terminalCellWidth, visibleSlice } from '../render/width.js';
-import { composerUsageLabel, usageLabelIsSpent, usageRemainingPercent } from '../render/usage-words.js';
-import { usageIsLow } from '../../harness/protocol/lean.js';
-import { HARNESS_DEFAULT_SETTINGS } from '../../session/state/settings.js';
-import { sessionProviderLabel } from '../../harness/protocol/labels.js';
+import { terminalCellWidth, visiblePathTail, visibleSlice } from '../render/width.js';
+import { compactPath, sessionProviderLabel } from '../../harness/protocol/labels.js';
 import { sessionModelLabel } from '../../harness/output.js';
 import { isGatewayService } from '../../session/route.js';
 import { harnessSupportsEffort, localHarnessForCommand } from '../../runtime/lazy-bridge.js';
@@ -22,13 +19,12 @@ import { keyHint, keyHintFor } from '../../harness/protocol/wording.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
 import { WaitingTurn } from './state.js';
 
-/** The one footer line under the composer, fitted to `width`: the model, its
- * effort only when it is not the default, and the usage figure only when it
- * is low or spent. The provider is the chat's (/status), the directory is the
- * shell's, the full usage is /usage. */
+/** The line under the composer, fitted to `width`: a narrow screen
+ * shortens the directory from the left (`…/clikcode`) before anything. */
 export function statusText(this: TerminalHarnessPrompter, width: number): string {
   const session = this.currentSession;
   if (!session) return '';
+  const path = compactPath(session.workspace ?? process.cwd());
   const provider = sessionProviderLabel(session);
   const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
   // What the harness reported running beats what it was asked to run: a
@@ -48,20 +44,12 @@ export function statusText(this: TerminalHarnessPrompter, width: number): string
   // model is its engine's catalog entry, named by label.
   const model = session.route === 'clikcode-local' ? localModelLabel(session.model)
     : isGatewayService(session) ? sessionModelLabel(session, session.reported?.model ?? session.model) : nativeModelLabel(harness?.command, rawModel);
-  const effort = harness && harnessSupportsEffort(harness) && session.effort !== HARNESS_DEFAULT_SETTINGS.effort ? session.effort : undefined;
-  // No model known yet: the provider says what the chat is running as.
-  const lead = [model, effort].filter(Boolean).join(' ') || provider;
-  return visibleSlice(lead, width);
-}
-
-/** The usage reading for the footer line: only when it is low or spent. */
-export function footerUsage(this: TerminalHarnessPrompter): { label: string; spent: boolean } | undefined {
-  const label = composerUsageLabel(this.usageLabel, this.usageResetLabel);
-  if (!label) return undefined;
-  const spent = usageLabelIsSpent(label);
-  // A turn parked until the reset is a state, not a reading: always said.
-  if (/^waiting for reset/.test(label)) return { label, spent: true };
-  return usageIsLow(usageRemainingPercent(this.usageLabel), spent) ? { label, spent } : undefined;
+  const effort = harness && harnessSupportsEffort(harness) ? session.effort : undefined;
+  // The title is not on this line: it sits on the rule under the composer,
+  // so a long one never truncates the provider, model or directory.
+  const lead = [provider, [model, effort].filter(Boolean).join(' ')].filter(Boolean).join('  •  ');
+  const context = visiblePathTail(path, Math.max(12, width - terminalCellWidth(lead) - 5));
+  return visibleSlice([lead, context].filter(Boolean).join('  •  '), width);
 }
 
 /** `⠋  Reading prompter.ts · 1m 12s`: what the turn is doing and how long
