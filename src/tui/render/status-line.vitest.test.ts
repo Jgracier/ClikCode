@@ -1,47 +1,47 @@
 import { Chalk } from 'chalk';
 import { describe, expect, it } from 'vitest';
-import { paintStatus, statusColour } from './status-line.js';
+import { LOOK, xtermRgb } from '../../harness/protocol/look.js';
+import { paintStatus } from './status-line.js';
 
 const strip = (text: string): string => text.replace(/\u001b\[[0-9;]*m/g, '');
 const base = { glyph: '⣿', label: 'reading app.ts', frame: 3, shimmer: false };
 
 describe('the status line', () => {
-  it('wears the tone of what the turn is doing', () => {
-    expect(statusColour('thinking')).toBe('cyan');
-    expect(statusColour('tool', 'edit')).toBe('magenta');
-    expect(statusColour('tool')).toBe('cyan');
-    expect(statusColour('asking')).toBe('blue');
+  it('wears one colour for every tone and every tool: the look accent', () => {
+    const chalk = new Chalk({ level: 3 });
+    const accent = chalk.rgb(...xtermRgb(LOOK.roles.accent.ansi))('⣿');
+    for (const tone of ['thinking', 'tool', 'asking'] as const) expect(paintStatus({ ...base, tone }, chalk).spinner).toBe(accent);
   });
 
   it('writes only the words where there is no colour', () => {
-    const painted = paintStatus({ ...base, tone: 'tool', category: 'read', shimmer: true }, new Chalk({ level: 0 }));
+    const painted = paintStatus({ ...base, tone: 'tool', shimmer: true }, new Chalk({ level: 0 }));
     expect(painted).toEqual({ spinner: '⣿', label: 'reading app.ts' });
   });
 
   it('sweeps a bold highlight on a terminal without truecolor, and never changes the words', () => {
     const chalk = new Chalk({ level: 2 });
-    const painted = paintStatus({ ...base, tone: 'tool', category: 'read', shimmer: true }, chalk);
+    const painted = paintStatus({ ...base, tone: 'tool', shimmer: true }, chalk);
     expect(strip(painted.label)).toBe('reading app.ts');
     expect(painted.label).toContain('\u001b[1m');
-    const still = paintStatus({ ...base, tone: 'tool', category: 'read' }, chalk);
+    const still = paintStatus({ ...base, tone: 'tool' }, chalk);
     expect(still.label).not.toContain('\u001b[1m');
   });
 
   it('wears its tone, and brightens under the highlight, in truecolor', () => {
     const chalk = new Chalk({ level: 3 });
-    expect(paintStatus({ ...base, tone: 'thinking' }, chalk).spinner).toBe(chalk.rgb(80, 200, 220)('⣿'));
+    expect(paintStatus({ ...base, tone: 'thinking' }, chalk).spinner).toBe(chalk.rgb(...xtermRgb(LOOK.roles.accent.ansi))('⣿'));
     const shimmering = paintStatus({ ...base, tone: 'thinking', shimmer: true }, chalk);
     expect(strip(shimmering.label)).toBe('reading app.ts');
     const colours = new Set(shimmering.label.match(/38;2;\d+;\d+;\d+/g));
     expect(colours.size).toBeGreaterThan(1);
   });
 
-  it('turns only the spinner yellow when the turn has stalled', () => {
+  it('turns only the spinner to the stopped colour when the turn has stalled', () => {
     const chalk = new Chalk({ level: 3 });
     const stalled = paintStatus({ ...base, tone: 'thinking', stalled: true }, chalk);
-    expect(stalled.spinner).toBe(chalk.rgb(230, 190, 90)('⣿'));
+    expect(stalled.spinner).toBe(chalk.rgb(...xtermRgb(LOOK.roles.stopped.ansi))('⣿'));
     expect(stalled.label).toBe(paintStatus({ ...base, tone: 'thinking' }, chalk).label);
-    expect(paintStatus({ ...base, tone: 'thinking', stalled: true }, new Chalk({ level: 1 })).spinner).toBe(new Chalk({ level: 1 }).yellow('⣿'));
+    expect(paintStatus({ ...base, tone: 'thinking', stalled: true }, new Chalk({ level: 1 })).spinner).toBe(new Chalk({ level: 1 }).ansi256(LOOK.roles.stopped.ansi)('⣿'));
   });
 
   it('writes a colour where it changes, not around every character', () => {

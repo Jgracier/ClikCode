@@ -6,7 +6,7 @@
 
 import chalk from 'chalk';
 import { agentTask, callDetail, AGENT_RESULT_LINES, DETAIL_DIFF_LINES } from '../../harness/protocol/call-groups.js';
-import { TOOL_ROW_TEXT } from '../../harness/protocol/tool-category-style.js';
+import { look, TOOL_ROW_TEXT } from '../../harness/protocol/tool-category-style.js';
 import { fileDiffRows } from '../../harness/protocol/activity-line.js';
 import { visibleSlice } from './width.js';
 import { wrapWords } from './wrap.js';
@@ -52,7 +52,7 @@ export function itemDetailRows(entry: ActivityEntry, room: number): string[] {
   const { event, thought } = entry;
   const rows: string[] = [];
   if (thought) {
-    if (thought.text) for (const row of wrapWords(thought.text.replace(/\s+/g, ' ').trim(), room)) rows.push(chalk.dim(chalk.italic(row)));
+    if (thought.text) for (const row of wrapWords(thought.text.replace(/\s+/g, ' ').trim(), room)) rows.push(look.paint.thought(row));
     return rows;
   }
   if (!event) {

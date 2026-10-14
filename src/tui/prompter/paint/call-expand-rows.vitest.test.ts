@@ -32,7 +32,7 @@ function entriesOf(events: HarnessActivityEvent[], offset = 0): ActivityEntry[] 
 
 const textOf = (tools: readonly SettlingTool[]): string[] => tools.flatMap((tool) => extractTags(tool.lines).rows.map(strip));
 
-const AGENT = event('a1', 'tool-done', 'Task(explore the parser)', {
+const AGENT = event('a1', 'tool-done', 'Agent explore the parser', {
   category: undefined, agent: true, childTools: 2, childTokens: 30000, durationMs: 65000,
   call: { name: 'Task', input: { description: 'explore the parser', prompt: 'Find where tokens are produced and report the file.' } },
   output: ['Tokens come from lexer.ts', 'Nothing else reads them'],
@@ -54,12 +54,12 @@ describe('a sub-agent row, opened in place', () => {
   };
 
   it('is one row closed, with its outcome', () => {
-    expect(live().text).toEqual(['', '  Task(explore the parser) (2 tool uses · 30k tokens · 1m 5s)']);
+    expect(live().text).toEqual(['', '  ‣ Agent explore the parser (2 tool uses · 30k tokens · 1m 5s)']);
   });
 
   it('opens to its task, each call it made, and what it answered', () => {
     expect(live(['a1']).text).toEqual([
-      '', '  Task(explore the parser) (2 tool uses · 30k tokens · 1m 5s)',
+      '', '  ‣ Agent explore the parser (2 tool uses · 30k tokens · 1m 5s)',
       '    Find where tokens are produced and report the file.',
       '      ‣ Read lexer.ts', '      ‣ $ grep -rn token src failed',
       '    Tokens come from lexer.ts', '    Nothing else reads them',
@@ -88,7 +88,7 @@ describe('a sub-agent row, opened in place', () => {
     ]);
     const bare = kit();
     bare.p.groupExpansion.toggleGroup('call:b');
-    expect(textOf(bare.rows.groupedRows(entriesOf([event('b', 'tool-done', 'Task(x)', { agent: true, category: undefined })]), true, new CallGrouping()))).toEqual(['', '  Task(x)']);
+    expect(textOf(bare.rows.groupedRows(entriesOf([event('b', 'tool-done', 'Agent x', { agent: true, category: undefined })]), true, new CallGrouping()))).toEqual(['', '  ‣ Agent x']);
   });
 
   it('counts in the summary of a run it is part of, and stays its own tappable row', () => {
@@ -97,7 +97,7 @@ describe('a sub-agent row, opened in place', () => {
     const rows = tools.flatMap((tool) => extractTags(tool.lines));
     const text = rows.flatMap((row) => row.rows.map(strip)).join('\n');
     expect(text).toContain('Ran 2 commands, 1 agent');
-    expect(text).toContain('Task(explore the parser)');
+    expect(text).toContain('Agent explore the parser');
     const tagged = tools.flatMap((tool) => extractTags(tool.lines).tags).map(parseTag).filter(Boolean);
     expect(tagged.some((tag) => tag!.group === 'call:a1')).toBe(true);
   });
@@ -129,7 +129,7 @@ describe('a lone call, opened in place', () => {
     setup?.(k.p);
     return textOf(k.rows.groupedRows(entriesOf(events), true, new CallGrouping()));
   };
-  const COMMAND = event('1', 'tool-done', '$ npm test -- --reporter verbose', {
+  const COMMAND = event('1', 'tool-done', '$ npm test -- --reporter verbose --bail', {
     call: { name: 'Bash', input: { command: 'npm test -- --reporter verbose --bail' } }, output: ['ok 1', 'ok 2'], exitCode: 0,
   });
 

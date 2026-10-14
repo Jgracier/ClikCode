@@ -1,5 +1,6 @@
 /** The fixed bands of a frame (notice, palette, approval, thought, sign-in, plan, panel) and the rows left for the composer. */
 import chalk from 'chalk';
+import { thoughtLine } from '../../../harness/protocol/tool-category-style.js';
 import { noticeLines } from '../../render/wrap.js';
 import { composerLayout } from '../../render/composer-layout.js';
 import { terminalCellWidth, visibleSlice, visibleTail } from '../../render/width.js';
@@ -79,7 +80,7 @@ export function frameBands(p: TerminalHarnessPrompter, input: BandInput) {
   // The newest words of the reasoning: it is read as it is written.
   const thought = p.thought ? reasoningBody(p.thought.text) : '';
   const thoughtRows = p.turn && thought && !approval && liveBandBudget > 0
-    ? [`  ${chalk.dim(chalk.italic(`✻ ${visibleTail(thought, Math.max(1, inner - 2))}`))}`] : [];
+    ? [`  ${thoughtLine(visibleTail(thought, Math.max(1, inner - 2)))}`] : [];
   liveBandBudget -= thoughtRows.length;
   // A link sign-in's link is wrapped, never cut: on a phone it is read (and
   // its code typed) from here.

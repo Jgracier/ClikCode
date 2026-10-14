@@ -8,7 +8,8 @@ import { visibleSlice } from './width.js';
 import { renderActivityLine } from '../../harness/protocol/activity-line.js';
 import { mergeActivity, sameCall, stoppedCall } from '../../harness/protocol/activity-view.js';
 import type { HarnessActivityEvent } from '../../harness/prompter.js';
-import { TOOL_CATEGORY_STYLE } from '../../harness/protocol/tool-category-style.js';
+import { look, toolGlyph } from '../../harness/protocol/tool-category-style.js';
+import { TOOL_CATEGORY } from '../../harness/protocol/tool-category.js';
 import { decisionRow, type Decision } from '../../harness/protocol/turn-flow.js';
 import type { GroupThought } from '../../harness/protocol/call-groups.js';
 
@@ -44,7 +45,7 @@ export type EntryDecision = {
 };
 
 const paintDecision = (text: string, tone: 'ok' | 'no' | 'told'): string => {
-  const glyph = tone === 'ok' ? chalk.green : tone === 'no' ? chalk.red : chalk.cyan;
+  const glyph = tone === 'ok' ? look.paint.success : tone === 'no' ? look.paint.failed : look.paint.accent;
   return sanitizeTerminalText(glyph(text.slice(0, 1)) + chalk.dim(text.slice(1)), { keepSgr: true, singleLine: true });
 };
 
@@ -211,8 +212,7 @@ export function collapseToolRuns(entries: readonly ActivityEntry[]): ActivityEnt
     }
     const count = end - index + 1;
     if (count < 2) { result.push(entry); continue; }
-    const { paint, glyph, folded } = TOOL_CATEGORY_STYLE[category];
-    result.push({ ...entry, lines: [`  ${paint(glyph)} ${chalk.dim(folded(count))}`] });
+    result.push({ ...entry, lines: [`  ${toolGlyph()} ${chalk.dim(TOOL_CATEGORY[category].folded(count))}`] });
     index = end;
   }
   return result;
