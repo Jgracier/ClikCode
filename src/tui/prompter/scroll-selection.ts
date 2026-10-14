@@ -19,7 +19,7 @@ export function scrollTranscript(this: TerminalHarnessPrompter, rows: number): b
   // the end of what any frame would draw, and the rows a reader then had to
   // swipe back through before the view moved again were rows that were
   // never on it.
-  const furthest = Math.max(0, this.alternateTranscript.length - this.alternateAbove);
+  const furthest = Math.max(0, this.alternateTranscript.length + this.scrollTail.rows.length - this.alternateAbove);
   const next = Math.max(0, Math.min(furthest, this.alternateScrollback + rows));
   // What a report of "it did not move" needs to be answerable: whether the
   // key arrived (logged where keys are read), and whether there was anywhere
@@ -152,7 +152,7 @@ export function handleSelection(this: TerminalHarnessPrompter, action: MouseActi
  * reached the edge. */
 export function lineAtScreenRow(this: TerminalHarnessPrompter, row: number): number {
   return lineAtRow({
-    length: this.alternateTranscript.length, trimmed: this.alternateTrimmed,
+    length: this.alternateTranscript.length + this.viewExtra.rows.length, trimmed: this.alternateTrimmed,
     above: this.alternateAbove, scrollback: this.alternateScrollback,
   }, row);
 }
@@ -162,8 +162,9 @@ export function lineAtScreenRow(this: TerminalHarnessPrompter, row: number): num
 export function selectionText(this: TerminalHarnessPrompter, selection: Selection): string {
   const range = orderedRange(selection);
   const rows: string[] = [];
+  const extra = this.viewExtra.rows;
   for (let line = range.start.row; line <= range.end.row; line += 1) {
-    rows.push(lineText(line, this.alternateTranscript, this.alternateTrimmed, this.frameLayout.live));
+    rows.push(lineText(line, extra.length ? [...this.alternateTranscript, ...extra] : this.alternateTranscript, this.alternateTrimmed, this.frameLayout.live));
   }
   const shift = (cell: { row: number; col: number }) => ({ row: cell.row - range.start.row, col: cell.col });
   return selectedText(rows, { anchor: shift(selection.anchor), head: shift(selection.head) });

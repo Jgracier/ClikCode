@@ -49,6 +49,10 @@ import { question } from './prompter/prompt-input.js';
 import { paint } from './prompter/paint/frame.js';
 
 
+/** Rows of the live conversation with their group tags. */
+export type ScrollTail = { rows: string[]; tags: Array<string | undefined> };
+const EMPTY_TAIL: ScrollTail = { rows: [], tags: [] };
+
 export class TerminalHarnessPrompter implements HarnessPrompter {
   closed = false;
   history: string[] = [];
@@ -146,7 +150,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** Rows retired since the last frame reached the terminal, and the live
    * region that frame will draw below them. */
   pendingFinished: string[] = [];
-  pendingLive?: { live: string[]; cursorRow: number; cursorColumn: number; hideCursor: boolean; tags: Array<string | undefined> };
+  pendingLive?: { live: string[]; cursorRow: number; cursorColumn: number; hideCursor: boolean; tags: Array<string | undefined>; tail?: ScrollTail };
   /** The last row retired, so a blank separator is never doubled across the
    * boundary between one frame and the next. */
   lastFinishedRow?: string;
@@ -192,6 +196,15 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** The live rows below the transcript in the last frame: the text a
    * selection copies from them. */
   frameLayout = { live: [] as string[], tags: [] as Array<string | undefined> };
+  /** The live conversation's rows (a running agent, the answer being written),
+   * all of them, as of the last frame. Scrolled back they are the end of what
+   * can be read -- they are not in the transcript until they retire. */
+  scrollTail: ScrollTail = { rows: [], tags: [] };
+  /** The scrollable length (transcript plus tail) of the last frame drawn
+   * scrolled back: what holds the view still while rows arrive. */
+  scrollBodyLength: number | undefined;
+  /** The rows the view scrolls over beyond the transcript: the live tail, while scrolled back. */
+  get viewExtra(): ScrollTail { return this.alternateScrollback > 0 ? this.scrollTail : EMPTY_TAIL; }
   /** What the composer's slash palette offers, remembered from the last
    * question() so a turn in flight can offer the same commands. A turn does
    * not change which commands exist; each is re-checked when it runs. */

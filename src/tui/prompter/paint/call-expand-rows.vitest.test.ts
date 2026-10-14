@@ -198,7 +198,7 @@ describe('tags and taps of expandable rows', () => {
     const lineTags = new Map<number, string>();
     transcript.tags.forEach((tag, index) => { if (tag) lineTags.set(10 + index, tag); });
     const h = {
-      ...k.p, alternateTrimmed: 10, alternateTranscript: transcript.rows, alternateAbove: 40, alternateScrollback: 0, lineTags,
+      ...k.p, alternateTrimmed: 10, alternateTranscript: transcript.rows, alternateAbove: 40, alternateScrollback: 0, viewExtra: { rows: [], tags: [] }, lineTags,
       emitted: { requestReseed: vi.fn() }, redrawSelection: vi.fn(), frameLayout: { live: [], tags: [] as Array<string | undefined> }, groupAnchor: undefined as unknown,
     };
     return { k, h, transcript };
