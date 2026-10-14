@@ -25,7 +25,10 @@ export type AnchorTarget = { line: number; height: number; row: number; fit: boo
  * live row's from the last frame. */
 function tagAt(p: TerminalHarnessPrompter, line: number): string | undefined {
   const end = p.alternateTrimmed + p.alternateTranscript.length;
-  return line < end ? p.lineTags.get(line) : p.frameLayout.tags[line - end];
+  if (line < end) return p.lineTags.get(line);
+  const extra = p.viewExtra;
+  const index = line - end;
+  return index < extra.rows.length ? extra.tags[index] : p.frameLayout.tags[index - extra.rows.length];
 }
 
 const belongs = (tag: RowTag | undefined, group: string, item: string): boolean =>
@@ -40,7 +43,7 @@ function linesOf(p: TerminalHarnessPrompter, group: string, item: string): numbe
 
 /** The screen row a transcript line is on now (negative: above the screen). */
 export function screenRowOfLine(p: TerminalHarnessPrompter, line: number): number {
-  const length = p.alternateTranscript.length;
+  const length = p.alternateTranscript.length + p.viewExtra.rows.length;
   return line - p.alternateTrimmed - (length - p.alternateAbove - p.alternateScrollback);
 }
 

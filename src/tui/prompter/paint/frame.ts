@@ -123,7 +123,7 @@ export function paint(this: TerminalHarnessPrompter, composer: string, options: 
   const cursorRow = Math.max(0, liveConversationRows + composerStart + composerRows.cursorRow - overflow);
   const cursorColumn = 3 + terminalCellWidth(prompt) + composerRows.cursorWidth;
   this.pendingSignals += this.terminalSignals();
-  this.renderFrame(finished, live, cursorRow, cursorColumn, Boolean(palette?.hideCursor), shown.tags);
+  this.renderFrame(finished, live, cursorRow, cursorColumn, Boolean(palette?.hideCursor), shown.tags, extractTags(conversationLines));
   // The two moments a user feels, once per turn each (runtime/turn-latency.ts):
   // their message on screen, and the first of the answer.
   if (pendingPrompt && turnMarkOpen('first-paint')) markTurn('first-paint');

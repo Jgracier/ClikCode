@@ -18,6 +18,7 @@ export function renderFrame(
   this: TerminalHarnessPrompter,
   finished: readonly string[], live: readonly string[], cursorRow: number, cursorColumn: number, hideCursor: boolean,
   liveTags: ReadonlyArray<string | undefined> = [],
+  tail?: { rows: readonly string[]; tags: ReadonlyArray<string | undefined> },
 ): void {
   // Last line of defence: whatever produced a row, the only escape sequences
   // that reach the terminal are SGR colors, no row contains a control
@@ -44,7 +45,10 @@ export function renderFrame(
   // instead of replacing them. A live row dropped here is drawn again by the
   // frame that replaces it; a retired row would simply be lost.
   this.pendingFinished.push(...finished.map(safeRow));
-  this.pendingLive = { live: safeLive, cursorRow, cursorColumn, hideCursor, tags: [...liveTags] };
+  this.pendingLive = {
+    live: safeLive, cursorRow, cursorColumn, hideCursor, tags: [...liveTags],
+    ...(tail ? { tail: { rows: tail.rows.map(safeRow), tags: [...tail.tags] } } : {}),
+  };
   if (!this.frameInFlight) this.flushFrame();
 }
 
@@ -75,8 +79,11 @@ export function flushFrame(this: TerminalHarnessPrompter): void {
 export function flushAlternateFrame(
   this: TerminalHarnessPrompter,
   finished: readonly string[],
-  pending: { live: string[]; cursorRow: number; cursorColumn: number; hideCursor: boolean; tags?: Array<string | undefined> },
+  pending: { live: string[]; cursorRow: number; cursorColumn: number; hideCursor: boolean; tags?: Array<string | undefined>; tail?: { rows: string[]; tags: Array<string | undefined> } },
 ): void {
+  if (pending.tail) this.scrollTail = pending.tail;
+  const lastBody = this.scrollBodyLength;
+  const trimmedBefore = this.alternateTrimmed;
   if (finished.length) {
     this.alternateTranscript.push(...finished);
     // Someone reading stays where they are. The offset counts rows from the
@@ -84,7 +91,6 @@ export function flushAlternateFrame(
     // forward by one per row -- the text walks out from under the reader
     // while a turn streams, which is what "scrolling slips through previous
     // messages" is. Growing the offset by the same count holds it still.
-    if (this.alternateScrollback > 0) this.alternateScrollback += finished.length;
     // Trimming the front does not move the end, so it leaves the offset be.
     // Never past a /search mention being looked at: a long way back in a
     // long chat is exactly where one can be.
@@ -95,6 +101,12 @@ export function flushAlternateFrame(
       this.alternateTranscript.splice(0, excess);
       this.alternateTrimmed += excess;
     }
+  }
+  // Held still while rows arrive at the end of what can be read: the
+  // transcript's new rows, and the live conversation growing or retiring.
+  const extra = this.viewExtra;
+  if (this.alternateScrollback > 0 && lastBody !== undefined) {
+    this.alternateScrollback = Math.max(0, this.alternateScrollback + this.alternateTranscript.length + extra.rows.length - lastBody + (this.alternateTrimmed - trimmedBefore));
   }
   const height = this.viewportRows();
   const live = pending.live.slice(-height);
@@ -115,14 +127,20 @@ export function flushAlternateFrame(
   // above it are unchanged, so the view is moved to put it back there.
   const target = this.anchorTarget;
   this.anchorTarget = undefined;
-  const anchored = target ? anchoredScrollback(target, { length: this.alternateTranscript.length, trimmed: this.alternateTrimmed, above }) : undefined;
+  const bodyLength = this.alternateTranscript.length + extra.rows.length;
+  const anchored = target ? anchoredScrollback(target, { length: bodyLength, trimmed: this.alternateTrimmed, above }) : undefined;
   if (anchored !== undefined) this.alternateScrollback = anchored;
   this.jumpToMention(above);
-  const furthest = Math.max(0, this.alternateTranscript.length - above);
+  const furthest = Math.max(0, bodyLength - above);
   this.alternateScrollback = Math.min(this.alternateScrollback, furthest);
   const scrolled = this.alternateScrollback;
-  const first = Math.max(0, this.alternateTranscript.length - above - scrolled);
-  const shownTranscript = this.alternateTranscript.slice(first, this.alternateTranscript.length - scrolled);
+  this.scrollBodyLength = scrolled > 0 ? bodyLength : undefined;
+  const first = Math.max(0, bodyLength - above - scrolled);
+  const transcriptLength = this.alternateTranscript.length;
+  const shownTranscript = [
+    ...this.alternateTranscript.slice(first, Math.min(transcriptLength, bodyLength - scrolled)),
+    ...(scrolled > 0 ? extra.rows.slice(Math.max(0, first - transcriptLength), bodyLength - scrolled - transcriptLength) : []),
+  ];
   const shownLive = scrolled > 0 ? live.slice(0, Math.max(0, height - above)) : live;
   let rows = [...shownTranscript, ...shownLive];
   while (rows.length < height) rows.unshift('');

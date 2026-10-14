@@ -187,7 +187,7 @@ describe('tapping and Ctrl+O', () => {
     const emitted = { requestReseed: vi.fn() };
     const redrawSelection = vi.fn();
     const h = {
-      ...k.p, alternateTrimmed: 10, alternateTranscript: transcript.rows, alternateAbove: 40, alternateScrollback: 0, lineTags, emitted, redrawSelection,
+      ...k.p, alternateTrimmed: 10, alternateTranscript: transcript.rows, alternateAbove: 40, alternateScrollback: 0, viewExtra: { rows: [], tags: [] }, lineTags, emitted, redrawSelection,
       frameLayout: { live: [], tags: [] as Array<string | undefined> }, groupAnchor: undefined as unknown,
     };
     return { h, transcript, emitted, redrawSelection };
@@ -251,7 +251,7 @@ describe('anchoring the viewport on the tapped row', () => {
     const anchored = anchoredScrollback({ line: 500 + tappedIndex, height: 7, row, fit: true }, { length: after.length, trimmed: 500, above })!;
     expect(screen(after, above, anchored)[row]).toBe(`row ${tappedIndex}`);
     // The screen row seen from the prompter's own arithmetic agrees.
-    expect(screenRowOfLine({ alternateTranscript: after, alternateTrimmed: 500, alternateAbove: above, alternateScrollback: anchored } as never, 500 + tappedIndex)).toBe(row);
+    expect(screenRowOfLine({ alternateTranscript: after, alternateTrimmed: 500, alternateAbove: above, alternateScrollback: anchored, viewExtra: { rows: [], tags: [] } } as never, 500 + tappedIndex)).toBe(row);
   });
 
   it('moves a row near the bottom up just enough for what opens under it, and no further than the top', () => {

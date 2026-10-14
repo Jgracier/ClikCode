@@ -984,6 +984,29 @@ SCENARIOS = {
         'snap_same_row': [(name, 'Agent scan') for name in ('opened', 'child', 'child-closed', 'minimised')],
         'snap_rows_after': {'opened': ('Agent scan', ['scan the parser for tokens', 'Read src/lexer.ts', 'echo child-two'])},
     },
+    # A sub-agent still running, opened in place and taller than the screen:
+    # scrolling back reaches its top (its header, where a tap minimises it).
+    'running-agent-scrolls-to-its-top': {
+        'rows': 24,
+        'turns': [{'emits': [
+            {'op': 'agent-start', 'id': 'ag1', 'title': 'Task: scan the parser', 'description': 'scan the parser for tokens'},
+            *[item for n in range(1, 31) for item in (
+                {'op': 'child-start', 'id': f'c{n}', 'parent': 'ag1', 'title': f'Read src/part{n}.ts', 'kind': 'read', 'input': {'file_path': f'src/part{n}.ts'}},
+                {'op': 'child-end', 'id': f'c{n}', 'parent': 'ag1', 'result': f'body{n}'})],
+            {'op': 'sleep', 'ms': 14000},
+            {'op': 'agent-end', 'id': 'ag1', 'result': 'The scan found everything'},
+            {'op': 'text', 'text': 'The agent is done.'},
+        ]}],
+        'steps': [
+            ('type', 'scan the parser'), ('wait_for', 'Agent scan', 40), ('settle', 1),
+            ('click', 'Agent scan'), ('settle', 1), ('snap', 'opened'),
+            *[step for _ in range(8) for step in (('keys', '\x1b[<64;35;12M'), ('settle', 0.4))], ('settle', 1), ('snap', 'scrolled'),
+            ('click', 'Agent scan'), ('settle', 1), ('snap', 'minimised'),
+        ],
+        'watch': [],
+        'snap_contains': {'scrolled': ['Agent scan', 'scan the parser for tokens']},
+        'snap_lacks': {'minimised': ['Read src/part3.ts']},
+    },
     # A lone command opens too: its full command and the tail of its output.
     'lone-call-expands': {
         'turns': [{'emits': [
