@@ -13,7 +13,7 @@ const strip = (text: string): string => text.replace(/\u001b\[[0-9;]*m/g, '');
 
 function kit(overrides: Record<string, unknown> = {}) {
   const p = {
-    callGroups: new GroupRegistry(), groupExpansion: new GroupExpansion(), viewportRows: () => 30, reducedMotion: true, waitingFrame: 0,
+    callGroups: new GroupRegistry(), groupExpansion: new GroupExpansion(), agentStarts: new Map(), liveChildren: { latest: () => undefined, rows: () => [] }, viewportRows: () => 30, reducedMotion: true, waitingFrame: 0,
     liveResponse: '', approvalQueue: [], childEntries: [] as ActivityEntry[], ...overrides,
   };
   const builders = createRowBuilders(p as never, 80);
