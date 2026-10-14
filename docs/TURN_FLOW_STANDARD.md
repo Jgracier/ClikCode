@@ -83,10 +83,18 @@ each surface draws its own glyph.
 
 ## 6. Explore runs
 
-Adjacent read/search/list calls (a listing is category `search`) merge into
-one group row, in start order.
-Membership is decided on the first frame that carries the category; a start
-frame that cannot classify yet does not freeze the group.
+Calls and thoughts that run one after another with no prose between them
+(and no steered message) are one run, in start order. A run is held live --
+spinner, newest items under its summary -- until prose follows it or the turn
+ends, then settles ONCE as a single summary row (`Ran 4 commands, read 3
+files · 2 thoughts`; reads and searches in Claude Code's words, `Read 2 files,
+searched 1 pattern`) and is sealed: membership is never recomputed. One item
+alone is its own row. A failed or stopped call, a sub-agent and a call waiting
+on an approval are never folded: each keeps a row of its own, and a failure is
+counted in the summary. The items stay reachable: a tap on the summary row (or
+Ctrl+O) opens a panel listing them, and each opens to its full command and
+output tail, or a thought's text (`src/harness/protocol/call-groups.ts`).
+A saved turn regroups the same way from its saved calls and marks.
 
 ## 7. Plan
 
