@@ -16,7 +16,7 @@ import type { McpServerSpec } from '../agent/mcp/config.js';
 import { runAgentLoop } from '../agent/run-turn.js';
 import { mcpToolsForTurn } from '../agent/mcp/manager.js';
 import { hooksForWorkspace, toolHooksFrom } from '../agent/hooks.js';
-import type { AgentTurnResult, ModelClient, TokenUsage, UsageReport } from '../agent/model-client.js';
+import type { AgentTurnInput, AgentTurnResult, ModelClient, TokenUsage, UsageReport } from '../agent/model-client.js';
 import { turnStopReason, type TurnUsage } from '../harness/protocol/turn-usage.js';
 import type { HarnessActivityEvent as AgentActivityEvent } from '../harness/prompter.js';
 import { GATEWAY_HARNESS_COMMAND, toolCategory } from '../harness/protocol/tools.js';
@@ -28,7 +28,7 @@ import type { HarnessSession } from '../session/model.js';
 import type { HarnessTurnObserver } from '../harness/events/turn-observer.js';
 import type { TurnObserver } from '../turn/observer.js';
 
-interface AgentSessionTurnInput extends HarnessTurnObserver {
+interface AgentSessionTurnInput extends HarnessTurnObserver, Pick<AgentTurnInput, 'onRemembered'> {
   session: HarnessSession;
   prompt: string;
   prompter?: TurnObserver;
@@ -38,8 +38,6 @@ interface AgentSessionTurnInput extends HarnessTurnObserver {
   agentInstructions?: string;
   signal?: AbortSignal;
   images?: readonly string[];
-  /** The turn's request is in the agent's memory (AgentTurnInput.onRemembered). */
-  onRemembered?: () => Promise<void>;
   /** Whatever supplies the model step: the Gateway or ClikCode Local, as
    * modelClientForSession (agent/models/for-session.ts) chose for the route. */
   modelClient: ModelClient;
