@@ -17,8 +17,8 @@ import { ActivityEntry, commonPrefixLength, rebaseActivityOffsets } from './rend
 import type { OpenTool, Thought } from '../harness/protocol/activity-view.js';
 import { logProcessWarnings } from './warnings.js';
 import { CallGrouping, GroupRegistry } from './render/call-groups.js';
-import type { GroupPanelState } from './render/group-panel.js';
-import { toggleGroupPanel, closeGroupPanel, tapGroupRow } from './prompter/group-panel-actions.js';
+import { GroupExpansion } from './render/group-rows.js';
+import { toggleLatestGroup, tapGroupRow, type GroupAnchor, type AnchorTarget } from './prompter/group-actions.js';
 import { ApprovalRequest } from './render/approval-block.js';
 import { EmittedTranscript } from './render/emitted-transcript.js';
 import { LiveChildren } from './render/child-rows.js';
@@ -93,8 +93,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   readonly callGrouping = new CallGrouping();
   /** The groups of this view, kept so one can be opened (call-groups.ts). */
   readonly callGroups = new GroupRegistry();
-  /** The open expansion panel, if any (render/group-panel.ts). */
-  groupPanel?: GroupPanelState;
+  /** Which groups and items are open, read by the rows (render/group-rows.ts). */
+  readonly groupExpansion = new GroupExpansion();
+  /** Where a toggled group's row must land once the transcript is written again (group-actions.ts). */
+  groupAnchor?: GroupAnchor;
+  anchorTarget?: AnchorTarget;
   /** The tag of each transcript line that belongs to a group, by line
    * number (alternateTrimmed + index), taken out of the row text where the
    * frame is built (render/row-tags.ts). */
@@ -424,6 +427,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.planEntries = [];
       this.planStart = undefined;
       this.panelState = undefined;
+      this.groupExpansion.clear();
       // The conversation opened is the only one in the transcript.
       this.emitted.requestReseed();
       // Rewritten whole, a turn still running included, once it is followed.
@@ -702,9 +706,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** True while the reader is looking at something other than the live end. */
   get scrolledBack(): boolean { return this.alternateScrollback > 0; }
 
-  toggleGroupPanel(...args: Parameters<typeof toggleGroupPanel>): ReturnType<typeof toggleGroupPanel> { return toggleGroupPanel.apply(this, args); }
-
-  closeGroupPanel(...args: Parameters<typeof closeGroupPanel>): ReturnType<typeof closeGroupPanel> { return closeGroupPanel.apply(this, args); }
+  toggleLatestGroup(...args: Parameters<typeof toggleLatestGroup>): ReturnType<typeof toggleLatestGroup> { return toggleLatestGroup.apply(this, args); }
 
   tapGroupRow(...args: Parameters<typeof tapGroupRow>): ReturnType<typeof tapGroupRow> { return tapGroupRow.apply(this, args); }
 

@@ -868,9 +868,9 @@ SCENARIOS = {
         'never': ['build step 15 of 30', 'lines hidden'],
     },
     # A run of calls and thoughts with no prose between them settles as ONE
-    # summary row (counts by kind), and the items stay reachable: Ctrl+O opens
-    # a panel above the composer listing them, a tap on an item opens its full
-    # command and output, Esc closes it.
+    # summary row (counts by kind), and the items stay reachable: a tap on the
+    # row, or Ctrl+O, lists them IN PLACE under it; a tap on an item opens its
+    # full command and output under it; a tap again minimises.
     'call-group-collapses': {
         'turns': [{'emits': [
             {'op': 'thought', 'heading': 'Planning the work', 'text': 'First look around.', 'ms': 20},
@@ -882,36 +882,59 @@ SCENARIOS = {
             {'op': 'tool', 'id': 'g4', 'title': 'echo delta-four', 'ms': 200, 'result': 'delta-four'},
             {'op': 'text', 'text': 'The calls are all done.'},
         ]}],
-        'steps': [('type', 'run the calls'), ('wait_for', 'The calls are all done.', 40), ('settle', 2), ('snap', 'final')],
+        'steps': [('type', 'run the calls'), ('wait_for', 'The calls are all done.', 40), ('settle', 2), ('snap', 'final'),
+                  ('click', 'Ran 3 commands'), ('settle', 0.8), ('snap', 'opened'),
+                  ('click', 'Ran 3 commands'), ('settle', 0.8), ('snap', 'minimised')],
         'watch': ['run the calls', 'The calls are all done.'],
         'final_once': ['Ran 3 commands, read 1 file', '2 thoughts'],
-        # The calls are inside the group, not rows of their own.
-        'snap_lacks': {'final': ['echo alpha-one', 'echo gamma-three', 'Thought for']},
+        # The calls are inside the group, not rows of their own; a tap lists them under it, a second minimises it.
+        'snap_lacks': {'final': ['echo alpha-one', 'echo gamma-three', 'Thought for'], 'minimised': ['echo alpha-one', 'Thought for']},
+        'snap_contains': {'opened': ['tap to collapse', 'echo alpha-one', 'echo gamma-three', 'echo delta-four', 'Thought for']},
     },
     'call-group-panel': {
+        # The group is mid-screen with prose under it: opening it must grow the
+        # group where it is, keep its row on the same screen row, and put nothing
+        # new at the bottom above the composer.
         'turns': [{'emits': [
+            *[{'op': 'text', 'text': f'earlier paragraph {n} came first.\n\n', 'ms': 5} for n in range(1, 13)],
             {'op': 'tool', 'id': 'g1', 'title': 'echo alpha-one', 'ms': 200, 'result': 'alpha-one'},
             {'op': 'tool-start', 'id': 'g2', 'title': 'Read src/beta.ts', 'kind': 'read', 'input': {'path': 'src/beta.ts'}},
             {'op': 'tool-end', 'id': 'g2', 'result': 'b0\nb1'},
             {'op': 'tool', 'id': 'g3', 'title': 'echo gamma-three', 'ms': 200, 'result': 'gamma-three\nline two of gamma'},
+            *[{'op': 'text', 'text': f'prose paragraph {n} follows.\n\n', 'ms': 5} for n in range(1, 4)],
             {'op': 'text', 'text': 'The calls are all done.'},
         ]}],
+        # A short screen, so the transcript is taller than it and the group is mid-screen.
+        'rows': 24,
         'steps': [
-            ('type', 'run the calls'), ('wait_for', 'The calls are all done.', 40), ('settle', 2),
-            ('keys', '\x0f'), ('settle', 0.8), ('snap', 'panel'),
-            ('click', 'echo gamma-three'), ('settle', 0.8), ('snap', 'expanded'),
-            ('click', 'echo gamma-three'), ('settle', 0.8), ('snap', 'collapsed'),
-            ('keys', '\x0f'), ('settle', 0.8), ('snap', 'closed'),
-            ('click', 'Ran 2 commands'), ('settle', 0.8), ('snap', 'tapped'),
-            ('keys', '\x1b'), ('settle', 0.8), ('snap', 'escaped'),
+            ('type', 'run the calls'), ('wait_for', 'The calls are all done.', 40), ('settle', 2), ('snap', 'closed'),
+            ('click', 'Ran 2 commands'), ('settle', 0.8), ('snap', 'opened'),
+            ('click', 'echo gamma-three'), ('settle', 0.8), ('snap', 'item'),
+            ('click', 'echo gamma-three'), ('settle', 0.8), ('snap', 'item-closed'),
+            ('click', 'Ran 2 commands'), ('settle', 0.8), ('snap', 'minimised'),
+            ('keys', '\x0f'), ('settle', 0.8), ('snap', 'ctrl-o'),
+            ('keys', '\x0f'), ('settle', 0.8), ('snap', 'ctrl-o-closed'),
         ],
-        'watch': ['run the calls', 'The calls are all done.'],
+        'watch': [],
         'snap_contains': {
-            'panel': ['tap or Esc to close', 'echo alpha-one', 'Read src/beta.ts', 'echo gamma-three'],
-            'expanded': ['line two of gamma'],
-            'tapped': ['tap or Esc to close', 'echo alpha-one'],
+            'closed': ['Ran 2 commands, read 1 file · tap'],
+            'opened': ['tap to collapse', 'echo alpha-one', 'Read src/beta.ts', 'echo gamma-three'],
+            'item': ['line two of gamma'],
+            'ctrl-o': ['tap to collapse', 'echo alpha-one', 'echo gamma-three'],
         },
-        'snap_lacks': {'panel': ['line two of gamma'], 'collapsed': ['line two of gamma'], 'closed': ['tap or Esc to close'], 'escaped': ['tap or Esc to close', 'echo alpha-one']},
+        'snap_lacks': {
+            'closed': ['echo alpha-one', 'tap to collapse'], 'opened': ['line two of gamma'], 'item-closed': ['line two of gamma'],
+            'minimised': ['echo alpha-one', 'tap to collapse'], 'ctrl-o-closed': ['echo alpha-one', 'tap to collapse'],
+        },
+        # The group's row never moves, whichever way it is toggled.
+        'snap_same_row': [(name, 'Ran 2 commands') for name in ('opened', 'item', 'item-closed', 'minimised', 'ctrl-o', 'ctrl-o-closed')],
+        # The items are listed directly under the row, the opened item's detail under its own row.
+        'snap_rows_after': {
+            'opened': ('Ran 2 commands', ['echo alpha-one', 'Read src/beta.ts', 'echo gamma-three']),
+            'item': ('Read src/beta.ts', ['echo gamma-three', 'echo gamma-three', 'gamma-three', 'line two of gamma']),
+        },
+        # Nothing of the group appears at the bottom, above the composer.
+        'snap_bottom_lacks': {'opened': ['echo alpha-one', 'echo gamma-three', 'tap to collapse'], 'item': ['line two of gamma']},
     },
     # Two approvals at once say which is which; the second is answered "no,
     # and do this instead": the call is denied and the words go to the turn.
@@ -2334,6 +2357,27 @@ def run(name, spec, entry, keep):
         if final.count(phrase) != count: problems.append(f'on screen {final.count(phrase)}x at the end, expected {count}x: {phrase!r}')
     for phrase in spec.get('final_once', []):
         if final.count(phrase) != 1: problems.append(f'on screen {final.count(phrase)}x at the end, expected once: {phrase!r}')
+    # A phrase on the same screen row in two snapshots (a tapped row stays under the finger).
+    for name, phrase in spec.get('snap_same_row', []):
+        def last_row(snap):
+            rows_with = [i for i, line in enumerate(snaps.get(snap, [])) if phrase in line]
+            return rows_with[-1] if rows_with else None
+        if last_row(name) is None: problems.append(f'{phrase!r} not on the {name!r} screen')
+        elif last_row(name) != last_row('closed'): problems.append(f'{phrase!r} is on row {last_row(name)} on the {name!r} screen, was on row {last_row("closed")}')
+    # Rows right under a row, in order: the first of them is the very next row.
+    for name, (anchor, phrases) in spec.get('snap_rows_after', {}).items():
+        rows_of = [line for line in snaps.get(name, [])]
+        at = [i for i, line in enumerate(rows_of) if anchor in line]
+        if not at: problems.append(f'{anchor!r} not on the {name!r} screen'); continue
+        under = rows_of[at[-1] + 1:at[-1] + 1 + len(phrases)]
+        for phrase, row in zip(phrases, under):
+            if phrase not in row: problems.append(f'on the {name!r} screen the rows under {anchor!r} are {[r.strip() for r in under]!r}, expected {phrases!r}')
+    # The rows just above the composer must not show these.
+    for name, phrases in spec.get('snap_bottom_lacks', {}).items():
+        rows_here = transcript_rows('\n'.join(snaps.get(name, []))) or []
+        shown = '\n'.join(rows_here[-3:])
+        for phrase in phrases:
+            if phrase in shown: problems.append(f'at the bottom of the {name!r} screen, above the composer: {phrase!r}')
     for name, phrases in spec.get('snap_lacks', {}).items():
         shown = '\n'.join(snaps.get(name, []))
         for phrase in phrases:

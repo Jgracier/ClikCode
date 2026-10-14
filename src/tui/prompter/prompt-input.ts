@@ -252,7 +252,6 @@ class PromptSession {
       this.draw();
       return true;
     }
-    if (key === '\u001b' && p.groupPanel) { p.closeGroupPanel(); return true; }
     if (key === '\u001a') { p.suspendToShell(); return true; }
     // Esc on an empty composer, no panel open, stops a turn parked for
     // the quota reset.

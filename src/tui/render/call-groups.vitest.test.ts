@@ -65,10 +65,10 @@ describe('the groups kept for expansion', () => {
 
 describe('row tags', () => {
   it('ride in front of a row and come off clean', () => {
-    const rows = ['plain', tagRow('  ‣ Ran 2 commands', { kind: 'g', group: '3:a b|c', item: 'x/y' }), ''];
+    const rows = ['plain', tagRow('  ‣ Ran 2 commands', { group: '3:a b|c', item: 'x/y' }), ''];
     const { rows: clean, tags } = extractTags(rows);
     expect(clean).toEqual(['plain', '  ‣ Ran 2 commands', '']);
     expect(tags[0]).toBeUndefined();
-    expect(parseTag(tags[1])).toEqual({ kind: 'g', group: '3:a b|c', item: 'x/y' });
+    expect(parseTag(tags[1])).toEqual({ group: '3:a b|c', item: 'x/y' });
   });
 });
