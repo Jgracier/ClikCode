@@ -21,9 +21,9 @@ const toolEntry = (category: ToolCategory, label: string, extra: Record<string, 
 };
 
 describe('tool glyphs', () => {
-  it('gives every category its own marker', () => {
+  it('marks every call with the same quiet glyph; the verb says the kind', () => {
     const glyphs = CATEGORIES.map((category) => TOOL_CATEGORY_STYLE[category].glyph);
-    expect(new Set(glyphs).size).toBe(CATEGORIES.length);
+    expect(new Set(glyphs).size).toBe(1);
   });
 
   it('keeps every glyph single-width so rows stay aligned on a phone', () => {

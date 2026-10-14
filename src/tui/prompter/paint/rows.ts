@@ -10,7 +10,6 @@ import { toolUses, liveWaitKind, waitingSpinnerGlyph } from '../../../harness/pr
 import { outputPreviewRows, renderActivityLine } from '../../../harness/protocol/activity-line.js';
 import { tensedLabel } from '../../../harness/protocol/turn-flow.js';
 import { ExploreGrouping, mergedExploreLines, mergedExploreSummaryLine, type GroupRow, type TurnGroup } from '../../render/explore-groups.js';
-import { TOOL_CATEGORY_STYLE } from '../../../harness/protocol/tool-category-style.js';
 import { STEER_WORDS, steerTranscriptRows } from '../../render/steer-rows.js';
 import { messageRows as cachedMessageRows } from '../../render/message-blocks.js';
 import { callRow, underCallRow } from '../../render/tool-rows.js';
@@ -38,7 +37,7 @@ export function createRowBuilders(p: TerminalHarnessPrompter, conversationInner:
   // messages (standaloneActivity) closes its own.
   const activityRows = (lines: readonly string[], category?: ToolCategory): string[] => (lines.length
     ? ['', ...lines.map((line, index) => (index > 0 ? underCall(line)
-      : callRow(line, conversationInner, category ? TOOL_CATEGORY_STYLE[category].paint : undefined)))]
+      : callRow(line, conversationInner)))]
     : []);
   const messageRows = (content: string, marker: string): readonly string[] => cachedMessageRows(content, marker, conversationInner);
   /** A user-side message: what the user wrote. */
