@@ -154,6 +154,19 @@ TWO_BLOCKS = {'blocks': ['Checking the workspace first.', 'The final commit is l
 # ('expect_workers', n) waits for exactly n to be running. Checks on it:
 # 'final2_contains', 'final2_once', 'never2' (from 'mark2' on); on any snap:
 # 'snap_lacks', 'snap_once'.
+
+def signed_in_fake(binary, auth_path, auth_text):
+    """The one fake vendor, installed as `binary`, with the sign-in file its harness checks (catalog `authFiles`)."""
+    def setup(context):
+        target = os.path.join(context['fakebin'], binary)
+        shutil.copy(os.path.join(REPO, 'scripts', 'tui-e2e', 'fake-grok.mjs'), target)
+        os.chmod(target, 0o755)
+        path = os.path.join(context['home'], auth_path)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, 'w').write(auth_text)
+    return setup
+
+
 SCENARIOS = {
     'two-blocks-with-tool': {
         'turns': [TWO_BLOCKS],
@@ -1835,6 +1848,32 @@ SCENARIOS = {
                          ('Notes written while the agent works.', 'child-alpha'), ('Notes written while the agent works.', 'child-bravo')],
         'ever_together': [('child-alpha', 'child-bravo')],
         'final_once': ['Notes written while the agent works.', 'The investigation is complete.'],
+    },
+    # 5a: a sub-agent opens into its own screen from its expanded row (Right), the main turn runs on, Left
+    # returns to the main chat, and a harness that gives no way to message it says so in place of the composer.
+    # Qwen publishes child frames (read: frames) and no way to send (steer: none), docs/SUBAGENTS.md.
+    'subagent-view': {
+        'harness': 'qwen', 'setup': signed_in_fake('qwen', '.qwen/settings.json', '{"selectedType": "openai"}'), 'startup': 5,
+        'env': {'FAKE_ACP_PROFILE': json.dumps({'modes': {'currentModeId': 'default', 'availableModes': [
+            {'id': 'default', 'name': 'Default'}, {'id': 'yolo', 'name': 'Yolo'}, {'id': 'auto', 'name': 'Auto'}]}})},
+        'turns': [{'emits': [
+            {'op': 'text', 'text': 'Starting the investigation.\n\n'},
+            {'op': 'agent-start', 'id': 'ag1', 'title': 'Task: investigate'},
+            {'op': 'child-start', 'id': 'c1', 'parent': 'ag1', 'title': 'Read child-alpha.ts'},
+            {'op': 'sleep', 'ms': 20000},
+            {'op': 'child-end', 'id': 'c1', 'parent': 'ag1'},
+            {'op': 'agent-end', 'id': 'ag1', 'result': 'investigated'},
+            {'op': 'text', 'text': 'The investigation is complete.'}]}],
+        'steps': [('type', 'investigate'), ('wait_for', 'child-alpha', 30), ('settle', 1),
+                  ('keys', '\x0f'), ('settle', 1), ('keys', '\x1b[C'), ('wait_for', 'main >', 10), ('settle', 1), ('snap', 'inside'),
+                  ('keys', 'hello'), ('settle', 1), ('snap', 'typed'),
+                  ('keys', '\x1b[D'), ('settle', 2), ('snap', 'back'),
+                  ('wait_for', 'The investigation is complete.', 40), ('settle', 2)],
+        'watch': [], 'no_dup_check': 'the view and the main chat both show the row',
+        'snap_contains': {'inside': ['main >', 'main: running', 'child-alpha', 'read-only'],
+                          'back': ['Starting the investigation.']},
+        'snap_lacks': {'inside': ['Starting the investigation.'], 'typed': ['› hello'], 'back': ['main >']},
+        'final_contains': ['The investigation is complete.'],
     },
     # 5: a sub-agent that outlasts what the live region can hold is retired
     # as a running line IN ORDER, its held text follows, and nothing is ever

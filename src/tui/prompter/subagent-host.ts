@@ -51,7 +51,8 @@ export function openSubView(this: TerminalHarnessPrompter): boolean {
   const { command, modes } = harnessOf(this);
   const events = this.activityEntries.flatMap((entry) => (entry.event ? [entry.event] : []));
   const siblings = subAgentRefs(events, command, modes);
-  const open = siblings.filter((ref) => this.groupExpansion.isOpen(`call:${ref.id}`));
+  // A harness that publishes nothing of its sub-agents has nothing to open (docs/SUBAGENTS.md).
+  const open = siblings.filter((ref) => ref.read !== 'none' && this.groupExpansion.isOpen(`call:${ref.id}`));
   const ref = open[open.length - 1];
   const state = ref ? subAgentViewOpen(siblings, ref.id) : undefined;
   if (!state) return false;
@@ -106,9 +107,9 @@ export function paintSubView(this: TerminalHarnessPrompter): void {
   const { vendor } = harnessOf(this);
   view.state = { ...view.state, frame: this.reducedMotion ? 0 : this.waitingFrame };
   const width = Math.max(12, output.columns || 100);
-  const height = Math.max(4, (output.rows || 24) - 1);
+  const height = Math.max(4, this.viewportRows());
   const mainStatus = `main: running ${formatElapsed(turnElapsedMs(turn.clock, Date.now()))}`;
-  const lines = subAgentViewLines(view.state, { vendor, mainStatus, rows: view.rows, ...(view.notice ? { notice: view.notice } : {}), width: width - 1 });
+  const lines = subAgentViewLines(view.state, { vendor, mainStatus, rows: view.rows, ...(view.notice ? { notice: view.notice } : {}), width: width - 1, height });
   const shown = lines.slice(-height);
   const composerRow = shown.length - 2;
   const writable = shown[composerRow]?.startsWith('› ') ?? false;

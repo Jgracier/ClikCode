@@ -104,6 +104,8 @@ export interface SubAgentViewHost {
   /** What the last send did, one line (the visible relay, or the refusal). */
   notice?: string;
   width: number;
+  /** The screen's height: the composer sits at the bottom of it, as in the main chat, and nothing else shows. */
+  height?: number;
 }
 
 /** The screen's rows, top to bottom: header, the chat, the composer or the
@@ -125,7 +127,9 @@ export function subAgentViewLines(state: SubAgentViewState, host: SubAgentViewHo
   }
   if (host.notice) lines.push(fit(look.paint.neutral(host.notice)));
   const block = subAgentSteerBlock(ref, host.vendor);
+  // The screen belongs to this sub-agent: rows above its own are not the main chat's.
+  if (host.height) lines.push(...Array.from({ length: Math.max(0, host.height - lines.length - 3) }, () => ''));
   lines.push('', fit(block ? look.paint.neutral(block) : `› ${state.draft}`));
-  lines.push(fit(look.paint.neutral(`${host.mainStatus}${siblings}  ·  ←/esc back  ↑↓ sub-agents`)));
+  lines.push(fit(look.paint.neutral(`${host.mainStatus}${siblings}  ·  ←/esc back${state.siblings.length > 1 ? '  ↑↓ sub-agents' : ''}`)));
   return lines;
 }
