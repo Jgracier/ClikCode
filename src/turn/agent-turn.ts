@@ -130,6 +130,9 @@ export async function runAgentTurn(input: {
   let held: Awaited<ReturnType<typeof seedAgentConversation>> = { total: 0, seeded: 0 };
   let memoryBytes = 0;
   let seededOk = false;
+  // Steers handed to the agent's queue, and their durable writes: any the model never saw go back to the queue (onSteersUndelivered).
+  const accepted: Array<import('./live-input.js').LiveTurnSubmission> = [];
+  const steerWrites: Array<Promise<void>> = [];
   // The coding agent runs here, on this machine; the model server supplies
   // the model step and nothing else. A server that cannot serve one fails the
   // turn with its own reason (for-session.ts gatewayErrorMessage).
@@ -184,8 +187,21 @@ export async function runAgentTurn(input: {
         // The loop takes steering before each model step (run-turn.ts).
         onSteerReady: (handler) => run.liveInput?.setSteerHandler(handler ? async (steerText, submission) => {
           await handler(steerText);
-          if (submission.kind !== 'note') await checkpoint.steer(submission);
+          if (submission.kind === 'note') return;
+          const write = checkpoint.steer(submission);
+          steerWrites.push(write.catch(() => undefined));
+          accepted.push(submission);
+          await write;
         } : undefined),
+        onSteersUndelivered: async (texts) => {
+          await Promise.all(steerWrites);
+          for (const text of texts) {
+            const at = accepted.findIndex((item) => item.text === text.trim());
+            if (at < 0) continue;
+            const [submission] = accepted.splice(at, 1);
+            await checkpoint.requeueSteer(submission);
+          }
+        },
       });
       const nothingRan = harnessTurn.steps === 0 && !session.pendingTurn?.response?.trim();
       if (!harnessTurn.isError || !gatewayService || signInTried || !nothingRan

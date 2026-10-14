@@ -210,6 +210,10 @@ export async function closeTurn(rt: TurnRuntime): Promise<void> {
   const { input } = rt;
   rt.steerOpen = false;
   input.onSteerReady?.(undefined);
+  // Accepted after the loop's last look, or left when the turn ended early:
+  // the model never saw them.
+  const undelivered = rt.steerQueue.splice(0);
+  if (undelivered.length) await input.onSteersUndelivered?.(undelivered).catch(() => undefined);
   // An early end (cancel, error, step limit, a question) stops them; each
   // commits its work to its branch before the turn returns.
   rt.backgroundStop.abort();

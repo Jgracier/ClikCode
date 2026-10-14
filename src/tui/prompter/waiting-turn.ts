@@ -130,11 +130,14 @@ export function submitWaiting(this: TerminalHarnessPrompter, text: string, allow
   }).catch(() => {
     const item = this.waitingSubmissions.find((entry) => entry.localId === localId);
     if (item) item.state = 'error';
+    // Restored once: into the running turn's draft (handed to queuedDraft when
+    // the turn ends, stopWaiting), else straight to queuedDraft.
     if (this.turn && !this.turn.draft) {
       this.turn.draft = text;
       this.turn.cursor = text.length;
+    } else {
+      this.queuedDraft = this.queuedDraft ? `${this.queuedDraft}\n${text}` : text;
     }
-    this.queuedDraft = this.queuedDraft ? `${this.queuedDraft}\n${text}` : text;
     this.updateWaiting();
   });
   this.waitingSubmissionWrites.add(write);

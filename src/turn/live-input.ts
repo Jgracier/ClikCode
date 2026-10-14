@@ -80,6 +80,9 @@ export class LiveTurnInputBroker {
   private readonly late = new Set<Promise<void>>();
   /** How to drop each held message, by id, until it is sent or released. */
   private readonly holds = new Map<string, () => boolean>();
+  /** Every steer whose attempt is still unsettled after its message was
+   * queued (held or timed out), by id: in flight, so neither takeable nor re-sendable. */
+  private readonly inflight = new Set<string>();
 
   constructor(options: LiveTurnInputBrokerOptions = {}) {
     this.steerTimeoutMs = options.steerTimeoutMs ?? DEFAULT_STEER_TIMEOUT_MS;
@@ -133,7 +136,7 @@ export class LiveTurnInputBroker {
    * queued copy back too would send it twice), undefined if it was not held. */
   withdraw(id: string): boolean | undefined {
     const withdraw = this.holds.get(id);
-    if (!withdraw) return undefined;
+    if (!withdraw) return this.inflight.has(id) ? false : undefined;
     this.holds.delete(id);
     return withdraw();
   }
@@ -141,7 +144,7 @@ export class LiveTurnInputBroker {
   /** The turn is already holding this message for its next pause. Enter
    *  again must not submit it a second time. */
   holding(id: string): boolean {
-    return this.holds.has(id);
+    return this.holds.has(id) || this.inflight.has(id);
   }
 
   /** Release submissions if setup failed before a durable checkpoint could
@@ -204,11 +207,12 @@ export class LiveTurnInputBroker {
         resolveQueued();
       }
       if (outcome === STEER_HELD || outcome === STEER_TIMED_OUT) {
+        this.inflight.add(id);
         const landed = attempt.then(
           () => { try { this.lateSteerHandler?.(submission); } catch { /* fail-open-ok: de-duplication is best effort */ } return true; },
           () => false, // it failed after all; the queued copy is the only one
         );
-        const tracked = landed.then(() => { this.holds.delete(id); });
+        const tracked = landed.then(() => { this.holds.delete(id); this.inflight.delete(id); });
         this.late.add(tracked);
         void tracked.finally(() => this.late.delete(tracked));
         if (outcome === STEER_HELD) return { disposition: 'queued', submission, landed };

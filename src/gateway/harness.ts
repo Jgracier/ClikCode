@@ -28,7 +28,7 @@ import type { HarnessSession } from '../session/model.js';
 import type { HarnessTurnObserver } from '../harness/events/turn-observer.js';
 import type { TurnObserver } from '../turn/observer.js';
 
-interface AgentSessionTurnInput extends HarnessTurnObserver, Pick<AgentTurnInput, 'onRemembered'> {
+interface AgentSessionTurnInput extends HarnessTurnObserver, Pick<AgentTurnInput, 'onRemembered' | 'onSteersUndelivered'> {
   session: HarnessSession;
   prompt: string;
   prompter?: TurnObserver;
@@ -142,6 +142,7 @@ export async function runAgentSessionTurn(
     // remembered here: the third answer is passed straight through.
     ...(prompter ? { onApproval: async (title: string, detail?: string, rule?: string, preview?: ApprovalPreview) => (await prompter.approval(title, detail, preview, rule)) ?? false } : {}),
     ...(input.onSteerReady ? { onSteerReady: input.onSteerReady } : {}),
+    ...(input.onSteersUndelivered ? { onSteersUndelivered: input.onSteersUndelivered } : {}),
     ...(input.onRemembered ? { onRemembered: input.onRemembered } : {}),
   });
 }

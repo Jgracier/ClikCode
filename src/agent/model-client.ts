@@ -190,6 +190,10 @@ export interface AgentTurnInput {
    *  stays valid, so an approver that cannot remember anything is unchanged. */
   onApproval?: (title: string, detail?: string, rule?: string, preview?: import('../tui/render/approval-block.js').ApprovalPreview) => Promise<boolean | 'always'>;
   onSteerReady?: (handler?: (text: string) => Promise<void>) => void;
+  /** Steered messages still waiting in the agent's queue when the turn closed
+   *  (cancelled, failed, or arrived after the loop's last check): they never
+   *  reached the model, so the caller takes them back out of the turn. */
+  onSteersUndelivered?: (texts: string[]) => Promise<void>;
   /** The turn's request is in the agent's memory (awaited): the caller records that, durably, before the turn goes on. */
   onRemembered?: () => Promise<void>;
   onUsage?: (usage: UsageReport) => void;

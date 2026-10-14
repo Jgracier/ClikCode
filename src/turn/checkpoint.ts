@@ -294,14 +294,15 @@ export function recordPendingActivity(session: HarnessSession, event: HarnessAct
  * (MarkSequencer) -- what places it among the rows that share its offset. */
 export function recordPendingSteer(
   session: HarnessSession, text: string, submittedAt: string, responseOffset: number, now: string, id?: string, seq?: number,
-): void {
+): boolean {
   const pending = session.pendingTurn;
-  if (!pending || !text.trim()) return;
+  if (!pending || !text.trim()) return false;
   pending.steers = [...(pending.steers ?? []), {
     text: text.trim(), submittedAt, responseOffset: Math.max(0, responseOffset), ...(id ? { id } : {}),
     ...(seq === undefined ? {} : { seq }),
   }];
   pending.updatedAt = now;
+  return true;
 }
 
 /** A thought, plan, notice or approval outcome, kept with the turn. A mark

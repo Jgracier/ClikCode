@@ -211,17 +211,30 @@ export class DurableTurnCheckpoint {
     }
   }
 
+  /** A steer recorded on the turn that never reached the model: taken off the
+   * turn and queued as a message for the next one, so transcript and model agree. */
+  async requeueSteer(submission: LiveTurnSubmission): Promise<void> {
+    const pending = this.session.pendingTurn;
+    if (pending?.steers) pending.steers = pending.steers.filter((item) => item.id !== submission.id);
+    await this.queue(submission);
+  }
+
   /** A steer that timed out was queued, then turned out to have landed after
    * all: drop the queued copy so it is not also sent as the next turn. */
   async unqueue(submission: LiveTurnSubmission): Promise<void> {
     if (consumeSessionTurn(this.session, submission.id)) await this.persistNow();
   }
 
+  /** Records the steer and drops any queued copy of it in one write, so disk
+   * never holds both. Rejects when the turn is already over (nothing to
+   * record it on): the broker then queues the message instead. */
   async steer(submission: LiveTurnSubmission): Promise<void> {
-    recordPendingSteer(
+    const recorded = recordPendingSteer(
       this.session, submission.text, submission.submittedAt,
       this.session.pendingTurn?.response?.length ?? 0, new Date().toISOString(), submission.id, this.sequencer.take(),
     );
+    if (!recorded) throw new Error('turn is finishing');
+    consumeSessionTurn(this.session, submission.id);
     await this.persistNow();
   }
 
@@ -230,7 +243,17 @@ export class DurableTurnCheckpoint {
     await this.flush();
   }
 
+  /** Resolves once steers still in flight have landed or failed (bound by startTurnCheckpoint). */
+  settleInput: (() => Promise<void>) | undefined;
+
   async complete(response: string): Promise<void> {
+    // A steer still in flight lands before the final record, or finds the
+    // turn over and falls back to the queue; never after, silently.
+    if (this.settleInput) {
+      let timer: NodeJS.Timeout | undefined;
+      await Promise.race([this.settleInput(), new Promise<void>((resolve) => { timer = setTimeout(resolve, 5_000); })]);
+      if (timer) clearTimeout(timer);
+    }
     finishPendingTurn(this.session, response, new Date().toISOString());
     this.dirty = true;
     // The vendor's answer exists and is shown whether or not ClikCode could
@@ -338,6 +361,7 @@ export async function startTurnCheckpoint(
     run.recorder.start();
     checkpoint.record(run.recorder);
   }
+  if (run.liveInput) { const live = run.liveInput; checkpoint.settleInput = () => live.settled(); }
   run.liveInput?.bindQueue((submission, options) => checkpoint.queue(submission, options));
   run.liveInput?.setLateSteerHandler((submission) => checkpoint.unqueueSoon(submission));
   return checkpoint;

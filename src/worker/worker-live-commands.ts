@@ -54,6 +54,7 @@ export function createLiveCommands(ctx: WorkerContext) {
     if (!ctx.activeLiveInput) return;
     const liveInput = ctx.activeLiveInput;
     let item: { id: string; text: string } | undefined;
+    let entry: NonNullable<Parameters<typeof enqueueSessionTurn>[1]> | undefined;
     try {
       const state = await readState({ transcripts: [sessionId] });
       const session = state.sessions.find((entry) => entry.id === sessionId);
@@ -66,6 +67,7 @@ export function createLiveCommands(ctx: WorkerContext) {
       if (!consumeSessionTurn(session, queued.id)) return;
       await writeState(state);
       item = { id: queued.id, text: queued.text };
+      entry = queued;
     } catch (error) {
       answer('error', undefined, error instanceof Error ? error.message : String(error));
       return;
@@ -81,6 +83,17 @@ export function createLiveCommands(ctx: WorkerContext) {
         else showEveryWindow();
         void result.landed?.then((steered) => { if (steered) broadcastQueueChanged(); });
       } catch (error) {
+        // The queued copy was consumed above: put it back, or the message is gone.
+        if (entry) {
+          const restore = entry;
+          await readState({ transcripts: [sessionId] }).then(async (state) => {
+            const session = state.sessions.find((value) => value.id === sessionId);
+            if (!session) return;
+            enqueueSessionTurn(session, restore, new Date().toISOString());
+            await writeState(state);
+          }).catch(() => undefined);
+          broadcastQueueChanged();
+        }
         answer('error', queuedItem.id, error instanceof Error ? error.message : String(error));
       }
     })();

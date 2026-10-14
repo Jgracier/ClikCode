@@ -535,3 +535,12 @@ describe('the turn\'s durable marks and order (standards 1, 4, 7, 8, 11)', () =>
     expect(target.pendingTurn!.marks!.map((mark) => mark.responseOffset)).toEqual([5, 0]);
   });
 });
+
+describe('recording a steer', () => {
+  it('reports failure when there is no turn to record it on', () => {
+    expect(recordPendingSteer(session(), 'late', stamp(1), 0, stamp(1))).toBe(false);
+    const running = session();
+    beginPendingTurn(running, 'go', stamp(0));
+    expect(recordPendingSteer(running, 'now', stamp(1), 0, stamp(1))).toBe(true);
+  });
+});
