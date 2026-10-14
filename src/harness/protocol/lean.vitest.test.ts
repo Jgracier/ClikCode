@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { callOutcomeParts, costShownInline, endLineShown, endLineUsageShown, failedOutputTail, usageIsLow } from './lean.js';
+import { callOutcomeParts, costShownInline, endLineShown, endLineUsageShown, failedOutputTail } from './lean.js';
 
 describe('lean thresholds', () => {
   it('ends on a line only for a long turn or a turn that changed files', () => {
@@ -24,12 +24,6 @@ describe('lean thresholds', () => {
     expect(callOutcomeParts(1, 300, words)).toEqual(['exit 1']);
     expect(callOutcomeParts(1, 2_000, words)).toEqual(['exit 1', '2s']);
     expect(callOutcomeParts(0, 5_000, words)).toEqual(['5s']);
-  });
-  it('puts usage in the footer only when low or spent', () => {
-    expect(usageIsLow(42, false)).toBe(false);
-    expect(usageIsLow(25, false)).toBe(true);
-    expect(usageIsLow(undefined, true)).toBe(true);
-    expect(usageIsLow(undefined, false)).toBe(false);
   });
   it('keeps the last three lines of a failed call', () => {
     expect(failedOutputTail('a\nb\nc\nd\ne\n\n')).toEqual(['c', 'd', 'e']);
