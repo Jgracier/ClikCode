@@ -4,7 +4,7 @@
  * underneath; none of these keys reaches it. State, keys and rows are
  * tui/subagent-view.ts; this file only connects them to the prompter. */
 import { stdout as output } from 'node:process';
-import { localHarnessForCommand } from '@clikcode/router/ai-local-harness';
+import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { turnElapsedMs } from '../../harness/protocol/activity-view.js';
 import { formatElapsed } from '../../harness/protocol/format.js';
 import { liveSubAgentRows, readClaudeSubagent, type SubAgentRow } from '../../harness/subagent-read.js';

@@ -10,7 +10,7 @@ import { deliverTyped } from '../turn/send-mode.js';
 import { closePersistentTransport, persistentWorkRunning } from '../turn/vendor-process.js';
 import { hasHeldVendorProcess, stopHeldVendorProcess } from '../harness/transport/native/held-vendor.js';
 import { sendEvent } from './broadcast-observer.js';
-import { localHarnessForCommand } from '@clikcode/router/ai-local-harness';
+import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { subAgentSteerPlan, type SubAgentRef } from '../harness/protocol/activity-normalize.js';
 import type { ClientCommand } from './protocol.js';
 import type { WorkerContext } from './worker-context.js';
