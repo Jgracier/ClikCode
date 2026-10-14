@@ -164,7 +164,7 @@ export function ActivityRow({ activity, workspace, userIndex }: { activity: Acti
         {/* Every running row spins for itself, in its category's colour, on
             the page's one clock (the working line spins for the turn). */}
         <span class={`activity-status ${toneOf(status)}`} aria-label={status}>
-          {status === 'running' ? <Spinner tone="tone-accent" /> : <ActivityGlyph status={status} />}
+          {status === 'running' ? <Spinner tone="tone-accent" agent={agentRunning} /> : <ActivityGlyph status={status} />}
         </span>
         <ActivityLabel label={status === 'stopped' ? activity.label : tensedLabel(activity.label, status === 'running')} workspace={workspace} shimmer={agentRunning && animating} />
         {status === 'stopped' ? <span class="activity-outcome stopped">stopped</span> : null}

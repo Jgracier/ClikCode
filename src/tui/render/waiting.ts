@@ -3,7 +3,7 @@
 
 import { terminalCellWidth, visibleSlice } from './width.js';
 import { composerUsageLabel, usageLabelIsSpent, usageRemainingPercent } from './usage-words.js';
-import { waitingSpinnerGlyph } from '../../harness/protocol/activity-view.js';
+import { agentSpinnerGlyph, waitingSpinnerGlyph } from '../../harness/protocol/activity-view.js';
 import chalk from 'chalk';
 import { look } from '../../harness/protocol/tool-category-style.js';
 
@@ -25,7 +25,7 @@ export function rightLabeledRule(width: number, label?: string): string {
 export function runningChatLine(
   label: string, frame: number, kind: 'command' | 'agent' | 'tool',
 ): string {
-  const spinner = look.paint.accent(waitingSpinnerGlyph(frame));
+  const spinner = look.paint.accent(kind === 'agent' ? agentSpinnerGlyph(frame) : waitingSpinnerGlyph(frame));
   // A title that already says it is one ("Agent worker 0") is not told again.
   const verb = kind === 'agent' && !/^agent\b/i.test(label) ? 'agent ' : '';
   return `  ${spinner}  ${verb}${label}`;
