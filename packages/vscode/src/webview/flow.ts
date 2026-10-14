@@ -6,7 +6,7 @@ import { answerWriting, backgroundTerminalsLabel, decisionRow, endsWithSummary, 
 import { shimmerCycleMs, SPIN_MS } from '../../../../src/harness/protocol/timings';
 import { TOOL_CATEGORY } from '../../../../src/harness/protocol/tool-category';
 import type { HarnessActivityEvent, ToolCategory } from '../../../../src/harness/prompter';
-import { groupSummary, groupSummaryText, standsAlone, type GroupItem } from '../../../../src/harness/protocol/call-groups';
+import { agentTask, callArgs, callCommand, groupSummary, groupSummaryText, standsAlone, type GroupItem } from '../../../../src/harness/protocol/call-groups';
 import type { FileDiff } from '../protocol';
 import type { Activity, LiveTurn, ThoughtEntry, TurnTrace } from '../model';
 import { formatElapsed } from '../../../../src/harness/protocol/format';
@@ -194,4 +194,15 @@ export function liveMeter(state: { shown: number; usage?: Pick<TurnUsage, 'outpu
  * `1m 2s · ↓ 1.2k tokens`, as the terminal words it. */
 export function workingDetail(elapsedMs: number, meter: string | undefined): string {
   return `${formatElapsed(elapsedMs)}${meter ? ` · ${meter}` : ''}`;
+}
+
+/** What an open call shows besides its output, diff and children: a command in
+ * full (the label is clipped), what a tool was asked, a sub-agent's task. The
+ * terminal's words (call-groups.ts), so each is there for any call that
+ * carries it, and nothing is made up for one that does not. */
+export function activityMore(activity: Activity): { task?: string; command?: string; args: string[] } {
+  const event = activity as unknown as HarnessActivityEvent;
+  const command = !activity.agent && activity.category === 'run' ? callCommand(event) : undefined;
+  const task = activity.agent ? agentTask(event) : undefined;
+  return { ...(task ? { task } : {}), ...(command && command !== activity.label ? { command } : {}), args: callArgs(event) };
 }

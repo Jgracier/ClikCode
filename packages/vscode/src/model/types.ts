@@ -10,7 +10,7 @@ import type { Decision } from '../../../../src/harness/protocol/turn-flow';
  * event fields (cleaned of escapes), merged frame by frame with the CLI's
  * rules (activity-view.ts). */
 export interface Activity extends Pick<HarnessActivityEvent,
-  'id' | 'kind' | 'label' | 'category' | 'agent' | 'output' | 'outputOmitted' | 'outputTail' | 'durationMs' | 'exitCode' | 'childTools' | 'childTokens' | 'outputHead' | 'stopped'> {
+  'id' | 'kind' | 'label' | 'category' | 'agent' | 'output' | 'outputOmitted' | 'outputTail' | 'durationMs' | 'exitCode' | 'childTools' | 'childTokens' | 'outputHead' | 'stopped' | 'call'> {
   /** The call's id, or its position for a harness that sends none. */
   key: string;
   /** Each file the call changed, as hunks (see src/agent/line-diff.ts). */
