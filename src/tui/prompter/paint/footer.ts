@@ -23,7 +23,7 @@ export function buildFooter(this: TerminalHarnessPrompter, input: FooterInput): 
   const { inner, rowWidth, width, prompt, options, selected, palette, session, targetHeight, bands } = input;
   const {
     noticeShown, noticeRows, waitingRows, paletteRows: paletteCapacity, indicatorRows, indicatorText, approvalRows,
-    thoughtRows, signInRows, planRows, panelRows, composerRows,
+    thoughtRows, signInRows, planRows, panelRows, groupRows, composerRows,
   } = bands;
   const meta = this.statusText(inner);
   const footer: string[] = [];
@@ -41,7 +41,7 @@ export function buildFooter(this: TerminalHarnessPrompter, input: FooterInput): 
       ...(palette?.headings ? { headings: true } : {}), ...(palette?.hint ? { hint: palette.hint } : {}),
     }));
   }
-  footer.push(...panelRows, ...planRows);
+  footer.push(...groupRows, ...panelRows, ...planRows);
   const aboveApproval = footer.length;
   const midRows = [...thoughtRows, ...(signInRows.length ? ['', ...signInRows] : [])];
   footer.push(...approvalRows, ...midRows);

@@ -3,17 +3,21 @@ import chalk from 'chalk';
 import { readTurnActivities } from '../../../turn/turn-activities.js';
 import { readTurnMarks } from '../../../turn/turn-marks.js';
 import type { SettlingTool } from '../../../turn/transcript.js';
-import type { ToolCategory } from '../../../harness/prompter.js';
+import type { HarnessActivityEvent, ToolCategory } from '../../../harness/prompter.js';
 import type { TranscriptMessage, HarnessSession } from '../../../session/model.js';
 import { ActivityEntry, collapseToolRuns, settleDecisionEntry, upsertActivityEvent } from '../../render/activity-log.js';
 import { toolUses, liveWaitKind, waitingSpinnerGlyph } from '../../../harness/protocol/activity-view.js';
 import { outputPreviewRows, renderActivityLine } from '../../../harness/protocol/activity-line.js';
 import { tensedLabel } from '../../../harness/protocol/turn-flow.js';
-import { ExploreGrouping, mergedExploreLines, mergedExploreSummaryLine, type GroupRow, type TurnGroup } from '../../render/explore-groups.js';
+import { CallGrouping, LIVE_SHOWN_CALLS, liveItemLine, type CallRun, type GroupRow } from '../../render/call-groups.js';
+import { groupSummary, groupSummaryText, standsAlone } from '../../../harness/protocol/call-groups.js';
+import { tagRow } from '../../render/row-tags.js';
+import { TOOL_CATEGORY_STYLE, TOOL_ROW_TEXT } from '../../../harness/protocol/tool-category-style.js';
+import { terminalCellWidth } from '../../render/width.js';
 import { STEER_WORDS, steerTranscriptRows } from '../../render/steer-rows.js';
 import { messageRows as cachedMessageRows } from '../../render/message-blocks.js';
 import { callRow, underCallRow } from '../../render/tool-rows.js';
-import { callDecision, savedTurnRanks, turnMarkLines } from '../../render/turn-mark-rows.js';
+import { callDecision, markThought, savedTurnRanks, turnMarkLines } from '../../render/turn-mark-rows.js';
 import { runningChatLine } from '../../render/waiting.js';
 import type { TerminalHarnessPrompter } from '../../prompter.js';
 import { LIVE_OUTPUT_LINES } from '../state.js';
@@ -62,13 +66,13 @@ export function createRowBuilders(p: TerminalHarnessPrompter, conversationInner:
     }
     return rows;
   };
-  return { userMarker, underCall, activityRows, messageRows, userRows, standaloneActivity };
+  return { conversationInner, userMarker, underCall, activityRows, messageRows, userRows, standaloneActivity };
 }
 export type RowBuilders = ReturnType<typeof createRowBuilders>;
 
 /** A call as a settling row: its own, or merged into a run of reads. */
 export function createToolRows(p: TerminalHarnessPrompter, builders: RowBuilders) {
-  const { underCall, activityRows } = builders;
+  const { underCall, activityRows, conversationInner } = builders;
   /** The in-flight turn's tools and steering messages, as rows that settle.
    * A call that is still running is `done: false`: the same slot in the
    * live region, spinner instead of the settled glyph, so finishing it
@@ -112,35 +116,69 @@ export function createToolRows(p: TerminalHarnessPrompter, builders: RowBuilders
       lines: ['', `  ${row}`, ...live],
     };
   };
-  /** A run of reads and searches as one row (explore-groups.ts): the
-   * summary, and under it the last calls, dimmed. Running, the summary
-   * spins in the row's place; settled, it wears the work's glyph. */
-  const groupRow = (group: TurnGroup<ActivityEntry & GroupRow>, ended: boolean): SettlingTool => {
-    const first = group.members[0]!;
-    const { summary, calls, running } = mergedExploreLines(group.members.map((member) => member.event), ended);
-    const under = calls.map(underCall);
-    if (running && !group.done) {
-      const row = runningChatLine(summary, p.reducedMotion ? 0 : p.waitingFrame, 'tool', first.event?.category).trim();
-      return { id: group.key, done: false, responseOffset: first.responseOffset, ...(first.sequence === undefined ? {} : { seq: first.sequence }), lines: ['', `  ${row}`, ...under] };
-    }
-    const { line, category } = mergedExploreSummaryLine(group.members.map((member) => member.event), summary);
-    return { id: group.key, done: group.done, responseOffset: first.responseOffset, ...(first.sequence === undefined ? {} : { seq: first.sequence }), lines: [...activityRows([line], category), ...under] };
+  /** The waiting-for-approval calls: they stay visible, never folded. */
+  const waitingOnApproval = (event: HarnessActivityEvent): boolean => event.id !== undefined
+    && (p.pendingApproval?.callId === event.id || p.approvalQueue.some((queued) => queued.callId === event.id));
+  const tagged = (lines: readonly string[], group: string, item: string): string[] =>
+    lines.map((line) => (line.trim() ? tagRow(line, { kind: 'g', group, item }) : line));
+  /** A group's summary row: counts by kind in the tool-row blue, what failed
+   * in red, and `· tap` where the width has room. */
+  const summaryLine = (items: readonly (ActivityEntry & GroupRow)[], running: boolean, plainOnly: boolean): string => {
+    const summary = groupSummary(items.map((item) => ({ id: item.key, event: item.event, ...(item.thought ? { thought: item.thought } : {}) })), running, waitingOnApproval);
+    const blue = [summary.calls, ...(summary.thoughts ? [`${summary.thoughts} thought${summary.thoughts === 1 ? '' : 's'}`] : [])].filter(Boolean).join(' · ');
+    if (plainOnly) return blue;
+    const style = TOOL_CATEGORY_STYLE.run;
+    const marks = [
+      ...(summary.failed ? [chalk.red(`${summary.failed} failed`)] : []),
+      ...(summary.stopped ? [chalk.yellow(`${summary.stopped} stopped`)] : []),
+    ];
+    const text = `${TOOL_ROW_TEXT(blue)}${marks.map((mark) => ` ${chalk.dim('·')} ${mark}`).join('')}`;
+    const hint = ' · tap';
+    const fits = terminalCellWidth(groupSummaryText(summary)) + hint.length + 4 <= conversationInner;
+    return `${style.paint(style.glyph)} ${text}${fits ? chalk.dim(hint) : ''}`;
   };
-  /** The turn's rows, looking-around runs merged. A lone call is its own
-   * row as always, except that a finished read or search waits in the live
-   * region while it is the tail: the next one may merge with it. */
-  const groupedRows = (entries: readonly ActivityEntry[], ended: boolean, grouping: ExploreGrouping): SettlingTool[] => {
-    // A call that is a row of its own: a note (lines and no event, from
-    // activity()) or a call the user refused, whose row says so. Neither
-    // can join a run of looking-around calls.
-    const alone = (entry: ActivityEntry): boolean => !entry.event || refused(entry);
+  /** A run of calls and thoughts as one row (call-groups.ts). Running, the
+   * summary spins in the row's place with the newest items under it; settled,
+   * it is the one summary row. The items stay reachable from it (a tap, or
+   * Ctrl+O, opens them in the panel). */
+  const groupRow = (run: CallRun<ActivityEntry & GroupRow>, folded: ReadonlyArray<ActivityEntry & GroupRow>, ended: boolean, id: string): SettlingTool => {
+    const first = folded[0]!;
+    const running = !ended && folded.some((member) => member.event.kind === 'tool-start');
+    const order = { ...(first.sequence === undefined ? {} : { seq: first.sequence }) };
+    if (!run.done) {
+      const under = folded.slice(-LIVE_SHOWN_CALLS).map((member) => underCall(liveItemLine(member, ended)));
+      const head = running
+        ? `  ${runningChatLine(summaryLine(run.items, true, true), p.reducedMotion ? 0 : p.waitingFrame, 'tool', first.event.category).trim()}`
+        : `  ${summaryLine(run.items, false, false)}`;
+      return { id, done: false, responseOffset: first.responseOffset, ...order, lines: tagged(['', head, ...under], groupIdOf(run), '') };
+    }
+    return { id, done: true, responseOffset: first.responseOffset, ...order, lines: tagged(activityRows([summaryLine(run.items, false, false)]), groupIdOf(run), '') };
+  };
+  const groupIdOf = (run: CallRun<ActivityEntry & GroupRow>): string => `${run.items[0]!.anchor}:${run.key}`;
+  /** One run's rows: a group row when two or more of its items fold, else
+   * each item as the row it always was -- a lone call is its own summary. */
+  const runRows = (run: CallRun<ActivityEntry & GroupRow>, ended: boolean): SettlingTool[] => {
+    const alones = run.items.filter((item) => standsAlone(item, waitingOnApproval));
+    const folded = run.items.filter((item) => !standsAlone(item, waitingOnApproval));
+    const id = groupIdOf(run);
+    p.callGroups.set({ id, items: run.items.map((item) => ({ id: item.key, entry: item })), running: !run.done && run.items.some((item) => item.event.kind === 'tool-start') });
+    const single = (item: ActivityEntry & GroupRow, held: boolean): SettlingTool => {
+      const row = toolRow(item, ended);
+      return { ...row, ...(held && row.done ? { done: false } : {}), lines: tagged(row.lines, id, item.key) };
+    };
+    if (folded.length < 2) return run.items.map((item) => single(item, !run.done && !alones.includes(item)));
+    return [groupRow(run, folded, ended, `grp:${run.key}`), ...alones.map((item) => single(item, false))];
+  };
+  /** The turn's rows, runs of calls and thoughts grouped. A finished call
+   * waits in the live region while its run is open: the next may join it. */
+  const groupedRows = (entries: readonly ActivityEntry[], ended: boolean, grouping: CallGrouping): SettlingTool[] => {
+    // A row of its own that never joins a run: a note (lines and no event,
+    // from activity()), a plan or notice, or a call the user refused, whose
+    // row says so.
+    const alone = (entry: ActivityEntry): boolean => !entry.event || refused(entry) || (entry.event.kind === 'thinking' && !entry.thought);
     const rows = entries.flatMap((entry) => (entry.event && !alone(entry) ? [{ ...entry, event: entry.event, key: entry.event.id ?? `activity#${entry.sequence ?? entry.responseOffset}` }] : []));
-    const grouped = grouping.group(rows, ended, ended ? Number.POSITIVE_INFINITY : p.liveResponse.length).map((group) => {
-      if (group.merged) return groupRow(group, ended);
-      const row = toolRow(group.members[0]!, ended);
-      return row.done && !group.done ? { ...row, done: false } : row;
-    });
-    return [...grouped, ...entries.filter(alone).map((entry) => toolRow(entry, ended))];
+    const runs = grouping.group(rows, ended, ended ? Number.POSITIVE_INFINITY : p.liveResponse.length);
+    return [...runs.flatMap((run) => runRows(run, ended)), ...entries.filter(alone).map((entry) => toolRow(entry, ended))];
   };
   return { toolRow, groupedRows };
 }
@@ -187,16 +225,17 @@ export function createTurnTools(
       entries.push({
         anchor: index, responseOffset: at(mark.responseOffset), sequence: ranks.marks[position]!,
         event: { kind: 'thinking', label: mark.id, id: mark.id }, lines,
+        ...(mark.kind === 'thought' ? { thought: markThought(mark) } : {}),
       });
     }
-    return groupedRows(entries, true, new ExploreGrouping());
+    return groupedRows(entries, true, new CallGrouping());
   };
   const turnTools = (ended: boolean): SettlingTool[] => {
     const tools: SettlingTool[] = groupedRows(turnEntries(p.activityAnchor)
       // An anchor is reused: the next turn's assistant occupies the same
       // index when the previous one was never persisted. The turn that
       // produced an entry is what decides whether it belongs to this one.
-      .filter((entry) => (entry.sequence ?? 0) > p.emitted.turnSequenceFloor), ended, p.exploreGrouping);
+      .filter((entry) => (entry.sequence ?? 0) > p.emitted.turnSequenceFloor), ended, p.callGrouping);
     // A running agent's live calls, one row each, nested under it. They are
     // never retired (the turn's end drops them with their parent) and never
     // gate another row; where they sit is child-rows.ts's rule.

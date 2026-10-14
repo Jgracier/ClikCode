@@ -256,7 +256,7 @@ export function startWaiting(
   if (!rejoined) {
     this.activeTools = new Map();
     this.liveChildren.reset();
-    this.exploreGrouping.reset();
+    this.callGrouping.reset();
     this.liveActivitiesShown = -1;
     this.turnTranscript.reset();
     this.emitted.liveAnswerSettled();

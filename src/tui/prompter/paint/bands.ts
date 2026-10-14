@@ -13,6 +13,7 @@ import { APPROVAL_MIN_ROWS, frameRowBudget } from '../../render/frame-budget.js'
 import { panelRows as panelBandRows } from '../../render/footer-rows.js';
 import type { PaletteLayout } from '../../option-picker.js';
 import { planBlockRows } from '../../render/plan-block.js';
+import { groupPanelRows } from '../../render/group-panel.js';
 import type { TerminalHarnessPrompter } from '../../prompter.js';
 
 export type BandInput = {
@@ -96,6 +97,17 @@ export function frameBands(p: TerminalHarnessPrompter, input: BandInput) {
   const planGlyph = p.turn && !p.reducedMotion ? waitingSpinnerGlyph(p.waitingFrame) : undefined;
   const planRows = paletteRows || p.selecting ? [] : planBlockRows(p.planEntries, width, liveBandBudget, planGlyph);
   liveBandBudget -= planRows.length;
+  // A group's items, opened (render/group-panel.ts): above the composer, never over an approval.
+  let groupRows: string[] = [];
+  const open = p.groupPanel;
+  if (open) {
+    const data = p.callGroups.get(open.id);
+    if (!data) p.groupPanel = undefined;
+    else if (!paletteRows && !approval && !p.selecting && liveBandBudget >= 3) {
+      groupRows = groupPanelRows(data, open, Math.max(1, width - 2), Math.min(liveBandBudget, Math.max(4, Math.floor(targetHeight / 2))));
+      liveBandBudget -= groupRows.length;
+    }
+  }
   let panelRows: string[] = [];
   const panel = p.panelState;
   if (panel && !paletteRows && !approval && !p.selecting && liveBandBudget >= 3) {
@@ -104,12 +116,12 @@ export function frameBands(p: TerminalHarnessPrompter, input: BandInput) {
     panelRows = shown.rows;
   }
   const maxComposerRows = Math.max(
-    1, targetHeight - 3 - paletteRows - noticeRows - waitingRows - indicatorRows - approvalRows.length - thoughtRows.length - signInRows.length - planRows.length - panelRows.length,
+    1, targetHeight - 3 - paletteRows - noticeRows - waitingRows - indicatorRows - approvalRows.length - thoughtRows.length - signInRows.length - planRows.length - panelRows.length - groupRows.length,
   );
   const composerRows = composerLayout(composer, cursor, composerWidth, maxComposerRows);
   return {
     targetHeight, noticeShown, noticeRows, waitingRows, paletteRows, indicatorRows, indicatorText, approvalRows,
-    thoughtRows, signInRows, planRows, panelRows, maxComposerRows, composerRows,
+    thoughtRows, signInRows, planRows, panelRows, groupRows, maxComposerRows, composerRows,
   };
 }
 
