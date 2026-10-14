@@ -383,7 +383,11 @@ export function resumeClock(this: TerminalHarnessPrompter): void {
 }
 
 export async function flushWaitingSubmissions(this: TerminalHarnessPrompter): Promise<void> {
-  await Promise.allSettled([...this.waitingSubmissionWrites]);
+  // Bounded: a write that never settles would keep the turn showing as running.
+  await Promise.race([
+    Promise.allSettled([...this.waitingSubmissionWrites]),
+    new Promise<void>((resolve) => { setTimeout(resolve, 10_000).unref(); }),
+  ]);
 }
 
 /** This window stops following the running turn (← to the board); its
