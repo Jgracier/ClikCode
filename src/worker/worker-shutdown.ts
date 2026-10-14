@@ -11,6 +11,9 @@ import { sendEvent } from './broadcast-observer.js';
 import { removeWorkerRecord } from './registry.js';
 import type { WorkerContext } from './worker-context.js';
 
+/** How long the last events get to reach a window that is slow to read. */
+const FLUSH_WINDOWS_MS = 10_000;
+
 export function createShutdown(ctx: WorkerContext) {
   const { observer, sessionId, token, hold, socketPath, connections } = ctx;
   /** Once: a second signal while the first shutdown is still recording
@@ -41,10 +44,22 @@ export function createShutdown(ctx: WorkerContext) {
     await closePersistentTransport().catch(() => undefined);
     // The lsp tool's language servers live as long as this worker.
     await shutdownLanguageServers().catch(() => undefined);
+    const flushed: Promise<void>[] = [];
     for (const connection of connections.keys()) {
       sendEvent(connection, { type: 'shutdown', reason });
       connection.end();
+      flushed.push(new Promise<void>((resolve) => {
+        if (connection.destroyed || connection.writableFinished) { resolve(); return; }
+        connection.once('finish', resolve);
+        connection.once('close', resolve);
+        connection.once('error', () => resolve());
+      }));
     }
+    // The end of a long turn writes the whole conversation to each window
+    // (megabytes), and what is still queued here is lost when the process
+    // exits: the window got a cut-off frame and a closed socket instead of
+    // the turn's end, and showed it running until it was reopened.
+    await Promise.race([Promise.all(flushed), new Promise<void>((resolve) => { setTimeout(resolve, FLUSH_WINDOWS_MS).unref(); })]);
     ctx.server.close();
     // Only what is still this worker's: the record and socket of a worker
     // that replaced it are that worker's to remove.
