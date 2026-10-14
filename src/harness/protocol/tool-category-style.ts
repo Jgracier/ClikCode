@@ -17,3 +17,6 @@ import { TOOL_CATEGORY } from './tool-category.js';
 
 export const TOOL_CATEGORY_STYLE: Record<ToolCategory, (typeof TOOL_CATEGORY)[ToolCategory] & { paint: (text: string) => string }> =
   Object.fromEntries(Object.entries(TOOL_CATEGORY).map(([category, facts]) => [category, { ...facts, paint: (text: string) => chalk.hex('#5f87d7')(text) }])) as never;
+
+/** The words of a call's row: a lighter blue than its glyph. */
+export const TOOL_ROW_TEXT = (text: string): string => chalk.hex('#87afd7')(text);

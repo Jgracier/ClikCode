@@ -7,7 +7,7 @@ import type { HarnessActivityEvent } from '../prompter.js';
 import type { FileDiff } from '../../agent/line-diff.js';
 import { activityOutcome, diffPreview, diffTotals, outputPreview } from './activity-view.js';
 import { activityResult, tensedLabel } from './turn-flow.js';
-import { TOOL_CATEGORY_STYLE } from './tool-category-style.js';
+import { TOOL_CATEGORY_STYLE, TOOL_ROW_TEXT } from './tool-category-style.js';
 import { EDIT_FILES_SHOWN, failedOutputTail } from './lean.js';
 import { claudeShaped, opencodeShaped, asRecord } from './json-lines.js';
 
@@ -42,7 +42,7 @@ export function renderActivityLine(event: HarnessActivityEvent): string[] {
     ? `${chalk.yellow(STOPPED_GLYPH)} ${chalk.dim(event.label)} ${chalk.yellow('stopped')}`
     : event.kind === 'tool-error'
     ? `${chalk.red(`${plainMark}${event.label}`)} ${chalk.red('failed')}`
-    : `${mark}${chalk.dim(`${tensedLabel(event.label, event.kind === 'tool-start')}${result ? ` · ${result}` : ''}`)}`}${outcome ? ` ${chalk.dim(outcome)}` : ''}`;
+    : `${mark}${TOOL_ROW_TEXT(`${tensedLabel(event.label, event.kind === 'tool-start')}${result ? ` · ${result}` : ''}`)}`}${outcome ? ` ${chalk.dim(outcome)}` : ''}`;
   // One line per call. Under a successful call nothing: its output, a read's
   // contents, a search's hits are in the saved turn. Under a failed call the
   // last lines of its output -- that is the error.
@@ -55,7 +55,7 @@ export function renderActivityLine(event: HarnessActivityEvent): string[] {
   const shown = event.diff.slice(0, EDIT_FILES_SHOWN).map((file) => {
     const verb = file.change === 'add' ? 'Created' : file.change === 'delete' ? 'Deleted' : 'Edited';
     const counts = changeCounts(file.additions, file.removals);
-    return `  ${mark}${chalk.dim(`${verb} ${file.path ?? 'file'}`)}${counts ? ` ${counts}` : ''}`;
+    return `  ${mark}${TOOL_ROW_TEXT(`${verb} ${file.path ?? 'file'}`)}${counts ? ` ${counts}` : ''}`;
   });
   const more = event.diff.length - EDIT_FILES_SHOWN;
   return more > 0 ? [...shown, `  ${chalk.dim(`+${more} more file${more === 1 ? '' : 's'}`)}`] : shown;

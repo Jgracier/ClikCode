@@ -288,7 +288,7 @@ SCENARIOS = {
     },
     # The worker running a turn is killed mid-call. The turn ends there as a
     # stopped one, under its own prompt -- its answer used to be drawn above
-    # it, the call left running (∷), and "session worker connection closed
+    # it, the call left running (‣), and "session worker connection closed
     # unexpectedly" shown -- and the next message starts a worker again.
     'worker-killed-mid-turn': {
         'turns': [{'intro': 'Starting the long build.', 'hold_ms': 20000, 'blocks': ['The build passed.']},
@@ -303,7 +303,7 @@ SCENARIOS = {
         # have saved the turn's end is gone, and that line is the saved one.
         'snap_contains': {'stopped': ['sleep 30 stopped']},
         'snap_once': {'stopped': ['start the build', 'Starting the long build.']},
-        'snap_lacks': {'stopped': ['∷', 'Worked for']},
+        'snap_lacks': {'stopped': ['‣', 'Worked for']},
         'final_once': ['Second answer arrives here.'], 'never': ['closed unexpectedly', 'send again to continue', "worker stopped"],
     },
     # Esc on a turn that has not answered yet takes the message back -- into

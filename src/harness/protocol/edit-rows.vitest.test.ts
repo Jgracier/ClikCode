@@ -17,5 +17,5 @@ it('names each file of a multi-file change, with what each added and removed', (
   const update = unifiedEventDiff('@@ -10,2 +10,2 @@\n-old b\n+new b\n context c\n', { path: 'a.ts' });
   const added = unifiedEventDiff('export const x = 1;\n', { path: 'b.ts', change: 'add' });
   const rows = plain(renderActivityLine({ kind: 'tool-done', label: 'a.ts, b.ts', category: 'edit', diff: [...update, ...added] }));
-  expect(rows).toEqual(['  ∷ Edited a.ts +1 -1', '  ∷ Created b.ts +1']);
+  expect(rows).toEqual(['  ‣ Edited a.ts +1 -1', '  ‣ Created b.ts +1']);
 });
