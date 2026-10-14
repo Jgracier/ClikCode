@@ -813,6 +813,7 @@ describe('the model after its worker was stopped mid-turn', () => {
       expect(said.filter((line) => line.includes('second question'))).toHaveLength(1);
     }, 60_000);
   }
+});
 
 describe('a worker that retires as its turn ends', () => {
   it('delivers the end of the turn to a window even when the conversation is large', async () => {
