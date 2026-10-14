@@ -143,3 +143,56 @@ export function normalizeActivityEvents<T extends HarnessActivityEvent>(events: 
   return next.every((event, index) => event === events[index]) ? events : next;
 }
 
+
+/** What a client can do with one sub-agent (the catalog's `subagents`,
+ * docs/SUBAGENTS.md). */
+export interface SubAgentModes {
+  read: 'session' | 'thread' | 'transcript' | 'frames' | 'none';
+  steer: 'session' | 'thread' | 'relay' | 'none';
+}
+
+/** One sub-agent, in the one shape both surfaces consume. */
+export interface SubAgentRef {
+  /** The parent's call id: the row's `id`, and the `parentId` of its children. */
+  id: string;
+  /** The vendor's own id for it (Claude agentId, Codex thread id), when known. */
+  agentId?: string;
+  label: string;
+  status: 'running' | 'done' | 'error' | 'stopped';
+  /** The harness command (`claude`, `codex`, ...). */
+  harness: string;
+  read: SubAgentModes['read'];
+  steer: SubAgentModes['steer'];
+}
+
+const CODEX_AGENT_ROW = /^agent:(.+)$/;
+
+/** The sub-agent an agent row stands for, or undefined when the event is not
+ * one. `modes` is the harness's catalog declaration; absent is `none`/`none`.
+ * A harness that publishes no child frames still gets a ref (its row exists),
+ * with `read: 'none'`: the surface says it cannot be opened. */
+export function subAgentRef(event: HarnessActivityEvent, harness: string, modes: SubAgentModes | undefined): SubAgentRef | undefined {
+  if (event.kind === 'thinking' || !event.agent || !event.id || event.parentId) return undefined;
+  const agentId = event.agentId ?? (harness === 'codex' ? CODEX_AGENT_ROW.exec(event.id)?.[1] : undefined);
+  const status: SubAgentRef['status'] = event.kind === 'tool-start' ? 'running'
+    : event.kind === 'tool-done' ? 'done' : event.stopped ? 'stopped' : 'error';
+  return {
+    id: event.id, ...(agentId ? { agentId } : {}), label: event.label, status, harness,
+    read: modes?.read ?? 'none', steer: modes?.steer ?? 'none',
+  };
+}
+
+/** Why a sub-agent's composer cannot send, in one line; undefined when it can.
+ * `vendor` is the harness's display name. Said precisely, never softened. */
+export function subAgentSteerBlock(ref: SubAgentRef, vendor: string): string | undefined {
+  if (ref.status !== 'running') return 'This sub-agent has finished: nothing to steer.';
+  if (ref.steer === 'none') return `${vendor} gives ClikCode no way to message a running sub-agent: this view is read-only.`;
+  return undefined;
+}
+
+/** The visible message a `relay` steer sends to the MAIN agent: the user's
+ * words, and which sub-agent they are for. Shown to the user as sent. */
+export function subAgentRelayText(ref: SubAgentRef, text: string): string {
+  const to = ref.agentId ? `${ref.label} (${ref.agentId})` : ref.label;
+  return `Send this to your sub-agent ${to}: ${text}`;
+}
