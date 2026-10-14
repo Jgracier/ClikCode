@@ -134,6 +134,9 @@ function interleave(
   let run: MessageBlock[] = [];
   const flush = (): void => {
     if (!run.length) return;
+    // A call opens with its own blank row and closes without one: the paragraph after it brings the gap,
+    // even when it is the first of the message (a turn that calls tools before saying anything).
+    if (first && out.length && out[out.length - 1] !== '') out.push('');
     out.push(...render(run, first));
     first = false;
     run = [];

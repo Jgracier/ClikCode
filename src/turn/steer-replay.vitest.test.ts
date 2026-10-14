@@ -29,7 +29,7 @@ const blockRows = (blocks: readonly MessageBlock[]): string[] => blocks.map((blo
 function liveRows(answer: string, offset: number): string[] {
   return new TurnTranscript().advance({
     content: answer,
-    tools: [{ id: 'steer', done: true, steer: true, lines: [STEER], responseOffset: offset, seq: 1 }],
+    tools: [{ id: 'steer', done: true, steer: true, lines: [STEER, ''], responseOffset: offset, seq: 1 }],
     turnEnded: true,
     renderBlocks: blockRows,
   }).finished;
@@ -43,7 +43,7 @@ function replayRows(answer: string, offset: number): string[] {
   updatePendingResponse(target, answer, 'append', stamp(1));
   recordPendingSteer(target, 'also this', stamp(2), offset, stamp(2), 'steer-1', 1);
   finishPendingTurn(target, undefined, stamp(3));
-  return sessionTranscriptMessages(target).slice(1).flatMap((message) => (message.role === 'user' ? [STEER]
+  return sessionTranscriptMessages(target).slice(1).flatMap((message) => (message.role === 'user' ? [STEER, '']
     : new TurnTranscript().advance({ content: message.content, tools: [], turnEnded: true, renderBlocks: blockRows }).finished));
 }
 
