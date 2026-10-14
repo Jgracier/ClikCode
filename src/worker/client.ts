@@ -112,6 +112,8 @@ async function socketReleased(record: WorkerRuntimeRecord): Promise<boolean> {
  * worker answers within milliseconds even mid-turn, and a message sent right
  * after switching waits on it. */
 const RETIRE_ANSWER_MS = 500;
+/** How long a window waits for a worker's first reply (its snapshot). */
+const ATTACH_ANSWER_MS = 30_000;
 
 /** Asks a worker on another build to step down. It knows whether it is in
  * the middle of something and the asking window does not -- so it decides:
@@ -293,7 +295,11 @@ export class WorkerClient extends EventEmitter {
     const client = new WorkerClient(socket);
     lifecycle('client.worker.connect', { worker: record.sessionId, workerPid: record.pid });
     client.send({ type: 'attach', token: record.token });
-    const initial = await client.initialSnapshot;
+    // A worker that took the connection and says nothing is not waited on for ever.
+    const initial = await Promise.race([
+      client.initialSnapshot,
+      new Promise<never>((_, reject) => { setTimeout(() => reject(new Error('the conversation\'s worker did not answer')), ATTACH_ANSWER_MS).unref(); }),
+    ]).catch((error: unknown) => { client.close(); throw error; });
     if (initial.type === 'attach-rejected') { client.close(); throw new Error(`worker rejected this connection: ${initial.reason}`); }
     return client;
   }
