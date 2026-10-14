@@ -94,6 +94,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * after a resize, or a repair (Ctrl+L). See redrawPreamble. */
   pendingRedraw: Redraw | undefined;
   queuedDraft?: string;
+  /** The last conversation turn ended stopped; read once by the loop (takeStopped). */
+  turnEndedStopped = false;
   /** A message typed and sent (Enter) under a sign-in's own wait, and any
    * keys after it: typed into the prompt that opens next, as if typed there,
    * so it is sent -- the wait has no turn to send it to. */
@@ -537,6 +539,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** What the next prompt's composer opens with: a message that never
    * reached its turn, a cancelled one the worker hands back, or a `/`. */
   restoreDraft(value: string): void { this.queuedDraft = value; }
+  /** Whether the turn that just ended was stopped: what was queued behind it must not run on its own. */
+  takeStopped(): boolean { const stopped = this.turnEndedStopped; this.turnEndedStopped = false; return stopped; }
+  markTurnStopped(): void { this.turnEndedStopped = true; }
   flushWaitingSubmissions(...args: Parameters<typeof flushWaitingSubmissions>): ReturnType<typeof flushWaitingSubmissions> { return flushWaitingSubmissions.apply(this, args); }
 
   leaveTurn(...args: Parameters<typeof leaveTurn>): ReturnType<typeof leaveTurn> { return leaveTurn.apply(this, args); }

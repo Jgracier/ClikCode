@@ -89,10 +89,10 @@ export function createCommandHandler(ctx: WorkerContext) {
         // The submit ended without a turn to stop (queued, rejected): the Stop
         // asked for has nothing to apply to, and its askers are told.
         if (ctx.submitsInFlight === 0 && ctx.pendingCancel) {
-          const { askers } = ctx.pendingCancel;
           ctx.pendingCancel = undefined;
           if (!ctx.activeController) ctx.stopAnnounced = false;
-          for (const asker of askers) sendEvent(asker, { type: 'stop-done', nothing: true });
+          // Every window heard `stopping`; every one hears it ended.
+          observer.broadcast({ type: 'stop-done', nothing: true });
         }
       }
       return;

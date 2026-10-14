@@ -14,6 +14,8 @@ export class WorkerLink {
   /** Seen waiting-start without its waiting-stop: a turn is running on this
    * conversation's worker, whichever client started it. */
   workerTurnRunning = false;
+  /** The last turn ended stopped: nothing queued behind it runs until the user acts. */
+  stopped = false;
   turnWaiter: { resolve: () => void; reject: (error: Error) => void; error?: Error } | undefined;
 
   constructor(private readonly host: Pick<BridgeHost, 'channel' | 'prompter' | 'sessionId' | 'closed' | 'shown' | 'enqueue' | 'report' | 'refreshUsage' | 'scheduleDrain'>) {}
@@ -69,6 +71,7 @@ export class WorkerLink {
     switch (event.type) {
       case 'waiting-start':
         this.workerTurnRunning = true;
+        this.stopped = false;
         return;
       case 'sign-in-request':
         // The worker has no terminal; the editor has one. The worker retries
@@ -89,6 +92,7 @@ export class WorkerLink {
         return;
       case 'waiting-stop': {
         this.workerTurnRunning = false;
+        this.stopped = event.stopped === true;
         const waiter = this.turnWaiter;
         this.turnWaiter = undefined;
         // The turn's cost is on the conversation's figure now.

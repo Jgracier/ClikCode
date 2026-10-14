@@ -59,7 +59,7 @@ export interface TurnObserver {
   bindJournal?(journal: TurnMarkJournal | undefined): void;
   /** Runs a vendor sign-in somewhere with a terminal. A worker has none, so
    * it asks its client; absent, the turn signs in where it runs. */
-  signIn?(request: SignInRequest): Promise<void>;
+  signIn?(request: SignInRequest, signal?: AbortSignal): Promise<void>;
 }
 
 export interface SignInRequest {

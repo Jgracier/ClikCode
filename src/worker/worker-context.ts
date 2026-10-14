@@ -75,6 +75,11 @@ export interface WorkerContext {
   pendingCancel: { restoreDraft: Socket | undefined; askers: Set<Socket> } | undefined;
   /** The running turn's Stop has been accepted and announced (`stopping`). */
   stopAnnounced: boolean;
+  /** The running turn's vendor work is over (it is only saving now): a Stop has nothing left to stop. */
+  turnWorkDone?: boolean;
+  /** A Stop the turn did not answer: after a while, or on a second one, it is ended by force. */
+  stopEscalation?: ReturnType<typeof setTimeout>;
+  forceStop?: () => void;
   /** A turn parked until the quota resets was sent from here: marks it for the turn runner. */
   resumingTurn: boolean;
   /** A newer build asked for this worker while it was busy. */

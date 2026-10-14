@@ -25,7 +25,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
     case 'waiting-start':
       return {
         ...model, running: true, turnUserIndex: model.messages.length,
-        live: { ...freshLive(stripAnsi(event.message)), ...(model.stopPending ? { stopping: true } : {}) }, plan: [], submissions: [],
+        live: freshLive(stripAnsi(event.message)), plan: [], submissions: [],
         turnUsage: undefined, stopPending: undefined,
       };
     case 'waiting-stop':

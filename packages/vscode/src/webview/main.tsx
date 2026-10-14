@@ -233,8 +233,6 @@ function App(): JSX.Element {
   const lastScroll = useRef({ top: 0, height: 0 });
   const runningRef = useRef(false);
   runningRef.current = Boolean(model && (model.running || preparing(model)));
-  const stoppingRef = useRef(false);
-  stoppingRef.current = Boolean(model?.live?.stopping);
   const approvalRef = useRef<string>();
   approvalRef.current = model?.approvals[0]?.id;
   /** The newest message of the user's still waiting -- what Esc takes back. */
@@ -311,15 +309,15 @@ function App(): JSX.Element {
         return;
       }
       // Esc, unless a menu, a sheet or the suggestions already took it.
-      // An approval is denied and the turn goes on. A waiting message comes
+      // An approval is denied and the turn stops. A waiting message comes
       // back to edit and the turn goes on. With neither, a prompt that has
       // no answer yet comes back, and a turn that has started answering stops.
       if (event.key === 'Escape' && !event.defaultPrevented && runningRef.current) {
         const pending = approvalRef.current;
         const waiting = waitingRef.current;
-        if (pending) { event.preventDefault(); post({ type: 'approve', id: pending, approved: false }); }
+        if (pending) { event.preventDefault(); post({ type: 'approve', id: pending, approved: false }); post({ type: 'cancel', restoreDraft: !answeredRef.current }); }
         else if (waiting) { event.preventDefault(); post({ type: 'unqueue', id: waiting.id, edit: true }); }
-        else { event.preventDefault(); if (!stoppingRef.current) post({ type: 'cancel', restoreDraft: !answeredRef.current }); }
+        else { event.preventDefault(); post({ type: 'cancel', restoreDraft: !answeredRef.current }); }
       }
     };
     document.addEventListener('click', onClick);

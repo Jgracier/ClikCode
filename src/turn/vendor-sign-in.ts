@@ -34,7 +34,7 @@ export async function signInForTurn(ctx: VendorTurnContext, environment: Readonl
   // is done. Without that the vendor's login ran here, in a detached
   // process, and could never finish.
   const signedIn = await (prompter?.signIn
-    ? prompter.signIn({ command: harness.command, argv: signInArgv, environment, name: signInName })
+    ? prompter.signIn({ command: harness.command, argv: signInArgv, environment, name: signInName }, ctx.signal)
     : withSignIn(prompter, signInName, () => loginNativeHarness(signIn, environment)))
     .then(() => true, (error: unknown) => {
       // No one to sign in (a script, a worker with no window): nothing was

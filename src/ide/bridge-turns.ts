@@ -26,7 +26,15 @@ export class BridgeTurns {
    * line (/review): what an interrupted turn recorded is compared to. */
   private sentPrompt: string | undefined;
 
+  /** Counted by every Stop: a submit prepared before one is dropped, not sent
+   * (the Stop reached the worker while nothing was there to stop). */
+  private cancelEpoch = 0;
+  /** The epoch the queued send job was typed at. */
+  private submitEpoch: number | undefined;
+
   constructor(private readonly host: BridgeHost) {}
+
+  noteCancel(): void { this.cancelEpoch++; }
 
   async send(text: string, id?: string): Promise<void> {
     const line = text.trim();
@@ -51,7 +59,10 @@ export class BridgeTurns {
       this.host.report(error);
       return;
     }
+    const typedAt = this.cancelEpoch;
+    this.host.link.stopped = false;
     this.host.enqueue(async () => {
+      this.submitEpoch = typedAt;
       await this.host.execute(line, {});
       await this.host.drainQueue();
     });
@@ -62,11 +73,13 @@ export class BridgeTurns {
    * interactive loop does at the top of every pass. */
   async drainQueue(): Promise<void> {
     let previous: string | undefined;
+    // The last turn ended stopped: what is queued behind it waits for the user.
     while (!this.host.closed && this.host.sessionId) {
       const state = await readState({ transcripts: [this.host.sessionId!] });
       const session = state.sessions.find((item) => item.id === this.host.sessionId);
       const queued = session?.queuedTurns?.[0];
       if (!session || !queued) return;
+      if (this.host.link.stopped && queued.kind !== 'command') return;
       // What ClikCode owes the model is the worker's to run, silently.
       if (queued.kind === 'notification') return;
       // Still at the head after its run: it failed and could not be taken
@@ -137,9 +150,19 @@ export class BridgeTurns {
   /** One turn through the conversation's worker, after what the terminal
    * does before one (prepareTurn). */
   async runTurn(targetId: string, prompt: string, turn: { echo: boolean; queuedTurnId?: string }): Promise<void> {
+    const epoch = this.submitEpoch ?? this.cancelEpoch;
+    this.submitEpoch = undefined;
     await prepareTurn(targetId, (label) => this.host.channel.send({ type: 'busy', ...(label ? { label } : {}) }));
     await this.host.prepareRoute();
     const client = await this.host.link.workerFor(targetId);
+    if (epoch !== this.cancelEpoch) {
+      // Stopped before it was sent: it never runs. A typed message goes back
+      // to the composer; a queued one stays queued for the user to decide.
+      this.host.link.stopped = true;
+      this.host.channel.send({ type: 'worker', sessionId: targetId, event: { type: 'submit-rejected', message: 'Stopped' } });
+      if (turn.echo && !turn.queuedTurnId) this.host.channel.send({ type: 'worker', sessionId: targetId, event: { type: 'restore-draft', text: prompt } });
+      return;
+    }
     this.host.channel.send({ type: 'turn-start', sessionId: targetId, ...(turn.echo ? { prompt } : {}), ...(turn.queuedTurnId ? { queuedTurnId: turn.queuedTurnId } : {}) });
     try {
       await new Promise<void>((resolve, reject) => {

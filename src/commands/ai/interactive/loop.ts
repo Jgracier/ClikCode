@@ -230,7 +230,22 @@ export class ChatLoop {
     /** This line was already handed to the loop once. Anything below that
      * would hand it back must not, or a cancelled picker loops forever. */
     let fromQueuedCommand = false;
-    const queued = latest.queuedTurns?.[0];
+    let queued = latest.queuedTurns?.[0];
+    // A turn that ended stopped: the messages queued behind it do not run on
+    // their own (it would look as if the Stop failed). They come back to the
+    // composer, and the user decides.
+    if (terminal?.takeStopped() && !running && !this.openBoard && queued && queued.kind !== 'command' && queued.kind !== 'notification') {
+      const back: string[] = [];
+      for (const entry of [...(latest.queuedTurns ?? [])]) {
+        if (entry.kind === 'command' || entry.kind === 'notification') continue;
+        if (consumeSessionTurn(latest, entry.id)) back.push(entry.text);
+      }
+      if (back.length) {
+        await writeState(latestState);
+        terminal.restoreDraft([terminal.queuedDraft, ...back].filter(Boolean).join('\n'));
+      }
+      queued = latest.queuedTurns?.[0];
+    }
     if (this.openBoard) {
       // Before anything that would follow the running turn straight back.
       this.openBoard = false;
