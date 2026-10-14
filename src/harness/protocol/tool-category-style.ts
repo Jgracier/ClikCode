@@ -16,4 +16,4 @@ import type { ToolCategory } from '../prompter.js';
 import { TOOL_CATEGORY } from './tool-category.js';
 
 export const TOOL_CATEGORY_STYLE: Record<ToolCategory, (typeof TOOL_CATEGORY)[ToolCategory] & { paint: (text: string) => string }> =
-  Object.fromEntries(Object.entries(TOOL_CATEGORY).map(([category, facts]) => [category, { ...facts, paint: (text: string) => chalk.gray(text) }])) as never;
+  Object.fromEntries(Object.entries(TOOL_CATEGORY).map(([category, facts]) => [category, { ...facts, paint: (text: string) => chalk.hex('#5f87d7')(text) }])) as never;
