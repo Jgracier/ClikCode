@@ -40,6 +40,7 @@ import { activity, setPlan, settlePlan, activityEvent, settleThought, markDrawn,
 import { editTurnDraft, waitingUserMessages, enterAgainReady, turnHasAnswer, takeBackWaiting, submitWaiting, waitingLabel, updateWaitingLabel, joinedWaiting, markVendorWork, startWaiting, turnStarting, toolStatus, turnWaits, waitingOnUser, scheduleWaitingTick, stepTokens, setTurnUsage, setBackgroundWork, pauseClock, resumeClock, flushWaitingSubmissions, leaveTurn, turnStopped, turnStopping, stopSettled, onWaitingEnded, stopWaiting, vendorAnswered, phase } from './prompter/waiting-turn.js';
 import { statusText, waitingLine, escStops, updateWaiting, schedulePaint, paintWaiting, repaint } from './prompter/waiting-band.js';
 import { onWaitingKey } from './prompter/waiting-keys.js';
+import { openSubView, closeSubView, subViewKey, paintSubView, type SubView } from './prompter/subagent-host.js';
 import { viewportRows, onResize, repaintAfterResize, rewrapIfWidthChanged, clearTranscript } from './prompter/viewport.js';
 import { signInScreen } from './prompter/sign-in.js';
 import { renderFrame, flushFrame, flushAlternateFrame } from './prompter/frame-flush.js';
@@ -240,6 +241,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * after it ends it; labels this window sets itself (stopping, waiting for
    * approval) are not phases and stay. */
   reportedPhase?: string;
+  /** The sub-agent open in full view, if one is (prompter/subagent-host.ts). */
+  subView?: SubView;
+  /** Sends a message typed into a sub-agent's view to the worker; resolves to the refusal, if any. Set by the window that follows the turn. */
+  subAgentSteer?: (ref: import('../harness/protocol/activity-normalize.js').SubAgentRef, text: string) => Promise<string | undefined>;
+  openSubView(...args: Parameters<typeof openSubView>): ReturnType<typeof openSubView> { return openSubView.apply(this, args); }
+  closeSubView(...args: Parameters<typeof closeSubView>): ReturnType<typeof closeSubView> { return closeSubView.apply(this, args); }
+  subViewKey(...args: Parameters<typeof subViewKey>): ReturnType<typeof subViewKey> { return subViewKey.apply(this, args); }
+  paintSubView(...args: Parameters<typeof paintSubView>): ReturnType<typeof paintSubView> { return paintSubView.apply(this, args); }
   readonly onWaitingKey = (...args: Parameters<typeof onWaitingKey>): ReturnType<typeof onWaitingKey> => onWaitingKey.apply(this, args);
 
   editTurnDraft(...args: Parameters<typeof editTurnDraft>): ReturnType<typeof editTurnDraft> { return editTurnDraft.apply(this, args); }

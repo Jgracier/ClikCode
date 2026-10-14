@@ -18,6 +18,11 @@ export function onWaitingKey(this: TerminalHarnessPrompter, key: string): void {
     this.paintWaiting(turn);
     return;
   }
+  // A sub-agent open in full view takes every key; none of them reaches the
+  // main turn (Esc and Ctrl+C go back to the main chat, they do not stop it).
+  if (this.subView) { this.subViewKey(key); return; }
+  // Right on an empty composer, on an open sub-agent row: its own screen.
+  if (key === '\u001b[C' && !turn.draft && !this.pendingApproval && this.openSubView()) return;
   // Before approvals and before the draft: a turn running is when someone
   // wants to read what went past.
   if (!this.pendingApproval && this.handleScrollKey(key)) return;
