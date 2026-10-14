@@ -29,6 +29,8 @@ import { installSystemdRunShim, separateFromForeground } from './own-scope.js';
 import { startResourceGuard } from './resource-guard.js';
 import { createCommandSweep } from './command-groups.js';
 import { useConversationTmp } from './conversation-tmp.js';
+import { startDiskWatch } from './disk-watch.js';
+import { startStateSweep } from './state-sweep.js';
 import { startStuckWatchdog } from './stuck-watchdog.js';
 import { LiveSettings } from '../turn/live-settings.js';
 import { sessionState } from '../agent/session-state.js';
@@ -78,6 +80,8 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   if (process.platform === 'linux' && process.env.CLIKCODE_OWN_SCOPE !== '0') installSystemdRunShim();
   // Temp files on disk, not in RAM-backed /tmp, for everything the agent runs.
   useConversationTmp(sessionId);
+  // What ClikCode leaves under its own state directory is removed when old (worker/state-sweep.ts).
+  startStateSweep();
   const socketPath = socketPathFor(sessionId);
   // A worker from a build before the hold existed takes none, and still
   // answers: it keeps the conversation. Anything else at the path is left
@@ -147,8 +151,10 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   startStuckWatchdog(sessionId);
   // Memory: a nudge near the machine's limit, the largest command stopped
   // past it, and this conversation's agent told either way -- into the turn
-  // running now, or with the next one (worker/resource-guard.ts).
+  // running now, or with the next one (worker/resource-guard.ts). The same
+  // channel tells it when the disk is getting full (worker/disk-watch.ts).
   {
+    const deliverNote = createResourceNoteDelivery(ctx);
     // One cgroup per command the agent runs, so the guard reads and stops
     // exactly a command (worker/command-groups.ts).
     const commands = placement?.divided ? createCommandSweep(placement.scopeDir) : undefined;
@@ -156,8 +162,9 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     startResourceGuard({
       sessionId,
       ...(placement?.divided ? { sliceDir: placement.sliceDir, remembered: { scopeDir: placement.scopeDir, labels: commands!.labels } } : {}),
-      deliver: createResourceNoteDelivery(ctx),
+      deliver: deliverNote,
     });
+    startDiskWatch({ sessionId, paths: [stateDirectory(), session.workspace], deliver: deliverNote });
   }
 
   try {
