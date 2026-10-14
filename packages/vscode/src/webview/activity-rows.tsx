@@ -12,7 +12,7 @@ import type { FileDiff } from '../protocol';
 import { post } from './bus';
 import { pathIn, relative } from './format';
 import { Animating, Icon, Spinner } from './ui';
-import { decisionBadge, foldedSummary, runGroupSummary, runGroupView, runItemKey, runItemStandsAlone, shimmerStyle, type RunItem } from './flow';
+import { activityMore, decisionBadge, foldedSummary, runGroupSummary, runGroupView, runItemKey, runItemStandsAlone, shimmerStyle, type RunItem } from './flow';
 
 export const CATEGORY_ICON: Record<ToolCategory, string> = { read: 'file', edit: 'edit', run: 'terminal', search: 'search', fetch: 'globe' };
 
@@ -142,7 +142,8 @@ export function ActivityRow({ activity, workspace, userIndex }: { activity: Acti
   const budget = previewLinesFor(activity.category);
   const ends = activity.category === 'run' && status !== 'running' ? commandOutputPreview(activity) : undefined;
   const preview = !ends && activity.output?.length && budget > 0 ? outputPreview(activity, budget) : undefined;
-  const hasMore = Boolean((activity.output?.length && (ends ? ends.hidden > 0 : !preview || preview.hidden > 0))
+  const more = activityMore(activity);
+  const hasMore = Boolean(more.task || more.command || more.args.length || (activity.output?.length && (ends ? ends.hidden > 0 : !preview || preview.hidden > 0))
     || (activity.diff && diffPreview(activity.diff, DIFF_PREVIEW_LINES).hiddenLines) || activity.children?.length);
   // Its own live children directly under it (those that began after more
   // text was written are drawn lower, by the turn: turnMarks).
@@ -192,6 +193,13 @@ export function ActivityRow({ activity, workspace, userIndex }: { activity: Acti
       {/* The children stay available once it settles, one click away. */}
       {open && activity.children?.length ? (
         <div class="activities nested">{activity.children.map((child) => <ActivityRow key={child.key} activity={child} workspace={workspace} userIndex={userIndex} />)}</div>
+      ) : null}
+      {open && (more.task || more.command || more.args.length) ? (
+        <div class="activity-more muted">
+          {more.task ? <div>{more.task}</div> : null}
+          {more.command ? <div class="activity-command">{more.command}</div> : null}
+          {more.args.map((arg) => <div key={arg}>{arg}</div>)}
+        </div>
       ) : null}
       {/* A running call shows what it has printed so far, newest last -- a
           long build is visibly working instead of a bare timer. */}

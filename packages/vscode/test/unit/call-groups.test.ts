@@ -32,3 +32,20 @@ describe('a run of calls and thoughts in the panel', () => {
     expect(items.map(runItemKey)).toEqual(['h1', '$ npm test', 'Read a.ts', '$ ls', 'Edit a.ts', 'h2']);
   });
 });
+
+describe('what an open call shows besides its output', () => {
+  it('is the full command, what a tool was asked, and a sub-agent\'s task', async () => {
+    const { activityMore } = await import('../../src/webview/flow.js');
+    const run = call({ label: '$ npm te…', category: 'run', call: { name: 'Bash', input: { command: 'npm test --bail' } } }).activity!;
+    expect(activityMore(run)).toEqual({ command: '$ npm test --bail', args: [] });
+    const mcp = call({ label: 'github.search', call: { name: 'mcp__github__search', input: { query: 'bug', limit: 5 } } }).activity!;
+    expect(activityMore(mcp)).toEqual({ args: ['query: bug', 'limit: 5'] });
+    const agent = call({ label: 'Task(x)', agent: true, call: { name: 'Task', input: { prompt: 'Find the lexer.' } } }).activity!;
+    expect(activityMore(agent)).toEqual({ task: 'Find the lexer.', args: [] });
+    expect(activityMore(call({ label: 'Read a.ts', category: 'read' }).activity!)).toEqual({ args: [] });
+  });
+
+  it('counts a sub-agent in the run it is part of', () => {
+    expect(runGroupSummary([call({ label: '$ a', category: 'run' }), call({ label: '$ b', category: 'run' }), call({ label: 'Task(x)', agent: true })])).toBe('Ran 2 commands, 1 agent');
+  });
+});
