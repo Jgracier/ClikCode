@@ -79,15 +79,14 @@ describe('the status line motion', () => {
     } finally { rl.close(); }
   });
 
-  it('shows the spinner, one word and the clock: no token meter, no key hint', () => {
+  it('shows the spinner, one word and the clock: no token meter, the key that stops it', () => {
     const { rl, line } = open();
     try {
       rl.response('x'.repeat(4000));
       (rl as unknown as { setTurnUsage(u: { output: number }): void }).setTurnUsage({ output: 3400 });
       vi.advanceTimersByTime(SPIN_MS * 60);
-      expect(line()).toMatch(/(thinking|writing) · \d+s$/);
+      expect(line()).toMatch(/(thinking|writing) · \d+s · esc stop$/);
       expect(line()).not.toContain('tokens');
-      expect(line()).not.toContain('esc stop');
     } finally { rl.close(); }
   });
 

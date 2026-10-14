@@ -31,12 +31,12 @@ export function editTurnDraft(this: TerminalHarnessPrompter, turn: WaitingTurn, 
  *  notice stay in the queue: Esc does not edit them, and Enter again does
  *  not send them. One still being submitted (`sending`) is not waiting. */
 export function waitingUserMessages(this: TerminalHarnessPrompter): Array<{ id: string; text: string } & WaitingMessage> {
-  const stored = (this.currentSession?.queuedTurns ?? []).filter((item) => item.kind !== 'command' && item.kind !== 'notification');
+  const stored = (this.currentSession?.queuedTurns ?? []).filter((item) => item.kind !== 'command' && item.kind !== 'notification' && !this.takingBack.has(item.id));
   const startedAt = this.currentSession?.pendingTurn?.startedAt;
   const unsteered = (id: string): WaitingMessage => (this.waitingSubmissions.some((item) => item.id === id && item.unsteered) ? { unsteered: true } : {});
   return [
     ...stored.map((item) => ({ id: item.id, text: item.text, ...(item.heldForTurn && item.heldForTurn === startedAt ? { held: true } : {}), ...unsteered(item.id) })),
-    ...this.waitingSubmissions.filter((item) => item.state === 'queued' && item.id && !stored.some((entry) => entry.id === item.id))
+    ...this.waitingSubmissions.filter((item) => item.state === 'queued' && item.id && !this.takingBack.has(item.id) && !stored.some((entry) => entry.id === item.id))
       .map((item) => ({ id: item.id!, text: item.text, ...unsteered(item.id!) })),
   ];
 }
@@ -66,8 +66,14 @@ export function takeBackWaiting(this: TerminalHarnessPrompter): boolean {
   if (!turn?.takeBack) return false;
   const last = this.waitingUserMessages().at(-1);
   if (!last) return false;
+  // Hidden from the moment Esc is pressed until the worker answers
+  // (`unqueued`): a snapshot in between does not draw it again, and a second
+  // Esc goes on to the next message, or to stop.
+  this.takingBack.add(last.id);
+  this.updateWaiting();
   void turn.takeBack(last.id).then((outcome) => {
-    if (outcome !== 'removed') return;
+    this.takingBack.delete(last.id);
+    if (outcome !== 'removed') { this.updateWaiting(); return; }
     this.waitingSubmissions = this.waitingSubmissions.filter((item) => item.id !== last.id);
     if (this.currentSession?.queuedTurns) this.currentSession.queuedTurns = this.currentSession.queuedTurns.filter((item) => item.id !== last.id);
     if (this.turn) {
@@ -75,7 +81,7 @@ export function takeBackWaiting(this: TerminalHarnessPrompter): boolean {
       this.turn.cursor = last.text.length;
       this.updateWaiting();
     } else this.queuedDraft = this.queuedDraft ? `${last.text}\n${this.queuedDraft}` : last.text;
-  }, () => undefined);
+  }, () => { this.takingBack.delete(last.id); this.updateWaiting(); });
   return true;
 }
 
@@ -309,7 +315,7 @@ export function scheduleWaitingTick(this: TerminalHarnessPrompter): void {
   if (this.closed) return;
   const now = Date.now();
   // Reduced motion never animates: the band ticks for the clock alone.
-  this.waitingTickFast = !this.reducedMotion && turnAnimating(this.turnWaits());
+  this.waitingTickFast = !this.reducedMotion && !turn.cancelled && turnAnimating(this.turnWaits());
   const delay = nextTurnTickMs(turn.clock, now, this.waitingTickFast);
   turn.timer = setTimeout(() => {
     turn.timer = undefined;
@@ -406,7 +412,9 @@ export function turnStopping(this: TerminalHarnessPrompter, restoreDraft: boolea
   const turn = this.turn;
   if (!turn) return;
   turn.cancelled = true;
-  turn.label = restoreDraft ? 'editing…' : 'stopping…';
+  turn.stopLabel = restoreDraft ? 'editing…' : 'stopping…';
+  // The spinner and the shimmer hold still from here on.
+  this.scheduleWaitingTick();
   this.updateWaiting();
 }
 
@@ -415,7 +423,8 @@ export function stopSettled(this: TerminalHarnessPrompter): void {
   const turn = this.turn;
   if (!turn?.cancelled) return;
   turn.cancelled = false;
-  turn.label = 'thinking';
+  delete turn.stopLabel;
+  this.scheduleWaitingTick();
   this.updateWaiting();
 }
 

@@ -80,6 +80,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * list then holds each as a user message of its own, and what was drawn
    * live is what decides which of those are copies (liveTurnSpan). */
   turnSteers = new Map<string, SteerRow>();
+  /** Waiting messages Esc has asked the worker to hand back and it has not yet answered (`unqueued`): drawn nowhere, taken back once. */
+  takingBack = new Set<string>();
   /** The calls still open: the status line names the newest (toolStatus). */
   activeTools = new Map<string, OpenTool>();
   /** The calls inside running sub-agents, one live slot each
@@ -460,8 +462,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // composer here would draw it over the list being used; the state is kept
     // and the frame repaints with it when the picker closes.
     if (this.selecting) return;
-    // A running turn's composer is its draft, not empty.
-    this.paint(this.turn?.draft ?? '', [], 0, '› ', this.turn?.cursor ?? 0);
+    // A running turn's composer is its draft, not empty. While it runs the
+    // frame goes through the coalescing scheduler: a snapshot, a queue change
+    // and a stop arrive together, and a direct paint drew each in between.
+    if (this.turn) this.updateWaiting();
+    else this.paint('', [], 0, '› ', 0);
   }
 
   response(text: string, mode: 'append' | 'replace' = 'append'): void {

@@ -31,7 +31,10 @@ export function buildFooter(this: TerminalHarnessPrompter, input: FooterInput): 
   // on the last line of the answer. While a turn runs the generating band
   // already carries its own blank, budgeted into the height -- adding a
   // second one there would double the gap and push an answer row off.
-  if (!this.turn) footer.push('');
+  // The row count is the same on both sides of a turn's end -- the band's
+  // blank and its status line become two blank rows -- so nothing under or
+  // above the composer shifts when the status goes.
+  if (!this.turn) footer.push('', ...(targetHeight >= 5 && !approvalRows.length ? [''] : []));
   footer.push(...noticeShown.slice(0, noticeRows).map((row) => `  ${chalk.yellow(row)}`));
   if (paletteCapacity) {
     footer.push(...paletteBandRows(options as readonly PaletteEntry[], selected, paletteCapacity, width, {

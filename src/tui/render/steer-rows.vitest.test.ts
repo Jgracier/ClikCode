@@ -154,3 +154,22 @@ describe('which saved messages a live turn already drew', () => {
     expect(liveTurnSpan(saved, 0, [{ text: 'last word' }])).toBe(1);
   });
 });
+
+describe('a steer keeps one id from the snapshot to the acknowledgement', () => {
+  it('is the same row whether the durable copy meets a sending or an acknowledged submission', () => {
+    const durable = [{ id: 'm1', text: 'yes', responseOffset: 4 }];
+    const sending = rows({ durable, live: [{ ...live('yes', 3, 'sending') }] });
+    const acked = rows({ durable, live: [{ ...live('yes', 3), id: 'm1' }] });
+    expect(sending.map((row) => row.id)).toEqual(['steer#m1']);
+    expect(acked.map((row) => row.id)).toEqual(['steer#m1']);
+  });
+
+  it('gives a live-only steer the id its durable copy will have', () => {
+    expect(rows({ live: [{ ...live('yes', 3), id: 'm1' }] }).map((row) => row.id)).toEqual(['steer#m1']);
+  });
+
+  it('keeps two identical steers apart by id', () => {
+    const result = rows({ durable: [{ id: 'a', text: 'yes', responseOffset: 1 }, { id: 'b', text: 'yes', responseOffset: 2 }], live: [] });
+    expect(result.map((row) => row.id)).toEqual(['steer#a', 'steer#b']);
+  });
+});

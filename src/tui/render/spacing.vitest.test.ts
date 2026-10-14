@@ -21,7 +21,7 @@ describe('the composer has room to breathe', () => {
     const source = await readFile(new URL('../prompter/paint/footer.ts', import.meta.url), 'utf8');
     const footer = source.slice(source.indexOf('const footer: string[] = [];'));
     const firstPush = footer.slice(0, footer.indexOf('footer.push(...noticeShown'));
-    expect(firstPush, 'the footer must open with a blank row').toContain("footer.push('')");
+    expect(firstPush, 'the footer must open with a blank row').toContain("footer.push(''");
   });
 
   it('gives a change of speaker a bigger break than a change of paragraph', async () => {
@@ -32,11 +32,11 @@ describe('the composer has room to breathe', () => {
     expect(source).toContain("if (message.role === 'user' && index > 0) emit([''])");
   });
 
-  it('does not add that row while a turn is generating', async () => {
-    // The generating band already carries a blank, budgeted into the height.
-    // A second one there doubles the gap and pushes an answer row off screen.
+  it('keeps the footer the same height on both sides of a turn', async () => {
+    // The generating band is a blank and the status (two rows); the resting
+    // footer says two blank rows there instead, so ending a turn moves nothing.
     const source = await readFile(new URL('../prompter/paint/footer.ts', import.meta.url), 'utf8');
-    expect(source).toContain("if (!this.turn) footer.push('')");
+    expect(source).toContain("if (!this.turn) footer.push('', ...(targetHeight >= 5 && !approvalRows.length ? [''] : []))");
   });
 });
 

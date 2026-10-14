@@ -70,9 +70,16 @@ export type SteerRow = {
 export function hasDurableSteer(
   submission: Pick<LiveSubmission, 'id' | 'text'>, steers: readonly DurableSteer[],
 ): boolean {
-  return steers.some((steer) => submission.id && steer.id
-    ? submission.id === steer.id : submission.text === steer.text);
+  // By identity where both carry one. Text only while one side has none yet:
+  // the submission before the worker answered, or a steer stored without one.
+  return steers.some((steer) => (submission.id && steer.id
+    ? submission.id === steer.id : submission.text === steer.text));
 }
+
+/** One id for a steer, whichever copy is drawn: its message id when it has
+ *  one (the live copy and the durable copy carry the same), so the row keeps
+ *  its identity when the acknowledgement arrives after the snapshot. */
+const steerRowId = (id: string | undefined, fallback: string): string => (id ? `steer#${id}` : fallback);
 
 export function steerTranscriptRows(input: {
   /** Steers the transcript reader produced, or empty once the pending turn
@@ -97,7 +104,7 @@ export function steerTranscriptRows(input: {
     const live = steered.find((candidate) => !claimed.has(candidate.sequence) && hasDurableSteer(candidate, [item]));
     if (live) claimed.add(live.sequence);
     return {
-      id: live ? `steer#${live.sequence}` : `steer#${item.responseOffset ?? 0}#${index}`, done: true,
+      id: steerRowId(item.id ?? live?.id, live ? `steer#${live.sequence}` : `steer#${item.responseOffset ?? 0}#${index}`), done: true,
       responseOffset: item.responseOffset ?? 0, lines: input.render(item.text), steer: true, text: item.text,
       ...(item.id ? { steerId: item.id } : {}),
     };
@@ -110,7 +117,7 @@ export function steerTranscriptRows(input: {
     // Placed where it was acknowledged, in the same order every other row
     // is: one that began before sorts above it, one after sorts below.
     rows.push({
-      id: `steer#${item.sequence}`, done: true, responseOffset: item.ack?.responseOffset ?? item.responseOffset,
+      id: steerRowId(item.id, `steer#${item.sequence}`), done: true, responseOffset: item.ack?.responseOffset ?? item.responseOffset,
       lines: input.render(item.text), ...(item.ack ? { seq: item.ack.sequence } : {}),
       steer: true, text: item.text, ...(item.id ? { steerId: item.id } : {}),
     });

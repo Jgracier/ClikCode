@@ -44,6 +44,9 @@ export const EMPTY_COMPOSER: ComposerFrame = { text: '', options: [], selected: 
 export type WaitingTurn = {
   /** What the band says the turn is doing. */
   label: string;
+  /** What a Stop in flight says instead of `label`, which keeps the phase
+   * the turn was in so that a Stop that ends nothing gives it back. */
+  stopLabel?: string;
   /** Elapsed less approvals, and the last delta or event, which is what
    * "stalled" means (see activity-view.ts). */
   clock: TurnClock;
