@@ -6,61 +6,45 @@
  * chalk writes the words alone, which is all they need to read. */
 
 import chalk, { type ChalkInstance } from 'chalk';
-import type { ToolCategory } from '../../harness/prompter.js';
-import { TOOL_CATEGORY } from '../../harness/protocol/tool-category.js';
 import { shimmerLevels, type StatusTone } from '../../harness/protocol/turn-flow.js';
-import { SHIMMER_STRIDE } from '../../harness/protocol/timings.js';
+import { LOOK, xtermRgb } from '../../harness/protocol/look.js';
 
-type Colour = 'cyan' | 'blue' | 'magenta' | 'yellow' | 'green' | 'red';
 type Rgb = readonly [number, number, number];
 
-/** The named colours, as the truecolor blends start from them. */
-const RGB: Record<Colour, Rgb> = {
-  cyan: [80, 200, 220], blue: [110, 150, 255], magenta: [205, 125, 235],
-  yellow: [230, 190, 90], green: [135, 205, 115], red: [235, 85, 85],
-};
 const WHITE: Rgb = [255, 255, 255];
-
-/** How far the highlight brightens the tone at its centre. */
-const SHIMMER_LIFT = 0.65;
-
 
 function blend(from: Rgb, to: Rgb, amount: number): Rgb {
   const t = Math.max(0, Math.min(1, amount));
   return [0, 1, 2].map((index) => Math.round(from[index]! + (to[index]! - from[index]!) * t)) as unknown as Rgb;
 }
 
-/** The tone's colour: thinking cyan, a call its category's, asking blue. */
-export function statusColour(tone: StatusTone, category?: ToolCategory): Colour {
-  if (tone === 'asking') return 'blue';
-  if (tone === 'tool' && category) return TOOL_CATEGORY[category].colour;
-  return 'cyan';
-}
-
-/** The spinner glyph and the label, painted. `shimmer` is false whenever the
- * band should hold still: reduced motion, an approval up. `stalled`: the turn
- * has gone quiet (turn-pace.ts), and the spinner alone turns yellow -- the
- * words keep the colour of what the turn is doing. */
+/** The spinner glyph and the label, painted. One colour for every tone, every
+ * tool and every harness: the look's running accent (look.ts), a highlight
+ * swept across the label. `shimmer` is false whenever the band should hold
+ * still: reduced motion, an approval up. `stalled`: the turn has gone quiet
+ * (turn-pace.ts), and the spinner alone takes the stopped colour -- the words
+ * keep the accent. `tone` still decides the words (turnStatus), not the colour. */
 export function paintStatus(input: {
-  glyph: string; label: string; tone: StatusTone; category?: ToolCategory;
+  glyph: string; label: string; tone: StatusTone;
   frame: number; shimmer: boolean; stalled?: boolean;
 }, paint: ChalkInstance = chalk): { spinner: string; label: string } {
-  const base = statusColour(input.tone, input.category);
-  const spinnerColour: Colour = input.stalled ? 'yellow' : base;
+  const accent = LOOK.roles.accent.ansi;
+  const stalled = LOOK.roles.stopped.ansi;
   if (paint.level === 0) return { spinner: input.glyph, label: input.label };
   const characters = [...input.label];
-  const levels = input.shimmer ? shimmerLevels(characters.length, input.frame * SHIMMER_STRIDE) : undefined;
+  const levels = input.shimmer ? shimmerLevels(characters.length, input.frame * LOOK.shimmer.stride) : undefined;
+  const spinnerIndex = input.stalled ? stalled : accent;
   if (paint.level >= 3) {
-    const tone = RGB[base];
+    const tone = xtermRgb(accent);
     const label = levels
-      ? painted(characters, (index) => blend(tone, WHITE, (levels[index] ?? 0) * SHIMMER_LIFT).join(','), (key, run) => paint.rgb(...(key.split(',').map(Number) as unknown as Rgb))(run))
+      ? painted(characters, (index) => blend(tone, WHITE, (levels[index] ?? 0) * LOOK.shimmer.lift).join(','), (key, run) => paint.rgb(...(key.split(',').map(Number) as unknown as Rgb))(run))
       : paint.rgb(...tone)(input.label);
-    return { spinner: paint.rgb(...RGB[spinnerColour])(input.glyph), label };
+    return { spinner: paint.rgb(...xtermRgb(spinnerIndex))(input.glyph), label };
   }
   const label = levels
-    ? painted(characters, (index) => ((levels[index] ?? 0) >= 0.5 ? 'bold' : ''), (key, run) => (key ? paint.bold[base](run) : paint[base](run)))
-    : paint[base](input.label);
-  return { spinner: paint[spinnerColour](input.glyph), label };
+    ? painted(characters, (index) => ((levels[index] ?? 0) >= 0.5 ? 'bold' : ''), (key, run) => (key ? paint.ansi256(accent).bold(run) : paint.ansi256(accent)(run)))
+    : paint.ansi256(accent)(input.label);
+  return { spinner: paint.ansi256(spinnerIndex)(input.glyph), label };
 }
 
 /** The characters as runs of one look each, every run painted once: the

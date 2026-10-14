@@ -7,6 +7,7 @@
  * did while it ran. */
 
 import chalk from 'chalk';
+import { look, thoughtLine } from '../../harness/protocol/tool-category-style.js';
 import { orderMarks } from '../../harness/protocol/activity-view.js';
 import { decisionRow, thoughtRow, type Decision } from '../../harness/protocol/turn-flow.js';
 import type { TurnActivity, TurnMark } from '../../session/model.js';
@@ -22,12 +23,12 @@ export function turnMarkLines(mark: TurnMark): string[] {
   const clean = (text: string): string => sanitizeTerminalText(text, { singleLine: true }).trim();
   switch (mark.kind) {
     case 'thought':
-      return [chalk.dim(chalk.italic(clean(`✻ ${thoughtRow({ durationMs: mark.durationMs, ...(mark.heading ? { heading: mark.heading } : {}) })}`)))];
+      return [thoughtLine(clean(thoughtRow({ durationMs: mark.durationMs, ...(mark.heading ? { heading: mark.heading } : {}) })))];
     case 'notice':
       return clean(mark.message) ? [chalk.dim(clean(mark.message))] : [];
     case 'outcome': {
       const { text, tone } = decisionRow({ kind: mark.outcome, label: clean(mark.label) });
-      const paint = tone === 'no' ? chalk.red : tone === 'told' ? chalk.cyan : chalk.green;
+      const paint = tone === 'no' ? look.paint.failed : tone === 'told' ? look.paint.accent : look.paint.success;
       return [paint(text.slice(0, 1)) + chalk.dim(text.slice(1))];
     }
     case 'plan': {

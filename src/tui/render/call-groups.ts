@@ -17,6 +17,8 @@
  * expansion state as an input (group-rows.ts, prompter/group-actions.ts). */
 
 import chalk from 'chalk';
+import { look, thoughtLine } from '../../harness/protocol/tool-category-style.js';
+import { LOOK } from '../../harness/protocol/look.js';
 import type { HarnessActivityEvent } from '../../harness/prompter.js';
 import { activityResult, tensedLabel } from '../../harness/protocol/turn-flow.js';
 import { standsAlone, type GroupThought } from '../../harness/protocol/call-groups.js';
@@ -128,15 +130,15 @@ export function thoughtEntryRow(thought: GroupThought): string {
 /** The call's line under a live group, in the tense of its state with what it
  * found; a stopped call says so, a failed one is red. */
 export function liveItemLine(entry: ActivityEntry, ended: boolean): string {
-  if (entry.thought) return chalk.dim(chalk.italic(`✻ ${plainThought(entry.thought)}`));
+  if (entry.thought) return thoughtLine(plainThought(entry.thought));
   const base = entry.event!;
   const event = ended && base.kind === 'tool-start' ? { ...base, kind: 'tool-done' as const } : base;
   const result = activityResult(event);
-  if (event.stopped) return `${chalk.dim(event.label)} ${chalk.yellow('stopped')}`;
+  if (event.stopped) return `${chalk.dim(event.label)} ${look.paint.stopped('stopped')}`;
   const label = event.kind === 'tool-error' ? `${event.label} failed` : tensedLabel(event.label, event.kind === 'tool-start');
-  return event.kind === 'tool-error' ? chalk.red(label) : chalk.dim(`${label}${result ? ` · ${result}` : ''}`);
+  return event.kind === 'tool-error' ? look.paint.failed(label) : chalk.dim(`${label}${result ? ` · ${result}` : ''}`);
 }
 
-const plainThought = (thought: GroupThought): string => thoughtEntryRow(thought).replace(/\u001b\[[0-9;]*m/g, '').replace(/^✻ /, '');
+const plainThought = (thought: GroupThought): string => thoughtEntryRow(thought).replace(/\u001b\[[0-9;]*m/g, '').replace(new RegExp(`^${LOOK.glyph.thought} `), '');
 
 export { LIVE_SHOWN_CALLS, standsAlone };

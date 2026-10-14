@@ -7,15 +7,13 @@ import type { HarnessActivityEvent } from '../prompter.js';
 import type { FileDiff } from '../../agent/line-diff.js';
 import { activityOutcome, diffPreview, diffTotals, outputPreview } from './activity-view.js';
 import { activityResult, tensedLabel } from './turn-flow.js';
-import { TOOL_CATEGORY_STYLE, TOOL_ROW_TEXT } from './tool-category-style.js';
+import { look, toolGlyph, TOOL_ROW_TEXT } from './tool-category-style.js';
+import { LOOK } from './look.js';
 import { EDIT_FILES_SHOWN, failedOutputTail } from './lean.js';
 import { claudeShaped, opencodeShaped, asRecord } from './json-lines.js';
 
-/** A call its turn was stopped under (HarnessActivityEvent.stopped). */
-const STOPPED_GLYPH = '■';
-
 export function renderActivityLine(event: HarnessActivityEvent): string[] {
-  if (event.kind === 'thinking') return [`  ${chalk.cyan('thinking')} ${chalk.dim(event.label)}`];
+  if (event.kind === 'thinking') return [`  ${look.paint.thought(`${LOOK.glyph.thought} ${event.label}`)}`];
   // The tool's own label, with nothing prepended to it. A status word in front
   // of every row ("done", "edit", "tool") restated what the row already said by
   // existing -- a finished tool is reported when it finishes -- and pushed the
@@ -28,9 +26,9 @@ export function renderActivityLine(event: HarnessActivityEvent): string[] {
   // and a column of tool rows scans as a list rather than a wall.
   // Only where the category is actually known: an unclassified tool stays
   // bare, exactly as it was.
-  const style = event.category ? TOOL_CATEGORY_STYLE[event.category] : undefined;
-  const mark = style ? `${style.paint(style.glyph)} ` : '';
-  const plainMark = style ? `${style.glyph} ` : '';
+  // Every tool row wears the one glyph (look.ts), categorised or not.
+  const mark = `${toolGlyph()} `;
+  const plainMark = `${LOOK.glyph.tool} `;
   const outcome = outcomeSuffix(event);
   // In the tense of its state -- `Reading a.ts` while it runs, `Read a.ts`
   // once done -- and then what it found (`42 lines`), before the outcome.
@@ -39,9 +37,9 @@ export function renderActivityLine(event: HarnessActivityEvent): string[] {
   // Stopped with its turn: not the kind's glyph, which a finished call wears,
   // nor a failure's red. The call's own name, as it was asked for.
   const summary = `  ${event.stopped
-    ? `${chalk.yellow(STOPPED_GLYPH)} ${chalk.dim(event.label)} ${chalk.yellow('stopped')}`
+    ? `${look.paint.stopped(LOOK.glyph.stopped)} ${look.paint.neutral(event.label)} ${look.paint.stopped('stopped')}`
     : event.kind === 'tool-error'
-    ? `${chalk.red(`${plainMark}${event.label}`)} ${chalk.red('failed')}`
+    ? `${look.paint.failed(`${plainMark}${event.label}`)} ${look.paint.failed('failed')}`
     : `${mark}${TOOL_ROW_TEXT(`${tensedLabel(event.label, event.kind === 'tool-start')}${result ? ` · ${result}` : ''}`)}`}${outcome ? ` ${chalk.dim(outcome)}` : ''}`;
   // One line per call. Under a successful call nothing: its output, a read's
   // contents, a search's hits are in the saved turn. Under a failed call the
@@ -67,7 +65,7 @@ function failedOutputRows(event: HarnessActivityEvent): string[] {
 }
 
 function changeCounts(additions: number, removals: number): string {
-  return [additions ? chalk.green(`+${additions}`) : '', removals ? chalk.red(`-${removals}`) : ''].filter(Boolean).join(' ');
+  return [additions ? look.paint.success(`+${additions}`) : '', removals ? look.paint.failed(`-${removals}`) : ''].filter(Boolean).join(' ');
 }
 
 /** The row's label, then what the change added and removed in all. */
@@ -93,8 +91,8 @@ export function fileDiffRows(files: readonly FileDiff[], budget: number): string
     for (const line of lines) {
       const number = gutter ? `${line.line === undefined ? ''.padStart(gutter) : String(line.line).padStart(gutter)} ` : '';
       if (line.kind === 'gap') rows.push(`    ${chalk.dim(`${''.padStart(gutter)}${gutter ? ' ' : ''}\u22ee`)}`);
-      else if (line.kind === 'removed') rows.push(`    ${chalk.dim(number)}${chalk.red(`- ${line.text}`)}`);
-      else if (line.kind === 'added') rows.push(`    ${chalk.dim(number)}${chalk.green(`+ ${line.text}`)}`);
+      else if (line.kind === 'removed') rows.push(`    ${chalk.dim(number)}${look.paint.failed(`- ${line.text}`)}`);
+      else if (line.kind === 'added') rows.push(`    ${chalk.dim(number)}${look.paint.success(`+ ${line.text}`)}`);
       else rows.push(`    ${chalk.dim(`${number}  ${line.text}`)}`);
     }
   }

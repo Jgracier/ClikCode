@@ -1,12 +1,11 @@
 /** The waiting band: the spinner, and the rules and dimming that mark which
  * conversation lines are still live. */
 
-import chalk from 'chalk';
 import { terminalCellWidth, visibleSlice } from './width.js';
 import { composerUsageLabel, usageLabelIsSpent, usageRemainingPercent } from './usage-words.js';
 import { waitingSpinnerGlyph } from '../../harness/protocol/activity-view.js';
-import type { ToolCategory } from '../../harness/prompter.js';
-import { TOOL_CATEGORY } from '../../harness/protocol/tool-category.js';
+import chalk from 'chalk';
+import { look } from '../../harness/protocol/tool-category-style.js';
 
 export { composerUsageLabel, usageRemainingPercent };
 
@@ -21,17 +20,12 @@ export function rightLabeledRule(width: number, label?: string): string {
 /** One open call, drawn under the answer that is still streaming: the row it
  * settles into, the spinner in its glyph's place (a command's `$ make`, not
  * `running $ make`). A sub-agent says so. The row is repainted, not appended.
- * Its colour is the call's category, the same one the status line uses. The
+ * Its colour is the look's one running accent, the status line's. The
  * turn's clock stays on that line, so this row has none. */
 export function runningChatLine(
-  label: string, frame: number, kind: 'command' | 'agent' | 'tool', category?: ToolCategory,
+  label: string, frame: number, kind: 'command' | 'agent' | 'tool',
 ): string {
-  const colour = category ? TOOL_CATEGORY[category].colour
-    : kind === 'command' ? 'yellow' as const
-      : kind === 'agent' ? 'cyan' as const
-        : undefined;
-  const glyph = waitingSpinnerGlyph(frame);
-  const spinner = colour ? chalk[colour](glyph) : chalk.dim(glyph);
+  const spinner = look.paint.accent(waitingSpinnerGlyph(frame));
   // A title that already says it is one ("Agent worker 0") is not told again.
   const verb = kind === 'agent' && !/^agent\b/i.test(label) ? 'agent ' : '';
   return `  ${spinner}  ${verb}${label}`;

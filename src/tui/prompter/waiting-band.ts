@@ -87,7 +87,6 @@ export function waitingLine(this: TerminalHarnessPrompter, turn: WaitingTurn, wi
   const label = turn.stopLabel && !asking ? turn.stopLabel : status.label;
   const painted = paintStatus({
     glyph, label, tone: status.tone,
-    ...(status.tone === 'tool' && tool?.category ? { category: tool.category } : {}),
     frame: this.waitingFrame, shimmer: !this.reducedMotion && !turn.cancelled && this.waitingTickFast && status.tone !== 'asking',
     stalled: waitStalled({ conversationTurn: Boolean(turn.submit || turn.early), onUser: asking, cancelled: turn.cancelled, quietMs: now - turn.activeAt }),
   });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { collapseToolRuns, type ActivityEntry } from './activity-log.js';
-import { TOOL_CATEGORY_STYLE } from '../../harness/protocol/tool-category-style.js';
+import { toolGlyph } from '../../harness/protocol/tool-category-style.js';
+import { LOOK } from '../../harness/protocol/look.js';
 import { CATEGORY_PREVIEW_LINES, previewLinesFor } from '../../harness/protocol/activity-view.js';
 import { terminalCellWidth } from './width.js';
 import type { ToolCategory } from '../../harness/prompter.js';
@@ -22,16 +23,15 @@ const toolEntry = (category: ToolCategory, label: string, extra: Record<string, 
 
 describe('tool glyphs', () => {
   it('marks every call with the same quiet glyph; the verb says the kind', () => {
-    const glyphs = CATEGORIES.map((category) => TOOL_CATEGORY_STYLE[category].glyph);
-    expect(new Set(glyphs).size).toBe(1);
+    // One glyph, painted one way, for every category (look.ts): the verb says the kind.
+    expect(LOOK.glyph.tool).toBe('‣');
+    expect(new Set(CATEGORIES.map(() => toolGlyph())).size).toBe(1);
   });
 
   it('keeps every glyph single-width so rows stay aligned on a phone', () => {
     // A double-width glyph shifts every row beneath it. Emoji are exactly the
     // trap here, and a narrow terminal is where it shows.
-    for (const category of CATEGORIES) {
-      expect(terminalCellWidth(TOOL_CATEGORY_STYLE[category].glyph), category).toBe(1);
-    }
+    expect(terminalCellWidth(LOOK.glyph.tool)).toBe(1);
   });
 
 });

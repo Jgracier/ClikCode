@@ -13,7 +13,7 @@ import { CallGrouping, LIVE_SHOWN_CALLS, liveItemLine, type CallRun, type GroupR
 import { groupSummary, groupSummaryText, isExpandable, standsAlone } from '../../../harness/protocol/call-groups.js';
 import { tagRow } from '../../render/row-tags.js';
 import { capOpenRows, openGroupRows, soloRows } from '../../render/group-rows.js';
-import { TOOL_CATEGORY_STYLE, TOOL_ROW_TEXT } from '../../../harness/protocol/tool-category-style.js';
+import { look, toolGlyph } from '../../../harness/protocol/tool-category-style.js';
 import { terminalCellWidth } from '../../render/width.js';
 import { STEER_WORDS, steerTranscriptRows } from '../../render/steer-rows.js';
 import { messageRows as cachedMessageRows } from '../../render/message-blocks.js';
@@ -105,7 +105,7 @@ export function createToolRows(p: TerminalHarnessPrompter, builders: RowBuilders
     const kind = liveWaitKind(entry.event!) ?? 'tool';
     const frame = p.reducedMotion ? 0 : p.waitingFrame;
     const row = runningChatLine(
-      tensedLabel(entry.event?.label ?? '', true), frame, kind, entry.event?.category,
+      tensedLabel(entry.event?.label ?? '', true), frame, kind,
     ).trim();
     // What it has printed so far, newest last, under the spinner -- a long
     // build or test run is visibly working instead of a bare timer.
@@ -118,8 +118,8 @@ export function createToolRows(p: TerminalHarnessPrompter, builders: RowBuilders
       const label = tensedLabel(entry.event.label, true);
       const settled = renderActivityLine({ ...entry.event, kind: 'tool-done' })[0]?.trim() ?? label;
       return {
-        released: open(['', `  ${runningChatLine(label, 0, kind, entry.event.category).trim()} ${chalk.dim('· running')}`]),
-        completed: open(['', `  ${chalk.green('✓')} ${settled}`]),
+        released: open(['', `  ${runningChatLine(label, 0, kind).trim()} ${chalk.dim('· running')}`]),
+        completed: open(['', `  ${look.paint.success('✓')} ${settled}`]),
         childHeader: [`    ${chalk.dim(`↳ ${entry.event.label}`)}`],
       };
     })() : {};
@@ -139,15 +139,14 @@ export function createToolRows(p: TerminalHarnessPrompter, builders: RowBuilders
     const summary = groupSummary(items.map((item) => ({ id: item.key, event: item.event, ...(item.thought ? { thought: item.thought } : {}) })), running, waitingOnApproval);
     const blue = [summary.calls, ...(summary.thoughts ? [`${summary.thoughts} thought${summary.thoughts === 1 ? '' : 's'}`] : [])].filter(Boolean).join(' · ');
     if (plainOnly) return blue;
-    const style = TOOL_CATEGORY_STYLE.run;
     const marks = [
-      ...(summary.failed ? [chalk.red(`${summary.failed} failed`)] : []),
-      ...(summary.stopped ? [chalk.yellow(`${summary.stopped} stopped`)] : []),
+      ...(summary.failed ? [look.paint.failed(`${summary.failed} failed`)] : []),
+      ...(summary.stopped ? [look.paint.stopped(`${summary.stopped} stopped`)] : []),
     ];
-    const text = `${TOOL_ROW_TEXT(blue)}${marks.map((mark) => ` ${chalk.dim('·')} ${mark}`).join('')}`;
+    const text = `${look.paint.summary(blue)}${marks.map((mark) => ` ${chalk.dim('·')} ${mark}`).join('')}`;
     const hint = open ? ' · tap to collapse' : ' · tap';
     const fits = terminalCellWidth(groupSummaryText(summary)) + hint.length + 4 <= conversationInner;
-    return `${style.paint(style.glyph)} ${text}${fits ? chalk.dim(hint) : ''}`;
+    return `${toolGlyph()} ${text}${fits ? chalk.dim(hint) : ''}`;
   };
   /** A run of calls and thoughts as one row (call-groups.ts). Running, the
    * summary spins in the row's place with the newest items under it; settled,
@@ -162,7 +161,7 @@ export function createToolRows(p: TerminalHarnessPrompter, builders: RowBuilders
     const items = (live: boolean) => folded.map((member, index) => ({ id: itemIdOf(member, index), line: live ? liveItemLine(member, ended) : (member.lines[0] ?? ''), entry: member }));
     if (!run.done) {
       const head = running
-        ? `  ${runningChatLine(summaryLine(run.items, true, true), p.reducedMotion ? 0 : p.waitingFrame, 'tool', first.event.category).trim()}`
+        ? `  ${runningChatLine(summaryLine(run.items, true, true), p.reducedMotion ? 0 : p.waitingFrame, 'tool').trim()}`
         : `  ${summaryLine(run.items, false, false, state.open)}`;
       if (state.open) {
         // All the items, in the live region, bounded by the viewport.
