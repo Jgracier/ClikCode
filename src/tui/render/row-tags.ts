@@ -9,18 +9,18 @@
 const OPEN = '\uE000';
 const CLOSE = '\uE001';
 
-export type RowTag = { kind: 'g' | 'gp'; group: string; item: string };
+export type RowTag = { group: string; item: string };
 
-/** `g`: a conversation row of a group (a tap opens it). `gp`: a row of the open panel. */
+/** A conversation row of a group (`item` empty: its header row). */
 export function tagRow(row: string, tag: RowTag): string {
-  return `${OPEN}${tag.kind}:${encodeURIComponent(tag.group)}|${encodeURIComponent(tag.item)}${CLOSE}${row}`;
+  return `${OPEN}g:${encodeURIComponent(tag.group)}|${encodeURIComponent(tag.item)}${CLOSE}${row}`;
 }
 
 export function parseTag(raw: string | undefined): RowTag | undefined {
-  const match = raw ? /^(gp?):([^|]*)\|(.*)$/.exec(raw) : null;
+  const match = raw ? /^g:([^|]*)\|(.*)$/.exec(raw) : null;
   if (!match) return undefined;
   try {
-    return { kind: match[1] as RowTag['kind'], group: decodeURIComponent(match[2]!), item: decodeURIComponent(match[3]!) };
+    return { group: decodeURIComponent(match[1]!), item: decodeURIComponent(match[2]!) };
   } catch {
     return undefined;
   }

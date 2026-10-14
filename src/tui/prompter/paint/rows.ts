@@ -12,6 +12,7 @@ import { tensedLabel } from '../../../harness/protocol/turn-flow.js';
 import { CallGrouping, LIVE_SHOWN_CALLS, liveItemLine, type CallRun, type GroupRow } from '../../render/call-groups.js';
 import { groupSummary, groupSummaryText, standsAlone } from '../../../harness/protocol/call-groups.js';
 import { tagRow } from '../../render/row-tags.js';
+import { capOpenRows, openGroupRows } from '../../render/group-rows.js';
 import { TOOL_CATEGORY_STYLE, TOOL_ROW_TEXT } from '../../../harness/protocol/tool-category-style.js';
 import { terminalCellWidth } from '../../render/width.js';
 import { STEER_WORDS, steerTranscriptRows } from '../../render/steer-rows.js';
@@ -120,10 +121,10 @@ export function createToolRows(p: TerminalHarnessPrompter, builders: RowBuilders
   const waitingOnApproval = (event: HarnessActivityEvent): boolean => event.id !== undefined
     && (p.pendingApproval?.callId === event.id || p.approvalQueue.some((queued) => queued.callId === event.id));
   const tagged = (lines: readonly string[], group: string, item: string): string[] =>
-    lines.map((line) => (line.trim() ? tagRow(line, { kind: 'g', group, item }) : line));
+    lines.map((line) => (line.trim() ? tagRow(line, { group, item }) : line));
   /** A group's summary row: counts by kind in the tool-row blue, what failed
    * in red, and `· tap` where the width has room. */
-  const summaryLine = (items: readonly (ActivityEntry & GroupRow)[], running: boolean, plainOnly: boolean): string => {
+  const summaryLine = (items: readonly (ActivityEntry & GroupRow)[], running: boolean, plainOnly: boolean, open = false): string => {
     const summary = groupSummary(items.map((item) => ({ id: item.key, event: item.event, ...(item.thought ? { thought: item.thought } : {}) })), running, waitingOnApproval);
     const blue = [summary.calls, ...(summary.thoughts ? [`${summary.thoughts} thought${summary.thoughts === 1 ? '' : 's'}`] : [])].filter(Boolean).join(' · ');
     if (plainOnly) return blue;
@@ -133,41 +134,56 @@ export function createToolRows(p: TerminalHarnessPrompter, builders: RowBuilders
       ...(summary.stopped ? [chalk.yellow(`${summary.stopped} stopped`)] : []),
     ];
     const text = `${TOOL_ROW_TEXT(blue)}${marks.map((mark) => ` ${chalk.dim('·')} ${mark}`).join('')}`;
-    const hint = ' · tap';
+    const hint = open ? ' · tap to collapse' : ' · tap';
     const fits = terminalCellWidth(groupSummaryText(summary)) + hint.length + 4 <= conversationInner;
     return `${style.paint(style.glyph)} ${text}${fits ? chalk.dim(hint) : ''}`;
   };
   /** A run of calls and thoughts as one row (call-groups.ts). Running, the
    * summary spins in the row's place with the newest items under it; settled,
-   * it is the one summary row. The items stay reachable from it (a tap, or
-   * Ctrl+O, opens them in the panel). */
-  const groupRow = (run: CallRun<ActivityEntry & GroupRow>, folded: ReadonlyArray<ActivityEntry & GroupRow>, ended: boolean, id: string): SettlingTool => {
+   * it is the one summary row. Opened by a tap or Ctrl+O (p.groupExpansion),
+   * it grows where it is: the items listed right under the header, each
+   * opened to its detail -- the same rows live and reopened. */
+  const groupRow = (run: CallRun<ActivityEntry & GroupRow>, folded: ReadonlyArray<ActivityEntry & GroupRow>, ended: boolean, id: string, gid: string): SettlingTool => {
     const first = folded[0]!;
     const running = !ended && folded.some((member) => member.event.kind === 'tool-start');
     const order = { ...(first.sequence === undefined ? {} : { seq: first.sequence }) };
+    const state = p.groupExpansion.get(gid);
+    const items = (live: boolean) => folded.map((member, index) => ({ id: itemIdOf(member, index), line: live ? liveItemLine(member, ended) : (member.lines[0] ?? ''), entry: member }));
     if (!run.done) {
-      const under = folded.slice(-LIVE_SHOWN_CALLS).map((member) => underCall(liveItemLine(member, ended)));
       const head = running
         ? `  ${runningChatLine(summaryLine(run.items, true, true), p.reducedMotion ? 0 : p.waitingFrame, 'tool', first.event.category).trim()}`
-        : `  ${summaryLine(run.items, false, false)}`;
-      return { id, done: false, responseOffset: first.responseOffset, ...order, lines: tagged(['', head, ...under], groupIdOf(run), '') };
+        : `  ${summaryLine(run.items, false, false, state.open)}`;
+      if (state.open) {
+        // All the items, in the live region, bounded by the viewport.
+        const rows = capOpenRows(openGroupRows({ id: gid, header: head, items: items(true), state, width: conversationInner }), gid, Math.max(4, p.viewportRows() - 8));
+        return { id, done: false, responseOffset: first.responseOffset, ...order, lines: ['', ...rows] };
+      }
+      const under = folded.slice(-LIVE_SHOWN_CALLS).map((member) => underCall(liveItemLine(member, ended)));
+      return { id, done: false, responseOffset: first.responseOffset, ...order, lines: tagged(['', head, ...under], gid, '') };
     }
-    return { id, done: true, responseOffset: first.responseOffset, ...order, lines: tagged(activityRows([summaryLine(run.items, false, false)]), groupIdOf(run), '') };
+    const header = callRow(summaryLine(run.items, false, false, state.open), conversationInner);
+    const lines = state.open ? openGroupRows({ id: gid, header, items: items(false), state, width: conversationInner }) : tagged([header], gid, '');
+    return { id, done: true, responseOffset: first.responseOffset, ...order, lines: ['', ...lines] };
   };
-  const groupIdOf = (run: CallRun<ActivityEntry & GroupRow>): string => `${run.items[0]!.anchor}:${run.key}`;
+  /** The group's identity for its expansion state and its rows' tags: the
+   * first call's id, which a saved turn keeps (a thought's key is made up
+   * live and is a mark's id once saved, so it is not used while a call can be). */
+  const groupIdOf = (run: CallRun<ActivityEntry & GroupRow>): string => (run.items.find((item) => !item.thought) ?? run.items[0]!).key;
+  /** An item's identity in its group: a call's id, a thought's place among the items. */
+  const itemIdOf = (item: ActivityEntry & GroupRow, index: number): string => (item.thought ? `thought:${index}` : item.key);
   /** One run's rows: a group row when two or more of its items fold, else
    * each item as the row it always was -- a lone call is its own summary. */
   const runRows = (run: CallRun<ActivityEntry & GroupRow>, ended: boolean): SettlingTool[] => {
     const alones = run.items.filter((item) => standsAlone(item, waitingOnApproval));
     const folded = run.items.filter((item) => !standsAlone(item, waitingOnApproval));
-    const id = groupIdOf(run);
-    p.callGroups.set({ id, items: run.items.map((item) => ({ id: item.key, entry: item })), running: !run.done && run.items.some((item) => item.event.kind === 'tool-start') });
     const single = (item: ActivityEntry & GroupRow, held: boolean): SettlingTool => {
       const row = toolRow(item, ended);
-      return { ...row, ...(held && row.done ? { done: false } : {}), lines: tagged(row.lines, id, item.key) };
+      return { ...row, ...(held && row.done ? { done: false } : {}) };
     };
     if (folded.length < 2) return run.items.map((item) => single(item, !run.done && !alones.includes(item)));
-    return [groupRow(run, folded, ended, `grp:${run.key}`), ...alones.map((item) => single(item, false))];
+    const gid = groupIdOf(run);
+    p.callGroups.set({ id: gid, items: folded.map((item, index) => ({ id: itemIdOf(item, index), entry: item })), running: !run.done && run.items.some((item) => item.event.kind === 'tool-start') });
+    return [groupRow(run, folded, ended, `grp:${run.key}`, gid), ...alones.map((item) => single(item, false))];
   };
   /** The turn's rows, runs of calls and thoughts grouped. A finished call
    * waits in the live region while its run is open: the next may join it. */

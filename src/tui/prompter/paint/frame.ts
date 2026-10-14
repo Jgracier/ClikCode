@@ -4,7 +4,7 @@ import { terminalCellWidth } from '../../render/width.js';
 import type { PickerOption } from '../../../harness/prompter.js';
 import type { PaletteLayout } from '../../option-picker.js';
 import { markTurn, turnMarkOpen } from '../../../runtime/turn-latency.js';
-import { extractTags } from '../../render/row-tags.js';
+import { extractTags, parseTag } from '../../render/row-tags.js';
 import { liveConversationLines } from '../../render/waiting.js';
 import type { TerminalHarnessPrompter } from '../../prompter.js';
 import { frameBands } from './bands.js';
@@ -57,6 +57,21 @@ export function paint(this: TerminalHarnessPrompter, composer: string, options: 
   const finished = retired.rows;
   const firstLine = this.alternateTrimmed + this.alternateTranscript.length + this.pendingFinished.length;
   for (const [index, tag] of retired.tags.entries()) if (tag) this.lineTags.set(firstLine + index, tag);
+  // A toggled group's row, found in the rewritten transcript: the viewport is
+  // anchored on it when this frame is flushed (flushAlternateFrame).
+  if (this.groupAnchor && !this.emitted.pendingReseed()) {
+    const anchor = this.groupAnchor;
+    this.groupAnchor = undefined;
+    let line: number | undefined;
+    let height = 0;
+    for (const [index, raw] of retired.tags.entries()) {
+      const tag = parseTag(raw);
+      if (!tag || tag.group !== anchor.group || (anchor.item !== '' && tag.item !== anchor.item)) continue;
+      line ??= firstLine + index;
+      height += 1;
+    }
+    if (line !== undefined) this.anchorTarget = { line, height, row: anchor.row, fit: anchor.fit };
+  }
   if (this.lineTags.size > 4000) for (const line of this.lineTags.keys()) if (line < this.alternateTrimmed) this.lineTags.delete(line);
   // Decided from the rows this frame built: a steer leaves the bottom only
   // once its own row is in the answer.

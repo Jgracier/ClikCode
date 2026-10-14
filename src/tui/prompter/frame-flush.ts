@@ -10,6 +10,7 @@ import { logCursorEvent } from '../cursor-log.js';
 import { redrawPreamble, takeQueuedModes } from '../modes.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
 import { ALTERNATE_TRANSCRIPT_ROWS } from './state.js';
+import { anchoredScrollback } from './group-actions.js';
 
 /** One frame: `finished` rows are retired into the transcript, and the live
  * region below them is replaced. */
@@ -110,6 +111,12 @@ export function flushAlternateFrame(
   // moment ago is suddenly past its end -- and every further swipe moves a
   // number while the view stays pinned at the top, which reads as scrolling
   // having stopped working. The offset is clamped to what can be shown.
+  // A toggled group's row stays on the screen row it was tapped on: the rows
+  // above it are unchanged, so the view is moved to put it back there.
+  const target = this.anchorTarget;
+  this.anchorTarget = undefined;
+  const anchored = target ? anchoredScrollback(target, { length: this.alternateTranscript.length, trimmed: this.alternateTrimmed, above }) : undefined;
+  if (anchored !== undefined) this.alternateScrollback = anchored;
   this.jumpToMention(above);
   const furthest = Math.max(0, this.alternateTranscript.length - above);
   this.alternateScrollback = Math.min(this.alternateScrollback, furthest);

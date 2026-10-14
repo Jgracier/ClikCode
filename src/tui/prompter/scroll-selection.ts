@@ -92,9 +92,8 @@ export function handleScrollKey(this: TerminalHarnessPrompter, key: string): boo
     if (rows) this.queueScroll(rows);
     return true;
   }
-  // Ctrl+O opens the latest group's items (the live one while it runs); Esc closes them.
-  if (key === '\u000f') return this.toggleGroupPanel();
-  if (key === '\u001b' && this.groupPanel) return this.closeGroupPanel();
+  // Ctrl+O opens or minimises the latest group (the live one while it runs), in place.
+  if (key === '\u000f') return this.toggleLatestGroup();
   const page = Math.max(1, this.viewportRows() - 3);
   if (key === '\u001b[5~') { this.scrollTranscript(page); return true; }
   if (key === '\u001b[6~') { this.scrollTranscript(-page); return true; }

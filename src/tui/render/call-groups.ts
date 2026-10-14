@@ -12,9 +12,9 @@
  * part of the run but never folded into its summary row: each keeps a row of
  * its own, in place (harness/protocol/call-groups.ts standsAlone).
  *
- * The group's items are kept (GroupRegistry) so a tap or Ctrl+O can open them
- * without rewriting a row already drawn: the expansion is a panel in the live
- * region (group-panel.ts). */
+ * The group's items are kept (GroupRegistry) so a tap or Ctrl+O can find the
+ * group; opening it is in place, the transcript written again with the group's
+ * expansion state as an input (group-rows.ts, prompter/group-actions.ts). */
 
 import chalk from 'chalk';
 import type { HarnessActivityEvent } from '../../harness/prompter.js';
