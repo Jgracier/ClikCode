@@ -81,6 +81,30 @@ each surface draws its own glyph.
 - A harness with no child activity is declared so in the catalog; the parent
   row is then the whole story and says nothing about children.
 
+### 5a. A sub-agent in full view
+
+Where the harness gives a client the means (`subagents.read !== 'none'`,
+docs/SUBAGENTS.md, the evidence for every harness), an open sub-agent row can
+be opened into a screen of its own, drawn with the main chat's rows (the same
+call rows, the ring spinner, the look tokens) under a header such as
+`main > Agent explore`.
+
+- Keys (terminal): on an expanded sub-agent row, Right opens it. Left with an
+  empty composer, Esc and Ctrl+C go back to the main chat; none of them stops
+  the main turn, and on the main chat Left with an empty composer keeps its
+  meaning (step out to the board). Up and Down move between sibling
+  sub-agents. Enter sends the composer to the sub-agent.
+- The main turn keeps running; the view's last line says `main: running 3m`.
+- Steering is what the harness allows, said as it is: `relay` is a visible
+  message to the MAIN agent (`Send this to your sub-agent <label>: <text>`),
+  never hidden and never worded for the vendor beyond that; `none` replaces
+  the composer with one line saying why and the view is read-only. A finished
+  sub-agent has nothing to steer and says so.
+- The rows come from one source per harness (`src/harness/subagent-read.ts`):
+  the live `parentId` frames, a Claude Code sub-agent's transcript on disk,
+  or a Codex child thread (`thread/read`). Nothing is saved for this.
+- Both surfaces consume one `SubAgentRef` (`activity-normalize.ts`).
+
 ## 6. Explore runs
 
 Calls and thoughts that run one after another with no prose between them

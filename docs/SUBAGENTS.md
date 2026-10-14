@@ -66,3 +66,25 @@ first. A row that says `unknown` is not a promise it cannot be done.
   child id arrived as `subAgentActivity.agentThreadId`; `thread/read` of it
   succeeded; `turn/start {threadId: child}` returned error -32600 `direct
   app-server input is not allowed for multi-agent v2 sub-agents`.
+
+## What ClikCode does today
+
+Verified by unit tests and, for the terminal, by the pty scenario
+`subagent-view` (a fake ACP vendor declared as Qwen): open from an expanded row
+with Right, the read-only line, back with Left.
+
+- Terminal, live turn, any harness with `read !== 'none'` (claude, codex,
+  cursor, qwen, amp): open, watch the live frames (Claude: the transcript on
+  disk when it is found), switch siblings, go back.
+- Steer: Claude Code only, as a relay through the main agent. Not exercised
+  against a real Claude Code (no quota-spending probe was made); the
+  `steer-subagent` command, the relay text and the refusal lines are unit
+  tested. Everything else is read-only with the line saying why.
+- Not done: the VS Code panel; reopening a finished sub-agent in a reopened
+  chat; reading a Codex child thread live in the view (the reader exists,
+  `codexThreadRows`, but the view is not connected to `thread/read`); the own
+  agent's sub-agents (Gateway `session` steer: `BackgroundAgents.send` exists
+  but is not reachable from a window).
+- The webview does receive `call.input`: the worker broadcasts the whole
+  normalized event, `asActivity` spreads it, `Activity` picks `call`, and
+  model-patch is a structural diff with no field filter (read, not run).
