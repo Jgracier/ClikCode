@@ -1528,7 +1528,9 @@ SCENARIOS = {
     # The same turn through ClikCode's own agent (the Gateway) and through a native harness draws the same rows.
     'gateway-tool-turn-rows': {
         'turns': [{}], 'harness': 'grok', 'setup': gateway_fake(), 'startup': 5, 'no_dup_check': 'timing',
-        'steps': [('keys', '\r'), ('settle', 3), ('type', 'GW-TOOLS GW-HEAD go'), ('wait_for', 'Both reads came back fine.', 40), ('settle', 2)],
+        'steps': [('keys', '\r'), ('settle', 3), ('type', 'GW-TOOLS GW-HEAD go'), ('wait_for', 'Both reads came back fine.', 40), ('settle', 2),
+                  # The two reads are one row; Ctrl+O lists them.
+                  ('keys', '\x0f'), ('settle', 1)],
         'watch': [], 'final_contains': ['Thought for', '· Planning', 'Read 2 files', 'Read alpha.txt', 'Read beta.txt', 'Both reads came back fine.'],
         'never': ['Error:'],
     },
