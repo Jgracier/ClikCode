@@ -7,6 +7,7 @@ import chalk from 'chalk';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
 import { diagnostic } from '../runtime/lifecycle-log.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
+import { normalizeActivityEvent } from '../harness/protocol/activity-normalize.js';
 import { renderActivityLine } from '../harness/protocol/activity-line.js';
 import { stopReasonNotice, type TurnStopReason, type TurnUsage } from '../harness/protocol/turn-usage.js';
 import type { HarnessState } from '../session/model.js';
@@ -86,7 +87,8 @@ export function turnSink(checkpoint: Pick<DurableTurnCheckpoint, 'response' | 'a
       checkpoint.response(text, mode);
       prompter?.response(text, mode);
     },
-    activity(event: HarnessActivityEvent): void {
+    activity(raw: HarnessActivityEvent): void {
+      const event = normalizeActivityEvent(raw);
       markTurn('first-event');
       checkpoint.activity(event);
       showActivity(prompter, event);

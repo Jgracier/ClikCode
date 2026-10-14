@@ -21,6 +21,7 @@ import {
   ACTIVITY_PREVIEW_LINES, COMMAND_HEAD_LINES, COMMAND_TAIL_LINES, DIFF_PREVIEW_FILES, DIFF_PREVIEW_LINES,
   markBefore, mergeActivity, sameCall, stoppedCall, withChildTool,
 } from '../harness/protocol/activity-view.js';
+import { normalizeActivityEvent } from '../harness/protocol/activity-normalize.js';
 import type { TranscriptMessage, TurnActivity, TurnMark } from '../session/model.js';
 
 /** Characters of a call's label kept. */
@@ -229,18 +230,21 @@ export function readTurnActivities(value: unknown, legacyOffset = 0): TurnActivi
         if (open >= 0) activities[open] = { ...activities[open]!, event: { ...activities[open]!.event, kind } };
         continue;
       }
-      activities = recordTurnActivity(activities, { kind, label: match[2]! }, legacyOffset);
+      activities = recordTurnActivity(activities, normalizeActivityEvent({ kind, label: match[2]! }), legacyOffset);
       continue;
     }
     const record = item as Partial<TurnActivity> | null;
     const event = record?.event as Partial<HarnessActivityEvent> | undefined;
     if (!event || typeof event !== 'object' || typeof event.label !== 'string' || !KINDS.has(String(event.kind))) continue;
     const offset = record!.responseOffset;
-    // Kept as the same object when it is already well-formed: the size
+    // Normalized on read, so a turn saved before the shared shape reads like
+    // one saved after it. The same record when nothing changes: the size
     // bound remembers each record's size by identity.
+    const normalized = normalizeActivityEvent(event as HarnessActivityEvent);
+    const sameEvent = normalized === event;
     activities.push(typeof offset === 'number' && Number.isFinite(offset) && offset >= 0
-      ? record as TurnActivity
-      : { event: event as HarnessActivityEvent, responseOffset: legacyOffset });
+      ? (sameEvent ? record as TurnActivity : { ...record, event: normalized } as TurnActivity)
+      : { event: normalized, responseOffset: legacyOffset });
   }
   if (!legacy && activities.length === value.length && activities.every((activity, index) => activity === value[index])) return value as TurnActivity[];
   return activities;

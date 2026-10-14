@@ -265,9 +265,9 @@ describe('durable turn checkpoints', () => {
     recordPendingActivity(target, { kind: 'tool-done', label: '$ two', id: 'b' }, stamp(5));
     finishPendingTurn(target, undefined, stamp(6));
     expect(target.messages!.slice(-3)).toEqual([
-      { role: 'assistant', content: 'First part.\n\n', activities: [{ event: { kind: 'tool-done', label: '$ one', id: 'a' }, responseOffset: 13 }], ...by },
+      { role: 'assistant', content: 'First part.\n\n', activities: [{ event: { kind: 'tool-done', label: '$ one', id: 'a', category: 'run' }, responseOffset: 13 }], ...by },
       { role: 'user', content: 'also two' },
-      { role: 'assistant', content: 'Second part.', activities: [{ event: { kind: 'tool-done', label: '$ two', id: 'b' }, responseOffset: 12 }], ...by, turnEnd: { ms: 6_000 } },
+      { role: 'assistant', content: 'Second part.', activities: [{ event: { kind: 'tool-done', label: '$ two', id: 'b', category: 'run' }, responseOffset: 12 }], ...by, turnEnd: { ms: 6_000 } },
     ]);
   });
 
@@ -434,7 +434,7 @@ describe('joining a turn another window is running', () => {
     // Folded in, it read "› continue / Interrupted turn activity: …" and then
     // the same prompt again live beneath it.
     expect(settledTranscriptMessages(running(), 'continue')).toEqual(session().messages);
-    expect(sessionTranscriptMessages(running()).at(-1)?.activities?.map((item) => item.event.label)).toEqual(['Bash(npx vitest)', 'Bash(node scripts/verify.mjs)']);
+    expect(sessionTranscriptMessages(running()).at(-1)?.activities?.map((item) => item.event.label)).toEqual(['$ npx vitest', '$ node scripts/verify.mjs']);
   });
 
   it('keeps an older interrupted turn that is not the one being followed', () => {
@@ -442,24 +442,24 @@ describe('joining a turn another window is running', () => {
   });
 
   it('names the call the turn is running, and nothing once it completed', () => {
-    expect(runningActivityLabel(running().pendingTurn)).toBe('running Bash(node scripts/verify.mjs)');
+    expect(runningActivityLabel(running().pendingTurn)).toBe('running $ node scripts/verify.mjs');
     const done = running();
     recordPendingActivity(done, { kind: 'tool-done', label: 'tool', id: 'w' }, '2026-01-02T00:11:00.000Z');
     expect(runningActivityLabel(done.pendingTurn)).toBeUndefined();
   });
 
   it('reads a journal of one-line strings as calls, and never throws on one', () => {
-    expect(runningActivityLabel(legacy().pendingTurn)).toBe('running Bash(node scripts/verify.mjs)');
+    expect(runningActivityLabel(legacy().pendingTurn)).toBe('running $ node scripts/verify.mjs');
     const messages = sessionTranscriptMessages(legacy());
     expect(messages.at(-1)?.activities?.map((item) => [item.event.kind, item.event.label])).toEqual([
-      ['tool-done', 'Bash(npx vitest)'], ['tool-start', 'Bash(node scripts/verify.mjs)'],
+      ['tool-done', '$ npx vitest'], ['tool-start', '$ node scripts/verify.mjs'],
     ]);
     const done = legacy();
     (done.pendingTurn!.activities as unknown as string[]).push('completed tool');
     expect(runningActivityLabel(done.pendingTurn)).toBeUndefined();
     // A new call recorded onto an old journal converts it.
-    recordPendingActivity(done, { kind: 'tool-start', label: 'Read(a.ts)', id: 'r' }, '2026-01-02T00:12:00.000Z');
-    expect(done.pendingTurn!.activities!.map((item) => item.event.label)).toEqual(['Bash(npx vitest)', 'Bash(node scripts/verify.mjs)', 'Read(a.ts)']);
+    recordPendingActivity(done, { kind: 'tool-start', label: 'Read a.ts', id: 'r' }, '2026-01-02T00:12:00.000Z');
+    expect(done.pendingTurn!.activities!.map((item) => item.event.label)).toEqual(['$ npx vitest', '$ node scripts/verify.mjs', 'Read a.ts']);
     const junk = { ...session(), pendingTurn: { ...running().pendingTurn!, activities: [null, 7, { event: 'x' }, 'nonsense'] as never } };
     expect(() => sessionTranscriptMessages(junk)).not.toThrow();
     expect(runningActivityLabel(junk.pendingTurn)).toBeUndefined();

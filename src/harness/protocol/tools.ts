@@ -121,11 +121,11 @@ export function isAgentToolName(name: string): boolean {
  * `strReplaceEditor` and `STR-REPLACE-EDITOR` are one entry. Web surfaces come
  * first: a `web_search` is a fetch, not a repository search. */
 const TOOL_NAME_CATEGORIES: ReadonlyArray<readonly [ToolCategory, RegExp]> = [
-  ['fetch', /^(webfetch|websearch|webbrowse|webread|browse|curl|httpget|http|fetchurl)$/],
-  ['edit', /^(edit|write|patch|applypatch|strreplace|strreplaceeditor|multiedit|createfile|updatefile|writefile|filewrite|notebookedit|insert|append)$/],
-  ['read', /^(read|view|open|cat|readfile|getfile|fileread|viewfile|openfile|notebookread)$/],
-  ['run', /^(bash|sh|shell|exec|execute|run|runcommand|runterminalcmd|terminal|command|process|localshell)$/],
-  ['search', /^(grep|glob|find|search|rg|ripgrep|listdir|listdirectory|listdirectories|listfolder|readdir|list|ls|listfiles|codebasesearch|filesearch|searchfiles|findfiles|todoread)$/],
+  ['fetch', /^(webfetch|websearch|webbrowse|webread|browse|curl|httpget|http|fetchurl|googlewebsearch|searchweb|webfetchtool)$/],
+  ['edit', /^(edit|write|patch|applypatch|strreplace|strreplaceeditor|multiedit|createfile|updatefile|writefile|filewrite|notebookedit|insert|append|replace|create|delete|remove|strreplacefile|writetofile|replaceinfile)$/],
+  ['read', /^(read|view|open|cat|readfile|getfile|fileread|viewfile|openfile|notebookread|readmanyfiles|readfiles|readmultiplefiles|readmcpresource)$/],
+  ['run', /^(bash|sh|shell|exec|execute|run|runcommand|runterminalcmd|terminal|command|process|localshell|execcommand|runshellcommand|shellcommand|writestdin|execbash|bashtool|runbash)$/],
+  ['search', /^(grep|glob|find|search|rg|ripgrep|listdir|listdirectory|listdirectories|listfolder|readdir|list|ls|listfiles|codebasesearch|filesearch|searchfiles|findfiles|todoread|searchfilecontent|grepsearch|globtool|greptool|lstool)$/],
   ['fetch', /^(fetch|request|download)$/],
 ];
 
