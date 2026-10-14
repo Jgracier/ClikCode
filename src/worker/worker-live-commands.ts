@@ -13,6 +13,9 @@ import { sendEvent } from './broadcast-observer.js';
 import type { ClientCommand } from './protocol.js';
 import type { WorkerContext } from './worker-context.js';
 
+/** How long a Stop is given to end the turn before it is ended by force. */
+const HARD_STOP_AFTER_MS = 8000;
+
 export function createLiveCommands(ctx: WorkerContext) {
   const { observer, sessionId } = ctx;
   const { currentSessionAndAccount, note, broadcastQueueChanged, showEveryWindow } = ctx.io;
@@ -111,13 +114,42 @@ export function createLiveCommands(ctx: WorkerContext) {
     if (restoreTo) sendEvent(restoreTo, { type: 'stopping', restoreDraft: true });
   };
 
+  /** Ends a stopping turn that did not end: what it may be waiting on is
+   * killed or refused, and the turn is ended as stopped. */
+  const hardStop = async (): Promise<void> => {
+    lifecycle('worker.cancel', { stopped: 'forced' });
+    observer.rejectPendingRequests();
+    await Promise.allSettled([closePersistentTransport(sessionId), stopHeldVendorProcess(sessionId)]);
+    ctx.forceStop?.();
+  };
+
   const handleCancel = async (socket: Socket, command: Extract<ClientCommand, { type: 'cancel' }>): Promise<void> => {
+    // The vendor's work is over and only the record is being saved: nothing is
+    // left to stop, and the turn must not be labelled stopped.
+    if (ctx.activeController && ctx.turnWorkDone) {
+      lifecycle('worker.cancel', { stopped: 'nothing (turn work finished)' });
+      sendEvent(socket, { type: 'stop-done', nothing: true });
+      return;
+    }
     if (ctx.activeController) {
       lifecycle('worker.cancel', { stopped: 'turn' });
+      const repeated = ctx.stopAnnounced && ctx.activeController.signal.aborted;
       // A repeated Stop must not take back the first's draft decision.
       if (command.restoreDraft && !ctx.stopAnnounced) ctx.activeRestoreDraft = socket;
       announceStopping(ctx.activeRestoreDraft);
       ctx.activeController.abort();
+      // A Stop the turn does not honour (a held vendor's release, a sign-in,
+      // work that ignores the abort) must not leave the window stopping: a
+      // second Stop, or the wait running out, ends it by force.
+      if (repeated) await hardStop();
+      else if (!ctx.stopEscalation) {
+        const controller = ctx.activeController;
+        ctx.stopEscalation = setTimeout(() => {
+          ctx.stopEscalation = undefined;
+          if (ctx.activeController === controller) void hardStop();
+        }, HARD_STOP_AFTER_MS);
+        ctx.stopEscalation.unref?.();
+      }
       return;
     }
     // A submit accepted but not yet a turn: the Stop is the turn's, and is
@@ -135,13 +167,13 @@ export function createLiveCommands(ctx: WorkerContext) {
     if (hasHeldVendorProcess(sessionId)) {
       lifecycle('worker.cancel', { stopped: 'held vendor' });
       announceStopping(undefined);
-      try { await stopHeldVendorProcess(sessionId); } finally { ctx.stopAnnounced = false; observer.broadcast({ type: 'stop-done' }); }
+      try { await stopHeldVendorProcess(sessionId); } finally { if (!ctx.turnRunning) ctx.stopAnnounced = false; observer.broadcast({ type: 'stop-done' }); }
       return;
     }
     if (ctx.vendorBackground.busy || await persistentWorkRunning(sessionId)) {
       lifecycle('worker.cancel', { stopped: 'vendor background work' });
       announceStopping(undefined);
-      try { await closePersistentTransport(sessionId); } finally { ctx.stopAnnounced = false; observer.broadcast({ type: 'stop-done' }); }
+      try { await closePersistentTransport(sessionId); } finally { if (!ctx.turnRunning) ctx.stopAnnounced = false; observer.broadcast({ type: 'stop-done' }); }
       return;
     }
     // Else a turn parked for the reset, if there is one. Said out loud

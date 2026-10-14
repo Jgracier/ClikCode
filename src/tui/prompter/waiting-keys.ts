@@ -33,7 +33,14 @@ export function onWaitingKey(this: TerminalHarnessPrompter, key: string): void {
     this.questionKey(turn, this.pendingApproval, key);
     return;
   }
-  if (this.pendingApproval) {
+  // Esc and Ctrl+C on an approval deny it AND stop the turn, at once (no
+  // guard window): denying alone let the model go on to its next call.
+  let stopWithApproval = false;
+  if (this.pendingApproval && (key === '\u001b' || key === '\u0003')) {
+    this.restoreTellingDraft();
+    this.answerApproval(this.pendingApproval, false);
+    stopWithApproval = true;
+  } else if (this.pendingApproval) {
     approvalKey.call(this, turn, this.pendingApproval, key);
     return;
   }
@@ -53,13 +60,16 @@ export function onWaitingKey(this: TerminalHarnessPrompter, key: string): void {
     turn.leave();
     return;
   }
-  const action = waitingInputAction(key);
+  const action = stopWithApproval ? 'stop' : waitingInputAction(key);
+  // A repeated Stop goes through to the worker (it ends a Stop that is not
+  // ending the turn); only a wait this window runs itself stops once.
+  const stoppedHere = turn.cancelled && !turn.submit && !turn.early;
   if (action === 'take-back') {
     if (this.takeBackWaiting()) return;
     // A download, a shell, or a sign-in is not the conversation: Esc leaves
     // it. A conversation turn with no answer yet comes back to edit; one
     // that has started answering stops.
-    if (turn.cancelled) return;
+    if (stoppedHere) return;
     // The vendor's own background work is not ClikCode's to stop on an Esc: the window only stops
     // following it, and the vendor goes on with it. (Ctrl+C below is the explicit Stop.) Stopping it
     // closed the vendor, which took every shell it held with it.
@@ -81,7 +91,7 @@ export function onWaitingKey(this: TerminalHarnessPrompter, key: string): void {
     if (turn.early) turn.early.interrupt = { restoreDraft };
     turn.cancel?.(restoreDraft);
   } else if (action === 'stop') {
-    if (turn.cancelled) return;
+    if (stoppedHere) return;
     // A conversation turn shows "stopping" when its worker says so
     // (turnStopping); any other wait (a download, a shell) is this window's own.
     if (!turn.submit && !turn.early) { turn.cancelled = true; turn.label = 'stopping…'; this.updateWaiting(); }

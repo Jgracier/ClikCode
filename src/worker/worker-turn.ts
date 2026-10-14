@@ -114,6 +114,10 @@ export function createTurnRunner(ctx: WorkerContext) {
     ctx.activeSubmissions = undefined;
     ctx.activeRestoreDraft = undefined;
     ctx.stopAnnounced = false;
+    ctx.turnWorkDone = false;
+    if (ctx.stopEscalation) clearTimeout(ctx.stopEscalation);
+    ctx.stopEscalation = undefined;
+    ctx.forceStop = undefined;
     // A message typed as the turn ended may still be on its way into the
     // queue (the broker falls back to it once steering has closed). The
     // final snapshot, the queue drained below and its answer to the window
@@ -168,6 +172,10 @@ export function createTurnRunner(ctx: WorkerContext) {
     ctx.activeController = controller;
     ctx.activeLiveInput = liveInput;
     ctx.activeSubmissions = submissions;
+    ctx.turnWorkDone = false;
+    // A hard Stop ends the turn here even when what it waits on never answers.
+    const forced = new Promise<never>((_, reject) => { ctx.forceStop = () => reject(turnCancelledError()); });
+    forced.catch(() => undefined);
     // A Stop that arrived before this turn started: applied now, and the turn
     // ends through the ordinary cancelled path.
     const earlyStop = ctx.pendingCancel;
@@ -190,13 +198,16 @@ export function createTurnRunner(ctx: WorkerContext) {
       // would read the conversation without it and then write it back whole.
       await ctx.vendorBackground.settled();
       if (controller.signal.aborted) throw turnCancelledError();
-      await runSessionTurn(config, sessionId, command.text, controller.signal, {
+      const running = runSessionTurn(config, sessionId, command.text, controller.signal, {
+        onWorkFinished: () => { ctx.turnWorkDone = true; },
         persistentTransports: true,
         prompter: observer,
         liveInput,
         liveSettings: ctx.liveSettings,
         ...(command.queuedTurnId ? { queuedTurnId: command.queuedTurnId } : {}),
       });
+      running.catch(() => undefined);
+      await Promise.race([running, forced]);
     } catch (error) {
       const cancelled = isTurnCancelled(error);
       turnOutcome = cancelled ? 'cancelled' : `error: ${(error instanceof Error ? error.message : String(error)).slice(0, 200)}`;

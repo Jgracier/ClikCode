@@ -187,3 +187,52 @@ describe('a Stop that fails while stopping vendor work', () => {
     expect(alice.events.map((event) => event.type)).toEqual(['stopping', 'stop-done']);
   });
 });
+
+describe('a Stop the turn does not honour', () => {
+  it('a second Stop ends the turn by force, as stopped', async () => {
+    const { ctx, send, types } = build();
+    turn.run = () => new Promise<void>(() => undefined);
+    await send({ type: 'submit', text: 'x', echo: true } as never);
+    await settle(20);
+    await send({ type: 'cancel', restoreDraft: false });
+    await settle(20);
+    expect(ctx.turnRunning).toBe(true);
+    await send({ type: 'cancel', restoreDraft: false });
+    await settle(150);
+    expect(ctx.turnRunning).toBe(false);
+    expect(types().filter((type) => type === 'waiting-stop')).toHaveLength(1);
+    expect(types().filter((type) => type === 'stopping')).toHaveLength(1);
+  });
+});
+
+describe('a Stop after the vendor finished', () => {
+  it('has nothing to stop and does not abort', async () => {
+    const { ctx, send, alice } = build();
+    let release: (() => void) | undefined;
+    turn.run = () => new Promise<void>((resolveRun) => { release = resolveRun; });
+    await send({ type: 'submit', text: 'x', echo: true } as never);
+    await settle(20);
+    ctx.turnWorkDone = true;
+    await send({ type: 'cancel', restoreDraft: true });
+    expect(turn.signals[0]!.aborted).toBe(false);
+    expect(alice.events).toContainEqual({ type: 'stop-done', nothing: true });
+    expect(alice.events.some((event) => event.type === 'stopping')).toBe(false);
+    release?.();
+    await settle(50);
+  });
+});
+
+describe('a pending Stop whose submit ends without a turn', () => {
+  it('tells every window it is over, not only the asker', async () => {
+    const { ctx, send, alice } = build({ sessionReadMs: 30, sessionFails: true });
+    const bob = fakeSocket();
+    ctx.observer.attach(bob.socket);
+    const submitted = send({ type: 'submit', text: 'hello', echo: true, queuedTurnId: 'q1' } as never);
+    await settle(5);
+    await send({ type: 'cancel', restoreDraft: false });
+    await submitted;
+    expect(alice.events).toContainEqual({ type: 'stop-done', nothing: true });
+    expect(bob.events).toContainEqual({ type: 'stop-done', nothing: true });
+    expect(ctx.stopAnnounced).toBe(false);
+  });
+});

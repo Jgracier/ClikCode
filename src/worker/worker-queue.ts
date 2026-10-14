@@ -47,6 +47,9 @@ export function createWorkerQueue(ctx: WorkerContext) {
       ctx.turnRunning = false;
       ctx.activeController = undefined; ctx.activeLiveInput = undefined; ctx.activeSubmissions = undefined; ctx.activeRestoreDraft = undefined;
       ctx.activeQueuedTurnId = undefined;
+      ctx.stopAnnounced = false; ctx.pendingCancel = undefined; ctx.turnWorkDone = false; ctx.forceStop = undefined;
+      if (ctx.stopEscalation) clearTimeout(ctx.stopEscalation);
+      ctx.stopEscalation = undefined;
       observer.broadcast({ type: 'turn-error', message: error instanceof Error ? error.message : String(error) });
       observer.endTurn();
       ctx.idle.scheduleIdleExit();

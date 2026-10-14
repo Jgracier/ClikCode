@@ -580,9 +580,14 @@ async function driveWorkerTurn(
       };
       client.on('event', onEvent);
       client.on('close', onClose);
+      // A Stop pressed before the message was sent (startWaiting replays it
+      // at once) goes after the submit: ahead of it, the worker answered
+      // "nothing to stop" and then ran the turn anyway.
+      let submitSent = false;
+      let earlyStop: { restoreDraft: boolean } | undefined;
       rl.startWaiting(
         'thinking',
-        (restoreDraft) => { client.send({ type: 'cancel', restoreDraft }); },
+        (restoreDraft) => { if (submitSent) client.send({ type: 'cancel', restoreDraft }); else earlyStop = { restoreDraft }; },
         async (text) => {
           // The worker decides steered vs. queued -- it owns the broker the
           // steer races -- and now says which, on a `submission` event
@@ -638,6 +643,8 @@ async function driveWorkerTurn(
       // turn afresh or opens the prompt, and is never left with neither.
       rl.onWaitingEnded?.(() => finish('display-ended', () => resolveTurn()));
       begin();
+      submitSent = true;
+      if (earlyStop) client.send({ type: 'cancel', restoreDraft: earlyStop.restoreDraft });
       for (const event of tracker.unanswered.splice(0)) onEvent(event);
       // Following a turn that ended while this was being set up: its
       // waiting-stop has already gone by.

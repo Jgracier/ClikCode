@@ -42,6 +42,8 @@ export interface TurnRunOptions {
   prompter?: TurnObserver;
   /** Set by runSessionTurn, not by callers: the turn's record for /undo. */
   recorder?: TurnRecorder;
+  /** Called when the turn's work is over and only its record is left to save. */
+  onWorkFinished?: () => void;
 }
 
 export async function runSessionTurn(
@@ -89,6 +91,7 @@ export async function runSessionTurn(
     throw error;
   } finally {
     markTurn('end', { outcome });
+    run.onWorkFinished?.();
     if (ownClock) endTurnClock(ownClock);
     // A record that failed to write must not fail the turn it records.
     await recorder.finish(stateDirectory(), id).catch(() => undefined);

@@ -355,7 +355,7 @@ export function Composer(props: {
           <button type="button" class="icon-button" aria-label="Commands" title="Commands (/)" disabled={!connected} onClick={() => update('/')}><span class="slash-glyph" aria-hidden="true">/</span></button>
           {model.running || preparing(model) ? (
             <button type="button" id="stop-button" class="send stop" aria-label={model.live?.stopping ? 'Stopping' : 'Stop'} title={model.live?.stopping ? 'Stopping' : 'Stop'}
-              disabled={Boolean(model.live?.stopping)} onClick={() => post({ type: 'cancel', restoreDraft: !text })}><Icon name="debug-stop" /></button>
+              onClick={() => post({ type: 'cancel', restoreDraft: !text })}><Icon name="debug-stop" /></button>
           ) : null}
           {enterAgain ? (
             <button type="button" id="send-button" class="send" data-stop-and-send="true" aria-label={buttonTitle('sendNow')} title={buttonTitle('sendNow')}

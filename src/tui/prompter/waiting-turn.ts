@@ -427,6 +427,7 @@ export function onWaitingEnded(this: TerminalHarnessPrompter, ended: () => void)
 export function stopWaiting(this: TerminalHarnessPrompter, refresh = true, why?: string): void {
   const turn = this.turn;
   if (turn) lifecycle('window.turn.end', { cancelled: turn.cancelled, ...(why ? { why } : {}) });
+  if (turn?.cancelled && turn.submit && !this.steppedOut) this.markTurnStopped();
   if (turn) {
     if (turn.timer) clearTimeout(turn.timer);
     turn.timer = undefined;

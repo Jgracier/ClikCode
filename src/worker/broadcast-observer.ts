@@ -251,6 +251,9 @@ export class BroadcastObserver implements TurnObserver {
   }
 
   /** A turn's end, whatever it was: nobody is left to answer what it asked. */
+  /** A hard Stop: nothing the turn asked is answered any more. */
+  rejectPendingRequests(): void { this.dropPending(); }
+
   private dropPending(): void {
     const hadApprovals = this.pendingApprovals.size > 0 || this.pendingQuestions.size > 0;
     for (const id of [...this.pendingApprovals.keys(), ...this.pendingQuestions.keys()]) this.broadcast({ type: 'request-closed', id });
@@ -504,12 +507,15 @@ export class BroadcastObserver implements TurnObserver {
   /** The sign-in runs on the client's terminal (see SignInRequest). With no
    * client attached there is nowhere to run it, so the turn fails with its
    * authentication error and the user signs in on reattaching. */
-  signIn(request: SignInRequest): Promise<void> {
+  signIn(request: SignInRequest, signal?: AbortSignal): Promise<void> {
     if (this.clients.size === 0) return Promise.reject(new Error(`sign in to ${request.name} needs an open ClikCode window`));
+    if (signal?.aborted) return Promise.reject(new Error('stopped'));
     const id = randomUUID();
     const event: WorkerEvent = { type: 'sign-in-request', id, ...request };
     return new Promise((resolve, reject) => {
       this.pendingSignIns.set(id, { resolve, reject, event });
+      // Stop ends a sign-in the user left waiting.
+      signal?.addEventListener('abort', () => this.resolveSignIn(id, 'stopped'), { once: true });
       this.userWaitChanged();
       this.broadcast(event);
     });
