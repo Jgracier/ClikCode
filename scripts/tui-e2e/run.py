@@ -1313,7 +1313,10 @@ SCENARIOS = {
     # brings them back. It used to move only the top rows.
     'long-turn-scroll-moves-whole-screen': {
         'cols': 70, 'rows': 40, 'env': {'FAKE_TOOL_MS': '150', 'FAKE_DELAY_MS': '40'},
-        'turns': [{'intro': 'Running every part now.', 'tools_first': 30, 'hold_ms': 25000, 'blocks': ['All thirty parts pass.']}],
+        # Thirty paragraphs, one per part, then a call that stays open: a run of calls is now one
+        # row, so the long transcript the scroll needs is made of the answer's own rows.
+        'turns': [{'emits': [*[{'op': 'text', 'text': f'run part{n} done.\n\n', 'ms': 5} for n in range(1, 31)],
+                             {'op': 'tool', 'id': 'hold', 'title': 'sleep 30', 'ms': 25000}]}],
         'steps': [
             ('type', 'run every part'), ('wait_for', 'sleep 30', 40), ('settle', 1.5), ('snap', 'before'),
             *[step for _ in range(5) for step in (('keys', '\x1b[<64;35;20M'), ('settle', 0.4))], ('settle', 1), ('snap', 'scrolled'),
@@ -1328,7 +1331,8 @@ SCENARIOS = {
     # that did nothing.
     'long-turn-swipe-arrows-scroll': {
         'cols': 70, 'rows': 32, 'env': {'FAKE_TOOL_MS': '150', 'FAKE_DELAY_MS': '40'},
-        'turns': [{'intro': 'Running every part now.', 'tools_first': 30, 'hold_ms': 25000, 'blocks': ['All thirty parts pass.']}],
+        'turns': [{'emits': [*[{'op': 'text', 'text': f'run part{n} done.\n\n', 'ms': 5} for n in range(1, 31)],
+                             {'op': 'tool', 'id': 'hold', 'title': 'sleep 30', 'ms': 25000}]}],
         'steps': [
             ('type', 'run every part'), ('wait_for', 'sleep 30', 40), ('settle', 1.5), ('snap', 'before'),
             *[step for _ in range(4) for step in (('keys', '\x1b[A'), ('settle', 0.4))], ('settle', 1), ('snap', 'scrolled'),
