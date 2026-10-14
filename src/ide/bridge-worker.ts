@@ -34,10 +34,11 @@ export class WorkerLink {
       const midTurn = this.workerTurnRunning || Boolean(this.turnWaiter);
       this.worker = undefined;
       this.workerTurnRunning = false;
-      if (midTurn) { this.failTurn(new Error('session worker connection closed unexpectedly')); return; }
-      // An idle worker left -- retired for a newer build, or timed out. Not
-      // the user's concern: attach to (or start) its replacement so this
-      // window keeps following the conversation.
+      if (midTurn) this.failTurn(new Error('session worker connection closed unexpectedly'));
+      // The worker left -- retired for a newer build, timed out, or dropped
+      // this window for reading too slowly. Attach to it again (or to its
+      // replacement): its snapshot says whether a turn still runs, and a
+      // panel told nothing else would show one for ever.
       if (this.host.closed || this.host.sessionId !== sessionId) return;
       this.host.enqueue(async () => {
         if (this.host.closed || this.host.sessionId !== sessionId || this.worker) return;
