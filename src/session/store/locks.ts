@@ -34,6 +34,22 @@ export function pidIsAlive(pid: number): boolean {
  * something to a process in the same one. */
 interface LockOwner { pid: number; host: string; nonce: string; at: string; pidns?: string }
 
+type OwnerFileWriter = (path: string, contents: string, options: {
+  encoding: 'utf8'; mode: number; flag: 'wx';
+}) => Promise<void>;
+
+/** Write an exclusively-created owner file without leaving a zero-byte file
+ * when the open succeeds but the write fails (ENOSPC, quota, I/O error).
+ * Exported so tests can reproduce that otherwise filesystem-specific split. */
+export async function writeOwnerFile(path: string, contents: string, writer: OwnerFileWriter = writeFile): Promise<void> {
+  try {
+    await writer(path, contents, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+  } catch (error) {
+    await unlink(path).catch(() => undefined);
+    throw error;
+  }
+}
+
 /** Exported for tests only; production code never changes these. */
 export const LOCK_TUNING = {
   /** A lock whose file has not been refreshed for this long is stale. */
@@ -218,7 +234,7 @@ export function fileLocksHeld(): boolean {
  * the new lock look stale on arrival. */
 async function createLock(lockPath: string, mine: string): Promise<boolean> {
   const temp = `${lockPath}.${process.pid}.${randomBytes(6).toString('hex')}.new`;
-  await writeFile(temp, mine, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+  await writeOwnerFile(temp, mine);
   try {
     await link(temp, lockPath);
     return true;
@@ -237,7 +253,7 @@ async function takeTicket(lockPath: string, mine: string): Promise<string> {
   const queue = `${lockPath}.queue`;
   await ensurePrivateDirectory(queue);
   const ticket = join(queue, `${String(Date.now()).padStart(15, '0')}.${process.pid}.${randomBytes(6).toString('hex')}`);
-  await writeFile(ticket, mine, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+  await writeOwnerFile(ticket, mine);
   return ticket;
 }
 

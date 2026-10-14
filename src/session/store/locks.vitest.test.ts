@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from '
 import { readlinkSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { LOCK_TUNING, breakStaleLock, lockLooksStale, withFileLock } from './locks.js';
+import { LOCK_TUNING, breakStaleLock, lockLooksStale, withFileLock, writeOwnerFile } from './locks.js';
 import { lifecycle } from '../../runtime/lifecycle-log.js';
 import { runChild } from '../state/testing/concurrency.js';
 
@@ -89,6 +89,17 @@ describe('withFileLock', () => {
 
 describe('a fair lock', () => {
   const ticketName = (msAgo: number, pid: number) => `${String(Date.now() - msAgo).padStart(15, '0')}.${pid}.abc`;
+
+  it('removes an owner file when the filesystem creates it but cannot write its contents', async () => {
+    root = await mkdtemp(join(tmpdir(), 'clikcode-locks-'));
+    const path = join(root, 'partial-ticket');
+    const enospc = Object.assign(new Error('no space left on device'), { code: 'ENOSPC' });
+    await expect(writeOwnerFile(path, owner({}), async (target, _contents, options) => {
+      await writeFile(target, '', options);
+      throw enospc;
+    })).rejects.toBe(enospc);
+    await expect(stat(path)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
 
   it('waits for a live waiter that arrived first, and goes once it has left the line', async () => {
     root = await mkdtemp(join(tmpdir(), 'clikcode-locks-'));
