@@ -123,7 +123,7 @@ describe('a tool lands where it happened', () => {
       id: `t${index}`, done: true, responseOffset: 0, lines: [`done Read(file${index}.ts)`],
     }));
     const rows = run('Done.', tools);
-    expect(rows).toEqual([...tools.flatMap((tool) => tool.lines), 'Done.']);
+    expect(rows).toEqual([...tools.flatMap((tool) => tool.lines), '', 'Done.']);
     expect(rows.join('\n')).not.toContain('earlier tool');
   });
 
@@ -492,5 +492,16 @@ describe('a steer acknowledged inside a block', () => {
   it('still settles when the turn ends inside the block', () => {
     const step = new TurnTranscript().advance({ content: 'Cut off mid', tools: [steer(5)], turnEnded: true, renderBlocks });
     expect(step.finished).toEqual(['Cut off mid', '> steer']);
+  });
+});
+
+describe('a paragraph after a call that opened the turn', () => {
+  it('has its own blank row above it, as the paragraph after any call does', () => {
+    const renderBlocks = (blocks: readonly MessageBlock[], first: boolean): string[] => text(blocks, first);
+    const step = new TurnTranscript().advance({
+      content: 'All done.', tools: [{ id: 'a', done: true, responseOffset: 0, lines: ['', 'call a'] }], turnEnded: true, renderBlocks,
+    });
+    expect(step.finished.slice(0, 3)).toEqual(['', 'call a', '']);
+    expect(step.finished[3]).toContain('All done.');
   });
 });
