@@ -188,7 +188,7 @@ export interface PickerOption<T> {
     apply(value: string): Promise<void>;
   };
   /** A conversation row's glyph (conversation-activity.ts): a turn is
-   * running in it (a spinner, animated where the list can), has stalled
-   * (the spinner yellow), or is waiting on the user (a dot). */
-  activity?: 'working' | 'stalled' | 'needs-you';
+   * running in it (a spinner, animated where the list can), or it is
+   * waiting on the user (a dot). */
+  activity?: 'working' | 'needs-you';
 }

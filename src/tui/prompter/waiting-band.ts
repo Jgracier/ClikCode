@@ -11,7 +11,6 @@ import { nativeModelLabel } from '../../harness/accounts/model-catalog.js';
 import { localModelLabel } from '../../local-models/catalog.js';
 import { turnElapsedMs, waitingSpinnerGlyph } from '../../harness/protocol/activity-view.js';
 import { answerWriting, tokenMeterLabel, turnStatus } from '../../harness/protocol/turn-flow.js';
-import { waitStalled } from '../../harness/protocol/turn-pace.js';
 import { paintStatus } from '../render/status-line.js';
 import { PAINT_COALESCE_MS } from '../../harness/protocol/timings.js';
 import { formatElapsed } from '../../harness/protocol/format.js';
@@ -55,7 +54,7 @@ export function statusText(this: TerminalHarnessPrompter, width: number): string
 /** `⠋  Reading prompter.ts · 1m 12s`: what the turn is doing and how long
  * it has taken -- the style of a native CLI's own status row -- driven by
  * what actually arrives: the open call names the verb, the clock stops for
- * an approval. The spinner turns yellow once the turn has gone quiet.
+ * an approval.
  *
  * One key hint, where it fits in `width`: `esc stop` while Esc is what
  * stops the turn (Claude Code's and Codex's "esc to interrupt"). Enter
@@ -90,7 +89,6 @@ export function waitingLine(this: TerminalHarnessPrompter, turn: WaitingTurn, wi
     glyph, label: status.label, tone: status.tone,
     ...(status.tone === 'tool' && tool?.category ? { category: tool.category } : {}),
     frame: this.waitingFrame, shimmer: !this.reducedMotion && this.waitingTickFast && status.tone !== 'asking',
-    stalled: waitStalled({ conversationTurn: Boolean(turn.submit || turn.early), onUser: asking, cancelled: turn.cancelled, quietMs: now - turn.activeAt }),
   });
   const line = `${painted.spinner}${asking ? ' ' : '  '}${painted.label}${chalk.dim(rest)}`;
   // A sign-in's wait: Esc cancels it.

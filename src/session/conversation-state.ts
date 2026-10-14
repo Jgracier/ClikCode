@@ -3,7 +3,6 @@
  * menu -- so the surfaces cannot word it differently.
  *
  *   working 3m · 2 agents   a turn is generating (and sub-agents are out)
- *   stalled 4m              that turn has been quiet past turn-pace's threshold
  *   needs you               an approval is waiting on the user
  *   back 2:30PM             a turn parked until the quota resets
  *   5m ago                  otherwise, when it last changed
@@ -11,7 +10,6 @@
  * Chalk free and dependency free, so the webview bundle can import it. */
 
 import { quotaResetPhrase, relativeTime, formatElapsed } from '../harness/protocol/format.js';
-import { turnStalled } from '../harness/protocol/turn-pace.js';
 
 /** Where a row is listed: generating, changed in the last 24 hours, older.
  * The keys are on the IDE protocol (IdeConversation.section); only the
@@ -37,7 +35,7 @@ export interface ConversationStateFacts {
   resumeAt?: string;
 }
 
-type ConversationStateKind = 'working' | 'stalled' | 'needs-you' | 'back' | 'idle';
+type ConversationStateKind = 'working' | 'needs-you' | 'back' | 'idle';
 
 export interface ConversationState {
   kind: ConversationStateKind;
@@ -55,8 +53,7 @@ const parsed = (iso: string | undefined): number => {
 };
 
 /** When a generating turn last did anything. A sub-agent's own steps are
- * not written to the turn's `updatedAt`, so a turn whose agents are busy
- * would otherwise read as stalled while they work. */
+ * not written to the turn's `updatedAt`. */
 export function turnActiveAt(pending: PendingTurnShape): string {
   let latest = pending.updatedAt;
   for (const agent of pending.subagents ?? []) {
@@ -81,9 +78,6 @@ export function turnFacts(pending: PendingTurnShape): TurnFacts {
 export function conversationState(facts: ConversationStateFacts, now: number): ConversationState {
   if (facts.needsYou) return { kind: 'needs-you', text: 'needs you' };
   if (facts.turn) {
-    const active = parsed(facts.turn.activeAt);
-    const quiet = Number.isFinite(active) ? now - active : 0;
-    if (turnStalled(quiet)) return { kind: 'stalled', text: `stalled ${formatElapsed(quiet)}` };
     const agents = facts.turn.agents ?? 0;
     const started = parsed(facts.turn.startedAt);
     return {

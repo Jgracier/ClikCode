@@ -44,12 +44,10 @@ export const EMPTY_COMPOSER: ComposerFrame = { text: '', options: [], selected: 
 export type WaitingTurn = {
   /** What the band says the turn is doing. */
   label: string;
-  /** Elapsed less approvals, and the last delta or event, which is what
-   * "stalled" means (see activity-view.ts). */
+  /** Elapsed less approvals, and the last delta or event. */
   clock: TurnClock;
   /** When the turn last did anything -- a word, a thought, a call -- or an
-   * approval was answered: quiet past turn-pace's threshold and the spinner
-   * turns yellow, by the same rule as a stalled row in the conversation list. */
+   * approval was answered. */
   activeAt: number;
   /** When answer text last arrived (a statusOrder tick): the status line says
    * "writing" until a call starts after it (answerWriting). */

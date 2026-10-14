@@ -1,20 +1,19 @@
 /** A turn as it reads, live or finished: its flow, plan, notes and working line. */
 import type { JSX } from 'preact';
 import { memo } from 'preact/compat';
-import { useRef, useState } from 'preact/hooks';
+import { useContext, useRef, useState } from 'preact/hooks';
 import { exploreRuns } from '../../../../src/harness/protocol/turn-flow';
 import { useNow, useSpinFrame } from './clock';
 import type { TurnUsage } from '../../../../src/harness/protocol/turn-usage';
-import { turnStalled } from '../../../../src/harness/protocol/turn-pace';
 import { withoutOtherOrgThinkingNotice } from '../../../../src/harness/protocol/claude-thinking-notice';
 import { planWindow } from '../../../../src/tui/render/plan-window';
 import { liveElapsedMs, turnMarks, type Activity, type ChatModel, type DecisionEntry, type LiveTurn, type Note, type PlanAt, type ThoughtEntry, type TurnTrace } from '../model';
 import { post } from './bus';
 import { renderMarkdown } from './markdown';
-import { Icon, Spinner } from './ui';
+import { Animating, Icon, Spinner } from './ui';
 import { foldedGroupCount, liveMeter, shimmerStyle, traceSummaryLine, workingDetail, workingIndicator, workingStatus } from './flow';
 import { CopyAnswer, LiveMarkdown, renderFinished } from './messages';
-import { ChildLine, DecisionRow, FoldedRun, Reasoning, RunGroups, ThoughtRow } from './activity-rows';
+import { ChildLine, DecisionRow, FoldedRun, Reasoning, RunGroups, ThoughtRow, RunningActivityMark, isAgentActivity } from './activity-rows';
 
 /** How a turn reads, live or finished, in the order it happened -- as
  * Claude Code and Codex lay a turn out: each paragraph of the answer, and
@@ -212,7 +211,7 @@ export function Working({ live, asking, usage, reconnecting: away = false }: { l
         {/* Waiting on the user is not working: a still dot, as the terminal
             shows it, and no clock -- it is stopped. */}
         {held ? <span class={`spinner ${status.toneClass}`} aria-hidden="true">●</span>
-          : <Spinner tone={live && turnStalled(now - live.activeAt) ? 'tone-yellow' : status.toneClass} />}
+          : <Spinner tone={status.toneClass} />}
         <span class={workingLabelClass(status.toneClass, held)} style={held ? undefined : shimmerStyle(status.label)} title={thought ? (thought.length > 600 ? `…${thought.slice(-600)}` : thought) : undefined}>{status.label}</span>
         {thought ? (
           <button type="button" class="icon-button tiny working-thought" aria-expanded={open} title={open ? 'Hide reasoning' : 'Show reasoning'} aria-label={open ? 'Hide reasoning' : 'Show reasoning'}
@@ -232,18 +231,20 @@ export function Working({ live, asking, usage, reconnecting: away = false }: { l
  * counts. Settled calls return to their place in the transcript. */
 export function PinnedProgress({ live, workspace }: { live: LiveTurn; workspace?: string }): JSX.Element | null {
   const [open, setOpen] = useState(false);
+  const animating = useContext(Animating);
   const running = live.activities.filter((activity) => activity.kind === 'tool-start');
   const background = workingIndicator(live);
   if (!running.length && !background) return null;
   const latest = running.at(-1);
+  const agent = latest ? isAgentActivity(latest) : false;
   const label = latest?.child || latest?.label || background || '';
   return (
     <div class="pinned-progress">
       <button type="button" class="pinned-progress-toggle" aria-expanded={open} onClick={() => setOpen(!open)}
         title={open ? 'Hide live progress' : 'Show live progress'}>
-        {latest ? <Spinner tone={latest.agent ? 'tone-cyan' : undefined} /> : <Icon name="pulse" />}
-        <span class="pinned-progress-label">{label}</span>
-        <span class="muted">{open ? 'Hide' : 'Show progress'}</span>
+        {open ? <Icon name="chevron-up" /> : latest ? <RunningActivityMark agent={agent} /> : <Icon name="pulse" />}
+        <span class={`pinned-progress-label${agent && !open && animating ? ' agent-progress-label' : ''}`}>{open ? 'Live progress' : label}</span>
+        <span class="muted">{open ? 'Hide progress' : 'Show progress'}</span>
       </button>
       {open ? <div class="pinned-progress-detail">
         {running.length ? <RunGroups groups={exploreRuns(running.slice(-8))} workspace={workspace} /> : null}

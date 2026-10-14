@@ -14,10 +14,8 @@ export function Icon({ name, label, spin }: { name: string; label?: string; spin
  * reconnecting (standard section 9): every spinner under it holds still. */
 export const Animating = createContext(true);
 
-/** The terminal's spinner, the same braille frames at the same rate: a
- * command's in yellow, a sub-agent's in cyan, the turn's own still and
- * yellow when nothing is arriving. Every spinner on the page steps on the
- * page's one clock; still under reduced motion and while hidden. */
+/** The terminal's braille spinner for the turn status and loading rows.
+ * Tool bullets and agent chevrons have their own animation in activity-rows. */
 export function Spinner({ tone = '', still = false }: { tone?: string; still?: boolean }): JSX.Element {
   const allowed = useContext(Animating);
   const frame = useSpinFrame(!still && allowed);

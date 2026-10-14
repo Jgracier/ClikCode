@@ -11,7 +11,7 @@ import { liveChildren, type Activity, type DecisionEntry, type LiveChild, type T
 import type { FileDiff } from '../protocol';
 import { post } from './bus';
 import { pathIn, relative } from './format';
-import { Animating, Icon, Spinner } from './ui';
+import { Animating, Icon } from './ui';
 import { decisionBadge, foldedSummary, runGroupView, shimmerStyle } from './flow';
 
 export const CATEGORY_ICON: Record<ToolCategory, string> = { read: 'file', edit: 'edit', run: 'terminal', search: 'search', fetch: 'globe' };
@@ -26,6 +26,16 @@ export function activityIcon(activity: Activity): string {
 export function toneOf(activity: Activity): string {
   if (activity.agent) return 'tone-cyan';
   return activity.category ? `tone-${TOOL_CATEGORY[activity.category].colour}` : '';
+}
+
+export function isAgentActivity(activity: Activity): boolean {
+  return Boolean(activity.swarm || activity.agent) || liveWaitKind({ kind: 'tool-start', label: activity.label, agent: activity.agent, category: activity.category }) === 'agent';
+}
+
+/** Tool calls pulse a bullet; agents sweep their label beside a still chevron. */
+export function RunningActivityMark({ agent }: { agent: boolean }): JSX.Element {
+  const animating = useContext(Animating);
+  return <span class={agent ? 'agent-mark' : animating ? 'tool-pulse' : 'tool-mark'} aria-hidden="true">{agent ? '⏵' : '●'}</span>;
 }
 
 
@@ -119,13 +129,13 @@ export function Clock({ since }: { since: number }): JSX.Element | null {
   return now - since >= 1000 ? <span class="activity-outcome">{formatElapsed(now - since)}</span> : null;
 }
 
-/** One running child of a sub-agent, on its own line with its own spinner;
+/** One running child of a sub-agent, on its own line with a tool pulse;
  * the newest carries the parent's count (as the terminal's row does). */
 export function ChildLine({ live }: { live: LiveChild }): JSX.Element {
   const uses = live.newest ? live.parent.childTools : undefined;
   return (
     <div class="activity-child" title={live.child.label}>
-      <Spinner tone="tone-cyan" /><span>{tensedLabel(live.child.label, true)}</span>{uses ? <span class="muted">{toolUses(uses)}</span> : null}
+      <RunningActivityMark agent={false} /><span>{tensedLabel(live.child.label, true)}</span>{uses ? <span class="muted">{toolUses(uses)}</span> : null}
     </div>
   );
 }
@@ -151,8 +161,7 @@ export function ActivityRow({ activity, workspace, userIndex }: { activity: Acti
   const result = activityResult(activity);
   const outcome = activityOutcome(activity);
   const totals = activity.diff?.length ? diffTotals(activity.diff) : undefined;
-  const agentRunning = status === 'running' && (Boolean(activity.swarm) || Boolean(activity.agent)
-    || liveWaitKind({ kind: 'tool-start', label: activity.label, agent: activity.agent, category: activity.category }) === 'agent');
+  const agentRunning = status === 'running' && isAgentActivity(activity);
   const animating = useContext(Animating);
   const change = (action: 'view' | 'revert') => (event: MouseEvent): void => {
     event.stopPropagation();
@@ -161,11 +170,11 @@ export function ActivityRow({ activity, workspace, userIndex }: { activity: Acti
   return (
     <div class={`activity ${status}`}>
       <div class="activity-line">
-        {/* Every running row spins for itself, in its category's colour, on
-            the page's one clock (the working line spins for the turn). */}
+        {/* Tools pulse; agent labels shimmer beside a still chevron. The
+            working line owns the turn's rotating spinner. */}
         <span class={`activity-status ${activity.swarm ? 'tone-cyan' : toneOf(activity)}`} aria-label={status}>
           {status === 'error' ? <Icon name="error" /> : status === 'stopped' ? <Icon name="debug-stop" />
-            : status === 'running' ? <Spinner tone={agentRunning ? 'tone-cyan' : toneOf(activity)} /> : <Icon name={activityIcon(activity)} />}
+            : status === 'running' ? <RunningActivityMark agent={agentRunning} /> : <Icon name={activityIcon(activity)} />}
         </span>
         <ActivityLabel label={status === 'stopped' ? activity.label : tensedLabel(activity.label, status === 'running')} workspace={workspace} shimmer={agentRunning && animating} />
         {status === 'stopped' ? <span class="activity-outcome stopped">stopped</span> : null}
@@ -188,7 +197,7 @@ export function ActivityRow({ activity, workspace, userIndex }: { activity: Acti
       </div>
       {beside.map((entry) => <ChildLine key={entry.child.key} live={entry} />)}
       {/* A harness that sent no child calls, only what it is doing now. */}
-      {status === 'running' && activity.child && !activity.children?.length ? <div class="activity-child" title={activity.child}><Spinner tone="tone-cyan" /><span>{activity.child}</span>{activity.childTools ? <span class="muted">{toolUses(activity.childTools)}</span> : null}</div> : null}
+      {status === 'running' && activity.child && !activity.children?.length ? <div class="activity-child" title={activity.child}><RunningActivityMark agent={false} /><span>{activity.child}</span>{activity.childTools ? <span class="muted">{toolUses(activity.childTools)}</span> : null}</div> : null}
       {/* The children stay available once it settles, one click away. */}
       {open && activity.children?.length ? (
         <div class="activities nested">{activity.children.map((child) => <ActivityRow key={child.key} activity={child} workspace={workspace} userIndex={userIndex} />)}</div>
@@ -251,7 +260,6 @@ export function ExploredRow({ activities, workspace, userIndex }: { activities: 
     <div class={`explored${running ? ' running' : ''}`}>
       <button type="button" class="trace-toggle explored-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
         <Icon name={open ? 'chevron-down' : 'chevron-right'} />
-        {running ? <Spinner tone="tone-blue" /> : null}
         <span class="explored-title">{running ? 'Exploring' : 'Explored'}</span>
         <span class="muted explored-summary">{exploreSummary(activities)}</span>
       </button>
@@ -261,7 +269,7 @@ export function ExploredRow({ activities, workspace, userIndex }: { activities: 
             const result = activityResult(activity);
             return (
               <div key={activity.key} class="explored-call">
-                <span class={`activity-status ${toneOf(activity)}`}>{activity.kind === 'tool-start' ? <Spinner tone={toneOf(activity)} /> : <Icon name={activityIcon(activity)} />}</span>
+                <span class={`activity-status ${toneOf(activity)}`}>{activity.kind === 'tool-start' ? <RunningActivityMark agent={isAgentActivity(activity)} /> : <Icon name={activityIcon(activity)} />}</span>
                 <ActivityLabel label={activity.stopped ? activity.label : tensedLabel(activity.label, activity.kind === 'tool-start')} workspace={workspace} />
                 {activity.stopped ? <span class="activity-outcome stopped">stopped</span> : null}
                 {result ? <span class="activity-outcome activity-result">{result}</span> : null}

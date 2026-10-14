@@ -165,8 +165,7 @@ export interface LiveTurn {
   writingAt?: number;
   callAt?: number;
   /** When the turn last did anything (a word, a thought, a call) or an
-   * approval was answered: quiet past turn-pace's threshold and the working
-   * line's spinner turns yellow, as the terminal's does. */
+   * approval was answered. */
   activeAt: number;
   /** Time spent waiting on an approval, which the clock leaves out as the
    * terminal's does, and since when one is up (the clock stops). */

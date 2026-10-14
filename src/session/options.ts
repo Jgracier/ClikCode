@@ -16,7 +16,6 @@ import { isConversationChat } from './conversation-rows.js';
 
 export { conversationPreview };
 import { isClikCodeAgent } from './route.js';
-import chalk from 'chalk';
 import { commonControlFor, optionIdsForControl } from '../harness/options.js';
 import { harnessTierRank } from '../runtime/lazy-bridge.js';
 import { sessionProviderLabel } from '../harness/protocol/labels.js';
@@ -143,10 +142,10 @@ export function conversationOption(
     ...(row.needsYou ? { needsYou: true } : {}),
     ...(latest.resumeAt ? { resumeAt: latest.resumeAt.at } : {}),
   }, now);
-  const activity = state.kind === 'working' || state.kind === 'stalled' || state.kind === 'needs-you' ? state.kind : undefined;
+  const activity = state.kind === 'working' || state.kind === 'needs-you' ? state.kind : undefined;
   return {
     label: title,
-    detail: [`· ${state.kind === 'stalled' ? chalk.yellow(state.text) : state.text}`, preview, summarized && summaryHeadline(summarized)].filter(Boolean).join(' · '),
+    detail: [`· ${state.text}`, preview, summarized && summaryHeadline(summarized)].filter(Boolean).join(' · '),
     ...(activity ? { activity } : {}),
     value: latest.id,
     alternates: history.length > 1 ? history.map((session) => ({

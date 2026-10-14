@@ -55,7 +55,7 @@ const SUGGESTIONS: Array<{ icon: string; title: string; prompt: string }> = [
 function Welcome({ model, onPrompt, onMenu }: { model: ChatModel; onPrompt: (text: string) => void; onMenu: (menu: WebviewMenu) => void }): JSX.Element {
   // The history menu's list and rules: kept current as turns start and end,
   // so a dot stops pulsing when its chat finishes, and marked by each row's
-  // one state (working, stalled, needs you).
+  // one state (working, needs you).
   const { rows } = useConversations(undefined, model.sessionId);
   const recent = rows?.filter((row) => !row.current).slice(0, 3);
   const now = useNow(Boolean(recent?.some((row) => row.activity === 'working')));

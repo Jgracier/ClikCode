@@ -18,9 +18,9 @@ describe('a conversation row\'s one state', () => {
       .toBe('working 3m · 1 agent');
   });
 
-  it('is stalled, and for how long, once the turn has been quiet three minutes', () => {
+  it('stays working however long the turn has been quiet', () => {
     expect(conversationState({ updatedAt: ago(0), turn: { startedAt: ago(20 * MINUTE), activeAt: ago(4 * MINUTE), agents: 2 } }, NOW))
-      .toEqual({ kind: 'stalled', text: 'stalled 4m' });
+      .toEqual({ kind: 'working', text: 'working 20m · 2 agents' });
   });
 
   it('shows idle when no turn facts are passed (conversationRows filtered them out)', () => {
@@ -46,7 +46,7 @@ describe('a conversation row\'s one state', () => {
     expect(conversationState({ updatedAt: ago(5 * MINUTE), resumeAt: 'not a date' }, NOW).kind).toBe('idle');
   });
 
-  it('never calls a turn with no readable timestamps stalled', () => {
+  it('says working when a turn has no readable timestamps', () => {
     expect(conversationState({ updatedAt: ago(0), turn: { startedAt: '', activeAt: '' } }, NOW)).toEqual({ kind: 'working', text: 'working' });
   });
 });
