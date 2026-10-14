@@ -29,7 +29,10 @@ export async function settleStep(
   // for the next to finish, and the next step hears it.
   if (backgroundAgents?.running()) {
     input.onPhase?.('waiting for background agents');
-    await abortable(backgroundAgents.nextFinish(signal), signal);
+    // A steer typed meanwhile ends the wait: the model answers it now, and waits again after.
+    let release: () => void = () => undefined;
+    const steered = new Promise<void>((resolve) => { release = resolve; rt.steerWaiters.add(resolve); });
+    try { await abortable(Promise.race([backgroundAgents.nextFinish(signal), steered]), signal); } finally { rt.steerWaiters.delete(release); }
     return 'continue';
   }
   // A sub-agent answers to SubagentStop, named as Claude Code names it:

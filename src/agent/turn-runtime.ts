@@ -59,6 +59,8 @@ export interface TurnRuntime {
   readonly result: (extra: Partial<AgentTurnResult> & Pick<AgentTurnResult, 'stopReason'>) => AgentTurnResult;
   /** Steering: text typed mid-turn is queued and lands before the next model step. */
   readonly steerQueue: string[];
+  /** Woken when a steer arrives, so a wait on background agents does not sit through it. */
+  readonly steerWaiters: Set<() => void>;
   steerOpen: boolean;
   items: ConversationItem[];
   ledger: ReturnType<typeof emptyLedger>;
@@ -187,7 +189,7 @@ export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime
     result: (extra) => ({
       text: segments.join('\n\n').trim(), nativeSessionId: input.sessionId, usage: rt.ledger.total, steps: rt.steps, contextProfile: profile.name, ...extra,
     }),
-    steerQueue: [], steerOpen: true, items, ledger, lastStepUsage: undefined, itemsAtLastUsage: items.length,
+    steerQueue: [], steerWaiters: new Set(), steerOpen: true, items, ledger, lastStepUsage: undefined, itemsAtLastUsage: items.length,
     contextWindow: input.contextWindow ?? input.modelClient.contextHints?.contextWindow,
     servedModel: undefined, segments, needsSeparator: false, steps: 0, stall: new StallGuard(), stalledCall: undefined,
     stepRetries: 0, retryWaitedSeconds: 0, compactedForSize: false, tokensAfterCompaction: undefined, lengthContinues: 0, stopContinues: 0,
@@ -200,7 +202,7 @@ export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime
   }
   input.onSteerReady?.(async (text: string) => {
     if (!rt.steerOpen) throw new Error('The turn has already finished');
-    if (text.trim()) rt.steerQueue.push(text);
+    if (text.trim()) { rt.steerQueue.push(text); for (const wake of [...rt.steerWaiters]) wake(); }
   });
   return { rt, promptBlocked };
 }
