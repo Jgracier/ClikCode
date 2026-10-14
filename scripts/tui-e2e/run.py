@@ -886,6 +886,19 @@ SCENARIOS = {
         # Each decision leaves one settled row at its place.
         'final_once': ['✗ denied make clean', '↳ told: use pnpm instead'],
     },
+    # Ctrl+C with an approval open denies it AND stops the turn: the model
+    # does not go on to its next call.
+    'ctrl-c-on-approval-stops-turn': {
+        'turns': [{'permissions': ['make clean', 'make release'], 'blocks': ['Answers: {answers}.']}],
+        'steps': [
+            ('type', 'clean and release'), ('wait_for', 'Approval 1 of 2', 30), ('settle', 0.6),
+            ('keys', '\x03'), ('settle', 4),
+        ],
+        'watch': [],
+        # No answer yet: the prompt comes back to edit, the model never goes on.
+        'never': ['Approval 2 of 2', 'Answers: ', 'Worked for'],
+        'final_contains': ['› clean and release'],
+    },
     # A long paste is a placeholder in the composer, and the whole text is
     # what is sent; the placeholder never reaches the transcript.
     'paste-placeholder': {
