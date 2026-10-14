@@ -5,9 +5,10 @@
 import { answerWriting, backgroundTerminalsLabel, decisionRow, endsWithSummary, exploreRuns, explores, exploreSummary, liveTokenTarget, smoothTokens, tensedLabel, tokenMeterLabel, turnStatus, turnSummary, type Decision, type StatusTone } from '../../../../src/harness/protocol/turn-flow';
 import { shimmerCycleMs, SPIN_MS } from '../../../../src/harness/protocol/timings';
 import { TOOL_CATEGORY } from '../../../../src/harness/protocol/tool-category';
-import type { ToolCategory } from '../../../../src/harness/prompter';
+import type { HarnessActivityEvent, ToolCategory } from '../../../../src/harness/prompter';
+import { groupSummary, groupSummaryText, standsAlone, type GroupItem } from '../../../../src/harness/protocol/call-groups';
 import type { FileDiff } from '../protocol';
-import type { Activity, LiveTurn, TurnTrace } from '../model';
+import type { Activity, LiveTurn, ThoughtEntry, TurnTrace } from '../model';
 import { formatElapsed } from '../../../../src/harness/protocol/format';
 import { changedFileCount, endLineUsageShown } from '../../../../src/harness/protocol/lean';
 import { formatTurnUsage } from '../../../../src/tui/render/usage-line';
@@ -70,22 +71,30 @@ export function runSummary(activities: readonly Activity[]): string {
       : TOOL_CATEGORY[kind as ToolCategory].folded(count))).join(' · ');
 }
 
+/** One item of a run of calls and thoughts (harness/protocol/call-groups.ts). */
+export type RunItem = { activity: Activity; thought?: undefined } | { thought: ThoughtEntry; activity?: undefined };
+
+export const runItemKey = (item: RunItem): string => (item.activity ? item.activity.key : `h${item.thought.seq}`);
+
+const groupItemOf = (item: RunItem): GroupItem => (item.activity
+  ? { id: item.activity.key, event: item.activity as unknown as HarnessActivityEvent }
+  : { id: `h${item.thought.seq}`, thought: { durationMs: item.thought.ms, ...(item.thought.heading ? { heading: item.thought.heading } : {}), ...(item.thought.text ? { text: item.thought.text } : {}) } });
+
+/** A failed or stopped call, a sub-agent: a call a folded run keeps in view as a row of its own. */
+export const runItemStandsAlone = (item: RunItem): boolean => Boolean(item.activity) && standsAlone(groupItemOf(item));
+
+/** A run of calls and thoughts in one line, the terminal's words: `Ran 4
+ * commands, read 3 files · 2 thoughts · 1 failed`. */
+export function runGroupSummary(items: readonly RunItem[]): string {
+  return groupSummaryText(groupSummary(items.map(groupItemOf), false));
+}
+
 /** A finished run of calls folded to one line: each run of looking-around
  * calls as Claude Code says it ("Read 3 files, searched 2 patterns"), the
- * rest by kind ("ran 2 commands"). */
+ * rest by kind ("ran 2 commands"). One call alone is its own label. */
 export function foldedSummary(activities: readonly Activity[]): string {
-  const segments: Array<{ explore: boolean; rows: Activity[] }> = [];
-  for (const group of exploreRuns(activities)) {
-    const last = segments[segments.length - 1];
-    if (!group.explore && last && !last.explore) last.rows.push(...group.rows);
-    else segments.push({ explore: group.explore, rows: [...group.rows] });
-  }
-  const text = segments.map((segment, index) => {
-    if (!segment.explore) return runSummary(segment.rows);
-    const said = exploreSummary(segment.rows);
-    return index ? said.charAt(0).toLowerCase() + said.slice(1) : said;
-  }).join(' · ');
-  return titleCase(text);
+  if (activities.length === 1) return titleCase(runSummary(activities));
+  return runGroupSummary(activities.map((activity) => ({ activity })));
 }
 
 /** The live background work beside the status, in the same words as the CLI's

@@ -12,7 +12,7 @@ import type { FileDiff } from '../protocol';
 import { post } from './bus';
 import { pathIn, relative } from './format';
 import { Animating, Icon, Spinner } from './ui';
-import { decisionBadge, foldedSummary, runGroupView, shimmerStyle } from './flow';
+import { decisionBadge, foldedSummary, runGroupSummary, runGroupView, runItemKey, runItemStandsAlone, shimmerStyle, type RunItem } from './flow';
 
 export const CATEGORY_ICON: Record<ToolCategory, string> = { read: 'file', edit: 'edit', run: 'terminal', search: 'search', fetch: 'globe' };
 
@@ -204,24 +204,29 @@ export function ActivityRow({ activity, workspace, userIndex }: { activity: Acti
   );
 }
 
-/** A run of calls a finished turn made between two paragraphs, folded to
- * one line in its place -- "Read 3 files, searched 1 pattern · ran 2
- * commands" -- as Codex folds its work; open, the rows themselves. */
-export function FoldedRun({ activities, workspace, userIndex }: { activities: Activity[]; workspace?: string; userIndex?: number }): JSX.Element {
+/** A run of calls and thoughts a turn made between two paragraphs, folded to
+ * one line in its place -- "Ran 4 commands, read 3 files · 2 thoughts" -- as
+ * Codex folds its work. Open, each item is its own row, and each opens in
+ * turn (a call's output, a thought's text). A failed or stopped call stays a
+ * row of its own under the line: errors do not hide. One item alone stays as
+ * it was: its own label. */
+export function FoldedRun({ items, workspace, userIndex }: { items: RunItem[]; workspace?: string; userIndex?: number }): JSX.Element {
   const [open, setOpen] = useState(false);
-  const failed = activities.filter((activity) => activity.kind === 'tool-error' && !activity.stopped).length;
-  const stopped = activities.filter((activity) => activity.stopped).length;
-  const totals = diffTotals(activities.flatMap((activity) => activity.diff ?? []));
+  const calls = items.flatMap((item) => (item.activity ? [item.activity] : []));
+  const totals = diffTotals(calls.flatMap((activity) => activity.diff ?? []));
+  const row = (item: RunItem): JSX.Element => (item.activity
+    ? <ActivityRow key={runItemKey(item)} activity={item.activity} workspace={workspace} userIndex={userIndex} />
+    : <ThoughtRow key={runItemKey(item)} thought={item.thought} />);
+  const single = items.length === 1;
+  const alone = !open && !single ? items.filter(runItemStandsAlone) : [];
   return (
     <div class="trace">
       <button type="button" class="trace-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
         <Icon name={open ? 'chevron-down' : 'chevron-right'} />
-        <span>{foldedSummary(activities)}</span>
-        {failed ? <span class="muted"> · {failed} failed</span> : null}
-        {stopped ? <span class="muted"> · {stopped} stopped</span> : null}
+        <span>{single ? foldedSummary(calls) : runGroupSummary(items)}</span>
         {totals.additions || totals.removals ? <span class="activity-counts"><Counts additions={totals.additions} removals={totals.removals} /></span> : null}
       </button>
-      {open ? <div class="activities"><RunGroups groups={exploreRuns(activities)} workspace={workspace} userIndex={userIndex} /></div> : null}
+      {open ? <div class="activities">{items.map(row)}</div> : alone.length ? <div class="activities">{alone.map(row)}</div> : null}
     </div>
   );
 }

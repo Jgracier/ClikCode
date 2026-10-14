@@ -12,7 +12,7 @@ import { liveElapsedMs, turnMarks, type Activity, type ChatModel, type DecisionE
 import { post } from './bus';
 import { renderMarkdown } from './markdown';
 import { Icon, Spinner } from './ui';
-import { foldedGroupCount, liveMeter, shimmerStyle, traceSummaryLine, workingDetail, workingIndicator, workingStatus } from './flow';
+import { foldedGroupCount, liveMeter, runItemKey, type RunItem, shimmerStyle, traceSummaryLine, workingDetail, workingIndicator, workingStatus } from './flow';
 import { CopyAnswer, LiveMarkdown, renderFinished } from './messages';
 import { ChildLine, DecisionRow, FoldedRun, Reasoning, RunGroups, ThoughtRow } from './activity-rows';
 
@@ -44,18 +44,38 @@ export function TurnFlow(props: {
   // sent into the turn moves the offsets after it, and a text piece keyed by
   // offset was remounted (losing selection and scroll) each time.
   let after = 'start';
-  let run: Activity[] = [];
-  const flushRun = (): void => {
+  let run: RunItem[] = [];
+  // A run of calls and thoughts with no prose between them. Closed (prose
+  // follows it, or the turn is over) it folds to one line; still open while
+  // the turn runs, its calls are rows, as they always were, and fold once the
+  // answer moves on.
+  const flushRun = (closed: boolean): void => {
     if (!run.length) return;
-    parts.push(props.live
-      ? <ActivityRun key={`r${run[0]!.key}`} activities={run} workspace={props.workspace} />
-      : <FoldedRun key={`r${run[0]!.key}`} activities={run} workspace={props.workspace} userIndex={props.userIndex} />);
+    const items = run;
     run = [];
+    if (items.length === 1 && items[0]!.thought) {
+      parts.push(<ThoughtRow key={`h${items[0]!.thought!.seq}`} thought={items[0]!.thought!} />);
+      return;
+    }
+    if (props.live && !closed) {
+      let batch: Activity[] = [];
+      const flushBatch = (): void => {
+        if (batch.length) parts.push(<ActivityRun key={`r${batch[0]!.key}`} activities={batch} workspace={props.workspace} />);
+        batch = [];
+      };
+      for (const item of items) {
+        if (item.activity) batch.push(item.activity);
+        else { flushBatch(); parts.push(<ThoughtRow key={`h${item.thought.seq}`} thought={item.thought} />); }
+      }
+      flushBatch();
+      return;
+    }
+    parts.push(<FoldedRun key={`r${runItemKey(items[0]!)}`} items={items} workspace={props.workspace} userIndex={props.userIndex} />);
   };
   const paragraph = (end: number): void => {
     const piece = text.slice(at, end);
     if (!piece.trim()) return;
-    flushRun();
+    flushRun(true);
     // Live, every block of text is the same kind of node under the same key
     // as it grows and as a call starts after it: its DOM survives.
     if (props.live) parts.push(<LiveMarkdown key={`t${after}`} text={piece} />);
@@ -68,16 +88,16 @@ export function TurnFlow(props: {
   for (const mark of marks) {
     if (mark.offset > at) paragraph(mark.offset);
     after = `${mark.activity ? 'a' : mark.thought ? 'h' : mark.plan ? 'p' : mark.note ? 'n' : mark.child ? 'c' : mark.decision ? 'd' : 's'}${mark.activity?.key ?? mark.child?.child.key ?? mark.decision?.id ?? mark.steerId ?? mark.steerIndex ?? mark.seq}`;
-    if (mark.activity) { run.push(mark.activity); continue; }
-    flushRun();
-    if (mark.thought) parts.push(<ThoughtRow key={`h${mark.thought.seq}`} thought={mark.thought} />);
-    else if (mark.plan && props.plan) parts.push(<Plan key="plan" plan={props.plan.entries} folded={!props.live} running={Boolean(props.live)} />);
+    if (mark.activity) { run.push({ activity: mark.activity }); continue; }
+    if (mark.thought) { run.push({ thought: mark.thought }); continue; }
+    flushRun(!props.live);
+    if (mark.plan && props.plan) parts.push(<Plan key="plan" plan={props.plan.entries} folded={!props.live} running={Boolean(props.live)} />);
     else if (mark.note) parts.push(<NoteView key={`n${mark.seq}`} note={mark.note} />);
     else if (mark.child) parts.push(<div key={`c${mark.child.child.key}`} class="activities"><ChildLine live={mark.child} /></div>);
     else if (mark.decision) parts.push(<DecisionRow key={`d${mark.decision.id}`} entry={mark.decision} />);
     else parts.push(<div key={`s${mark.steerId ?? mark.steerIndex}`} class="steer"><Icon name="arrow-small-right" /><span>{mark.steer}</span><span class="muted">sent into this turn</span></div>);
   }
-  flushRun();
+  flushRun(!props.live || Boolean(text.slice(at).trim()));
   if (props.live) {
     if (text.slice(at).trim()) parts.push(<LiveMarkdown key={`t${after}`} text={text.slice(at)} />);
   } else paragraph(text.length);

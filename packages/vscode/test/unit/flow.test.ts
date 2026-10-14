@@ -299,7 +299,7 @@ describe('tool rows', () => {
     const read = (path: string): Activity => row({ label: `Read ${path}`, category: 'read' });
     expect(foldedSummary([read('a.ts'), read('b.ts'), row({ label: 'Grep foo', category: 'search' })])).toBe('Read 2 files, searched 1 pattern');
     expect(foldedSummary([row({ label: '$ npm test', category: 'run' }), row({ label: '$ npm run build', category: 'run' }), read('a.ts'), read('b.ts')]))
-      .toBe('Ran 2 commands · read 2 files');
+      .toBe('Ran 2 commands, read 2 files');
     expect(foldedSummary([row({ label: 'Edit a.ts', category: 'edit' })])).toBe('Edited a.ts');
     expect(runSummary([row({ label: 'Read a.ts', category: 'read', kind: 'tool-start' })])).toBe('Reading a.ts');
   });
