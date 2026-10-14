@@ -31,7 +31,8 @@ vi.mock('../runtime/lazy-bridge.js', async (importOriginal) => ({
   harnessTierRank: () => 0,
 }));
 
-const { accountList, conversationList, creditOf } = await import('./queries.js');
+const { accountList, chatSettings, conversationList, creditOf } = await import('./queries.js');
+const { aiSettingsSetGlobal } = await import('../commands/ai/settings.js');
 const { readState } = await import('../session/state/read.js');
 const { writeState } = await import('../session/state/write.js');
 const { IdeBridge } = await import('./bridge.js');
@@ -299,5 +300,20 @@ describe('the bridge\'s revision-2 requests', () => {
     inner.workerTurnRunning = true;
     bridge.handle({ type: 'choose', requestId: 'p', choice: { kind: 'provider', provider: 'codex' } });
     expect(await result('p')).toMatchObject({ ok: false });
+  });
+});
+
+describe('the send setting the editor shows', () => {
+  it('is the global one /send sets: steer on a fresh install, then whatever the terminal chose', async () => {
+    await home({ sessions: [session('s1')] });
+    const read = async () => {
+      const state = await readState();
+      return (await chatSettings(state, state.sessions.find((item) => item.id === 's1')!)).send;
+    };
+    expect(await read()).toBe('steer');
+    await aiSettingsSetGlobal('send', 'queue', false);
+    expect(await read()).toBe('queue');
+    await aiSettingsSetGlobal('send', 'steer', false);
+    expect(await read()).toBe('steer');
   });
 });
