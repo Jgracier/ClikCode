@@ -59,6 +59,8 @@ export function footerUsage(this: TerminalHarnessPrompter): { label: string; spe
   const label = composerUsageLabel(this.usageLabel, this.usageResetLabel);
   if (!label) return undefined;
   const spent = usageLabelIsSpent(label);
+  // A turn parked until the reset is a state, not a reading: always said.
+  if (/^waiting for reset/.test(label)) return { label, spent: true };
   return usageIsLow(usageRemainingPercent(this.usageLabel), spent) ? { label, spent } : undefined;
 }
 
