@@ -29,7 +29,7 @@ const LIVE_SHOWN_CALLS = 3;
 /** Groups kept for expansion. */
 const GROUPS_KEPT = 50;
 
-export type GroupRow = { key: string; event: HarnessActivityEvent; thought?: GroupThought; responseOffset?: number };
+export type GroupRow = { key: string; event: HarnessActivityEvent; thought?: GroupThought; responseOffset?: number; sequence?: number };
 
 export type CallRun<T extends GroupRow> = {
   /** The first item's key: the run's identity in the transcript. */
@@ -50,8 +50,12 @@ export class CallGrouping {
 
   /** `rows` in the order they happened; `ended` the turn is over; `prose`
    * how much of the answer has streamed, which is what says text followed a
-   * call. */
-  group<T extends GroupRow>(rows: readonly T[], ended: boolean, prose: number): Array<CallRun<T>> {
+   * call. `breaks`: where a message the user steered into the turn was
+   * acknowledged (a `sequence` of the same counter as the rows'): it ends the
+   * run before it, so a call begun after it is drawn after it. */
+  group<T extends GroupRow>(rows: readonly T[], ended: boolean, prose: number, breaks: readonly number[] = []): Array<CallRun<T>> {
+    const between = (from: number | undefined, to: number | undefined): boolean => from !== undefined && to !== undefined
+      && breaks.some((at) => at > from && at < to);
     const runs: Array<CallRun<T>> = [];
     const byKey = new Map<string, CallRun<T>>();
     let open: CallRun<T> | undefined;
@@ -64,7 +68,7 @@ export class CallGrouping {
         continue;
       }
       const tail = open?.items[open.items.length - 1];
-      if (open && tail && tail.responseOffset !== undefined && tail.responseOffset === row.responseOffset) { open.items.push(row); continue; }
+      if (open && tail && tail.responseOffset !== undefined && tail.responseOffset === row.responseOffset && !between(tail.sequence, row.sequence)) { open.items.push(row); continue; }
       open = { key: row.key, items: [row], done: false };
       runs.push(open);
       byKey.set(open.key, open);
@@ -73,7 +77,8 @@ export class CallGrouping {
       if (this.sealed.has(run.key)) { run.done = true; continue; }
       const finished = run.items.every((item) => item.event.kind !== 'tool-start');
       const last = run.items[run.items.length - 1]!;
-      const followed = index < runs.length - 1 || (last.responseOffset !== undefined && prose > last.responseOffset);
+      const followed = index < runs.length - 1 || (last.responseOffset !== undefined && prose > last.responseOffset)
+        || (last.sequence !== undefined && breaks.some((at) => at > last.sequence!));
       run.done = ended || (finished && followed);
       if (run.done) {
         this.sealed.set(run.key, run.items.map((item) => item.key));

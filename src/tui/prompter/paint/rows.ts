@@ -171,13 +171,13 @@ export function createToolRows(p: TerminalHarnessPrompter, builders: RowBuilders
   };
   /** The turn's rows, runs of calls and thoughts grouped. A finished call
    * waits in the live region while its run is open: the next may join it. */
-  const groupedRows = (entries: readonly ActivityEntry[], ended: boolean, grouping: CallGrouping): SettlingTool[] => {
+  const groupedRows = (entries: readonly ActivityEntry[], ended: boolean, grouping: CallGrouping, breaks: readonly number[] = []): SettlingTool[] => {
     // A row of its own that never joins a run: a note (lines and no event,
     // from activity()), a plan or notice, or a call the user refused, whose
     // row says so.
     const alone = (entry: ActivityEntry): boolean => !entry.event || refused(entry) || (entry.event.kind === 'thinking' && !entry.thought);
     const rows = entries.flatMap((entry) => (entry.event && !alone(entry) ? [{ ...entry, event: entry.event, key: entry.event.id ?? `activity#${entry.sequence ?? entry.responseOffset}` }] : []));
-    const runs = grouping.group(rows, ended, ended ? Number.POSITIVE_INFINITY : p.liveResponse.length);
+    const runs = grouping.group(rows, ended, ended ? Number.POSITIVE_INFINITY : p.liveResponse.length, breaks);
     return [...runs.flatMap((run) => runRows(run, ended)), ...entries.filter(alone).map((entry) => toolRow(entry, ended))];
   };
   return { toolRow, groupedRows };
@@ -231,11 +231,23 @@ export function createTurnTools(
     return groupedRows(entries, true, new CallGrouping());
   };
   const turnTools = (ended: boolean): SettlingTool[] => {
+    // One row on each side, matching every other message: a steer is a
+    // message the user wrote mid-answer.
+    const steerRows = (text: string): string[] => [
+      '', '', ...messageRows(text, userMarker), `  ${chalk.dim(`↳ ${STEER_WORDS.steered}`)}`, '',
+    ];
+    const steers = steerTranscriptRows({
+      durable: pending?.steers ?? [], live: p.waitingSubmissions,
+      materializedPendingTurn: seam.materializedPendingTurn, retiredThisSession: p.emitted.retiredTexts(), render: steerRows,
+    });
+    for (const row of steers) p.turnSteers.set(row.id, row);
     const tools: SettlingTool[] = groupedRows(turnEntries(p.activityAnchor)
       // An anchor is reused: the next turn's assistant occupies the same
       // index when the previous one was never persisted. The turn that
-      // produced an entry is what decides whether it belongs to this one.
-      .filter((entry) => (entry.sequence ?? 0) > p.emitted.turnSequenceFloor), ended, p.callGrouping);
+      // produced an entry is what decided whether it belongs to this one.
+      .filter((entry) => (entry.sequence ?? 0) > p.emitted.turnSequenceFloor), ended, p.callGrouping,
+    // Where each steer of this window was acknowledged: it ends the run before it.
+    p.waitingSubmissions.flatMap((item) => (item.state === 'steered' && item.ack ? [item.ack.sequence] : [])));
     // A running agent's live calls, one row each, nested under it. They are
     // never retired (the turn's end drops them with their parent) and never
     // gate another row; where they sit is child-rows.ts's rule.
@@ -251,16 +263,6 @@ export function createTurnTools(
         });
       }
     }
-    // One row on each side, matching every other message: a steer is a
-    // message the user wrote mid-answer.
-    const steerRows = (text: string): string[] => [
-      '', '', ...messageRows(text, userMarker), `  ${chalk.dim(`↳ ${STEER_WORDS.steered}`)}`, '',
-    ];
-    const steers = steerTranscriptRows({
-      durable: pending?.steers ?? [], live: p.waitingSubmissions,
-      materializedPendingTurn: seam.materializedPendingTurn, retiredThisSession: p.emitted.retiredTexts(), render: steerRows,
-    });
-    for (const row of steers) p.turnSteers.set(row.id, row);
     // A steer drawn earlier is still this turn's row once its sources are
     // gone (the turn has ended: the saved list is all that is left of it).
     // It is owed under the id it was first drawn with -- once, whichever
