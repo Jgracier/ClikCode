@@ -124,7 +124,7 @@ export function ChildLine({ live }: { live: LiveChild }): JSX.Element {
   const uses = live.newest ? live.parent.childTools : undefined;
   return (
     <div class="activity-child" title={live.child.label}>
-      <Spinner tone="tone-accent" /><span>{tensedLabel(live.child.label, true)}</span>{uses ? <span class="muted">{toolUses(uses)}</span> : null}
+      <ActivityGlyph status="done" /><span>{tensedLabel(live.child.label, true)}</span>{uses ? <span class="muted">{toolUses(uses)}</span> : null}
     </div>
   );
 }
@@ -188,7 +188,7 @@ export function ActivityRow({ activity, workspace, userIndex }: { activity: Acti
       </div>
       {beside.map((entry) => <ChildLine key={entry.child.key} live={entry} />)}
       {/* A harness that sent no child calls, only what it is doing now. */}
-      {status === 'running' && activity.child && !activity.children?.length ? <div class="activity-child" title={activity.child}><Spinner tone="tone-accent" /><span>{activity.child}</span>{activity.childTools ? <span class="muted">{toolUses(activity.childTools)}</span> : null}</div> : null}
+      {status === 'running' && activity.child && !activity.children?.length ? <div class="activity-child" title={activity.child}><ActivityGlyph status="done" /><span>{activity.child}</span>{activity.childTools ? <span class="muted">{toolUses(activity.childTools)}</span> : null}</div> : null}
       {/* The children stay available once it settles, one click away. */}
       {open && activity.children?.length ? (
         <div class="activities nested">{activity.children.map((child) => <ActivityRow key={child.key} activity={child} workspace={workspace} userIndex={userIndex} />)}</div>
