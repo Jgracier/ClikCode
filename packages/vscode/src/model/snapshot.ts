@@ -45,12 +45,19 @@ export function applySnapshot(model: ChatModel, event: Extract<WorkerEvent, { ty
   // worker's `seq` where it sends one, else the order this window first
   // saw it in (the earlier window's, kept).
   let seen = folded.seen;
+  // Merged with what this window already placed, by id: a snapshot read
+  // before the steer was persisted does not take it away, and the same steer
+  // is one row whichever copy arrives first. Without an id (an older
+  // worker) the place in the list is all there is to match by.
   const held = model.live?.steers ?? [];
-  const steers = (event.session.pendingTurn?.steers ?? []).map((steer, index) => {
-    const seq = steer.seq ?? held[index]?.seq ?? ++seen;
+  const durable = event.session.pendingTurn?.steers ?? [];
+  const merged = durable.map((steer, index) => {
+    const local = steer.id ? held.find((item) => item.id === steer.id) : held[index]?.id ? undefined : held[index];
+    const seq = steer.seq ?? local?.seq ?? ++seen;
     seen = Math.max(seen, seq);
-    return { text: steer.text, offset: steer.responseOffset ?? event.live!.text.length, seq };
+    return { ...(steer.id ? { id: steer.id } : {}), text: steer.text, offset: steer.responseOffset ?? local?.offset ?? event.live!.text.length, seq };
   });
+  const steers = [...merged, ...held.filter((item) => item.id && !durable.some((steer) => steer.id === item.id))];
   // The plan the worker says the turn has is placed where this window
   // first saw it (or, joining mid-turn, at the top, as it was drawn
   // before). `planOffset` is where the worker says it really was (absent

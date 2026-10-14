@@ -144,7 +144,7 @@ export interface LiveTurn {
   toolPhase?: string;
   /** Messages sent into this turn while it runs, where they landed, and
    * the order they were acknowledged in (`seq`, as every row has). */
-  steers: Array<{ text: string; offset: number; seq?: number }>;
+  steers: Array<{ id?: string; text: string; offset: number; seq?: number }>;
   /** Where the turn's plan first appeared. */
   planAt?: PlanAt;
   /** The approvals and questions of this turn the user has settled. */
@@ -262,7 +262,7 @@ export interface LiveChild { parent: Activity; child: Activity; beside: boolean;
 export type Decided = { outcome: 'approved' | 'denied' | 'answered' | 'declined'; label?: string; always?: boolean; told?: string; callId?: string };
 
 export type TurnMark = {
-  offset: number; seq: number; activity?: Activity; thought?: ThoughtEntry; steer?: string; steerIndex?: number; plan?: true; note?: Note;
+  offset: number; seq: number; activity?: Activity; thought?: ThoughtEntry; steer?: string; steerIndex?: number; steerId?: string; plan?: true; note?: Note;
   /** A decision that is a row of its own (not settled on a call's row). */
   decision?: DecisionEntry;
   /** A running sub-agent's live child that sits below text (not beside its

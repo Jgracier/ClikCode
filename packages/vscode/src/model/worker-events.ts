@@ -29,7 +29,10 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
         turnUsage: undefined, stopPending: undefined,
       };
     case 'waiting-stop':
-      return { ...endTurn(model, event.stopped === true), ...NO_TRANSIENT };
+      // Submissions stay: the messages the turn saved are not here yet, and a
+      // steered one would leave the screen for the frames in between. The
+      // snapshot that carries them settles them (applySession).
+      return { ...endTurn(model, event.stopped === true), pendingPrompt: undefined, approvals: [], stopPending: undefined };
     // The worker accepted a Stop: the one source of "stopping".
     case 'stopping':
       if (model.live?.stopping || model.stopPending) return model;
@@ -44,6 +47,8 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
     case 'submit-rejected':
       return model.running ? model : { ...model, ownTurn: undefined, pendingPrompt: undefined, stopPending: undefined };
     case 'delta': {
+      // A Stop is in flight: what the vendor still streams is not drawn.
+      if (model.live?.stopping) return model;
       const live = model.live ?? freshLive('thinking');
       const text = event.mode === 'replace' ? event.text : live.text + event.text;
       // The thought led to this text; once the answer arrives it is settled.
@@ -61,6 +66,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       return { ...model, notes, live: { ...after, ...placed, ...planAt, text, activeAt: Date.now(), ...(event.text ? { writingAt: stampAfter(after.callAt) } : {}) } };
     }
     case 'activity': {
+      if (model.live?.stopping) return model;
       const live = model.live ?? freshLive('thinking');
       return { ...model, live: { ...applyActivity(withoutPhase(live), event.event), activeAt: Date.now() } };
     }
@@ -135,8 +141,21 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       const exhausted = isUsageExhaustedMessage(msg);
       return withNote(model, { kind: 'notice', level: exhausted ? 'info' : 'error', text: msg });
     }
-    case 'submission':
-      return { ...model, submissions: model.submissions.map((item) => (item.id === event.id ? { ...item, disposition: event.disposition, ...(event.unsteered ? { unsteered: true } : {}) } : item)) };
+    case 'submission': {
+      const submissions = model.submissions.map((item) => (item.id === event.id ? { ...item, disposition: event.disposition, ...(event.unsteered ? { unsteered: true } : {}) } : item));
+      if (event.disposition !== 'steered') return { ...model, submissions };
+      // Taken into the turn: out of the queue now, and in the turn where it
+      // was acknowledged -- not a row at the bottom until a snapshot says so.
+      const queued = model.queued.filter((item) => item.id !== event.id);
+      const sent = model.submissions.find((item) => item.id === event.id);
+      const live = model.live;
+      if (!live || !sent || live.steers.some((steer) => steer.id === event.id)) return { ...model, submissions, queued };
+      const { seq, seen } = takeSeq(live, event.seq);
+      return {
+        ...model, submissions, queued,
+        live: { ...live, seen, steers: [...live.steers, { id: event.id, text: sent.text, offset: Math.min(event.responseOffset ?? live.text.length, live.text.length), seq }] },
+      };
+    }
     case 'shutdown':
       // An idle worker retiring (a newer build, an idle timeout) is invisible:
       // the bridge attaches to its replacement. Only a cut-off turn is news.

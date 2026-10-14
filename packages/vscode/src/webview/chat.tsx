@@ -103,12 +103,16 @@ export function Transcript({ model, reveal }: { model: ChatModel; reveal?: numbe
   model.notes.forEach((note, position) => {
     if (note.after > model.messages.length && !(inTurn !== undefined && note.turn === inTurn)) parts.push(<NoteView key={`n${position}`} note={note} />);
   });
-  const queuedTexts = new Set(model.queued.map((item) => item.text));
-  const steered = new Set(model.live?.steers.map((steer) => steer.text));
+  // By id, never by text: two messages that say "yes" are two messages.
+  const queuedIds = new Set(model.queued.map((item) => item.id));
+  const steeredIds = new Set(model.live?.steers.flatMap((steer) => (steer.id ? [steer.id] : [])));
   for (const submission of model.submissions) {
-    // A queued message is drawn once, from the stored queue under the
-    // composer; one the turn took is drawn in the turn, where it landed.
-    if (submission.disposition === 'queued' || (!submission.disposition && queuedTexts.has(submission.text)) || steered.has(submission.text)) continue;
+    // A queued message is drawn once -- from the stored queue under the
+    // composer once the snapshot has it, from here until then; one the turn
+    // took is drawn in the turn, where it landed. A message that waits for a
+    // turn that is over is the next turn's, not a row of this one.
+    if (queuedIds.has(submission.id) || steeredIds.has(submission.id)) continue;
+    if (!model.running && submission.disposition !== 'steered' && submission.disposition !== 'error') continue;
     const said = submission.disposition === 'steered' ? 'Sent into this turn' : submission.disposition === 'queued' ? 'Queued for the next turn' : submission.disposition === 'error' ? 'Not sent' : 'Sending…';
     parts.push(<div key={`s${submission.id}`} class="submission"><Icon name="arrow-small-right" /><span class="muted">{said}:</span> <span>{submission.text}</span></div>);
   }

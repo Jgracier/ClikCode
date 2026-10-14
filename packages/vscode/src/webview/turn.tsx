@@ -23,7 +23,7 @@ import { ChildLine, DecisionRow, FoldedRun, Reasoning, RunGroups, ThoughtRow } f
  * finished, each run of calls folds to one line in its place, so nothing
  * moves when the turn ends. */
 export function TurnFlow(props: {
-  text: string; activities: readonly Activity[]; thoughts: readonly ThoughtEntry[]; steers: ReadonlyArray<{ text: string; offset: number; seq?: number }>;
+  text: string; activities: readonly Activity[]; thoughts: readonly ThoughtEntry[]; steers: ReadonlyArray<{ id?: string; text: string; offset: number; seq?: number }>;
   workspace?: string; live?: { startedAt: number }; cacheKey?: string; userIndex?: number;
   /** The turn's one plan, drawn once at the offset it first appeared. */
   plan?: { entries: ChatModel['plan']; at: PlanAt };
@@ -40,6 +40,10 @@ export function TurnFlow(props: {
   });
   const parts: JSX.Element[] = [];
   let at = 0;
+  // Text is keyed by the mark before it, not by where it starts: a message
+  // sent into the turn moves the offsets after it, and a text piece keyed by
+  // offset was remounted (losing selection and scroll) each time.
+  let after = 'start';
   let run: Activity[] = [];
   const flushRun = (): void => {
     if (!run.length) return;
@@ -54,15 +58,16 @@ export function TurnFlow(props: {
     flushRun();
     // Live, every block of text is the same kind of node under the same key
     // as it grows and as a call starts after it: its DOM survives.
-    if (props.live) parts.push(<LiveMarkdown key={`t${at}`} text={piece} />);
+    if (props.live) parts.push(<LiveMarkdown key={`t${after}`} text={piece} />);
     else {
       const html = props.cacheKey ? renderFinished(`${props.cacheKey}@${at}`, piece) : renderMarkdown(withoutOtherOrgThinkingNotice(piece));
-      parts.push(<div key={`t${at}`} class="markdown" dangerouslySetInnerHTML={{ __html: html }} />);
+      parts.push(<div key={`t${after}`} class="markdown" dangerouslySetInnerHTML={{ __html: html }} />);
     }
     at = end;
   };
   for (const mark of marks) {
     if (mark.offset > at) paragraph(mark.offset);
+    after = `${mark.activity ? 'a' : mark.thought ? 'h' : mark.plan ? 'p' : mark.note ? 'n' : mark.child ? 'c' : mark.decision ? 'd' : 's'}${mark.activity?.key ?? mark.child?.child.key ?? mark.decision?.id ?? mark.steerId ?? mark.steerIndex ?? mark.seq}`;
     if (mark.activity) { run.push(mark.activity); continue; }
     flushRun();
     if (mark.thought) parts.push(<ThoughtRow key={`h${mark.thought.seq}`} thought={mark.thought} />);
@@ -70,11 +75,11 @@ export function TurnFlow(props: {
     else if (mark.note) parts.push(<NoteView key={`n${mark.seq}`} note={mark.note} />);
     else if (mark.child) parts.push(<div key={`c${mark.child.child.key}`} class="activities"><ChildLine live={mark.child} /></div>);
     else if (mark.decision) parts.push(<DecisionRow key={`d${mark.decision.id}`} entry={mark.decision} />);
-    else parts.push(<div key={`s${mark.steerIndex}`} class="steer"><Icon name="arrow-small-right" /><span>{mark.steer}</span><span class="muted">sent into this turn</span></div>);
+    else parts.push(<div key={`s${mark.steerId ?? mark.steerIndex}`} class="steer"><Icon name="arrow-small-right" /><span>{mark.steer}</span><span class="muted">sent into this turn</span></div>);
   }
   flushRun();
   if (props.live) {
-    if (text.slice(at).trim()) parts.push(<LiveMarkdown key={`t${at}`} text={text.slice(at)} />);
+    if (text.slice(at).trim()) parts.push(<LiveMarkdown key={`t${after}`} text={text.slice(at)} />);
   } else paragraph(text.length);
   return <>{parts}</>;
 }
