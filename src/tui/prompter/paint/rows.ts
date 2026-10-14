@@ -6,7 +6,7 @@ import type { SettlingTool } from '../../../turn/transcript.js';
 import type { HarnessActivityEvent, ToolCategory } from '../../../harness/prompter.js';
 import type { TranscriptMessage, HarnessSession } from '../../../session/model.js';
 import { ActivityEntry, collapseToolRuns, settleDecisionEntry, upsertActivityEvent } from '../../render/activity-log.js';
-import { agentProgress, toolUses, liveWaitKind, waitingSpinnerGlyph } from '../../../harness/protocol/activity-view.js';
+import { agentProgress, toolUses, liveWaitKind } from '../../../harness/protocol/activity-view.js';
 import { outputPreviewRows, renderActivityLine } from '../../../harness/protocol/activity-line.js';
 import { tensedLabel } from '../../../harness/protocol/turn-flow.js';
 import { CallGrouping, LIVE_SHOWN_CALLS, liveItemLine, type CallRun, type GroupRow } from '../../render/call-groups.js';
@@ -295,12 +295,12 @@ export function createTurnTools(
     if (!ended) {
       const open = turnEntries(p.activityAnchor).filter((entry) => entry.event?.kind === 'tool-start' && entry.event.id
         && (entry.sequence ?? 0) > p.emitted.turnSequenceFloor);
-      const frame = p.reducedMotion ? 0 : p.waitingFrame;
+      // The agent's own row carries the motion; its calls are the tools' static mark.
       for (const child of p.liveChildren.rows(open.map((entry) => ({ id: entry.event!.id!, offset: entry.responseOffset, seq: entry.sequence })))) {
         const uses = child.newest ? open.find((entry) => entry.event!.id === child.parentId)?.event?.childTools : undefined;
         tools.push({
           id: child.id, done: false, nested: true, parent: child.parentId, responseOffset: child.offset, seq: child.seq,
-          lines: [`    ${look.paint.accent(waitingSpinnerGlyph(frame))} ${chalk.dim(`${child.label}${uses ? ` · ${toolUses(uses)}` : ''}`)}`],
+          lines: [`    ${toolGlyph()} ${chalk.dim(`${child.label}${uses ? ` · ${toolUses(uses)}` : ''}`)}`],
         });
       }
     }
