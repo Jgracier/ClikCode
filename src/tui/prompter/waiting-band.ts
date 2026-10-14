@@ -57,8 +57,8 @@ export function statusText(this: TerminalHarnessPrompter, width: number): string
  * what actually arrives: the open call names the verb, the clock stops for
  * an approval. The spinner turns yellow once the turn has gone quiet.
  *
- * No token meter and no `esc stop`: the spinner, one word and the clock.
- * Only a sign-in's wait keeps its `esc cancel`. */
+ * No token meter: the spinner, one word and the clock, then the key that
+ * acts on the wait -- `esc stop`, or a sign-in's `esc cancel`. */
 export function waitingLine(this: TerminalHarnessPrompter, turn: WaitingTurn, width: number): string {
   const now = Date.now();
   const elapsed = formatElapsed(turnElapsedMs(turn.clock, now));
@@ -83,17 +83,19 @@ export function waitingLine(this: TerminalHarnessPrompter, turn: WaitingTurn, wi
   // shimmering with it. An approval is the turn waiting on the user, not
   // working: a still dot, and no clock (it is stopped).
   const glyph = asking ? '●' : waitingSpinnerGlyph(this.reducedMotion ? 0 : this.waitingFrame);
+  // A Stop in flight says so -- but never over a question that is still open.
+  const label = turn.stopLabel && !asking ? turn.stopLabel : status.label;
   const painted = paintStatus({
-    glyph, label: status.label, tone: status.tone,
+    glyph, label, tone: status.tone,
     ...(status.tone === 'tool' && tool?.category ? { category: tool.category } : {}),
-    frame: this.waitingFrame, shimmer: !this.reducedMotion && this.waitingTickFast && status.tone !== 'asking',
+    frame: this.waitingFrame, shimmer: !this.reducedMotion && !turn.cancelled && this.waitingTickFast && status.tone !== 'asking',
     stalled: waitStalled({ conversationTurn: Boolean(turn.submit || turn.early), onUser: asking, cancelled: turn.cancelled, quietMs: now - turn.activeAt }),
   });
   const line = `${painted.spinner}${asking ? ' ' : '  '}${painted.label}${chalk.dim(rest)}`;
-  // A sign-in's wait: Esc cancels it. Esc stopping a turn is in /help.
+  // A sign-in's wait: Esc cancels it. Otherwise Esc stops the turn, while it would.
   const cancels = this.signingIn && !turn.cancelled;
-  const hint = ` · ${keyHintFor('esc', 'cancel')}`;
-  return cancels && terminalCellWidth(line) + terminalCellWidth(hint) <= width ? `${line}${chalk.dim(hint)}` : line;
+  const hint = ` · ${cancels ? keyHintFor('esc', 'cancel') : keyHint('escStop')}`;
+  return (cancels || this.escStops()) && terminalCellWidth(line) + terminalCellWidth(hint) <= width ? `${line}${chalk.dim(hint)}` : line;
 }
 
 /** Esc would stop the running turn (see onWaitingKey): a conversation's

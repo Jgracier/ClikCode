@@ -259,5 +259,5 @@ export function writeTranscript(p: TerminalHarnessPrompter, input: TranscriptInp
     emit(step.finished);
     liveConversation.push(...step.live);
   }
-  return { finished, liveConversation, userRows };
+  return { finished, liveConversation, userRows, materializedPendingTurn: settled.materializedPendingTurn };
 }
