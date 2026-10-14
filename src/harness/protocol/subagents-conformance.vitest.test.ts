@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { AI_LOCAL_HARNESSES } from '@clikcode/router/ai-local-harness';
-import { subAgentRef, subAgentRelayText, subAgentSteerBlock } from './activity-normalize.js';
+import { subAgentRef, subAgentRelayText, subAgentSteerBlock, subAgentSteerPlan } from './activity-normalize.js';
 
 const matrix = readFileSync(new URL('../../../docs/SUBAGENTS.md', import.meta.url), 'utf8');
 const row = (command: string): string => matrix.split('\n').find((line) => line.startsWith(`| ${command} `) || line.startsWith(`| ${command}(`)) ?? '';
@@ -47,5 +47,12 @@ describe('subAgentRef', () => {
   it('relays by label and agent id, in the user\'s words', () => {
     expect(subAgentRelayText({ id: 'a', agentId: 'ab12', label: 'Agent explore', status: 'running', harness: 'claude', read: 'transcript', steer: 'relay' }, 'also check tests'))
       .toBe('Send this to your sub-agent Agent explore (ab12): also check tests');
+  });
+  it('plans a steer: a relay when the main agent runs, else one line why not', () => {
+    const base = { id: 'a', label: 'Agent explore', status: 'running', harness: 'claude', read: 'transcript', steer: 'relay' } as const;
+    expect(subAgentSteerPlan(base, 'Claude Code', true, 'hi')).toEqual({ steer: 'Send this to your sub-agent Agent explore: hi' });
+    expect(subAgentSteerPlan(base, 'Claude Code', false, 'hi')).toHaveProperty('refuse');
+    expect(subAgentSteerPlan({ ...base, steer: 'none' }, 'Codex', true, 'hi')).toEqual({ refuse: expect.stringContaining('read-only') });
+    expect(subAgentSteerPlan({ ...base, steer: 'thread' }, 'Codex', true, 'hi')).toEqual({ refuse: expect.stringContaining('not send') });
   });
 });
