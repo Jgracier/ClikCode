@@ -335,7 +335,7 @@ export async function interactiveSessionPicker(
   // rows each time). Nothing it reads changes between keys except discovery
   // landing or the watch below, so the rows are rebuilt only then -- not all
   // five hundred of them per arrow press. And once a second while a turn
-  // runs: its `working 3m` counts up, and it can turn `stalled`.
+  // runs: its `working 3m` counts up.
   const buildOptions = (): PickerOption<string>[] => {
     const second = rows.some((row) => row.pending) ? Math.floor(Date.now() / 1000) : 0;
     if (built && built.discovering === discovering && built.slow === slowDiscovery && built.discovered === discovered && built.revision === listRevision && built.second === second) {

@@ -88,11 +88,11 @@ export function listSecond(rows: readonly ListedConversation[] | undefined, now:
   return rows?.some((row) => row.activity === 'working') ? Math.floor(now / 1000) : 0;
 }
 
-/** What a row is marked with, by its one state: waiting on you, working
- * (stalled), the chat on screen, finished unseen, or nothing. */
-export function conversationMark(row: ListedConversation, state: ReturnType<typeof rowState>): 'needs-you' | 'working' | 'stalled' | 'current' | 'unread' | 'none' {
+/** What a row is marked with, by its one state: waiting on you, working,
+ * the chat on screen, finished unseen, or nothing. */
+export function conversationMark(row: ListedConversation, state: ReturnType<typeof rowState>): 'needs-you' | 'working' | 'current' | 'unread' | 'none' {
   if (state.kind === 'needs-you') return 'needs-you';
-  if (row.activity === 'working') return state.kind === 'stalled' ? 'stalled' : 'working';
+  if (row.activity === 'working') return 'working';
   if (row.current) return 'current';
   return row.attention === 'unread' ? 'unread' : 'none';
 }
@@ -101,7 +101,7 @@ export function conversationMark(row: ListedConversation, state: ReturnType<type
 export function ConversationMark({ row, state }: { row: ListedConversation; state: ReturnType<typeof rowState> }): JSX.Element {
   const mark = conversationMark(row, state);
   if (mark === 'needs-you') return <Icon name="bell-dot" label="waiting for your answer" />;
-  if (mark === 'working' || mark === 'stalled') return <span class={`conversation-dot working${mark === 'stalled' ? ' stalled' : ''}`} aria-label={state.text} />;
+  if (mark === 'working') return <span class="conversation-dot working" aria-label={state.text} />;
   if (mark === 'current') return <Icon name="check" label="this chat" />;
   if (mark === 'unread') return <span class="conversation-dot unread" aria-label="finished" />;
   return <span class="conversation-dot" aria-hidden="true" />;
@@ -130,8 +130,8 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
   };
 
   const query = search.trim().toLowerCase();
-  // A working row's "working 3m" counts up and can turn "stalled": the rows
-  // are rebuilt each second while one works, and only then.
+  // A working row's "working 3m" counts up: the rows are rebuilt each second
+  // while one works, and only then.
   const now = useNow(Boolean(rows?.some((row) => row.activity === 'working')));
   const second = listSecond(rows, now);
   const listRows = useMemo((): ListRow[] => {

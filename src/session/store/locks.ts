@@ -4,7 +4,7 @@
 
 import { randomBytes } from 'node:crypto';
 import { readlinkSync } from 'node:fs';
-import { link, open, readdir, readFile, rename, stat, unlink, utimes, writeFile } from 'node:fs/promises';
+import { link, open, readdir, readFile, rename, stat, unlink, utimes } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { lifecycle } from '../../runtime/lifecycle-log.js';
@@ -218,7 +218,7 @@ export function fileLocksHeld(): boolean {
  * the new lock look stale on arrival. */
 async function createLock(lockPath: string, mine: string): Promise<boolean> {
   const temp = `${lockPath}.${process.pid}.${randomBytes(6).toString('hex')}.new`;
-  await writeFile(temp, mine, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+  await writeOwnedFile(temp, mine);
   try {
     await link(temp, lockPath);
     return true;
@@ -230,6 +230,23 @@ async function createLock(lockPath: string, mine: string): Promise<boolean> {
   }
 }
 
+/** Creates a private file with all of `contents`, removing it if the write
+ * fails after the exclusive open (notably ENOSPC, which otherwise leaves an
+ * empty file behind). The open itself is kept separate so EEXIST can never
+ * make us unlink a file owned by another process. */
+async function writeOwnedFile(path: string, contents: string): Promise<void> {
+  const handle = await open(path, 'wx', 0o600);
+  try {
+    await handle.writeFile(contents, { encoding: 'utf8' });
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    await unlink(path).catch(() => undefined);
+    throw error;
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+}
+
 /** A waiter's place in line for a fair lock: a file named by when it
  * arrived, holding its owner like the lock does, so a dead or stalled
  * waiter's place is judged exactly as a dead or stalled holder is. */
@@ -237,7 +254,7 @@ async function takeTicket(lockPath: string, mine: string): Promise<string> {
   const queue = `${lockPath}.queue`;
   await ensurePrivateDirectory(queue);
   const ticket = join(queue, `${String(Date.now()).padStart(15, '0')}.${process.pid}.${randomBytes(6).toString('hex')}`);
-  await writeFile(ticket, mine, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+  await writeOwnedFile(ticket, mine);
   return ticket;
 }
 

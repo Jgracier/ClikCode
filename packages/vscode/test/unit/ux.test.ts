@@ -224,10 +224,10 @@ describe('the history menu lists the terminal board\'s sections', () => {
 describe('a history row\'s state', () => {
   const now = Date.parse('2026-10-03T12:00:00.000Z');
   const row = { id: 'a', title: 't', updatedAt: '2026-10-03T11:55:00.000Z', messages: 1, current: false };
-  it('is the terminal\'s: when, working, stalled, needs you', () => {
+  it('is the terminal\'s: when, working, needs you', () => {
     expect(rowState(row, now)).toEqual({ kind: 'idle', text: '5m ago' });
     expect(rowState({ ...row, activity: 'working', turn: { startedAt: '2026-10-03T11:57:00.000Z', activeAt: '2026-10-03T11:59:50.000Z', agents: 2 } }, now).text).toBe('working 3m · 2 agents');
-    expect(rowState({ ...row, activity: 'working', turn: { startedAt: '2026-10-03T11:40:00.000Z', activeAt: '2026-10-03T11:56:00.000Z' } }, now).text).toBe('stalled 4m');
+    expect(rowState({ ...row, activity: 'working', turn: { startedAt: '2026-10-03T11:40:00.000Z', activeAt: '2026-10-03T11:56:00.000Z' } }, now).text).toBe('working 20m');
     expect(rowState({ ...row, needsYou: true }, now).kind).toBe('needs-you');
   });
 
