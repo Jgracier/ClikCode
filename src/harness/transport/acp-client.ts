@@ -14,7 +14,7 @@ import { commandOutcome } from '../protocol/activity-events.js';
 import { categoryOf, commandText, formatToolRow, isAgentToolName, toolLabel } from '../protocol/tools.js';
 import { acpSessionTotals, normalizeTurnUsage, turnShareOf, turnStopReason, type TurnUsage } from '../protocol/turn-usage.js';
 import { claudeRateLimitReading } from '../accounts/usage-reading.js';
-import { activityOutput, editDiffFromInput, toolCall } from '../protocol/activity-events.js';
+import { activityOutput, editDiffFromInput, thoughtLabel, toolCall } from '../protocol/activity-events.js';
 import { turnCancelledError } from '../../agent/cancellation.js';
 import { type JsonRpcPeer } from './jsonrpc-peer.js';
 import { BackgroundTurnChannel } from './background-turn.js';
@@ -235,6 +235,9 @@ function acpToolLabel(update: Json, classified: { category?: ToolCategory; agent
   const title = typeof (update.title ?? update.name) === 'string' ? String(update.title ?? update.name).trim() : '';
   if (classified.agent) return formatToolRow('agent', typeof raw?.description === 'string' ? raw.description : title);
   const head = title.split(/[\s:(]/, 1)[0] || 'tool';
+  // A command under any of the names agents give it (`command`, `cmd`).
+  const command = classified.category === 'run' ? acpCommand(raw)?.trim() : undefined;
+  if (command) return formatToolRow('shell', command, 'run');
   const fromInput = raw ? toolLabel(classified.category === 'run' ? 'shell' : head, raw, classified.category) : undefined;
   if (fromInput && fromInput !== formatToolRow(classified.category === 'run' ? 'shell' : head, undefined, classified.category)) return fromInput;
   const location = Array.isArray(update.locations) ? update.locations.find((entry: Json) => typeof entry?.path === 'string')?.path as string | undefined : undefined;
@@ -1243,7 +1246,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       const said = `${prior && prior.kind === update.sessionUpdate ? prior.text : ''}${text}`.slice(-2000);
       target.subagentText.set(parentId, { kind: String(update.sessionUpdate), text: said });
       const latest = said.trim().split(/\n+/).pop()?.trim() ?? '';
-      if (latest) input.onActivity?.({ kind: 'thinking', label: latest.slice(-160), parentId });
+      if (latest) input.onActivity?.({ kind: 'thinking', label: thoughtLabel(latest), parentId });
       return;
     }
     const thought = acpThoughtDelta(update);

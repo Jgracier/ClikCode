@@ -444,6 +444,13 @@ export function nextTurnTickMs(clock: TurnClock, now: number, animating: boolean
   return animating ? SPIN_MS : 1000 - (turnElapsedMs(clock, now) % 1000) + 5;
 }
 
+/** A finished call that failed: reported as an error (not stopped), or a
+ * non-zero exit. Independent of what else it reported -- a vendor that sends
+ * no exit code or duration still has a failure, and its output tail is shown. */
+export function callFailed(event: Pick<HarnessActivityEvent, 'kind' | 'stopped' | 'exitCode'>): boolean {
+  return (event.kind === 'tool-error' && !event.stopped) || (event.kind === 'tool-done' && event.exitCode !== undefined && event.exitCode !== 0);
+}
+
 /** What follows a finished call: a non-zero exit and a run of a second or
  * more -- the exceptions, since every call exits 0 in under a second. */
 export function activityOutcome(event: Pick<HarnessActivityEvent, 'kind' | 'stopped' | 'exitCode' | 'durationMs' | 'childTools' | 'childTokens'>): { parts: string[]; failed: boolean } | undefined {
