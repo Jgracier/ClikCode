@@ -1,7 +1,7 @@
 /** Put an agent's temporary files on disk rather than RAM-backed /tmp.
  * The directory belongs to the conversation, so a replacement worker uses
- * the same files. ClikCode does not delete it while a detached command might
- * still be using it. */
+ * the same files. It is never removed itself; old entries in it are swept by
+ * worker/state-sweep.ts, which skips any a live process is using. */
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { stateDirectory } from '../session/store/paths.js';

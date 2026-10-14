@@ -91,4 +91,18 @@ describe('worker registry', () => {
       expect(await workerIsReachable(socketPathFor('nothing-here'))).toBe(false);
     });
   });
+  it('falls back to the startup temp directory for a long state directory, even after TMPDIR moves', () => {
+    const saved = { home: process.env.CLIKCODE_HOME, tmp: process.env.TMPDIR };
+    try {
+      process.env.CLIKCODE_HOME = `/${'a'.repeat(90)}`;
+      const before = socketPathFor('abc');
+      expect(before).toContain('/cc-');
+      process.env.TMPDIR = '/moved/by/a/worker/into/its/state/directory';
+      expect(socketPathFor('abc')).toBe(before);
+      expect(before).not.toContain('/moved/by/a/worker');
+    } finally {
+      if (saved.home === undefined) delete process.env.CLIKCODE_HOME; else process.env.CLIKCODE_HOME = saved.home;
+      if (saved.tmp === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = saved.tmp;
+    }
+  });
 });
