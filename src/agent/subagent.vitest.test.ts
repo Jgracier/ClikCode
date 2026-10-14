@@ -467,9 +467,67 @@ describe('coding sub-agents in their own worktree', () => {
     });
     await runAgentLoop(turn(client).input);
     const [output] = toolResults(client.requests(PARENT_PROMPT)[1]);
-    expect(output).toMatch(/needs a git repository/);
+    expect(output).toMatch(/works in its own git worktree, and .* is not inside a git repository/);
+    expect(output).toMatch(/Pass the repository to work in as `repo`/);
     expect(output.split('\n')).toHaveLength(1);
     expect(client.requests('never runs')).toHaveLength(0);
+  });
+
+  async function initChildRepo(name: string): Promise<string> {
+    const dir = path.join(cwd, name);
+    await fs.mkdir(dir);
+    await fs.writeFile(path.join(dir, 'a.txt'), 'the answer is 42\n');
+    const inChild = (...args: string[]) => execFileAsync('git', args, { cwd: dir });
+    await inChild('init', '-q', '-b', 'main');
+    await inChild('add', '-A');
+    await inChild('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-q', '-m', 'base');
+    return dir;
+  }
+
+  it('works in the repository named by `repo` when the session sits in a folder of repositories', async () => {
+    const child = await initChildRepo('app');
+    const client = new RoutedModelClient({
+      [PARENT_PROMPT]: { script: [{ toolCalls: [{ name: 'agent', args: { prompt: 'edit the child', description: 'Edit child', repo: 'app' } }] }, { text: 'done' }] },
+      'edit the child': { script: [
+        { toolCalls: [{ name: 'edit_file', args: { path: 'a.txt', old_string: '42', new_string: '48' } }] },
+        { text: 'Changed.' },
+      ] },
+    });
+    await runAgentLoop(turn(client).input);
+    const [output] = toolResults(client.requests(PARENT_PROMPT)[1]);
+    const branch = branchOf(output);
+    const inChild = async (...args: string[]) => (await execFileAsync('git', args, { cwd: child })).stdout.trim();
+    expect(await inChild('show', `${branch}:a.txt`)).toBe('the answer is 48');
+    expect(await fs.readFile(path.join(child, 'a.txt'), 'utf8')).toBe('the answer is 42\n');
+  });
+
+  it('names the repositories under the working directory when isolation has no repository to use', async () => {
+    const child = await initChildRepo('app');
+    const client = new RoutedModelClient({
+      [PARENT_PROMPT]: { script: [{ toolCalls: [{ name: 'agent', args: { prompt: 'never runs', background: true } }] }, { text: 'done' }] },
+      'never runs': { script: [{ text: 'ran' }] },
+    });
+    await runAgentLoop(turn(client).input);
+    const [output] = toolResults(client.requests(PARENT_PROMPT)[1]);
+    expect(output).toContain(child);
+    expect(output).toMatch(/Pass one of them as `repo`/);
+    expect(client.requests('never runs')).toHaveLength(0);
+  });
+
+  it('refuses a `repo` outside the session directories', async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'clikcode-outside-'));
+    try {
+      const client = new RoutedModelClient({
+        [PARENT_PROMPT]: { script: [{ toolCalls: [{ name: 'agent', args: { prompt: 'never runs', repo: outside } }] }, { text: 'done' }] },
+        'never runs': { script: [{ text: 'ran' }] },
+      });
+      await runAgentLoop(turn(client).input);
+      const [output] = toolResults(client.requests(PARENT_PROMPT)[1]);
+      expect(output).toMatch(/outside this session's working directory/);
+      expect(client.requests('never runs')).toHaveLength(0);
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
   });
 
   it('runs a background agent while the parent works, and the turn ends with its result', async () => {
@@ -580,7 +638,7 @@ describe('coding sub-agents in their own worktree', () => {
       'never runs': { script: [{ text: 'ran' }] },
     });
     await runAgentLoop(turn(client).input);
-    expect(toolResults(client.requests(PARENT_PROMPT)[1])[0]).toMatch(/not in a git repository/);
+    expect(toolResults(client.requests(PARENT_PROMPT)[1])[0]).toMatch(/is not inside a git repository/);
     expect(client.requests('never runs')).toHaveLength(0);
   });
 

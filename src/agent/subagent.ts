@@ -10,7 +10,7 @@ import { ConversationStore } from './conversation.js';
 import { disposeSessionState } from './session-state.js';
 import { toolOutputDir } from './security.js';
 import type { SubagentCall, ToolDefinition, ToolRunResult } from './tool-contract.js';
-import { createAgentWorktree, finishAgentWorktree, type AgentWorktree } from './worktree.js';
+import { createAgentWorktree, finishAgentWorktree, noWorktreeMessage, type AgentWorktree } from './worktree.js';
 import { claudeToolName } from './hooks.js';
 
 /** By name, not by class: `read` also covers bash_output and task itself,
@@ -112,11 +112,11 @@ export function createSubagentRunner(options: SubagentRunnerOptions): (request: 
     let worktree: AgentWorktree | undefined;
     if (work && request.isolation === 'worktree') {
       try {
-        worktree = await createAgentWorktree(parent.cwd, request.description);
+        worktree = await createAgentWorktree(request.repo ?? parent.cwd, request.description);
       } catch (error) {
         return { output: `Could not create a git worktree for the subagent: ${error instanceof Error ? error.message : String(error)}`, isError: true };
       }
-      if (!worktree) return { output: `isolation "worktree" needs a git repository with a commit, and ${parent.cwd} is not in one; run the agent without isolation.`, isError: true };
+      if (!worktree) return { output: await noWorktreeMessage(request.repo ?? parent.cwd, request.repo !== undefined), isError: true };
     }
     const transcriptFile = path.join(toolOutputDir(parent.stateDir, parent.sessionId), `${randomUUID()}.jsonl`);
     const store = new ConversationStore(parent.stateDir, sessionId, transcriptFile);

@@ -41,6 +41,40 @@ export async function canCreateAgentWorktree(cwd: string): Promise<boolean> {
   return git(['rev-parse', '--verify', 'HEAD^{commit}'], cwd).then(() => true, () => false);
 }
 
+/** Repositories (with a commit) among a directory's immediate children: what a session rooted in a folder
+ * of repositories can name as `repo`. Bounded: a huge folder is not scanned whole. */
+export async function findChildRepositories(parent: string, limit = 12): Promise<string[]> {
+  let names: string[];
+  try {
+    names = (await fs.readdir(parent, { withFileTypes: true })).filter((entry) => entry.isDirectory() && !entry.name.startsWith('.')).map((entry) => entry.name).sort();
+  } catch {
+    // fail-open-ok: an unreadable directory has no repositories to suggest.
+    return [];
+  }
+  const found: string[] = [];
+  for (const name of names.slice(0, 400)) {
+    const dir = path.join(parent, name);
+    if (!await fs.stat(path.join(dir, '.git')).then(() => true, () => false)) continue;
+    if (await canCreateAgentWorktree(dir)) found.push(dir);
+    if (found.length >= limit) break;
+  }
+  return found;
+}
+
+/** Why a worktree cannot be made from `dir`, and what to do about it. */
+export async function noWorktreeMessage(dir: string, explicit: boolean): Promise<string> {
+  const inRepo = await git(['rev-parse', '--show-toplevel'], dir).then((top) => top.trim(), () => undefined);
+  const why = explicit
+    ? `${dir} is not inside a git repository with a commit`
+    : inRepo ? `${dir} is in a git repository (${inRepo}) that has no commits yet`
+      : `${dir} is not inside a git repository`;
+  const children = await findChildRepositories(dir);
+  const hint = children.length
+    ? ` Repositories under it: ${children.join(', ')}. Pass one of them as \`repo\`.`
+    : ' Pass the repository to work in as `repo`, or run the agent without isolation.';
+  return `An isolated or background agent works in its own git worktree, and ${why}.${hint}`;
+}
+
 /** Undefined when cwd is not inside a git work tree with at least one commit. */
 export async function createAgentWorktree(cwd: string, label = 'agent'): Promise<AgentWorktree | undefined> {
   let top: string;

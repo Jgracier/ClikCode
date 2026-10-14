@@ -48,6 +48,9 @@ export interface SubagentCall {
   agentType?: { name: string; prompt: string; tools?: readonly string[] };
   /** A coding sub-agent in its own git worktree, on its own branch. */
   isolation?: 'worktree';
+  /** The repository the worktree is made from, when it is not the parent's own cwd (a session rooted in a
+   * folder of repositories). An absolute directory inside a git repository with a commit. */
+  repo?: string;
   /** Started in the background: outlives the call, not the turn. */
   background?: true;
   /** Hands over the running sub-agent's steering handler (agent_send). */
