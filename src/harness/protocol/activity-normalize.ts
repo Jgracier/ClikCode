@@ -73,21 +73,22 @@ function labelFor(event: HarnessActivityEvent, category: ToolCategory | undefine
     const called = /^([A-Za-z_][\w-]*)\((.*)\)$/s.exec(label);
     return called && isAgentToolName(called[1]!) ? formatToolRow('agent', called[2]) : label;
   }
-  if (!category) return label;
-  // The call is known: the row is built from it, as every parser does, so the
-  // same call reads the same however an adapter spelled its title. Only with
-  // an id, so frames that merge by label all say the same thing.
-  if (event.call && event.id) {
-    const built = toolLabel(event.call.name, event.call.input, category);
-    if (built !== formatToolRow(event.call.name, undefined, category)) return built;
-  }
-  if (CANONICAL_LABEL[category].test(label)) return label;
+  if (!category || CANONICAL_LABEL[category].test(label)) return label;
   // `Bash(ls)`, `Read(src/a.ts)`: the vendor's own spelling of the row.
   const called = /^([A-Za-z_][\w-]*)\((.*)\)$/s.exec(label);
   if (called) return formatToolRow(called[1]!, called[2], category);
   // An ACP agent's title for a command: `` `npm test` ``.
   const ticked = /^`([^`\n]+)`$/.exec(label);
   if (ticked) return formatToolRow('shell', ticked[1], category);
+  // The call is known: the row is built from it, as every parser does. Only
+  // with an id, so frames that merge by label all say the same thing. A label
+  // already in the shape is never rebuilt: the observer shortens its paths
+  // against the workspace (withWorkspacePaths) and the call keeps the
+  // absolute ones.
+  if (event.call && event.id) {
+    const built = toolLabel(event.call.name, event.call.input, category);
+    if (built !== formatToolRow(event.call.name, undefined, category)) return built;
+  }
   return label;
 }
 
@@ -119,7 +120,7 @@ export function normalizeActivityEvent<T extends HarnessActivityEvent>(event: T)
   const base = agent && !event.agent ? { ...event, agent } : event;
   const category = categoryFor(base);
   const label = labelFor(base, category);
-  const failedExit = base.kind === 'tool-done' && !base.stopped && category === 'run' && finite(base.exitCode) && base.exitCode !== 0;
+  const failedExit = base.kind === 'tool-done' && !base.stopped && finite(base.exitCode) && base.exitCode !== 0;
   const output = boundedOutput(base, category);
   const next: HarnessActivityEvent = {
     ...base,

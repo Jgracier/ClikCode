@@ -19,7 +19,7 @@ describe('normalizeActivityEvent', () => {
     expect(n({ kind: 'tool-start', label: 'Bash(npm test)' })).toMatchObject({ label: '$ npm test', category: 'run' });
     expect(n({ kind: 'tool-start', label: 'Read(src/a.ts)' })).toMatchObject({ label: 'Read src/a.ts', category: 'read' });
     expect(n({ kind: 'tool-start', label: '`npm test`', category: 'run' }).label).toBe('$ npm test');
-    expect(n({ kind: 'tool-start', label: 'Read config', id: 'a', category: 'read', call: { name: 'Read', input: { file_path: 'a.ts' } } }).label).toBe('Read a.ts');
+    expect(n({ kind: 'tool-start', label: 'Reading config', id: 'a', category: 'read', call: { name: 'Read', input: { file_path: 'a.ts' } } }).label).toBe('Read a.ts');
     expect(n({ kind: 'tool-start', label: 'Task(review the tests)', agent: true }).label).toBe('Agent review the tests');
   });
 

@@ -5,7 +5,7 @@ import chalk from 'chalk';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import type { HarnessActivityEvent } from '../prompter.js';
 import type { FileDiff } from '../../agent/line-diff.js';
-import { activityOutcome, diffPreview, diffTotals, outputPreview } from './activity-view.js';
+import { activityOutcome, callFailed, diffPreview, diffTotals, outputPreview } from './activity-view.js';
 import { activityResult, tensedLabel } from './turn-flow.js';
 import { look, toolGlyph, TOOL_ROW_TEXT } from './tool-category-style.js';
 import { LOOK } from './look.js';
@@ -45,7 +45,7 @@ export function renderActivityLine(event: HarnessActivityEvent): string[] {
   // contents, a search's hits are in the saved turn. Under a failed call the
   // last lines of its output -- that is the error.
   if (!event.diff?.length) {
-    return activityOutcome(event)?.failed ? [summary, ...failedOutputRows(event)] : [summary];
+    return callFailed(event) ? [summary, ...failedOutputRows(event)] : [summary];
   }
   // An edit is a line per file -- `Edited path +N −M` -- and no hunks under
   // it: the diff is /diff, /changes and the end-of-turn summary.

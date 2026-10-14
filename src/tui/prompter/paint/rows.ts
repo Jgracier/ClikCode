@@ -291,7 +291,7 @@ export function createTurnTools(
         const uses = child.newest ? open.find((entry) => entry.event!.id === child.parentId)?.event?.childTools : undefined;
         tools.push({
           id: child.id, done: false, nested: true, parent: child.parentId, responseOffset: child.offset, seq: child.seq,
-          lines: [`    ${chalk.cyan(waitingSpinnerGlyph(frame))} ${chalk.dim(`${child.label}${uses ? ` · ${toolUses(uses)}` : ''}`)}`],
+          lines: [`    ${look.paint.accent(waitingSpinnerGlyph(frame))} ${chalk.dim(`${child.label}${uses ? ` · ${toolUses(uses)}` : ''}`)}`],
         });
       }
     }
