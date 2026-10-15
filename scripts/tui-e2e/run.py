@@ -1235,6 +1235,24 @@ SCENARIOS = {
         'final_once': ['› queued message one', '› queued message two'],
         'final_in_order': ['› queued message one', 'First queued answered.', '› queued message two', 'Second queued answered.'],
     },
+    # The default is steer, and an agent that takes none (the fake without
+    # FAKE_STEERING: Grok's ACP advertises no steering) cannot be steered: the
+    # message queues for the next turn and the row says why, instead of
+    # looking like the user's own choice of /send queue.
+    'unsteerable-queues-and-says-so': {
+        'env': {'FAKE_DELAY_MS': '150'},
+        'turns': [{'intro': 'Starting the long build.', 'hold_ms': 3000, 'blocks': ['The build passed.']},
+                  {'blocks': ['Queued turn answered.']}],
+        'steps': [
+            ('type', 'start the build'), ('wait_for', 'Starting the long build.', 30),
+            ('type', 'also run the linter'), ('wait_for', "this turn can't take it", 10),
+            ('wait_for', 'The build passed.', 60), ('wait_for', 'Queued turn answered.', 60), ('settle', 3),
+        ],
+        'watch': ['start the build', 'also run the linter'],
+        'dup_ok': ['↳ queued for next turn'],
+        'never': ['sent into the turn', 'sending at the next pause', 'Request interrupted', 'stopping'],
+        'final_in_order': ['› start the build', 'The build passed.', '› also run the linter', 'Queued turn answered.'],
+    },
     # A message sent into a turn that ends in the same moment: one row, one run.
     'steer-as-turn-ends': {
         'env': {'FAKE_STEERING': '1', 'FAKE_DELAY_MS': '100'},
