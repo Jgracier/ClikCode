@@ -25,6 +25,7 @@ import { conversationHandlers, lastAnswer } from './handlers/conversation.js';
 import { modelHandlers } from './handlers/model.js';
 import { settingsHandlers } from './handlers/settings.js';
 import { accountsHandlers } from './handlers/accounts.js';
+import { agentsHandlers } from './handlers/agents.js';
 import { runShellLine } from './handlers/shell.js';
 import { INTERACTIVE_ONLY, sendSessionTurn, type HeadlessSlashHandler } from './handlers/shared.js';
 
@@ -38,6 +39,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
   ...modelHandlers,
   ...settingsHandlers,
   ...accountsHandlers,
+  ...agentsHandlers,
   init: (context) => HEADLESS_SLASH_HANDLERS.review(context),
   options: INTERACTIVE_ONLY('options'),
   provider: INTERACTIVE_ONLY('provider'),

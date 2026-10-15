@@ -149,6 +149,9 @@ export class IdeBridge {
         this.turns.noteCancel();
         void this.link.cancelTurn(request.restoreDraft, request.trigger);
         return;
+      case 'stop-agents':
+        if (this.sessionId) void this.link.workerFor(this.sessionId).then((client) => client.send({ type: 'agents', action: 'stop', ...(request.ids ? { ids: request.ids } : {}), ...(request.all ? { all: true } : {}), ...(request.confirm ? { confirm: true } : {}) }), (error: unknown) => this.report(error));
+        return;
       case 'send-queued':
         this.link.worker?.client.send({ type: 'send-queued' });
         return;

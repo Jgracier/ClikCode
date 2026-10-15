@@ -73,7 +73,7 @@ export class BroadcastObserver implements TurnObserver {
    * draws those too, not only its text. */
   private liveActivities: LiveActivity[] = [];
   /** Top-level calls started and not yet finished, by call id: what a held steer is waiting behind. */
-  private readonly openCalls = new Map<string, { label: string; since: number }>();
+  private readonly openCalls = new Map<string, { label: string; since: number; agent: boolean }>();
   private livePlan: readonly PlanEntry[] = [];
   /** The rest of what an attached window has drawn, so a joining one draws it
    * too: the turn's settled thoughts, plan, notices and approval outcomes
@@ -302,6 +302,11 @@ export class BroadcastObserver implements TurnObserver {
     this.broadcast({ type: 'delta', text, mode });
   }
 
+  /** Sub-agent calls still open: stopping the turn would end them (a vendor harness cancels them with the turn). */
+  openAgentCalls(): Array<{ id: string; label: string }> {
+    return [...this.openCalls.entries()].filter(([, call]) => call.agent).map(([id, call]) => ({ id, label: call.label }));
+  }
+
   /** The oldest call still running, and for how long: what a typed message waits behind. */
   openCall(): { label: string; seconds: number; count: number } | undefined {
     let oldest: { label: string; since: number } | undefined;
@@ -328,7 +333,7 @@ export class BroadcastObserver implements TurnObserver {
     }
     this.outputStarted = true;
     if (event.id && !event.parentId) {
-      if (event.kind === 'tool-start') this.openCalls.set(event.id, { label: event.label, since: Date.now() });
+      if (event.kind === 'tool-start') this.openCalls.set(event.id, { label: event.label, since: Date.now(), agent: event.agent === true });
       else if (event.kind === 'tool-done' || event.kind === 'tool-error') this.openCalls.delete(event.id);
     }
     if (this.waitingLabel && !event.parentId) this.foldThought(event);

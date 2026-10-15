@@ -245,6 +245,12 @@
         "icon": "$(debug-stop)"
       },
       {
+        "command": "clikcode.stopAgents",
+        "title": "Stop Background Agents",
+        "category": "ClikCode",
+        "icon": "$(stop-circle)"
+      },
+      {
         "command": "clikcode.restart",
         "title": "Restart ClikCode",
         "category": "ClikCode"

@@ -59,6 +59,8 @@ export type IdeRequest =
   | { type: 'cancel'; restoreDraft: boolean; trigger?: 'editor-stop' | 'programmatic' }
   /** Enter again: the oldest queued user message goes into the running turn. */
   | { type: 'send-queued' }
+  /** The editor's stop-agents action: the worker names what it would stop, and stops only with `confirm`. */
+  | { type: 'stop-agents'; ids?: string[]; all?: boolean; confirm?: boolean }
   /** Take a queued message back before its turn (see the worker's `unqueue`). */
   | { type: 'unqueue'; id: string }
   | { type: 'approval-response'; id: string; approved: boolean | 'always' }

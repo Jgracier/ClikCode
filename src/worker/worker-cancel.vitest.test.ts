@@ -54,7 +54,7 @@ function build(options: { sessionReadMs?: number; sessionFails?: boolean } = {})
         if (options.sessionFails) throw new Error('conversation not found');
         return { session };
       },
-      broadcastNotice: () => undefined, broadcastQueueChanged: () => undefined, showEveryWindow: () => undefined, recordNotifications: async () => undefined,
+      note: (message: string) => observer.activity(message), broadcastNotice: () => undefined, broadcastQueueChanged: () => undefined, showEveryWindow: () => undefined, recordNotifications: async () => undefined,
     },
   } as never as import('./worker-context.js').WorkerContext;
   ctx.queue = createWorkerQueue(ctx);
@@ -248,5 +248,37 @@ describe('the origin of a Stop is recorded', () => {
     const cancels = logged.filter(([event]) => event === 'worker.cancel').map(([, fields]) => fields);
     expect(cancels[0]).toMatchObject({ client: 'window', clientPid: 4242, trigger: 'esc' });
     expect(cancels[1]).toMatchObject({ client: 'unknown', trigger: 'unknown' });
+  });
+});
+
+describe('a Stop while sub-agents are running', () => {
+  const start = async () => {
+    const built = build();
+    turn.run = async (signal) => { await new Promise<void>((_, reject) => signal.addEventListener('abort', () => reject(turnCancelledError()))); };
+    const submitted = built.send({ type: 'submit', text: 'hello', echo: true, queuedTurnId: 'q1' } as never);
+    await settle(80);
+    expect(built.ctx.activeController).toBeDefined();
+    built.ctx.observer.activityEvent({ kind: 'tool-start', label: 'Explore the repo', id: 'a1', agent: true } as never);
+    return { ...built, submitted };
+  };
+
+  it('is held: a plain Esc does not interrupt them, says so, and a second Esc confirms', async () => {
+    logged.length = 0;
+    const { ctx, send, alice, submitted } = await start();
+    const esc = { type: 'cancel', restoreDraft: false, origin: { client: 'window', pid: 1, trigger: 'esc' } } as const;
+    await send(esc);
+    expect(ctx.activeController!.signal.aborted).toBe(false);
+    expect(alice.events.some((event) => event.type === 'note' && /Stop held: 1 sub-agent is running .*Explore the repo/.test(event.message))).toBe(true);
+    expect(logged.some(([event, fields]) => event === 'worker.cancel' && String(fields.stopped).startsWith('held'))).toBe(true);
+    await send(esc);
+    expect(ctx.activeController!.signal.aborted).toBe(true);
+    await submitted;
+  });
+
+  it('a script\'s abort signal is a decision already made: it stops at once', async () => {
+    const { ctx, send, submitted } = await start();
+    await send({ type: 'cancel', restoreDraft: false, origin: { client: 'scripted', pid: 1, trigger: 'abort-signal' } });
+    expect(ctx.activeController!.signal.aborted).toBe(true);
+    await submitted;
   });
 });

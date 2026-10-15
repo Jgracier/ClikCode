@@ -268,6 +268,7 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
     vscode.commands.registerCommand('clikcode.chooseEffort', slash('/effort')),
     vscode.commands.registerCommand('clikcode.choosePermissions', slash('/permissions')),
     vscode.commands.registerCommand('clikcode.cancel', () => active().cancel(true)),
+    vscode.commands.registerCommand('clikcode.stopAgents', () => active().stopAgents()),
     vscode.commands.registerCommand('clikcode.restart', () => active().restart()),
     vscode.commands.registerCommand('clikcode.showLog', () => log.show()),
     vscode.commands.registerCommand('clikcode.configure', () => vscode.commands.executeCommand('workbench.action.openSettings', `@ext:${context.extension.id}`)),

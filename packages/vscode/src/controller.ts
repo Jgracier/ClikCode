@@ -508,7 +508,23 @@ export class ClikCodeController implements vscode.Disposable {
     surface.post({ type: 'ui-request', id, request });
   }
 
+  /** The editor's stop-agents action. The worker names what it would stop; only a yes here stops them. */
+  stopAgents(): void {
+    this.deliver({ type: 'stop-agents', all: true }, 'Stop agents');
+  }
+
+  private async confirmStopAgents(text: string): Promise<void> {
+    const yes = 'Stop agents';
+    const answer = await vscode.window.showWarningMessage(text, { modal: true }, yes);
+    if (answer === yes) this.deliver({ type: 'stop-agents', all: true, confirm: true }, 'Stop agents');
+  }
+
   private onWorkerEvent(event: WorkerEvent): void {
+    if (event.type === 'agents') {
+      if (event.outcome === 'needs-confirm') void this.confirmStopAgents(event.text);
+      else this.note(event.text, 'info');
+      return;
+    }
     if (event.type === 'request-closed') {
       this.changes.close(event.id);
       return;
