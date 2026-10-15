@@ -208,7 +208,7 @@ export async function runVendorCliAttempt(input: {
           // One stream position per background turn, like per attempt.
           report: (text, observer, parsed) => {
             let position = heldStreams.get(observer);
-            if (!position) heldStreams.set(observer, position = createStreamState());
+            if (!position) { heldStreams.set(observer, position = createStreamState()); position.agentRows = stream.agentRows; }
             reportStructuredLine(harness, text, observer, position, parsed);
           },
         });
@@ -237,6 +237,8 @@ export async function runVendorCliAttempt(input: {
     if (background && !held) {
       run.liveInput?.setSteerHandler(undefined);
     }
+    // The process is gone: an agent it ran in the background went with it.
+    if (!held) for (const event of stream.agentRows.settle('tool-error', true)) sharedObserver.onActivity?.(event);
     if (piTurn) {
       piTurn.ended();
       run.liveInput?.setSteerHandler(undefined);

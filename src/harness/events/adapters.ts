@@ -3,6 +3,7 @@
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import { aiderLine } from './aider.js';
 import { CLINE_ANSWER_KINDS, clineLine, type ClineState } from './cline.js';
+import { BackgroundAgentRows } from './background-agent-rows.js';
 import { ClaudeBlocks } from './claude-stream.js';
 import { parseNativeActivityEventsFromValue, thoughtLabel, type NativeActivityEvent } from '../protocol/activity-events.js';
 import { nativeActivityPhaseFromValue } from '../protocol/activity-line.js';
@@ -49,6 +50,8 @@ export interface StreamState {
   readonly usage: StreamUsageTally;
   /** Claude-shaped content blocks in flight, created on first use. */
   claudeBlocks?: ClaudeBlocks;
+  /** Background Agent rows held open past their launch call (background-agent-rows.ts). */
+  agentRows: BackgroundAgentRows;
   /** Tool calls started with no vendor id, oldest first, each under the id
    * synthesized for it (Pi builds that omit `toolCallId`). */
   readonly anonymousCalls: string[];
@@ -71,7 +74,7 @@ export interface StreamState {
 export function createStreamState(): StreamState {
   return {
     hasText: false, sawDeltas: false, segment: '', needsSeparator: false,
-    usage: new StreamUsageTally(), anonymousCalls: [], anonymousCallCount: 0, thoughtCount: 0, thoughtText: '', tasks: new TaskListTracker(),
+    usage: new StreamUsageTally(), agentRows: new BackgroundAgentRows(), anonymousCalls: [], anonymousCallCount: 0, thoughtCount: 0, thoughtText: '', tasks: new TaskListTracker(),
   };
 }
 
@@ -331,11 +334,15 @@ export function parseHarnessLine(
 /** parseHarnessLine for a record the caller has already parsed. */
 function parseHarnessValue(harness: AiLocalHarnessDefinition, value: Json, turn: StreamState): ParsedHarnessLine {
   const parsedResponse = nativeResponseUpdateFromValue(harness, value, turn);
-  const activities = stampThoughts(harness, turn, value, pairAnonymousCalls(harness, turn, value, [
+  const read = stampThoughts(harness, turn, value, pairAnonymousCalls(harness, turn, value, [
     ...(claudeShaped(harness) ? (turn.claudeBlocks ??= new ClaudeBlocks(harness.command)).note(value) : []),
     ...(harness.parser === 'cline-json' ? clineLine(value, turn, harness.command) : []),
     ...parseNativeActivityEventsFromValue(harness, value),
   ]));
+  // A background Agent's call returns at launch; its row is held to its own end.
+  const activities = claudeShaped(harness)
+    ? [...read.flatMap((event) => turn.agentRows.filter(event) ?? []), ...turn.agentRows.frame(value)]
+    : read;
   // ONE PARAGRAPH RULE FOR EVERY FAMILY. Text that follows a tool call is a new paragraph, whichever
   // parser read it: the families that build their update directly (pi, antigravity, goose, opencode)
   // never went through appendText, so a closing answer was glued to the sentence before the tools
