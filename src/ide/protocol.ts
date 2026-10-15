@@ -255,6 +255,8 @@ export type IdeChoice =
   | { kind: 'plan'; on: boolean }
   /** ClikDeploy Gateway: served by the fastest provider instead of the cheapest. */
   | { kind: 'fast'; on: boolean }
+  /** `/send`: what a message typed mid-turn does, in every chat (one global setting). */
+  | { kind: 'send'; mode: 'steer' | 'queue' }
   | { kind: 'account'; accountId: string }
   | { kind: 'add-account'; provider: string }
   | { kind: 'account-action'; accountId: string; action: 'reauthenticate' | 'disconnect' | 'remove' | 'verified' }

@@ -221,6 +221,15 @@ describe('the bridge\'s revision-2 requests', () => {
     expect(bridge.quietOutput).toBe(0);
   });
 
+  it('sets the global send mode with /send, the terminal control, mid-turn too', async () => {
+    const { bridge, inner, result } = bridgeFor();
+    inner.sessionId = 's1';
+    inner.workerTurnRunning = true;
+    bridge.handle({ type: 'choose', requestId: 'c', choice: { kind: 'send', mode: 'queue' } });
+    expect(await result('c')).toMatchObject({ ok: true });
+    expect(duringTurn).toHaveBeenCalledWith('s1', '/send queue');
+  });
+
   it('says nothing in the chat about a rename made in the conversations list', async () => {
     const { bridge, inner, result } = bridgeFor();
     inner.sessionId = 's1';
