@@ -15,7 +15,7 @@ import { STALL_LIMIT } from './stall.js';
 import type { AiHarnessPermissionMode } from '../harness/definition.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import { abortable, type CallOutcome, SHELL_TOOLS, stableStringify, categoryForTool } from './turn-support.js';
-import { releaseHeldSteers, type TurnRuntime } from './turn-runtime.js';
+import { releaseHeldSteers, steerAlert, type TurnRuntime } from './turn-runtime.js';
 
 const STREAM_EVENT_INTERVAL_MS = 150;
 
@@ -123,12 +123,15 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
     let result: ToolRunResult;
     started();
     rt.callsOpen++;
+    const alert = steerAlert(rt);
+    ctx.steerSignal = alert.signal;
     try {
       result = await abortable(tool.run(call.args, ctx), signal);
     } catch (error) {
       if (isTurnCancelled(error) || signal?.aborted) throw turnCancelledError();
       result = { output: error instanceof Error ? error.message : String(error), isError: true };
     } finally {
+      alert.dispose();
       rt.callsOpen--;
     }
     if (rt.callsOpen === 0) await releaseHeldSteers(rt);

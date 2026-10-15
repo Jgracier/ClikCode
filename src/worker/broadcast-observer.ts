@@ -72,6 +72,8 @@ export class BroadcastObserver implements TurnObserver {
   /** The running turn's tool rows and plan, so a window joining it mid-way
    * draws those too, not only its text. */
   private liveActivities: LiveActivity[] = [];
+  /** Top-level calls started and not yet finished, by call id: what a held steer is waiting behind. */
+  private readonly openCalls = new Map<string, { label: string; since: number }>();
   private livePlan: readonly PlanEntry[] = [];
   /** The rest of what an attached window has drawn, so a joining one draws it
    * too: the turn's settled thoughts, plan, notices and approval outcomes
@@ -300,6 +302,13 @@ export class BroadcastObserver implements TurnObserver {
     this.broadcast({ type: 'delta', text, mode });
   }
 
+  /** The oldest call still running, and for how long: what a typed message waits behind. */
+  openCall(): { label: string; seconds: number; count: number } | undefined {
+    let oldest: { label: string; since: number } | undefined;
+    for (const call of this.openCalls.values()) if (!oldest || call.since < oldest.since) oldest = call;
+    return oldest ? { label: oldest.label, seconds: Math.round((Date.now() - oldest.since) / 1000), count: this.openCalls.size } : undefined;
+  }
+
   activity(message: string): void {
     this.outputStarted = true;
     const place = this.waitingLabel ? { seq: this.sequencer.take(), responseOffset: this.liveText.length } : undefined;
@@ -318,6 +327,10 @@ export class BroadcastObserver implements TurnObserver {
       this.seenActivity.set(key, value);
     }
     this.outputStarted = true;
+    if (event.id && !event.parentId) {
+      if (event.kind === 'tool-start') this.openCalls.set(event.id, { label: event.label, since: Date.now() });
+      else if (event.kind === 'tool-done' || event.kind === 'tool-error') this.openCalls.delete(event.id);
+    }
     if (this.waitingLabel && !event.parentId) this.foldThought(event);
     if (this.waitingLabel && isTranscriptActivity(event)) this.liveActivities.push({ event, responseOffset: this.liveText.length });
     this.broadcast({ type: 'activity', event });
@@ -469,6 +482,7 @@ export class BroadcastObserver implements TurnObserver {
   /** `stopped`: the turn was stopped, not finished -- whichever window
    * stopped it, every one ends it that way. */
   private endWaiting(stopped: boolean): void {
+    this.openCalls.clear();
     this.waitingLabel = '';
     this.livePrompt = undefined;
     this.liveVendorWork = false;

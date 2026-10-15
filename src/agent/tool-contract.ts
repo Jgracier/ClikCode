@@ -15,6 +15,10 @@ export interface ToolContext {
   stateDir: string;
   homeDir: string;
   signal?: AbortSignal;
+  /** Aborts when the user typed a message while this call runs. NOT a cancel: a call that can wait for
+   * long (agent_wait, wait, a foreground shell) returns early -- keeping whatever it started running --
+   * so the model can read the message. */
+  steerSignal?: AbortSignal;
   checkpoints: FileCheckpointStore;
   /** Per-session memory: read-before-edit tracking, background shells, plan mode. */
   session: HarnessSessionState;

@@ -237,6 +237,16 @@ function pushSteer(rt: TurnRuntime, text: string): void {
   for (const wake of [...rt.steerWaiters]) wake();
 }
 
+/** An abort for one call: fires when a steer is held (or already is) because a call is running. The call
+ * returns early so the model hears it; `dispose` when the call ends. */
+export function steerAlert(rt: TurnRuntime): { signal: AbortSignal; dispose: () => void } {
+  const controller = new AbortController();
+  if (rt.heldSteers.length) { controller.abort(); return { signal: controller.signal, dispose: () => undefined }; }
+  const wake = (): void => { if (rt.heldSteers.length) controller.abort(); };
+  rt.steerWaiters.add(wake);
+  return { signal: controller.signal, dispose: () => { rt.steerWaiters.delete(wake); } };
+}
+
 export function holdSteer(rt: TurnRuntime, text: string, hold: (withdraw: () => boolean) => Promise<void>): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const drop = (error: Error): boolean => {
@@ -250,6 +260,8 @@ export function holdSteer(rt: TurnRuntime, text: string, hold: (withdraw: () => 
     const item: HeldSteer = { text, ready, resolve, reject };
     ready.catch((error: unknown) => drop(error instanceof Error ? error : new Error(String(error))));
     rt.heldSteers.push(item);
+    // A call that can wait for long returns now, so this is heard in seconds, not when it times out.
+    for (const wake of [...rt.steerWaiters]) wake();
   });
 }
 
