@@ -185,8 +185,9 @@ export async function runAgentTurn(input: {
           prompter?.render(session);
         },
         // The loop takes steering before each model step (run-turn.ts).
-        onSteerReady: (handler) => run.liveInput?.setSteerHandler(handler ? async (steerText, submission) => {
-          await handler(steerText);
+        onSteerReady: (handler) => run.liveInput?.setSteerHandler(handler ? async (steerText, submission, hold) => {
+          // A note from ClikCode is not the user's: it never waits in the queue.
+          await handler(steerText, submission.kind === 'note' ? undefined : hold);
           if (submission.kind === 'note') return;
           const write = checkpoint.steer(submission);
           steerWrites.push(write.catch(() => undefined));
