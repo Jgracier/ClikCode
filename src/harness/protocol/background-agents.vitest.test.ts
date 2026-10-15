@@ -116,6 +116,21 @@ describe('recorded vendor streams (src/harness/transport/native/fixtures)', () =
     expect(seen.map((work) => [work.agents, work.terminals])).toEqual([[1, 0], [0, 0]]);
   });
 
+  it("claude: a background Agent's row runs from its launch until task_notification, not just the launch call (claude 2.1.281 recording)", () => {
+    const state = createStreamState();
+    const harness = { command: 'claude', parser: 'claude-stream-json' } as unknown as AiLocalHarnessDefinition;
+    const rows: Array<[string, number | undefined, number | undefined]> = [];
+    for (const record of fixture('claude-background-agent')) {
+      reportStructuredLine(harness, JSON.stringify(record), {
+        onActivity: (event) => { if (event.agent && event.id === 'toolu_013yyax3JAMzifVzKLgUP5DF') rows.push([event.kind, event.childTools, event.durationMs]); },
+      }, state);
+    }
+    // start, then progress (still running), and only the notification settles it.
+    expect(rows.map(([kind]) => kind)).toEqual(['tool-start', 'tool-start', 'tool-done']);
+    expect(rows[2]![2]).toBe(11067);
+    expect(state.agentRows.size).toBe(0);
+  });
+
   it('cursor: a background shell is a terminal from its call to its task_notification (cursor-agent 2026.09 recording)', () => {
     const seen = play('cursor-background-shell', { command: 'cursor-agent', parser: 'cursor-stream-json' });
     expect(seen).toEqual([{ terminals: 1 }, { terminals: 0 }]);

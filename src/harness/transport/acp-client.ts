@@ -20,6 +20,7 @@ import { type JsonRpcPeer } from './jsonrpc-peer.js';
 import { BackgroundTurnChannel } from './background-turn.js';
 import { PersistentSession, runOneTurn, turnFailure, type PersistentSessionOptions } from './persistent-session.js';
 import { lifecycle } from '../../runtime/lifecycle-log.js';
+import { BackgroundAgentRows } from '../events/background-agent-rows.js';
 import { backgroundWork, mergeBackgroundWork, type BackgroundWork } from '../protocol/background-agents.js';
 import { markTurn } from '../../runtime/turn-latency.js';
 import { OTHER_ORG_THINKING_TITLE } from '../protocol/claude-thinking-notice.js';
@@ -583,11 +584,9 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
    * background turn that is receiving updates. */
   private readonly pendingTools = new Map<string, string>();
   private readonly pendingAgents = new Set<string>();
-  /** Background Agent calls by tool call id: the call completes at launch
-   * (`task_started {is_backgrounded}` named it first), but the agent runs on.
-   * Its row stays open, with the label it had, until the agent's own
-   * `task_notification` (heldAgentFrame) or the turn can no longer hear it. */
-  private readonly heldAgents = new Map<string, { label?: string }>();
+  /** Background Agent calls: the call completes at launch, the agent runs on
+   * and its row stays open until its own `task_notification` (heldAgentFrame). */
+  private readonly heldAgents = new BackgroundAgentRows();
   /** The background work the vendor's level says is running (claude-agent-acp's
    * `_claude/sdkMessage` background_tasks_changed). Kept between turns: it
    * holds the worker while anything runs, tells the next turn and the
@@ -648,7 +647,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
         // An unsettled tool call belongs to the still-live vendor, even
         // after its parent request ends. Route its later events into the
         // worker's background turn and keep the process alive until it ends.
-        if (!(this.live && (this.backgroundLevel || this.pendingTools.size))) this.settleHeldAgents(input);
+        if (!(this.live && (this.backgroundLevel || this.pendingTools.size))) for (const event of this.heldAgents.settle('tool-done')) input.onActivity?.(event);
         if (this.live && (this.pendingTools.size || this.backgroundLevel)) {
           const run = this.openBackground('background-work');
           if (run) {
@@ -665,7 +664,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
   protected clearPending(): void {
     this.pendingTools.clear();
     this.pendingAgents.clear();
-    this.heldAgents.clear();
+    this.heldAgents.settle('tool-done');
     this.backgroundLevel = undefined;
   }
 
@@ -1304,12 +1303,10 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
         activity = { ...activity, kind: 'tool-done' };
       } else if (activity.id && activity.kind !== 'tool-start') target.settledTools.add(activity.id);
       target.sawActivity = true;
-      const held = activity.id ? this.heldAgents.get(activity.id) : undefined;
-      if (held) {
-        if (activity.agent && activity.label !== 'tool') held.label = activity.label;
-        // The launch's result is not the agent's end: its row keeps running.
-        if (activity.kind !== 'tool-start') return;
-      }
+      // The launch's result is not the agent's end: its row keeps running.
+      const shown = this.heldAgents.filter(activity);
+      if (!shown) return;
+      activity = shown;
       // A sub-agent's call ends what it was saying before it.
       if (activity.parentId) target.subagentText?.delete(activity.parentId);
       if (target.text && !activity.parentId) target.needsSeparator = true;
@@ -1415,48 +1412,16 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     if (!this.backgroundLevel && target === run && this.pendingTools.size === 0 && !this.heldAgents.size) this.finishBackground('completed');
   }
 
-  /** A background Agent's lifecycle, from the raw `task_*` frames:
-   * `task_started` names the call that launched it, `task_progress` carries
-   * what it has used, `task_notification` is its end (the level above drops
-   * a moment before it, so the level cannot end the row). */
+  /** A background Agent's lifecycle, from the raw `task_*` frames
+   * (events/background-agent-rows.ts). The level above drops a moment before
+   * the agent's end, so the level cannot end its row. */
   private heldAgentFrame(params: Json, message: Json): void {
-    const id = typeof message.tool_use_id === 'string' ? message.tool_use_id : undefined;
-    if (message.type !== 'system' || !id) return;
-    if (message.subtype === 'task_started') {
-      if (message.is_backgrounded === true && message.owned_by_subagent !== true && typeof message.subagent_type === 'string') this.heldAgents.set(id, {});
-      return;
-    }
-    const held = this.heldAgents.get(id);
+    const [event] = this.heldAgents.frame(message);
+    if (!event) return;
     const target = this.liveTarget(params);
-    if (!held) return;
-    const usage = message.usage && typeof message.usage === 'object' ? message.usage as Json : {};
-    const count = (value: unknown): number | undefined => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined);
-    const spent = {
-      ...(count(usage.tool_uses) !== undefined ? { childTools: count(usage.tool_uses)! } : {}),
-      ...(count(usage.total_tokens) !== undefined ? { childTokens: count(usage.total_tokens)! } : {}),
-    };
-    if (message.subtype === 'task_progress') {
-      target?.observer.onActivity?.({ kind: 'tool-start', label: held.label ?? 'tool', agent: true, id, ...spent });
-      return;
-    }
-    if (message.subtype !== 'task_notification') return;
-    this.heldAgents.delete(id);
-    const status = String(message.status ?? 'completed');
-    const stopped = status === 'killed' || status === 'stopped';
-    const duration = count(usage.duration_ms);
-    target?.observer.onActivity?.({
-      kind: status === 'completed' ? 'tool-done' : 'tool-error', label: held.label ?? 'tool', agent: true, id, ...spent,
-      ...(stopped ? { stopped: true } : {}), ...(duration !== undefined ? { durationMs: duration } : {}),
-    });
+    target?.observer.onActivity?.(event);
     const run = this.background;
-    if (run && target === run && !this.backgroundLevel && this.pendingTools.size === 0 && !this.heldAgents.size) this.finishBackground('completed');
-  }
-
-  /** Agent rows nothing can still end (the turn is over and the agent is
-   * not running on): settled as the agent's launch said, never left spinning. */
-  private settleHeldAgents(observer: HarnessTurnObserver): void {
-    for (const [id, held] of this.heldAgents) observer.onActivity?.({ kind: 'tool-done', label: held.label ?? 'tool', agent: true, id });
-    this.heldAgents.clear();
+    if (event.kind !== 'tool-start' && run && target === run && !this.backgroundLevel && this.pendingTools.size === 0 && !this.heldAgents.size) this.finishBackground('completed');
   }
 
   /** claude-agent-acp pushes the identity it runs as (`_auth/status_update`
