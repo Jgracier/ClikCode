@@ -8,6 +8,7 @@ import type { TurnUsage } from '../../../../src/harness/protocol/turn-usage';
 import { turnStalled } from '../../../../src/harness/protocol/turn-pace';
 import { withoutOtherOrgThinkingNotice } from '../../../../src/harness/protocol/claude-thinking-notice';
 import { planWindow } from '../../../../src/tui/render/plan-window';
+import { STEER_WORDS } from '../../../../src/tui/render/steer-rows';
 import { liveElapsedMs, turnMarks, type Activity, type ChatModel, type DecisionEntry, type LiveTurn, type Note, type PlanAt, type ThoughtEntry, type TurnTrace } from '../model';
 import { post } from './bus';
 import { renderMarkdown } from './markdown';
@@ -95,7 +96,7 @@ export function TurnFlow(props: {
     else if (mark.note) parts.push(<NoteView key={`n${mark.seq}`} note={mark.note} />);
     else if (mark.child) parts.push(<div key={`c${mark.child.child.key}`} class="activities"><ChildLine live={mark.child} /></div>);
     else if (mark.decision) parts.push(<DecisionRow key={`d${mark.decision.id}`} entry={mark.decision} />);
-    else parts.push(<div key={`s${mark.steerId ?? mark.steerIndex}`} class="steer"><Icon name="arrow-small-right" /><span>{mark.steer}</span><span class="muted">sent into this turn</span></div>);
+    else parts.push(<div key={`s${mark.steerId ?? mark.steerIndex}`} class="steer"><Icon name="arrow-small-right" /><span>{mark.steer}</span><span class="muted">{STEER_WORDS.steered}</span></div>);
   }
   flushRun(!props.live || Boolean(text.slice(at).trim()));
   if (props.live) {
