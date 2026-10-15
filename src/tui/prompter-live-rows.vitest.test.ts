@@ -107,7 +107,7 @@ describe('running steps stay above the status line', () => {
     process.stdout.write = realWrite;
   });
 
-  it('shows the latest step until a click, then the live rows, then hides them', () => {
+  it('is one animated agent row with its latest call under it, whether or not it is clicked', () => {
     const written: string[] = [];
     Object.assign(process.stdout, { isTTY: true, columns: 100, rows: 30 });
     process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
@@ -122,6 +122,7 @@ describe('running steps stay above the status line', () => {
       keys.handleScrollKey('\u001b[<0;4;2m');
       vi.advanceTimersByTime(50);
     };
+    const agentRow = (text: string): string[] => [...text.matchAll(/(\S\S) {2}agent Task\(explore\)/g)].map((match) => match[1]!);
     try {
       rl.render({ id: 's', route: 'local', accountId: null, provider: null, model: null, createdAt: '', updatedAt: '', status: 'active', messages: [] } as never);
       rl.startWaiting('thinking', () => undefined, async () => ({ kind: 'sent' }) as never);
@@ -129,18 +130,19 @@ describe('running steps stay above the status line', () => {
       rl.activityEvent({ kind: 'tool-start', id: 'a', label: 'Task(explore)', agent: true });
       rl.activityEvent({ kind: 'tool-start', id: 'c', parentId: 'a', label: 'Grep(charge)' });
       vi.advanceTimersByTime(300);
-      const closed = strip(written.slice(-3).join(''));
-      expect(closed).toContain('Grep(charge)');
-      expect(closed).toContain('click');
-      expect(closed).not.toContain('Task(explore)');
+      const before = strip(written.join(''));
+      // One row for the agent, its call under it with the static tool mark and the count.
+      expect(before).toContain('‣ Grep(charge) · 1 tool use');
+      expect(before).not.toContain('click');
+      // The ring spins: the glyph changes from frame to frame.
+      expect(new Set(agentRow(before)).size).toBeGreaterThan(1);
+      written.length = 0;
       click();
-      const open = strip(written.slice(-4).join(''));
-      expect(open.lastIndexOf('Task(explore)')).toBeGreaterThan(open.lastIndexOf('· click'));
-      expect(open).toContain('Grep(charge)');
-      click();
-      const shut = strip(written.slice(-4).join(''));
-      expect(shut.lastIndexOf('· click')).toBeGreaterThan(shut.lastIndexOf('Task(explore)'));
-      expect(shut).toContain('Grep(charge)');
+      vi.advanceTimersByTime(300);
+      const after = strip(written.join(''));
+      // Clicking changes nothing: the row stays, and keeps animating.
+      expect(after).toContain('agent Task(explore)');
+      expect(after).not.toContain('click');
     } finally { rl.close(); }
   });
 });
