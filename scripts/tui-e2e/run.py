@@ -585,9 +585,9 @@ SCENARIOS = {
             ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\x1b[A'), ('settle', 0.5), ('keys', '\r'),
             ('wait_for', 'All twelve parts pass.', 60), ('settle', 3),
         ],
-        # Rejoined, the turn is drawn with every call it made, which pushes
-        # its prompt above a 50-row screen: its rows are what is counted.
-        'watch': [], 'final_once': ['part2 ok', 'part11 ok', 'All twelve parts pass.'],
+        # Rejoined, the turn is drawn with every call it made -- twelve calls are one folded row
+        # now, so it is that row (all twelve counted) and the answer that are held to once.
+        'watch': [], 'final_once': ['Ran 12 commands', 'All twelve parts pass.'],
         'never': ['Interrupted turn activity'],
     },
     # Into another conversation and back. The conversation joined is the only
@@ -1484,7 +1484,10 @@ SCENARIOS = {
     # back), where the whole turn so far arrives at once.
     'joined-turn-scroll-moves-whole-screen': {
         'cols': 70, 'rows': 40, 'env': {'FAKE_TOOL_MS': '150', 'FAKE_DELAY_MS': '40'},
-        'turns': [{'intro': 'Running every part now.', 'tools_first': 30, 'hold_ms': 25000, 'blocks': ['All thirty parts pass.']}],
+        # Thirty paragraphs and a call that stays open (a run of calls is one row, so the long
+        # transcript is the answer's own rows, as in the two scenarios above).
+        'turns': [{'emits': [*[{'op': 'text', 'text': f'run part{n} done.\n\n', 'ms': 5} for n in range(1, 31)],
+                             {'op': 'tool', 'id': 'hold', 'title': 'sleep 30', 'ms': 25000}]}],
         'steps': [
             ('type', 'run every part'), ('wait_for', 'sleep 30', 40), ('settle', 1),
             ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\r'), ('settle', 2.5), ('snap', 'before'),
