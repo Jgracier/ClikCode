@@ -68,6 +68,9 @@ export const agentTool = defineTool<AgentArgs>({
     if (!await canCreateAgentWorktree(repo.dir ?? ctx.cwd)) return { output: await noWorktreeMessage(repo.dir ?? ctx.cwd, repo.dir !== undefined), isError: true };
     const runSubagent = ctx.runSubagent;
     const id = ctx.agents.start(description || args.prompt.split('\n')[0].slice(0, 80), (onSteerReady) => runSubagent({ ...request, background: true, onSteerReady }));
-    return { output: `Started ${id} in the background, in its own worktree. Carry on; agent_send("${id}", ...) gives it more instructions, agent_wait("${id}") gets its result.` };
+    return {
+      output: `Started ${id} in the background, in its own worktree. Carry on; agent_send("${id}", ...) gives it more instructions, agent_wait("${id}") gets its result.`,
+      continuesAs: id,
+    };
   },
 });

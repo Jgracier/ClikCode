@@ -65,6 +65,9 @@ export interface ToolRunResult {
   diff?: import('./line-diff.js').FileDiff[];
   /** A finished command's exit code, shown on its row. */
   exitCode?: number;
+  /** The call returned at once but what it started runs on (a background
+   * agent, by its id): its row stays running until that ends. */
+  continuesAs?: string;
 }
 
 type ToolClass = 'read' | 'write' | 'exec' | 'network' | 'meta';
