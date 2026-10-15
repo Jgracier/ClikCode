@@ -78,6 +78,24 @@ describe('ACP status updates and extension notifications', () => {
     expect(phases).toEqual(['compacting the conversation', 'compacting the conversation', 'background task: dev server', 'sub-agent: reviewer']);
   });
 
+  it("keeps a background Agent's row running past its launch call, until its own task_notification", async () => {
+    const raw = (message: Record<string, unknown>) => ({ send: { method: '_claude/sdkMessage', params: { sessionId: 's1', message: { type: 'system', ...message } } } });
+    const events: Array<Record<string, unknown>> = [];
+    await run({ steps: [
+      update({ sessionUpdate: 'tool_call', toolCallId: 'a1', title: 'Agent', kind: 'other', status: 'in_progress', rawInput: { description: 'scan', subagent_type: 'general-purpose' } }),
+      raw({ subtype: 'task_started', task_id: 'T', tool_use_id: 'a1', subagent_type: 'general-purpose', is_backgrounded: true }),
+      update({ sessionUpdate: 'tool_call_update', toolCallId: 'a1', status: 'completed' }),
+      raw({ subtype: 'task_progress', task_id: 'T', tool_use_id: 'a1', usage: { total_tokens: 900, tool_uses: 3, duration_ms: 4000 } }),
+      raw({ subtype: 'task_notification', task_id: 'T', tool_use_id: 'a1', status: 'completed', usage: { total_tokens: 1200, tool_uses: 4, duration_ms: 9000 } }),
+    ] }, { onActivity: (event: Record<string, unknown>) => events.push(event) });
+    expect(events.map((event) => [event.kind, event.childTools, event.childTokens, event.durationMs])).toEqual([
+      ['tool-start', undefined, undefined, undefined],
+      ['tool-start', 3, 900, undefined],
+      ['tool-done', 4, 1200, 9000],
+    ]);
+    expect(events.every((event) => event.agent === true && event.id === 'a1')).toBe(true);
+  });
+
   it('hides only Claude cross-organization thinking notices in both adapter formats', async () => {
     const streamed: string[] = [];
     const { notices, seen } = await run({ steps: [
