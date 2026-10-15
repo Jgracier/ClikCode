@@ -67,6 +67,9 @@ export interface TurnRuntime {
   /** Steers typed while a call runs: queued by the broker as the fallback and
    * put into the turn when the last open call returns (releaseHeldSteers). */
   readonly heldSteers: HeldSteer[];
+  /** Foreground sub-agents running now (by their call id) and the handler that
+   * steers each: a steer typed during their call goes to them to answer. */
+  readonly foregroundSteers: Map<string, (text: string) => Promise<void>>;
   items: ConversationItem[];
   ledger: ReturnType<typeof emptyLedger>;
   lastStepUsage: TokenUsage | undefined;
@@ -194,7 +197,7 @@ export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime
     result: (extra) => ({
       text: segments.join('\n\n').trim(), nativeSessionId: input.sessionId, usage: rt.ledger.total, steps: rt.steps, contextProfile: profile.name, ...extra,
     }),
-    steerQueue: [], steerWaiters: new Set(), steerOpen: true, callsOpen: 0, heldSteers: [], items, ledger, lastStepUsage: undefined, itemsAtLastUsage: items.length,
+    steerQueue: [], steerWaiters: new Set(), steerOpen: true, callsOpen: 0, heldSteers: [], foregroundSteers: new Map(), items, ledger, lastStepUsage: undefined, itemsAtLastUsage: items.length,
     contextWindow: input.contextWindow ?? input.modelClient.contextHints?.contextWindow,
     servedModel: undefined, segments, needsSeparator: false, steps: 0, stall: new StallGuard(), stalledCall: undefined,
     stepRetries: 0, retryWaitedSeconds: 0, compactedForSize: false, tokensAfterCompaction: undefined, lengthContinues: 0, stopContinues: 0,
@@ -211,7 +214,12 @@ export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime
     // A call is running: the model hears this when it returns, not before.
     // Held (queued as the fallback, the row says "at the next pause") rather
     // than shown as sent into a turn that cannot answer yet.
-    if (hold && rt.callsOpen > 0) return holdSteer(rt, text, hold);
+    if (hold && rt.callsOpen > 0) {
+      // A foreground sub-agent is running: it can answer now, so it hears the
+      // message at once. The main agent hears it too, when the call returns.
+      for (const steer of [...rt.foregroundSteers.values()]) void steer(text).catch(() => undefined);
+      return holdSteer(rt, text, hold);
+    }
     pushSteer(rt, text);
   });
   return { rt, promptBlocked };

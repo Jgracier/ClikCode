@@ -117,6 +117,31 @@ describe('task sub-agents', () => {
     expect(await fs.readFile(path.join(cwd, 'a.txt'), 'utf8')).toBe('the answer is 42\n');
   });
 
+  it('hands a steer typed during a foreground sub-agent to that sub-agent, and the main agent still hears it afterward', async () => {
+    let steer: ((text: string, hold?: (withdraw: () => boolean) => Promise<void>) => Promise<void>) | undefined;
+    let landed: Promise<void> | undefined;
+    const client = new RoutedModelClient({
+      [PARENT_PROMPT]: { script: [
+        { toolCalls: [{ id: 'fg-1', name: 'agent', args: { prompt: 'Work for a moment' } }] },
+        { text: 'Heard it.' },
+      ] },
+      'Work for a moment': { script: [
+        // The sub-agent's first step runs while the user types: its call is open.
+        { before: () => { landed = steer!('use tabs', () => Promise.resolve()); }, toolCalls: [{ id: 'k-1', name: 'read_file', args: { path: 'a.txt' } }] },
+        { text: 'Done.' },
+      ] },
+    });
+    const { input } = turn(client, { onSteerReady: (handler) => { if (handler) steer = handler; } });
+    await runAgentLoop(input);
+    await landed;
+    // The sub-agent saw it, before its next step...
+    const childSaw = client.requests('Work for a moment').flatMap((request) => request.items).some((item) => item.type === 'text' && item.role === 'user' && item.text.includes('use tabs'));
+    expect(childSaw).toBe(true);
+    // ...and the main agent was told after the call returned.
+    const parentSaw = client.requests(PARENT_PROMPT).at(-1)!.items.some((item) => item.type === 'text' && item.role === 'user' && item.text.includes('use tabs'));
+    expect(parentSaw).toBe(true);
+  });
+
   it('keeps an interrupted coding agent\'s edit and undo checkpoint', async () => {
     const controller = new AbortController();
     const client = new RoutedModelClient({

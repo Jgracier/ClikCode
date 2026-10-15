@@ -71,7 +71,11 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
     ...(rt.stepAcceptsImages ? { acceptsImages: true } : {}),
     ...(input.onPlan ? { onPlan: input.onPlan } : {}), ...(input.net ? { net: input.net } : {}),
     ...(input.sandbox === 'workspace' ? { sandbox: input.sandbox } : {}),
-    ...(runSubagent ? { runSubagent: (request: SubagentCall) => runSubagent({ ...request, callId, ...(request.background ? { signal: backgroundSignal } : signal ? { signal } : {}) }) } : {}),
+    ...(runSubagent ? { runSubagent: (request: SubagentCall) => runSubagent({
+      ...request, callId, ...(request.background ? { signal: backgroundSignal } : signal ? { signal } : {}),
+      // A foreground sub-agent is steerable while its call is open (turn-runtime.ts).
+      ...(request.background ? {} : { onSteerReady: (handler?: (text: string) => Promise<void>) => { if (handler) rt.foregroundSteers.set(callId, handler); else rt.foregroundSteers.delete(callId); } }),
+    }) } : {}),
     ...(rt.backgroundAgents ? { agents: rt.backgroundAgents } : {}),
   });
 
