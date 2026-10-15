@@ -15,7 +15,7 @@ import { STALL_LIMIT } from './stall.js';
 import type { AiHarnessPermissionMode } from '../harness/definition.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import { abortable, type CallOutcome, SHELL_TOOLS, stableStringify, categoryForTool } from './turn-support.js';
-import type { TurnRuntime } from './turn-runtime.js';
+import { releaseHeldSteers, type TurnRuntime } from './turn-runtime.js';
 
 const STREAM_EVENT_INTERVAL_MS = 150;
 
@@ -118,12 +118,16 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
     input.onPhase?.('running tools');
     let result: ToolRunResult;
     started();
+    rt.callsOpen++;
     try {
       result = await abortable(tool.run(call.args, ctx), signal);
     } catch (error) {
       if (isTurnCancelled(error) || signal?.aborted) throw turnCancelledError();
       result = { output: error instanceof Error ? error.message : String(error), isError: true };
+    } finally {
+      rt.callsOpen--;
     }
+    if (rt.callsOpen === 0) await releaseHeldSteers(rt);
     if (wasPlanning && !session.plan.active) input.onPlanModeExit?.(session.plan.approvedPlan ?? '');
     if (!wasPlanning && session.plan.active) input.onPlanModeEnter?.();
     const rewritten = await abortable(Promise.resolve(input.hooks?.postToolUse?.(call, result, rt.turnHookInfo)), signal);
