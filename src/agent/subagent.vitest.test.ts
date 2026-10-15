@@ -7,6 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { FileCheckpointStore } from './file-checkpoints.js';
 import { runAgentLoop } from './run-turn.js';
+import { sessionAgents } from './background-agents.js';
+import { readAgentRecords } from './agent-registry.js';
+import { formatShellNotifications, sessionState } from './session-state.js';
 import { ScriptedModelClient, type ScriptEntry } from './testing.js';
 import type { AgentTurnInput, ModelClient, ModelStepRequest, ModelStepResult } from './model-client.js';
 
@@ -667,24 +670,66 @@ describe('coding sub-agents in their own worktree', () => {
     expect(client.requests('never runs')).toHaveLength(0);
   });
 
-  it('stops a background agent when the turn is cancelled, keeping its work on its branch', async () => {
+  /** A background agent gated on `gate`, after it has made an edit. */
+  const gatedAgent = (gate: Promise<void>, started: () => void): RoutedModelClient => new RoutedModelClient({
+    [PARENT_PROMPT]: { script: [
+      { toolCalls: [{ name: 'agent', args: { prompt: 'edit and hang', background: true } }] },
+      { text: 'waiting' },
+    ] },
+    'edit and hang': { script: [
+      { toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] },
+      { toolCalls: [{ name: 'edit_file', args: { path: 'a.txt', old_string: '42', new_string: '48' } }] },
+      { before: async () => { started(); await gate; }, text: 'all done' },
+    ] },
+  });
+
+  it('a cancelled turn does NOT stop a background agent: it finishes, and its result is queued for the model', async () => {
     await initRepo();
     const controller = new AbortController();
-    const client = new RoutedModelClient({
-      [PARENT_PROMPT]: { script: [
-        { toolCalls: [{ name: 'agent', args: { prompt: 'edit and hang', background: true } }] },
-        { text: 'waiting' },
-      ] },
-      'edit and hang': { script: [
-        { toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] },
-        { toolCalls: [{ name: 'edit_file', args: { path: 'a.txt', old_string: '42', new_string: '48' } }] },
-        { before: () => controller.abort(), text: 'never' },
-      ] },
-    });
-    await expect(runAgentLoop(turn(client, { signal: controller.signal }).input)).rejects.toMatchObject({ code: 'ERR_TURN_CANCELLED' });
-    // The turn returned only after the agent wound down.
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => { open = resolve; });
+    let reachedGate!: () => void;
+    const atGate = new Promise<void>((resolve) => { reachedGate = resolve; });
+    const client = gatedAgent(gate, () => { reachedGate(); });
+    const { input } = turn(client, { signal: controller.signal });
+    const loop = runAgentLoop(input);
+    await atGate;
+    controller.abort();
+    await expect(loop).rejects.toMatchObject({ code: 'ERR_TURN_CANCELLED' });
+    const session = sessionState(stateDir, input.sessionId);
+    const agents = sessionAgents(session, stateDir);
+    // The turn is over; the agent is not.
+    expect(agents.running()).toBe(1);
+    expect((await fs.readdir(path.join(root, 'tmp'))).length).toBe(1);
+    open();
+    await agents.settled();
+    expect(agents.running()).toBe(0);
+    const branch = await git('branch', '--list', '--format=%(refname:short)', 'clikcode/*');
+    expect(await git('show', `${branch}:a.txt`)).toBe('the answer is 48');
+    // Nobody was listening: the model hears of it as a notification.
+    expect(session.notifications.map((note) => note.kind)).toEqual(['agent']);
+    expect(formatShellNotifications(session.notifications)).toMatch(/\[background agent agent_1 finished\] edit and hang/);
+    expect(readAgentRecords(stateDir, input.sessionId)).toMatchObject([{ id: 'agent_1', status: 'finished' }]);
+  });
+
+  it('an explicit stop ends the agent, keeping its work on its branch', async () => {
+    await initRepo();
+    const controller = new AbortController();
+    let reachedGate!: () => void;
+    const atGate = new Promise<void>((resolve) => { reachedGate = resolve; });
+    // Never opens: only the stop ends it.
+    const client = gatedAgent(new Promise<void>(() => undefined), () => { reachedGate(); });
+    const { input } = turn(client, { signal: controller.signal });
+    const loop = runAgentLoop(input);
+    await atGate;
+    controller.abort();
+    await expect(loop).rejects.toMatchObject({ code: 'ERR_TURN_CANCELLED' });
+    const agents = sessionAgents(sessionState(stateDir, input.sessionId), stateDir);
+    expect(agents.runningAgents().map((agent) => agent.id)).toEqual(['agent_1']);
+    expect(await agents.stop('agent_1', 'stopped by you')).toBe(true);
     expect(await fs.readdir(path.join(root, 'tmp'))).toEqual([]);
     const branch = await git('branch', '--list', '--format=%(refname:short)', 'clikcode/*');
     expect(await git('show', `${branch}:a.txt`)).toBe('the answer is 48');
+    expect(readAgentRecords(stateDir, input.sessionId)).toMatchObject([{ id: 'agent_1', status: 'stopped' }]);
   });
 });

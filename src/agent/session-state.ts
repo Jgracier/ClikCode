@@ -33,7 +33,7 @@ export interface ShellNotification {
   /** What happened: the shell exited (the default), a monitor's command printed
    * lines (`tail` holds them), or a scheduled wakeup fired (`shellId` is its
    * id, `command` the reason, `tail` the prompt to carry out). */
-  kind?: 'output' | 'wakeup';
+  kind?: 'output' | 'wakeup' | 'agent';
   shellId: string;
   command: string;
   exitCode?: number | null;
@@ -131,6 +131,7 @@ export function runningShellCount(state: HarnessSessionState): number {
 export function formatShellNotifications(notifications: readonly ShellNotification[]): string {
   return notifications.map((note) => {
     if (note.kind === 'wakeup') return `[scheduled wakeup ${note.shellId}] ${note.command}\n${note.tail}`;
+    if (note.kind === 'agent') return `[background agent ${note.shellId} ${note.reason === 'interrupted' ? 'was interrupted' : note.reason === 'failed' ? 'finished with an error' : 'finished'}] ${note.command}\n${note.tail.replace(/\s+$/, '')}`;
     if (note.kind === 'output') return `[background shell ${note.shellId} output] ${note.command}\n${note.tail.replace(/\s+$/, '')}`;
     const how = note.reason ? `was stopped: ${note.reason}`
       : note.exitCode !== undefined && note.exitCode !== null ? `exited (code ${note.exitCode})`

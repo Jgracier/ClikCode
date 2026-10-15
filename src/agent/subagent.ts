@@ -117,6 +117,7 @@ export function createSubagentRunner(options: SubagentRunnerOptions): (request: 
         return { output: `Could not create a git worktree for the subagent: ${error instanceof Error ? error.message : String(error)}`, isError: true };
       }
       if (!worktree) return { output: await noWorktreeMessage(request.repo ?? parent.cwd, request.repo !== undefined), isError: true };
+      request.onWorktree?.({ branch: worktree.branch, cwd: worktree.cwd, root: worktree.root, base: worktree.base, repo: worktree.repo });
     }
     const transcriptFile = path.join(toolOutputDir(parent.stateDir, parent.sessionId), `${randomUUID()}.jsonl`);
     const store = new ConversationStore(parent.stateDir, sessionId, transcriptFile);

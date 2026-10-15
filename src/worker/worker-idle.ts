@@ -1,6 +1,7 @@
 /** The worker's idle exit, vendor idle close and build-watch retirement: the
  * timers and the rules for when each lets the worker go. */
 import { lifecycle } from '../runtime/lifecycle-log.js';
+import { existingSessionAgents } from '../agent/background-agents.js';
 import { idleDecision, vendorIdleDecision } from './idle-decisions.js';
 import { hasHeldVendorProcess, whenHeldVendorGone } from '../harness/transport/native/held-vendor.js';
 import { closePersistentTransport, hasPersistentTransport, persistentWorkRunning } from '../turn/vendor-process.js';
@@ -50,6 +51,7 @@ export function createIdleControl(ctx: WorkerContext) {
     if (ctx.vendorBackground.busy) return 'vendor background work is running';
     if (hasHeldVendorProcess(sessionId)) return 'a vendor is still finishing its background work';
     if (vendorWorkSince !== undefined) return 'the vendor is still running work it started';
+    if (existingSessionAgents(agentSession)?.running()) return 'background agents are running';
     if (runningShellCount(agentSession) > 0) return 'a background shell is running';
     if (agentSession.notifications.length) return 'a notification is on its way to the model';
     if (agentSession.wakeups.size) return 'a scheduled wakeup is pending';
@@ -97,7 +99,7 @@ export function createIdleControl(ctx: WorkerContext) {
     if (ctx.idleTimer) clearTimeout(ctx.idleTimer);
     ctx.idleTimer = undefined;
     noteIdle(ctx.turnRunning ? 'held: a turn is running' : ctx.vendorBackground.busy ? 'held: vendor background work'
-      : observer.attachedCount > 0 ? `held: ${observer.attachedCount} window(s) attached` : agentSession.notifications.length ? 'held: a notification to deliver' : agentSession.wakeups.size ? `held: ${agentSession.wakeups.size} scheduled wakeup(s)`
+      : observer.attachedCount > 0 ? `held: ${observer.attachedCount} window(s) attached` : existingSessionAgents(agentSession)?.running() ? `held: ${existingSessionAgents(agentSession)!.running()} background agent(s)` : agentSession.notifications.length ? 'held: a notification to deliver' : agentSession.wakeups.size ? `held: ${agentSession.wakeups.size} scheduled wakeup(s)`
         : ctx.resumeWaiter.pending ? 'held: waiting for a quota reset' : hasHeldVendorProcess(sessionId) ? 'held: a vendor finishing background work'
           : runningShellCount(agentSession) > 0 ? `held: ${runningShellCount(agentSession)} background shell(s)` : `idle: exits in ${Math.round(IDLE_EXIT_MS / 1000)}s`);
     // A newer build asked for this worker while it was busy: the moment it is
@@ -106,7 +108,7 @@ export function createIdleControl(ctx: WorkerContext) {
     else leaveIfStaleBuild();
     // A scheduled wakeup is owed to the model: the worker that holds its
     // timer must stay up to fire it (the longest is an hour).
-    if (ctx.turnRunning || ctx.vendorBackground.busy || observer.attachedCount > 0 || agentSession.notifications.length || agentSession.wakeups.size) return;
+    if (ctx.turnRunning || ctx.vendorBackground.busy || observer.attachedCount > 0 || existingSessionAgents(agentSession)?.running() || agentSession.notifications.length || agentSession.wakeups.size) return;
     // A turn parked for a quota reset: this worker is what sends it.
     if (ctx.resumeWaiter.pending) return;
     // A vendor kept running for its own background work (held-vendor.ts):

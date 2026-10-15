@@ -54,7 +54,6 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
     },
   });
   const runSubagent = innerSubagent;
-  const backgroundSignal = signal ? AbortSignal.any([signal, rt.backgroundStop.signal]) : rt.backgroundStop.signal;
 
   const toolContext = (callId: string, toolName: string, emitOutput: (chunk: string) => void): ToolContext => ({
     cwd, addDirs,
@@ -72,7 +71,7 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
     ...(input.onPlan ? { onPlan: input.onPlan } : {}), ...(input.net ? { net: input.net } : {}),
     ...(input.sandbox === 'workspace' ? { sandbox: input.sandbox } : {}),
     ...(runSubagent ? { runSubagent: (request: SubagentCall) => runSubagent({
-      ...request, callId, ...(request.background ? { signal: backgroundSignal } : signal ? { signal } : {}),
+      ...request, callId, ...(request.background ? {} : signal ? { signal } : {}),
       // A foreground sub-agent is steerable while its call is open (turn-runtime.ts).
       ...(request.background ? {} : { onSteerReady: (handler?: (text: string) => Promise<void>) => { if (handler) rt.foregroundSteers.set(callId, handler); else rt.foregroundSteers.delete(callId); } }),
     }) } : {}),
