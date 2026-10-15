@@ -23,7 +23,7 @@ import { keyHint } from '../../harness/protocol/wording.js';
 export const STEER_WORDS = {
   /** Held by the turn until no tool call is open (acp-client.ts). */
   held: 'sending at the next pause',
-  steered: 'sent into the turn',
+  steered: 'steered',
   /** `/send steer`, but nothing running could take a steer: it queued. */
   unsteered: "this turn can't take it",
   sendNow: keyHint('sendNow'),

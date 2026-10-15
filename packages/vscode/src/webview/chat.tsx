@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { reconnecting, turnNoticeNotes, type ChatModel, type Note, type TurnTrace } from '../model';
 import { Animating, Icon } from './ui';
 import { userMessageIndexes } from '../../../../src/tui/slash/fork-at';
+import { STEER_WORDS } from '../../../../src/tui/render/steer-rows';
 import { withoutOtherOrgThinkingNotice } from '../../../../src/harness/protocol/claude-thinking-notice';
 import { AssistantMessage, UserMessage } from './messages';
 import { FinishedTurn, LiveTurnView, NoteView, waitingOnUser } from './turn';
@@ -113,8 +114,12 @@ export function Transcript({ model, reveal }: { model: ChatModel; reveal?: numbe
     // turn that is over is the next turn's, not a row of this one.
     if (queuedIds.has(submission.id) || steeredIds.has(submission.id)) continue;
     if (!model.running && submission.disposition !== 'steered' && submission.disposition !== 'error') continue;
-    const said = submission.disposition === 'steered' ? 'Sent into this turn' : submission.disposition === 'queued' ? 'Queued for the next turn' : submission.disposition === 'error' ? 'Not sent' : 'Sending…';
-    parts.push(<div key={`s${submission.id}`} class="submission"><Icon name="arrow-small-right" /><span class="muted">{said}:</span> <span>{submission.text}</span></div>);
+    if (submission.disposition === 'steered') {
+      parts.push(<div key={`s${submission.id}`} class="submission"><Icon name="arrow-small-right" /><span>{submission.text}</span><span class="muted">{STEER_WORDS.steered}</span></div>);
+      continue;
+    }
+    const said = submission.disposition === 'queued' ? 'Queued for the next turn' : submission.disposition === 'error' ? 'Not sent' : 'Sending…';
+    parts.push(<div key={`s${submission.id}`} class="submission"><Icon name="arrow-small-right" /><span class="muted">{said}: </span><span>{submission.text}</span></div>);
   }
   return (
     <Animating.Provider value={!reconnecting(model)}>
