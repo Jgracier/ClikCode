@@ -22,7 +22,7 @@ export function usageRemainingPercent(label?: string): number | undefined {
  * whole message. */
 export function composerUsageLabel(label?: string, resetLabel?: string): string | undefined {
   if (resetLabel) return resetLabel;
-  if (label && /credits exhausted|out of credits/i.test(label)) return 'Out Of Credits';
+  if (label && !label.includes(' • ') && /credits exhausted|out of credits/i.test(label)) return 'Out Of Credits';
   return label;
 }
 
@@ -36,7 +36,7 @@ export function chatCostLabel(costUsd: number | undefined): string | undefined {
 /** Whether the reading says the allowance is spent (it is then drawn red). */
 export function usageLabelIsSpent(label?: string): boolean {
   if (!label) return false;
-  if (/^resets\b/i.test(label) || label === 'Out Of Credits') return true;
+  if (/^resets\b/i.test(label) || label === 'Out Of Credits' || /• Out of credits$/.test(label)) return true;
   const remaining = usageRemainingPercent(label);
   return /exhausted/i.test(label) || (remaining !== undefined && remaining <= 0);
 }
