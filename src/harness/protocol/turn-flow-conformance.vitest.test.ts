@@ -40,6 +40,13 @@ import { createAcpSession } from '../transport/acp-client.js';
 import { createCodexSession } from '../transport/codex-app-server.js';
 import { harnessTurnTransport } from '../transport/select.js';
 import { upsertActivityEvent } from '../../tui/render/activity-log.js';
+import { normalizeActivityEvent } from './activity-normalize.js';
+import { renderActivityLine } from './activity-line.js';
+import { groupSummary, groupSummaryText } from './call-groups.js';
+import { LOOK } from './look.js';
+import { runGroupSummary } from '../../../packages/vscode/src/webview/flow.js';
+import { recordTurnActivity, stopOpenActivities } from '../../turn/turn-activities.js';
+import type { TurnActivity } from '../../session/model.js';
 
 type Json = Record<string, unknown>;
 type Capability = keyof AiHarnessFlowCapabilities;
@@ -591,6 +598,58 @@ describe('every harness is proven by the fixtures of the wire shape it publishes
         if (declared) check(label, got[capability], `declares ${capability}=true but none of its fixtures [${fixtures.map((f) => f.id).join(', ')}] produced it: correct the catalog, or add the fixture of the shape the vendor publishes`);
         else if (family.exact && !(family.bounded ?? []).includes(capability)) check(label, !got[capability], `declares ${capability}=false but its adapter produced it (a hidden capability)`);
       }
+    });
+  }
+});
+
+
+// ------------------------------------------------- one look, every harness
+
+/** Each fixture's events as the saved turn keeps them: one normalizer, one merge. */
+const savedTurn = (events: readonly HarnessActivityEvent[]): TurnActivity[] => {
+  let activities: TurnActivity[] = [];
+  for (const event of events) activities = recordTurnActivity(activities, normalizeActivityEvent(event), 0);
+  return activities;
+};
+const plainRows = (rows: string[]): string[] => rows.map((row) => row.replace(/\u001b\[[0-9;]*m/g, ''));
+
+describe('every harness\'s own adapter output is drawn the one way, by the terminal and by the webview', () => {
+  for (const harness of AI_LOCAL_HARNESSES) {
+    it(`${harness.command}: tool rows carry the one glyph, thoughts the thought mark, a stopped call reads stopped, and both surfaces group it alike`, async () => {
+      const label = `conformance[${harness.command}]`;
+      const events = (await Promise.all((PROOFS[harness.command] ?? []).map((id) => runOnce(ALL_FIXTURES.get(id)!)))).flatMap((observed) => observed.events);
+      const calls = events.filter((event) => event.kind !== 'thinking');
+      // A text CLI (Aider, Continue) prints prose and reports no tool call: nothing to draw, by the vendor's design.
+      if (!calls.length) {
+        check(label, familyOf(harness) === 'aider' || familyOf(harness) === 'text', 'its fixtures produced no tool call to draw');
+        return;
+      }
+      // (a) rows: every call, normalized, is drawn with the one tool mark (a sub-agent too), at the standard indent.
+      for (const event of calls.filter((entry) => !entry.parentId)) {
+        const rows = plainRows(renderActivityLine(normalizeActivityEvent(event)));
+        check(label, rows[0]!.startsWith(`  ${LOOK.glyph.tool} `), `"${event.label}" (${event.kind}) is not drawn as "  ${LOOK.glyph.tool} ..." but as "${rows[0]}"`);
+      }
+      // thoughts: one dim ✻ row, as every other harness's.
+      for (const thought of events.filter((event) => event.kind === 'thinking' && event.label.trim())) {
+        const rows = plainRows(renderActivityLine(normalizeActivityEvent(thought)));
+        check(label, rows.length === 1 && rows[0]!.startsWith(`  ${LOOK.glyph.thought} `), `thought "${thought.label.slice(0, 30)}" is drawn as ${JSON.stringify(rows)}`);
+      }
+      // stopped: a call still open when the turn is stopped is closed as stopped, not failed.
+      const saved = savedTurn(events);
+      const open = saved.filter((activity) => activity.event.kind === 'tool-start');
+      for (const activity of stopOpenActivities(open)) {
+        check(label, activity.event.stopped === true && activity.event.kind === 'tool-error', `an open call "${activity.event.label}" is not closed as stopped`);
+        check(label, plainRows(renderActivityLine(activity.event)).join(' ').includes('stopped'), `a stopped call "${activity.event.label}" does not say stopped`);
+      }
+      // failed: a failed call is drawn as failed, whoever failed it.
+      for (const activity of saved.filter((entry) => entry.event.kind === 'tool-error' && !entry.event.stopped)) {
+        check(label, plainRows(renderActivityLine(activity.event)).join(' ').includes('failed'), `a failed call "${activity.event.label}" does not say failed`);
+      }
+      // (c) grouping: the terminal's summary and the webview's are the same words.
+      const top = saved.filter((activity) => !activity.event.parentId).map((activity) => activity.event);
+      const terminal = groupSummaryText(groupSummary(top.map((event, index) => ({ id: String(index), event })), false));
+      const webview = runGroupSummary(top.map((event, index) => ({ activity: { ...event, key: String(index) } as never })));
+      check(label, webview === terminal, `terminal says "${terminal}", webview says "${webview}"`);
     });
   }
 });
