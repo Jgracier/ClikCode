@@ -17,6 +17,8 @@ import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { TakeBackOutcome } from '../turn/live-input.js';
 import type { LiveSettingsFields } from '../turn/live-settings.js';
 
+export interface AgentSummary { id: string; label: string; status: string; startedAt: number; branch?: string }
+
 /** Which key or signal asked for a Stop. */
 export type CancelTrigger = 'esc' | 'ctrl-c' | 'sign-in-esc' | 'editor-stop' | 'abort-signal' | 'programmatic';
 /** Who asked for a Stop: the client kind and its pid, and the trigger. */
@@ -61,6 +63,10 @@ export type ClientCommand =
   /** Enter again: the oldest queued user message goes into the running
    *  turn at its next pause. The turn is not cancelled. */
   | { type: 'send-queued' }
+  /** `/agents`: list the conversation's background agents, or stop some. A stop is only done with
+   *  `confirm`: without it the worker answers `needs-confirm`, naming what would stop. */
+  | { type: 'agents'; action: 'list' }
+  | { type: 'agents'; action: 'stop'; ids?: string[]; all?: boolean; confirm?: boolean }
   | { type: 'approval-response'; id: string; approved: boolean | 'always' }
   /** The answer to a `question-request` (cancelled when the user dismissed it). */
   | { type: 'question-response'; id: string; result: HarnessQuestionResult }
@@ -153,6 +159,8 @@ export type WorkerEvent =
    * switch, a model substitution, an answer cut off at its limit. It was
    * sent as a thought, which a window shows only until the next one. */
   | { type: 'note'; message: string; seq?: number; responseOffset?: number }
+  /** The answer to an `agents` command. `text` is ready to show. */
+  | { type: 'agents'; outcome: 'listed' | 'needs-confirm' | 'stopped' | 'none'; running: AgentSummary[]; stopped?: string[]; text: string }
   | { type: 'phase'; message: string }
   /** `seq`/`responseOffset`: where the plan row began (it updates in place). */
   | { type: 'plan'; entries: readonly PlanEntry[]; seq?: number; responseOffset?: number }

@@ -89,3 +89,69 @@ with Right, the read-only line, back with Left.
 - The webview does receive `call.input`: the worker broadcasts the whole
   normalized event, `asActivity` spreads it, `Activity` picks `call`, and
   model-patch is a structural diff with no field filter (read, not run).
+
+## What ends a sub-agent (the lifetime guarantees)
+
+The rule: **nothing interrupts a sub-agent except the user explicitly stopping
+it.** A message typed mid-turn steers; it never cancels. What each kind of
+sub-agent can honestly promise:
+
+### ClikCode's own agent (`agent` tool, `background: true`)
+
+Owned by the **session** (the conversation's worker), not by the turn
+(`src/agent/background-agents.ts`). Each has its own abort signal that only an
+explicit stop fires.
+
+| Event | Effect on a running background agent |
+|---|---|
+| Esc / Ctrl+C / the editor's Stop on the turn | none: the turn ends, the agent runs on, its result is queued as a notification and a follow-up turn delivers it |
+| a window closes, resizes, detaches | none (the worker owns the agent, not a window) |
+| model or account switch | none (the turn waits for agents before switching; the agent keeps its own model client) |
+| a newer ClikCode build | none: the worker declines to retire (`retireBlocker`: "background agents are running") and steps down once they finish and the model has been told |
+| `/agents stop <id>` or `/agents stop all`, then `confirm` (editor: "Stop Background Agents", modal naming them) | stops them; their work is committed to their branch |
+| the worker must go anyway (SIGTERM, its home removed, power) | graceful: stopped, work committed to branch, the next turn is told "interrupted" |
+| the worker is killed hard (SIGKILL, OOM, crash) | not survivable in-process. The on-disk record (`<state>/agent-registry/<session>.json`) lets the next worker commit the abandoned worktree to its branch and report the agent interrupted (`reconcileAgents`) |
+
+Honest limit: the agents run **inside the worker process**, not as detached
+processes of their own. A hard kill of the worker ends them; no work is lost
+(committed on the next start) but they do not keep running. Approvals an agent
+needs are asked through the worker's windows; with none attached the request
+waits like any other.
+
+`list_agents` and `/agents` show them, including ones an earlier worker ran.
+
+### Vendor harnesses (Claude, Codex, Cursor, ...)
+
+ClikCode does not own these sub-agents; the vendor does. Claude's ACP adapter
+cancels its sub-agents when the turn is cancelled (`session/cancel`; each
+transcript ends `[Request interrupted by user for tool use]`). So:
+
+- A plain Esc, Ctrl+C or editor Stop while the vendor reports an open
+  sub-agent call is **held**: ClikCode says it is running N sub-agents and that
+  stopping would end them; a second Esc/Ctrl+C within 30 s confirms. Nothing is
+  sent to the vendor for the first. (A script's abort signal is a decision
+  already made and stops at once.) Every Stop is logged with its origin:
+  `worker.cancel {client, clientPid, trigger}`.
+- A vendor's sub-agents die if the vendor process dies (worker retirement is
+  already held while the vendor runs background work, `persistentWorkRunning`).
+  ClikCode cannot make a vendor keep them across its own exit.
+- Steers: an ACP agent takes a steer only when no tool call is open
+  (`steerSafe`); otherwise it is held. ClikCode itself answers at once ("Steer
+  received ... held until <call> pauses"), repeats every minute while held, and
+  says when it was delivered or that it will run as the next message. It cannot
+  make a vendor read a message sooner than the vendor allows.
+
+### Steering ClikCode's own loop
+
+A message typed while a call runs is held, acknowledged by ClikCode, and the
+long-waiting calls return early so the model hears it within seconds:
+`agent_wait` and `wait` return; a foreground shell command is moved to a
+background shell (it keeps running; nothing is killed).
+
+### Install check
+
+`npx vitest run src/worker/agents-survive.vitest.test.ts`: cancel the turn,
+worker replacement, window closed: the agent still finishes; a dead worker's
+agent is committed to its branch and reported. Also run
+`src/agent/subagent.vitest.test.ts` (turn cancel leaves the agent running;
+explicit stop commits its work) and `src/worker/worker-agents.vitest.test.ts`.

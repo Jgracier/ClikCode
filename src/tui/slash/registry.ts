@@ -44,7 +44,7 @@ export const SLASH_HANDLER_KEYS = [
   'provider', 'accounts', 'login', 'logout', 'gateway',
   'model', 'effort', 'fast', 'permissions', 'sandbox', 'send', 'options', 'capabilities', 'settings',
   'sessions', 'resume', 'search', 'rename', 'fork', 'redo', 'archive', 'delete',
-  'usage', 'doctor',
+  'usage', 'doctor', 'agents',
 ] as const;
 export type SlashHandlerKey = typeof SLASH_HANDLER_KEYS[number];
 
@@ -239,6 +239,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('status', 'Info', 'current configuration'),
   entry('context', 'Info', 'context window and token usage reported by the harness'),
   entry('usage', 'Info', 'quota, tokens, and cost for this provider', { aliases: ['cost'], argHint: '[all]' }),
+  entry('agents', 'Tools', 'background agents: list them, or stop one (Esc and Ctrl+C never do)', { argHint: '[stop <id>|stop all] [confirm]', duringTurn: 'apply' }),
   entry('doctor', 'Info', 'check installed harnesses and accounts'),
   entry('help', 'Info', 'all commands'),
 ];

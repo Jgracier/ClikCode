@@ -9,6 +9,7 @@ import { prepareMcp, releaseMcp } from '../agent/mcp/manager.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { sendEvent } from './broadcast-observer.js';
 import type { ClientCommand } from './protocol.js';
+import { createAgentsCommand } from './worker-agents.js';
 import { createLiveCommands } from './worker-live-commands.js';
 import type { ConnectionState, WorkerContext } from './worker-context.js';
 
@@ -16,6 +17,7 @@ export function createCommandHandler(ctx: WorkerContext) {
   const { observer, sessionId, config, token } = ctx;
   const { currentSessionAndAccount } = ctx.io;
   const live = createLiveCommands(ctx);
+  const agentsCommand = createAgentsCommand(ctx);
 
   /** Ready for the route the conversation is on now -- or, off an agent
    * route, nothing left running that only an agent turn would use. */
@@ -115,6 +117,7 @@ export function createCommandHandler(ctx: WorkerContext) {
     if (command.type === 'retire') { await handleRetire(socket); return; }
     if (command.type === 'detach') { socket.end(); return; }
     if (command.type === 'unqueue') { await live.handleUnqueue(socket, command); return; }
+    if (command.type === 'agents') { sendEvent(socket, await agentsCommand(command)); return; }
     if (command.type === 'send-queued') { await live.handleSendQueued(socket, command); return; }
     if (command.type === 'cancel') { await live.handleCancel(socket, command); return; }
     if (command.type === 'steer') { await live.handleSteer(socket, command); return; }
