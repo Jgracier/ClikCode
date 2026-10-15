@@ -14,8 +14,20 @@ let cwd: string;
 let stateDir: string;
 let homeDir: string;
 
+/** A temp base with no `.git` above it: the "no repository" case walks up, and
+ * a developer's home that is itself a repository would otherwise be found. */
+async function repoFreeTmp(): Promise<string> {
+  const inRepo = async (dir: string): Promise<boolean> => {
+    for (let at = dir; ; at = path.dirname(at)) {
+      if (await fs.access(path.join(at, '.git')).then(() => true, () => false)) return true;
+      if (path.dirname(at) === at) return false;
+    }
+  };
+  return (await inRepo(os.tmpdir())) ? '/tmp' : os.tmpdir();
+}
+
 beforeEach(async () => {
-  root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'skills-')));
+  root = await fs.realpath(await fs.mkdtemp(path.join(await repoFreeTmp(), 'skills-')));
   repo = path.join(root, 'repo');
   cwd = path.join(repo, 'packages', 'app');
   stateDir = path.join(root, 'state');
