@@ -204,7 +204,11 @@ export interface AiHarnessTurnDefinition {
    * it while the vendor reports background work, so a task that finishes
    * after the turn's `result` still gets its follow-up turn. Claude Code only:
    * its `-p` mode kills background tasks the moment stdin closes. */
-  stdinFormat?: 'stream-json';
+  stdinFormat?: 'stream-json' | 'pi-rpc';
+  /* `pi-rpc`: Pi's `--mode rpc` -- the prompt is a JSON command on stdin, stdin stays open for the
+   * turn, and a message typed meanwhile is a `steer` command (delivered after the running tool calls,
+   * before the next model call: pi docs/rpc.md; verified against pi 0.87.0). Images travel in the
+   * command (`@file` is refused in RPC mode), not in argv. */
   /** Argv standing in for the prompt when it is piped. Defaults to `['-']`
    * (Codex). `[]` is for a vendor that reads stdin when no prompt is given. */
   stdinArgv?: readonly string[];
@@ -1025,7 +1029,7 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // or checks credentials. The steps type /login, its method/provider menus
   // and key field are read on ClikCode's screen, and Ctrl+D leaves once it
   // says the credentials are saved (verified 2026-10-03, pi 0.87 signed out).
-  { command: 'pi', modelListFormat: 'pi-table', quotaProbe: { none: '`pi auth` only prints or checks credentials; no usage read' }, subagents: { read: 'none', steer: 'none' }, capabilities: { childActivity: false, thinking: true, plan: false, usage: true, toolOutput: true, backgroundAgents: false, backgroundTerminals: false, workflows: false }, freePlan: { suffix: ':free' }, provider: 'pi', displayName: 'Pi Coding Agent', tier: 'more', transport: 'structured-cli', integration: 'structured', parser: 'pi-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, effortValues: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'], localAuth: ['api-key', 'oauth', 'vendor-cli'], loginArgv: [], binary: 'pi', npmPackage: '@earendil-works/pi-coding-agent', loginSteps: [{ when: '/login to log into a provider', send: '/login{enter}' }, { when: 'Credentials saved to', send: '{ctrl-d}' }], loginKeyRoutes: providerKeyRoutes(['Sign in with an API key'], { ...SHARED_PROVIDER_MENU_LABELS, google: 'Google', fireworks: 'Fireworks', 'moonshot-cn': 'Moonshot AI CN', minimax: 'MiniMax', together: 'Together' }), authFiles: [{ path: '${PI_CODING_AGENT_DIR:-~/.pi/agent}/auth.json', contains: '"type"' }], modelDiscoveryArgv: ['--list-models'], modelProviderSeparator: '/', modelArgvPrefix: ['--model'], effortArgvPrefix: ['--thinking'], imageArgvPrefix: ['@'], imageArgvStyle: 'concatenated', profileEnv: 'PI_CODING_AGENT_DIR', turn: { startArgv: ['-p', '--mode', 'json'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session'], output: 'json-lines', responseFields: ['text', 'content'], extensionArgv: ['-e'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session'] } },
+  { command: 'pi', modelListFormat: 'pi-table', quotaProbe: { none: '`pi auth` only prints or checks credentials; no usage read' }, subagents: { read: 'none', steer: 'none' }, capabilities: { childActivity: false, thinking: true, plan: false, usage: true, toolOutput: true, backgroundAgents: false, backgroundTerminals: false, workflows: false }, freePlan: { suffix: ':free' }, provider: 'pi', displayName: 'Pi Coding Agent', tier: 'more', transport: 'structured-cli', integration: 'structured', parser: 'pi-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, effortValues: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'], localAuth: ['api-key', 'oauth', 'vendor-cli'], loginArgv: [], binary: 'pi', npmPackage: '@earendil-works/pi-coding-agent', loginSteps: [{ when: '/login to log into a provider', send: '/login{enter}' }, { when: 'Credentials saved to', send: '{ctrl-d}' }], loginKeyRoutes: providerKeyRoutes(['Sign in with an API key'], { ...SHARED_PROVIDER_MENU_LABELS, google: 'Google', fireworks: 'Fireworks', 'moonshot-cn': 'Moonshot AI CN', minimax: 'MiniMax', together: 'Together' }), authFiles: [{ path: '${PI_CODING_AGENT_DIR:-~/.pi/agent}/auth.json', contains: '"type"' }], modelDiscoveryArgv: ['--list-models'], modelProviderSeparator: '/', modelArgvPrefix: ['--model'], effortArgvPrefix: ['--thinking'], imageArgvPrefix: ['@'], imageArgvStyle: 'concatenated', profileEnv: 'PI_CODING_AGENT_DIR', turn: { startArgv: ['--mode', 'rpc'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session'], promptInput: 'stdin', stdinFormat: 'pi-rpc', stdinArgv: [], output: 'json-lines', responseFields: ['text', 'content'], extensionArgv: ['-e'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session'] } },
   // Checked against droid 0.223.0: `droid exec` takes -m/--model,
   // -r/--reasoning-effort, --cwd, -s/--session-id, --auto low|medium|high and
   // --skip-permissions-unsafe, all as declared here. Two things were missing:
@@ -1982,7 +1986,7 @@ export function nativeHarnessTurnArgv(harness: AiLocalHarnessDefinition, input: 
   const carriesProvider = Boolean(input.model && harness.modelProviderArgvPrefix && splitHarnessModel(harness, input.model));
   const { provider: _provider, ...withoutProvider } = input.options ?? {};
   appendDeclaredHarnessOptions(argv, harness, carriesProvider ? withoutProvider : input.options, resumed);
-  if (harness.imageArgvPrefix) for (const image of input.images ?? []) {
+  if (harness.imageArgvPrefix && harness.turn.stdinFormat !== 'pi-rpc') for (const image of input.images ?? []) {
     if (harness.imageArgvStyle === 'concatenated') {
       const prefix = harness.imageArgvPrefix.join('');
       argv.push(`${prefix}${image}`);
