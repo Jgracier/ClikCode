@@ -145,6 +145,16 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
     let startedAt: number | undefined;
     const finish = (result: ToolRunResult): ToolRunResult => {
       const output = eventOutputPreview(result.output);
+      // A background agent's call returns at launch; its row is the agent's, and
+      // settles when the agent does, not as a one-off command.
+      if (result.continuesAs && rt.backgroundAgents) {
+        rt.backgroundAgents.whenEnded(result.continuesAs, (ended) => input.onActivity?.({
+          kind: ended?.isError ? 'tool-error' : 'tool-done', label, id: call.id, ...category,
+          ...(ended ? eventOutputPreview(ended.output) : {}),
+          ...(startedAt !== undefined ? { durationMs: Date.now() - startedAt } : {}),
+        }));
+        return { ...result, output: capHeadTail(result.output, toolOutputCap(rt.contextWindow, rt.profile.toolOutputBytes), 'narrow the request to see the middle').text };
+      }
       input.onActivity?.({
         kind: result.isError ? 'tool-error' : 'tool-done', label, id: call.id, ...category,
         ...output, ...(result.diff ? { diff: result.diff } : {}),

@@ -102,6 +102,13 @@ export class BackgroundAgents {
     }));
   }
 
+  /** Calls `ended` once the agent has finished (or failed), with how it ended. */
+  whenEnded(id: string, ended: (result: ToolRunResult | undefined) => void): void {
+    const agent = this.agents.get(id);
+    if (!agent) { ended(undefined); return; }
+    void agent.done.then(() => ended(agent.result));
+  }
+
   running(): number {
     let count = 0;
     for (const agent of this.agents.values()) if (!agent.result) count++;

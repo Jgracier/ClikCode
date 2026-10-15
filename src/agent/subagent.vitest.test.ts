@@ -558,7 +558,7 @@ describe('coding sub-agents in their own worktree', () => {
     const note = parent[3].items.at(-1);
     expect(note).toMatchObject({ type: 'text', role: 'user' });
     expect(note?.type === 'text' && note.text).toMatch(/^\[background agent agent_1 finished\] Slow edit\nChanged to 47\./);
-    expect(events.some((event) => event.id === 'agent-done-agent_1')).toBe(true);
+    expect(events.some((event) => event.id === 'bg' && event.kind === 'tool-done')).toBe(true);
     const branch = await git('branch', '--list', '--format=%(refname:short)', 'clikcode/*');
     expect(await git('show', `${branch}:a.txt`)).toBe('the answer is 47');
     expect(await fs.readFile(path.join(cwd, 'a.txt'), 'utf8')).toBe('the answer is 42\n');
@@ -592,9 +592,9 @@ describe('coding sub-agents in their own worktree', () => {
     expect(result.stopReason).toBe('account-switch');
     // The agent was not stopped: it made its edit and gave its answer.
     expect(client.requests('slow edit')).toHaveLength(3);
-    const done = events.find((event) => event.id === 'agent-done-agent_1');
+    const done = events.find((event) => event.id === 'bg' && event.kind === 'tool-done');
     expect(done?.kind).toBe('tool-done');
-    expect(done?.output?.join('\n')).toMatch(/Changed to 47/);
+    expect(done?.output?.join('\n')).toMatch(/Agent: Slow edit/);
     const branch = await git('branch', '--list', '--format=%(refname:short)', 'clikcode/*');
     expect(await git('show', `${branch}:a.txt`)).toBe('the answer is 47');
     // The parent made no model call after the switch.

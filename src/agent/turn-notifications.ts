@@ -20,7 +20,6 @@ export async function deliverPending(rt: TurnRuntime): Promise<void> {
   // Background agents that finished without the model waiting for them.
   const agentResults = backgroundAgents?.takeFinished() ?? [];
   if (agentResults.length) {
-    for (const note of agentResults) input.onActivity?.({ kind: note.result.isError ? 'tool-error' : 'tool-done', label: `${note.id} finished: ${note.label}`, id: `agent-done-${note.id}`, agent: true });
     await append({ type: 'text', role: 'user', text: formatAgentNotifications(agentResults) });
   }
 }
@@ -37,7 +36,6 @@ export async function finishBackgroundForSwitch(rt: TurnRuntime): Promise<void> 
   }
   const done = backgroundAgents?.takeFinished() ?? [];
   if (done.length) {
-    for (const note of done) input.onActivity?.({ kind: note.result.isError ? 'tool-error' : 'tool-done', label: `${note.id} finished: ${note.label}`, id: `agent-done-${note.id}`, agent: true, output: note.result.output.split('\n').slice(0, 40) });
     await rt.append({ type: 'text', role: 'user', text: formatAgentNotifications(done) });
   }
 }
