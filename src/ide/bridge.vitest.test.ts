@@ -268,7 +268,7 @@ describe('the editor bridge and Stop', () => {
       inner.workerTurnRunning = true;
       bridge.handle({ type: 'cancel', restoreDraft: true });
       await vi.advanceTimersByTimeAsync(60_000);
-      expect(sent).toEqual([{ type: 'cancel', restoreDraft: true }]);
+      expect(sent).toEqual([{ type: 'cancel', restoreDraft: true, origin: { client: 'bridge', pid: process.pid, trigger: 'editor-stop' } }]);
       expect(vi.getTimerCount()).toBe(0);
     } finally { vi.useRealTimers(); }
   });
