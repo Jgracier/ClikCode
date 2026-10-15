@@ -486,9 +486,11 @@ interface LiveAgent {
   models?: Json;
   modes?: Json;
   configOptions?: Json[];
-  /** The agent takes `_session/steering` (InitializeResponse
-   * `_meta.steering.supported`; claude-agent-acp 0.84). */
-  steering?: boolean;
+  /** How the agent takes a message into its running turn: `_session/steering`
+   * (InitializeResponse `_meta.steering.supported`; claude-agent-acp 0.84), or
+   * MiniMax Code's own `mcode/session/steer` (listed in its initialize
+   * `_meta['minimax-code/extensions'].methods`). */
+  steering?: 'session' | 'mcode';
   /** A prompt of this process was cancelled: the agent may still be unwinding
    * it when the next prompt arrives (see vendorBusyNotice). */
   cancelled?: boolean;
@@ -753,7 +755,10 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
         clientInfo: { name: 'clikcode', title: 'ClikCode', version: '1' },
       }, setup));
       live.capabilities = (initialized.agentCapabilities as Json | undefined) ?? {};
-      live.steering = initialized._meta?.steering?.supported === true && input.acp?.steering !== false;
+      const extensions = initialized._meta?.['minimax-code/extensions']?.methods;
+      live.steering = input.acp?.steering === false ? undefined
+        : initialized._meta?.steering?.supported === true ? 'session'
+          : Array.isArray(extensions) && extensions.includes('mcode/session/steer') ? 'mcode' : undefined;
       stillRunning();
     }
     // A vendor that says it is signed out is not signed in over ACP
@@ -1031,12 +1036,16 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
           // `promptRequired`: the agent has no turn running (it ended between
           // here and there); ClikCode owns the next turn, so the queued copy
           // runs. Never let the agent start a detached one (`startedNewTurn`).
-          const answer = await live.peer.request('_session/steering', {
-            sessionId: turn.sessionId, prompt: [{ type: 'text', text: item.text }],
-            _meta: { steering: { idleBehavior: 'promptRequired' } },
-          }, {});
-          if (answer?.outcome === 'injected') item.resolve();
-          else item.reject(new Error(`${turn.input.command} did not take the message into its turn (${String(answer?.outcome)})`));
+          // mcode refuses (an error) when no prompt turn of this session is
+          // running, and never starts one: either way the queued copy runs.
+          const answer = live.steering === 'mcode'
+            ? await live.peer.request('mcode/session/steer', { sessionId: turn.sessionId, text: item.text }, {})
+            : await live.peer.request('_session/steering', {
+              sessionId: turn.sessionId, prompt: [{ type: 'text', text: item.text }],
+              _meta: { steering: { idleBehavior: 'promptRequired' } },
+            }, {});
+          if (answer?.outcome === 'injected' || (live.steering === 'mcode' && answer?.mode === 'steered')) item.resolve();
+          else item.reject(new Error(`${turn.input.command} did not take the message into its turn (${String(answer?.outcome ?? answer?.mode)})`));
         } catch (error) {
           item.reject(error instanceof Error ? error : new Error(String(error)));
         }

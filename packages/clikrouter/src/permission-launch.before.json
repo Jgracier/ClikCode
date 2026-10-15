@@ -1536,28 +1536,22 @@
   "ask": {
    "acp": null,
    "turn": [
-    "-p",
     "--mode",
-    "json",
-    "hi"
+    "rpc"
    ]
   },
   "auto": {
    "acp": null,
    "turn": [
-    "-p",
     "--mode",
-    "json",
-    "hi"
+    "rpc"
    ]
   },
   "bypass": {
    "acp": null,
    "turn": [
-    "-p",
     "--mode",
-    "json",
-    "hi"
+    "rpc"
    ]
   }
  },
