@@ -15,6 +15,8 @@ import { defineTool } from '../tool-contract.js';
 
 interface WaitArgs { shell_ids?: string[]; output?: string; path?: string; seconds?: number }
 
+/** The user sent a message while a wait ran. */
+export const STEERED_NOTE = 'Returned early because the user sent a message; read it before anything else. Nothing was stopped: call wait again if you still need to.';
 const DEFAULT_SECONDS = 300;
 const MAX_SECONDS = 1800;
 /** How much of a shell's recent output an `output` pattern is matched against. */
@@ -134,6 +136,13 @@ export const waitTool = defineTool<WaitArgs>({
       };
       ctx.signal?.addEventListener('abort', onAbort, { once: true });
       cleanup.push(() => ctx.signal?.removeEventListener('abort', onAbort));
+      // The user typed while this waits: return now, so the model hears it. Nothing is cancelled.
+      const onSteer = (): void => finish(STEERED_NOTE);
+      if (ctx.steerSignal?.aborted) onSteer();
+      else if (ctx.steerSignal) {
+        ctx.steerSignal.addEventListener('abort', onSteer, { once: true });
+        cleanup.push(() => ctx.steerSignal?.removeEventListener('abort', onSteer));
+      }
     });
   },
 });

@@ -65,7 +65,7 @@ export class BackgroundAgents {
 
   /** The named agent's result, or the next one to finish of those not yet
    * delivered; a note when the time runs out first. */
-  async wait(id: string | undefined, seconds: number, signal?: AbortSignal): Promise<ToolRunResult> {
+  async wait(id: string | undefined, seconds: number, signal?: AbortSignal, steerSignal?: AbortSignal): Promise<ToolRunResult> {
     let targets: BackgroundAgent[];
     if (id) {
       const agent = this.find(id);
@@ -76,8 +76,9 @@ export class BackgroundAgents {
       if (!targets.length) return { output: 'No background agent is running or has an undelivered result.' };
     }
     const ready = (): BackgroundAgent | undefined => targets.find((agent) => agent.result);
-    if (!ready()) await this.until(() => ready() !== undefined, seconds * 1000, signal);
+    if (!ready()) await this.until(() => ready() !== undefined, seconds * 1000, steerSignal ? AbortSignal.any([...(signal ? [signal] : []), steerSignal]) : signal);
     const agent = ready();
+    if (!agent && steerSignal?.aborted && !signal?.aborted) return { output: `Returned early because the user sent a message; read it before anything else. ${targets.map((entry) => entry.id).join(', ')} still running: nothing was stopped. Call agent_wait again if you still need the result.` };
     if (!agent) return { output: `${targets.map((entry) => entry.id).join(', ')} still running after ${seconds}s.` };
     agent.delivered = true;
     return { ...agent.result!, output: `[${agent.id} finished] ${agent.label}\n${agent.result!.output}` };

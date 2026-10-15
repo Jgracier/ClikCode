@@ -42,7 +42,7 @@ export const agentWaitTool = defineTool<WaitArgs>({
   async run(args, ctx) {
     if (!ctx.agents) return { output: 'There are no background agents here.', isError: true };
     const seconds = Math.min(Math.max(Math.round(args.seconds ?? DEFAULT_SECONDS), 1), MAX_SECONDS);
-    const result = await ctx.agents.wait(args.id, seconds, ctx.signal);
+    const result = await ctx.agents.wait(args.id, seconds, ctx.signal, ctx.steerSignal);
     if (ctx.signal?.aborted) throw turnCancelledError();
     return result;
   },

@@ -129,6 +129,12 @@ export function spawnBackgroundShell(args: BashArgs, ctx: ToolContext, onStdout?
   // stdin is a pipe so bash_input can answer a prompt or drive a REPL. A
   // foreground command keeps 'ignore': nothing could ever type into it.
   const child = spawnPortable(file, argv, { cwd: ctx.cwd, env: shellEnvironment(), stdio: ['pipe', 'pipe', 'pipe'], detached, windowsHide: true });
+  return { shell: registerBackgroundShell(child, detached, args.command, ctx, onStdout), ...(notice ? { notice } : {}) };
+}
+
+/** Makes a running child a background shell of the session: output collects, its exit is queued as a notification.
+ * Also how a foreground command that must stop blocking the model (a message was typed) carries on. */
+function registerBackgroundShell(child: BackgroundShell['child'], detached: boolean, command: string, ctx: ToolContext, onStdout?: (chunk: string) => void): BackgroundShell {
   // A write after the process exits is EPIPE; bash_input reports the exit instead.
   child.stdin?.on('error', () => undefined);
   const id = `bash_${ctx.session.nextShellNumber++}`;
@@ -138,7 +144,7 @@ export function spawnBackgroundShell(args: BashArgs, ctx: ToolContext, onStdout?
   let chunks: string[] = [];
   let held = 0;
   const shell: BackgroundShell = {
-    id, command: args.command, child, detached, droppedBytes: 0, status: 'running', startedAt: Date.now(),
+    id, command, child, detached, droppedBytes: 0, status: 'running', startedAt: Date.now(),
     get unread(): string {
       if (chunks.length > 1) chunks = [chunks.join('')];
       return chunks[0] ?? '';
@@ -173,12 +179,12 @@ export function spawnBackgroundShell(args: BashArgs, ctx: ToolContext, onStdout?
     if (!tell) return;
     const unread = shell.unread.length > NOTIFICATION_TAIL_CHARS ? `… ${shell.unread.slice(-NOTIFICATION_TAIL_CHARS)}` : shell.unread;
     queueShellNotification(ctx.session, {
-      shellId: id, command: args.command, exitCode: code, signal, tail: redactSecrets(unread),
+      shellId: id, command, exitCode: code, signal, tail: redactSecrets(unread),
       ...(shell.killReason ? { reason: shell.killReason } : {}), at: Date.now(),
     });
   });
   ctx.session.shells.set(id, shell);
-  return { shell, ...(notice ? { notice } : {}) };
+  return shell;
 }
 
 function startBackground(args: BashArgs, ctx: ToolContext): { output: string } {
@@ -215,7 +221,7 @@ export const bashTool = defineTool<BashArgs>({
     const before = await snapshotBeforeShell(ctx.cwd).catch(() => undefined);
     let result: ToolRunResult & { timedOut?: boolean };
     try {
-      result = await runForeground(invocation, timeoutMs, path.join(toolOutputDir(ctx.stateDir, ctx.sessionId), `${callName}.log`), ctx);
+      result = await runForeground(invocation, args.command, timeoutMs, path.join(toolOutputDir(ctx.stateDir, ctx.sessionId), `${callName}.log`), ctx);
     } catch (error) {
       // Stopped mid-command: what it changed so far is still this turn's.
       if (before) await recordShellChanges(before, ctx).catch(() => undefined);
@@ -244,7 +250,7 @@ function withNote({ timedOut: _timedOut, ...result }: ToolRunResult & { timedOut
   return { ...result, output: where === 'before' ? `${note}\n${result.output}` : `${result.output}\n${note}` };
 }
 
-function runForeground(invocation: { file: string; args: string[] }, timeoutMs: number, spillTarget: string, ctx: ToolContext): Promise<ToolRunResult & { timedOut?: boolean }> {
+function runForeground(invocation: { file: string; args: string[] }, invocationCommand: string, timeoutMs: number, spillTarget: string, ctx: ToolContext): Promise<ToolRunResult & { timedOut?: boolean }> {
   const detached = process.platform !== 'win32';
   const output = new CappedOutput(spillTarget, ctx.outputCap);
   return new Promise((resolve, reject) => {
@@ -260,9 +266,27 @@ function runForeground(invocation: { file: string; args: string[] }, timeoutMs: 
     ctx.signal?.addEventListener('abort', abort, { once: true });
     child.stdout!.setEncoding('utf8').on('data', onData);
     child.stderr!.setEncoding('utf8').on('data', onData);
-    const cleanup = (): void => { clearTimeout(timer); ctx.signal?.removeEventListener('abort', abort); };
+    let promoted = false;
+    const cleanup = (): void => { clearTimeout(timer); ctx.signal?.removeEventListener('abort', abort); ctx.steerSignal?.removeEventListener('abort', promote); };
+    // The user typed while this runs: the model must hear it now, and nothing may be killed. The command
+    // carries on as a background shell (exit arrives as a notification) and the call returns.
+    function promote(): void {
+      if (promoted || child.exitCode !== null || child.signalCode !== null) return;
+      promoted = true;
+      cleanup();
+      child.stdout!.removeListener('data', onData);
+      child.stderr!.removeListener('data', onData);
+      void pending.then(() => output.finish()).then((text) => {
+        const shell = registerBackgroundShell(child, detached, invocationCommand, ctx);
+        const body = redactSecrets(text).replace(/\s+$/, '');
+        resolve({ output: `${body ? `${body}\n\n` : ''}[Returned early because the user sent a message; read it before anything else. The command is NOT stopped: it carries on as background shell ${shell.id}, and its exit arrives as a notification. bash_output reads what it prints; kill_bash stops it.]` });
+      }, reject);
+    }
+    if (ctx.steerSignal?.aborted) queueMicrotask(promote);
+    else ctx.steerSignal?.addEventListener('abort', promote, { once: true });
     child.once('error', (error) => { cleanup(); resolve({ output: `Failed to start the shell: ${error.message}`, isError: true }); });
     child.once('close', (code, signal) => {
+      if (promoted) return;
       cleanup();
       void pending.then(() => output.finish()).then((text) => {
         if (ctx.signal?.aborted) return reject(turnCancelledError());
