@@ -9,7 +9,6 @@ import { consumeSessionTurn, enqueueSessionTurn } from '../turn/checkpoint.js';
 import { deliverTyped } from '../turn/send-mode.js';
 import { closePersistentTransport, persistentWorkRunning } from '../turn/vendor-process.js';
 import { hasHeldVendorProcess, stopHeldVendorProcess } from '../harness/transport/native/held-vendor.js';
-import { acknowledgeHeldSteer } from './steer-ack.js';
 import { sendEvent } from './broadcast-observer.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { subAgentSteerPlan, type SubAgentRef } from '../harness/protocol/activity-normalize.js';
@@ -102,8 +101,6 @@ export function createLiveCommands(ctx: WorkerContext) {
         if (result.disposition !== 'steered') broadcastQueueChanged();
         else showEveryWindow();
         void result.landed?.then((steered) => { if (steered) broadcastQueueChanged(); });
-        // Queued behind an open call: ClikCode answers now, in its own words, and keeps answering until it lands.
-        if (result.disposition === 'queued' && result.landed) acknowledgeHeldSteer(queuedItem.text, result.landed, { say: note, openCall: () => observer.openCall() });
       } catch (error) {
         // The queued copy was consumed above: put it back, or the message is gone.
         if (entry) {
@@ -255,8 +252,6 @@ export function createLiveCommands(ctx: WorkerContext) {
         // Held for the next pause, then steered in: out of the queue and
         // into the turn, on every window.
         void result.landed?.then((steered) => { if (steered) broadcastQueueChanged(); });
-        // Queued behind an open call: ClikCode answers now, in its own words, and keeps answering until it lands.
-        if (result.disposition === 'queued' && result.landed) acknowledgeHeldSteer(command.text, result.landed, { say: note, openCall: () => observer.openCall() });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         answer('error', message);
