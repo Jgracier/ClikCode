@@ -76,9 +76,14 @@ export function nativeProfileEnvironment(
 }
 
 function copilotProfileEnvironment(nativeProfile: NonNullable<AiHarnessAccount['nativeProfile']>, platform: NodeJS.Platform): Record<string, string> {
-  if (nativeProfile.env !== 'COPILOT_HOME' || platform === 'win32') return {};
+  if (nativeProfile.env !== 'COPILOT_HOME') return {};
+  // Copilot accepts these before consulting its profile. A token inherited
+  // from ClikCode would silently sign a new profile in as the parent account
+  // and could override that profile's identity on later turns too.
+  const isolated = { COPILOT_GITHUB_TOKEN: '', GH_TOKEN: '', GITHUB_TOKEN: '' };
+  if (platform === 'win32') return isolated;
   const shim = copilotGhShimDirectory();
-  return shim ? { PATH: [shim, process.env.PATH].filter(Boolean).join(':') } : {};
+  return shim ? { ...isolated, PATH: [shim, process.env.PATH].filter(Boolean).join(':') } : isolated;
 }
 
 /** Environment for one account. API-key references stay in the parent

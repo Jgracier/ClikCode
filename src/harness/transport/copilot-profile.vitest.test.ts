@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { nativeProfileEnvironment } from './profile-environment.js';
 import { parseCopilotConfig } from '../accounts/vendor-identity.js';
+import { AI_LOCAL_HARNESSES } from '../../../packages/clikrouter/src/ai-local-harness.js';
 
 const state = mkdtempSync(join(tmpdir(), 'copilot-profile-'));
 process.env.CLIKCODE_HOME = state;
@@ -18,6 +19,7 @@ describe.skipIf(process.platform === 'win32')('a Copilot account profile', () =>
     const env = nativeProfileEnvironment({ env: 'COPILOT_HOME', path: '/profiles/copilot/a' });
     expect(env.COPILOT_HOME).toBe('/profiles/copilot/a');
     expect(env.PATH?.split(':')[0]).toBe(join(state, 'tools', 'copilot-gh-shim'));
+    expect(env).toMatchObject({ COPILOT_GITHUB_TOKEN: '', GH_TOKEN: '', GITHUB_TOKEN: '' });
     expect(nativeProfileEnvironment({ env: 'CODEX_HOME', path: '/profiles/codex/a' }).PATH).toBeUndefined();
   });
 
@@ -34,6 +36,11 @@ describe.skipIf(process.platform === 'win32')('a Copilot account profile', () =>
       expect(run('pr', 'list')).toBe('real gh: pr list\n');
     } finally { rmSync(realBin, { recursive: true, force: true }); }
   });
+});
+
+it('requires a fresh device authorization when adding Copilot on a local desktop', () => {
+  const copilot = AI_LOCAL_HARNESSES.find((entry) => entry.command === 'copilot')!;
+  expect(copilot.loginArgv).toEqual(['login', '--device-code']);
 });
 
 it('names a Copilot account by the GitHub login it signed in as', () => {
