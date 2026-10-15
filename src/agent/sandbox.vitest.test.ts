@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
@@ -305,5 +305,43 @@ describe.skipIf(!hasSandbox || outsideIsWritable)('the sandbox in a turn', () =>
     expect(asked).toEqual([]);
     expect(result).toMatch(/plan mode is active/);
     expect(existsSync(outside)).toBe(false);
+  });
+});
+
+describe('linked agent worktree under the real bwrap sandbox', () => {
+  const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
+  const sandboxed = (cwd: string, command: string) => {
+    const wrapped = sandboxCommand('workspace', { file: '/bin/bash', args: ['-c', command] }, { cwd, addDirs: [], homeDir: homedir() });
+    return { wrapped, run: spawnSync(wrapped.invocation.file, wrapped.invocation.args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } }) };
+  };
+  // The repo sits in /var/tmp, which the sandbox does not make writable (all of /tmp is); the worktree is in the temp dir.
+  let root = ''; let repoRoot = '';
+  beforeEach(async () => {
+    root = realpathSync(await mkdtemp(join(tmpdir(), 'clikcode-sandbox-wt-')));
+    repoRoot = realpathSync(await mkdtemp('/var/tmp/clikcode-sandbox-repo-'));
+  });
+  afterEach(async () => { await rm(root, { recursive: true, force: true }); await rm(repoRoot, { recursive: true, force: true }); });
+
+  it('commits and fetches in the worktree, still refuses the main working tree and hooks, keeps the ssh overlay', () => {
+    const origin = join(repoRoot, 'origin'); const repo = join(repoRoot, 'repo'); const wt = join(root, 'wt');
+    execFileSync('git', ['init', '-q', '-b', 'main', origin]);
+    git(origin, 'commit', '-q', '--allow-empty', '-m', 'init');
+    execFileSync('git', ['clone', '-q', origin, repo]);
+    git(repo, 'worktree', 'add', '-q', '-b', 'agent', wt);
+    git(origin, 'commit', '-q', '--allow-empty', '-m', 'second');
+
+    const commit = sandboxed(wt, 'echo x > f && git add f && git commit -q -m c && git fetch -q origin');
+    expect(commit.wrapped.sandboxed).toBe(true);
+    expect(commit.run.stderr).toBe('');
+    expect(commit.run.status).toBe(0);
+    expect(git(wt, 'log', '--format=%s', '-1').trim()).toBe('c');
+    expect(git(wt, 'rev-parse', 'origin/main')).toBe(git(origin, 'rev-parse', 'main'));
+
+    expect(sandboxed(wt, `echo x > ${repo}/outside`).run.status).not.toBe(0);
+    expect(existsSync(join(repo, 'outside'))).toBe(false);
+    expect(sandboxed(wt, `echo x > ${repo}/.git/hooks/pre-commit`).run.status).not.toBe(0);
+    expect(sandboxed(wt, `echo x >> ${repo}/.git/config`).run.status).not.toBe(0);
+
+    if (existsSync('/etc/ssh/ssh_config.d')) expect(sandboxed(wt, 'ls /etc/ssh/ssh_config.d | wc -l').run.stdout.trim()).toBe('0');
   });
 });
