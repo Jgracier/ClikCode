@@ -18,6 +18,7 @@ import { reportStructuredLine } from '../harness/events/structured.js';
 import { captureNativeHarness } from '../harness/transport/native/command.js';
 import { captureNativeHarnessTurn, createTurnInput, createTurnRelease } from '../harness/transport/native/turn.js';
 import { createBackgroundWait, streamJsonUserMessage } from '../harness/transport/native/background-wait.js';
+import { createPiRpcTurn, piRpcPrompt, piRpcSteer } from '../harness/transport/native/pi-rpc.js';
 import { settleHeldVendor } from './turn-steps.js';
 import { holdVendorProcess, type HeldVendor } from '../harness/transport/native/held-vendor.js';
 import { recordNativeStreamUsage } from '../harness/accounts/stream-usage.js';
@@ -107,18 +108,22 @@ export async function runVendorCliAttempt(input: {
   // running, so the turn it starts when that work finishes reaches this
   // conversation instead of being killed at exit (background-wait.ts).
   // A message typed while this turn runs goes straight to the vendor.
-  const heldInput = turn.promptInput === 'stdin' && turn.stdinFormat === 'stream-json' ? createTurnInput() : undefined;
+  const streamJsonInput = turn.promptInput === 'stdin' && turn.stdinFormat === 'stream-json';
+  // Pi's RPC mode takes the same: stdin stays open for the turn so a message
+  // typed meanwhile is a `steer` command (pi-rpc.ts).
+  const piRpc = turn.promptInput === 'stdin' && turn.stdinFormat === 'pi-rpc';
+  const heldInput = streamJsonInput || piRpc ? createTurnInput() : undefined;
   // An answer with background tasks still running ends this
   // turn at once; the process is kept, and what it says when a task
   // finishes becomes a background turn (held-vendor.ts). With nobody to
   // show that (no session worker: `clikcode send`), the turn stays open
   // until the tasks finish and their result is in it -- ClikCode does not
   // cut short work it was asked for.
-  const backgroundHandler = heldInput ? vendorBackgroundTurnHandlerFor(session.id) : undefined;
+  const backgroundHandler = streamJsonInput ? vendorBackgroundTurnHandlerFor(session.id) : undefined;
   const release = backgroundHandler ? createTurnRelease() : undefined;
   let held: HeldVendor | undefined;
   const heldStreams = new WeakMap<object, ReturnType<typeof createStreamState>>();
-  const background = heldInput ? createBackgroundWait({
+  const background = streamJsonInput && heldInput ? createBackgroundWait({
     onSettled: () => {
       run.liveInput?.setSteerHandler(undefined);
       heldInput.end();
@@ -134,6 +139,20 @@ export async function runVendorCliAttempt(input: {
       lifecycle('turn.background-task', { session: session.id, task: id, state: status });
     },
   }) : undefined;
+  const piTurn = piRpc && heldInput ? createPiRpcTurn({
+    close: () => { run.liveInput?.setSteerHandler(undefined); heldInput.end(); },
+  }) : undefined;
+  if (heldInput && piTurn) {
+    run.liveInput?.setSteerHandler(async (steerText, submission) => {
+      if (piTurn.settled) throw new Error('turn is finishing');
+      const id = randomUUID();
+      const taken = piTurn.await(id);
+      taken.catch(() => undefined);
+      if (!heldInput.write(piRpcSteer(id, steerText))) throw new Error('turn is finishing');
+      await taken;
+      if (submission.kind !== 'note') await checkpoint.steer(submission);
+    });
+  }
   if (heldInput && background) {
     run.liveInput?.setSteerHandler(async (steerText, submission) => {
       if (background.settled || !heldInput.write(streamJsonUserMessage(steerText))) throw new Error('turn is finishing');
@@ -141,16 +160,19 @@ export async function runVendorCliAttempt(input: {
       if (submission.kind !== 'note') await checkpoint.steer(submission);
     });
   }
+  const stdinText = turn.promptInput !== 'stdin' ? undefined
+    : piRpc ? await piRpcPrompt(turnText, images) : heldInput ? streamJsonUserMessage(turnText) : turnText;
   try {
     turnOutput = await captureNativeHarnessTurn(harness, argv, environment, {
     cwd: session.workspace,
     signal,
-    stdinText: turn.promptInput === 'stdin' ? (heldInput ? streamJsonUserMessage(turnText) : turnText) : undefined,
+    stdinText,
     ...(heldInput ? { input: heldInput } : {}),
     ...(release ? { release } : {}),
     onStdoutLine: (lineText) => {
       // Parsed here, once: every reader below takes this record.
       const record = parseJsonRecord(lineText);
+      if (piTurn && record) piTurn.note(record);
       if (held) {
         held.line(lineText, record);
         void recordNativeStreamUsage(session, lineText).catch(() => undefined);
@@ -213,6 +235,10 @@ export async function runVendorCliAttempt(input: {
     // Whatever ended the process, input to it has nowhere to go now --
     // unless it was handed on still running.
     if (background && !held) {
+      run.liveInput?.setSteerHandler(undefined);
+    }
+    if (piTurn) {
+      piTurn.ended();
       run.liveInput?.setSteerHandler(undefined);
     }
   }
