@@ -12,26 +12,26 @@ import { dollars } from '../harness/protocol/format.js';
 const CREDIT_TTL_MS = 60_000;
 let cached: { at: number; label: string | undefined } | undefined;
 
-/** What the account spent over the last 30 days, and its credit, from the
- * Gateway's own ledger (`GET /api/clikcode/v1/usage`). Undefined when it did
+/** What the account has spent in all, and its credit, from the Gateway's own
+ * ledger (`GET /api/clikcode/v1/usage`, `lifetimeChargeMicroUsd`). Undefined when it did
  * not answer: a figure the Gateway did not give is never made up. */
 async function usageReading(config: Conf, fetchImpl: typeof fetch): Promise<{ usedUsd: number; credit: ReturnType<typeof creditOf> } | undefined> {
   const apiUrl = getApiUrl(config);
   const apiKey = getApiKeyForUrl(config, apiUrl);
   if (!apiKey) return undefined;
   try {
-    const response = await fetchImpl(new URL('/api/clikcode/v1/usage?days=30', apiUrl), {
+    const response = await fetchImpl(new URL('/api/clikcode/v1/usage?days=1', apiUrl), {
       headers: { authorization: `Bearer ${apiKey}`, accept: 'application/json', 'user-agent': CLIKCODE_USER_AGENT },
       signal: AbortSignal.timeout(10_000),
     });
-    const body = await response.json().catch(() => undefined) as { data?: { credit?: Record<string, unknown>; totals?: { chargeMicroUsd?: unknown } } } | undefined;
-    const charged = Number(body?.data?.totals?.chargeMicroUsd);
+    const body = await response.json().catch(() => undefined) as { data?: { credit?: Record<string, unknown>; lifetimeChargeMicroUsd?: unknown } } | undefined;
+    const charged = Number(body?.data?.lifetimeChargeMicroUsd);
     if (!response.ok || !body?.data?.credit || !Number.isFinite(charged)) return undefined;
     return { usedUsd: charged / 1_000_000, credit: creditOf(body.data.credit) };
   } catch { return undefined; }
 }
 
-/** `$65.42 used • $12.45 available` (used: the last 30 days), `… • Out of credits`, or `… • Unlimited`
+/** `$65.42 used • $12.45 available` (used: all the account has been charged), `… • Out of credits`, or `… • Unlimited`
  * for an account that is not metered. Where the ledger gave no spend, `$4.50 credit left` from the
  * balance alone. Nothing for one that is not connected or a Gateway that did not answer. Both the
  * terminal's rule and the extension's bar read this. */
