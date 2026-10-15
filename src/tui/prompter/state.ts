@@ -1,6 +1,7 @@
 /** The terminal prompter's constants and the shapes of its in-flight state, shared by the modules that act on it. */
 import type { LiveTurnInputResult, TakeBackOutcome } from '../../turn/live-input.js';
 import type { PickerOption } from '../../harness/prompter.js';
+import type { CancelTrigger } from '../../worker/protocol.js';
 import type { TurnClock } from '../../harness/protocol/activity-view.js';
 import type { PaletteLayout } from '../option-picker.js';
 import type { TurnUsage } from '../../harness/protocol/turn-usage.js';
@@ -68,7 +69,7 @@ export type WaitingTurn = {
   cursor: number;
   /** Ctrl+C, or Esc once the turn has an answer, has asked the turn to stop. */
   cancelled: boolean;
-  cancel?: (restoreDraft: boolean) => void;
+  cancel?: (restoreDraft: boolean, trigger?: CancelTrigger) => void;
   /** The turn is the vendor's own background work, not one ClikCode started: Esc leaves it, and the
    * work goes on. Ctrl+C is the explicit Stop. */
   vendorWork?: boolean;
@@ -86,7 +87,7 @@ export type WaitingTurn = {
   stopInput?: () => void;
   /** Drawn before the turn's own controls exist (turnStarting): what is
    * typed is kept for it, and an interrupt is passed on once it can be. */
-  early?: { interrupt?: { restoreDraft: boolean } };
+  early?: { interrupt?: { restoreDraft: boolean; trigger?: CancelTrigger } };
   /** Told when this turn's display ends, by whoever ends it: the follow of a
    * worker's turn (worker/turn-bridge.ts) lives exactly as long as the
    * display it drives. When the two could disagree, the display ended and the

@@ -17,6 +17,18 @@ import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { TakeBackOutcome } from '../turn/live-input.js';
 import type { LiveSettingsFields } from '../turn/live-settings.js';
 
+/** Which key or signal asked for a Stop. */
+export type CancelTrigger = 'esc' | 'ctrl-c' | 'sign-in-esc' | 'editor-stop' | 'abort-signal' | 'programmatic';
+/** Who asked for a Stop: the client kind and its pid, and the trigger. */
+export interface CancelOrigin { client: 'window' | 'bridge' | 'scripted' | 'editor'; pid?: number; trigger: CancelTrigger }
+
+export const cancelOrigin = (client: CancelOrigin['client'], trigger: CancelTrigger): CancelOrigin => ({ client, pid: process.pid, trigger });
+
+/** The lifecycle-log fields for a Stop: older clients send no origin. */
+export const cancelOriginFields = (command: { origin?: CancelOrigin }): Record<string, unknown> => command.origin
+  ? { client: command.origin.client, clientPid: command.origin.pid, trigger: command.origin.trigger }
+  : { client: 'unknown', trigger: 'unknown' };
+
 /** What a client may ask the worker to do. `submit`/`steer`/`cancel` mirror
  * the same three actions a terminal already offers a running turn; `attach`
  * is the very first message a connection sends, and the only one the worker
@@ -43,7 +55,9 @@ export type ClientCommand =
    * (docs/SUBAGENTS.md): a `relay` is a visible steer to the main agent; where
    * the harness gives no way the `submission` answer says exactly why. */
   | { type: 'steer-subagent'; parentId: string; text: string; label?: string; agentId?: string; id?: string }
-  | { type: 'cancel'; restoreDraft: boolean }
+  /** `origin` says who asked and by which key, so the lifecycle log can answer
+   *  "what stopped my agents". Optional: older clients send none. */
+  | { type: 'cancel'; restoreDraft: boolean; origin?: CancelOrigin }
   /** Enter again: the oldest queued user message goes into the running
    *  turn at its next pause. The turn is not cancelled. */
   | { type: 'send-queued' }

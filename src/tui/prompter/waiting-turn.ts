@@ -9,6 +9,7 @@ import type { ToolCategory } from '../../harness/prompter.js';
 import { stopEntries } from '../render/activity-log.js';
 import { openToolsStatus, joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, type TurnWaits } from '../../harness/protocol/activity-view.js';
 import { isApprovalWaitPhase, liveTokenTarget, smoothTokens } from '../../harness/protocol/turn-flow.js';
+import type { CancelTrigger } from '../../worker/protocol.js';
 import type { BackgroundWork } from '../../harness/protocol/background-agents.js';
 import { enterAgainSends, type WaitingMessage } from '../render/steer-rows.js';
 import { commandLineTypedDuringTurn } from '../waiting-slash.js';
@@ -184,7 +185,7 @@ export function markVendorWork(this: TerminalHarnessPrompter): void {
 export function startWaiting(
   this: TerminalHarnessPrompter,
   message: string,
-  onCancel?: (restoreDraft: boolean) => void,
+  onCancel?: (restoreDraft: boolean, trigger?: CancelTrigger) => void,
   onSubmit?: (text: string) => Promise<LiveTurnInputResult>,
   onCommand?: (text: string) => Promise<LiveTurnInputResult>,
   onLeave?: () => void,
@@ -279,7 +280,7 @@ export function startWaiting(
   const keys = onSubmit ? this.typedAhead.splice(0) : [];
   if (keys.length) setImmediate(() => { for (const key of keys) if (this.turn === turn) this.onWaitingKey(key); });
   const interrupt = early?.early?.interrupt;
-  if (interrupt && onCancel) onCancel(interrupt.restoreDraft);
+  if (interrupt && onCancel) onCancel(interrupt.restoreDraft, interrupt.trigger);
 }
 
 /** A turn is on its way, but what runs it is not answering yet: the first

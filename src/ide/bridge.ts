@@ -147,7 +147,7 @@ export class IdeBridge {
         return;
       case 'cancel':
         this.turns.noteCancel();
-        void this.link.cancelTurn(request.restoreDraft);
+        void this.link.cancelTurn(request.restoreDraft, request.trigger);
         return;
       case 'send-queued':
         this.link.worker?.client.send({ type: 'send-queued' });

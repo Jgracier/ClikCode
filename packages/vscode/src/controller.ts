@@ -607,7 +607,7 @@ export class ClikCodeController implements vscode.Disposable {
       if (restoreDraft) this.post({ type: 'setDraft', text });
     }
     // "Stopping" is shown when the worker says it accepted the Stop.
-    this.deliver({ type: 'cancel', restoreDraft }, 'Stop');
+    this.deliver({ type: 'cancel', restoreDraft, trigger: 'editor-stop' }, 'Stop');
   }
 
   /** A question answered, or dismissed (cancelled). */
