@@ -96,6 +96,18 @@ describe('ACP status updates and extension notifications', () => {
     expect(events.every((event) => event.agent === true && event.id === 'a1')).toBe(true);
   });
 
+  it("Cursor: a sub-agent's spawning call row runs until subagent_state_update, though the call returns first", async () => {
+    const events: Array<Record<string, unknown>> = [];
+    await run({ steps: [
+      update({ sessionUpdate: 'tool_call', toolCallId: 'c1', title: 'Task', kind: 'other', status: 'in_progress', rawInput: { description: 'audit', subagent_type: 'explore' } }),
+      update({ sessionUpdate: 'subagent_spawned', subagentSessionId: 'child', name: 'audit', _meta: { cursor: { toolCallId: 'c1' } } }),
+      update({ sessionUpdate: 'tool_call_update', toolCallId: 'c1', status: 'completed' }),
+      update({ sessionUpdate: 'subagent_state_update', subagentSessionId: 'child', state: 'completed' }),
+    ] }, { onActivity: (event: Record<string, unknown>) => events.push(event) });
+    expect(events.map((event) => event.kind)).toEqual(['tool-start', 'tool-done']);
+    expect(events.every((event) => event.id === 'c1' && event.agent === true)).toBe(true);
+  });
+
   it('hides only Claude cross-organization thinking notices in both adapter formats', async () => {
     const streamed: string[] = [];
     const { notices, seen } = await run({ steps: [

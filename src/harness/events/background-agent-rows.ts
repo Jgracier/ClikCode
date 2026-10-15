@@ -19,6 +19,18 @@ export class BackgroundAgentRows {
 
   get size(): number { return this.held.size; }
 
+  /** An agent the vendor says it launched from call `id` (ACP `subagent_spawned`). */
+  launched(id: string): void { if (!this.held.has(id)) this.held.set(id, {}); }
+
+  /** That agent ended in `state` (ACP `subagent_state_update`: completed, failed, cancelled, disconnected). */
+  ended(id: string, state: string): HarnessActivityEvent[] {
+    const row = this.held.get(id);
+    if (!row) return [];
+    this.held.delete(id);
+    const stopped = state === 'cancelled' || state === 'disconnected';
+    return [{ kind: state === 'completed' ? 'tool-done' : 'tool-error', label: row.label ?? 'tool', agent: true, id, ...(stopped ? { stopped: true } : {}) }];
+  }
+
   /** The activity as it should be shown: the launch call's completion is withheld (undefined). */
   filter(event: HarnessActivityEvent): HarnessActivityEvent | undefined {
     const row = event.id ? this.held.get(event.id) : undefined;
