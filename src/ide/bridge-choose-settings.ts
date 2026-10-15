@@ -1,5 +1,5 @@
 /** Choices that set something on the open conversation: model, agent, effort,
- * permissions, account, fast, plan. */
+ * permissions, account, fast, plan, send. */
 import { planModeOnChat, setAgentPlanMode } from '../agent/plan-mode-setting.js';
 import { selectGatewayAgent } from '../commands/ai/sessions.js';
 import type { IdeChoice } from './protocol.js';
@@ -28,6 +28,7 @@ export async function chooseSetting(cx: ChooseContext, choice: IdeChoice): Promi
     case 'effort': await setting(`/effort ${choice.value}`); done(); return true;
     case 'permissions': await setting(`/permissions ${choice.value}`); done(); return true;
     case 'account': await setting(`/settings account ${choice.accountId}`); done(); return true;
+    case 'send': await setting(`/send ${choice.mode}`); done(); return true;
     case 'fast': await setting(`/fast ${choice.on ? 'on' : 'off'}`); done(); return true;
     case 'plan': {
       const { session } = await host.current();

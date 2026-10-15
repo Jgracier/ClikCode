@@ -8,6 +8,7 @@ import type { IdeAccount, IdeAccounts, IdeChoice, IdeGateway, IdeModels, IdeProv
 import { post, request, uid } from './bus';
 import { modelLabel, titleCase } from './format';
 import { dollars } from '../../../../src/harness/protocol/format';
+import { SEND_MODE_DETAIL, SEND_MODES } from '../../../../src/turn/send-mode';
 import { accountUsageText, outOfUsageText } from '../../../../src/harness/accounts/usage-reading';
 import { Icon, KeyList, Loading, Popover, Spinner, Switch, useSlowWait, type ListRow } from './ui';
 
@@ -272,6 +273,15 @@ export function ModeMenu(props: { model: ChatModel; onClose: () => void; onError
       {settings?.plan !== undefined ? (
         <label class="menu-switch"><span><Icon name="list-tree" /> Plan mode <span class="muted">Read-only: plan, change nothing</span></span>
           <Switch checked={settings.plan} label="Plan mode" onChange={(on) => set({ kind: 'plan', on })} /></label>
+      ) : null}
+      {settings?.send !== undefined ? (
+        <div class="effort-bar" role="radiogroup" aria-label="When a message is sent while the turn runs" data-row-action>
+          <span class="effort-title muted">Send</span>
+          {SEND_MODES.map((mode) => (
+            <button key={mode} type="button" role="radio" aria-checked={settings.send === mode} class={`effort-option${settings.send === mode ? ' on' : ''}`}
+              title={SEND_MODE_DETAIL[mode]} onClick={() => set({ kind: 'send', mode })}>{titleCase(mode)}</button>
+          ))}
+        </div>
       ) : null}
       {settings?.fast !== undefined ? (
         <label class="menu-switch"><span><Icon name="zap" /> Fast <span class="muted">Fastest provider, not cheapest</span></span>
