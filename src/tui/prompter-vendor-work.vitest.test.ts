@@ -47,7 +47,7 @@ describe('Esc and Ctrl+C on the waiting display', () => {
     try {
       key('\u001b');
       expect(cancel).toHaveBeenCalledTimes(1);
-      expect(cancel).toHaveBeenCalledWith(true);
+      expect(cancel).toHaveBeenCalledWith(true, 'esc');
       expect(leave).not.toHaveBeenCalled();
     } finally { rl.close(); }
   });
