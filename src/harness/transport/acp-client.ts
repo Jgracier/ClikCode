@@ -1126,7 +1126,14 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       if (typeof spawner === 'string' && spawner) {
         // A sub-agent's own sub-agent hangs off the call in its session, itself a child.
         this.childSessions.set(update.subagentSessionId, spawner);
+        // The spawning call may complete at launch: its row is the agent's, held to its state update.
+        this.heldAgents.launched(spawner);
       }
+    }
+    if (update.sessionUpdate === 'subagent_state_update' && typeof update.subagentSessionId === 'string' && typeof update.state === 'string') {
+      const spawner = this.childSessions.get(update.subagentSessionId);
+      const target = this.liveTarget(params);
+      if (spawner && target) for (const event of this.heldAgents.ended(spawner, update.state)) target.observer.onActivity?.(event);
     }
     let ofChild = false;
     if (typeof params.sessionId === 'string' && expected && params.sessionId !== expected) {
