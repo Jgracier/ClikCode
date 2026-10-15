@@ -92,13 +92,14 @@ function maskedDirs(request: WrapRequest): string[] {
  * error), a private /dev and /proc. `masked` directories are replaced by an
  * empty private one: see SSH_CONFIG_DROPINS. No --new-session and no pid namespace:
  * the command stays in the process group a timeout or cancel signals. */
-export function bwrapInvocation(command: Invocation, writable: readonly string[], cwd: string, masked: readonly string[] = []): Invocation {
+export function bwrapInvocation(command: Invocation, writable: readonly string[], cwd: string, masked: readonly string[] = [], readOnly: readonly string[] = []): Invocation {
   return {
     file: 'bwrap',
     args: [
       '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc',
       ...masked.flatMap((dir) => ['--tmpfs', dir]),
       ...writable.flatMap((dir) => ['--bind-try', dir, dir]),
+      ...readOnly.flatMap((entry) => ['--ro-bind-try', entry, entry]),
       '--die-with-parent', '--chdir', cwd, '--', command.file, ...command.args,
     ],
   };
@@ -129,6 +130,8 @@ interface WrapRequest {
   available(binary: string): boolean;
   /** Whether a path exists on this machine (an injected lookup, for tests); absent: nothing is masked. */
   exists?(path: string): boolean;
+  /** Paths inside a writable dir that stay read-only (bwrap only): see linkedWorktreeGit. */
+  readOnly?: readonly string[];
 }
 
 export type SandboxWrap =
@@ -142,7 +145,7 @@ export function wrapForSandbox(request: WrapRequest): SandboxWrap {
   if (request.mode !== 'workspace') return { sandboxed: false, invocation: request.command };
   if (request.platform === 'linux') {
     return request.available('bwrap')
-      ? { sandboxed: true, invocation: bwrapInvocation(request.command, request.writable, request.cwd, maskedDirs(request)) }
+      ? { sandboxed: true, invocation: bwrapInvocation(request.command, request.writable, request.cwd, maskedDirs(request), request.readOnly) }
       : { sandboxed: false, invocation: request.command, missing: 'bubblewrap (bwrap)' };
   }
   if (request.platform === 'darwin') {
@@ -226,11 +229,26 @@ function platformDirs(): string[] {
   return darwinDirs;
 }
 
+/** A linked worktree's git dir (<repo>/.git/worktrees/<name>) and the repo's shared git dir lie outside the
+ * worktree root, so under the read-only root `git commit`, `git fetch` and `git apply --3way` failed. For a cwd
+ * in a linked worktree both are made writable (HEAD, index and FETCH_HEAD live in the first; objects, refs and
+ * packed-refs lock files in the second), but the shared `config` and `hooks` stay read-only, so a sandboxed
+ * command cannot plant a hook or rewrite config that later runs unsandboxed. A plain repo (git dir == common
+ * dir, inside the workspace) and a non-repo yield nothing. */
+export function linkedWorktreeGit(cwd: string): { writable: string[]; readOnly: string[] } {
+  const result = spawnSync('git', ['rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir'], { cwd, encoding: 'utf8', timeout: 5000 });
+  if (result.status !== 0) return { writable: [], readOnly: [] };
+  const [gitDir, common] = result.stdout.trim().split('\n');
+  if (!gitDir || !common || gitDir === common) return { writable: [], readOnly: [] };
+  return { writable: [gitDir, common], readOnly: [path.join(common, 'hooks'), path.join(common, 'config')] };
+}
+
 /** wrapForSandbox with this machine's facts filled in. `writable` is every
  * dir as named and as resolved, for the denial hint: a message names a path
  * the way the command spelled it (/tmp/x, not /private/tmp/x). */
 export function sandboxCommand(mode: SandboxMode, command: Invocation, scope: { cwd: string; addDirs: readonly string[]; homeDir: string }): SandboxWrap & { writable: string[] } {
-  const named = sandboxWritableDirs({ ...scope, tmpDir: os.tmpdir(), env: process.env, platformDirs: platformDirs() });
+  const git = mode === 'workspace' ? linkedWorktreeGit(scope.cwd) : { writable: [], readOnly: [] };
+  const named = sandboxWritableDirs({ ...scope, addDirs: [...scope.addDirs, ...git.writable], tmpDir: os.tmpdir(), env: process.env, platformDirs: platformDirs() });
   const resolved = [...new Set(named.map(realOrSame))];
-  return { ...wrapForSandbox({ mode, platform: process.platform, command, writable: resolved, cwd: scope.cwd, available: sandboxAvailable, exists: existsSync }), writable: [...new Set([...resolved, ...named])] };
+  return { ...wrapForSandbox({ mode, platform: process.platform, command, writable: resolved, cwd: scope.cwd, available: sandboxAvailable, exists: existsSync, readOnly: git.readOnly.map(realOrSame) }), writable: [...new Set([...resolved, ...named])] };
 }
