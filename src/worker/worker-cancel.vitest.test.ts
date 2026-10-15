@@ -19,6 +19,8 @@ vi.mock('../turn/turn-journal.js', () => ({
 vi.mock('../agent/mcp/manager.js', () => ({ releaseMcp: vi.fn(async () => undefined), prepareMcp: vi.fn() }));
 vi.mock('../harness/transport/native/held-vendor.js', () => ({ hasHeldVendorProcess: () => false, stopHeldVendorProcess: vi.fn(async () => undefined) }));
 vi.mock('../turn/vendor-process.js', () => ({ persistentWorkRunning: async () => false, closePersistentTransport: vi.fn(async () => undefined) }));
+const logged = vi.hoisted(() => [] as Array<[string, Record<string, unknown>]>);
+vi.mock('../runtime/lifecycle-log.js', async (original) => ({ ...(await original<object>()), lifecycle: (event: string, fields: Record<string, unknown> = {}) => { logged.push([event, fields]); } }));
 vi.mock('./consume-queued.js', () => ({ consumeQueuedTurn: vi.fn(async () => undefined) }));
 
 const { BroadcastObserver } = await import('./broadcast-observer.js');
@@ -234,5 +236,17 @@ describe('a pending Stop whose submit ends without a turn', () => {
     expect(alice.events).toContainEqual({ type: 'stop-done', nothing: true });
     expect(bob.events).toContainEqual({ type: 'stop-done', nothing: true });
     expect(ctx.stopAnnounced).toBe(false);
+  });
+});
+
+describe('the origin of a Stop is recorded', () => {
+  it('logs which client and trigger asked, and says unknown for an old client', async () => {
+    logged.length = 0;
+    const { send } = build();
+    await send({ type: 'cancel', restoreDraft: false, origin: { client: 'window', pid: 4242, trigger: 'esc' } });
+    await send({ type: 'cancel', restoreDraft: false });
+    const cancels = logged.filter(([event]) => event === 'worker.cancel').map(([, fields]) => fields);
+    expect(cancels[0]).toMatchObject({ client: 'window', clientPid: 4242, trigger: 'esc' });
+    expect(cancels[1]).toMatchObject({ client: 'unknown', trigger: 'unknown' });
   });
 });

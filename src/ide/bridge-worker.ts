@@ -5,7 +5,7 @@ import { withSignIn } from '../commands/account.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { WorkerClient } from '../worker/client.js';
-import type { WorkerEvent } from '../worker/protocol.js';
+import { cancelOrigin, type WorkerEvent } from '../worker/protocol.js';
 import { messageOf, TurnFailed } from './bridge-support.js';
 import type { BridgeHost } from './bridge-host.js';
 
@@ -51,11 +51,11 @@ export class WorkerLink {
   /** Stop: sent to the worker, attached on the way if need be. The worker
    * answers (`stopping`, then the turn's end, or `stop-done`); this keeps no
    * clock and sends nothing twice. */
-  async cancelTurn(restoreDraft: boolean): Promise<void> {
+  async cancelTurn(restoreDraft: boolean, trigger: 'editor-stop' | 'programmatic' = 'editor-stop'): Promise<void> {
     const id = this.host.sessionId;
     try {
       const client = this.worker?.client ?? (id ? await this.workerFor(id) : undefined);
-      client?.send({ type: 'cancel', restoreDraft });
+      client?.send({ type: 'cancel', restoreDraft, origin: cancelOrigin('bridge', trigger) });
     } catch (error) { this.host.report(error); }
   }
 

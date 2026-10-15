@@ -56,7 +56,7 @@ export type IdeRequest =
    * During a turn it steers (or queues); `id` comes back on the worker's
    * `submission` event. */
   | { type: 'send'; text: string; id?: string }
-  | { type: 'cancel'; restoreDraft: boolean }
+  | { type: 'cancel'; restoreDraft: boolean; trigger?: 'editor-stop' | 'programmatic' }
   /** Enter again: the oldest queued user message goes into the running turn. */
   | { type: 'send-queued' }
   /** Take a queued message back before its turn (see the worker's `unqueue`). */

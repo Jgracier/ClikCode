@@ -14,7 +14,7 @@ import type Conf from 'conf';
 import { stdout as output } from 'node:process';
 import { WorkerClient } from './client.js';
 import { takeConversation } from './registry.js';
-import type { WorkerEvent } from './protocol.js';
+import { cancelOrigin, type WorkerEvent } from './protocol.js';
 import { runSessionTurn } from '../turn/session-turn.js';
 import { consumeSessionTurn, sessionTranscriptMessages } from '../turn/checkpoint.js';
 import { disposeSessionState } from '../agent/session-state.js';
@@ -174,7 +174,7 @@ function turnThroughWorker(client: WorkerClient, sessionId: string, text: string
     };
     const onAbort = (): void => {
       stopping = true;
-      if (ours) { client.send({ type: 'cancel', restoreDraft: false }); return; }
+      if (ours) { client.send({ type: 'cancel', restoreDraft: false, origin: cancelOrigin('scripted', 'abort-signal') }); return; }
       void dequeue().then(() => finish(() => rejectTurn(turnCancelledError())), (error: unknown) => finish(() => rejectTurn(error)));
     };
     client.on('event', onEvent);

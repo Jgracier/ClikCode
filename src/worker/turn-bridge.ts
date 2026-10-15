@@ -21,7 +21,7 @@ import { WorkerClient } from './client.js';
 import { workersDirectory } from './registry.js';
 import { watchConversationList } from '../session/list-watch.js';
 import { stateDirectory } from '../session/store/paths.js';
-import { isTranscriptActivity, type LiveActivity, type LiveThought, type WorkerEvent } from './protocol.js';
+import { cancelOrigin, isTranscriptActivity, type CancelOrigin, type LiveActivity, type LiveThought, type WorkerEvent } from './protocol.js';
 import type { PlanEntry } from '../tui/render/plan-block.js';
 import type { HarnessSession, TurnMark } from '../session/model.js';
 import type { TurnUsage } from '../harness/protocol/turn-usage.js';
@@ -584,10 +584,10 @@ async function driveWorkerTurn(
       // at once) goes after the submit: ahead of it, the worker answered
       // "nothing to stop" and then ran the turn anyway.
       let submitSent = false;
-      let earlyStop: { restoreDraft: boolean } | undefined;
+      let earlyStop: { restoreDraft: boolean; origin: CancelOrigin } | undefined;
       rl.startWaiting(
         'thinking',
-        (restoreDraft) => { if (submitSent) client.send({ type: 'cancel', restoreDraft }); else earlyStop = { restoreDraft }; },
+        (restoreDraft, trigger) => { const origin = cancelOrigin('window', trigger ?? 'esc'); if (submitSent) client.send({ type: 'cancel', restoreDraft, origin }); else earlyStop = { restoreDraft, origin }; },
         async (text) => {
           // The worker decides steered vs. queued -- it owns the broker the
           // steer races -- and now says which, on a `submission` event
@@ -655,7 +655,7 @@ async function driveWorkerTurn(
       rl.onWaitingEnded?.(() => finish('display-ended', () => resolveTurn()));
       begin();
       submitSent = true;
-      if (earlyStop) client.send({ type: 'cancel', restoreDraft: earlyStop.restoreDraft });
+      if (earlyStop) client.send({ type: 'cancel', restoreDraft: earlyStop.restoreDraft, origin: earlyStop.origin });
       for (const event of tracker.unanswered.splice(0)) onEvent(event);
       // Following a turn that ended while this was being set up: its
       // waiting-stop has already gone by.

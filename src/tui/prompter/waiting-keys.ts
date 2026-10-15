@@ -89,14 +89,14 @@ export function onWaitingKey(this: TerminalHarnessPrompter, key: string): void {
     if (this.signingIn) {
       turn.cancelled = true;
       this.updateWaiting();
-      turn.cancel?.(false);
+      turn.cancel?.(false, 'sign-in-esc');
       return;
     }
     if (!turn.submit && !turn.early) return;
     // "stopping" is shown when the worker says it accepted the Stop (turnStopping).
     const restoreDraft = !this.turnHasAnswer();
-    if (turn.early) turn.early.interrupt = { restoreDraft };
-    turn.cancel?.(restoreDraft);
+    if (turn.early) turn.early.interrupt = { restoreDraft, trigger: 'esc' };
+    turn.cancel?.(restoreDraft, 'esc');
   } else if (action === 'stop') {
     if (stoppedHere) return;
     // A conversation turn shows "stopping" when its worker says so
@@ -105,8 +105,8 @@ export function onWaitingKey(this: TerminalHarnessPrompter, key: string): void {
     // A turn that did nothing yet gives its prompt back to edit -- unless
     // something is already typed, which keeps the composer.
     const restoreDraft = !turn.draft.trim();
-    if (turn.early) turn.early.interrupt = { restoreDraft };
-    turn.cancel?.(restoreDraft);
+    if (turn.early) turn.early.interrupt = { restoreDraft, trigger: 'ctrl-c' };
+    turn.cancel?.(restoreDraft, 'ctrl-c');
   } else if (key === '\u001a') {
     this.suspendToShell();
   } else if (key === '\r' && this.signInInput && (!this.signInInput.alongside || isKeyShaped(turn.draft.trim()) || (!turn.draft.trim() && this.signInInput.optional))) {
