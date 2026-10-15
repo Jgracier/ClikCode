@@ -17,7 +17,8 @@ import { takeConversation } from './registry.js';
 import { cancelOrigin, type WorkerEvent } from './protocol.js';
 import { runSessionTurn } from '../turn/session-turn.js';
 import { consumeSessionTurn, sessionTranscriptMessages } from '../turn/checkpoint.js';
-import { disposeSessionState } from '../agent/session-state.js';
+import { disposeSessionState, sessionState } from '../agent/session-state.js';
+import { existingSessionAgents } from '../agent/background-agents.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { textTranscript } from '../turn/turn-activities.js';
 import { readState } from '../session/state/read.js';
@@ -50,7 +51,7 @@ export async function sendScriptedTurn(config: Conf, sessionId: string, prompt: 
         return await runSessionTurn(config, sessionId, text, signal);
       } finally {
         // No worker will own what the turn left running: stop it.
-        settleInProcessWork(sessionId);
+        await settleInProcessWork(sessionId);
         await taken.hold.release();
       }
     }
@@ -187,6 +188,9 @@ function turnThroughWorker(client: WorkerClient, sessionId: string, text: string
 /** After a turn run here (no worker could start): background shells it
  * started are stopped -- they are detached, and would otherwise outlive this
  * process with nobody to report them. Nothing is queued about it. */
-function settleInProcessWork(sessionId: string): void {
+async function settleInProcessWork(sessionId: string): Promise<void> {
+  // An agent this process ran cannot outlive it: it stops now, its work committed to its branch.
+  const agents = existingSessionAgents(sessionState(stateDirectory(), sessionId));
+  if (agents?.running()) await Promise.race([agents.stopAll('the command that started it ended and no ClikCode worker could keep it; its work is committed to its branch'), new Promise<void>((resolve) => { setTimeout(resolve, 30_000).unref(); })]);
   disposeSessionState(stateDirectory(), sessionId, 'the command that started it ended and no ClikCode worker could keep it');
 }

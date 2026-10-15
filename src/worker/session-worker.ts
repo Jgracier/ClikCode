@@ -44,6 +44,7 @@ import { createWorkerQueue } from './worker-queue.js';
 import { createTurnRunner } from './worker-turn.js';
 import { createCommandHandler } from './worker-commands.js';
 import { createWorkerServer } from './worker-server.js';
+import { reconcileAgents } from '../agent/agent-registry.js';
 import { createShutdown } from './worker-shutdown.js';
 import { createOutOfTurnRelay } from './out-of-turn.js';
 import { createResourceNoteDelivery } from './resource-note-delivery.js';
@@ -183,6 +184,12 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     ...(currentWorkerBuild() ? { build: currentWorkerBuild() } : {}),
   };
   await writeWorkerRecord(record);
+  // Agents a worker that died left running: their work is committed to their branches, and the model hears of it.
+  void reconcileAgents(stateDirectory(), sessionId).then(async (reports) => {
+    if (!reports.length) return;
+    await ctx.io.recordNotifications(reports.map((entry) => ({ kind: 'agent' as const, shellId: entry.id, command: entry.label, tail: entry.report, reason: 'interrupted', at: Date.now() })));
+    await ctx.queue.deliverNotifications();
+  }).catch(() => undefined);
   observer.onAwaitingApproval = (awaitingApproval) => {
     ctx.recordWrite = ctx.recordWrite
       .then(() => writeWorkerRecord({ ...record, ...(awaitingApproval ? { awaitingApproval } : {}) }, { existing: true }))

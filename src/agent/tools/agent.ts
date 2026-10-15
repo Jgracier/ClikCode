@@ -67,7 +67,7 @@ export const agentTool = defineTool<AgentArgs>({
     // Refused now rather than as the agent's first and only result.
     if (!await canCreateAgentWorktree(repo.dir ?? ctx.cwd)) return { output: await noWorktreeMessage(repo.dir ?? ctx.cwd, repo.dir !== undefined), isError: true };
     const runSubagent = ctx.runSubagent;
-    const id = ctx.agents.start(description || args.prompt.split('\n')[0].slice(0, 80), (onSteerReady) => runSubagent({ ...request, background: true, onSteerReady }));
+    const id = ctx.agents.start(description || args.prompt.split('\n')[0].slice(0, 80), (onSteerReady, agentSignal, started) => runSubagent({ ...request, background: true, onSteerReady, signal: agentSignal, onWorktree: started }));
     return {
       output: `Started ${id} in the background, in its own worktree. Carry on; agent_send("${id}", ...) gives it more instructions, agent_wait("${id}") gets its result.`,
       continuesAs: id,

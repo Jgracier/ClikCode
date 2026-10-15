@@ -19,7 +19,7 @@ import type { ToolDefinition } from './tool-contract.js';
 import { emptyLedger } from './usage.js';
 import { resolveContextProfile } from './context-profile.js';
 import { readImageInputs } from './images.js';
-import { BackgroundAgents } from './background-agents.js';
+import { sessionAgents, type BackgroundAgents } from './background-agents.js';
 import { StallGuard } from './stall.js';
 import { TASK_TOOL_NAME } from './tools/task.js';
 import { abortable } from './turn-support.js';
@@ -48,7 +48,6 @@ export interface TurnRuntime {
   /** Background coding agents belong to this turn: it does not end while one
    * runs, and whatever ends it stops them. */
   readonly backgroundAgents: BackgroundAgents | undefined;
-  readonly backgroundStop: AbortController;
   /** What the model is offered this step (tools/notebook-gate.ts). */
   readonly advertised: (current: readonly ConversationItem[]) => ToolDefinition[];
   readonly throwIfAborted: () => void;
@@ -185,11 +184,12 @@ export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime
   const hookNote = hookContexts.length ? `<hook-context>\n${hookContexts.join('\n\n')}\n</hook-context>\n\n` : '';
 
   const ledger = emptyLedger();
-  const backgroundAgents = input.subagent ? undefined : new BackgroundAgents();
+  const backgroundAgents = input.subagent ? undefined : sessionAgents(session, input.stateDir);
+  backgroundAgents?.attachTurn();
   const segments: string[] = [];
   const rt: TurnRuntime = {
     input, signal, cwd, addDirs, homeDir, scope, turnId, session, checkpoints, store, profile, tools, baseSystem,
-    turnRules, turnHookInfo, backgroundAgents, backgroundStop: new AbortController(),
+    turnRules, turnHookInfo, backgroundAgents,
     advertised: (current) => gateNotebookTool(exposure.advertised(current), current, notebooksOnDisk),
     throwIfAborted,
     append: async (...added) => { rt.items.push(...added); await store.append(...added); },
@@ -289,10 +289,10 @@ export async function closeTurn(rt: TurnRuntime): Promise<void> {
   // the model never saw them.
   const undelivered = rt.steerQueue.splice(0);
   if (undelivered.length) await input.onSteersUndelivered?.(undelivered).catch(() => undefined);
-  // An early end (cancel, error, step limit, a question) stops them; each
-  // commits its work to its branch before the turn returns.
-  rt.backgroundStop.abort();
-  await rt.backgroundAgents?.settled();
+  // An early end (cancel, error, step limit, a question) does NOT stop them: a
+  // background agent's life is the session's, and only an explicit stop ends
+  // it (background-agents.ts). What it finishes later is queued as a notification.
+  rt.backgroundAgents?.detachTurn();
   await rt.checkpoints.seal(input.sessionId, rt.turnId).catch(() => undefined);
   await rt.checkpoints.prune(input.sessionId).catch(() => undefined);
 }

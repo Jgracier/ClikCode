@@ -59,6 +59,10 @@ export interface SubagentCall {
   background?: true;
   /** Hands over the running sub-agent's steering handler (agent_send). */
   onSteerReady?: (handler?: (text: string) => Promise<void>) => void;
+  /** Told where the isolated agent works, once its worktree exists. */
+  onWorktree?: (info: { branch: string; cwd: string; root: string; base: string; repo: string }) => void;
+  /** The agent's own abort, for a background agent: the turn's never reaches it. */
+  signal?: AbortSignal;
 }
 
 export interface ToolRunResult {
