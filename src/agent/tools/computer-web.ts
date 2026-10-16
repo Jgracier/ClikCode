@@ -2,12 +2,13 @@
 import { defineTool } from '../tool-contract.js';
 import { closeComputerBrowser, computerPage, openComputerPage } from '../computer/browser.js';
 import { computerEnabled } from '../computer/settings.js';
+import { callComputerDriver } from '../computer/driver.js';
 import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
 import type { Page } from 'playwright-core';
 import type { ToolRunResult } from '../tool-contract.js';
 
 type WebArgs = {
-  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'press' | 'scroll';
+  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'press' | 'scroll' | 'autofill';
   url?: string; role?: 'button' | 'link' | 'textbox' | 'checkbox' | 'combobox' | 'tab' | 'menuitem';
   name?: string; text?: string; key?: string; direction?: 'up' | 'down';
 };
@@ -43,9 +44,9 @@ export async function observeComputerPage(page: Page, acceptsImages: boolean): P
 
 export const computerWebTool = defineTool<WebArgs>({
   name: 'computer_web', class: 'exec',
-  description: 'Open a URL in ClikCode\'s browser in one action: Chrome starts automatically if closed. Observe and act on the page, then close the browser when done. The profile is separate from personal Chrome. Sign-in forms are hidden from observation; ask the user to complete them. Never request a password in chat.',
+  description: 'Open a URL in ClikCode\'s browser in one action: Chrome starts automatically if closed. Observe and act on the page, then close it when done. For a visible password field, autofill triggers the installed Bitwarden extension\'s shortcut and verifies a password was filled without showing it. If the vault is locked or missing, hand the browser to the user. Never request a password in chat.',
   parameters: { type: 'object', additionalProperties: false, required: ['action'], properties: {
-    action: { type: 'string', enum: ['open', 'close', 'observe', 'click', 'fill', 'press', 'scroll'] },
+    action: { type: 'string', enum: ['open', 'close', 'observe', 'click', 'fill', 'press', 'scroll', 'autofill'] },
     url: { type: 'string', description: 'Website URL for open.' },
     role: { type: 'string', enum: ['button', 'link', 'textbox', 'checkbox', 'combobox', 'tab', 'menuitem'] },
     name: { type: 'string', description: 'Exact accessible name from observe.' },
@@ -76,6 +77,18 @@ export const computerWebTool = defineTool<WebArgs>({
           case 'press':
             if (!args.key || !/^[A-Za-z0-9+_-]{1,30}$/.test(args.key)) throw new Error('Press needs a simple key.');
             await page.keyboard.press(args.key); return { output: `Pressed ${args.key}. Observe the page to verify the result.` };
+          case 'autofill': {
+            const password = page.locator('input[type="password"]:visible').first();
+            if (!await password.count()) throw new Error('No visible password field on this page.');
+            await page.bringToFront();
+            const sent = await callComputerDriver('hotkey', {
+              scope: 'desktop', target: { kind: 'desktop', display_id: 'primary' }, keys: ['ctrl', 'shift', 'l'],
+            }, ctx.signal);
+            if (sent.isError) throw new Error('Could not trigger Bitwarden in the ClikCode browser. Use the phone handoff.');
+            await page.waitForTimeout(750);
+            if (!await password.inputValue()) throw new Error('Bitwarden did not fill this page. Unlock or install its extension in the ClikCode browser, or use the phone handoff.');
+            return { output: 'Bitwarden filled the sign-in form. The password was not included in the tool result. Submit the form if the user asked to sign in.' };
+          }
           case 'scroll': await page.mouse.wheel(0, args.direction === 'up' ? -600 : 600); return { output: 'Scrolled. Observe the page to verify the result.' };
           default: throw new Error('Unknown web action.');
         }

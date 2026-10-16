@@ -20,16 +20,18 @@ and taps pass through a temporary encrypted relay; the decryption key is in
 the URL fragment, shown in the local ClikCode activity, and never sent to the
 relay server. No desktop port is opened.
 
-Agent-triggered Bitwarden filling is not exposed yet. An installed extension
-would share the browser profile with the agent's OS user, so a tool that only
-hides its return value would not protect credentials. The phone handoff lets
-the user enter them without putting a password in chat.
+If the user has installed and unlocked Bitwarden in the ClikCode browser
+profile, the agent can use `computer_web` with action `autofill`. That sends
+Bitwarden's login shortcut and checks that the visible password field was
+filled. The password is not returned to the model. A locked vault or unmatched
+site can be handled with the phone handoff; the user can enter the password
+there without putting it in chat. Bitwarden is never triggered on page load.
 
-This is not yet a protected credential broker. The browser runs as the same OS
-user as ClikCode, and ClikCode's own agent can run shell commands. Do not treat
-the browser profile as a secret store isolated from the agent. The current
-tool hides visible password forms from its Playwright observation, but that
-alone is not an OS security boundary.
+This is not a protected credential broker. The browser and Bitwarden extension
+run as the same OS user as ClikCode, and ClikCode's own agent can run shell
+commands. The shortcut keeps the password out of the tool result, but does
+not isolate the browser profile from that OS user. The web tool hides visible
+password forms from its Playwright observation; that is not an OS boundary.
 
 The phone link requires a ClikDeploy account connection on the local worker
 and a browser session signed in to that same account on the phone. It expires
