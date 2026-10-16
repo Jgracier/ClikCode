@@ -104,6 +104,7 @@ export async function fillBitwardenCredential(stateDir: string, page: Page, id: 
   if (!/^[0-9a-f-]{36}$/i.test(id)) throw new CredentialError('Invalid Bitwarden item reference.');
   const origin = siteOrigin(page.url());
   const session = await sessionFor(stateDir);
+  await bw(['sync'], { BW_SESSION: session });
   const item = parsed<VaultItem>(await bw(['get', 'item', id], { BW_SESSION: session }));
   if (item.id !== id || !item.login?.password || !item.login.uris?.some((entry) => {
     try { return siteOrigin(entry.uri ?? '') === origin; } catch { return false; }
