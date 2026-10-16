@@ -23,6 +23,7 @@ removed). `--expect-fail` lists them and exits. See README.md.
 Exit status 0 when every scenario passes every repeat. Captures of failures
 are kept (the path is printed) so they can be replayed frame by frame.
 """
+import os
 import argparse, fcntl, hashlib, json, os, pty, re, select, shutil, signal, struct, sys, tempfile, termios, time
 
 import pyte
@@ -385,7 +386,41 @@ SCENARIOS = {
         ],
         'watch': [],
         'stable_handoff': True,
+        'same_row': ['please check the commit'],
         'final_contains': ['another chat'],
+    },
+    # A chat taller than the screen, left for the board and another chat and opened again:
+    # its lines are on the rows they were on, not drawn short and then moved.
+    'switch-long-chats-keeps-rows': {
+        'cols': 70, 'rows': 40,
+        'turns': [{'emits': [{'op': 'text', 'text': f'run part{n} done.\n\n', 'ms': 5} for n in range(1, 31)]}, {'blocks': ['Other chat answered.']}],
+        'steps': [
+            ('type', 'run every part'), ('wait_for', 'run part30 done.', 30), ('settle', 2),
+            ('keys', '\x1b[D'), ('settle', 2), ('type', 'another chat'), ('wait_for', 'Other chat answered.', 30), ('settle', 2),
+            ('keys', '\x1b[D'), ('settle', 2), ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'),
+            ('wait_for', 'run part30 done.', 10), ('settle', 2),
+            ('keys', '\x1b[D'), ('settle', 2), ('keys', '\x1b[A'), ('settle', 0.5), ('keys', '\r'),
+            ('wait_for', 'Other chat answered.', 10), ('settle', 2),
+            ('keys', '\x1b[D'), ('settle', 2), ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'),
+            ('wait_for', 'run part30 done.', 10), ('settle', 2),
+        ],
+        'watch': [],
+        'stable_handoff': True,
+        'same_row': ['run part30 done.', 'run part25 done.', 'run part20 done.'],
+    },
+    # Left and straight Right on the same chat: the chat comes back on the rows it was on.
+    'board-quick-return-same-chat': {
+        'cols': 70, 'rows': 40,
+        'turns': [{'emits': [{'op': 'text', 'text': f'run part{n} done.\n\n', 'ms': 5} for n in range(1, 31)]}],
+        'steps': [
+            ('type', 'run every part'), ('wait_for', 'run part30 done.', 30), ('settle', 2), ('mark',),
+            ('keys', '\x1b[D'), ('settle', 0.15), ('keys', '\x1b[C'), ('settle', 2),
+            ('keys', '\x1b[D'), ('settle', 1), ('keys', '\x1b[C'), ('settle', 2),
+            ('keys', '\x1b[D'), ('settle', 0.05), ('keys', '\x1b[C'), ('settle', 2), ('mark_end',),
+        ],
+        'watch': [],
+        'same_row': ['run part30 done.', 'run part25 done.', 'run part20 done.'],
+        'shown_outside_board': ['run part30 done.'],
     },
     # The board's small print. Empty, it says so. Deleting asks about the
     # chat by its preview (every new one is "Untitled chat"), offers no
@@ -2665,6 +2700,29 @@ def run(name, spec, entry, keep):
         if begun is None: problems.append(f'shown_outside_board: {phrase!r} was never on screen'); continue
         gone = [(i, t) for i, t, text in complete_frames() if i > begun and not board_frame(text) and phrase not in text]
         if gone: problems.append(f'{phrase!r} missing from {len(gone)} complete frame(s) that are not the board, first at frame {gone[0][0]} ({gone[0][1]:.2f}s)')
+    # A line of the conversation stays on one screen row in every complete frame that shows it, the
+    # board's between them (from the first board on): opening a conversation puts its rows where they were, they do not hop.
+    for phrase in spec.get('same_row', []):
+        rows, boarded = {}, False
+        for i, t, text in complete_frames():
+            if board_frame(text): boarded = True; continue
+            if not boarded or 'Press Ctrl+C again' in text: continue  # the harness's own shutdown
+            for n, line in enumerate(text.split('\n')):
+                if phrase in line: rows.setdefault(n, (i, t))
+        if os.environ.get('SAMEROW_AFTER_BOARD'):
+            frames = list(complete_frames()); lastb = max(k for k, f in enumerate(frames) if board_frame(f[2]))
+            for i, t, text in frames[lastb:lastb + 4]:
+                print(f'DUMP {i} {t:.2f}'); print('\n'.join(f'{n:2d}|{l.rstrip()[:90]}' for n, l in enumerate(text.split('\n')) if l.strip())); print('ENDDUMP')
+        for want in filter(None, os.environ.get('SAMEROW_DUMP', '').split(',')):
+            for i, t, text in complete_frames():
+                if i == int(want): print(f'DUMP {i}'); print('\n'.join(f'{n:2d}|{l.rstrip()}' for n, l in enumerate(text.split('\n')))); print('ENDDUMP')
+        if os.environ.get('SAMEROW_TRACE'):
+            last = None
+            for i, t, text in complete_frames():
+                at = [n for n, line in enumerate(text.split('\n')) if phrase in line]
+                if board_frame(text): at = ['BOARD']
+                if at != last: print('TRACE', phrase, i, f'{t:.2f}', at); last = at
+        if len(rows) > 1: problems.append(f'{phrase!r} moved between screen rows {sorted(rows)} (first frames {[rows[r][0] for r in sorted(rows)]})')
     # The board hands the screen over in one change: from the first frame that shows the board
     # to the next that does not, every complete frame is the board or has a composer (never
     # the conversation being left, bare), and the composer's rules never change row.
