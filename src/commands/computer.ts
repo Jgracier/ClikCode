@@ -8,7 +8,7 @@ export async function computerStatus(): Promise<void> {
   const enabled = await computerEnabled(stateDirectory());
   if (isJsonDefaultMode()) return emitResult({ computer: { enabled } });
   process.stdout.write(enabled
-    ? 'Computer use is on for ClikCode’s own agent. Ask it to use the browser or desktop.\n'
+    ? 'Computer use is on. The agent can open URLs and control the desktop when a task needs it.\n'
     : 'Computer use is off. Run `clikcode computer on` once to make it available.\n');
 }
 
@@ -17,6 +17,6 @@ export async function computerSetEnabled(enabled: boolean): Promise<void> {
   if (!enabled) await closeComputerBrowser(stateDirectory());
   if (isJsonDefaultMode()) return emitResult({ computer: { enabled } });
   process.stdout.write(enabled
-    ? 'Computer use is on. The next ClikCode agent turn can use the browser and desktop. You will approve access when it first asks.\n'
+    ? 'Computer use is on. The agent can open URLs and control the desktop when a task needs it.\n'
     : 'Computer use is off for new ClikCode agent turns.\n');
 }

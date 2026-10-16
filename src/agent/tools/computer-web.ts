@@ -1,13 +1,13 @@
 /** Page-level browser actions in ClikCode's own Chrome profile. */
 import { defineTool } from '../tool-contract.js';
-import { computerPage } from '../computer/browser.js';
+import { closeComputerBrowser, computerPage, openComputerPage } from '../computer/browser.js';
 import { computerEnabled } from '../computer/settings.js';
 import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
 import type { Page } from 'playwright-core';
 import type { ToolRunResult } from '../tool-contract.js';
 
 type WebArgs = {
-  action: 'open' | 'observe' | 'click' | 'fill' | 'press' | 'scroll';
+  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'press' | 'scroll';
   url?: string; role?: 'button' | 'link' | 'textbox' | 'checkbox' | 'combobox' | 'tab' | 'menuitem';
   name?: string; text?: string; key?: string; direction?: 'up' | 'down';
 };
@@ -43,9 +43,9 @@ export async function observeComputerPage(page: Page, acceptsImages: boolean): P
 
 export const computerWebTool = defineTool<WebArgs>({
   name: 'computer_web', class: 'exec',
-  description: 'Use ClikCode\'s persistent browser. Open a website, observe its accessible page and screenshot, then click/fill/press/scroll. The profile is separate from your personal Chrome. Sign-in forms are hidden from observation; ask the user to complete them. Never request a password in chat.',
+  description: 'Open a URL in ClikCode\'s browser in one action: Chrome starts automatically if closed. Observe and act on the page, then close the browser when done. The profile is separate from personal Chrome. Sign-in forms are hidden from observation; ask the user to complete them. Never request a password in chat.',
   parameters: { type: 'object', additionalProperties: false, required: ['action'], properties: {
-    action: { type: 'string', enum: ['open', 'observe', 'click', 'fill', 'press', 'scroll'] },
+    action: { type: 'string', enum: ['open', 'close', 'observe', 'click', 'fill', 'press', 'scroll'] },
     url: { type: 'string', description: 'Website URL for open.' },
     role: { type: 'string', enum: ['button', 'link', 'textbox', 'checkbox', 'combobox', 'tab', 'menuitem'] },
     name: { type: 'string', description: 'Exact accessible name from observe.' },
@@ -58,8 +58,9 @@ export const computerWebTool = defineTool<WebArgs>({
   async run(args, ctx) {
     try {
       if (!(await computerEnabled(ctx.stateDir))) throw new Error('Computer use is off. Run `clikcode computer on` to enable it.');
+      if (args.action === 'close') { await closeComputerBrowser(ctx.stateDir); return { output: 'ClikCode browser closed.' }; }
       if (args.action === 'open') webAddress(args.url);
-      const page = await computerPage(ctx.stateDir);
+      const page = args.action === 'open' ? await openComputerPage(ctx.stateDir) : await computerPage(ctx.stateDir);
       const onAbort = (): void => { void page.context().close().catch(() => undefined); };
       ctx.signal?.addEventListener('abort', onAbort, { once: true });
       try {
