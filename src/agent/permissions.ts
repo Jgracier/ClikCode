@@ -28,7 +28,7 @@ export const NO_RULES: PermissionRules = { allow: [], deny: [], ask: [] };
 const EXIT_PLAN_MODE_TOOL = 'exit_plan_mode';
 const ENTER_PLAN_MODE_TOOL = 'enter_plan_mode';
 const BASH_TOOL = 'bash';
-const COMPUTER_TOOLS = new Set(['computer_windows', 'computer_observe', 'computer_act', 'computer_desktop', 'computer_web', 'computer_handoff']);
+const COMPUTER_TOOLS = new Set(['computer_windows', 'computer_observe', 'computer_act', 'computer_desktop', 'computer_web', 'computer_handoff', 'computer_credentials']);
 
 /** `Bash(git status:*)`, `Edit(src/**)`, `WebFetch(domain:example.com)`, or a
  * bare tool name. Returns undefined for anything malformed. */

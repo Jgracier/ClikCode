@@ -27,7 +27,8 @@ async function applyPhoneAction(page: Page, action: ReturnType<typeof decryptAct
     await page.mouse.click(action.x, action.y);
   } else if (action.kind === 'type') await page.keyboard.insertText(action.text);
   else if (action.kind === 'key') await page.keyboard.press(action.key);
-  else await page.mouse.wheel(0, action.direction === 'up' ? -600 : 600);
+  else if (action.kind === 'scroll') await page.mouse.wheel(0, action.direction === 'up' ? -600 : 600);
+  else throw new Error('This handoff does not accept credentials.');
 }
 
 export const computerHandoffTool = defineTool<Record<string, never>>({

@@ -6,6 +6,7 @@ import { createServer } from 'node:http';
 import { closeComputerBrowser, computerPage, openComputerPage } from './browser.js';
 import { computerWebTool, observeComputerPage } from '../tools/computer-web.js';
 import { setComputerEnabled } from './settings.js';
+import { computerDesktopTool } from '../tools/computer.js';
 import type { ToolContext } from '../tool-contract.js';
 
 it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('uses an isolated Chrome profile and hides filled sign-in forms', async () => {
@@ -16,6 +17,10 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('uses an isolated Chrome 
     const result = await observeComputerPage(page, true);
     expect(result.output).toContain('Sign-in form detected');
     expect(JSON.stringify(result)).not.toContain('secret');
+    await setComputerEnabled(stateDir, true);
+    const desktop = await computerDesktopTool.run({ action: 'observe' }, { stateDir } as ToolContext);
+    expect(desktop.isError).toBe(true);
+    expect(desktop.output).toContain('private login');
     expect(await computerPage(stateDir)).toBe(page);
   } finally {
     await closeComputerBrowser(stateDir);

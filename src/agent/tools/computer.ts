@@ -4,6 +4,7 @@ import { defineTool, type ToolDefinition } from '../tool-contract.js';
 import { callComputerDriver } from '../computer/driver.js';
 import { formatMcpResult } from '../mcp/tools.js';
 import { computerEnabled } from '../computer/settings.js';
+import { privateBrowserActive } from '../computer/private-page.js';
 
 const target = {
   pid: { type: 'integer', minimum: 1, description: 'Process id from computer_windows.' },
@@ -13,6 +14,8 @@ const target = {
 const call = async (name: string, args: Record<string, unknown>, acceptsImages: boolean, signal?: AbortSignal) =>
   formatMcpResult(await callComputerDriver(name, args, signal), acceptsImages);
 
+const privateNotice = 'A private login is open in the ClikCode browser. Finish it with the browser or phone handoff before observing the desktop.';
+
 export async function computerAllowed(stateDir: string): Promise<boolean> { return computerEnabled(stateDir); }
 
 export const computerWindowsTool = defineTool({
@@ -20,9 +23,10 @@ export const computerWindowsTool = defineTool({
   description: 'List windows on the connected local desktop. Requires cua-driver installed on that desktop. Choose an exact pid and window_id before observing or acting.',
   parameters: { type: 'object', additionalProperties: false, properties: {} },
   label: () => 'Computer windows',
-  run: async (_args, ctx) => (await computerAllowed(ctx.stateDir))
-    ? call('list_windows', { on_screen_only: true }, false, ctx.signal)
-    : { output: 'Computer use is off. Run `clikcode computer on` to enable it.', isError: true },
+  run: async (_args, ctx) => !(await computerAllowed(ctx.stateDir))
+    ? { output: 'Computer use is off. Run `clikcode computer on` to enable it.', isError: true }
+    : await privateBrowserActive(ctx.stateDir) ? { output: privateNotice, isError: true }
+    : call('list_windows', { on_screen_only: true }, false, ctx.signal),
 });
 
 export const computerObserveTool = defineTool<{ pid: number; window_id: number; query?: string }>({
@@ -32,9 +36,10 @@ export const computerObserveTool = defineTool<{ pid: number; window_id: number; 
     ...target, query: { type: 'string', description: 'Optional accessibility tree search.' },
   } },
   label: (args) => `Observe window ${args.window_id}`,
-  run: async (args, ctx) => (await computerAllowed(ctx.stateDir))
-    ? call('get_window_state', { pid: args.pid, window_id: args.window_id, max_elements: 1500, ...(args.query ? { query: args.query } : {}), include_screenshot: ctx.acceptsImages === true }, ctx.acceptsImages === true, ctx.signal)
-    : { output: 'Computer use is off. Run `clikcode computer on` to enable it.', isError: true },
+  run: async (args, ctx) => !(await computerAllowed(ctx.stateDir))
+    ? { output: 'Computer use is off. Run `clikcode computer on` to enable it.', isError: true }
+    : await privateBrowserActive(ctx.stateDir) ? { output: privateNotice, isError: true }
+    : call('get_window_state', { pid: args.pid, window_id: args.window_id, max_elements: 1500, ...(args.query ? { query: args.query } : {}), include_screenshot: ctx.acceptsImages === true }, ctx.acceptsImages === true, ctx.signal),
 });
 
 type ComputerAction = {
@@ -84,6 +89,7 @@ export const computerActTool = defineTool<ComputerAction>({
   describe: async (args) => `Window ${args.window_id} of process ${args.pid}; ${args.action}${args.action === 'type' ? ` (${args.text?.length ?? 0} characters)` : ''}.`,
   async run(args, ctx) {
     if (!(await computerAllowed(ctx.stateDir))) return { output: 'Computer use is off. Run `clikcode computer on` to enable it.', isError: true };
+    if (await privateBrowserActive(ctx.stateDir)) return { output: privateNotice, isError: true };
     try { const request = computerDriverAction(args); return await call(request.name, request.args, false, ctx.signal); }
     catch (error) { return { output: error instanceof Error ? error.message : String(error), isError: true }; }
   },
@@ -139,6 +145,7 @@ export const computerDesktopTool = defineTool<DesktopArgs>({
   describe: async (args) => `Primary desktop: ${args.action}${args.action === 'type' ? ` (${args.text?.length ?? 0} characters)` : ''}.`,
   async run(args, ctx) {
     if (!(await computerAllowed(ctx.stateDir))) return { output: 'Computer use is off. Run `clikcode computer on` to enable it.', isError: true };
+    if (await privateBrowserActive(ctx.stateDir)) return { output: privateNotice, isError: true };
     try {
       const request = computerDesktopAction(args);
       return await call(request.name, request.args, args.action === 'observe' && ctx.acceptsImages === true, ctx.signal);

@@ -4,6 +4,7 @@ import { closeComputerBrowser, computerPage, openComputerPage } from '../compute
 import { computerEnabled } from '../computer/settings.js';
 import { callComputerDriver } from '../computer/driver.js';
 import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
+import { privateLoginPage, protectLoginPage } from '../computer/private-page.js';
 import type { Page } from 'playwright-core';
 import type { ToolRunResult } from '../tool-contract.js';
 
@@ -29,7 +30,7 @@ export async function observeComputerPage(page: Page, acceptsImages: boolean): P
   // Playwright's accessibility snapshot includes the literal value of a
   // password input. Keep the entire login form out of the model result until
   // the private sign-in broker and takeover flow are in place.
-  if (await page.locator('input[type="password"]:visible').count()) {
+  if (await privateLoginPage(page)) {
     return { output: `Page: ${new URL(page.url()).origin}\n\nSign-in form detected. Browser contents are hidden until the user completes sign-in.` };
   }
   const snapshot = (await page.ariaSnapshot({ timeout: 10_000 })).slice(0, 25_000);
@@ -61,7 +62,12 @@ export const computerWebTool = defineTool<WebArgs>({
       if (!(await computerEnabled(ctx.stateDir))) throw new Error('Computer use is off. Run `clikcode computer on` to enable it.');
       if (args.action === 'close') { await closeComputerBrowser(ctx.stateDir); return { output: 'ClikCode browser closed.' }; }
       if (args.action === 'open') webAddress(args.url);
-      const page = args.action === 'open' ? await openComputerPage(ctx.stateDir) : await computerPage(ctx.stateDir);
+      let page = args.action === 'open' ? await openComputerPage(ctx.stateDir) : await computerPage(ctx.stateDir);
+      if (args.action === 'open' && await privateLoginPage(page)) {
+        const old = page;
+        page = await old.context().newPage();
+        await old.close();
+      }
       const onAbort = (): void => { void page.context().close().catch(() => undefined); };
       ctx.signal?.addEventListener('abort', onAbort, { once: true });
       try {
@@ -80,6 +86,7 @@ export const computerWebTool = defineTool<WebArgs>({
           case 'autofill': {
             const password = page.locator('input[type="password"]:visible').first();
             if (!await password.count()) throw new Error('No visible password field on this page.');
+            protectLoginPage(page);
             await page.bringToFront();
             const sent = await callComputerDriver('hotkey', {
               target: { kind: 'desktop', display_id: 'primary' }, keys: ['ctrl', 'shift', 'l'],

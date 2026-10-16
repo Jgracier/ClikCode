@@ -11,6 +11,7 @@ import { parseSandboxMode, sandboxModeText, sessionSandboxMode } from '../../../
 import { computerEnabled, setComputerEnabled } from '../../../agent/computer/settings.js';
 import { stateDirectory } from '../../../session/store/paths.js';
 import { closeComputerBrowser } from '../../../agent/computer/browser.js';
+import { forgetBitwardenSession } from '../../../agent/computer/bitwarden.js';
 import type { AiHarnessPermissionMode } from '../../../harness/definition.js';
 import { applyClikCodeAgentSessionPolicy, applyFreshLocalSessionPolicy } from '../../../commands/ai/sessions.js';
 import { aiSettingsClearProvider, aiSettingsSetGlobal, aiSettingsSetProvider } from '../../../commands/ai/settings.js';
@@ -57,7 +58,7 @@ export const settingsHandlers = {
     if (words.length > 1 || (value && value !== 'on' && value !== 'off')) throw new Error('usage: /computer [on|off]');
     if (value) {
       await setComputerEnabled(stateDirectory(), value === 'on');
-      if (value === 'off') await closeComputerBrowser(stateDirectory());
+      if (value === 'off') { await closeComputerBrowser(stateDirectory()); forgetBitwardenSession(stateDirectory()); }
     }
     const enabled = await computerEnabled(stateDirectory());
     return emitHarnessOutput({ panel: 'settings-updated', text: enabled
