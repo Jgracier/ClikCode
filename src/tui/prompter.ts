@@ -507,7 +507,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // frame goes through the coalescing scheduler: a snapshot, a queue change
     // and a stop arrive together, and a direct paint drew each in between.
     if (this.turn) this.updateWaiting();
-    else this.paint('', [], 0, '› ', 0);
+    else if (!(this.journal.running && this.journal.following)) this.paint('', [], 0, '› ', 0);
   }
 
   response(text: string, mode: 'append' | 'replace' = 'append'): void {

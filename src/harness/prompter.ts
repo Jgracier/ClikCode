@@ -126,7 +126,10 @@ export interface HarnessPrompter {
 /** What a render knows of the turn journal (`pendingTurn`) it carries: a
  * worker is still running it (with this prompt, when known), or nothing is
  * and it is an interrupted turn. */
-export type JournalState = { running: false } | { running: true; prompt?: string };
+/** `following`: the caller follows this running turn at once. Nothing is painted for it here -- its
+ * first frame is the follow's, which replaces whatever is on screen (the board, or the chat as it was)
+ * in one change. An idle composer painted first is a frame with the chat missing. */
+export type JournalState = { running: false } | { running: true; prompt?: string; following?: true };
 
 export type MessageBlock =
   | { kind: 'paragraph'; text: string; quoteDepth: number; indent: number; sourceEnd: number; blockBoundary?: boolean }

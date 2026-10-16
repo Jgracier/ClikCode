@@ -143,7 +143,7 @@ export class ChatLoop {
     }
     const account = await this.prepareRound(latest, latestState);
     const running = terminal ? await workerTurn(latest.id) : undefined;
-    terminal?.render(latest, account, running ? { running: true, ...running } : { running: false });
+    terminal?.render(latest, account, running ? { running: true, following: true, ...running } : { running: false });
     // After a turn or a command: a Gateway balance a turn just billed.
     refreshUsage(latest, latestState, true);
     // What the last pass has to say goes into the transcript, as a line.
