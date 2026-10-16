@@ -211,6 +211,7 @@ export class ChatLoop {
    * over the conversation, then the answer. `resendText` is what running
    * out of usage offers to send again. */
   private async followRunning(terminal: TerminalHarnessPrompter, latest: HarnessSession, account: string | undefined, prompt: string | undefined, resendText: string | undefined): Promise<void> {
+    terminal.holdPaints();
     terminal.submitted(prompt);
     terminal.render(latest, account, { running: true, ...(prompt !== undefined ? { prompt } : {}) });
     try {
@@ -218,6 +219,9 @@ export class ChatLoop {
       if (followed.left) this.openBoard = true;
     } catch (error) {
       await this.handleTurnFailure(error, { line: resendText });
+    } finally {
+      // Normally released once the turn is drawn (followWorkerTurn); this is for a follow that never got there.
+      terminal.releasePaints();
     }
   }
 

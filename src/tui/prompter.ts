@@ -662,7 +662,23 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   repaint(...args: Parameters<typeof repaint>): ReturnType<typeof repaint> { return repaint.apply(this, args); }
 
-  paint(...args: Parameters<typeof paint>): ReturnType<typeof paint> { return paint.apply(this, args); }
+  paint(...args: Parameters<typeof paint>): ReturnType<typeof paint> {
+    if (this.paintsHeld) return;
+    return paint.apply(this, args);
+  }
+
+  /** True from a window starting to join a running turn until the turn is drawn. Every step of a
+   * join (the prompt, the history, the live text, the calls) used to paint as it went, so the
+   * screen showed the chat built up in pieces, each one moving the rows already there. Held, the
+   * join paints once, with all of it. */
+  paintsHeld = false;
+  holdPaints(): void { this.paintsHeld = true; }
+  releasePaints(): void {
+    if (!this.paintsHeld) return;
+    this.paintsHeld = false;
+    if (this.turn) this.paintWaiting(this.turn);
+    else this.repaint();
+  }
 
   /** The last frame's live rows made safe, by the row as built and the width. */
   safeLiveRows = { limit: 0, rows: new Map<string, string>() };

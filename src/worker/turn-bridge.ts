@@ -386,6 +386,8 @@ export async function followWorkerTurn(
   return driveWorkerTurn(sessionId, client, rl, () => {
     if (joined) rl.joinedWaiting(joined.startedAt, joined.activity);
     showLive(rl, tracker);
+    // The first frame of a joined turn is the whole of it.
+    rl.releasePaints?.();
   }, () => tracker.running);
 }
 
