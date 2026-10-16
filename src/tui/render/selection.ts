@@ -180,7 +180,11 @@ export function scrollShift(previous: readonly string[], rows: readonly string[]
   let changed = 0;
   for (let index = 0; index < above; index += 1) if (previous[index] !== rows[index]) changed += 1;
   if (changed * 2 < above) return 0;
-  for (let shift = 2; shift < above; shift += 1) {
+  // From one row: the first step back from the live edge moves the history by
+  // the step less the rows the live tail took, which is one row for a notch of
+  // three and a tail of two. Missed, the real shift was passed over for a
+  // meaningless one of nearly the whole screen, and every row was drawn again.
+  for (let shift = 1; shift < above; shift += 1) {
     let up = true;
     let down = true;
     for (let index = 0; index + shift < above; index += 1) {

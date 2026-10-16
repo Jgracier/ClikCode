@@ -1484,6 +1484,26 @@ SCENARIOS = {
         'watch': [], 'scroll_moves': {'pattern': r'run part(\d+)'},
         'never': ['Interrupted turn activity'],
     },
+    # Reading back through a turn that is still working is a scroll and nothing else:
+    # no frame addresses a row below the screen, the composer is whole in every frame,
+    # and each step is handed to the terminal as a shift (a few rows drawn), not the
+    # whole history rewritten. The first step used to write one row too many -- the
+    # live tail's slice ended at a negative index -- so the footer landed on the
+    # composer's bottom rule, and rewrote every row besides.
+    'scroll-into-history-while-working-is-stable': {
+        'cols': 70, 'rows': 40, 'env': {'FAKE_TOOL_MS': '150', 'FAKE_DELAY_MS': '40'},
+        'turns': [{'emits': [*[{'op': 'text', 'text': f'run part{n} done.\n\n', 'ms': 5} for n in range(1, 31)],
+                             {'op': 'tool', 'id': 'hold', 'title': 'sleep 30', 'ms': 25000}]}],
+        'steps': [
+            ('type', 'run every part'), ('wait_for', 'sleep 30', 40), ('settle', 1.5), ('snap', 'before'), ('mark',),
+            *[step for _ in range(5) for step in (('keys', '\x1b[<64;35;20M'), ('settle', 0.4))], ('settle', 1), ('snap', 'scrolled'),
+            ('keys', '\x1b'), ('settle', 1.5), ('snap', 'back'), ('mark_end',),
+        ],
+        'watch': [], 'scroll_moves': {'pattern': r'run part(\d+)'},
+        # Coming back from 15 rows up shows about 13 rows that were not on screen; a rewrite is 34 or more.
+        'rows_within_screen': True, 'composer_whole_after_mark': True, 'cheap_frames_after_mark': 20,
+        'never': ['Interrupted turn activity'],
+    },
     # A phone with its keyboard up sends a swipe as arrow keys only: Up with
     # nothing typed must scroll a running turn back, as it does at the prompt.
     # Recorded: during a long turn the keyboard came up and every swipe after
@@ -1493,11 +1513,14 @@ SCENARIOS = {
         'turns': [{'emits': [*[{'op': 'text', 'text': f'run part{n} done.\n\n', 'ms': 5} for n in range(1, 31)],
                              {'op': 'tool', 'id': 'hold', 'title': 'sleep 30', 'ms': 25000}]}],
         'steps': [
-            ('type', 'run every part'), ('wait_for', 'sleep 30', 40), ('settle', 1.5), ('snap', 'before'),
+            ('type', 'run every part'), ('wait_for', 'sleep 30', 40), ('settle', 1.5), ('snap', 'before'), ('mark',),
             *[step for _ in range(4) for step in (('keys', '\x1b[A'), ('settle', 0.4))], ('settle', 1), ('snap', 'scrolled'),
-            ('keys', '\x1b'), ('settle', 1.5), ('snap', 'back'),
+            ('keys', '\x1b'), ('settle', 1.5), ('snap', 'back'), ('mark_end',),
         ],
         'watch': [], 'scroll_moves': {'pattern': r'run part(\d+)'},
+        # Each step is a shift of the history, not the history drawn again. Back at the live edge from
+        # 12 rows up shows 12 rows that were not on screen, and the live block; a rewrite is 28 or more.
+        'rows_within_screen': True, 'composer_whole_after_mark': True, 'cheap_frames_after_mark': 18,
         'never': ['Interrupted turn activity'],
     },
     # The same in a window that joined the running turn (out to the board and
@@ -2225,6 +2248,9 @@ def run(name, spec, entry, keep):
     typed_at = None
     typed_raw_at = None
     marked_at = None
+    marked_raw_at = None
+    marked_end_at = None
+    marked_raw_end_at = None
     marked2_at = None
     for step in spec['steps']:
         if step[0] == 'open2':
@@ -2287,6 +2313,11 @@ def run(name, spec, entry, keep):
         elif step[0] == 'mark':
             # Where 'never_after_mark' starts looking.
             marked_at = len(frames)
+            marked_raw_at = len(raw)
+        elif step[0] == 'mark_end':
+            # Where the checks that start at the mark stop: what comes after (a turn ending, a restart) is not theirs.
+            marked_end_at = len(frames)
+            marked_raw_end_at = len(raw)
         elif step[0] == 'snap':
             # The screen as it is now, kept under a name for the checks below.
             snaps[step[1]] = list(screen.display)
@@ -2596,6 +2627,33 @@ def run(name, spec, entry, keep):
     # ---- Order and state checks over every complete frame ------------------
     def complete_frames():
         return [(i, t, text) for i, (t, text) in enumerate(frames) if frame_complete[i] and typed_at is not None and t >= typed_at]
+    # Frames, one per complete synchronized update, as the bytes the app wrote.
+    SYNC_END = b'\x1b[?2026l'
+    def written_frames(first=0, last=None):
+        data, at, out = bytes(raw[first:last]), 0, []
+        while True:
+            end = data.find(SYNC_END, at)
+            if end < 0: return out
+            out.append(data[at:end + len(SYNC_END)]); at = end + len(SYNC_END)
+    def rows_written(chunk): return [int(n) for n in re.findall(rb'\x1b\[(\d+);\d+H', chunk)]
+    # No frame addresses a row below the screen: a terminal clamps it to the last row, and what
+    # was meant for the row below lands on top of the composer.
+    if spec.get('rows_within_screen'):
+        screen_rows = spec.get('rows', ROWS)
+        low = [(n, max(r)) for n, r in enumerate(rows_written(c) for c in written_frames()) if r and max(r) > screen_rows]
+        if low: problems.append(f'{len(low)} frame(s) addressed a row below the {screen_rows}-row screen, first frame {low[0][0]} (row {low[0][1]})')
+    # From the mark on, the composer's two rules are on screen in every complete frame.
+    if spec.get('composer_whole_after_mark') and marked_at is not None:
+        broken = [i for i, (t, text) in enumerate(frames) if i >= marked_at and (marked_end_at is None or i < marked_end_at) and frame_complete[i]
+                  and len([1 for line in text.split('\n') if RULE_ROW.match(line.rstrip())]) != 2]
+        if broken: problems.append(f'the composer was not whole in {len(broken)} complete frame(s) after the mark, first frame {broken[0]} ({frames[broken[0]][0]:.2f}s)')
+    # From the mark on, no frame draws more than this many rows: a scroll, the spinner, a clock.
+    # A whole-screen rewrite is every row of the history, and shows as a flash where the
+    # terminal does not hold a frame whole.
+    if spec.get('cheap_frames_after_mark') and marked_raw_at is not None:
+        limit = spec['cheap_frames_after_mark']
+        dear = [(n, len(set(r))) for n, r in enumerate(rows_written(c) for c in written_frames(marked_raw_at, marked_raw_end_at)) if len(set(r)) > limit]
+        if dear: problems.append(f'{len(dear)} frame(s) after the mark drew more than {limit} rows (the history rewritten, not shifted): first {dear[0][0]} with {dear[0][1]} rows')
     # The board hands the screen over in one change: from the first frame that shows the board
     # to the next that does not, every complete frame is the board or has a composer (never
     # the conversation being left, bare), and the composer's rules never change row.

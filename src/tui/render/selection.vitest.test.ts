@@ -114,6 +114,13 @@ describe('a scroll as a shift', () => {
     expect(shiftedRow(before, 0, -1)).toBeUndefined();
   });
 
+  it('finds a shift of one row, the first step back from a live tail the notch only partly passes', () => {
+    const lines = ['a', '', 'b', '', 'c', '', 'd', '', 'e'];
+    const back = ['', ...lines.slice(0, 8)];
+    expect(scrollShift([...lines, 'composer'], [...back, 'composer'], 9)).toBe(-1);
+    expect(scrollShift([...back, 'composer'], [...lines, 'composer'], 9)).toBe(1);
+  });
+
   it('sees no shift in a keystroke, a short transcript or a resize', () => {
     expect(scrollShift(before, ['1', '2', '3', '4', '5', 'X', 'composer'], 6)).toBe(0);
     expect(scrollShift(before.slice(0, 4), ['2', '3', '4', 'x'], 3)).toBe(0);
