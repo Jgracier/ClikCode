@@ -15,7 +15,7 @@ it('interoperates with the phone browser AES-GCM format and authenticates each a
   const packet = { iv: iv.toString('base64url'), data: Buffer.from(encrypted).toString('base64url'), seq: 1 };
   expect(decryptAction(key, 'session-id', packet)).toEqual({ kind: 'click', x: 10, y: 20 });
   expect(() => decryptAction(key, 'another-session', packet)).toThrow();
-  const privateInput = { kind: 'credential', accountId: '123', email: 'private@example.com', password: 'never-in-model', vaultPassword: 'vault-only' };
+  const privateInput = { kind: 'credential', accountId: '123', email: 'private@example.com', password: 'never-in-model' };
   const privatePacket = encryptPacket(key, 'session-id', 'action', 2, Buffer.from(JSON.stringify(privateInput)));
   expect(JSON.stringify(privatePacket)).not.toContain(privateInput.password);
   expect(decryptAction(key, 'session-id', privatePacket)).toEqual(privateInput);

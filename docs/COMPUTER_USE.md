@@ -1,66 +1,47 @@
 # Computer use
 
 ClikCode's own agent can use a persistent Chrome browser through Playwright and
-the primary desktop through Cua Driver. The feature is off until the user
-runs `/computer on` in the terminal or VS Code panel, or `clikcode computer on`
-in a shell. This enables the capability; the agent opens a URL in one action
-when its task needs a browser, can use the desktop directly, and can close its
-browser when finished. `/computer off` stops new actions and closes the browser.
+the primary desktop through Cua Driver. Computer use is available by default.
+The agent opens a URL in one action when it needs a browser, and can close it
+when done. `/computer off` or `clikcode computer off` stops new actions and
+closes the browser; `on` makes it available again.
 
-The browser has its own profile under ClikCode's state directory. It does not
-attach to a personal Chrome profile. Existing signed-in sites in that profile
-remain signed in across turns. A user can sign in to a site in that browser,
-then ask the agent to continue.
+The browser uses its own profile under ClikCode's state directory. It does not
+attach to a personal Chrome profile. Existing sign-ins in that profile remain
+available across turns.
 
-When a site needs a password, CAPTCHA or MFA, the agent can call
-`computer_handoff`. ClikCode shows a ten-minute link; the user opens it on a
-phone, finishes in the same live browser, then taps Done. The agent continues
-from that page. The link is tied to the same ClikDeploy account. Screenshots
-and taps pass through a temporary encrypted relay; the decryption key is in
-the URL fragment, shown in the local ClikCode activity, and never sent to the
-relay server. No desktop port is opened.
+For an HTTPS login, `computer_credentials request` gives the user a private
+form for the site's account ID, email and password. ClikCode generates a random
+32-byte vault key automatically on first use. It stores that key in a private
+local file (`computer/vault/vault.key`, mode 0600), and encrypts each saved login
+with AES-256-GCM in a separate file. No setup or vault password is required.
+The private form sends an encrypted packet to the local worker through the
+ClikDeploy relay. The relay only holds ciphertext. The agent receives an
+opaque item reference and a status, never the website password.
 
-If the user has installed and unlocked Bitwarden in the ClikCode browser
-profile, the agent can use `computer_web` with action `autofill`. That sends
-Bitwarden's login shortcut and checks that the visible password field was
-filled. The password is not returned to the model. A locked vault or unmatched
-site can be handled with the phone handoff; the user can enter the password
-there without putting it in chat. Bitwarden is never triggered on page load.
+`computer_credentials fill` uses the item reference to fill the same HTTPS
+origin. It reads the key and decrypts the item inside the worker, including
+after the worker restarts. The browser page is hidden from model observations
+while a login is being handled. If a site uses an unfamiliar or cross-origin
+login, the user can finish through `computer_handoff` instead.
 
-`computer_credentials` adds a private form for an HTTPS site already open in
-the ClikCode browser. `request` shows a phone link for account ID, email and
-password. The page encrypts those values to the local worker using the handoff
-key in the URL fragment; the ClikDeploy relay holds ciphertext only. The worker
-sends a new login item to the official Bitwarden CLI with a host-matched URI
-and returns only its item ID to the model. `fill` accepts that ID only on the
-same HTTPS origin and fills the fields without returning their values. If the
-worker's temporary vault session has expired, `fill` opens a private vault
-unlock form first. It can advance through ordinary split login forms locally;
-an unfamiliar or cross-origin login falls back to the phone handoff. The
-Bitwarden CLI must be installed and signed in once; the private form can supply
-the vault master password to unlock it when needed. ClikCode keeps the CLI
-session key in worker memory for up to ten minutes and forgets it when computer
-use is switched off. It does not store the form values or vault password in
-ClikCode settings.
+For CAPTCHA, MFA, or another step the agent cannot finish, `computer_handoff`
+provides a ten-minute phone link. The user opens it, completes the step in the
+same live browser, then taps Done. Screenshots and taps pass through a temporary
+encrypted relay. The decryption key stays in the URL fragment and is not sent
+to the relay server. No desktop port is opened.
 
-The browser observation tool hides a login page from the model, including after
-a site's show-password control changes the input type. Desktop observation and
-actions are held while that private page is open. Open a new URL to leave the
-private page after signing in; ClikCode closes the protected tab. The user can
-still finish a difficult login through the phone handoff.
+The optional `computer_web autofill` action triggers an installed Bitwarden
+browser extension. The default private credential path uses ClikCode's local
+vault and does not require Bitwarden.
 
-This keeps credentials out of the model's normal tool arguments and results.
-It is not an OS security boundary: the agent's shell tool and ClikCode run as
-the same OS user as the Bitwarden CLI. A fully isolated vault would require a
-separate OS identity and a broker that never exposes vault access to shell or
-desktop tools. A signed-in website can also display the account email or ID in
-ordinary page content after login; those values cannot be guaranteed hidden
-while the agent is allowed to use that website.
+The local key file is private to the OS account, but it is not an isolation
+boundary against other processes running as that same user. ClikCode's shell
+and desktop tools also run as that user. A separate OS identity and broker
+would be required to prevent those tools from accessing the key or a signed-in
+website. Sites may show an account email or ID after login.
 
-The phone link requires a ClikDeploy account connection on the local worker
-and a browser session signed in to that same account on the phone. It expires
-after ten minutes, and the user can finish sooner with Done.
-
-Vendor harnesses do not automatically receive ClikCode's own computer tools.
-Their tool support and permission systems differ. The computer controls are
-available through ClikCode's own agent in both the terminal and VS Code panel.
+The phone link requires a ClikDeploy connection on the local worker and a
+browser session signed in to the same account on the phone. Vendor harnesses
+do not automatically receive ClikCode's own computer tools. The computer
+controls are available to ClikCode's own agent in the terminal and VS Code.

@@ -6,7 +6,7 @@ import { defineTool } from '../tool-contract.js';
 import { computerPage } from '../computer/browser.js';
 import { computerEnabled } from '../computer/settings.js';
 import { decryptAction, type EncryptedPacket } from '../computer/handoff-crypto.js';
-import { bitwardenReady, bitwardenSessionReady, CredentialError, fillBitwardenCredential, saveBitwardenCredential, unlockBitwarden } from '../computer/bitwarden.js';
+import { CredentialError, fillCredential, saveCredential } from '../computer/credential-vault.js';
 import { gatewayConnection } from '../models/for-session.js';
 
 type Args = { action: 'request' | 'fill'; item_id?: string };
@@ -25,10 +25,10 @@ async function api<T>(url: string, key: string, method: 'GET' | 'POST' | 'DELETE
 
 export const computerCredentialsTool = defineTool<Args>({
   name: 'computer_credentials', class: 'exec',
-  description: 'For a site login, request account ID, email, and password through a private phone form that saves them to Bitwarden. The values never appear in this tool call or result. Later fill an exact Bitwarden item reference into the same HTTPS website. Do not ask for credentials in chat.',
+  description: 'For a site login, request account ID, email, and password through a private form that saves them in an encrypted local vault. The values never appear in this tool call or result. Later fill the opaque saved login reference into the same HTTPS website. Do not ask for credentials in chat.',
   parameters: { type: 'object', additionalProperties: false, required: ['action'], properties: {
     action: { type: 'string', enum: ['request', 'fill'] },
-    item_id: { type: 'string', description: 'Opaque Bitwarden item reference returned by request, required for fill.' },
+    item_id: { type: 'string', description: 'Opaque saved login reference returned by request, required for fill.' },
   } },
   label: (args) => args.action === 'request' ? 'Request private login' : 'Fill private login',
   async run(args, ctx) {
@@ -41,22 +41,21 @@ export const computerCredentialsTool = defineTool<Args>({
       const site = new URL(page.url());
       if (site.protocol !== 'https:') throw new Error('Private credentials require an HTTPS website.');
       if (args.action !== 'request' && args.action !== 'fill') throw new CredentialError('Unknown credential action.');
-      if (args.action === 'fill' && !args.item_id) throw new CredentialError('Fill needs a Bitwarden item reference.');
-      if (args.action === 'fill' && bitwardenSessionReady(ctx.stateDir)) {
-        await fillBitwardenCredential(ctx.stateDir, page, args.item_id!);
-        return { output: 'Bitwarden filled this website. Credentials were not included in the tool result.' };
+      if (args.action === 'fill' && !args.item_id) throw new CredentialError('Fill needs a saved login reference.');
+      if (args.action === 'fill') {
+        await fillCredential(ctx.stateDir, page, args.item_id!);
+        return { output: 'Saved login filled this website. Credentials were not included in the tool result.' };
       }
-      await bitwardenReady();
       const connection = gatewayConnection(new Conf({ projectName: 'clikcode', configFileMode: 0o600 }));
       apiKey = connection.apiKey;
       root = `${new URL(connection.baseUrl).origin}/api/clikcode/v1/computer`;
       const created = await api<{ id: string; expiresAt: number }>(root, apiKey, 'POST', ctx.signal);
       sessionId = created.id;
       const key = randomBytes(32);
-      const mode = args.action === 'request' ? 'credential' : 'unlock';
+      const mode = 'credential';
       const fragment = new URLSearchParams({ key: key.toString('base64url'), mode, site: site.origin });
       const link = `${new URL(connection.baseUrl).origin}/computer/handoff/${sessionId}#${fragment}`;
-      ctx.emitOutput?.(`Open this private form to ${mode === 'credential' ? 'save a login' : 'unlock Bitwarden'} for ${site.origin}: ${link}\n`);
+      ctx.emitOutput?.(`Open this private form to save a login for ${site.origin}: ${link}\n`);
       const deadline = Math.min(created.expiresAt, Date.now() + TEN_MINUTES);
       let lastSeq = 0;
       while (Date.now() < deadline) {
@@ -65,14 +64,9 @@ export const computerCredentialsTool = defineTool<Args>({
           lastSeq = next.packet.seq;
           const input = decryptAction(key, sessionId, next.packet);
           if (args.action === 'request' && input.kind === 'credential') {
-            const { accountId, email, password, vaultPassword } = input;
-            const id = await saveBitwardenCredential(ctx.stateDir, site.origin, { accountId, email, password, vaultPassword });
-            return { output: `Saved in Bitwarden for ${site.origin}. Item reference: ${id}. Use computer_credentials fill with this reference on the same site.` };
-          }
-          if (args.action === 'fill' && input.kind === 'unlock') {
-            await unlockBitwarden(ctx.stateDir, input.vaultPassword);
-            await fillBitwardenCredential(ctx.stateDir, page, args.item_id!);
-            return { output: 'Bitwarden filled this website. Credentials were not included in the tool result.' };
+            const { accountId, email, password } = input;
+            const id = await saveCredential(ctx.stateDir, site.origin, { accountId, email, password });
+            return { output: `Saved a login for ${site.origin}. Reference: ${id}. Use computer_credentials fill with this reference on the same site.` };
           }
           throw new CredentialError('This form sent an unsupported action.');
         }
