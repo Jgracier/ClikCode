@@ -45,7 +45,7 @@ export async function observeComputerPage(page: Page, acceptsImages: boolean): P
 
 export const computerWebTool = defineTool<WebArgs>({
   name: 'computer_web', class: 'exec',
-  description: 'Open a URL in ClikCode\'s browser in one action: Chrome starts automatically if closed. Observe and act on the page, then close it when done. For a visible password field, autofill triggers the installed Bitwarden extension\'s shortcut and verifies a password was filled without showing it. If the vault is locked or missing, hand the browser to the user. Never request a password in chat.',
+  description: 'Open a URL in ClikCode\'s browser in one action: Chrome starts automatically if closed. Observe and act on the page, then close it when done. For a visible password field, autofill triggers the installed Bitwarden extension\'s shortcut and verifies a password was filled without showing it. Use computer_credentials to privately request and fill a Bitwarden login by item reference; use computer_handoff for CAPTCHA or an unfamiliar sign-in. Never request a password in chat.',
   parameters: { type: 'object', additionalProperties: false, required: ['action'], properties: {
     action: { type: 'string', enum: ['open', 'close', 'observe', 'click', 'fill', 'press', 'scroll', 'autofill'] },
     url: { type: 'string', description: 'Website URL for open.' },
