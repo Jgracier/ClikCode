@@ -33,11 +33,11 @@ function decide(name: string, args: Record<string, unknown>, mode: AiHarnessPerm
 }
 
 describe('permission matrix', () => {
-  it('treats computer on as the one-time auto-mode grant while keeping ask and deny rules', async () => {
+  it('makes computer tools available by default while keeping ask, off, and deny rules', async () => {
     const judge = (mode: AiHarnessPermissionMode, rules = NO_RULES) => decidePermission({
       tool: computerWebTool, args: { action: 'observe' }, mode, rules, planMode: false, scope, hasApprover: true,
     }).decision;
-    expect(judge('auto')).toBe('ask');
+    expect(judge('auto')).toBe('allow');
     await setComputerEnabled(scope.stateDir, true);
     expect(judge('auto')).toBe('allow');
     expect(judge('ask')).toBe('ask');

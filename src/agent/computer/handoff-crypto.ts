@@ -5,8 +5,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 export type EncryptedPacket = { iv: string; data: string; seq: number; width?: number; height?: number };
 export type PhoneAction = { kind: 'click'; x: number; y: number } | { kind: 'type'; text: string }
   | { kind: 'key'; key: string } | { kind: 'scroll'; direction: 'up' | 'down' }
-  | { kind: 'credential'; accountId: string; email: string; password: string; vaultPassword: string }
-  | { kind: 'unlock'; vaultPassword: string };
+  | { kind: 'credential'; accountId: string; email: string; password: string };
 
 export function encryptPacket(key: Buffer, id: string, kind: 'frame' | 'action', seq: number, bytes: Buffer, size?: { width: number; height: number }): EncryptedPacket {
   const iv = randomBytes(12);
@@ -31,9 +30,6 @@ export function decryptAction(key: Buffer, id: string, packet: EncryptedPacket):
   if (value.kind === 'credential'
     && typeof value.accountId === 'string' && value.accountId.length <= 200
     && typeof value.email === 'string' && value.email.length <= 320
-    && typeof value.password === 'string' && value.password.length > 0 && value.password.length <= 1000
-    && typeof value.vaultPassword === 'string' && value.vaultPassword.length <= 1000) return value;
-  if (value.kind === 'unlock' && typeof value.vaultPassword === 'string'
-    && value.vaultPassword.length > 0 && value.vaultPassword.length <= 1000) return value;
+    && typeof value.password === 'string' && value.password.length > 0 && value.password.length <= 1000) return value;
   throw new Error('Unsupported handoff input');
 }

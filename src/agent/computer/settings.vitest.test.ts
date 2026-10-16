@@ -7,10 +7,10 @@ import { computerEnabled, computerEnabledSync, setComputerEnabled } from './sett
 let dir: string | undefined;
 afterEach(async () => { if (dir) await rm(dir, { recursive: true, force: true }); dir = undefined; });
 
-it('keeps computer use off until the local user enables it', async () => {
+it('makes computer use available by default and honors an explicit off setting', async () => {
   dir = await mkdtemp(join(tmpdir(), 'clikcode-computer-'));
-  expect(await computerEnabled(dir)).toBe(false);
-  expect(computerEnabledSync(dir)).toBe(false);
+  expect(await computerEnabled(dir)).toBe(true);
+  expect(computerEnabledSync(dir)).toBe(true);
   await setComputerEnabled(dir, true);
   expect(await computerEnabled(dir)).toBe(true);
   expect(computerEnabledSync(dir)).toBe(true);
