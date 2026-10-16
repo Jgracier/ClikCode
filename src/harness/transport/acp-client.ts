@@ -20,6 +20,7 @@ import { type JsonRpcPeer } from './jsonrpc-peer.js';
 import { BackgroundTurnChannel } from './background-turn.js';
 import { PersistentSession, runOneTurn, turnFailure, type PersistentSessionOptions } from './persistent-session.js';
 import { lifecycle } from '../../runtime/lifecycle-log.js';
+import { globalMcpServersForAcp } from './acp-mcp-servers.js';
 import { BackgroundAgentRows } from '../events/background-agent-rows.js';
 import { backgroundWork, mergeBackgroundWork, type BackgroundWork } from '../protocol/background-agents.js';
 import { markTurn } from '../../runtime/turn-latency.js';
@@ -784,7 +785,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     if (directories.length && !capabilities.sessionCapabilities?.additionalDirectories) {
       throw new Error(`${input.command} ACP does not accept additional directories (/add-dir); remove them or start from a common parent directory`);
     }
-    const sessionParams = { cwd: input.cwd, mcpServers: [], _meta: ACP_SESSION_META, ...(directories.length ? { additionalDirectories: [...directories] } : {}) };
+    const sessionParams = { cwd: input.cwd, mcpServers: await globalMcpServersForAcp(input.command, capabilities), _meta: ACP_SESSION_META, ...(directories.length ? { additionalDirectories: [...directories] } : {}) };
     const images = input.images ?? [];
     if (images.length && capabilities.promptCapabilities?.image !== true) {
       throw Object.assign(new Error(`${input.command} ACP does not accept image prompts`), { acpUnsupportedImages: true });
