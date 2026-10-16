@@ -422,6 +422,35 @@ SCENARIOS = {
         'same_row': ['run part30 done.', 'run part25 done.', 'run part20 done.'],
         'shown_outside_board': ['run part30 done.'],
     },
+    # A working turn holds still (a long tool, or sub-agents) while the window goes to the board and
+    # back: the history lines come back on the rows they were on, whatever the activity rows below are doing.
+    'board-return-while-tool-holds': {
+        'cols': 70, 'rows': 40, 'env': {'FAKE_TOOL_MS': '150', 'FAKE_DELAY_MS': '40'},
+        'turns': [{'emits': [*[{'op': 'text', 'text': f'run part{n} done.\n\n', 'ms': 5} for n in range(1, 31)],
+                             {'op': 'tool', 'id': 'hold', 'title': 'sleep 30', 'ms': 25000}]}],
+        'steps': [
+            ('type', 'run every part'), ('wait_for', 'sleep 30', 40), ('settle', 3),
+            ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\x1b[C'), ('settle', 2.5),
+            ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\x1b[C'), ('settle', 2.5),
+        ],
+        'watch': [],
+        'same_row': ['run part30 done.', 'run part20 done.', 'sleep 30'],
+        'timer_counts_up': [r'running sleep · (\d+)s'],
+        'shown_outside_board': ['run part30 done.'],
+    },
+    'board-return-while-agents-hold': {
+        'cols': 70, 'rows': 40,
+        'turns': [{'intro': 'Starting the long build.', 'subagents': {'count': 2, 'calls': 40, 'hold_ms': 15000}, 'blocks': ['The build passed.']}],
+        'steps': [
+            ('type', 'start the build'), ('wait_for', 'Starting the long build.', 30), ('settle', 4),
+            ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\x1b[C'), ('settle', 2.5),
+            ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\x1b[C'), ('settle', 2.5),
+        ],
+        'watch': [],
+        'same_row': ['Starting the long build.', 'start the build'],
+        'timer_counts_up': [r'waiting on agent · (\d+)s', r'Agent worker 0 · \d+ tool uses · (\d+)s'],
+        'shown_outside_board': ['Starting the long build.'],
+    },
     # The board's small print. Empty, it says so. Deleting asks about the
     # chat by its preview (every new one is "Untitled chat"), offers no
     # filter on a two-row list, and says Esc closes -- not "exit", which it
@@ -2706,7 +2735,7 @@ def run(name, spec, entry, keep):
         rows, boarded = {}, False
         for i, t, text in complete_frames():
             if board_frame(text): boarded = True; continue
-            if not boarded or 'Press Ctrl+C again' in text: continue  # the harness's own shutdown
+            if not boarded or 'Press Ctrl+C again' in text or '─ Stopped ─' in text or 'Stop held' in text: continue  # the harness's own shutdown
             for n, line in enumerate(text.split('\n')):
                 if phrase in line: rows.setdefault(n, (i, t))
         if os.environ.get('SAMEROW_AFTER_BOARD'):
@@ -2721,8 +2750,23 @@ def run(name, spec, entry, keep):
             for i, t, text in complete_frames():
                 at = [n for n, line in enumerate(text.split('\n')) if phrase in line]
                 if board_frame(text): at = ['BOARD']
-                if at != last: print('TRACE', phrase, i, f'{t:.2f}', at); last = at
+                if at != last:
+                    print('TRACE', phrase, i, f'{t:.2f}', at)
+                    if os.environ.get('SAMEROW_TRACE') == 'full' and last not in (None, ['BOARD']) and at != ['BOARD'] or (os.environ.get('SAMEROW_TRACE') == 'full' and at == [] and last == ['BOARD']):
+                        print('\n'.join(f'  {n:2d}|{l.rstrip()[:80]}' for n, l in enumerate(text.split('\n')) if l.strip()))
+                    last = at
         if len(rows) > 1: problems.append(f'{phrase!r} moved between screen rows {sorted(rows)} (first frames {[rows[r][0] for r in sorted(rows)]})')
+    # A clock on screen only counts up: coming back from the board does not start it again at 0s.
+    for pattern in spec.get('timer_counts_up', []):
+        last, back = None, []
+        for i, t, text in complete_frames():
+            if board_frame(text) or 'Stopped' in text or 'Stop held' in text: continue
+            found = re.search(pattern, text)
+            if not found: continue
+            seconds = int(found.group(1))
+            if last is not None and seconds < last: back.append((i, t, last, seconds))
+            last = seconds
+        if back: problems.append(f'{pattern!r}: the clock went back {back[0][2]}s -> {back[0][3]}s at frame {back[0][0]} ({back[0][1]:.2f}s), {len(back)} time(s)')
     # The board hands the screen over in one change: from the first frame that shows the board
     # to the next that does not, every complete frame is the board or has a composer (never
     # the conversation being left, bare), and the composer's rules never change row.
