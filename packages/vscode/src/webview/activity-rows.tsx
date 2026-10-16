@@ -91,6 +91,11 @@ export function OutputView({ activity, budget }: { activity: Activity; budget: n
   const { lines, hidden, fromEnd } = outputPreview(activity, budget);
   if (!lines.length) return null;
   const note = hidden > 0 ? <div class="gap">… {hidden} {fromEnd ? 'earlier' : 'more'} line{hidden === 1 ? '' : 's'}</div> : null;
+  if (activity.label === 'Hand browser to user') {
+    const url = lines.join('\n').match(/https:\/\/[^\s]+\/computer\/handoff\/[A-Za-z0-9_-]{32}#key=[A-Za-z0-9_-]{43}/)?.[0];
+    if (url) return <div class="activity-output"><span>Open on your phone: </span><a href={url} data-href={url}>handoff link</a>{' '}
+      <button type="button" onClick={() => void navigator.clipboard.writeText(url)}>Copy link</button></div>;
+  }
   return <pre class="activity-output">{fromEnd ? note : null}{lines.join('\n')}{fromEnd ? null : note}</pre>;
 }
 
