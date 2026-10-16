@@ -111,6 +111,9 @@ export function flushAlternateFrame(
   const height = this.viewportRows();
   const live = pending.live.slice(-height);
   const above = Math.max(0, height - live.length);
+  // Where the boundary was: scrolling back gives the history the rows the live conversation had, and
+  // leaving it takes them back, so the boundary moves in the frame the scroll begins and ends.
+  const aboveBefore = this.alternateAbove;
   this.alternateAbove = above;
   // Scrolled back, the live region gives up its rows to the transcript:
   // looking at what went past is the whole point, and the composer is not
@@ -139,11 +142,16 @@ export function flushAlternateFrame(
   const transcriptLength = this.alternateTranscript.length;
   const shownTranscript = [
     ...this.alternateTranscript.slice(first, Math.min(transcriptLength, bodyLength - scrolled)),
-    ...(scrolled > 0 ? extra.rows.slice(Math.max(0, first - transcriptLength), bodyLength - scrolled - transcriptLength) : []),
+    // The end never below zero: a negative one counts from the end of the rows, and gave the first
+    // step back (an offset past the live tail's length) one row too many.
+    ...(scrolled > 0 ? extra.rows.slice(Math.max(0, first - transcriptLength), Math.max(0, bodyLength - scrolled - transcriptLength)) : []),
   ];
   const shownLive = scrolled > 0 ? live.slice(0, Math.max(0, height - above)) : live;
   let rows = [...shownTranscript, ...shownLive];
   while (rows.length < height) rows.unshift('');
+  // Never taller than the screen: a terminal clamps a row below it onto the last one, which is the
+  // composer's own. The history gives up its top rows, not the live block its bottom ones.
+  if (rows.length > height) rows = rows.slice(rows.length - height);
   this.frameLayout = { live: [...live], tags: (pending.tags ?? []).slice(-height) };
   if (this.mentionFocus?.words.length) {
     const words = this.mentionFocus.words;
@@ -179,7 +187,11 @@ export function flushAlternateFrame(
   // out and those are not rows this code can redraw from its own transcript.
   const scrolling = this.paintingScroll;
   this.paintingScroll = false;
-  const shift = full || !scrolling ? 0 : scrollShift(this.alternatePrevious, rows, above);
+  // Only the rows above both boundaries are a transcript that moved; the ones between them were live
+  // rows a moment ago (or are about to be) and are drawn. Taking the larger boundary found no clean shift
+  // at the first step, and drew the whole history again.
+  const moving = Math.min(above, aboveBefore);
+  const shift = full || !scrolling ? 0 : scrollShift(this.alternatePrevious, rows, moving);
   const updates: string[] = [];
   // Rows the shift already drew, so the diff below does not draw them twice
   // -- a frame carrying the same row twice is a duplicated prompt on screen.
@@ -189,11 +201,11 @@ export function flushAlternateFrame(
     const span = Math.abs(shift);
     // Region over the transcript only, so the live region stays put; reset
     // straight after, because a region left set confines every later frame.
-    updates.push(`\u001b[1;${above}r`);
+    updates.push(`\u001b[1;${moving}r`);
     updates.push(shift > 0 ? `\u001b[${span}S` : `\u001b[${span}T`);
     updates.push('\u001b[r');
-    const exposed = shift > 0 ? rows.slice(above - span, above) : rows.slice(0, span);
-    exposedFrom = shift > 0 ? above - span : 0;
+    const exposed = shift > 0 ? rows.slice(moving - span, moving) : rows.slice(0, span);
+    exposedFrom = shift > 0 ? moving - span : 0;
     exposedTo = exposedFrom + span;
     for (const [offset, row] of exposed.entries()) {
       updates.push(`\u001b[${exposedFrom + offset + 1};1H${row}\u001b[K`);
@@ -202,7 +214,7 @@ export function flushAlternateFrame(
   for (const [index, row] of rows.entries()) {
     if (!full && this.alternatePrevious[index] === row) continue;
     if (index >= exposedFrom && index < exposedTo) continue;
-    if (shift !== 0 && index < above && shiftedRow(this.alternatePrevious, index, shift) === row) continue;
+    if (shift !== 0 && index < moving && shiftedRow(this.alternatePrevious, index, shift) === row) continue;
     updates.push(`\u001b[${index + 1};1H${row}\u001b[K`);
   }
   this.alternatePrevious = rows;
