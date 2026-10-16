@@ -77,13 +77,6 @@ export function onWaitingKey(this: TerminalHarnessPrompter, key: string): void {
     // it. A conversation turn with no answer yet comes back to edit; one
     // that has started answering stops.
     if (stoppedHere) return;
-    // The vendor's own background work is not ClikCode's to stop on an Esc: the window only stops
-    // following it, and the vendor goes on with it. (Ctrl+C below is the explicit Stop.) Stopping it
-    // closed the vendor, which took every shell it held with it.
-    if (turn.vendorWork && turn.leave) {
-      turn.leave();
-      return;
-    }
     // A sign-in, the turn's or its own: Esc cancels it (its outcome line
     // says so, and the message that opened it comes back).
     if (this.signingIn) {

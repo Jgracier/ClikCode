@@ -647,8 +647,6 @@ async function driveWorkerTurn(
         if (!outcome) return 'The connection to the worker was lost; nothing was sent.';
         return outcome.disposition === 'error' ? outcome.message ?? 'Not sent.' : undefined;
       };
-      // What this window follows is the vendor's own background work: Esc leaves it, Ctrl+C stops it.
-      if (tracker.vendorWork === true) rl.markVendorWork?.();
       // This follow lasts exactly as long as the display it drives: ended
       // by anything else, the loop asks the worker again -- it follows the
       // turn afresh or opens the prompt, and is never left with neither.

@@ -70,9 +70,6 @@ export type WaitingTurn = {
   /** Ctrl+C, or Esc once the turn has an answer, has asked the turn to stop. */
   cancelled: boolean;
   cancel?: (restoreDraft: boolean, trigger?: CancelTrigger) => void;
-  /** The turn is the vendor's own background work, not one ClikCode started: Esc leaves it, and the
-   * work goes on. Ctrl+C is the explicit Stop. */
-  vendorWork?: boolean;
   /** Put the oldest waiting user message into the chat (Enter again). */
   sendWaiting?: () => void;
   /** Take a waiting message back out of the queue (Esc): `removed` only when

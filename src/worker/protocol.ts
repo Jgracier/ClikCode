@@ -186,8 +186,7 @@ export type WorkerEvent =
    * for a finished background shell -- follows it from here to waiting-stop
    * and shows the prompt as the pending message. */
   | { type: 'waiting-start'; message: string; prompt?: string;
-      /** The turn is the VENDOR's own background work, not one ClikCode started. A window leaves it on
-       * Esc (the work is the vendor's and goes on); Ctrl+C is the explicit Stop. */
+      /** The turn is the vendor's own background work, not one ClikCode started. */
       vendorWork?: true }
   /** The turn is over. `stopped`: it was stopped (Esc or Ctrl+C in any
    * window), so every window ends it as stopped, not finished. */
