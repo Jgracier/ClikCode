@@ -3,7 +3,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PickerOption } from '../harness/prompter.js';
 
-vi.mock('./input-decoder.js', () => ({ takeTerminalKeys: () => () => undefined }));
+let keyHandler: ((key: string) => void) | undefined;
+vi.mock('./input-decoder.js', () => ({ takeTerminalKeys: (onKey: (key: string) => void) => { keyHandler = onKey; return () => undefined; } }));
 vi.mock('./capabilities.js', async (importOriginal) => ({ ...await importOriginal<typeof import('./capabilities.js')>(), reducedMotion: () => false }));
 
 const { runConversationBoard } = await import('./conversation-board.js');
@@ -57,5 +58,35 @@ describe('the board spinner', () => {
     redraw!();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(painted).toBeGreaterThan(3);
+  });
+});
+
+describe('closing the board', () => {
+  /** Opens the board on one conversation, with a host that records what the board asks of the frame. */
+  async function closeBoardWith(key: string, host: Record<string, unknown>): Promise<unknown> {
+    const conversations = (): PickerOption<string>[] => [{ label: 'Fix the bug', value: 'a', group: 'Active 1' }];
+    const closed = runConversationBoard({ paint: () => undefined, setSelecting: () => undefined, select: async () => undefined, ...host } as never, { conversations, commands: [] });
+    await Promise.resolve();
+    keyHandler!(key);
+    return closed;
+  }
+
+  it('leaves its frame for the next paint to replace, when the host can: clearing it showed the conversation being left, bare', async () => {
+    const calls: string[] = [];
+    await closeBoardWith('\u001b[D', { clearFrame: () => calls.push('clear'), keepFrame: () => calls.push('keep') });
+    expect(calls).toEqual(['keep']);
+  });
+
+  it('chooses a conversation the same way, then hands it on', async () => {
+    const calls: string[] = [];
+    const result = await closeBoardWith('\r', { clearFrame: () => calls.push('clear'), keepFrame: () => calls.push('keep') });
+    expect(calls).toEqual(['keep']);
+    expect(result).toEqual({ open: 'a' });
+  });
+
+  it('clears it as before with a host that cannot keep a frame', async () => {
+    const calls: string[] = [];
+    await closeBoardWith('\u001b[D', { clearFrame: () => calls.push('clear') });
+    expect(calls).toEqual(['clear']);
   });
 });

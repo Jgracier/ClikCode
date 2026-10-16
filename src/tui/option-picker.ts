@@ -26,6 +26,12 @@ export interface OptionPickerHost {
     prompt: string, cursor: number, palette?: PaletteLayout,
   ): void;
   clearFrame(): void;
+  /** Leave the picker's last frame on screen for whatever paints next to
+   * replace in one change. Clearing it first shows the screen underneath for
+   * the moment between -- for the conversation board, the conversation being
+   * left (its last rows, no composer) -- which is the chat hopping before the
+   * next one loads. Absent: the frame is cleared. */
+  keepFrame?(): void;
   setSelecting(selecting: boolean): void;
   /** Ctrl+L: the next paint redraws the whole screen, whatever the terminal
    * lost (a mobile resize, a remote redraw). */

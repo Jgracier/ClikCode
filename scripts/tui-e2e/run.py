@@ -366,6 +366,27 @@ SCENARIOS = {
         'watch': [], 
         'final_contains': ['please check the commit'],
     },
+    # Switching chats from the board is ONE change on screen: the board, then the
+    # other conversation with its composer. Closing the board used to paint the
+    # conversation being left (its last rows, no composer) into the freed space, and
+    # the one chosen a moment later -- the composer vanishing and the chat hopping
+    # before the new one loaded. Several switches, then Esc out of the board.
+    'switch-chats-is-one-frame': {
+        'turns': [TWO_BLOCKS, {'blocks': ['Other chat answered.']}],
+        'steps': [
+            ('type', 'please check the commit'), ('wait_for', 'The final commit is live.', 30), ('settle', 2),
+            ('keys', '\x1b[D'), ('settle', 2), ('type', 'another chat'), ('wait_for', 'Other chat answered.', 30), ('settle', 2),
+            ('keys', '\x1b[D'), ('settle', 2), ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'),
+            ('wait_for', 'The final commit is live.', 10), ('settle', 2),
+            # Back on the first chat the cursor starts on its row, below the newer one: Up for the other.
+            ('keys', '\x1b[D'), ('settle', 2), ('keys', '\x1b[A'), ('settle', 0.5), ('keys', '\r'),
+            ('wait_for', 'Other chat answered.', 10), ('settle', 2),
+            ('keys', '\x1b[D'), ('settle', 2), ('keys', '\x1b'), ('settle', 2),
+        ],
+        'watch': [],
+        'stable_handoff': True,
+        'final_contains': ['another chat'],
+    },
     # The board's small print. Empty, it says so. Deleting asks about the
     # chat by its preview (every new one is "Untitled chat"), offers no
     # filter on a two-row list, and says Esc closes -- not "exit", which it
@@ -2575,6 +2596,23 @@ def run(name, spec, entry, keep):
     # ---- Order and state checks over every complete frame ------------------
     def complete_frames():
         return [(i, t, text) for i, (t, text) in enumerate(frames) if frame_complete[i] and typed_at is not None and t >= typed_at]
+    # The board hands the screen over in one change: from the first frame that shows the board
+    # to the next that does not, every complete frame is the board or has a composer (never
+    # the conversation being left, bare), and the composer's rules never change row.
+    if spec.get('stable_handoff'):
+        def board_frame(text): return 'enter open' in text or 'enter start a new chat' in text
+        def rule_rows(text):
+            lines = [line.rstrip() for line in text.split('\n')]
+            return [n for n, line in enumerate(lines) if RULE_ROW.match(line)]
+        seen_board, bare, composer_rows = False, [], set()
+        for i, t, text in complete_frames():
+            rules = rule_rows(text)
+            if len(rules) >= 2: composer_rows.add((rules[-2], rules[-1]))
+            if board_frame(text): seen_board = True; continue
+            if seen_board and len(rules) < 2: bare.append((i, t))
+        if not seen_board: problems.append('stable_handoff: the board was never on screen')
+        if bare: problems.append(f'no composer in {len(bare)} complete frame(s) after the board was shown (the conversation left, bare), first at frame {bare[0][0]} ({bare[0][1]:.2f}s)')
+        if len(composer_rows) > 1: problems.append(f'the composer changed rows: {sorted(composer_rows)}')
     # ('above', 'below'): wherever both are on screen, `above` is higher up.
     for upper, lower in spec.get('always_order', []):
         bad = []
