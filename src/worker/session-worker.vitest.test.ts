@@ -12,7 +12,8 @@ import type { HarnessSession } from '../session/model.js';
 import { forceStoreSession, unforceStoreSession } from '../session/ephemeral.js';
 import { WorkerClient, retireStaleWorkers } from './client.js';
 import { readWorkerRecord, takeConversation, workerIsReachable, writeWorkerRecord } from './registry.js';
-import type { WorkerEvent } from './protocol.js';
+import { connect } from 'node:net';
+import { encodeFrame, FrameDecoder, type ClientCommand, type WorkerEvent } from './protocol.js';
 
 const previousHome = process.env.CLIKCODE_HOME;
 const previousWorkerEntry = process.env.CLIKCODE_WORKER_ENTRY;
@@ -66,7 +67,7 @@ afterEach(async () => {
   root = undefined;
 });
 
-async function isolatedSession(): Promise<HarnessSession> {
+async function isolatedSession(messages?: HarnessSession['messages']): Promise<HarnessSession> {
   root = await mkdtemp(join(tmpdir(), 'clikcode-worker-e2e-'));
   process.env.CLIKCODE_HOME = root;
   const state = await readState();
@@ -74,6 +75,7 @@ async function isolatedSession(): Promise<HarnessSession> {
   const session: HarnessSession = {
     id: randomUUID(), conversationId: randomUUID(), route: 'local', accountId: null, provider: null, model: null,
     effort: 'medium', permissionMode: 'ask', createdAt: now, updatedAt: now, status: 'active',
+    ...(messages ? { messages } : {}),
   };
   state.sessions.push(session);
   // A blank draft is normally process-local. The test launches a separate
@@ -82,6 +84,26 @@ async function isolatedSession(): Promise<HarnessSession> {
   await writeState(state);
   spawnedSessionIds.push(session.id);
   return session;
+}
+
+/** What a worker sends back to a connection that sends `commands` and nothing
+ * else: every event until it closes the connection or `ms` pass. */
+async function exchange(sessionId: string, commands: (token: string) => ClientCommand[], ms = 600): Promise<WorkerEvent[]> {
+  const record = (await readWorkerRecord(sessionId))!;
+  const socket = connect(record.socketPath);
+  await new Promise<void>((resolveConnect) => socket.once('connect', () => resolveConnect()));
+  const events: WorkerEvent[] = [];
+  const frames = new FrameDecoder();
+  const ended = new Promise<void>((resolveEnded) => {
+    socket.on('data', (chunk) => { for (const message of frames.push(chunk)) events.push(message as WorkerEvent); });
+    socket.on('close', () => resolveEnded());
+    socket.on('error', () => resolveEnded());
+    setTimeout(resolveEnded, ms);
+  });
+  for (const command of commands(record.token)) socket.write(encodeFrame(command));
+  await ended;
+  socket.destroy();
+  return events;
 }
 
 /** Waits for the next event of a given type, or throws after a bounded time
@@ -282,6 +304,70 @@ describe('session worker (real spawned process, real socket)', () => {
     rogueSocket.write(encodeFrame({ type: 'attach', token: 'definitely-not-the-real-token' }));
     await rejected;
     rogueSocket.destroy();
+  });
+
+  it('sends a window that reads the saved conversation a snapshot without its messages, and an older window all of it', async () => {
+    const messages = Array.from({ length: 4 }, (_, index) => ({ role: index % 2 === 0 ? 'user' as const : 'assistant' as const, content: `message ${index}` }));
+    const session = await isolatedSession(messages);
+    const first = await WorkerClient.attach(session.id);
+    spawnedClients.push(first);
+    // A window hands its consumers the whole conversation, whichever way it travelled.
+    const initial = await first.initialSnapshot;
+    expect(initial.type === 'snapshot' && initial.session.messages?.map((message) => message.content)).toEqual(['message 0', 'message 1', 'message 2', 'message 3']);
+
+    const [slim] = await exchange(session.id, (token) => [{ type: 'attach', token, readsSaved: true }]);
+    const [whole] = await exchange(session.id, (token) => [{ type: 'attach', token }]);
+    expect(slim).toMatchObject({ type: 'snapshot', saved: { count: 4 } });
+    expect(slim?.type === 'snapshot' && slim.session.messages).toBeUndefined();
+    expect(whole?.type === 'snapshot' && whole.session.messages).toHaveLength(4);
+    expect(whole?.type === 'snapshot' && whole.saved).toBeUndefined();
+  });
+
+  it('attaches to a conversation too large to send whole, and stays attached when another snapshot follows', async () => {
+    // Past the worker's 16 MiB unread limit, which is what used to cut a window off.
+    const large = Array.from({ length: 20 }, (_, index) => ({ role: index % 2 === 0 ? 'user' as const : 'assistant' as const, content: `${index}:${'x'.repeat(1_000_000)}` }));
+    const session = await isolatedSession(large);
+    const client = await WorkerClient.attach(session.id);
+    spawnedClients.push(client);
+    const initial = await client.initialSnapshot;
+    expect(initial.type === 'snapshot' && initial.session.messages).toHaveLength(20);
+
+    let closed = false;
+    client.on('close', () => { closed = true; });
+    const next = nextEvent(client, 'snapshot', 15_000);
+    client.send({ type: 'refresh' });
+    const again = await next;
+    expect(again.type === 'snapshot' && again.session.messages).toHaveLength(20);
+    expect(closed).toBe(false);
+  }, 60_000);
+
+  it('answers a retire question on its own to the asker, with no snapshot, and an idle worker goes', async () => {
+    const session = await isolatedSession();
+    const client = await WorkerClient.attach(session.id);
+    spawnedClients.push(client);
+    await client.initialSnapshot;
+    const record = (await readWorkerRecord(session.id))!;
+    client.close();
+
+    const events = await exchange(session.id, (token) => [{ type: 'retire', token }], 3_000);
+    // Answered to the asker directly, and never with a snapshot. A worker that has only just started is still
+    // reading its queue and says so (`retire-declined`) -- which also marks it to go as soon as it is not.
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.every((event) => event.type === 'shutdown' || event.type === 'retire-declined')).toBe(true);
+    for (let waited = 0; waited < 5_000 && await workerIsReachable(record.socketPath, 200); waited += 100) await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(await workerIsReachable(record.socketPath, 200)).toBe(false);
+  }, 20_000);
+
+  it('rejects a retire question with the wrong token, and the worker stays', async () => {
+    const session = await isolatedSession();
+    const client = await WorkerClient.attach(session.id);
+    spawnedClients.push(client);
+    await client.initialSnapshot;
+    const record = (await readWorkerRecord(session.id))!;
+
+    const events = await exchange(session.id, () => [{ type: 'retire', token: 'definitely-not-the-real-token' }]);
+    expect(events.map((event) => event.type)).toEqual(['attach-rejected']);
+    expect(await workerIsReachable(record.socketPath, 500)).toBe(true);
   });
 
   it('broadcasts a render() to every attached client, not just the most recent one', async () => {

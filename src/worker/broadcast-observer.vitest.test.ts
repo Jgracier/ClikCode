@@ -1,7 +1,7 @@
 import type { Socket } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import { MarkSequencer } from '../turn/turn-marks';
-import { BroadcastObserver } from './broadcast-observer';
+import { BroadcastObserver, windowReadsSaved } from './broadcast-observer';
 
 function fakeClient(): { socket: Socket; frames: Record<string, unknown>[] } {
   const frames: Record<string, unknown>[] = [];
@@ -511,5 +511,47 @@ describe('a snapshot and the journal it was read against', () => {
     // Read after it: the finished turn, which must not also be drawn live.
     observer.snapshotFor(window.socket, folded);
     expect(window.frames.at(-1)).not.toHaveProperty('live');
+  });
+});
+
+describe('a snapshot for a window that reads the saved conversation itself', () => {
+  const conversation = { id: 's', model: 'm', messages: [{ role: 'user', content: 'a' }, { role: 'assistant', content: 'b' }, { role: 'user', content: 'c' }] };
+
+  it('leaves the messages out and says how many there were, to that window only', () => {
+    const observer = new BroadcastObserver();
+    const reads = fakeClient();
+    const older = fakeClient();
+    windowReadsSaved(reads.socket);
+    observer.attach(reads.socket);
+    observer.attach(older.socket);
+    observer.render(conversation as never);
+    const slim = reads.frames[0] as { session: Record<string, unknown>; saved?: { count: number } };
+    expect(slim.session.messages).toBeUndefined();
+    expect(slim.session).toMatchObject({ id: 's', model: 'm' });
+    expect(slim.saved).toEqual({ count: 3 });
+    // An older window is sent all of it, as before.
+    const whole = older.frames[0] as { session: { messages: unknown[] }; saved?: unknown };
+    expect(whole.session.messages).toHaveLength(3);
+    expect(whole.saved).toBeUndefined();
+  });
+
+  it('is not the size of the conversation, which was what got a healthy window dropped', () => {
+    const observer = new BroadcastObserver();
+    const reads = fakeClient();
+    windowReadsSaved(reads.socket);
+    observer.attach(reads.socket);
+    const large = { id: 's', messages: Array.from({ length: 20 }, () => ({ role: 'user', content: 'x'.repeat(1_000_000) })) };
+    observer.render(large as never);
+    expect(JSON.stringify(reads.frames[0]).length).toBeLessThan(1_000);
+  });
+
+  it('sends a conversation with no messages as it is', () => {
+    const observer = new BroadcastObserver();
+    const reads = fakeClient();
+    windowReadsSaved(reads.socket);
+    observer.attach(reads.socket);
+    observer.render({ id: 's' } as never);
+    expect(reads.frames[0]).toMatchObject({ type: 'snapshot', session: { id: 's' } });
+    expect((reads.frames[0] as { saved?: unknown }).saved).toBeUndefined();
   });
 });

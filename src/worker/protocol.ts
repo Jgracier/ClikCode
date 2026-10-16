@@ -43,7 +43,12 @@ export type ClientCommand =
    * boundary against a local attacker who could read the record file
    * directly anyway -- just belt-and-suspenders against a stale socket path
    * some other process's connection happened to land on. */
-  | { type: 'attach'; token: string }
+  /** `readsSaved`: this window reads the saved conversation from disk itself,
+   * so its snapshots leave the messages out and carry `saved` instead. The
+   * worker already read that file; sending it all again scaled every attach,
+   * submit and refresh with the length of the conversation. Absent from an
+   * older window, which is sent the whole conversation as before. */
+  | { type: 'attach'; token: string; readsSaved?: true }
   /** `turnId` and `submittedAt` (the window's wall clock at Enter) carry the
    * turn's latency marks across the two processes (runtime/turn-latency.ts);
    * a client without them gets a turn the worker times from its own start. */
@@ -95,8 +100,11 @@ export type ClientCommand =
    * already begun is that turn now, and stays. */
   | { type: 'unqueue'; id: string }
   /** Sent by a client on a different build. The worker exits if it is idle
-   * and otherwise answers `retire-declined` and exits once it is. */
-  | { type: 'retire' };
+   * and otherwise answers `retire-declined` and exits once it is. With the
+   * worker's `token` it is a question on its own: no attach, no snapshot, and
+   * the asker is told `shutdown` or `retire-declined` directly. Without one
+   * (an older client) it is answered only after an attach. */
+  | { type: 'retire'; token?: string };
 
 /** One tool row of the running turn, and how much of its answer had streamed
  * when it happened -- where it sits between the answer's paragraphs. The same
@@ -152,7 +160,10 @@ export type WorkerEvent =
   /** `live` is present exactly while a turn runs: a snapshot without it says
    * nothing is running, including the one that closes a turn. */
   /** `stopped`: the snapshot that closes a stopped turn (see waiting-stop). */
-  | { type: 'snapshot'; session: HarnessSession; account?: string; live?: LiveTurn; stopped?: true }
+  /** `saved`: sent to a window that `readsSaved`. `session` then has no
+   * `messages`; `saved.count` is how many the worker saw, so the window reads
+   * exactly that many from the transcript and nothing newer. */
+  | { type: 'snapshot'; session: HarnessSession; account?: string; live?: LiveTurn; stopped?: true; saved?: { count: number } }
   | { type: 'delta'; text: string; mode: 'append' | 'replace' }
   | { type: 'activity'; event: HarnessActivityEvent }
   /** A line of the turn's own transcript that is not a tool call: an account
