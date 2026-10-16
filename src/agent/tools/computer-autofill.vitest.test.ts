@@ -23,7 +23,7 @@ it('triggers the installed password manager from the browser without returning t
   expect(result.output).not.toContain(mock.password);
   expect(mock.front).toHaveBeenCalled();
   expect(mock.driver).toHaveBeenCalledWith('hotkey', {
-    scope: 'desktop', target: { kind: 'desktop', display_id: 'primary' }, keys: ['ctrl', 'shift', 'l'],
+    target: { kind: 'desktop', display_id: 'primary' }, keys: ['ctrl', 'shift', 'l'],
   }, undefined);
 });
 

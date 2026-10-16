@@ -99,7 +99,7 @@ type DesktopArgs = {
 export function computerDesktopAction(args: DesktopArgs): { name: string; args: Record<string, unknown> } {
   if (args.action === 'observe') return { name: 'get_desktop_state', args: {} };
   const target = { kind: 'desktop', display_id: 'primary' };
-  const base = { scope: 'desktop', target };
+  const base = { target };
   const at = Number.isFinite(args.x) && Number.isFinite(args.y) && args.x! >= 0 && args.y! >= 0
     ? { x: args.x, y: args.y } : undefined;
   switch (args.action) {

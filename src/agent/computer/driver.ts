@@ -9,7 +9,7 @@ function start(): Promise<McpClient> {
   if (connected && !connected.closed) return Promise.resolve(connected);
   if (pending) return pending;
   pending = McpClient.connect(
-    { name: 'clikcode-computer', transport: 'stdio', command: 'cua-driver', args: ['mcp'], env: {} },
+    { name: 'clikcode-computer', transport: 'stdio', command: 'cua-driver', args: ['mcp', '--direct'], env: {} },
     { timeoutMs: 15_000 },
   ).then((client) => {
     connected = client;
