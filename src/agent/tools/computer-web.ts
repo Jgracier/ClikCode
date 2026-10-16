@@ -82,7 +82,7 @@ export const computerWebTool = defineTool<WebArgs>({
             if (!await password.count()) throw new Error('No visible password field on this page.');
             await page.bringToFront();
             const sent = await callComputerDriver('hotkey', {
-              scope: 'desktop', target: { kind: 'desktop', display_id: 'primary' }, keys: ['ctrl', 'shift', 'l'],
+              target: { kind: 'desktop', display_id: 'primary' }, keys: ['ctrl', 'shift', 'l'],
             }, ctx.signal);
             if (sent.isError) throw new Error('Could not trigger Bitwarden in the ClikCode browser. Use the phone handoff.');
             await page.waitForTimeout(750);

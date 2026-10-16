@@ -23,7 +23,7 @@ describe('computer tool boundary', () => {
   it('can observe and act on the primary desktop after computer use is enabled', () => {
     expect(computerDesktopAction({ action: 'observe' })).toEqual({ name: 'get_desktop_state', args: {} });
     expect(computerDesktopAction({ action: 'click', x: 42, y: 7 })).toEqual({
-      name: 'click', args: { scope: 'desktop', target: { kind: 'desktop', display_id: 'primary' }, x: 42, y: 7 },
+      name: 'click', args: { target: { kind: 'desktop', display_id: 'primary' }, x: 42, y: 7 },
     });
     expect(() => computerDesktopAction({ action: 'click' })).toThrow('x and y');
     expect(computerDesktopAction({ action: 'hotkey', keys: ['ctrl', 'l'] }).name).toBe('hotkey');
