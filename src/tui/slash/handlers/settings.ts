@@ -61,7 +61,7 @@ export const settingsHandlers = {
     }
     const enabled = await computerEnabled(stateDirectory());
     return emitHarnessOutput({ panel: 'settings-updated', text: enabled
-      ? 'Computer use is on. The next agent turn can use the browser and desktop.'
+      ? 'Computer use is on. The agent can open URLs and control the desktop when a task needs it.'
       : 'Computer use is off. New computer actions are refused.' });
   },
   // Global, not this chat's: how mid-turn messages go is the user's habit.

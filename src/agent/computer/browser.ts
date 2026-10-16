@@ -56,11 +56,21 @@ async function browserFor(stateDir: string): Promise<RunningBrowser> {
   return opening;
 }
 
-export async function computerPage(stateDir: string): Promise<Page> {
+export async function openComputerPage(stateDir: string): Promise<Page> {
   const { context } = await browserFor(stateDir);
   // OAuth and sign-in flows often open a new tab. Follow the newest live page
   // so the next observation sees the page the previous click opened.
   return context.pages().filter((page) => !page.isClosed()).at(-1) ?? context.newPage();
+}
+
+/** All non-open browser actions require the agent to have opened it first. */
+export async function computerPage(stateDir: string): Promise<Page> {
+  const opening = running.get(path.join(stateDir, 'computer', 'chrome'));
+  if (!opening) throw new Error('ClikCode browser is closed. Open a URL with computer_web first.');
+  const { context } = await opening;
+  const page = context.pages().filter((candidate) => !candidate.isClosed()).at(-1);
+  if (!page) throw new Error('ClikCode browser has no open tab. Open a URL with computer_web first.');
+  return page;
 }
 
 /** Close the browser when the user disables computer use. This also releases

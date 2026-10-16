@@ -1,6 +1,5 @@
-/** Small, window-scoped computer tools. Cua validates exact targets and stale
- * element handles; these wrappers deliberately expose no desktop-wide input,
- * clipboard, process termination or existing-browser-profile attachment. */
+/** Local computer tools through Cua. The user enables the capability once;
+ * the agent chooses window targeting or the primary desktop per action. */
 import { defineTool, type ToolDefinition } from '../tool-contract.js';
 import { callComputerDriver } from '../computer/driver.js';
 import { formatMcpResult } from '../mcp/tools.js';
@@ -90,4 +89,61 @@ export const computerActTool = defineTool<ComputerAction>({
   },
 });
 
-export const computerTools: ToolDefinition[] = [computerWindowsTool, computerObserveTool, computerActTool];
+type DesktopArgs = {
+  action: 'observe' | 'click' | 'type' | 'key' | 'hotkey' | 'scroll';
+  x?: number; y?: number; text?: string; key?: string; keys?: string[];
+  direction?: 'up' | 'down' | 'left' | 'right'; amount?: number;
+};
+
+/** Desktop coordinates come from get_desktop_state's current screenshot. */
+export function computerDesktopAction(args: DesktopArgs): { name: string; args: Record<string, unknown> } {
+  if (args.action === 'observe') return { name: 'get_desktop_state', args: {} };
+  const target = { kind: 'desktop', display_id: 'primary' };
+  const base = { scope: 'desktop', target };
+  const at = Number.isFinite(args.x) && Number.isFinite(args.y) && args.x! >= 0 && args.y! >= 0
+    ? { x: args.x, y: args.y } : undefined;
+  switch (args.action) {
+    case 'click':
+      if (!at) throw new Error('Desktop click needs x and y from a fresh desktop observation.');
+      return { name: 'click', args: { ...base, ...at } };
+    case 'type':
+      if (typeof args.text !== 'string' || args.text.length > 20_000) throw new Error('Desktop type needs text of at most 20,000 characters.');
+      return { name: 'type_text', args: { ...base, ...(at ?? {}), text: args.text } };
+    case 'key':
+      if (!args.key || !/^[A-Za-z0-9_-]{1,30}$/.test(args.key)) throw new Error('Desktop key needs one simple key.');
+      return { name: 'press_key', args: { ...base, key: args.key } };
+    case 'hotkey':
+      if (!Array.isArray(args.keys) || args.keys.length < 2 || args.keys.length > 4 || args.keys.some((key) => !/^[a-z0-9_-]{1,20}$/i.test(key))) throw new Error('Desktop hotkey needs two to four simple keys.');
+      return { name: 'hotkey', args: { ...base, keys: args.keys } };
+    case 'scroll':
+      if (!args.direction || !['up', 'down', 'left', 'right'].includes(args.direction)) throw new Error('Desktop scroll needs a direction.');
+      return { name: 'scroll', args: { ...base, ...(at ?? {}), direction: args.direction, amount: Math.min(10, Math.max(1, Math.floor(args.amount ?? 1))) } };
+    default: throw new Error('Unknown desktop action.');
+  }
+}
+
+export const computerDesktopTool = defineTool<DesktopArgs>({
+  name: 'computer_desktop', class: 'exec',
+  description: 'Observe the primary desktop screenshot, then click, type, press keys, or scroll on the actual computer. Use this when a task needs desktop control rather than page-level browser actions. Desktop coordinates must come from a fresh observation.',
+  parameters: { type: 'object', additionalProperties: false, required: ['action'], properties: {
+    action: { type: 'string', enum: ['observe', 'click', 'type', 'key', 'hotkey', 'scroll'] },
+    x: { type: 'number', description: 'Desktop screenshot x coordinate.' },
+    y: { type: 'number', description: 'Desktop screenshot y coordinate.' },
+    text: { type: 'string', description: 'Text to type. Never include credentials.' },
+    key: { type: 'string', description: 'One key, such as Escape or Enter.' },
+    keys: { type: 'array', items: { type: 'string' }, description: 'Hotkey such as ["ctrl", "l"].' },
+    direction: { type: 'string', enum: ['up', 'down', 'left', 'right'] },
+    amount: { type: 'integer', minimum: 1, maximum: 10 },
+  } },
+  label: (args) => `Desktop ${args.action}`,
+  describe: async (args) => `Primary desktop: ${args.action}${args.action === 'type' ? ` (${args.text?.length ?? 0} characters)` : ''}.`,
+  async run(args, ctx) {
+    if (!(await computerAllowed(ctx.stateDir))) return { output: 'Computer use is off. Run `clikcode computer on` to enable it.', isError: true };
+    try {
+      const request = computerDesktopAction(args);
+      return await call(request.name, request.args, args.action === 'observe' && ctx.acceptsImages === true, ctx.signal);
+    } catch (error) { return { output: error instanceof Error ? error.message : String(error), isError: true }; }
+  },
+});
+
+export const computerTools: ToolDefinition[] = [computerDesktopTool, computerWindowsTool, computerObserveTool, computerActTool];

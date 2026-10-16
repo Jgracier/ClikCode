@@ -1,9 +1,11 @@
 # Computer use
 
 ClikCode's own agent can use a persistent Chrome browser through Playwright and
-local desktop windows through Cua Driver. The feature is off until the user
+the primary desktop through Cua Driver. The feature is off until the user
 runs `/computer on` in the terminal or VS Code panel, or `clikcode computer on`
-in a shell. `/computer off` stops new actions and closes ClikCode's browser.
+in a shell. This enables the capability; the agent opens a URL in one action
+when its task needs a browser, can use the desktop directly, and can close its
+browser when finished. `/computer off` stops new actions and closes the browser.
 
 The browser has its own profile under ClikCode's state directory. It does not
 attach to a personal Chrome profile. Existing signed-in sites in that profile
