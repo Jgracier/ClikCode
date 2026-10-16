@@ -60,6 +60,10 @@ async function stageClikcode() {
         resolveDir: repo, sourcefile: `${name}.entry.js`,
       },
       bundle: true, platform: 'node', format: 'esm', target: 'node22', outfile: join(dir, 'index.mjs'), logLevel: 'error',
+      // playwright-core requires chromium-bidi's internals lazily, and only to speak the BiDi protocol, which
+      // ClikCode's computer tools do not (they drive Chrome over CDP). They cannot be resolved, so they stay
+      // requires: a run that did reach BiDi would say which module is missing, rather than packaging failing.
+      external: ['chromium-bidi/*'],
       // A bundled CommonJS package that requires a Node built-in needs a `require` in an ES module.
       banner: { js: "import { createRequire as __clikcodeCreateRequire } from 'node:module';\nconst require = __clikcodeCreateRequire(import.meta.url);" },
     });
