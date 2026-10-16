@@ -17,12 +17,14 @@ export async function privateLoginPage(page: Page): Promise<boolean> {
 }
 
 export async function privateBrowserActive(stateDir: string): Promise<boolean> {
+  let page: Page;
+  try { page = await computerPage(stateDir); }
+  catch { return false; } // No ClikCode browser is open.
   try {
-    const page = await computerPage(stateDir);
     for (const candidate of page.context().pages()) {
       if (!candidate.isClosed() && await privateLoginPage(candidate)) return true;
     }
     return false;
   }
-  catch { return false; }
+  catch { return true; } // A running browser that cannot be inspected stays private.
 }
