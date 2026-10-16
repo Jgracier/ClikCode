@@ -7,7 +7,7 @@ import { gatewayModels } from '../gateway/models.js';
 import { routeMcpServers } from '../gateway/mcp.js';
 import { prepareMcp, releaseMcp } from '../agent/mcp/manager.js';
 import { stateDirectory } from '../session/store/paths.js';
-import { sendEvent } from './broadcast-observer.js';
+import { sendEvent, windowReadsSaved } from './broadcast-observer.js';
 import type { ClientCommand } from './protocol.js';
 import { createAgentsCommand } from './worker-agents.js';
 import { createLiveCommands } from './worker-live-commands.js';
@@ -37,6 +37,8 @@ export function createCommandHandler(ctx: WorkerContext) {
       socket.end();
       return;
     }
+    // Before any snapshot: the first one is already the slim kind.
+    if (command.readsSaved) windowReadsSaved(socket);
     // Read first, then join the broadcast and send the snapshot in the same
     // tick. Joined before the read, the window was sent every delta that
     // streamed during it AND a snapshot whose text already held them, and
@@ -57,8 +59,15 @@ export function createCommandHandler(ctx: WorkerContext) {
     return;
   };
 
-  /** `retire`: the worker decides, not the window asking. */
-  const handleRetire = async (socket: Socket): Promise<void> => {
+  /** `retire`: the worker decides, not the window asking. `presented` is the
+   * token of a question asked on its own (no attach): checked here, and the
+   * answer goes to the asker directly, because it is not in the broadcast. */
+  const handleRetire = async (socket: Socket, presented?: string): Promise<void> => {
+    if (presented !== undefined && presented !== token) {
+      sendEvent(socket, { type: 'attach-rejected', reason: 'stale or invalid token' });
+      socket.end();
+      return;
+    }
     // The worker decides, not the window asking: only it knows whether it
     // is in the middle of something. A window used to decide from the
     // state file and SIGTERM it -- killing another window's turn whenever
@@ -69,12 +78,15 @@ export function createCommandHandler(ctx: WorkerContext) {
       sendEvent(socket, { type: 'retire-declined', reason: blocker });
       return;
     }
+    // Told before it goes, so an asker that never attached still hears it.
+    if (presented !== undefined) sendEvent(socket, { type: 'shutdown', reason: 'replaced by a newer ClikCode build' });
     void ctx.shutdown('replaced by a newer ClikCode build');
     return;
   };
 
   return async (socket: Socket, command: ClientCommand, connection: ConnectionState): Promise<void> => {
     if (command.type === 'attach') { await handleAttach(socket, command, connection); return; }
+    if (command.type === 'retire' && command.token !== undefined) { await handleRetire(socket, command.token); return; }
     if (connection.attaching) await connection.attaching.catch(() => undefined);
     if (!connection.attached) return;
     if (command.type === 'submit') {

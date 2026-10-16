@@ -14,6 +14,7 @@ import { conversationHolder, currentWorkerBuild, listWorkerRecords, readWorkerRe
 import { processAlive } from '../harness/transport/process-group.js';
 import { ensureSessionOnDisk } from '../session/blank.js';
 import { encodeFrame, FrameDecoder, type ClientCommand, type WorkerEvent } from './protocol.js';
+import { withSavedConversation } from './saved-conversation.js';
 
 const SPAWN_TIMEOUT_MS = 5_000;
 /** A new worker is looked for this often: the first message of a
@@ -118,7 +119,11 @@ const ATTACH_ANSWER_MS = 30_000;
 /** Asks a worker on another build to step down. It knows whether it is in
  * the middle of something and the asking window does not -- so it decides:
  * `retired` (it is shutting down), `declined` (busy; it goes once it is not),
- * or `unanswered` (no answer in time: it is kept). */
+ * or `unanswered` (nothing said in time, or the connection ended with nothing
+ * said: what became of the worker is then looked at, not guessed).
+ *
+ * A question on its own: it is not an attach, so the worker neither reads the
+ * conversation nor sends a snapshot of it to a window that would throw it away. */
 function askToRetire(record: WorkerRuntimeRecord): Promise<'retired' | 'declined' | 'unanswered'> {
   return new Promise((resolveAnswer) => {
     const socket = connect(record.socketPath);
@@ -133,8 +138,7 @@ function askToRetire(record: WorkerRuntimeRecord): Promise<'retired' | 'declined
     };
     const timer = setTimeout(() => answer('unanswered'), RETIRE_ANSWER_MS);
     socket.on('connect', () => {
-      socket.write(encodeFrame({ type: 'attach', token: record.token } satisfies ClientCommand));
-      socket.write(encodeFrame({ type: 'retire' } satisfies ClientCommand));
+      socket.write(encodeFrame({ type: 'retire', token: record.token } satisfies ClientCommand));
     });
     socket.on('data', (chunk) => {
       for (const message of frames.push(chunk) as WorkerEvent[]) {
@@ -143,8 +147,9 @@ function askToRetire(record: WorkerRuntimeRecord): Promise<'retired' | 'declined
         else if (message.type === 'shutdown') answer('retired');
       }
     });
-    socket.on('close', () => answer('retired'));
-    socket.on('error', () => answer('retired'));
+    // A connection that ends says nothing about the worker: only what it said does.
+    socket.on('close', () => answer('unanswered'));
+    socket.on('error', () => answer('unanswered'));
   });
 }
 
@@ -169,8 +174,9 @@ async function retireIfStale(record: WorkerRuntimeRecord): Promise<WorkerRuntime
   const answer = await askToRetire(record);
   if (answer === 'declined') return record;
   if (answer === 'retired') return (await socketReleased(record)) ? undefined : record;
-  // No answer: kept. A window never stops a worker it cannot ask.
-  return record;
+  // No answer: kept. A window never stops a worker it cannot ask -- but one
+  // that is no longer there (it went while being asked) is not attached to.
+  return (await recordIsLive(record)) ? record : undefined;
 }
 
 /** Asks every worker still running a different build to step down. Idle ones
@@ -210,6 +216,14 @@ async function recordIsLive(record: WorkerRuntimeRecord): Promise<boolean> {
   return processAlive(record.pid) && workerIsReachable(record.socketPath);
 }
 
+/** The connection ended before the worker said anything. */
+class ClosedBeforeAnswer extends Error {
+  constructor() {
+    super('the conversation\'s worker closed the connection before it answered');
+    this.name = 'ClosedBeforeAnswer';
+  }
+}
+
 /** One connection to one session's worker. `send` is fire-and-forget over the
  * socket; events arrive through `.on('event', ...)` exactly as a terminal
  * used to receive them via direct method calls on TERMINAL.active -- the
@@ -232,32 +246,57 @@ export class WorkerClient extends EventEmitter {
   readonly initialSnapshot: Promise<Extract<WorkerEvent, { type: 'snapshot' | 'attach-rejected' }>>;
   /** The same event, readable synchronously once attach() has resolved. */
   initialEvent: Extract<WorkerEvent, { type: 'snapshot' | 'attach-rejected' }> | undefined;
+  /** Events held behind a snapshot still being completed from disk, so none
+   * overtakes it: delivery stays in the order the worker sent them. */
+  private behind = 0;
+  private order: Promise<void> = Promise.resolve();
 
   private constructor(private readonly socket: Socket) {
     super();
     let resolveInitial!: (event: Extract<WorkerEvent, { type: 'snapshot' | 'attach-rejected' }>) => void;
+    let rejectInitial!: (error: Error) => void;
     let sawInitial = false;
-    this.initialSnapshot = new Promise((resolve) => { resolveInitial = resolve; });
+    this.initialSnapshot = new Promise((resolve, reject) => { resolveInitial = resolve; rejectInitial = reject; });
+    // Settled by an attach that is no longer waiting on it (timed out, given up): not an unhandled rejection.
+    this.initialSnapshot.catch(() => undefined);
+    const deliver = (event: WorkerEvent): void => {
+      if (!sawInitial && (event.type === 'snapshot' || event.type === 'attach-rejected')) {
+        sawInitial = true;
+        this.initialEvent = event;
+        resolveInitial(event);
+        return;
+      }
+      // Anything before the snapshot is already in it. A worker from before
+      // attach was atomic joined a window to its broadcast and then read
+      // the conversation, so what streamed during that read came first AND
+      // inside the snapshot's text; replayed, it was drawn twice.
+      if (!sawInitial) return;
+      // Events that arrive in the same chunk as the snapshot -- an approval
+      // re-offered on attach, a turn's first delta -- come before attach()
+      // has even returned, so before anyone could listen. Held until the
+      // first listener, instead of emitted to nobody.
+      if (this.early) this.early.push(event);
+      else this.emit('event', event);
+    };
     socket.on('data', (chunk) => {
       for (const message of this.frames.push(chunk)) {
         const event = message as WorkerEvent;
-        if (!sawInitial && (event.type === 'snapshot' || event.type === 'attach-rejected')) {
-          sawInitial = true;
-          this.initialEvent = event;
-          resolveInitial(event);
-          continue;
-        }
-        // Anything before the snapshot is already in it. A worker from before
-        // attach was atomic joined a window to its broadcast and then read
-        // the conversation, so what streamed during that read came first AND
-        // inside the snapshot's text; replayed, it was drawn twice.
-        if (!sawInitial) continue;
-        // Events that arrive in the same chunk as the snapshot -- an approval
-        // re-offered on attach, a turn's first delta -- come before attach()
-        // has even returned, so before anyone could listen. Held until the
-        // first listener, instead of emitted to nobody.
-        if (this.early) this.early.push(event);
-        else this.emit('event', event);
+        // The saved messages of a slim snapshot are read from disk first; what
+        // the worker sent after it waits for them.
+        if (this.behind === 0 && !(event.type === 'snapshot' && event.saved)) { deliver(event); continue; }
+        this.behind += 1;
+        this.order = this.order.then(async () => {
+          try {
+            deliver(event.type === 'snapshot' ? await withSavedConversation(event) : event);
+          } catch (error) {
+            const reason = error instanceof Error ? error : new Error(String(error));
+            lifecycle('client.worker.snapshot-unread', { message: reason.message });
+            // The first one failing is the attach failing; a later one is dropped, and the next brings the conversation up to date.
+            if (!sawInitial) rejectInitial(reason);
+          } finally {
+            this.behind -= 1;
+          }
+        });
       }
     });
     this.on('newListener', (name) => {
@@ -266,7 +305,15 @@ export class WorkerClient extends EventEmitter {
       this.early = undefined;
       queueMicrotask(() => { for (const event of held) this.emit('event', event); });
     });
-    socket.on('close', () => { lifecycle('client.worker.closed'); this.emit('close'); });
+    socket.on('close', () => {
+      lifecycle('client.worker.closed');
+      const ended = (): void => {
+        // Closed before it ever answered: the attach has failed now, not when a timer says so.
+        if (!sawInitial) rejectInitial(new ClosedBeforeAnswer());
+        this.emit('close');
+      };
+      if (this.behind === 0) ended(); else void this.order.then(ended);
+    });
   }
 
   static async attach(sessionId: string): Promise<WorkerClient> {
@@ -286,7 +333,19 @@ export class WorkerClient extends EventEmitter {
     return record ? WorkerClient.connectTo(record) : undefined;
   }
 
+  /** One reconnect, and only for a connection lost before the worker answered
+   * (the worker is still there to be asked again); any other failure is the
+   * answer. */
   private static async connectTo(record: WorkerRuntimeRecord): Promise<WorkerClient> {
+    try {
+      return await WorkerClient.connectOnce(record);
+    } catch (error) {
+      if (!(error instanceof ClosedBeforeAnswer)) throw error;
+      return WorkerClient.connectOnce(record);
+    }
+  }
+
+  private static async connectOnce(record: WorkerRuntimeRecord): Promise<WorkerClient> {
     const socket = await new Promise<Socket>((resolveSocket, rejectSocket) => {
       const candidate = connect(record.socketPath);
       candidate.once('connect', () => resolveSocket(candidate));
@@ -294,7 +353,8 @@ export class WorkerClient extends EventEmitter {
     });
     const client = new WorkerClient(socket);
     lifecycle('client.worker.connect', { worker: record.sessionId, workerPid: record.pid });
-    client.send({ type: 'attach', token: record.token });
+    // This window reads the saved conversation itself (saved-conversation.ts).
+    client.send({ type: 'attach', token: record.token, readsSaved: true });
     // A worker that took the connection and says nothing is not waited on for ever.
     const initial = await Promise.race([
       client.initialSnapshot,

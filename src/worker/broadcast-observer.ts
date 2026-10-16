@@ -37,11 +37,30 @@ const LIVE_THOUGHT_CHARS = 1000;
  * gets then is whole: nothing is lost by dropping what it did not read. */
 const MAX_UNREAD_BYTES = 16 * 1024 * 1024;
 
+/** Windows that read the saved conversation from disk themselves (attach's
+ * `readsSaved`). The worker has just read the same file, so a snapshot sent
+ * them the whole conversation a second time -- the size of the conversation,
+ * on every attach, submit, refresh and turn end, and past MAX_UNREAD_BYTES it
+ * was itself what got a healthy window dropped. */
+const readsSaved = new WeakSet<Socket>();
+
+export function windowReadsSaved(socket: Socket): void {
+  readsSaved.add(socket);
+}
+
+/** The event as this window is sent it: a snapshot for a window that reads the
+ * saved conversation leaves the messages out, saying how many there were. */
+function forWindow(socket: Socket, event: WorkerEvent): WorkerEvent {
+  if (event.type !== 'snapshot' || !event.session.messages || !readsSaved.has(socket)) return event;
+  const { messages, ...rest } = event.session;
+  return { ...event, session: rest as HarnessSession, saved: { count: messages.length } };
+}
+
 /** Writes one event to one window, unless that window is too far behind. */
 export function sendEvent(socket: Socket, event: WorkerEvent): void {
   if (socket.destroyed) return;
   if (socket.writableLength > MAX_UNREAD_BYTES) { socket.destroy(); return; }
-  socket.write(encodeFrame(event));
+  socket.write(encodeFrame(forWindow(socket, event)));
 }
 
 /** Where a request was asked, and what it was about: its settled row goes
