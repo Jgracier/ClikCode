@@ -257,6 +257,7 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
     effort: async () => args ? viaHeadless(text) : interactiveEffortPicker(rl, id),
     permissions: async () => args ? viaHeadless(text) : interactivePermissionPicker(rl, id),
     sandbox: async () => viaHeadless(text),
+    computer: async () => viaHeadless(text),
     send: async () => {
       if (args) return viaHeadless(text);
       // Two rows, the current one marked: what a message typed while a turn

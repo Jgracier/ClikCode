@@ -8,6 +8,9 @@ import { parseSendMode, sendModeOf, SEND_MODE_DETAIL, SEND_MODES } from '../../.
 import { sessionPermissionModes, setSessionHarnessOption } from '../../../session/options.js';
 import type { SlashHandlerKey } from '../registry.js';
 import { parseSandboxMode, sandboxModeText, sessionSandboxMode } from '../../../agent/sandbox.js';
+import { computerEnabled, setComputerEnabled } from '../../../agent/computer/settings.js';
+import { stateDirectory } from '../../../session/store/paths.js';
+import { closeComputerBrowser } from '../../../agent/computer/browser.js';
 import type { AiHarnessPermissionMode } from '../../../harness/definition.js';
 import { applyClikCodeAgentSessionPolicy, applyFreshLocalSessionPolicy } from '../../../commands/ai/sessions.js';
 import { aiSettingsClearProvider, aiSettingsSetGlobal, aiSettingsSetProvider } from '../../../commands/ai/settings.js';
@@ -47,6 +50,19 @@ export const settingsHandlers = {
     if (mode === 'off') session.sandbox = 'off';
     else delete session.sandbox;
     return saveSettings(state, session);
+  },
+  computer: async ({ session, words }) => {
+    if (!isClikCodeAgent(session)) throw new Error('Computer use is available in ClikCode’s own agent.');
+    const value = words[0]?.toLowerCase();
+    if (words.length > 1 || (value && value !== 'on' && value !== 'off')) throw new Error('usage: /computer [on|off]');
+    if (value) {
+      await setComputerEnabled(stateDirectory(), value === 'on');
+      if (value === 'off') await closeComputerBrowser(stateDirectory());
+    }
+    const enabled = await computerEnabled(stateDirectory());
+    return emitHarnessOutput({ panel: 'settings-updated', text: enabled
+      ? 'Computer use is on. The next agent turn can use the browser and desktop.'
+      : 'Computer use is off. New computer actions are refused.' });
   },
   // Global, not this chat's: how mid-turn messages go is the user's habit.
   // The worker reads it as each message arrives (session-worker.ts).

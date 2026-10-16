@@ -43,6 +43,10 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
       emitHarnessOutput(searchResultsPayload(result));
     });
   program.command('doctor').description('Inspect installed harness versions and centralized capabilities').action(aiDoctor);
+  const computer = program.command('computer').description('Control the local browser and desktop from ClikCode’s own agent');
+  computer.command('status').description('Show whether computer use is on').action(async () => (await import('../commands/computer.js')).computerStatus());
+  computer.command('on').description('Make computer use available for new turns').action(async () => (await import('../commands/computer.js')).computerSetEnabled(true));
+  computer.command('off').description('Stop offering computer tools in new turns').action(async () => (await import('../commands/computer.js')).computerSetEnabled(false));
   program.command('logs').description('What every ClikCode window, worker and editor bridge did, in order (the lifecycle log)')
     .option('--session <id>', 'Only this conversation (an id or the start of one)')
     .option('--role <role>', 'Only window, worker, bridge or command')

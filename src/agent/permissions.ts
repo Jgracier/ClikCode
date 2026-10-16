@@ -11,6 +11,7 @@ import {
 import type { ToolContext, ToolDefinition } from './tool-contract.js';
 import type { AiHarnessPermissionMode } from '../harness/definition.js';
 import { updateJsonFile } from '../session/store/json-file.js';
+import { computerEnabledSync } from './computer/settings.js';
 
 type PermissionVerdict = 'allow' | 'ask' | 'deny';
 /** `invalidArguments`: the call named no usable path (empty, or with a NUL byte). That is a mistake in the call, not a
@@ -27,6 +28,7 @@ export const NO_RULES: PermissionRules = { allow: [], deny: [], ask: [] };
 const EXIT_PLAN_MODE_TOOL = 'exit_plan_mode';
 const ENTER_PLAN_MODE_TOOL = 'enter_plan_mode';
 const BASH_TOOL = 'bash';
+const COMPUTER_TOOLS = new Set(['computer_windows', 'computer_observe', 'computer_act', 'computer_web']);
 
 /** `Bash(git status:*)`, `Edit(src/**)`, `WebFetch(domain:example.com)`, or a
  * bare tool name. Returns undefined for anything malformed. */
@@ -224,6 +226,9 @@ function decide(request: PermissionRequest): PermissionDecision {
       if (mode === 'auto' && allConfined) return { decision: 'allow', reason: 'write confined to the workspace' };
       return { decision: 'ask', reason: allConfined ? 'file changes need approval' : 'path is outside the workspace' };
     case 'exec':
+      if (mode === 'auto' && !tool.mcp && COMPUTER_TOOLS.has(tool.name) && computerEnabledSync(scope.stateDir)) {
+        return { decision: 'allow', reason: 'computer use is on' };
+      }
       if (mode === 'auto' && command?.tier === 'safe') return { decision: 'allow', reason: command.reason };
       return { decision: 'ask', reason: command?.reason ?? 'commands need approval' };
     case 'network':

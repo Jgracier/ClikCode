@@ -42,7 +42,7 @@ export const SLASH_HANDLER_KEYS = [
   'help', 'status', 'new', 'redraw', 'exit', 'compact', 'context', 'export', 'history', 'copy', 'select', 'changes',
   'review', 'init', 'memory', 'diff', 'cwd', 'add-dir', 'mention',
   'provider', 'accounts', 'login', 'logout', 'gateway',
-  'model', 'effort', 'fast', 'permissions', 'sandbox', 'send', 'options', 'capabilities', 'settings',
+  'model', 'effort', 'fast', 'permissions', 'sandbox', 'computer', 'send', 'options', 'capabilities', 'settings',
   'sessions', 'resume', 'search', 'rename', 'fork', 'redo', 'archive', 'delete',
   'usage', 'doctor', 'agents',
 ] as const;
@@ -222,6 +222,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
       (found) => sessionPermissionModes(session ?? { route: 'local' }, found).length > 0, session),
   }),
   entry('sandbox', 'Settings', "whether the agent's shell commands write only the workspace, temp and caches (on by default)", { argHint: '[on|off]', availability: agentOnly }),
+  entry('computer', 'Settings', 'let the agent use this computer’s browser and desktop', { argHint: '[on|off]', availability: agentOnly, duringTurn: 'apply' }),
   entry('send', 'Settings', 'messages typed mid-turn: steer into the turn, or queue for after it', { argHint: '[steer|queue]', duringTurn: 'apply' }),
   entry('options', 'Settings', 'provider-specific modes and controls', { availability: needsHarness('setting options') }),
   entry('capabilities', 'Settings', 'what the selected provider supports'),
