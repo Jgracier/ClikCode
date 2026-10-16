@@ -319,7 +319,9 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
       stopSpin();
       host.setSelecting(false);
       stopInput();
-      host.clearFrame();
+      // The next paint is the conversation chosen (or the one left, on Esc), drawn with its
+      // composer in one change; clearing the board first drew the conversation being left, bare.
+      if (host.keepFrame) host.keepFrame(); else host.clearFrame();
       resolve(result);
     };
     const listen = (): void => {

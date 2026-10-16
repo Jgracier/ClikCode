@@ -43,6 +43,8 @@ export function pickerHost(this: TerminalHarnessPrompter): OptionPickerHost {
     paint: (composer, pickerOptions, selected, prompt, cursor, palette) =>
       this.paint(composer, pickerOptions, selected, prompt, cursor, palette),
     clearFrame: () => this.clearInteractiveFrame(),
+    // The board's frame stays until the next paint replaces it (option-picker.ts keepFrame).
+    keepFrame: () => undefined,
     repair: () => { this.requestRedraw('repair'); this.forgetScreenPosition(); },
     // A closed picker is not the frame to come back to: resume() and any
     // repaint after it used to draw the finished list again (with the
