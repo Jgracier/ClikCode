@@ -395,7 +395,9 @@ export function leaveTurn(this: TerminalHarnessPrompter): void {
   if (this.turn && this.currentSession) {
     this.steppedOut = { sessionId: this.currentSession.id, ...(this.submittedPrompt !== undefined ? { prompt: this.submittedPrompt } : {}), anchor: this.activityAnchor };
   }
-  this.stopWaiting();
+  // No repaint: the board is drawn next, over the chat as it is. Repainting the idle composer first
+  // wiped the turn's rows for a frame before the board replaced them.
+  this.stopWaiting(false);
 }
 
 /** The turn showing was stopped elsewhere -- from another window, or its

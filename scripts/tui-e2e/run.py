@@ -571,6 +571,7 @@ SCENARIOS = {
             ('wait_for', 'The long job is finished.', 60), ('settle', 3),
         ],
         'watch': [], 'final_once': ['run the long job', 'Step one of the long job.', 'The long job is finished.'],
+        'shown_outside_board': ['run the long job'],
         'never': ['Interrupted turn activity'],
     },
     # The phone's case: nothing but tool calls for a long while, then out to
@@ -2654,11 +2655,20 @@ def run(name, spec, entry, keep):
         limit = spec['cheap_frames_after_mark']
         dear = [(n, len(set(r))) for n, r in enumerate(rows_written(c) for c in written_frames(marked_raw_at, marked_raw_end_at)) if len(set(r)) > limit]
         if dear: problems.append(f'{len(dear)} frame(s) after the mark drew more than {limit} rows (the history rewritten, not shifted): first {dear[0][0]} with {dear[0][1]} rows')
+    def board_frame(text): return 'enter open' in text or 'enter start a new chat' in text
+    # A conversation that was on screen is on screen in every complete frame that is not the board:
+    # leaving it for the board and coming back are each one change, never a frame with the chat
+    # missing between them. (A turn that is working used to be wiped before the board was drawn,
+    # and the board wiped before the turn was drawn again.)
+    for phrase in spec.get('shown_outside_board', []):
+        begun = next((i for i, _, text in complete_frames() if phrase in text), None)
+        if begun is None: problems.append(f'shown_outside_board: {phrase!r} was never on screen'); continue
+        gone = [(i, t) for i, t, text in complete_frames() if i > begun and not board_frame(text) and phrase not in text]
+        if gone: problems.append(f'{phrase!r} missing from {len(gone)} complete frame(s) that are not the board, first at frame {gone[0][0]} ({gone[0][1]:.2f}s)')
     # The board hands the screen over in one change: from the first frame that shows the board
     # to the next that does not, every complete frame is the board or has a composer (never
     # the conversation being left, bare), and the composer's rules never change row.
     if spec.get('stable_handoff'):
-        def board_frame(text): return 'enter open' in text or 'enter start a new chat' in text
         def rule_rows(text):
             lines = [line.rstrip() for line in text.split('\n')]
             return [n for n, line in enumerate(lines) if RULE_ROW.match(line)]
