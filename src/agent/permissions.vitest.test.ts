@@ -11,6 +11,8 @@ import {
 import type { PathScope } from './security.js';
 import { sessionState } from './session-state.js';
 import { defaultTools } from './tools/registry.js';
+import { computerWebTool } from './tools/computer-web.js';
+import { setComputerEnabled } from './computer/settings.js';
 import type { ToolContext, ToolDefinition } from './tool-contract.js';
 import type { AiHarnessPermissionMode } from '../harness/definition.js';
 
@@ -31,6 +33,19 @@ function decide(name: string, args: Record<string, unknown>, mode: AiHarnessPerm
 }
 
 describe('permission matrix', () => {
+  it('treats computer on as the one-time auto-mode grant while keeping ask and deny rules', async () => {
+    const judge = (mode: AiHarnessPermissionMode, rules = NO_RULES) => decidePermission({
+      tool: computerWebTool, args: { action: 'observe' }, mode, rules, planMode: false, scope, hasApprover: true,
+    }).decision;
+    expect(judge('auto')).toBe('ask');
+    await setComputerEnabled(scope.stateDir, true);
+    expect(judge('auto')).toBe('allow');
+    expect(judge('ask')).toBe('ask');
+    expect(judge('auto', parsePermissionSettings({ deny: ['computer_web'] }))).toBe('deny');
+    expect(judge('auto', parsePermissionSettings({ ask: ['computer_web'] }))).toBe('ask');
+    await setComputerEnabled(scope.stateDir, false);
+    expect(judge('auto')).toBe('ask');
+  });
   it('reads this session\'s tool output without approval and blocks another session\'s output', () => {
     expect(decide('read_file', { path: path.join(scope.stateDir, 'sessions', 's1', 'tool-output', 'trace.jsonl') }, 'ask')).toBe('allow');
     expect(decide('read_file', { path: path.join(scope.stateDir, 'sessions', 's2', 'tool-output', 'trace.jsonl') }, 'bypass')).toBe('deny');

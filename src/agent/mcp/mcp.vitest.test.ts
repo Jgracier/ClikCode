@@ -97,6 +97,10 @@ describe('schemas and results', () => {
   it('joins text, summarizes what is not text, and respects isError', () => {
     expect(formatMcpResult({ content: [{ type: 'text', text: 'a' }, { type: 'text', text: 'b' }] })).toEqual({ output: 'a\nb' });
     expect(formatMcpResult({ content: [{ type: 'image', data: 'AAAA', mimeType: 'image/png' }] }).output).toBe('[image: image/png, 3 B]');
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lXcAAAAASUVORK5CYII=';
+    expect(formatMcpResult({ content: [{ type: 'image', data: png, mimeType: 'image/png' }] }, true).images)
+      .toEqual([{ mimeType: 'image/png', data: png }]);
+    expect(formatMcpResult({ content: [{ type: 'image', data: 'AAAA', mimeType: 'image/png' }] }, true).images).toBeUndefined();
     expect(formatMcpResult({ content: [{ type: 'text', text: 'no' }], isError: true })).toEqual({ output: 'no', isError: true });
     expect(formatMcpResult({ structuredContent: { a: 1 } }).output).toContain('"a": 1');
     expect(formatMcpResult({ content: [] }).output).toBe('(no output)');

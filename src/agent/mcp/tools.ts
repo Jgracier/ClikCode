@@ -2,6 +2,7 @@
  * sees, the permission class, and what a result reads like. */
 import { createHash } from 'node:crypto';
 import { argumentSummary, formatToolRow } from '../../harness/protocol/tools.js';
+import { MAX_IMAGE_SIDE, MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
 import { defineTool, type ToolDefinition, type ToolRunResult } from '../tool-contract.js';
 import type { McpCallResult, McpContent, McpToolInfo } from './client.js';
 
@@ -64,13 +65,23 @@ function describeContent(item: McpContent): string {
   }
 }
 
-export function formatMcpResult(result: McpCallResult): ToolRunResult {
+export function formatMcpResult(result: McpCallResult, acceptsImages = false): ToolRunResult {
   const parts = (Array.isArray(result.content) ? result.content : []).map(describeContent).filter((part) => part.length);
+  const images = acceptsImages && !result.isError ? (result.content ?? []).flatMap((item) => {
+    if (item.type !== 'image' || typeof item.data !== 'string' || typeof item.mimeType !== 'string') return [];
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(item.data) || item.data.length > Math.ceil(MAX_TOOL_IMAGE_BYTES * 4 / 3) + 4) return [];
+    const bytes = Buffer.from(item.data, 'base64');
+    const found = sniffImage(bytes);
+    if (!found || found.mimeType !== item.mimeType || bytes.length > MAX_TOOL_IMAGE_BYTES
+      || (found.width !== undefined && found.width > MAX_IMAGE_SIDE)
+      || (found.height !== undefined && found.height > MAX_IMAGE_SIDE)) return [];
+    return [{ mimeType: found.mimeType, data: item.data }];
+  }) : [];
   let output = parts.join('\n');
   // Structured output is only the answer when there is no text alongside
   // it; the spec asks servers that send both to make the text equivalent.
   if (!output && result.structuredContent !== undefined) output = JSON.stringify(result.structuredContent, null, 2);
-  return { output: output || '(no output)', ...(result.isError ? { isError: true } : {}) };
+  return { output: output || '(no output)', ...(result.isError ? { isError: true } : {}), ...(images.length ? { images } : {}) };
 }
 
 export interface McpToolCaller {
@@ -103,6 +114,6 @@ export function mcpToolDefinition(server: string, info: McpToolInfo, name: strin
       return [`MCP server: ${server}`, `tool: ${info.name}`, 'arguments:',
         json.length > MAX_PREVIEW_ARGS ? `${json.slice(0, MAX_PREVIEW_ARGS)}\n… truncated` : json].join('\n');
     },
-    run: async (args, ctx) => formatMcpResult(await call(info.name, args, ctx.signal)),
+    run: async (args, ctx) => formatMcpResult(await call(info.name, args, ctx.signal), ctx.acceptsImages),
   });
 }
