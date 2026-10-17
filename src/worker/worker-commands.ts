@@ -138,6 +138,7 @@ export function createCommandHandler(ctx: WorkerContext) {
             ask: (site, fields, signal) => askPrivateLogin(observer, site, fields, signal) });
           if (!socket.destroyed) sendEvent(socket, { type: 'computer-login-result', id: command.id, ok: outcome !== 'unverified',
             message: outcome === 'signed_in' ? 'Browser advanced beyond sign-in. ClikCode Secrets Manager is ready for this site.'
+              : outcome === 'session_reused' ? 'Browser advanced without asking for a password. An existing session may have been reused; no new login was saved.'
               : outcome === 'verification_needed' ? 'Finish verification in the open browser. The new login was not saved.'
               : 'Sign-in could not be verified. The new login was not saved.' });
         } catch {

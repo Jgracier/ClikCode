@@ -84,6 +84,7 @@ export const computerWebTool = defineTool<WebArgs>({
                 return ctx.requestPrivateLogin(site, fields, signal);
               }, onVerification: () => ctx.emitOutput?.('Approve the sign-in or finish verification in the open browser.\n') });
             return { output: outcome === 'signed_in' ? 'Browser advanced beyond sign-in. ClikCode Secrets Manager is ready for this site.'
+              : outcome === 'session_reused' ? 'Browser advanced without asking for a password. An existing session may have been reused; no new login was saved.'
               : outcome === 'verification_needed' ? 'Waiting for verification on the sign-in page. The new login was not saved.'
               : 'Sign-in could not be verified. The new login was not saved.', ...(outcome === 'unverified' ? { isError: true } : {}) };
           }

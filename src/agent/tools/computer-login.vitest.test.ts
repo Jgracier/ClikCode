@@ -9,6 +9,7 @@ const browser = vi.hoisted(() => {
   const filled: string[] = [];
   let step = 0;
   let advance = true;
+  let emailOnly = false;
   let finishUrl = 'https://mail.google.com/mail/u/0/';
   const field = (type: string, name: string, label: string) => ({
     type, name, id: name, autocomplete: type === 'password' ? 'current-password' : 'username', required: true, placeholder: '', labels: [],
@@ -21,14 +22,15 @@ const browser = vi.hoisted(() => {
     locator: (selector: string) => ({
       count: async () => selector.includes('password') ? Number(step === 1) : Number(step < 2),
       evaluateAll: async (callback: (nodes: unknown[]) => unknown) => callback(step === 2 ? [] : [step ? field('password', 'password', 'Password') : field('text', 'identifier', 'Email or phone')]),
-      nth: () => ({ fill: async (value: string) => { filled.push(value); }, press: async (key: string) => { filled.push(key); if (advance) step++; } }),
+      nth: () => ({ fill: async (value: string) => { filled.push(value); }, press: async (key: string) => { filled.push(key); if (advance) step = emailOnly && step === 0 ? 2 : step + 1; } }),
       fill: async (value: string) => { filled.push(value); },
       press: async (key: string) => { filled.push(key); },
     }),
     getByRole: () => ({ count: async () => 0 }),
   };
-  return { filled, page, reset: () => { step = 0; advance = true; finishUrl = 'https://mail.google.com/mail/u/0/'; },
-    stopAdvancing: () => { advance = false; }, requireVerification: () => { finishUrl = 'https://accounts.google.com/v3/signin/challenge/dp'; } };
+  return { filled, page, reset: () => { step = 0; advance = true; emailOnly = false; finishUrl = 'https://mail.google.com/mail/u/0/'; },
+    stopAdvancing: () => { advance = false; }, reuseSession: () => { emailOnly = true; },
+    requireVerification: () => { finishUrl = 'https://accounts.google.com/v3/signin/challenge/dp'; } };
 });
 vi.mock('../computer/browser.js', () => ({ computerPage: async () => browser.page }));
 vi.mock('../computer/settings.js', () => ({ computerEnabled: async () => true }));
@@ -87,6 +89,18 @@ it('does not save a password while verification is still pending', async () => {
   } as ToolContext);
   expect(result.output).toContain('verification');
   expect(result.output).toContain('not saved');
+  await expect(readdir(join(stateDir, 'computer', 'vault', 'items'))).rejects.toThrow();
+});
+
+it('reports an existing browser session without saving an email-only attempt', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-private-login-session-'));
+  browser.reuseSession();
+  const result = await computerWebTool.run({ action: 'login' }, {
+    stateDir, requestPrivateLogin: async () => ({ username: 'private@example.com' }),
+  } as ToolContext);
+  expect(result.isError).toBeUndefined();
+  expect(result.output).toContain('existing session may have been reused');
+  expect(result.output).not.toContain('private@example.com');
   await expect(readdir(join(stateDir, 'computer', 'vault', 'items'))).rejects.toThrow();
 });
 
