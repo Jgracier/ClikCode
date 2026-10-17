@@ -4,6 +4,7 @@ import { adoptPage, closeComputerPage, computerPage, openComputerPage } from '..
 import { COMPUTER_OFF, computerEnabled } from '../computer/settings.js';
 import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
 import { maskSensitive, sensitiveValues } from '../computer/sensitive-fields.js';
+import { expectSignup, settleSignup } from '../computer/signup-login.js';
 import { loginComputerPage, loginOutcomeMessage } from '../computer/login-page.js';
 import { LoginError } from '../computer/login-error.js';
 import { type LoginField } from '../computer/login-fields.js';
@@ -313,6 +314,8 @@ async function askForFills(page: Page, steps: readonly Step[], ctx: ToolContext)
   if (!answers) throw new Error('The user did not provide the values.');
   // A password typed into a form shows in the page's own text afterwards: hold it back from every view.
   for (const field of fields) if (field.kind === 'password' && answers[field.key]) registerSecret(answers[field.key]!);
+  const created = fields.find(field => field.kind === 'password' && answers[field.key]);
+  if (created) expectSignup(page, answers[created.key]!);
   let at = 0;
   return steps.map(step => step.do === 'fill' && step.text === undefined ? { ...step, text: answers[`fill${at++}`] ?? '' } : step);
 }
@@ -330,6 +333,8 @@ async function runSteps(page: Page, steps: readonly Step[], ctx: ToolContext): P
     try {
       notes.push(await doStep(current, step));
       await settle(current);
+      const saved = await settleSignup(ctx.stateDir, current);
+      if (saved) notes.push(saved);
     } catch (error) {
       const view = await observeComputerPage(current, false).catch(() => undefined);
       return { output: `${[...notes, `Step ${index + 1} (${step.do}${step.target ? ` ${step.target}` : ''}) failed: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`].join('\n')}${view ? `\n\n${view.output}` : ''}`, isError: true };
