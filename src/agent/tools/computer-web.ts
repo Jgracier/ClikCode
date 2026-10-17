@@ -7,14 +7,16 @@ import { privateLoginPage } from '../computer/private-page.js';
 import { loginComputerPage, loginOutcomeMessage } from '../computer/login-page.js';
 import { LoginError } from '../computer/login-error.js';
 import { loginFields, loginFieldSummary, loginOptions } from '../computer/login-fields.js';
+import { showsSecret } from '../computer/secret-scrubber.js';
+import { captureSecret } from '../computer/secret-capture.js';
 import { runTailcatHandoff } from '../computer/tailcat-handoff.js';
 import type { Page } from 'playwright-core';
 import type { ToolContext, ToolRunResult } from '../tool-contract.js';
 
 type WebArgs = {
-  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'press' | 'scroll' | 'login' | 'handoff';
+  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'press' | 'scroll' | 'login' | 'handoff' | 'capture_secret';
   url?: string; role?: 'button' | 'link' | 'textbox' | 'checkbox' | 'combobox' | 'tab' | 'menuitem';
-  name?: string; text?: string; key?: string; direction?: 'up' | 'down'; new_account?: boolean;
+  name?: string; text?: string; key?: string; direction?: 'up' | 'down'; new_account?: boolean; secret_name?: string; remote?: boolean;
 };
 
 export function webAddress(value: string | undefined): string {
@@ -29,6 +31,12 @@ function element(page: Page, args: WebArgs) {
   return page.getByRole(args.role, { name: args.name, exact: true });
 }
 
+/** Runs in the page: the visible text and every input value, for the secret check. */
+function visibleText(): string {
+  const doc = (globalThis as unknown as { document: { body: { innerText: string }; querySelectorAll(selector: string): ArrayLike<{ value?: string }> } }).document;
+  return `${doc.body.innerText}\n${Array.from(doc.querySelectorAll('input, textarea')).map(element => element.value ?? '').join('\n')}`;
+}
+
 export async function observeComputerPage(page: Page, acceptsImages: boolean): Promise<ToolRunResult> {
   // Login pages remain observable by field name and type. No DOM values,
   // accessibility snapshot or screenshot crosses into the model context.
@@ -39,6 +47,7 @@ export async function observeComputerPage(page: Page, acceptsImages: boolean): P
   const snapshot = (await page.ariaSnapshot({ timeout: 10_000 })).slice(0, 25_000);
   const output = `Page: ${page.url()}\n\n${snapshot}`;
   if (!acceptsImages) return { output };
+  if (showsSecret(snapshot) || showsSecret(await page.evaluate(visibleText).catch(() => ''))) return { output: `${output}\n\n[Screenshot withheld: the page shows a saved secret.]` };
   let bytes = await page.screenshot({ type: 'jpeg', quality: 65, animations: 'disabled', timeout: 10_000 });
   if (bytes.length > MAX_TOOL_IMAGE_BYTES) bytes = await page.screenshot({ type: 'jpeg', quality: 35, animations: 'disabled', timeout: 10_000 });
   const found = sniffImage(bytes);
@@ -48,15 +57,17 @@ export async function observeComputerPage(page: Page, acceptsImages: boolean): P
 
 export const computerWebTool = defineTool<WebArgs>({
   name: 'computer_web', class: 'exec',
-  description: 'Open a URL in one action; Chrome starts automatically. Observe shows sign-in field names without values. Login uses the one saved account for the site, lets the user pick when several are saved, otherwise privately requests the visible fields, follows ordinary sign-in pages, and saves new answers only after the browser advances past sign-in. When a sign-in page offers different ways in (root or IAM, another account), ask the user with ask_user, click their choice, then login. A one-time code is asked for privately each time and never saved. Use handoff for a CAPTCHA, or MFA that needs remote control. Never request a password or code in chat.',
+  description: 'Open a URL in one action; Chrome starts automatically. Observe shows sign-in field names without values. Login uses the one saved account for the site, lets the user pick when several are saved, otherwise privately requests the visible fields, follows ordinary sign-in pages, and saves new answers only after the browser advances past sign-in. When a sign-in page offers different ways in (root or IAM, another account), ask the user with ask_user, click their choice, then login. A one-time code is asked for privately each time and never saved. Use handoff for a CAPTCHA, or MFA that needs remote control. Never request a password or code in chat. To get an API key without seeing it: go to the site\'s keys page, set the permissions, then call capture_secret with a secret_name and the role and name of the final Create button; the worker clicks it, finds the new key itself and saves it to ClikCode Secrets Manager. You get only its length. If it cannot tell, the user is asked to tap Copy or paste (set remote when they are on their phone). Then use store_secret to put it where it belongs.',
   parameters: { type: 'object', additionalProperties: false, required: ['action'], properties: {
-    action: { type: 'string', enum: ['open', 'close', 'observe', 'click', 'fill', 'press', 'scroll', 'login', 'handoff'] },
+    action: { type: 'string', enum: ['open', 'close', 'observe', 'click', 'fill', 'press', 'scroll', 'login', 'handoff', 'capture_secret'] },
     url: { type: 'string', description: 'Website URL for open.' },
     role: { type: 'string', enum: ['button', 'link', 'textbox', 'checkbox', 'combobox', 'tab', 'menuitem'] },
     name: { type: 'string', description: 'Exact accessible name from observe.' },
     text: { type: 'string', description: 'Text for fill. Never include credentials.' },
     key: { type: 'string', description: 'Keyboard key for press, for example Enter or Escape.' },
     direction: { type: 'string', enum: ['up', 'down'] },
+    secret_name: { type: 'string', description: 'For capture_secret: the name to save the key under, such as salad/api-key.' },
+    remote: { type: 'boolean', description: 'For capture_secret: also print a phone link so the user can tap Copy on the page remotely.' },
     new_account: { type: 'boolean', description: 'For login: the user wants a different account than the saved one, so ask for it instead of reusing.' },
   } },
   label: (args) => `Web ${args.action}${args.url ? ` ${args.url.slice(0, 80)}` : ''}`,
@@ -83,7 +94,7 @@ export const computerWebTool = defineTool<WebArgs>({
         return await Promise.race([stopped, act(page, args, ctx)]);
       } finally { ctx.signal?.removeEventListener('abort', onAbort); }
     } catch (error) {
-      if (args.action === 'login') return { output: error instanceof LoginError ? error.message : 'Private login did not finish. Check the browser and try again.', isError: true };
+      if (args.action === 'login' || args.action === 'capture_secret') return { output: error instanceof LoginError ? error.message : args.action === 'login' ? 'Private login did not finish. Check the browser and try again.' : 'The secret could not be saved. Check the browser and try again.', isError: true };
       return { output: error instanceof Error ? error.message : String(error), isError: true };
     }
   },
@@ -100,6 +111,16 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
           return ctx.requestPrivateLogin(site, fields, signal);
         }, onVerification: () => ctx.emitOutput?.('Approve the sign-in or finish verification in the open browser.\n') });
       return { output: loginOutcomeMessage(outcome), ...(outcome === 'unverified' || outcome === 'saved_login_rejected' ? { isError: true } : {}) };
+    }
+    case 'capture_secret': {
+      if (!args.secret_name) throw new Error('capture_secret needs a secret_name.');
+      const { length, found } = await captureSecret({ stateDir: ctx.stateDir, page, name: args.secret_name, remote: args.remote === true, signal: ctx.signal,
+        ...(args.role && args.name ? { trigger: () => clickOrHint(page, args) } : {}),
+        ask: async (name, hint, signal) => {
+          if (!ctx.requestPrivateSecret) throw new LoginError('This chat cannot show a private prompt.');
+          return ctx.requestPrivateSecret(name, hint, signal);
+        }, onLink: link => ctx.emitOutput?.(`Open this link on your phone, then tap Copy on the page: ${link}\n`) });
+      return { output: `Saved secret "${args.secret_name}" (${length} characters) in ClikCode Secrets Manager${found ? ', found on the page' : ', supplied by the user'}. Its value was not shown to you. Use store_secret to send it where it belongs.` };
     }
     case 'handoff': {
       await runTailcatHandoff({ stateDir: ctx.stateDir, signal: ctx.signal,

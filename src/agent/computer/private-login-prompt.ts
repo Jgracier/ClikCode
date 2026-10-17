@@ -40,3 +40,16 @@ export async function askPrivateChoice(
   const picked = result.answers.choice?.[0];
   return picked && options.includes(picked) ? picked : undefined;
 }
+
+/** A key pasted into the same private prompt as a password: masked, never in the history. */
+export async function askPrivateSecret(
+  observer: TurnObserver, name: string, hint: string, signal?: AbortSignal,
+): Promise<string | undefined> {
+  if (!observer.askQuestions) return undefined;
+  const result = await observer.askQuestions({
+    title: `${name}`,
+    questions: [{ id: 'secret', prompt: hint, options: [], secret: true, maskInput: true }],
+  }, signal);
+  if (result.kind !== 'answered') return undefined;
+  return result.answers.secret?.[0]?.trim() || undefined;
+}

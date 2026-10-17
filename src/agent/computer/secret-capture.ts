@@ -1,0 +1,58 @@
+/** Gets an API key from the page into the Secrets Manager without it passing
+ * through the model. First the worker finds the key itself (the site's own
+ * response and new key-looking text on the page). Only when that is not clear
+ * does a person step in: tap the site's Copy button (on the computer or through
+ * the phone link) or paste into the private prompt. */
+import type { Page } from 'playwright-core';
+import { saveNamedSecret } from './credential-vault.js';
+import { waitForCopiedSecret } from './clipboard-watch.js';
+import { LoginError } from './login-error.js';
+import { armFinder } from './secret-finder.js';
+import { registerSecret } from './secret-scrubber.js';
+import { runTailcatHandoff } from './tailcat-handoff.js';
+
+const LOOK_POLLS = 20;
+
+export async function captureSecret(input: {
+  stateDir: string; page: Page; name: string; remote: boolean; signal?: AbortSignal;
+  /** The click that makes the site show the key, done after the page is watched. */
+  trigger?(): Promise<void>;
+  ask(name: string, hint: string, signal: AbortSignal): Promise<string | undefined>;
+  onLink(link: string): void;
+}): Promise<{ length: number; found: boolean }> {
+  const stop = new AbortController();
+  const outer = (): void => stop.abort();
+  input.signal?.addEventListener('abort', outer, { once: true });
+  if (input.signal?.aborted) stop.abort();
+  const finder = await armFinder(input.page);
+  try {
+    await input.trigger?.();
+    let value: string | undefined;
+    let ambiguous = false;
+    for (let poll = 0; poll < LOOK_POLLS && !value; poll++) {
+      if (stop.signal.aborted) throw new LoginError('Secret capture cancelled.');
+      await input.page.waitForTimeout(500);
+      const decision = await finder.look();
+      if (decision.kind === 'found') value = decision.value;
+      else if (decision.kind === 'ambiguous') { ambiguous = true; break; }
+    }
+    const found = !!value;
+    if (!value) {
+      const hint = (ambiguous ? 'More than one possible key on the page. ' : 'Could not find the key on its own. ')
+        + (input.remote ? 'Tap Copy on the page at the link, or paste the key here' : 'Copy the key on the page, or paste it here');
+      if (input.remote) void runTailcatHandoff({ stateDir: input.stateDir, signal: stop.signal, onLink: input.onLink }).catch(() => undefined);
+      value = await new Promise<string | undefined>((resolve, reject) => {
+        void waitForCopiedSecret(input.page, stop.signal).then(copied => { if (copied) resolve(copied); }, () => undefined);
+        input.ask(input.name, hint, stop.signal).then(resolve, reject);
+      });
+    }
+    if (!value || input.signal?.aborted) throw new LoginError('Secret capture cancelled.');
+    registerSecret(value);
+    await saveNamedSecret(input.stateDir, input.name, value);
+    return { length: value.length, found };
+  } finally {
+    finder.dispose();
+    stop.abort();
+    input.signal?.removeEventListener('abort', outer);
+  }
+}
