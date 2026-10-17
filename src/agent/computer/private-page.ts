@@ -22,7 +22,8 @@ export async function privateLoginPage(page: Page): Promise<boolean> {
       return true;
     }
   } catch { /* Inspect the fields below if the URL is transient. */ }
-  if (await (await loginScope(page)).locator('input[type="password"]:visible').count()) {
+  if (await (await loginScope(page)).locator('input[type="password"]:visible:not([autocomplete="new-password"])').count()) {
+    // (A field that creates a password, on a signup form, is filled with a private prompt and does not hide the page.)
     // One masked field labelled as a key or token (an account's API-key page) is a
     // credential on display, not a sign-in: its value is hidden by the key
     // redaction, and the rest of the page stays readable.

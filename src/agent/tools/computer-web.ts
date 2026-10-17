@@ -7,7 +7,7 @@ import { privateLoginPage } from '../computer/private-page.js';
 import { loginComputerPage, loginOutcomeMessage } from '../computer/login-page.js';
 import { LoginError } from '../computer/login-error.js';
 import { loginFields, loginFieldSummary, pageControls, type LoginField } from '../computer/login-fields.js';
-import { scrubSecrets, showsSecret } from '../computer/secret-scrubber.js';
+import { registerSecret, scrubSecrets, showsSecret } from '../computer/secret-scrubber.js';
 import { hideKeyLikeText } from '../computer/secret-finder.js';
 import { dialogNote, withDialogs } from '../computer/page-dialogs.js';
 import { SEND_TO_HELP, SEND_TO_SCHEMA } from './store-secret.js';
@@ -124,7 +124,7 @@ export async function observeComputerPage(page: Page, acceptsImages: boolean, fu
     const fields = await loginFields(page);
     return { output: loginFieldSummary(new URL(page.url()).origin, fields, await pageControls(page)) };
   }
-  const raw = await page.ariaSnapshot({ mode: 'ai', timeout: 10_000 } as never) as string;
+  const raw = scrubSecrets(await page.ariaSnapshot({ mode: 'ai', timeout: 10_000 } as never) as string);
   // A key the page is showing is not for the model to read: capture_secret takes it.
   const { text: shown, hidden } = hideKeyLikeText(raw);
   if (find?.trim()) {
@@ -283,14 +283,16 @@ async function askForFills(page: Page, steps: readonly Step[], ctx: ToolContext)
   if (!ctx.requestPrivateLogin) throw new Error('Fill needs text: this chat cannot ask the user privately.');
   const fields: LoginField[] = [];
   for (const [index, step] of blank.entries()) {
-    const label = await (await locate(page, step.target)).evaluate(element => {
-      const el = element as unknown as { labels?: ArrayLike<{ textContent: string | null }>; getAttribute(name: string): string | null };
-      return (el.labels?.[0]?.textContent || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('name') || '').trim();
-    }).catch(() => '');
-    fields.push({ index, key: `fill${index}`, label: label || String(step.target), kind: 'text', required: true });
+    const described = await (await locate(page, step.target)).evaluate(element => {
+      const el = element as unknown as { type?: string; labels?: ArrayLike<{ textContent: string | null }>; getAttribute(name: string): string | null };
+      return { label: (el.labels?.[0]?.textContent || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('name') || '').trim(), password: el.type === 'password' };
+    }).catch(() => ({ label: '', password: false }));
+    fields.push({ index, key: `fill${index}`, label: described.label || String(step.target), kind: described.password ? 'password' : 'text', required: true });
   }
   const answers = await ctx.requestPrivateLogin(new URL(page.url()).origin, fields, ctx.signal);
   if (!answers) throw new Error('The user did not provide the values.');
+  // A password typed into a form shows in the page's own text afterwards: hold it back from every view.
+  for (const field of fields) if (field.kind === 'password' && answers[field.key]) registerSecret(answers[field.key]!);
   let at = 0;
   return steps.map(step => step.do === 'fill' && step.text === undefined ? { ...step, text: answers[`fill${at++}`] ?? '' } : step);
 }
