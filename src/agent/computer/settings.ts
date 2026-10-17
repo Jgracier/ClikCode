@@ -25,3 +25,5 @@ export async function setComputerEnabled(stateDir: string, enabled: boolean): Pr
   await fs.writeFile(temp, `${JSON.stringify({ enabled })}\n`, { mode: 0o600 });
   await fs.rename(temp, file);
 }
+
+export const COMPUTER_OFF = 'Computer use is off. Run `clikcode computer on` to enable it.';

@@ -19,9 +19,17 @@ function start(): Promise<McpClient> {
   return pending;
 }
 
+/** The Cua driver is a separate install; say so plainly instead of leaking a spawn error. */
+export const DRIVER_MISSING = 'Desktop control needs cua-driver installed on this computer (https://github.com/trycua/cua). Browser pages work without it through computer_web.';
+
 export async function callComputerDriver(
   tool: string, args: Record<string, unknown>, signal?: AbortSignal,
 ): Promise<McpCallResult> {
-  const client = await start();
+  let client: McpClient;
+  try { client = await start(); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT' || /ENOENT|not found/i.test(error instanceof Error ? error.message : '')) throw new Error(DRIVER_MISSING);
+    throw error;
+  }
   return client.callTool(tool, args, { timeoutMs: 45_000, signal });
 }

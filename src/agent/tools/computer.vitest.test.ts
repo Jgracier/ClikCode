@@ -1,10 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { computerDesktopAction, computerDriverAction, computerTools } from './computer.js';
+import { computerDriverAction, computerTools } from './computer.js';
 
-describe('computer tool boundary', () => {
-  it('offers a small window-scoped surface', () => {
-    expect(computerTools.map((tool) => tool.name)).toEqual(['computer_desktop', 'computer_windows', 'computer_observe', 'computer_act']);
-    expect(computerTools.map((tool) => tool.class)).toEqual(['exec', 'exec', 'exec', 'exec']);
+describe('computer_desktop boundary', () => {
+  it('is one tool', () => {
+    expect(computerTools.map((tool) => tool.name)).toEqual(['computer_desktop']);
+    expect(computerTools.map((tool) => tool.class)).toEqual(['exec']);
+  });
+
+  it('lists windows and observes the desktop or one window', () => {
+    expect(computerDriverAction({ action: 'windows' })).toEqual({ name: 'list_windows', args: { on_screen_only: true } });
+    expect(computerDriverAction({ action: 'observe' })).toEqual({ name: 'get_desktop_state', args: {} });
+    expect(computerDriverAction({ action: 'observe', pid: 42, window_id: 7, query: 'OK' }))
+      .toEqual({ name: 'get_window_state', args: { pid: 42, window_id: 7, max_elements: 1500, query: 'OK' } });
   });
 
   it('sends an exact window target and a fresh element handle to Cua', () => {
@@ -14,19 +21,19 @@ describe('computer tool boundary', () => {
       .toEqual({ name: 'type_text', args: { pid: 42, window_id: 7, scope: 'window', x: 5, y: 9, text: 'hello' } });
   });
 
+  it('acts on the primary desktop when no window is named', () => {
+    expect(computerDriverAction({ action: 'click', x: 42, y: 7 })).toEqual({
+      name: 'click', args: { target: { kind: 'desktop', display_id: 'primary' }, x: 42, y: 7 },
+    });
+    expect(computerDriverAction({ action: 'hotkey', keys: ['ctrl', 'l'] }).name).toBe('hotkey');
+    // An element token only means something inside a window.
+    expect(() => computerDriverAction({ action: 'click', element_token: 'opaque' })).toThrow('x and y');
+  });
+
   it('rejects actions without a proven target', () => {
     expect(() => computerDriverAction({ pid: 42, window_id: 7, action: 'click' })).toThrow('element_token or x and y');
     expect(() => computerDriverAction({ pid: 0, window_id: 7, action: 'click', x: 1, y: 2 })).toThrow('exact window');
+    expect(() => computerDriverAction({ pid: 42, action: 'click', x: 1, y: 2 })).toThrow('exact window');
     expect(() => computerDriverAction({ pid: 42, window_id: 7, action: 'hotkey', keys: ['ctrl', 'a;rm'] })).toThrow('simple keys');
   });
-
-  it('can observe and act on the primary desktop after computer use is enabled', () => {
-    expect(computerDesktopAction({ action: 'observe' })).toEqual({ name: 'get_desktop_state', args: {} });
-    expect(computerDesktopAction({ action: 'click', x: 42, y: 7 })).toEqual({
-      name: 'click', args: { target: { kind: 'desktop', display_id: 'primary' }, x: 42, y: 7 },
-    });
-    expect(() => computerDesktopAction({ action: 'click' })).toThrow('x and y');
-    expect(computerDesktopAction({ action: 'hotkey', keys: ['ctrl', 'l'] }).name).toBe('hotkey');
-  });
-
 });

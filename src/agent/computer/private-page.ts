@@ -6,6 +6,9 @@ import type { Page } from 'playwright-core';
 
 const protectedPages = new WeakMap<Page, string>();
 
+/** Paths that mean a sign-in or verification step; shared with the login flow. */
+export const AUTH_PATH = /(?:^|\/)(?:login|signin|sign-in|auth|oauth|authenticate|challenge|verify|verification|mfa|otp|2fa|2sv|two-factor|sso|saml)(?:\/|$)/i;
+
 export function protectLoginPage(page: Page): void { protectedPages.set(page, page.url()); }
 
 export async function privateLoginPage(page: Page): Promise<boolean> {
@@ -14,7 +17,7 @@ export async function privateLoginPage(page: Page): Promise<boolean> {
   // the credential form has navigated to a challenge page.
   try {
     const path = new URL(page.url()).pathname;
-    if (/(?:^|\/)(?:login|signin|sign-in|auth|challenge|verify|verification)(?:\/|$)/i.test(path)) {
+    if (AUTH_PATH.test(path)) {
       protectLoginPage(page);
       return true;
     }
