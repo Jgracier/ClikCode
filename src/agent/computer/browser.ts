@@ -97,31 +97,65 @@ async function browserFor(stateDir: string, start: boolean): Promise<Connected> 
   return opening;
 }
 
-/** The tab the person sees in front. Chrome lists tabs in no particular order,
- * so the last one is not the current one; a tab in front reports itself visible. */
-export async function frontPage(context: BrowserContext): Promise<Page | undefined> {
-  const open = context.pages().filter(page => !page.isClosed());
-  const inFront: Page[] = [];
-  for (const page of open) {
-    try { if (await page.evaluate(() => (globalThis as unknown as { document: { visibilityState: string } }).document.visibilityState === 'visible')) inFront.push(page); }
-    catch { /* a browser-internal tab cannot be inspected */ }
-  }
-  return inFront.at(-1) ?? open.at(-1);
+/** This process is one chat's worker, so the tab it holds is that chat's own: another chat
+ * in the same Chrome never has its page read, clicked or followed by this one. */
+const owned = new Map<string, Page[]>();
+
+/** The newest tab still open; a popup that closed itself (a sign-in window) hands back to the page that opened it. */
+function mine(stateDir: string): Page | undefined {
+  const stack = (owned.get(stateDir) ?? []).filter(page => !page.isClosed());
+  owned.set(stateDir, stack);
+  return stack.at(-1);
 }
 
+/** Make `page` this chat's tab (a popup the chat's own page opened). */
+export function adoptPage(stateDir: string, page: Page): void { owned.set(stateDir, [...(owned.get(stateDir) ?? []).filter(old => old !== page), page]); }
+
+/** This chat's tab, opened in the shared Chrome the first time it is needed. */
 export async function openComputerPage(stateDir: string): Promise<Page> {
   const { context } = await browserFor(stateDir, true);
-  return await frontPage(context) ?? context.newPage();
-}
-
-export async function computerPage(stateDir: string): Promise<Page> {
-  const { context } = await browserFor(stateDir, false);
-  const page = await frontPage(context);
-  if (!page) throw new Error('ClikCode browser has no open tab. Open a URL with computer_web first.');
+  const existing = mine(stateDir);
+  if (existing) return existing;
+  const page = await context.newPage();
+  adoptPage(stateDir, page);
   return page;
 }
 
+export async function computerPage(stateDir: string): Promise<Page> {
+  await browserFor(stateDir, false);
+  const page = mine(stateDir);
+  if (!page) throw new Error('This chat has no open tab. Open a URL with computer_web first.');
+  return page;
+}
+
+/** For a command run outside any chat (`clikcode computer inspect`): the tab in front. */
+export async function frontComputerPage(stateDir: string): Promise<Page> {
+  const { context } = await browserFor(stateDir, false);
+  const open = context.pages().filter(page => !page.isClosed());
+  for (const page of open.reverse()) {
+    try { if (await page.evaluate(() => (globalThis as unknown as { document: { visibilityState: string } }).document.visibilityState === 'visible')) return page; }
+    catch { /* a browser-internal tab cannot be inspected */ }
+  }
+  const page = open[0];
+  if (!page) throw new Error('ClikCode browser has no open tab.');
+  return page;
+}
+
+/** Every tab in the shared Chrome, whichever chat holds it (for the rule that keeps a sign-in out of view). */
+export async function allComputerPages(stateDir: string): Promise<Page[]> {
+  const { context } = await browserFor(stateDir, false);
+  return context.pages().filter(page => !page.isClosed());
+}
+
+/** Close this chat's tab only: the Chrome and every other chat's tab stay as they are. */
+export async function closeComputerPage(stateDir: string): Promise<void> {
+  const pages = owned.get(stateDir) ?? [];
+  owned.delete(stateDir);
+  for (const page of pages) await page.close().catch(() => undefined);
+}
+
 export async function closeComputerBrowser(stateDir: string): Promise<void> {
+  owned.delete(stateDir);
   const opening = running.get(stateDir);
   running.delete(stateDir);
   const connected = await opening?.catch(() => undefined);

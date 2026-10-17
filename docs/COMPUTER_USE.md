@@ -6,7 +6,7 @@ and closes the browser, `on` brings them back.
 
 | Tool | What it is for |
 |---|---|
-| `computer_web` | A Chrome with its own saved profile (Edge if Chrome is missing). Shared by every terminal and VS Code window; never your personal profile. |
+| `computer_web` | A Chrome with its own saved profile (Edge if Chrome is missing), shared by every terminal and VS Code window, never your personal profile. **Each chat gets its own tab**: a chat only sees, acts on and follows tabs it opened itself, so chats working at once do not collide. `close` closes that chat's tab only. |
 | `computer_desktop` | Everything outside the page, through [cua-driver](https://github.com/trycua/cua) (a separate install): a popup window, a native dialog, another app. Give it a `pid` and `window_id` from `windows` to act on one window. |
 | `store_secret` | Send a key already in Secrets Manager on to a destination again. Values are never shown. |
 
@@ -43,9 +43,13 @@ sign-in page; you type into a private prompt in the terminal or VS Code panel
   is never saved, and a saved one a site refuses is asked about next time.
 - `/computer login [url] [--new]` does it from the command line; `/computer logins`
   lists and removes saved logins (the model sees only a count).
-- A CAPTCHA, or MFA that needs hands: `handoff` gives you a one-use phone link
+- A CAPTCHA, or MFA that needs hands: `handoff` returns a one-use phone link at once
   (static page `site/handoff/` on `gh-pages`, an encrypted Tailcat connection, no
-  ClikDeploy or Tailscale account).
+  ClikDeploy or Tailscale account); the agent gives it to you, then calls `handoff`
+  again to wait until you finish.
+- A signup or contact form is an ordinary page. Only a password or one-time-code field
+  hides a page. A `fill` with no `text` asks you privately (once for all such fields in
+  the call) and the answer never reaches the model.
 
 ## Getting an API key without the agent seeing it
 
@@ -65,7 +69,11 @@ authorization; there is no extra approval step.
    showed it is **not saved**; a key the click just made is kept even if refused (the
    site shows it once) but is **not sent anywhere** until it checks out.
    Anything else is saved and marked "not checked", with the reason.
-3. **Save** it to ClikCode Secrets Manager (always).
+3. **Save** it to ClikCode Secrets Manager (always). The result says what it took (length,
+   kind of text, and which control: "the site's Copy button next to 'Secret Key'"). When a
+   page shows an access key id and a secret key, the Copy button whose label says secret
+   is pressed, not the id's; a value equal to one already saved under another name is
+   refused as the first value again. `paste: true` skips looking and asks you to paste.
 4. **Send** it on, as `send_to` says. If a destination fails the key stays saved.
 
 Once the click that makes the key has happened, a stop does not abandon the capture: it
