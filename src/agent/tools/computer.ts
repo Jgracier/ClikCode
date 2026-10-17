@@ -5,9 +5,9 @@ import { defineTool, type ToolDefinition } from '../tool-contract.js';
 import { callComputerDriver } from '../computer/driver.js';
 import { formatMcpResult } from '../mcp/tools.js';
 import { COMPUTER_OFF, computerEnabled } from '../computer/settings.js';
-import { privateBrowserActive } from '../computer/private-page.js';
+import { credentialOnScreen } from '../computer/sensitive-fields.js';
 
-const privateNotice = 'A private login is open in the ClikCode browser. Finish it with the browser or phone handoff before observing the desktop.';
+const privateNotice = 'A password, code or card number is showing in the ClikCode browser, and a screenshot would show it. Submit or clear the form first.';
 
 type DesktopArgs = {
   action: 'windows' | 'observe' | 'click' | 'type' | 'key' | 'hotkey' | 'scroll';
@@ -77,9 +77,8 @@ export const computerDesktopTool = defineTool<DesktopArgs>({
   describe: async (args) => `${args.window_id !== undefined ? `Window ${args.window_id} of process ${args.pid}` : 'Primary desktop'}: ${args.action}${args.action === 'type' ? ` (${args.text?.length ?? 0} characters)` : ''}.`,
   async run(args, ctx) {
     if (!(await computerEnabled(ctx.stateDir))) return { output: COMPUTER_OFF, isError: true };
-    // Only the picture of the screen can show what a sign-in page withholds: acting
-    // (for example on an OAuth popup) is allowed, looking is not.
-    if (args.action === 'observe' && await privateBrowserActive(ctx.stateDir)) return { output: privateNotice, isError: true };
+    // Only the picture of the screen could show a typed credential: acting (an OAuth popup) is allowed, looking is not.
+    if (args.action === 'observe' && await credentialOnScreen(ctx.stateDir)) return { output: privateNotice, isError: true };
     try {
       const request = computerDriverAction(args);
       const withImage = ctx.acceptsImages === true && args.action === 'observe';

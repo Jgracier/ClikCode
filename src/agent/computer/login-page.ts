@@ -6,7 +6,8 @@ import type { Page } from 'playwright-core';
 import { loginLabel, sameSite, saveLoginFields, savedLoginFields, savedLoginsForSite, setLoginRejected } from './credential-vault.js';
 import { LoginError } from './login-error.js';
 import { loginFields, loginScope, uniqueLabels, type LoginField } from './login-fields.js';
-import { AUTH_PATH, protectLoginPage } from './private-page.js';
+/** Paths that mean a sign-in or verification step. */
+const AUTH_PATH = /(?:^|\/)(?:login|signin|sign-in|auth|oauth|authenticate|challenge|verify|verification|mfa|otp|2fa|2sv|two-factor|sso|saml)(?:\/|$)/i;
 
 export type LoginOutcome = 'signed_in' | 'session_reused' | 'verification_needed' | 'unverified' | 'saved_login_rejected';
 const NEW_ACCOUNT = 'Use a different account';
@@ -99,7 +100,6 @@ export async function loginComputerPage(input: {
 }): Promise<LoginOutcome> {
   const startUrl = input.page.url();
   const origin = checkedOrigin(startUrl);
-  protectLoginPage(input.page);
   const accounts = await savedLoginsForSite(input.stateDir, startUrl);
   // One saved account is simply used. Several (or one the site refused last
   // time) are put to the user as an arrow-key picker, with a way to add another.

@@ -3,10 +3,10 @@ import { defineTool } from '../tool-contract.js';
 import { adoptPage, closeComputerPage, computerPage, openComputerPage } from '../computer/browser.js';
 import { COMPUTER_OFF, computerEnabled } from '../computer/settings.js';
 import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
-import { privateLoginPage } from '../computer/private-page.js';
+import { maskSensitive, sensitiveValues } from '../computer/sensitive-fields.js';
 import { loginComputerPage, loginOutcomeMessage } from '../computer/login-page.js';
 import { LoginError } from '../computer/login-error.js';
-import { loginFields, loginFieldSummary, pageControls, type LoginField } from '../computer/login-fields.js';
+import { type LoginField } from '../computer/login-fields.js';
 import { registerSecret, scrubSecrets, showsSecret } from '../computer/secret-scrubber.js';
 import { hideKeyLikeText } from '../computer/secret-finder.js';
 import { dialogNote, withDialogs } from '../computer/page-dialogs.js';
@@ -118,13 +118,7 @@ export function findInSnapshot(snapshot: string, text: string): string {
 }
 
 export async function observeComputerPage(page: Page, acceptsImages: boolean, full = false, find?: string): Promise<ToolRunResult> {
-  // Login pages remain observable by field name and type. No DOM values,
-  // accessibility snapshot or screenshot crosses into the model context.
-  if (await privateLoginPage(page)) {
-    const fields = await loginFields(page);
-    return { output: loginFieldSummary(new URL(page.url()).origin, fields, await pageControls(page)) };
-  }
-  const raw = scrubSecrets(await page.ariaSnapshot({ mode: 'ai', timeout: 10_000 } as never) as string);
+  const raw = scrubSecrets(await maskSensitive(page, await page.ariaSnapshot({ mode: 'ai', timeout: 10_000 } as never) as string));
   // A key the page is showing is not for the model to read: capture_secret takes it.
   const { text: shown, hidden } = hideKeyLikeText(raw);
   if (find?.trim()) {
@@ -134,7 +128,7 @@ export async function observeComputerPage(page: Page, acceptsImages: boolean, fu
   const snapshot = arrangeSnapshot(shown, full);
   const output = `Page: ${page.url()}\n\n${snapshot}${hidden ? `\n\n[${hidden} key-like value${hidden === 1 ? '' : 's'} hidden. Use capture_secret to save it without reading it.]` : ''}`;
   if (!acceptsImages) return { output };
-  if (hidden || showsSecret(snapshot) || showsSecret(await page.evaluate(visibleText).catch(() => ''))) return { output: `${output}\n\n[Screenshot withheld: the page shows a saved secret.]` };
+  if (hidden || (await sensitiveValues(page)).length || showsSecret(snapshot) || showsSecret(await page.evaluate(visibleText).catch(() => ''))) return { output: `${output}\n\n[Screenshot withheld: the page holds a typed credential or a saved secret.]` };
   let bytes = await page.screenshot({ type: 'jpeg', quality: 65, animations: 'disabled', timeout: 10_000 });
   if (bytes.length > MAX_TOOL_IMAGE_BYTES) bytes = await page.screenshot({ type: 'jpeg', quality: 35, animations: 'disabled', timeout: 10_000 });
   const found = sniffImage(bytes);
@@ -202,13 +196,7 @@ export const computerWebTool = defineTool<WebArgs>({
       if (!(await computerEnabled(ctx.stateDir))) throw new Error(COMPUTER_OFF);
       if (args.action === 'close') { await closeComputerPage(ctx.stateDir); return { output: 'This chat\'s tab is closed.' }; }
       if (args.action === 'open') webAddress(args.url);
-      let page = args.action === 'open' ? await openComputerPage(ctx.stateDir) : await computerPage(ctx.stateDir);
-      if (args.action === 'open' && await privateLoginPage(page)) {
-        const old = page;
-        page = await old.context().newPage();
-        adoptPage(ctx.stateDir, page);
-        await old.close();
-      }
+      const page = args.action === 'open' ? await openComputerPage(ctx.stateDir) : await computerPage(ctx.stateDir);
       // Playwright cannot be interrupted mid-call, so a stop returns at once
       // and the browser carries on harmlessly in the background.
       let onAbort = (): void => undefined;
