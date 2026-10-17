@@ -131,13 +131,13 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
     }
     case 'capture_secret': {
       if (!args.secret_name) throw new Error('capture_secret needs a secret_name.');
-      const { length, found } = await captureSecret({ stateDir: ctx.stateDir, page, name: args.secret_name, remote: args.remote === true, signal: ctx.signal,
+      const { length, found, check } = await captureSecret({ stateDir: ctx.stateDir, page, name: args.secret_name, remote: args.remote === true, signal: ctx.signal,
         ...(args.role && args.name ? { trigger: () => clickOrHint(page, args) } : {}),
         ask: async (name, hint, signal) => {
           if (!ctx.requestPrivateSecret) throw new LoginError('This chat cannot show a private prompt.');
           return ctx.requestPrivateSecret(name, hint, signal);
         }, onLink: link => ctx.emitOutput?.(`Open this link on your phone, then tap Copy on the page: ${link}\n`) });
-      return { output: `Saved secret "${args.secret_name}" (${length} characters) in ClikCode Secrets Manager${found ? ', found on the page' : ', supplied by the user'}. Its value was not shown to you. Use store_secret to send it where it belongs.` };
+      return { output: `Saved secret "${args.secret_name}" (${length} characters) in ClikCode Secrets Manager${found ? ', found on the page' : ', supplied by the user'}. ${check.verdict === 'works' ? `Verified: ${check.detail}.` : `Not verified: ${check.detail}.`} Its value was not shown to you. Use store_secret to send it where it belongs.` };
     }
     case 'handoff': {
       await runTailcatHandoff({ stateDir: ctx.stateDir, signal: ctx.signal,

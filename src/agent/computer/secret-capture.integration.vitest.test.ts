@@ -74,7 +74,7 @@ it.skipIf(!enabled)('finds the key from the site\'s response and the new page te
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
   const tab = await open('/from-response');
   const result = await captureSecret({ stateDir, page: tab, name: 'salad/api-key', remote: false, trigger: () => tap(tab, '#go'), ask: neverAsked, onLink: () => undefined });
-  expect(result).toEqual({ length: KEY.length, found: true });
+  expect(result).toMatchObject({ length: KEY.length, found: true });
   expect(await readNamedSecret(stateDir, 'salad/api-key')).toBe(KEY);
   expect(scrubSecrets(`token ${KEY} and Zx9Qw3Er7Ty1Ui5Op2As4Df6`)).toBe('token [secret hidden] and Zx9Qw3Er7Ty1Ui5Op2As4Df6');
   // A picture of this page would show the key, so the observation withholds it.
@@ -97,7 +97,7 @@ it.skipIf(!enabled)('asks instead of guessing when two keys are equally likely',
   const tab = await open('/two');
   let hint = '';
   const result = await captureSecret({ stateDir, page: tab, name: 'two', remote: false, trigger: () => tap(tab, '#go'), ask: async (_n, h) => { hint = h; return KEY; }, onLink: () => undefined });
-  expect(result).toEqual({ length: KEY.length, found: false });
+  expect(result).toMatchObject({ length: KEY.length, found: false });
   expect(hint).toContain('More than one');
 }, 60_000);
 
@@ -118,7 +118,7 @@ it.skipIf(!enabled)('presses the page\'s own Copy button by itself and ignores o
   await other.evaluate(() => navigator.clipboard.writeText('unrelated-token-0000-1111'));
   await tab.bringToFront();
   const result = await captureSecret({ stateDir, page: tab, name: 'copied', remote: false, ask: neverAsked, onLink: () => undefined });
-  expect(result).toEqual({ length: KEY.length, found: true });
+  expect(result).toMatchObject({ length: KEY.length, found: true });
   expect(await readNamedSecret(stateDir, 'copied')).toBe(KEY);
 }, 60_000);
 
@@ -126,7 +126,7 @@ it.skipIf(!enabled)('takes a pasted key', async () => {
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
   const tab = await open('/plain');
   const result = await captureSecret({ stateDir, page: tab, name: 'pasted', remote: false, trigger: () => tap(tab, '#go'), ask: async () => KEY, onLink: () => undefined });
-  expect(result).toEqual({ length: KEY.length, found: false });
+  expect(result).toMatchObject({ length: KEY.length, found: false });
   expect(await readNamedSecret(stateDir, 'pasted')).toBe(KEY);
 }, 60_000);
 
@@ -134,7 +134,7 @@ it.skipIf(!enabled)('takes a key the page is already showing when no button is g
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
   const tab = await open('/existing');
   const result = await captureSecret({ stateDir, page: tab, name: 'current', remote: false, ask: neverAsked, onLink: () => undefined });
-  expect(result).toEqual({ length: KEY.length, found: true });
+  expect(result).toMatchObject({ length: KEY.length, found: true });
   expect(await readNamedSecret(stateDir, 'current')).toBe(KEY);
 }, 60_000);
 
@@ -142,7 +142,7 @@ it.skipIf(!enabled)('finds a key shown beside a resource name and Copy buttons, 
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
   const tab = await open('/dialog');
   const result = await captureSecret({ stateDir, page: tab, name: 'dialog', remote: false, trigger: () => tap(tab, '#go'), ask: neverAsked, onLink: () => undefined });
-  expect(result).toEqual({ length: GOOGLE_STYLE.length, found: true });
+  expect(result).toMatchObject({ length: GOOGLE_STYLE.length, found: true });
   expect(await readNamedSecret(stateDir, 'dialog')).toBe(GOOGLE_STYLE);
 }, 60_000);
 
@@ -160,6 +160,19 @@ it.skipIf(!enabled)('presses the site\'s own Copy button when the key never appe
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
   const tab = await open('/copy-modal');
   const result = await captureSecret({ stateDir, page: tab, name: 'masked', remote: false, trigger: () => tap(tab, '#go'), ask: neverAsked, onLink: () => undefined });
-  expect(result).toEqual({ length: KEY.length, found: true });
+  expect(result).toMatchObject({ length: KEY.length, found: true });
   expect(await readNamedSecret(stateDir, 'masked')).toBe(KEY);
+}, 60_000);
+
+it.skipIf(!enabled)('refuses to save a value its own service rejects, and saves one it accepts', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
+  const tab = await open('/reveal');
+  await expect(captureSecret({ stateDir, page: tab, name: 'refused', remote: false, trigger: () => tap(tab, '#go'), ask: neverAsked, onLink: () => undefined,
+    check: async () => ({ verdict: 'rejected', service: 'Example', detail: 'Example refused it (HTTP 401)' }) })).rejects.toThrow('Not saved: Example refused it');
+  await expect(readNamedSecret(stateDir, 'refused')).rejects.toThrow();
+  const tab2 = await open('/reveal');
+  const ok = await captureSecret({ stateDir, page: tab2, name: 'accepted', remote: false, trigger: () => tap(tab2, '#go'), ask: neverAsked, onLink: () => undefined,
+    check: async () => ({ verdict: 'works', service: 'Example', detail: 'Example accepted it' }) });
+  expect(ok.check.verdict).toBe('works');
+  expect(await readNamedSecret(stateDir, 'accepted')).toBe(KEY);
 }, 60_000);

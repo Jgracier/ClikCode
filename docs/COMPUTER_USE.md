@@ -101,6 +101,12 @@ signs in, sets the permissions, then calls `computer_web capture_secret` with a
   credential-named field (`api_key`, `secret`, `access_token`; a plain `token`
   such as a CSRF token does not count). One clear leader is saved to ClikCode
   Secrets Manager. The agent hears only the name and the length.
+- **It is tested before it is saved.** The value goes to the issuing service's own
+  API (chosen by the page's host: Hugging Face, Google AI Studio, Together AI,
+  OpenAI, Anthropic, Groq, Mistral, DeepSeek, OpenRouter) together with a damaged
+  copy as a control. A key the service refuses is not saved (it was an id or a page
+  blob), and a service that answers both the same is reported as "not verified".
+  Sites without a check are saved as "not verified" and say so.
 - **Only when unclear does a person help:** two equally likely keys, or none
   found. The private prompt then appears (masked, never in history), and the
   page's own Copy button or a keyboard copy on that page also completes it.
@@ -111,8 +117,9 @@ signs in, sets the permissions, then calls `computer_web capture_secret` with a
   is in no command the model writes. Each use asks for approval. Destinations:
   a ClikDeploy platform secret, a ClikDeploy app secret (`app`), or a GitHub
   repository secret (`destination: github`, `repo: owner/name`; the value goes to
-  `gh` on stdin). After a ClikDeploy write it reads back whether the secret is set
-  and, for compute keys, whether the provider that uses it reports healthy.
+  `gh` on stdin). What ClikDeploy answers (set, applied to the running process) is
+  relayed as it is; testing and running the platform are ClikDeploy's own tools.
+  
   `clikdeploy tools run admin_platform_secrets` lists every platform key with the
   page where its key is created, which is the list of what to fetch.
 - **`list_secrets`** and **`delete_secret`** show names only and remove one by
