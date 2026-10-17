@@ -217,7 +217,12 @@ export function quotaRefusalHolds(account: AiHarnessAccount, now: number = Date.
   if (expires === undefined || expires <= now) return false;
   const readAt = Date.parse(account.usage?.at ?? '');
   const markedAt = Date.parse(account.quotaExhaustedAt ?? '');
-  return !(vendorWindows(account).some((window) => !window.advisory) && readAt > markedAt);
+  if (!(readAt > markedAt)) return true;
+  // A later reading overrules the refusal only when it shows room: one that still has a window
+  // spent agrees with it. Overruled by any later reading, every new turn went back to the spent
+  // account, was refused, and failed over again (2026-10-17: a 5h window at 100%).
+  const windows = vendorWindows(account).filter((window) => !window.advisory);
+  return !windows.length || windows.some((window) => windowSpent(window) && (window.resetsAt === undefined || Date.parse(window.resetsAt) > now));
 }
 
 /** Can this account take a turn now? Signed in, not held by the vendor for
