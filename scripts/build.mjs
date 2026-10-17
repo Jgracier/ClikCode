@@ -83,20 +83,33 @@ const common = {
   define: { __CLIKCODE_VERSION__: JSON.stringify(pkg.version) },
 };
 
+// Inlined CommonJS packages (commander, cross-spawn, conf's ajv, …) call
+// require() for node builtins; native ESM has no `require`, so provide one.
+const index_banner = {
+  js: [
+    `import { createRequire as __clikcodeCreateRequire } from 'node:module';`,
+    'const require = __clikcodeCreateRequire(import.meta.url);',
+  ].join('\n'),
+};
+
 const index = await build({
   ...common,
   entryPoints: ['src/index.ts'],
   format: 'esm',
   plugins: [selectiveExternals],
-  // Inlined CommonJS packages (commander, cross-spawn, conf's ajv, …) call
-  // require() for node builtins; native ESM has no `require`, so provide one.
-  banner: {
-    js: [
-      `import { createRequire as __clikcodeCreateRequire } from 'node:module';`,
-      'const require = __clikcodeCreateRequire(import.meta.url);',
-    ].join('\n'),
-  },
+  banner: index_banner,
   outfile: 'dist/cli.js',
+});
+
+// The computer tools on their own, so a rebuilt copy replaces the running one without restarting a
+// chat (src/agent/computer/hot-tools.ts reloads this file when its time changes).
+await build({
+  ...common,
+  entryPoints: ['src/agent/computer-tools-entry.ts'],
+  format: 'esm',
+  plugins: [selectiveExternals],
+  banner: index_banner,
+  outfile: 'dist/computer-tools.js',
 });
 
 // Compiling the 2 MB program was ~30 ms of every start, and the catalog's CJS

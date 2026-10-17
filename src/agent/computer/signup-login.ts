@@ -3,9 +3,10 @@
  * It is saved to the vault only after the form has gone, with the email the form held. */
 import type { Page } from 'playwright-core';
 import { saveLoginFields } from './credential-vault.js';
+import { sharedState } from './shared-state.js';
 
 type Pending = { password: string; username?: string };
-const pending = new WeakMap<Page, Pending>();
+const pending = sharedState('signup-pending', () => new WeakMap<Page, Pending>());
 const PASSWORD_FIELD = 'input[type="password"]';
 const NAME_FIELD = 'input[type="email"], input[autocomplete="username"], input[autocomplete="email"]';
 

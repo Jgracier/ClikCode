@@ -7,6 +7,7 @@ import { COMPUTER_OFF } from '../agent/computer/settings.js';
 import { LoginError } from '../agent/computer/login-error.js';
 import { askPrivateLogin, askPrivateSecret } from '../agent/computer/private-login-prompt.js';
 import { scrubSecrets } from '../agent/computer/secret-scrubber.js';
+import { hotTool } from '../agent/computer/hot-tools.js';
 import { validateAgainstSchema } from '../agent/schema-validate.js';
 import { computerDesktopTool } from '../agent/tools/computer.js';
 import { computerWebTool } from '../agent/tools/computer-web.js';
@@ -14,7 +15,7 @@ import { storeSecretTool } from '../agent/tools/store-secret.js';
 import type { ToolContext, ToolDefinition } from '../agent/tool-contract.js';
 import type { TurnObserver } from '../turn/observer.js';
 
-export const SHARED_COMPUTER_TOOLS: readonly ToolDefinition[] = [computerWebTool, computerDesktopTool, storeSecretTool] as unknown as ToolDefinition[];
+export const SHARED_COMPUTER_TOOLS: readonly ToolDefinition[] = ([computerWebTool, computerDesktopTool, storeSecretTool] as unknown as ToolDefinition[]).map(hotTool);
 
 /** A private prompt needs a window that can show it; this call's own client cannot. */
 const NO_WINDOW = 'No chat window is open to show the prompt. Open this chat in the terminal or VS Code.';

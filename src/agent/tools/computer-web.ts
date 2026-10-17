@@ -4,6 +4,7 @@ import { adoptPage, closeComputerPage, computerPage, openComputerPage } from '..
 import { COMPUTER_OFF, computerEnabled } from '../computer/settings.js';
 import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
 import { maskSensitive, sensitiveValues } from '../computer/sensitive-fields.js';
+import { sharedState } from '../computer/shared-state.js';
 import { expectSignup, settleSignup } from '../computer/signup-login.js';
 import { loginComputerPage, loginOutcomeMessage } from '../computer/login-page.js';
 import { LoginError } from '../computer/login-error.js';
@@ -118,7 +119,7 @@ export function findInSnapshot(snapshot: string, text: string): string {
   return [...keep].sort((a, b) => a - b).map(at => lines[at]!).join('\n');
 }
 
-const lastSeen = new WeakMap<Page, { url: string; shown: string }>();
+const lastSeen = sharedState('page-last-seen', () => new WeakMap<Page, { url: string; shown: string }>());
 
 /** What is new on the page since it was last shown, each new line under the lines that contain it.
  * Undefined when most of the page changed (a different page), so the whole page should be shown instead. */
@@ -254,7 +255,7 @@ export const computerWebTool = defineTool<WebArgs>({
   },
 });
 
-const handoffs = new Map<string, { link: Promise<string>; done: Promise<{ ok: true } | { ok: false; message: string }>; stop: AbortController }>();
+const handoffs = sharedState('handoffs', () => new Map<string, { link: Promise<string>; done: Promise<{ ok: true } | { ok: false; message: string }>; stop: AbortController }>());
 
 const INTERACTIONS: ReadonlySet<string> = new Set(['click', 'fill', 'press', 'scroll', 'wait']);
 
