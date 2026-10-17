@@ -256,13 +256,15 @@ export const computerWebTool = defineTool<WebArgs>({
       if (args.action === 'profile') {
         if (args.fields && Object.keys(args.fields).length) return { output: `Saved. ${describeProfile(await saveProfile(ctx.stateDir, { ...(args.label ? { label: args.label } : {}), fields: args.fields }))}` };
         const all = await listProfiles(ctx.stateDir);
-        // Asked for by the agent, or nothing saved yet: one private prompt for the usual fields, kept as the profile.
+        // Asked for by the agent, or nothing saved yet: one private prompt shows what is saved ("Keep …", or type a
+        // replacement) and asks for what is missing; the result is the profile.
         if (args.ask || !all.length) {
           if (!ctx.requestPrivateLogin) throw new Error('This chat cannot ask the user privately. Save a profile with fields, or the user can run: clikcode computer profile --set key=value');
-          const asked = PROFILE_PROMPT.map(([key, label], index): LoginField => ({ index, key, label, kind: 'text', required: true }));
+          const current = (args.label ? all.find(profile => profile.label.toLowerCase() === args.label!.toLowerCase()) : all[0])?.fields ?? {};
+          const asked = PROFILE_PROMPT.map(([key, label, required], index): LoginField => ({ index, key, label, kind: 'text', required, ...(current[key as ProfileKey] ? { current: current[key as ProfileKey]! } : {}) }));
           const answers = await ctx.requestPrivateLogin('https://profile.clikcode', asked, ctx.signal);
           if (!answers) throw new Error('The user did not provide the profile.');
-          return { output: `Saved. ${describeProfile(await saveProfile(ctx.stateDir, { ...(args.label ? { label: args.label } : {}), fields: answers }))}` };
+          return { output: `Saved. ${describeProfile(await saveProfile(ctx.stateDir, { ...(args.label ? { label: args.label } : all[0] ? { id: all[0].id } : {}), fields: answers }))}` };
         }
         return { output: all.map(describeProfile).join('\n') };
       }
@@ -369,7 +371,7 @@ async function describeField(target: Locator): Promise<{ label: string; password
   }).catch(() => ({ label: '', password: false, hint: { autocomplete: '', type: 'text', text: '' }, placeholder: '', current: '' }));
 }
 
-const PROFILE_PROMPT: readonly [string, string][] = [['given_name', 'First name'], ['family_name', 'Last name'], ['email', 'Email'], ['phone', 'Phone (with area code)'], ['address_line1', 'Street address'], ['city', 'City'], ['state', 'State'], ['postal_code', 'Zip / postal code'], ['country', 'Country']];
+const PROFILE_PROMPT: readonly [string, string, boolean][] = [['given_name', 'First name', true], ['family_name', 'Last name', true], ['email', 'Email', true], ['phone', 'Phone (with area code)', true], ['address_line1', 'Street address', true], ['address_line2', 'Apartment / suite (optional)', false], ['city', 'City', true], ['state', 'State', true], ['postal_code', 'Zip / postal code', true], ['country', 'Country', true], ['organization', 'Company (optional)', false]];
 
 const profileChoice = sharedState('profile-choice', () => new Map<string, string>());
 

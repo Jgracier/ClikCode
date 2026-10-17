@@ -18,11 +18,17 @@ export async function askPrivateLogin(
     title: new URL(site).hostname === 'profile.clikcode' ? 'Your autofill profile' : `${new URL(site).hostname.replace(/^www\./, '')} ${fields.every(field => field.key.startsWith('fill')) ? 'details' : 'sign in'}`,
     questions: fields.map(field => field.kind === 'choice'
       ? { id: field.key, prompt: field.label, options: (field.options ?? []).map(label => ({ label })), secret: true }
-      : { id: field.key, prompt: askFor(field), options: [], secret: true, maskInput: field.kind === 'password' }),
+      : field.current
+        // Known already: the value is the first row ("Keep …"); typing instead replaces it.
+        ? { id: field.key, prompt: field.label, options: [{ label: `Keep ${field.current}` }], allowFreeText: true, secret: true }
+        : { id: field.key, prompt: askFor(field), options: [], secret: true, maskInput: field.kind === 'password', ...(field.required ? {} : { optional: true }) }),
   }, signal);
   if (result.kind !== 'answered') return undefined;
-  const values = Object.fromEntries(fields.map(field => [field.key, result.answers[field.key]?.[0] ?? '']));
-  if (Object.values(values).some(value => !value)) throw new LoginError('Complete the visible login fields.');
+  const values = Object.fromEntries(fields.map(field => {
+    const answer = result.answers[field.key]?.[0] ?? '';
+    return [field.key, field.current && answer === `Keep ${field.current}` ? field.current : answer];
+  }));
+  if (fields.some(field => field.required && !values[field.key])) throw new LoginError('Complete the visible login fields.');
   for (const field of fields) if (field.kind === 'choice' && !field.options?.includes(values[field.key]!)) throw new LoginError('Choose one of the listed options.');
   return values;
 }

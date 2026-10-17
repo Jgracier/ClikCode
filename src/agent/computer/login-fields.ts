@@ -23,6 +23,8 @@ export async function loginScope(page: Page): Promise<LoginScope> {
 export type LoginField = {
   index: number; key: string; label: string; kind: 'text' | 'password' | 'choice'; required: boolean;
   options?: readonly string[];
+  /** A value already known: offered as "Keep …" with room to type a replacement (an autofill profile). */
+  current?: string;
   /** A one-time code: asked for every time it appears, never saved. */
   transient?: true;
 };
