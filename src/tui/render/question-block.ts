@@ -106,7 +106,9 @@ export function questionBlockRows(
     return `    ${on ? chalk.bold(label) : label}${detail}`;
   });
   const hint = state.typing
-    ? (question.secret ? 'Type it (hidden) · [enter] send' : 'Type it below · [enter] send') + (startsTyping(question) ? ' · [esc] cancel' : ' · [esc] back')
+    ? (question.secret
+      ? `${question.maskInput === false ? '' : 'Input hidden · '}[enter] continue`
+      : 'Type it below · [enter] send') + (startsTyping(question) ? ' · [esc] cancel' : ' · [esc] back')
     : question.multiSelect ? '[↑↓] move  [space] tick  [enter] done  [esc] cancel' : '[↑↓] move  [enter] choose  [1-9] pick  [esc] cancel';
   const needs = flags.needsFocus && !flags.focused;
   const answer = `  ${flags.guarded || needs ? chalk.dim(needs ? `Draft kept. Press [tab] to answer · ${hint}` : hint) : chalk.bold(hint)}`;

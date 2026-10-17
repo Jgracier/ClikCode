@@ -142,7 +142,7 @@ export function QuestionCard({ approval, position, total, onAnswer }: {
             );
           })}
           {question.allowFreeText || question.options.length === 0 ? (
-            <input type={question.secret ? 'password' : 'text'} class="approval-note-input question-text" autocomplete="off"
+            <input type={question.secret && question.maskInput !== false ? 'password' : 'text'} class="approval-note-input question-text" autocomplete="off"
               aria-label={question.options.length ? `${question.prompt} (other answer)` : question.prompt}
               placeholder={question.options.length ? 'Other…' : 'Type your answer…'} value={typed[question.id] ?? ''}
               onInput={(event) => {

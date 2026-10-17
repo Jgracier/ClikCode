@@ -22,8 +22,9 @@ ClikCode generates a random
 32-byte vault key automatically on first use. It stores that key in a private
 local file (`computer/vault/vault.key`, mode 0600), and encrypts each saved login
 with AES-256-GCM in a separate file. No setup or vault password is required.
-The password and other login fields are hidden in the terminal and panel and
-are omitted from the transcript. No ClikDeploy or Tailscale account is needed
+Passwords are masked in the terminal and panel. Email, phone, and account IDs
+are visible while typing. All login answers are omitted from the transcript
+and agent context. No ClikDeploy or Tailscale account is needed
 to enter them.
 
 The login action fills and submits the same HTTPS origin. It reads the key and

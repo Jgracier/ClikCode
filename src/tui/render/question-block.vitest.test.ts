@@ -71,6 +71,19 @@ describe('a question\'s rows', () => {
     expect(rows).toContain('sql');
     expect(rows).toContain('[enter] choose');
   });
+
+  it('shows a concise private login prompt with clear text or masked input hints', () => {
+    const flags = { guarded: false, needsFocus: false, focused: true };
+    const login = state({ prompt: 'Email or phone', options: [], secret: true, maskInput: false }, {
+      request: { title: 'Sign in to accounts.google.com', questions: [] }, typing: true,
+    });
+    const clear = questionBlockRows(login, 80, 20, flags).join('\n');
+    expect(clear.match(/Email or phone/g)).toHaveLength(1);
+    expect(clear).toContain('[enter] continue');
+    expect(clear).not.toContain('hidden');
+    const masked = questionBlockRows({ ...login, question: { ...login.question, prompt: 'Password', maskInput: true } }, 80, 20, flags).join('\n');
+    expect(masked).toContain('Input hidden · [enter] continue');
+  });
 });
 
 describe('a question given too few rows', () => {
