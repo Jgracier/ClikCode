@@ -17,6 +17,8 @@ export async function captureSecret(input: {
   stateDir: string; page: Page; name: string; remote: boolean; signal?: AbortSignal;
   /** The click that makes the site show the key, done after the page is watched. */
   trigger?(): Promise<void>;
+  /** Take a key the page already shows, instead of one that appears after a click. Default: when there is no click. */
+  existing?: boolean;
   ask(name: string, hint: string, signal: AbortSignal): Promise<string | undefined>;
   onLink(link: string): void;
 }): Promise<{ length: number; found: boolean }> {
@@ -24,7 +26,7 @@ export async function captureSecret(input: {
   const outer = (): void => stop.abort();
   input.signal?.addEventListener('abort', outer, { once: true });
   if (input.signal?.aborted) stop.abort();
-  const finder = await armFinder(input.page);
+  const finder = await armFinder(input.page, input.existing ?? !input.trigger);
   try {
     await input.trigger?.();
     let value: string | undefined;
