@@ -3,7 +3,7 @@ import { stateDirectory } from '../session/store/paths.js';
 import { emitResult } from '../cli/structured-output.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
 import { closeComputerBrowser, computerPage } from '../agent/computer/browser.js';
-import { loginFields, loginFieldSummary } from '../agent/computer/login-fields.js';
+import { loginFields, loginFieldSummary, loginOptions } from '../agent/computer/login-fields.js';
 import { lockCredentialVault } from '../agent/computer/credential-vault.js';
 import { randomUUID } from 'node:crypto';
 import { WorkerClient } from '../worker/client.js';
@@ -34,14 +34,15 @@ export async function computerInspect(): Promise<void> {
   try {
     const site = new URL(page.url()).origin;
     const fields = await loginFields(page);
-    if (isJsonDefaultMode()) return emitResult({ computer: { site, fields: fields.map(({ label, kind }) => ({ label, kind })) } });
-    process.stdout.write(`${loginFieldSummary(site, fields)}\n`);
+    const options = await loginOptions(page);
+    if (isJsonDefaultMode()) return emitResult({ computer: { site, fields: fields.map(({ label, kind }) => ({ label, kind })), options } });
+    process.stdout.write(`${loginFieldSummary(site, fields, options)}\n`);
   } finally { await page.context().browser()?.close().catch(() => undefined); }
 }
 
 /** Ask for a site's credentials in the attached chat panel. This command's
  * stdout carries status only; the UI answer goes directly to its worker. */
-export async function computerLogin(chat?: string, url?: string): Promise<void> {
+export async function computerLogin(chat?: string, url?: string, newAccount?: boolean): Promise<void> {
   const workerPid = Number(process.env.CLIKCODE_WORKER_PID);
   const fromTurn = Number.isSafeInteger(workerPid) && workerPid > 0
     ? (await listWorkerRecords()).find(record => record.pid === workerPid)?.sessionId
@@ -67,7 +68,7 @@ export async function computerLogin(chat?: string, url?: string): Promise<void> 
       };
       client.on('event', onEvent);
       client.on('close', onClose);
-      client.send({ type: 'computer-login', id, ...(url ? { url } : {}) });
+      client.send({ type: 'computer-login', id, ...(url ? { url } : {}), ...(newAccount ? { newAccount: true as const } : {}) });
     });
     if (!result.ok) throw new Error(result.message);
     if (isJsonDefaultMode()) emitResult({ computer: { login: result.message } });

@@ -9,7 +9,7 @@ const SESSION_MS = 10 * 60_000;
 const sessions = new Map<string, { key: Buffer; expires: number }>();
 export class CredentialError extends Error {}
 export type PrivateLogin = { accountId: string; email: string; password: string };
-type Item = { origin: string; accountId?: string; email?: string; password?: string; fields?: Record<string, string> };
+type Item = { origin: string; accountId?: string; email?: string; password?: string; fields?: Record<string, string>; rejected?: true };
 
 function vaultDir(stateDir: string): string { return path.join(stateDir, 'computer', 'vault'); }
 function keyFile(stateDir: string): string { return path.join(vaultDir(stateDir), 'vault.key'); }
@@ -82,10 +82,13 @@ export async function saveCredential(stateDir: string, url: string, secret: Omit
 
 /** Incremental login steps, such as Gmail's email page followed by its
  * password page, use the same encrypted item. Only the local worker reads it. */
-export async function savedLoginFields(stateDir: string, url: string, id: string): Promise<Record<string, string>> {
-  const item = await readCredential(stateDir, url, id);
+function itemFields(item: Item): Record<string, string> {
   return { ...(item.accountId ? { accountId: item.accountId } : {}), ...(item.email ? { email: item.email, username: item.email } : {}),
     ...(item.password ? { password: item.password } : {}), ...item.fields };
+}
+
+export async function savedLoginFields(stateDir: string, url: string, id: string): Promise<Record<string, string>> {
+  return itemFields(await readCredential(stateDir, url, id));
 }
 
 export async function saveLoginFields(stateDir: string, url: string, fields: Record<string, string>, id?: string): Promise<string> {
@@ -96,8 +99,17 @@ export async function saveLoginFields(stateDir: string, url: string, fields: Rec
   const itemId = id ?? randomUUID();
   const dir = path.join(vaultDir(stateDir), 'items');
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  await fs.writeFile(path.join(dir, `${itemId}.json`), seal(key, `item:${itemId}`, JSON.stringify({ ...item, fields: { ...item.fields, ...fields } })), { mode: 0o600, flag: id ? 'w' : 'wx' });
+  const { rejected: _worked, ...kept } = item;
+  await fs.writeFile(path.join(dir, `${itemId}.json`), seal(key, `item:${itemId}`, JSON.stringify({ ...kept, fields: { ...item.fields, ...fields } })), { mode: 0o600, flag: id ? 'w' : 'wx' });
   return itemId;
+}
+
+/** The site refused this saved password. Remembered so the next sign-in asks
+ * which account to use (and can take a new password) instead of resending it. */
+export async function setLoginRejected(stateDir: string, url: string, id: string, rejected: boolean): Promise<void> {
+  const key = await vaultKey(stateDir, false);
+  const { rejected: _was, ...item } = await readCredential(stateDir, url, id);
+  await fs.writeFile(path.join(vaultDir(stateDir), 'items', `${id}.json`), seal(key, `item:${id}`, JSON.stringify(rejected ? { ...item, rejected: true } : item)), { mode: 0o600 });
 }
 
 async function readCredential(stateDir: string, url: string, id: string): Promise<Item> {
@@ -110,29 +122,39 @@ async function readCredential(stateDir: string, url: string, id: string): Promis
   return item;
 }
 
-/** Reuse a saved login only when this site has exactly one. Never guess which
- * account the user wants when several are saved for the same origin. */
-export async function soleCredentialForSite(stateDir: string, url: string): Promise<string | undefined> {
+export type SavedLogin = { id: string; label: string; rejected: boolean };
+
+/** What a person recognises a login by: its non-secret fields, never the
+ * password. Shown only in the user's own picker, never to the model. */
+export function loginLabel(fields: Readonly<Record<string, string>>): string {
+  const order = ['accountId', 'email', 'username'];
+  const keys = [...order.filter(key => fields[key]), ...Object.keys(fields).filter(key => !order.includes(key) && key !== 'password' && fields[key])];
+  const values = [...new Set(keys.map(key => fields[key]!))];
+  return values.join(' · ') || 'Saved login';
+}
+
+/** Every login saved for this exact origin, in a stable order. */
+export async function savedLoginsForSite(stateDir: string, url: string): Promise<SavedLogin[]> {
   const origin = siteOrigin(url);
   const dir = path.join(vaultDir(stateDir), 'items');
   let files: string[];
   try { files = await fs.readdir(dir); }
   catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw new CredentialError('Saved logins could not be read.');
   }
-  if (files.length === 0) return undefined;
+  if (files.length === 0) return [];
   const key = await vaultKey(stateDir, false);
-  const matches: string[] = [];
+  const found: SavedLogin[] = [];
   for (const file of files) {
     const id = file.replace(/\.json$/, '');
     if (!/^[0-9a-f-]{36}$/i.test(id) || file !== `${id}.json`) continue;
     try {
       const item = JSON.parse(open(key, `item:${id}`, await fs.readFile(path.join(dir, file), 'utf8'))) as Item;
-      if (item.origin === origin) matches.push(id);
+      if (item.origin === origin) found.push({ id, label: loginLabel(itemFields(item)), rejected: item.rejected === true });
     } catch { throw new CredentialError('A saved login could not be opened.'); }
   }
-  return matches.length === 1 ? matches[0] : undefined;
+  return found.sort((a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id));
 }
 export async function fillCredential(stateDir: string, page: Page, id: string): Promise<void> {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) throw new CredentialError('Invalid saved login reference.');

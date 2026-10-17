@@ -79,6 +79,23 @@ describe('a harness question in the terminal', () => {
     } finally { rl.close(); }
   });
 
+  it('picks an account with the arrow keys and Enter without writing the choice into history', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const { rl, key } = open();
+    try {
+      const answered = rl.askQuestions({ title: 'Sign in to accounts.google.com', questions: [{
+        id: 'account', prompt: 'Choose an account', secret: true,
+        options: [{ label: 'one@example.com' }, { label: 'two@example.com' }, { label: 'Use a different account' }],
+      }] });
+      vi.setSystemTime(Date.now() + 1000);
+      key('\u001b[B');
+      key('\r');
+      await expect(answered).resolves.toEqual({ kind: 'answered', answers: { account: ['two@example.com'] } });
+      expect(rl.history.join('\n')).not.toContain('two@example.com');
+      expect(JSON.stringify(rl.journal)).not.toContain('two@example.com');
+    } finally { rl.close(); }
+  });
+
   it('is cancelled by Esc', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     const { rl, key } = open();

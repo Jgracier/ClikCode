@@ -4,8 +4,8 @@ import { closeComputerBrowser, computerPage, openComputerPage } from '../compute
 import { computerEnabled } from '../computer/settings.js';
 import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
 import { privateLoginPage } from '../computer/private-page.js';
-import { loginComputerPage } from '../computer/login-page.js';
-import { loginFields, loginFieldSummary } from '../computer/login-fields.js';
+import { loginComputerPage, loginOutcomeMessage } from '../computer/login-page.js';
+import { loginFields, loginFieldSummary, loginOptions } from '../computer/login-fields.js';
 import { runTailcatHandoff } from '../computer/tailcat-handoff.js';
 import type { Page } from 'playwright-core';
 import type { ToolRunResult } from '../tool-contract.js';
@@ -13,7 +13,7 @@ import type { ToolRunResult } from '../tool-contract.js';
 type WebArgs = {
   action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'press' | 'scroll' | 'login' | 'handoff';
   url?: string; role?: 'button' | 'link' | 'textbox' | 'checkbox' | 'combobox' | 'tab' | 'menuitem';
-  name?: string; text?: string; key?: string; direction?: 'up' | 'down';
+  name?: string; text?: string; key?: string; direction?: 'up' | 'down'; new_account?: boolean;
 };
 
 export function webAddress(value: string | undefined): string {
@@ -33,7 +33,7 @@ export async function observeComputerPage(page: Page, acceptsImages: boolean): P
   // accessibility snapshot or screenshot crosses into the model context.
   if (await privateLoginPage(page)) {
     const fields = await loginFields(page);
-    return { output: loginFieldSummary(new URL(page.url()).origin, fields) };
+    return { output: loginFieldSummary(new URL(page.url()).origin, fields, await loginOptions(page)) };
   }
   const snapshot = (await page.ariaSnapshot({ timeout: 10_000 })).slice(0, 25_000);
   const output = `Page: ${page.url()}\n\n${snapshot}`;
@@ -47,7 +47,7 @@ export async function observeComputerPage(page: Page, acceptsImages: boolean): P
 
 export const computerWebTool = defineTool<WebArgs>({
   name: 'computer_web', class: 'exec',
-  description: 'Open a URL in one action; Chrome starts automatically. Observe shows sign-in field names without values. Login privately requests visible fields, follows ordinary sign-in pages, and saves new answers only after the browser advances past sign-in. Use handoff for CAPTCHA or MFA that needs remote control. Never request a password in chat.',
+  description: 'Open a URL in one action; Chrome starts automatically. Observe shows sign-in field names without values. Login uses the one saved account for the site, lets the user pick when several are saved, otherwise privately requests the visible fields, follows ordinary sign-in pages, and saves new answers only after the browser advances past sign-in. When a sign-in page offers different ways in (root or IAM, another account), ask the user with ask_user, click their choice, then login. Use handoff for CAPTCHA or MFA that needs remote control. Never request a password in chat.',
   parameters: { type: 'object', additionalProperties: false, required: ['action'], properties: {
     action: { type: 'string', enum: ['open', 'close', 'observe', 'click', 'fill', 'press', 'scroll', 'login', 'handoff'] },
     url: { type: 'string', description: 'Website URL for open.' },
@@ -56,6 +56,7 @@ export const computerWebTool = defineTool<WebArgs>({
     text: { type: 'string', description: 'Text for fill. Never include credentials.' },
     key: { type: 'string', description: 'Keyboard key for press, for example Enter or Escape.' },
     direction: { type: 'string', enum: ['up', 'down'] },
+    new_account: { type: 'boolean', description: 'For login: the user wants a different account than the saved one, so ask for it instead of reusing.' },
   } },
   label: (args) => `Web ${args.action}${args.url ? ` ${args.url.slice(0, 80)}` : ''}`,
   describe: async (args) => `ClikCode browser: ${args.action}${args.url ? ` ${args.url}` : ''}${args.name ? ` ${args.role} ${args.name}` : ''}${args.action === 'fill' ? ` (${args.text?.length ?? 0} characters)` : ''}`,
@@ -78,15 +79,12 @@ export const computerWebTool = defineTool<WebArgs>({
           case 'open': await page.goto(webAddress(args.url), { waitUntil: 'domcontentloaded', timeout: 30_000 }); return observeComputerPage(page, ctx.acceptsImages === true);
           case 'observe': return observeComputerPage(page, ctx.acceptsImages === true);
           case 'login': {
-            const outcome = await loginComputerPage({ stateDir: ctx.stateDir, page, signal: ctx.signal,
+            const outcome = await loginComputerPage({ stateDir: ctx.stateDir, page, signal: ctx.signal, newAccount: args.new_account === true,
               ask: async (site, fields, signal) => {
                 if (!ctx.requestPrivateLogin) throw new Error('This chat cannot show private login fields.');
                 return ctx.requestPrivateLogin(site, fields, signal);
               }, onVerification: () => ctx.emitOutput?.('Approve the sign-in or finish verification in the open browser.\n') });
-            return { output: outcome === 'signed_in' ? 'Browser advanced beyond sign-in. ClikCode Secrets Manager is ready for this site.'
-              : outcome === 'session_reused' ? 'Browser advanced without asking for a password. An existing session may have been reused; no new login was saved.'
-              : outcome === 'verification_needed' ? 'Waiting for verification on the sign-in page. The new login was not saved.'
-              : 'Sign-in could not be verified. The new login was not saved.', ...(outcome === 'unverified' ? { isError: true } : {}) };
+            return { output: loginOutcomeMessage(outcome), ...(outcome === 'unverified' || outcome === 'saved_login_rejected' ? { isError: true } : {}) };
           }
           case 'handoff': {
             await runTailcatHandoff({ stateDir: ctx.stateDir, signal: ctx.signal,

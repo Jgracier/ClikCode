@@ -21,7 +21,19 @@ One action follows ordinary email-first and password pages. New answers are
 saved only after a password is submitted and the browser moves past the
 sign-in page. A rejected or unverified attempt leaves no new saved login.
 The values go directly from the UI to the local worker and ClikCode Secrets
-Manager; the model receives only the status. ClikCode generates a random
+Manager; the model receives only the status.
+
+Saved accounts: with one login saved for a site, `login` simply uses it. With
+several, the terminal or VS Code panel shows a picker of their usernames or
+emails (arrow keys and Enter), plus "Use a different account". Passing
+`new_account` (tool), `--new` (command) or `/computer login --new` skips the
+saved account. If a site refuses a saved password, the picker appears next
+time so an updated one can be entered; typing the same username again updates
+that account instead of adding a copy. The picker is shown to you only: the
+model never sees the usernames, and your choice is not written to the chat
+history. When a sign-in page offers different ways in (root or IAM, another
+account), the page observation lists them by name and the agent asks you with
+`ask_user` before clicking. ClikCode generates a random
 32-byte encryption key automatically on first use. It stores that key in a private
 local file (`computer/vault/vault.key`, mode 0600), and encrypts each saved login
 with AES-256-GCM in a separate file. No setup or vault password is required.
