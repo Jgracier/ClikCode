@@ -8,6 +8,7 @@
 import { homedir } from 'node:os';
 import { loadMcpServers, type McpServerSpec } from '../../agent/mcp/config.js';
 import { vendorMcpServerNames } from '../../agent/mcp/import.js';
+import { computerEnabledSync } from '../../agent/computer/settings.js';
 import { stateDirectory } from '../../session/store/paths.js';
 
 type Json = Record<string, any>;
@@ -21,10 +22,23 @@ export function acpMcpServer(spec: McpServerSpec, capabilities: Json | undefined
   return { type: spec.transport, name: spec.name, url: spec.url, headers: pairs(spec.headers) };
 }
 
+/** ClikCode's own server, in every harness session: computer use and secret
+ * capture work the same in any harness. Nothing is installed or recorded; it
+ * is the clikcode that is running now, told which worker to call back. */
+export const BUILT_IN_MCP_NAME = 'clikcode';
+export function builtInMcpServer(): McpServerSpec | undefined {
+  const entry = process.env.CLIKCODE_MCP_ENTRY || process.argv[1];
+  if (!entry || !computerEnabledSync(stateDirectory())) return undefined;
+  return { name: BUILT_IN_MCP_NAME, transport: 'stdio', command: process.execPath, args: [entry, 'mcp-serve'], env: { CLIKCODE_WORKER_PID: String(process.pid) } };
+}
+
 export async function globalMcpServersForAcp(command: string, capabilities: Json | undefined, home: string = homedir()): Promise<Json[]> {
   if (process.env.VITEST && !process.env.CLIKCODE_HOME?.trim()) return [];
   try {
-    const { servers } = await loadMcpServers(stateDirectory());
+    const { servers: recorded } = await loadMcpServers(stateDirectory());
+    // A server the user recorded under this name wins; the built-in one steps aside.
+    const builtIn = builtInMcpServer();
+    const servers = builtIn && !recorded.some((server) => server.name === builtIn.name) ? [builtIn, ...recorded] : recorded;
     if (!servers.length) return [];
     const { names } = await vendorMcpServerNames(command, home);
     return servers.filter((server) => !names.has(server.name)).flatMap((server) => acpMcpServer(server, capabilities) ?? []);

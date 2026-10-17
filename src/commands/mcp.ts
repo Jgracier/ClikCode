@@ -5,6 +5,7 @@
  * reads. A vendor harness keeps its own MCP configuration; ClikCode never
  * writes into it.
  */
+import { BUILT_IN_MCP_NAME } from '../harness/transport/acp-mcp-servers.js';
 import chalk from 'chalk';
 import { stdin as input, stdout as output } from 'node:process';
 import { createInterface } from 'node:readline/promises';
@@ -144,6 +145,7 @@ export async function mcpList(): Promise<void> {
   if (isJsonDefaultMode()) {
     return emitResult({
       mcp: 'list',
+      builtIn: [{ name: BUILT_IN_MCP_NAME, target: 'clikcode', args: ['mcp-serve'], tools: ['computer_web', 'computer_desktop', 'store_secret'] }],
       servers: servers.map((spec) => ({
         name: spec.name,
         ...(spec.transport === 'stdio' ? { target: spec.command, args: spec.args } : { target: spec.url }),
@@ -152,6 +154,8 @@ export async function mcpList(): Promise<void> {
       ...(problem ? { problem } : {}),
     });
   }
+  output.write(`\n${chalk.bold('Built in, given to every harness session')} ${chalk.dim('(turn off with `clikcode computer off`)')}\n`);
+  output.write(`  ${chalk.bold(BUILT_IN_MCP_NAME.padEnd(24))}${chalk.dim('clikcode mcp-serve: computer_web, computer_desktop, store_secret')}\n`);
   output.write(`\n${chalk.bold("MCP servers recorded for ClikCode's own agent")}\n`);
   for (const spec of servers) {
     const state = states.get(spec.name);
