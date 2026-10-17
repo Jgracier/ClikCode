@@ -1,7 +1,7 @@
 /** Keep a login page out of model observations even if a website changes its
  * password input to text for a "show password" control. */
 import { computerPage } from './browser.js';
-import { loginFields } from './login-fields.js';
+import { loginFields, loginScope } from './login-fields.js';
 import type { Page } from 'playwright-core';
 
 const protectedPages = new WeakMap<Page, string>();
@@ -22,7 +22,7 @@ export async function privateLoginPage(page: Page): Promise<boolean> {
       return true;
     }
   } catch { /* Inspect the fields below if the URL is transient. */ }
-  if (await page.locator('input[type="password"]:visible').count()) {
+  if (await (await loginScope(page)).locator('input[type="password"]:visible').count()) {
     protectLoginPage(page);
     return true;
   }

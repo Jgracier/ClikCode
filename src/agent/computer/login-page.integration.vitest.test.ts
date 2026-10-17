@@ -51,6 +51,9 @@ beforeAll(async () => {
     if (url.pathname === '/signin/identifier') send(form('/signin/identifier', 'Email or phone', 'identifier', 'text', 'username', error));
     else if (url.pathname === '/signin/pwd') send(form('/signin/pwd', 'Enter your password', 'password', 'password', 'current-password', error));
     else if (url.pathname === '/signin/challenge/totp') send(form('/signin/challenge/totp', 'Enter the 6-digit code', 'totp', 'text', 'one-time-code', error));
+    else if (url.pathname === '/embedded') send(page('Embedded', '<h1>Pay</h1><iframe src="/signin/identifier" width="400" height="200"></iframe>'));
+    else if (url.pathname === '/signin/jsform') send(page('JS form', '<label>Email or phone<input name="identifier" type="text" autocomplete="username"></label><button type="button" onclick="location=\'/signin/pwd\'">Next</button>'));
+    else if (request.headers['sec-fetch-dest'] === 'iframe') send(page('Done', '<script>top.location = "/home"</script>'));
     else send(page('Home', '<h1>Welcome</h1>'));
   });
   await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve));
@@ -70,14 +73,14 @@ afterEach(async () => {
   mfa = false;
 });
 
-async function signIn(answers: Record<string, string>, options: { newAccount?: boolean } = {}): Promise<{ outcome: string; asked: string[][]; options: (readonly string[] | undefined)[]; at: string; page: Page }> {
+async function signIn(answers: Record<string, string>, options: { newAccount?: boolean; start?: string } = {}): Promise<{ outcome: string; asked: string[][]; options: (readonly string[] | undefined)[]; at: string; page: Page }> {
   const context = await browser!.newContext({ ignoreHTTPSErrors: true });
   const tab = await context.newPage();
-  await tab.goto(`${base}/signin/identifier`);
+  await tab.goto(`${base}${options.start ?? '/signin/identifier'}`);
   const asked: string[][] = [];
   const offered: (readonly string[] | undefined)[] = [];
   const outcome = await loginComputerPage({
-    stateDir, page: tab, ...options,
+    stateDir, page: tab, newAccount: options.newAccount,
     ask: async (_site: string, fields: readonly LoginField[]) => {
       asked.push(fields.map(field => field.key));
       offered.push(fields[0]!.options);
@@ -143,4 +146,18 @@ it.skipIf(!enabled)('uses the one saved account without asking, and replaces its
   expect(fixed).toMatchObject({ outcome: 'signed_in', asked: [['account'], ['username'], ['password']] });
   expect(await savedLoginsForSite(stateDir, `${base}/`)).toEqual([{ id, label: 'one@example.com', rejected: false }]);
   expect((await savedLoginFields(stateDir, `${base}/`, id)).password).toBe('correct-new');
+}, 60_000);
+
+it.skipIf(!enabled)('signs in through a form embedded in an iframe', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-login-real-'));
+  const result = await signIn({ username: 'one@example.com', password: 'correct-one' }, { start: '/embedded' });
+  expect(result).toMatchObject({ outcome: 'signed_in', asked: [['username'], ['password']], at: '/home' });
+  expect(received).toEqual(['/signin/identifier=one@example.com', '/signin/pwd=correct-one']);
+}, 60_000);
+
+it.skipIf(!enabled)('clicks the button when Enter does not submit the form', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-login-real-'));
+  const result = await signIn({ username: 'one@example.com', password: 'correct-one' }, { start: '/signin/jsform' });
+  expect(result).toMatchObject({ outcome: 'signed_in', asked: [['username'], ['password']], at: '/home' });
+  expect(received).toEqual(['/signin/pwd=correct-one']);
 }, 60_000);
