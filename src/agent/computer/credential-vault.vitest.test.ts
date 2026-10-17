@@ -59,6 +59,7 @@ it('fills an email-first sign-in without returning the saved password', async ()
       count: async () => selector.includes('password') ? step : 1 - step,
       fill: async (value: string) => { filled.push(value); },
       press: async () => { step = 1; },
+      waitFor: async () => undefined,
     }),
     getByRole: () => ({ count: async () => 0 }),
     waitForTimeout: async () => undefined,

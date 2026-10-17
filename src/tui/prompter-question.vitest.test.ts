@@ -46,6 +46,20 @@ describe('a harness question in the terminal', () => {
     } finally { rl.close(); }
   });
 
+  it('preserves spaces in a hidden password answer', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const { rl, key } = open();
+    try {
+      const answered = rl.askQuestions({ title: 'Private login', questions: [
+        { id: 'password', prompt: 'Password', options: [], secret: true },
+      ] });
+      vi.setSystemTime(Date.now() + 1000);
+      for (const ch of ' pass ') key(ch);
+      key('\r');
+      await expect(answered).resolves.toEqual({ kind: 'answered', answers: { password: [' pass '] } });
+    } finally { rl.close(); }
+  });
+
   it('is cancelled by Esc', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     const { rl, key } = open();

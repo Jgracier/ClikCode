@@ -12,15 +12,16 @@ to the same browser. It does not attach to a personal Chrome profile. Existing
 sign-ins in that profile remain available across turns.
 
 For an HTTPS login, `computer_web login` reuses the site's sole saved login or
-gives the user a private form for the site's account ID, email and password.
+prompts for its account ID, email and password in the ClikCode terminal or VS
+Code panel. These values go directly from the UI to the local worker and vault;
+the model receives only the tool's completion status.
 ClikCode generates a random
 32-byte vault key automatically on first use. It stores that key in a private
 local file (`computer/vault/vault.key`, mode 0600), and encrypts each saved login
 with AES-256-GCM in a separate file. No setup or vault password is required.
-The private form uses a short-lived Tailcat link to send the login directly to
-the local worker over an encrypted connection. It needs no ClikDeploy or
-Tailscale account. The agent sees only the form link and a completion status;
-the tool result does not contain the website password or email.
+The password and other login fields are hidden in the terminal and panel and
+are omitted from the transcript. No ClikDeploy or Tailscale account is needed
+to enter them.
 
 The login action fills and submits the same HTTPS origin. It reads the key and
 decrypts the item inside the worker, including after the worker restarts. The

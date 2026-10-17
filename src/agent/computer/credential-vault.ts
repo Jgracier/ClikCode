@@ -8,7 +8,8 @@ import { protectLoginPage } from './private-page.js';
 const SESSION_MS = 10 * 60_000;
 const sessions = new Map<string, { key: Buffer; expires: number }>();
 export class CredentialError extends Error {}
-type Item = { origin: string; accountId: string; email: string; password: string };
+export type PrivateLogin = { accountId: string; email: string; password: string };
+type Item = { origin: string } & PrivateLogin;
 
 function vaultDir(stateDir: string): string { return path.join(stateDir, 'computer', 'vault'); }
 function keyFile(stateDir: string): string { return path.join(vaultDir(stateDir), 'vault.key'); }
@@ -125,7 +126,9 @@ export async function fillCredential(stateDir: string, page: Page, id: string): 
     if (await password.count() === 1) { await password.fill(item.password); return; }
     if (!next) throw new CredentialError('No matching login field is visible. Use the phone handoff.');
     await next.press('Enter');
-    await page.waitForTimeout(750);
+    // Email-first sites such as Google may take several seconds to render the
+    // password step; pressing Enter again during that transition duplicates it.
+    await password.waitFor({ state: 'visible', timeout: 10_000 }).catch(() => undefined);
   }
   throw new CredentialError('The website needs more login steps. Use the phone handoff.');
 }

@@ -5,8 +5,6 @@ const params = new URLSearchParams(location.hash.slice(1));
 const addr = params.get('addr');
 const token = params.get('token');
 const port = Number(params.get('port'));
-const mode = params.get('mode');
-const site = params.get('site');
 history.replaceState(null, '', location.pathname);
 const status = message => { $('status').textContent = message; };
 let conn;
@@ -43,7 +41,6 @@ async function readFrames() {
       pending = pending.slice(end + 1);
       const message = JSON.parse(line);
       if (message.type === 'frame' && typeof message.data === 'string') showFrame(message);
-      else if (message.type === 'saved') { status('Login saved. Return to ClikCode.'); $('credential').hidden = true; return; }
       else if (message.type === 'done') { status('Done. ClikCode will continue.'); return; }
     }
   }
@@ -60,31 +57,8 @@ $('tab').onclick = () => void send({ type: 'key', key: 'Tab' });
 $('up').onclick = () => void send({ type: 'scroll', direction: 'up' });
 $('down').onclick = () => void send({ type: 'scroll', direction: 'down' });
 $('done').onclick = () => { void send({ type: 'done' }); $('controls').style.display = 'none'; status('Finishing…'); };
-$('credential').onsubmit = event => {
-  event.preventDefault();
-  const button = $('credential').querySelector('button[type="submit"]');
-  if (button.disabled) return;
-  const accountId = $('accountId').value;
-  const email = $('email').value;
-  const password = $('password').value;
-  if ((!accountId && !email) || !password) { status('Enter an email or account ID and a password.'); return; }
-  button.disabled = true;
-  void send({ type: 'credential', accountId, email, password }).then(sent => {
-    if (!sent) { button.disabled = false; return; }
-    $('accountId').value = '';
-    $('email').value = '';
-    $('password').value = '';
-    status('Saving login securely…');
-  });
-};
-
 async function start() {
   if (!addr?.startsWith('tc') || !/^[A-Za-z0-9_-]{43}$/.test(token ?? '') || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('This link is incomplete. Ask ClikCode for a new one.');
-  if (mode === 'credential') {
-    const origin = new URL(site).origin;
-    if (new URL(site).protocol !== 'https:' || origin !== site) throw new Error('Invalid login site.');
-    $('site').textContent = origin;
-  }
   const ready = new Promise(resolve => { globalThis.onTailcatReady = resolve; });
   const response = await fetch('main.wasm.gz');
   if (!response.ok) throw new Error('Could not load the handoff.');
@@ -96,7 +70,6 @@ async function start() {
   status('Connecting securely…');
   conn = await tailcatDial({ addr, derpMapURL: 'https://tailcat.dev/derpmap.json', port });
   await send({ type: 'hello' });
-  if (mode === 'credential') { $('credential').hidden = false; status('Enter the login below. It will be saved on your computer.'); }
   await readFrames();
 }
 start().catch(() => status('Could not connect. Ask ClikCode for a new handoff link.'));

@@ -171,7 +171,7 @@ export function questionKey(this: TerminalHarnessPrompter, turn: WaitingTurn, pe
     }
     case 'submit': {
       if (state.typing) {
-        const text = turn.draft.trim();
+        const text = state.question.secret ? turn.draft : turn.draft.trim();
         if (!text) {
           if (state.question.multiSelect && state.picked.size) return finish(questionValues(state, undefined));
           if (state.question.optional) return finish([]);
