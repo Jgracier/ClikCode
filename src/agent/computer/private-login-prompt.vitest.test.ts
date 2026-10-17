@@ -52,11 +52,11 @@ it('asks which saved account as an option list, keeps the answer secret, and ref
   await expect(askPrivateLogin(observer, 'https://example.com', [field])).rejects.toThrow('listed options');
 });
 
-it('shows a known value as "Keep …" with room to type another, and lets an optional field stay empty', async () => {
+it('starts a known value in the text box to edit or leave alone, and lets an optional field stay empty', async () => {
   let request: HarnessQuestionRequest | undefined;
   const observer = { askQuestions: async (asked: HarnessQuestionRequest) => {
     request = asked;
-    return { kind: 'answered' as const, answers: { phone: ['Keep +17195550123'], city: ['Calhan'] } };
+    return { kind: 'answered' as const, answers: { phone: ['+17195550123'], city: ['Calhan'] } };
   } } as TurnObserver;
   expect(await askPrivateLogin(observer, 'https://profile.clikcode', [
     { index: 0, key: 'phone', label: 'Phone', kind: 'text', required: true, current: '+17195550123' },
@@ -64,6 +64,6 @@ it('shows a known value as "Keep …" with room to type another, and lets an opt
     { index: 2, key: 'organization', label: 'Company (optional)', kind: 'text', required: false },
   ])).toEqual({ phone: '+17195550123', city: 'Calhan', organization: '' });
   expect(request?.title).toBe('Your autofill profile');
-  expect(request?.questions[0]).toMatchObject({ options: [{ label: 'Keep +17195550123' }], allowFreeText: true });
+  expect(request?.questions[0]).toMatchObject({ options: [], initial: '+17195550123' });
   expect(request?.questions[2]).toMatchObject({ optional: true });
 });

@@ -33,6 +33,8 @@ export interface HarnessQuestion {
   secret?: boolean;
   /** Display only: false shows private text while typing. Passwords stay masked. */
   maskInput?: boolean;
+  /** A free-text question that starts with this text in the box, for the user to edit or leave alone (a saved value). */
+  initial?: string;
   /** The user may leave it unanswered (shown as a Skip row). */
   optional?: boolean;
 }
