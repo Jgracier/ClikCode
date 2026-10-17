@@ -94,7 +94,7 @@ export function QuestionCard({ approval, position, total, onAnswer }: {
   const shownAt = useRef(Date.now());
   const [guarded, setGuarded] = useState(true);
   const [picks, setPicks] = useState<Record<string, string[]>>({});
-  const [typed, setTyped] = useState<Record<string, string>>({});
+  const [typed, setTyped] = useState<Record<string, string>>(() => Object.fromEntries(request.questions.filter((question) => question.initial).map((question) => [question.id, question.initial!])));
   const card = useRef<HTMLDivElement>(null);
   useEffect(() => { const timer = setTimeout(() => setGuarded(false), APPROVAL_GUARD_MS); return () => clearTimeout(timer); }, []);
   // A lone choice (which saved account to sign in with) is answered from the

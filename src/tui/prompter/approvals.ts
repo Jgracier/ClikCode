@@ -139,8 +139,8 @@ export function questionKey(this: TerminalHarnessPrompter, turn: WaitingTurn, pe
   const typeIn = (): void => {
     state.typing = true;
     this.tellingInstead ??= { draft: turn.draft, cursor: turn.cursor };
-    turn.draft = '';
-    turn.cursor = 0;
+    turn.draft = state.question.initial ?? '';
+    turn.cursor = turn.draft.length;
     this.updateWaiting();
   };
   switch (action.type) {
@@ -200,8 +200,8 @@ export function presentNextApproval(this: TerminalHarnessPrompter): boolean {
   if (asked && startsTyping(asked.question) && this.turn && !this.pendingApproval.needsFocus) {
     asked.typing = true;
     this.tellingInstead = { draft: this.turn.draft, cursor: this.turn.cursor };
-    this.turn.draft = '';
-    this.turn.cursor = 0;
+    this.turn.draft = asked.question.initial ?? '';
+    this.turn.cursor = this.turn.draft.length;
   }
   if (this.turn) {
     this.turn.label = next.question ? 'waiting for your answer' : 'waiting for approval';
