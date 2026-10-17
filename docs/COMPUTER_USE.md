@@ -53,10 +53,11 @@ withheld while one holds a value). There is no "sign-in page" mode to get stuck 
   one a site refuses is asked about next time.
 - `/computer login [url] [--new]` does it from the command line; `/computer logins` lists and
   removes saved logins (the model sees only a count).
-- A CAPTCHA, or MFA that needs hands: `handoff` returns a one-use phone link at once (static
-  page `site/handoff/` on `gh-pages`, an encrypted Tailcat connection, no ClikDeploy or
-  Tailscale account); the agent gives it to you, then calls `handoff` again to wait until you
-  finish.
+- A CAPTCHA, a card, or MFA that needs hands: `handoff` returns a one-use link at once, served from
+  this computer's Tailscale address, so the phone connects directly (no relay, no third-party host;
+  the phone just has to be on the same tailnet). The agent gives you the link, then calls `handoff`
+  again to wait until you tap Done. Without Tailscale a handoff says so, and the step is finished at
+  the computer.
 - **Each chat has its own tab** in the shared Chrome: a chat only sees, acts on and follows
   tabs it opened itself, so chats working at once do not collide. `close` closes that chat's
   tab only.
