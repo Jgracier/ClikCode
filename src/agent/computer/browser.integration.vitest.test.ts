@@ -262,3 +262,52 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('reads a signup form and 
     await rm(stateDir, { recursive: true, force: true });
   }
 }, 30_000);
+
+it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('fills a form from the saved profile without asking, formats the phone for the field, asks only for the rest and keeps it', async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'clikcode-computer-profile-'));
+  const server = createServer((_request, response) => {
+    response.setHeader('Content-Type', 'text/html');
+    response.end(`<form><label>First name <input name=fn autocomplete=given-name></label>
+      <label>Phone <input name=ph type=tel placeholder="(702) 123-4567"></label>
+      <label>Company <input name=co autocomplete=organization></label>
+      <label>Plan <select name=plan><option>Free</option><option>Pro</option></select></label>
+      <div id=dd role=combobox tabindex=0 onclick="this.nextElementSibling.hidden=false">Pick a region</div><ul hidden><li role=option onclick="document.getElementById('dd').textContent=this.textContent;this.parentElement.hidden=true">US West</li><li role=option onclick="document.getElementById('dd').textContent=this.textContent;this.parentElement.hidden=true">US East</li></ul>
+      <button id=go disabled>Continue</button></form>
+      <script>const fn=document.querySelector('[name=fn]'),ph=document.querySelector('[name=ph]'),go=document.getElementById('go');
+      const check=()=>{go.disabled=!(fn.value.length>1&&/^\\(\\d{3}\\) \\d{3}-\\d{4}$/.test(ph.value))};fn.addEventListener('input',check);ph.addEventListener('input',check);
+      ph.addEventListener('input',()=>{const d=ph.value.replace(/\\D/g,'');if(d.length===10&&!ph.value.includes('('))ph.value='('+d.slice(0,3)+') '+d.slice(3,6)+'-'+d.slice(6)});</script>`);
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    await setComputerEnabled(stateDir, true);
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('No local HTTP port');
+    const { saveProfile, listProfiles } = await import('./profiles.js');
+    await saveProfile(stateDir, { label: 'Personal', fields: { given_name: 'Ada', phone: '+17195550123' } });
+    const asked: string[] = [];
+    const ctx = { stateDir, acceptsImages: false, requestPrivateLogin: async (_site: string, fields: readonly { key: string; label: string }[]) => { asked.push(...fields.map(field => field.label)); return Object.fromEntries(fields.map(field => [field.key, 'Lovelace Ltd'])); } } as unknown as ToolContext;
+    const run = (args: Record<string, unknown>) => computerWebTool.run(args, ctx);
+    const opened = (await run({ action: 'open', url: `http://127.0.0.1:${address.port}/` })).output;
+    const ref = (role: string, name: string): string => new RegExp(`${role} "${name}" \\[ref=(\\w+)\\]`).exec(opened)![1]!;
+    const filled = await run({ action: 'steps', steps: [{ do: 'fill', target: ref('textbox', 'First name') }, { do: 'fill', target: ref('textbox', 'Phone') }, { do: 'fill', target: ref('textbox', 'Company') }] });
+    expect(asked).toEqual(['Company']);
+    const page = await computerPage(stateDir);
+    expect(await page.locator('[name=fn]').inputValue()).toBe('Ada');
+    expect(await page.locator('[name=ph]').inputValue()).toBe('(719) 555-0123');
+    expect(await page.locator('#go').isDisabled()).toBe(false);
+    expect(filled.output).not.toContain('is disabled');
+    expect((await listProfiles(stateDir))[0]!.fields.organization).toBe('Lovelace Ltd');
+    await run({ action: 'choose', target: 'Pick a region', text: 'US West' });
+    expect(await page.locator('#dd').textContent()).toBe('US West');
+    await run({ action: 'choose', target: 'Plan', text: 'Pro' });
+    expect(await page.locator('[name=plan]').inputValue()).toBe('Pro');
+    // A fix the agent makes: its own text wins, and the report says why a button stays disabled.
+    await run({ action: 'fill', target: ref('textbox', 'First name'), text: 'A' });
+    const report = await run({ action: 'fill', target: ref('textbox', 'Phone'), text: '12' });
+    expect(report.output).toContain('"Continue" button is disabled');
+  } finally {
+    await closeComputerBrowser(stateDir);
+    server.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+}, 60_000);
