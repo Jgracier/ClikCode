@@ -27,6 +27,8 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   // (binds a socket, writes a runtime record) that only makes sense as a
   // spawn target.
   program.command('session-worker <id>', { hidden: true }).action((id: string) => runSessionWorker(id));
+  program.command('mcp-serve').description("Serve ClikCode's computer tools to a harness over MCP (stdio); started for you in every harness session")
+    .action(async () => (await import('../commands/mcp-serve.js')).mcpServe());
   program.command('computer-host <stateDir>', { hidden: true }).action(async (stateDir: string) => (await import('../agent/computer/browser-host.js')).runComputerHost(stateDir));
   // An editor extension's client (ide/bridge.ts), over an IPC channel the
   // extension opens; and the terminal it runs a vendor sign-in in. Hidden for
@@ -53,6 +55,31 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .option('--chat <chat>', 'Chat id, prefix or name when run outside a chat')
     .option('--new', 'Sign in with a different account instead of the saved one')
     .action(async (url: string | undefined, options: { chat?: string; new?: boolean }) => (await import('../commands/computer.js')).computerLogin(options.chat, { ...(url ? { url } : {}), ...(options.new ? { newAccount: true } : {}) }));
+  computer.command('tool <name>').description('Run a computer tool (computer_web, computer_desktop, store_secret) in the current chat; prints its scrubbed result')
+    .option('--args-json <json>', 'The tool arguments as one JSON object', '{}')
+    .option('--chat <chat>', 'Chat to use when run from outside a ClikCode chat')
+    .action(async (name: string, options: { argsJson: string; chat?: string }) => {
+      let args: unknown;
+      try { args = JSON.parse(options.argsJson); } catch { throw new Error('--args-json must be a JSON object'); }
+      if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('--args-json must be a JSON object');
+      await (await import('../commands/computer.js')).computerTool(name, args as Record<string, unknown>, options.chat);
+    });
+  computer.command('capture <secret-name>').description('Get an API key from the open page into Secrets Manager without showing it (click the Create button first with --click role:name)')
+    .option('--click <role:name>', 'The button that makes the site show the key, for example button:Create')
+    .option('--remote', 'Also print a phone link so the Copy button can be tapped remotely')
+    .option('--chat <chat>', 'Chat to use when run from outside a ClikCode chat')
+    .action(async (secret: string, options: { click?: string; remote?: boolean; chat?: string }) => {
+      const click = options.click ? /^([a-z]+):(.+)$/.exec(options.click) : undefined;
+      if (options.click && !click) throw new Error('--click is role:name, for example button:Create');
+      await (await import('../commands/computer.js')).computerTool('computer_web', { action: 'capture_secret', secret_name: secret,
+        ...(click ? { role: click[1], name: click[2] } : {}), ...(options.remote ? { remote: true } : {}) }, options.chat);
+    });
+  computer.command('store <secret-name>').description('Send a saved secret to ClikDeploy as KEY (asks you to approve)')
+    .requiredOption('--key <KEY>', 'The name at the destination, for example SALAD_API_KEY')
+    .option('--app <id>', 'Set an app secret instead of a platform secret')
+    .option('--chat <chat>', 'Chat to use when run from outside a ClikCode chat')
+    .action(async (secret: string, options: { key: string; app?: string; chat?: string }) =>
+      (await import('../commands/computer.js')).computerTool('store_secret', { secret, destination: 'clikdeploy', key: options.key, ...(options.app ? { app: options.app } : {}) }, options.chat));
   computer.command('logins').description('Review and remove saved logins in the current chat (shown only to you)')
     .option('--chat <chat>', 'Chat id, prefix or name when run outside a chat')
     .action(async (options: { chat?: string }) => (await import('../commands/computer.js')).computerLogin(options.chat, { manage: true }));

@@ -47,9 +47,30 @@ never a screenshot. `computer_web login` does the rest in one action:
 
 `/computer login [url] [--new]` does the same from the command line, and
 `/computer logins` lists saved logins as `site · username` so you can remove
-one; the model sees only a count. Both work in every harness. Other harnesses
-do not get `computer_web`, but can run `clikcode computer inspect` and
-`clikcode computer login`.
+one; the model sees only a count.
+
+## In every harness
+
+The tools are not tied to ClikCode's own agent. They run in the chat's worker,
+and a harness reaches them two ways:
+
+- **MCP, automatically.** `clikcode mcp-serve` is a built-in MCP server named
+  `clikcode` (tools `computer_web`, `computer_desktop`, `store_secret`). It is
+  handed to every ACP harness session as that session starts, nothing is
+  installed or written into the harness's config, and it ships in every ClikCode
+  install, including the VS Code extension's own copy. It follows
+  `/computer off`, and a server you record under the same name replaces it.
+  `clikcode mcp list` shows it.
+- **CLI, for anything else.** `clikcode computer tool <name> --args-json …`
+  runs any of them; `computer capture <secret-name> --click button:Create` and
+  `computer store <secret-name> --key SALAD_API_KEY` are the short forms;
+  `computer login` and `computer inspect` already existed.
+
+Either way the private prompts appear in the chat's terminal or VS Code panel
+(so a chat window must be open), `store_secret` asks you to approve in that
+window even if the harness would not, and results are scrubbed in the worker
+before the harness sees them. The Codex app-server route does not take the
+built-in server yet; use the CLI there.
 
 ## ClikCode Secrets Manager
 

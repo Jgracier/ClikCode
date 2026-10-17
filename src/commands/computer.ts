@@ -76,3 +76,13 @@ export async function computerLogin(chat?: string, options: { url?: string; newA
     else process.stdout.write(`${result.message}\n`);
   } finally { client.close(); }
 }
+
+/** Run one computer tool in the current chat's worker. For a harness with no MCP, a script,
+ * or a person at a shell: the output is the same scrubbed status the MCP server returns. */
+export async function computerTool(tool: string, args: Record<string, unknown>, chat?: string): Promise<void> {
+  const { callWorkerTool } = await import('./computer-tool-client.js');
+  const result = await callWorkerTool({ ...(chat ? { chat } : {}), tool, args });
+  if (isJsonDefaultMode()) emitResult({ computer: { ok: result.ok, output: result.output } });
+  else process.stdout.write(`${result.output}\n`);
+  if (!result.ok) process.exitCode = 1;
+}

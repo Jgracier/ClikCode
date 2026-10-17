@@ -13,6 +13,8 @@ import { loginComputerPage, loginOutcomeMessage } from '../agent/computer/login-
 import { LoginError } from '../agent/computer/login-error.js';
 import { manageSavedLogins } from '../agent/computer/login-manager.js';
 import { askPrivateLogin } from '../agent/computer/private-login-prompt.js';
+import { runSharedComputerTool } from './computer-tool.js';
+import { homedir } from 'node:os';
 import { sendEvent, windowReadsSaved } from './broadcast-observer.js';
 import type { ClientCommand } from './protocol.js';
 import { createAgentsCommand } from './worker-agents.js';
@@ -149,6 +151,19 @@ export function createCommandHandler(ctx: WorkerContext) {
           if (!socket.destroyed) sendEvent(socket, { type: 'computer-login-result', id: command.id, ok: false,
             message: error instanceof LoginError ? error.message : 'Private login did not finish. Check the browser and try again.' });
         } finally { socket.off('close', cancel); }
+      })();
+      return;
+    }
+    if (command.type === 'computer-tool') {
+      sendEvent(socket, { type: 'computer-tool-started', id: command.id });
+      const controller = new AbortController();
+      const cancel = (): void => controller.abort();
+      socket.once('close', cancel);
+      void (async () => {
+        const result = await runSharedComputerTool({ observer, stateDir: stateDirectory(), homeDir: homedir(), tool: command.tool, args: command.args,
+          signal: controller.signal, windows: () => observer.attachedCount });
+        if (!socket.destroyed) sendEvent(socket, { type: 'computer-tool-result', id: command.id, ...result });
+        socket.off('close', cancel);
       })();
       return;
     }

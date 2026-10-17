@@ -77,6 +77,8 @@ export type ClientCommand =
   | { type: 'question-response'; id: string; result: HarnessQuestionResult }
   /** A private website login requested from this conversation, including a vendor harness chat. */
   | { type: 'computer-login'; id: string; url?: string; newAccount?: true; manage?: true }
+  /** A shared computer tool run in this chat's worker (the MCP server and the CLI send these). */
+  | { type: 'computer-tool'; id: string; tool: string; args: Record<string, unknown> }
   /** The vendor sign-in a `sign-in-request` asked for has finished, on the
    * client's own terminal; `error` when it failed. */
   | { type: 'sign-in-response'; id: string; error?: string }
@@ -160,6 +162,8 @@ export type WorkerEvent =
   | { type: 'attach-rejected'; reason: string }
   | { type: 'computer-login-result'; id: string; ok: boolean; message: string }
   | { type: 'computer-login-started'; id: string }
+  | { type: 'computer-tool-started'; id: string }
+  | { type: 'computer-tool-result'; id: string; ok: boolean; output: string }
   | { type: 'retire-declined'; reason: string }
   /** `live` is present exactly while a turn runs: a snapshot without it says
    * nothing is running, including the one that closes a turn. */
