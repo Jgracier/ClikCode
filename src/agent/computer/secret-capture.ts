@@ -25,7 +25,7 @@ export async function captureSecret(input: {
   existing?: boolean;
   ask(name: string, hint: string, signal: AbortSignal): Promise<string | undefined>;
   /** Tests the value against its service before it is saved. Default: the built-in checks by site. */
-  check?(pageUrl: string, value: string): Promise<KeyCheck>;
+  check?(pageUrl: string, value: string, options: { fresh: boolean }): Promise<KeyCheck>;
   /** Where the key goes once it is captured and checked, decided and approved beforehand. */
   sendTo?: readonly Destination[];
 }): Promise<{ length: number; found: boolean; check: KeyCheck; sent: Delivery[] }> {
@@ -64,12 +64,14 @@ export async function captureSecret(input: {
     if (!value) throw new LoginError('Not saved: no key was found and none was pasted.');
     registerSecret(value);
     for (const part of secretParts(value)) registerSecret(part);
-    const check = await (input.check ?? checkKey)(input.page.url(), value);
-    // A value its own service refuses is not the key (an id, a page blob): saving it would only hide the problem.
-    if (check.verdict === 'rejected') throw new LoginError(`Not saved: ${check.detail}. What was on the page is not a working key (it may be the key's id or another value).`);
+    const check = await (input.check ?? ((url, key, options) => checkKey(url, key, fetch, options)))(input.page.url(), value, { fresh: clicked });
+    // A value its own service refuses, from a page that already showed it, is not the key (an id, a page
+    // blob): saving it would only hide the problem. A key just made by the click is different: the site
+    // shows it once, so it is kept (and held back from every destination) rather than lost.
+    if (check.verdict === 'rejected' && !clicked) throw new LoginError(`Not saved: ${check.detail}. What was on the page is not a working key (it may be the key's id or another value).`);
     await saveNamedSecret(input.stateDir, input.name, value);
     // Saved first: if a destination fails, the key is still safe in Secrets Manager and can be sent again.
-    const sent = input.sendTo?.length ? await sendToDestinations(input.stateDir, input.sendTo, value, input.signal) : [];
+    const sent = input.sendTo?.length && check.verdict !== 'rejected' ? await sendToDestinations(input.stateDir, input.sendTo, value, input.signal) : [];
     return { length: value.length, found, check, sent };
   } catch (error) {
     // The click may have made the site create a key: whoever reports the failure must be able to say so.

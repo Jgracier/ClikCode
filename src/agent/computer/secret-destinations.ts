@@ -33,6 +33,8 @@ export const DEFAULT_DESTINATIONS: Readonly<Record<string, Template>> = {
 /** A plan in whatever honest shape the agent gave it: a list, one {to, with}, or just a name. */
 export function normalizeSendTo(value: unknown): Destination[] | undefined {
   if (Array.isArray(value)) return value as Destination[];
+  // A harness whose cached schema lacks a nested argument can hand it over as JSON text.
+  if (typeof value === 'string' && /^\s*[[{]/.test(value)) { try { return normalizeSendTo(JSON.parse(value)); } catch { return undefined; } }
   if (typeof value === 'string' && value) return [{ to: value }];
   if (value && typeof value === 'object') return [value as Destination];
   return undefined;

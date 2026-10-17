@@ -48,7 +48,23 @@ function serviceAccountOf(key: string): { client_email: string; private_key: str
   } catch { return undefined; }
 }
 
-async function checkServiceAccount(account: { client_email: string; private_key: string }, fetcher: typeof fetch): Promise<KeyCheck> {
+/** Google takes up to about a minute to start accepting a service-account key it has just made: until then
+ * it answers `invalid_grant: Invalid JWT Signature` for a perfectly good key. */
+export type CheckOptions = { fresh?: boolean; pause?: (ms: number) => Promise<void> };
+const FRESH_TRIES = 8;
+const FRESH_GAP_MS = 8_000;
+
+async function checkServiceAccount(account: { client_email: string; private_key: string }, fetcher: typeof fetch, options: CheckOptions): Promise<KeyCheck> {
+  const pause = options.pause ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms)));
+  let last = await tryServiceAccount(account, fetcher);
+  for (let attempt = 1; options.fresh && last.verdict === 'rejected' && /invalid_grant/.test(last.detail) && attempt < FRESH_TRIES; attempt++) {
+    await pause(FRESH_GAP_MS);
+    last = await tryServiceAccount(account, fetcher);
+  }
+  return last;
+}
+
+async function tryServiceAccount(account: { client_email: string; private_key: string }, fetcher: typeof fetch): Promise<KeyCheck> {
   const encode = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString('base64url');
   const now = Math.floor(Date.now() / 1000);
   const unsigned = `${encode({ alg: 'RS256', typ: 'JWT' })}.${encode({ iss: account.client_email, scope: 'https://www.googleapis.com/auth/cloud-platform', aud: GOOGLE_TOKEN, iat: now, exp: now + 300 })}`;
@@ -64,9 +80,9 @@ async function checkServiceAccount(account: { client_email: string; private_key:
   } catch { return { verdict: 'untested', service: 'Google', detail: 'Google could not be reached' }; }
 }
 
-export async function checkKey(pageUrl: string, key: string, fetcher: typeof fetch = fetch): Promise<KeyCheck> {
+export async function checkKey(pageUrl: string, key: string, fetcher: typeof fetch = fetch, options: CheckOptions = {}): Promise<KeyCheck> {
   const account = serviceAccountOf(key);
-  if (account) return checkServiceAccount(account, fetcher);
+  if (account) return checkServiceAccount(account, fetcher, options);
   let host: string;
   try { host = new URL(pageUrl).hostname; } catch { return { verdict: 'untested', detail: 'no check is known for this site' }; }
   const recipe = RECIPES.find(candidate => candidate.host.test(host));

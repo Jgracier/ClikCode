@@ -166,17 +166,37 @@ it.skipIf(!enabled)('presses the site\'s own Copy button when the key never appe
   expect(await readNamedSecret(stateDir, 'masked')).toBe(KEY);
 }, 60_000);
 
-it.skipIf(!enabled)('refuses to save a value its own service rejects, and saves one it accepts', async () => {
+it.skipIf(!enabled)('refuses to save a value its own service rejects when the page already showed it, and saves one it accepts', async () => {
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
-  const tab = await open('/reveal');
-  await expect(captureSecret({ stateDir, page: tab, name: 'refused', trigger: () => tap(tab, '#go'), ask: neverAsked,
-    check: async () => ({ verdict: 'rejected', service: 'Example', detail: 'Example refused it (HTTP 401)' }) })).rejects.toMatchObject({ message: expect.stringContaining('Not saved: Example refused it'), afterClick: true });
+  const refused = { verdict: 'rejected', service: 'Example', detail: 'Example refused it (HTTP 401)' } as const;
+  const tab = await open('/existing');
+  await expect(captureSecret({ stateDir, page: tab, name: 'refused', ask: neverAsked, check: async () => refused })).rejects.toThrow('Not saved: Example refused it');
   await expect(readNamedSecret(stateDir, 'refused')).rejects.toThrow();
   const tab2 = await open('/reveal');
   const ok = await captureSecret({ stateDir, page: tab2, name: 'accepted', trigger: () => tap(tab2, '#go'), ask: neverAsked,
     check: async () => ({ verdict: 'works', service: 'Example', detail: 'Example accepted it' }) });
   expect(ok.check.verdict).toBe('works');
   expect(await readNamedSecret(stateDir, 'accepted')).toBe(KEY);
+}, 60_000);
+
+it.skipIf(!enabled)('keeps a key it just made even when its service refuses it for now, and sends it nowhere', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
+  const { chmod, mkdir, writeFile } = await import('node:fs/promises');
+  const bin = join(work, 'bin-held');
+  await mkdir(bin, { recursive: true });
+  const log = join(work, 'held.log');
+  await writeFile(log, '');
+  await writeFile(join(bin, 'clikdeploy'), `#!/bin/sh\nprintf '%s\\n' "$@" >> "${log}"\necho '{}'\n`);
+  await chmod(join(bin, 'clikdeploy'), 0o755);
+  process.env.PATH = `${bin}:${process.env.PATH}`;
+  const tab = await open('/reveal');
+  const result = await captureSecret({ stateDir, page: tab, name: 'held', trigger: () => tap(tab, '#go'), ask: neverAsked,
+    sendTo: [{ to: 'clikdeploy-secret', with: { key: 'SALAD_API_KEY' } }],
+    check: async () => ({ verdict: 'rejected', service: 'Google', detail: 'Google refused it (invalid_grant)' }) });
+  expect(result.check.verdict).toBe('rejected');
+  expect(result.sent).toEqual([]);
+  expect(await readNamedSecret(stateDir, 'held')).toBe(KEY);
+  expect(await readFile(log, 'utf8')).toBe('');
 }, 60_000);
 
 describe_('forwarding the captured key', () => {
@@ -206,8 +226,9 @@ describe_('forwarding the captured key', () => {
     stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
     const { log } = await fakeCli(`echo '{}'`);
     const tab = await open('/reveal');
-    await expect(captureSecret({ stateDir, page: tab, name: 'refused-send', trigger: () => tap(tab, '#go'), ask: neverAsked, sendTo: plan,
-      check: async () => ({ verdict: 'rejected', service: 'Example', detail: 'Example refused it (HTTP 401)' }) })).rejects.toThrow('Not saved');
+    const result = await captureSecret({ stateDir, page: tab, name: 'refused-send', trigger: () => tap(tab, '#go'), ask: neverAsked, sendTo: plan,
+      check: async () => ({ verdict: 'rejected', service: 'Example', detail: 'Example refused it (HTTP 401)' }) });
+    expect(result.sent).toEqual([]);
     expect(await readFile(log, 'utf8')).toBe('');
   }, 60_000);
 

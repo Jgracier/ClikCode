@@ -65,3 +65,9 @@ it('every correction carries a working example, so one wrong call is enough to f
   expect(unknown.output).toContain('no destination named "clikdeploy"');
   expect(unknown.output).toContain('Example: {"to":"clikdeploy-secret"');
 });
+
+it('accepts the slots as JSON text too', async () => {
+  await fake('clikdeploy', `printf '%s\\n' "$@" >> "${dir}/argv"; echo '{"status":"success","message":"ok"}'`);
+  const result = await storeSecretTool.run({ secret: 'salad/api-key', to: 'clikdeploy-secret', with: '{"key":"SALAD_API_KEY"}' } as never, ctx());
+  expect(result.output).toContain('SENT - clikdeploy-secret (SALAD_API_KEY)');
+});

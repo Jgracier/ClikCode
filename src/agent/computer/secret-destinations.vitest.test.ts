@@ -2,7 +2,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import { addDestination, destinationProblem, loadDestinations, removeDestination, sendToDestinations, slotsOf } from './secret-destinations.js';
+import { addDestination, destinationProblem, loadDestinations, normalizeSendTo, removeDestination, sendToDestinations, slotsOf } from './secret-destinations.js';
 import { forgetSecrets, registerSecret } from './secret-scrubber.js';
 
 const VALUE = 'salad_live_9f8e7d6c5b4a39281706';
@@ -84,4 +84,11 @@ it('keeps going after a destination fails, says which failed and why, and says w
   expect(results[0]).toMatchObject({ ok: false });
   expect(results[0]!.message).toContain('step-up required');
   expect(results[1]!.message).toContain('not installed');
+});
+
+it('reads a plan a harness handed over as JSON text, because its cached schema did not know the argument', () => {
+  expect(normalizeSendTo('{"to":"clikdeploy-compute","with":{"provider":"GCP","field":"serviceAccountJson"}}')).toEqual([{ to: 'clikdeploy-compute', with: { provider: 'GCP', field: 'serviceAccountJson' } }]);
+  expect(normalizeSendTo('[{"to":"github-secret","with":{"repo":"a/b","key":"K_KEY"}}]')).toHaveLength(1);
+  expect(normalizeSendTo('clikdeploy-secret')).toEqual([{ to: 'clikdeploy-secret' }]);
+  expect(normalizeSendTo('{broken')).toBeUndefined();
 });

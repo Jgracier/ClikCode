@@ -60,7 +60,10 @@ authorization; there is no extra approval step.
    Studio, Together, OpenAI, Anthropic, Groq, Mistral, DeepSeek, OpenRouter), with
    a damaged copy as a control. A Google service-account JSON is tested by getting a
    token with it (signed here; only the signed request goes, to Google's own token
-   address). A key the service refuses is **not saved**.
+   address), retrying for about a minute if the key was just made, because Google is
+   slow to accept a new one. A value the service refuses from a page that already
+   showed it is **not saved**; a key the click just made is kept even if refused (the
+   site shows it once) but is **not sent anywhere** until it checks out.
    Anything else is saved and marked "not checked", with the reason.
 3. **Save** it to ClikCode Secrets Manager (always).
 4. **Send** it on, as `send_to` says. If a destination fails the key stays saved.
