@@ -10,6 +10,8 @@ import { stateDirectory } from '../session/store/paths.js';
 import { computerEnabled } from '../agent/computer/settings.js';
 import { computerPage, openComputerPage } from '../agent/computer/browser.js';
 import { loginComputerPage, loginOutcomeMessage } from '../agent/computer/login-page.js';
+import { LoginError } from '../agent/computer/login-error.js';
+import { manageSavedLogins } from '../agent/computer/login-manager.js';
 import { askPrivateLogin } from '../agent/computer/private-login-prompt.js';
 import { sendEvent, windowReadsSaved } from './broadcast-observer.js';
 import type { ClientCommand } from './protocol.js';
@@ -125,22 +127,27 @@ export function createCommandHandler(ctx: WorkerContext) {
       void (async () => {
         try {
           const stateDir = stateDirectory();
-          if (!await computerEnabled(stateDir)) throw new Error('Computer use is off.');
+          if (!await computerEnabled(stateDir)) throw new LoginError('Computer use is off.');
           // This command's own IPC client cannot display question fields.
-          if (observer.attachedCount < 2) throw new Error('No interactive chat is attached.');
+          if (observer.attachedCount < 2) throw new LoginError('No chat window is open to show the prompt. Open this chat in the terminal or VS Code.');
+          if (command.manage) {
+            const message = await manageSavedLogins(observer, stateDir, controller.signal);
+            if (!socket.destroyed) sendEvent(socket, { type: 'computer-login-result', id: command.id, ok: true, message });
+            return;
+          }
           const page = command.url ? await openComputerPage(stateDir) : await computerPage(stateDir);
           if (command.url) {
             const url = new URL(command.url);
-            if (url.protocol !== 'https:' || url.username || url.password) throw new Error('Private login needs an HTTPS website URL without credentials.');
+            if (url.protocol !== 'https:' || url.username || url.password) throw new LoginError('Private login needs an HTTPS website URL without credentials.');
             await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 30_000 });
           }
           const outcome = await loginComputerPage({ stateDir, page, signal: controller.signal, ...(command.newAccount ? { newAccount: true } : {}),
             ask: (site, fields, signal) => askPrivateLogin(observer, site, fields, signal) });
           if (!socket.destroyed) sendEvent(socket, { type: 'computer-login-result', id: command.id,
             ok: outcome !== 'unverified' && outcome !== 'saved_login_rejected', message: loginOutcomeMessage(outcome) });
-        } catch {
+        } catch (error) {
           if (!socket.destroyed) sendEvent(socket, { type: 'computer-login-result', id: command.id, ok: false,
-            message: 'Private login did not finish. Check the browser and try again.' });
+            message: error instanceof LoginError ? error.message : 'Private login did not finish. Check the browser and try again.' });
         } finally { socket.off('close', cancel); }
       })();
       return;

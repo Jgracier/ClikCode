@@ -10,29 +10,43 @@ const browser = vi.hoisted(() => {
   let step = 0;
   let advance = true;
   let emailOnly = false;
-  let rejectPassword = false;
-  let rejectedPage = false;
+  let mfa = false;
+  let rejectAt = -1;
+  let rejections = 0;
   let finishUrl = 'https://mail.google.com/mail/u/0/';
-  const field = (type: string, name: string, label: string) => ({
-    type, name, id: name, autocomplete: type === 'password' ? 'current-password' : 'username', required: true, placeholder: '', labels: [],
+  const field = (type: string, name: string, label: string, autocomplete = type === 'password' ? 'current-password' : 'username') => ({
+    type, name, id: name, autocomplete, required: true, placeholder: '', labels: [],
     getAttribute: (attribute: string) => attribute === 'aria-label' ? label : null,
   });
+  const last = () => mfa ? 3 : 2;
   const page = {
-    url: () => rejectedPage ? 'https://accounts.google.com/v3/signin/pwd?again'
+    url: () => rejections && step === rejectAt ? `https://accounts.google.com/v3/signin/again/${rejections}`
       : step === 0 ? 'https://accounts.google.com/v3/signin/identifier'
-      : step === 1 ? 'https://accounts.google.com/v3/signin/pwd' : finishUrl,
+      : step === 1 ? 'https://accounts.google.com/v3/signin/pwd'
+      : step === 2 && mfa ? 'https://accounts.google.com/v3/signin/challenge/totp' : finishUrl,
     waitForTimeout: async () => {},
     locator: (selector: string) => ({
       count: async () => selector.includes('password') ? Number(step === 1) : Number(step < 2),
-      evaluateAll: async (callback: (nodes: unknown[]) => unknown) => callback(step === 2 ? [] : [step ? field('password', 'password', 'Password') : field('text', 'identifier', 'Email or phone')]),
-      nth: () => ({ fill: async (value: string) => { filled.push(value); }, press: async (key: string) => { filled.push(key); if (rejectPassword && step === 1) { rejectedPage = true; return; } if (advance) step = emailOnly && step === 0 ? 2 : step + 1; } }),
+      evaluateAll: async (callback: (nodes: unknown[]) => unknown) => callback(step >= last() ? [] : [
+        step === 0 ? field('text', 'identifier', 'Email or phone') : step === 1 ? field('password', 'password', 'Password')
+          : field('text', 'totp', 'Enter the 6-digit code', 'one-time-code')]),
+      nth: () => ({
+        fill: async (value: string) => { filled.push(value); },
+        press: async (key: string) => {
+          filled.push(key);
+          if (step === rejectAt) { rejections++; return; }
+          if (advance) step = emailOnly && step === 0 ? last() : step + 1;
+        },
+      }),
       fill: async (value: string) => { filled.push(value); },
       press: async (key: string) => { filled.push(key); },
     }),
     getByRole: () => ({ count: async () => 0 }),
   };
-  return { filled, page, reset: () => { step = 0; advance = true; emailOnly = false; rejectPassword = false; rejectedPage = false; finishUrl = 'https://mail.google.com/mail/u/0/'; },
-    stopAdvancing: () => { advance = false; }, rejectPassword: () => { rejectPassword = true; }, reuseSession: () => { emailOnly = true; },
+  return { filled, page,
+    reset: () => { step = 0; advance = true; emailOnly = false; mfa = false; rejectAt = -1; rejections = 0; finishUrl = 'https://mail.google.com/mail/u/0/'; },
+    stopAdvancing: () => { advance = false; }, rejectPassword: () => { rejectAt = 1; }, rejectCode: () => { mfa = true; rejectAt = 2; },
+    requireMfa: () => { mfa = true; }, reuseSession: () => { emailOnly = true; }, signedIn: () => { step = last(); },
     requireVerification: () => { finishUrl = 'https://accounts.google.com/v3/signin/challenge/dp'; } };
 });
 vi.mock('../computer/browser.js', () => ({ computerPage: async () => browser.page }));
@@ -90,7 +104,7 @@ it('does not save a password while verification is still pending', async () => {
     stateDir, requestPrivateLogin: async (_site: string, fields: { key: string }[]) => fields[0].key === 'password'
       ? { password: 'private-secret' } : { username: 'private@example.com' },
   } as ToolContext);
-  expect(result.output).toContain('verification');
+  expect(result.output).toMatch(/erification is still pending/);
   expect(result.output).toContain('not saved');
   await expect(readdir(join(stateDir, 'computer', 'vault', 'items'))).rejects.toThrow();
 });
@@ -111,7 +125,7 @@ it('does not fall back to a phone credential link when no private client UI is a
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-private-login-headless-'));
   const result = await computerWebTool.run({ action: 'login' }, { stateDir } as ToolContext);
   expect(result.isError).toBe(true);
-  expect(result.output).toContain('Private login did not finish');
+  expect(result.output).toBe('This chat cannot show private login fields.');
   expect(result.output).not.toContain('https://jgracier.github.io');
 });
 
@@ -213,4 +227,45 @@ it('offers the picker again after the site refuses a saved password, so a new on
   expect(asked[0]![0]!.kind).toBe('choice');
   expect(await savedLoginsForSite(stateDir, GOOGLE)).toEqual([{ id, label: 'one@example.com', rejected: false }]);
   expect((await savedLoginFields(stateDir, GOOGLE, id)).password).toBe('pw-fixed');
+});
+
+it('asks for a one-time code every time, fills it, and never saves it', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-private-login-code-'));
+  browser.requireMfa();
+  const asked: string[][] = [];
+  const answers: Record<string, string> = { username: 'one@example.com', password: 'pw-one', code: '123456' };
+  const ctx = { stateDir, requestPrivateLogin: async (_s: string, fields: { key: string }[]) => { asked.push(fields.map(field => field.key)); return { [fields[0]!.key]: answers[fields[0]!.key]! }; } } as ToolContext;
+  const first = await computerWebTool.run({ action: 'login' }, ctx);
+  expect(first.isError).toBeUndefined();
+  expect(asked).toEqual([['username'], ['password'], ['code']]);
+  expect(browser.filled).toEqual(['one@example.com', 'Enter', 'pw-one', 'Enter', '123456', 'Enter']);
+  const [saved] = await savedLoginsForSite(stateDir, GOOGLE);
+  expect(Object.keys(await savedLoginFields(stateDir, GOOGLE, saved!.id)).sort()).toEqual(['password', 'username']);
+  expect(JSON.stringify(first)).not.toMatch(/123456|one@example|pw-one/);
+
+  browser.reset(); browser.requireMfa(); browser.filled.length = 0; asked.length = 0;
+  answers.code = '654321';
+  expect((await computerWebTool.run({ action: 'login' }, ctx)).isError).toBeUndefined();
+  expect(asked).toEqual([['code']]);
+  expect(browser.filled).toEqual(['one@example.com', 'Enter', 'pw-one', 'Enter', '654321', 'Enter']);
+});
+
+it('stops after two wrong codes and saves nothing', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-private-login-badcode-'));
+  browser.rejectCode();
+  const asked: string[][] = [];
+  const answers: Record<string, string> = { username: 'one@example.com', password: 'pw-one', code: '000000' };
+  const ctx = { stateDir, requestPrivateLogin: async (_s: string, fields: { key: string }[]) => { asked.push(fields.map(field => field.key)); return { [fields[0]!.key]: answers[fields[0]!.key]! }; } } as ToolContext;
+  const result = await computerWebTool.run({ action: 'login' }, ctx);
+  expect(result.isError).toBe(true);
+  expect(asked.filter(fields => fields[0] === 'code')).toHaveLength(2);
+  expect(await savedLoginsForSite(stateDir, GOOGLE)).toEqual([]);
+});
+
+it('says why when there is nothing to sign in to, without quoting the page', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-private-login-none-'));
+  browser.signedIn();
+  const result = await computerWebTool.run({ action: 'login' }, person({}));
+  expect(result.isError).toBe(true);
+  expect(result.output).toBe('No sign-in form is visible. If a verification or CAPTCHA is showing, use handoff.');
 });

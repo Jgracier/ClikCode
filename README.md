@@ -273,6 +273,7 @@ when you would rather type than pick.
 | `clikcode search <words>` | Find the conversations that mention something, any provider, most mentions first; `--json` gives each hit and its first mention |
 | `clikcode logs [--session <id>] [--role <role>] [--since 10m] [-f]` | What every ClikCode window, worker and editor bridge did, in order; the first place to look when something went wrong |
 | `clikcode permissions [ask\|bypass\|auto]` | Approval behavior for the active chat |
+| `clikcode computer on` / `off` / `status` / `inspect` / `login [url] [--new]` / `logins` | Browser and desktop use for ClikCode's agent, and its private sign-in: see `docs/COMPUTER_USE.md` |
 | `clikcode mcp add` / `list` / `remove` / `login` / `logout` | MCP servers for ClikCode's own agent (below) |
 | `clikcode plugin list` / `enable <plugin>` / `disable <plugin>` | Which of Claude Code's plugins ClikCode's own agent uses |
 | `clikcode acp add <command> <binary> [-- <flags>]` / `acp list` / `acp remove` | An ACP agent the catalog does not ship |
@@ -291,7 +292,7 @@ and `--debug` adds the stack and HTTP detail when something fails.
 Most of the time you will not type any of those. You will be in a session,
 where everything is a slash away.
 
-Pressing `/` opens a searchable list of ClikCode's 44 commands. Ten are pinned
+Pressing `/` opens a searchable list of ClikCode's 45 commands. Ten are pinned
 at the top, in the order people reach for them: resume a conversation, pick a
 tool, an account on it, then its model, start over, change what needs your
 approval, then settings, sessions, status and help. (The terminal leaves
@@ -367,6 +368,7 @@ not reversed.
 | `/fast [on\|off]` | on ClikDeploy Gateway, serve from the fastest provider of the model instead of the cheapest |
 | `/permissions [ask\|bypass\|auto]` | approval behavior |
 | `/sandbox [on\|off]` | ClikCode's own agent: its shell commands write only the workspace, temp and caches (on by default) |
+| `/computer [on\|off\|inspect\|logins\|login [url] [--new]]` | let the agent use this computer's browser and desktop. `login` signs in privately: the one saved account is used, several show a picker, new logins are saved only once sign-in completes, and one-time codes are asked for each time and never kept. `logins` reviews and removes saved logins (shown only to you); `inspect` shows the sign-in fields without their values |
 | `/agents [stop <id>\|stop all] [confirm]` | background agents: list them, or stop one. Esc, Ctrl+C, closing a window and a new ClikCode build never stop them; this does, after naming what it ends |
 | `/send [steer\|queue]` | messages typed mid-turn: steer them into the running turn at its next pause (where the agent takes steering; elsewhere they queue, and say so), or queue them for after it. Global; bare `/send` shows the two |
 | `/options` | provider-specific modes and controls |
@@ -503,7 +505,7 @@ Three packages, one lockfile:
 `dist/cli.js` inlines the small pure-JS dependencies (chalk, commander, conf,
 cross-spawn, marked) so startup is a single file read, which is why the
 published package declares only the runtime dependencies it loads
-(`@huggingface/gguf`, `yaml`) — a property the build asserts rather than
+(`@huggingface/gguf`, `playwright-core`, `yaml`) — a property the build asserts rather than
 assumes. The version reported by `--version` is
 injected at build time from `package.json`.
 

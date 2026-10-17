@@ -6,6 +6,8 @@ import type { Page } from 'playwright-core';
 export type LoginField = {
   index: number; key: string; label: string; kind: 'text' | 'password' | 'choice'; required: boolean;
   options?: readonly string[];
+  /** A one-time code: asked for every time it appears, never saved. */
+  transient?: true;
 };
 type InputNode = {
   type: string; autocomplete: string; name: string; id: string; required: boolean; placeholder: string;
@@ -31,12 +33,14 @@ export async function loginFields(page: Page): Promise<LoginField[]> {
   }));
   const keys = new Map<string, number>();
   return raw.slice(0, 30).flatMap((field) => {
-    if (!['text', 'email', 'password', 'tel'].includes(field.type)) return [];
+    if (!['text', 'email', 'password', 'tel', 'number'].includes(field.type)) return [];
     const hint = `${field.label} ${field.name} ${field.id} ${field.autocomplete}`.toLowerCase();
-    if (/captcha|verification|one.time|\botp\b|security code|search|coupon|promo/.test(hint)) return [];
-    const password = field.type === 'password' || /current-password|password/.test(hint);
+    if (/captcha|search|coupon|promo|referral|invite|discount|zip|postal|country|area code/.test(hint)) return [];
     if (/new-password/.test(field.autocomplete)) return [];
-    const key = password ? 'password'
+    const password = field.type === 'password' || /current-password|password/.test(hint);
+    const code = !password && (/one-time-code/.test(field.autocomplete)
+      || /one.time|\botp\b|\btotp\b|verification|security code|passcode|authenticator|\b2fa\b|\bmfa\b|\bcode\b/.test(hint));
+    const key = code ? 'code' : password ? 'password'
       : /account[ -]?id|account[ -]?alias/.test(hint) ? 'accountId'
       : field.type === 'email' || /\bemail\b/.test(field.autocomplete) ? 'email'
       : /username|identifier|email|phone|login/.test(hint) ? 'username'
@@ -44,8 +48,8 @@ export async function loginFields(page: Page): Promise<LoginField[]> {
     const count = keys.get(key) ?? 0;
     keys.set(key, count + 1);
     const finalKey = count ? `${key}_${count + 1}` : key;
-    const label = safeLabel(field.label || (key === 'password' ? 'Password' : key === 'accountId' ? 'Account ID' : key === 'email' ? 'Email' : key === 'username' ? 'Email or username' : field.name || field.id || 'Login field'));
-    return [{ index: field.index, key: finalKey, label, kind: password ? 'password' as const : 'text' as const, required: field.required }];
+    const label = safeLabel(field.label || (key === 'code' ? 'Verification code' : key === 'password' ? 'Password' : key === 'accountId' ? 'Account ID' : key === 'email' ? 'Email' : key === 'username' ? 'Email or username' : field.name || field.id || 'Login field'));
+    return [{ index: field.index, key: finalKey, label, kind: password ? 'password' as const : 'text' as const, required: field.required, ...(code ? { transient: true as const } : {}) }];
   });
 }
 
@@ -80,4 +84,14 @@ export function loginFieldSummary(site: string, fields: readonly LoginField[], o
     ? `\n\nOther ways to sign in on this page:\n${options.map(name => `- ${name}`).join('\n')}\nIf more than one could apply (for example root user or IAM user), ask the user which one with ask_user before clicking.`
     : '';
   return `Page: ${site}\n\nSign-in fields:\n${shown}${other}\n\nUse login to ask for the visible fields privately; if several accounts are saved for this site the user picks one, and a single saved account is used without asking. Values are never shown here.`;
+}
+
+/** The same label twice (two accounts, or a retyped password) still has to be told apart in a list. */
+export function uniqueLabels(labels: readonly string[]): string[] {
+  const seen = new Map<string, number>();
+  return labels.map(label => {
+    const count = (seen.get(label) ?? 0) + 1;
+    seen.set(label, count);
+    return count === 1 ? label : `${label} (${count})`;
+  });
 }

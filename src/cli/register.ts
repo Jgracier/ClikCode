@@ -52,7 +52,10 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   computer.command('login [url]').description('Open a login URL if given, then ask privately in the current chat')
     .option('--chat <chat>', 'Chat id, prefix or name when run outside a chat')
     .option('--new', 'Sign in with a different account instead of the saved one')
-    .action(async (url: string | undefined, options: { chat?: string; new?: boolean }) => (await import('../commands/computer.js')).computerLogin(options.chat, url, options.new));
+    .action(async (url: string | undefined, options: { chat?: string; new?: boolean }) => (await import('../commands/computer.js')).computerLogin(options.chat, { ...(url ? { url } : {}), ...(options.new ? { newAccount: true } : {}) }));
+  computer.command('logins').description('Review and remove saved logins in the current chat (shown only to you)')
+    .option('--chat <chat>', 'Chat id, prefix or name when run outside a chat')
+    .action(async (options: { chat?: string }) => (await import('../commands/computer.js')).computerLogin(options.chat, { manage: true }));
   program.command('logs').description('What every ClikCode window, worker and editor bridge did, in order (the lifecycle log)')
     .option('--session <id>', 'Only this conversation (an id or the start of one)')
     .option('--role <role>', 'Only window, worker, bridge or command')

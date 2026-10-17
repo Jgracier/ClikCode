@@ -42,7 +42,8 @@ export async function computerInspect(): Promise<void> {
 
 /** Ask for a site's credentials in the attached chat panel. This command's
  * stdout carries status only; the UI answer goes directly to its worker. */
-export async function computerLogin(chat?: string, url?: string, newAccount?: boolean): Promise<void> {
+export async function computerLogin(chat?: string, options: { url?: string; newAccount?: boolean; manage?: boolean } = {}): Promise<void> {
+  const { url, newAccount, manage } = options;
   const workerPid = Number(process.env.CLIKCODE_WORKER_PID);
   const fromTurn = Number.isSafeInteger(workerPid) && workerPid > 0
     ? (await listWorkerRecords()).find(record => record.pid === workerPid)?.sessionId
@@ -68,7 +69,7 @@ export async function computerLogin(chat?: string, url?: string, newAccount?: bo
       };
       client.on('event', onEvent);
       client.on('close', onClose);
-      client.send({ type: 'computer-login', id, ...(url ? { url } : {}), ...(newAccount ? { newAccount: true as const } : {}) });
+      client.send({ type: 'computer-login', id, ...(url ? { url } : {}), ...(newAccount ? { newAccount: true as const } : {}), ...(manage ? { manage: true as const } : {}) });
     });
     if (!result.ok) throw new Error(result.message);
     if (isJsonDefaultMode()) emitResult({ computer: { login: result.message } });

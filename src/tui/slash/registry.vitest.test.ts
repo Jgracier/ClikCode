@@ -88,6 +88,8 @@ describe('slash registry', () => {
       expect(computer.availability(session({ route }), route === 'local' ? harness() : undefined).available).toBe(true);
     }
     expect(routeSlashInput('/computer login', { harness: harness() })).toMatchObject({ kind: 'command', head: 'computer', args: 'login' });
+    expect(routeSlashInput('/computer logins', { harness: harness() })).toMatchObject({ kind: 'command', head: 'computer', args: 'logins' });
+    expect(resolveSlashCommand('computer')!.argHint).toContain('logins');
   });
 
   const VENDOR_EXTRAS = {

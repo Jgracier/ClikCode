@@ -5,6 +5,7 @@ import { computerEnabled } from '../computer/settings.js';
 import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
 import { privateLoginPage } from '../computer/private-page.js';
 import { loginComputerPage, loginOutcomeMessage } from '../computer/login-page.js';
+import { LoginError } from '../computer/login-error.js';
 import { loginFields, loginFieldSummary, loginOptions } from '../computer/login-fields.js';
 import { runTailcatHandoff } from '../computer/tailcat-handoff.js';
 import type { Page } from 'playwright-core';
@@ -47,7 +48,7 @@ export async function observeComputerPage(page: Page, acceptsImages: boolean): P
 
 export const computerWebTool = defineTool<WebArgs>({
   name: 'computer_web', class: 'exec',
-  description: 'Open a URL in one action; Chrome starts automatically. Observe shows sign-in field names without values. Login uses the one saved account for the site, lets the user pick when several are saved, otherwise privately requests the visible fields, follows ordinary sign-in pages, and saves new answers only after the browser advances past sign-in. When a sign-in page offers different ways in (root or IAM, another account), ask the user with ask_user, click their choice, then login. Use handoff for CAPTCHA or MFA that needs remote control. Never request a password in chat.',
+  description: 'Open a URL in one action; Chrome starts automatically. Observe shows sign-in field names without values. Login uses the one saved account for the site, lets the user pick when several are saved, otherwise privately requests the visible fields, follows ordinary sign-in pages, and saves new answers only after the browser advances past sign-in. When a sign-in page offers different ways in (root or IAM, another account), ask the user with ask_user, click their choice, then login. A one-time code is asked for privately each time and never saved. Use handoff for a CAPTCHA, or MFA that needs remote control. Never request a password or code in chat.',
   parameters: { type: 'object', additionalProperties: false, required: ['action'], properties: {
     action: { type: 'string', enum: ['open', 'close', 'observe', 'click', 'fill', 'press', 'scroll', 'login', 'handoff'] },
     url: { type: 'string', description: 'Website URL for open.' },
@@ -81,7 +82,7 @@ export const computerWebTool = defineTool<WebArgs>({
           case 'login': {
             const outcome = await loginComputerPage({ stateDir: ctx.stateDir, page, signal: ctx.signal, newAccount: args.new_account === true,
               ask: async (site, fields, signal) => {
-                if (!ctx.requestPrivateLogin) throw new Error('This chat cannot show private login fields.');
+                if (!ctx.requestPrivateLogin) throw new LoginError('This chat cannot show private login fields.');
                 return ctx.requestPrivateLogin(site, fields, signal);
               }, onVerification: () => ctx.emitOutput?.('Approve the sign-in or finish verification in the open browser.\n') });
             return { output: loginOutcomeMessage(outcome), ...(outcome === 'unverified' || outcome === 'saved_login_rejected' ? { isError: true } : {}) };
@@ -104,7 +105,7 @@ export const computerWebTool = defineTool<WebArgs>({
         }
       } finally { ctx.signal?.removeEventListener('abort', onAbort); }
     } catch (error) {
-      if (args.action === 'login') return { output: 'Private login did not finish. Check the browser and try again.', isError: true };
+      if (args.action === 'login') return { output: error instanceof LoginError ? error.message : 'Private login did not finish. Check the browser and try again.', isError: true };
       return { output: error instanceof Error ? error.message : String(error), isError: true };
     }
   },
