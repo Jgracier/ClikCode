@@ -5,11 +5,14 @@ import { computerEnabled } from '../computer/settings.js';
 import { callComputerDriver } from '../computer/driver.js';
 import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
 import { privateLoginPage, protectLoginPage } from '../computer/private-page.js';
+import { fillCredential, soleCredentialForSite } from '../computer/credential-vault.js';
+import { requestTailcatCredential } from '../computer/tailcat-credentials.js';
+import { runTailcatHandoff } from '../computer/tailcat-handoff.js';
 import type { Page } from 'playwright-core';
 import type { ToolRunResult } from '../tool-contract.js';
 
 type WebArgs = {
-  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'press' | 'scroll' | 'autofill';
+  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'press' | 'scroll' | 'autofill' | 'login' | 'handoff';
   url?: string; role?: 'button' | 'link' | 'textbox' | 'checkbox' | 'combobox' | 'tab' | 'menuitem';
   name?: string; text?: string; key?: string; direction?: 'up' | 'down';
 };
@@ -45,9 +48,9 @@ export async function observeComputerPage(page: Page, acceptsImages: boolean): P
 
 export const computerWebTool = defineTool<WebArgs>({
   name: 'computer_web', class: 'exec',
-  description: 'Open a URL in ClikCode\'s browser in one action: Chrome starts automatically if closed. Observe and act on the page, then close it when done. Use computer_credentials to privately save and fill logins from the local encrypted vault; use computer_handoff for CAPTCHA or an unfamiliar sign-in. The autofill action can optionally trigger an installed Bitwarden extension. Never request a password in chat.',
+  description: 'Open a URL in one action; Chrome starts automatically. Use login to reuse a saved site login or ask the user for one through a private form, then fill and submit it without showing credentials to the model. Use handoff for CAPTCHA or MFA so the user can finish on their phone. Observe and act on ordinary pages, and close when done. Never request a password in chat.',
   parameters: { type: 'object', additionalProperties: false, required: ['action'], properties: {
-    action: { type: 'string', enum: ['open', 'close', 'observe', 'click', 'fill', 'press', 'scroll', 'autofill'] },
+    action: { type: 'string', enum: ['open', 'close', 'observe', 'click', 'fill', 'press', 'scroll', 'autofill', 'login', 'handoff'] },
     url: { type: 'string', description: 'Website URL for open.' },
     role: { type: 'string', enum: ['button', 'link', 'textbox', 'checkbox', 'combobox', 'tab', 'menuitem'] },
     name: { type: 'string', description: 'Exact accessible name from observe.' },
@@ -75,6 +78,24 @@ export const computerWebTool = defineTool<WebArgs>({
         switch (args.action) {
           case 'open': await page.goto(webAddress(args.url), { waitUntil: 'domcontentloaded', timeout: 30_000 }); return observeComputerPage(page, ctx.acceptsImages === true);
           case 'observe': return observeComputerPage(page, ctx.acceptsImages === true);
+          case 'login': {
+            const site = new URL(page.url());
+            if (site.protocol !== 'https:') throw new Error('Private login needs an HTTPS website.');
+            protectLoginPage(page);
+            const id = await soleCredentialForSite(ctx.stateDir, site.href)
+              ?? await requestTailcatCredential({ stateDir: ctx.stateDir, site: site.origin, signal: ctx.signal,
+                onLink: link => ctx.emitOutput?.(`Open this private login form for ${site.origin}: ${link}\n`) });
+            await fillCredential(ctx.stateDir, page, id);
+            const password = page.locator('input[type="password"]:visible');
+            if (await password.count() !== 1) throw new Error('Login was filled, but its submit field changed. Use handoff.');
+            await password.press('Enter');
+            return { output: 'Login submitted. Credentials stayed in the private vault and were not shown to the model. If the site asks for MFA or CAPTCHA, use handoff.' };
+          }
+          case 'handoff': {
+            await runTailcatHandoff({ stateDir: ctx.stateDir, signal: ctx.signal,
+              onLink: link => ctx.emitOutput?.(`Open this link on your phone to finish the browser step: ${link}\n`) });
+            return { output: 'The user finished the browser step. Continue from the current page.' };
+          }
           case 'click': await element(page, args).click({ timeout: 10_000 }); return { output: `Clicked ${args.role} ${args.name}. Observe the page to verify the result.` };
           case 'fill':
             if (typeof args.text !== 'string' || args.text.length > 20_000) throw new Error('Fill needs text of at most 20,000 characters.');
