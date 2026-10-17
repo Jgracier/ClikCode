@@ -12,6 +12,7 @@ import { computerEnabled, setComputerEnabled } from '../../../agent/computer/set
 import { stateDirectory } from '../../../session/store/paths.js';
 import { closeComputerBrowser } from '../../../agent/computer/browser.js';
 import { lockCredentialVault } from '../../../agent/computer/credential-vault.js';
+import { computerLogin } from '../../../commands/computer.js';
 import type { AiHarnessPermissionMode } from '../../../harness/definition.js';
 import { applyClikCodeAgentSessionPolicy, applyFreshLocalSessionPolicy } from '../../../commands/ai/sessions.js';
 import { aiSettingsClearProvider, aiSettingsSetGlobal, aiSettingsSetProvider } from '../../../commands/ai/settings.js';
@@ -53,9 +54,9 @@ export const settingsHandlers = {
     return saveSettings(state, session);
   },
   computer: async ({ session, words }) => {
-    if (!isClikCodeAgent(session)) throw new Error('Computer use is available in ClikCode’s own agent.');
     const value = words[0]?.toLowerCase();
-    if (words.length > 1 || (value && value !== 'on' && value !== 'off')) throw new Error('usage: /computer [on|off]');
+    if (value === 'login' && words.length <= 2) { await computerLogin(session.id, words[1]); return; }
+    if (words.length > 1 || (value && value !== 'on' && value !== 'off')) throw new Error('usage: /computer [on|off|login [url]]');
     if (value) {
       await setComputerEnabled(stateDirectory(), value === 'on');
       if (value === 'off') { await closeComputerBrowser(stateDirectory()); lockCredentialVault(stateDirectory()); }

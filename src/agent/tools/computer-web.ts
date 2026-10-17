@@ -5,7 +5,7 @@ import { computerEnabled } from '../computer/settings.js';
 import { callComputerDriver } from '../computer/driver.js';
 import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
 import { privateLoginPage, protectLoginPage } from '../computer/private-page.js';
-import { fillCredential, saveCredential, soleCredentialForSite } from '../computer/credential-vault.js';
+import { loginComputerPage } from '../computer/login-page.js';
 import { runTailcatHandoff } from '../computer/tailcat-handoff.js';
 import type { Page } from 'playwright-core';
 import type { ToolRunResult } from '../tool-contract.js';
@@ -78,20 +78,11 @@ export const computerWebTool = defineTool<WebArgs>({
           case 'open': await page.goto(webAddress(args.url), { waitUntil: 'domcontentloaded', timeout: 30_000 }); return observeComputerPage(page, ctx.acceptsImages === true);
           case 'observe': return observeComputerPage(page, ctx.acceptsImages === true);
           case 'login': {
-            const site = new URL(page.url());
-            if (site.protocol !== 'https:') throw new Error('Private login needs an HTTPS website.');
-            protectLoginPage(page);
-            let id = await soleCredentialForSite(ctx.stateDir, site.href);
-            if (!id) {
-              if (!ctx.requestPrivateLogin) throw new Error('Open this chat in the ClikCode terminal or VS Code panel to enter a login privately.');
-              const secret = await ctx.requestPrivateLogin(site.origin, ctx.signal);
-              if (!secret) throw new Error('Private login cancelled.');
-              id = await saveCredential(ctx.stateDir, site.href, secret);
-            }
-            await fillCredential(ctx.stateDir, page, id);
-            const password = page.locator('input[type="password"]:visible');
-            if (await password.count() !== 1) throw new Error('Login was filled, but its submit field changed. Use handoff.');
-            await password.press('Enter');
+            await loginComputerPage({ stateDir: ctx.stateDir, page, signal: ctx.signal,
+              ask: async (site, signal) => {
+                if (!ctx.requestPrivateLogin) throw new Error('This chat cannot show private login fields.');
+                return ctx.requestPrivateLogin(site, signal);
+              } });
             return { output: 'Login submitted. Credentials stayed in the private vault and were not shown to the model. If the site asks for MFA or CAPTCHA, use handoff.' };
           }
           case 'handoff': {
@@ -124,6 +115,9 @@ export const computerWebTool = defineTool<WebArgs>({
           default: throw new Error('Unknown web action.');
         }
       } finally { ctx.signal?.removeEventListener('abort', onAbort); }
-    } catch (error) { return { output: error instanceof Error ? error.message : String(error), isError: true }; }
+    } catch (error) {
+      if (args.action === 'login') return { output: 'Private login did not finish. Check the browser and try again.', isError: true };
+      return { output: error instanceof Error ? error.message : String(error), isError: true };
+    }
   },
 });
