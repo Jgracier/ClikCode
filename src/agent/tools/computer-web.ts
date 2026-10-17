@@ -6,6 +6,8 @@ import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
 import { maskSensitive, sensitiveValues } from '../computer/sensitive-fields.js';
 import { storeSecretTool } from './store-secret.js';
 import { sharedState } from '../computer/shared-state.js';
+import { savedLoginFields, savedLoginsForSite } from '../computer/credential-vault.js';
+import { loginValueFor } from '../computer/login-fill.js';
 import { describeProfile, listProfiles, PROFILE_KEYS, phoneFor, profileKeyFor, saveProfile, type FieldHint, type ProfileKey } from '../computer/profiles.js';
 import { expectSignup, settleSignup } from '../computer/signup-login.js';
 import { loginComputerPage, loginOutcomeMessage } from '../computer/login-page.js';
@@ -228,7 +230,7 @@ export const computerWebTool = defineTool<WebArgs>({
   description: [
     "Drive ClikCode's own Chrome (its own saved profile; it starts by itself). open and observe return the page, with a [ref=…] on each element: pass a ref as target (or visible text) to click or fill. After an action you get only what changed (and any open dialog); observe shows the whole page again. A new tab or popup the page opens is followed automatically.",
     'Actions: open (a URL) · observe (the page again; full: true adds header and footer; find: "words" shows only the lines that mention them, for a long page) · click · fill · choose (an option of a dropdown: target + text) · press · scroll · wait (for text to appear or go, up to 2 minutes; for jobs that finish on their own) · steps (several of those in order, one call, stops at the first failure) · login · handoff · capture_secret · profile · open_email_link (find the newest email from a sender in the signed-in Gmail and open a link in it, one call: verification and sign-in emails) · close.',
-    'Each chat has its own tab. The user\'s autofill profile (name, email, phone, address) fills forms for you: fill a field with no text and it is filled from the profile, or the user is asked once and the answer is kept. If a site wants another format, fill that field with the exact text, and save the corrected value with action profile and fields. When a site offers Continue/Sign in with Google and the browser is already signed in to Google, prefer it: no new password or email check. Every page can be read, including sign-in and signup forms; the values of password, code and card fields are masked. For anything only the user knows (a password, a code, an address, a phone number), fill the field with no text: the user is asked privately and you are not shown the answer. login fills a saved login, or asks the user privately; never ask for a password or code in chat. When a sign-in page offers different ways in (root or IAM, another account), ask the user with ask_user, click their choice, then login. handoff returns a phone link for a CAPTCHA or MFA at once; give it to the user, then call handoff again to wait until they finish.',
+    'Each chat has its own tab. The user\'s autofill profile (name, email, phone, address) fills forms for you: fill a field with no text and it is filled from the profile, or the user is asked once and the answer is kept. If a site wants another format, fill that field with the exact text, and save the corrected value with action profile and fields. When a site offers Continue/Sign in with Google and the browser is already signed in to Google, prefer it: no new password or email check. Every page can be read, including sign-in and signup forms; the values of password, code and card fields are masked. For anything only the user knows (a password, a code, an address, a phone number), fill the field with no text: a saved login for the site or the profile fills it, else the user is asked privately, and you are not shown the answer. That is all a sign-in or signup needs: fill the fields, click Next, repeat. (login does the same in one action for a plain email-then-password sign-in.) Never ask for a password or code in chat. When a sign-in page offers different ways in (root or IAM, another account), ask the user with ask_user, click their choice, then login. handoff returns a phone link for a CAPTCHA or MFA at once; give it to the user, then call handoff again to wait until they finish.',
     'Work through the whole task you were given without checking in at each step. Ask real choices (project, account, role set) once, up front, in one question; after that ask only when genuinely blocked (a sign-in they must type, a payment).',
     'API keys: go to the key page, set the options, then capture_secret with target = the final Create button and a send_to plan. It presses the site\'s Copy button or reads the file it hands over, checks the key against its service, saves it to ClikCode Secrets Manager and sends it where send_to says. You never see the key. With no target it takes a key the page already shows; never click Regenerate just to see one.',
   ].join('\n'),
@@ -430,7 +432,25 @@ async function askForFills(page: Page, steps: readonly Step[], ctx: ToolContext)
   }
   const values = new Map<Step, string>();
   const ask: { step: Step; key: ProfileKey | undefined; field: LoginField }[] = [];
+  // A saved login for this site fills its sign-in fields. Not on a form that creates a password (two password
+  // boxes): that is a signup, and the saved login belongs to the account that already exists.
+  let login: Record<string, string> | undefined;
+  if (fields.filter(field => field.password).length <= 1) {
+    const accounts = (await savedLoginsForSite(ctx.stateDir, page.url()).catch(() => [])).filter(account => !account.rejected);
+    if (accounts.length && fields.some(field => loginValueFor({ username: 'x', password: 'x' }, field))) {
+      let account = accounts.length === 1 ? accounts[0] : accounts.find(candidate => candidate.id === profileChoice.get(`${ctx.stateDir}|login|${origin}`));
+      if (!account && ctx.requestPrivateLogin) {
+        const labels = accounts.map(candidate => candidate.label);
+        const answer = await ctx.requestPrivateLogin(origin, [{ index: -1, key: 'account', label: 'Sign in with which account?', kind: 'choice', required: true, options: [...labels, 'Enter a different one'] }], ctx.signal);
+        account = accounts[labels.indexOf(answer?.account ?? '')];
+        if (account) profileChoice.set(`${ctx.stateDir}|login|${origin}`, account.id);
+      }
+      if (account) login = await savedLoginFields(ctx.stateDir, page.url(), account.id).catch(() => undefined);
+    }
+  }
   for (const field of fields) {
+    const fromLogin = login ? loginValueFor(login, field) : undefined;
+    if (fromLogin) { values.set(field.step, fromLogin); continue; }
     const key = field.password ? undefined : profileKeyFor(field.hint);
     const known = key ? profile?.fields[key] : undefined;
     if (known) { values.set(field.step, key === 'phone' ? phoneFor(known, field.placeholder, field.current) : known); continue; }
