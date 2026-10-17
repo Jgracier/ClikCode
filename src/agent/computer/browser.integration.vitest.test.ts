@@ -227,3 +227,37 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('gives each chat its own 
     await rm(stateDir, { recursive: true, force: true });
   }
 }, 60_000);
+
+it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('reads a signup form and fills it from private prompts, masking and never showing the new password', async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'clikcode-computer-signup-'));
+  const server = createServer((_request, response) => {
+    response.setHeader('Content-Type', 'text/html');
+    response.end('<label>First name <input name=fn></label><label>Email <input name=em type=email></label><label>Password <input name=pw type=password autocomplete=new-password></label><label>Confirm <input name=pw2 type=password autocomplete=new-password></label>');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    await setComputerEnabled(stateDir, true);
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('No local HTTP port');
+    const asked: { label: string; kind: string }[] = [];
+    const secret = 'Zq9-correct-horse-77';
+    const ctx = { stateDir, acceptsImages: false,
+      requestPrivateLogin: async (_site: string, fields: readonly { key: string; label: string; kind: string }[]) => {
+        asked.push(...fields.map(({ label, kind }) => ({ label, kind })));
+        return Object.fromEntries(fields.map(field => [field.key, field.kind === 'password' ? secret : 'Ada']));
+      } } as unknown as ToolContext;
+    const run = (args: Record<string, unknown>) => computerWebTool.run(args, ctx);
+    const opened = (await run({ action: 'open', url: `http://127.0.0.1:${address.port}/` })).output;
+    expect(opened).not.toContain('Sign-in fields');
+    const ref = (name: string): string => new RegExp(`textbox "${name}" \\[ref=(\\w+)\\]`).exec(opened)![1]!;
+    const filled = await run({ action: 'steps', steps: [{ do: 'fill', target: ref('First name') }, { do: 'fill', target: ref('Password') }, { do: 'fill', target: ref('Confirm') }] });
+    expect(asked.map(field => field.kind)).toEqual(['text', 'password', 'password']);
+    expect(JSON.stringify(filled)).not.toContain(secret);
+    expect((await run({ action: 'observe' })).output).not.toContain(secret);
+    expect(await (await computerPage(stateDir)).locator('input[name=pw2]').inputValue()).toBe(secret);
+  } finally {
+    await closeComputerBrowser(stateDir);
+    server.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+}, 30_000);

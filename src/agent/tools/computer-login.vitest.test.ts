@@ -67,12 +67,12 @@ it('follows both Gmail fields in one call without returning credentials to the m
   const ctx = {
     stateDir, requestPrivateLogin: async (_site: string, fields: { key: string }[]) => {
       asked.push(fields.map(field => field.key));
-      return fields[0].key === 'password' ? { password: 'private-secret' } : { username: 'private@example.com' };
+      return Object.fromEntries(fields.map(field => [field.key, field.key === 'password' ? 'private-secret' : 'private@example.com']));
     },
   } as ToolContext;
   const result = await computerWebTool.run({ action: 'login' }, ctx);
   expect(result.isError).toBeUndefined();
-  expect(asked).toEqual([['username'], ['password']]);
+  expect(asked).toEqual([['username', 'password']]);
   expect(browser.filled).toEqual(['private@example.com', 'Enter', 'private-secret', 'Enter']);
   expect(JSON.stringify(result)).not.toContain('private@example.com');
   expect(JSON.stringify(result)).not.toContain('private-secret');
@@ -83,14 +83,14 @@ it('follows both Gmail fields in one call without returning credentials to the m
   expect(encrypted).not.toContain('private-secret');
   browser.reset();
   await computerWebTool.run({ action: 'login' }, ctx);
-  expect(asked).toEqual([['username'], ['password']]);
+  expect(asked).toEqual([['username', 'password']]);
 });
 
 it('does not save new answers when a form stays on the login page', async () => {
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-private-login-rejected-'));
   browser.stopAdvancing();
   const result = await computerWebTool.run({ action: 'login' }, {
-    stateDir, requestPrivateLogin: async () => ({ username: 'wrong@example.com' }),
+    stateDir, requestPrivateLogin: async () => ({ username: 'wrong@example.com', password: 'wrong-pw' }),
   } as ToolContext);
   expect(result.isError).toBe(true);
   expect(result.output).toContain('not saved');
@@ -101,8 +101,8 @@ it('does not save a password while verification is still pending', async () => {
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-private-login-mfa-'));
   browser.requireVerification();
   const result = await computerWebTool.run({ action: 'login' }, {
-    stateDir, requestPrivateLogin: async (_site: string, fields: { key: string }[]) => fields[0].key === 'password'
-      ? { password: 'private-secret' } : { username: 'private@example.com' },
+    stateDir, requestPrivateLogin: async (_site: string, fields: { key: string }[]) =>
+      Object.fromEntries(fields.map(field => [field.key, field.key === 'password' ? 'private-secret' : 'private@example.com'])),
   } as ToolContext);
   expect(result.output).toMatch(/erification is still pending/);
   expect(result.output).toContain('not saved');
@@ -113,7 +113,7 @@ it('reports an existing browser session without saving an email-only attempt', a
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-private-login-session-'));
   browser.reuseSession();
   const result = await computerWebTool.run({ action: 'login' }, {
-    stateDir, requestPrivateLogin: async () => ({ username: 'private@example.com' }),
+    stateDir, requestPrivateLogin: async () => ({ username: 'private@example.com', password: 'unused-pw' }),
   } as ToolContext);
   expect(result.isError).toBeUndefined();
   expect(result.output).toContain('existing session may have been reused');
@@ -138,8 +138,8 @@ function person(answers: { account?: string; username?: string; password?: strin
   return {
     stateDir, requestPrivateLogin: async (_site: string, fields: { key: string; kind: string; options?: readonly string[] }[]) => {
       asked.push(fields);
-      const key = fields[0]!.key as 'account' | 'username' | 'password';
-      return answers[key] === undefined ? undefined : { [key]: answers[key]! };
+      const given = fields.map(field => [field.key, answers[field.key as 'account' | 'username' | 'password']] as const);
+      return given.some(([, value]) => value === undefined) ? undefined : Object.fromEntries(given);
     },
   } as ToolContext;
 }
@@ -182,7 +182,7 @@ it('adds a third account from the picker', async () => {
   await seed('one@example.com', 'pw-one');
   await seed('two@example.com', 'pw-two');
   const answers = { account: NEW_ACCOUNT, username: 'three@example.com', password: 'pw-three' };
-  const ctx = { stateDir, requestPrivateLogin: async (_s: string, fields: { key: keyof typeof answers }[]) => ({ [fields[0]!.key]: answers[fields[0]!.key] }) } as ToolContext;
+  const ctx = { stateDir, requestPrivateLogin: async (_s: string, fields: { key: keyof typeof answers }[]) => Object.fromEntries(fields.map(field => [field.key, answers[field.key]])) } as ToolContext;
   expect((await computerWebTool.run({ action: 'login' }, ctx)).isError).toBeUndefined();
   expect((await savedLoginsForSite(stateDir, GOOGLE)).map(login => login.label)).toEqual(['one@example.com', 'three@example.com', 'two@example.com']);
 });
@@ -192,7 +192,7 @@ it('updates an account instead of duplicating it when the same username is enter
   const first = await seed('one@example.com', 'pw-old');
   await seed('two@example.com', 'pw-two');
   const answers = { account: NEW_ACCOUNT, username: 'one@example.com', password: 'pw-new' };
-  const ctx = { stateDir, requestPrivateLogin: async (_s: string, fields: { key: keyof typeof answers }[]) => ({ [fields[0]!.key]: answers[fields[0]!.key] }) } as ToolContext;
+  const ctx = { stateDir, requestPrivateLogin: async (_s: string, fields: { key: keyof typeof answers }[]) => Object.fromEntries(fields.map(field => [field.key, answers[field.key]])) } as ToolContext;
   expect((await computerWebTool.run({ action: 'login' }, ctx)).isError).toBeUndefined();
   expect(await savedLoginsForSite(stateDir, GOOGLE)).toHaveLength(2);
   expect((await savedLoginFields(stateDir, GOOGLE, first)).password).toBe('pw-new');
@@ -203,9 +203,9 @@ it('lets the user choose a different account even when only one is saved', async
   await seed('one@example.com', 'pw-one');
   const asked: { key: string; kind: string }[][] = [];
   const answers = { username: 'other@example.com', password: 'pw-other' };
-  const ctx = { stateDir, requestPrivateLogin: async (_s: string, fields: { key: keyof typeof answers; kind: string }[]) => { asked.push(fields); return { [fields[0]!.key]: answers[fields[0]!.key] }; } } as ToolContext;
+  const ctx = { stateDir, requestPrivateLogin: async (_s: string, fields: { key: keyof typeof answers; kind: string }[]) => { asked.push(fields); return Object.fromEntries(fields.map(field => [field.key, answers[field.key]])); } } as ToolContext;
   expect((await computerWebTool.run({ action: 'login', new_account: true }, ctx)).isError).toBeUndefined();
-  expect(asked.map(fields => fields[0]!.key)).toEqual(['username', 'password']);
+  expect(asked.map(fields => fields.map(field => field.key))).toEqual([['username', 'password']]);
   expect(await savedLoginsForSite(stateDir, GOOGLE)).toHaveLength(2);
 });
 
@@ -222,7 +222,7 @@ it('offers the picker again after the site refuses a saved password, so a new on
   browser.filled.length = 0;
   const answers = { account: NEW_ACCOUNT, username: 'one@example.com', password: 'pw-fixed' };
   const asked: { key: string; kind: string }[][] = [];
-  const ctx = { stateDir, requestPrivateLogin: async (_s: string, fields: { key: keyof typeof answers; kind: string }[]) => { asked.push(fields); return { [fields[0]!.key]: answers[fields[0]!.key] }; } } as ToolContext;
+  const ctx = { stateDir, requestPrivateLogin: async (_s: string, fields: { key: keyof typeof answers; kind: string }[]) => { asked.push(fields); return Object.fromEntries(fields.map(field => [field.key, answers[field.key]])); } } as ToolContext;
   expect((await computerWebTool.run({ action: 'login' }, ctx)).isError).toBeUndefined();
   expect(asked[0]![0]!.kind).toBe('choice');
   expect(await savedLoginsForSite(stateDir, GOOGLE)).toEqual([{ id, label: 'one@example.com', rejected: false }]);
@@ -234,10 +234,10 @@ it('asks for a one-time code every time, fills it, and never saves it', async ()
   browser.requireMfa();
   const asked: string[][] = [];
   const answers: Record<string, string> = { username: 'one@example.com', password: 'pw-one', code: '123456' };
-  const ctx = { stateDir, requestPrivateLogin: async (_s: string, fields: { key: string }[]) => { asked.push(fields.map(field => field.key)); return { [fields[0]!.key]: answers[fields[0]!.key]! }; } } as ToolContext;
+  const ctx = { stateDir, requestPrivateLogin: async (_s: string, fields: { key: string }[]) => { asked.push(fields.map(field => field.key)); return Object.fromEntries(fields.map(field => [field.key, answers[field.key]!])); } } as ToolContext;
   const first = await computerWebTool.run({ action: 'login' }, ctx);
   expect(first.isError).toBeUndefined();
-  expect(asked).toEqual([['username'], ['password'], ['code']]);
+  expect(asked).toEqual([['username', 'password'], ['code']]);
   expect(browser.filled).toEqual(['one@example.com', 'Enter', 'pw-one', 'Enter', '123456', 'Enter']);
   const [saved] = await savedLoginsForSite(stateDir, GOOGLE);
   expect(Object.keys(await savedLoginFields(stateDir, GOOGLE, saved!.id)).sort()).toEqual(['password', 'username']);
@@ -255,7 +255,7 @@ it('stops after two wrong codes and saves nothing', async () => {
   browser.rejectCode();
   const asked: string[][] = [];
   const answers: Record<string, string> = { username: 'one@example.com', password: 'pw-one', code: '000000' };
-  const ctx = { stateDir, requestPrivateLogin: async (_s: string, fields: { key: string }[]) => { asked.push(fields.map(field => field.key)); return { [fields[0]!.key]: answers[fields[0]!.key]! }; } } as ToolContext;
+  const ctx = { stateDir, requestPrivateLogin: async (_s: string, fields: { key: string }[]) => { asked.push(fields.map(field => field.key)); return Object.fromEntries(fields.map(field => [field.key, answers[field.key]!])); } } as ToolContext;
   const result = await computerWebTool.run({ action: 'login' }, ctx);
   expect(result.isError).toBe(true);
   expect(asked.filter(fields => fields[0] === 'code')).toHaveLength(2);
