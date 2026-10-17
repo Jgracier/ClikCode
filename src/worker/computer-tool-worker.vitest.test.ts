@@ -87,7 +87,7 @@ it('offers the tools over MCP with typed schemas', async () => {
   const init = await server.call('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } });
   expect(init.result.serverInfo.name).toBe('clikcode');
   const listed = await server.call('tools/list');
-  expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toEqual(['computer_web', 'computer_desktop', 'store_secret']);
+  expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toEqual(['computer_web', 'computer_desktop', 'store_secret', 'list_secrets', 'delete_secret']);
   expect(listed.result.tools[2].inputSchema.required).toEqual(['secret', 'destination', 'key']);
   expect((await server.call('tools/call', { name: 'nope', arguments: {} })).error.code).toBe(-32602);
 }, 60_000);
@@ -97,7 +97,7 @@ it('stores a saved secret only after the window approves, and returns no value',
   await saveNamedSecret(home, 'salad/api-key', VALUE);
   const bin = join(root!, 'bin');
   await mkdir(bin);
-  await writeFile(join(bin, 'clikdeploy'), `#!/bin/sh\nprintf '%s\\n' "$@" > "${root}/argv"\necho '{"status":"success","message":"echo '"$5"'"}'\n`);
+  await writeFile(join(bin, 'clikdeploy'), `#!/bin/sh\ncase "$3" in admin_platform_set_secret) printf '%s\\n' "$@" > "${root}/argv"; echo '{"status":"success","message":"stored"}';; *) echo '{}';; esac\n`);
   await chmod(join(bin, 'clikdeploy'), 0o755);
   process.env.PATH = `${bin}:${savedEnv.PATH}`;
   const window = await attach(id);

@@ -55,8 +55,9 @@ The tools are not tied to ClikCode's own agent. They run in the chat's worker,
 and a harness reaches them two ways:
 
 - **MCP, automatically.** `clikcode mcp-serve` is a built-in MCP server named
-  `clikcode` (tools `computer_web`, `computer_desktop`, `store_secret`). It is
-  handed to every ACP harness session as that session starts, nothing is
+  `clikcode` (tools `computer_web`, `computer_desktop`, `store_secret`, `list_secrets`,
+  `delete_secret`). It is handed to every ACP harness session as that session
+  starts, and to Codex as `-c mcp_servers.clikcode.*` launch overrides, nothing is
   installed or written into the harness's config, and it ships in every ClikCode
   install, including the VS Code extension's own copy. It follows
   `/computer off`, and a server you record under the same name replaces it.
@@ -69,8 +70,9 @@ and a harness reaches them two ways:
 Either way the private prompts appear in the chat's terminal or VS Code panel
 (so a chat window must be open), `store_secret` asks you to approve in that
 window even if the harness would not, and results are scrubbed in the worker
-before the harness sees them. The Codex app-server route does not take the
-built-in server yet; use the CLI there.
+before the harness sees them. A harness's own approval prompts still apply to
+its MCP calls; ClikCode adds no second prompt for opening a page, only for
+writes (`store_secret`, `delete_secret`).
 
 ## ClikCode Secrets Manager
 
@@ -102,8 +104,17 @@ signs in, sets the permissions, then calls `computer_web capture_secret` with a
   `remote` prints the phone link for tapping Copy. The computer's shared
   clipboard is never read, so an unrelated copy cannot be taken for the key.
 - **`store_secret`** sends it on. The agent names the saved secret and the
-  ClikDeploy key (`SALAD_API_KEY`); the worker runs `clikdeploy` itself, so the
-  value is in no command the model writes. Each use asks for approval.
+  destination key (`SALAD_API_KEY`); the worker runs the CLI itself, so the value
+  is in no command the model writes. Each use asks for approval. Destinations:
+  a ClikDeploy platform secret, a ClikDeploy app secret (`app`), or a GitHub
+  repository secret (`destination: github`, `repo: owner/name`; the value goes to
+  `gh` on stdin). After a ClikDeploy write it reads back whether the secret is set
+  and, for compute keys, whether the provider that uses it reports healthy.
+  `clikdeploy tools run admin_platform_secrets` lists every platform key with the
+  page where its key is created, which is the list of what to fetch.
+- **`list_secrets`** and **`delete_secret`** show names only and remove one by
+  name (re-capturing a name replaces its value). From a shell:
+  `clikcode computer secrets [--delete NAME]`.
 - **Scrubbing.** Once held, a secret's exact value (and its base64, URL-encoded
   and JSON-escaped forms) is replaced with `[secret hidden]` in every tool result
   and streamed output, and a screenshot of a page that shows it is withheld.

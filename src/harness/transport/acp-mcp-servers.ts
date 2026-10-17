@@ -47,3 +47,14 @@ export async function globalMcpServersForAcp(command: string, capabilities: Json
     return [];
   }
 }
+
+/** The same built-in server for Codex's app-server, which takes its MCP servers as
+ * `-c` config overrides on the launch line (verified against codex-cli 0.162: the
+ * server shows up in mcpServerStatus/list). Nothing is written to Codex's config. */
+export function codexBuiltInMcpArgs(): string[] {
+  const server = builtInMcpServer();
+  if (!server || server.transport !== 'stdio') return [];
+  const prefix = `mcp_servers.${server.name}`;
+  const env = Object.entries(server.env).map(([key, value]) => `${key}=${JSON.stringify(value)}`).join(',');
+  return ['-c', `${prefix}.command=${JSON.stringify(server.command)}`, '-c', `${prefix}.args=${JSON.stringify(server.args)}`, ...(env ? ['-c', `${prefix}.env={${env}}`] : [])];
+}
