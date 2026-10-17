@@ -34,6 +34,8 @@ const RECIPES: readonly Recipe[] = [
   { host: /(^|\.)cloud\.lambda(labs)?\.(ai|com)$/, service: 'Lambda', rejects: [401, 403], request: bearer('https://cloud.lambdalabs.com/api/v1/instance-types') },
   { host: /(^|\.)my\.vultr\.com$/, service: 'Vultr', rejects: [401], request: bearer('https://api.vultr.com/v2/account') },
   { host: /(^|\.)console\.hetzner\.(cloud|com)$/, service: 'Hetzner', rejects: [401], request: bearer('https://api.hetzner.cloud/v1/servers?per_page=1') },
+  // 403 here means a good key on an account with no credit; only 401 is a refused key.
+  { host: /(^|\.)reka\.ai$/, service: 'Reka', rejects: [401], request: bearer('https://api.reka.ai/v1/models') },
   { host: /^github\.com$/, service: 'GitHub', rejects: [401], request: bearer('https://api.github.com/user') },
 ];
 
