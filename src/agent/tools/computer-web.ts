@@ -1,6 +1,6 @@
 /** Page-level browser actions in ClikCode's own Chrome profile. */
 import { defineTool } from '../tool-contract.js';
-import { closeComputerBrowser, computerPage, frontPage, openComputerPage } from '../computer/browser.js';
+import { adoptPage, closeComputerPage, computerPage, openComputerPage } from '../computer/browser.js';
 import { COMPUTER_OFF, computerEnabled } from '../computer/settings.js';
 import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
 import { privateLoginPage } from '../computer/private-page.js';
@@ -21,7 +21,7 @@ type Step = { do: 'click' | 'fill' | 'press' | 'scroll' | 'wait'; target?: strin
 type WebArgs = {
   action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'press' | 'scroll' | 'wait' | 'steps' | 'login' | 'handoff' | 'capture_secret';
   url?: string; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
-  new_account?: boolean; secret_name?: string; send_to?: Destination[] | Destination | string;
+  new_account?: boolean; secret_name?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
 };
 
 export function webAddress(value: string | undefined): string {
@@ -154,7 +154,7 @@ export const computerWebTool = defineTool<WebArgs>({
   description: [
     "Drive ClikCode's own Chrome (its own saved profile; it starts by itself). Every action returns the page as it is now, with a [ref=…] on each element: pass a ref as target (or visible text) to click or fill. Open dialogs come first; a new tab or popup is followed automatically.",
     'Actions: open (a URL) · observe (the page again; full: true adds header and footer; find: "words" shows only the lines that mention them, for a long page) · click · fill · press · scroll · wait (for text to appear or go, up to 2 minutes; for jobs that finish on their own) · steps (several of those in order, one call, stops at the first failure) · login · handoff · capture_secret · close.',
-    'Sign-in pages show only field names. login uses a saved login, or asks the user privately (never ask for a password or code in chat). When a sign-in page offers different ways in (root or IAM, another account), ask the user with ask_user, click their choice, then login. handoff gives the user a phone link for a CAPTCHA or MFA.',
+    'Each chat has its own tab. Sign-in pages show only field names. login uses a saved login, or asks the user privately (never ask for a password or code in chat). When a sign-in page offers different ways in (root or IAM, another account), ask the user with ask_user, click their choice, then login. handoff returns a phone link for a CAPTCHA or MFA at once; give it to the user, then call handoff again to wait until they finish.',
     'Work through the whole task you were given without checking in at each step. Ask real choices (project, account, role set) once, up front, in one question; after that ask only when genuinely blocked (a sign-in they must type, a payment).',
     'API keys: go to the key page, set the options, then capture_secret with target = the final Create button and a send_to plan. It presses the site\'s Copy button or reads the file it hands over, checks the key against its service, saves it to ClikCode Secrets Manager and sends it where send_to says. You never see the key. With no target it takes a key the page already shows; never click Regenerate just to see one.',
   ].join('\n'),
@@ -175,6 +175,7 @@ export const computerWebTool = defineTool<WebArgs>({
     full: { type: 'boolean', description: 'observe: include the header and footer and a longer view.' },
     accept_dialog: { type: 'boolean', description: 'click: answer yes to a browser confirm dialog the click raises ("delete this token?"). Default: declined and reported.' },
     new_account: { type: 'boolean', description: 'login: ask for a different account instead of the saved one.' },
+    paste: { type: 'boolean', description: 'capture_secret: do not look for the key; ask the user to paste it privately (when the page hides it or shows it as an image). With target, that button is still clicked first.' },
     secret_name: { type: 'string', description: 'capture_secret: name to save the key under (default: the site\'s name plus "/key").' },
     send_to: { ...SEND_TO_SCHEMA, description: 'capture_secret: ' + SEND_TO_HELP },
   } },
@@ -199,12 +200,13 @@ export const computerWebTool = defineTool<WebArgs>({
   async run(args, ctx) {
     try {
       if (!(await computerEnabled(ctx.stateDir))) throw new Error(COMPUTER_OFF);
-      if (args.action === 'close') { await closeComputerBrowser(ctx.stateDir); return { output: 'ClikCode browser closed.' }; }
+      if (args.action === 'close') { await closeComputerPage(ctx.stateDir); return { output: 'This chat\'s tab is closed.' }; }
       if (args.action === 'open') webAddress(args.url);
       let page = args.action === 'open' ? await openComputerPage(ctx.stateDir) : await computerPage(ctx.stateDir);
       if (args.action === 'open' && await privateLoginPage(page)) {
         const old = page;
         page = await old.context().newPage();
+        adoptPage(ctx.stateDir, page);
         await old.close();
       }
       // Playwright cannot be interrupted mid-call, so a stop returns at once
@@ -230,6 +232,8 @@ export const computerWebTool = defineTool<WebArgs>({
     }
   },
 });
+
+const handoffs = new Map<string, { link: Promise<string>; done: Promise<{ ok: true } | { ok: false; message: string }>; stop: AbortController }>();
 
 const INTERACTIONS: ReadonlySet<string> = new Set(['click', 'fill', 'press', 'scroll', 'wait']);
 
@@ -297,6 +301,10 @@ async function runSteps(page: Page, steps: readonly Step[], ctx: ToolContext): P
   let current = page;
   steps = await askForFills(page, steps, ctx);
   for (const [index, step] of steps.entries()) {
+    // Only a tab the chat's own page opens is followed; another chat's tabs are not this chat's business.
+    const popups: Page[] = [];
+    const onPopup = (popup: Page): void => { popups.push(popup); };
+    current.on('popup', onPopup);
     try {
       notes.push(await doStep(current, step));
       await settle(current);
@@ -304,9 +312,11 @@ async function runSteps(page: Page, steps: readonly Step[], ctx: ToolContext): P
       const view = await observeComputerPage(current, false).catch(() => undefined);
       return { output: `${[...notes, `Step ${index + 1} (${step.do}${step.target ? ` ${step.target}` : ''}) failed: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`].join('\n')}${view ? `\n\n${view.output}` : ''}`, isError: true };
     }
-    const next = await frontPage(current.context());
-    if (next && next !== current && !next.isClosed()) {
+    finally { current.off('popup', onPopup); }
+    const next = popups.filter(popup => !popup.isClosed()).at(-1);
+    if (next) {
       current = next;
+      adoptPage(ctx.stateDir, current);
       await settle(current);
       notes.push(`A new tab opened and is now the page: ${current.url()}`);
     }
@@ -336,7 +346,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       const failed = outcome === 'unverified' || outcome === 'saved_login_rejected';
       // Signed in: the page you landed on comes with it, so there is nothing more to ask for.
       const landed = failed ? undefined : await (async () => {
-        try { return await observeComputerPage(await frontPage(page.context()) ?? page, false); }
+        try { return await observeComputerPage(page.isClosed() ? await computerPage(ctx.stateDir) : page, false); }
         catch { return undefined; } // the sign-in worked whether or not the page can be read
       })();
       return { output: `${loginOutcomeMessage(outcome)}${landed ? `\n\n${landed.output}` : ''}`, ...(failed ? { isError: true } : {}) };
@@ -347,7 +357,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       const planProblem = plan?.length ? await destinationProblem(ctx.stateDir, plan) : undefined;
       if (planProblem) throw new Error(`${planProblem} Nothing was clicked.`);
       const name = args.secret_name?.trim() || `${new URL(page.url()).hostname.replace(/^www\./, '')}/key`;
-      const { length, found, check, sent } = await captureSecret({ stateDir: ctx.stateDir, page, name, signal: ctx.signal,
+      const { length, shape, via, check, sent } = await captureSecret({ ...(args.paste ? { paste: true } : {}), stateDir: ctx.stateDir, page, name, signal: ctx.signal,
         ...(plan?.length ? { sendTo: plan } : {}),
         ...(args.target ? { trigger: async () => { await clickOrHint(await locate(page, args.target)); } } : {}),
         ask: async (secretName, hint, signal) => {
@@ -356,7 +366,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
         } });
       const refused = check.verdict === 'rejected';
       const lines = [
-        `SAVED "${name}" in ClikCode Secrets Manager (${length} characters, ${found ? 'found on the page' : 'pasted by the user'}). You were not shown the key.`,
+        `SAVED "${name}" in ClikCode Secrets Manager (${length} characters, ${shape}, taken from ${via}). You were not shown the key; if that does not match what you expected (an id where a secret should be), delete it and capture again.`,
         refused ? `NOT VERIFIED: ${check.detail}. It was kept because the site shows a new key only once, and it was NOT sent anywhere. Wait a minute, then send it with store_secret and check the result.`
           : check.verdict === 'works' ? `Checked: ${check.detail}.` : `Not checked: ${check.detail}.`,
         ...sent.map(delivery => `${delivery.ok ? 'SENT' : 'NOT SENT'} - ${delivery.label}: ${delivery.message}`),
@@ -365,9 +375,24 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       return { output: lines.join('\n'), ...(sent.some(delivery => !delivery.ok) ? { isError: true } : {}) };
     }
     case 'handoff': {
-      await runTailcatHandoff({ stateDir: ctx.stateDir, signal: ctx.signal,
-        onLink: link => ctx.emitOutput?.(`Open this link on your phone to finish the browser step: ${link}\n`) });
-      return { output: 'The user finished the browser step. Continue from the current page.' };
+      // The link is returned at once; the handoff runs on, and a second handoff call waits for the user to finish.
+      let running = handoffs.get(ctx.stateDir);
+      if (!running) {
+        const stop = new AbortController();
+        let resolveLink!: (link: string) => void; let failLink!: (error: Error) => void;
+        const link = new Promise<string>((resolve, reject) => { resolveLink = resolve; failLink = reject; });
+        link.catch(() => undefined);
+        const done = runTailcatHandoff({ stateDir: ctx.stateDir, signal: stop.signal, onLink: resolveLink })
+          .then(() => ({ ok: true as const }), (error: unknown) => { failLink(error instanceof Error ? error : new Error(String(error))); return { ok: false as const, message: error instanceof Error ? error.message : String(error) }; })
+          .finally(() => { handoffs.delete(ctx.stateDir); });
+        running = { link, done, stop };
+        handoffs.set(ctx.stateDir, running);
+        const url = await Promise.race([running.link, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('The phone link did not come up.')), 45_000))]);
+        return { output: `Phone link (valid 10 minutes, one use): ${url}\nTell the user to open it and finish the browser step (CAPTCHA, MFA). Then call handoff again to wait until they are done.` };
+      }
+      const outcome = await Promise.race([running.done, new Promise<'waiting'>(resolve => setTimeout(() => resolve('waiting'), 90_000))]);
+      if (outcome === 'waiting') return { output: 'The user has not finished yet. Call handoff again to keep waiting.' };
+      return outcome.ok ? { output: 'The user finished the browser step. Continue from the current page.' } : { output: outcome.message, isError: true };
     }
     default: throw new Error('Unknown web action.');
   }

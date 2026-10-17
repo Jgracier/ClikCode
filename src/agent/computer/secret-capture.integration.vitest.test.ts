@@ -44,6 +44,8 @@ beforeAll(async () => {
     if (path === '/two') return send(page(create('go', `document.getElementById('out').innerHTML='<code>${KEY}</code> <code>${OTHER}</code>'`)));
     // Nothing key-like appears; the only help is the site's Copy button.
     if (path === '/copy-only') return send(page(`<button id="copy" style="width:200px;height:50px" onclick="navigator.clipboard.writeText('${KEY}')">Copy</button>`));
+    // An access key id and a secret key, each with its own Copy button, the id first.
+    if (path === '/pair') return send(page(create('go', "document.getElementById('out').innerHTML=`<div><span>Access Key ID:</span><code>ABCDEFGHIJKLMNOPQRSTUV</code><button onclick=&quot;navigator.clipboard.writeText('ABCDEFGHIJKLMNOPQRSTUV')&quot;>Copy</button></div><div><span>Secret Key:</span><code>••••••••</code><button onclick=&quot;navigator.clipboard.writeText('"+KEY+"')&quot;>Copy</button></div>`")));
     // A dialog like Google AI Studio's: the key beside a resource name and Copy buttons.
     if (path === '/dialog') return send(page(create('go', `document.getElementById('out').innerHTML='<p>API Key ${GOOGLE_STYLE}</p><button>Copy key to clipboard</button><p>Project name projects/831963658327</p><p>Project number 831963658327</p>'`)));
     // The key is never in the page text: only the site's own Copy button knows it. A "Copy cURL" button must not be pressed.
@@ -164,6 +166,17 @@ it.skipIf(!enabled)('presses the site\'s own Copy button when the key never appe
   const result = await captureSecret({ stateDir, page: tab, name: 'masked', trigger: () => tap(tab, '#go'), ask: neverAsked });
   expect(result).toMatchObject({ length: KEY.length, found: true });
   expect(await readNamedSecret(stateDir, 'masked')).toBe(KEY);
+}, 60_000);
+
+it.skipIf(!enabled)('takes the secret from a pair of Copy buttons, says where it came from, and never saves the id as a second secret', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
+  const tab = await open('/pair');
+  const result = await captureSecret({ stateDir, page: tab, name: 'pair/secret', trigger: () => tap(tab, '#go'), ask: neverAsked });
+  expect(result.via).toContain('next to "Secret Key"');
+  expect(await readNamedSecret(stateDir, 'pair/secret')).toBe(KEY);
+  // The same value again, under another name, is the first value again.
+  const again = await open('/pair');
+  await expect(captureSecret({ stateDir, page: again, name: 'pair/other', trigger: () => tap(again, '#go'), ask: neverAsked })).rejects.toThrow('same value already saved as "pair/secret"');
 }, 60_000);
 
 it.skipIf(!enabled)('refuses to save a value its own service rejects when the page already showed it, and saves one it accepts', async () => {

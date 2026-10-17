@@ -2,7 +2,7 @@ import { computerEnabled, setComputerEnabled } from '../agent/computer/settings.
 import { stateDirectory } from '../session/store/paths.js';
 import { emitResult } from '../cli/structured-output.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
-import { closeComputerBrowser, computerPage } from '../agent/computer/browser.js';
+import { closeComputerBrowser, frontComputerPage } from '../agent/computer/browser.js';
 import { loginFields, loginFieldSummary, pageControls } from '../agent/computer/login-fields.js';
 import { lockCredentialVault } from '../agent/computer/credential-vault.js';
 import { randomUUID } from 'node:crypto';
@@ -30,7 +30,7 @@ export async function computerSetEnabled(enabled: boolean): Promise<void> {
 /** Safe form metadata for a vendor agent. Never reads input values or takes a screenshot. */
 export async function computerInspect(): Promise<void> {
   if (!await computerEnabled(stateDirectory())) throw new Error('Computer use is off.');
-  const page = await computerPage(stateDirectory());
+  const page = await frontComputerPage(stateDirectory());
   try {
     const site = new URL(page.url()).origin;
     const fields = await loginFields(page);

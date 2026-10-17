@@ -1,6 +1,6 @@
 /** Keep a login page out of model observations even if a website changes its
  * password input to text for a "show password" control. */
-import { computerPage } from './browser.js';
+import { allComputerPages } from './browser.js';
 import { loginFields, loginScope } from './login-fields.js';
 import type { Page } from 'playwright-core';
 
@@ -46,13 +46,11 @@ export async function privateLoginPage(page: Page): Promise<boolean> {
 }
 
 export async function privateBrowserActive(stateDir: string): Promise<boolean> {
-  let page: Page;
-  try { page = await computerPage(stateDir); }
+  let pages: Page[];
+  try { pages = await allComputerPages(stateDir); }
   catch { return false; } // No ClikCode browser is open.
   try {
-    for (const candidate of page.context().pages()) {
-      if (!candidate.isClosed() && await privateLoginPage(candidate)) return true;
-    }
+    for (const candidate of pages) if (await privateLoginPage(candidate)) return true;
     return false;
   }
   catch { return true; } // A running browser that cannot be inspected stays private.

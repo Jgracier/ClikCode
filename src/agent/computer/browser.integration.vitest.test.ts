@@ -63,8 +63,8 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('opens, fills and clicks 
     expect((await run({ action: 'fill', target: ref('textbox', 'Name'), text: 'Ada' })).isError).toBeUndefined();
     expect((await run({ action: 'click', target: ref('button', 'Save') })).isError).toBeUndefined();
     expect(await (await computerPage(stateDir)).locator('body').getAttribute('data-done')).toBe('Ada');
-    expect((await run({ action: 'close' })).output).toBe('ClikCode browser closed.');
-    expect((await run({ action: 'observe' })).output).toContain('browser is closed');
+    expect((await run({ action: 'close' })).output).toBe("This chat's tab is closed.");
+    expect((await run({ action: 'observe' })).output).toContain('no open tab');
   } finally {
     await closeComputerBrowser(stateDir);
     server.close();
@@ -204,3 +204,26 @@ it.skipIf(!smoke)('waits for words to appear, and finds the lines of a long page
     await rm(stateDir, { recursive: true, force: true });
   }
 }, 90_000);
+
+it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('gives each chat its own tab in the shared Chrome', async () => {
+  const { spawn } = await import('node:child_process');
+  const { allComputerPages } = await import('./browser.js');
+  const stateDir = await mkdtemp(join(tmpdir(), 'clikcode-computer-chats-'));
+  try {
+    const mine = await openComputerPage(stateDir);
+    await mine.goto('data:text/html,<title>chat-a</title>chat a');
+    // A second chat is a second process: it must get its own tab, and neither may see the other's.
+    const script = `import('${new URL('./browser.js', import.meta.url).href}').then(async m => { const p = await m.openComputerPage(${JSON.stringify(stateDir)}); await p.goto('data:text/html,<title>chat-b</title>chat b'); console.log(JSON.stringify({ title: await p.title(), pages: (await m.allComputerPages(${JSON.stringify(stateDir)})).length })); process.exit(0); })`;
+    const out = await new Promise<string>((resolve, reject) => {
+      const child = spawn('npx', ['tsx', '-e', script], { env: { ...process.env, CLIKCODE_BROWSER_HOST_ENTRY: process.env.CLIKCODE_BROWSER_HOST_ENTRY ?? '' } });
+      let text = ''; child.stdout.on('data', chunk => { text += String(chunk); }); child.stderr.on('data', chunk => { text += String(chunk); });
+      child.on('close', () => resolve(text)); child.on('error', reject);
+    });
+    expect(out).toContain('"title":"chat-b"');
+    expect(await (await computerPage(stateDir)).title()).toBe('chat-a');
+    expect((await allComputerPages(stateDir)).length).toBeGreaterThanOrEqual(2);
+  } finally {
+    await closeComputerBrowser(stateDir);
+    await rm(stateDir, { recursive: true, force: true });
+  }
+}, 60_000);

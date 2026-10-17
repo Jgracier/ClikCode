@@ -42,11 +42,14 @@ export function copyRank(label: string): number {
   return /key|credential|bearer/.test(text) ? 2 : 1;
 }
 
+/** The words near a Copy button that say what it copies, for the result line (never the nearby text itself, which may hold the value). */
+const LABEL_WORDS = /\b(?:access key id|secret access key|secret key|client secret|client id|access key|api key|private key|key id|secret|token|password|passphrase)\b/i;
+
 /** Several Copy buttons (an access key id, a secret key, a code snippet): the one whose
  * surroundings rank highest as the credential; the first when nothing tells them apart. */
-async function bestCopy(buttons: import('playwright-core').Locator): Promise<import('playwright-core').Locator> {
+async function bestCopy(buttons: import('playwright-core').Locator): Promise<{ button: import('playwright-core').Locator; label: string }> {
   const count = Math.min(await buttons.count(), 8);
-  let best = 0; let bestRank = -1;
+  let best = 0; let bestRank = -1; let bestLabel = '';
   for (let index = 0; index < count; index++) {
     // Climb to the nearest ancestor that names what it holds ("Access Key ID:", "Secret Key:").
     const near = await buttons.nth(index).evaluate(element => {
@@ -58,9 +61,9 @@ async function bestCopy(buttons: import('playwright-core').Locator): Promise<imp
       return '';
     }).catch(() => '');
     const rank = copyRank(near);
-    if (rank > bestRank) { best = index; bestRank = rank; }
+    if (rank > bestRank) { best = index; bestRank = rank; bestLabel = LABEL_WORDS.exec(near)?.[0] ?? ''; }
   }
-  return buttons.nth(best);
+  return { button: buttons.nth(best), label: bestLabel };
 }
 
 /** Listen for copies from now on, so a click that itself copies (the agent pressed a Copy button as the trigger) is not lost. */
@@ -79,22 +82,24 @@ export async function copiedSince(page: Page): Promise<string | undefined> {
 
 /** Press that button and take what the page copies. What the site itself puts on
  * the clipboard is the key by definition, so no guess about its shape is needed. */
-export async function copyWithSiteButton(page: Page, waitMs = 3_000): Promise<string | undefined> {
+export async function copyWithSiteButton(page: Page, waitMs = 3_000): Promise<{ value: string; label: string } | undefined> {
   const buttons = page.getByRole('button', { name: COPY_KEY_BUTTON }).locator('visible=true');
+  let label = '';
   try {
     if (!await buttons.count()) return undefined;
-    const button = await bestCopy(buttons);
+    const chosen = await bestCopy(buttons);
+    label = chosen.label;
     await page.addInitScript(hookCopy);
     await page.evaluate(hookCopy);
     await page.evaluate(() => { (globalThis as unknown as Hooked).__clikcodeCopied = null; });
-    await button.click({ timeout: 3_000 });
+    await chosen.button.click({ timeout: 3_000 });
   } catch { return undefined; }
   for (let waited = 0; waited < waitMs; waited += 250) {
     await new Promise(resolve => setTimeout(resolve, 250));
     const found = plausibleCopy(await page.evaluate(() => (globalThis as unknown as Hooked).__clikcodeCopied).catch(() => undefined));
     if (found) {
       await page.evaluate(() => { (globalThis as unknown as Hooked).__clikcodeCopied = null; }).catch(() => undefined);
-      return found;
+      return { value: found, label };
     }
   }
   return undefined;
