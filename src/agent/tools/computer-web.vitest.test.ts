@@ -1,23 +1,52 @@
 import { describe, expect, it } from 'vitest';
-import { compactSnapshot, computerWebTool } from './computer-web.js';
+import { arrangeSnapshot, computerWebTool } from './computer-web.js';
 
-describe('compactSnapshot', () => {
-  const page = ['- banner:', '  - navigation "Main":', '    - link "Models"', '- main:', '  - heading "API Keys" [level=1]', '  - button "Create key"', '- contentinfo:', '  - link "Terms"'].join('\n');
+describe('arrangeSnapshot', () => {
+  const longMiddle = Array.from({ length: 900 }, (_, index) => `    - link "Item number ${index} of the long list" [ref=e${100 + index}]`).join('\n');
+  const page = [
+    '- generic [active] [ref=e1]:',
+    '  - banner [ref=e2]:', '    - navigation "Main" [ref=e3]:', '      - link "Models" [ref=e4]',
+    '  - main [ref=e5]:', '    - heading "API Keys" [level=1] [ref=e6]', '    - button "Create key" [ref=e7]', longMiddle,
+    '  - contentinfo [ref=e8]:', '    - link "Terms" [ref=e9]',
+    '  - dialog "Add role" [ref=e10]:', '    - combobox "Role" [ref=e11]', '    - button "Save" [ref=e12]',
+  ].join('\n');
 
-  it('folds the header and footer away and keeps the main area whole', () => {
-    const out = compactSnapshot(page);
-    expect(out).toContain('- heading "API Keys"');
-    expect(out).toContain('- button "Create key"');
-    expect(out).not.toContain('Models');
-    expect(out).not.toContain('Terms');
-    expect(out).toContain('observe with full: true');
+  it('puts what is open first, even when it sits at the end of a very long page', () => {
+    const out = arrangeSnapshot(page);
+    expect(out.startsWith('Open now (dialogs and menus):\n- dialog "Add role" [ref=e10]:\n  - combobox "Role" [ref=e11]\n  - button "Save" [ref=e12]')).toBe(true);
+    // The dialog is taken out of the body, not shown twice.
+    expect(out.match(/dialog "Add role"/g)).toHaveLength(1);
   });
 
-  it('leaves a page with no main area, or no header, exactly as it is', () => {
-    const noMain = '- banner:\n  - link "Home"\n- button "Go"';
-    expect(compactSnapshot(noMain)).toBe(noMain);
-    const plain = '- main:\n  - button "Go"';
-    expect(compactSnapshot(plain)).toBe(plain);
+  it('folds the header and footer, keeps the main area, and trims only the middle of a long page', () => {
+    const out = arrangeSnapshot(page);
+    expect(out).toContain('heading "API Keys"');
+    expect(out).toContain('button "Create key" [ref=e7]');
+    expect(out).not.toContain('Models');
+    expect(out).not.toContain('Terms');
+    expect(out).toContain('lines trimmed from the middle');
+    expect(out).toContain('Item number 0 ');
+    expect(out).toContain('Item number 899 ');
+    expect(out).not.toContain('Item number 450 ');
+    expect(out).toContain('observe with full: true');
+    expect(out.length).toBeLessThan(16_000);
+  });
+
+  it('full keeps the header and footer and allows a longer view', () => {
+    const out = arrangeSnapshot(page, true);
+    expect(out).toContain('Models');
+    expect(out).toContain('Terms');
+    expect(out).not.toContain('header and footer folded');
+  });
+
+  it('leaves a short page with no main area exactly as it is', () => {
+    const plain = '- generic [ref=e1]:\n  - banner [ref=e2]:\n    - link "Home" [ref=e3]\n  - button "Go" [ref=e4]';
+    expect(arrangeSnapshot(plain)).toBe(plain);
+  });
+
+  it('opens menus and dropdowns first too', () => {
+    const out = arrangeSnapshot('- generic [ref=e1]:\n  - main [ref=e2]:\n    - button "Role" [ref=e3]\n  - listbox [ref=e4]:\n    - option "Compute Admin" [ref=e5]');
+    expect(out.startsWith('Open now (dialogs and menus):\n- listbox [ref=e4]:\n  - option "Compute Admin" [ref=e5]')).toBe(true);
   });
 });
 
@@ -25,7 +54,8 @@ describe('computer_web labels and plan text', () => {
   const label = (args: Record<string, unknown>): string => computerWebTool.label(args as never);
   it('reads like what is happening, not like the call', () => {
     expect(label({ action: 'open', url: 'https://www.huggingface.co/settings/tokens' })).toBe('Open huggingface.co');
-    expect(label({ action: 'click', role: 'button', name: 'Create token' })).toBe('Click Create token');
+    expect(label({ action: 'click', target: 'e12' })).toBe('Click e12');
+    expect(label({ action: 'steps', steps: [{ do: 'click', target: 'e1' }, { do: 'fill', target: 'e2', text: 'x' }] })).toBe('2 steps on the page');
     expect(label({ action: 'capture_secret', secret_name: 'salad/api-key' })).toBe('Capture key as salad/api-key');
     expect(label({ action: 'login' })).toBe('Sign in');
   });
@@ -40,7 +70,7 @@ describe('capture_secret failures say what really happened', () => {
     const stateDir = await mkdtemp(join(tmpdir(), 'clikcode-web-plan-'));
     try {
       await setComputerEnabled(stateDir, true);
-      const result = await computerWebTool.run({ action: 'capture_secret', name: 'Create key', send_to: [{ to: 'nowhere' }] } as never, { stateDir } as never);
+      const result = await computerWebTool.run({ action: 'capture_secret', target: 'e7', send_to: [{ to: 'nowhere' }] } as never, { stateDir } as never);
       expect(result.isError).toBe(true);
       expect(result.output).toMatch(/^Not saved: /);
       expect(result.output).toContain('browser is closed');

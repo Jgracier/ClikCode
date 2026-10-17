@@ -6,13 +6,25 @@ and closes the browser, `on` brings them back.
 
 | Tool | What it is for |
 |---|---|
-| `computer_web` | A Chrome with its own saved profile (Edge if Chrome is missing): open, observe, click, fill, login, capture_secret, handoff. Shared by every terminal and VS Code window; never your personal profile. |
+| `computer_web` | A Chrome with its own saved profile (Edge if Chrome is missing). Shared by every terminal and VS Code window; never your personal profile. |
 | `computer_desktop` | Everything outside the page, through [cua-driver](https://github.com/trycua/cua) (a separate install): a popup window, a native dialog, another app. Give it a `pid` and `window_id` from `windows` to act on one window. |
 | `store_secret` | Send a key already in Secrets Manager on to a destination again. Values are never shown. |
 
 Nothing here asks you anything of its own: in Auto mode these tools just run, and the
 agent stops only for what it cannot do itself (a sign-in you must type, a choice
 between accounts, a payment, a CAPTCHA).
+
+## How the agent works a page
+
+Every action returns the page as it is now, so there is no separate "look" call. Each
+element carries a `[ref=e12]` (`f1e2` inside a frame); the agent clicks or fills by
+that reference, which works for unnamed chips, hidden radios and elements in iframes
+alike. What is open (a dialog, a dropdown) is shown first, a page's header and footer
+menus are folded away (`observe` with `full: true` brings them back), and a very long
+middle is trimmed. After each action the tool waits for the page to settle and follows
+a new tab or popup. `steps` runs several clicks and fills in one call and stops at the
+first that fails, showing the page. A stale reference answers "the page has changed"
+with the current page.
 
 ## Signing in
 
@@ -88,7 +100,7 @@ The tools run in the chat's worker, so they work the same in any harness:
   as it starts. Nothing is installed or written into a harness's config; it ships in
   every ClikCode install and follows `/computer off`. `clikcode mcp list` shows it.
 - **CLI, for anything else.** `clikcode computer tool <name> --args-json …`,
-  `computer capture <name> --click button:Create`,
+  `computer capture <name> --click <target> [--to clikdeploy-secret --with key=…]`,
   `computer store <name> --to clikdeploy-secret --with key=SALAD_API_KEY`,
   `computer secrets [--delete NAME]` (your own vault, no chat needed), `computer login`.
 
