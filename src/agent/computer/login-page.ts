@@ -146,6 +146,13 @@ export async function loginComputerPage(input: {
     // A rejected password often comes back on a new URL or a re-rendered
     // form. Never keep submitting the same secret into an account lockout.
     if (submittedPassword && fields.some(field => field.kind === 'password')) {
+      // A page that is still redrawing after the password (a phone prompt on its way) shows the old form for a moment.
+      let gone = false;
+      for (let poll = 0; poll < 32 && !gone; poll++) {
+        await input.page.waitForTimeout(250);
+        gone = !(await visible(input.page)).some(field => field.kind === 'password');
+      }
+      if (gone) { step--; continue; }
       if (id && !supplied.password && saved.password) { await setLoginRejected(input.stateDir, startUrl, id, true); return 'saved_login_rejected'; }
       return 'unverified';
     }
@@ -165,7 +172,11 @@ export async function loginComputerPage(input: {
     }
     // A one-time code is asked for every time and never kept.
     const codes: Record<string, string> = {};
-    const needed = fields.filter(field => field.transient || (!saved[field.key] && !supplied[field.key]));
+    const needed: LoginField[] = fields.filter(field => field.transient || (!saved[field.key] && !supplied[field.key]));
+    // An email-only first page is followed by a password page nearly everywhere: ask for both now, in one prompt.
+    const early = !fields.some(field => field.kind === 'password') && !saved.password && !supplied.password
+      && needed.some(field => ['email', 'username', 'accountId'].includes(field.key));
+    if (early) needed.push({ index: -1, key: 'password', label: 'Password', kind: 'password', required: true });
     if (needed.length) {
       const answers = await input.ask(origin, needed, input.signal);
       if (!answers || input.signal?.aborted) throw new LoginError('Private login cancelled.');
