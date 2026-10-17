@@ -8,6 +8,7 @@ import { saveNamedSecret } from './credential-vault.js';
 import { copyWithSiteButton, waitForCopiedSecret } from './clipboard-watch.js';
 import { LoginError } from './login-error.js';
 import { armFinder } from './secret-finder.js';
+import { checkKey, type KeyCheck } from './key-check.js';
 import { registerSecret } from './secret-scrubber.js';
 import { runTailcatHandoff } from './tailcat-handoff.js';
 
@@ -21,7 +22,9 @@ export async function captureSecret(input: {
   existing?: boolean;
   ask(name: string, hint: string, signal: AbortSignal): Promise<string | undefined>;
   onLink(link: string): void;
-}): Promise<{ length: number; found: boolean }> {
+  /** Tests the value against its service before it is saved. Default: the built-in checks by site. */
+  check?(pageUrl: string, value: string): Promise<KeyCheck>;
+}): Promise<{ length: number; found: boolean; check: KeyCheck }> {
   const stop = new AbortController();
   const outer = (): void => stop.abort();
   input.signal?.addEventListener('abort', outer, { once: true });
@@ -55,8 +58,11 @@ export async function captureSecret(input: {
     }
     if (!value || input.signal?.aborted) throw new LoginError('Secret capture cancelled.');
     registerSecret(value);
+    const check = await (input.check ?? checkKey)(input.page.url(), value);
+    // A value its own service refuses is not the key (an id, a page blob): saving it would only hide the problem.
+    if (check.verdict === 'rejected') throw new LoginError(`Not saved: ${check.detail}. What was on the page is not a working key (it may be the key's id or another value).`);
     await saveNamedSecret(input.stateDir, input.name, value);
-    return { length: value.length, found };
+    return { length: value.length, found, check };
   } finally {
     finder.dispose();
     stop.abort();

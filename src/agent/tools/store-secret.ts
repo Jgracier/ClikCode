@@ -1,8 +1,9 @@
 /** Sends a saved secret to a fixed destination. The agent names the secret and
  * where it goes; the worker runs the CLI and reads the value, so the value is
- * never in the command the model writes or in anything it gets back. After a
- * ClikDeploy write it checks the result, so "stored" means "set, and healthy
- * where a health check exists". */
+ * never in the command the model writes or in anything it gets back. What
+ * the destination says back (ClikDeploy reports whether the secret reached the
+ * running process) is relayed as it is: checking a key belongs to capture, and
+ * running a platform belongs to the platform. */
 import { spawn } from 'node:child_process';
 import { defineTool } from '../tool-contract.js';
 import { readNamedSecret } from '../computer/credential-vault.js';
@@ -28,35 +29,9 @@ function runCli(command: string, argv: string[], options: { stdin?: string; sign
 
 const json = (text: string): unknown => { try { return JSON.parse(text.slice(text.indexOf('{'))); } catch { return undefined; } };
 
-function find<T>(node: unknown, match: (value: Record<string, unknown>) => boolean): T | undefined {
-  if (Array.isArray(node)) { for (const item of node) { const hit = find<T>(item, match); if (hit) return hit; } return undefined; }
-  if (node && typeof node === 'object') {
-    if (match(node as Record<string, unknown>)) return node as T;
-    for (const value of Object.values(node)) { const hit = find<T>(value, match); if (hit) return hit; }
-  }
-  return undefined;
-}
-
-/** Did ClikDeploy keep it, and does the provider that uses it say it works? */
-async function verifyClikdeploy(key: string, signal?: AbortSignal): Promise<string> {
-  const listed = json((await runCli('clikdeploy', ['tools', 'run', 'admin_platform_secrets'], { signal, timeoutMs: 120_000 })).text);
-  const entry = find<{ configured?: boolean; updatedAt?: string; category?: string }>(listed, node => node.key === key && 'configured' in node);
-  if (!entry) return 'Could not confirm it in ClikDeploy (the secret list was unreadable).';
-  const fresh = entry.updatedAt && Date.now() - Date.parse(entry.updatedAt) < 5 * 60_000;
-  if (!entry.configured || !fresh) return 'ClikDeploy does not show it as just set. Check it before relying on it.';
-  let verdict = 'Confirmed set in ClikDeploy.';
-  if (entry.category?.startsWith('compute')) {
-    const providers = json((await runCli('clikdeploy', ['tools', 'run', 'admin_compute_gpu_providers'], { signal, timeoutMs: 150_000 })).text);
-    const provider = find<{ id?: string; health?: { healthy?: boolean; error?: string } }>(providers, node => Array.isArray(node.credentialKeys) && (node.credentialKeys as unknown[]).includes(key));
-    if (provider?.health) verdict += provider.health.healthy ? ` Provider ${provider.id} reports healthy with this credential.` : ` Provider ${provider.id} reports UNHEALTHY with this credential${provider.health.error ? `: ${provider.health.error}` : ''}.`;
-    else if (provider) verdict += ` Provider ${provider.id} has no live health check, so it is set but not tested.`;
-  } else verdict += ' No live health check exists for this kind of key, so it is set but not tested.';
-  return verdict;
-}
-
 export const storeSecretTool = defineTool<Args>({
   name: 'store_secret', class: 'exec',
-  description: 'Send a secret saved with computer_web capture_secret to a destination without ever showing you its value. destination clikdeploy: with no app it sets a ClikDeploy platform secret (the key must be a platform secret name such as SALAD_API_KEY; `clikdeploy tools run admin_platform_secrets` lists every name with the page where its key is created); with an app it sets that app\'s secret. destination github: sets a repository secret (needs repo as owner/name). A ClikDeploy write is checked afterwards and the result says whether it is set and whether its provider is healthy. Asks the user to approve each use.',
+  description: 'Send a secret saved with computer_web capture_secret to a destination without ever showing you its value. destination clikdeploy: with no app it sets a ClikDeploy platform secret (the key must be a platform secret name such as SALAD_API_KEY; `clikdeploy tools run admin_platform_secrets` lists every name with the page where its key is created); with an app it sets that app\'s secret. destination github: sets a repository secret (needs repo as owner/name). Asks the user to approve each use.',
   parameters: { type: 'object', additionalProperties: false, required: ['secret', 'destination', 'key'], properties: {
     secret: { type: 'string', description: 'Name given to capture_secret.' },
     destination: { type: 'string', enum: ['clikdeploy', 'github'] },
@@ -88,7 +63,6 @@ export const storeSecretTool = defineTool<Args>({
         : result.text.trim().split('\n').slice(-3).join(' ');
       const where = args.destination === 'github' ? `GitHub repository ${args.repo}` : 'ClikDeploy';
       let output = `${ok ? `Stored "${args.secret}" in ${where} as ${args.key}.` : `${where} did not store ${args.key}.`} ${detail}`.trim();
-      if (ok && args.destination === 'clikdeploy' && !args.app) output += ` ${await verifyClikdeploy(args.key, ctx.signal)}`;
       return { output: scrubSecrets(output), ...(ok ? {} : { isError: true }) };
     } catch (error) { return { output: scrubSecrets(error instanceof Error ? error.message : String(error)), isError: true }; }
   },
