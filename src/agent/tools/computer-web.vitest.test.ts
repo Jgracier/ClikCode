@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { arrangeSnapshot, computerWebTool } from './computer-web.js';
+import { arrangeSnapshot, computerWebTool, findInSnapshot } from './computer-web.js';
 
 describe('arrangeSnapshot', () => {
   const longMiddle = Array.from({ length: 900 }, (_, index) => `    - link "Item number ${index} of the long list" [ref=e${100 + index}]`).join('\n');
@@ -50,6 +50,14 @@ describe('arrangeSnapshot', () => {
   });
 });
 
+describe('findInSnapshot', () => {
+  const page = ['- generic [ref=e1]:', '  - main [ref=e2]:', '    - dialog "Add role" [ref=e3]:', '      - listbox [ref=e4]:', '        - option "Compute Admin" [ref=e5]', '        - option "Cloud Run Admin" [ref=e6]', '    - button "Other" [ref=e7]'].join('\n');
+  it('shows only the lines that mention the words, under the elements that contain them', () => {
+    expect(findInSnapshot(page, 'compute admin')).toBe(['- generic [ref=e1]:', '  - main [ref=e2]:', '    - dialog "Add role" [ref=e3]:', '      - listbox [ref=e4]:', '        - option "Compute Admin" [ref=e5]'].join('\n'));
+    expect(findInSnapshot(page, 'nothing like this')).toBe('');
+  });
+});
+
 describe('computer_web labels and plan text', () => {
   const label = (args: Record<string, unknown>): string => computerWebTool.label(args as never);
   it('reads like what is happening, not like the call', () => {
@@ -58,6 +66,7 @@ describe('computer_web labels and plan text', () => {
     expect(label({ action: 'steps', steps: [{ do: 'click', target: 'e1' }, { do: 'fill', target: 'e2', text: 'x' }] })).toBe('2 steps on the page');
     expect(label({ action: 'capture_secret', secret_name: 'salad/api-key' })).toBe('Capture key as salad/api-key');
     expect(label({ action: 'login' })).toBe('Sign in');
+    expect(label({ action: 'wait', text: 'API enabled' })).toBe('Wait for "API enabled"');
   });
 });
 

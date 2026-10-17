@@ -23,7 +23,10 @@ alike. What is open (a dialog, a dropdown) is shown first, a page's header and f
 menus are folded away (`observe` with `full: true` brings them back), and a very long
 middle is trimmed. After each action the tool waits for the page to settle and follows
 a new tab or popup. `steps` runs several clicks and fills in one call and stops at the
-first that fails, showing the page. A stale reference answers "the page has changed"
+first that fails, showing the page. `wait` holds for words to appear or go (an API
+being enabled, a resource being created) instead of looking again and again, and
+`observe` with `find: "words"` shows just the lines that mention them, for a page too
+long to read whole. A stale reference answers "the page has changed"
 with the current page.
 
 ## Signing in
@@ -55,10 +58,16 @@ authorization; there is no extra approval step.
    none is clear does the private paste prompt appear.
 2. **Check it.** The key is tried against its own service (Hugging Face, Google AI
    Studio, Together, OpenAI, Anthropic, Groq, Mistral, DeepSeek, OpenRouter), with
-   a damaged copy as a control. A key the service refuses is **not saved**.
+   a damaged copy as a control. A Google service-account JSON is tested by getting a
+   token with it (signed here; only the signed request goes, to Google's own token
+   address). A key the service refuses is **not saved**.
    Anything else is saved and marked "not checked", with the reason.
 3. **Save** it to ClikCode Secrets Manager (always).
 4. **Send** it on, as `send_to` says. If a destination fails the key stays saved.
+
+Once the click that makes the key has happened, a stop does not abandon the capture: it
+is finished and saved, so an interruption cannot leave a live key at the site that the
+vault never got. A downloaded key file is read and deleted at once.
 
 **A destination is a name for a command, nothing more.** The command has `{{secret}}`
 where the key goes and `{{slot}}` for anything the agent fills in:
@@ -85,8 +94,8 @@ destination's `--stdin` keeps the key out of the command line. Every result begi
 click may have made the site create a key that was then not saved (delete it there).
 `store_secret` takes the same thing as `{secret, to, with}`.
 
-Once held, a key's exact value (and its base64, URL-encoded and JSON forms, and each
-long field of a JSON file) is replaced with `[secret hidden]` in every tool result,
+Once held, a key's exact value (and its base64, URL-encoded and JSON forms, and the
+secret fields of a JSON file such as its private key, but not its public ids) is replaced with `[secret hidden]` in every tool result,
 and a screenshot of a page showing it is withheld. With no Create button,
 `capture_secret` takes the key a page already shows. The computer's shared clipboard
 is never read.

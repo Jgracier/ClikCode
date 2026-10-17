@@ -31,15 +31,18 @@ export function watchDownload(page: Page): DownloadWatch {
   };
 }
 
-/** A JSON credential file carries secrets in several of its fields, not only in the whole:
- * each long string inside is registered too, so quoting a field of it is hidden as well. */
+/** Fields of a JSON credential file that are secrets in their own right (the private key, a client secret,
+ * a token): quoting one on its own must be hidden too. Identifiers (private_key_id, client_email, project_id)
+ * are public and stay readable, so the agent can tell which key is which. */
+const SECRET_FIELD = /(?:private_key|secret|password|token|credential|api_?key)$/i;
+
 export function secretParts(content: string): string[] {
   try {
     const parts: string[] = [];
-    const walk = (node: unknown): void => {
-      if (typeof node === 'string') { if (node.length >= 24) parts.push(node); }
-      else if (Array.isArray(node)) node.forEach(walk);
-      else if (node && typeof node === 'object') Object.values(node).forEach(walk);
+    const walk = (node: unknown, field = ''): void => {
+      if (typeof node === 'string') { if (node.length >= 16 && SECRET_FIELD.test(field)) parts.push(node); }
+      else if (Array.isArray(node)) node.forEach(item => walk(item, field));
+      else if (node && typeof node === 'object') for (const [key, child] of Object.entries(node)) walk(child, key);
     };
     walk(JSON.parse(content));
     return parts;

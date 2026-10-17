@@ -6,6 +6,8 @@
  * Each check is paired with a control: the same request with the key damaged.
  * A service that answers both the same does not check keys at that endpoint, and
  * the result is "not tested" rather than a false "works". */
+import { createSign } from 'node:crypto';
+
 export type KeyCheck = { verdict: 'works' | 'rejected' | 'untested'; service?: string; detail: string };
 
 type Recipe = { host: RegExp; service: string; rejects?: readonly number[]; request(key: string): { url: string; headers: Record<string, string> } };
@@ -34,7 +36,37 @@ async function status(recipe: Recipe, key: string, fetcher: typeof fetch): Promi
   try { return (await fetcher(url, { headers, signal: AbortSignal.timeout(8_000) })).status; } catch { return undefined; }
 }
 
+/** A Google service-account key is tested by what it is for: signing a request to Google for an access
+ * token. The signing happens here, so the private key never leaves; only the signed request goes, and
+ * only to Google's own token address (never to one named inside the file). */
+const GOOGLE_TOKEN = 'https://oauth2.googleapis.com/token';
+
+function serviceAccountOf(key: string): { client_email: string; private_key: string } | undefined {
+  try {
+    const parsed = JSON.parse(key) as { type?: string; client_email?: string; private_key?: string };
+    return parsed.type === 'service_account' && parsed.client_email && parsed.private_key ? { client_email: parsed.client_email, private_key: parsed.private_key } : undefined;
+  } catch { return undefined; }
+}
+
+async function checkServiceAccount(account: { client_email: string; private_key: string }, fetcher: typeof fetch): Promise<KeyCheck> {
+  const encode = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString('base64url');
+  const now = Math.floor(Date.now() / 1000);
+  const unsigned = `${encode({ alg: 'RS256', typ: 'JWT' })}.${encode({ iss: account.client_email, scope: 'https://www.googleapis.com/auth/cloud-platform', aud: GOOGLE_TOKEN, iat: now, exp: now + 300 })}`;
+  let assertion: string;
+  try { assertion = `${unsigned}.${createSign('RSA-SHA256').update(unsigned).sign(account.private_key, 'base64url')}`; }
+  catch { return { verdict: 'rejected', service: 'Google', detail: 'the private key in the file is not a usable key' }; }
+  try {
+    const response = await fetcher(GOOGLE_TOKEN, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion }), signal: AbortSignal.timeout(8_000) });
+    const body = await response.json().catch(() => ({})) as { access_token?: string; error?: string; error_description?: string };
+    if (response.ok && body.access_token) return { verdict: 'works', service: 'Google', detail: `Google gave ${account.client_email} an access token with it` };
+    if (response.status === 400 || response.status === 401) return { verdict: 'rejected', service: 'Google', detail: `Google refused it (${body.error ?? `HTTP ${response.status}`}${body.error_description ? `: ${body.error_description}` : ''})` };
+    return { verdict: 'untested', service: 'Google', detail: `Google answered HTTP ${response.status}, which does not show whether the key works` };
+  } catch { return { verdict: 'untested', service: 'Google', detail: 'Google could not be reached' }; }
+}
+
 export async function checkKey(pageUrl: string, key: string, fetcher: typeof fetch = fetch): Promise<KeyCheck> {
+  const account = serviceAccountOf(key);
+  if (account) return checkServiceAccount(account, fetcher);
   let host: string;
   try { host = new URL(pageUrl).hostname; } catch { return { verdict: 'untested', detail: 'no check is known for this site' }; }
   const recipe = RECIPES.find(candidate => candidate.host.test(host));
