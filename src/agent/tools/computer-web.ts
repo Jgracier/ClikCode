@@ -25,7 +25,7 @@ type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait'; tar
 type WebArgs = {
   action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'profile' | 'open_email_link';
   url?: string; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
-  new_account?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; label?: string; secret_name?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
+  new_account?: boolean; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; label?: string; secret_name?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
 };
 
 export function webAddress(value: string | undefined): string {
@@ -222,6 +222,7 @@ export const computerWebTool = defineTool<WebArgs>({
     accept_dialog: { type: 'boolean', description: 'click: answer yes to a browser confirm dialog the click raises ("delete this token?"). Default: declined and reported.' },
     new_account: { type: 'boolean', description: 'login: ask for a different account instead of the saved one.' },
     paste: { type: 'boolean', description: 'capture_secret: do not look for the key; ask the user to paste it privately (when the page hides it or shows it as an image). With target, that button is still clicked first.' },
+    ask: { type: 'boolean', description: 'profile: ask the user now for name, email, phone and address and save them as a profile (also happens when none exists).' },
     from: { type: 'string', description: 'open_email_link: sender (name or address) of the email in the signed-in Gmail.' },
     subject: { type: 'string', description: 'open_email_link: words from the subject.' },
     link: { type: 'string', description: 'open_email_link: words or domain of the link to open (default: the first real link in the message).' },
@@ -255,7 +256,15 @@ export const computerWebTool = defineTool<WebArgs>({
       if (args.action === 'profile') {
         if (args.fields && Object.keys(args.fields).length) return { output: `Saved. ${describeProfile(await saveProfile(ctx.stateDir, { ...(args.label ? { label: args.label } : {}), fields: args.fields }))}` };
         const all = await listProfiles(ctx.stateDir);
-        return { output: all.length ? all.map(describeProfile).join('\n') : 'No profile is saved yet. The first form you fill with no text asks the user once and keeps the answers, or save one with fields.' };
+        // Asked for by the agent, or nothing saved yet: one private prompt for the usual fields, kept as the profile.
+        if (args.ask || !all.length) {
+          if (!ctx.requestPrivateLogin) throw new Error('This chat cannot ask the user privately. Save a profile with fields, or the user can run: clikcode computer profile --set key=value');
+          const asked = PROFILE_PROMPT.map(([key, label], index): LoginField => ({ index, key, label, kind: 'text', required: true }));
+          const answers = await ctx.requestPrivateLogin('https://profile.clikcode', asked, ctx.signal);
+          if (!answers) throw new Error('The user did not provide the profile.');
+          return { output: `Saved. ${describeProfile(await saveProfile(ctx.stateDir, { ...(args.label ? { label: args.label } : {}), fields: answers }))}` };
+        }
+        return { output: all.map(describeProfile).join('\n') };
       }
       if (args.action === 'close') { await closeComputerPage(ctx.stateDir); return { output: 'This chat\'s tab is closed.' }; }
       if (args.action === 'open') webAddress(args.url);
@@ -359,6 +368,8 @@ async function describeField(target: Locator): Promise<{ label: string; password
       hint: { autocomplete: el.getAttribute('autocomplete') ?? '', type, text: `${label} ${el.getAttribute('name') ?? ''} ${el.getAttribute('id') ?? ''}` } };
   }).catch(() => ({ label: '', password: false, hint: { autocomplete: '', type: 'text', text: '' }, placeholder: '', current: '' }));
 }
+
+const PROFILE_PROMPT: readonly [string, string][] = [['given_name', 'First name'], ['family_name', 'Last name'], ['email', 'Email'], ['phone', 'Phone (with area code)'], ['address_line1', 'Street address'], ['city', 'City'], ['state', 'State'], ['postal_code', 'Zip / postal code'], ['country', 'Country']];
 
 const profileChoice = sharedState('profile-choice', () => new Map<string, string>());
 
