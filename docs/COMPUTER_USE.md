@@ -16,40 +16,44 @@ between accounts, a payment, a CAPTCHA).
 
 ## How the agent works a page
 
-Every action returns the page as it is now, so there is no separate "look" call. Each
-element carries a `[ref=e12]` (`f1e2` inside a frame); the agent clicks or fills by
-that reference, which works for unnamed chips, hidden radios and elements in iframes
-alike. What is open (a dialog, a dropdown) is shown first, a page's header, footer and
-long side menus are folded away (`observe` with `full: true` brings them back), and a very long
-middle is trimmed. After each action the tool waits for the page to settle and follows
-a new tab or popup. `steps` runs several clicks and fills in one call and stops at the
-first that fails, showing the page. `wait` holds for words to appear or go (an API
-being enabled, a resource being created) instead of looking again and again, and
-`observe` with `find: "words"` shows just the lines that mention them, for a page too
-long to read whole. A stale reference answers "the page has changed"
-with the current page.
+`open` and `observe` return the page; each element carries a `[ref=e12]` (`f1e2` inside a
+frame) that the agent clicks or fills by, which works for unnamed chips, hidden radios and
+elements in iframes alike. What is open (a dialog, a dropdown) is shown first, a page's
+header, footer and long side menus are folded away (`observe` with `full: true` brings them
+back), and a very long middle is trimmed. After an action the tool waits for the page to
+settle, follows a new tab or popup the chat's own page opened, and returns **only what
+changed** (plus any open dialog); `observe` shows the whole page again. `steps` runs several
+clicks and fills in one call and stops at the first that fails, showing the page. `wait`
+holds for words to appear or go, and `observe` with `find: "words"` shows just the lines that
+mention them. A stale reference answers "the page has changed" with the current page.
 
-## Signing in
+**Every page can be read**, sign-in and signup forms included. What is never shown is the
+*value* of a password, one-time-code or card field (masked in every view, and a screenshot is
+withheld while one holds a value). There is no "sign-in page" mode to get stuck in.
 
-`login` is one action. The agent sees field names, never values or screenshots of a
-sign-in page; you type into a private prompt in the terminal or VS Code panel
-(email shown, passwords masked, nothing recorded in the chat).
+## Signing in and filling forms
 
-- One saved login for the site is used silently. Several: an arrow-key picker plus
-  "Use a different account".
-- Email-first, password and one-time-code pages are followed in turn; a code is
-  asked for every time and never saved.
-- A login is saved only after the browser leaves the sign-in page. A refused one
-  is never saved, and a saved one a site refuses is asked about next time.
-- `/computer login [url] [--new]` does it from the command line; `/computer logins`
-  lists and removes saved logins (the model sees only a count).
-- A CAPTCHA, or MFA that needs hands: `handoff` returns a one-use phone link at once
-  (static page `site/handoff/` on `gh-pages`, an encrypted Tailcat connection, no
-  ClikDeploy or Tailscale account); the agent gives it to you, then calls `handoff`
-  again to wait until you finish.
-- A signup or contact form is an ordinary page. Only a password or one-time-code field
-  hides a page. A `fill` with no `text` asks you privately (once for all such fields in
-  the call) and the answer never reaches the model.
+- **`fill` with no `text`** asks you in a private prompt (masked for password boxes), once for
+  all such fields in the call; the agent is never shown the answer. This is how a signup
+  form's name, address, phone and new password are filled.
+- A password you create this way is kept: when the form goes (its password fields disappear)
+  the login is saved to Secrets Manager under that site and the email the form held, so the
+  account is not lost.
+- **`login`** fills a saved login, or asks you in one prompt (an email-first page asks for
+  email and password together). One saved login for the site is used silently; several: an
+  arrow-key picker plus "Use a different account". Email-first, password and one-time-code
+  pages are followed in turn; a code is asked for every time and never saved. A login is saved
+  only after the browser leaves the sign-in page; a refused one is never saved, and a saved
+  one a site refuses is asked about next time.
+- `/computer login [url] [--new]` does it from the command line; `/computer logins` lists and
+  removes saved logins (the model sees only a count).
+- A CAPTCHA, or MFA that needs hands: `handoff` returns a one-use phone link at once (static
+  page `site/handoff/` on `gh-pages`, an encrypted Tailcat connection, no ClikDeploy or
+  Tailscale account); the agent gives it to you, then calls `handoff` again to wait until you
+  finish.
+- **Each chat has its own tab** in the shared Chrome: a chat only sees, acts on and follows
+  tabs it opened itself, so chats working at once do not collide. `close` closes that chat's
+  tab only.
 
 ## Getting an API key without the agent seeing it
 
@@ -111,6 +115,13 @@ and a screenshot of a page showing it is withheld. With no Create button,
 `capture_secret` takes the key a page already shows. The computer's shared clipboard
 is never read.
 
+## Updates without restarting
+
+The computer tools are also built as `computer-tools.js` next to the program. Each call checks
+that file and runs the newest copy, so a rebuilt ClikCode takes effect in a chat that is
+already open: its worker, history and tab stay. Only the argument list and descriptions the
+model was given when the chat began stay as they were, so a brand-new argument needs a new chat.
+
 ## In every harness
 
 The tools run in the chat's worker, so they work the same in any harness:
@@ -141,5 +152,5 @@ this protects against a copied folder, not against other programs running as you
 - The key is briefly in the `clikdeploy` command line, visible to the same OS user.
 - A URL change is the only success signal for a sign-in; no site-independent proof
   exists.
-- `computer_desktop observe` is refused while a browser tab is on a sign-in page, so
-  the screen cannot show what the page withholds. Acting is allowed.
+- `computer_desktop observe` is refused while a browser tab holds a typed password, code or
+  card number, since a screenshot would show it. Acting is allowed.
