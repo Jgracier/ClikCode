@@ -28,7 +28,8 @@ it('accepts a sound plan and says what is wrong with an unsound one', () => {
 it('shows the plan with the key only as its placeholder', () => {
   const text = describeDestinations([GCP, { type: 'github', repo: 'Jgracier/app', name: 'SALAD_API_KEY' }]);
   expect(text).toContain('admin_compute_save_credentials');
-  expect(text).toContain('{{secret}}');
+  expect(text).toContain('‹the key›');
+  expect(text).not.toContain('{{secret}}');
   expect(text).toContain('Jgracier/app');
 });
 

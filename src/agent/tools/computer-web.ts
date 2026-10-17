@@ -7,7 +7,7 @@ import { privateLoginPage } from '../computer/private-page.js';
 import { loginComputerPage, loginOutcomeMessage } from '../computer/login-page.js';
 import { LoginError } from '../computer/login-error.js';
 import { loginFields, loginFieldSummary, pageControls } from '../computer/login-fields.js';
-import { showsSecret } from '../computer/secret-scrubber.js';
+import { scrubSecrets, showsSecret } from '../computer/secret-scrubber.js';
 import { hideKeyLikeText } from '../computer/secret-finder.js';
 import { dialogNote, withDialogs } from '../computer/page-dialogs.js';
 import { SEND_TO_SCHEMA } from './store-secret.js';
@@ -20,7 +20,7 @@ import type { ToolContext, ToolRunResult } from '../tool-contract.js';
 type WebArgs = {
   action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'press' | 'scroll' | 'login' | 'handoff' | 'capture_secret';
   url?: string; role?: 'button' | 'link' | 'textbox' | 'checkbox' | 'combobox' | 'tab' | 'menuitem' | 'option' | 'radio' | 'switch';
-  name?: string; text?: string; key?: string; direction?: 'up' | 'down'; new_account?: boolean; secret_name?: string; remote?: boolean; accept_dialog?: boolean; send_to?: Destination[]; source?: 'page' | 'download';
+  name?: string; text?: string; key?: string; direction?: 'up' | 'down'; new_account?: boolean; secret_name?: string; accept_dialog?: boolean; send_to?: Destination[]; full?: boolean;
 };
 
 export function webAddress(value: string | undefined): string {
@@ -53,7 +53,22 @@ function visibleText(): string {
   return `${doc.body.innerText}\n${Array.from(doc.querySelectorAll('input, textarea')).map(element => element.value ?? '').join('\n')}`;
 }
 
-export async function observeComputerPage(page: Page, acceptsImages: boolean): Promise<ToolRunResult> {
+/** A page's header menus and footer are most of its accessibility text and rarely what a task needs.
+ * With a `main` area present they are folded to one line; `full` brings them back. */
+export function compactSnapshot(snapshot: string): string {
+  const blocks: string[][] = [];
+  for (const line of snapshot.split('\n')) { if (line.startsWith('- ') || !blocks.length) blocks.push([line]); else blocks.at(-1)!.push(line); }
+  if (!blocks.some(block => /^- main\b/.test(block[0] ?? ''))) return snapshot;
+  const kept: string[] = [];
+  let folded = false;
+  for (const block of blocks) {
+    if (/^- (banner|contentinfo)\b/.test(block[0] ?? '')) { folded = true; continue; }
+    kept.push(...block);
+  }
+  return folded ? `${kept.join('\n')}\n- (header and footer folded away; observe with full: true to see them)` : snapshot;
+}
+
+export async function observeComputerPage(page: Page, acceptsImages: boolean, full = false): Promise<ToolRunResult> {
   // Login pages remain observable by field name and type. No DOM values,
   // accessibility snapshot or screenshot crosses into the model context.
   if (await privateLoginPage(page)) {
@@ -62,7 +77,8 @@ export async function observeComputerPage(page: Page, acceptsImages: boolean): P
   }
   const raw = (await page.ariaSnapshot({ timeout: 10_000 })).slice(0, 25_000);
   // A key the page is showing is not for the model to read: capture_secret takes it.
-  const { text: snapshot, hidden } = hideKeyLikeText(raw);
+  const { text: shown, hidden } = hideKeyLikeText(raw);
+  const snapshot = full ? shown : compactSnapshot(shown);
   const output = `Page: ${page.url()}\n\n${snapshot}${hidden ? `\n\n[${hidden} key-like value${hidden === 1 ? '' : 's'} hidden. Use capture_secret to save it without reading it.]` : ''}`;
   if (!acceptsImages) return { output };
   if (hidden || showsSecret(snapshot) || showsSecret(await page.evaluate(visibleText).catch(() => ''))) return { output: `${output}\n\n[Screenshot withheld: the page shows a saved secret.]` };
@@ -75,26 +91,45 @@ export async function observeComputerPage(page: Page, acceptsImages: boolean): P
 
 export const computerWebTool = defineTool<WebArgs>({
   name: 'computer_web', class: 'exec',
-  description: 'Open a URL in one action; Chrome starts automatically. Observe shows sign-in field names without values. Login uses the one saved account for the site, lets the user pick when several are saved, otherwise privately requests the visible fields, follows ordinary sign-in pages, and saves new answers only after the browser advances past sign-in. When a sign-in page offers different ways in (root or IAM, another account), ask the user with ask_user, click their choice, then login. A one-time code is asked for privately each time and never saved. Use handoff for a CAPTCHA, or MFA that needs remote control. Never request a password or code in chat. To get an API key without seeing it: go to the site\'s keys page, set the permissions, then call capture_secret with a secret_name and the role and name of the final Create button; the worker clicks it, finds the new key itself and saves it to ClikCode Secrets Manager. With no button given it takes a key the page is already showing (an account\'s current key), which does not change the key. Never click Regenerate or Reset just to see a key. You get only the length. If it cannot tell, the user is asked to tap Copy or paste (set remote when they are on their phone). Then use store_secret to put it where it belongs.',
+  description: [
+    "Drive ClikCode's own Chrome (its own saved profile; it starts by itself).",
+    'Actions: open (a URL, then shows the page) · observe · click · fill · press · scroll · login · handoff · capture_secret · close.',
+    'click/fill take a role and the exact name from observe; leave the role out to match visible text. observe hides the page header and footer unless full is true.',
+    'Sign-in pages show only field names. login uses a saved login, or asks the user privately (never ask for a password or code in chat). When a sign-in page offers different ways in (root or IAM, another account), ask the user with ask_user, click their choice, then login. handoff gives the user a phone link for a CAPTCHA or MFA.',
+    'API keys: go to the site\'s key page, set the options, then capture_secret with the final Create button as role+name and a send_to plan. It presses the site\'s Copy button or reads the file it hands over, checks the key against its service, saves it to ClikCode Secrets Manager and sends it where send_to says. You never see the key. With no button it takes a key the page already shows; never click Regenerate just to see one.',
+  ].join('\n'),
   parameters: { type: 'object', additionalProperties: false, required: ['action'], properties: {
     action: { type: 'string', enum: ['open', 'close', 'observe', 'click', 'fill', 'press', 'scroll', 'login', 'handoff', 'capture_secret'] },
-    url: { type: 'string', description: 'Website URL for open.' },
-    role: { type: 'string', enum: ['button', 'link', 'textbox', 'checkbox', 'combobox', 'tab', 'menuitem', 'option', 'radio', 'switch'], description: 'Optional: leave it out to match the visible text.' },
-    name: { type: 'string', description: 'Exact accessible name (or visible text, with no role) from observe.' },
-    text: { type: 'string', description: 'Text for fill. Never include credentials.' },
-    key: { type: 'string', description: 'Keyboard key for press, for example Enter or Escape.' },
-    direction: { type: 'string', enum: ['up', 'down'] },
-    accept_dialog: { type: 'boolean', description: 'For click: answer yes to a browser confirm/alert dialog the click raises (for example "delete this token?"). Default: the dialog is declined and reported.' },
-    send_to: { ...SEND_TO_SCHEMA, description: 'For capture_secret: where the key goes after it is captured and checked, decided now and approved by the user once; the key is never shown to you. Same plan as store_secret: {type:"clikdeploy", tool, args} runs that ClikDeploy CLI tool with {{secret}} inside args marking where the key goes (for example admin_platform_set_secret with {key:"SALAD_API_KEY", value:"{{secret}}"}, or admin_compute_save_credentials with {provider:"GCP", credentials:{serviceAccountJson:"{{secret}}"}}); {type:"github", repo, name} sets a repository secret.' },
-    source: { type: 'string', enum: ['page', 'download'], description: 'For capture_secret: where the key shows up. page (default): in the page or via its Copy button. download: the site hands the key over as a file (a Google service-account JSON, a private key): the click starts the download and the worker reads and deletes it.' },
-    secret_name: { type: 'string', description: 'For capture_secret: the name to save the key under, such as salad/api-key.' },
-    remote: { type: 'boolean', description: 'For capture_secret: also print a phone link so the user can tap Copy on the page remotely.' },
-    new_account: { type: 'boolean', description: 'For login: the user wants a different account than the saved one, so ask for it instead of reusing.' },
+    url: { type: 'string', description: 'open: the website address.' },
+    role: { type: 'string', enum: ['button', 'link', 'textbox', 'checkbox', 'combobox', 'tab', 'menuitem', 'option', 'radio', 'switch'], description: 'click, fill, capture_secret: the control\'s role. Leave out to match visible text.' },
+    name: { type: 'string', description: 'click, fill, capture_secret: the exact name (or visible text) from observe.' },
+    text: { type: 'string', description: 'fill: the text. Never a credential.' },
+    key: { type: 'string', description: 'press: a key such as Enter or Escape.' },
+    direction: { type: 'string', enum: ['up', 'down'], description: 'scroll.' },
+    full: { type: 'boolean', description: 'observe: include the header and footer.' },
+    accept_dialog: { type: 'boolean', description: 'click: answer yes to a browser confirm dialog the click raises ("delete this token?"). Default: declined and reported.' },
+    new_account: { type: 'boolean', description: 'login: ask for a different account instead of the saved one.' },
+    secret_name: { type: 'string', description: 'capture_secret: name to save the key under (default: the site\'s name plus "/key").' },
+    send_to: { ...SEND_TO_SCHEMA, description: 'capture_secret: where the key goes, decided now and approved by the user once. {type:"clikdeploy", tool, args} runs that ClikDeploy CLI tool; the string {{secret}} inside args marks where the key goes (admin_platform_set_secret with {key:"SALAD_API_KEY", value:"{{secret}}"}; admin_compute_save_credentials with {provider:"GCP", credentials:{serviceAccountJson:"{{secret}}"}}). {type:"github", repo, name} sets a repository secret.' },
   } },
-  label: (args) => `Web ${args.action}${args.url ? ` ${args.url.slice(0, 80)}` : ''}`,
+  label: (args) => {
+    const host = (): string => { try { return new URL(args.url ?? '').hostname.replace(/^www\./, ''); } catch { return args.url?.slice(0, 60) ?? ''; } };
+    switch (args.action) {
+      case 'open': return `Open ${host()}`;
+      case 'observe': return 'Look at the page';
+      case 'click': return `Click ${args.name ?? ''}`.trim();
+      case 'fill': return `Fill ${args.name ?? ''}`.trim();
+      case 'press': return `Press ${args.key ?? ''}`.trim();
+      case 'login': return 'Sign in';
+      case 'handoff': return 'Hand off to phone';
+      case 'capture_secret': return `Capture key${args.secret_name ? ` as ${args.secret_name}` : ''}`;
+      case 'close': return 'Close browser';
+      default: return `Web ${args.action}`;
+    }
+  },
   describe: async (args) => args.action === 'capture_secret' && args.send_to?.length
-    ? `Capture an API key from the page (saved as "${args.secret_name ?? ''}" in ClikCode Secrets Manager; its value is never shown to the agent), then send it to:\n${describeDestinations(args.send_to)}`
-    : `ClikCode browser: ${args.action}${args.url ? ` ${args.url}` : ''}${args.name ? ` ${args.role} ${args.name}` : ''}${args.action === 'fill' ? ` (${args.text?.length ?? 0} characters)` : ''}`,
+    ? `Capture an API key from this page. It is saved in ClikCode Secrets Manager${args.secret_name ? ` as "${args.secret_name}"` : ''} and never shown to the agent, then sent to:\n${describeDestinations(args.send_to)}`
+    : `ClikCode browser: ${args.action}${args.url ? ` ${args.url}` : ''}${args.name ? ` ${args.role ?? ''} ${args.name}`.replace('  ', ' ') : ''}${args.action === 'fill' ? ` (${args.text?.length ?? 0} characters)` : ''}`,
   async run(args, ctx) {
     try {
       if (!(await computerEnabled(ctx.stateDir))) throw new Error(COMPUTER_OFF);
@@ -117,7 +152,9 @@ export const computerWebTool = defineTool<WebArgs>({
         return await Promise.race([stopped, act(page, args, ctx)]);
       } finally { ctx.signal?.removeEventListener('abort', onAbort); }
     } catch (error) {
-      if (args.action === 'login' || args.action === 'capture_secret') return { output: error instanceof LoginError ? error.message : args.action === 'login' ? 'Private login did not finish. Check the browser and try again.' : 'The secret could not be saved. Check the browser and try again.', isError: true };
+      // A sign-in's own errors may echo what was typed, so only its planned messages are shown; a capture's are always the real reason.
+      if (args.action === 'login') return { output: error instanceof LoginError ? error.message : 'Private login did not finish. Check the browser and try again.', isError: true };
+      if (args.action === 'capture_secret') { const why = error instanceof Error ? error.message : String(error); return { output: scrubSecrets(why.startsWith('Not saved') ? why : `Not saved: ${why}`), isError: true }; }
       return { output: error instanceof Error ? error.message : String(error), isError: true };
     }
   },
@@ -126,7 +163,7 @@ export const computerWebTool = defineTool<WebArgs>({
 async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRunResult> {
   switch (args.action) {
     case 'open': await page.goto(webAddress(args.url), { waitUntil: 'domcontentloaded', timeout: 30_000 }); return observeComputerPage(page, ctx.acceptsImages === true);
-    case 'observe': return observeComputerPage(page, ctx.acceptsImages === true);
+    case 'observe': return observeComputerPage(page, ctx.acceptsImages === true, args.full === true);
     case 'login': {
       const outcome = await loginComputerPage({ stateDir: ctx.stateDir, page, signal: ctx.signal, newAccount: args.new_account === true,
         ask: async (site, fields, signal) => {
@@ -136,18 +173,24 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       return { output: loginOutcomeMessage(outcome), ...(outcome === 'unverified' || outcome === 'saved_login_rejected' ? { isError: true } : {}) };
     }
     case 'capture_secret': {
-      if (!args.secret_name) throw new Error('capture_secret needs a secret_name.');
       // Before anything is clicked: a key must not be created for a plan that cannot deliver it.
       const planProblem = args.send_to?.length ? destinationProblem(args.send_to) : undefined;
       if (planProblem) throw new Error(planProblem);
-      const { length, found, check, sent } = await captureSecret({ stateDir: ctx.stateDir, page, name: args.secret_name, remote: args.remote === true, signal: ctx.signal,
-        ...(args.send_to?.length ? { sendTo: args.send_to } : {}), ...(args.source ? { source: args.source } : {}),
-        ...(args.role && args.name ? { trigger: () => clickOrHint(page, args) } : {}),
-        ask: async (name, hint, signal) => {
-          if (!ctx.requestPrivateSecret) throw new LoginError('This chat cannot show a private prompt.');
-          return ctx.requestPrivateSecret(name, hint, signal);
-        }, onLink: link => ctx.emitOutput?.(`Open this link on your phone, then tap Copy on the page: ${link}\n`) });
-      return { output: `Saved secret "${args.secret_name}" (${length} characters) in ClikCode Secrets Manager${found ? ', found on the page' : ', supplied by the user'}. ${check.verdict === 'works' ? `Verified: ${check.detail}.` : `Not verified: ${check.detail}.`} Its value was not shown to you.${sent.length ? `\n${sent.map(delivery => `${delivery.ok ? 'Sent' : 'FAILED'} - ${delivery.label}: ${delivery.message}`).join('\n')}${sent.some(delivery => !delivery.ok) ? '\nThe key is still saved; fix the cause and send it again with store_secret.' : ''}` : ' Use send_to next time, or store_secret, to send it where it belongs.'}` };
+      const name = args.secret_name?.trim() || `${new URL(page.url()).hostname.replace(/^www\./, '')}/key`;
+      const { length, found, check, sent } = await captureSecret({ stateDir: ctx.stateDir, page, name, signal: ctx.signal,
+        ...(args.send_to?.length ? { sendTo: args.send_to } : {}),
+        ...(args.name ? { trigger: () => clickOrHint(page, args) } : {}),
+        ask: async (secretName, hint, signal) => {
+          if (!ctx.requestPrivateSecret) throw new LoginError('Not saved: this chat cannot show a private prompt, and the key could not be found on its own.');
+          return ctx.requestPrivateSecret(secretName, hint, signal);
+        } });
+      const lines = [
+        `SAVED "${name}" in ClikCode Secrets Manager (${length} characters, ${found ? 'found on the page' : 'pasted by the user'}). You were not shown the key.`,
+        check.verdict === 'works' ? `Checked: ${check.detail}.` : `Not checked: ${check.detail}.`,
+        ...sent.map(delivery => `${delivery.ok ? 'SENT' : 'NOT SENT'} - ${delivery.label}: ${delivery.message}`),
+        ...(sent.some(delivery => !delivery.ok) ? ['The key is still saved. Fix the cause, then send it again with store_secret.'] : sent.length ? [] : ['Nothing was sent anywhere: use send_to to send it on, or store_secret later.']),
+      ];
+      return { output: lines.join('\n'), ...(sent.some(delivery => !delivery.ok) ? { isError: true } : {}) };
     }
     case 'handoff': {
       await runTailcatHandoff({ stateDir: ctx.stateDir, signal: ctx.signal,
@@ -155,9 +198,9 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       return { output: 'The user finished the browser step. Continue from the current page.' };
     }
     case 'click': {
-    const { dialogs } = await withDialogs(page, args.accept_dialog === true, () => clickOrHint(page, args));
-    return { output: `Clicked ${args.role} ${args.name}.${dialogNote(dialogs, args.accept_dialog === true)} Observe the page to verify the result.` };
-  }
+      const { dialogs } = await withDialogs(page, args.accept_dialog === true, () => clickOrHint(page, args));
+      return { output: `Clicked ${args.name}.${dialogNote(dialogs, args.accept_dialog === true)} Observe the page to see the result.` };
+    }
     case 'fill':
       if (typeof args.text !== 'string' || args.text.length > 20_000) throw new Error('Fill needs text of at most 20,000 characters.');
       await element(page, args).fill(args.text, { timeout: 10_000 });

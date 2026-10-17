@@ -46,8 +46,8 @@ export function destinationProblem(list: readonly unknown[]): string | undefined
 /** The plan as the user will read it when approving: the key is shown only as its placeholder. */
 export function describeDestinations(list: readonly Destination[]): string {
   return list.map(d => d.type === 'github'
-    ? `GitHub repository ${d.repo}: secret ${d.name}`
-    : `ClikDeploy: tools run ${d.tool} ${JSON.stringify(d.args)}`).join('\n');
+    ? `  • GitHub repository ${d.repo}: secret ${d.name}`
+    : `  • ClikDeploy: ${d.tool} ${JSON.stringify(d.args).replace(/"/g, '').replace(/\{\{secret\}\}/g, '‹the key›').slice(0, 200)}`).join('\n');
 }
 
 function fill(node: unknown, value: string): unknown {
