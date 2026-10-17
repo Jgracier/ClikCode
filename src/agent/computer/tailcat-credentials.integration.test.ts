@@ -26,7 +26,7 @@ it.skipIf(process.env.CLIKCODE_TAILCAT_E2E !== '1')('saves a login without expos
     let ready!: () => void;
     const linkReady = new Promise<void>(resolve => { ready = resolve; });
     const request = requestTailcatCredential({ stateDir, site: 'https://accounts.example.test',
-      pageUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/handoff/`,
+      pageUrl: process.env.CLIKCODE_TAILCAT_PAGE_URL ?? `http://127.0.0.1:${(server.address() as { port: number }).port}/handoff/`,
       onLink: url => { link = url; ready(); } });
     await linkReady;
     expect(link).not.toContain('private@example.test');
