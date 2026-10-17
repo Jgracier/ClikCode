@@ -5,7 +5,7 @@ import { saveLoginFields, savedLoginFields, soleCredentialForSite } from './cred
 import { loginFields, type LoginField } from './login-fields.js';
 import { protectLoginPage } from './private-page.js';
 
-export type LoginOutcome = 'signed_in' | 'verification_needed' | 'unverified';
+export type LoginOutcome = 'signed_in' | 'session_reused' | 'verification_needed' | 'unverified';
 const AUTH_PATH = /(?:^|\/)(?:login|signin|sign-in|auth|authenticate|challenge|verify|verification)(?:\/|$)/i;
 const STEP_POLLS = 60;
 const VERIFY_POLLS = 120;
@@ -70,7 +70,7 @@ export async function loginComputerPage(input: {
         if (Object.keys(supplied).length) await saveLoginFields(input.stateDir, startUrl, supplied, id);
         return 'signed_in';
       }
-      if (submitted && leftSignIn(startUrl, url)) return 'unverified';
+      if (submitted && leftSignIn(startUrl, url)) return 'session_reused';
       if (!submitted) throw new Error('No login field is visible. Use handoff for verification or CAPTCHA.');
       if (!announcedVerification) { input.onVerification?.(); announcedVerification = true; }
       for (let poll = 0; poll < VERIFY_POLLS; poll++) {
