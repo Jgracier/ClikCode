@@ -8,7 +8,6 @@ and closes the browser, `on` brings them back.
 |---|---|
 | `computer_web` | A Chrome with its own saved profile (Edge if Chrome is missing), shared by every terminal and VS Code window, never your personal profile. **Each chat gets its own tab**: a chat only sees, acts on and follows tabs it opened itself, so chats working at once do not collide. `close` closes that chat's tab only. |
 | `computer_desktop` | Everything outside the page, through [cua-driver](https://github.com/trycua/cua) (a separate install): a popup window, a native dialog, another app. Give it a `pid` and `window_id` from `windows` to act on one window. |
-| `store_secret` | Send a key already in Secrets Manager on to a destination again. Values are never shown. |
 
 Nothing here asks you anything of its own: in Auto mode these tools just run, and the
 agent stops only for what it cannot do itself (a sign-in you must type, a choice
@@ -114,7 +113,7 @@ by a page the agent is reading. `{{secret|json}}` is the key inside a JSON strin
 destination's `--stdin` keeps the key out of the command line. Every result begins
 `SAVED` or `Not saved:` and says what really happened, including a warning when a
 click may have made the site create a key that was then not saved (delete it there).
-`store_secret` takes the same thing as `{secret, to, with}`.
+`send_secret` (an action of `computer_web`) sends a saved key again, or somewhere else, with `{secret, to, with}`.
 
 Once held, a key's exact value (and its base64, URL-encoded and JSON forms, and the
 secret fields of a JSON file such as its private key, but not its public ids) is replaced with `[secret hidden]` in every tool result,

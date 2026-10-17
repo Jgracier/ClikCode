@@ -13,7 +13,6 @@ import { agentTypesPromptSection, enabledPluginAgents } from './plugins.js';
 import { defaultTools, mergeTools } from './tools/registry.js';
 import { computerEnabled } from './computer/settings.js';
 import { computerTools } from './tools/computer.js';
-import { storeSecretTool } from './tools/store-secret.js';
 import { computerWebTool } from './tools/computer-web.js';
 import { hotTool } from './computer/hot-tools.js';
 import { exposeTools } from './mcp/deferred.js';
@@ -131,7 +130,7 @@ export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime
     hints: { ...input.modelClient.contextHints, contextWindow: input.modelClient.contextHints?.contextWindow ?? input.contextWindow },
     session: input.contextProfile,
   });
-  const ownTools = input.tools ?? [...defaultTools(), ...(await computerEnabled(input.stateDir) ? [...computerTools, computerWebTool, storeSecretTool].map(hotTool) : [])];
+  const ownTools = input.tools ?? [...defaultTools(), ...(await computerEnabled(input.stateDir) ? [...computerTools, computerWebTool].map(hotTool) : [])];
   const exposure = exposeTools(mergeTools(ownTools, input.extraTools), profile.mcpEagerSchemaTokens);
   const tools = exposure.all;
 
