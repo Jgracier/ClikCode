@@ -2,9 +2,8 @@
 import { defineTool } from '../tool-contract.js';
 import { closeComputerBrowser, computerPage, openComputerPage } from '../computer/browser.js';
 import { computerEnabled } from '../computer/settings.js';
-import { callComputerDriver } from '../computer/driver.js';
 import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
-import { privateLoginPage, protectLoginPage } from '../computer/private-page.js';
+import { privateLoginPage } from '../computer/private-page.js';
 import { loginComputerPage } from '../computer/login-page.js';
 import { loginFields, loginFieldSummary } from '../computer/login-fields.js';
 import { runTailcatHandoff } from '../computer/tailcat-handoff.js';
@@ -12,7 +11,7 @@ import type { Page } from 'playwright-core';
 import type { ToolRunResult } from '../tool-contract.js';
 
 type WebArgs = {
-  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'press' | 'scroll' | 'autofill' | 'login' | 'handoff';
+  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'press' | 'scroll' | 'login' | 'handoff';
   url?: string; role?: 'button' | 'link' | 'textbox' | 'checkbox' | 'combobox' | 'tab' | 'menuitem';
   name?: string; text?: string; key?: string; direction?: 'up' | 'down';
 };
@@ -48,9 +47,9 @@ export async function observeComputerPage(page: Page, acceptsImages: boolean): P
 
 export const computerWebTool = defineTool<WebArgs>({
   name: 'computer_web', class: 'exec',
-  description: 'Open a URL in one action; Chrome starts automatically. Observe shows sign-in field names without values. After inspecting the form, use login to request exactly those visible fields privately in the terminal or VS Code panel, fill and submit this step, then inspect the next page. Use handoff for CAPTCHA or MFA. Never request a password in chat.',
+  description: 'Open a URL in one action; Chrome starts automatically. Observe shows sign-in field names without values. Login privately requests visible fields, follows ordinary sign-in pages, and saves new answers only after the browser advances past sign-in. Use handoff for CAPTCHA or MFA that needs remote control. Never request a password in chat.',
   parameters: { type: 'object', additionalProperties: false, required: ['action'], properties: {
-    action: { type: 'string', enum: ['open', 'close', 'observe', 'click', 'fill', 'press', 'scroll', 'autofill', 'login', 'handoff'] },
+    action: { type: 'string', enum: ['open', 'close', 'observe', 'click', 'fill', 'press', 'scroll', 'login', 'handoff'] },
     url: { type: 'string', description: 'Website URL for open.' },
     role: { type: 'string', enum: ['button', 'link', 'textbox', 'checkbox', 'combobox', 'tab', 'menuitem'] },
     name: { type: 'string', description: 'Exact accessible name from observe.' },
@@ -79,12 +78,14 @@ export const computerWebTool = defineTool<WebArgs>({
           case 'open': await page.goto(webAddress(args.url), { waitUntil: 'domcontentloaded', timeout: 30_000 }); return observeComputerPage(page, ctx.acceptsImages === true);
           case 'observe': return observeComputerPage(page, ctx.acceptsImages === true);
           case 'login': {
-            await loginComputerPage({ stateDir: ctx.stateDir, page, signal: ctx.signal,
+            const outcome = await loginComputerPage({ stateDir: ctx.stateDir, page, signal: ctx.signal,
               ask: async (site, fields, signal) => {
                 if (!ctx.requestPrivateLogin) throw new Error('This chat cannot show private login fields.');
                 return ctx.requestPrivateLogin(site, fields, signal);
-              } });
-            return { output: 'Login step submitted. Observe the next page; if it asks for another field, use login again. Credentials stayed out of model context.' };
+              }, onVerification: () => ctx.emitOutput?.('Approve the sign-in or finish verification in the open browser.\n') });
+            return { output: outcome === 'signed_in' ? 'Browser advanced beyond sign-in. ClikCode Secrets Manager is ready for this site.'
+              : outcome === 'verification_needed' ? 'Waiting for verification on the sign-in page. The new login was not saved.'
+              : 'Sign-in could not be verified. The new login was not saved.', ...(outcome === 'unverified' ? { isError: true } : {}) };
           }
           case 'handoff': {
             await runTailcatHandoff({ stateDir: ctx.stateDir, signal: ctx.signal,
@@ -99,19 +100,6 @@ export const computerWebTool = defineTool<WebArgs>({
           case 'press':
             if (!args.key || !/^[A-Za-z0-9+_-]{1,30}$/.test(args.key)) throw new Error('Press needs a simple key.');
             await page.keyboard.press(args.key); return { output: `Pressed ${args.key}. Observe the page to verify the result.` };
-          case 'autofill': {
-            const password = page.locator('input[type="password"]:visible').first();
-            if (!await password.count()) throw new Error('No visible password field on this page.');
-            protectLoginPage(page);
-            await page.bringToFront();
-            const sent = await callComputerDriver('hotkey', {
-              target: { kind: 'desktop', display_id: 'primary' }, keys: ['ctrl', 'shift', 'l'],
-            }, ctx.signal);
-            if (sent.isError) throw new Error('Could not trigger Bitwarden in the ClikCode browser. Use the phone handoff.');
-            await page.waitForTimeout(750);
-            if (!await password.inputValue()) throw new Error('Bitwarden did not fill this page. Unlock or install its extension in the ClikCode browser, or use the phone handoff.');
-            return { output: 'Bitwarden filled the sign-in form. The password was not included in the tool result. Submit the form if the user asked to sign in.' };
-          }
           case 'scroll': await page.mouse.wheel(0, args.direction === 'up' ? -600 : 600); return { output: 'Scrolled. Observe the page to verify the result.' };
           default: throw new Error('Unknown web action.');
         }

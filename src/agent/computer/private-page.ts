@@ -10,6 +10,15 @@ export function protectLoginPage(page: Page): void { protectedPages.set(page, pa
 
 export async function privateLoginPage(page: Page): Promise<boolean> {
   if (protectedPages.get(page) === page.url()) return true;
+  // Identity providers commonly show account details or recovery hints after
+  // the credential form has navigated to a challenge page.
+  try {
+    const path = new URL(page.url()).pathname;
+    if (/(?:^|\/)(?:login|signin|sign-in|auth|challenge|verify|verification)(?:\/|$)/i.test(path)) {
+      protectLoginPage(page);
+      return true;
+    }
+  } catch { /* Inspect the fields below if the URL is transient. */ }
   if (await page.locator('input[type="password"]:visible').count()) {
     protectLoginPage(page);
     return true;

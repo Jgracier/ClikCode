@@ -9,6 +9,8 @@ it('keeps the same login page private when a show-password control changes the i
   expect(await privateLoginPage(page)).toBe(true);
   passwordField = false;
   expect(await privateLoginPage(page)).toBe(true);
+  url = 'https://example.com/signin/challenge/phone';
+  expect(await privateLoginPage(page)).toBe(true);
   url = 'https://example.com/account';
   expect(await privateLoginPage(page)).toBe(false);
 });
