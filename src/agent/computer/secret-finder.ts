@@ -12,7 +12,8 @@ const STRONG_KEY = /api.?key|secret|access.?token|private.?key|auth.?token|beare
 const PREFIXED = /^(?:[a-z]{2,12}(?:_[a-z]+)*_[A-Za-z0-9]{12,}|sk-|ghp_|github_pat_|AKIA|AIza|AQ\.|xox[abp]-|eyJ)/;
 /** A word that names the credential, so the value right after it is the credential ("API Key AQ.xxxx"). */
 const LABEL_THEN_VALUE = /\b(?:api[ _-]?key|secret(?: key)?|access[ _-]?token|token|key|credential|password)s?[ \t]*[:=]?[ \t]+([A-Za-z0-9_\-+/=.:~]{16,512})/gi;
-const mixedCase = (value: string): boolean => /[a-z]/.test(value) && /[A-Z]/.test(value) && /\d/.test(value);
+/** Upper and lower case together with a digit, or (no digit) enough randomness that it is not a word. */
+const mixedCase = (value: string): boolean => /[a-z]/.test(value) && /[A-Z]/.test(value) && (/\d/.test(value) || entropy(value) >= 4.5);
 
 export function labelledValues(text: string): Set<string> {
   const found = new Set<string>();
@@ -32,7 +33,9 @@ function entropy(text: string): number {
 /** Long, unbroken, mixed text with a digit: shaped like a key, not a word, URL or email. */
 export function keyShaped(value: string): boolean {
   if (value.length < 16 || value.length > 512 || !/^[A-Za-z0-9_\-+/=.:~]+$/.test(value)) return false;
-  if (/^https?:|@/.test(value) || !/\d/.test(value) || /^\d+$/.test(value)) return false;
+  if (/^https?:|@/.test(value) || /^\d+$/.test(value)) return false;
+  // Most keys carry a digit; one without (hf_ + letters) must be prefixed or plainly random.
+  if (!/\d/.test(value) && !PREFIXED.test(value) && !(value.length >= 32 && mixedCase(value))) return false;
   // A resource path such as projects/831963658327 names a thing, it is not a credential.
   if (/^[a-z][a-z-]*\/[\w-]+$/.test(value)) return false;
   return entropy(value) >= 3;

@@ -9,6 +9,7 @@ import { LoginError } from '../computer/login-error.js';
 import { loginFields, loginFieldSummary, loginOptions, pageControls } from '../computer/login-fields.js';
 import { showsSecret } from '../computer/secret-scrubber.js';
 import { hideKeyLikeText } from '../computer/secret-finder.js';
+import { dialogNote, withDialogs } from '../computer/page-dialogs.js';
 import { captureSecret } from '../computer/secret-capture.js';
 import { runTailcatHandoff } from '../computer/tailcat-handoff.js';
 import type { Page } from 'playwright-core';
@@ -17,7 +18,7 @@ import type { ToolContext, ToolRunResult } from '../tool-contract.js';
 type WebArgs = {
   action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'press' | 'scroll' | 'login' | 'handoff' | 'capture_secret';
   url?: string; role?: 'button' | 'link' | 'textbox' | 'checkbox' | 'combobox' | 'tab' | 'menuitem' | 'option' | 'radio' | 'switch';
-  name?: string; text?: string; key?: string; direction?: 'up' | 'down'; new_account?: boolean; secret_name?: string; remote?: boolean;
+  name?: string; text?: string; key?: string; direction?: 'up' | 'down'; new_account?: boolean; secret_name?: string; remote?: boolean; accept_dialog?: boolean;
 };
 
 export function webAddress(value: string | undefined): string {
@@ -69,6 +70,7 @@ export const computerWebTool = defineTool<WebArgs>({
     text: { type: 'string', description: 'Text for fill. Never include credentials.' },
     key: { type: 'string', description: 'Keyboard key for press, for example Enter or Escape.' },
     direction: { type: 'string', enum: ['up', 'down'] },
+    accept_dialog: { type: 'boolean', description: 'For click: answer yes to a browser confirm/alert dialog the click raises (for example "delete this token?"). Default: the dialog is declined and reported.' },
     secret_name: { type: 'string', description: 'For capture_secret: the name to save the key under, such as salad/api-key.' },
     remote: { type: 'boolean', description: 'For capture_secret: also print a phone link so the user can tap Copy on the page remotely.' },
     new_account: { type: 'boolean', description: 'For login: the user wants a different account than the saved one, so ask for it instead of reusing.' },
@@ -130,7 +132,10 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
         onLink: link => ctx.emitOutput?.(`Open this link on your phone to finish the browser step: ${link}\n`) });
       return { output: 'The user finished the browser step. Continue from the current page.' };
     }
-    case 'click': await clickOrHint(page, args); return { output: `Clicked ${args.role} ${args.name}. Observe the page to verify the result.` };
+    case 'click': {
+    const { dialogs } = await withDialogs(page, args.accept_dialog === true, () => clickOrHint(page, args));
+    return { output: `Clicked ${args.role} ${args.name}.${dialogNote(dialogs, args.accept_dialog === true)} Observe the page to verify the result.` };
+  }
     case 'fill':
       if (typeof args.text !== 'string' || args.text.length > 20_000) throw new Error('Fill needs text of at most 20,000 characters.');
       await element(page, args).fill(args.text, { timeout: 10_000 });
