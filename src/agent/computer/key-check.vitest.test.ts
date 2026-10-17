@@ -1,3 +1,4 @@
+import { createVerify, generateKeyPairSync } from 'node:crypto';
 import { expect, it } from 'vitest';
 import { checkKey, keyCheckService } from './key-check.js';
 
@@ -39,4 +40,48 @@ it('has no check for a site it does not know', async () => {
   expect(await checkKey('https://example.com/keys', KEY)).toMatchObject({ verdict: 'untested', detail: 'no check is known for this site' });
   expect(keyCheckService('https://platform.openai.com/api-keys')).toBe('OpenAI');
   expect(keyCheckService('https://example.com/')).toBeUndefined();
+});
+
+const pair = generateKeyPairSync('rsa', { modulusLength: 2048 });
+const serviceAccount = (extra: Record<string, unknown> = {}): string => JSON.stringify({
+  type: 'service_account', project_id: 'p', private_key_id: 'a92ef41d3362f8ba630ce9d06e248537e08cc19f', client_email: 'clikdeploy-compute@p.iam.gserviceaccount.com',
+  private_key: pair.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), token_uri: 'https://evil.example/token', ...extra });
+
+/** Google, as far as the check can tell: accepts a request signed by the key it knows. */
+function google(answer: (signedOk: boolean, claims: Record<string, unknown>) => Response, seen: { url?: string } = {}): typeof fetch {
+  return (async (url: string, init?: RequestInit) => {
+    seen.url = String(url);
+    const assertion = new URLSearchParams(String(init?.body)).get('assertion')!;
+    const [header, claims, signature] = assertion.split('.');
+    const ok = createVerify('RSA-SHA256').update(`${header}.${claims}`).verify(pair.publicKey, signature!, 'base64url');
+    return answer(ok, JSON.parse(Buffer.from(claims!, 'base64url').toString('utf8')));
+  }) as unknown as typeof fetch;
+}
+
+it('tests a Google service-account key by getting a token with it, signed here and sent only to Google', async () => {
+  const seen: { url?: string } = {};
+  const got: { ok?: boolean; claims?: Record<string, unknown> } = {};
+  const result = await checkKey('https://console.cloud.google.com/iam-admin', serviceAccount(), google((ok, claims) => {
+    Object.assign(got, { ok, claims });
+    return new Response(JSON.stringify({ access_token: 'x' }), { status: 200 });
+  }, seen));
+  expect(got.ok).toBe(true);
+  expect(got.claims).toMatchObject({ iss: 'clikdeploy-compute@p.iam.gserviceaccount.com', aud: 'https://oauth2.googleapis.com/token', scope: 'https://www.googleapis.com/auth/cloud-platform' });
+  expect(result).toMatchObject({ verdict: 'works', service: 'Google' });
+  // The address inside the file is ignored: the signed request goes to Google's own token endpoint.
+  expect(seen.url).toBe('https://oauth2.googleapis.com/token');
+});
+
+it('reports a service-account key Google refuses as rejected, and one that is not a usable key', async () => {
+  const refused = await checkKey('https://console.cloud.google.com/', serviceAccount(), google(() => new Response(JSON.stringify({ error: 'invalid_grant', error_description: 'Invalid JWT Signature.' }), { status: 400 })));
+  expect(refused.verdict).toBe('rejected');
+  expect(refused.detail).toContain('invalid_grant');
+  const broken = await checkKey('https://console.cloud.google.com/', serviceAccount({ private_key: 'not a key' }), google(() => new Response('{}', { status: 200 })));
+  expect(broken).toMatchObject({ verdict: 'rejected', detail: 'the private key in the file is not a usable key' });
+});
+
+it('treats an unreachable Google as untested, and leaves other JSON alone', async () => {
+  const down = (async () => { throw new Error('offline'); }) as unknown as typeof fetch;
+  expect((await checkKey('https://console.cloud.google.com/', serviceAccount(), down)).verdict).toBe('untested');
+  expect((await checkKey('https://example.com/', JSON.stringify({ type: 'something-else' }))).detail).toBe('no check is known for this site');
 });

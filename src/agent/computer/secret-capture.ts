@@ -30,18 +30,20 @@ export async function captureSecret(input: {
   sendTo?: readonly Destination[];
 }): Promise<{ length: number; found: boolean; check: KeyCheck; sent: Delivery[] }> {
   const stop = new AbortController();
-  const outer = (): void => stop.abort();
+  // Before the click, a stop simply stops. After it the site may already have made a key, so what is
+  // under way is finished and saved rather than abandoned half-way; only waiting for a person gives up.
+  let clicked = false;
+  const outer = (): void => { if (!clicked) stop.abort(); };
   input.signal?.addEventListener('abort', outer, { once: true });
   if (input.signal?.aborted) stop.abort();
   const finder = await armFinder(input.page, input.existing ?? !input.trigger);
   const download = watchDownload(input.page);
-  let clicked = false;
   try {
     if (input.trigger) { clicked = true; await input.trigger(); }
     let value: string | undefined;
     let ambiguous = false;
     for (let poll = 0; poll < LOOK_POLLS && !value; poll++) {
-      if (stop.signal.aborted) throw new LoginError('Not saved: capture was cancelled.');
+      if (!clicked && stop.signal.aborted) throw new LoginError('Not saved: capture was cancelled.');
       await input.page.waitForTimeout(500);
       value = await download.result();
       if (value) break;
@@ -57,9 +59,9 @@ export async function captureSecret(input: {
     const found = !!value;
     if (!value) {
       const hint = `${ambiguous ? 'More than one possible key on the page' : 'Could not find the key on its own'}. Paste it here`;
-      value = await input.ask(input.name, hint, stop.signal);
+      value = await input.ask(input.name, hint, input.signal ? AbortSignal.any([stop.signal, input.signal]) : stop.signal);
     }
-    if (!value || input.signal?.aborted) throw new LoginError('Not saved: no key was found and none was pasted.');
+    if (!value) throw new LoginError('Not saved: no key was found and none was pasted.');
     registerSecret(value);
     for (const part of secretParts(value)) registerSecret(part);
     const check = await (input.check ?? checkKey)(input.page.url(), value);

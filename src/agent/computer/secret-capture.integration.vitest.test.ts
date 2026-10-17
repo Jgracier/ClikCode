@@ -221,3 +221,22 @@ describe_('forwarding the captured key', () => {
     expect(await readNamedSecret(stateDir, 'kept')).toBe(KEY);
   }, 60_000);
 });
+
+it.skipIf(!enabled)('finishes and saves the key when it is stopped after the click that made it', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
+  const tab = await open('/reveal');
+  const controller = new AbortController();
+  const result = await captureSecret({ stateDir, page: tab, name: 'finished', signal: controller.signal, ask: neverAsked,
+    trigger: async () => { await tap(tab, '#go'); controller.abort(); } });
+  expect(result.length).toBe(KEY.length);
+  expect(await readNamedSecret(stateDir, 'finished')).toBe(KEY);
+}, 60_000);
+
+it.skipIf(!enabled)('simply stops when it is stopped before anything was clicked', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
+  const tab = await open('/reveal');
+  const controller = new AbortController();
+  controller.abort();
+  await expect(captureSecret({ stateDir, page: tab, name: 'never', signal: controller.signal, ask: neverAsked })).rejects.toThrow('Not saved');
+  await expect(readNamedSecret(stateDir, 'never')).rejects.toThrow();
+}, 60_000);

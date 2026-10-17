@@ -17,10 +17,10 @@ import { runTailcatHandoff } from '../computer/tailcat-handoff.js';
 import type { Locator, Page } from 'playwright-core';
 import type { ToolContext, ToolRunResult } from '../tool-contract.js';
 
-type Step = { do: 'click' | 'fill' | 'press' | 'scroll'; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; accept_dialog?: boolean };
+type Step = { do: 'click' | 'fill' | 'press' | 'scroll' | 'wait'; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; accept_dialog?: boolean; gone?: boolean; seconds?: number };
 type WebArgs = {
-  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'press' | 'scroll' | 'steps' | 'login' | 'handoff' | 'capture_secret';
-  url?: string; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; steps?: Step[]; full?: boolean; accept_dialog?: boolean;
+  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'press' | 'scroll' | 'wait' | 'steps' | 'login' | 'handoff' | 'capture_secret';
+  url?: string; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; steps?: Step[]; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
   new_account?: boolean; secret_name?: string; send_to?: Destination[] | Destination | string;
 };
 
@@ -100,7 +100,21 @@ export function arrangeSnapshot(snapshot: string, full = false): string {
   return [overlays.length ? `Open now (dialogs and menus):\n${overlays.join('\n')}\n` : '', body, folded ? '- (header and footer folded away; observe with full: true to see them)' : ''].filter(Boolean).join('\n');
 }
 
-export async function observeComputerPage(page: Page, acceptsImages: boolean, full = false): Promise<ToolRunResult> {
+/** Only the lines that mention `text`, each under the lines that contain it: for a page too long to read whole. */
+export function findInSnapshot(snapshot: string, text: string): string {
+  const lines = snapshot.split('\n');
+  const wanted = text.toLowerCase();
+  const keep = new Set<number>();
+  lines.forEach((line, at) => {
+    if (!line.toLowerCase().includes(wanted)) return;
+    keep.add(at);
+    let depth = indentOf(line);
+    for (let up = at - 1; up >= 0 && depth > 0; up--) if (indentOf(lines[up]!) < depth) { keep.add(up); depth = indentOf(lines[up]!); }
+  });
+  return [...keep].sort((a, b) => a - b).map(at => lines[at]!).join('\n');
+}
+
+export async function observeComputerPage(page: Page, acceptsImages: boolean, full = false, find?: string): Promise<ToolRunResult> {
   // Login pages remain observable by field name and type. No DOM values,
   // accessibility snapshot or screenshot crosses into the model context.
   if (await privateLoginPage(page)) {
@@ -110,6 +124,10 @@ export async function observeComputerPage(page: Page, acceptsImages: boolean, fu
   const raw = await page.ariaSnapshot({ mode: 'ai', timeout: 10_000 } as never) as string;
   // A key the page is showing is not for the model to read: capture_secret takes it.
   const { text: shown, hidden } = hideKeyLikeText(raw);
+  if (find?.trim()) {
+    const found = findInSnapshot(shown, find.trim());
+    return { output: `Page: ${page.url()}\n\n${found ? `Lines mentioning "${find.trim()}" (with the elements around them):\n${found.slice(0, 12_000)}` : `Nothing on the page mentions "${find.trim()}". Try observe with full: true.`}` };
+  }
   const snapshot = arrangeSnapshot(shown, full);
   const output = `Page: ${page.url()}\n\n${snapshot}${hidden ? `\n\n[${hidden} key-like value${hidden === 1 ? '' : 's'} hidden. Use capture_secret to save it without reading it.]` : ''}`;
   if (!acceptsImages) return { output };
@@ -132,21 +150,24 @@ export const computerWebTool = defineTool<WebArgs>({
   name: 'computer_web', class: 'exec',
   description: [
     "Drive ClikCode's own Chrome (its own saved profile; it starts by itself). Every action returns the page as it is now, with a [ref=…] on each element: pass a ref as target (or visible text) to click or fill. Open dialogs come first; a new tab or popup is followed automatically.",
-    'Actions: open (a URL) · observe (the page again; full: true adds header and footer) · click · fill · press · scroll · steps (several of those in order, one call, stops at the first failure) · login · handoff · capture_secret · close.',
+    'Actions: open (a URL) · observe (the page again; full: true adds header and footer; find: "words" shows only the lines that mention them, for a long page) · click · fill · press · scroll · wait (for text to appear or go, up to 2 minutes; for jobs that finish on their own) · steps (several of those in order, one call, stops at the first failure) · login · handoff · capture_secret · close.',
     'Sign-in pages show only field names. login uses a saved login, or asks the user privately (never ask for a password or code in chat). When a sign-in page offers different ways in (root or IAM, another account), ask the user with ask_user, click their choice, then login. handoff gives the user a phone link for a CAPTCHA or MFA.',
     'Work through the whole task you were given without checking in at each step. Ask real choices (project, account, role set) once, up front, in one question; after that ask only when genuinely blocked (a sign-in they must type, a payment).',
     'API keys: go to the key page, set the options, then capture_secret with target = the final Create button and a send_to plan. It presses the site\'s Copy button or reads the file it hands over, checks the key against its service, saves it to ClikCode Secrets Manager and sends it where send_to says. You never see the key. With no target it takes a key the page already shows; never click Regenerate just to see one.',
   ].join('\n'),
   parameters: { type: 'object', additionalProperties: false, required: ['action'], properties: {
-    action: { type: 'string', enum: ['open', 'close', 'observe', 'click', 'fill', 'press', 'scroll', 'steps', 'login', 'handoff', 'capture_secret'] },
+    action: { type: 'string', enum: ['open', 'close', 'observe', 'click', 'fill', 'press', 'scroll', 'wait', 'steps', 'login', 'handoff', 'capture_secret'] },
     url: { type: 'string', description: 'open: the website address.' },
     target: { type: 'string', description: 'click, fill, capture_secret: a [ref=…] from the page view (e5, or f1e2 inside a frame), or the visible text of a sign-in page control.' },
-    text: { type: 'string', description: 'fill: the text. Never a credential.' },
+    text: { type: 'string', description: 'fill: the text (never a credential). wait: the words to wait for.' },
+    gone: { type: 'boolean', description: 'wait: wait for the text to disappear instead of appear.' },
+    seconds: { type: 'number', description: 'wait: how long to wait at most (default 30, up to 120).' },
+    find: { type: 'string', description: 'observe: show only the lines that mention these words.' },
     key: { type: 'string', description: 'press: a key such as Enter or Escape.' },
     direction: { type: 'string', enum: ['up', 'down'], description: 'scroll.' },
     steps: { type: 'array', description: 'steps: what to do, in order, e.g. [{do:"fill", target:"e4", text:"My key"}, {do:"click", target:"e9"}].',
       items: { type: 'object', additionalProperties: false, required: ['do'], properties: {
-        do: { type: 'string', enum: ['click', 'fill', 'press', 'scroll'] }, target: { type: 'string' }, text: { type: 'string' }, key: { type: 'string' }, direction: { type: 'string', enum: ['up', 'down'] }, accept_dialog: { type: 'boolean' },
+        do: { type: 'string', enum: ['click', 'fill', 'press', 'scroll', 'wait'] }, target: { type: 'string' }, text: { type: 'string' }, key: { type: 'string' }, direction: { type: 'string', enum: ['up', 'down'] }, accept_dialog: { type: 'boolean' }, gone: { type: 'boolean' }, seconds: { type: 'number' },
       } } },
     full: { type: 'boolean', description: 'observe: include the header and footer and a longer view.' },
     accept_dialog: { type: 'boolean', description: 'click: answer yes to a browser confirm dialog the click raises ("delete this token?"). Default: declined and reported.' },
@@ -162,6 +183,7 @@ export const computerWebTool = defineTool<WebArgs>({
       case 'click': return `Click ${args.target ?? ''}`.trim();
       case 'fill': return `Fill ${args.target ?? ''}`.trim();
       case 'press': return `Press ${args.key ?? ''}`.trim();
+      case 'wait': return `Wait for ${args.text ? `"${args.text}"` : `${args.seconds ?? 30}s`}`;
       case 'steps': return `${args.steps?.length ?? 0} steps on the page`;
       case 'login': return 'Sign in';
       case 'handoff': return 'Hand off to phone';
@@ -206,7 +228,22 @@ export const computerWebTool = defineTool<WebArgs>({
   },
 });
 
-const INTERACTIONS: ReadonlySet<string> = new Set(['click', 'fill', 'press', 'scroll']);
+const INTERACTIONS: ReadonlySet<string> = new Set(['click', 'fill', 'press', 'scroll', 'wait']);
+
+/** Long jobs (an API being enabled, a resource being created) finish on their own: wait for words to
+ * appear (or go) instead of looking again and again. Gives up with the page as it is. */
+async function waitOn(page: Page, step: Step): Promise<string> {
+  const seconds = Math.min(Math.max(Math.floor(step.seconds ?? 30), 1), 120);
+  const text = step.text?.trim();
+  if (!text) { await page.waitForTimeout(seconds * 1000); return `Waited ${seconds}s.`; }
+  const deadline = Date.now() + seconds * 1000;
+  while (Date.now() < deadline) {
+    const shown = (await page.ariaSnapshot({ mode: 'ai', timeout: 8_000 } as never).catch(() => '') as string).toLowerCase().includes(text.toLowerCase());
+    if (shown !== (step.gone === true)) return `${step.gone ? 'Gone' : 'Appeared'}: "${text}".`;
+    await page.waitForTimeout(1_000);
+  }
+  throw new Error(`Still ${step.gone ? 'showing' : 'not showing'} "${text}" after ${seconds}s.`);
+}
 
 /** One thing done to the page, in words. Throws with the reason it could not be done. */
 async function doStep(page: Page, step: Step): Promise<string> {
@@ -227,6 +264,7 @@ async function doStep(page: Page, step: Step): Promise<string> {
     case 'scroll':
       await page.mouse.wheel(0, step.direction === 'up' ? -600 : 600);
       return 'Scrolled.';
+    case 'wait': return waitOn(page, step);
     default: throw new Error(`Unknown step "${String((step as { do?: unknown }).do)}".`);
   }
 }
@@ -256,12 +294,12 @@ async function runSteps(page: Page, steps: readonly Step[], ctx: ToolContext): P
 
 async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRunResult> {
   if (INTERACTIONS.has(args.action)) {
-    const one: Step = { do: args.action as Step['do'], ...(args.target ? { target: args.target } : {}), ...(args.text !== undefined ? { text: args.text } : {}), ...(args.key ? { key: args.key } : {}), ...(args.direction ? { direction: args.direction } : {}), ...(args.accept_dialog ? { accept_dialog: true } : {}) };
+    const one: Step = { do: args.action as Step['do'], ...(args.target ? { target: args.target } : {}), ...(args.text !== undefined ? { text: args.text } : {}), ...(args.key ? { key: args.key } : {}), ...(args.direction ? { direction: args.direction } : {}), ...(args.accept_dialog ? { accept_dialog: true } : {}), ...(args.gone ? { gone: true } : {}), ...(args.seconds ? { seconds: args.seconds } : {}) };
     return runSteps(page, [one], ctx);
   }
   switch (args.action) {
     case 'open': await page.goto(webAddress(args.url), { waitUntil: 'domcontentloaded', timeout: 30_000 }); await settle(page); return observeComputerPage(page, ctx.acceptsImages === true);
-    case 'observe': return observeComputerPage(page, ctx.acceptsImages === true, args.full === true);
+    case 'observe': return observeComputerPage(page, ctx.acceptsImages === true, args.full === true, args.find);
     case 'steps':
       if (!args.steps?.length) throw new Error('steps needs a list, e.g. [{"do":"click","target":"e5"}].');
       return runSteps(page, args.steps, ctx);

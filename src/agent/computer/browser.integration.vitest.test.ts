@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
@@ -88,10 +88,15 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('takes a key file the sit
     const address = server.address() as { port: number };
     const page = await openComputerPage(stateDir);
     await page.goto(`http://127.0.0.1:${address.port}/`);
-    const result = await captureSecret({ stateDir, page, name: 'gcp/service-account-json',
+    let downloaded: string | null | undefined;
+    page.on('download', download => { void download.path().then(path => { downloaded = path; }); });
+    const result = await captureSecret({ stateDir, page, name: 'gcp/service-account-json', check: async () => ({ verdict: 'untested', detail: 'not tested in this test' }),
       trigger: () => page.getByRole('button', { name: 'Create key' }).click(), ask: async () => { throw new Error('the person should not have been asked'); } });
     expect(result).toMatchObject({ length: FILE.length, found: true });
     expect(await readNamedSecret(stateDir, 'gcp/service-account-json')).toBe(FILE);
+    // The downloaded copy is gone once it has been read.
+    expect(downloaded).toBeTruthy();
+    await expect(access(downloaded!)).rejects.toThrow();
     // The whole file is hidden, and so is each long field inside it (the private key quoted on its own).
     const { scrubSecrets } = await import('./secret-scrubber.js');
     expect(scrubSecrets(FILE)).toBe('[secret hidden]');
@@ -169,3 +174,33 @@ it.skipIf(!smoke)('acts on anything by reference, several steps at a time, and f
     await rm(stateDir, { recursive: true, force: true });
   }
 }, 120_000);
+
+it.skipIf(!smoke)('waits for words to appear, and finds the lines of a long page that mention some words', async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'clikcode-computer-wait-'));
+  const rows = Array.from({ length: 900 }, (_, index) => `<li>Row ${index}</li>`).join('');
+  const server = createServer((_request, response) => {
+    response.setHeader('Content-Type', 'text/html');
+    response.end(`<main><h1>Console</h1><p id="s">Enabling the API…</p><ul>${rows}</ul><p>The special row: Compute Admin</p></main><script>setTimeout(() => { document.getElementById('s').textContent = 'API enabled'; }, 2500)</script>`);
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    await setComputerEnabled(stateDir, true);
+    const run = (args: Record<string, unknown>) => computerWebTool.run(args, { stateDir, acceptsImages: false } as ToolContext);
+    await run({ action: 'open', url: `http://127.0.0.1:${(server.address() as { port: number }).port}/` });
+    const waited = await run({ action: 'wait', text: 'API enabled', seconds: 20 });
+    expect(waited.isError).toBeUndefined();
+    expect(waited.output).toContain('Appeared: "API enabled"');
+    expect((await run({ action: 'wait', text: 'Enabling the API', gone: true, seconds: 5 })).output).toContain('Gone: "Enabling the API"');
+    const never = await run({ action: 'wait', text: 'will never show', seconds: 2 });
+    expect(never.isError).toBe(true);
+    expect(never.output).toContain('not showing "will never show" after 2s');
+    const found = (await run({ action: 'observe', find: 'compute admin' })).output;
+    expect(found).toContain('Compute Admin');
+    expect(found).not.toContain('Row 450');
+    expect((await run({ action: 'observe', find: 'zzz not here' })).output).toContain('Nothing on the page mentions');
+  } finally {
+    await closeComputerBrowser(stateDir);
+    server.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+}, 90_000);
