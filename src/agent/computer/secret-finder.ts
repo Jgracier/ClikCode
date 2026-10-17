@@ -80,8 +80,9 @@ async function snapshot(page: Page): Promise<Snapshot> {
 export type Finder = { look(): Promise<Decision>; dispose(): void };
 
 /** Take the "before" picture and start listening to the site's own requests. */
-export async function armFinder(page: Page): Promise<Finder> {
-  const before = new Set((await snapshot(page)).tokens);
+/** With `existing`, nothing counts as already there: a key the page is showing now (an account's current key) is taken. */
+export async function armFinder(page: Page, existing = false): Promise<Finder> {
+  const before = existing ? new Set<string>() : new Set((await snapshot(page)).tokens);
   const responses: Found[] = [];
   const listen = async (response: import('playwright-core').Response): Promise<void> => {
     try {

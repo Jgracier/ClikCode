@@ -42,6 +42,8 @@ beforeAll(async () => {
     if (path === '/two') return send(page(create('go', `document.getElementById('out').innerHTML='<code>${KEY}</code> <code>${OTHER}</code>'`)));
     // Nothing key-like appears; the only help is the site's Copy button.
     if (path === '/copy-only') return send(page(`<button id="copy" style="width:200px;height:50px" onclick="navigator.clipboard.writeText('${KEY}')">Copy</button>`));
+    // An account's current key, already on the page in a masked field, beside an id that is not a key.
+    if (path === '/existing') return send(page(`<p>Your API key</p><input type="password" value="${KEY}"><p>Org 3f2a9c1e-7b4d-4e8a-9c21-5d6e7f809a1b</p>`));
     send(page(create('go', "document.getElementById('out').textContent='done'")));
   });
   await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve));
@@ -128,4 +130,12 @@ it.skipIf(!enabled)('takes a pasted key', async () => {
   const result = await captureSecret({ stateDir, page: tab, name: 'pasted', remote: false, trigger: () => tap(tab, '#go'), ask: async () => KEY, onLink: () => undefined });
   expect(result).toEqual({ length: KEY.length, found: false });
   expect(await readNamedSecret(stateDir, 'pasted')).toBe(KEY);
+}, 60_000);
+
+it.skipIf(!enabled)('takes a key the page is already showing when no button is given', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
+  const tab = await open('/existing');
+  const result = await captureSecret({ stateDir, page: tab, name: 'current', remote: false, ask: neverAsked, onLink: () => undefined });
+  expect(result).toEqual({ length: KEY.length, found: true });
+  expect(await readNamedSecret(stateDir, 'current')).toBe(KEY);
 }, 60_000);
