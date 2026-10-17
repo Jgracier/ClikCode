@@ -190,14 +190,14 @@ describe_('forwarding the captured key', () => {
     process.env.PATH = `${bin}:${process.env.PATH}`;
     return { log };
   }
-  const plan: Destination[] = [{ type: 'clikdeploy', tool: 'admin_platform_set_secret', args: { key: 'SALAD_API_KEY', value: '{{secret}}' } }];
+  const plan: Destination[] = [{ to: 'clikdeploy-secret', with: { key: 'SALAD_API_KEY' } }];
 
   it.skipIf(!enabled)('captures, saves, then sends to the planned destination in one step', async () => {
     stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
     const { log } = await fakeCli(`echo '{"status":"success","message":"stored"}'`);
     const tab = await open('/reveal');
     const result = await captureSecret({ stateDir, page: tab, name: 'forwarded', trigger: () => tap(tab, '#go'), ask: neverAsked, sendTo: plan });
-    expect(result.sent).toEqual([expect.objectContaining({ ok: true, label: 'ClikDeploy admin_platform_set_secret' })]);
+    expect(result.sent).toEqual([expect.objectContaining({ ok: true, label: 'clikdeploy-secret (SALAD_API_KEY)' })]);
     expect(await readFile(log, 'utf8')).toContain(KEY);
     expect(await readNamedSecret(stateDir, 'forwarded')).toBe(KEY);
   }, 60_000);

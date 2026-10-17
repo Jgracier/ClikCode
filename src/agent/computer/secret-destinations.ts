@@ -1,60 +1,98 @@
-/** Where a captured key goes, decided by the agent before it is captured and
- * approved once by the user. Nothing about a provider is built in: a destination
- * is "this ClikDeploy tool with these arguments" or "this GitHub repository
- * secret", with `{{secret}}` marking where the value goes. The worker fills it in
- * at the moment of capture, so the value is never in anything the agent writes or reads.
+/** Where a captured key can go: a name for a command, nothing more.
  *
- * Only two executors exist, both talking to the user's own services: the
- * `clikdeploy` command (`tools run`) and `gh secret set`. The agent chooses the
- * tool and its arguments, not the program that runs. */
+ * A destination is a command line with slots: `{{secret}}` is where the key goes,
+ * `{{anything-else}}` is filled by the agent (`send_to: [{ to: "clikdeploy-secret",
+ * with: { key: "SALAD_API_KEY" } }]`). The key is put in by the worker at the
+ * moment of capture, so it is in nothing the agent writes or reads.
+ *
+ * Nothing is built in. A handful of destinations ship as plain data below, and the
+ * user adds their own with one line (`clikcode computer destination add`), kept in
+ * `computer/destinations.json`. The agent cannot add or change one, so what can ever
+ * run is decided by the user, not by a page the agent happens to be reading. */
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { runCli } from './run-cli.js';
 import { scrubSecrets } from './secret-scrubber.js';
 
-export const PLACEHOLDER = '{{secret}}';
+export type Destination = { to: string; with?: Record<string, string> };
+export type Template = { run: string[]; stdin?: string; about?: string };
 
-export type Destination =
-  | { type: 'clikdeploy'; tool: string; args: Record<string, unknown> }
-  | { type: 'github'; repo: string; name: string };
+/** `{{secret|json}}` is the key as it must sit inside a JSON string. */
+const JSON_ARGS = (fields: string): string => `{${fields}}`;
 
-const TOOL_NAME = /^[a-z][a-z0-9_]{2,80}$/;
-const REPO = /^[\w.-]+\/[\w.-]+$/;
-const SECRET_NAME = /^[A-Z][A-Z0-9_]{1,80}$/;
+export const DEFAULT_DESTINATIONS: Readonly<Record<string, Template>> = {
+  'clikdeploy-secret': { about: 'a ClikDeploy platform secret (key)',
+    run: ['clikdeploy', 'tools', 'run', 'admin_platform_set_secret', '--args-json', JSON_ARGS('"key":"{{key}}","value":"{{secret|json}}"'), '--confirm'] },
+  'clikdeploy-app-secret': { about: 'a ClikDeploy app secret (app, key)',
+    run: ['clikdeploy', 'tools', 'run', 'set_secret', '--args-json', JSON_ARGS('"appId":"{{app}}","key":"{{key}}","value":"{{secret|json}}"'), '--confirm'] },
+  'clikdeploy-compute': { about: 'one field of a ClikDeploy compute provider card (provider, field)',
+    run: ['clikdeploy', 'tools', 'run', 'admin_compute_save_credentials', '--args-json', JSON_ARGS('"provider":"{{provider}}","credentials":{"{{field}}":"{{secret|json}}"}'), '--confirm'] },
+  'github-secret': { about: 'a GitHub repository secret (repo, key)', run: ['gh', 'secret', 'set', '{{key}}', '--repo', '{{repo}}'], stdin: '{{secret}}' },
+};
 
-const mentionsSecret = (node: unknown): boolean =>
-  typeof node === 'string' ? node.includes(PLACEHOLDER)
-    : Array.isArray(node) ? node.some(mentionsSecret)
-      : node !== null && typeof node === 'object' ? Object.values(node).some(mentionsSecret) : false;
+const NAME = /^[a-z][a-z0-9-]{1,40}$/;
+/** A slot value goes into a command line: no quotes, no leading dash that a program could read as a flag. */
+const SAFE_VALUE = /^[A-Za-z0-9_][\w.@:/ -]{0,119}$/;
+const SLOT = /\{\{([a-z][a-z0-9_]*)(\|json)?\}\}/g;
+
+export const destinationsFile = (stateDir: string): string => path.join(stateDir, 'computer', 'destinations.json');
+
+export async function loadDestinations(stateDir: string): Promise<Record<string, Template>> {
+  let own: Record<string, Template> = {};
+  try { own = JSON.parse(await fs.readFile(destinationsFile(stateDir), 'utf8')) as Record<string, Template>; } catch { /* none added yet */ }
+  return { ...DEFAULT_DESTINATIONS, ...own };
+}
+
+/** The slots a template asks the agent to fill (everything but the key). */
+export function slotsOf(template: Template): string[] {
+  const text = [...template.run, template.stdin ?? ''].join('\n');
+  return [...new Set([...text.matchAll(SLOT)].map(match => match[1]!))].filter(slot => slot !== 'secret');
+}
+const carriesSecret = (template: Template): boolean => [...template.run, template.stdin ?? ''].some(part => part.includes('{{secret}}') || part.includes('{{secret|json}}'));
+
+export async function addDestination(stateDir: string, name: string, template: Template): Promise<void> {
+  if (!NAME.test(name)) throw new Error('A destination name is lower-case letters, digits and dashes, such as my-vault.');
+  if (!template.run.length || !template.run[0]) throw new Error('A destination needs a command to run.');
+  if (!carriesSecret(template)) throw new Error('A destination needs {{secret}} in its command (or its stdin), or the key is never sent.');
+  let own: Record<string, Template> = {};
+  try { own = JSON.parse(await fs.readFile(destinationsFile(stateDir), 'utf8')) as Record<string, Template>; } catch { /* first one */ }
+  own[name] = template;
+  await fs.mkdir(path.dirname(destinationsFile(stateDir)), { recursive: true, mode: 0o700 });
+  await fs.writeFile(destinationsFile(stateDir), `${JSON.stringify(own, null, 2)}\n`, { mode: 0o600 });
+}
+
+export async function removeDestination(stateDir: string, name: string): Promise<boolean> {
+  let own: Record<string, Template> = {};
+  try { own = JSON.parse(await fs.readFile(destinationsFile(stateDir), 'utf8')) as Record<string, Template>; } catch { return false; }
+  if (!(name in own)) return false;
+  delete own[name];
+  await fs.writeFile(destinationsFile(stateDir), `${JSON.stringify(own, null, 2)}\n`, { mode: 0o600 });
+  return true;
+}
+
+export const describeKnown = (all: Readonly<Record<string, Template>>): string =>
+  Object.entries(all).map(([name, template]) => `${name}${slotsOf(template).length ? `(${slotsOf(template).join(', ')})` : ''}${template.about ? ` - ${template.about}` : ''}`).join('; ');
 
 /** The first problem with the plan, in words the agent can act on; undefined when it is sound. */
-export function destinationProblem(list: readonly unknown[]): string | undefined {
+export async function destinationProblem(stateDir: string, list: readonly unknown[]): Promise<string | undefined> {
+  const all = await loadDestinations(stateDir);
   for (const [index, item] of list.entries()) {
     const at = `send_to[${index}]`;
-    const d = item as Record<string, unknown> | null;
-    if (!d || typeof d !== 'object') return `${at} must be an object.`;
-    if (d.type === 'clikdeploy') {
-      if (typeof d.tool !== 'string' || !TOOL_NAME.test(d.tool)) return `${at}.tool must be a ClikDeploy tool name such as admin_compute_save_credentials.`;
-      if (!d.args || typeof d.args !== 'object' || Array.isArray(d.args)) return `${at}.args must be an object of the tool's arguments.`;
-      if (!mentionsSecret(d.args)) return `${at}.args must contain ${PLACEHOLDER} where the key goes, or the key is never sent.`;
-    } else if (d.type === 'github') {
-      if (typeof d.repo !== 'string' || !REPO.test(d.repo)) return `${at}.repo must be owner/name.`;
-      if (typeof d.name !== 'string' || !SECRET_NAME.test(d.name)) return `${at}.name must be an upper-case secret name such as SALAD_API_KEY.`;
-    } else return `${at}.type must be clikdeploy or github.`;
+    const d = item as Destination | null;
+    if (!d || typeof d !== 'object' || typeof d.to !== 'string') return `${at} needs {to: "<destination>", with: {...}}.`;
+    const template = all[d.to];
+    if (!template) return `${at}: no destination named "${d.to}". Known: ${describeKnown(all)}. The user adds more with \`clikcode computer destination add\`.`;
+    for (const slot of slotsOf(template)) {
+      const value = d.with?.[slot];
+      if (typeof value !== 'string' || !SAFE_VALUE.test(value)) return `${at}: "${d.to}" needs with.${slot} (letters, digits, dot, dash, underscore, slash; not starting with a dash).`;
+    }
   }
   return undefined;
 }
 
-/** The plan as the user will read it when approving: the key is shown only as its placeholder. */
-export function describeDestinations(list: readonly Destination[]): string {
-  return list.map(d => d.type === 'github'
-    ? `  • GitHub repository ${d.repo}: secret ${d.name}`
-    : `  • ClikDeploy: ${d.tool} ${JSON.stringify(d.args).replace(/"/g, '').replace(/\{\{secret\}\}/g, '‹the key›').slice(0, 200)}`).join('\n');
-}
-
-function fill(node: unknown, value: string): unknown {
-  if (typeof node === 'string') return node.split(PLACEHOLDER).join(value);
-  if (Array.isArray(node)) return node.map(item => fill(item, value));
-  if (node && typeof node === 'object') return Object.fromEntries(Object.entries(node).map(([key, child]) => [key, fill(child, value)]));
-  return node;
+/** One pass, so a key that happens to contain {{...}} text is never read as a slot. */
+function fill(text: string, params: Record<string, string>, secret: string): string {
+  return text.replace(SLOT, (_all, slot: string, json?: string) => slot === 'secret' ? (json ? JSON.stringify(secret).slice(1, -1) : secret) : params[slot] ?? '');
 }
 
 export type Delivery = { label: string; ok: boolean; message: string };
@@ -68,16 +106,19 @@ const say = (text: string): string => {
   return text.trim().split('\n').slice(-3).join(' ').slice(0, 300);
 };
 
-export async function sendToDestinations(list: readonly Destination[], value: string, signal?: AbortSignal): Promise<Delivery[]> {
+export async function sendToDestinations(stateDir: string, list: readonly Destination[], value: string, signal?: AbortSignal): Promise<Delivery[]> {
+  const all = await loadDestinations(stateDir);
   const out: Delivery[] = [];
   for (const d of list) {
-    const label = d.type === 'github' ? `GitHub ${d.repo} ${d.name}` : `ClikDeploy ${d.tool}`;
-    const result = d.type === 'github'
-      // gh reads the value from stdin: it is in no command line.
-      ? await runCli('gh', ['secret', 'set', d.name, '--repo', d.repo], { stdin: value, signal, timeoutMs: 60_000 })
-      : await runCli('clikdeploy', ['tools', 'run', d.tool, '--args-json', JSON.stringify(fill(d.args, value)), '--confirm'], { signal, timeoutMs: 90_000 });
-    if (result.missing) { out.push({ label, ok: false, message: `The ${d.type === 'github' ? 'gh' : 'clikdeploy'} command is not installed on this computer.` }); continue; }
-    out.push({ label, ok: result.code === 0, message: scrubSecrets(say(result.text)) });
+    const template = all[d.to]!;
+    const params = d.with ?? {};
+    const label = `${d.to}${Object.keys(params).length ? ` (${Object.values(params).join(', ')})` : ''}`;
+    const [program, ...args] = template.run.map(part => fill(part, params, value));
+    // A value goes to the program on stdin when the template says so: then it is in no command line.
+    const result = await runCli(program!, args, { ...(template.stdin !== undefined ? { stdin: fill(template.stdin, params, value) } : {}), signal, timeoutMs: 90_000 });
+    out.push(result.missing
+      ? { label, ok: false, message: `The ${program} command is not installed on this computer.` }
+      : { label, ok: result.code === 0, message: scrubSecrets(say(result.text)) });
   }
   return out;
 }

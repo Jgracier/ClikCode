@@ -1,8 +1,6 @@
-/** Fallback when the key cannot be found on its own: wait for a copy made ON
- * THE PAGE (the site's Copy button, or a keyboard copy of a selection, on the
- * computer or through the phone handoff). The page's own copy is observed, not
- * the computer's shared clipboard, so another program copying something else
- * can never be mistaken for the key. */
+/** Takes what the site's own Copy button copies. The page's own copy is observed, not the
+ * computer's shared clipboard, so another program copying something else can never be
+ * mistaken for the key. */
 import type { Page } from 'playwright-core';
 
 type Hooked = { __clikcodeCopied?: string | null; navigator: { clipboard?: { writeText(text: string): Promise<void> } }; document: { getSelection(): { toString(): string } | null; addEventListener(type: string, listener: () => void, capture: boolean): void } };
@@ -28,24 +26,6 @@ export function plausibleCopy(value: string | null | undefined): string | undefi
   const text = value?.trim();
   if (!text || text.length < 8 || text.length > 4096 || /\s/.test(text)) return undefined;
   return text;
-}
-
-export async function waitForCopiedSecret(page: Page, signal: AbortSignal): Promise<string | undefined> {
-  try {
-    await page.addInitScript(hookCopy);
-    await page.evaluate(hookCopy);
-  } catch { /* the paste prompt still works */ }
-  const read = (): Promise<string | null | undefined> =>
-    page.evaluate(() => (globalThis as unknown as Hooked).__clikcodeCopied).catch(() => undefined);
-  while (!signal.aborted && !page.isClosed()) {
-    await new Promise(resolve => setTimeout(resolve, 500));
-    const found = plausibleCopy(await read());
-    if (found) {
-      await page.evaluate(() => { (globalThis as unknown as Hooked).__clikcodeCopied = null; }).catch(() => undefined);
-      return found;
-    }
-  }
-  return undefined;
 }
 
 /** The site's own button for copying the new key: "Copy", "Copy key", "Copy API key to

@@ -10,8 +10,8 @@ import { loginFields, loginFieldSummary, pageControls } from '../computer/login-
 import { scrubSecrets, showsSecret } from '../computer/secret-scrubber.js';
 import { hideKeyLikeText } from '../computer/secret-finder.js';
 import { dialogNote, withDialogs } from '../computer/page-dialogs.js';
-import { SEND_TO_SCHEMA } from './store-secret.js';
-import { describeDestinations, destinationProblem, type Destination } from '../computer/secret-destinations.js';
+import { SEND_TO_HELP, SEND_TO_SCHEMA } from './store-secret.js';
+import { destinationProblem, type Destination } from '../computer/secret-destinations.js';
 import { captureSecret } from '../computer/secret-capture.js';
 import { runTailcatHandoff } from '../computer/tailcat-handoff.js';
 import type { Page } from 'playwright-core';
@@ -96,6 +96,7 @@ export const computerWebTool = defineTool<WebArgs>({
     'Actions: open (a URL, then shows the page) · observe · click · fill · press · scroll · login · handoff · capture_secret · close.',
     'click/fill take a role and the exact name from observe; leave the role out to match visible text. observe hides the page header and footer unless full is true.',
     'Sign-in pages show only field names. login uses a saved login, or asks the user privately (never ask for a password or code in chat). When a sign-in page offers different ways in (root or IAM, another account), ask the user with ask_user, click their choice, then login. handoff gives the user a phone link for a CAPTCHA or MFA.',
+    'Do the whole task you were given without checking in at each step; ask the user only when you are genuinely blocked (a sign-in they must type, a choice between accounts, a payment).',
     'API keys: go to the site\'s key page, set the options, then capture_secret with the final Create button as role+name and a send_to plan. It presses the site\'s Copy button or reads the file it hands over, checks the key against its service, saves it to ClikCode Secrets Manager and sends it where send_to says. You never see the key. With no button it takes a key the page already shows; never click Regenerate just to see one.',
   ].join('\n'),
   parameters: { type: 'object', additionalProperties: false, required: ['action'], properties: {
@@ -110,7 +111,7 @@ export const computerWebTool = defineTool<WebArgs>({
     accept_dialog: { type: 'boolean', description: 'click: answer yes to a browser confirm dialog the click raises ("delete this token?"). Default: declined and reported.' },
     new_account: { type: 'boolean', description: 'login: ask for a different account instead of the saved one.' },
     secret_name: { type: 'string', description: 'capture_secret: name to save the key under (default: the site\'s name plus "/key").' },
-    send_to: { ...SEND_TO_SCHEMA, description: 'capture_secret: where the key goes, decided now and approved by the user once. {type:"clikdeploy", tool, args} runs that ClikDeploy CLI tool; the string {{secret}} inside args marks where the key goes (admin_platform_set_secret with {key:"SALAD_API_KEY", value:"{{secret}}"}; admin_compute_save_credentials with {provider:"GCP", credentials:{serviceAccountJson:"{{secret}}"}}). {type:"github", repo, name} sets a repository secret.' },
+    send_to: { ...SEND_TO_SCHEMA, description: 'capture_secret: ' + SEND_TO_HELP },
   } },
   label: (args) => {
     const host = (): string => { try { return new URL(args.url ?? '').hostname.replace(/^www\./, ''); } catch { return args.url?.slice(0, 60) ?? ''; } };
@@ -127,9 +128,7 @@ export const computerWebTool = defineTool<WebArgs>({
       default: return `Web ${args.action}`;
     }
   },
-  describe: async (args) => args.action === 'capture_secret' && args.send_to?.length
-    ? `Capture an API key from this page. It is saved in ClikCode Secrets Manager${args.secret_name ? ` as "${args.secret_name}"` : ''} and never shown to the agent, then sent to:\n${describeDestinations(args.send_to)}`
-    : `ClikCode browser: ${args.action}${args.url ? ` ${args.url}` : ''}${args.name ? ` ${args.role ?? ''} ${args.name}`.replace('  ', ' ') : ''}${args.action === 'fill' ? ` (${args.text?.length ?? 0} characters)` : ''}`,
+  describe: async (args) => `ClikCode browser: ${args.action}${args.url ? ` ${args.url}` : ''}${args.name ? ` ${args.name}` : ''}${args.action === 'fill' ? ` (${args.text?.length ?? 0} characters)` : ''}`,
   async run(args, ctx) {
     try {
       if (!(await computerEnabled(ctx.stateDir))) throw new Error(COMPUTER_OFF);
@@ -174,7 +173,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
     }
     case 'capture_secret': {
       // Before anything is clicked: a key must not be created for a plan that cannot deliver it.
-      const planProblem = args.send_to?.length ? destinationProblem(args.send_to) : undefined;
+      const planProblem = args.send_to?.length ? await destinationProblem(ctx.stateDir, args.send_to) : undefined;
       if (planProblem) throw new Error(planProblem);
       const name = args.secret_name?.trim() || `${new URL(page.url()).hostname.replace(/^www\./, '')}/key`;
       const { length, found, check, sent } = await captureSecret({ stateDir: ctx.stateDir, page, name, signal: ctx.signal,

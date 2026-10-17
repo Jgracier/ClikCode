@@ -87,12 +87,12 @@ it('offers the tools over MCP with typed schemas', async () => {
   const init = await server.call('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } });
   expect(init.result.serverInfo.name).toBe('clikcode');
   const listed = await server.call('tools/list');
-  expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toEqual(['computer_web', 'computer_desktop', 'store_secret', 'list_secrets', 'delete_secret']);
+  expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toEqual(['computer_web', 'computer_desktop', 'store_secret']);
   expect(listed.result.tools[2].inputSchema.required).toEqual(['secret', 'send_to']);
   expect((await server.call('tools/call', { name: 'nope', arguments: {} })).error.code).toBe(-32602);
 }, 60_000);
 
-it('stores a saved secret only after the window approves, and returns no value', async () => {
+it('sends a saved secret without asking anyone, and returns no value', async () => {
   const { id, home } = await session();
   await saveNamedSecret(home, 'salad/api-key', VALUE);
   const bin = join(root!, 'bin');
@@ -100,40 +100,24 @@ it('stores a saved secret only after the window approves, and returns no value',
   await writeFile(join(bin, 'clikdeploy'), `#!/bin/sh\ncase "$3" in admin_platform_set_secret) printf '%s\\n' "$@" > "${root}/argv"; echo '{"status":"success","message":"stored"}';; *) echo '{}';; esac\n`);
   await chmod(join(bin, 'clikdeploy'), 0o755);
   process.env.PATH = `${bin}:${savedEnv.PATH}`;
-  const window = await attach(id);
-  await attach(id); // a second window, as a chat has: the first is the one that answers
-  const asked = next(window, 'approval-request');
+  await attach(id); // the worker exists; nobody is asked anything
   const server = await mcpServer(id);
-  const pending = server.call('tools/call', { name: 'store_secret', arguments: { secret: 'salad/api-key', send_to: [{ type: 'clikdeploy', tool: 'admin_platform_set_secret', args: { key: 'SALAD_API_KEY', value: '{{secret}}' } }] } });
-  const approval = await asked;
-  expect(JSON.stringify(approval)).not.toContain(VALUE);
-  window.send({ type: 'approval-response', id: approval.id, approved: true });
-  const result = (await pending).result;
+  const result = (await server.call('tools/call', { name: 'store_secret', arguments: { secret: 'salad/api-key', send_to: [{ to: 'clikdeploy-secret', with: { key: 'SALAD_API_KEY' } }] } })).result;
   expect(result.isError).toBe(false);
-  expect(result.content[0].text).toContain('Sent - ClikDeploy admin_platform_set_secret');
+  expect(result.content[0].text).toContain('SENT - clikdeploy-secret (SALAD_API_KEY)');
   expect(JSON.stringify(result)).not.toContain(VALUE);
   expect(await readFile(join(root!, 'argv'), 'utf8')).toContain(VALUE);
 }, 60_000);
 
-it('does nothing when the window declines, and says so without a prompt when no window is open', async () => {
+it('answers an unknown destination with the real list, so the agent can correct itself', async () => {
   const { id, home } = await session();
   await saveNamedSecret(home, 'salad/api-key', VALUE);
-  const starter = await attach(id);
-  const server = await mcpServer(id);
-  starter.close();
-  await new Promise(resolve => setTimeout(resolve, 300));
-  const args = { secret: 'salad/api-key', send_to: [{ type: 'clikdeploy', tool: 'admin_platform_set_secret', args: { key: 'SALAD_API_KEY', value: '{{secret}}' } }] };
-  const alone = await server.call('tools/call', { name: 'store_secret', arguments: args });
-  expect(alone.result.isError).toBe(true);
-  expect(alone.result.content[0].text).toContain('No chat window is open');
-  const window = await attach(id);
   await attach(id);
-  const asked = next(window, 'approval-request');
-  const pending = server.call('tools/call', { name: 'store_secret', arguments: args });
-  window.send({ type: 'approval-response', id: (await asked).id, approved: false });
-  const declined = (await pending).result;
-  expect(declined.isError).toBe(true);
-  expect(declined.content[0].text).toContain('did not approve');
+  const server = await mcpServer(id);
+  const result = (await server.call('tools/call', { name: 'store_secret', arguments: { secret: 'salad/api-key', send_to: [{ to: 'nowhere' }] } })).result;
+  expect(result.isError).toBe(true);
+  expect(result.content[0].text).toContain('no destination named "nowhere"');
+  expect(result.content[0].text).toContain('clikdeploy-secret(key)');
 }, 60_000);
 
 it('refuses bad arguments with a plain reason, and honours computer off', async () => {

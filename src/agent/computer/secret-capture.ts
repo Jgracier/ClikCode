@@ -7,7 +7,7 @@
  * prompt. Every failure says "Not saved" and why; nothing is ever saved half-way. */
 import type { Page } from 'playwright-core';
 import { saveNamedSecret } from './credential-vault.js';
-import { copyWithSiteButton, waitForCopiedSecret } from './clipboard-watch.js';
+import { copyWithSiteButton } from './clipboard-watch.js';
 import { secretParts, watchDownload } from './download-capture.js';
 import { LoginError } from './login-error.js';
 import { checkKey, type KeyCheck } from './key-check.js';
@@ -55,11 +55,8 @@ export async function captureSecret(input: {
     }
     const found = !!value;
     if (!value) {
-      const hint = `${ambiguous ? 'More than one possible key on the page' : 'Could not find the key on its own'}. Copy it on the page, or paste it here`;
-      value = await new Promise<string | undefined>((resolve, reject) => {
-        void waitForCopiedSecret(input.page, stop.signal).then(copied => { if (copied) resolve(copied); }, () => undefined);
-        input.ask(input.name, hint, stop.signal).then(resolve, reject);
-      });
+      const hint = `${ambiguous ? 'More than one possible key on the page' : 'Could not find the key on its own'}. Paste it here`;
+      value = await input.ask(input.name, hint, stop.signal);
     }
     if (!value || input.signal?.aborted) throw new LoginError('Not saved: no key was found and none was pasted.');
     registerSecret(value);
@@ -69,7 +66,7 @@ export async function captureSecret(input: {
     if (check.verdict === 'rejected') throw new LoginError(`Not saved: ${check.detail}. What was on the page is not a working key (it may be the key's id or another value).`);
     await saveNamedSecret(input.stateDir, input.name, value);
     // Saved first: if a destination fails, the key is still safe in Secrets Manager and can be sent again.
-    const sent = input.sendTo?.length ? await sendToDestinations(input.sendTo, value, input.signal) : [];
+    const sent = input.sendTo?.length ? await sendToDestinations(input.stateDir, input.sendTo, value, input.signal) : [];
     return { length: value.length, found, check, sent };
   } finally {
     finder.dispose();

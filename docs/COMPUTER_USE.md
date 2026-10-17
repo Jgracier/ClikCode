@@ -8,10 +8,11 @@ and closes the browser, `on` brings them back.
 |---|---|
 | `computer_web` | A Chrome with its own saved profile (Edge if Chrome is missing): open, observe, click, fill, login, capture_secret, handoff. Shared by every terminal and VS Code window; never your personal profile. |
 | `computer_desktop` | Everything outside the page, through [cua-driver](https://github.com/trycua/cua) (a separate install): a popup window, a native dialog, another app. Give it a `pid` and `window_id` from `windows` to act on one window. |
-| `store_secret` · `list_secrets` · `delete_secret` | Move or manage keys already in Secrets Manager. Names only; values are never shown. |
+| `store_secret` | Send a key already in Secrets Manager on to a destination again. Values are never shown. |
 
-In Auto mode `computer_web open` asks once per new site ("always" is the same
-`WebFetch(domain:…)` rule `web_fetch` uses). Acting on an open page asks nothing.
+Nothing here asks you anything of its own: in Auto mode these tools just run, and the
+agent stops only for what it cannot do itself (a sign-in you must type, a choice
+between accounts, a payment, a CAPTCHA).
 
 ## Signing in
 
@@ -33,9 +34,9 @@ sign-in page; you type into a private prompt in the terminal or VS Code panel
 
 ## Getting an API key without the agent seeing it
 
-The agent signs in, sets the options, then makes one `capture_secret` call: the
-final Create button, and a **`send_to` plan** saying where the key goes. You
-approve the plan once; then everything runs as one action.
+The agent signs in, sets the options, then makes one `capture_secret` call: the final
+Create button, and `send_to`, saying where the key goes. Your request is the
+authorization; there is no extra approval step.
 
 1. **Find the key.** Press the site's own Copy button; or notice a file the click
    downloads (a service-account JSON); or recognise the key on the page. Only if
@@ -45,19 +46,29 @@ approve the plan once; then everything runs as one action.
    a damaged copy as a control. A key the service refuses is **not saved**.
    Anything else is saved and marked "not checked", with the reason.
 3. **Save** it to ClikCode Secrets Manager (always).
-4. **Send** it on, as the plan says. If a destination fails the key stays saved.
+4. **Send** it on, as `send_to` says. If a destination fails the key stays saved.
 
-`send_to` is data, nothing is built in per provider:
+**A destination is a name for a command, nothing more.** The command has `{{secret}}`
+where the key goes and `{{slot}}` for anything the agent fills in:
 
 ```
-{ type: "clikdeploy", tool: "admin_platform_set_secret", args: { key: "SALAD_API_KEY", value: "{{secret}}" } }
-{ type: "clikdeploy", tool: "admin_compute_save_credentials", args: { provider: "GCP", credentials: { serviceAccountJson: "{{secret}}" } } }
-{ type: "github", repo: "owner/name", name: "SALAD_API_KEY" }
+send_to: [{ to: "clikdeploy-secret",  with: { key: "SALAD_API_KEY" } }]
+send_to: [{ to: "clikdeploy-compute", with: { provider: "GCP", field: "serviceAccountJson" } }]
 ```
 
-Only two programs can ever run (`clikdeploy tools run`, `gh secret set` with the
-value on stdin), so a plan reaches your ClikDeploy or GitHub and nowhere else. Every
-result begins `SAVED` or `Not saved:` and says what really happened.
+Four ship as plain data (`clikdeploy-secret`, `clikdeploy-app-secret`,
+`clikdeploy-compute`, `github-secret`). You add your own with one line, and the agent
+can then use it by name; an unknown name is answered with the full list:
+
+```
+clikcode computer destination add my-vault --stdin "{{secret}}" -- vault kv put secret/{{path}} value=-
+clikcode computer destination list | remove <name>
+```
+
+Only you can add one (the agent cannot), so what can ever run is decided by you, not
+by a page the agent is reading. `{{secret|json}}` is the key inside a JSON string; a
+destination's `--stdin` keeps the key out of the command line. Every result begins
+`SAVED` or `Not saved:` and says what really happened.
 
 Once held, a key's exact value (and its base64, URL-encoded and JSON forms, and each
 long field of a JSON file) is replaced with `[secret hidden]` in every tool result,
@@ -74,11 +85,11 @@ The tools run in the chat's worker, so they work the same in any harness:
   as it starts. Nothing is installed or written into a harness's config; it ships in
   every ClikCode install and follows `/computer off`. `clikcode mcp list` shows it.
 - **CLI, for anything else.** `clikcode computer tool <name> --args-json …`,
-  `computer capture <name> --click button:Create`, `computer store <name> --key KEY`
-  (or `--send-to-json`), `computer secrets [--delete NAME]`, `computer login`.
+  `computer capture <name> --click button:Create`,
+  `computer store <name> --to clikdeploy-secret --with key=SALAD_API_KEY`,
+  `computer secrets [--delete NAME]` (your own vault, no chat needed), `computer login`.
 
-Private prompts need a chat window open. `store_secret`, `delete_secret` and any
-capture with a plan ask you to approve in that window even if the harness would not.
+Private prompts need a chat window open; nothing else does.
 
 ## Where things live
 
