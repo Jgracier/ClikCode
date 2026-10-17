@@ -103,7 +103,9 @@ export async function computerSecrets(remove?: string): Promise<void> {
 }
 
 /** Autofill profiles: list them, set fields (`--set phone=719-555-0123`), pick one with `--label`, or `--delete` by label. */
-export async function computerProfile(options: { label?: string; set?: string[]; delete?: string }): Promise<void> {
+const PROFILE_QUESTIONS: readonly [string, string][] = [['given_name', 'First name'], ['family_name', 'Last name'], ['email', 'Email'], ['phone', 'Phone (with area code)'], ['address_line1', 'Street address'], ['address_line2', 'Apartment / suite (Enter to skip)'], ['city', 'City'], ['state', 'State'], ['postal_code', 'Zip / postal code'], ['country', 'Country'], ['organization', 'Company (Enter to skip)']];
+
+export async function computerProfile(options: { label?: string; set?: string[]; delete?: string; create?: boolean }): Promise<void> {
   const { describeProfile, listProfiles, removeProfile, saveProfile } = await import('../agent/computer/profiles.js');
   const stateDir = stateDirectory();
   const emit = (text: string, data: unknown): void => { if (isJsonDefaultMode()) emitResult({ computer: { profiles: data } }); else process.stdout.write(`${text}\n`); };
@@ -111,6 +113,17 @@ export async function computerProfile(options: { label?: string; set?: string[];
     const target = (await listProfiles(stateDir)).find(profile => profile.label.toLowerCase() === options.delete!.toLowerCase());
     const removed = target ? await removeProfile(stateDir, target.id) : false;
     return emit(removed ? `Deleted "${options.delete}".` : `No profile named "${options.delete}".`, { deleted: removed });
+  }
+  if (options.create) {
+    if (!process.stdin.isTTY) throw new Error('Creating a profile asks questions: run it in a terminal, or use --set key=value.');
+    const { createInterface } = await import('node:readline/promises');
+    const rl = createInterface({ input: process.stdin, output: process.stderr });
+    const label = options.label ?? ((await rl.question('Profile name [Personal]: ')).trim() || 'Personal');
+    const fields: Record<string, string> = {};
+    for (const [key, question] of PROFILE_QUESTIONS) { const answer = (await rl.question(`${question}: `)).trim(); if (answer) fields[key] = answer; }
+    rl.close();
+    const saved = await saveProfile(stateDir, { label, fields });
+    return emit(`Saved. ${describeProfile(saved)}`, [saved]);
   }
   if (options.set?.length) {
     const fields = Object.fromEntries(options.set.map(pair => { const at = pair.indexOf('='); if (at < 1) throw new Error(`Use key=value, for example phone=719-555-0123 (got "${pair}").`); return [pair.slice(0, at), pair.slice(at + 1)]; }));

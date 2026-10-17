@@ -33,6 +33,13 @@ withheld while one holds a value). There is no "sign-in page" mode to get stuck 
 
 ## Signing in and filling forms
 
+- **Autofill profiles** keep the details every signup form asks for (name, email, phone, address,
+  company). A `fill` with no `text` takes them from the profile instead of asking; with several
+  profiles you pick once per site. Create one with `/computer profile` (a private prompt in the
+  chat), `clikcode computer profile --create` (questions in the terminal) or
+  `clikcode computer profile --set phone=719-555-0123`; the agent can call `profile` (with
+  `ask: true` to ask you, or `fields` to correct a value, for example a phone in the format a
+  site wants). Passwords, codes and card numbers are never kept in one.
 - **`fill` with no `text`** asks you in a private prompt (masked for password boxes), once for
   all such fields in the call; the agent is never shown the answer. This is how a signup
   form's name, address, phone and new password are filled.
