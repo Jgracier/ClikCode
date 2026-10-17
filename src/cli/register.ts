@@ -74,12 +74,19 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
       await (await import('../commands/computer.js')).computerTool('computer_web', { action: 'capture_secret', secret_name: secret,
         ...(click ? { role: click[1], name: click[2] } : {}), ...(options.remote ? { remote: true } : {}) }, options.chat);
     });
-  computer.command('store <secret-name>').description('Send a saved secret to ClikDeploy as KEY (asks you to approve)')
+  computer.command('store <secret-name>').description('Send a saved secret to ClikDeploy (or a GitHub repository) as KEY; asks you to approve, then checks the result')
     .requiredOption('--key <KEY>', 'The name at the destination, for example SALAD_API_KEY')
-    .option('--app <id>', 'Set an app secret instead of a platform secret')
+    .option('--app <id>', 'Set a ClikDeploy app secret instead of a platform secret')
+    .option('--github <owner/name>', 'Set a GitHub repository secret instead of ClikDeploy')
     .option('--chat <chat>', 'Chat to use when run from outside a ClikCode chat')
-    .action(async (secret: string, options: { key: string; app?: string; chat?: string }) =>
-      (await import('../commands/computer.js')).computerTool('store_secret', { secret, destination: 'clikdeploy', key: options.key, ...(options.app ? { app: options.app } : {}) }, options.chat));
+    .action(async (secret: string, options: { key: string; app?: string; github?: string; chat?: string }) =>
+      (await import('../commands/computer.js')).computerTool('store_secret', { secret, destination: options.github ? 'github' : 'clikdeploy', key: options.key,
+        ...(options.app ? { app: options.app } : {}), ...(options.github ? { repo: options.github } : {}) }, options.chat));
+  computer.command('secrets').description('List the names of saved secrets, or delete one (values are never shown)')
+    .option('--delete <name>', 'Delete this secret (asks you to approve)')
+    .option('--chat <chat>', 'Chat to use when run from outside a ClikCode chat')
+    .action(async (options: { delete?: string; chat?: string }) => (await import('../commands/computer.js')).computerTool(
+      options.delete ? 'delete_secret' : 'list_secrets', options.delete ? { name: options.delete } : {}, options.chat));
   computer.command('logins').description('Review and remove saved logins in the current chat (shown only to you)')
     .option('--chat <chat>', 'Chat id, prefix or name when run outside a chat')
     .action(async (options: { chat?: string }) => (await import('../commands/computer.js')).computerLogin(options.chat, { manage: true }));

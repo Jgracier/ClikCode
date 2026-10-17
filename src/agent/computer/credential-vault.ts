@@ -208,3 +208,9 @@ export async function namedSecretNames(stateDir: string): Promise<string[]> {
   }
   return names.sort();
 }
+
+export async function deleteNamedSecret(stateDir: string, name: string): Promise<boolean> {
+  const { file } = secretFile(stateDir, name);
+  try { await fs.unlink(file); return true; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw new CredentialError('The secret could not be removed.'); }
+}

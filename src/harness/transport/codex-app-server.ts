@@ -1,3 +1,4 @@
+import { codexBuiltInMcpArgs } from './acp-mcp-servers.js';
 import { askHarnessQuestion, CANCELLED, type HarnessQuestion, type HarnessQuestionRequest, type HarnessQuestionResult } from '../events/question.js';
 import { formToQuestions } from '../events/form-questions.js';
 import { activityOutput } from '../protocol/activity-events.js';
@@ -528,7 +529,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     // means a fresh server that resumes the thread. Permission mode is not here: it is
     // sent with every turn/start (codexTurnStartParams), so changing it restarts nothing.
     return this.liveFor(JSON.stringify([input.binary, input.cwd, input.environment ?? {}, threadKey]), 'Codex app-server restarted', {
-      binary: input.binary, argv: ['app-server', '--stdio'], cwd: input.cwd, environment: input.environment,
+      binary: input.binary, argv: ['app-server', '--stdio', ...codexBuiltInMcpArgs()], cwd: input.cwd, environment: input.environment,
       peer: {
         label: 'Codex app-server',
         jsonrpcVersion: false,
