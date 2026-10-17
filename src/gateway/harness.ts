@@ -142,7 +142,7 @@ export async function runAgentSessionTurn(
     // The gateway path runs ClikCode's OWN agent, so a rule can be
     // remembered here: the third answer is passed straight through.
     ...(prompter ? { onApproval: async (title: string, detail?: string, rule?: string, preview?: ApprovalPreview) => (await prompter.approval(title, detail, preview, rule)) ?? false } : {}),
-    ...(prompter?.askQuestions ? { onPrivateLogin: (site: string, signal?: AbortSignal) => askPrivateLogin(prompter, site, signal) } : {}),
+    ...(prompter?.askQuestions ? { onPrivateLogin: (site: string, fields: readonly import('../agent/computer/login-fields.js').LoginField[], signal?: AbortSignal) => askPrivateLogin(prompter, site, fields, signal) } : {}),
     ...(input.onSteerReady ? { onSteerReady: input.onSteerReady } : {}),
     ...(input.onSteersUndelivered ? { onSteersUndelivered: input.onSteersUndelivered } : {}),
     ...(input.onRemembered ? { onRemembered: input.onRemembered } : {}),

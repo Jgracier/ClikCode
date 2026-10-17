@@ -9,7 +9,7 @@ const SESSION_MS = 10 * 60_000;
 const sessions = new Map<string, { key: Buffer; expires: number }>();
 export class CredentialError extends Error {}
 export type PrivateLogin = { accountId: string; email: string; password: string };
-type Item = { origin: string } & PrivateLogin;
+type Item = { origin: string; accountId?: string; email?: string; password?: string; fields?: Record<string, string> };
 
 function vaultDir(stateDir: string): string { return path.join(stateDir, 'computer', 'vault'); }
 function keyFile(stateDir: string): string { return path.join(vaultDir(stateDir), 'vault.key'); }
@@ -78,6 +78,36 @@ export async function saveCredential(stateDir: string, url: string, secret: Omit
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   await fs.writeFile(path.join(dir, `${id}.json`), seal(key, `item:${id}`, JSON.stringify({ origin, accountId: secret.accountId, email: secret.email, password: secret.password })), { mode: 0o600, flag: 'wx' });
   return id;
+}
+
+/** Incremental login steps, such as Gmail's email page followed by its
+ * password page, use the same encrypted item. Only the local worker reads it. */
+export async function savedLoginFields(stateDir: string, url: string, id: string): Promise<Record<string, string>> {
+  const item = await readCredential(stateDir, url, id);
+  return { ...(item.accountId ? { accountId: item.accountId } : {}), ...(item.email ? { email: item.email, username: item.email } : {}),
+    ...(item.password ? { password: item.password } : {}), ...item.fields };
+}
+
+export async function saveLoginFields(stateDir: string, url: string, fields: Record<string, string>, id?: string): Promise<string> {
+  const origin = siteOrigin(url);
+  if (!Object.keys(fields).length || Object.values(fields).some(value => !value)) throw new CredentialError('Complete the visible login fields.');
+  const key = await vaultKey(stateDir, true);
+  const item: Item = id ? await readCredential(stateDir, url, id) : { origin };
+  const itemId = id ?? randomUUID();
+  const dir = path.join(vaultDir(stateDir), 'items');
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  await fs.writeFile(path.join(dir, `${itemId}.json`), seal(key, `item:${itemId}`, JSON.stringify({ ...item, fields: { ...item.fields, ...fields } })), { mode: 0o600, flag: id ? 'w' : 'wx' });
+  return itemId;
+}
+
+async function readCredential(stateDir: string, url: string, id: string): Promise<Item> {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) throw new CredentialError('Invalid saved login reference.');
+  const key = await vaultKey(stateDir, false);
+  let item: Item;
+  try { item = JSON.parse(open(key, `item:${id}`, await fs.readFile(path.join(vaultDir(stateDir), 'items', `${id}.json`), 'utf8'))) as Item; }
+  catch { throw new CredentialError('That saved login could not be opened.'); }
+  if (item.origin !== siteOrigin(url)) throw new CredentialError('That saved login does not match this website.');
+  return item;
 }
 
 /** Reuse a saved login only when this site has exactly one. Never guess which

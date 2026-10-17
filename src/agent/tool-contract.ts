@@ -26,7 +26,7 @@ export interface ToolContext {
   callId?: string;
   emitOutput?(chunk: string): void;
   /** UI answer delivered to the local worker only; never added to the model's tool result. */
-  requestPrivateLogin?(site: string, signal?: AbortSignal): Promise<import('./computer/credential-vault.js').PrivateLogin | undefined>;
+  requestPrivateLogin?(site: string, fields: readonly import('./computer/login-fields.js').LoginField[], signal?: AbortSignal): Promise<Record<string, string> | undefined>;
   /** Bytes of output the model will be given (context.ts toolOutputCap).
    * A tool that can say where it stopped should stop here itself rather than
    * have its middle cut out by the loop. */

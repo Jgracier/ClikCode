@@ -135,8 +135,8 @@ export function createCommandHandler(ctx: WorkerContext) {
             await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 30_000 });
           }
           await loginComputerPage({ stateDir, page, signal: controller.signal,
-            ask: (site, signal) => askPrivateLogin(observer, site, signal) });
-          if (!socket.destroyed) sendEvent(socket, { type: 'computer-login-result', id: command.id, ok: true, message: 'Login submitted.' });
+            ask: (site, fields, signal) => askPrivateLogin(observer, site, fields, signal) });
+          if (!socket.destroyed) sendEvent(socket, { type: 'computer-login-result', id: command.id, ok: true, message: 'Login step submitted.' });
         } catch {
           if (!socket.destroyed) sendEvent(socket, { type: 'computer-login-result', id: command.id, ok: false,
             message: 'Private login did not finish. Check the browser and try again.' });

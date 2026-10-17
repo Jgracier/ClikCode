@@ -7,11 +7,11 @@ it('asks for every login field privately and returns values only to the local ca
   let request: HarnessQuestionRequest | undefined;
   const observer = { askQuestions: async (asked: HarnessQuestionRequest) => {
     request = asked;
-    return { kind: 'answered' as const, answers: { email: ['private@example.com'], password: ['private-secret'] } };
+    return { kind: 'answered' as const, answers: { username: ['private@example.com'] } };
   } } as TurnObserver;
-  expect(await askPrivateLogin(observer, 'https://accounts.google.com')).toEqual({
-    accountId: '', email: 'private@example.com', password: 'private-secret',
-  });
-  expect(request?.questions.map(question => question.secret)).toEqual([true, true, true]);
-  expect(JSON.stringify(request)).not.toContain('private-secret');
+  expect(await askPrivateLogin(observer, 'https://accounts.google.com', [
+    { index: 0, key: 'username', label: 'Email or phone', kind: 'text', required: true },
+  ])).toEqual({ username: 'private@example.com' });
+  expect(request?.questions.map(question => [question.prompt, question.secret])).toEqual([['Email or phone', true]]);
+  expect(JSON.stringify(request)).not.toContain('private@example.com');
 });

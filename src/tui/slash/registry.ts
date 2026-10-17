@@ -222,7 +222,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
       (found) => sessionPermissionModes(session ?? { route: 'local' }, found).length > 0, session),
   }),
   entry('sandbox', 'Settings', "whether the agent's shell commands write only the workspace, temp and caches (on by default)", { argHint: '[on|off]', availability: agentOnly }),
-  entry('computer', 'Settings', 'let the agent use this computer’s browser and desktop', { argHint: '[on|off|login [url]]', duringTurn: 'apply' }),
+  entry('computer', 'Settings', 'let the agent use this computer’s browser and desktop', { argHint: '[on|off|inspect|login [url]]', duringTurn: 'apply' }),
   entry('send', 'Settings', 'messages typed mid-turn: steer into the turn, or queue for after it', { argHint: '[steer|queue]', duringTurn: 'apply' }),
   entry('options', 'Settings', 'provider-specific modes and controls', { availability: needsHarness('setting options') }),
   entry('capabilities', 'Settings', 'what the selected provider supports'),
