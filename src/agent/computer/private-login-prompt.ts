@@ -15,7 +15,7 @@ export async function askPrivateLogin(
   if (!observer.askQuestions) return undefined;
   if (!fields.length) return undefined;
   const result = await observer.askQuestions({
-    title: `${new URL(site).hostname.replace(/^www\./, '')} ${fields.every(field => field.key.startsWith('fill')) ? 'details' : 'sign in'}`,
+    title: new URL(site).hostname === 'profile.clikcode' ? 'Your autofill profile' : `${new URL(site).hostname.replace(/^www\./, '')} ${fields.every(field => field.key.startsWith('fill')) ? 'details' : 'sign in'}`,
     questions: fields.map(field => field.kind === 'choice'
       ? { id: field.key, prompt: field.label, options: (field.options ?? []).map(label => ({ label })), secret: true }
       : { id: field.key, prompt: askFor(field), options: [], secret: true, maskInput: field.kind === 'password' }),
