@@ -36,7 +36,8 @@ it.skipIf(!process.env.CLIKCODE_TAILCAT_BINARY)('connects the phone page, shows 
     let link!: string;
     let linkReady!: () => void;
     const ready = new Promise<void>(resolve => { linkReady = resolve; });
-    const handoff = runTailcatHandoff({ stateDir: '/tmp/unused-tailcat-smoke', pageUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/handoff/`, onLink: url => { link = url; linkReady(); } });
+    const pageUrl = process.env.CLIKCODE_TAILCAT_PAGE_URL ?? `http://127.0.0.1:${(server.address() as { port: number }).port}/handoff/`;
+    const handoff = runTailcatHandoff({ stateDir: '/tmp/unused-tailcat-smoke', pageUrl, onLink: url => { link = url; linkReady(); } });
     await ready;
     const phone = await browser.newPage({ viewport: { width: 400, height: 800 } });
     const errors: string[] = [];
