@@ -86,8 +86,8 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('takes a key file the sit
     const address = server.address() as { port: number };
     const page = await openComputerPage(stateDir);
     await page.goto(`http://127.0.0.1:${address.port}/`);
-    const result = await captureSecret({ stateDir, page, name: 'gcp/service-account-json', remote: false, source: 'download',
-      trigger: () => page.getByRole('button', { name: 'Create key' }).click(), ask: async () => { throw new Error('the person should not have been asked'); }, onLink: () => undefined });
+    const result = await captureSecret({ stateDir, page, name: 'gcp/service-account-json',
+      trigger: () => page.getByRole('button', { name: 'Create key' }).click(), ask: async () => { throw new Error('the person should not have been asked'); } });
     expect(result).toMatchObject({ length: FILE.length, found: true });
     expect(await readNamedSecret(stateDir, 'gcp/service-account-json')).toBe(FILE);
     // The whole file is hidden, and so is each long field inside it (the private key quoted on its own).

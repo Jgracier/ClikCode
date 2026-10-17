@@ -1,164 +1,99 @@
 # Computer use
 
-ClikCode's own agent can open web pages in a persistent Chrome and, separately,
-control the desktop. Both are on by default. `/computer off` (or
-`clikcode computer off`) refuses new actions and closes the browser; `on`
-turns them back on.
+ClikCode's agent can drive a browser of its own and the rest of the desktop. Both
+are on by default; `/computer off` (or `clikcode computer off`) refuses new actions
+and closes the browser, `on` brings them back.
 
-## Two tools
+| Tool | What it is for |
+|---|---|
+| `computer_web` | A Chrome with its own saved profile (Edge if Chrome is missing): open, observe, click, fill, login, capture_secret, handoff. Shared by every terminal and VS Code window; never your personal profile. |
+| `computer_desktop` | Everything outside the page, through [cua-driver](https://github.com/trycua/cua) (a separate install): a popup window, a native dialog, another app. Give it a `pid` and `window_id` from `windows` to act on one window. |
+| `store_secret` · `list_secrets` · `delete_secret` | Move or manage keys already in Secrets Manager. Names only; values are never shown. |
 
-- **`computer_web`** — a browser of its own: open, observe, click, fill, press,
-  scroll, login, handoff, close. Chrome starts on the first `open`; Edge is used
-  when Chrome is not installed. The profile lives under ClikCode's state
-  directory, is shared by every terminal and VS Code window, and keeps sign-ins
-  between turns. It never attaches to a personal profile.
-- **`computer_desktop`** — the rest of the screen, through
-  [cua-driver](https://github.com/trycua/cua) (a separate install; the tool says
-  so if it is missing). With no window it acts on the primary desktop by
-  screenshot coordinates. With a `pid` and `window_id` from its `windows` action
-  it acts on that one window. Use it for what a page cannot reach: a popup
-  window, a native permission or file dialog, another app.
-
-In Auto mode `computer_web open` asks once for each new site. "Always" adds the
-same `WebFetch(domain:…)` rule that `web_fetch` uses. Acting on a page that is
-already open, and signing in, ask nothing more.
+In Auto mode `computer_web open` asks once per new site ("always" is the same
+`WebFetch(domain:…)` rule `web_fetch` uses). Acting on an open page asks nothing.
 
 ## Signing in
 
-On a sign-in page the agent sees field labels and types, never their values and
-never a screenshot. `computer_web login` does the rest in one action:
+`login` is one action. The agent sees field names, never values or screenshots of a
+sign-in page; you type into a private prompt in the terminal or VS Code panel
+(email shown, passwords masked, nothing recorded in the chat).
 
-- It reads the visible fields (also inside an iframe), asks for exactly those in
-  a private prompt in the terminal or the VS Code panel, fills them and submits
-  with Enter, or the submit button if Enter did nothing. It follows email-first
-  pages, then password, then code.
-- Email, phone and account ID are shown while typing; passwords are masked.
-  Answers never reach the model, the transcript or the worker's record.
-- One saved account for the site is used without asking. Several: a picker
-  (arrow keys, Enter) plus "Use a different account". `new_account` / `--new`
-  skips the saved one. A site that refused the saved password asks again next
-  time instead of resending it.
-- A page that offers different ways in (root or IAM, another account) lists them
-  by name; the agent asks you with `ask_user` before clicking.
-- One-time codes are asked for every time and never saved. Two wrong codes stop
-  the attempt.
-- A new login is saved only after a password was submitted and the browser left
-  the sign-in page. A rejected or unconfirmed attempt saves nothing.
+- One saved login for the site is used silently. Several: an arrow-key picker plus
+  "Use a different account".
+- Email-first, password and one-time-code pages are followed in turn; a code is
+  asked for every time and never saved.
+- A login is saved only after the browser leaves the sign-in page. A refused one
+  is never saved, and a saved one a site refuses is asked about next time.
+- `/computer login [url] [--new]` does it from the command line; `/computer logins`
+  lists and removes saved logins (the model sees only a count).
+- A CAPTCHA, or MFA that needs hands: `handoff` gives you a one-use phone link
+  (static page `site/handoff/` on `gh-pages`, an encrypted Tailcat connection, no
+  ClikDeploy or Tailscale account).
 
-`/computer login [url] [--new]` does the same from the command line, and
-`/computer logins` lists saved logins as `site · username` so you can remove
-one; the model sees only a count.
+## Getting an API key without the agent seeing it
+
+The agent signs in, sets the options, then makes one `capture_secret` call: the
+final Create button, and a **`send_to` plan** saying where the key goes. You
+approve the plan once; then everything runs as one action.
+
+1. **Find the key.** Press the site's own Copy button; or notice a file the click
+   downloads (a service-account JSON); or recognise the key on the page. Only if
+   none is clear does the private paste prompt appear.
+2. **Check it.** The key is tried against its own service (Hugging Face, Google AI
+   Studio, Together, OpenAI, Anthropic, Groq, Mistral, DeepSeek, OpenRouter), with
+   a damaged copy as a control. A key the service refuses is **not saved**.
+   Anything else is saved and marked "not checked", with the reason.
+3. **Save** it to ClikCode Secrets Manager (always).
+4. **Send** it on, as the plan says. If a destination fails the key stays saved.
+
+`send_to` is data, nothing is built in per provider:
+
+```
+{ type: "clikdeploy", tool: "admin_platform_set_secret", args: { key: "SALAD_API_KEY", value: "{{secret}}" } }
+{ type: "clikdeploy", tool: "admin_compute_save_credentials", args: { provider: "GCP", credentials: { serviceAccountJson: "{{secret}}" } } }
+{ type: "github", repo: "owner/name", name: "SALAD_API_KEY" }
+```
+
+Only two programs can ever run (`clikdeploy tools run`, `gh secret set` with the
+value on stdin), so a plan reaches your ClikDeploy or GitHub and nowhere else. Every
+result begins `SAVED` or `Not saved:` and says what really happened.
+
+Once held, a key's exact value (and its base64, URL-encoded and JSON forms, and each
+long field of a JSON file) is replaced with `[secret hidden]` in every tool result,
+and a screenshot of a page showing it is withheld. With no Create button,
+`capture_secret` takes the key a page already shows. The computer's shared clipboard
+is never read.
 
 ## In every harness
 
-The tools are not tied to ClikCode's own agent. They run in the chat's worker,
-and a harness reaches them two ways:
+The tools run in the chat's worker, so they work the same in any harness:
 
-- **MCP, automatically.** `clikcode mcp-serve` is a built-in MCP server named
-  `clikcode` (tools `computer_web`, `computer_desktop`, `store_secret`, `list_secrets`,
-  `delete_secret`). It is handed to every ACP harness session as that session
-  starts, and to Codex as `-c mcp_servers.clikcode.*` launch overrides, nothing is
-  installed or written into the harness's config, and it ships in every ClikCode
-  install, including the VS Code extension's own copy. It follows
-  `/computer off`, and a server you record under the same name replaces it.
-  `clikcode mcp list` shows it.
-- **CLI, for anything else.** `clikcode computer tool <name> --args-json …`
-  runs any of them; `computer capture <secret-name> --click button:Create` and
-  `computer store <secret-name> --key SALAD_API_KEY` are the short forms;
-  `computer login` and `computer inspect` already existed.
+- **MCP, automatically.** `clikcode mcp-serve` is a built-in server named `clikcode`,
+  handed to every ACP harness session (and to Codex as `-c mcp_servers.clikcode.*`)
+  as it starts. Nothing is installed or written into a harness's config; it ships in
+  every ClikCode install and follows `/computer off`. `clikcode mcp list` shows it.
+- **CLI, for anything else.** `clikcode computer tool <name> --args-json …`,
+  `computer capture <name> --click button:Create`, `computer store <name> --key KEY`
+  (or `--send-to-json`), `computer secrets [--delete NAME]`, `computer login`.
 
-Either way the private prompts appear in the chat's terminal or VS Code panel
-(so a chat window must be open), `store_secret` asks you to approve in that
-window even if the harness would not, and results are scrubbed in the worker
-before the harness sees them. A harness's own approval prompts still apply to
-its MCP calls; ClikCode adds no second prompt for opening a page, only for
-writes (`store_secret`, `delete_secret`).
+Private prompts need a chat window open. `store_secret`, `delete_secret` and any
+capture with a plan ask you to approve in that window even if the harness would not.
 
-## ClikCode Secrets Manager
+## Where things live
 
-Saved logins live in `~/.clikcode/computer/vault/`: a random 32-byte key
-(`vault.key`, owner-only) and one AES-256-GCM file per login. No setup or
-password. A login belongs to a site by host; the one allowance is a leading
-cloud-region label (`us-east-2.signin.aws.amazon.com` matches `eu-west-1.…`).
-
-The key sits beside the files, so it protects against a copied folder, not
-against other processes running as you. ClikCode's shell and desktop tools run
-as you too, and the browser host listens for local debugging on loopback. Use a
-separate OS account if untrusted users share the machine.
-
-## API keys the agent never sees
-
-To get a key from a site into ClikDeploy without the model reading it, the agent
-signs in, sets the permissions, then calls `computer_web capture_secret` with a
-`secret_name` and the role and name of the final Create button.
-
-- **The worker finds the key itself.** After the Create click it presses the
-  site's own Copy button (named "Copy", "Copy key", "Copy token"; a "Copy cURL" or
-  "Copy project name" button does not match) and takes what the page copies: that
-  is the key by definition, even when the page only shows dots. Failing that, it
-  records the page before the click and looks at what the site's own request returned and what new key-shaped text
-  appeared. A value counts when it is new on the page, or returned under a
-  credential-named field (`api_key`, `secret`, `access_token`; a plain `token`
-  such as a CSRF token does not count). One clear leader is saved to ClikCode
-  Secrets Manager. The agent hears only the name and the length.
-- **It is tested before it is saved.** The value goes to the issuing service's own
-  API (chosen by the page's host: Hugging Face, Google AI Studio, Together AI,
-  OpenAI, Anthropic, Groq, Mistral, DeepSeek, OpenRouter) together with a damaged
-  copy as a control. A key the service refuses is not saved (it was an id or a page
-  blob), and a service that answers both the same is reported as "not verified".
-  Sites without a check are saved as "not verified" and say so.
-- **Keys that arrive as a file** (a Google service-account JSON, a private key):
-  `source: "download"` makes the click start the download; the worker reads the file
-  from the browser, deletes it, and treats its content, and each long field inside
-  it, as the secret. There is no check for these, so they are saved as "not
-  verified".
-- **Only when unclear does a person help:** two equally likely keys, or none
-  found. The private prompt then appears (masked, never in history), and the
-  page's own Copy button or a keyboard copy on that page also completes it.
-  `remote` prints the phone link for tapping Copy. The computer's shared
-  clipboard is never read, so an unrelated copy cannot be taken for the key.
-- **Where it goes is decided first, as data.** `capture_secret` takes `send_to`, a
-  list the agent writes before anything happens: `{type:"clikdeploy", tool, args}`
-  runs that `clikdeploy tools run` tool, with `{{secret}}` inside `args` marking
-  where the key goes (`admin_platform_set_secret` with `{key:"SALAD_API_KEY",
-  value:"{{secret}}"}`, or `admin_compute_save_credentials` with
-  `{provider:"GCP", credentials:{serviceAccountJson:"{{secret}}"}}`);
-  `{type:"github", repo, name}` sets a repository secret (the value goes to `gh`
-  on stdin). Nothing about a provider is built in, and only those two executors
-  exist, so a plan can reach the user's ClikDeploy or GitHub and nowhere else.
-  The user approves the whole plan once, up front, with the key shown only as its
-  placeholder (no "always": each plan is its own decision). Then capture, check,
-  save and delivery run as one action, and what each destination answered is
-  relayed. If one fails the key stays saved.
-- **`store_secret`** is the same plan for a key already saved: to send it again
-  after a failure, or to another place later.
-- **`list_secrets`** and **`delete_secret`** show names only and remove one by
-  name (re-capturing a name replaces its value). From a shell:
-  `clikcode computer secrets [--delete NAME]`. `clikcode computer store NAME --key KEY [--app ID | --github owner/name]` (or `--send-to-json`) sends a saved one.
-- **Scrubbing.** Once held, a secret's exact value (and its base64, URL-encoded
-  and JSON-escaped forms) is replaced with `[secret hidden]` in every tool result
-  and streamed output, and a screenshot of a page that shows it is withheld.
-
-Limits: a key shown as an image or QR, split across boxes, only in a downloaded
-file, or only after an email confirmation is not found on its own. The value is
-briefly in the `clikdeploy` command line, visible to other processes of the same
-OS user.
-
-## Stuck steps: phone handoff
-
-For a CAPTCHA or MFA the agent cannot finish, `computer_web handoff` prints a
-one-use ten-minute link. Open it on a phone, finish the step in the live
-browser, tap Done. The page is static (`site/handoff/`, published to the `gh-pages` branch) and talks
-to your computer over an encrypted Tailcat
-connection; the token stays in the URL fragment, so the page host never sees it.
-No ClikDeploy or Tailscale account is needed. The Tailcat binary is downloaded
-and checksum-verified on first use (Homebrew on macOS). The phone needs
-WebAssembly.
+`~/.clikcode/computer/vault/`: a random 32-byte key (`vault.key`, owner-only) and one
+AES-256-GCM file per login or secret. No setup or password. A login belongs to a site
+by host (a leading cloud-region label is ignored). The key sits beside the files, so
+this protects against a copied folder, not against other programs running as you.
 
 ## Limits
 
-- Some sites reject automated sign-ins regardless of the browser's settings.
-- A URL change is the success signal; no site-independent proof exists.
-- Desktop tools are refused while any ClikCode browser tab is on a sign-in page,
-  so the screen cannot expose what the page withholds from the model.
-- A code split across several boxes goes to `handoff`.
+- Some sites refuse automated browsers whatever is done.
+- A key shown only as an image, or split across boxes, or sent only by email: use the
+  paste prompt or `handoff`.
+- The key is briefly in the `clikdeploy` command line, visible to the same OS user.
+- A URL change is the only success signal for a sign-in; no site-independent proof
+  exists.
+- `computer_desktop observe` is refused while a browser tab is on a sign-in page, so
+  the screen cannot show what the page withholds. Acting is allowed.

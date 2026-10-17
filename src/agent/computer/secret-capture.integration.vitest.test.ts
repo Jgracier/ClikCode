@@ -75,7 +75,7 @@ async function tap(tab: Page, selector: string): Promise<void> {
 it.skipIf(!enabled)('finds the key from the site\'s response and the new page text, asking no one', async () => {
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
   const tab = await open('/from-response');
-  const result = await captureSecret({ stateDir, page: tab, name: 'salad/api-key', remote: false, trigger: () => tap(tab, '#go'), ask: neverAsked, onLink: () => undefined });
+  const result = await captureSecret({ stateDir, page: tab, name: 'salad/api-key', trigger: () => tap(tab, '#go'), ask: neverAsked });
   expect(result).toMatchObject({ length: KEY.length, found: true });
   expect(await readNamedSecret(stateDir, 'salad/api-key')).toBe(KEY);
   expect(scrubSecrets(`token ${KEY} and Zx9Qw3Er7Ty1Ui5Op2As4Df6`)).toBe('token [secret hidden] and Zx9Qw3Er7Ty1Ui5Op2As4Df6');
@@ -89,7 +89,7 @@ it.skipIf(!enabled)('finds the key from the site\'s response and the new page te
 it.skipIf(!enabled)('finds a key that the page only reveals, with no request', async () => {
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
   const tab = await open('/reveal');
-  const result = await captureSecret({ stateDir, page: tab, name: 'revealed', remote: false, trigger: () => tap(tab, '#go'), ask: neverAsked, onLink: () => undefined });
+  const result = await captureSecret({ stateDir, page: tab, name: 'revealed', trigger: () => tap(tab, '#go'), ask: neverAsked });
   expect(result.found).toBe(true);
   expect(await readNamedSecret(stateDir, 'revealed')).toBe(KEY);
 }, 60_000);
@@ -98,7 +98,7 @@ it.skipIf(!enabled)('asks instead of guessing when two keys are equally likely',
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
   const tab = await open('/two');
   let hint = '';
-  const result = await captureSecret({ stateDir, page: tab, name: 'two', remote: false, trigger: () => tap(tab, '#go'), ask: async (_n, h) => { hint = h; return KEY; }, onLink: () => undefined });
+  const result = await captureSecret({ stateDir, page: tab, name: 'two', trigger: () => tap(tab, '#go'), ask: async (_n, h) => { hint = h; return KEY; } });
   expect(result).toMatchObject({ length: KEY.length, found: false });
   expect(hint).toContain('More than one');
 }, 60_000);
@@ -106,7 +106,7 @@ it.skipIf(!enabled)('asks instead of guessing when two keys are equally likely',
 it.skipIf(!enabled)('asks when nothing key-like appears, and saves nothing if the person cancels', async () => {
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
   const tab = await open('/plain');
-  await expect(captureSecret({ stateDir, page: tab, name: 'nothing', remote: false, trigger: () => tap(tab, '#go'), ask: async () => undefined, onLink: () => undefined })).rejects.toThrow('cancelled');
+  await expect(captureSecret({ stateDir, page: tab, name: 'nothing', trigger: () => tap(tab, '#go'), ask: async () => undefined })).rejects.toThrow('Not saved: no key was found');
   await expect(readNamedSecret(stateDir, 'nothing')).rejects.toThrow();
 }, 60_000);
 
@@ -119,7 +119,7 @@ it.skipIf(!enabled)('presses the page\'s own Copy button by itself and ignores o
   await other.goto(`${base}/plain`);
   await other.evaluate(() => navigator.clipboard.writeText('unrelated-token-0000-1111'));
   await tab.bringToFront();
-  const result = await captureSecret({ stateDir, page: tab, name: 'copied', remote: false, ask: neverAsked, onLink: () => undefined });
+  const result = await captureSecret({ stateDir, page: tab, name: 'copied', ask: neverAsked });
   expect(result).toMatchObject({ length: KEY.length, found: true });
   expect(await readNamedSecret(stateDir, 'copied')).toBe(KEY);
 }, 60_000);
@@ -127,7 +127,7 @@ it.skipIf(!enabled)('presses the page\'s own Copy button by itself and ignores o
 it.skipIf(!enabled)('takes a pasted key', async () => {
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
   const tab = await open('/plain');
-  const result = await captureSecret({ stateDir, page: tab, name: 'pasted', remote: false, trigger: () => tap(tab, '#go'), ask: async () => KEY, onLink: () => undefined });
+  const result = await captureSecret({ stateDir, page: tab, name: 'pasted', trigger: () => tap(tab, '#go'), ask: async () => KEY });
   expect(result).toMatchObject({ length: KEY.length, found: false });
   expect(await readNamedSecret(stateDir, 'pasted')).toBe(KEY);
 }, 60_000);
@@ -135,7 +135,7 @@ it.skipIf(!enabled)('takes a pasted key', async () => {
 it.skipIf(!enabled)('takes a key the page is already showing when no button is given', async () => {
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
   const tab = await open('/existing');
-  const result = await captureSecret({ stateDir, page: tab, name: 'current', remote: false, ask: neverAsked, onLink: () => undefined });
+  const result = await captureSecret({ stateDir, page: tab, name: 'current', ask: neverAsked });
   expect(result).toMatchObject({ length: KEY.length, found: true });
   expect(await readNamedSecret(stateDir, 'current')).toBe(KEY);
 }, 60_000);
@@ -143,7 +143,7 @@ it.skipIf(!enabled)('takes a key the page is already showing when no button is g
 it.skipIf(!enabled)('finds a key shown beside a resource name and Copy buttons, as a Google-style dialog does', async () => {
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
   const tab = await open('/dialog');
-  const result = await captureSecret({ stateDir, page: tab, name: 'dialog', remote: false, trigger: () => tap(tab, '#go'), ask: neverAsked, onLink: () => undefined });
+  const result = await captureSecret({ stateDir, page: tab, name: 'dialog', trigger: () => tap(tab, '#go'), ask: neverAsked });
   expect(result).toMatchObject({ length: GOOGLE_STYLE.length, found: true });
   expect(await readNamedSecret(stateDir, 'dialog')).toBe(GOOGLE_STYLE);
 }, 60_000);
@@ -161,7 +161,7 @@ it.skipIf(!enabled)('never shows the agent a key the page displays, before or af
 it.skipIf(!enabled)('presses the site\'s own Copy button when the key never appears in the page text, and not the cURL one', async () => {
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
   const tab = await open('/copy-modal');
-  const result = await captureSecret({ stateDir, page: tab, name: 'masked', remote: false, trigger: () => tap(tab, '#go'), ask: neverAsked, onLink: () => undefined });
+  const result = await captureSecret({ stateDir, page: tab, name: 'masked', trigger: () => tap(tab, '#go'), ask: neverAsked });
   expect(result).toMatchObject({ length: KEY.length, found: true });
   expect(await readNamedSecret(stateDir, 'masked')).toBe(KEY);
 }, 60_000);
@@ -169,11 +169,11 @@ it.skipIf(!enabled)('presses the site\'s own Copy button when the key never appe
 it.skipIf(!enabled)('refuses to save a value its own service rejects, and saves one it accepts', async () => {
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
   const tab = await open('/reveal');
-  await expect(captureSecret({ stateDir, page: tab, name: 'refused', remote: false, trigger: () => tap(tab, '#go'), ask: neverAsked, onLink: () => undefined,
+  await expect(captureSecret({ stateDir, page: tab, name: 'refused', trigger: () => tap(tab, '#go'), ask: neverAsked,
     check: async () => ({ verdict: 'rejected', service: 'Example', detail: 'Example refused it (HTTP 401)' }) })).rejects.toThrow('Not saved: Example refused it');
   await expect(readNamedSecret(stateDir, 'refused')).rejects.toThrow();
   const tab2 = await open('/reveal');
-  const ok = await captureSecret({ stateDir, page: tab2, name: 'accepted', remote: false, trigger: () => tap(tab2, '#go'), ask: neverAsked, onLink: () => undefined,
+  const ok = await captureSecret({ stateDir, page: tab2, name: 'accepted', trigger: () => tap(tab2, '#go'), ask: neverAsked,
     check: async () => ({ verdict: 'works', service: 'Example', detail: 'Example accepted it' }) });
   expect(ok.check.verdict).toBe('works');
   expect(await readNamedSecret(stateDir, 'accepted')).toBe(KEY);
@@ -196,7 +196,7 @@ describe_('forwarding the captured key', () => {
     stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
     const { log } = await fakeCli(`echo '{"status":"success","message":"stored"}'`);
     const tab = await open('/reveal');
-    const result = await captureSecret({ stateDir, page: tab, name: 'forwarded', remote: false, trigger: () => tap(tab, '#go'), ask: neverAsked, onLink: () => undefined, sendTo: plan });
+    const result = await captureSecret({ stateDir, page: tab, name: 'forwarded', trigger: () => tap(tab, '#go'), ask: neverAsked, sendTo: plan });
     expect(result.sent).toEqual([expect.objectContaining({ ok: true, label: 'ClikDeploy admin_platform_set_secret' })]);
     expect(await readFile(log, 'utf8')).toContain(KEY);
     expect(await readNamedSecret(stateDir, 'forwarded')).toBe(KEY);
@@ -206,7 +206,7 @@ describe_('forwarding the captured key', () => {
     stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
     const { log } = await fakeCli(`echo '{}'`);
     const tab = await open('/reveal');
-    await expect(captureSecret({ stateDir, page: tab, name: 'refused-send', remote: false, trigger: () => tap(tab, '#go'), ask: neverAsked, onLink: () => undefined, sendTo: plan,
+    await expect(captureSecret({ stateDir, page: tab, name: 'refused-send', trigger: () => tap(tab, '#go'), ask: neverAsked, sendTo: plan,
       check: async () => ({ verdict: 'rejected', service: 'Example', detail: 'Example refused it (HTTP 401)' }) })).rejects.toThrow('Not saved');
     expect(await readFile(log, 'utf8')).toBe('');
   }, 60_000);
@@ -215,7 +215,7 @@ describe_('forwarding the captured key', () => {
     stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
     await fakeCli(`echo '{"status":"error","message":"step-up required"}'; exit 2`);
     const tab = await open('/reveal');
-    const result = await captureSecret({ stateDir, page: tab, name: 'kept', remote: false, trigger: () => tap(tab, '#go'), ask: neverAsked, onLink: () => undefined, sendTo: plan });
+    const result = await captureSecret({ stateDir, page: tab, name: 'kept', trigger: () => tap(tab, '#go'), ask: neverAsked, sendTo: plan });
     expect(result.sent[0]).toMatchObject({ ok: false });
     expect(result.sent[0]!.message).toContain('step-up required');
     expect(await readNamedSecret(stateDir, 'kept')).toBe(KEY);

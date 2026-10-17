@@ -66,13 +66,12 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     });
   computer.command('capture <secret-name>').description('Get an API key from the open page into Secrets Manager without showing it (click the Create button first with --click role:name)')
     .option('--click <role:name>', 'The button that makes the site show the key, for example button:Create')
-    .option('--remote', 'Also print a phone link so the Copy button can be tapped remotely')
     .option('--chat <chat>', 'Chat to use when run from outside a ClikCode chat')
-    .action(async (secret: string, options: { click?: string; remote?: boolean; chat?: string }) => {
+    .action(async (secret: string, options: { click?: string; chat?: string }) => {
       const click = options.click ? /^([a-z]+):(.+)$/.exec(options.click) : undefined;
       if (options.click && !click) throw new Error('--click is role:name, for example button:Create');
       await (await import('../commands/computer.js')).computerTool('computer_web', { action: 'capture_secret', secret_name: secret,
-        ...(click ? { role: click[1], name: click[2] } : {}), ...(options.remote ? { remote: true } : {}) }, options.chat);
+        ...(click ? { role: click[1], name: click[2] } : {}) }, options.chat);
     });
   computer.command('store <secret-name>').description('Send a saved secret to ClikDeploy or GitHub (asks you to approve the plan)')
     .option('--key <KEY>', 'Shortcut: set this ClikDeploy platform secret, for example SALAD_API_KEY')

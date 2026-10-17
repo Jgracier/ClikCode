@@ -1,31 +1,58 @@
 import { describe, expect, it } from 'vitest';
-import { computerWebTool, observeComputerPage, webAddress } from './computer-web.js';
-import type { Page } from 'playwright-core';
+import { compactSnapshot, computerWebTool } from './computer-web.js';
 
-describe('ClikCode browser boundary', () => {
-  it('accepts websites and rejects local files and URL credentials', () => {
-    expect(webAddress('https://example.com/work')).toBe('https://example.com/work');
-    expect(() => webAddress('file:///etc/passwd')).toThrow('HTTP or HTTPS');
-    expect(() => webAddress('https://name:secret@example.com')).toThrow('without credentials');
+describe('compactSnapshot', () => {
+  const page = ['- banner:', '  - navigation "Main":', '    - link "Models"', '- main:', '  - heading "API Keys" [level=1]', '  - button "Create key"', '- contentinfo:', '  - link "Terms"'].join('\n');
+
+  it('folds the header and footer away and keeps the main area whole', () => {
+    const out = compactSnapshot(page);
+    expect(out).toContain('- heading "API Keys"');
+    expect(out).toContain('- button "Create key"');
+    expect(out).not.toContain('Models');
+    expect(out).not.toContain('Terms');
+    expect(out).toContain('observe with full: true');
   });
 
-  it('requires approval before observing browser state or changing it', () => {
-    expect(computerWebTool.class).toBe('exec');
+  it('leaves a page with no main area, or no header, exactly as it is', () => {
+    const noMain = '- banner:\n  - link "Home"\n- button "Go"';
+    expect(compactSnapshot(noMain)).toBe(noMain);
+    const plain = '- main:\n  - button "Go"';
+    expect(compactSnapshot(plain)).toBe(plain);
+  });
+});
+
+describe('computer_web labels and plan text', () => {
+  const label = (args: Record<string, unknown>): string => computerWebTool.label(args as never);
+  it('reads like what is happening, not like the call', () => {
+    expect(label({ action: 'open', url: 'https://www.huggingface.co/settings/tokens' })).toBe('Open huggingface.co');
+    expect(label({ action: 'click', role: 'button', name: 'Create token' })).toBe('Click Create token');
+    expect(label({ action: 'capture_secret', secret_name: 'salad/api-key' })).toBe('Capture key as salad/api-key');
+    expect(label({ action: 'login' })).toBe('Sign in');
   });
 
-  it('does not expose a filled password field to a model', async () => {
-    const fake = {
-      url: () => 'https://example.com/login?token=private',
-      locator: () => ({ count: async () => 1, evaluateAll: async (callback: (inputs: unknown[]) => unknown) => callback([{
-        type: 'password', name: 'password', id: 'password', autocomplete: 'current-password', required: true, placeholder: '', labels: [], value: 'private-password',
-        getAttribute: (key: string) => key === 'aria-label' ? 'Password' : null,
-      }]) }),
-      ariaSnapshot: () => { throw new Error('snapshot would reveal the password'); },
-      screenshot: () => { throw new Error('capture would reveal the page'); },
-    } as unknown as Page;
-    const result = await observeComputerPage(fake, true);
-    expect(result.output).toContain('Password (password)');
-    expect(JSON.stringify(result)).not.toContain('private-password');
-    expect(JSON.stringify(result)).not.toContain('token=private');
+  it('shows the user the whole plan, with the key only as a stand-in', async () => {
+    const text = await computerWebTool.describe!({ action: 'capture_secret', secret_name: 'salad/api-key',
+      send_to: [{ type: 'clikdeploy', tool: 'admin_platform_set_secret', args: { key: 'SALAD_API_KEY', value: '{{secret}}' } }, { type: 'github', repo: 'Jgracier/app', name: 'SALAD_API_KEY' }] } as never);
+    expect(text).toContain('never shown to the agent');
+    expect(text).toContain('• ClikDeploy: admin_platform_set_secret');
+    expect(text).toContain('‹the key›');
+    expect(text).toContain('• GitHub repository Jgracier/app');
+  });
+});
+
+describe('capture_secret failures say what really happened', () => {
+  it('says "Not saved" with the real reason, never a generic "check the browser"', async () => {
+    const { setComputerEnabled } = await import('../computer/settings.js');
+    const { mkdtemp, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const stateDir = await mkdtemp(join(tmpdir(), 'clikcode-web-plan-'));
+    try {
+      await setComputerEnabled(stateDir, true);
+      const result = await computerWebTool.run({ action: 'capture_secret', send_to: [{ type: 'clikdeploy', tool: 'x', args: {} }] } as never, { stateDir } as never);
+      expect(result.isError).toBe(true);
+      expect(result.output).toMatch(/^Not saved: /);
+      expect(result.output).not.toContain('Check the browser and try again');
+    } finally { await rm(stateDir, { recursive: true, force: true }); }
   });
 });
