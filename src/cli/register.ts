@@ -64,14 +64,15 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
       if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('--args-json must be a JSON object');
       await (await import('../commands/computer.js')).computerTool(name, args as Record<string, unknown>, options.chat);
     });
-  computer.command('capture <secret-name>').description('Get an API key from the open page into Secrets Manager without showing it (click the Create button first with --click role:name)')
-    .option('--click <role:name>', 'The button that makes the site show the key, for example button:Create')
+  computer.command('capture <secret-name>').description('Get an API key from the open page into Secrets Manager without showing it (name the Create button with --click, as a [ref=…] from the page view or its text)')
+    .option('--click <target>', 'The button that makes the site show the key')
+    .option('--to <destination>', 'Also send it on, for example clikdeploy-secret')
+    .option('--with <slot=value...>', 'A value for a slot of the destination, repeatable', (value: string, all: string[] = []) => [...all, value])
     .option('--chat <chat>', 'Chat to use when run from outside a ClikCode chat')
-    .action(async (secret: string, options: { click?: string; chat?: string }) => {
-      const click = options.click ? /^([a-z]+):(.+)$/.exec(options.click) : undefined;
-      if (options.click && !click) throw new Error('--click is role:name, for example button:Create');
+    .action(async (secret: string, options: { click?: string; to?: string; with?: string[]; chat?: string }) => {
+      const params = Object.fromEntries((options.with ?? []).map(pair => { const at = pair.indexOf('='); if (at < 1) throw new Error('--with is slot=value'); return [pair.slice(0, at), pair.slice(at + 1)]; }));
       await (await import('../commands/computer.js')).computerTool('computer_web', { action: 'capture_secret', secret_name: secret,
-        ...(click ? { role: click[1], name: click[2] } : {}) }, options.chat);
+        ...(options.click ? { target: options.click } : {}), ...(options.to ? { send_to: { to: options.to, ...(Object.keys(params).length ? { with: params } : {}) } } : {}) }, options.chat);
     });
   computer.command('store <secret-name>').description('Send a saved secret on to a destination, for example --to clikdeploy-secret --with key=SALAD_API_KEY')
     .requiredOption('--to <destination>', 'A destination name (see `computer destination list`)')
