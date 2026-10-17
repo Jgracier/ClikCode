@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { arrangeSnapshot, changedLines, computerWebTool, findInSnapshot } from './computer-web.js';
+import { arrangeSnapshot, changedLines, displayUrl, computerWebTool, findInSnapshot } from './computer-web.js';
 
 describe('arrangeSnapshot', () => {
   const longMiddle = Array.from({ length: 900 }, (_, index) => `    - link "Item number ${index} of the long list" [ref=e${100 + index}]`).join('\n');
@@ -115,5 +115,15 @@ describe('changedLines', () => {
     const before = Array.from({ length: 30 }, (_, i) => `- link "Old ${i}" [ref=e${i}]`).join('\n');
     const after = Array.from({ length: 30 }, (_, i) => `- link "New ${i}" [ref=e${i}]`).join('\n');
     expect(changedLines(before, after)).toBeUndefined();
+  });
+});
+
+describe('displayUrl', () => {
+  it('shortens long or secret query values and fragments, and leaves ordinary addresses alone', () => {
+    const long = 'a'.repeat(300);
+    expect(displayUrl(`https://signup.example.com/?verify_email=${long}`)).toBe('https://signup.example.com/?verify_email=…');
+    expect(displayUrl('https://app.example.com/cb?code=abc123&page=2')).toBe('https://app.example.com/cb?code=…&page=2');
+    expect(displayUrl(`https://app.example.com/#access_token=${long}`)).toBe('https://app.example.com/#…');
+    expect(displayUrl('https://console.example.com/iam/api-keys')).toBe('https://console.example.com/iam/api-keys');
   });
 });
