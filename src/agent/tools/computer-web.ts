@@ -20,7 +20,7 @@ import type { ToolContext, ToolRunResult } from '../tool-contract.js';
 type Step = { do: 'click' | 'fill' | 'press' | 'scroll' | 'wait'; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; accept_dialog?: boolean; gone?: boolean; seconds?: number };
 type WebArgs = {
   action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'press' | 'scroll' | 'wait' | 'steps' | 'login' | 'handoff' | 'capture_secret';
-  url?: string; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; steps?: Step[]; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
+  url?: string; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
   new_account?: boolean; secret_name?: string; send_to?: Destination[] | Destination | string;
 };
 
@@ -165,7 +165,7 @@ export const computerWebTool = defineTool<WebArgs>({
     find: { type: 'string', description: 'observe: show only the lines that mention these words.' },
     key: { type: 'string', description: 'press: a key such as Enter or Escape.' },
     direction: { type: 'string', enum: ['up', 'down'], description: 'scroll.' },
-    steps: { type: 'array', description: 'steps: what to do, in order, e.g. [{do:"fill", target:"e4", text:"My key"}, {do:"click", target:"e9"}].',
+    steps: { type: ['array', 'string'], description: 'steps: what to do, in order, e.g. [{do:"fill", target:"e4", text:"My key"}, {do:"click", target:"e9"}].',
       items: { type: 'object', additionalProperties: false, required: ['do'], properties: {
         do: { type: 'string', enum: ['click', 'fill', 'press', 'scroll', 'wait'] }, target: { type: 'string' }, text: { type: 'string' }, key: { type: 'string' }, direction: { type: 'string', enum: ['up', 'down'] }, accept_dialog: { type: 'boolean' }, gone: { type: 'boolean' }, seconds: { type: 'number' },
       } } },
@@ -301,8 +301,9 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
     case 'open': await page.goto(webAddress(args.url), { waitUntil: 'domcontentloaded', timeout: 30_000 }); await settle(page); return observeComputerPage(page, ctx.acceptsImages === true);
     case 'observe': return observeComputerPage(page, ctx.acceptsImages === true, args.full === true, args.find);
     case 'steps':
-      if (!args.steps?.length) throw new Error('steps needs a list, e.g. [{"do":"click","target":"e5"}].');
-      return runSteps(page, args.steps, ctx);
+      const list = typeof args.steps === 'string' ? (() => { try { return JSON.parse(args.steps) as Step[]; } catch { return undefined; } })() : args.steps;
+      if (!Array.isArray(list) || !list.length) throw new Error('steps needs a list, e.g. [{"do":"click","target":"e5"}].');
+      return runSteps(page, list, ctx);
     case 'login': {
       const outcome = await loginComputerPage({ stateDir: ctx.stateDir, page, signal: ctx.signal, newAccount: args.new_account === true,
         ask: async (site, fields, signal) => {
@@ -330,11 +331,13 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
           if (!ctx.requestPrivateSecret) throw new LoginError('Not saved: this chat cannot show a private prompt, and the key could not be found on its own.');
           return ctx.requestPrivateSecret(secretName, hint, signal);
         } });
+      const refused = check.verdict === 'rejected';
       const lines = [
         `SAVED "${name}" in ClikCode Secrets Manager (${length} characters, ${found ? 'found on the page' : 'pasted by the user'}). You were not shown the key.`,
-        check.verdict === 'works' ? `Checked: ${check.detail}.` : `Not checked: ${check.detail}.`,
+        refused ? `NOT VERIFIED: ${check.detail}. It was kept because the site shows a new key only once, and it was NOT sent anywhere. Wait a minute, then send it with store_secret and check the result.`
+          : check.verdict === 'works' ? `Checked: ${check.detail}.` : `Not checked: ${check.detail}.`,
         ...sent.map(delivery => `${delivery.ok ? 'SENT' : 'NOT SENT'} - ${delivery.label}: ${delivery.message}`),
-        ...(sent.some(delivery => !delivery.ok) ? ['The key is still saved. Fix the cause, then send it again with store_secret.'] : sent.length ? [] : ['Nothing was sent anywhere: use send_to to send it on, or store_secret later.']),
+        ...(refused ? [] : sent.some(delivery => !delivery.ok) ? ['The key is still saved. Fix the cause, then send it again with store_secret.'] : sent.length ? [] : ['Nothing was sent anywhere: use send_to to send it on, or store_secret later.']),
       ];
       return { output: lines.join('\n'), ...(sent.some(delivery => !delivery.ok) ? { isError: true } : {}) };
     }

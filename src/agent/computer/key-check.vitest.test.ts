@@ -85,3 +85,26 @@ it('treats an unreachable Google as untested, and leaves other JSON alone', asyn
   expect((await checkKey('https://console.cloud.google.com/', serviceAccount(), down)).verdict).toBe('untested');
   expect((await checkKey('https://example.com/', JSON.stringify({ type: 'something-else' }))).detail).toBe('no check is known for this site');
 });
+
+const refusing = (error = 'invalid_grant'): Response => new Response(JSON.stringify({ error, error_description: 'Invalid JWT Signature.' }), { status: 400 });
+
+it('keeps asking Google for a minute when the key was only just made, because Google is slow to accept a new one', async () => {
+  let calls = 0;
+  const slow = google(() => (++calls < 3 ? refusing() : new Response(JSON.stringify({ access_token: 'x' }), { status: 200 })));
+  const pauses: number[] = [];
+  const result = await checkKey('https://console.cloud.google.com/', serviceAccount(), slow, { fresh: true, pause: async ms => { pauses.push(ms); } });
+  expect(result.verdict).toBe('works');
+  expect(calls).toBe(3);
+  expect(pauses).toEqual([8000, 8000]);
+});
+
+it('gives up with Google\'s reason after the wait, and does not wait at all for a key that was not just made', async () => {
+  let calls = 0;
+  const never = google(() => { calls++; return refusing(); });
+  const waited = await checkKey('https://console.cloud.google.com/', serviceAccount(), never, { fresh: true, pause: async () => undefined });
+  expect(waited).toMatchObject({ verdict: 'rejected' });
+  expect(calls).toBe(8);
+  calls = 0;
+  expect((await checkKey('https://console.cloud.google.com/', serviceAccount(), never, { pause: async () => { throw new Error('should not wait'); } })).verdict).toBe('rejected');
+  expect(calls).toBe(1);
+});
