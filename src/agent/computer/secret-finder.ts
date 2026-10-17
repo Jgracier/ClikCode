@@ -131,12 +131,10 @@ export function hideKeyLikeText(text: string): { text: string; hidden: number } 
   const labelled = labelledValues(text);
   const copyHint = WORTH_SAVING_HINT.test(text);
   let hidden = 0;
-  // A page that invites copying and shows a "Secret Key:" label puts the value on the next line or in the next element.
-  const uuids = copyHint && /secret[ _-]?key/i.test(text) ? /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/g : SECRET_UUID;
-  text = text.replace(uuids, (match, label?: string) => { hidden++; return typeof label === 'string' ? `${label}[secret hidden]` : '[secret hidden]'; });
+  text = text.replace(SECRET_UUID, (match, label?: string) => { hidden++; return typeof label === 'string' ? `${label}[secret hidden]` : '[secret hidden]'; });
   const out = text.replace(/[A-Za-z0-9_\-+/=.:~]{24,}/g, token => {
     const bare = token.replace(/[.,;:)]+$/, '');
-    if (!keyShaped(bare) || !mixedCase(bare) || !(labelled.has(bare) || (copyHint && bare.length >= 32))) return token;
+    if (!keyShaped(bare) || !((mixedCase(bare) && labelled.has(bare)) || (copyHint && bare.length >= 32))) return token;
     hidden++;
     return '[secret hidden]';
   });
