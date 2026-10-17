@@ -34,7 +34,9 @@ export async function privateLoginPage(page: Page): Promise<boolean> {
   }
   try {
     const fields = await loginFields(page);
-    if (fields.some(field => ['email', 'username', 'accountId', 'code'].includes(field.key))) {
+    // Only a one-time code makes a page private by its fields: an email or name box is also on
+    // every signup and contact form, which the agent reads normally and fills with what the user gave it.
+    if (fields.some(field => field.key === 'code')) {
       protectLoginPage(page);
       return true;
     }

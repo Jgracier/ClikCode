@@ -6,7 +6,7 @@ import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
 import { privateLoginPage } from '../computer/private-page.js';
 import { loginComputerPage, loginOutcomeMessage } from '../computer/login-page.js';
 import { LoginError } from '../computer/login-error.js';
-import { loginFields, loginFieldSummary, pageControls } from '../computer/login-fields.js';
+import { loginFields, loginFieldSummary, pageControls, type LoginField } from '../computer/login-fields.js';
 import { scrubSecrets, showsSecret } from '../computer/secret-scrubber.js';
 import { hideKeyLikeText } from '../computer/secret-finder.js';
 import { dialogNote, withDialogs } from '../computer/page-dialogs.js';
@@ -162,7 +162,7 @@ export const computerWebTool = defineTool<WebArgs>({
     action: { type: 'string', enum: ['open', 'close', 'observe', 'click', 'fill', 'press', 'scroll', 'wait', 'steps', 'login', 'handoff', 'capture_secret'] },
     url: { type: 'string', description: 'open: the website address.' },
     target: { type: 'string', description: 'click, fill, capture_secret: a [ref=…] from the page view (e5, or f1e2 inside a frame), or the visible text of a sign-in page control.' },
-    text: { type: 'string', description: 'fill: the text (never a credential). wait: the words to wait for.' },
+    text: { type: 'string', description: 'fill: the text. Leave it out for what only the user knows (name, address, phone, a password): the user is asked privately, once for all such fields in the call, and you are not shown the answer. wait: the words to wait for.' },
     gone: { type: 'boolean', description: 'wait: wait for the text to disappear instead of appear.' },
     seconds: { type: 'number', description: 'wait: how long to wait at most (default 30, up to 120).' },
     find: { type: 'string', description: 'observe: show only the lines that mention these words.' },
@@ -272,10 +272,30 @@ async function doStep(page: Page, step: Step): Promise<string> {
   }
 }
 
+/** Fills that name no text ask the user, once for all of them, in the private prompt; the answers never reach the model. */
+async function askForFills(page: Page, steps: readonly Step[], ctx: ToolContext): Promise<Step[]> {
+  const blank = steps.filter(step => step.do === 'fill' && step.text === undefined);
+  if (!blank.length) return [...steps];
+  if (!ctx.requestPrivateLogin) throw new Error('Fill needs text: this chat cannot ask the user privately.');
+  const fields: LoginField[] = [];
+  for (const [index, step] of blank.entries()) {
+    const label = await (await locate(page, step.target)).evaluate(element => {
+      const el = element as unknown as { labels?: ArrayLike<{ textContent: string | null }>; getAttribute(name: string): string | null };
+      return (el.labels?.[0]?.textContent || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('name') || '').trim();
+    }).catch(() => '');
+    fields.push({ index, key: `fill${index}`, label: label || String(step.target), kind: 'text', required: true });
+  }
+  const answers = await ctx.requestPrivateLogin(new URL(page.url()).hostname, fields, ctx.signal);
+  if (!answers) throw new Error('The user did not provide the values.');
+  let at = 0;
+  return steps.map(step => step.do === 'fill' && step.text === undefined ? { ...step, text: answers[`fill${at++}`] ?? '' } : step);
+}
+
 /** Does the steps in order, following a new tab or popup, and returns the page as it ends up. */
 async function runSteps(page: Page, steps: readonly Step[], ctx: ToolContext): Promise<ToolRunResult> {
   const notes: string[] = [];
   let current = page;
+  steps = await askForFills(page, steps, ctx);
   for (const [index, step] of steps.entries()) {
     try {
       notes.push(await doStep(current, step));
