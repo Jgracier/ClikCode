@@ -2,12 +2,13 @@
  * site's response or new page text, never from the shared clipboard, and a
  * person asked only when it is unclear. Opt in with CLIKCODE_COMPUTER_SMOKE=1. */
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:https';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright-core';
-import { afterAll, afterEach, beforeAll, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe as describe_, expect, it } from 'vitest';
+import type { Destination } from './secret-destinations.js';
 import { lockCredentialVault, readNamedSecret } from './credential-vault.js';
 import { captureSecret } from './secret-capture.js';
 import { forgetSecrets, scrubSecrets, showsSecret } from './secret-scrubber.js';
@@ -57,7 +58,8 @@ beforeAll(async () => {
 }, 60_000);
 
 afterAll(async () => { await browser?.close(); server?.close(); if (work) await rm(work, { recursive: true, force: true }); });
-afterEach(async () => { forgetSecrets(); if (stateDir) { lockCredentialVault(stateDir); await rm(stateDir, { recursive: true, force: true }); stateDir = ''; } });
+const savedPath = process.env.PATH;
+afterEach(async () => { process.env.PATH = savedPath; forgetSecrets(); if (stateDir) { lockCredentialVault(stateDir); await rm(stateDir, { recursive: true, force: true }); stateDir = ''; } });
 
 async function open(path: string): Promise<Page> {
   const tab = await (await browser!.newContext({ ignoreHTTPSErrors: true })).newPage();
@@ -176,3 +178,46 @@ it.skipIf(!enabled)('refuses to save a value its own service rejects, and saves 
   expect(ok.check.verdict).toBe('works');
   expect(await readNamedSecret(stateDir, 'accepted')).toBe(KEY);
 }, 60_000);
+
+describe_('forwarding the captured key', () => {
+  async function fakeCli(script: string): Promise<{ log: string }> {
+    const bin = join(work, 'bin-forward');
+    await mkdir(bin, { recursive: true });
+    const log = join(work, 'forward.log');
+    await writeFile(log, '');
+    await writeFile(join(bin, 'clikdeploy'), `#!/bin/sh\nprintf '%s\\n' "$@" >> "${log}"\n${script}\n`);
+    await chmod(join(bin, 'clikdeploy'), 0o755);
+    process.env.PATH = `${bin}:${process.env.PATH}`;
+    return { log };
+  }
+  const plan: Destination[] = [{ type: 'clikdeploy', tool: 'admin_platform_set_secret', args: { key: 'SALAD_API_KEY', value: '{{secret}}' } }];
+
+  it.skipIf(!enabled)('captures, saves, then sends to the planned destination in one step', async () => {
+    stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
+    const { log } = await fakeCli(`echo '{"status":"success","message":"stored"}'`);
+    const tab = await open('/reveal');
+    const result = await captureSecret({ stateDir, page: tab, name: 'forwarded', remote: false, trigger: () => tap(tab, '#go'), ask: neverAsked, onLink: () => undefined, sendTo: plan });
+    expect(result.sent).toEqual([expect.objectContaining({ ok: true, label: 'ClikDeploy admin_platform_set_secret' })]);
+    expect(await readFile(log, 'utf8')).toContain(KEY);
+    expect(await readNamedSecret(stateDir, 'forwarded')).toBe(KEY);
+  }, 60_000);
+
+  it.skipIf(!enabled)('sends nothing when the service refuses the key', async () => {
+    stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
+    const { log } = await fakeCli(`echo '{}'`);
+    const tab = await open('/reveal');
+    await expect(captureSecret({ stateDir, page: tab, name: 'refused-send', remote: false, trigger: () => tap(tab, '#go'), ask: neverAsked, onLink: () => undefined, sendTo: plan,
+      check: async () => ({ verdict: 'rejected', service: 'Example', detail: 'Example refused it (HTTP 401)' }) })).rejects.toThrow('Not saved');
+    expect(await readFile(log, 'utf8')).toBe('');
+  }, 60_000);
+
+  it.skipIf(!enabled)('keeps the key saved when a destination fails, so it can be sent again', async () => {
+    stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
+    await fakeCli(`echo '{"status":"error","message":"step-up required"}'; exit 2`);
+    const tab = await open('/reveal');
+    const result = await captureSecret({ stateDir, page: tab, name: 'kept', remote: false, trigger: () => tap(tab, '#go'), ask: neverAsked, onLink: () => undefined, sendTo: plan });
+    expect(result.sent[0]).toMatchObject({ ok: false });
+    expect(result.sent[0]!.message).toContain('step-up required');
+    expect(await readNamedSecret(stateDir, 'kept')).toBe(KEY);
+  }, 60_000);
+});

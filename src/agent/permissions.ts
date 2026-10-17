@@ -32,6 +32,10 @@ const COMPUTER_TOOLS = new Set(['computer_desktop', 'computer_web']);
 
 /** A call that carries a URL to a host: fetches, and the browser opening a page.
  * Both are covered by the same `WebFetch(domain:...)` rule. */
+/** computer_web capture_secret with a send_to plan. */
+export const sendsCapturedKey = (tool: { name: string }, args: Record<string, unknown>): boolean =>
+  tool.name === 'computer_web' && args.action === 'capture_secret' && Array.isArray(args.send_to) && args.send_to.length > 0;
+
 const reachesHost = (tool: ToolDefinition): boolean => tool.class === 'network' || tool.name === 'computer_web';
 
 /** `Bash(git status:*)`, `Edit(src/**)`, `WebFetch(domain:example.com)`, or a
@@ -213,6 +217,8 @@ function decide(request: PermissionRequest): PermissionDecision {
   const asked = request.rules.ask.find((rule) => ruleNamesCall([rule], request, resolved));
   if (asked) return { decision: 'ask', reason: `the ask rule ${asked.raw} requires approval` };
   if (command?.tier === 'ask' && command.always) return { decision: 'ask', reason: command.reason };
+  // A capture that forwards the key to other services is a write there: asked every time, whatever rules or auto mode say.
+  if (sendsCapturedKey(tool, args)) return { decision: 'ask', reason: 'it sends the captured key to other services' };
 
   // 5. Persisted allow rules.
   if (allowedByRules(request, resolved)) return { decision: 'allow', reason: 'matches a saved allow rule' };
@@ -353,6 +359,7 @@ export function suggestPermissionRule(tool: ToolDefinition, args: Record<string,
     if (!words[0] || UNSPLITTABLE.test(String(args.command)) || /&&|\|\||;|\|/.test(String(args.command))) return undefined;
     return `Bash(${words.slice(0, Math.min(2, words.length)).join(' ')}:*)`;
   }
+  if (sendsCapturedKey(tool, args)) return undefined; // no "always": each plan is its own decision
   if (reachesHost(tool)) {
     const host = hostOf(args.url);
     // No URL (a search): the rule is the tool itself; rules match tools by name.

@@ -27,21 +27,13 @@ async function fake(name: string, script: string): Promise<void> {
   await chmod(join(bin, name), 0o755);
 }
 const ctx = (): ToolContext => ({ stateDir: dir } as ToolContext);
-const SALAD = { secret: 'salad/api-key', destination: 'clikdeploy', key: 'SALAD_API_KEY' } as const;
+const SALAD = { secret: 'salad/api-key', send_to: [{ type: 'clikdeploy', tool: 'admin_platform_set_secret', args: { key: 'SALAD_API_KEY', value: '{{secret}}' } }] } as const;
 
-/** A ClikDeploy CLI that records the write and answers with what the platform says. */
-function clikdeploy(options: { echo?: boolean } = {}): Promise<void> {
-  return fake('clikdeploy', `
-case "$3" in
-  admin_platform_set_secret|set_secret) printf '%s\\n' "$@" > "${dir}/argv"; echo '{"status":"success","message":"stored${options.echo ? ' ' + VALUE : ''}","data":{"appliedToWebProcess":true}}';;
-esac`);
-}
-
-it('stores the value and relays what ClikDeploy says, never showing the value', async () => {
-  await clikdeploy({ echo: true });
-  const result = await storeSecretTool.run(SALAD, ctx());
+it('sends a saved secret by the plan and relays what the destination says, never the value', async () => {
+  await fake('clikdeploy', `printf '%s\\n' "$@" > "${dir}/argv"; echo '{"status":"success","message":"stored ${VALUE}","data":{"appliedToWebProcess":true}}'`);
+  const result = await storeSecretTool.run(SALAD as never, ctx());
   expect(result.isError).toBeUndefined();
-  expect(result.output).toContain('Stored "salad/api-key" in ClikDeploy as SALAD_API_KEY');
+  expect(result.output).toContain('Sent - ClikDeploy admin_platform_set_secret');
   expect(result.output).toContain('appliedToWebProcess=true');
   expect(result.output).not.toContain(VALUE);
   const argv = await readFile(join(dir, 'argv'), 'utf8');
@@ -49,38 +41,20 @@ it('stores the value and relays what ClikDeploy says, never showing the value', 
   expect(argv).toContain(VALUE);
 });
 
-it('sets an app secret when an app is named', async () => {
-  await clikdeploy();
-  await storeSecretTool.run({ ...SALAD, app: 'app_1' }, ctx());
-  const argv = await readFile(join(dir, 'argv'), 'utf8');
-  expect(argv).toContain('set_secret');
-  expect(argv).not.toContain('admin_platform_set_secret');
-  expect(argv).toContain('"appId":"app_1"');
-});
-
-it('reports a failed write without the value, even when the CLI prints it', async () => {
-  await fake('clikdeploy', `echo '{"status":"error","message":"bad value ${VALUE}"}'; exit 2`);
-  const result = await storeSecretTool.run(SALAD, ctx());
+it('can send one saved secret to several places, saying which failed', async () => {
+  await fake('clikdeploy', `echo '{"status":"error","message":"step-up required"}'; exit 2`);
+  await fake('gh', 'cat > /dev/null');
+  const result = await storeSecretTool.run({ secret: 'salad/api-key', send_to: [...SALAD.send_to, { type: 'github', repo: 'Jgracier/app', name: 'SALAD_API_KEY' }] } as never, ctx());
   expect(result.isError).toBe(true);
-  expect(result.output).toContain('did not store');
-  expect(result.output).not.toContain(VALUE);
+  expect(result.output).toContain('FAILED - ClikDeploy admin_platform_set_secret: step-up required');
+  expect(result.output).toContain('Sent - GitHub Jgracier/app SALAD_API_KEY');
 });
 
-it('sets a GitHub repository secret with the value on stdin, never on the command line', async () => {
-  await fake('gh', `printf '%s\\n' "$@" > "${dir}/gh-argv"; cat > "${dir}/gh-stdin"`);
-  const result = await storeSecretTool.run({ secret: 'salad/api-key', destination: 'github', key: 'SALAD_API_KEY', repo: 'Jgracier/app' }, ctx());
-  expect(result.isError).toBeUndefined();
-  expect(result.output).toContain('GitHub repository Jgracier/app');
-  expect(await readFile(join(dir, 'gh-stdin'), 'utf8')).toBe(VALUE);
-  expect(await readFile(join(dir, 'gh-argv'), 'utf8')).not.toContain(VALUE);
-  expect((await storeSecretTool.run({ secret: 'salad/api-key', destination: 'github', key: 'SALAD_API_KEY' }, ctx())).output).toContain('owner/name');
-});
-
-it('refuses an unknown secret, a lower-case destination key, and a missing CLI', async () => {
-  expect((await storeSecretTool.run({ ...SALAD, secret: 'nope' }, ctx())).output).toContain('No secret named');
-  expect((await storeSecretTool.run({ ...SALAD, key: 'lower' }, ctx())).output).toContain('upper-case');
+it('refuses an unsound plan, an unknown secret and a missing CLI', async () => {
+  expect((await storeSecretTool.run({ secret: 'salad/api-key', send_to: [{ type: 'clikdeploy', tool: 'admin_platform_set_secret', args: { value: 'literal' } }] } as never, ctx())).output).toContain('{{secret}}');
+  expect((await storeSecretTool.run({ ...SALAD, secret: 'nope' } as never, ctx())).output).toContain('No secret named');
   process.env.PATH = bin;
-  expect((await storeSecretTool.run(SALAD, ctx())).output).toContain('not installed');
+  expect((await storeSecretTool.run(SALAD as never, ctx())).output).toContain('not installed');
 });
 
 it('lists secret names only, and deletes one by name', async () => {

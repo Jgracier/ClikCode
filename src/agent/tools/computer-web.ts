@@ -10,6 +10,8 @@ import { loginFields, loginFieldSummary, pageControls } from '../computer/login-
 import { showsSecret } from '../computer/secret-scrubber.js';
 import { hideKeyLikeText } from '../computer/secret-finder.js';
 import { dialogNote, withDialogs } from '../computer/page-dialogs.js';
+import { SEND_TO_SCHEMA } from './store-secret.js';
+import { describeDestinations, destinationProblem, type Destination } from '../computer/secret-destinations.js';
 import { captureSecret } from '../computer/secret-capture.js';
 import { runTailcatHandoff } from '../computer/tailcat-handoff.js';
 import type { Page } from 'playwright-core';
@@ -18,7 +20,7 @@ import type { ToolContext, ToolRunResult } from '../tool-contract.js';
 type WebArgs = {
   action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'press' | 'scroll' | 'login' | 'handoff' | 'capture_secret';
   url?: string; role?: 'button' | 'link' | 'textbox' | 'checkbox' | 'combobox' | 'tab' | 'menuitem' | 'option' | 'radio' | 'switch';
-  name?: string; text?: string; key?: string; direction?: 'up' | 'down'; new_account?: boolean; secret_name?: string; remote?: boolean; accept_dialog?: boolean;
+  name?: string; text?: string; key?: string; direction?: 'up' | 'down'; new_account?: boolean; secret_name?: string; remote?: boolean; accept_dialog?: boolean; send_to?: Destination[];
 };
 
 export function webAddress(value: string | undefined): string {
@@ -83,12 +85,15 @@ export const computerWebTool = defineTool<WebArgs>({
     key: { type: 'string', description: 'Keyboard key for press, for example Enter or Escape.' },
     direction: { type: 'string', enum: ['up', 'down'] },
     accept_dialog: { type: 'boolean', description: 'For click: answer yes to a browser confirm/alert dialog the click raises (for example "delete this token?"). Default: the dialog is declined and reported.' },
+    send_to: { ...SEND_TO_SCHEMA, description: 'For capture_secret: where the key goes after it is captured and checked, decided now and approved by the user once; the key is never shown to you. Same plan as store_secret: {type:"clikdeploy", tool, args} runs that ClikDeploy CLI tool with {{secret}} inside args marking where the key goes (for example admin_platform_set_secret with {key:"SALAD_API_KEY", value:"{{secret}}"}, or admin_compute_save_credentials with {provider:"GCP", credentials:{serviceAccountJson:"{{secret}}"}}); {type:"github", repo, name} sets a repository secret.' },
     secret_name: { type: 'string', description: 'For capture_secret: the name to save the key under, such as salad/api-key.' },
     remote: { type: 'boolean', description: 'For capture_secret: also print a phone link so the user can tap Copy on the page remotely.' },
     new_account: { type: 'boolean', description: 'For login: the user wants a different account than the saved one, so ask for it instead of reusing.' },
   } },
   label: (args) => `Web ${args.action}${args.url ? ` ${args.url.slice(0, 80)}` : ''}`,
-  describe: async (args) => `ClikCode browser: ${args.action}${args.url ? ` ${args.url}` : ''}${args.name ? ` ${args.role} ${args.name}` : ''}${args.action === 'fill' ? ` (${args.text?.length ?? 0} characters)` : ''}`,
+  describe: async (args) => args.action === 'capture_secret' && args.send_to?.length
+    ? `Capture an API key from the page (saved as "${args.secret_name ?? ''}" in ClikCode Secrets Manager; its value is never shown to the agent), then send it to:\n${describeDestinations(args.send_to)}`
+    : `ClikCode browser: ${args.action}${args.url ? ` ${args.url}` : ''}${args.name ? ` ${args.role} ${args.name}` : ''}${args.action === 'fill' ? ` (${args.text?.length ?? 0} characters)` : ''}`,
   async run(args, ctx) {
     try {
       if (!(await computerEnabled(ctx.stateDir))) throw new Error(COMPUTER_OFF);
@@ -131,13 +136,17 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
     }
     case 'capture_secret': {
       if (!args.secret_name) throw new Error('capture_secret needs a secret_name.');
-      const { length, found, check } = await captureSecret({ stateDir: ctx.stateDir, page, name: args.secret_name, remote: args.remote === true, signal: ctx.signal,
+      // Before anything is clicked: a key must not be created for a plan that cannot deliver it.
+      const planProblem = args.send_to?.length ? destinationProblem(args.send_to) : undefined;
+      if (planProblem) throw new Error(planProblem);
+      const { length, found, check, sent } = await captureSecret({ stateDir: ctx.stateDir, page, name: args.secret_name, remote: args.remote === true, signal: ctx.signal,
+        ...(args.send_to?.length ? { sendTo: args.send_to } : {}),
         ...(args.role && args.name ? { trigger: () => clickOrHint(page, args) } : {}),
         ask: async (name, hint, signal) => {
           if (!ctx.requestPrivateSecret) throw new LoginError('This chat cannot show a private prompt.');
           return ctx.requestPrivateSecret(name, hint, signal);
         }, onLink: link => ctx.emitOutput?.(`Open this link on your phone, then tap Copy on the page: ${link}\n`) });
-      return { output: `Saved secret "${args.secret_name}" (${length} characters) in ClikCode Secrets Manager${found ? ', found on the page' : ', supplied by the user'}. ${check.verdict === 'works' ? `Verified: ${check.detail}.` : `Not verified: ${check.detail}.`} Its value was not shown to you. Use store_secret to send it where it belongs.` };
+      return { output: `Saved secret "${args.secret_name}" (${length} characters) in ClikCode Secrets Manager${found ? ', found on the page' : ', supplied by the user'}. ${check.verdict === 'works' ? `Verified: ${check.detail}.` : `Not verified: ${check.detail}.`} Its value was not shown to you.${sent.length ? `\n${sent.map(delivery => `${delivery.ok ? 'Sent' : 'FAILED'} - ${delivery.label}: ${delivery.message}`).join('\n')}${sent.some(delivery => !delivery.ok) ? '\nThe key is still saved; fix the cause and send it again with store_secret.' : ''}` : ' Use send_to next time, or store_secret, to send it where it belongs.'}` };
     }
     case 'handoff': {
       await runTailcatHandoff({ stateDir: ctx.stateDir, signal: ctx.signal,
