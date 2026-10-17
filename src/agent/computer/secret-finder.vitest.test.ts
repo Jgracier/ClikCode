@@ -60,3 +60,12 @@ it('hides a long mixed-case token on a page that invites copying, even unlabelle
   expect(hideKeyLikeText(`Your new credential is shown once ${token} copy it now`).hidden).toBe(1);
   expect(hideKeyLikeText(`Build ${token} finished`).hidden).toBe(0);
 });
+
+it('recognises and hides a prefixed token that has no digit, as Hugging Face tokens can', () => {
+  const noDigit = ['hf', 'QjXkVbNzWpLcRmTgHsYdFaUeIoKnBvCxZq'].join('_'); // built here so no token-shaped text sits in the source
+  expect(keyShaped(noDigit)).toBe(true);
+  expect(decide({ before: none, after: [noDigit], responses: [], hint: true })).toEqual({ kind: 'found', value: noDigit });
+  expect(hideKeyLikeText(`Save your token\nCopy ${noDigit}`).hidden).toBe(1);
+  // A long CamelCase identifier is not a key.
+  expect(keyShaped('ThisIsAVeryLongFunctionNameForTheThing')).toBe(false);
+});
