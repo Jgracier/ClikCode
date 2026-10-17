@@ -95,12 +95,37 @@ export async function loginOptions(page: Page): Promise<string[]> {
   return options;
 }
 
-export function loginFieldSummary(site: string, fields: readonly LoginField[], options: readonly string[] = []): string {
+/** Names of the buttons and links on the page, for a page that holds a key or other
+ * secret in a field and so cannot be shown whole: the agent still needs to see what
+ * it can press (Create, Regenerate, Copy). Names only, never values or email-like text. */
+export async function pageControls(page: Page): Promise<string[]> {
+  let names: string[];
+  try {
+    names = await page.locator('a:visible, button:visible, [role="button"]:visible, [role="link"]:visible').evaluateAll(
+      nodes => nodes.map(node => {
+        const element = node as unknown as { innerText?: string; getAttribute(name: string): string | null };
+        return (element.innerText || element.getAttribute('aria-label') || element.getAttribute('title') || '').replace(/\s+/g, ' ').trim();
+      }));
+  } catch { return []; } // The page is navigating.
+  const seen = new Set<string>();
+  const controls: string[] = [];
+  for (const name of names) {
+    const key = name.toLowerCase();
+    if (!name || name.length > 50 || /@/.test(name) || seen.has(key)) continue;
+    seen.add(key);
+    controls.push(name);
+    if (controls.length === 30) break;
+  }
+  return controls;
+}
+
+export function loginFieldSummary(site: string, fields: readonly LoginField[], options: readonly string[] = [], controls: readonly string[] = []): string {
   const shown = fields.length ? fields.map(field => `- ${field.label} (${field.kind})`).join('\n') : '- No credential field is visible. Use handoff for verification or CAPTCHA.';
   const other = options.length
     ? `\n\nOther ways to sign in on this page:\n${options.map(name => `- ${name}`).join('\n')}\nIf more than one could apply (for example root user or IAM user), ask the user which one with ask_user before clicking.`
     : '';
-  return `Page: ${site}\n\nSign-in fields:\n${shown}${other}\n\nUse login to ask for the visible fields privately; if several accounts are saved for this site the user picks one, and a single saved account is used without asking. Values are never shown here.`;
+  const pressable = controls.length ? `\n\nButtons and links on the page (names only):\n${controls.map(name => `- ${name}`).join('\n')}\nPress one with click, using its role and name.` : '';
+  return `Page: ${site}\n\nSign-in fields:\n${shown}${other}${pressable}\n\nUse login to ask for the visible fields privately; if several accounts are saved for this site the user picks one, and a single saved account is used without asking. Values are never shown here.`;
 }
 
 /** The same label twice (two accounts, or a retyped password) still has to be told apart in a list. */

@@ -6,7 +6,7 @@ import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
 import { privateLoginPage } from '../computer/private-page.js';
 import { loginComputerPage, loginOutcomeMessage } from '../computer/login-page.js';
 import { LoginError } from '../computer/login-error.js';
-import { loginFields, loginFieldSummary, loginOptions } from '../computer/login-fields.js';
+import { loginFields, loginFieldSummary, loginOptions, pageControls } from '../computer/login-fields.js';
 import { showsSecret } from '../computer/secret-scrubber.js';
 import { captureSecret } from '../computer/secret-capture.js';
 import { runTailcatHandoff } from '../computer/tailcat-handoff.js';
@@ -42,7 +42,7 @@ export async function observeComputerPage(page: Page, acceptsImages: boolean): P
   // accessibility snapshot or screenshot crosses into the model context.
   if (await privateLoginPage(page)) {
     const fields = await loginFields(page);
-    return { output: loginFieldSummary(new URL(page.url()).origin, fields, await loginOptions(page)) };
+    return { output: loginFieldSummary(new URL(page.url()).origin, fields, await loginOptions(page), await pageControls(page)) };
   }
   const snapshot = (await page.ariaSnapshot({ timeout: 10_000 })).slice(0, 25_000);
   const output = `Page: ${page.url()}\n\n${snapshot}`;
