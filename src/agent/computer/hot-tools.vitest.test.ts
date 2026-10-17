@@ -31,6 +31,10 @@ it('runs a rebuilt copy as soon as its file changes, and falls back to the progr
     expect((await hot.run({} as never, {} as never)).output).toBe('v2');
     await writeFile(file, 'export const computerToolSet = (() => { throw new Error("broken build"); })();');
     await utimes(file, new Date(), new Date(Date.now() + 10_000));
+    const broken = (await hot.run({} as never, {} as never)).output;
+    expect(broken).toContain('did not load');
+    expect(broken).toContain('program');
+    // Said once: the next call is the plain result.
     expect((await hot.run({} as never, {} as never)).output).toBe('program');
   } finally { await rm(file, { force: true }); }
 });
