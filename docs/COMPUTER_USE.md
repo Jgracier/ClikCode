@@ -11,23 +11,24 @@ browser host keeps that profile open, and terminal and VS Code workers attach
 to the same browser. It does not attach to a personal Chrome profile. Existing
 sign-ins in that profile remain available across turns.
 
-For an HTTPS login, `computer_credentials request` gives the user a private
-form for the site's account ID, email and password. ClikCode generates a random
+For an HTTPS login, `computer_web login` reuses the site's sole saved login or
+gives the user a private form for the site's account ID, email and password.
+ClikCode generates a random
 32-byte vault key automatically on first use. It stores that key in a private
 local file (`computer/vault/vault.key`, mode 0600), and encrypts each saved login
 with AES-256-GCM in a separate file. No setup or vault password is required.
 The private form uses a short-lived Tailcat link to send the login directly to
 the local worker over an encrypted connection. It needs no ClikDeploy or
-Tailscale account. The agent receives an opaque item reference and a status;
-the tool result does not contain the website password.
+Tailscale account. The agent sees only the form link and a completion status;
+the tool result does not contain the website password or email.
 
-`computer_credentials fill` uses the item reference to fill the same HTTPS
-origin. It reads the key and decrypts the item inside the worker, including
-after the worker restarts. The browser page is hidden from model observations
+The login action fills and submits the same HTTPS origin. It reads the key and
+decrypts the item inside the worker, including after the worker restarts. The
+browser page is hidden from model observations
 while a login is being handled. If a site uses an unfamiliar or cross-origin
-login, the user can finish through `computer_handoff` instead.
+login, the user can finish through `computer_web handoff` instead.
 
-For CAPTCHA, MFA, or another step the agent cannot finish, `computer_handoff`
+For CAPTCHA, MFA, or another step the agent cannot finish, `computer_web handoff`
 provides a one-use, ten-minute phone link. The user opens it, completes the
 step in the same live browser, then taps Done. ClikCode starts Tailcat for this
 handoff and closes it afterward. The phone connects over Tailcat's encrypted

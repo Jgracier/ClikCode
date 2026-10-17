@@ -78,6 +78,31 @@ export async function saveCredential(stateDir: string, url: string, secret: Omit
   await fs.writeFile(path.join(dir, `${id}.json`), seal(key, `item:${id}`, JSON.stringify({ origin, accountId: secret.accountId, email: secret.email, password: secret.password })), { mode: 0o600, flag: 'wx' });
   return id;
 }
+
+/** Reuse a saved login only when this site has exactly one. Never guess which
+ * account the user wants when several are saved for the same origin. */
+export async function soleCredentialForSite(stateDir: string, url: string): Promise<string | undefined> {
+  const origin = siteOrigin(url);
+  const dir = path.join(vaultDir(stateDir), 'items');
+  let files: string[];
+  try { files = await fs.readdir(dir); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw new CredentialError('Saved logins could not be read.');
+  }
+  if (files.length === 0) return undefined;
+  const key = await vaultKey(stateDir, false);
+  const matches: string[] = [];
+  for (const file of files) {
+    const id = file.replace(/\.json$/, '');
+    if (!/^[0-9a-f-]{36}$/i.test(id) || file !== `${id}.json`) continue;
+    try {
+      const item = JSON.parse(open(key, `item:${id}`, await fs.readFile(path.join(dir, file), 'utf8'))) as Item;
+      if (item.origin === origin) matches.push(id);
+    } catch { throw new CredentialError('A saved login could not be opened.'); }
+  }
+  return matches.length === 1 ? matches[0] : undefined;
+}
 export async function fillCredential(stateDir: string, page: Page, id: string): Promise<void> {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) throw new CredentialError('Invalid saved login reference.');
   const origin = siteOrigin(page.url());

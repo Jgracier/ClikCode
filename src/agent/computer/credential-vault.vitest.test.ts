@@ -2,7 +2,7 @@ import { afterEach, expect, it } from 'vitest';
 import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fillCredential, lockCredentialVault, saveCredential } from './credential-vault.js';
+import { fillCredential, lockCredentialVault, saveCredential, soleCredentialForSite } from './credential-vault.js';
 import type { Page } from 'playwright-core';
 
 let dir = '';
@@ -14,6 +14,8 @@ it('generates a local key automatically, stores only encrypted records, and fill
   const id = await saveCredential(dir, 'https://signin.aws.amazon.com/login', {
     accountId: 'account-123', email: 'private@example.com', password: secret,
   });
+  expect(await soleCredentialForSite(dir, 'https://signin.aws.amazon.com/elsewhere')).toBe(id);
+  expect(await soleCredentialForSite(dir, 'https://other.example/login')).toBeUndefined();
   const vaultDir = join(dir, 'computer', 'vault');
   const items = await readdir(join(vaultDir, 'items'));
   expect(items).toEqual([`${id}.json`]);
@@ -34,6 +36,14 @@ it('generates a local key automatically, stores only encrypted records, and fill
   await fillCredential(dir, page('https://signin.aws.amazon.com/login'), id);
   expect(filled['input[type="password"]:visible']).toBe(secret);
   expect(filled.account).toBe('account-123');
+});
+
+it('does not choose between multiple saved accounts on one site', async () => {
+  dir = await mkdtemp(join(tmpdir(), 'clikcode-vault-accounts-'));
+  for (const email of ['one@example.com', 'two@example.com']) {
+    await saveCredential(dir, 'https://accounts.google.com/', { accountId: '', email, password: 'private-password' });
+  }
+  expect(await soleCredentialForSite(dir, 'https://accounts.google.com/login')).toBeUndefined();
 });
 
 it('fills an email-first sign-in without returning the saved password', async () => {
