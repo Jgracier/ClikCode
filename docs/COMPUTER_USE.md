@@ -11,10 +11,13 @@ browser host keeps that profile open, and terminal and VS Code workers attach
 to the same browser. It does not attach to a personal Chrome profile. Existing
 sign-ins in that profile remain available across turns.
 
-For an HTTPS login, `computer_web login` reuses the site's sole saved login or
-prompts for its account ID, email and password in the ClikCode terminal or VS
-Code panel. These values go directly from the UI to the local worker and vault;
-the model receives only the tool's completion status.
+On a sign-in page the agent sees the visible field labels and types, never
+their values or a screenshot. `computer_web login` reuses saved fields or asks
+for exactly the fields visible at that step in the ClikCode terminal or VS Code
+panel. An email-first site can ask for email, advance, then ask for password.
+The fields are saved encrypted as each step is completed. The values go
+directly from the UI to the local worker and vault; the model receives only
+the step status.
 ClikCode generates a random
 32-byte vault key automatically on first use. It stores that key in a private
 local file (`computer/vault/vault.key`, mode 0600), and encrypts each saved login
@@ -25,9 +28,9 @@ to enter them.
 
 The login action fills and submits the same HTTPS origin. It reads the key and
 decrypts the item inside the worker, including after the worker restarts. The
-browser page is hidden from model observations
-while a login is being handled. If a site uses an unfamiliar or cross-origin
-login, the user can finish through `computer_web handoff` instead.
+agent can inspect field names on login pages, while page values and screenshots
+stay private. If a site uses an unfamiliar or cross-origin login, the user can
+finish through `computer_web handoff` instead.
 
 For CAPTCHA, MFA, or another step the agent cannot finish, `computer_web handoff`
 provides a one-use, ten-minute phone link. The user opens it, completes the
@@ -54,6 +57,8 @@ other processes on the same computer could connect to it. Use a dedicated OS
 account if untrusted local users share the computer. Sites may show an account
 email or ID after login.
 
-Vendor harnesses do not automatically receive ClikCode's own computer tools.
-The computer controls are available to ClikCode's own agent in the terminal
-and VS Code.
+In any harness chat, `/computer inspect` shows safe login field names and
+`/computer login [url]` opens the private prompt. Harnesses that can execute
+local commands can call `clikcode computer inspect` and `clikcode computer login
+[url]` themselves. Vendor harnesses do not automatically receive ClikCode's
+own `computer_web` tool; the shared slash commands work regardless of route.

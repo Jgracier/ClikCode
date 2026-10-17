@@ -1,24 +1,19 @@
 /** Collect a login in the terminal or VS Code question UI. The answer is
  * consumed by the local worker; only a status reaches the agent transcript. */
 import type { TurnObserver } from '../../turn/observer.js';
-import type { PrivateLogin } from './credential-vault.js';
+import type { LoginField } from './login-fields.js';
 
 export async function askPrivateLogin(
-  observer: TurnObserver, site: string, signal?: AbortSignal,
-): Promise<PrivateLogin | undefined> {
+  observer: TurnObserver, site: string, fields: readonly LoginField[], signal?: AbortSignal,
+): Promise<Record<string, string> | undefined> {
   if (!observer.askQuestions) return undefined;
+  if (!fields.length) return undefined;
   const result = await observer.askQuestions({
     title: `Save login for ${site}`,
-    questions: [
-      { id: 'accountId', header: 'Account ID', prompt: 'Account ID, if needed', options: [], optional: true, secret: true },
-      { id: 'email', header: 'Email or username', prompt: 'Email or username, if needed', options: [], optional: true, secret: true },
-      { id: 'password', header: 'Password', prompt: 'Password', options: [], secret: true },
-    ],
+    questions: fields.map(field => ({ id: field.key, header: field.label, prompt: field.label, options: [], secret: true })),
   }, signal);
   if (result.kind !== 'answered') return undefined;
-  const accountId = result.answers.accountId?.[0] ?? '';
-  const email = result.answers.email?.[0] ?? '';
-  const password = result.answers.password?.[0] ?? '';
-  if ((!email && !accountId) || !password) throw new Error('Enter an account ID or email and a password.');
-  return { accountId, email, password };
+  const values = Object.fromEntries(fields.map(field => [field.key, result.answers[field.key]?.[0] ?? '']));
+  if (Object.values(values).some(value => !value)) throw new Error('Complete the visible login fields.');
+  return values;
 }

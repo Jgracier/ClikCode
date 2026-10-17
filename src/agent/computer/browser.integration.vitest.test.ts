@@ -16,7 +16,7 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('uses an isolated Chrome 
     const page = await openComputerPage(stateDir);
     await page.goto('data:text/html,<label>Password <input type=password value=secret></label>');
     const result = await observeComputerPage(page, true);
-    expect(result.output).toContain('Sign-in form detected');
+    expect(result.output).toContain('Sign-in fields');
     expect(JSON.stringify(result)).not.toContain('secret');
     await setComputerEnabled(stateDir, true);
     const desktop = await computerDesktopTool.run({ action: 'observe' }, { stateDir } as ToolContext);

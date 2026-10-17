@@ -2,7 +2,8 @@ import { computerEnabled, setComputerEnabled } from '../agent/computer/settings.
 import { stateDirectory } from '../session/store/paths.js';
 import { emitResult } from '../cli/structured-output.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
-import { closeComputerBrowser } from '../agent/computer/browser.js';
+import { closeComputerBrowser, computerPage } from '../agent/computer/browser.js';
+import { loginFields, loginFieldSummary } from '../agent/computer/login-fields.js';
 import { lockCredentialVault } from '../agent/computer/credential-vault.js';
 import { randomUUID } from 'node:crypto';
 import { WorkerClient } from '../worker/client.js';
@@ -24,6 +25,18 @@ export async function computerSetEnabled(enabled: boolean): Promise<void> {
   process.stdout.write(enabled
     ? 'Computer use is on. The agent can open URLs and control the desktop when a task needs it.\n'
     : 'Computer use is off for new ClikCode agent turns.\n');
+}
+
+/** Safe form metadata for a vendor agent. Never reads input values or takes a screenshot. */
+export async function computerInspect(): Promise<void> {
+  if (!await computerEnabled(stateDirectory())) throw new Error('Computer use is off.');
+  const page = await computerPage(stateDirectory());
+  try {
+    const site = new URL(page.url()).origin;
+    const fields = await loginFields(page);
+    if (isJsonDefaultMode()) return emitResult({ computer: { site, fields: fields.map(({ label, kind }) => ({ label, kind })) } });
+    process.stdout.write(`${loginFieldSummary(site, fields)}\n`);
+  } finally { await page.context().browser()?.close().catch(() => undefined); }
 }
 
 /** Ask for a site's credentials in the attached chat panel. This command's

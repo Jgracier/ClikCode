@@ -2,7 +2,7 @@ import { expect, it } from 'vitest';
 import { privateLoginPage } from './private-page.js';
 import type { Page } from 'playwright-core';
 
-it('keeps a login page hidden when a show-password control changes the input type', async () => {
+it('keeps the same login page private when a show-password control changes the input type', async () => {
   let url = 'https://example.com/login';
   let passwordField = true;
   const page = { url: () => url, locator: () => ({ count: async () => passwordField ? 1 : 0 }) } as unknown as Page;
@@ -10,5 +10,5 @@ it('keeps a login page hidden when a show-password control changes the input typ
   passwordField = false;
   expect(await privateLoginPage(page)).toBe(true);
   url = 'https://example.com/account';
-  expect(await privateLoginPage(page)).toBe(true);
+  expect(await privateLoginPage(page)).toBe(false);
 });

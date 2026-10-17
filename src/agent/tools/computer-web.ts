@@ -6,6 +6,7 @@ import { callComputerDriver } from '../computer/driver.js';
 import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
 import { privateLoginPage, protectLoginPage } from '../computer/private-page.js';
 import { loginComputerPage } from '../computer/login-page.js';
+import { loginFields, loginFieldSummary } from '../computer/login-fields.js';
 import { runTailcatHandoff } from '../computer/tailcat-handoff.js';
 import type { Page } from 'playwright-core';
 import type { ToolRunResult } from '../tool-contract.js';
@@ -29,11 +30,11 @@ function element(page: Page, args: WebArgs) {
 }
 
 export async function observeComputerPage(page: Page, acceptsImages: boolean): Promise<ToolRunResult> {
-  // Playwright's accessibility snapshot includes the literal value of a
-  // password input. Keep the entire login form out of the model result until
-  // the private sign-in broker and takeover flow are in place.
+  // Login pages remain observable by field name and type. No DOM values,
+  // accessibility snapshot or screenshot crosses into the model context.
   if (await privateLoginPage(page)) {
-    return { output: `Page: ${new URL(page.url()).origin}\n\nSign-in form detected. Browser contents are hidden until the user completes sign-in.` };
+    const fields = await loginFields(page);
+    return { output: loginFieldSummary(new URL(page.url()).origin, fields) };
   }
   const snapshot = (await page.ariaSnapshot({ timeout: 10_000 })).slice(0, 25_000);
   const output = `Page: ${page.url()}\n\n${snapshot}`;
@@ -47,7 +48,7 @@ export async function observeComputerPage(page: Page, acceptsImages: boolean): P
 
 export const computerWebTool = defineTool<WebArgs>({
   name: 'computer_web', class: 'exec',
-  description: 'Open a URL in one action; Chrome starts automatically. Use login to reuse a saved site login or prompt for credentials privately in the terminal or VS Code panel, then fill and submit without showing them to the model. Use handoff for CAPTCHA or MFA so the user can finish on their phone. Observe and act on ordinary pages, and close when done. Never request a password in chat.',
+  description: 'Open a URL in one action; Chrome starts automatically. Observe shows sign-in field names without values. After inspecting the form, use login to request exactly those visible fields privately in the terminal or VS Code panel, fill and submit this step, then inspect the next page. Use handoff for CAPTCHA or MFA. Never request a password in chat.',
   parameters: { type: 'object', additionalProperties: false, required: ['action'], properties: {
     action: { type: 'string', enum: ['open', 'close', 'observe', 'click', 'fill', 'press', 'scroll', 'autofill', 'login', 'handoff'] },
     url: { type: 'string', description: 'Website URL for open.' },
@@ -79,11 +80,11 @@ export const computerWebTool = defineTool<WebArgs>({
           case 'observe': return observeComputerPage(page, ctx.acceptsImages === true);
           case 'login': {
             await loginComputerPage({ stateDir: ctx.stateDir, page, signal: ctx.signal,
-              ask: async (site, signal) => {
+              ask: async (site, fields, signal) => {
                 if (!ctx.requestPrivateLogin) throw new Error('This chat cannot show private login fields.');
-                return ctx.requestPrivateLogin(site, signal);
+                return ctx.requestPrivateLogin(site, fields, signal);
               } });
-            return { output: 'Login submitted. Credentials stayed in the private vault and were not shown to the model. If the site asks for MFA or CAPTCHA, use handoff.' };
+            return { output: 'Login step submitted. Observe the next page; if it asks for another field, use login again. Credentials stayed out of model context.' };
           }
           case 'handoff': {
             await runTailcatHandoff({ stateDir: ctx.stateDir, signal: ctx.signal,
