@@ -85,7 +85,7 @@ async function signIn(answers: Record<string, string>, options: { newAccount?: b
     ask: async (_site: string, fields: readonly LoginField[]) => {
       asked.push(fields.map(field => field.key));
       offered.push(fields[0]!.options);
-      return { [fields[0]!.key]: answers[fields[0]!.key]! };
+      return Object.fromEntries(fields.map(field => [field.key, answers[field.key]!]));
     },
   });
   return { outcome, asked, options: offered, at: new URL(tab.url()).pathname, page: tab };
@@ -95,7 +95,7 @@ it.skipIf(!enabled)('signs in with email, password and a one-time code, saving t
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-login-real-'));
   mfa = true;
   const result = await signIn({ username: 'one@example.com', password: 'correct-one', code: '123456' });
-  expect(result).toMatchObject({ outcome: 'signed_in', asked: [['username'], ['password'], ['code']], at: '/home' });
+  expect(result).toMatchObject({ outcome: 'signed_in', asked: [['username', 'password'], ['code']], at: '/home' });
   expect(received).toEqual(['/signin/identifier=one@example.com', '/signin/pwd=correct-one', '/signin/challenge/totp=123456']);
   const [saved] = await savedLoginsForSite(stateDir, `${base}/`);
   expect(saved!.label).toBe('one@example.com');
@@ -144,7 +144,7 @@ it.skipIf(!enabled)('uses the one saved account without asking, and replaces its
 
   received = [];
   const fixed = await signIn({ account: NEW_ACCOUNT, username: 'one@example.com', password: 'correct-new' });
-  expect(fixed).toMatchObject({ outcome: 'signed_in', asked: [['account'], ['username'], ['password']] });
+  expect(fixed).toMatchObject({ outcome: 'signed_in', asked: [['account'], ['username', 'password']] });
   expect(await savedLoginsForSite(stateDir, `${base}/`)).toEqual([{ id, label: 'one@example.com', rejected: false }]);
   expect((await savedLoginFields(stateDir, `${base}/`, id)).password).toBe('correct-new');
 }, 60_000);
@@ -152,14 +152,14 @@ it.skipIf(!enabled)('uses the one saved account without asking, and replaces its
 it.skipIf(!enabled)('signs in through a form embedded in an iframe', async () => {
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-login-real-'));
   const result = await signIn({ username: 'one@example.com', password: 'correct-one' }, { start: '/embedded' });
-  expect(result).toMatchObject({ outcome: 'signed_in', asked: [['username'], ['password']], at: '/home' });
+  expect(result).toMatchObject({ outcome: 'signed_in', asked: [['username', 'password']], at: '/home' });
   expect(received).toEqual(['/signin/identifier=one@example.com', '/signin/pwd=correct-one']);
 }, 60_000);
 
 it.skipIf(!enabled)('clicks the button when Enter does not submit the form', async () => {
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-login-real-'));
   const result = await signIn({ username: 'one@example.com', password: 'correct-one' }, { start: '/signin/jsform' });
-  expect(result).toMatchObject({ outcome: 'signed_in', asked: [['username'], ['password']], at: '/home' });
+  expect(result).toMatchObject({ outcome: 'signed_in', asked: [['username', 'password']], at: '/home' });
   expect(received).toEqual(['/signin/pwd=correct-one']);
 }, 60_000);
 
