@@ -9,6 +9,7 @@
   },
   "files": [
     "dist",
+    "docs/handoff/TAILCAT-LICENSE",
     "README.md",
     "LICENSE"
   ],
