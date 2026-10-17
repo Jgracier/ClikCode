@@ -107,6 +107,11 @@ signs in, sets the permissions, then calls `computer_web capture_secret` with a
   copy as a control. A key the service refuses is not saved (it was an id or a page
   blob), and a service that answers both the same is reported as "not verified".
   Sites without a check are saved as "not verified" and say so.
+- **Keys that arrive as a file** (a Google service-account JSON, a private key):
+  `source: "download"` makes the click start the download; the worker reads the file
+  from the browser, deletes it, and treats its content, and each long field inside
+  it, as the secret. There is no check for these, so they are saved as "not
+  verified".
 - **Only when unclear does a person help:** two equally likely keys, or none
   found. The private prompt then appears (masked, never in history), and the
   page's own Copy button or a keyboard copy on that page also completes it.

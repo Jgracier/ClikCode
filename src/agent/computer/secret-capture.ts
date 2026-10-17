@@ -6,6 +6,7 @@
 import type { Page } from 'playwright-core';
 import { saveNamedSecret } from './credential-vault.js';
 import { copyWithSiteButton, waitForCopiedSecret } from './clipboard-watch.js';
+import { captureDownload, secretParts } from './download-capture.js';
 import { LoginError } from './login-error.js';
 import { armFinder } from './secret-finder.js';
 import { checkKey, type KeyCheck } from './key-check.js';
@@ -27,6 +28,8 @@ export async function captureSecret(input: {
   check?(pageUrl: string, value: string): Promise<KeyCheck>;
   /** Where the key goes once it is captured and checked, decided and approved beforehand. */
   sendTo?: readonly Destination[];
+  /** `download`: the key is a file the site hands over, taken instead of looking at the page. */
+  source?: 'page' | 'download';
 }): Promise<{ length: number; found: boolean; check: KeyCheck; sent: Delivery[] }> {
   const stop = new AbortController();
   const outer = (): void => stop.abort();
@@ -34,10 +37,11 @@ export async function captureSecret(input: {
   if (input.signal?.aborted) stop.abort();
   const finder = await armFinder(input.page, input.existing ?? !input.trigger);
   try {
-    await input.trigger?.();
     let value: string | undefined;
     let ambiguous = false;
-    for (let poll = 0; poll < LOOK_POLLS && !value; poll++) {
+    if (input.source === 'download') value = await captureDownload(input.page, input.trigger);
+    else await input.trigger?.();
+    for (let poll = 0; input.source !== 'download' && poll < LOOK_POLLS && !value; poll++) {
       if (stop.signal.aborted) throw new LoginError('Secret capture cancelled.');
       await input.page.waitForTimeout(500);
       const decision = await finder.look();
@@ -51,7 +55,7 @@ export async function captureSecret(input: {
     }
     const found = !!value;
     if (!value) {
-      const hint = (ambiguous ? 'More than one possible key on the page. ' : 'Could not find the key on its own. ')
+      const hint = (ambiguous ? 'More than one possible key on the page. ' : input.source === 'download' ? 'No file was downloaded. ' : 'Could not find the key on its own. ')
         + (input.remote ? 'Tap Copy on the page at the link, or paste the key here' : 'Copy the key on the page, or paste it here');
       if (input.remote) void runTailcatHandoff({ stateDir: input.stateDir, signal: stop.signal, onLink: input.onLink }).catch(() => undefined);
       value = await new Promise<string | undefined>((resolve, reject) => {
@@ -61,6 +65,7 @@ export async function captureSecret(input: {
     }
     if (!value || input.signal?.aborted) throw new LoginError('Secret capture cancelled.');
     registerSecret(value);
+    for (const part of secretParts(value)) registerSecret(part);
     const check = await (input.check ?? checkKey)(input.page.url(), value);
     // A value its own service refuses is not the key (an id, a page blob): saving it would only hide the problem.
     if (check.verdict === 'rejected') throw new LoginError(`Not saved: ${check.detail}. What was on the page is not a working key (it may be the key's id or another value).`);
