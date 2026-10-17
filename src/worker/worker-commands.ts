@@ -134,9 +134,12 @@ export function createCommandHandler(ctx: WorkerContext) {
             if (url.protocol !== 'https:' || url.username || url.password) throw new Error('Private login needs an HTTPS website URL without credentials.');
             await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 30_000 });
           }
-          await loginComputerPage({ stateDir, page, signal: controller.signal,
+          const outcome = await loginComputerPage({ stateDir, page, signal: controller.signal,
             ask: (site, fields, signal) => askPrivateLogin(observer, site, fields, signal) });
-          if (!socket.destroyed) sendEvent(socket, { type: 'computer-login-result', id: command.id, ok: true, message: 'Login step submitted.' });
+          if (!socket.destroyed) sendEvent(socket, { type: 'computer-login-result', id: command.id, ok: outcome !== 'unverified',
+            message: outcome === 'signed_in' ? 'Browser advanced beyond sign-in. ClikCode Secrets Manager is ready for this site.'
+              : outcome === 'verification_needed' ? 'Finish verification in the open browser. The new login was not saved.'
+              : 'Sign-in could not be verified. The new login was not saved.' });
         } catch {
           if (!socket.destroyed) sendEvent(socket, { type: 'computer-login-result', id: command.id, ok: false,
             message: 'Private login did not finish. Check the browser and try again.' });

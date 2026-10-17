@@ -70,7 +70,7 @@ export async function computerLogin(chat?: string, url?: string): Promise<void> 
       client.send({ type: 'computer-login', id, ...(url ? { url } : {}) });
     });
     if (!result.ok) throw new Error(result.message);
-    if (isJsonDefaultMode()) emitResult({ computer: { login: 'submitted' } });
+    if (isJsonDefaultMode()) emitResult({ computer: { login: result.message } });
     else process.stdout.write(`${result.message}\n`);
   } finally { client.close(); }
 }
