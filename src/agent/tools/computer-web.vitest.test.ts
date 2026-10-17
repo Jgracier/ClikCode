@@ -39,6 +39,17 @@ describe('arrangeSnapshot', () => {
     expect(out).not.toContain('header and footer folded');
   });
 
+  it('folds a long side menu away but keeps a short navigation such as a breadcrumb', () => {
+    const menu = Array.from({ length: 40 }, (_, index) => `      - link "Menu item ${index}" [ref=e${200 + index}]`).join('\n');
+    const withMenu = ['- generic [ref=e1]:', '  - navigation "Breadcrumb" [ref=e2]:', '    - link "Home" [ref=e3]', '  - navigation "Side" [ref=e4]:', menu, '  - main [ref=e5]:', '    - button "Create key" [ref=e6]'].join('\n');
+    const out = arrangeSnapshot(withMenu);
+    expect(out).toContain('navigation "Breadcrumb"');
+    expect(out).toContain('button "Create key"');
+    expect(out).not.toContain('Menu item 0');
+    expect(out).toContain('long side menus folded away');
+    expect(arrangeSnapshot(withMenu, true)).toContain('Menu item 39');
+  });
+
   it('leaves a short page with no main area exactly as it is', () => {
     const plain = '- generic [ref=e1]:\n  - banner [ref=e2]:\n    - link "Home" [ref=e3]\n  - button "Go" [ref=e4]';
     expect(arrangeSnapshot(plain)).toBe(plain);
