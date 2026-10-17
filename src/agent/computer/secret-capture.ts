@@ -7,7 +7,7 @@
  * prompt. Every failure says "Not saved" and why; nothing is ever saved half-way. */
 import type { Page } from 'playwright-core';
 import { saveNamedSecret } from './credential-vault.js';
-import { copyWithSiteButton } from './clipboard-watch.js';
+import { copyWithSiteButton, listenForCopies, copiedSince } from './clipboard-watch.js';
 import { secretParts, watchDownload } from './download-capture.js';
 import { LoginError } from './login-error.js';
 import { checkKey, type KeyCheck } from './key-check.js';
@@ -38,6 +38,7 @@ export async function captureSecret(input: {
   if (input.signal?.aborted) stop.abort();
   const finder = await armFinder(input.page, input.existing ?? !input.trigger);
   const download = watchDownload(input.page);
+  await listenForCopies(input.page);
   try {
     if (input.trigger) { clicked = true; await input.trigger(); }
     let value: string | undefined;
@@ -46,6 +47,8 @@ export async function captureSecret(input: {
       if (!clicked && stop.signal.aborted) throw new LoginError('Not saved: capture was cancelled.');
       await input.page.waitForTimeout(500);
       value = await download.result();
+      if (value) break;
+      value = await copiedSince(input.page);
       if (value) break;
       const decision = await finder.look();
       // After a Create, the site's own Copy button is the exact answer. Without a click

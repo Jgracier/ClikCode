@@ -52,6 +52,20 @@ async function secretOne(buttons: import('playwright-core').Locator): Promise<im
   return buttons.first();
 }
 
+/** Listen for copies from now on, so a click that itself copies (the agent pressed a Copy button as the trigger) is not lost. */
+export async function listenForCopies(page: Page): Promise<void> {
+  try {
+    await page.addInitScript(hookCopy);
+    await page.evaluate(hookCopy);
+    await page.evaluate(() => { (globalThis as unknown as Hooked).__clikcodeCopied = null; });
+  } catch { /* a page that is navigating cannot be hooked; the other ways still work */ }
+}
+
+/** What the page copied since `listenForCopies`, if it looks like a key. */
+export async function copiedSince(page: Page): Promise<string | undefined> {
+  return plausibleCopy(await page.evaluate(() => (globalThis as unknown as Hooked).__clikcodeCopied).catch(() => undefined));
+}
+
 /** Press that button and take what the page copies. What the site itself puts on
  * the clipboard is the key by definition, so no guess about its shape is needed. */
 export async function copyWithSiteButton(page: Page, waitMs = 3_000): Promise<string | undefined> {
