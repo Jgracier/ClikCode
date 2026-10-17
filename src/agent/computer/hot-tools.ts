@@ -9,7 +9,7 @@ import { stat } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { ToolDefinition } from '../tool-contract.js';
 
-type Loaded = { mtime: number; tools: Map<string, ToolDefinition> | undefined };
+type Loaded = { mtime: number; tools: Map<string, ToolDefinition> | undefined; failure?: string };
 let loaded: Loaded | undefined;
 
 async function latest(): Promise<Map<string, ToolDefinition> | undefined> {
@@ -23,12 +23,21 @@ async function latest(): Promise<Map<string, ToolDefinition> | undefined> {
     loaded = { mtime, tools: new Map((module.computerToolSet ?? []).map(tool => [tool.name, tool])) };
   } catch (error) {
     // A broken build must not take the tools down: run the copy in the program, and look again only after the next build.
-    loaded = { mtime, tools: undefined };
-    process.stderr.write(`computer tools: could not load the rebuilt copy (${error instanceof Error ? error.message : String(error)})\n`);
+    const failure = error instanceof Error ? error.message : String(error);
+    loaded = { mtime, tools: undefined, failure };
+    process.stderr.write(`computer tools: could not load the rebuilt copy (${failure})\n`);
   }
   return loaded.tools;
 }
 
 export function hotTool<T extends ToolDefinition>(tool: T): T {
-  return { ...tool, run: async (args: never, context: never) => ((await latest())?.get(tool.name) ?? tool).run(args, context) } as T;
+  return { ...tool, run: async (args: never, context: never) => {
+    const rebuilt = (await latest())?.get(tool.name);
+    const result = await (rebuilt ?? tool).run(args, context);
+    // Said once per broken build, in the result, so a build that did not load is never mistaken for one that did.
+    if (!rebuilt && loaded?.failure && !told.has(loaded.mtime)) { told.add(loaded.mtime); return { ...result, output: `[The rebuilt computer tools did not load (${loaded.failure.slice(0, 200)}); this ran the copy built into the program.]\n${result.output}` }; }
+    return result;
+  } } as T;
 }
+
+const told = new Set<number>();
