@@ -87,8 +87,8 @@ it('offers the tools over MCP with typed schemas', async () => {
   const init = await server.call('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } });
   expect(init.result.serverInfo.name).toBe('clikcode');
   const listed = await server.call('tools/list');
-  expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toEqual(['computer_web', 'computer_desktop', 'store_secret']);
-  expect(listed.result.tools[2].inputSchema.required).toEqual(['secret']);
+  expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toEqual(['computer_web', 'computer_desktop']);
+  expect(listed.result.tools[0].inputSchema.additionalProperties).toBe(true);
   expect((await server.call('tools/call', { name: 'nope', arguments: {} })).error.code).toBe(-32602);
 }, 60_000);
 
@@ -102,7 +102,7 @@ it('sends a saved secret without asking anyone, and returns no value', async () 
   process.env.PATH = `${bin}:${savedEnv.PATH}`;
   await attach(id); // the worker exists; nobody is asked anything
   const server = await mcpServer(id);
-  const result = (await server.call('tools/call', { name: 'store_secret', arguments: { secret: 'salad/api-key', send_to: [{ to: 'clikdeploy-secret', with: { key: 'SALAD_API_KEY' } }] } })).result;
+  const result = (await server.call('tools/call', { name: 'computer_web', arguments: { action: 'send_secret', secret: 'salad/api-key', send_to: [{ to: 'clikdeploy-secret', with: { key: 'SALAD_API_KEY' } }] } })).result;
   expect(result.isError).toBe(false);
   expect(result.content[0].text).toContain('SENT - clikdeploy-secret (SALAD_API_KEY)');
   expect(JSON.stringify(result)).not.toContain(VALUE);
@@ -114,7 +114,7 @@ it('answers an unknown destination with the real list, so the agent can correct 
   await saveNamedSecret(home, 'salad/api-key', VALUE);
   await attach(id);
   const server = await mcpServer(id);
-  const result = (await server.call('tools/call', { name: 'store_secret', arguments: { secret: 'salad/api-key', send_to: [{ to: 'nowhere' }] } })).result;
+  const result = (await server.call('tools/call', { name: 'computer_web', arguments: { action: 'send_secret', secret: 'salad/api-key', send_to: [{ to: 'nowhere' }] } })).result;
   expect(result.isError).toBe(true);
   expect(result.content[0].text).toContain('no destination named "nowhere"');
   expect(result.content[0].text).toContain('clikdeploy-secret(key)');
@@ -124,7 +124,7 @@ it('refuses bad arguments with a plain reason, and honours computer off', async 
   const { id } = await session();
   await attach(id);
   const server = await mcpServer(id);
-  const bad = await server.call('tools/call', { name: 'store_secret', arguments: { secret: 'x', bogus: true } });
+  const bad = await server.call('tools/call', { name: 'computer_web', arguments: { bogus: true } });
   expect(bad.result.isError).toBe(true);
   expect(bad.result.content[0].text).toContain('Invalid arguments');
   await mkdir(join(process.env.CLIKCODE_HOME!, 'computer'), { recursive: true });

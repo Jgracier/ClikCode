@@ -4,6 +4,7 @@ import { adoptPage, closeComputerPage, computerPage, openComputerPage } from '..
 import { COMPUTER_OFF, computerEnabled } from '../computer/settings.js';
 import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
 import { maskSensitive, sensitiveValues } from '../computer/sensitive-fields.js';
+import { storeSecretTool } from './store-secret.js';
 import { sharedState } from '../computer/shared-state.js';
 import { describeProfile, listProfiles, PROFILE_KEYS, phoneFor, profileKeyFor, saveProfile, type FieldHint, type ProfileKey } from '../computer/profiles.js';
 import { expectSignup, settleSignup } from '../computer/signup-login.js';
@@ -23,9 +24,9 @@ import type { ToolContext, ToolRunResult } from '../tool-contract.js';
 
 type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait'; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; accept_dialog?: boolean; gone?: boolean; seconds?: number };
 type WebArgs = {
-  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'profile' | 'open_email_link' | 'help';
+  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'profile' | 'open_email_link' | 'help';
   url?: string; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
-  new_account?: boolean; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; label?: string; secret_name?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
+  new_account?: boolean; secret?: string; to?: string; with?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; label?: string; secret_name?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
 };
 
 export function webAddress(value: string | undefined): string {
@@ -221,7 +222,7 @@ async function settle(page: Page): Promise<void> {
   })).catch(() => undefined); // a navigation destroys the page being watched: the next look is a new page
 }
 
-const ACTION_LIST = 'open · close · observe · click · fill · choose · press · scroll · wait · steps · login · handoff · capture_secret · profile · open_email_link · help';
+const ACTION_LIST = 'open · close · observe · click · fill · choose · press · scroll · wait · steps · login · handoff · capture_secret · send_secret · profile · open_email_link · help';
 
 export const computerWebTool = defineTool<WebArgs>({
   name: 'computer_web', class: 'exec',
@@ -251,6 +252,9 @@ export const computerWebTool = defineTool<WebArgs>({
     accept_dialog: { type: 'boolean', description: 'click: answer yes to a browser confirm dialog the click raises ("delete this token?"). Default: declined and reported.' },
     new_account: { type: 'boolean', description: 'login: ask for a different account instead of the saved one.' },
     paste: { type: 'boolean', description: 'capture_secret: do not look for the key; ask the user to paste it privately (when the page hides it or shows it as an image). With target, that button is still clicked first.' },
+    secret: { type: 'string', description: 'send_secret: name a key was saved under (send it again, or somewhere else, without seeing it). With to and with, or send_to.' },
+    to: { type: 'string', description: 'send_secret: destination name, e.g. clikdeploy-secret.' },
+    with: { type: ['object', 'string'], description: 'send_secret: values for the destination slots, e.g. {key:"SALAD_API_KEY"}.' },
     ask: { type: 'boolean', description: 'profile: ask the user now for name, email, phone and address and save them as a profile (also happens when none exists).' },
     from: { type: 'string', description: 'open_email_link: sender (name or address) of the email in the signed-in Gmail.' },
     subject: { type: 'string', description: 'open_email_link: words from the subject.' },
@@ -282,6 +286,7 @@ export const computerWebTool = defineTool<WebArgs>({
   async run(args, ctx) {
     try {
       if (!(await computerEnabled(ctx.stateDir))) throw new Error(COMPUTER_OFF);
+      if (args.action === 'send_secret') return storeSecretTool.run({ secret: args.secret ?? '', ...(args.to ? { to: args.to } : {}), ...(args.with ? { with: args.with } : {}), ...(args.send_to ? { send_to: args.send_to } : {}) }, ctx);
       if (args.action === 'profile') {
         if (args.fields && Object.keys(args.fields).length) return { output: `Saved. ${describeProfile(await saveProfile(ctx.stateDir, { ...(args.label ? { label: args.label } : {}), fields: args.fields }))}` };
         const all = await listProfiles(ctx.stateDir);
@@ -565,10 +570,10 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       const refused = check.verdict === 'rejected';
       const lines = [
         `SAVED "${name}" in ClikCode Secrets Manager (${length} characters, ${shape}, taken from ${via}). You were not shown the key; if that does not match what you expected (an id where a secret should be), delete it and capture again.`,
-        refused ? `NOT VERIFIED: ${check.detail}. It was kept because the site shows a new key only once, and it was NOT sent anywhere. Wait a minute, then send it with store_secret and check the result.`
+        refused ? `NOT VERIFIED: ${check.detail}. It was kept because the site shows a new key only once, and it was NOT sent anywhere. Wait a minute, then send it with send_secret and check the result.`
           : check.verdict === 'works' ? `Checked: ${check.detail}.` : `Not checked: ${check.detail}.`,
         ...sent.map(delivery => `${delivery.ok ? 'SENT' : 'NOT SENT'} - ${delivery.label}: ${delivery.message}`),
-        ...(refused ? [] : sent.some(delivery => !delivery.ok) ? ['The key is still saved. Fix the cause, then send it again with store_secret.'] : sent.length ? [] : ['Nothing was sent anywhere: use send_to to send it on, or store_secret later.']),
+        ...(refused ? [] : sent.some(delivery => !delivery.ok) ? ['The key is still saved. Fix the cause, then send it again with send_secret.'] : sent.length ? [] : ['Nothing was sent anywhere: use send_to to send it on, or send_secret later.']),
       ];
       return { output: lines.join('\n'), ...(sent.some(delivery => !delivery.ok) ? { isError: true } : {}) };
     }
