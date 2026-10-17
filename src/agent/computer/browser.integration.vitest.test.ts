@@ -14,6 +14,7 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('uses an isolated Chrome 
   const stateDir = await mkdtemp(join(tmpdir(), 'clikcode-computer-smoke-'));
   try {
     const page = await openComputerPage(stateDir);
+    expect(await page.evaluate(() => navigator.webdriver)).toBe(false);
     await page.goto('data:text/html,<label>Password <input type=password value=secret></label>');
     const result = await observeComputerPage(page, true);
     expect(result.output).toContain('Sign-in fields');

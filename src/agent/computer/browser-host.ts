@@ -11,7 +11,11 @@ export async function runComputerHost(stateDir: string): Promise<void> {
   await fs.mkdir(profile, { recursive: true, mode: 0o700 });
   const context = await chromium.launchPersistentContext(profile, {
     channel: 'chrome', headless: false, viewport: null, acceptDownloads: false,
-    args: ['--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0'],
+    // Playwright's default --enable-automation and Chrome's port-0 debugging
+    // each advertise WebDriver to sites. Keep the private CDP connection, but
+    // don't expose that signal to ordinary page JavaScript.
+    ignoreDefaultArgs: ['--enable-automation'],
+    args: ['--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0', '--disable-blink-features=AutomationControlled'],
   });
   const hostFile = computerHostFile(stateDir);
   const record = JSON.stringify({ pid: process.pid });

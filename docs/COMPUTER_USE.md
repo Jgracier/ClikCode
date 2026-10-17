@@ -10,6 +10,9 @@ The browser uses its own profile under ClikCode's state directory. A detached
 browser host keeps that profile open, and terminal and VS Code workers attach
 to the same browser. It does not attach to a personal Chrome profile. Existing
 sign-ins in that profile remain available across turns.
+The visible Chrome session suppresses its standard WebDriver page signal.
+Some websites can still reject automated sign-ins; no browser setting can
+guarantee access to every site.
 
 On a sign-in page the agent sees the visible field labels and types, never
 their values or a screenshot. `computer_web login` reuses saved fields or asks
