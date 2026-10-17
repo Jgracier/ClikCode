@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { createServer } from 'node:http';
+import { chromium } from 'playwright-core';
 import { closeComputerBrowser, computerPage, openComputerPage } from './browser.js';
 import { computerWebTool, observeComputerPage } from '../tools/computer-web.js';
 import { setComputerEnabled } from './settings.js';
@@ -24,6 +25,19 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('uses an isolated Chrome 
     expect(await computerPage(stateDir)).toBe(page);
   } finally {
     await closeComputerBrowser(stateDir);
+    await rm(stateDir, { recursive: true, force: true });
+  }
+}, 30_000);
+
+it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('explains when another Chrome process holds the profile', async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'clikcode-computer-external-'));
+  const external = await chromium.launchPersistentContext(join(stateDir, 'computer', 'chrome'), {
+    channel: 'chrome', headless: false,
+  });
+  try {
+    await expect(openComputerPage(stateDir)).rejects.toThrow('open outside ClikCode');
+  } finally {
+    await external.close();
     await rm(stateDir, { recursive: true, force: true });
   }
 }, 30_000);

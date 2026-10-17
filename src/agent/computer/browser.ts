@@ -1,84 +1,121 @@
-/** A persistent browser that ClikCode owns. The lock keeps two workers from
- * opening the same Chrome profile and silently corrupting its login state. */
+/** One persistent Chrome profile shared by ClikCode's terminal and editor workers. */
 import fs from 'node:fs/promises';
-import { existsSync, readFileSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
-import { chromium, type BrowserContext, type Page } from 'playwright-core';
+import { spawn } from 'node:child_process';
+import { setTimeout as pause } from 'node:timers/promises';
+import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core';
+import { computerHostFile, computerProfile } from './browser-host.js';
 
-interface RunningBrowser { context: BrowserContext; release(): void }
-const running = new Map<string, Promise<RunningBrowser>>();
+type Connected = { browser: Browser; context: BrowserContext };
+const running = new Map<string, Promise<Connected>>();
 
-async function profileLock(dir: string): Promise<() => void> {
-  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  const file = path.join(dir, '.owner');
-  const nonce = randomUUID();
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const handle = await fs.open(file, 'wx', 0o600);
-      try { await handle.writeFile(JSON.stringify({ pid: process.pid, nonce })); } finally { await handle.close(); }
-      const release = (): void => {
-        try { if (JSON.parse(readFileSync(file, 'utf8')).nonce === nonce) unlinkSync(file); } catch { /* already released */ }
-      };
-      process.once('exit', release);
-      return () => { process.off('exit', release); release(); };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      let pid = 0;
-      try { pid = JSON.parse(await fs.readFile(file, 'utf8')).pid; } catch { /* interrupted writer */ }
-      if (Number.isSafeInteger(pid) && pid > 0) {
-        try { process.kill(pid, 0); throw new Error('ClikCode browser is in use by another session. Finish that session before using this browser.'); }
-        catch (alive) { if (!(alive instanceof Error) || !('code' in alive) || (alive as NodeJS.ErrnoException).code !== 'ESRCH') throw alive; }
-      }
-      if (attempt === 0 && existsSync(file)) await fs.unlink(file).catch(() => undefined);
-    }
-  }
-  throw new Error('Could not acquire the ClikCode browser profile.');
+async function connect(stateDir: string): Promise<Connected | undefined> {
+  const file = path.join(computerProfile(stateDir), 'DevToolsActivePort');
+  let port: number;
+  try { port = Number((await fs.readFile(file, 'utf8')).split('\n')[0]); }
+  catch { return undefined; }
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return undefined;
+  try {
+    const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, { timeout: 3_000 });
+    const context = browser.contexts()[0];
+    if (!context) { await browser.close(); return undefined; }
+    return { browser, context };
+  } catch { return undefined; }
 }
 
-async function browserFor(stateDir: string): Promise<RunningBrowser> {
-  const dir = path.join(stateDir, 'computer', 'chrome');
-  let opening = running.get(dir);
+async function externalChromeRunning(stateDir: string): Promise<boolean> {
+  try {
+    const lock = await fs.readlink(path.join(computerProfile(stateDir), 'SingletonLock'));
+    const pid = Number(lock.match(/-(\d+)$/)?.[1]);
+    if (!pid) return false;
+    process.kill(pid, 0);
+    return true;
+  } catch { return false; }
+}
+
+async function startHost(stateDir: string): Promise<Connected> {
+  const dir = path.join(stateDir, 'computer');
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  const lock = path.join(dir, 'host-start.lock');
+  let owned = false;
+  try {
+    const handle = await fs.open(lock, 'wx', 0o600);
+    await handle.close();
+    owned = true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    try {
+      if (Date.now() - (await fs.stat(lock)).mtimeMs > 30_000) {
+        await fs.unlink(lock);
+        return startHost(stateDir);
+      }
+    } catch { /* another worker already cleared the stale lock */ }
+  }
+  if (owned) {
+    try {
+      const existing = await connect(stateDir);
+      if (existing) return existing;
+      if (await externalChromeRunning(stateDir)) throw new Error('ClikCode Chrome is open outside ClikCode. Finish that browser step, close its window, and retry.');
+      const entry = process.env.CLIKCODE_BROWSER_HOST_ENTRY || process.argv[1];
+      if (!entry) throw new Error('ClikCode could not start its browser host.');
+      const child = spawn(process.execPath, [entry, 'computer-host', stateDir], { detached: true, stdio: 'ignore', windowsHide: true });
+      let startupError: Error | undefined;
+      child.once('error', error => { startupError = error; });
+      child.unref();
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const result = await connect(stateDir);
+        if (result) return result;
+        if (startupError || child.exitCode !== null) break;
+        await pause(200);
+      }
+      throw new Error('ClikCode Chrome could not start. Check that Chrome is installed and the desktop is available.');
+    } finally { await fs.unlink(lock).catch(() => undefined); }
+  }
+  for (let attempt = 0; attempt < 110; attempt++) {
+    const result = await connect(stateDir);
+    if (result) return result;
+    await pause(200);
+  }
+  throw new Error('ClikCode Chrome could not start.');
+}
+
+async function browserFor(stateDir: string, start: boolean): Promise<Connected> {
+  let opening = running.get(stateDir);
   if (!opening) {
     opening = (async () => {
-      const release = await profileLock(dir);
-      try {
-        const context = await chromium.launchPersistentContext(dir, {
-          channel: 'chrome', headless: false, viewport: null, acceptDownloads: false,
-        });
-        context.on('close', () => { release(); running.delete(dir); });
-        return { context, release };
-      } catch (error) { release(); throw error; }
+      const current = await connect(stateDir);
+      if (current) return current;
+      if (!start) throw new Error('ClikCode browser is closed. Open a URL with computer_web first.');
+      return startHost(stateDir);
     })();
-    running.set(dir, opening);
-    opening.catch(() => { if (running.get(dir) === opening) running.delete(dir); });
+    running.set(stateDir, opening);
+    void opening.then(({ browser }) => {
+      browser.on('disconnected', () => { if (running.get(stateDir) === opening) running.delete(stateDir); });
+    }).catch(() => undefined);
+    opening.catch(() => { if (running.get(stateDir) === opening) running.delete(stateDir); });
   }
   return opening;
 }
 
 export async function openComputerPage(stateDir: string): Promise<Page> {
-  const { context } = await browserFor(stateDir);
-  // OAuth and sign-in flows often open a new tab. Follow the newest live page
-  // so the next observation sees the page the previous click opened.
-  return context.pages().filter((page) => !page.isClosed()).at(-1) ?? context.newPage();
+  const { context } = await browserFor(stateDir, true);
+  return context.pages().filter(page => !page.isClosed()).at(-1) ?? context.newPage();
 }
 
-/** All non-open browser actions require the agent to have opened it first. */
 export async function computerPage(stateDir: string): Promise<Page> {
-  const opening = running.get(path.join(stateDir, 'computer', 'chrome'));
-  if (!opening) throw new Error('ClikCode browser is closed. Open a URL with computer_web first.');
-  const { context } = await opening;
-  const page = context.pages().filter((candidate) => !candidate.isClosed()).at(-1);
+  const { context } = await browserFor(stateDir, false);
+  const page = context.pages().filter(candidate => !candidate.isClosed()).at(-1);
   if (!page) throw new Error('ClikCode browser has no open tab. Open a URL with computer_web first.');
   return page;
 }
 
-/** Close the browser when the user disables computer use. This also releases
- * the profile lock so another ClikCode session can take it over. */
 export async function closeComputerBrowser(stateDir: string): Promise<void> {
-  const dir = path.join(stateDir, 'computer', 'chrome');
-  const opening = running.get(dir);
-  if (!opening) return;
-  const browser = await opening.catch(() => undefined);
-  if (browser) await browser.context.close().catch(() => undefined);
+  const opening = running.get(stateDir);
+  running.delete(stateDir);
+  const connected = await opening?.catch(() => undefined);
+  await connected?.browser.close().catch(() => undefined);
+  try {
+    const record = JSON.parse(await fs.readFile(computerHostFile(stateDir), 'utf8')) as { pid?: number };
+    if (Number.isSafeInteger(record.pid) && record.pid! > 1) process.kill(record.pid!, 'SIGTERM');
+  } catch { /* no ClikCode-owned browser */ }
 }

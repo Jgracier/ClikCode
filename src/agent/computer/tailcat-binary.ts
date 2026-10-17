@@ -30,6 +30,15 @@ export async function tailcatBinary(stateDir: string): Promise<string> {
   const cached = spec && path.join(dir, `${VERSION}-${spec.binary}`);
   if (cached && works(cached)) return cached;
   if (works('tailcat')) return 'tailcat';
+  if (process.platform === 'darwin') {
+    // Upstream publishes no macOS binary; Homebrew is its documented install.
+    const brew = spawnSync('brew', ['install', 'tailcat'], { stdio: 'ignore', timeout: 180_000 });
+    if (brew.status === 0 && works('tailcat')) return 'tailcat';
+    const prefix = spawnSync('brew', ['--prefix', 'tailcat'], { encoding: 'utf8', timeout: 5_000 });
+    const brewed = path.join(prefix.stdout?.trim() || '/', 'bin', 'tailcat');
+    if (prefix.status === 0 && works(brewed)) return brewed;
+    throw new Error('Tailcat could not be installed automatically on this Mac. Install Homebrew and retry.');
+  }
   if (!spec || !cached) throw new Error('Tailcat is not bundled for this computer yet. Install Tailcat and retry the phone handoff.');
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const temp = path.join(dir, `download-${randomUUID()}`);

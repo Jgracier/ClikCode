@@ -27,6 +27,7 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   // (binds a socket, writes a runtime record) that only makes sense as a
   // spawn target.
   program.command('session-worker <id>', { hidden: true }).action((id: string) => runSessionWorker(id));
+  program.command('computer-host <stateDir>', { hidden: true }).action(async (stateDir: string) => (await import('../agent/computer/browser-host.js')).runComputerHost(stateDir));
   // An editor extension's client (ide/bridge.ts), over an IPC channel the
   // extension opens; and the terminal it runs a vendor sign-in in. Hidden for
   // the same reason as session-worker: neither is anything to type.
