@@ -170,7 +170,7 @@ it.skipIf(!enabled)('refuses to save a value its own service rejects, and saves 
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
   const tab = await open('/reveal');
   await expect(captureSecret({ stateDir, page: tab, name: 'refused', trigger: () => tap(tab, '#go'), ask: neverAsked,
-    check: async () => ({ verdict: 'rejected', service: 'Example', detail: 'Example refused it (HTTP 401)' }) })).rejects.toThrow('Not saved: Example refused it');
+    check: async () => ({ verdict: 'rejected', service: 'Example', detail: 'Example refused it (HTTP 401)' }) })).rejects.toMatchObject({ message: expect.stringContaining('Not saved: Example refused it'), afterClick: true });
   await expect(readNamedSecret(stateDir, 'refused')).rejects.toThrow();
   const tab2 = await open('/reveal');
   const ok = await captureSecret({ stateDir, page: tab2, name: 'accepted', trigger: () => tap(tab2, '#go'), ask: neverAsked,

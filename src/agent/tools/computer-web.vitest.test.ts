@@ -40,9 +40,12 @@ describe('capture_secret failures say what really happened', () => {
     const stateDir = await mkdtemp(join(tmpdir(), 'clikcode-web-plan-'));
     try {
       await setComputerEnabled(stateDir, true);
-      const result = await computerWebTool.run({ action: 'capture_secret', send_to: [{ type: 'clikdeploy', tool: 'x', args: {} }] } as never, { stateDir } as never);
+      const result = await computerWebTool.run({ action: 'capture_secret', name: 'Create key', send_to: [{ to: 'nowhere' }] } as never, { stateDir } as never);
       expect(result.isError).toBe(true);
       expect(result.output).toMatch(/^Not saved: /);
+      expect(result.output).toContain('browser is closed');
+      // Nothing was clicked, so no key can have been created, and the output does not claim one was.
+      expect(result.output).not.toContain('may already have created');
       expect(result.output).not.toContain('Check the browser and try again');
     } finally { await rm(stateDir, { recursive: true, force: true }); }
   });

@@ -88,7 +88,7 @@ it('offers the tools over MCP with typed schemas', async () => {
   expect(init.result.serverInfo.name).toBe('clikcode');
   const listed = await server.call('tools/list');
   expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toEqual(['computer_web', 'computer_desktop', 'store_secret']);
-  expect(listed.result.tools[2].inputSchema.required).toEqual(['secret', 'send_to']);
+  expect(listed.result.tools[2].inputSchema.required).toEqual(['secret']);
   expect((await server.call('tools/call', { name: 'nope', arguments: {} })).error.code).toBe(-32602);
 }, 60_000);
 
@@ -124,7 +124,7 @@ it('refuses bad arguments with a plain reason, and honours computer off', async 
   const { id } = await session();
   await attach(id);
   const server = await mcpServer(id);
-  const bad = await server.call('tools/call', { name: 'store_secret', arguments: { secret: 'x' } });
+  const bad = await server.call('tools/call', { name: 'store_secret', arguments: { secret: 'x', bogus: true } });
   expect(bad.result.isError).toBe(true);
   expect(bad.result.content[0].text).toContain('Invalid arguments');
   await mkdir(join(process.env.CLIKCODE_HOME!, 'computer'), { recursive: true });

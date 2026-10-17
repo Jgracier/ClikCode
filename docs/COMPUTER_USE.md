@@ -52,8 +52,9 @@ authorization; there is no extra approval step.
 where the key goes and `{{slot}}` for anything the agent fills in:
 
 ```
-send_to: [{ to: "clikdeploy-secret",  with: { key: "SALAD_API_KEY" } }]
-send_to: [{ to: "clikdeploy-compute", with: { provider: "GCP", field: "serviceAccountJson" } }]
+send_to: { to: "clikdeploy-secret",  with: { key: "SALAD_API_KEY" } }
+send_to: { to: "clikdeploy-compute", with: { provider: "GCP", field: "serviceAccountJson" } }
+send_to: [ ...several of those... ]
 ```
 
 Four ship as plain data (`clikdeploy-secret`, `clikdeploy-app-secret`,
@@ -68,7 +69,9 @@ clikcode computer destination list | remove <name>
 Only you can add one (the agent cannot), so what can ever run is decided by you, not
 by a page the agent is reading. `{{secret|json}}` is the key inside a JSON string; a
 destination's `--stdin` keeps the key out of the command line. Every result begins
-`SAVED` or `Not saved:` and says what really happened.
+`SAVED` or `Not saved:` and says what really happened, including a warning when a
+click may have made the site create a key that was then not saved (delete it there).
+`store_secret` takes the same thing as `{secret, to, with}`.
 
 Once held, a key's exact value (and its base64, URL-encoded and JSON forms, and each
 long field of a JSON file) is replaced with `[secret hidden]` in every tool result,
