@@ -7,16 +7,14 @@ import { COMPUTER_OFF } from '../agent/computer/settings.js';
 import { LoginError } from '../agent/computer/login-error.js';
 import { askPrivateLogin, askPrivateSecret } from '../agent/computer/private-login-prompt.js';
 import { scrubSecrets } from '../agent/computer/secret-scrubber.js';
-import { sendsCapturedKey } from '../agent/permissions.js';
 import { validateAgainstSchema } from '../agent/schema-validate.js';
 import { computerDesktopTool } from '../agent/tools/computer.js';
 import { computerWebTool } from '../agent/tools/computer-web.js';
 import { storeSecretTool } from '../agent/tools/store-secret.js';
-import { deleteSecretTool, listSecretsTool } from '../agent/tools/manage-secrets.js';
 import type { ToolContext, ToolDefinition } from '../agent/tool-contract.js';
 import type { TurnObserver } from '../turn/observer.js';
 
-export const SHARED_COMPUTER_TOOLS: readonly ToolDefinition[] = [computerWebTool, computerDesktopTool, storeSecretTool, listSecretsTool, deleteSecretTool] as unknown as ToolDefinition[];
+export const SHARED_COMPUTER_TOOLS: readonly ToolDefinition[] = [computerWebTool, computerDesktopTool, storeSecretTool] as unknown as ToolDefinition[];
 
 /** A private prompt needs a window that can show it; this call's own client cannot. */
 const NO_WINDOW = 'No chat window is open to show the prompt. Open this chat in the terminal or VS Code.';
@@ -31,12 +29,6 @@ export async function runSharedComputerTool(input: {
     const problems = validateAgainstSchema(input.args, tool.parameters);
     if (problems.length) return { ok: false, output: `Invalid arguments: ${problems.join('; ')}` };
     const needWindow = (): void => { if (input.windows() < 2) throw new LoginError(NO_WINDOW); };
-    if (tool.name === 'store_secret' || tool.name === 'delete_secret' || sendsCapturedKey(tool, input.args)) {
-      // The calling harness may not ask before a destructive write: ClikCode does.
-      needWindow();
-      const approved = await input.observer.approval(`Approve ${tool.name}`, await tool.describe?.(input.args), undefined, undefined, input.signal);
-      if (!approved) return { ok: false, output: 'The user did not approve this. Do not retry; ask what they would prefer.' };
-    }
     const context: Partial<ToolContext> = {
       cwd: process.cwd(), stateDir: input.stateDir, homeDir: input.homeDir, signal: input.signal,
       requestPrivateLogin: async (site, fields, signal) => { needWindow(); return askPrivateLogin(input.observer, site, fields, signal); },

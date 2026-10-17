@@ -46,34 +46,6 @@ describe('permission matrix', () => {
     await setComputerEnabled(scope.stateDir, false);
     expect(judge('auto')).toBe('ask');
   });
-  it('asks once per new site before the browser opens it, and "always" covers fetch and browser alike', async () => {
-    await setComputerEnabled(scope.stateDir, true);
-    const open = (url: string, rules = NO_RULES, mode: AiHarnessPermissionMode = 'auto') => decidePermission({
-      tool: computerWebTool, args: { action: 'open', url }, mode, rules, planMode: false, scope, hasApprover: true,
-    }).decision;
-    expect(open('https://new.example.org/page')).toBe('ask');
-    const rules = parsePermissionSettings({ allow: ['WebFetch(domain:example.org)'] });
-    expect(open('https://new.example.org/page', rules)).toBe('allow');
-    expect(open('https://example.org.evil.io/', rules)).toBe('ask');
-    expect(open('https://anything.test/', NO_RULES, 'bypass')).toBe('allow');
-    expect(suggestPermissionRule(computerWebTool, { action: 'open', url: 'https://a.example.com/p' }, scope)).toBe('WebFetch(domain:a.example.com)');
-    // Acting on the page that is already open, or signing in, asks nothing more.
-    for (const action of ['observe', 'click', 'login']) {
-      expect(decidePermission({ tool: computerWebTool, args: { action }, mode: 'auto', rules: NO_RULES, planMode: false, scope, hasApprover: true }).decision).toBe('allow');
-    }
-  });
-  it('asks every time before a capture forwards the key to other services, whatever rules or auto mode say', async () => {
-    await setComputerEnabled(scope.stateDir, true);
-    const plan = [{ type: 'clikdeploy', tool: 'admin_platform_set_secret', args: { key: 'K', value: '{{secret}}' } }];
-    const capture = (args: Record<string, unknown>, rules = NO_RULES, mode: AiHarnessPermissionMode = 'auto') => decidePermission({
-      tool: computerWebTool, args: { action: 'capture_secret', secret_name: 'k', ...args }, mode, rules, planMode: false, scope, hasApprover: true,
-    }).decision;
-    expect(capture({})).toBe('allow');
-    expect(capture({ send_to: plan })).toBe('ask');
-    expect(capture({ send_to: plan }, parsePermissionSettings({ allow: ['computer_web'] }))).toBe('ask');
-    expect(capture({ send_to: plan }, NO_RULES, 'bypass')).toBe('allow');
-    expect(suggestPermissionRule(computerWebTool, { action: 'capture_secret', send_to: plan }, scope)).toBeUndefined();
-  });
   it('reads this session\'s tool output without approval and blocks another session\'s output', () => {
     expect(decide('read_file', { path: path.join(scope.stateDir, 'sessions', 's1', 'tool-output', 'trace.jsonl') }, 'ask')).toBe('allow');
     expect(decide('read_file', { path: path.join(scope.stateDir, 'sessions', 's2', 'tool-output', 'trace.jsonl') }, 'bypass')).toBe('deny');

@@ -73,25 +73,27 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
       await (await import('../commands/computer.js')).computerTool('computer_web', { action: 'capture_secret', secret_name: secret,
         ...(click ? { role: click[1], name: click[2] } : {}) }, options.chat);
     });
-  computer.command('store <secret-name>').description('Send a saved secret to ClikDeploy or GitHub (asks you to approve the plan)')
-    .option('--key <KEY>', 'Shortcut: set this ClikDeploy platform secret, for example SALAD_API_KEY')
-    .option('--app <id>', 'With --key: set a ClikDeploy app secret instead of a platform secret')
-    .option('--github <owner/name>', 'With --key: set a GitHub repository secret instead')
-    .option('--send-to-json <json>', 'Full plan: a JSON array of {type:"clikdeploy",tool,args} / {type:"github",repo,name}, with {{secret}} in args')
+  computer.command('store <secret-name>').description('Send a saved secret on to a destination, for example --to clikdeploy-secret --with key=SALAD_API_KEY')
+    .requiredOption('--to <destination>', 'A destination name (see `computer destination list`)')
+    .option('--with <slot=value...>', 'A value for a slot of the destination, repeatable', (value: string, all: string[] = []) => [...all, value])
     .option('--chat <chat>', 'Chat to use when run from outside a ClikCode chat')
-    .action(async (secret: string, options: { key?: string; app?: string; github?: string; sendToJson?: string; chat?: string }) => {
-      let sendTo: unknown;
-      if (options.sendToJson) { try { sendTo = JSON.parse(options.sendToJson); } catch { throw new Error('--send-to-json must be a JSON array'); } }
-      else if (options.key && options.github) sendTo = [{ type: 'github', repo: options.github, name: options.key }];
-      else if (options.key) sendTo = [{ type: 'clikdeploy', tool: options.app ? 'set_secret' : 'admin_platform_set_secret', args: { ...(options.app ? { appId: options.app } : {}), key: options.key, value: '{{secret}}' } }];
-      else throw new Error('Give --key (with optional --app or --github) or --send-to-json.');
-      await (await import('../commands/computer.js')).computerTool('store_secret', { secret, send_to: sendTo }, options.chat);
+    .action(async (secret: string, options: { to: string; with?: string[]; chat?: string }) => {
+      const params = Object.fromEntries((options.with ?? []).map(pair => { const at = pair.indexOf('='); if (at < 1) throw new Error('--with is slot=value'); return [pair.slice(0, at), pair.slice(at + 1)]; }));
+      await (await import('../commands/computer.js')).computerTool('store_secret', { secret, send_to: [{ to: options.to, ...(Object.keys(params).length ? { with: params } : {}) }] }, options.chat);
     });
   computer.command('secrets').description('List the names of saved secrets, or delete one (values are never shown)')
-    .option('--delete <name>', 'Delete this secret (asks you to approve)')
-    .option('--chat <chat>', 'Chat to use when run from outside a ClikCode chat')
-    .action(async (options: { delete?: string; chat?: string }) => (await import('../commands/computer.js')).computerTool(
-      options.delete ? 'delete_secret' : 'list_secrets', options.delete ? { name: options.delete } : {}, options.chat));
+    .option('--delete <name>', 'Delete this secret')
+    .action(async (options: { delete?: string }) => (await import('../commands/computer.js')).computerSecrets(options.delete));
+  const destination = computer.command('destination').description('Where captured keys can be sent: named commands with a {{secret}} slot');
+  destination.command('list').description('Show every destination and the values the agent fills in')
+    .action(async () => (await import('../commands/computer.js')).computerDestinations());
+  destination.command('add <name> [command...]').description('Add one: the command to run, with {{secret}} where the key goes and {{slot}} for anything the agent fills in. Example: add my-vault --stdin "{{secret}}" -- vault kv put secret/{{key}} value=-')
+    .option('--stdin <text>', 'Send this on standard input instead of in the command line, e.g. "{{secret}}"')
+    .option('--about <text>', 'A short description shown in the list')
+    .allowUnknownOption()
+    .action(async (name: string, command: string[], options: { stdin?: string; about?: string }) => (await import('../commands/computer.js')).computerDestinationAdd(name, command, options));
+  destination.command('remove <name>').description('Remove one you added')
+    .action(async (name: string) => (await import('../commands/computer.js')).computerDestinationRemove(name));
   computer.command('logins').description('Review and remove saved logins in the current chat (shown only to you)')
     .option('--chat <chat>', 'Chat id, prefix or name when run outside a chat')
     .action(async (options: { chat?: string }) => (await import('../commands/computer.js')).computerLogin(options.chat, { manage: true }));

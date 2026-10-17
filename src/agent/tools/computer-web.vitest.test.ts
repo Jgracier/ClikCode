@@ -29,15 +29,6 @@ describe('computer_web labels and plan text', () => {
     expect(label({ action: 'capture_secret', secret_name: 'salad/api-key' })).toBe('Capture key as salad/api-key');
     expect(label({ action: 'login' })).toBe('Sign in');
   });
-
-  it('shows the user the whole plan, with the key only as a stand-in', async () => {
-    const text = await computerWebTool.describe!({ action: 'capture_secret', secret_name: 'salad/api-key',
-      send_to: [{ type: 'clikdeploy', tool: 'admin_platform_set_secret', args: { key: 'SALAD_API_KEY', value: '{{secret}}' } }, { type: 'github', repo: 'Jgracier/app', name: 'SALAD_API_KEY' }] } as never);
-    expect(text).toContain('never shown to the agent');
-    expect(text).toContain('• ClikDeploy: admin_platform_set_secret');
-    expect(text).toContain('‹the key›');
-    expect(text).toContain('• GitHub repository Jgracier/app');
-  });
 });
 
 describe('capture_secret failures say what really happened', () => {

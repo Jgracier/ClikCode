@@ -86,3 +86,39 @@ export async function computerTool(tool: string, args: Record<string, unknown>, 
   else process.stdout.write(`${result.output}\n`);
   if (!result.ok) process.exitCode = 1;
 }
+
+/** The vault's saved secrets, by name only: no chat or worker is needed to look at your own files. */
+export async function computerSecrets(remove?: string): Promise<void> {
+  const { deleteNamedSecret, namedSecretNames } = await import('../agent/computer/credential-vault.js');
+  const stateDir = stateDirectory();
+  if (remove) {
+    const removed = await deleteNamedSecret(stateDir, remove);
+    if (isJsonDefaultMode()) return emitResult({ computer: { deleted: removed, name: remove } });
+    process.stdout.write(removed ? `Deleted "${remove}".\n` : `No secret named "${remove}".\n`);
+    return;
+  }
+  const names = await namedSecretNames(stateDir);
+  if (isJsonDefaultMode()) return emitResult({ computer: { secrets: names } });
+  process.stdout.write(names.length ? `${names.map(name => `  ${name}`).join('\n')}\n` : 'No secrets are saved.\n');
+}
+
+export async function computerDestinations(): Promise<void> {
+  const { describeKnown, loadDestinations } = await import('../agent/computer/secret-destinations.js');
+  const all = await loadDestinations(stateDirectory());
+  if (isJsonDefaultMode()) return emitResult({ computer: { destinations: all } });
+  process.stdout.write(`${describeKnown(all).split('; ').map(line => `  ${line}`).join('\n')}\n`);
+}
+
+export async function computerDestinationAdd(name: string, command: string[], options: { stdin?: string; about?: string }): Promise<void> {
+  const { addDestination } = await import('../agent/computer/secret-destinations.js');
+  await addDestination(stateDirectory(), name, { run: command, ...(options.stdin !== undefined ? { stdin: options.stdin } : {}), ...(options.about ? { about: options.about } : {}) });
+  if (isJsonDefaultMode()) return emitResult({ computer: { destination: name, added: true } });
+  process.stdout.write(`Added "${name}". The agent can now send keys there with send_to.\n`);
+}
+
+export async function computerDestinationRemove(name: string): Promise<void> {
+  const { removeDestination } = await import('../agent/computer/secret-destinations.js');
+  const removed = await removeDestination(stateDirectory(), name);
+  if (isJsonDefaultMode()) return emitResult({ computer: { destination: name, removed } });
+  process.stdout.write(removed ? `Removed "${name}".\n` : `"${name}" is not one you added.\n`);
+}

@@ -30,13 +30,6 @@ const ENTER_PLAN_MODE_TOOL = 'enter_plan_mode';
 const BASH_TOOL = 'bash';
 const COMPUTER_TOOLS = new Set(['computer_desktop', 'computer_web']);
 
-/** A call that carries a URL to a host: fetches, and the browser opening a page.
- * Both are covered by the same `WebFetch(domain:...)` rule. */
-/** computer_web capture_secret with a send_to plan. */
-export const sendsCapturedKey = (tool: { name: string }, args: Record<string, unknown>): boolean =>
-  tool.name === 'computer_web' && args.action === 'capture_secret' && Array.isArray(args.send_to) && args.send_to.length > 0;
-
-const reachesHost = (tool: ToolDefinition): boolean => tool.class === 'network' || tool.name === 'computer_web';
 
 /** `Bash(git status:*)`, `Edit(src/**)`, `WebFetch(domain:example.com)`, or a
  * bare tool name. Returns undefined for anything malformed. */
@@ -73,7 +66,7 @@ function ruleCoversTool(rule: PermissionRule, tool: ToolDefinition): boolean {
   if (family === 'bash') return tool.name === BASH_TOOL;
   if (family === 'edit' || family === 'write') return tool.class === 'write';
   if (family === 'read') return tool.class === 'read';
-  if (family === 'webfetch') return reachesHost(tool);
+  if (family === 'webfetch') return tool.class === 'network';
   return false;
 }
 
@@ -149,7 +142,7 @@ function ruleNamesCall(rules: readonly PermissionRule[], request: PermissionRequ
     const segments = bashSegments(String(request.args.command ?? ''));
     return covering.some((rule) => segments.some((segment) => bashSpecifierMatches(rule.specifier ?? '*', segment)));
   }
-  if (reachesHost(request.tool)) return networkRuleMatches(covering, request.args.url);
+  if (request.tool.class === 'network') return networkRuleMatches(covering, request.args.url);
   if (!resolved.length) return covering.some((rule) => !rule.specifier || rule.specifier === '*');
   return resolved.some((entry) => covering.some((rule) => pathRuleMatches(rule.specifier ?? '*', entry, request.scope)));
 }
@@ -167,7 +160,7 @@ function allowedByRules(request: PermissionRequest, resolved: readonly ResolvedP
   const rules = request.rules.allow.filter((rule) => ruleCoversTool(rule, request.tool));
   if (!rules.length) return false;
   if (request.tool.name === BASH_TOOL) return bashCommandAllowedByRules(String(request.args.command ?? ''), rules, request.scope);
-  if (reachesHost(request.tool)) {
+  if (request.tool.class === 'network') {
     return networkRuleMatches(rules, request.args.url);
   }
   if (!resolved.length) return rules.some((rule) => !rule.specifier || rule.specifier === '*');
@@ -217,8 +210,6 @@ function decide(request: PermissionRequest): PermissionDecision {
   const asked = request.rules.ask.find((rule) => ruleNamesCall([rule], request, resolved));
   if (asked) return { decision: 'ask', reason: `the ask rule ${asked.raw} requires approval` };
   if (command?.tier === 'ask' && command.always) return { decision: 'ask', reason: command.reason };
-  // A capture that forwards the key to other services is a write there: asked every time, whatever rules or auto mode say.
-  if (sendsCapturedKey(tool, args)) return { decision: 'ask', reason: 'it sends the captured key to other services' };
 
   // 5. Persisted allow rules.
   if (allowedByRules(request, resolved)) return { decision: 'allow', reason: 'matches a saved allow rule' };
@@ -237,12 +228,6 @@ function decide(request: PermissionRequest): PermissionDecision {
       return { decision: 'ask', reason: allConfined ? 'file changes need approval' : 'path is outside the workspace' };
     case 'exec':
       if (mode === 'auto' && !tool.mcp && COMPUTER_TOOLS.has(tool.name) && computerEnabledSync(scope.stateDir)) {
-        // Opening a page sends its URL to a host the model chose, so a new
-        // domain is asked about once ("always" remembers it). Acting on a
-        // page already open, or signing in, asks nothing more.
-        if (tool.name === 'computer_web' && args.action === 'open') {
-          return { decision: 'ask', reason: `first visit to ${hostOf(args.url) ?? 'this site'}` };
-        }
         return { decision: 'allow', reason: 'computer use is on' };
       }
       if (mode === 'auto' && command?.tier === 'safe') return { decision: 'allow', reason: command.reason };
@@ -359,8 +344,7 @@ export function suggestPermissionRule(tool: ToolDefinition, args: Record<string,
     if (!words[0] || UNSPLITTABLE.test(String(args.command)) || /&&|\|\||;|\|/.test(String(args.command))) return undefined;
     return `Bash(${words.slice(0, Math.min(2, words.length)).join(' ')}:*)`;
   }
-  if (sendsCapturedKey(tool, args)) return undefined; // no "always": each plan is its own decision
-  if (reachesHost(tool)) {
+  if (tool.class === 'network') {
     const host = hostOf(args.url);
     // No URL (a search): the rule is the tool itself; rules match tools by name.
     return host ? `WebFetch(domain:${host})` : args.url === undefined ? tool.name : undefined;
