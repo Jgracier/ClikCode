@@ -7,6 +7,10 @@ import { gatewayModels } from '../gateway/models.js';
 import { routeMcpServers } from '../gateway/mcp.js';
 import { prepareMcp, releaseMcp } from '../agent/mcp/manager.js';
 import { stateDirectory } from '../session/store/paths.js';
+import { computerEnabled } from '../agent/computer/settings.js';
+import { computerPage, openComputerPage } from '../agent/computer/browser.js';
+import { loginComputerPage } from '../agent/computer/login-page.js';
+import { askPrivateLogin } from '../agent/computer/private-login-prompt.js';
 import { sendEvent, windowReadsSaved } from './broadcast-observer.js';
 import type { ClientCommand } from './protocol.js';
 import { createAgentsCommand } from './worker-agents.js';
@@ -113,6 +117,33 @@ export function createCommandHandler(ctx: WorkerContext) {
     }
     if (command.type === 'approval-response') { observer.resolveApproval(command.id, command.approved); return; }
     if (command.type === 'question-response') { observer.resolveQuestion(command.id, command.result); return; }
+    if (command.type === 'computer-login') {
+      sendEvent(socket, { type: 'computer-login-started', id: command.id });
+      const controller = new AbortController();
+      const cancel = (): void => controller.abort();
+      socket.once('close', cancel);
+      void (async () => {
+        try {
+          const stateDir = stateDirectory();
+          if (!await computerEnabled(stateDir)) throw new Error('Computer use is off.');
+          // This command's own IPC client cannot display question fields.
+          if (observer.attachedCount < 2) throw new Error('No interactive chat is attached.');
+          const page = command.url ? await openComputerPage(stateDir) : await computerPage(stateDir);
+          if (command.url) {
+            const url = new URL(command.url);
+            if (url.protocol !== 'https:' || url.username || url.password) throw new Error('Private login needs an HTTPS website URL without credentials.');
+            await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+          }
+          await loginComputerPage({ stateDir, page, signal: controller.signal,
+            ask: (site, signal) => askPrivateLogin(observer, site, signal) });
+          if (!socket.destroyed) sendEvent(socket, { type: 'computer-login-result', id: command.id, ok: true, message: 'Login submitted.' });
+        } catch {
+          if (!socket.destroyed) sendEvent(socket, { type: 'computer-login-result', id: command.id, ok: false,
+            message: 'Private login did not finish. Check the browser and try again.' });
+        } finally { socket.off('close', cancel); }
+      })();
+      return;
+    }
     if (command.type === 'sign-in-response') { observer.resolveSignIn(command.id, command.error); return; }
     if (command.type === 'refresh') {
       // What the window changed may be a turn parked for the reset.

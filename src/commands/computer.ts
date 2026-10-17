@@ -4,6 +4,10 @@ import { emitResult } from '../cli/structured-output.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
 import { closeComputerBrowser } from '../agent/computer/browser.js';
 import { lockCredentialVault } from '../agent/computer/credential-vault.js';
+import { randomUUID } from 'node:crypto';
+import { WorkerClient } from '../worker/client.js';
+import { listWorkerRecords } from '../worker/registry.js';
+import { resolveChat } from './ai/harness.js';
 
 export async function computerStatus(): Promise<void> {
   const enabled = await computerEnabled(stateDirectory());
@@ -20,4 +24,40 @@ export async function computerSetEnabled(enabled: boolean): Promise<void> {
   process.stdout.write(enabled
     ? 'Computer use is on. The agent can open URLs and control the desktop when a task needs it.\n'
     : 'Computer use is off for new ClikCode agent turns.\n');
+}
+
+/** Ask for a site's credentials in the attached chat panel. This command's
+ * stdout carries status only; the UI answer goes directly to its worker. */
+export async function computerLogin(chat?: string, url?: string): Promise<void> {
+  const workerPid = Number(process.env.CLIKCODE_WORKER_PID);
+  const fromTurn = Number.isSafeInteger(workerPid) && workerPid > 0
+    ? (await listWorkerRecords()).find(record => record.pid === workerPid)?.sessionId
+    : undefined;
+  const sessionId = chat ? await resolveChat(chat) : fromTurn;
+  if (!sessionId) throw new Error('Use `clikcode computer login --chat <chat>` from outside a ClikCode chat.');
+  if (fromTurn && sessionId !== fromTurn) throw new Error('A running chat can request a private login only in its own chat.');
+  const client = await WorkerClient.attach(sessionId);
+  const id = randomUUID();
+  try {
+    const result = await new Promise<{ ok: boolean; message: string }>((resolve, reject) => {
+      let timer = setTimeout(() => { done(); reject(new Error('This chat is still running an older ClikCode worker. Try again after its current turn finishes.')); }, 5_000);
+      const done = (): void => { clearTimeout(timer); client.off('event', onEvent); client.off('close', onClose); };
+      const onClose = (): void => { done(); reject(new Error('The ClikCode chat disconnected.')); };
+      const onEvent = (event: import('../worker/protocol.js').WorkerEvent): void => {
+        if (event.type === 'computer-login-started' && event.id === id) {
+          clearTimeout(timer);
+          timer = setTimeout(() => { done(); reject(new Error('The private login prompt expired.')); }, 10 * 60_000);
+          return;
+        }
+        if (event.type !== 'computer-login-result' || event.id !== id) return;
+        done(); resolve(event);
+      };
+      client.on('event', onEvent);
+      client.on('close', onClose);
+      client.send({ type: 'computer-login', id, ...(url ? { url } : {}) });
+    });
+    if (!result.ok) throw new Error(result.message);
+    if (isJsonDefaultMode()) emitResult({ computer: { login: 'submitted' } });
+    else process.stdout.write(`${result.message}\n`);
+  } finally { client.close(); }
 }

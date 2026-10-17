@@ -49,6 +49,6 @@ it('does not fall back to a phone credential link when no private client UI is a
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-private-login-headless-'));
   const result = await computerWebTool.run({ action: 'login' }, { stateDir } as ToolContext);
   expect(result.isError).toBe(true);
-  expect(result.output).toContain('terminal or VS Code panel');
+  expect(result.output).toContain('Private login did not finish');
   expect(result.output).not.toContain('https://jgracier.github.io');
 });

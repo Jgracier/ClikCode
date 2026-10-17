@@ -44,10 +44,13 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
       emitHarnessOutput(searchResultsPayload(result));
     });
   program.command('doctor').description('Inspect installed harness versions and centralized capabilities').action(aiDoctor);
-  const computer = program.command('computer').description('Control the local browser and desktop from ClikCode’s own agent');
+  const computer = program.command('computer').description('Control the local browser and request a private login in any ClikCode chat');
   computer.command('status').description('Show whether computer use is on').action(async () => (await import('../commands/computer.js')).computerStatus());
   computer.command('on').description('Make computer use available for new turns').action(async () => (await import('../commands/computer.js')).computerSetEnabled(true));
   computer.command('off').description('Stop offering computer tools in new turns').action(async () => (await import('../commands/computer.js')).computerSetEnabled(false));
+  computer.command('login [url]').description('Open a login URL if given, then ask privately in the current chat')
+    .option('--chat <chat>', 'Chat id, prefix or name when run outside a chat')
+    .action(async (url: string | undefined, options: { chat?: string }) => (await import('../commands/computer.js')).computerLogin(options.chat, url));
   program.command('logs').description('What every ClikCode window, worker and editor bridge did, in order (the lifecycle log)')
     .option('--session <id>', 'Only this conversation (an id or the start of one)')
     .option('--role <role>', 'Only window, worker, bridge or command')

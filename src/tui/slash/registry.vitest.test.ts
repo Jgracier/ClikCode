@@ -82,6 +82,14 @@ describe('slash registry', () => {
     expect(sandbox.availability(session(), harness()).available).toBe(false);
   });
 
+  it('offers the private computer login command on every route', () => {
+    const computer = resolveSlashCommand('computer')!;
+    for (const route of ['gateway', 'clikcode-local', 'local'] as const) {
+      expect(computer.availability(session({ route }), route === 'local' ? harness() : undefined).available).toBe(true);
+    }
+    expect(routeSlashInput('/computer login', { harness: harness() })).toMatchObject({ kind: 'command', head: 'computer', args: 'login' });
+  });
+
   const VENDOR_EXTRAS = {
     managers: [{ name: 'mcp', label: 'MCP servers' }],
     native: [{ name: 'rewind', description: 'rewind the vendor conversation' }],
