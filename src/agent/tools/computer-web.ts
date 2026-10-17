@@ -117,13 +117,45 @@ export function findInSnapshot(snapshot: string, text: string): string {
   return [...keep].sort((a, b) => a - b).map(at => lines[at]!).join('\n');
 }
 
-export async function observeComputerPage(page: Page, acceptsImages: boolean, full = false, find?: string): Promise<ToolRunResult> {
+const lastSeen = new WeakMap<Page, { url: string; shown: string }>();
+
+/** What is new on the page since it was last shown, each new line under the lines that contain it.
+ * Undefined when most of the page changed (a different page), so the whole page should be shown instead. */
+export function changedLines(previous: string, shown: string): { text: string; count: number } | undefined {
+  const before = new Set(previous.split('\n').map(line => line.trim()));
+  const lines = shown.split('\n');
+  const keep = new Set<number>();
+  let count = 0;
+  lines.forEach((line, at) => {
+    if (before.has(line.trim())) return;
+    count++;
+    keep.add(at);
+    let depth = indentOf(line);
+    for (let up = at - 1; up >= 0 && depth > 0; up--) if (indentOf(lines[up]!) < depth) { keep.add(up); depth = indentOf(lines[up]!); }
+  });
+  if (count > lines.length * 0.4 && count > 12) return undefined;
+  return { text: [...keep].sort((a, b) => a - b).map(at => lines[at]!).join('\n'), count };
+}
+
+/** `compact`: after an action, show only what changed (plus any open dialog) instead of the whole page again. */
+export async function observeComputerPage(page: Page, acceptsImages: boolean, full = false, find?: string, compact = false): Promise<ToolRunResult> {
   const raw = scrubSecrets(await maskSensitive(page, await page.ariaSnapshot({ mode: 'ai', timeout: 10_000 } as never) as string));
   // A key the page is showing is not for the model to read: capture_secret takes it.
   const { text: shown, hidden } = hideKeyLikeText(raw);
   if (find?.trim()) {
     const found = findInSnapshot(shown, find.trim());
     return { output: `Page: ${page.url()}\n\n${found ? `Lines mentioning "${find.trim()}" (with the elements around them):\n${found.slice(0, 12_000)}` : `Nothing on the page mentions "${find.trim()}". Try observe with full: true.`}` };
+  }
+  const before = lastSeen.get(page);
+  lastSeen.set(page, { url: page.url(), shown });
+  if (compact && !full && before && before.url === page.url()) {
+    const changed = changedLines(before.shown, shown);
+    if (changed) {
+      const head = arrangeSnapshot(shown, false).split('\n\n')[0]!;
+      const open = head.startsWith('Open now') ? `${head}\n\n` : '';
+      const body = changed.count ? `Changed on the page (${changed.count} new or changed line${changed.count === 1 ? '' : 's'}; the rest is as before, observe for the whole page):\n${changed.text.slice(0, 8_000)}` : 'Nothing on the page changed (observe for the whole page).';
+      return { output: `Page: ${page.url()}\n\n${open}${body}${hidden ? `\n\n[${hidden} key-like value${hidden === 1 ? '' : 's'} hidden. Use capture_secret to save it without reading it.]` : ''}` };
+    }
   }
   const snapshot = arrangeSnapshot(shown, full);
   const output = `Page: ${page.url()}\n\n${snapshot}${hidden ? `\n\n[${hidden} key-like value${hidden === 1 ? '' : 's'} hidden. Use capture_secret to save it without reading it.]` : ''}`;
@@ -146,9 +178,9 @@ async function settle(page: Page): Promise<void> {
 export const computerWebTool = defineTool<WebArgs>({
   name: 'computer_web', class: 'exec',
   description: [
-    "Drive ClikCode's own Chrome (its own saved profile; it starts by itself). Every action returns the page as it is now, with a [ref=…] on each element: pass a ref as target (or visible text) to click or fill. Open dialogs come first; a new tab or popup is followed automatically.",
+    "Drive ClikCode's own Chrome (its own saved profile; it starts by itself). open and observe return the page, with a [ref=…] on each element: pass a ref as target (or visible text) to click or fill. After an action you get only what changed (and any open dialog); observe shows the whole page again. A new tab or popup the page opens is followed automatically.",
     'Actions: open (a URL) · observe (the page again; full: true adds header and footer; find: "words" shows only the lines that mention them, for a long page) · click · fill · press · scroll · wait (for text to appear or go, up to 2 minutes; for jobs that finish on their own) · steps (several of those in order, one call, stops at the first failure) · login · handoff · capture_secret · close.',
-    'Each chat has its own tab. Sign-in pages show only field names. login uses a saved login, or asks the user privately (never ask for a password or code in chat). When a sign-in page offers different ways in (root or IAM, another account), ask the user with ask_user, click their choice, then login. handoff returns a phone link for a CAPTCHA or MFA at once; give it to the user, then call handoff again to wait until they finish.',
+    'Each chat has its own tab. Every page can be read, including sign-in and signup forms; the values of password, code and card fields are masked. For anything only the user knows (a password, a code, an address, a phone number), fill the field with no text: the user is asked privately and you are not shown the answer. login fills a saved login, or asks the user privately; never ask for a password or code in chat. When a sign-in page offers different ways in (root or IAM, another account), ask the user with ask_user, click their choice, then login. handoff returns a phone link for a CAPTCHA or MFA at once; give it to the user, then call handoff again to wait until they finish.',
     'Work through the whole task you were given without checking in at each step. Ask real choices (project, account, role set) once, up front, in one question; after that ask only when genuinely blocked (a sign-in they must type, a payment).',
     'API keys: go to the key page, set the options, then capture_secret with target = the final Create button and a send_to plan. It presses the site\'s Copy button or reads the file it hands over, checks the key against its service, saves it to ClikCode Secrets Manager and sends it where send_to says. You never see the key. With no target it takes a key the page already shows; never click Regenerate just to see one.',
   ].join('\n'),
@@ -311,7 +343,7 @@ async function runSteps(page: Page, steps: readonly Step[], ctx: ToolContext): P
       notes.push(`A new tab opened and is now the page: ${current.url()}`);
     }
   }
-  const view = await observeComputerPage(current, false);
+  const view = await observeComputerPage(current, false, false, undefined, true);
   return { output: `${notes.join('\n')}\n\n${view.output}` };
 }
 
