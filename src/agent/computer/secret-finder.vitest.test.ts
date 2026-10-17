@@ -69,3 +69,16 @@ it('recognises and hides a prefixed token that has no digit, as Hugging Face tok
   // A long CamelCase identifier is not a key.
   expect(keyShaped('ThisIsAVeryLongFunctionNameForTheThing')).toBe(false);
 });
+
+it('does not take an unlabelled, unprefixed token from a page that had it from the start', () => {
+  const blob = 'QWERTYUIOPASDFGHJKLZXCVBNM0123456789QWERTYUIOPASDFGHJKLZXCVBNM01234'.slice(0, 60);
+  expect(decide({ before: none, after: [blob], responses: [], hint: true, existing: true })).toEqual({ kind: 'none' });
+  expect(decide({ before: none, after: [blob], responses: [], hint: true, existing: false })).toEqual({ kind: 'found', value: blob });
+  expect(decide({ before: none, after: [KEY], responses: [], hint: false, existing: true })).toEqual({ kind: 'found', value: KEY });
+});
+
+it('rejects a very long token unless it is a dotted JWT', () => {
+  const long = `${'Ab3'.repeat(70)}`;
+  expect(keyShaped(long)).toBe(false);
+  expect(keyShaped(`eyJ${'a1B'.repeat(20)}.${'c2D'.repeat(20)}.${'e3F'.repeat(20)}`)).toBe(true);
+});

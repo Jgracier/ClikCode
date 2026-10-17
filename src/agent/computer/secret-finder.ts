@@ -32,7 +32,8 @@ function entropy(text: string): number {
 
 /** Long, unbroken, mixed text with a digit: shaped like a key, not a word, URL or email. */
 export function keyShaped(value: string): boolean {
-  if (value.length < 16 || value.length > 512 || !/^[A-Za-z0-9_\-+/=.:~]+$/.test(value)) return false;
+  // Keys are rarely over ~130 characters; a longer token is a key only in JWT form (dotted segments).
+  if (value.length < 16 || value.length > 512 || (value.length > 130 && !/^[\w-]+\.[\w-]+\.[\w-]+$/.test(value)) || !/^[A-Za-z0-9_\-+/=.:~]+$/.test(value)) return false;
   if (/^https?:|@/.test(value) || /^\d+$/.test(value)) return false;
   // Most keys carry a digit; one without (hf_ + letters) must be prefixed or plainly random.
   if (!/\d/.test(value) && !PREFIXED.test(value) && !(value.length >= 32 && mixedCase(value))) return false;
@@ -50,7 +51,7 @@ function walk(node: unknown, key: string | undefined, out: Found[], depth = 0): 
 
 /** Pure decision from what was seen. Eligible: new on the page, or returned
  * under a field name that says it is a credential. */
-export function decide(input: { before: ReadonlySet<string>; after: readonly string[]; responses: readonly Found[]; hint: boolean; labelled?: ReadonlySet<string> }): Decision {
+export function decide(input: { before: ReadonlySet<string>; after: readonly string[]; responses: readonly Found[]; hint: boolean; labelled?: ReadonlySet<string>; existing?: boolean }): Decision {
   const scored = new Map<string, number>();
   const responseFor = new Map<string, Found>();
   for (const found of input.responses) responseFor.set(found.value, found);
@@ -60,6 +61,9 @@ export function decide(input: { before: ReadonlySet<string>; after: readonly str
     const response = responseFor.get(value);
     const strong = !!response?.keyName && STRONG_KEY.test(response.keyName);
     if (!onPage && !strong) continue;
+    // Text that was already on the page proves nothing by being there: it must say it is a
+    // key (a label before it, or a known key prefix), or any long id would be taken.
+    if (input.existing && !strong && !input.labelled?.has(value) && !PREFIXED.test(value)) continue;
     scored.set(value, (onPage ? 3 : 0) + (response ? 2 : 0) + (strong ? 2 : 0) + (PREFIXED.test(value) ? 2 : 0) + (input.labelled?.has(value) ? 2 : 0) + (mixedCase(value) ? 1 : 0) + (value.length >= 24 ? 1 : 0) + (input.hint ? 1 : 0));
   }
   const ranked = [...scored.entries()].sort((a, b) => b[1] - a[1]);
@@ -111,7 +115,7 @@ export async function armFinder(page: Page, existing = false): Promise<Finder> {
   return {
     async look() {
       const now = await snapshot(page);
-      return decide({ before, after: now.tokens, responses, hint: now.hint, labelled: now.labelled });
+      return decide({ before, after: now.tokens, responses, hint: now.hint, labelled: now.labelled, existing });
     },
     dispose() { page.off('response', listen); },
   };
