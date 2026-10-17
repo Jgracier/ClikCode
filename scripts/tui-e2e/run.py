@@ -480,6 +480,16 @@ SCENARIOS = {
         'snap_contains': {'board-while': ['Working', 'working'], 'board-after': ['Recent']},
         'snap_lacks': {'board-after': ['Working']},
     },
+    # A turn is working and the composer is empty: Right opens the command menu, as it does between turns.
+    'right-arrow-opens-menu-mid-turn': {
+        'cols': 90, 'env': {'FAKE_TOOL_MS': '150'},
+        'turns': [{'emits': [{'op': 'text', 'text': 'Working on it.\n\n', 'ms': 5}, {'op': 'tool', 'id': 'hold', 'title': 'sleep 30', 'ms': 20000}]}],
+        'steps': [('type', 'do the long thing'), ('wait_for', 'sleep 30', 40), ('settle', 1.5),
+                  ('keys', '\x1b[C'), ('settle', 1.5), ('snap', 'menu'), ('keys', '\x7f'), ('settle', 1), ('snap', 'closed')],
+        'watch': [],
+        'snap_contains': {'menu': ['/model', '/sessions']},
+        'snap_lacks': {'closed': ['/model']},
+    },
     # The board's small print. Empty, it says so. Deleting asks about the
     # chat by its preview (every new one is "Untitled chat"), offers no
     # filter on a two-row list, and says Esc closes -- not "exit", which it

@@ -23,6 +23,13 @@ export function onWaitingKey(this: TerminalHarnessPrompter, key: string): void {
   if (this.subView) { this.subViewKey(key); return; }
   // Right on an empty composer, on an open sub-agent row: its own screen.
   if (key === '\u001b[C' && !turn.draft && !this.pendingApproval && this.openSubView()) return;
+  // Otherwise Right on an empty composer opens the command menu, as it does when no turn runs.
+  if (key === '\u001b[C' && !turn.draft && !this.pendingApproval && turn.command && !this.signInInput) {
+    turn.draft = '/';
+    turn.cursor = 1;
+    this.updateWaiting();
+    return;
+  }
   // Before approvals and before the draft: a turn running is when someone
   // wants to read what went past.
   if (!this.pendingApproval && this.handleScrollKey(key)) return;
