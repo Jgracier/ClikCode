@@ -33,23 +33,34 @@ export function plausibleCopy(value: string | null | undefined): string | undefi
  * command) say so and do not match. */
 const COPY_KEY_BUTTON = /^copy(?: (?:the |your )?(?:new )?(?:api )?(?:secret )?(?:key|token|secret|value|password))?(?: to clipboard)?$/i;
 
+/** What a Copy button's nearest label says it copies, as a rank: a secret, token or password
+ * is the credential; an id, name or address is not. Pure so it can be tested. */
+export function copyRank(label: string): number {
+  const text = label.toLowerCase();
+  if (/secret|private|token|password|passphrase/.test(text)) return 3;
+  if (/\b(?:id|identifier|name|url|uri|endpoint|region|email|username|user)\b/.test(text)) return 0;
+  return /key|credential|bearer/.test(text) ? 2 : 1;
+}
+
 /** Several Copy buttons (an access key id, a secret key, a code snippet): the one whose
- * surroundings say "secret", else the first. */
-async function secretOne(buttons: import('playwright-core').Locator): Promise<import('playwright-core').Locator> {
+ * surroundings rank highest as the credential; the first when nothing tells them apart. */
+async function bestCopy(buttons: import('playwright-core').Locator): Promise<import('playwright-core').Locator> {
   const count = Math.min(await buttons.count(), 8);
+  let best = 0; let bestRank = -1;
   for (let index = 0; index < count; index++) {
     // Climb to the nearest ancestor that names what it holds ("Access Key ID:", "Secret Key:").
     const near = await buttons.nth(index).evaluate(element => {
       type Node = { parentElement: Node | null; textContent: string | null };
       for (let node = (element as unknown as Node).parentElement, depth = 0; node && depth < 8; node = node.parentElement, depth++) {
-        const label = /(?:access|secret)[ _-]?key|api[ _-]?key|token/i.exec(node.textContent?.slice(0, 300) ?? '');
-        if (label) return label[0];
+        const text = (node.textContent ?? '').slice(0, 80);
+        if (/key|token|secret|password|credential|bearer|\bid\b|name|url|endpoint/i.test(text)) return text;
       }
       return '';
     }).catch(() => '');
-    if (/secret/i.test(near)) return buttons.nth(index);
+    const rank = copyRank(near);
+    if (rank > bestRank) { best = index; bestRank = rank; }
   }
-  return buttons.first();
+  return buttons.nth(best);
 }
 
 /** Listen for copies from now on, so a click that itself copies (the agent pressed a Copy button as the trigger) is not lost. */
@@ -72,7 +83,7 @@ export async function copyWithSiteButton(page: Page, waitMs = 3_000): Promise<st
   const buttons = page.getByRole('button', { name: COPY_KEY_BUTTON }).locator('visible=true');
   try {
     if (!await buttons.count()) return undefined;
-    const button = await secretOne(buttons);
+    const button = await bestCopy(buttons);
     await page.addInitScript(hookCopy);
     await page.evaluate(hookCopy);
     await page.evaluate(() => { (globalThis as unknown as Hooked).__clikcodeCopied = null; });

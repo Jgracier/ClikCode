@@ -43,6 +43,7 @@ export async function captureSecret(input: {
     if (input.trigger) { clicked = true; await input.trigger(); }
     let value: string | undefined;
     let ambiguous = false;
+    let presses = 0; // the site's Copy button is pressed a couple of times at most: a button that copies nothing is not worth 3 s a poll
     for (let poll = 0; poll < LOOK_POLLS && !value; poll++) {
       if (!clicked && stop.signal.aborted) throw new LoginError('Not saved: capture was cancelled.');
       await input.page.waitForTimeout(500);
@@ -54,7 +55,7 @@ export async function captureSecret(input: {
       // After a Create, the site's own Copy button is the exact answer. Without a click
       // (a key already on the page) the page's own text is trusted first, because a
       // bare "Copy" there may copy something else.
-      if (input.trigger || decision.kind !== 'found') value = await copyWithSiteButton(input.page);
+      if ((input.trigger || decision.kind !== 'found') && presses < 2) { presses++; value = await copyWithSiteButton(input.page); }
       if (value) break;
       if (decision.kind === 'found') value = decision.value;
       else if (decision.kind === 'ambiguous') { ambiguous = true; break; }
