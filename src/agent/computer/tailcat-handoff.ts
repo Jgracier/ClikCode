@@ -12,8 +12,9 @@ const TEN_MINUTES = 10 * 60_000;
 const PAGE_URL = 'https://jgracier.github.io/ClikCode/handoff/';
 type Action = { type: string; token?: string; x?: number; y?: number; text?: string; key?: string; direction?: string };
 
-function startTailcat(binary: string, port: number): Promise<{ child: ChildProcess; address: string }> {
+function startTailcat(binary: string, port: number, onSpawn: (child: ChildProcess) => void): Promise<{ child: ChildProcess; address: string }> {
   const child = spawn(binary, ['serve', String(port)], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  onSpawn(child);
   return new Promise((resolve, reject) => {
     let output = '';
     const timer = setTimeout(() => { child.kill(); reject(new Error('Tailcat did not start.')); }, 30_000);
@@ -97,7 +98,8 @@ export async function runTailcatHandoff(input: {
   const stopped = new AbortController();
   let rejectAbort!: (error: Error) => void;
   const abort = new Promise<never>((_, reject) => { rejectAbort = reject; });
-  const onAbort = () => rejectAbort(new Error('Handoff stopped.'));
+  const onAbort = () => { child?.kill(); rejectAbort(new Error('Handoff stopped.')); };
+  void abort.catch(() => undefined);
   input.signal?.addEventListener('abort', onAbort, { once: true });
   if (input.signal?.aborted) onAbort();
   try {
@@ -106,8 +108,8 @@ export async function runTailcatHandoff(input: {
       server.listen(0, '127.0.0.1', () => { server.off('error', reject); resolve(); });
     });
     const port = (server.address() as AddressInfo).port;
-    const binary = await tailcatBinary(input.stateDir);
-    const started = await startTailcat(binary, port);
+    const binary = await Promise.race([tailcatBinary(input.stateDir), abort]);
+    const started = await Promise.race([startTailcat(binary, port, spawned => { child = spawned; }), abort]);
     child = started.child;
     const fragment = new URLSearchParams({ addr: started.address, token, port: String(port) });
     input.onLink(`${input.pageUrl ?? PAGE_URL}#${fragment}`);
