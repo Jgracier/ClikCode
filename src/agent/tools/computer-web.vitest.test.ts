@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { arrangeSnapshot, computerWebTool, findInSnapshot } from './computer-web.js';
+import { arrangeSnapshot, changedLines, computerWebTool, findInSnapshot } from './computer-web.js';
 
 describe('arrangeSnapshot', () => {
   const longMiddle = Array.from({ length: 900 }, (_, index) => `    - link "Item number ${index} of the long list" [ref=e${100 + index}]`).join('\n');
@@ -98,5 +98,22 @@ describe('capture_secret failures say what really happened', () => {
       expect(result.output).not.toContain('may already have created');
       expect(result.output).not.toContain('Check the browser and try again');
     } finally { await rm(stateDir, { recursive: true, force: true }); }
+  });
+});
+
+describe('changedLines', () => {
+  it('shows only the new lines under their parents, and nothing when nothing changed', () => {
+    const before = '- main:\n  - heading "Keys" [ref=e1]\n  - button "Create" [ref=e2]';
+    const after = `${before}\n  - alert [ref=e3]:\n    - text: Key created`;
+    const changed = changedLines(before, after)!;
+    expect(changed.count).toBe(2);
+    expect(changed.text).toContain('Key created');
+    expect(changed.text).not.toContain('heading "Keys"');
+    expect(changedLines(before, before)).toMatchObject({ count: 0 });
+  });
+  it('gives up when most of the page is different, so a new page is shown whole', () => {
+    const before = Array.from({ length: 30 }, (_, i) => `- link "Old ${i}" [ref=e${i}]`).join('\n');
+    const after = Array.from({ length: 30 }, (_, i) => `- link "New ${i}" [ref=e${i}]`).join('\n');
+    expect(changedLines(before, after)).toBeUndefined();
   });
 });
