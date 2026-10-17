@@ -69,11 +69,14 @@ function visibleText(): string {
 const indentOf = (line: string): number => line.length - line.trimStart().length;
 const OVERLAY = /^\s*- (?:dialog|alertdialog|menu|listbox)\b/;
 const EDGE = /^\s*- (?:banner|contentinfo)\b/;
+/** A site's own side menu: dozens of links that change nothing about the task. Short ones (a breadcrumb) stay. */
+const SIDE_MENU = /^\s*- (?:navigation|complementary)\b/;
+const LONG_MENU_LINES = 25;
 
 /** The page as read for the agent: what is open comes first (a role dialog or a dropdown is the
  * thing being acted on, and sits at the END of a big page, where a cut-off would lose it), a
  * page's header and footer menus are folded to a line, and a very long middle is trimmed.
- * `full` keeps the header and footer and allows a longer view. */
+ * `full` keeps the header, footer and side menus and allows a longer view. */
 export function arrangeSnapshot(snapshot: string, full = false): string {
   const lines = snapshot.split('\n');
   const end = (from: number): number => { let at = from + 1; while (at < lines.length && indentOf(lines[at]!) > indentOf(lines[from]!)) at++; return at; };
@@ -84,7 +87,7 @@ export function arrangeSnapshot(snapshot: string, full = false): string {
   for (let at = 0; at < lines.length;) {
     const line = lines[at]!;
     if (OVERLAY.test(line)) { const to = end(at); const base = indentOf(line); overlays.push(...lines.slice(at, to).map(item => item.slice(base))); at = to; continue; }
-    if (!full && hasMain && EDGE.test(line)) { folded = true; at = end(at); continue; }
+    if (!full && hasMain && (EDGE.test(line) || (SIDE_MENU.test(line) && end(at) - at > LONG_MENU_LINES))) { folded = true; at = end(at); continue; }
     kept.push(line); at++;
   }
   const cap = full ? 40_000 : 14_000;
@@ -97,7 +100,7 @@ export function arrangeSnapshot(snapshot: string, full = false): string {
     while (tail > head && tailSize < cap * 0.35) tailSize += rows[--tail]!.length + 1;
     body = [...rows.slice(0, head), `- (… ${tail - head} lines trimmed from the middle of a long page; scroll, or observe with full: true …)`, ...rows.slice(tail)].join('\n');
   }
-  return [overlays.length ? `Open now (dialogs and menus):\n${overlays.join('\n')}\n` : '', body, folded ? '- (header and footer folded away; observe with full: true to see them)' : ''].filter(Boolean).join('\n');
+  return [overlays.length ? `Open now (dialogs and menus):\n${overlays.join('\n')}\n` : '', body, folded ? '- (header, footer and long side menus folded away; observe with full: true to see them)' : ''].filter(Boolean).join('\n');
 }
 
 /** Only the lines that mention `text`, each under the lines that contain it: for a page too long to read whole. */

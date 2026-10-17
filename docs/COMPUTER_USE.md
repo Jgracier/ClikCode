@@ -19,8 +19,8 @@ between accounts, a payment, a CAPTCHA).
 Every action returns the page as it is now, so there is no separate "look" call. Each
 element carries a `[ref=e12]` (`f1e2` inside a frame); the agent clicks or fills by
 that reference, which works for unnamed chips, hidden radios and elements in iframes
-alike. What is open (a dialog, a dropdown) is shown first, a page's header and footer
-menus are folded away (`observe` with `full: true` brings them back), and a very long
+alike. What is open (a dialog, a dropdown) is shown first, a page's header, footer and
+long side menus are folded away (`observe` with `full: true` brings them back), and a very long
 middle is trimmed. After each action the tool waits for the page to settle and follows
 a new tab or popup. `steps` runs several clicks and fills in one call and stops at the
 first that fails, showing the page. `wait` holds for words to appear or go (an API
