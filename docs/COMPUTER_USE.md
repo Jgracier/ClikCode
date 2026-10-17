@@ -33,7 +33,28 @@ that account instead of adding a copy. The picker is shown to you only: the
 model never sees the usernames, and your choice is not written to the chat
 history. When a sign-in page offers different ways in (root or IAM, another
 account), the page observation lists them by name and the agent asks you with
-`ask_user` before clicking. ClikCode generates a random
+`ask_user` before clicking.
+
+One-time codes: a verification-code box (authenticator, SMS, email) is asked
+for in the same private prompt every time it appears. The code is typed
+visibly, filled, and never saved. Two wrong codes stop the attempt rather
+than guessing a third time, and a page with the code split across several
+boxes is handed to `handoff`. Waiting on a phone approval or CAPTCHA lasts up
+to ten minutes, as long as a private prompt does, and the new login is saved
+only if sign-in then completes.
+
+Managing saved logins: `/computer logins` (or `clikcode computer logins`)
+lists every saved login as `site · username` in the same picker, lets you
+remove one after a confirmation, and reports only a count. The usernames are
+shown to you, not to the model or the command's output, and nothing about
+them is written to the chat history or the worker's record.
+
+Matching: a login belongs to a site by its host. The one looseness is a
+leading cloud-region label, so a login saved on `us-east-2.signin.aws.amazon.com`
+also works on `eu-west-1.signin.aws.amazon.com`. Other hosts must match
+exactly, and a failed sign-in explains itself in plain words (no form visible,
+several password fields, wrong code, site refused the saved password) without
+quoting the page. ClikCode generates a random
 32-byte encryption key automatically on first use. It stores that key in a private
 local file (`computer/vault/vault.key`, mode 0600), and encrypts each saved login
 with AES-256-GCM in a separate file. No setup or vault password is required.

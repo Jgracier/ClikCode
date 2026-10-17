@@ -2,13 +2,10 @@
 import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { Page } from 'playwright-core';
-import { protectLoginPage } from './private-page.js';
 
 const SESSION_MS = 10 * 60_000;
 const sessions = new Map<string, { key: Buffer; expires: number }>();
 export class CredentialError extends Error {}
-export type PrivateLogin = { accountId: string; email: string; password: string };
 type Item = { origin: string; accountId?: string; email?: string; password?: string; fields?: Record<string, string>; rejected?: true };
 
 function vaultDir(stateDir: string): string { return path.join(stateDir, 'computer', 'vault'); }
@@ -17,6 +14,17 @@ function siteOrigin(url: string): string {
   try { const value = new URL(url); if (value.protocol === 'https:' && !value.username && !value.password) return value.origin; }
   catch { /* invalid URL */ }
   throw new CredentialError('Private credentials require an HTTPS website.');
+}
+/** Cloud providers sign users in on a regional host (us-east-2.signin.aws.amazon.com).
+ * Only that leading region label is ignored when matching a saved login, so the
+ * same account works whichever region the redirect picks. Nothing else is loosened. */
+const REGION_LABEL = /^[a-z]{2}(?:-[a-z]+)+-\d+\./;
+export function siteKey(url: string): string {
+  const { protocol, hostname, port } = new URL(siteOrigin(url));
+  return `${protocol}//${hostname.replace(REGION_LABEL, '')}${port ? `:${port}` : ''}`;
+}
+export function sameSite(a: string, b: string): boolean {
+  try { return siteKey(a) === siteKey(b); } catch { return false; }
 }
 function seal(key: Buffer, aad: string, plain: string): string {
   const iv = randomBytes(12);
@@ -69,17 +77,6 @@ async function vaultKey(stateDir: string, create: boolean): Promise<Buffer> {
   cache(stateDir, key);
   return key;
 }
-export async function saveCredential(stateDir: string, url: string, secret: Omit<Item, 'origin'>): Promise<string> {
-  const origin = siteOrigin(url);
-  if (!secret.email && !secret.accountId || !secret.password) throw new CredentialError('Enter an email or account ID and a password.');
-  const key = await vaultKey(stateDir, true);
-  const id = randomUUID();
-  const dir = path.join(vaultDir(stateDir), 'items');
-  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  await fs.writeFile(path.join(dir, `${id}.json`), seal(key, `item:${id}`, JSON.stringify({ origin, accountId: secret.accountId, email: secret.email, password: secret.password })), { mode: 0o600, flag: 'wx' });
-  return id;
-}
-
 /** Incremental login steps, such as Gmail's email page followed by its
  * password page, use the same encrypted item. Only the local worker reads it. */
 function itemFields(item: Item): Record<string, string> {
@@ -118,7 +115,7 @@ async function readCredential(stateDir: string, url: string, id: string): Promis
   let item: Item;
   try { item = JSON.parse(open(key, `item:${id}`, await fs.readFile(path.join(vaultDir(stateDir), 'items', `${id}.json`), 'utf8'))) as Item; }
   catch { throw new CredentialError('That saved login could not be opened.'); }
-  if (item.origin !== siteOrigin(url)) throw new CredentialError('That saved login does not match this website.');
+  if (!sameSite(item.origin, url)) throw new CredentialError('That saved login does not match this website.');
   return item;
 }
 
@@ -133,9 +130,7 @@ export function loginLabel(fields: Readonly<Record<string, string>>): string {
   return values.join(' · ') || 'Saved login';
 }
 
-/** Every login saved for this exact origin, in a stable order. */
-export async function savedLoginsForSite(stateDir: string, url: string): Promise<SavedLogin[]> {
-  const origin = siteOrigin(url);
+async function readItems(stateDir: string): Promise<{ id: string; item: Item }[]> {
   const dir = path.join(vaultDir(stateDir), 'items');
   let files: string[];
   try { files = await fs.readdir(dir); }
@@ -145,42 +140,36 @@ export async function savedLoginsForSite(stateDir: string, url: string): Promise
   }
   if (files.length === 0) return [];
   const key = await vaultKey(stateDir, false);
-  const found: SavedLogin[] = [];
+  const items: { id: string; item: Item }[] = [];
   for (const file of files) {
     const id = file.replace(/\.json$/, '');
     if (!/^[0-9a-f-]{36}$/i.test(id) || file !== `${id}.json`) continue;
-    try {
-      const item = JSON.parse(open(key, `item:${id}`, await fs.readFile(path.join(dir, file), 'utf8'))) as Item;
-      if (item.origin === origin) found.push({ id, label: loginLabel(itemFields(item)), rejected: item.rejected === true });
-    } catch { throw new CredentialError('A saved login could not be opened.'); }
+    try { items.push({ id, item: JSON.parse(open(key, `item:${id}`, await fs.readFile(path.join(dir, file), 'utf8'))) as Item }); }
+    catch { throw new CredentialError('A saved login could not be opened.'); }
   }
-  return found.sort((a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id));
+  return items;
 }
-export async function fillCredential(stateDir: string, page: Page, id: string): Promise<void> {
+
+const byLabel = <T extends { label: string; id: string }>(a: T, b: T): number => a.label.localeCompare(b.label) || a.id.localeCompare(b.id);
+
+/** Every login saved for this site, in a stable order. */
+export async function savedLoginsForSite(stateDir: string, url: string): Promise<SavedLogin[]> {
+  siteOrigin(url);
+  return (await readItems(stateDir))
+    .filter(({ item }) => sameSite(item.origin, url))
+    .map(({ id, item }) => ({ id, label: loginLabel(itemFields(item)), rejected: item.rejected === true }))
+    .sort(byLabel);
+}
+
+/** Every saved login on every site, for the user's own review. */
+export async function allSavedLogins(stateDir: string): Promise<{ id: string; site: string; label: string }[]> {
+  return (await readItems(stateDir))
+    .map(({ id, item }) => ({ id, site: new URL(item.origin).hostname, label: loginLabel(itemFields(item)) }))
+    .sort((a, b) => a.site.localeCompare(b.site) || byLabel(a, b));
+}
+
+export async function removeSavedLogin(stateDir: string, id: string): Promise<boolean> {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) throw new CredentialError('Invalid saved login reference.');
-  const origin = siteOrigin(page.url());
-  const key = await vaultKey(stateDir, false);
-  let item: Item;
-  try { item = JSON.parse(open(key, `item:${id}`, await fs.readFile(path.join(vaultDir(stateDir), 'items', `${id}.json`), 'utf8'))) as Item; }
-  catch { throw new CredentialError('That saved login could not be opened.'); }
-  if (item.origin !== origin || !item.password) throw new CredentialError('That saved login does not match this website.');
-  protectLoginPage(page);
-  for (let step = 0; step < 4; step++) {
-    if (siteOrigin(page.url()) !== origin) throw new CredentialError('The login moved to another website. Use the phone handoff.');
-    const password = page.locator('input[type="password"]:visible');
-    const account = page.getByRole('textbox', { name: /account id|account alias/i });
-    const username = page.locator('input[autocomplete="username"]:visible, input[type="email"]:visible');
-    const namedUsername = page.getByRole('textbox', { name: /email|username/i });
-    let next: { fill(value: string): Promise<void>; press(key: string): Promise<void> } | undefined;
-    if (item.email && await username.count() === 1) { await username.fill(item.email); next = username; }
-    else if (item.email && await namedUsername.count() === 1) { await namedUsername.fill(item.email); next = namedUsername; }
-    if (item.accountId && await account.count() === 1) { await account.fill(item.accountId); next = account; }
-    if (await password.count() === 1) { await password.fill(item.password); return; }
-    if (!next) throw new CredentialError('No matching login field is visible. Use the phone handoff.');
-    await next.press('Enter');
-    // Email-first sites such as Google may take several seconds to render the
-    // password step; pressing Enter again during that transition duplicates it.
-    await password.waitFor({ state: 'visible', timeout: 10_000 }).catch(() => undefined);
-  }
-  throw new CredentialError('The website needs more login steps. Use the phone handoff.');
+  try { await fs.unlink(path.join(vaultDir(stateDir), 'items', `${id}.json`)); return true; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw new CredentialError('The saved login could not be removed.'); }
 }

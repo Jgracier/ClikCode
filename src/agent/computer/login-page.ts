@@ -1,41 +1,42 @@
-/** A single private login action follows ordinary multi-page sign-in forms.
- * Answers stay in this worker until the browser advances past sign-in. */
+/** One private login action that follows an ordinary sign-in: saved account
+ * (picked if there are several), email, password, then a one-time code.
+ * Answers stay in this worker, and a new login is saved only after the
+ * browser has moved past sign-in. */
 import type { Page } from 'playwright-core';
-import { loginLabel, saveLoginFields, savedLoginFields, savedLoginsForSite, setLoginRejected, type SavedLogin } from './credential-vault.js';
-import { loginFields, type LoginField } from './login-fields.js';
+import { loginLabel, sameSite, saveLoginFields, savedLoginFields, savedLoginsForSite, setLoginRejected } from './credential-vault.js';
+import { LoginError } from './login-error.js';
+import { loginFields, uniqueLabels, type LoginField } from './login-fields.js';
 import { protectLoginPage } from './private-page.js';
 
 export type LoginOutcome = 'signed_in' | 'session_reused' | 'verification_needed' | 'unverified' | 'saved_login_rejected';
 const NEW_ACCOUNT = 'Use a different account';
+const AUTH_PATH = /(?:^|\/)(?:login|signin|sign-in|auth|oauth|authenticate|challenge|verify|verification|mfa|otp|2fa|2sv|two-factor|sso|saml)(?:\/|$)/i;
+const STEP_POLLS = 60;
+/** Phone approval and CAPTCHA take a person a while: as long as a private prompt waits. */
+const VERIFY_POLLS = 600;
+const CODE_ATTEMPTS = 2;
 
 /** The one wording of each result, for the agent tool and the slash command alike. */
 export function loginOutcomeMessage(outcome: LoginOutcome): string {
   switch (outcome) {
     case 'signed_in': return 'Browser advanced beyond sign-in. ClikCode Secrets Manager is ready for this site.';
     case 'session_reused': return 'Browser advanced without asking for a password. An existing session may have been reused; no new login was saved.';
-    case 'verification_needed': return 'Finish verification in the open browser. The new login was not saved.';
+    case 'verification_needed': return 'Verification is still pending, so the new login was not saved. Approve it on your phone or finish it in the open browser, or use handoff to finish it from another device.';
     case 'saved_login_rejected': return 'The site did not accept the saved password. Run login again and choose "Use a different account" to enter an updated one.';
     default: return 'Sign-in could not be verified. The new login was not saved.';
   }
 }
 
-/** The same account twice (a retyped password) still has to be told apart. */
-function pickerLabels(accounts: readonly SavedLogin[]): string[] {
-  const seen = new Map<string, number>();
-  return accounts.map(account => {
-    const count = (seen.get(account.label) ?? 0) + 1;
-    seen.set(account.label, count);
-    return count === 1 ? account.label : `${account.label} (${count})`;
-  });
-}
-const AUTH_PATH = /(?:^|\/)(?:login|signin|sign-in|auth|authenticate|challenge|verify|verification)(?:\/|$)/i;
-const STEP_POLLS = 60;
-const VERIFY_POLLS = 120;
-
 function checkedOrigin(url: string): string {
   const site = new URL(url);
-  if (site.protocol !== 'https:' || site.username || site.password) throw new Error('Private login needs an HTTPS website.');
+  if (site.protocol !== 'https:' || site.username || site.password) throw new LoginError('Private login needs an HTTPS website.');
   return site.origin;
+}
+
+/** Still on the site the login started on (a regional host of it counts). */
+function onSite(url: string, startUrl: string): boolean {
+  checkedOrigin(url);
+  return sameSite(url, startUrl);
 }
 
 function signature(url: string, fields: readonly LoginField[]): string {
@@ -49,7 +50,7 @@ async function visible(page: Page): Promise<LoginField[]> {
 
 async function progress(page: Page, before: string, signal?: AbortSignal): Promise<boolean> {
   for (let poll = 0; poll < STEP_POLLS; poll++) {
-    if (signal?.aborted) throw new Error('Private login cancelled.');
+    if (signal?.aborted) throw new LoginError('Private login cancelled.');
     await page.waitForTimeout(250);
     if (signature(page.url(), await visible(page)) !== before) return true;
   }
@@ -86,13 +87,15 @@ export async function loginComputerPage(input: {
   const supplied: Record<string, string> = {};
   let submitted = false;
   let submittedPassword = false;
+  let codeAttempts = 0;
   let announcedVerification = false;
 
-  for (let step = 0; step < 8; step++) {
-    if (input.signal?.aborted) throw new Error('Private login cancelled.');
+  for (let step = 0; step < 10; step++) {
+    if (input.signal?.aborted) throw new LoginError('Private login cancelled.');
     const url = input.page.url();
     const fields = await visible(input.page);
-    if (fields.filter(field => field.kind === 'password').length > 1) throw new Error('Multiple password fields are visible. Use handoff.');
+    if (fields.filter(field => field.kind === 'password').length > 1) throw new LoginError('Several password fields are visible. Use handoff.');
+    if (fields.filter(field => field.transient).length > 1) throw new LoginError('This page asks for a code in several boxes. Use handoff.');
     if (!fields.length) {
       if (submittedPassword && leftSignIn(startUrl, url)) {
         if (Object.keys(supplied).length) {
@@ -102,10 +105,10 @@ export async function loginComputerPage(input: {
         return 'signed_in';
       }
       if (submitted && leftSignIn(startUrl, url)) return 'session_reused';
-      if (!submitted) throw new Error('No login field is visible. Use handoff for verification or CAPTCHA.');
+      if (!submitted) throw new LoginError('No sign-in form is visible. If a verification or CAPTCHA is showing, use handoff.');
       if (!announcedVerification) { input.onVerification?.(); announcedVerification = true; }
       for (let poll = 0; poll < VERIFY_POLLS; poll++) {
-        if (input.signal?.aborted) throw new Error('Private login cancelled.');
+        if (input.signal?.aborted) throw new LoginError('Private login cancelled.');
         await input.page.waitForTimeout(1_000);
         const nextFields = await visible(input.page);
         if (nextFields.length || leftSignIn(startUrl, input.page.url())) break;
@@ -114,44 +117,49 @@ export async function loginComputerPage(input: {
       step--; // Resume the same flow after an MFA or loading page.
       continue;
     }
-    if (checkedOrigin(url) !== origin) return 'unverified';
+    if (!onSite(url, startUrl)) return 'unverified';
     // A rejected password often comes back on a new URL or a re-rendered
     // form. Never keep submitting the same secret into an account lockout.
     if (submittedPassword && fields.some(field => field.kind === 'password')) {
       if (id && !supplied.password && saved.password) { await setLoginRejected(input.stateDir, startUrl, id, true); return 'saved_login_rejected'; }
       return 'unverified';
     }
+    if (codeAttempts >= CODE_ATTEMPTS && fields.some(field => field.transient)) return 'unverified';
     if (!accountChosen) {
       accountChosen = true;
       if (input.newAccount) id = undefined;
       else if (accounts.length > 1 || accounts[0]?.rejected) {
-        const labels = pickerLabels(accounts);
+        const labels = uniqueLabels(accounts.map(account => account.label));
         const answers = await input.ask(origin, [{ index: -1, key: 'account', label: 'Choose an account', kind: 'choice', required: true, options: [...labels, NEW_ACCOUNT] }], input.signal);
-        if (!answers || input.signal?.aborted) throw new Error('Private login cancelled.');
+        if (!answers || input.signal?.aborted) throw new LoginError('Private login cancelled.');
         id = accounts[labels.indexOf(answers.account!)]?.id;
       } else id = accounts[0]?.id;
       saved = id ? await savedLoginFields(input.stateDir, startUrl, id) : {};
       step--; // The page may have moved while the picker was open: read it again.
       continue;
     }
-    const missing = fields.filter(field => !saved[field.key] && !supplied[field.key]);
-    if (missing.length) {
-      const answers = await input.ask(origin, missing, input.signal);
-      if (!answers || input.signal?.aborted) throw new Error('Private login cancelled.');
-      if (checkedOrigin(input.page.url()) !== origin) return 'unverified';
-      for (const field of missing) {
-        if (!answers[field.key]) throw new Error('Complete the visible login fields.');
-        supplied[field.key] = answers[field.key];
+    // A one-time code is asked for every time and never kept.
+    const codes: Record<string, string> = {};
+    const needed = fields.filter(field => field.transient || (!saved[field.key] && !supplied[field.key]));
+    if (needed.length) {
+      const answers = await input.ask(origin, needed, input.signal);
+      if (!answers || input.signal?.aborted) throw new LoginError('Private login cancelled.');
+      if (!onSite(input.page.url(), startUrl)) return 'unverified';
+      for (const field of needed) {
+        if (!answers[field.key]) throw new LoginError('Complete the visible login fields.');
+        if (field.transient) codes[field.key] = answers[field.key]!; else supplied[field.key] = answers[field.key]!;
       }
     }
     const before = signature(url, fields);
     for (const field of fields) {
-      if (checkedOrigin(input.page.url()) !== origin) return 'unverified';
-      await input.page.locator('input:visible').nth(field.index).fill(saved[field.key] ?? supplied[field.key]);
+      if (!onSite(input.page.url(), startUrl)) return 'unverified';
+      await input.page.locator('input:visible').nth(field.index).fill(field.transient ? codes[field.key]! : (saved[field.key] ?? supplied[field.key]!));
     }
+    for (const key of Object.keys(codes)) delete codes[key];
     await input.page.locator('input:visible').nth(fields.at(-1)!.index).press('Enter');
     submitted = true;
     if (fields.some(field => field.kind === 'password')) submittedPassword = true;
+    if (fields.some(field => field.transient)) codeAttempts++;
     if (!await progress(input.page, before, input.signal)) return 'unverified';
   }
   return 'unverified';

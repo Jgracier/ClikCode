@@ -25,7 +25,7 @@ export async function privateLoginPage(page: Page): Promise<boolean> {
   }
   try {
     const fields = await loginFields(page);
-    if (fields.some(field => ['email', 'username', 'accountId'].includes(field.key))) {
+    if (fields.some(field => ['email', 'username', 'accountId', 'code'].includes(field.key))) {
       protectLoginPage(page);
       return true;
     }

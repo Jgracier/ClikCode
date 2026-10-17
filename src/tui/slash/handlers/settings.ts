@@ -59,10 +59,11 @@ export const settingsHandlers = {
       const rest = words.slice(1);
       const newAccount = rest.includes('--new');
       const urls = rest.filter(word => word !== '--new');
-      if (urls.length <= 1) { await computerLogin(session.id, urls[0], newAccount); return; }
+      if (urls.length <= 1) { await computerLogin(session.id, { ...(urls[0] ? { url: urls[0] } : {}), ...(newAccount ? { newAccount: true } : {}) }); return; }
     }
+    if (value === 'logins' && words.length === 1) { await computerLogin(session.id, { manage: true }); return; }
     if (value === 'inspect' && words.length === 1) { await computerInspect(); return; }
-    if (words.length > 1 || (value && value !== 'on' && value !== 'off')) throw new Error('usage: /computer [on|off|inspect|login [url] [--new]]');
+    if (words.length > 1 || (value && value !== 'on' && value !== 'off')) throw new Error('usage: /computer [on|off|inspect|logins|login [url] [--new]]');
     if (value) {
       await setComputerEnabled(stateDirectory(), value === 'on');
       if (value === 'off') { await closeComputerBrowser(stateDirectory()); lockCredentialVault(stateDirectory()); }
