@@ -16,6 +16,7 @@ import { SEND_TO_HELP, SEND_TO_SCHEMA } from './store-secret.js';
 import { destinationProblem, normalizeSendTo, type Destination } from '../computer/secret-destinations.js';
 import { captureSecret } from '../computer/secret-capture.js';
 import { runTailcatHandoff } from '../computer/tailcat-handoff.js';
+import { runTailnetHandoff, tailnetAddress } from '../computer/tailnet-handoff.js';
 import type { Locator, Page } from 'playwright-core';
 import type { ToolContext, ToolRunResult } from '../tool-contract.js';
 
@@ -410,13 +411,15 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
         let resolveLink!: (link: string) => void; let failLink!: (error: Error) => void;
         const link = new Promise<string>((resolve, reject) => { resolveLink = resolve; failLink = reject; });
         link.catch(() => undefined);
-        const done = runTailcatHandoff({ stateDir: ctx.stateDir, signal: stop.signal, onLink: resolveLink })
+        // A phone on the user's Tailscale network is reached directly; anywhere else the relayed link is used.
+        const host = tailnetAddress();
+        const done = (host ? runTailnetHandoff({ stateDir: ctx.stateDir, host, signal: stop.signal, onLink: resolveLink }) : runTailcatHandoff({ stateDir: ctx.stateDir, signal: stop.signal, onLink: resolveLink }))
           .then(() => ({ ok: true as const }), (error: unknown) => { failLink(error instanceof Error ? error : new Error(String(error))); return { ok: false as const, message: error instanceof Error ? error.message : String(error) }; })
           .finally(() => { handoffs.delete(ctx.stateDir); });
         running = { link, done, stop };
         handoffs.set(ctx.stateDir, running);
         const url = await Promise.race([running.link, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('The phone link did not come up.')), 45_000))]);
-        return { output: `Phone link (valid 10 minutes, one use): ${url}\nTell the user to open it and finish the browser step (CAPTCHA, MFA). Then call handoff again to wait until they are done.` };
+        return { output: `${/^http:/.test(url) ? 'Phone link over Tailscale (the phone must be on the same tailnet; valid 10 minutes, one use)' : 'Phone link (valid 10 minutes, one use)'}: ${url}\nTell the user to open it and finish the browser step (CAPTCHA, MFA). Then call handoff again to wait until they are done.` };
       }
       const outcome = await Promise.race([running.done, new Promise<'waiting'>(resolve => setTimeout(() => resolve('waiting'), 90_000))]);
       if (outcome === 'waiting') return { output: 'The user has not finished yet. Call handoff again to keep waiting.' };
