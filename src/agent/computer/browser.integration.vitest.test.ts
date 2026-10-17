@@ -10,19 +10,20 @@ import { setComputerEnabled } from './settings.js';
 import { computerDesktopTool } from '../tools/computer.js';
 import type { ToolContext } from '../tool-contract.js';
 
-it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('uses an isolated Chrome profile and hides filled sign-in forms', async () => {
+it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('uses an isolated Chrome profile, reads a sign-in form, and masks a filled password', async () => {
   const stateDir = await mkdtemp(join(tmpdir(), 'clikcode-computer-smoke-'));
   try {
     const page = await openComputerPage(stateDir);
     expect(await page.evaluate(() => navigator.webdriver)).toBe(false);
-    await page.goto('data:text/html,<label>Password <input type=password value=secret></label>');
+    await page.goto('data:text/html,<label>Password <input type=password></label>');
+    await page.locator('input').fill('hunter2-typed');
     const result = await observeComputerPage(page, true);
-    expect(result.output).toContain('Sign-in fields');
-    expect(JSON.stringify(result)).not.toContain('secret');
+    expect(result.output).toContain('Password');
+    expect(JSON.stringify(result)).not.toContain('hunter2-typed');
     await setComputerEnabled(stateDir, true);
     const desktop = await computerDesktopTool.run({ action: 'observe' }, { stateDir } as ToolContext);
     expect(desktop.isError).toBe(true);
-    expect(desktop.output).toContain('private login');
+    expect(desktop.output).toContain('password');
     expect(await computerPage(stateDir)).toBe(page);
   } finally {
     await closeComputerBrowser(stateDir);
