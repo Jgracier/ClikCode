@@ -20,7 +20,7 @@ import type { ToolContext, ToolRunResult } from '../tool-contract.js';
 type WebArgs = {
   action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'press' | 'scroll' | 'login' | 'handoff' | 'capture_secret';
   url?: string; role?: 'button' | 'link' | 'textbox' | 'checkbox' | 'combobox' | 'tab' | 'menuitem' | 'option' | 'radio' | 'switch';
-  name?: string; text?: string; key?: string; direction?: 'up' | 'down'; new_account?: boolean; secret_name?: string; remote?: boolean; accept_dialog?: boolean; send_to?: Destination[];
+  name?: string; text?: string; key?: string; direction?: 'up' | 'down'; new_account?: boolean; secret_name?: string; remote?: boolean; accept_dialog?: boolean; send_to?: Destination[]; source?: 'page' | 'download';
 };
 
 export function webAddress(value: string | undefined): string {
@@ -86,6 +86,7 @@ export const computerWebTool = defineTool<WebArgs>({
     direction: { type: 'string', enum: ['up', 'down'] },
     accept_dialog: { type: 'boolean', description: 'For click: answer yes to a browser confirm/alert dialog the click raises (for example "delete this token?"). Default: the dialog is declined and reported.' },
     send_to: { ...SEND_TO_SCHEMA, description: 'For capture_secret: where the key goes after it is captured and checked, decided now and approved by the user once; the key is never shown to you. Same plan as store_secret: {type:"clikdeploy", tool, args} runs that ClikDeploy CLI tool with {{secret}} inside args marking where the key goes (for example admin_platform_set_secret with {key:"SALAD_API_KEY", value:"{{secret}}"}, or admin_compute_save_credentials with {provider:"GCP", credentials:{serviceAccountJson:"{{secret}}"}}); {type:"github", repo, name} sets a repository secret.' },
+    source: { type: 'string', enum: ['page', 'download'], description: 'For capture_secret: where the key shows up. page (default): in the page or via its Copy button. download: the site hands the key over as a file (a Google service-account JSON, a private key): the click starts the download and the worker reads and deletes it.' },
     secret_name: { type: 'string', description: 'For capture_secret: the name to save the key under, such as salad/api-key.' },
     remote: { type: 'boolean', description: 'For capture_secret: also print a phone link so the user can tap Copy on the page remotely.' },
     new_account: { type: 'boolean', description: 'For login: the user wants a different account than the saved one, so ask for it instead of reusing.' },
@@ -140,7 +141,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       const planProblem = args.send_to?.length ? destinationProblem(args.send_to) : undefined;
       if (planProblem) throw new Error(planProblem);
       const { length, found, check, sent } = await captureSecret({ stateDir: ctx.stateDir, page, name: args.secret_name, remote: args.remote === true, signal: ctx.signal,
-        ...(args.send_to?.length ? { sendTo: args.send_to } : {}),
+        ...(args.send_to?.length ? { sendTo: args.send_to } : {}), ...(args.source ? { source: args.source } : {}),
         ...(args.role && args.name ? { trigger: () => clickOrHint(page, args) } : {}),
         ask: async (name, hint, signal) => {
           if (!ctx.requestPrivateSecret) throw new LoginError('This chat cannot show a private prompt.');

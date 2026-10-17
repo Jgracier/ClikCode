@@ -69,3 +69,35 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('opens, fills and clicks 
     await rm(stateDir, { recursive: true, force: true });
   }
 }, 30_000);
+
+it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('takes a key file the site hands over as a download, through the shared browser, and leaves no file behind', async () => {
+  const { captureSecret } = await import('./secret-capture.js');
+  const { readNamedSecret, lockCredentialVault } = await import('./credential-vault.js');
+  const stateDir = await mkdtemp(join(tmpdir(), 'clikcode-computer-download-'));
+  const FILE = JSON.stringify({ type: 'service_account', client_email: 'x@example.iam.gserviceaccount.com', private_key: '-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n-----END PRIVATE KEY-----\n' }, null, 2);
+  const server = createServer((request, response) => {
+    if (request.url === '/key.json') { response.setHeader('Content-Type', 'application/json'); response.setHeader('Content-Disposition', 'attachment; filename="key.json"'); response.end(FILE); return; }
+    response.setHeader('Content-Type', 'text/html');
+    response.end('<button id="go" style="width:200px;height:50px" onclick="location.href=\'/key.json\'">Create key</button>');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    await setComputerEnabled(stateDir, true);
+    const address = server.address() as { port: number };
+    const page = await openComputerPage(stateDir);
+    await page.goto(`http://127.0.0.1:${address.port}/`);
+    const result = await captureSecret({ stateDir, page, name: 'gcp/service-account-json', remote: false, source: 'download',
+      trigger: () => page.getByRole('button', { name: 'Create key' }).click(), ask: async () => { throw new Error('the person should not have been asked'); }, onLink: () => undefined });
+    expect(result).toMatchObject({ length: FILE.length, found: true });
+    expect(await readNamedSecret(stateDir, 'gcp/service-account-json')).toBe(FILE);
+    // The whole file is hidden, and so is each long field inside it (the private key quoted on its own).
+    const { scrubSecrets } = await import('./secret-scrubber.js');
+    expect(scrubSecrets(FILE)).toBe('[secret hidden]');
+    expect(scrubSecrets(`key: ${(JSON.parse(FILE) as { private_key: string }).private_key}`)).toBe('key: [secret hidden]');
+  } finally {
+    lockCredentialVault(stateDir);
+    server.close();
+    await closeComputerBrowser(stateDir);
+    await rm(stateDir, { recursive: true, force: true });
+  }
+}, 60_000);

@@ -26,7 +26,7 @@ export async function runComputerHost(stateDir: string): Promise<void> {
   const profile = computerProfile(stateDir);
   await fs.mkdir(profile, { recursive: true, mode: 0o700 });
   const context = await launchFirst(channel => chromium.launchPersistentContext(profile, {
-    channel, headless: false, viewport: null, acceptDownloads: false,
+    channel, headless: false, viewport: null, acceptDownloads: true,
     // Playwright's default --enable-automation and Chrome's port-0 debugging
     // each advertise WebDriver to sites. Keep the private CDP connection, but
     // don't expose that signal to ordinary page JavaScript.
