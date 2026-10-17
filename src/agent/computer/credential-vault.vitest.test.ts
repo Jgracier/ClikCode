@@ -35,3 +35,24 @@ it('generates a local key automatically, stores only encrypted records, and fill
   expect(filled['input[type="password"]:visible']).toBe(secret);
   expect(filled.account).toBe('account-123');
 });
+
+it('fills an email-first sign-in without returning the saved password', async () => {
+  dir = await mkdtemp(join(tmpdir(), 'clikcode-vault-two-step-'));
+  const id = await saveCredential(dir, 'https://accounts.google.com', {
+    accountId: '', email: 'private@example.com', password: 'website-only-secret',
+  });
+  let step = 0;
+  const filled: string[] = [];
+  const page = {
+    url: () => 'https://accounts.google.com/signin',
+    locator: (selector: string) => ({
+      count: async () => selector.includes('password') ? step : 1 - step,
+      fill: async (value: string) => { filled.push(value); },
+      press: async () => { step = 1; },
+    }),
+    getByRole: () => ({ count: async () => 0 }),
+    waitForTimeout: async () => undefined,
+  } as unknown as Page;
+  await fillCredential(dir, page, id);
+  expect(filled).toEqual(['private@example.com', 'website-only-secret']);
+});
