@@ -70,6 +70,7 @@ export async function activeConversations(options: ActiveOptions = {}): Promise<
   ]);
   const live = new Set<string>();
   const approvals = new Map<string, { title: string; since: string }>();
+  const background = new Map<string, NonNullable<(typeof records)[number]['background']>>();
   for (const record of records) {
     try {
       process.kill(record.pid, 0);
@@ -78,13 +79,14 @@ export async function activeConversations(options: ActiveOptions = {}): Promise<
     }
     live.add(record.sessionId);
     if (record.awaitingApproval) approvals.set(record.sessionId, record.awaitingApproval);
+    if (record.background) background.set(record.sessionId, record.background);
   }
   const workerIsLive = (id: string): boolean => live.has(id);
   const candidates = groups.filter((group) => group.id !== options.excludeConversationId
     && !group.branches.some((branch) => branch.id === options.excludeSessionId));
   const sessions = candidates.flatMap((group) => group.branches);
   const byId = new Map(sessions.map((session) => [session.id, session]));
-  const pending = await livePendingTurns(sessions, workerIsLive);
+  const pending = await livePendingTurns(sessions, workerIsLive, (id) => background.get(id));
   const out: ActiveConversation[] = [];
   for (const group of candidates) {
     let chosen: HarnessSession | undefined;

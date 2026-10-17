@@ -23,10 +23,13 @@
  */
 
 import type { HarnessSession } from './model.js';
-import { listWorkerRecords, liveOpenConversations } from '../worker/registry.js';
+import { listWorkerRecords, liveOpenConversations, type WorkerRuntimeRecord } from '../worker/registry.js';
 import { loadSessionFile } from './store/records.js';
 
 type PendingTurn = NonNullable<HarnessSession['pendingTurn']>;
+
+/** The background work a live worker reports for a session (its record). */
+export type BackgroundOf = (sessionId: string) => WorkerRuntimeRecord['background'];
 
 /** Whether a worker process exists for a session id. Supplied by the caller so
  *  one filesystem pass answers for a whole list. */
@@ -60,9 +63,10 @@ export async function liveWorkerSessions(): Promise<(sessionId: string) => boole
 /** The same pass, and which live workers have an approval waiting on the
  * user: the record a worker keeps beside its pid (onAwaitingApproval), so a
  * list can say a conversation needs the user without attaching to it. */
-export async function liveWorkers(): Promise<{ isLive: WorkerLiveness; isOpen: WorkerLiveness; awaitingYou: (sessionId: string) => boolean }> {
+export async function liveWorkers(): Promise<{ isLive: WorkerLiveness; isOpen: WorkerLiveness; awaitingYou: (sessionId: string) => boolean; background: BackgroundOf }> {
   const live = new Set<string>();
   const awaiting = new Set<string>();
+  const background = new Map<string, NonNullable<WorkerRuntimeRecord['background']>>();
   const [records, isOpen] = await Promise.all([listWorkerRecords().catch(() => []), liveOpenConversations().catch(() => () => false)]);
   await Promise.all(records.map(async (record) => {
     try {
@@ -73,8 +77,9 @@ export async function liveWorkers(): Promise<{ isLive: WorkerLiveness; isOpen: W
     }
     live.add(record.sessionId);
     if (record.awaitingApproval) awaiting.add(record.sessionId);
+    if (record.background) background.set(record.sessionId, record.background);
   }));
-  return { isLive: (sessionId) => live.has(sessionId), isOpen, awaitingYou: (sessionId) => awaiting.has(sessionId) };
+  return { isLive: (sessionId) => live.has(sessionId), isOpen, awaitingYou: (sessionId) => awaiting.has(sessionId), background: (sessionId) => background.get(sessionId) };
 }
 
 /** The turn each live-worker session is generating, read from its transcript.
@@ -86,13 +91,25 @@ export async function liveWorkers(): Promise<{ isLive: WorkerLiveness; isOpen: W
 export async function livePendingTurns(
   sessions: readonly HarnessSession[],
   workerIsLive: WorkerLiveness,
+  /** Work the vendor still runs for a chat whose own turn is over (liveWorkers). */
+  background: BackgroundOf = () => undefined,
 ): Promise<Map<string, PendingTurn>> {
   const pending = new Map<string, PendingTurn>();
   await Promise.all(sessions.filter((session) => session.status === 'active' && workerIsLive(session.id)).map(async (session) => {
     const turn = (await loadSessionFile(session.id).catch(() => undefined))?.pendingTurn;
-    if (turn && !turn.failedAt) pending.set(session.id, turn);
+    if (turn && !turn.failedAt) { pending.set(session.id, turn); return; }
+    const work = background(session.id);
+    if (work) pending.set(session.id, backgroundAsTurn(work));
   }));
   return pending;
+}
+
+/** A chat waiting on background agents, workflows or terminals is still working: a list shows it as a turn in flight, its agents as its sub-agents. */
+function backgroundAsTurn(work: NonNullable<WorkerRuntimeRecord['background']>): PendingTurn {
+  return {
+    prompt: '', startedAt: work.since, updatedAt: new Date().toISOString(), outputStarted: true,
+    subagents: Array.from({ length: work.agents ?? 0 }, (_, index) => ({ id: `background-${index}`, label: 'background agent', startedAt: work.since })),
+  };
 }
 
 /** What a live session is doing: `working` while a turn is in flight

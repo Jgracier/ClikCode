@@ -451,6 +451,35 @@ SCENARIOS = {
         'timer_counts_up': [r'waiting on agent · (\d+)s', r'Agent worker 0 · \d+ tool uses · (\d+)s'],
         'shown_outside_board': ['Starting the long build.'],
     },
+    'board-composer-empty-after-open': {
+        'turns': [TWO_BLOCKS, {'blocks': ['Other chat answered.']}],
+        'steps': [
+            ('type', 'please check the commit'), ('wait_for', 'The final commit is live.', 30), ('settle', 2),
+            ('type', '/rename Quiet River'), ('settle', 2), ('snap', 'named'),
+            ('keys', '\x1b[D'), ('settle', 2), ('snap', 'board-first'), ('keys', '\x1b[C'), ('settle', 2), ('snap', 'chat'),
+            ('keys', '\x1b[D'), ('settle', 2), ('snap', 'board-again'),
+            ('keys', '\x1b[C'), ('settle', 2), ('keys', '\x1b[D'), ('settle', 2), ('snap', 'board-third'),
+        ],
+        'watch': [],
+        # The chat's name is on its own composer's rule; the board's composer starts another chat and has none.
+        'snap_contains': {'named': ['Quiet River'], 'chat': ['Quiet River'], 'board-first': ['Quiet River']},
+        'snap_rules_lack': {'board-first': ['Quiet River'], 'board-again': ['Quiet River'], 'board-third': ['Quiet River']},
+    },
+    # The turn is over but the vendor still runs a terminal: the board keeps the chat under Working
+    # while it does, and lists it as idle once the work is done.
+    'board-working-while-background-runs': {
+        'turns': [{'emits': [
+            {'op': 'text', 'text': 'The dev server is started.'},
+            {'op': 'background', 'tasks': [{'type': 'local_bash', 'description': 'npm run dev'}]}],
+            'after': [{'op': 'sleep', 'ms': 14000}, {'op': 'background', 'tasks': []}]}],
+        'steps': [('type', 'start the server'), ('wait_for', '1 background terminal running', 30), ('settle', 1),
+                  ('keys', '\x1b[D'), ('settle', 2), ('snap', 'board-while'), ('keys', '\x1b'), ('settle', 1),
+                  ('wait_for', 'The dev server is started.', 5), ('settle', 14),
+                  ('keys', '\x1b[D'), ('settle', 2), ('snap', 'board-after')],
+        'watch': [],
+        'snap_contains': {'board-while': ['Working', 'working'], 'board-after': ['Recent']},
+        'snap_lacks': {'board-after': ['Working']},
+    },
     # The board's small print. Empty, it says so. Deleting asks about the
     # chat by its preview (every new one is "Untitled chat"), offers no
     # filter on a two-row list, and says Esc closes -- not "exit", which it
@@ -2386,6 +2415,7 @@ def run(name, spec, entry, keep):
         elif step[0] == 'snap':
             # The screen as it is now, kept under a name for the checks below.
             snaps[step[1]] = list(screen.display)
+            if os.environ.get("SHOW_SNAPS"): print("SNAP", step[1]); print("\n".join(f"  {n:2d}|{l.rstrip()[:100]}" for n, l in enumerate(screen.display) if l.strip()))
         elif step[0] == 'restart':
             # The window closes (its terminal hangs up) and a fresh process
             # opens on a fresh screen. Workers it started keep running.
@@ -2643,6 +2673,10 @@ def run(name, spec, entry, keep):
         shown = '\n'.join(snaps.get(name, []))
         for phrase in phrases:
             if phrase in shown: problems.append(f'on the {name!r} screen, and never should be: {phrase!r}')
+    for name, phrases in spec.get('snap_rules_lack', {}).items():
+        shown = '\n'.join(line for line in snaps.get(name, []) if line.lstrip().startswith('─'))
+        for phrase in phrases:
+            if phrase in shown: problems.append(f'on a rule of the {name!r} screen, and never should be: {phrase!r}')
     for name, phrases in spec.get('snap_once', {}).items():
         shown = '\n'.join(snaps.get(name, []))
         for phrase in phrases:

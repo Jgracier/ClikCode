@@ -123,6 +123,8 @@ export class BroadcastObserver implements TurnObserver {
    * process can say a conversation is waiting on the user without
    * attaching to it. */
   onAwaitingApproval?: (approval: { title: string; since: string } | undefined) => Promise<void> | void;
+  /** Told when the background work the vendor reports changes (undefined: none). Recorded beside the runtime record like an approval. */
+  onBackgroundWork?: (work: BackgroundWork | undefined) => Promise<void> | void;
   /** The conversation this worker runs: its turn's time waiting on the
    * user is kept under it (turn/user-wait.ts). */
   sessionId?: string;
@@ -399,6 +401,7 @@ export class BroadcastObserver implements TurnObserver {
   setBackgroundWork(work: BackgroundWork | undefined): void {
     const level = mergeBackgroundWork(undefined, work ?? {});
     if (this.waitingLabel) this.liveBackground = level;
+    void this.onBackgroundWork?.(level);
     this.broadcast({ type: 'background', pending: level?.agents ?? 0, ...(level ? { work: level } : {}) });
   }
 
