@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { arrangeSnapshot, changedLines, displayUrl, computerWebTool, findInSnapshot } from './computer-web.js';
+import { arrangeSnapshot, changedLines, collapseOptions, displayUrl, computerWebTool, findInSnapshot } from './computer-web.js';
 
 describe('arrangeSnapshot', () => {
   const longMiddle = Array.from({ length: 900 }, (_, index) => `    - link "Item number ${index} of the long list" [ref=e${100 + index}]`).join('\n');
@@ -125,5 +125,19 @@ describe('displayUrl', () => {
     expect(displayUrl('https://app.example.com/cb?code=abc123&page=2')).toBe('https://app.example.com/cb?code=…&page=2');
     expect(displayUrl(`https://app.example.com/#access_token=${long}`)).toBe('https://app.example.com/#…');
     expect(displayUrl('https://console.example.com/iam/api-keys')).toBe('https://console.example.com/iam/api-keys');
+  });
+});
+
+describe('collapseOptions', () => {
+  it('keeps the chosen option and the first few of a long list, and counts the rest', () => {
+    const options = Array.from({ length: 200 }, (_, i) => `      - option "Country ${i}"${i === 150 ? ' [selected]' : ''}`).join('\n');
+    const shown = collapseOptions(`- combobox "Country":\n${options}\n- button "Next"`);
+    expect(shown).toContain('option "Country 150" [selected]');
+    expect(shown).toContain('option "Country 0"');
+    expect(shown).not.toContain('Country 100"');
+    expect(shown).toContain('more options; choose one by its text');
+    expect(shown).toContain('button "Next"');
+    expect(shown.split('\n').length).toBeLessThan(15);
+    expect(collapseOptions('- combobox:\n  - option "A"\n  - option "B"')).toContain('option "B"');
   });
 });

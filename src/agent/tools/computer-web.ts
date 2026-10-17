@@ -87,7 +87,26 @@ const LONG_MENU_LINES = 25;
  * thing being acted on, and sits at the END of a big page, where a cut-off would lose it), a
  * page's header and footer menus are folded to a line, and a very long middle is trimmed.
  * `full` keeps the header, footer and side menus and allows a longer view. */
+/** A dropdown with hundreds of options (a country list) costs a page of text and says nothing: keep the chosen one and the first few, and count the rest. */
+export function collapseOptions(snapshot: string, keep = 6): string {
+  const lines = snapshot.split('\n');
+  const out: string[] = [];
+  for (let at = 0; at < lines.length;) {
+    if (!/^\s*- option "/.test(lines[at]!)) { out.push(lines[at]!); at++; continue; }
+    let end = at;
+    while (end < lines.length && /^\s*- option "/.test(lines[end]!) && indentOf(lines[end]!) === indentOf(lines[at]!)) end++;
+    const run = lines.slice(at, end);
+    if (run.length <= keep + 1) { out.push(...run); at = end; continue; }
+    const chosen = run.filter(line => /\[selected\]/.test(line));
+    const shown = new Set([...run.slice(0, keep), ...chosen]);
+    out.push(...run.filter(line => shown.has(line)), `${' '.repeat(indentOf(run[0]!))}- (… ${run.length - shown.size} more options; choose one by its text)`);
+    at = end;
+  }
+  return out.join('\n');
+}
+
 export function arrangeSnapshot(snapshot: string, full = false): string {
+  snapshot = collapseOptions(snapshot);
   const lines = snapshot.split('\n');
   const end = (from: number): number => { let at = from + 1; while (at < lines.length && indentOf(lines[at]!) > indentOf(lines[from]!)) at++; return at; };
   const hasMain = lines.some(line => /^\s*- main\b/.test(line));
