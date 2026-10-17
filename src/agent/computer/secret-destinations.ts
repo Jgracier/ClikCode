@@ -111,8 +111,9 @@ export type Delivery = { label: string; ok: boolean; message: string };
 
 const say = (text: string): string => {
   try {
-    const parsed = JSON.parse(text.slice(text.indexOf('{'))) as { message?: string; error?: string; data?: { message?: string; appliedToWebProcess?: boolean; reloadReason?: string } };
-    const line = [parsed.message ?? parsed.error ?? parsed.data?.message, parsed.data?.appliedToWebProcess !== undefined ? `appliedToWebProcess=${parsed.data.appliedToWebProcess}` : '', parsed.data?.reloadReason].filter(Boolean).join(' · ');
+    const parsed = JSON.parse(text.slice(text.indexOf('{'))) as { message?: string; error?: string | { message?: string; code?: string }; data?: { message?: string; appliedToWebProcess?: boolean; reloadReason?: string } };
+    const failure = typeof parsed.error === 'object' ? parsed.error.message ?? parsed.error.code : parsed.error;
+    const line = [parsed.message ?? failure ?? parsed.data?.message, parsed.data?.appliedToWebProcess !== undefined ? `appliedToWebProcess=${parsed.data.appliedToWebProcess}` : '', parsed.data?.reloadReason].filter(Boolean).join(' · ');
     if (line) return line;
   } catch { /* not JSON: use the last lines */ }
   return text.trim().split('\n').slice(-3).join(' ').slice(0, 300);

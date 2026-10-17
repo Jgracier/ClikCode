@@ -11,7 +11,9 @@ export type Decision = { kind: 'found'; value: string } | { kind: 'none' } | { k
 const STRONG_KEY = /api.?key|secret|access.?token|private.?key|auth.?token|bearer|credential/i;
 const PREFIXED = /^(?:[a-z]{2,12}(?:_[a-z]+)*_[A-Za-z0-9]{12,}|sk-|ghp_|github_pat_|AKIA|AIza|AQ\.|xox[abp]-|eyJ)/;
 /** A word that names the credential, so the value right after it is the credential ("API Key AQ.xxxx"). */
-const LABEL_THEN_VALUE = /\b(?:api[ _-]?key|secret(?: key)?|access[ _-]?token|token|key|credential|password)s?[ \t]*[:=]?[ \t]+([A-Za-z0-9_\-+/=.:~]{16,512})/gi;
+const LABEL_THEN_VALUE = /\b(?:api[ _-]?key|secret(?:[ _-]?key)?|access[ _-]?token|token|key|credential|password)s?(?:[ \t]*[:=][ \t]*|[ \t]+)([A-Za-z0-9_\-+/=.:~]{16,512})/gi;
+/** A UUID right after a "secret" label ("secret-key=7456…"): all lower-case hex, so it is no mixed-case token, yet it is the credential. */
+const SECRET_UUID = /(\bsecret[ _-]?(?:key|token)?s?(?:[ \t]*[:=][ \t]*|[ \t]+))([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/gi;
 /** Upper and lower case together with a digit, or (no digit) enough randomness that it is not a word. */
 const mixedCase = (value: string): boolean => /[a-z]/.test(value) && /[A-Z]/.test(value) && (/\d/.test(value) || entropy(value) >= 4.5);
 
@@ -129,6 +131,9 @@ export function hideKeyLikeText(text: string): { text: string; hidden: number } 
   const labelled = labelledValues(text);
   const copyHint = WORTH_SAVING_HINT.test(text);
   let hidden = 0;
+  // A page that invites copying and shows a "Secret Key:" label puts the value on the next line or in the next element.
+  const uuids = copyHint && /secret[ _-]?key/i.test(text) ? /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/g : SECRET_UUID;
+  text = text.replace(uuids, (match, label?: string) => { hidden++; return typeof label === 'string' ? `${label}[secret hidden]` : '[secret hidden]'; });
   const out = text.replace(/[A-Za-z0-9_\-+/=.:~]{24,}/g, token => {
     const bare = token.replace(/[.,;:)]+$/, '');
     if (!keyShaped(bare) || !mixedCase(bare) || !(labelled.has(bare) || (copyHint && bare.length >= 32))) return token;

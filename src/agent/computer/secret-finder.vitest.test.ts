@@ -82,3 +82,12 @@ it('rejects a very long token unless it is a dotted JWT', () => {
   expect(keyShaped(long)).toBe(false);
   expect(keyShaped(`eyJ${'a1B'.repeat(20)}.${'c2D'.repeat(20)}.${'e3F'.repeat(20)}`)).toBe(true);
 });
+
+it('hides a lower-case UUID secret key, in a snippet and under a "Secret Key:" label', () => {
+  const uuid = ['7456ed7e', 'be98', '4e0e', '9fe7', '50d010f9fbb2'].join('-');
+  const snippet = hideKeyLikeText(`access-key=ABC\nsecret-key=${uuid}\\\norganization-id=5354e130-df7f-4c1c-8d8f-c74f41131c06`);
+  expect(snippet.text).not.toContain(uuid);
+  expect(snippet.text).toContain('5354e130-df7f-4c1c-8d8f-c74f41131c06');
+  const labelled = hideKeyLikeText(`Secret Key:\n${uuid}\nCopy and store your secret key. It will only be shown once.`);
+  expect(labelled.text).not.toContain(uuid);
+});
