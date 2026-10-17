@@ -26,10 +26,15 @@ while a login is being handled. If a site uses an unfamiliar or cross-origin
 login, the user can finish through `computer_handoff` instead.
 
 For CAPTCHA, MFA, or another step the agent cannot finish, `computer_handoff`
-provides a ten-minute phone link. The user opens it, completes the step in the
-same live browser, then taps Done. Screenshots and taps pass through a temporary
-encrypted relay. The decryption key stays in the URL fragment and is not sent
-to the relay server. No desktop port is opened.
+provides a one-use, ten-minute phone link. The user opens it, completes the
+step in the same live browser, then taps Done. ClikCode starts Tailcat for this
+handoff and closes it afterward. The phone connects over Tailcat's encrypted
+transport; the browser version currently uses a DERP relay for its traffic.
+The Tailcat address and a second random session token stay in the URL fragment,
+which is not sent to the static page host. No ClikDeploy or Tailscale account is
+needed for this handoff. ClikCode downloads and verifies the Tailcat binary on
+first use when one is not installed, on supported platforms. The phone needs a
+modern browser with WebAssembly and DecompressionStream support.
 
 The optional `computer_web autofill` action triggers an installed Bitwarden
 browser extension. The default private credential path uses ClikCode's local
@@ -41,7 +46,7 @@ and desktop tools also run as that user. A separate OS identity and broker
 would be required to prevent those tools from accessing the key or a signed-in
 website. Sites may show an account email or ID after login.
 
-The phone link requires a ClikDeploy connection on the local worker and a
-browser session signed in to the same account on the phone. Vendor harnesses
-do not automatically receive ClikCode's own computer tools. The computer
-controls are available to ClikCode's own agent in the terminal and VS Code.
+The credential request form above still uses ClikDeploy as its ciphertext
+relay. The phone browser handoff does not. Vendor harnesses do not automatically
+receive ClikCode's own computer tools. The computer controls are available to
+ClikCode's own agent in the terminal and VS Code.
