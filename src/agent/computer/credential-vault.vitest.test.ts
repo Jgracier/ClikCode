@@ -2,7 +2,7 @@ import { afterEach, expect, it } from 'vitest';
 import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fillCredential, lockCredentialVault, saveCredential, soleCredentialForSite } from './credential-vault.js';
+import { fillCredential, loginLabel, lockCredentialVault, saveCredential, saveLoginFields, savedLoginsForSite } from './credential-vault.js';
 import type { Page } from 'playwright-core';
 
 let dir = '';
@@ -14,8 +14,8 @@ it('generates a local key automatically, stores only encrypted records, and fill
   const id = await saveCredential(dir, 'https://signin.aws.amazon.com/login', {
     accountId: 'account-123', email: 'private@example.com', password: secret,
   });
-  expect(await soleCredentialForSite(dir, 'https://signin.aws.amazon.com/elsewhere')).toBe(id);
-  expect(await soleCredentialForSite(dir, 'https://other.example/login')).toBeUndefined();
+  expect(await savedLoginsForSite(dir, 'https://signin.aws.amazon.com/elsewhere')).toEqual([{ id, label: 'account-123 · private@example.com', rejected: false }]);
+  expect(await savedLoginsForSite(dir, 'https://other.example/login')).toEqual([]);
   const vaultDir = join(dir, 'computer', 'vault');
   const items = await readdir(join(vaultDir, 'items'));
   expect(items).toEqual([`${id}.json`]);
@@ -38,12 +38,20 @@ it('generates a local key automatically, stores only encrypted records, and fill
   expect(filled.account).toBe('account-123');
 });
 
-it('does not choose between multiple saved accounts on one site', async () => {
+it('lists every account saved for a site by username, in order, and never by password', async () => {
   dir = await mkdtemp(join(tmpdir(), 'clikcode-vault-accounts-'));
-  for (const email of ['one@example.com', 'two@example.com']) {
-    await saveCredential(dir, 'https://accounts.google.com/', { accountId: '', email, password: 'private-password' });
-  }
-  expect(await soleCredentialForSite(dir, 'https://accounts.google.com/login')).toBeUndefined();
+  await saveCredential(dir, 'https://accounts.google.com/', { accountId: '', email: 'two@example.com', password: 'private-password' });
+  await saveLoginFields(dir, 'https://accounts.google.com/', { username: 'one@example.com', password: 'other-password' });
+  await saveLoginFields(dir, 'https://example.com/', { username: 'elsewhere@example.com', password: 'x' });
+  const logins = await savedLoginsForSite(dir, 'https://accounts.google.com/login');
+  expect(logins.map(login => login.label)).toEqual(['one@example.com', 'two@example.com']);
+  expect(JSON.stringify(logins)).not.toMatch(/password/);
+});
+
+it('labels a login by its non-secret fields only', () => {
+  expect(loginLabel({ accountId: '123456789012', username: 'admin', password: 'secret' })).toBe('123456789012 · admin');
+  expect(loginLabel({ email: 'a@example.com', username: 'a@example.com', password: 'secret' })).toBe('a@example.com');
+  expect(loginLabel({ password: 'secret' })).toBe('Saved login');
 });
 
 it('fills an email-first sign-in without returning the saved password', async () => {

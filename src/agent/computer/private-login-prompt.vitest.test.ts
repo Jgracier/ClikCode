@@ -33,3 +33,21 @@ it('masks passwords while keeping other login answers private', async () => {
     ['Email', true, false], ['Password', true, true],
   ]);
 });
+
+it('asks which saved account as an option list, keeps the answer secret, and refuses an unlisted choice', async () => {
+  let request: HarnessQuestionRequest | undefined;
+  let answer = 'two@example.com';
+  const observer = { askQuestions: async (asked: HarnessQuestionRequest) => {
+    request = asked;
+    return { kind: 'answered' as const, answers: { account: [answer] } };
+  } } as TurnObserver;
+  const field = { index: -1, key: 'account', label: 'Choose an account', kind: 'choice' as const, required: true, options: ['one@example.com', 'two@example.com', 'Use a different account'] };
+  expect(await askPrivateLogin(observer, 'https://example.com', [field])).toEqual({ account: 'two@example.com' });
+  expect(request?.questions).toEqual([{
+    id: 'account', prompt: 'Choose an account', secret: true,
+    options: [{ label: 'one@example.com' }, { label: 'two@example.com' }, { label: 'Use a different account' }],
+  }]);
+  expect(request?.title).toBe('Sign in to example.com');
+  answer = 'someone-else@example.com';
+  await expect(askPrivateLogin(observer, 'https://example.com', [field])).rejects.toThrow('listed options');
+});

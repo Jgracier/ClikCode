@@ -95,18 +95,24 @@ export function QuestionCard({ approval, position, total, onAnswer }: {
   const [guarded, setGuarded] = useState(true);
   const [picks, setPicks] = useState<Record<string, string[]>>({});
   const [typed, setTyped] = useState<Record<string, string>>({});
+  const card = useRef<HTMLDivElement>(null);
   useEffect(() => { const timer = setTimeout(() => setGuarded(false), APPROVAL_GUARD_MS); return () => clearTimeout(timer); }, []);
-  const valuesOf = (question: HarnessQuestion): string[] => {
+  // A lone choice (which saved account to sign in with) is answered from the
+  // keyboard like the terminal's: the first option is focused, arrows move,
+  // Enter chooses.
+  useEffect(() => { if (request.questions.length === 1) card.current?.querySelector<HTMLInputElement>('input[type="radio"]')?.focus(); }, []);
+  const valuesOf = (question: HarnessQuestion, held: Record<string, string[]> = picks): string[] => {
     const text = question.secret ? (typed[question.id] ?? '') : (typed[question.id] ?? '').trim();
-    const chosen = picks[question.id] ?? [];
+    const chosen = held[question.id] ?? [];
     if (question.multiSelect) return text ? [...chosen, text] : chosen;
     return text ? [text] : chosen;
   };
   const complete = request.questions.every((question) => question.optional || valuesOf(question).length > 0);
-  const submit = (): void => {
-    if (Date.now() - shownAt.current < APPROVAL_GUARD_MS || !complete) return;
+  const submit = (held: Record<string, string[]> = picks): void => {
+    if (Date.now() - shownAt.current < APPROVAL_GUARD_MS) return;
+    if (!request.questions.every((question) => question.optional || valuesOf(question, held).length > 0)) return;
     const answers: Record<string, string[]> = {};
-    for (const question of request.questions) { const values = valuesOf(question); if (values.length) answers[question.id] = values; }
+    for (const question of request.questions) { const values = valuesOf(question, held); if (values.length) answers[question.id] = values; }
     onAnswer({ kind: 'answered', answers });
   };
   const pick = (question: HarnessQuestion, label: string, on: boolean): void => {
@@ -121,7 +127,7 @@ export function QuestionCard({ approval, position, total, onAnswer }: {
     if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); submit(); }
   };
   return (
-    <div class={`approval question${guarded ? ' guarded' : ''}`} role="dialog" aria-label={`Question: ${approval.title}`} tabIndex={0} onKeyDown={onKey} data-approval={approval.id}>
+    <div ref={card} class={`approval question${guarded ? ' guarded' : ''}`} role="dialog" aria-label={`Question: ${approval.title}`} tabIndex={0} onKeyDown={onKey} data-approval={approval.id}>
       <div class="approval-head">
         <Icon name="question" /><span class="approval-title">{request.title}</span>
         {total > 1 ? <span class="muted approval-count">{position} of {total} waiting</span> : null}
@@ -136,7 +142,13 @@ export function QuestionCard({ approval, position, total, onAnswer }: {
             return (
               <label class="question-option" key={option.label}>
                 <input type={question.multiSelect ? 'checkbox' : 'radio'} name={`q-${approval.id}-${question.id}`} checked={chosen}
-                  onChange={(event) => pick(question, option.label, (event.target as HTMLInputElement).checked)} />
+                  onChange={(event) => pick(question, option.label, (event.target as HTMLInputElement).checked)}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter' || event.ctrlKey || event.metaKey || event.isComposing || question.multiSelect || request.questions.length !== 1) return;
+                    event.preventDefault(); event.stopPropagation();
+                    pick(question, option.label, true);
+                    submit({ [question.id]: [option.label] });
+                  }} />
                 <span>{option.label}{option.description ? <span class="muted"> — {option.description}</span> : null}</span>
               </label>
             );
@@ -155,7 +167,7 @@ export function QuestionCard({ approval, position, total, onAnswer }: {
         </fieldset>
       ))}
       <div class="approval-actions">
-        <button type="button" class="primary" data-question="submit" disabled={!complete} title="Send your answer (Ctrl+Enter)" onClick={submit}>Submit</button>
+        <button type="button" class="primary" data-question="submit" disabled={!complete} title="Send your answer (Ctrl+Enter)" onClick={() => submit()}>Submit</button>
         <button type="button" class="secondary" data-question="dismiss" title="Dismiss without answering (Esc)" onClick={() => { if (Date.now() - shownAt.current >= APPROVAL_GUARD_MS) onAnswer({ kind: 'cancelled' }); }}>Dismiss</button>
       </div>
     </div>

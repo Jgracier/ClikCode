@@ -51,7 +51,8 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   computer.command('inspect').description('Show visible login field names without their values').action(async () => (await import('../commands/computer.js')).computerInspect());
   computer.command('login [url]').description('Open a login URL if given, then ask privately in the current chat')
     .option('--chat <chat>', 'Chat id, prefix or name when run outside a chat')
-    .action(async (url: string | undefined, options: { chat?: string }) => (await import('../commands/computer.js')).computerLogin(options.chat, url));
+    .option('--new', 'Sign in with a different account instead of the saved one')
+    .action(async (url: string | undefined, options: { chat?: string; new?: boolean }) => (await import('../commands/computer.js')).computerLogin(options.chat, url, options.new));
   program.command('logs').description('What every ClikCode window, worker and editor bridge did, in order (the lifecycle log)')
     .option('--session <id>', 'Only this conversation (an id or the start of one)')
     .option('--role <role>', 'Only window, worker, bridge or command')

@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import type { Page } from 'playwright-core';
-import { loginFields } from './login-fields.js';
+import { loginFields, loginFieldSummary, loginOptions } from './login-fields.js';
 import { observeComputerPage } from '../tools/computer-web.js';
 
 it('shows the agent Gmail’s field label without exposing its value or taking a screenshot', async () => {
@@ -34,4 +34,17 @@ it('recognizes an account ID, email and password form from the fields actually o
   expect((await loginFields(page)).map(({ key, label }) => [key, label])).toEqual([
     ['accountId', 'Account ID'], ['email', 'Email'], ['password', 'Password'],
   ]);
+});
+
+it('lists the other ways to sign in so the agent can ask which one, without naming any account', async () => {
+  const names = ['Sign in using root user email', 'Sign in as IAM user', 'Justin Gracier justin@example.com', 'Privacy', 'Terms', 'Use another account', 'Sign in using root user email'];
+  const page = { locator: () => ({ evaluateAll: async (callback: (nodes: unknown[]) => unknown) => callback(names.map(innerText => ({ innerText }))) }) } as unknown as Page;
+  const options = await loginOptions(page);
+  expect(options).toEqual(['Sign in using root user email', 'Sign in as IAM user', 'Use another account']);
+  const summary = loginFieldSummary('https://signin.aws.amazon.com', [], options);
+  expect(summary).toContain('Sign in as IAM user');
+  expect(summary).toContain('ask_user');
+  expect(summary).toContain('picks one');
+  expect(summary).not.toContain('justin@example.com');
+  expect(loginFieldSummary('https://example.com', [])).not.toContain('Other ways');
 });

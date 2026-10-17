@@ -3,33 +3,36 @@ import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ToolContext } from '../tool-contract.js';
-import { lockCredentialVault } from '../computer/credential-vault.js';
+import { lockCredentialVault, saveLoginFields, savedLoginFields, savedLoginsForSite } from '../computer/credential-vault.js';
 
 const browser = vi.hoisted(() => {
   const filled: string[] = [];
   let step = 0;
   let advance = true;
   let emailOnly = false;
+  let rejectPassword = false;
+  let rejectedPage = false;
   let finishUrl = 'https://mail.google.com/mail/u/0/';
   const field = (type: string, name: string, label: string) => ({
     type, name, id: name, autocomplete: type === 'password' ? 'current-password' : 'username', required: true, placeholder: '', labels: [],
     getAttribute: (attribute: string) => attribute === 'aria-label' ? label : null,
   });
   const page = {
-    url: () => step === 0 ? 'https://accounts.google.com/v3/signin/identifier'
+    url: () => rejectedPage ? 'https://accounts.google.com/v3/signin/pwd?again'
+      : step === 0 ? 'https://accounts.google.com/v3/signin/identifier'
       : step === 1 ? 'https://accounts.google.com/v3/signin/pwd' : finishUrl,
     waitForTimeout: async () => {},
     locator: (selector: string) => ({
       count: async () => selector.includes('password') ? Number(step === 1) : Number(step < 2),
       evaluateAll: async (callback: (nodes: unknown[]) => unknown) => callback(step === 2 ? [] : [step ? field('password', 'password', 'Password') : field('text', 'identifier', 'Email or phone')]),
-      nth: () => ({ fill: async (value: string) => { filled.push(value); }, press: async (key: string) => { filled.push(key); if (advance) step = emailOnly && step === 0 ? 2 : step + 1; } }),
+      nth: () => ({ fill: async (value: string) => { filled.push(value); }, press: async (key: string) => { filled.push(key); if (rejectPassword && step === 1) { rejectedPage = true; return; } if (advance) step = emailOnly && step === 0 ? 2 : step + 1; } }),
       fill: async (value: string) => { filled.push(value); },
       press: async (key: string) => { filled.push(key); },
     }),
     getByRole: () => ({ count: async () => 0 }),
   };
-  return { filled, page, reset: () => { step = 0; advance = true; emailOnly = false; finishUrl = 'https://mail.google.com/mail/u/0/'; },
-    stopAdvancing: () => { advance = false; }, reuseSession: () => { emailOnly = true; },
+  return { filled, page, reset: () => { step = 0; advance = true; emailOnly = false; rejectPassword = false; rejectedPage = false; finishUrl = 'https://mail.google.com/mail/u/0/'; },
+    stopAdvancing: () => { advance = false; }, rejectPassword: () => { rejectPassword = true; }, reuseSession: () => { emailOnly = true; },
     requireVerification: () => { finishUrl = 'https://accounts.google.com/v3/signin/challenge/dp'; } };
 });
 vi.mock('../computer/browser.js', () => ({ computerPage: async () => browser.page }));
@@ -110,4 +113,104 @@ it('does not fall back to a phone credential link when no private client UI is a
   expect(result.isError).toBe(true);
   expect(result.output).toContain('Private login did not finish');
   expect(result.output).not.toContain('https://jgracier.github.io');
+});
+
+
+const GOOGLE = 'https://accounts.google.com/';
+const NEW_ACCOUNT = 'Use a different account';
+const seed = (username: string, password: string): Promise<string> => saveLoginFields(stateDir, GOOGLE, { username, password });
+/** Answers the way a person would: the named account (or a new one) from the picker, then typed fields. */
+function person(answers: { account?: string; username?: string; password?: string }, asked: { key: string; kind: string; options?: readonly string[] }[][] = []): ToolContext {
+  return {
+    stateDir, requestPrivateLogin: async (_site: string, fields: { key: string; kind: string; options?: readonly string[] }[]) => {
+      asked.push(fields);
+      const key = fields[0]!.key as 'account' | 'username' | 'password';
+      return answers[key] === undefined ? undefined : { [key]: answers[key]! };
+    },
+  } as ToolContext;
+}
+
+it('uses the one saved account without asking anything', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-private-login-one-'));
+  await seed('one@example.com', 'pw-one');
+  const asked: { key: string; kind: string }[][] = [];
+  const result = await computerWebTool.run({ action: 'login' }, person({}, asked));
+  expect(result.isError).toBeUndefined();
+  expect(asked).toEqual([]);
+  expect(browser.filled).toEqual(['one@example.com', 'Enter', 'pw-one', 'Enter']);
+  expect(JSON.stringify(result)).not.toMatch(/one@example|pw-one/);
+});
+
+it('shows a picker of the saved usernames when there are several, then signs in with the chosen one', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-private-login-pick-'));
+  await seed('two@example.com', 'pw-two');
+  await seed('one@example.com', 'pw-one');
+  const asked: { key: string; kind: string; options?: readonly string[] }[][] = [];
+  const result = await computerWebTool.run({ action: 'login' }, person({ account: 'two@example.com' }, asked));
+  expect(result.isError).toBeUndefined();
+  expect(asked).toHaveLength(1);
+  expect(asked[0]![0]).toMatchObject({ kind: 'choice', options: ['one@example.com', 'two@example.com', NEW_ACCOUNT] });
+  expect(browser.filled).toEqual(['two@example.com', 'Enter', 'pw-two', 'Enter']);
+  expect(JSON.stringify(result)).not.toMatch(/one@example|two@example|pw-/);
+});
+
+it('signs nothing in when the picker is dismissed', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-private-login-dismiss-'));
+  await seed('one@example.com', 'pw-one');
+  await seed('two@example.com', 'pw-two');
+  const result = await computerWebTool.run({ action: 'login' }, person({}));
+  expect(result.isError).toBe(true);
+  expect(browser.filled).toEqual([]);
+});
+
+it('adds a third account from the picker', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-private-login-add-'));
+  await seed('one@example.com', 'pw-one');
+  await seed('two@example.com', 'pw-two');
+  const answers = { account: NEW_ACCOUNT, username: 'three@example.com', password: 'pw-three' };
+  const ctx = { stateDir, requestPrivateLogin: async (_s: string, fields: { key: keyof typeof answers }[]) => ({ [fields[0]!.key]: answers[fields[0]!.key] }) } as ToolContext;
+  expect((await computerWebTool.run({ action: 'login' }, ctx)).isError).toBeUndefined();
+  expect((await savedLoginsForSite(stateDir, GOOGLE)).map(login => login.label)).toEqual(['one@example.com', 'three@example.com', 'two@example.com']);
+});
+
+it('updates an account instead of duplicating it when the same username is entered again', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-private-login-same-'));
+  const first = await seed('one@example.com', 'pw-old');
+  await seed('two@example.com', 'pw-two');
+  const answers = { account: NEW_ACCOUNT, username: 'one@example.com', password: 'pw-new' };
+  const ctx = { stateDir, requestPrivateLogin: async (_s: string, fields: { key: keyof typeof answers }[]) => ({ [fields[0]!.key]: answers[fields[0]!.key] }) } as ToolContext;
+  expect((await computerWebTool.run({ action: 'login' }, ctx)).isError).toBeUndefined();
+  expect(await savedLoginsForSite(stateDir, GOOGLE)).toHaveLength(2);
+  expect((await savedLoginFields(stateDir, GOOGLE, first)).password).toBe('pw-new');
+});
+
+it('lets the user choose a different account even when only one is saved', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-private-login-new-'));
+  await seed('one@example.com', 'pw-one');
+  const asked: { key: string; kind: string }[][] = [];
+  const answers = { username: 'other@example.com', password: 'pw-other' };
+  const ctx = { stateDir, requestPrivateLogin: async (_s: string, fields: { key: keyof typeof answers; kind: string }[]) => { asked.push(fields); return { [fields[0]!.key]: answers[fields[0]!.key] }; } } as ToolContext;
+  expect((await computerWebTool.run({ action: 'login', new_account: true }, ctx)).isError).toBeUndefined();
+  expect(asked.map(fields => fields[0]!.key)).toEqual(['username', 'password']);
+  expect(await savedLoginsForSite(stateDir, GOOGLE)).toHaveLength(2);
+});
+
+it('offers the picker again after the site refuses a saved password, so a new one can be entered', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-private-login-refused-'));
+  const id = await seed('one@example.com', 'pw-stale');
+  browser.rejectPassword();
+  const refused = await computerWebTool.run({ action: 'login' }, person({}));
+  expect(refused.isError).toBe(true);
+  expect(refused.output).toContain('did not accept the saved password');
+  expect((await savedLoginsForSite(stateDir, GOOGLE))[0]).toMatchObject({ id, rejected: true });
+
+  browser.reset();
+  browser.filled.length = 0;
+  const answers = { account: NEW_ACCOUNT, username: 'one@example.com', password: 'pw-fixed' };
+  const asked: { key: string; kind: string }[][] = [];
+  const ctx = { stateDir, requestPrivateLogin: async (_s: string, fields: { key: keyof typeof answers; kind: string }[]) => { asked.push(fields); return { [fields[0]!.key]: answers[fields[0]!.key] }; } } as ToolContext;
+  expect((await computerWebTool.run({ action: 'login' }, ctx)).isError).toBeUndefined();
+  expect(asked[0]![0]!.kind).toBe('choice');
+  expect(await savedLoginsForSite(stateDir, GOOGLE)).toEqual([{ id, label: 'one@example.com', rejected: false }]);
+  expect((await savedLoginFields(stateDir, GOOGLE, id)).password).toBe('pw-fixed');
 });
