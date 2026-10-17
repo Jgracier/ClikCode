@@ -12,7 +12,7 @@ import { computerEnabled, setComputerEnabled } from '../../../agent/computer/set
 import { stateDirectory } from '../../../session/store/paths.js';
 import { closeComputerBrowser } from '../../../agent/computer/browser.js';
 import { lockCredentialVault } from '../../../agent/computer/credential-vault.js';
-import { computerInspect, computerLogin } from '../../../commands/computer.js';
+import { computerInspect, computerLogin, computerTool } from '../../../commands/computer.js';
 import type { AiHarnessPermissionMode } from '../../../harness/definition.js';
 import { applyClikCodeAgentSessionPolicy, applyFreshLocalSessionPolicy } from '../../../commands/ai/sessions.js';
 import { aiSettingsClearProvider, aiSettingsSetGlobal, aiSettingsSetProvider } from '../../../commands/ai/settings.js';
@@ -62,8 +62,9 @@ export const settingsHandlers = {
       if (urls.length <= 1) { await computerLogin(session.id, { ...(urls[0] ? { url: urls[0] } : {}), ...(newAccount ? { newAccount: true } : {}) }); return; }
     }
     if (value === 'logins' && words.length === 1) { await computerLogin(session.id, { manage: true }); return; }
+    if (value === 'profile' && words.length === 1) { await computerTool('computer_web', { action: 'profile', ask: true }, session.id); return; }
     if (value === 'inspect' && words.length === 1) { await computerInspect(); return; }
-    if (words.length > 1 || (value && value !== 'on' && value !== 'off')) throw new Error('usage: /computer [on|off|inspect|logins|login [url] [--new]]');
+    if (words.length > 1 || (value && value !== 'on' && value !== 'off')) throw new Error('usage: /computer [on|off|inspect|logins|profile|login [url] [--new]]');
     if (value) {
       await setComputerEnabled(stateDirectory(), value === 'on');
       if (value === 'off') { await closeComputerBrowser(stateDirectory()); lockCredentialVault(stateDirectory()); }
