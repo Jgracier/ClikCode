@@ -136,7 +136,7 @@ export function schedulePaint(this: TerminalHarnessPrompter, delay = PAINT_COALE
  * streamed; `/model` went to the model as the word "/model". */
 export function paintWaiting(this: TerminalHarnessPrompter, turn: WaitingTurn): void {
   const asking = this.pendingApproval?.question?.state;
-  if (asking?.typing && asking.question.secret) {
+  if (asking?.typing && asking.question.secret && asking.question.maskInput !== false) {
     this.paint('•'.repeat(turn.draft.length), [], 0, '› ', turn.cursor);
     return;
   }

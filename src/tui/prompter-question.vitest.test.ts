@@ -60,6 +60,25 @@ describe('a harness question in the terminal', () => {
     } finally { rl.close(); }
   });
 
+  it('shows a private email while typing but omits it from the transcript', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const { rl, key } = open();
+    try {
+      const paint = vi.spyOn(rl, 'paint').mockImplementation(() => {});
+      const answered = rl.askQuestions({ title: 'Sign in to accounts.google.com', questions: [
+        { id: 'username', prompt: 'Email or phone', options: [], secret: true, maskInput: false },
+      ] });
+      vi.setSystemTime(Date.now() + 1000);
+      for (const ch of 'private@example.com') key(ch);
+      rl.paintWaiting(rl.turn!);
+      expect(paint).toHaveBeenLastCalledWith('private@example.com', [], 0, '› ', 'private@example.com'.length);
+      key('\r');
+      await expect(answered).resolves.toEqual({ kind: 'answered', answers: { username: ['private@example.com'] } });
+      expect(rl.history.join('\n')).not.toContain('private@example.com');
+      expect(JSON.stringify(rl.journal)).not.toContain('private@example.com');
+    } finally { rl.close(); }
+  });
+
   it('is cancelled by Esc', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     const { rl, key } = open();

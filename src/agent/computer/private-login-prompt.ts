@@ -9,8 +9,11 @@ export async function askPrivateLogin(
   if (!observer.askQuestions) return undefined;
   if (!fields.length) return undefined;
   const result = await observer.askQuestions({
-    title: `Save login for ${site}`,
-    questions: fields.map(field => ({ id: field.key, header: field.label, prompt: field.label, options: [], secret: true })),
+    title: `Sign in to ${new URL(site).hostname}`,
+    questions: fields.map(field => ({
+      id: field.key, prompt: field.label, options: [], secret: true,
+      maskInput: field.kind === 'password',
+    })),
   }, signal);
   if (result.kind !== 'answered') return undefined;
   const values = Object.fromEntries(fields.map(field => [field.key, result.answers[field.key]?.[0] ?? '']));

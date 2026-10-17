@@ -29,8 +29,10 @@ export interface HarnessQuestion {
   multiSelect?: boolean;
   /** Beside the options, the user may type an answer of their own. */
   allowFreeText?: boolean;
-  /** The answer is typed hidden and kept out of history (a token). */
+  /** Keep the answer out of history and the agent transcript. Hidden by default. */
   secret?: boolean;
+  /** Display only: false shows private text while typing. Passwords stay masked. */
+  maskInput?: boolean;
   /** The user may leave it unanswered (shown as a Skip row). */
   optional?: boolean;
 }
