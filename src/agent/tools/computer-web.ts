@@ -23,7 +23,7 @@ import type { ToolContext, ToolRunResult } from '../tool-contract.js';
 
 type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait'; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; accept_dialog?: boolean; gone?: boolean; seconds?: number };
 type WebArgs = {
-  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'profile' | 'open_email_link';
+  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'profile' | 'open_email_link' | 'help';
   url?: string; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
   new_account?: boolean; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; label?: string; secret_name?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
 };
@@ -210,21 +210,31 @@ export async function observeComputerPage(page: Page, acceptsImages: boolean, fu
 /** Wait for what an action started to land, so the view that follows is a finished page, not a spinner. */
 async function settle(page: Page): Promise<void> {
   await page.waitForLoadState('domcontentloaded', { timeout: 5_000 }).catch(() => undefined);
-  await page.waitForLoadState('networkidle', { timeout: 2_500 }).catch(() => undefined);
-  await page.waitForTimeout(250).catch(() => undefined);
+  // Quiet, not "network idle" (many sites never go idle): done once the page has stopped changing for a moment.
+  await page.evaluate(() => new Promise<void>(resolve => {
+    const g = globalThis as unknown as { document: object; MutationObserver: new (callback: () => void) => { observe(target: object, options: object): void; disconnect(): void }; setTimeout(callback: () => void, ms: number): number; clearTimeout(id: number): void };
+    let quiet = g.setTimeout(done, 250);
+    const watcher = new g.MutationObserver(() => { g.clearTimeout(quiet); quiet = g.setTimeout(done, 250); });
+    watcher.observe(g.document, { subtree: true, childList: true, attributes: true, characterData: true });
+    g.setTimeout(done, 1_500);
+    function done(): void { watcher.disconnect(); resolve(); }
+  })).catch(() => undefined); // a navigation destroys the page being watched: the next look is a new page
 }
+
+const ACTION_LIST = 'open · close · observe · click · fill · choose · press · scroll · wait · steps · login · handoff · capture_secret · profile · open_email_link · help';
 
 export const computerWebTool = defineTool<WebArgs>({
   name: 'computer_web', class: 'exec',
   description: [
     "Drive ClikCode's own Chrome (its own saved profile; it starts by itself). open and observe return the page, with a [ref=…] on each element: pass a ref as target (or visible text) to click or fill. After an action you get only what changed (and any open dialog); observe shows the whole page again. A new tab or popup the page opens is followed automatically.",
     'Actions: open (a URL) · observe (the page again; full: true adds header and footer; find: "words" shows only the lines that mention them, for a long page) · click · fill · choose (an option of a dropdown: target + text) · press · scroll · wait (for text to appear or go, up to 2 minutes; for jobs that finish on their own) · steps (several of those in order, one call, stops at the first failure) · login · handoff · capture_secret · profile · open_email_link (find the newest email from a sender in the signed-in Gmail and open a link in it, one call: verification and sign-in emails) · close.',
-    'Each chat has its own tab. The user\'s autofill profile (name, email, phone, address) fills forms for you: fill a field with no text and it is filled from the profile, or the user is asked once and the answer is kept. If a site wants another format, fill that field with the exact text, and save the corrected value with action profile and fields. Every page can be read, including sign-in and signup forms; the values of password, code and card fields are masked. For anything only the user knows (a password, a code, an address, a phone number), fill the field with no text: the user is asked privately and you are not shown the answer. login fills a saved login, or asks the user privately; never ask for a password or code in chat. When a sign-in page offers different ways in (root or IAM, another account), ask the user with ask_user, click their choice, then login. handoff returns a phone link for a CAPTCHA or MFA at once; give it to the user, then call handoff again to wait until they finish.',
+    'Each chat has its own tab. The user\'s autofill profile (name, email, phone, address) fills forms for you: fill a field with no text and it is filled from the profile, or the user is asked once and the answer is kept. If a site wants another format, fill that field with the exact text, and save the corrected value with action profile and fields. When a site offers Continue/Sign in with Google and the browser is already signed in to Google, prefer it: no new password or email check. Every page can be read, including sign-in and signup forms; the values of password, code and card fields are masked. For anything only the user knows (a password, a code, an address, a phone number), fill the field with no text: the user is asked privately and you are not shown the answer. login fills a saved login, or asks the user privately; never ask for a password or code in chat. When a sign-in page offers different ways in (root or IAM, another account), ask the user with ask_user, click their choice, then login. handoff returns a phone link for a CAPTCHA or MFA at once; give it to the user, then call handoff again to wait until they finish.',
     'Work through the whole task you were given without checking in at each step. Ask real choices (project, account, role set) once, up front, in one question; after that ask only when genuinely blocked (a sign-in they must type, a payment).',
     'API keys: go to the key page, set the options, then capture_secret with target = the final Create button and a send_to plan. It presses the site\'s Copy button or reads the file it hands over, checks the key against its service, saves it to ClikCode Secrets Manager and sends it where send_to says. You never see the key. With no target it takes a key the page already shows; never click Regenerate just to see one.',
   ].join('\n'),
-  parameters: { type: 'object', additionalProperties: false, required: ['action'], properties: {
-    action: { type: 'string', enum: ['open', 'close', 'observe', 'click', 'fill', 'choose', 'press', 'scroll', 'wait', 'steps', 'login', 'handoff', 'capture_secret', 'profile', 'open_email_link'] },
+  // Open on purpose: a chat keeps the argument list it started with, and the reloaded code (hot-tools.ts) understands more.
+  parameters: { type: 'object', additionalProperties: true, required: ['action'], properties: {
+    action: { type: 'string', description: ACTION_LIST },
     url: { type: 'string', description: 'open: the website address.' },
     target: { type: 'string', description: 'click, fill, capture_secret: a [ref=…] from the page view (e5, or f1e2 inside a frame), or the visible text of a sign-in page control.' },
     text: { type: 'string', description: 'fill: the text. Leave it out for what only the user knows (name, address, phone, a password): the user is asked privately, once for all such fields in the call, and you are not shown the answer. wait: the words to wait for.' },
@@ -584,7 +594,8 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       if (outcome === 'waiting') return { output: 'The user has not finished yet. Call handoff again to keep waiting.' };
       return outcome.ok ? { output: 'The user finished the browser step. Continue from the current page.' } : { output: outcome.message, isError: true };
     }
-    default: throw new Error('Unknown web action.');
+    case 'help': return { output: `${computerWebTool.description}\n\nArguments: ${Object.entries((computerWebTool.parameters as { properties: Record<string, { description?: string }> }).properties).map(([name, spec]) => `${name}${spec.description ? ` (${spec.description})` : ''}`).join('; ')}` };
+    default: throw new Error(`Unknown action "${String(args.action)}". Actions: ${ACTION_LIST}.`);
   }
 }
 
