@@ -25,6 +25,16 @@ const RECIPES: readonly Recipe[] = [
   { host: /(^|\.)console\.mistral\.ai$/, service: 'Mistral', request: bearer('https://api.mistral.ai/v1/models') },
   { host: /(^|\.)platform\.deepseek\.com$/, service: 'DeepSeek', request: bearer('https://api.deepseek.com/models') },
   { host: /(^|\.)openrouter\.ai$/, service: 'OpenRouter', request: bearer('https://openrouter.ai/api/v1/key') },
+  // A 403 from these can mean "valid, but this key's scope does not include that call", so only 401 is a refusal.
+  { host: /(^|\.)scaleway\.com$/, service: 'Scaleway', rejects: [401], request: bearer('https://api.scaleway.ai/v1/models') },
+  { host: /(^|\.)(fireworks\.ai)$/, service: 'Fireworks', rejects: [401], request: bearer('https://api.fireworks.ai/inference/v1/models') },
+  { host: /(^|\.)console\.x\.ai$/, service: 'xAI', rejects: [400, 401], request: bearer('https://api.x.ai/v1/models') },
+  { host: /(^|\.)dashboard\.cohere\.com$/, service: 'Cohere', rejects: [401], request: bearer('https://api.cohere.com/v1/models') },
+  { host: /(^|\.)replicate\.com$/, service: 'Replicate', rejects: [401], request: bearer('https://api.replicate.com/v1/account') },
+  { host: /(^|\.)cloud\.lambda(labs)?\.(ai|com)$/, service: 'Lambda', rejects: [401, 403], request: bearer('https://cloud.lambdalabs.com/api/v1/instance-types') },
+  { host: /(^|\.)my\.vultr\.com$/, service: 'Vultr', rejects: [401], request: bearer('https://api.vultr.com/v2/account') },
+  { host: /(^|\.)console\.hetzner\.(cloud|com)$/, service: 'Hetzner', rejects: [401], request: bearer('https://api.hetzner.cloud/v1/servers?per_page=1') },
+  { host: /^github\.com$/, service: 'GitHub', rejects: [401], request: bearer('https://api.github.com/user') },
 ];
 
 export function keyCheckService(pageUrl: string): string | undefined {

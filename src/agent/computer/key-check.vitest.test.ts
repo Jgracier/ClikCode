@@ -108,3 +108,14 @@ it('gives up with Google\'s reason after the wait, and does not wait at all for 
   expect((await checkKey('https://console.cloud.google.com/', serviceAccount(), never, { pause: async () => { throw new Error('should not wait'); } })).verdict).toBe('rejected');
   expect(calls).toBe(1);
 });
+
+it('knows the common key pages, and sends each key only to its own service', async () => {
+  const urls: string[] = [];
+  const spy = (async (url: unknown, init?: RequestInit) => { urls.push(String(url)); const sent = JSON.stringify(init?.headers ?? {}); return new Response('{}', { status: sent.includes('abcDEF123456789xyz0') ? 200 : 401 }); }) as typeof fetch;
+  for (const [page, host] of [['https://console.scaleway.com/iam/api-keys', 'api.scaleway.ai'], ['https://github.com/settings/tokens', 'api.github.com'], ['https://replicate.com/account/api-tokens', 'api.replicate.com'], ['https://my.vultr.com/settings/#settingsapi', 'api.vultr.com'], ['https://console.hetzner.cloud/projects', 'api.hetzner.cloud']] as const) {
+    urls.length = 0;
+    expect(await checkKey(page, 'abcDEF123456789xyz0', spy)).toMatchObject({ verdict: 'works' });
+    expect(urls.every(url => new URL(url).hostname === host)).toBe(true);
+  }
+  expect(keyCheckService('https://console.x.ai/team/keys')).toBe('xAI');
+});
