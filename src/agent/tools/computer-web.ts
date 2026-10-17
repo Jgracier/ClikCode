@@ -120,6 +120,16 @@ export function findInSnapshot(snapshot: string, text: string): string {
   return [...keep].sort((a, b) => a - b).map(at => lines[at]!).join('\n');
 }
 
+/** A page address for the agent to read: a long query value or fragment (an emailed token, an OAuth code) is shortened, so it neither costs a page of text nor puts a one-use secret in the chat. */
+export function displayUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    for (const [key, value] of [...parsed.searchParams.entries()]) if (value.length > 40 || /^(?:code|token|access_token|id_token|state|key|secret)$/i.test(key)) parsed.searchParams.set(key, '…');
+    if (parsed.hash.length > 40) parsed.hash = '#…';
+    return parsed.href.replace(/%E2%80%A6/g, '…');
+  } catch { return url.slice(0, 200); }
+}
+
 const lastSeen = sharedState('page-last-seen', () => new WeakMap<Page, { url: string; shown: string }>());
 
 /** What is new on the page since it was last shown, each new line under the lines that contain it.
@@ -147,7 +157,7 @@ export async function observeComputerPage(page: Page, acceptsImages: boolean, fu
   const { text: shown, hidden } = hideKeyLikeText(raw);
   if (find?.trim()) {
     const found = findInSnapshot(shown, find.trim());
-    return { output: `Page: ${page.url()}\n\n${found ? `Lines mentioning "${find.trim()}" (with the elements around them):\n${found.slice(0, 12_000)}` : `Nothing on the page mentions "${find.trim()}". Try observe with full: true.`}` };
+    return { output: `Page: ${displayUrl(page.url())}\n\n${found ? `Lines mentioning "${find.trim()}" (with the elements around them):\n${found.slice(0, 12_000)}` : `Nothing on the page mentions "${find.trim()}". Try observe with full: true.`}` };
   }
   const before = lastSeen.get(page);
   lastSeen.set(page, { url: page.url(), shown });
@@ -157,11 +167,11 @@ export async function observeComputerPage(page: Page, acceptsImages: boolean, fu
       const head = arrangeSnapshot(shown, false).split('\n\n')[0]!;
       const open = head.startsWith('Open now') ? `${head}\n\n` : '';
       const body = changed.count ? `Changed on the page (${changed.count} new or changed line${changed.count === 1 ? '' : 's'}; the rest is as before, observe for the whole page):\n${changed.text.slice(0, 8_000)}` : 'Nothing on the page changed (observe for the whole page).';
-      return { output: `Page: ${page.url()}\n\n${open}${body}${hidden ? `\n\n[${hidden} key-like value${hidden === 1 ? '' : 's'} hidden. Use capture_secret to save it without reading it.]` : ''}` };
+      return { output: `Page: ${displayUrl(page.url())}\n\n${open}${body}${hidden ? `\n\n[${hidden} key-like value${hidden === 1 ? '' : 's'} hidden. Use capture_secret to save it without reading it.]` : ''}` };
     }
   }
   const snapshot = arrangeSnapshot(shown, full);
-  const output = `Page: ${page.url()}\n\n${snapshot}${hidden ? `\n\n[${hidden} key-like value${hidden === 1 ? '' : 's'} hidden. Use capture_secret to save it without reading it.]` : ''}`;
+  const output = `Page: ${displayUrl(page.url())}\n\n${snapshot}${hidden ? `\n\n[${hidden} key-like value${hidden === 1 ? '' : 's'} hidden. Use capture_secret to save it without reading it.]` : ''}`;
   if (!acceptsImages) return { output };
   if (hidden || (await sensitiveValues(page)).length || showsSecret(snapshot) || showsSecret(await page.evaluate(visibleText).catch(() => ''))) return { output: `${output}\n\n[Screenshot withheld: the page holds a typed credential or a saved secret.]` };
   let bytes = await page.screenshot({ type: 'jpeg', quality: 65, animations: 'disabled', timeout: 10_000 });
@@ -347,7 +357,7 @@ async function runSteps(page: Page, steps: readonly Step[], ctx: ToolContext): P
       current = next;
       adoptPage(ctx.stateDir, current);
       await settle(current);
-      notes.push(`A new tab opened and is now the page: ${current.url()}`);
+      notes.push(`A new tab opened and is now the page: ${displayUrl(current.url())}`);
     }
   }
   const view = await observeComputerPage(current, false, false, undefined, true);
