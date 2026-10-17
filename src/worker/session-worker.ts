@@ -36,7 +36,7 @@ import { startStuckWatchdog } from './stuck-watchdog.js';
 import { LiveSettings } from '../turn/live-settings.js';
 import { sessionState } from '../agent/session-state.js';
 import { stateDirectory } from '../session/store/paths.js';
-import { generateWorkerToken, socketPathFor, takeConversation, workerIsReachable, writeWorkerRecord, currentWorkerBuild, type ConversationHold } from './registry.js';
+import { generateWorkerToken, socketPathFor, takeConversation, workerIsReachable, writeWorkerRecord, currentWorkerBuild, type ConversationHold, type WorkerRuntimeRecord } from './registry.js';
 import type { ConnectionState, WorkerContext } from './worker-context.js';
 import { createWorkerIo } from './worker-io.js';
 import { BUILD_WATCH_MS, createIdleControl } from './worker-idle.js';
@@ -190,11 +190,22 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     await ctx.io.recordNotifications(reports.map((entry) => ({ kind: 'agent' as const, shellId: entry.id, command: entry.label, tail: entry.report, reason: 'interrupted', at: Date.now() })));
     await ctx.queue.deliverNotifications();
   }).catch(() => undefined);
-  observer.onAwaitingApproval = (awaitingApproval) => {
+  // The record carries what a list needs to say about this conversation: an approval it waits on,
+  // and background work still running. Each change rewrites the whole of it.
+  let awaiting: { title: string; since: string } | undefined;
+  let background: WorkerRuntimeRecord['background'];
+  const rewriteRecord = (): Promise<void> => {
     ctx.recordWrite = ctx.recordWrite
-      .then(() => writeWorkerRecord({ ...record, ...(awaitingApproval ? { awaitingApproval } : {}) }, { existing: true }))
+      .then(() => writeWorkerRecord({ ...record, ...(awaiting ? { awaitingApproval: awaiting } : {}), ...(background ? { background } : {}) }, { existing: true }))
       .catch(() => undefined);
     return ctx.recordWrite;
+  };
+  observer.onAwaitingApproval = (awaitingApproval) => { awaiting = awaitingApproval; return rewriteRecord(); };
+  observer.onBackgroundWork = (work) => {
+    const counts = (value: { agents?: number; terminals?: number; workflows?: number } | undefined): string => `${value?.agents ?? 0}/${value?.terminals ?? 0}/${value?.workflows ?? 0}`;
+    if (counts(work) === counts(background)) return undefined;
+    background = work ? { ...work, since: background?.since ?? new Date().toISOString() } : undefined;
+    return rewriteRecord();
   };
   process.on('SIGTERM', () => { void ctx.shutdown('SIGTERM'); });
   process.on('SIGINT', () => { void ctx.shutdown('SIGINT'); });

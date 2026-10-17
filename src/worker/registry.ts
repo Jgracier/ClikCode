@@ -42,6 +42,10 @@ export interface WorkerRuntimeRecord {
    * it changes, so a conversation list or another agent can tell a turn
    * that is working from one that is waiting on the user. */
   awaitingApproval?: { title: string; since: string };
+  /** What the vendor still runs for this conversation -- agents, workflows, terminals -- while
+   * no turn of its own is generating (or beside one). Rewritten as it changes, so a conversation
+   * list keeps the chat among the working ones until that work is done. */
+  background?: { agents?: number; terminals?: number; workflows?: number; since: string };
 }
 
 /** What identifies a build: the entry file a worker actually loads, by

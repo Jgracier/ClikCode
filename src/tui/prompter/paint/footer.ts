@@ -77,7 +77,8 @@ export function buildFooter(this: TerminalHarnessPrompter, input: FooterInput): 
   // (meta) stay on their own separate line below, never sharing space with
   // the title the way they used to.
   // A name cut from the chat's first message is already on screen as that message: the rule says a name only when it adds something.
-  const titleRule = paintTitleRule(rowWidth, session.nameSource === 'message' ? undefined : session.name || undefined);
+  // The board's composer starts a NEW conversation, so it carries no title: the last chat's name there read as its draft.
+  const titleRule = paintTitleRule(rowWidth, palette?.headings || session.nameSource === 'message' ? undefined : session.name || undefined);
   footer.push(titleRule);
   // Provider, model, effort and directory are one statement -- what this
   // conversation is running as -- so they read as one line in one colour

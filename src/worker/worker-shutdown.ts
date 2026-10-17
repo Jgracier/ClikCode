@@ -82,6 +82,7 @@ export function createShutdown(ctx: WorkerContext) {
     // Only what is still this worker's: the record and socket of a worker
     // that replaced it are that worker's to remove.
     observer.onAwaitingApproval = undefined;
+    observer.onBackgroundWork = undefined;
     await ctx.recordWrite;
     await removeWorkerRecord(sessionId, token).catch(() => undefined);
     if (await hold.held()) await unlink(socketPath).catch(() => undefined);

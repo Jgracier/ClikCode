@@ -224,7 +224,7 @@ export async function interactiveSessionPicker(
   let workerIsLive = workers.isLive;
   // The turn each live-worker chat is generating, from its transcript -- the
   // one record of a turn in flight. Its `updatedAt` is the spinner's pace.
-  let pendingById = await livePendingTurns(sessions, workerIsLive);
+  let pendingById = await livePendingTurns(sessions, workerIsLive, workers.background);
   // One row per conversation, in its section (session/conversation-rows.ts,
   // the same rows the editor's history menu draws).
   let rows: ConversationRow[] = [];
@@ -270,7 +270,7 @@ export async function interactiveSessionPicker(
     activityRefresh = (async () => {
       workers = await liveWorkers();
       workerIsLive = workers.isLive;
-      pendingById = await livePendingTurns(sessions, workerIsLive);
+      pendingById = await livePendingTurns(sessions, workerIsLive, workers.background);
       fillActivity();
       listRevision += 1;
       built = undefined;
