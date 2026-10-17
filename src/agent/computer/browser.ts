@@ -97,14 +97,26 @@ async function browserFor(stateDir: string, start: boolean): Promise<Connected> 
   return opening;
 }
 
+/** The tab the person sees in front. Chrome lists tabs in no particular order,
+ * so the last one is not the current one; a tab in front reports itself visible. */
+export async function frontPage(context: BrowserContext): Promise<Page | undefined> {
+  const open = context.pages().filter(page => !page.isClosed());
+  const inFront: Page[] = [];
+  for (const page of open) {
+    try { if (await page.evaluate(() => (globalThis as unknown as { document: { visibilityState: string } }).document.visibilityState === 'visible')) inFront.push(page); }
+    catch { /* a browser-internal tab cannot be inspected */ }
+  }
+  return inFront.at(-1) ?? open.at(-1);
+}
+
 export async function openComputerPage(stateDir: string): Promise<Page> {
   const { context } = await browserFor(stateDir, true);
-  return context.pages().filter(page => !page.isClosed()).at(-1) ?? context.newPage();
+  return await frontPage(context) ?? context.newPage();
 }
 
 export async function computerPage(stateDir: string): Promise<Page> {
   const { context } = await browserFor(stateDir, false);
-  const page = context.pages().filter(candidate => !candidate.isClosed()).at(-1);
+  const page = await frontPage(context);
   if (!page) throw new Error('ClikCode browser has no open tab. Open a URL with computer_web first.');
   return page;
 }
