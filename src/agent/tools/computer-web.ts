@@ -5,6 +5,7 @@ import { COMPUTER_OFF, computerEnabled } from '../computer/settings.js';
 import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
 import { maskSensitive, sensitiveValues } from '../computer/sensitive-fields.js';
 import { sharedState } from '../computer/shared-state.js';
+import { describeProfile, listProfiles, PROFILE_KEYS, phoneFor, profileKeyFor, saveProfile, type FieldHint, type ProfileKey } from '../computer/profiles.js';
 import { expectSignup, settleSignup } from '../computer/signup-login.js';
 import { loginComputerPage, loginOutcomeMessage } from '../computer/login-page.js';
 import { LoginError } from '../computer/login-error.js';
@@ -20,11 +21,11 @@ import { runTailnetHandoff, tailnetAddress } from '../computer/tailnet-handoff.j
 import type { Locator, Page } from 'playwright-core';
 import type { ToolContext, ToolRunResult } from '../tool-contract.js';
 
-type Step = { do: 'click' | 'fill' | 'press' | 'scroll' | 'wait'; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; accept_dialog?: boolean; gone?: boolean; seconds?: number };
+type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait'; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; accept_dialog?: boolean; gone?: boolean; seconds?: number };
 type WebArgs = {
-  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'press' | 'scroll' | 'wait' | 'steps' | 'login' | 'handoff' | 'capture_secret';
+  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'profile' | 'open_email_link';
   url?: string; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
-  new_account?: boolean; secret_name?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
+  new_account?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; label?: string; secret_name?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
 };
 
 export function webAddress(value: string | undefined): string {
@@ -46,9 +47,15 @@ async function locate(page: Page, target: string | undefined): Promise<Locator> 
     if (await byRef.count()) return byRef;
     throw new Error(`Nothing on the page has the reference ${wanted}: the page has changed since it was read.`);
   }
-  for (const candidate of [page.getByText(wanted, { exact: true }), page.getByLabel(wanted, { exact: true }), page.getByPlaceholder(wanted, { exact: true }), page.getByTitle(wanted, { exact: true })]) {
+  // A field's label names the field, so the field is found before the label's text.
+  for (const candidate of [page.getByLabel(wanted, { exact: true }), page.getByPlaceholder(wanted, { exact: true }), page.getByText(wanted, { exact: true }), page.getByTitle(wanted, { exact: true })]) {
     const visible = candidate.locator('visible=true');
     if (await visible.count()) return visible.first();
+  }
+  // A field's label can include its options ("Plan Free Pro"): a near match on the label is still that field.
+  for (const candidate of [page.getByLabel(wanted), page.getByPlaceholder(wanted)]) {
+    const visible = candidate.locator('visible=true');
+    if (await visible.count() === 1) return visible.first();
   }
   throw new Error(`Nothing on the page shows "${wanted}".`);
 }
@@ -192,13 +199,13 @@ export const computerWebTool = defineTool<WebArgs>({
   name: 'computer_web', class: 'exec',
   description: [
     "Drive ClikCode's own Chrome (its own saved profile; it starts by itself). open and observe return the page, with a [ref=…] on each element: pass a ref as target (or visible text) to click or fill. After an action you get only what changed (and any open dialog); observe shows the whole page again. A new tab or popup the page opens is followed automatically.",
-    'Actions: open (a URL) · observe (the page again; full: true adds header and footer; find: "words" shows only the lines that mention them, for a long page) · click · fill · press · scroll · wait (for text to appear or go, up to 2 minutes; for jobs that finish on their own) · steps (several of those in order, one call, stops at the first failure) · login · handoff · capture_secret · close.',
-    'Each chat has its own tab. Every page can be read, including sign-in and signup forms; the values of password, code and card fields are masked. For anything only the user knows (a password, a code, an address, a phone number), fill the field with no text: the user is asked privately and you are not shown the answer. login fills a saved login, or asks the user privately; never ask for a password or code in chat. When a sign-in page offers different ways in (root or IAM, another account), ask the user with ask_user, click their choice, then login. handoff returns a phone link for a CAPTCHA or MFA at once; give it to the user, then call handoff again to wait until they finish.',
+    'Actions: open (a URL) · observe (the page again; full: true adds header and footer; find: "words" shows only the lines that mention them, for a long page) · click · fill · choose (an option of a dropdown: target + text) · press · scroll · wait (for text to appear or go, up to 2 minutes; for jobs that finish on their own) · steps (several of those in order, one call, stops at the first failure) · login · handoff · capture_secret · profile · open_email_link (find the newest email from a sender in the signed-in Gmail and open a link in it, one call: verification and sign-in emails) · close.',
+    'Each chat has its own tab. The user\'s autofill profile (name, email, phone, address) fills forms for you: fill a field with no text and it is filled from the profile, or the user is asked once and the answer is kept. If a site wants another format, fill that field with the exact text, and save the corrected value with action profile and fields. Every page can be read, including sign-in and signup forms; the values of password, code and card fields are masked. For anything only the user knows (a password, a code, an address, a phone number), fill the field with no text: the user is asked privately and you are not shown the answer. login fills a saved login, or asks the user privately; never ask for a password or code in chat. When a sign-in page offers different ways in (root or IAM, another account), ask the user with ask_user, click their choice, then login. handoff returns a phone link for a CAPTCHA or MFA at once; give it to the user, then call handoff again to wait until they finish.',
     'Work through the whole task you were given without checking in at each step. Ask real choices (project, account, role set) once, up front, in one question; after that ask only when genuinely blocked (a sign-in they must type, a payment).',
     'API keys: go to the key page, set the options, then capture_secret with target = the final Create button and a send_to plan. It presses the site\'s Copy button or reads the file it hands over, checks the key against its service, saves it to ClikCode Secrets Manager and sends it where send_to says. You never see the key. With no target it takes a key the page already shows; never click Regenerate just to see one.',
   ].join('\n'),
   parameters: { type: 'object', additionalProperties: false, required: ['action'], properties: {
-    action: { type: 'string', enum: ['open', 'close', 'observe', 'click', 'fill', 'press', 'scroll', 'wait', 'steps', 'login', 'handoff', 'capture_secret'] },
+    action: { type: 'string', enum: ['open', 'close', 'observe', 'click', 'fill', 'choose', 'press', 'scroll', 'wait', 'steps', 'login', 'handoff', 'capture_secret', 'profile', 'open_email_link'] },
     url: { type: 'string', description: 'open: the website address.' },
     target: { type: 'string', description: 'click, fill, capture_secret: a [ref=…] from the page view (e5, or f1e2 inside a frame), or the visible text of a sign-in page control.' },
     text: { type: 'string', description: 'fill: the text. Leave it out for what only the user knows (name, address, phone, a password): the user is asked privately, once for all such fields in the call, and you are not shown the answer. wait: the words to wait for.' },
@@ -209,12 +216,18 @@ export const computerWebTool = defineTool<WebArgs>({
     direction: { type: 'string', enum: ['up', 'down'], description: 'scroll.' },
     steps: { type: ['array', 'string'], description: 'steps: what to do, in order, e.g. [{do:"fill", target:"e4", text:"My key"}, {do:"click", target:"e9"}].',
       items: { type: 'object', additionalProperties: false, required: ['do'], properties: {
-        do: { type: 'string', enum: ['click', 'fill', 'press', 'scroll', 'wait'] }, target: { type: 'string' }, text: { type: 'string' }, key: { type: 'string' }, direction: { type: 'string', enum: ['up', 'down'] }, accept_dialog: { type: 'boolean' }, gone: { type: 'boolean' }, seconds: { type: 'number' },
+        do: { type: 'string', enum: ['click', 'fill', 'choose', 'press', 'scroll', 'wait'] }, target: { type: 'string' }, text: { type: 'string' }, key: { type: 'string' }, direction: { type: 'string', enum: ['up', 'down'] }, accept_dialog: { type: 'boolean' }, gone: { type: 'boolean' }, seconds: { type: 'number' },
       } } },
     full: { type: 'boolean', description: 'observe: include the header and footer and a longer view.' },
     accept_dialog: { type: 'boolean', description: 'click: answer yes to a browser confirm dialog the click raises ("delete this token?"). Default: declined and reported.' },
     new_account: { type: 'boolean', description: 'login: ask for a different account instead of the saved one.' },
     paste: { type: 'boolean', description: 'capture_secret: do not look for the key; ask the user to paste it privately (when the page hides it or shows it as an image). With target, that button is still clicked first.' },
+    from: { type: 'string', description: 'open_email_link: sender (name or address) of the email in the signed-in Gmail.' },
+    subject: { type: 'string', description: 'open_email_link: words from the subject.' },
+    link: { type: 'string', description: 'open_email_link: words or domain of the link to open (default: the first real link in the message).' },
+    account: { type: 'integer', description: 'open_email_link: Gmail account number /u/N (default 0).' },
+    fields: { type: 'object', additionalProperties: { type: 'string' }, description: `profile: fields to save or correct in the user's autofill profile (${PROFILE_KEYS.join(', ')}). Leave out to list the profiles. Use it when a site wants a different format (phone as +1…, state as an abbreviation).` },
+    label: { type: 'string', description: 'profile: which profile (default: the only one, or a new one called Personal).' },
     secret_name: { type: 'string', description: 'capture_secret: name to save the key under (default: the site\'s name plus "/key").' },
     send_to: { ...SEND_TO_SCHEMA, description: 'capture_secret: ' + SEND_TO_HELP },
   } },
@@ -239,6 +252,11 @@ export const computerWebTool = defineTool<WebArgs>({
   async run(args, ctx) {
     try {
       if (!(await computerEnabled(ctx.stateDir))) throw new Error(COMPUTER_OFF);
+      if (args.action === 'profile') {
+        if (args.fields && Object.keys(args.fields).length) return { output: `Saved. ${describeProfile(await saveProfile(ctx.stateDir, { ...(args.label ? { label: args.label } : {}), fields: args.fields }))}` };
+        const all = await listProfiles(ctx.stateDir);
+        return { output: all.length ? all.map(describeProfile).join('\n') : 'No profile is saved yet. The first form you fill with no text asks the user once and keeps the answers, or save one with fields.' };
+      }
       if (args.action === 'close') { await closeComputerPage(ctx.stateDir); return { output: 'This chat\'s tab is closed.' }; }
       if (args.action === 'open') webAddress(args.url);
       const page = args.action === 'open' ? await openComputerPage(ctx.stateDir) : await computerPage(ctx.stateDir);
@@ -268,7 +286,7 @@ export const computerWebTool = defineTool<WebArgs>({
 
 const handoffs = sharedState('handoffs', () => new Map<string, { link: Promise<string>; done: Promise<{ ok: true } | { ok: false; message: string }>; stop: AbortController }>());
 
-const INTERACTIONS: ReadonlySet<string> = new Set(['click', 'fill', 'press', 'scroll', 'wait']);
+const INTERACTIONS: ReadonlySet<string> = new Set(['click', 'fill', 'choose', 'press', 'scroll', 'wait']);
 
 /** Long jobs (an API being enabled, a resource being created) finish on their own: wait for words to
  * appear (or go) instead of looking again and again. Gives up with the page as it is. */
@@ -293,10 +311,32 @@ async function doStep(page: Page, step: Step): Promise<string> {
       const { dialogs } = await withDialogs(page, step.accept_dialog === true, () => clickOrHint(target));
       return `Clicked ${step.target}.${dialogNote(dialogs, step.accept_dialog === true)}`;
     }
-    case 'fill':
+    case 'fill': {
       if (typeof step.text !== 'string' || step.text.length > 20_000) throw new Error('Fill needs text of at most 20,000 characters.');
-      await (await locate(page, step.target)).fill(step.text, { timeout: 10_000 });
+      const target = await locate(page, step.target);
+      // Typing, not setting a value: forms that check each key press (a phone box, an enabled Continue) only see real input.
+      const tag = await target.evaluate(element => (element as unknown as { tagName: string }).tagName).catch(() => '');
+      if (tag === 'SELECT') { await target.selectOption({ label: step.text }, { timeout: 10_000 }).catch(() => target.selectOption(step.text!, { timeout: 10_000 })); return `Chose "${step.text}" in ${step.target}.`; }
+      if (step.text.length <= 200 && tag !== 'TEXTAREA') {
+        await target.fill('', { timeout: 10_000 });
+        await target.pressSequentially(step.text, { timeout: 10_000 });
+        await target.blur().catch(() => undefined);
+      } else await target.fill(step.text, { timeout: 10_000 });
       return `Filled ${step.target}.`;
+    }
+    case 'choose': {
+      // A dropdown that is not a <select>: open it, type to narrow the list, take the option that says this.
+      if (!step.text) throw new Error('Choose needs the option text.');
+      const target = await locate(page, step.target);
+      if (await target.evaluate(element => (element as unknown as { tagName: string }).tagName).catch(() => '') === 'SELECT') { await target.selectOption({ label: step.text }, { timeout: 10_000 }); return `Chose "${step.text}".`; }
+      await clickOrHint(target);
+      await page.keyboard.insertText(step.text).catch(() => undefined);
+      await page.waitForTimeout(250);
+      const option = page.getByRole('option', { name: step.text, exact: true }).or(page.getByRole('option', { name: new RegExp(step.text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') })).first();
+      if (await option.count().catch(() => 0)) await option.click({ timeout: 5_000 });
+      else await page.keyboard.press('Enter');
+      return `Chose "${step.text}".`;
+    }
     case 'press':
       if (!step.key || !/^[A-Za-z0-9+_-]{1,30}$/.test(step.key)) throw new Error('Press needs a simple key.');
       await page.keyboard.press(step.key);
@@ -309,27 +349,84 @@ async function doStep(page: Page, step: Step): Promise<string> {
   }
 }
 
-/** Fills that name no text ask the user, once for all of them, in the private prompt; the answers never reach the model. */
+/** What a form field is, for matching it to a saved profile and for the private prompt. */
+async function describeField(target: Locator): Promise<{ label: string; password: boolean; hint: FieldHint; placeholder: string; current: string }> {
+  return target.evaluate(element => {
+    const el = element as unknown as { type?: string; value?: string; labels?: ArrayLike<{ textContent: string | null }>; getAttribute(name: string): string | null };
+    const label = (el.labels?.[0]?.textContent || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('name') || '').trim();
+    const type = el.type ?? 'text';
+    return { label, password: type === 'password', placeholder: el.getAttribute('placeholder') ?? '', current: type === 'password' ? '' : el.value ?? '',
+      hint: { autocomplete: el.getAttribute('autocomplete') ?? '', type, text: `${label} ${el.getAttribute('name') ?? ''} ${el.getAttribute('id') ?? ''}` } };
+  }).catch(() => ({ label: '', password: false, hint: { autocomplete: '', type: 'text', text: '' }, placeholder: '', current: '' }));
+}
+
+const profileChoice = sharedState('profile-choice', () => new Map<string, string>());
+
+/** Fills that name no text: a saved profile covers what it can (name, address, phone), the user is asked
+ * once, privately, for the rest, and what they answer is kept in the profile for next time. */
 async function askForFills(page: Page, steps: readonly Step[], ctx: ToolContext): Promise<Step[]> {
   const blank = steps.filter(step => step.do === 'fill' && step.text === undefined);
   if (!blank.length) return [...steps];
-  if (!ctx.requestPrivateLogin) throw new Error('Fill needs text: this chat cannot ask the user privately.');
-  const fields: LoginField[] = [];
-  for (const [index, step] of blank.entries()) {
-    const described = await (await locate(page, step.target)).evaluate(element => {
-      const el = element as unknown as { type?: string; labels?: ArrayLike<{ textContent: string | null }>; getAttribute(name: string): string | null };
-      return { label: (el.labels?.[0]?.textContent || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('name') || '').trim(), password: el.type === 'password' };
-    }).catch(() => ({ label: '', password: false }));
-    fields.push({ index, key: `fill${index}`, label: described.label || String(step.target), kind: described.password ? 'password' : 'text', required: true });
+  const origin = new URL(page.url()).origin;
+  const fields = await Promise.all(blank.map(async step => ({ step, ...await describeField(await locate(page, step.target)) })));
+  const profiles = await listProfiles(ctx.stateDir);
+  let profile = profiles.length === 1 ? profiles[0] : undefined;
+  if (profiles.length > 1) {
+    const remembered = profileChoice.get(`${ctx.stateDir}|${origin}`);
+    profile = profiles.find(candidate => candidate.id === remembered);
+    const wanted = fields.some(field => { const key = profileKeyFor(field.hint); return key && profiles.some(candidate => candidate.fields[key]); });
+    if (!profile && wanted && ctx.requestPrivateLogin) {
+      const labels = profiles.map(candidate => candidate.label);
+      const answer = await ctx.requestPrivateLogin(origin, [{ index: -1, key: 'profile', label: 'Fill this form with which profile?', kind: 'choice', required: true, options: labels }], ctx.signal);
+      profile = profiles[labels.indexOf(answer?.profile ?? '')];
+      if (profile) profileChoice.set(`${ctx.stateDir}|${origin}`, profile.id);
+    }
   }
-  const answers = await ctx.requestPrivateLogin(new URL(page.url()).origin, fields, ctx.signal);
-  if (!answers) throw new Error('The user did not provide the values.');
-  // A password typed into a form shows in the page's own text afterwards: hold it back from every view.
-  for (const field of fields) if (field.kind === 'password' && answers[field.key]) registerSecret(answers[field.key]!);
-  const created = fields.find(field => field.kind === 'password' && answers[field.key]);
-  if (created) expectSignup(page, answers[created.key]!);
-  let at = 0;
-  return steps.map(step => step.do === 'fill' && step.text === undefined ? { ...step, text: answers[`fill${at++}`] ?? '' } : step);
+  const values = new Map<Step, string>();
+  const ask: { step: Step; key: ProfileKey | undefined; field: LoginField }[] = [];
+  for (const field of fields) {
+    const key = field.password ? undefined : profileKeyFor(field.hint);
+    const known = key ? profile?.fields[key] : undefined;
+    if (known) { values.set(field.step, key === 'phone' ? phoneFor(known, field.placeholder, field.current) : known); continue; }
+    ask.push({ step: field.step, key, field: { index: ask.length, key: `fill${ask.length}`, label: field.label || String(field.step.target), kind: field.password ? 'password' : 'text', required: true } });
+  }
+  if (ask.length) {
+    if (!ctx.requestPrivateLogin) throw new Error('Fill needs text: this chat cannot ask the user privately.');
+    const answers = await ctx.requestPrivateLogin(origin, ask.map(item => item.field), ctx.signal);
+    if (!answers) throw new Error('The user did not provide the values.');
+    const learned: Partial<Record<ProfileKey, string>> = {};
+    for (const item of ask) {
+      const answer = answers[item.field.key] ?? '';
+      values.set(item.step, answer);
+      // A password typed into a form shows in the page's own text afterwards: hold it back from every view.
+      if (item.field.kind === 'password' && answer) { registerSecret(answer); expectSignup(page, answer); }
+      else if (item.key && answer) learned[item.key] = answer;
+    }
+    if (Object.keys(learned).length && (profile || profiles.length === 0)) await saveProfile(ctx.stateDir, { ...(profile ? { id: profile.id } : {}), fields: learned });
+  }
+  return steps.map(step => values.has(step) ? { ...step, text: values.get(step)! } : step);
+}
+
+/** Why a form will not go on: fields the browser or the page marks invalid, and a main button that is disabled. */
+export async function formProblems(page: Page): Promise<string[]> {
+  try {
+    return await page.evaluate(() => {
+      type El = { getAttribute(name: string): string | null; labels?: ArrayLike<{ textContent: string | null }>; validationMessage?: string; checkValidity?: () => boolean; disabled?: boolean; textContent: string | null; value?: string };
+      const doc = (globalThis as unknown as { document: { querySelectorAll(selector: string): ArrayLike<El> } }).document;
+      const problems: string[] = [];
+      for (const field of Array.from(doc.querySelectorAll('input, select, textarea'))) {
+        const invalid = field.getAttribute('aria-invalid') === 'true' || (field.checkValidity && !field.checkValidity() && !!field.value);
+        if (!invalid) continue;
+        const label = (field.labels?.[0]?.textContent || field.getAttribute('aria-label') || field.getAttribute('placeholder') || field.getAttribute('name') || 'a field').trim().slice(0, 40);
+        problems.push(`${label} looks invalid${field.validationMessage ? `: ${field.validationMessage}` : ''}`);
+      }
+      for (const button of Array.from(doc.querySelectorAll('button'))) {
+        const text = (button.textContent ?? '').trim();
+        if (button.disabled && /^(continue|next|submit|create|sign up|save|verify|start|register)\b/i.test(text)) problems.push(`the "${text.slice(0, 30)}" button is disabled`);
+      }
+      return problems.slice(0, 6);
+    });
+  } catch { return []; }
 }
 
 /** Does the steps in order, following a new tab or popup, and returns the page as it ends up. */
@@ -361,7 +458,8 @@ async function runSteps(page: Page, steps: readonly Step[], ctx: ToolContext): P
     }
   }
   const view = await observeComputerPage(current, false, false, undefined, true);
-  return { output: `${notes.join('\n')}\n\n${view.output}` };
+  const problems = steps.some(step => step.do === 'fill' || step.do === 'choose') ? await formProblems(current) : [];
+  return { output: `${notes.join('\n')}\n\n${view.output}${problems.length ? `\n\nOn the form: ${problems.join('; ')}.` : ''}` };
 }
 
 async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRunResult> {
@@ -376,6 +474,25 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       const list = typeof args.steps === 'string' ? (() => { try { return JSON.parse(args.steps) as Step[]; } catch { return undefined; } })() : args.steps;
       if (!Array.isArray(list) || !list.length) throw new Error('steps needs a list, e.g. [{"do":"click","target":"e5"}].');
       return runSteps(page, list, ctx);
+    case 'open_email_link': {
+      const query = [args.from ? `from:(${args.from})` : '', args.subject ? `subject:(${args.subject})` : '', 'newer_than:2d'].filter(Boolean).join(' ');
+      if (!args.from && !args.subject) throw new Error('open_email_link needs from or subject.');
+      await page.goto(`https://mail.google.com/mail/u/${args.account ?? 0}/#search/${encodeURIComponent(query)}`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+      const row = page.locator('tr.zA').first();
+      await row.waitFor({ timeout: 25_000 }).catch(() => { throw new Error(`No email matched ${query}. If Gmail asked to sign in, sign in first with login; the message may also not have arrived yet (try again in a few seconds).`); });
+      await row.click();
+      await page.locator('.a3s').last().waitFor({ timeout: 15_000 });
+      await page.locator('.ajR').last().click({ timeout: 1_500 }).catch(() => undefined); // "show trimmed content"
+      const links = await page.locator('.a3s').last().locator('a[href]').evaluateAll(nodes => nodes.map(node => ({ href: (node as unknown as { href: string }).href, text: (node as unknown as { textContent: string | null }).textContent ?? '' })));
+      const real = links.map(link => { try { const u = new URL(link.href); return { ...link, href: u.hostname.endsWith('google.com') && u.pathname === '/url' ? u.searchParams.get('q') ?? link.href : link.href }; } catch { return link; } })
+        .filter(link => /^https:/.test(link.href) && !/unsubscribe|accounts\.google\.com|mail\.google\.com|privacy|terms/i.test(link.href));
+      const wanted = args.link?.toLowerCase();
+      const pick = wanted ? real.find(link => `${link.href} ${link.text}`.toLowerCase().includes(wanted)) : real[0];
+      if (!pick) throw new Error(`The email has no ${wanted ? `link mentioning "${args.link}"` : 'usable link'}. Links found: ${real.slice(0, 5).map(link => displayUrl(link.href)).join(', ') || 'none'}.`);
+      await page.goto(pick.href, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+      await settle(page);
+      return observeComputerPage(page, ctx.acceptsImages === true);
+    }
     case 'login': {
       const outcome = await loginComputerPage({ stateDir: ctx.stateDir, page, signal: ctx.signal, newAccount: args.new_account === true,
         ask: async (site, fields, signal) => {

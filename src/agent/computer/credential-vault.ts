@@ -214,3 +214,34 @@ export async function deleteNamedSecret(stateDir: string, name: string): Promise
   try { await fs.unlink(file); return true; }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw new CredentialError('The secret could not be removed.'); }
 }
+
+/** Other sealed records that live in the vault (autofill profiles): one encrypted file each, under the same key. */
+const RECORD_FOLDER = /^[a-z][a-z-]{1,30}$/;
+export async function writeVaultRecord(stateDir: string, folder: string, id: string, value: object): Promise<void> {
+  if (!RECORD_FOLDER.test(folder) || !/^[0-9a-f-]{36}$/i.test(id)) throw new CredentialError('Invalid vault record.');
+  const key = await vaultKey(stateDir, true);
+  const dir = path.join(vaultDir(stateDir), folder);
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  await fs.writeFile(path.join(dir, `${id}.json`), seal(key, `${folder}:${id}`, JSON.stringify(value)), { mode: 0o600 });
+}
+export async function readVaultRecords<T>(stateDir: string, folder: string): Promise<{ id: string; value: T }[]> {
+  if (!RECORD_FOLDER.test(folder)) throw new CredentialError('Invalid vault record.');
+  const dir = path.join(vaultDir(stateDir), folder);
+  let files: string[];
+  try { files = await fs.readdir(dir); } catch { return []; }
+  if (!files.length) return [];
+  const key = await vaultKey(stateDir, false);
+  const out: { id: string; value: T }[] = [];
+  for (const file of files) {
+    const id = file.replace(/\.json$/, '');
+    if (!/^[0-9a-f-]{36}$/i.test(id) || file !== `${id}.json`) continue;
+    try { out.push({ id, value: JSON.parse(open(key, `${folder}:${id}`, await fs.readFile(path.join(dir, file), 'utf8'))) as T }); }
+    catch { /* an unreadable record is skipped, never shown */ }
+  }
+  return out;
+}
+export async function removeVaultRecord(stateDir: string, folder: string, id: string): Promise<boolean> {
+  if (!RECORD_FOLDER.test(folder) || !/^[0-9a-f-]{36}$/i.test(id)) throw new CredentialError('Invalid vault record.');
+  try { await fs.unlink(path.join(vaultDir(stateDir), folder, `${id}.json`)); return true; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw new CredentialError('The record could not be removed.'); }
+}
