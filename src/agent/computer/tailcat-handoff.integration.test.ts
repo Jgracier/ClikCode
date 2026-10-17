@@ -16,7 +16,7 @@ vi.mock('./tailcat-binary.js', () => ({ tailcatBinary: async () => process.env.C
 import { runTailcatHandoff } from './tailcat-handoff.js';
 
 it.skipIf(!process.env.CLIKCODE_TAILCAT_BINARY)('connects the phone page, shows the browser, handles a tap and Done', async () => {
-  const folder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../docs/handoff');
+  const folder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../site/handoff');
   const server = createServer(async (request, response) => {
     const name = path.basename(new URL(request.url ?? '/', 'http://localhost').pathname);
     const file = path.join(folder, name === 'handoff' ? 'index.html' : name);

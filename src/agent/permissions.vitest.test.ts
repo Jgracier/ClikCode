@@ -46,6 +46,22 @@ describe('permission matrix', () => {
     await setComputerEnabled(scope.stateDir, false);
     expect(judge('auto')).toBe('ask');
   });
+  it('asks once per new site before the browser opens it, and "always" covers fetch and browser alike', async () => {
+    await setComputerEnabled(scope.stateDir, true);
+    const open = (url: string, rules = NO_RULES, mode: AiHarnessPermissionMode = 'auto') => decidePermission({
+      tool: computerWebTool, args: { action: 'open', url }, mode, rules, planMode: false, scope, hasApprover: true,
+    }).decision;
+    expect(open('https://new.example.org/page')).toBe('ask');
+    const rules = parsePermissionSettings({ allow: ['WebFetch(domain:example.org)'] });
+    expect(open('https://new.example.org/page', rules)).toBe('allow');
+    expect(open('https://example.org.evil.io/', rules)).toBe('ask');
+    expect(open('https://anything.test/', NO_RULES, 'bypass')).toBe('allow');
+    expect(suggestPermissionRule(computerWebTool, { action: 'open', url: 'https://a.example.com/p' }, scope)).toBe('WebFetch(domain:a.example.com)');
+    // Acting on the page that is already open, or signing in, asks nothing more.
+    for (const action of ['observe', 'click', 'login']) {
+      expect(decidePermission({ tool: computerWebTool, args: { action }, mode: 'auto', rules: NO_RULES, planMode: false, scope, hasApprover: true }).decision).toBe('allow');
+    }
+  });
   it('reads this session\'s tool output without approval and blocks another session\'s output', () => {
     expect(decide('read_file', { path: path.join(scope.stateDir, 'sessions', 's1', 'tool-output', 'trace.jsonl') }, 'ask')).toBe('allow');
     expect(decide('read_file', { path: path.join(scope.stateDir, 'sessions', 's2', 'tool-output', 'trace.jsonl') }, 'bypass')).toBe('deny');

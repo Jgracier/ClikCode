@@ -5,12 +5,15 @@
 import type { Page } from 'playwright-core';
 import { loginLabel, sameSite, saveLoginFields, savedLoginFields, savedLoginsForSite, setLoginRejected } from './credential-vault.js';
 import { LoginError } from './login-error.js';
-import { loginFields, uniqueLabels, type LoginField } from './login-fields.js';
+import { loginFields, loginScope, uniqueLabels, type LoginField } from './login-fields.js';
 import { AUTH_PATH, protectLoginPage } from './private-page.js';
 
 export type LoginOutcome = 'signed_in' | 'session_reused' | 'verification_needed' | 'unverified' | 'saved_login_rejected';
 const NEW_ACCOUNT = 'Use a different account';
 const STEP_POLLS = 60;
+const MAX_POLLS = 240;
+/** Quiet for this long after Enter: try the submit button. */
+const NUDGE_POLLS = 12;
 /** Phone approval and CAPTCHA take a person a while: as long as a private prompt waits. */
 const VERIFY_POLLS = 600;
 const CODE_ATTEMPTS = 2;
@@ -47,13 +50,33 @@ async function visible(page: Page): Promise<LoginField[]> {
   catch { return []; } // A navigation can temporarily destroy the old DOM.
 }
 
-async function progress(page: Page, before: string, signal?: AbortSignal): Promise<boolean> {
-  for (let poll = 0; poll < STEP_POLLS; poll++) {
+async function loading(page: Page): Promise<boolean> {
+  try { return await page.evaluate(() => (globalThis as unknown as { document: { readyState: string } }).document.readyState !== 'complete'); }
+  catch { return false; } // Mid-navigation the old document is gone; the signature check sees the change.
+}
+
+/** Waits for the page to move on. A slow site is given more time while it is
+ * still loading (up to a minute); a quiet page that never changes ends after
+ * the normal wait. `nudge` runs once if nothing has changed early on. */
+async function progress(page: Page, before: string, signal?: AbortSignal, nudge?: () => Promise<void>): Promise<boolean> {
+  let deadline = STEP_POLLS;
+  let nudged = !nudge;
+  for (let poll = 0; poll < Math.min(deadline, MAX_POLLS); poll++) {
     if (signal?.aborted) throw new LoginError('Private login cancelled.');
     await page.waitForTimeout(250);
     if (signature(page.url(), await visible(page)) !== before) return true;
+    if (!nudged && poll >= NUDGE_POLLS && !await loading(page)) { nudged = true; await nudge!().catch(() => undefined); }
+    if (poll + 1 >= deadline && deadline < MAX_POLLS && await loading(page)) deadline += 20;
   }
   return false;
+}
+
+/** Enter did nothing: some forms only submit from their button. */
+async function pressSubmit(page: Page): Promise<void> {
+  const scope = await loginScope(page);
+  const button = scope.locator('button[type="submit"]:visible, input[type="submit"]:visible').first();
+  if (await button.count()) { await button.click({ timeout: 3_000 }); return; }
+  await scope.getByRole('button', { name: /^(sign in|log in|login|next|continue|submit|verify|confirm)\b/i }).first().click({ timeout: 3_000 });
 }
 
 /** No website-independent signal proves authentication. A move away from an
@@ -152,14 +175,14 @@ export async function loginComputerPage(input: {
     const before = signature(url, fields);
     for (const field of fields) {
       if (!onSite(input.page.url(), startUrl)) return 'unverified';
-      await input.page.locator('input:visible').nth(field.index).fill(field.transient ? codes[field.key]! : (saved[field.key] ?? supplied[field.key]!));
+      await (await loginScope(input.page)).locator('input:visible').nth(field.index).fill(field.transient ? codes[field.key]! : (saved[field.key] ?? supplied[field.key]!));
     }
     for (const key of Object.keys(codes)) delete codes[key];
-    await input.page.locator('input:visible').nth(fields.at(-1)!.index).press('Enter');
+    await (await loginScope(input.page)).locator('input:visible').nth(fields.at(-1)!.index).press('Enter');
     submitted = true;
     if (fields.some(field => field.kind === 'password')) submittedPassword = true;
     if (fields.some(field => field.transient)) codeAttempts++;
-    if (!await progress(input.page, before, input.signal)) return 'unverified';
+    if (!await progress(input.page, before, input.signal, () => pressSubmit(input.page))) return 'unverified';
   }
   return 'unverified';
 }

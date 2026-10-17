@@ -68,7 +68,7 @@ async function startHost(stateDir: string): Promise<Connected> {
         if (startupError || child.exitCode !== null) break;
         await pause(200);
       }
-      throw new Error('ClikCode Chrome could not start. Check that Chrome is installed and the desktop is available.');
+      throw new Error('ClikCode could not start its browser. Check that Chrome or Edge is installed and the desktop is available.');
     } finally { await fs.unlink(lock).catch(() => undefined); }
   }
   for (let attempt = 0; attempt < 110; attempt++) {

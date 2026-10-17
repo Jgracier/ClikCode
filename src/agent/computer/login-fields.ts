@@ -1,5 +1,22 @@
 /** Metadata the agent may see on a sign-in page. Input values are never read. */
-import type { Page } from 'playwright-core';
+import type { Frame, Page } from 'playwright-core';
+
+/** A page, or the frame inside it that holds the sign-in form. */
+export type LoginScope = Page | Frame;
+
+/** Sign-in forms are sometimes embedded in an iframe (payment and identity
+ * providers). The page itself wins when it has inputs; otherwise the first
+ * frame that does. */
+export async function loginScope(page: Page): Promise<LoginScope> {
+  try {
+    if (await page.locator('input:visible').count()) return page;
+    for (const frame of page.frames()) {
+      if (frame === page.mainFrame() || frame.isDetached()) continue;
+      if (await frame.locator('input:visible').count()) return frame;
+    }
+  } catch { /* A navigation can detach a frame mid-check: the page itself is the safe answer. */ }
+  return page;
+}
 
 /** A field the page shows, or (kind 'choice') a question ClikCode puts to the
  * user itself, such as which saved account to sign in with. */
@@ -21,7 +38,7 @@ function safeLabel(value: string): string {
 }
 
 export async function loginFields(page: Page): Promise<LoginField[]> {
-  const raw = await page.locator('input:visible').evaluateAll((inputs) => inputs.map((node, index) => {
+  const raw = await (await loginScope(page)).locator('input:visible').evaluateAll((inputs) => inputs.map((node, index) => {
     const input = node as unknown as InputNode;
     const doc = (globalThis as unknown as { document: { getElementById(id: string): { textContent?: string | null } | null } }).document;
     const labelled = input.getAttribute('aria-labelledby')?.split(/\s+/).map(id => doc.getElementById(id)?.textContent?.trim()).filter(Boolean).join(' ');
