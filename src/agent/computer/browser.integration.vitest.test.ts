@@ -251,7 +251,7 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('reads a signup form and 
     const opened = (await run({ action: 'open', url: `http://127.0.0.1:${address.port}/` })).output;
     expect(opened).not.toContain('Sign-in fields');
     const ref = (name: string): string => new RegExp(`textbox "${name}" \\[ref=(\\w+)\\]`).exec(opened)![1]!;
-    const filled = await run({ action: 'steps', steps: [{ do: 'fill', target: ref('First name') }, { do: 'fill', target: ref('Password') }, { do: 'fill', target: ref('Confirm') }] });
+    const filled = await run({ action: 'steps', steps: [{ do: 'fill', target: ref('First name') }, { do: 'fill', target: ref('Email'), text: 'ada@example.com' }, { do: 'fill', target: ref('Password') }, { do: 'fill', target: ref('Confirm') }] });
     expect(asked.map(field => field.kind)).toEqual(['text', 'password', 'password']);
     expect(JSON.stringify(filled)).not.toContain(secret);
     expect((await run({ action: 'observe' })).output).not.toContain(secret);
