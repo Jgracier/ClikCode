@@ -9,7 +9,16 @@ export type Decision = { kind: 'found'; value: string } | { kind: 'none' } | { k
 
 /** Field names that mean "this is the credential", not just any token (a CSRF token is not). */
 const STRONG_KEY = /api.?key|secret|access.?token|private.?key|auth.?token|bearer|credential/i;
-const PREFIXED = /^(?:[a-z]{2,12}(?:_[a-z]+)*_[A-Za-z0-9]{12,}|sk-|ghp_|github_pat_|AKIA|AIza|xox[abp]-|eyJ)/;
+const PREFIXED = /^(?:[a-z]{2,12}(?:_[a-z]+)*_[A-Za-z0-9]{12,}|sk-|ghp_|github_pat_|AKIA|AIza|AQ\.|xox[abp]-|eyJ)/;
+/** A word that names the credential, so the value right after it is the credential ("API Key AQ.xxxx"). */
+const LABEL_THEN_VALUE = /\b(?:api[ _-]?key|secret(?: key)?|access[ _-]?token|token|key|credential|password)s?[ \t]*[:=]?[ \t]+([A-Za-z0-9_\-+/=.:~]{16,512})/gi;
+const mixedCase = (value: string): boolean => /[a-z]/.test(value) && /[A-Z]/.test(value) && /\d/.test(value);
+
+export function labelledValues(text: string): Set<string> {
+  const found = new Set<string>();
+  for (const match of text.matchAll(LABEL_THEN_VALUE)) found.add(match[1]!.replace(/[.,;:)]+$/, ''));
+  return found;
+}
 const WORTH_SAVING_HINT = /\bcopy\b|won'?t be (?:shown|displayed|visible)|only (?:once|time)|(?:save|store) (?:this|it|your)|make sure to (?:copy|save)|never (?:be )?shown again/i;
 
 function entropy(text: string): number {
@@ -24,6 +33,8 @@ function entropy(text: string): number {
 export function keyShaped(value: string): boolean {
   if (value.length < 16 || value.length > 512 || !/^[A-Za-z0-9_\-+/=.:~]+$/.test(value)) return false;
   if (/^https?:|@/.test(value) || !/\d/.test(value) || /^\d+$/.test(value)) return false;
+  // A resource path such as projects/831963658327 names a thing, it is not a credential.
+  if (/^[a-z][a-z-]*\/[\w-]+$/.test(value)) return false;
   return entropy(value) >= 3;
 }
 
@@ -36,7 +47,7 @@ function walk(node: unknown, key: string | undefined, out: Found[], depth = 0): 
 
 /** Pure decision from what was seen. Eligible: new on the page, or returned
  * under a field name that says it is a credential. */
-export function decide(input: { before: ReadonlySet<string>; after: readonly string[]; responses: readonly Found[]; hint: boolean }): Decision {
+export function decide(input: { before: ReadonlySet<string>; after: readonly string[]; responses: readonly Found[]; hint: boolean; labelled?: ReadonlySet<string> }): Decision {
   const scored = new Map<string, number>();
   const responseFor = new Map<string, Found>();
   for (const found of input.responses) responseFor.set(found.value, found);
@@ -46,7 +57,7 @@ export function decide(input: { before: ReadonlySet<string>; after: readonly str
     const response = responseFor.get(value);
     const strong = !!response?.keyName && STRONG_KEY.test(response.keyName);
     if (!onPage && !strong) continue;
-    scored.set(value, (onPage ? 3 : 0) + (response ? 2 : 0) + (strong ? 2 : 0) + (PREFIXED.test(value) ? 2 : 0) + (value.length >= 24 ? 1 : 0) + (input.hint ? 1 : 0));
+    scored.set(value, (onPage ? 3 : 0) + (response ? 2 : 0) + (strong ? 2 : 0) + (PREFIXED.test(value) ? 2 : 0) + (input.labelled?.has(value) ? 2 : 0) + (mixedCase(value) ? 1 : 0) + (value.length >= 24 ? 1 : 0) + (input.hint ? 1 : 0));
   }
   const ranked = [...scored.entries()].sort((a, b) => b[1] - a[1]);
   const [top, next] = ranked;
@@ -55,7 +66,7 @@ export function decide(input: { before: ReadonlySet<string>; after: readonly str
   return { kind: 'found', value: top[0] };
 }
 
-type Snapshot = { tokens: string[]; hint: boolean };
+type Snapshot = { tokens: string[]; hint: boolean; labelled: Set<string> };
 
 /** Runs in the page: every input value, copy-button payload and word of visible text. */
 function pageTokens(): Snapshot {
@@ -66,15 +77,15 @@ function pageTokens(): Snapshot {
   for (const element of Array.from(doc.querySelectorAll('[data-clipboard-text], [data-copy], [data-value], [data-key], [data-secret]'))) {
     for (const name of ['data-clipboard-text', 'data-copy', 'data-value', 'data-key', 'data-secret']) { const attribute = element.getAttribute(name); if (attribute) tokens.add(attribute); }
   }
-  return { tokens: [...tokens].filter(token => token.length >= 16 && token.length <= 512), hint: false };
+  return { tokens: [...tokens].filter(token => token.length >= 16 && token.length <= 512), hint: false, labelled: new Set<string>() };
 }
 
 async function snapshot(page: Page): Promise<Snapshot> {
   try {
     const taken = await page.evaluate(pageTokens);
     const text = await page.evaluate(() => (globalThis as unknown as { document: { body: { innerText: string } } }).document.body.innerText);
-    return { tokens: taken.tokens, hint: WORTH_SAVING_HINT.test(text) };
-  } catch { return { tokens: [], hint: false }; } // A navigation can destroy the document mid-read.
+    return { tokens: taken.tokens, hint: WORTH_SAVING_HINT.test(text), labelled: labelledValues(text) };
+  } catch { return { tokens: [], hint: false, labelled: new Set<string>() }; } // A navigation can destroy the document mid-read.
 }
 
 export type Finder = { look(): Promise<Decision>; dispose(): void };
@@ -97,8 +108,25 @@ export async function armFinder(page: Page, existing = false): Promise<Finder> {
   return {
     async look() {
       const now = await snapshot(page);
-      return decide({ before, after: now.tokens, responses, hint: now.hint });
+      return decide({ before, after: now.tokens, responses, hint: now.hint, labelled: now.labelled });
     },
     dispose() { page.off('response', listen); },
   };
+}
+
+/** Hides credential-looking values in text the agent is about to read (a page's
+ * accessibility text): a long unbroken mixed-case token that follows a word like
+ * "API key", or any one when the page invites copying. Ordinary ids, URLs and
+ * lower-case slugs are left alone. */
+export function hideKeyLikeText(text: string): { text: string; hidden: number } {
+  const labelled = labelledValues(text);
+  const copyHint = WORTH_SAVING_HINT.test(text);
+  let hidden = 0;
+  const out = text.replace(/[A-Za-z0-9_\-+/=.:~]{24,}/g, token => {
+    const bare = token.replace(/[.,;:)]+$/, '');
+    if (!keyShaped(bare) || !mixedCase(bare) || !(labelled.has(bare) || (copyHint && bare.length >= 32))) return token;
+    hidden++;
+    return '[secret hidden]';
+  });
+  return { text: out, hidden };
 }

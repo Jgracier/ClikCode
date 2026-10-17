@@ -15,6 +15,7 @@ import { observeComputerPage } from '../tools/computer-web.js';
 
 const enabled = process.env.CLIKCODE_COMPUTER_SMOKE === '1';
 const KEY = 'salad_live_9f8e7d6c5b4a39281706';
+const GOOGLE_STYLE = 'AQ.Zx9Kp2LmQ7vRt4YhNb6WcDfGjS8aEuI3oPxC1VnMzKq5TyBw';
 const OTHER = 'salad_live_0a1b2c3d4e5f60718293';
 let server: Server | undefined;
 let browser: Browser | undefined;
@@ -42,6 +43,8 @@ beforeAll(async () => {
     if (path === '/two') return send(page(create('go', `document.getElementById('out').innerHTML='<code>${KEY}</code> <code>${OTHER}</code>'`)));
     // Nothing key-like appears; the only help is the site's Copy button.
     if (path === '/copy-only') return send(page(`<button id="copy" style="width:200px;height:50px" onclick="navigator.clipboard.writeText('${KEY}')">Copy</button>`));
+    // A dialog like Google AI Studio's: the key beside a resource name and Copy buttons.
+    if (path === '/dialog') return send(page(create('go', `document.getElementById('out').innerHTML='<p>API Key ${GOOGLE_STYLE}</p><button>Copy key to clipboard</button><p>Project name projects/831963658327</p><p>Project number 831963658327</p>'`)));
     // An account's current key, already on the page in a masked field, beside an id that is not a key.
     if (path === '/existing') return send(page(`<p>Your API key</p><input type="password" value="${KEY}"><p>Org 3f2a9c1e-7b4d-4e8a-9c21-5d6e7f809a1b</p>`));
     send(page(create('go', "document.getElementById('out').textContent='done'")));
@@ -138,4 +141,22 @@ it.skipIf(!enabled)('takes a key the page is already showing when no button is g
   const result = await captureSecret({ stateDir, page: tab, name: 'current', remote: false, ask: neverAsked, onLink: () => undefined });
   expect(result).toEqual({ length: KEY.length, found: true });
   expect(await readNamedSecret(stateDir, 'current')).toBe(KEY);
+}, 60_000);
+
+it.skipIf(!enabled)('finds a key shown beside a resource name and Copy buttons, as a Google-style dialog does', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
+  const tab = await open('/dialog');
+  const result = await captureSecret({ stateDir, page: tab, name: 'dialog', remote: false, trigger: () => tap(tab, '#go'), ask: neverAsked, onLink: () => undefined });
+  expect(result).toEqual({ length: GOOGLE_STYLE.length, found: true });
+  expect(await readNamedSecret(stateDir, 'dialog')).toBe(GOOGLE_STYLE);
+}, 60_000);
+
+it.skipIf(!enabled)('never shows the agent a key the page displays, before or after capture', async () => {
+  const tab = await open('/dialog');
+  await tap(tab, '#go');
+  await tab.waitForTimeout(500);
+  const seen = await observeComputerPage(tab, true);
+  expect(seen.output).not.toContain(GOOGLE_STYLE);
+  expect(seen.output).toContain('key-like value hidden');
+  expect(seen.images).toBeUndefined();
 }, 60_000);
