@@ -63,6 +63,35 @@ against other processes running as you. ClikCode's shell and desktop tools run
 as you too, and the browser host listens for local debugging on loopback. Use a
 separate OS account if untrusted users share the machine.
 
+## API keys the agent never sees
+
+To get a key from a site into ClikDeploy without the model reading it, the agent
+signs in, sets the permissions, then calls `computer_web capture_secret` with a
+`secret_name` and the role and name of the final Create button.
+
+- **The worker finds the key itself.** It records the page, clicks Create, and
+  looks at what the site's own request returned and what new key-shaped text
+  appeared. A value counts when it is new on the page, or returned under a
+  credential-named field (`api_key`, `secret`, `access_token`; a plain `token`
+  such as a CSRF token does not count). One clear leader is saved to ClikCode
+  Secrets Manager. The agent hears only the name and the length.
+- **Only when unclear does a person help:** two equally likely keys, or none
+  found. The private prompt then appears (masked, never in history), and the
+  page's own Copy button or a keyboard copy on that page also completes it.
+  `remote` prints the phone link for tapping Copy. The computer's shared
+  clipboard is never read, so an unrelated copy cannot be taken for the key.
+- **`store_secret`** sends it on. The agent names the saved secret and the
+  ClikDeploy key (`SALAD_API_KEY`); the worker runs `clikdeploy` itself, so the
+  value is in no command the model writes. Each use asks for approval.
+- **Scrubbing.** Once held, a secret's exact value (and its base64, URL-encoded
+  and JSON-escaped forms) is replaced with `[secret hidden]` in every tool result
+  and streamed output, and a screenshot of a page that shows it is withheld.
+
+Limits: a key shown as an image or QR, split across boxes, only in a downloaded
+file, or only after an email confirmation is not found on its own. The value is
+briefly in the `clikdeploy` command line, visible to other processes of the same
+OS user.
+
 ## Stuck steps: phone handoff
 
 For a CAPTCHA or MFA the agent cannot finish, `computer_web handoff` prints a

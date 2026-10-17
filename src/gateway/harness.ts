@@ -27,7 +27,7 @@ import { sessionSandboxMode } from '../agent/sandbox.js';
 import type { HarnessSession } from '../session/model.js';
 import type { HarnessTurnObserver } from '../harness/events/turn-observer.js';
 import type { TurnObserver } from '../turn/observer.js';
-import { askPrivateLogin } from '../agent/computer/private-login-prompt.js';
+import { askPrivateLogin, askPrivateSecret } from '../agent/computer/private-login-prompt.js';
 
 interface AgentSessionTurnInput extends HarnessTurnObserver, Pick<AgentTurnInput, 'onRemembered' | 'onSteersUndelivered'> {
   session: HarnessSession;
@@ -143,6 +143,7 @@ export async function runAgentSessionTurn(
     // remembered here: the third answer is passed straight through.
     ...(prompter ? { onApproval: async (title: string, detail?: string, rule?: string, preview?: ApprovalPreview) => (await prompter.approval(title, detail, preview, rule)) ?? false } : {}),
     ...(prompter?.askQuestions ? { onPrivateLogin: (site: string, fields: readonly import('../agent/computer/login-fields.js').LoginField[], signal?: AbortSignal) => askPrivateLogin(prompter, site, fields, signal) } : {}),
+    ...(prompter?.askQuestions ? { onPrivateSecret: (name: string, hint: string, signal?: AbortSignal) => askPrivateSecret(prompter, name, hint, signal) } : {}),
     ...(input.onSteerReady ? { onSteerReady: input.onSteerReady } : {}),
     ...(input.onSteersUndelivered ? { onSteersUndelivered: input.onSteersUndelivered } : {}),
     ...(input.onRemembered ? { onRemembered: input.onRemembered } : {}),

@@ -1,5 +1,6 @@
 /** Running a step's tool calls: validation, hooks, the permission decision and
  * its approval, the tool itself under the turn's abort, and the results' record. */
+import { scrubSecrets } from './computer/secret-scrubber.js';
 import { toolOutputCap } from './context.js';
 import { claudeToolName } from './hooks.js';
 import { addPermissionAllowRule, buildApprovalPrompt, decidePermission, parsePermissionRules, suggestPermissionRule, visibleTools } from './permissions.js';
@@ -64,8 +65,9 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
     turnId: input.subagent?.checkpoint && SHELL_TOOLS.has(toolName) ? input.subagent.checkpoint.turnId : rt.turnId,
     stateDir: input.stateDir, homeDir: rt.homeDir, signal, checkpoints: rt.checkpoints,
     session: input.subagent?.checkpoint && SHELL_TOOLS.has(toolName) ? sessionState(input.stateDir, input.subagent.checkpoint.sessionId) : session,
-    callId, emitOutput,
+    callId, emitOutput: (chunk: string) => emitOutput(scrubSecrets(chunk)),
     ...(input.onPrivateLogin ? { requestPrivateLogin: input.onPrivateLogin } : {}),
+    ...(input.onPrivateSecret ? { requestPrivateSecret: input.onPrivateSecret } : {}),
     ...(input.subagent?.checkpoint ? { checkpoint: input.subagent.checkpoint } : {}),
     outputCap: toolOutputCap(rt.contextWindow, rt.profile.toolOutputBytes),
     ...(rt.stepAcceptsImages ? { acceptsImages: true } : {}),
@@ -137,6 +139,7 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
     if (rt.callsOpen === 0) await releaseHeldSteers(rt);
     if (wasPlanning && !session.plan.active) input.onPlanModeExit?.(session.plan.approvedPlan ?? '');
     if (!wasPlanning && session.plan.active) input.onPlanModeEnter?.();
+    result = { ...result, output: scrubSecrets(result.output) };
     const rewritten = await abortable(Promise.resolve(input.hooks?.postToolUse?.(call, result, rt.turnHookInfo)), signal);
     if (rewritten && typeof rewritten.output === 'string') result = { ...result, output: rewritten.output };
     return result;

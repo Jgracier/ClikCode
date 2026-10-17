@@ -190,6 +190,7 @@ export interface AgentTurnInput {
    *  stays valid, so an approver that cannot remember anything is unchanged. */
   onApproval?: (title: string, detail?: string, rule?: string, preview?: import('../tui/render/approval-block.js').ApprovalPreview) => Promise<boolean | 'always'>;
   /** Credential fields go from the terminal/panel to the local vault, never into model context. */
+  onPrivateSecret?: (name: string, hint: string, signal?: AbortSignal) => Promise<string | undefined>;
   onPrivateLogin?: (site: string, fields: readonly import('./computer/login-fields.js').LoginField[], signal?: AbortSignal) => Promise<Record<string, string> | undefined>;
   /** `hold`: given when the message may wait for a moment the model can answer it (see TurnRuntime.heldSteers). */
   onSteerReady?: (handler?: (text: string, hold?: (withdraw: () => boolean) => Promise<void>) => Promise<void>) => void;

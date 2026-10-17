@@ -1,5 +1,5 @@
 /** Local encrypted login vault. Only opaque item ids cross the model boundary. */
-import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -172,4 +172,39 @@ export async function removeSavedLogin(stateDir: string, id: string): Promise<bo
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) throw new CredentialError('Invalid saved login reference.');
   try { await fs.unlink(path.join(vaultDir(stateDir), 'items', `${id}.json`)); return true; }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw new CredentialError('The saved login could not be removed.'); }
+}
+
+/** Named secrets (API keys) captured from a page or pasted by the user. They
+ * live beside the saved logins under the same key, and only the worker reads
+ * them back: the agent works with the name alone. */
+const SECRET_NAME = /^[a-z0-9][a-z0-9._/-]{0,63}$/i;
+function secretFile(stateDir: string, name: string): { file: string; aad: string } {
+  if (!SECRET_NAME.test(name)) throw new CredentialError('A secret name uses letters, digits, dot, dash, underscore or slash, up to 64 characters.');
+  const hash = createHash('sha256').update(name.toLowerCase()).digest('hex').slice(0, 32);
+  return { file: path.join(vaultDir(stateDir), 'secrets', `${hash}.json`), aad: `secret:${hash}` };
+}
+export async function saveNamedSecret(stateDir: string, name: string, value: string): Promise<void> {
+  if (!value) throw new CredentialError('The secret is empty.');
+  const { file, aad } = secretFile(stateDir, name);
+  const key = await vaultKey(stateDir, true);
+  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  await fs.writeFile(file, seal(key, aad, JSON.stringify({ name, value })), { mode: 0o600 });
+}
+export async function readNamedSecret(stateDir: string, name: string): Promise<string> {
+  const { file, aad } = secretFile(stateDir, name);
+  const key = await vaultKey(stateDir, false);
+  try { return (JSON.parse(open(key, aad, await fs.readFile(file, 'utf8'))) as { value: string }).value; }
+  catch { throw new CredentialError(`No secret named "${name}" is saved.`); }
+}
+export async function namedSecretNames(stateDir: string): Promise<string[]> {
+  const dir = path.join(vaultDir(stateDir), 'secrets');
+  let files: string[];
+  try { files = await fs.readdir(dir); } catch { return []; }
+  const key = await vaultKey(stateDir, false);
+  const names: string[] = [];
+  for (const file of files) {
+    try { names.push((JSON.parse(open(key, `secret:${file.replace(/\.json$/, '')}`, await fs.readFile(path.join(dir, file), 'utf8'))) as { name: string }).name); }
+    catch { /* an unreadable file is skipped, never shown */ }
+  }
+  return names.sort();
 }

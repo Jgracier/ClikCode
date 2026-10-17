@@ -12,6 +12,7 @@ import { disposeSessionState, formatShellNotifications, sessionState } from './s
 import { ScriptedModelClient, type ScriptEntry } from './testing.js';
 import { type AgentTurnInput } from './model-client.js';
 import { defineTool, type ToolDefinition } from './tool-contract.js';
+import { forgetSecrets, registerSecret } from './computer/secret-scrubber.js';
 
 let root: string;
 let cwd: string;
@@ -56,6 +57,24 @@ function harness(script: ScriptEntry[], overrides: Partial<AgentTurnInput> = {},
 }
 
 describe('runAgentLoop', () => {
+  it('never lets a held secret reach the model or the screen, whichever tool echoes it', async () => {
+    const secret = 'salad_live_9f8e7d6c5b4a39281706';
+    registerSecret(secret);
+    const echo = defineTool<{ n: number }>({
+      name: 'echo_secret', class: 'read', description: 'echo', parameters: { type: 'object', properties: { n: { type: 'number' } } },
+      label: () => 'echo',
+      async run(_args, ctx) { ctx.emitOutput?.(`streaming ${secret}\n`); return { output: `result ${secret} and ${encodeURIComponent(secret)}` }; },
+    });
+    const h = harness([{ toolCalls: [{ id: 'c1', name: 'echo_secret', args: { n: 1 } }] }, { text: 'ok' }], { tools: [echo] });
+    await runAgentLoop(h.input);
+    const toModel = JSON.stringify(h.client.requests[1].items);
+    expect(toModel).not.toContain(secret);
+    expect(toModel).toContain('[secret hidden]');
+    expect(JSON.stringify(h.events)).not.toContain(secret);
+    expect(JSON.stringify(h.events)).toContain('streaming [secret hidden]');
+    forgetSecrets();
+  });
+
   it('runs tool round trips and emits start/done in order with matching ids', async () => {
     await fs.writeFile(path.join(cwd, 'a.txt'), 'hello\nworld\n');
     const h = harness([

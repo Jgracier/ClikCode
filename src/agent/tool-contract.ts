@@ -27,6 +27,8 @@ export interface ToolContext {
   emitOutput?(chunk: string): void;
   /** UI answer delivered to the local worker only; never added to the model's tool result. */
   requestPrivateLogin?(site: string, fields: readonly import('./computer/login-fields.js').LoginField[], signal?: AbortSignal): Promise<Record<string, string> | undefined>;
+  /** The same private prompt for an API key: the answer goes to the worker only. */
+  requestPrivateSecret?(name: string, hint: string, signal?: AbortSignal): Promise<string | undefined>;
   /** Bytes of output the model will be given (context.ts toolOutputCap).
    * A tool that can say where it stopped should stop here itself rather than
    * have its middle cut out by the loop. */
