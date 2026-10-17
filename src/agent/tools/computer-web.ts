@@ -8,6 +8,7 @@ import { loginComputerPage, loginOutcomeMessage } from '../computer/login-page.j
 import { LoginError } from '../computer/login-error.js';
 import { loginFields, loginFieldSummary, loginOptions, pageControls } from '../computer/login-fields.js';
 import { showsSecret } from '../computer/secret-scrubber.js';
+import { hideKeyLikeText } from '../computer/secret-finder.js';
 import { captureSecret } from '../computer/secret-capture.js';
 import { runTailcatHandoff } from '../computer/tailcat-handoff.js';
 import type { Page } from 'playwright-core';
@@ -15,7 +16,7 @@ import type { ToolContext, ToolRunResult } from '../tool-contract.js';
 
 type WebArgs = {
   action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'press' | 'scroll' | 'login' | 'handoff' | 'capture_secret';
-  url?: string; role?: 'button' | 'link' | 'textbox' | 'checkbox' | 'combobox' | 'tab' | 'menuitem';
+  url?: string; role?: 'button' | 'link' | 'textbox' | 'checkbox' | 'combobox' | 'tab' | 'menuitem' | 'option' | 'radio' | 'switch';
   name?: string; text?: string; key?: string; direction?: 'up' | 'down'; new_account?: boolean; secret_name?: string; remote?: boolean;
 };
 
@@ -44,10 +45,12 @@ export async function observeComputerPage(page: Page, acceptsImages: boolean): P
     const fields = await loginFields(page);
     return { output: loginFieldSummary(new URL(page.url()).origin, fields, await loginOptions(page), await pageControls(page)) };
   }
-  const snapshot = (await page.ariaSnapshot({ timeout: 10_000 })).slice(0, 25_000);
-  const output = `Page: ${page.url()}\n\n${snapshot}`;
+  const raw = (await page.ariaSnapshot({ timeout: 10_000 })).slice(0, 25_000);
+  // A key the page is showing is not for the model to read: capture_secret takes it.
+  const { text: snapshot, hidden } = hideKeyLikeText(raw);
+  const output = `Page: ${page.url()}\n\n${snapshot}${hidden ? `\n\n[${hidden} key-like value${hidden === 1 ? '' : 's'} hidden. Use capture_secret to save it without reading it.]` : ''}`;
   if (!acceptsImages) return { output };
-  if (showsSecret(snapshot) || showsSecret(await page.evaluate(visibleText).catch(() => ''))) return { output: `${output}\n\n[Screenshot withheld: the page shows a saved secret.]` };
+  if (hidden || showsSecret(snapshot) || showsSecret(await page.evaluate(visibleText).catch(() => ''))) return { output: `${output}\n\n[Screenshot withheld: the page shows a saved secret.]` };
   let bytes = await page.screenshot({ type: 'jpeg', quality: 65, animations: 'disabled', timeout: 10_000 });
   if (bytes.length > MAX_TOOL_IMAGE_BYTES) bytes = await page.screenshot({ type: 'jpeg', quality: 35, animations: 'disabled', timeout: 10_000 });
   const found = sniffImage(bytes);
@@ -61,7 +64,7 @@ export const computerWebTool = defineTool<WebArgs>({
   parameters: { type: 'object', additionalProperties: false, required: ['action'], properties: {
     action: { type: 'string', enum: ['open', 'close', 'observe', 'click', 'fill', 'press', 'scroll', 'login', 'handoff', 'capture_secret'] },
     url: { type: 'string', description: 'Website URL for open.' },
-    role: { type: 'string', enum: ['button', 'link', 'textbox', 'checkbox', 'combobox', 'tab', 'menuitem'] },
+    role: { type: 'string', enum: ['button', 'link', 'textbox', 'checkbox', 'combobox', 'tab', 'menuitem', 'option', 'radio', 'switch'] },
     name: { type: 'string', description: 'Exact accessible name from observe.' },
     text: { type: 'string', description: 'Text for fill. Never include credentials.' },
     key: { type: 'string', description: 'Keyboard key for press, for example Enter or Escape.' },
