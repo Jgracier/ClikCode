@@ -285,7 +285,7 @@ async function askForFills(page: Page, steps: readonly Step[], ctx: ToolContext)
     }).catch(() => '');
     fields.push({ index, key: `fill${index}`, label: label || String(step.target), kind: 'text', required: true });
   }
-  const answers = await ctx.requestPrivateLogin(new URL(page.url()).hostname, fields, ctx.signal);
+  const answers = await ctx.requestPrivateLogin(new URL(page.url()).origin, fields, ctx.signal);
   if (!answers) throw new Error('The user did not provide the values.');
   let at = 0;
   return steps.map(step => step.do === 'fill' && step.text === undefined ? { ...step, text: answers[`fill${at++}`] ?? '' } : step);
