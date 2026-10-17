@@ -3,7 +3,7 @@ import { stateDirectory } from '../session/store/paths.js';
 import { emitResult } from '../cli/structured-output.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
 import { closeComputerBrowser, computerPage } from '../agent/computer/browser.js';
-import { loginFields, loginFieldSummary, loginOptions, pageControls } from '../agent/computer/login-fields.js';
+import { loginFields, loginFieldSummary, pageControls } from '../agent/computer/login-fields.js';
 import { lockCredentialVault } from '../agent/computer/credential-vault.js';
 import { randomUUID } from 'node:crypto';
 import { WorkerClient } from '../worker/client.js';
@@ -34,10 +34,9 @@ export async function computerInspect(): Promise<void> {
   try {
     const site = new URL(page.url()).origin;
     const fields = await loginFields(page);
-    const options = await loginOptions(page);
     const controls = await pageControls(page);
-    if (isJsonDefaultMode()) return emitResult({ computer: { site, fields: fields.map(({ label, kind }) => ({ label, kind })), options, controls } });
-    process.stdout.write(`${loginFieldSummary(site, fields, options, controls)}\n`);
+    if (isJsonDefaultMode()) return emitResult({ computer: { site, fields: fields.map(({ label, kind }) => ({ label, kind })), controls } });
+    process.stdout.write(`${loginFieldSummary(site, fields, controls)}\n`);
   } finally { await page.context().browser()?.close().catch(() => undefined); }
 }
 

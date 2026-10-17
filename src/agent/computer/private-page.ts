@@ -23,8 +23,14 @@ export async function privateLoginPage(page: Page): Promise<boolean> {
     }
   } catch { /* Inspect the fields below if the URL is transient. */ }
   if (await (await loginScope(page)).locator('input[type="password"]:visible').count()) {
-    protectLoginPage(page);
-    return true;
+    // One masked field labelled as a key or token (an account's API-key page) is a
+    // credential on display, not a sign-in: its value is hidden by the key
+    // redaction, and the rest of the page stays readable.
+    const lone = await loginFields(page).then(fields => fields.length === 1 && fields[0]!.kind === 'password' && /api|key|token|secret/i.test(fields[0]!.label)).catch(() => false);
+    if (!lone) {
+      protectLoginPage(page);
+      return true;
+    }
   }
   try {
     const fields = await loginFields(page);

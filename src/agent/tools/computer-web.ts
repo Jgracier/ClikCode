@@ -6,7 +6,7 @@ import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
 import { privateLoginPage } from '../computer/private-page.js';
 import { loginComputerPage, loginOutcomeMessage } from '../computer/login-page.js';
 import { LoginError } from '../computer/login-error.js';
-import { loginFields, loginFieldSummary, loginOptions, pageControls } from '../computer/login-fields.js';
+import { loginFields, loginFieldSummary, pageControls } from '../computer/login-fields.js';
 import { showsSecret } from '../computer/secret-scrubber.js';
 import { hideKeyLikeText } from '../computer/secret-finder.js';
 import { dialogNote, withDialogs } from '../computer/page-dialogs.js';
@@ -29,8 +29,20 @@ export function webAddress(value: string | undefined): string {
 }
 
 function element(page: Page, args: WebArgs) {
-  if (!args.role || !args.name?.trim()) throw new Error('Choose an exact role and name from the latest browser observation.');
-  return page.getByRole(args.role, { name: args.name, exact: true });
+  if (!args.name?.trim()) throw new Error('Choose an exact name (and role, when known) from the latest browser observation.');
+  // No role: match the visible text, for controls the accessibility tree names badly.
+  return args.role ? page.getByRole(args.role, { name: args.name, exact: true }) : page.getByText(args.name, { exact: true }).locator('visible=true').first();
+}
+
+/** Radios, checkboxes and switches are often visually hidden behind a styled
+ * label, so a plain click cannot reach them: set them directly instead. */
+async function press(page: Page, args: WebArgs): Promise<void> {
+  const target = element(page, args);
+  if (args.role === 'radio' || args.role === 'checkbox' || args.role === 'switch') {
+    try { await target.check({ timeout: 4_000 }); return; }
+    catch { await target.evaluate(node => (node as unknown as { click(): void }).click(), undefined, { timeout: 4_000 }); return; }
+  }
+  await target.click({ timeout: 10_000 });
 }
 
 /** Runs in the page: the visible text and every input value, for the secret check. */
@@ -44,7 +56,7 @@ export async function observeComputerPage(page: Page, acceptsImages: boolean): P
   // accessibility snapshot or screenshot crosses into the model context.
   if (await privateLoginPage(page)) {
     const fields = await loginFields(page);
-    return { output: loginFieldSummary(new URL(page.url()).origin, fields, await loginOptions(page), await pageControls(page)) };
+    return { output: loginFieldSummary(new URL(page.url()).origin, fields, await pageControls(page)) };
   }
   const raw = (await page.ariaSnapshot({ timeout: 10_000 })).slice(0, 25_000);
   // A key the page is showing is not for the model to read: capture_secret takes it.
@@ -65,8 +77,8 @@ export const computerWebTool = defineTool<WebArgs>({
   parameters: { type: 'object', additionalProperties: false, required: ['action'], properties: {
     action: { type: 'string', enum: ['open', 'close', 'observe', 'click', 'fill', 'press', 'scroll', 'login', 'handoff', 'capture_secret'] },
     url: { type: 'string', description: 'Website URL for open.' },
-    role: { type: 'string', enum: ['button', 'link', 'textbox', 'checkbox', 'combobox', 'tab', 'menuitem', 'option', 'radio', 'switch'] },
-    name: { type: 'string', description: 'Exact accessible name from observe.' },
+    role: { type: 'string', enum: ['button', 'link', 'textbox', 'checkbox', 'combobox', 'tab', 'menuitem', 'option', 'radio', 'switch'], description: 'Optional: leave it out to match the visible text.' },
+    name: { type: 'string', description: 'Exact accessible name (or visible text, with no role) from observe.' },
     text: { type: 'string', description: 'Text for fill. Never include credentials.' },
     key: { type: 'string', description: 'Keyboard key for press, for example Enter or Escape.' },
     direction: { type: 'string', enum: ['up', 'down'] },
@@ -151,7 +163,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
 /** A native dialog or separate popup window is outside the page, so a click
  * that never lands is most often that: point the agent at the desktop tool. */
 async function clickOrHint(page: Page, args: WebArgs): Promise<void> {
-  try { await element(page, args).click({ timeout: 10_000 }); }
+  try { await press(page, args); }
   catch (error) {
     if (!(error instanceof Error) || !/timeout/i.test(error.message)) throw error;
     throw new Error(`${error.message.split('\n')[0]} If a popup window or browser dialog is in front of the page, use computer_desktop to see and answer it.`);

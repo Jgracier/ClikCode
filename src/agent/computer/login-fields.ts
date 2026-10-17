@@ -70,31 +70,6 @@ export async function loginFields(page: Page): Promise<LoginField[]> {
   });
 }
 
-const OPTION_HINT = /sign in|log in|login|root|iam|\buser\b|account|\bsso\b|single sign|continue with|use another|different|email|phone|passkey|security key|try another/i;
-const OPTION_NOISE = /privacy|terms|cookie|language|forgot|create|help|learn more|contact/i;
-
-/** Other ways to sign in that the page offers (root or IAM, another account,
- * SSO), by their visible names. Names that look like an email address are
- * dropped so an account chooser never tells the model who is signed in. */
-export async function loginOptions(page: Page): Promise<string[]> {
-  let names: string[];
-  try {
-    names = await page.locator('a:visible, button:visible, [role="button"]:visible, [role="link"]:visible').evaluateAll(
-      nodes => nodes.map(node => ((node as unknown as { innerText?: string }).innerText ?? '').replace(/\s+/g, ' ').trim()));
-  } catch { return []; } // The page is navigating.
-  const seen = new Set<string>();
-  const options: string[] = [];
-  for (const name of names) {
-    if (!name || name.length > 60 || /@/.test(name) || !OPTION_HINT.test(name) || OPTION_NOISE.test(name)) continue;
-    const key = name.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    options.push(name);
-    if (options.length === 8) break;
-  }
-  return options;
-}
-
 /** Names of the buttons and links on the page, for a page that holds a key or other
  * secret in a field and so cannot be shown whole: the agent still needs to see what
  * it can press (Create, Regenerate, Copy). Names only, never values or email-like text. */
@@ -119,13 +94,10 @@ export async function pageControls(page: Page): Promise<string[]> {
   return controls;
 }
 
-export function loginFieldSummary(site: string, fields: readonly LoginField[], options: readonly string[] = [], controls: readonly string[] = []): string {
+export function loginFieldSummary(site: string, fields: readonly LoginField[], controls: readonly string[] = []): string {
   const shown = fields.length ? fields.map(field => `- ${field.label} (${field.kind})`).join('\n') : '- No credential field is visible. Use handoff for verification or CAPTCHA.';
-  const other = options.length
-    ? `\n\nOther ways to sign in on this page:\n${options.map(name => `- ${name}`).join('\n')}\nIf more than one could apply (for example root user or IAM user), ask the user which one with ask_user before clicking.`
-    : '';
-  const pressable = controls.length ? `\n\nButtons and links on the page (names only):\n${controls.map(name => `- ${name}`).join('\n')}\nPress one with click, using its role and name.` : '';
-  return `Page: ${site}\n\nSign-in fields:\n${shown}${other}${pressable}\n\nUse login to ask for the visible fields privately; if several accounts are saved for this site the user picks one, and a single saved account is used without asking. Values are never shown here.`;
+  const pressable = controls.length ? `\n\nButtons and links on the page (names only):\n${controls.map(name => `- ${name}`).join('\n')}\nPress one with click, using its role and name. If a sign-in page offers different ways in (for example root or IAM user, or another account), ask the user which with ask_user before clicking.` : '';
+  return `Page: ${site}\n\nSign-in fields:\n${shown}${pressable}\n\nUse login to ask for the visible fields privately; if several accounts are saved for this site the user picks one, and a single saved account is used without asking. Values are never shown here.`;
 }
 
 /** The same label twice (two accounts, or a retyped password) still has to be told apart in a list. */

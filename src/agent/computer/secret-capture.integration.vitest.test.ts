@@ -45,6 +45,8 @@ beforeAll(async () => {
     if (path === '/copy-only') return send(page(`<button id="copy" style="width:200px;height:50px" onclick="navigator.clipboard.writeText('${KEY}')">Copy</button>`));
     // A dialog like Google AI Studio's: the key beside a resource name and Copy buttons.
     if (path === '/dialog') return send(page(create('go', `document.getElementById('out').innerHTML='<p>API Key ${GOOGLE_STYLE}</p><button>Copy key to clipboard</button><p>Project name projects/831963658327</p><p>Project number 831963658327</p>'`)));
+    // The key is never in the page text: only the site's own Copy button knows it. A "Copy cURL" button must not be pressed.
+    if (path === '/copy-modal') return send(page(create('go', `document.getElementById('out').innerHTML='<p>Save your token</p><code>••••••••••••••••</code> <button id="curl" onclick="navigator.clipboard.writeText(&quot;curl -H wrong https://x&quot;)">Copy cURL</button> <button id="c" onclick="navigator.clipboard.writeText(&quot;${KEY}&quot;)">Copy</button>'`)));
     // An account's current key, already on the page in a masked field, beside an id that is not a key.
     if (path === '/existing') return send(page(`<p>Your API key</p><input type="password" value="${KEY}"><p>Org 3f2a9c1e-7b4d-4e8a-9c21-5d6e7f809a1b</p>`));
     send(page(create('go', "document.getElementById('out').textContent='done'")));
@@ -106,24 +108,17 @@ it.skipIf(!enabled)('asks when nothing key-like appears, and saves nothing if th
   await expect(readNamedSecret(stateDir, 'nothing')).rejects.toThrow();
 }, 60_000);
 
-it.skipIf(!enabled)('falls back to the page\'s own Copy button, ignoring other copies on the computer', async () => {
+it.skipIf(!enabled)('presses the page\'s own Copy button by itself and ignores other copies on the computer', async () => {
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
   const tab = await open('/copy-only');
-  const pending = captureSecret({
-    stateDir, page: tab, name: 'copied', remote: false,
-    ask: (_name, _hint, signal) => new Promise(resolve => signal.addEventListener('abort', () => resolve(undefined))), onLink: () => undefined,
-  });
   // Elsewhere on the computer something else is copied: it must not count.
   const elsewhere = await browser!.newContext({ ignoreHTTPSErrors: true, permissions: ['clipboard-read', 'clipboard-write'] });
   const other = await elsewhere.newPage();
   await other.goto(`${base}/plain`);
-  await other.bringToFront();
   await other.evaluate(() => navigator.clipboard.writeText('unrelated-token-0000-1111'));
-  expect(await other.evaluate(() => navigator.clipboard.readText())).toBe('unrelated-token-0000-1111');
   await tab.bringToFront();
-  await tab.waitForTimeout(11_000);
-  await tap(tab, '#copy');
-  expect(await pending).toEqual({ length: KEY.length, found: false });
+  const result = await captureSecret({ stateDir, page: tab, name: 'copied', remote: false, ask: neverAsked, onLink: () => undefined });
+  expect(result).toEqual({ length: KEY.length, found: true });
   expect(await readNamedSecret(stateDir, 'copied')).toBe(KEY);
 }, 60_000);
 
@@ -159,4 +154,12 @@ it.skipIf(!enabled)('never shows the agent a key the page displays, before or af
   expect(seen.output).not.toContain(GOOGLE_STYLE);
   expect(seen.output).toContain('key-like value hidden');
   expect(seen.images).toBeUndefined();
+}, 60_000);
+
+it.skipIf(!enabled)('presses the site\'s own Copy button when the key never appears in the page text, and not the cURL one', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
+  const tab = await open('/copy-modal');
+  const result = await captureSecret({ stateDir, page: tab, name: 'masked', remote: false, trigger: () => tap(tab, '#go'), ask: neverAsked, onLink: () => undefined });
+  expect(result).toEqual({ length: KEY.length, found: true });
+  expect(await readNamedSecret(stateDir, 'masked')).toBe(KEY);
 }, 60_000);

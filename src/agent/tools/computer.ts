@@ -58,7 +58,7 @@ export function computerDriverAction(args: DesktopArgs): { name: string; args: R
 
 export const computerDesktopTool = defineTool<DesktopArgs>({
   name: 'computer_desktop', class: 'exec',
-  description: 'Control the local desktop through cua-driver. Use it for what page tools cannot reach: a browser popup window, a native permission or file dialog, or any other app. `windows` lists windows; `observe`, then click, type, key, hotkey or scroll. With no pid and window_id it acts on the primary desktop by screenshot coordinates; with both (from `windows`) it acts on that one window and prefers a fresh element_token. Always observe first; coordinates and tokens expire. Not available while a sign-in page is open in the ClikCode browser. Never type credentials.',
+  description: 'Control the local desktop through cua-driver. Use it for what page tools cannot reach: a browser popup window, a native permission or file dialog, or any other app. `windows` lists windows; `observe`, then click, type, key, hotkey or scroll. With no pid and window_id it acts on the primary desktop by screenshot coordinates; with both (from `windows`) it acts on that one window and prefers a fresh element_token. Always observe first; coordinates and tokens expire. `observe` is refused while a sign-in page is open in the ClikCode browser, so the screen cannot show what the page withholds. Never type credentials.',
   parameters: { type: 'object', additionalProperties: false, required: ['action'], properties: {
     action: { type: 'string', enum: ['windows', 'observe', 'click', 'type', 'key', 'hotkey', 'scroll'] },
     pid: { type: 'integer', minimum: 1, description: 'Process id from windows, to act on one window.' },
@@ -77,7 +77,9 @@ export const computerDesktopTool = defineTool<DesktopArgs>({
   describe: async (args) => `${args.window_id !== undefined ? `Window ${args.window_id} of process ${args.pid}` : 'Primary desktop'}: ${args.action}${args.action === 'type' ? ` (${args.text?.length ?? 0} characters)` : ''}.`,
   async run(args, ctx) {
     if (!(await computerEnabled(ctx.stateDir))) return { output: COMPUTER_OFF, isError: true };
-    if (await privateBrowserActive(ctx.stateDir)) return { output: privateNotice, isError: true };
+    // Only the picture of the screen can show what a sign-in page withholds: acting
+    // (for example on an OAuth popup) is allowed, looking is not.
+    if (args.action === 'observe' && await privateBrowserActive(ctx.stateDir)) return { output: privateNotice, isError: true };
     try {
       const request = computerDriverAction(args);
       const withImage = ctx.acceptsImages === true && args.action === 'observe';
