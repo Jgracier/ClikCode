@@ -9,6 +9,7 @@ import { copyWithSiteButton, waitForCopiedSecret } from './clipboard-watch.js';
 import { LoginError } from './login-error.js';
 import { armFinder } from './secret-finder.js';
 import { checkKey, type KeyCheck } from './key-check.js';
+import { sendToDestinations, type Delivery, type Destination } from './secret-destinations.js';
 import { registerSecret } from './secret-scrubber.js';
 import { runTailcatHandoff } from './tailcat-handoff.js';
 
@@ -24,7 +25,9 @@ export async function captureSecret(input: {
   onLink(link: string): void;
   /** Tests the value against its service before it is saved. Default: the built-in checks by site. */
   check?(pageUrl: string, value: string): Promise<KeyCheck>;
-}): Promise<{ length: number; found: boolean; check: KeyCheck }> {
+  /** Where the key goes once it is captured and checked, decided and approved beforehand. */
+  sendTo?: readonly Destination[];
+}): Promise<{ length: number; found: boolean; check: KeyCheck; sent: Delivery[] }> {
   const stop = new AbortController();
   const outer = (): void => stop.abort();
   input.signal?.addEventListener('abort', outer, { once: true });
@@ -62,7 +65,9 @@ export async function captureSecret(input: {
     // A value its own service refuses is not the key (an id, a page blob): saving it would only hide the problem.
     if (check.verdict === 'rejected') throw new LoginError(`Not saved: ${check.detail}. What was on the page is not a working key (it may be the key's id or another value).`);
     await saveNamedSecret(input.stateDir, input.name, value);
-    return { length: value.length, found, check };
+    // Saved first: if a destination fails, the key is still safe in Secrets Manager and can be sent again.
+    const sent = input.sendTo?.length ? await sendToDestinations(input.sendTo, value, input.signal) : [];
+    return { length: value.length, found, check, sent };
   } finally {
     finder.dispose();
     stop.abort();

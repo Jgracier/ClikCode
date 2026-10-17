@@ -7,6 +7,7 @@ import { COMPUTER_OFF } from '../agent/computer/settings.js';
 import { LoginError } from '../agent/computer/login-error.js';
 import { askPrivateLogin, askPrivateSecret } from '../agent/computer/private-login-prompt.js';
 import { scrubSecrets } from '../agent/computer/secret-scrubber.js';
+import { sendsCapturedKey } from '../agent/permissions.js';
 import { validateAgainstSchema } from '../agent/schema-validate.js';
 import { computerDesktopTool } from '../agent/tools/computer.js';
 import { computerWebTool } from '../agent/tools/computer-web.js';
@@ -30,7 +31,7 @@ export async function runSharedComputerTool(input: {
     const problems = validateAgainstSchema(input.args, tool.parameters);
     if (problems.length) return { ok: false, output: `Invalid arguments: ${problems.join('; ')}` };
     const needWindow = (): void => { if (input.windows() < 2) throw new LoginError(NO_WINDOW); };
-    if (tool.name === 'store_secret' || tool.name === 'delete_secret') {
+    if (tool.name === 'store_secret' || tool.name === 'delete_secret' || sendsCapturedKey(tool, input.args)) {
       // The calling harness may not ask before a destructive write: ClikCode does.
       needWindow();
       const approved = await input.observer.approval(`Approve ${tool.name}`, await tool.describe?.(input.args), undefined, undefined, input.signal);

@@ -88,7 +88,7 @@ it('offers the tools over MCP with typed schemas', async () => {
   expect(init.result.serverInfo.name).toBe('clikcode');
   const listed = await server.call('tools/list');
   expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toEqual(['computer_web', 'computer_desktop', 'store_secret', 'list_secrets', 'delete_secret']);
-  expect(listed.result.tools[2].inputSchema.required).toEqual(['secret', 'destination', 'key']);
+  expect(listed.result.tools[2].inputSchema.required).toEqual(['secret', 'send_to']);
   expect((await server.call('tools/call', { name: 'nope', arguments: {} })).error.code).toBe(-32602);
 }, 60_000);
 
@@ -104,13 +104,13 @@ it('stores a saved secret only after the window approves, and returns no value',
   await attach(id); // a second window, as a chat has: the first is the one that answers
   const asked = next(window, 'approval-request');
   const server = await mcpServer(id);
-  const pending = server.call('tools/call', { name: 'store_secret', arguments: { secret: 'salad/api-key', destination: 'clikdeploy', key: 'SALAD_API_KEY' } });
+  const pending = server.call('tools/call', { name: 'store_secret', arguments: { secret: 'salad/api-key', send_to: [{ type: 'clikdeploy', tool: 'admin_platform_set_secret', args: { key: 'SALAD_API_KEY', value: '{{secret}}' } }] } });
   const approval = await asked;
   expect(JSON.stringify(approval)).not.toContain(VALUE);
   window.send({ type: 'approval-response', id: approval.id, approved: true });
   const result = (await pending).result;
   expect(result.isError).toBe(false);
-  expect(result.content[0].text).toContain('Stored "salad/api-key" in ClikDeploy as SALAD_API_KEY');
+  expect(result.content[0].text).toContain('Sent - ClikDeploy admin_platform_set_secret');
   expect(JSON.stringify(result)).not.toContain(VALUE);
   expect(await readFile(join(root!, 'argv'), 'utf8')).toContain(VALUE);
 }, 60_000);
@@ -122,7 +122,7 @@ it('does nothing when the window declines, and says so without a prompt when no 
   const server = await mcpServer(id);
   starter.close();
   await new Promise(resolve => setTimeout(resolve, 300));
-  const args = { secret: 'salad/api-key', destination: 'clikdeploy', key: 'SALAD_API_KEY' };
+  const args = { secret: 'salad/api-key', send_to: [{ type: 'clikdeploy', tool: 'admin_platform_set_secret', args: { key: 'SALAD_API_KEY', value: '{{secret}}' } }] };
   const alone = await server.call('tools/call', { name: 'store_secret', arguments: args });
   expect(alone.result.isError).toBe(true);
   expect(alone.result.content[0].text).toContain('No chat window is open');

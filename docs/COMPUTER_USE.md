@@ -112,19 +112,24 @@ signs in, sets the permissions, then calls `computer_web capture_secret` with a
   page's own Copy button or a keyboard copy on that page also completes it.
   `remote` prints the phone link for tapping Copy. The computer's shared
   clipboard is never read, so an unrelated copy cannot be taken for the key.
-- **`store_secret`** sends it on. The agent names the saved secret and the
-  destination key (`SALAD_API_KEY`); the worker runs the CLI itself, so the value
-  is in no command the model writes. Each use asks for approval. Destinations:
-  a ClikDeploy platform secret, a ClikDeploy app secret (`app`), or a GitHub
-  repository secret (`destination: github`, `repo: owner/name`; the value goes to
-  `gh` on stdin). What ClikDeploy answers (set, applied to the running process) is
-  relayed as it is; testing and running the platform are ClikDeploy's own tools.
-  
-  `clikdeploy tools run admin_platform_secrets` lists every platform key with the
-  page where its key is created, which is the list of what to fetch.
+- **Where it goes is decided first, as data.** `capture_secret` takes `send_to`, a
+  list the agent writes before anything happens: `{type:"clikdeploy", tool, args}`
+  runs that `clikdeploy tools run` tool, with `{{secret}}` inside `args` marking
+  where the key goes (`admin_platform_set_secret` with `{key:"SALAD_API_KEY",
+  value:"{{secret}}"}`, or `admin_compute_save_credentials` with
+  `{provider:"GCP", credentials:{serviceAccountJson:"{{secret}}"}}`);
+  `{type:"github", repo, name}` sets a repository secret (the value goes to `gh`
+  on stdin). Nothing about a provider is built in, and only those two executors
+  exist, so a plan can reach the user's ClikDeploy or GitHub and nowhere else.
+  The user approves the whole plan once, up front, with the key shown only as its
+  placeholder (no "always": each plan is its own decision). Then capture, check,
+  save and delivery run as one action, and what each destination answered is
+  relayed. If one fails the key stays saved.
+- **`store_secret`** is the same plan for a key already saved: to send it again
+  after a failure, or to another place later.
 - **`list_secrets`** and **`delete_secret`** show names only and remove one by
   name (re-capturing a name replaces its value). From a shell:
-  `clikcode computer secrets [--delete NAME]`.
+  `clikcode computer secrets [--delete NAME]`. `clikcode computer store NAME --key KEY [--app ID | --github owner/name]` (or `--send-to-json`) sends a saved one.
 - **Scrubbing.** Once held, a secret's exact value (and its base64, URL-encoded
   and JSON-escaped forms) is replaced with `[secret hidden]` in every tool result
   and streamed output, and a screenshot of a page that shows it is withheld.
