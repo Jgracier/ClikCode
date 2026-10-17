@@ -30,6 +30,16 @@ export const DEFAULT_DESTINATIONS: Readonly<Record<string, Template>> = {
   'github-secret': { about: 'a GitHub repository secret (repo, key)', run: ['gh', 'secret', 'set', '{{key}}', '--repo', '{{repo}}'], stdin: '{{secret}}' },
 };
 
+/** A plan in whatever honest shape the agent gave it: a list, one {to, with}, or just a name. */
+export function normalizeSendTo(value: unknown): Destination[] | undefined {
+  if (Array.isArray(value)) return value as Destination[];
+  if (typeof value === 'string' && value) return [{ to: value }];
+  if (value && typeof value === 'object') return [value as Destination];
+  return undefined;
+}
+
+const EXAMPLE = 'Example: {"to":"clikdeploy-secret","with":{"key":"SALAD_API_KEY"}}';
+
 const NAME = /^[a-z][a-z0-9-]{1,40}$/;
 /** A slot value goes into a command line: no quotes, no leading dash that a program could read as a flag. */
 const SAFE_VALUE = /^[A-Za-z0-9_][\w.@:/ -]{0,119}$/;
@@ -79,12 +89,12 @@ export async function destinationProblem(stateDir: string, list: readonly unknow
   for (const [index, item] of list.entries()) {
     const at = `send_to[${index}]`;
     const d = item as Destination | null;
-    if (!d || typeof d !== 'object' || typeof d.to !== 'string') return `${at} needs {to: "<destination>", with: {...}}.`;
+    if (!d || typeof d !== 'object' || typeof d.to !== 'string') return `${at} needs {to: "<destination>", with: {...}}. ${EXAMPLE}`;
     const template = all[d.to];
-    if (!template) return `${at}: no destination named "${d.to}". Known: ${describeKnown(all)}. The user adds more with \`clikcode computer destination add\`.`;
+    if (!template) return `${at}: no destination named "${d.to}". Known: ${describeKnown(all)}. The user adds more with \`clikcode computer destination add\`. ${EXAMPLE}`;
     for (const slot of slotsOf(template)) {
       const value = d.with?.[slot];
-      if (typeof value !== 'string' || !SAFE_VALUE.test(value)) return `${at}: "${d.to}" needs with.${slot} (letters, digits, dot, dash, underscore, slash; not starting with a dash).`;
+      if (typeof value !== 'string' || !SAFE_VALUE.test(value)) return `${at}: "${d.to}" needs with.${slot} (letters, digits, dot, dash, underscore, slash; not starting with a dash). ${EXAMPLE}`;
     }
   }
   return undefined;

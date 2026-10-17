@@ -35,8 +35,9 @@ export async function captureSecret(input: {
   if (input.signal?.aborted) stop.abort();
   const finder = await armFinder(input.page, input.existing ?? !input.trigger);
   const download = watchDownload(input.page);
+  let clicked = false;
   try {
-    await input.trigger?.();
+    if (input.trigger) { clicked = true; await input.trigger(); }
     let value: string | undefined;
     let ambiguous = false;
     for (let poll = 0; poll < LOOK_POLLS && !value; poll++) {
@@ -68,6 +69,9 @@ export async function captureSecret(input: {
     // Saved first: if a destination fails, the key is still safe in Secrets Manager and can be sent again.
     const sent = input.sendTo?.length ? await sendToDestinations(input.stateDir, input.sendTo, value, input.signal) : [];
     return { length: value.length, found, check, sent };
+  } catch (error) {
+    // The click may have made the site create a key: whoever reports the failure must be able to say so.
+    throw clicked && error instanceof Error ? Object.assign(error, { afterClick: true }) : error;
   } finally {
     finder.dispose();
     download.stop();

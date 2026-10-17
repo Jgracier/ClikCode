@@ -46,3 +46,22 @@ it('refuses an unknown destination, an unknown secret and a missing program, eac
   process.env.PATH = bin;
   expect((await storeSecretTool.run(SALAD, ctx())).output).toContain('not installed');
 });
+
+it('takes the one-destination call in its simplest shape, and a list, an object or a bare name', async () => {
+  await fake('clikdeploy', `printf '%s\\n' "$@" >> "${dir}/argv"; echo '{"status":"success","message":"ok"}'`);
+  const forms = [
+    { secret: 'salad/api-key', to: 'clikdeploy-secret', with: { key: 'SALAD_API_KEY' } },
+    { secret: 'salad/api-key', send_to: { to: 'clikdeploy-secret', with: { key: 'SALAD_API_KEY' } } },
+    { secret: 'salad/api-key', send_to: [{ to: 'clikdeploy-secret', with: { key: 'SALAD_API_KEY' } }] },
+  ];
+  for (const form of forms) expect((await storeSecretTool.run(form as never, ctx())).output).toContain('SENT - clikdeploy-secret (SALAD_API_KEY)');
+  expect((await storeSecretTool.run({ secret: 'salad/api-key', send_to: 'clikdeploy-secret' } as never, ctx())).output).toContain('needs with.key');
+});
+
+it('every correction carries a working example, so one wrong call is enough to fix', async () => {
+  const none = await storeSecretTool.run({ secret: 'salad/api-key' } as never, ctx());
+  expect(none.output).toContain('"to":"clikdeploy-secret"');
+  const unknown = await storeSecretTool.run({ secret: 'salad/api-key', to: 'clikdeploy' } as never, ctx());
+  expect(unknown.output).toContain('no destination named "clikdeploy"');
+  expect(unknown.output).toContain('Example: {"to":"clikdeploy-secret"');
+});

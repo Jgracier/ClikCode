@@ -11,7 +11,7 @@ import { scrubSecrets, showsSecret } from '../computer/secret-scrubber.js';
 import { hideKeyLikeText } from '../computer/secret-finder.js';
 import { dialogNote, withDialogs } from '../computer/page-dialogs.js';
 import { SEND_TO_HELP, SEND_TO_SCHEMA } from './store-secret.js';
-import { destinationProblem, type Destination } from '../computer/secret-destinations.js';
+import { destinationProblem, normalizeSendTo, type Destination } from '../computer/secret-destinations.js';
 import { captureSecret } from '../computer/secret-capture.js';
 import { runTailcatHandoff } from '../computer/tailcat-handoff.js';
 import type { Page } from 'playwright-core';
@@ -20,7 +20,7 @@ import type { ToolContext, ToolRunResult } from '../tool-contract.js';
 type WebArgs = {
   action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'press' | 'scroll' | 'login' | 'handoff' | 'capture_secret';
   url?: string; role?: 'button' | 'link' | 'textbox' | 'checkbox' | 'combobox' | 'tab' | 'menuitem' | 'option' | 'radio' | 'switch';
-  name?: string; text?: string; key?: string; direction?: 'up' | 'down'; new_account?: boolean; secret_name?: string; accept_dialog?: boolean; send_to?: Destination[]; full?: boolean;
+  name?: string; text?: string; key?: string; direction?: 'up' | 'down'; new_account?: boolean; secret_name?: string; accept_dialog?: boolean; send_to?: Destination[] | Destination | string; full?: boolean;
 };
 
 export function webAddress(value: string | undefined): string {
@@ -153,7 +153,12 @@ export const computerWebTool = defineTool<WebArgs>({
     } catch (error) {
       // A sign-in's own errors may echo what was typed, so only its planned messages are shown; a capture's are always the real reason.
       if (args.action === 'login') return { output: error instanceof LoginError ? error.message : 'Private login did not finish. Check the browser and try again.', isError: true };
-      if (args.action === 'capture_secret') { const why = error instanceof Error ? error.message : String(error); return { output: scrubSecrets(why.startsWith('Not saved') ? why : `Not saved: ${why}`), isError: true }; }
+      if (args.action === 'capture_secret') {
+        const why = error instanceof Error ? error.message : String(error);
+        // A click that creates a key at the site cannot be undone from here: say so, or a live key is left behind unnoticed.
+        const clicked = (error as { afterClick?: boolean }).afterClick ? ` The click on "${args.name ?? 'the button'}" may already have created a key at the site; if so, delete it there.` : '';
+        return { output: scrubSecrets(`${why.startsWith('Not saved') ? why : `Not saved: ${why}`}${clicked}`), isError: true };
+      }
       return { output: error instanceof Error ? error.message : String(error), isError: true };
     }
   },
@@ -173,11 +178,12 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
     }
     case 'capture_secret': {
       // Before anything is clicked: a key must not be created for a plan that cannot deliver it.
-      const planProblem = args.send_to?.length ? await destinationProblem(ctx.stateDir, args.send_to) : undefined;
-      if (planProblem) throw new Error(planProblem);
+      const plan = normalizeSendTo(args.send_to);
+      const planProblem = plan?.length ? await destinationProblem(ctx.stateDir, plan) : undefined;
+      if (planProblem) throw new Error(`${planProblem} Nothing was clicked.`);
       const name = args.secret_name?.trim() || `${new URL(page.url()).hostname.replace(/^www\./, '')}/key`;
       const { length, found, check, sent } = await captureSecret({ stateDir: ctx.stateDir, page, name, signal: ctx.signal,
-        ...(args.send_to?.length ? { sendTo: args.send_to } : {}),
+        ...(plan?.length ? { sendTo: plan } : {}),
         ...(args.name ? { trigger: () => clickOrHint(page, args) } : {}),
         ask: async (secretName, hint, signal) => {
           if (!ctx.requestPrivateSecret) throw new LoginError('Not saved: this chat cannot show a private prompt, and the key could not be found on its own.');
