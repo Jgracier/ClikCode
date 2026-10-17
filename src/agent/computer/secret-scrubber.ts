@@ -1,7 +1,8 @@
+import { sharedState } from './shared-state.js';
 /** Every secret value this process has held, in the forms it could reappear in,
  * so no tool result, event or log can carry one back to the model. This is an
  * exact match, not a guess at what a key looks like. */
-const live = new Map<string, string>();
+const live = sharedState('secrets-live', () => new Map<string, string>());
 const MASK = '[secret hidden]';
 
 function forms(value: string): string[] {

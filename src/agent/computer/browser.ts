@@ -5,9 +5,10 @@ import { spawn } from 'node:child_process';
 import { setTimeout as pause } from 'node:timers/promises';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core';
 import { computerHostFile, computerProfile } from './browser-host.js';
+import { sharedState } from './shared-state.js';
 
 type Connected = { browser: Browser; context: BrowserContext };
-const running = new Map<string, Promise<Connected>>();
+const running = sharedState('browser-running', () => new Map<string, Promise<Connected>>());
 
 async function connect(stateDir: string): Promise<Connected | undefined> {
   const file = path.join(computerProfile(stateDir), 'DevToolsActivePort');
@@ -99,7 +100,7 @@ async function browserFor(stateDir: string, start: boolean): Promise<Connected> 
 
 /** This process is one chat's worker, so the tab it holds is that chat's own: another chat
  * in the same Chrome never has its page read, clicked or followed by this one. */
-const owned = new Map<string, Page[]>();
+const owned = sharedState('browser-owned', () => new Map<string, Page[]>());
 
 /** The newest tab still open; a popup that closed itself (a sign-in window) hands back to the page that opened it. */
 function mine(stateDir: string): Page | undefined {
