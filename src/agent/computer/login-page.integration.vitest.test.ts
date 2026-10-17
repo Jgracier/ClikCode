@@ -53,6 +53,7 @@ beforeAll(async () => {
     else if (url.pathname === '/signin/challenge/totp') send(form('/signin/challenge/totp', 'Enter the 6-digit code', 'totp', 'text', 'one-time-code', error));
     else if (url.pathname === '/embedded') send(page('Embedded', '<h1>Pay</h1><iframe src="/signin/identifier" width="400" height="200"></iframe>'));
     else if (url.pathname === '/signin/jsform') send(page('JS form', '<label>Email or phone<input name="identifier" type="text" autocomplete="username"></label><button type="button" onclick="location=\'/signin/pwd\'">Next</button>'));
+    else if (url.pathname === '/signin/late') send(page('Late', '<div id="m"></div><script>setTimeout(() => { document.getElementById("m").innerHTML = `<form method="post" action="/signin/identifier"><label>Email or phone<input name="identifier" type="text" autocomplete="username"></label></form>` }, 2500)</script>'));
     else if (request.headers['sec-fetch-dest'] === 'iframe') send(page('Done', '<script>top.location = "/home"</script>'));
     else send(page('Home', '<h1>Welcome</h1>'));
   });
@@ -160,4 +161,10 @@ it.skipIf(!enabled)('clicks the button when Enter does not submit the form', asy
   const result = await signIn({ username: 'one@example.com', password: 'correct-one' }, { start: '/signin/jsform' });
   expect(result).toMatchObject({ outcome: 'signed_in', asked: [['username'], ['password']], at: '/home' });
   expect(received).toEqual(['/signin/pwd=correct-one']);
+}, 60_000);
+
+it.skipIf(!enabled)('waits for a form that is drawn a moment after the page opens', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-login-real-'));
+  const result = await signIn({ username: 'one@example.com', password: 'correct-one' }, { start: '/signin/late' });
+  expect(result).toMatchObject({ outcome: 'signed_in', at: '/home' });
 }, 60_000);

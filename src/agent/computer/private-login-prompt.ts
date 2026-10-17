@@ -4,6 +4,9 @@ import type { TurnObserver } from '../../turn/observer.js';
 import { LoginError } from './login-error.js';
 import type { LoginField } from './login-fields.js';
 
+const ASK: Record<string, string> = { password: 'Enter password', code: 'Enter verification code', email: 'Enter email', username: 'Enter username or email', accountId: 'Enter account ID' };
+const askFor = (field: LoginField): string => ASK[field.key] ?? `Enter ${field.label.replace(/[:*]+$/, '').trim().toLowerCase()}`;
+
 /** Fields are typed (the password masked); a 'choice' field is an arrow-key
  * picker. Every answer is marked secret, so none is recorded in the history. */
 export async function askPrivateLogin(
@@ -12,10 +15,10 @@ export async function askPrivateLogin(
   if (!observer.askQuestions) return undefined;
   if (!fields.length) return undefined;
   const result = await observer.askQuestions({
-    title: `Sign in to ${new URL(site).hostname}`,
+    title: `${new URL(site).hostname.replace(/^www\./, '')} sign in`,
     questions: fields.map(field => field.kind === 'choice'
       ? { id: field.key, prompt: field.label, options: (field.options ?? []).map(label => ({ label })), secret: true }
-      : { id: field.key, prompt: field.label, options: [], secret: true, maskInput: field.kind === 'password' }),
+      : { id: field.key, prompt: askFor(field), options: [], secret: true, maskInput: field.kind === 'password' }),
   }, signal);
   if (result.kind !== 'answered') return undefined;
   const values = Object.fromEntries(fields.map(field => [field.key, result.answers[field.key]?.[0] ?? '']));

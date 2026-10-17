@@ -111,6 +111,7 @@ export async function loginComputerPage(input: {
   let submittedPassword = false;
   let codeAttempts = 0;
   let announcedVerification = false;
+  let waited = 0;
 
   for (let step = 0; step < 10; step++) {
     if (input.signal?.aborted) throw new LoginError('Private login cancelled.');
@@ -127,6 +128,8 @@ export async function loginComputerPage(input: {
         return 'signed_in';
       }
       if (submitted && leftSignIn(startUrl, url)) return 'session_reused';
+      // A page opened a moment ago may not have drawn its form yet.
+      if (!submitted && waited++ < 24) { await input.page.waitForTimeout(500); step--; continue; }
       if (!submitted) throw new LoginError('No sign-in form is visible. If a verification or CAPTCHA is showing, use handoff.');
       if (!announcedVerification) { input.onVerification?.(); announcedVerification = true; }
       for (let poll = 0; poll < VERIFY_POLLS; poll++) {

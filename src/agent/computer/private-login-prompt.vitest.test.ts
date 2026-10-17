@@ -12,9 +12,9 @@ it('asks for every login field privately and returns values only to the local ca
   expect(await askPrivateLogin(observer, 'https://accounts.google.com', [
     { index: 0, key: 'username', label: 'Email or phone', kind: 'text', required: true },
   ])).toEqual({ username: 'private@example.com' });
-  expect(request?.title).toBe('Sign in to accounts.google.com');
+  expect(request?.title).toBe('accounts.google.com sign in');
   expect(request?.questions).toEqual([{
-    id: 'username', prompt: 'Email or phone', options: [], secret: true, maskInput: false,
+    id: 'username', prompt: 'Enter username or email', options: [], secret: true, maskInput: false,
   }]);
   expect(JSON.stringify(request)).not.toContain('private@example.com');
 });
@@ -30,7 +30,7 @@ it('masks passwords while keeping other login answers private', async () => {
     { index: 1, key: 'password', label: 'Password', kind: 'password', required: true },
   ])).toEqual({ username: 'person@example.com', password: 'private password' });
   expect(request?.questions.map(question => [question.prompt, question.secret, question.maskInput])).toEqual([
-    ['Email', true, false], ['Password', true, true],
+    ['Enter username or email', true, false], ['Enter password', true, true],
   ]);
 });
 
@@ -47,7 +47,7 @@ it('asks which saved account as an option list, keeps the answer secret, and ref
     id: 'account', prompt: 'Choose an account', secret: true,
     options: [{ label: 'one@example.com' }, { label: 'two@example.com' }, { label: 'Use a different account' }],
   }]);
-  expect(request?.title).toBe('Sign in to example.com');
+  expect(request?.title).toBe('example.com sign in');
   answer = 'someone-else@example.com';
   await expect(askPrivateLogin(observer, 'https://example.com', [field])).rejects.toThrow('listed options');
 });
