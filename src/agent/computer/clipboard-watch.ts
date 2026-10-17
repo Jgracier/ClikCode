@@ -31,14 +31,34 @@ export function plausibleCopy(value: string | null | undefined): string | undefi
 /** The site's own button for copying the new key: "Copy", "Copy key", "Copy API key to
  * clipboard", "Copy token". Buttons that copy something else (a name, an id, a cURL
  * command) say so and do not match. */
-const COPY_KEY_BUTTON = /^copy(?: (?:the |your )?(?:new )?(?:api )?(?:key|token|secret|value|password))?(?: to clipboard)?$/i;
+const COPY_KEY_BUTTON = /^copy(?: (?:the |your )?(?:new )?(?:api )?(?:secret )?(?:key|token|secret|value|password))?(?: to clipboard)?$/i;
+
+/** Several Copy buttons (an access key id, a secret key, a code snippet): the one whose
+ * surroundings say "secret", else the first. */
+async function secretOne(buttons: import('playwright-core').Locator): Promise<import('playwright-core').Locator> {
+  const count = Math.min(await buttons.count(), 8);
+  for (let index = 0; index < count; index++) {
+    // Climb to the nearest ancestor that names what it holds ("Access Key ID:", "Secret Key:").
+    const near = await buttons.nth(index).evaluate(element => {
+      type Node = { parentElement: Node | null; textContent: string | null };
+      for (let node = (element as unknown as Node).parentElement, depth = 0; node && depth < 5; node = node.parentElement, depth++) {
+        const label = /(?:access|secret)[ _-]?key|api[ _-]?key|token/i.exec(node.textContent?.slice(0, 300) ?? '');
+        if (label) return label[0];
+      }
+      return '';
+    }).catch(() => '');
+    if (/secret/i.test(near)) return buttons.nth(index);
+  }
+  return buttons.first();
+}
 
 /** Press that button and take what the page copies. What the site itself puts on
  * the clipboard is the key by definition, so no guess about its shape is needed. */
 export async function copyWithSiteButton(page: Page, waitMs = 3_000): Promise<string | undefined> {
-  const button = page.getByRole('button', { name: COPY_KEY_BUTTON }).locator('visible=true').first();
+  const buttons = page.getByRole('button', { name: COPY_KEY_BUTTON }).locator('visible=true');
   try {
-    if (!await button.count()) return undefined;
+    if (!await buttons.count()) return undefined;
+    const button = await secretOne(buttons);
     await page.addInitScript(hookCopy);
     await page.evaluate(hookCopy);
     await page.evaluate(() => { (globalThis as unknown as Hooked).__clikcodeCopied = null; });
