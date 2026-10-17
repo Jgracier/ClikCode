@@ -92,8 +92,11 @@ To get a key from a site into ClikDeploy without the model reading it, the agent
 signs in, sets the permissions, then calls `computer_web capture_secret` with a
 `secret_name` and the role and name of the final Create button.
 
-- **The worker finds the key itself.** It records the page, clicks Create, and
-  looks at what the site's own request returned and what new key-shaped text
+- **The worker finds the key itself.** After the Create click it presses the
+  site's own Copy button (named "Copy", "Copy key", "Copy token"; a "Copy cURL" or
+  "Copy project name" button does not match) and takes what the page copies: that
+  is the key by definition, even when the page only shows dots. Failing that, it
+  records the page before the click and looks at what the site's own request returned and what new key-shaped text
   appeared. A value counts when it is new on the page, or returned under a
   credential-named field (`api_key`, `secret`, `access_token`; a plain `token`
   such as a CSRF token does not count). One clear leader is saved to ClikCode

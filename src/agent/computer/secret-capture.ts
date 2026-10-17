@@ -5,7 +5,7 @@
  * the phone link) or paste into the private prompt. */
 import type { Page } from 'playwright-core';
 import { saveNamedSecret } from './credential-vault.js';
-import { waitForCopiedSecret } from './clipboard-watch.js';
+import { copyWithSiteButton, waitForCopiedSecret } from './clipboard-watch.js';
 import { LoginError } from './login-error.js';
 import { armFinder } from './secret-finder.js';
 import { registerSecret } from './secret-scrubber.js';
@@ -35,6 +35,11 @@ export async function captureSecret(input: {
       if (stop.signal.aborted) throw new LoginError('Secret capture cancelled.');
       await input.page.waitForTimeout(500);
       const decision = await finder.look();
+      // After a Create, the site's own Copy button is the exact answer. Without a click
+      // (a key already on the page) the page's own text is trusted first, because a
+      // bare "Copy" there may copy something else.
+      if (input.trigger || decision.kind !== 'found') value = await copyWithSiteButton(input.page);
+      if (value) break;
       if (decision.kind === 'found') value = decision.value;
       else if (decision.kind === 'ambiguous') { ambiguous = true; break; }
     }

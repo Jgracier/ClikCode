@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import type { Page } from 'playwright-core';
-import { loginFields, loginFieldSummary, loginOptions } from './login-fields.js';
+import { loginFields, loginFieldSummary, pageControls } from './login-fields.js';
 import { observeComputerPage } from '../tools/computer-web.js';
 
 it('shows the agent Gmail’s field label without exposing its value or taking a screenshot', async () => {
@@ -36,15 +36,15 @@ it('recognizes an account ID, email and password form from the fields actually o
   ]);
 });
 
-it('lists the other ways to sign in so the agent can ask which one, without naming any account', async () => {
-  const names = ['Sign in using root user email', 'Sign in as IAM user', 'Justin Gracier justin@example.com', 'Privacy', 'Terms', 'Use another account', 'Sign in using root user email'];
-  const page = { locator: () => ({ evaluateAll: async (callback: (nodes: unknown[]) => unknown) => callback(names.map(innerText => ({ innerText }))) }) } as unknown as Page;
-  const options = await loginOptions(page);
-  expect(options).toEqual(['Sign in using root user email', 'Sign in as IAM user', 'Use another account']);
-  const summary = loginFieldSummary('https://signin.aws.amazon.com', [], options);
+it('lists the buttons and links by name so the agent can press one or ask which, without naming any account', async () => {
+  const names = ['Sign in using root user email', 'Sign in as IAM user', 'Justin Gracier justin@example.com', 'Privacy', '', 'Use another account', 'Sign in using root user email', 'x'.repeat(80)];
+  const page = { locator: () => ({ evaluateAll: async (callback: (nodes: unknown[]) => unknown) => callback(names.map(innerText => ({ innerText, getAttribute: () => null }))) }) } as unknown as Page;
+  const controls = await pageControls(page);
+  expect(controls).toEqual(['Sign in using root user email', 'Sign in as IAM user', 'Privacy', 'Use another account']);
+  const summary = loginFieldSummary('https://signin.aws.amazon.com', [], controls);
   expect(summary).toContain('Sign in as IAM user');
   expect(summary).toContain('ask_user');
   expect(summary).toContain('picks one');
   expect(summary).not.toContain('justin@example.com');
-  expect(loginFieldSummary('https://example.com', [])).not.toContain('Other ways');
+  expect(loginFieldSummary('https://example.com', [])).not.toContain('Buttons and links');
 });
