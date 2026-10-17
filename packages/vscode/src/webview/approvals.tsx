@@ -97,7 +97,7 @@ export function QuestionCard({ approval, position, total, onAnswer }: {
   const [typed, setTyped] = useState<Record<string, string>>({});
   useEffect(() => { const timer = setTimeout(() => setGuarded(false), APPROVAL_GUARD_MS); return () => clearTimeout(timer); }, []);
   const valuesOf = (question: HarnessQuestion): string[] => {
-    const text = (typed[question.id] ?? '').trim();
+    const text = question.secret ? (typed[question.id] ?? '') : (typed[question.id] ?? '').trim();
     const chosen = picks[question.id] ?? [];
     if (question.multiSelect) return text ? [...chosen, text] : chosen;
     return text ? [text] : chosen;

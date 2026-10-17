@@ -5,8 +5,7 @@ import { computerEnabled } from '../computer/settings.js';
 import { callComputerDriver } from '../computer/driver.js';
 import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
 import { privateLoginPage, protectLoginPage } from '../computer/private-page.js';
-import { fillCredential, soleCredentialForSite } from '../computer/credential-vault.js';
-import { requestTailcatCredential } from '../computer/tailcat-credentials.js';
+import { fillCredential, saveCredential, soleCredentialForSite } from '../computer/credential-vault.js';
 import { runTailcatHandoff } from '../computer/tailcat-handoff.js';
 import type { Page } from 'playwright-core';
 import type { ToolRunResult } from '../tool-contract.js';
@@ -48,7 +47,7 @@ export async function observeComputerPage(page: Page, acceptsImages: boolean): P
 
 export const computerWebTool = defineTool<WebArgs>({
   name: 'computer_web', class: 'exec',
-  description: 'Open a URL in one action; Chrome starts automatically. Use login to reuse a saved site login or ask the user for one through a private form, then fill and submit it without showing credentials to the model. Use handoff for CAPTCHA or MFA so the user can finish on their phone. Observe and act on ordinary pages, and close when done. Never request a password in chat.',
+  description: 'Open a URL in one action; Chrome starts automatically. Use login to reuse a saved site login or prompt for credentials privately in the terminal or VS Code panel, then fill and submit without showing them to the model. Use handoff for CAPTCHA or MFA so the user can finish on their phone. Observe and act on ordinary pages, and close when done. Never request a password in chat.',
   parameters: { type: 'object', additionalProperties: false, required: ['action'], properties: {
     action: { type: 'string', enum: ['open', 'close', 'observe', 'click', 'fill', 'press', 'scroll', 'autofill', 'login', 'handoff'] },
     url: { type: 'string', description: 'Website URL for open.' },
@@ -82,9 +81,13 @@ export const computerWebTool = defineTool<WebArgs>({
             const site = new URL(page.url());
             if (site.protocol !== 'https:') throw new Error('Private login needs an HTTPS website.');
             protectLoginPage(page);
-            const id = await soleCredentialForSite(ctx.stateDir, site.href)
-              ?? await requestTailcatCredential({ stateDir: ctx.stateDir, site: site.origin, signal: ctx.signal,
-                onLink: link => ctx.emitOutput?.(`Open this private login form for ${site.origin}: ${link}\n`) });
+            let id = await soleCredentialForSite(ctx.stateDir, site.href);
+            if (!id) {
+              if (!ctx.requestPrivateLogin) throw new Error('Open this chat in the ClikCode terminal or VS Code panel to enter a login privately.');
+              const secret = await ctx.requestPrivateLogin(site.origin, ctx.signal);
+              if (!secret) throw new Error('Private login cancelled.');
+              id = await saveCredential(ctx.stateDir, site.href, secret);
+            }
             await fillCredential(ctx.stateDir, page, id);
             const password = page.locator('input[type="password"]:visible');
             if (await password.count() !== 1) throw new Error('Login was filled, but its submit field changed. Use handoff.');

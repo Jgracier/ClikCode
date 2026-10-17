@@ -65,6 +65,7 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
     stateDir: input.stateDir, homeDir: rt.homeDir, signal, checkpoints: rt.checkpoints,
     session: input.subagent?.checkpoint && SHELL_TOOLS.has(toolName) ? sessionState(input.stateDir, input.subagent.checkpoint.sessionId) : session,
     callId, emitOutput,
+    ...(input.onPrivateLogin ? { requestPrivateLogin: input.onPrivateLogin } : {}),
     ...(input.subagent?.checkpoint ? { checkpoint: input.subagent.checkpoint } : {}),
     outputCap: toolOutputCap(rt.contextWindow, rt.profile.toolOutputBytes),
     ...(rt.stepAcceptsImages ? { acceptsImages: true } : {}),

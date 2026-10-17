@@ -6,7 +6,7 @@
 <meta name="referrer" content="no-referrer">
 <title>Finish in ClikCode</title>
 <style>
-body{font:16px system-ui,sans-serif;margin:0;background:#10151c;color:#f2f5f8}main{max-width:900px;margin:auto;padding:16px}h1{font-size:1.4rem}#screen{display:none;width:100%;border:1px solid #505c68;border-radius:8px;touch-action:manipulation}button,input{font:inherit;min-height:44px;box-sizing:border-box}button{background:#263443;color:white;border:1px solid #65788b;border-radius:8px;padding:8px 14px}input{flex:1 1 190px;border:1px solid #65788b;border-radius:8px;padding:8px}#controls{display:none;gap:8px;flex-wrap:wrap;margin-top:12px}#status{min-height:1.5em}#credential{margin-top:16px}#credential label{display:block;margin:12px 0}#credential input{width:100%;margin-top:4px}#site{font-weight:600;word-break:break-all}
+body{font:16px system-ui,sans-serif;margin:0;background:#10151c;color:#f2f5f8}main{max-width:900px;margin:auto;padding:16px}h1{font-size:1.4rem}#screen{display:none;width:100%;border:1px solid #505c68;border-radius:8px;touch-action:manipulation}button,input{font:inherit;min-height:44px;box-sizing:border-box}button{background:#263443;color:white;border:1px solid #65788b;border-radius:8px;padding:8px 14px}input{flex:1 1 190px;border:1px solid #65788b;border-radius:8px;padding:8px}#controls{display:none;gap:8px;flex-wrap:wrap;margin-top:12px}#status{min-height:1.5em}
 </style>
 </head>
 <body><main>
@@ -14,6 +14,5 @@ body{font:16px system-ui,sans-serif;margin:0;background:#10151c;color:#f2f5f8}ma
 <p id="status" role="status">Connecting to your computer…</p>
 <img id="screen" alt="Live view of the ClikCode browser">
 <div id="controls"><input id="entry" aria-label="Type on computer" placeholder="Type on computer" autocomplete="off"><button id="type">Type</button><button id="enter">Enter</button><button id="tab">Tab</button><button id="up">Scroll up</button><button id="down">Scroll down</button><button id="done">Done</button></div>
-<form id="credential" hidden autocomplete="off"><p>Save a login for <span id="site"></span>. These details go directly to your computer and stay out of the agent's reply.</p><label>Account ID (if needed)<input id="accountId" autocomplete="off"></label><label>Email or username<input id="email" autocomplete="off"></label><label>Password<input id="password" type="password" autocomplete="new-password" required></label><button type="submit">Save login</button></form>
 </main><script src="wasm_exec.js"></script><script type="module" src="app.js"></script></body>
 </html>
