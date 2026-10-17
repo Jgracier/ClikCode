@@ -6,7 +6,7 @@ import path from 'node:path';
 const SESSION_MS = 10 * 60_000;
 const sessions = new Map<string, { key: Buffer; expires: number }>();
 export class CredentialError extends Error {}
-type Item = { origin: string; accountId?: string; email?: string; password?: string; fields?: Record<string, string>; rejected?: true };
+type Item = { origin: string; fields?: Record<string, string>; rejected?: true };
 
 function vaultDir(stateDir: string): string { return path.join(stateDir, 'computer', 'vault'); }
 function keyFile(stateDir: string): string { return path.join(vaultDir(stateDir), 'vault.key'); }
@@ -70,7 +70,8 @@ async function vaultKey(stateDir: string, create: boolean): Promise<Buffer> {
   let key: Buffer;
   try {
     const info = await fs.lstat(keyFile(stateDir));
-    if (!info.isFile() || (info.mode & 0o077) !== 0) throw new Error();
+    // Windows reports no POSIX bits (files look 0o666), so the owner-only check is POSIX-only.
+    if (!info.isFile() || (process.platform !== 'win32' && (info.mode & 0o077) !== 0)) throw new Error();
     key = await fs.readFile(keyFile(stateDir));
   } catch { throw new CredentialError('The local login vault key is missing or not private.'); }
   if (key.length !== 32) throw new CredentialError('The local login vault key is invalid.');
@@ -80,8 +81,7 @@ async function vaultKey(stateDir: string, create: boolean): Promise<Buffer> {
 /** Incremental login steps, such as Gmail's email page followed by its
  * password page, use the same encrypted item. Only the local worker reads it. */
 function itemFields(item: Item): Record<string, string> {
-  return { ...(item.accountId ? { accountId: item.accountId } : {}), ...(item.email ? { email: item.email, username: item.email } : {}),
-    ...(item.password ? { password: item.password } : {}), ...item.fields };
+  return { ...item.fields };
 }
 
 export async function savedLoginFields(stateDir: string, url: string, id: string): Promise<Record<string, string>> {

@@ -1,7 +1,7 @@
 /** Page-level browser actions in ClikCode's own Chrome profile. */
 import { defineTool } from '../tool-contract.js';
 import { closeComputerBrowser, computerPage, openComputerPage } from '../computer/browser.js';
-import { computerEnabled } from '../computer/settings.js';
+import { COMPUTER_OFF, computerEnabled } from '../computer/settings.js';
 import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
 import { privateLoginPage } from '../computer/private-page.js';
 import { loginComputerPage, loginOutcomeMessage } from '../computer/login-page.js';
@@ -9,7 +9,7 @@ import { LoginError } from '../computer/login-error.js';
 import { loginFields, loginFieldSummary, loginOptions } from '../computer/login-fields.js';
 import { runTailcatHandoff } from '../computer/tailcat-handoff.js';
 import type { Page } from 'playwright-core';
-import type { ToolRunResult } from '../tool-contract.js';
+import type { ToolContext, ToolRunResult } from '../tool-contract.js';
 
 type WebArgs = {
   action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'press' | 'scroll' | 'login' | 'handoff';
@@ -63,7 +63,7 @@ export const computerWebTool = defineTool<WebArgs>({
   describe: async (args) => `ClikCode browser: ${args.action}${args.url ? ` ${args.url}` : ''}${args.name ? ` ${args.role} ${args.name}` : ''}${args.action === 'fill' ? ` (${args.text?.length ?? 0} characters)` : ''}`,
   async run(args, ctx) {
     try {
-      if (!(await computerEnabled(ctx.stateDir))) throw new Error('Computer use is off. Run `clikcode computer on` to enable it.');
+      if (!(await computerEnabled(ctx.stateDir))) throw new Error(COMPUTER_OFF);
       if (args.action === 'close') { await closeComputerBrowser(ctx.stateDir); return { output: 'ClikCode browser closed.' }; }
       if (args.action === 'open') webAddress(args.url);
       let page = args.action === 'open' ? await openComputerPage(ctx.stateDir) : await computerPage(ctx.stateDir);
@@ -72,37 +72,15 @@ export const computerWebTool = defineTool<WebArgs>({
         page = await old.context().newPage();
         await old.close();
       }
-      const onAbort = (): void => { void page.context().close().catch(() => undefined); };
+      // Playwright cannot be interrupted mid-call, so a stop returns at once
+      // and the browser carries on harmlessly in the background.
+      let onAbort = (): void => undefined;
+      const stopped = new Promise<never>((_resolve, reject) => { onAbort = () => reject(new Error('Stopped.')); });
+      stopped.catch(() => undefined);
       ctx.signal?.addEventListener('abort', onAbort, { once: true });
       try {
         if (ctx.signal?.aborted) throw new Error('Stopped.');
-        switch (args.action) {
-          case 'open': await page.goto(webAddress(args.url), { waitUntil: 'domcontentloaded', timeout: 30_000 }); return observeComputerPage(page, ctx.acceptsImages === true);
-          case 'observe': return observeComputerPage(page, ctx.acceptsImages === true);
-          case 'login': {
-            const outcome = await loginComputerPage({ stateDir: ctx.stateDir, page, signal: ctx.signal, newAccount: args.new_account === true,
-              ask: async (site, fields, signal) => {
-                if (!ctx.requestPrivateLogin) throw new LoginError('This chat cannot show private login fields.');
-                return ctx.requestPrivateLogin(site, fields, signal);
-              }, onVerification: () => ctx.emitOutput?.('Approve the sign-in or finish verification in the open browser.\n') });
-            return { output: loginOutcomeMessage(outcome), ...(outcome === 'unverified' || outcome === 'saved_login_rejected' ? { isError: true } : {}) };
-          }
-          case 'handoff': {
-            await runTailcatHandoff({ stateDir: ctx.stateDir, signal: ctx.signal,
-              onLink: link => ctx.emitOutput?.(`Open this link on your phone to finish the browser step: ${link}\n`) });
-            return { output: 'The user finished the browser step. Continue from the current page.' };
-          }
-          case 'click': await element(page, args).click({ timeout: 10_000 }); return { output: `Clicked ${args.role} ${args.name}. Observe the page to verify the result.` };
-          case 'fill':
-            if (typeof args.text !== 'string' || args.text.length > 20_000) throw new Error('Fill needs text of at most 20,000 characters.');
-            await element(page, args).fill(args.text, { timeout: 10_000 });
-            return { output: `Filled ${args.role} ${args.name}. Observe the page to verify the result.` };
-          case 'press':
-            if (!args.key || !/^[A-Za-z0-9+_-]{1,30}$/.test(args.key)) throw new Error('Press needs a simple key.');
-            await page.keyboard.press(args.key); return { output: `Pressed ${args.key}. Observe the page to verify the result.` };
-          case 'scroll': await page.mouse.wheel(0, args.direction === 'up' ? -600 : 600); return { output: 'Scrolled. Observe the page to verify the result.' };
-          default: throw new Error('Unknown web action.');
-        }
+        return await Promise.race([stopped, act(page, args, ctx)]);
       } finally { ctx.signal?.removeEventListener('abort', onAbort); }
     } catch (error) {
       if (args.action === 'login') return { output: error instanceof LoginError ? error.message : 'Private login did not finish. Check the browser and try again.', isError: true };
@@ -110,3 +88,43 @@ export const computerWebTool = defineTool<WebArgs>({
     }
   },
 });
+
+async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRunResult> {
+  switch (args.action) {
+    case 'open': await page.goto(webAddress(args.url), { waitUntil: 'domcontentloaded', timeout: 30_000 }); return observeComputerPage(page, ctx.acceptsImages === true);
+    case 'observe': return observeComputerPage(page, ctx.acceptsImages === true);
+    case 'login': {
+      const outcome = await loginComputerPage({ stateDir: ctx.stateDir, page, signal: ctx.signal, newAccount: args.new_account === true,
+        ask: async (site, fields, signal) => {
+          if (!ctx.requestPrivateLogin) throw new LoginError('This chat cannot show private login fields.');
+          return ctx.requestPrivateLogin(site, fields, signal);
+        }, onVerification: () => ctx.emitOutput?.('Approve the sign-in or finish verification in the open browser.\n') });
+      return { output: loginOutcomeMessage(outcome), ...(outcome === 'unverified' || outcome === 'saved_login_rejected' ? { isError: true } : {}) };
+    }
+    case 'handoff': {
+      await runTailcatHandoff({ stateDir: ctx.stateDir, signal: ctx.signal,
+        onLink: link => ctx.emitOutput?.(`Open this link on your phone to finish the browser step: ${link}\n`) });
+      return { output: 'The user finished the browser step. Continue from the current page.' };
+    }
+    case 'click': await clickOrHint(page, args); return { output: `Clicked ${args.role} ${args.name}. Observe the page to verify the result.` };
+    case 'fill':
+      if (typeof args.text !== 'string' || args.text.length > 20_000) throw new Error('Fill needs text of at most 20,000 characters.');
+      await element(page, args).fill(args.text, { timeout: 10_000 });
+      return { output: `Filled ${args.role} ${args.name}. Observe the page to verify the result.` };
+    case 'press':
+      if (!args.key || !/^[A-Za-z0-9+_-]{1,30}$/.test(args.key)) throw new Error('Press needs a simple key.');
+      await page.keyboard.press(args.key); return { output: `Pressed ${args.key}. Observe the page to verify the result.` };
+    case 'scroll': await page.mouse.wheel(0, args.direction === 'up' ? -600 : 600); return { output: 'Scrolled. Observe the page to verify the result.' };
+    default: throw new Error('Unknown web action.');
+  }
+}
+
+/** A native dialog or separate popup window is outside the page, so a click
+ * that never lands is most often that: point the agent at the desktop tool. */
+async function clickOrHint(page: Page, args: WebArgs): Promise<void> {
+  try { await element(page, args).click({ timeout: 10_000 }); }
+  catch (error) {
+    if (!(error instanceof Error) || !/timeout/i.test(error.message)) throw error;
+    throw new Error(`${error.message.split('\n')[0]} If a popup window or browser dialog is in front of the page, use computer_desktop to see and answer it.`);
+  }
+}

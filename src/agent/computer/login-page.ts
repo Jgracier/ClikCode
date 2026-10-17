@@ -6,11 +6,10 @@ import type { Page } from 'playwright-core';
 import { loginLabel, sameSite, saveLoginFields, savedLoginFields, savedLoginsForSite, setLoginRejected } from './credential-vault.js';
 import { LoginError } from './login-error.js';
 import { loginFields, uniqueLabels, type LoginField } from './login-fields.js';
-import { protectLoginPage } from './private-page.js';
+import { AUTH_PATH, protectLoginPage } from './private-page.js';
 
 export type LoginOutcome = 'signed_in' | 'session_reused' | 'verification_needed' | 'unverified' | 'saved_login_rejected';
 const NEW_ACCOUNT = 'Use a different account';
-const AUTH_PATH = /(?:^|\/)(?:login|signin|sign-in|auth|oauth|authenticate|challenge|verify|verification|mfa|otp|2fa|2sv|two-factor|sso|saml)(?:\/|$)/i;
 const STEP_POLLS = 60;
 /** Phone approval and CAPTCHA take a person a while: as long as a private prompt waits. */
 const VERIFY_POLLS = 600;
