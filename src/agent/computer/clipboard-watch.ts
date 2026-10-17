@@ -41,7 +41,7 @@ async function secretOne(buttons: import('playwright-core').Locator): Promise<im
     // Climb to the nearest ancestor that names what it holds ("Access Key ID:", "Secret Key:").
     const near = await buttons.nth(index).evaluate(element => {
       type Node = { parentElement: Node | null; textContent: string | null };
-      for (let node = (element as unknown as Node).parentElement, depth = 0; node && depth < 5; node = node.parentElement, depth++) {
+      for (let node = (element as unknown as Node).parentElement, depth = 0; node && depth < 8; node = node.parentElement, depth++) {
         const label = /(?:access|secret)[ _-]?key|api[ _-]?key|token/i.exec(node.textContent?.slice(0, 300) ?? '');
         if (label) return label[0];
       }
