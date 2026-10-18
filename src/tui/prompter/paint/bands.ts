@@ -4,7 +4,8 @@ import { thoughtLine } from '../../../harness/protocol/tool-category-style.js';
 import { noticeLines } from '../../render/wrap.js';
 import { composerLayout } from '../../render/composer-layout.js';
 import { terminalCellWidth, visibleSlice, visibleTail } from '../../render/width.js';
-import { HYPERLINK_CLOSE, hyperlinkOpen, linksOn } from '../../render/hyperlinks.js';
+import { HYPERLINK_CLOSE, hyperlinkOpen } from '../../render/hyperlinks.js';
+import { SAFE_LINK } from '../../render/text.js';
 import type { PickerOption } from '../../../harness/prompter.js';
 import { waitingSpinnerGlyph } from '../../../harness/protocol/activity-view.js';
 import { backgroundTerminalsLabel, reasoningBody } from '../../../harness/protocol/turn-flow.js';
@@ -21,6 +22,19 @@ type BandInput = {
   composer: string; options: readonly PickerOption<string>[]; prompt: string; cursor: number; palette: PaletteLayout | undefined;
   width: number; inner: number;
 };
+
+/** Every visible row of a long consent URL opens the same complete URL.
+ * Mobile SSH clients may not identify themselves through TERM_PROGRAM, so
+ * link detection cannot decide whether a consent row gets an OSC 8 target. */
+export function signInUrlRows(url: string, room: number): string[] {
+  const rows: string[] = [];
+  const width = Math.max(1, room);
+  for (let at = 0; at < url.length; at += width) {
+    const part = url.slice(at, at + width);
+    rows.push(`  ${chalk.underline(SAFE_LINK.test(url) ? `${hyperlinkOpen(url)}${part}${HYPERLINK_CLOSE}` : part)}`);
+  }
+  return rows;
+}
 
 /** The rows the frame's fixed bands take and the bands' own rows, budgeted
  * against the viewport: notice, palette, approval, thought, sign-in, plan,
@@ -89,12 +103,7 @@ export function frameBands(p: TerminalHarnessPrompter, input: BandInput) {
     // The link arrives as its own plain line (account.ts).
     const room = Math.max(8, inner - 2);
     if (!/^https?:\/\/\S+$/.test(line)) return [`  ${visibleSlice(line, room)}`];
-    const rows: string[] = [];
-    for (let at = 0; at < line.length; at += room) {
-      const part = line.slice(at, at + room);
-      rows.push(`  ${chalk.underline(linksOn() ? `${hyperlinkOpen(line)}${part}${HYPERLINK_CLOSE}` : part)}`);
-    }
-    return rows;
+    return signInUrlRows(line, room);
   }) : [];
   const signInRows = signInWrapped.length <= liveBandBudget ? signInWrapped : signInWrapped.slice(0, Math.max(0, liveBandBudget));
   liveBandBudget -= signInRows.length;
