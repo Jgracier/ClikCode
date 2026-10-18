@@ -6,7 +6,7 @@
 - **Steer never interrupts.** A steer goes into the running turn only through a path the vendor itself offers for that (a message taken at the turn's next step). ClikCode never cancels and resends a turn to fake one.
 - **A steer is delivered once.** It is either taken into the running turn, whose model can then answer it, or it is queued durably and runs as the next turn when this one ends. Nothing is accepted and then dropped: a refused, timed-out or too-late steer falls back to the queue (`LiveTurnInputBroker.submit`). ClikCode does not insert its own acknowledgement or reminder into the conversation.
 - **A route that cannot steer queues, and the row says so**: `this turn can't take it`. A route that can steer but must wait for a quiet moment (no tool call open) queues the message as the fallback and the row says `sending at the next pause`; it becomes `steered` when it lands.
-- `/send queue` never reaches any steer handler. Enter again with nothing typed (`send-queued`) is the user's explicit "put it into the chat now" and steers where the harness can.
+- `/send queue` never reaches any steer handler. Enter again with nothing typed (`send-queued`) is the user's explicit "put it into the chat now": it steers where the harness can, and on a held message it forces the send (`LiveTurnInputBroker.force`), so the vendor cancels the one call the message was waiting for. That is the way out of a call that never returns. Esc still stops the whole turn.
 
 ## Per harness
 

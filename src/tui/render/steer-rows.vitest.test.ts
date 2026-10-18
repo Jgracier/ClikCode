@@ -101,8 +101,8 @@ describe('Enter again on a waiting message', () => {
   it('sends the oldest when it is only queued', () => {
     expect(enterAgainSends([{}, { held: true }])).toBe(true);
   });
-  it('offers nothing when the turn already holds it for its next pause: the worker only answers "queued"', () => {
-    expect(enterAgainSends([{ held: true }, {}])).toBe(false);
+  it('offers to send one the turn is holding for its next pause: Enter cuts the call it waits for', () => {
+    expect(enterAgainSends([{ held: true }, {}])).toBe(true);
   });
   it('offers nothing when this turn could not take a message: it would only queue again', () => {
     expect(enterAgainSends([{ unsteered: true }])).toBe(false);

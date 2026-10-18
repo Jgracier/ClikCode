@@ -1011,7 +1011,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
   /** The turn's steer handler. Sent now when nothing would be interrupted;
    * otherwise held (and queued by the caller as the fallback) until the next
    * moment that is true. A caller that cannot hold gets a rejection: queue. */
-  private steer(turn: ActiveTurn, text: string, hold?: (withdraw: () => boolean) => Promise<void>): Promise<void> {
+  private steer(turn: ActiveTurn, text: string, hold?: (withdraw: () => boolean, force?: () => void) => Promise<void>): Promise<void> {
     if (turn.done || this.turn !== turn) return Promise.reject(new Error(`${turn.input.command} ACP turn ended`));
     // Anything already held goes first: messages arrive in the order typed.
     const now = this.steerSafe(turn) && turn.held.length === 0 && !turn.flushing;
@@ -1027,7 +1027,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
         reject(error);
         return true;
       };
-      const ready = now ? Promise.resolve() : hold!(() => drop(new Error('taken back from the queue')));
+      const ready = now ? Promise.resolve() : hold!(() => drop(new Error('taken back from the queue')), () => this.flushSteers(turn, item));
       const item: HeldSteer = { text, ready, resolve, reject };
       turn.held.push(item);
       ready.catch((error: unknown) => drop(error instanceof Error ? error : new Error(String(error))));
@@ -1036,16 +1036,24 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
   }
 
   /** Send what is held, oldest first, while it stays safe to. */
-  private flushSteers(turn: ActiveTurn): void {
+  private flushSteers(turn: ActiveTurn, forced?: HeldSteer): void {
     const live = this.live;
-    if (turn.flushing || !turn.held.length || !live || !this.steerSafe(turn)) return;
+    if (turn.done || this.turn !== turn) return;
+    // `forced`: the user pressed Enter on it, so it goes now, and the vendor
+    // cancels the call in flight. What was typed before it goes first.
+    const open = (): boolean => (forced ? turn.held.includes(forced) : this.steerSafe(turn));
+    if (turn.flushing || !turn.held.length || !live || !open()) {
+      // A flush already running re-checks when it ends; make that one see the force.
+      if (forced && turn.flushing && live) void turn.flushing.then(() => this.flushSteers(turn, forced));
+      return;
+    }
     turn.flushing = (async () => {
-      while (turn.held.length && this.steerSafe(turn)) {
+      while (turn.held.length && open()) {
         const item = turn.held[0]!;
         try { await item.ready; } catch { continue; } // already taken out and rejected
         // Taken back while its fallback copy was being written.
         if (turn.held[0] !== item) continue;
-        if (!this.steerSafe(turn)) break;
+        if (!open()) break;
         turn.held.shift();
         try {
           // `promptRequired`: the agent has no turn running (it ended between
@@ -1068,7 +1076,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     })().finally(() => {
       turn.flushing = undefined;
       // Typed while the last one was being sent.
-      this.flushSteers(turn);
+      this.flushSteers(turn, forced);
     });
   }
 

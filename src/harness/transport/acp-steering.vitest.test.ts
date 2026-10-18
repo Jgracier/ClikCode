@@ -81,6 +81,8 @@ async function turnWithMessage(mode: string, options: {
   steering?: boolean;
   catalogSteering?: false;
   typeAtStart?: boolean;
+  /** Enter again once the message is held. */
+  force?: boolean;
 }) {
   const log = join(dir, 'log');
   const broker = new LiveTurnInputBroker({ steerTimeoutMs: 100 });
@@ -91,7 +93,11 @@ async function turnWithMessage(mode: string, options: {
   broker.setLateSteerHandler((submission) => { unqueued++; queue.splice(queue.indexOf(submission.id), 1); });
   let typed: Promise<LiveTurnInputResult> | undefined;
   let answer = '';
-  const type = () => { typed ??= broker.submit('also check c.ts', 'm1'); };
+  const type = () => {
+    if (typed) return;
+    typed = broker.submit('also check c.ts', 'm1');
+    if (options.force) void typed.then(() => broker.force('m1'));
+  };
   const session = createAcpSession();
   let stopReason: unknown;
   try {
@@ -145,6 +151,14 @@ describe('a message typed during an ACP turn that advertises steering', () => {
     expect(run.landed).toBe(false);
     expect(run.queue).toEqual(['m1']);
     expect(run.unqueued).toBe(0);
+  });
+
+  it('goes in at once on Enter again, cutting the call it was waiting for', async () => {
+    const run = await turnWithMessage('never-closes', { typeAt: (event) => event.kind === 'tool-start', force: true });
+    expect(run.log.filter((line) => line.startsWith('steer'))).toEqual(['steer also check c.ts INTERRUPTING bash1 idle=promptRequired']);
+    expect(run.landed).toBe(true);
+    expect(run.queue).toEqual([]);
+    expect(run.answer).toContain('Answered: also check c.ts');
   });
 
   it('is queued when the agent says no turn is running (promptRequired), never sent twice', async () => {

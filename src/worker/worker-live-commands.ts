@@ -65,8 +65,9 @@ export function createLiveCommands(ctx: WorkerContext) {
 
   const handleSendQueued = async (socket: Socket, command: Extract<ClientCommand, { type: 'send-queued' }>): Promise<void> => {
     // Enter again. The oldest message the user queued goes into this turn
-    // at the next pause. The turn is not cancelled, so a sub-agent it
-    // started keeps running. A command or a notice stays for the turn's end.
+    // now: at once where the vendor takes a steer without harm, otherwise it
+    // cuts the one call it was waiting for. The turn is not cancelled, so a
+    // sub-agent it started keeps running. A command or a notice stays for the turn's end.
     const answer = (disposition: 'steered' | 'queued' | 'error', id?: string, message?: string, unsteered?: boolean): void => {
       if (id) sendEvent(socket, { type: 'submission', id, disposition, ...(message ? { message } : {}), ...(unsteered ? { unsteered } : {}), ...(disposition === 'steered' ? observer.steerOrder(id) ?? {} : {}) });
     };
@@ -79,7 +80,10 @@ export function createLiveCommands(ctx: WorkerContext) {
       const session = state.sessions.find((entry) => entry.id === sessionId);
       const queued = session?.queuedTurns?.find((entry) => entry.kind !== 'command' && entry.kind !== 'notification');
       if (!session || !queued) return;
+      // The turn is holding it for a quiet moment: Enter is the user saying
+      // not to wait, so it goes in now and the call in the way is cut.
       if (liveInput.holding(queued.id)) {
+        liveInput.force(queued.id);
         answer('queued', queued.id);
         return;
       }
@@ -97,6 +101,7 @@ export function createLiveCommands(ctx: WorkerContext) {
     const handled = (async () => {
       try {
         const result = await liveInput.submit(queuedItem.text, queuedItem.id, { queue: false });
+        if (result.disposition === 'queued') liveInput.force(queuedItem.id);
         answer(result.disposition === 'steered' ? 'steered' : 'queued', queuedItem.id, undefined, result.unsteered);
         if (result.disposition !== 'steered') broadcastQueueChanged();
         else showEveryWindow();

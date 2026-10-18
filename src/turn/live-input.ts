@@ -45,10 +45,12 @@ type QueueHandler = (submission: LiveTurnSubmission, options?: { held?: boolean 
  * once, as the fallback; `withdraw` drops the hold if the user takes that
  * queued copy back (edit, remove) before it was sent; the returned promise settles when that copy is
  * written (or rejects if it could not be, in which case the hold must be
- * dropped: the message has gone back to the composer). The handler's own
+ * dropped: the message has gone back to the composer). `force` sends the
+ * message into the turn now, cutting the call that makes it wait (the user's
+ * Enter again; see LiveTurnInputBroker.force). The handler's own
  * promise then resolves if the message was steered in after all -- the
  * queued copy is dropped -- or rejects, leaving the queued copy to run. */
-type SteerHold = (withdraw: () => boolean) => Promise<void>;
+type SteerHold = (withdraw: () => boolean, force?: () => void) => Promise<void>;
 type SteerHandler = (text: string, submission: LiveTurnSubmission, hold: SteerHold) => Promise<void>;
 type LateSteerHandler = (submission: LiveTurnSubmission) => void;
 
@@ -80,6 +82,8 @@ export class LiveTurnInputBroker {
   private readonly late = new Set<Promise<void>>();
   /** How to drop each held message, by id, until it is sent or released. */
   private readonly holds = new Map<string, () => boolean>();
+  /** How to send each held message now, by id, cutting the call it waits for. */
+  private readonly forces = new Map<string, () => void>();
   /** Every steer whose attempt is still unsettled after its message was
    * queued (held or timed out), by id: in flight, so neither takeable nor re-sendable. */
   private readonly inflight = new Set<string>();
@@ -138,7 +142,18 @@ export class LiveTurnInputBroker {
     const withdraw = this.holds.get(id);
     if (!withdraw) return this.inflight.has(id) ? false : undefined;
     this.holds.delete(id);
+    this.forces.delete(id);
     return withdraw();
+  }
+
+  /** Enter again on a held message: send it into the turn now. The vendor
+   * cancels the tool call that made it wait, so the user, not ClikCode,
+   * decides a call is not worth waiting for. False if it was not held. */
+  force(id: string): boolean {
+    const force = this.forces.get(id);
+    if (!force) return false;
+    force();
+    return true;
   }
 
   /** The turn is already holding this message for its next pause. Enter
@@ -181,7 +196,7 @@ export class LiveTurnInputBroker {
       let rejectQueued!: (error: unknown) => void;
       const queued = new Promise<void>((resolve, reject) => { resolveQueued = resolve; rejectQueued = reject; });
       queued.catch(() => undefined);
-      const hold: SteerHold = (withdraw) => { this.holds.set(id, withdraw); signalHeld(); return queued; };
+      const hold: SteerHold = (withdraw, force) => { this.holds.set(id, withdraw); if (force) this.forces.set(id, force); signalHeld(); return queued; };
       const attempt = Promise.resolve().then(() => steer(text, submission, hold));
       let outcome: symbol | undefined;
       try {
@@ -212,7 +227,7 @@ export class LiveTurnInputBroker {
           () => { try { this.lateSteerHandler?.(submission); } catch { /* fail-open-ok: de-duplication is best effort */ } return true; },
           () => false, // it failed after all; the queued copy is the only one
         );
-        const tracked = landed.then(() => { this.holds.delete(id); this.inflight.delete(id); });
+        const tracked = landed.then(() => { this.holds.delete(id); this.forces.delete(id); this.inflight.delete(id); });
         this.late.add(tracked);
         void tracked.finally(() => this.late.delete(tracked));
         if (outcome === STEER_HELD) return { disposition: 'queued', submission, landed };
