@@ -17,7 +17,7 @@ import { forgetMcpOAuth, mcpOAuthState, signInMcpServer, type McpSignInUi } from
 import { mcpServerNeedsSignIn } from '../harness/mcp-sign-in.js';
 import { userMcpServers } from '../agent/mcp/manager.js';
 import { stateDirectory } from '../session/store/paths.js';
-import { hasLocalDisplay, loginUrlNotice, openLoginUrl } from '../gateway/login/url.js';
+import { hasLocalDisplay, loginLinkLine, loginUrlNotice, openLoginUrl } from '../gateway/login/url.js';
 import { loginPortForwardHint } from '../gateway/login/link-info.js';
 import type { SignInScreen } from '../gateway/login/vendor-sign-in.js';
 
@@ -82,7 +82,7 @@ function terminalSignInUi(name: string): McpSignInUi & { done(): void } {
     show: (link) => {
       const local = hasLocalDisplay();
       if (local && !opened) { opened = true; openLoginUrl(link.url); }
-      output.write(`${local ? '' : loginUrlNotice(link.url).clipboard}\n${chalk.bold(`Sign in to ${name}`)}\n${link.url}\n${loginPortForwardHint(link.url) ? `${loginPortForwardHint(link.url)}\n` : ''}${chalk.dim(local ? 'opened in your browser' : 'full link copied to clipboard')}\n`);
+      output.write(`${local ? '' : loginUrlNotice(link.url).clipboard}\n${chalk.bold(`Sign in to ${name}`)}\n${loginLinkLine(link.url)}\n${loginPortForwardHint(link.url) ? `${loginPortForwardHint(link.url)}\n` : ''}${chalk.dim(local ? 'opened in your browser' : 'full link copied to clipboard')}\n`);
     },
     ask: async (prompt, signal) => {
       const reader = createInterface({ input, output });

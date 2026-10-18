@@ -9,7 +9,7 @@ import { createInterface } from 'node:readline/promises';
 import { runVendorSignIn, SEARCH_CHOICE, type SignInScreen, type SignInUi } from '../../../gateway/login/vendor-sign-in.js';
 import { keyProviders, localHarnessForCommand } from '../../../runtime/lazy-bridge.js';
 import type { AiHarnessKeyRoute, AiKeyProvider, AiKeyProviderId, AiLocalHarnessDefinition } from '../../definition.js';
-import { hasLocalDisplay, loginUrlNotice, openLoginUrl } from '../../../gateway/login/url.js';
+import { hasLocalDisplay, loginLinkLine, loginUrlNotice, openLoginUrl } from '../../../gateway/login/url.js';
 import { loginPortForwardHint } from '../../../gateway/login/link-info.js';
 import { NativeHarnessSpec } from './binary.js';
 import { captureNativeHarnessOutput } from './command.js';
@@ -40,7 +40,7 @@ function plainSignInScreen(name: string): SignInScreen {
     show: (link) => {
       const local = hasLocalDisplay();
       if (local && !opened) { opened = true; openLoginUrl(link.url); }
-      process.stdout.write(`${local ? '' : loginUrlNotice(link.url).clipboard}Sign in to ${name}:\n${link.url}\n${loginPortForwardHint(link.url) ? `${loginPortForwardHint(link.url)}\n` : ''}${link.code ? `Code: ${link.code}\n` : ''}`);
+      process.stdout.write(`${local ? '' : loginUrlNotice(link.url).clipboard}Sign in to ${name}:\n${loginLinkLine(link.url)}\n${loginPortForwardHint(link.url) ? `${loginPortForwardHint(link.url)}\n` : ''}${link.code ? `Code: ${link.code}\n` : ''}`);
     },
     ask: (prompt) => line(`${prompt}: `),
     choose: async (title, choices) => {
