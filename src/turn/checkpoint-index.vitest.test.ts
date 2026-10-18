@@ -28,6 +28,7 @@ createdAt: now, updatedAt: now, status: 'active', messages: [{ role: 'user', con
       await writeState(state);
 
       const checkpoint = await DurableTurnCheckpoint.start(state, session, 'go', undefined);
+      await checkpoint.flush(); // the start write is not awaited by start()
       const indexPath = join(root, 'index.json');
       const started = await stat(indexPath);
       for (let step = 0; step < 4; step++) {

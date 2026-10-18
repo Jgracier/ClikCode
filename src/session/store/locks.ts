@@ -367,5 +367,24 @@ const STATE_LOCK_HELD = Object.freeze({}) as StateLockHeld;
 
 /** The one lock every index and transcript write runs under. */
 export function withStateLock<T>(run: (held: StateLockHeld) => Promise<T>): Promise<T> {
-  return withFileLock(stateLockPath(), () => run(STATE_LOCK_HELD), { fair: true });
+  // Taken now: after the first await the stack no longer says who asked.
+  const site = new Error().stack;
+  return withFileLock(stateLockPath(), async () => {
+    const started = Date.now();
+    try {
+      return await run(STATE_LOCK_HELD);
+    } finally {
+      // Every other window and worker waits while this is held: a long hold is named, so the
+      // waits it causes (lock.wait) can be traced to what did it.
+      const ms = Date.now() - started;
+      if (ms >= LONG_HOLD_MS) lifecycle('lock.held', { lock: 'harness-state.json.lock', ms, by: holdSite(site) });
+    }
+  }, { fair: true });
+}
+
+const LONG_HOLD_MS = 500;
+
+/** The first frame outside this file: who took the lock. */
+function holdSite(stack: string | undefined): string | undefined {
+  return stack?.split('\n').slice(1).map((line) => line.trim()).find((line) => !line.includes('locks.'))?.slice(0, 160);
 }

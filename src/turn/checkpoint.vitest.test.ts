@@ -361,6 +361,7 @@ describe('a live submission is queued or it is not', () => {
       } as unknown as Parameters<typeof beginPendingTurn>[0];
       const state = { v: 1, sessions: [session], accounts: [] } as never;
       const checkpoint = await DurableTurnCheckpoint.start(state, session, 'first prompt');
+      await checkpoint.flush(); // the start write is not awaited by start()
 
       // Every write from here on fails, the way a full disk or a revoked
       // directory does.
