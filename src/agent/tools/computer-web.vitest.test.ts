@@ -141,3 +141,12 @@ describe('collapseOptions', () => {
     expect(collapseOptions('- combobox:\n  - option "A"\n  - option "B"')).toContain('option "B"');
   });
 });
+
+it('shortens a very long link address in the page view', async () => {
+  const { observeComputerPage } = await import('./computer-web.js');
+  const long = `https://portal.example.com/#${'a%20b'.repeat(400)}`;
+  const page = { url: () => 'https://x.example.com/', locator: () => ({ evaluateAll: async () => [] }), ariaSnapshot: async () => `- link "Go" [ref=e1]:\n  - /url: ${long}`, evaluate: async () => '' } as never;
+  const shown = (await observeComputerPage(page, false)).output;
+  expect(shown.length).toBeLessThan(400);
+  expect(shown).toContain('…');
+});
