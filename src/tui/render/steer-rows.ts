@@ -18,8 +18,8 @@ import { keyHint } from '../../harness/protocol/wording.js';
 
 /** What a message typed during a turn is called on screen, by where it is.
  *  Enter delivers it. Enter again, with nothing typed, puts a waiting
- *  message into the chat at the next pause. The turn and its sub-agents
- *  keep running, which its hint says. */
+ *  message into the chat now. The turn and its sub-agents keep running; a
+ *  call the turn was waiting on to take it is cut. */
 export const STEER_WORDS = {
   /** Held by the turn until no tool call is open (acp-client.ts). */
   held: 'sending at the next pause',
@@ -30,19 +30,18 @@ export const STEER_WORDS = {
 } as const;
 
 /** A message of the user's waiting while a turn runs, as Enter again sees
- *  it: `held` -- the turn is holding it for its next pause already;
+ *  it: `held` -- the turn is holding it for its next pause (Enter forces it);
  *  `unsteered` -- the turn said it could not take one. */
 export type WaitingMessage = { held?: boolean; unsteered?: boolean };
 
 /** Whether Enter again -- nothing typed -- puts the oldest waiting message
- *  (`waiting[0]`, the one the worker takes) into the chat. Not when the turn
- *  already holds it for its next pause: the worker only answers "queued".
- *  Not when this turn could not take a message: sending it again only queues
+ *  (`waiting[0]`, the one the worker takes) into the chat; a held one too, the
+ *  worker then sends it now. Not when this turn could not take a message: sending it again only queues
  *  it again. The hint, the key and VS Code's button all ask this, so none of
  *  them offers what will not happen. */
 export function enterAgainSends(waiting: readonly WaitingMessage[]): boolean {
   const oldest = waiting[0];
-  return Boolean(oldest) && !oldest!.held && !waiting.some((message) => message.unsteered);
+  return Boolean(oldest) && !waiting.some((message) => message.unsteered);
 }
 
 /** Anything the live composer is tracking. Only 'steered' entries are ever

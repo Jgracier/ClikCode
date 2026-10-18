@@ -125,3 +125,24 @@ describe('a steer that timed out is still in flight', () => {
     expect(broker.withdraw('id-1')).toBeUndefined();
   });
 });
+
+describe('Enter again on a held message', () => {
+  it('sends it now through the force the transport gave when it held the message', async () => {
+    const broker = new LiveTurnInputBroker();
+    broker.bindQueue(async () => undefined);
+    let forced = false;
+    let sent!: () => void;
+    broker.setSteerHandler((_text, _submission, hold) => {
+      void hold(() => true, () => { forced = true; sent(); });
+      return new Promise<void>((resolve) => { sent = resolve; });
+    });
+    const result = await broker.submit('now please', 'id-9');
+    expect(result.disposition).toBe('queued');
+    expect(broker.holding('id-9')).toBe(true);
+    expect(broker.force('id-9')).toBe(true);
+    expect(forced).toBe(true);
+    expect(await result.landed).toBe(true);
+    await broker.settled();
+    expect(broker.force('id-9')).toBe(false);
+  });
+});

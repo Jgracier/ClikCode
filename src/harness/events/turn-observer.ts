@@ -105,7 +105,7 @@ export interface HarnessTurnObserver {
    * but will at the turn's next safe moment: it calls `hold(withdraw)`, which
    * queues the message as the fallback, and settles its promise later.
    * `withdraw` answers false once the message is already on its way. */
-  onSteerReady?: (handler?: (text: string, hold?: (withdraw: () => boolean) => Promise<void>) => Promise<void>) => void;
+  onSteerReady?: (handler?: (text: string, hold?: (withdraw: () => boolean, force?: () => void) => Promise<void>) => Promise<void>) => void;
   /** Slash commands the agent offers for this session. */
   onAvailableCommands?: (commands: readonly HarnessAvailableCommand[]) => void;
   /** The session/new or session/load answer, with the models the agent
