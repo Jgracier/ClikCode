@@ -18,15 +18,22 @@
  * interpreted by the terminal emulator, not the host, which is why ClikCode's
  * own /copy already lands there rather than in the server's clipboard.
  *
- * "Shortened" here means shortened for DISPLAY only. Sending a live OAuth
- * authorization URL to a third-party shortener would hand that service a
- * working sign-in link for the user's account; the full URL only ever goes to
- * the clipboard and the local browser.
+ * A short terminal label uses an OSC 8 link whose target is the exact OAuth
+ * URL. Sending that URL to a third-party shortener would hand it a working
+ * sign-in link for the user's account.
  */
 import { spawnPortable as spawn } from '../../harness/transport/spawn.js';
 import { osc52Sequence } from '../../session/attachments.js';
-import { shortenLoginUrl, loginPortForwardHint } from './link-info.js';
+import { loginPortForwardHint } from './link-info.js';
 export { shortenLoginUrl } from './link-info.js';
+import { HYPERLINK_CLOSE, hyperlinkOpen } from '../../tui/render/hyperlinks.js';
+
+/** Short visible words with the exact authorization URL as their terminal link target. */
+export function loginLinkLine(url: string, hyperlinked = Boolean(process.stdout.isTTY) && !process.env.CLIKCODE_NO_HYPERLINKS): string {
+  return hyperlinked && /^https?:\/\//.test(url) && !/[\x00-\x1f\x7f]/.test(url)
+    ? `${hyperlinkOpen(url)}Open full consent page${HYPERLINK_CLOSE}`
+    : 'Paste the copied full consent link';
+}
 
 /** CSI/OSC sequences a vendor TUI colours its output with, which otherwise
  * land in the middle of a captured URL. */
@@ -79,7 +86,7 @@ export function loginUrlNotice(url: string, environment: NodeJS.ProcessEnv = pro
   return {
     clipboard: osc52Sequence(url, environment),
     lines: [
-      `ClikCode · sign-in link copied to your clipboard: ${shortenLoginUrl(url)}`,
+      `ClikCode · ${loginLinkLine(url)}`,
       ...(loginPortForwardHint(url) ? [loginPortForwardHint(url)!] : []),
       local
         ? 'A browser should have opened here; paste the link if it did not.'
