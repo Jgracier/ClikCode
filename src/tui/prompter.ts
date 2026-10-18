@@ -48,7 +48,6 @@ import { clearInteractiveFrame, select, board, pickerHost } from './prompter/pic
 import { question } from './prompter/prompt-input.js';
 import { paint } from './prompter/paint/frame.js';
 
-
 /** Rows of the live conversation with their group tags. */
 export type ScrollTail = { rows: string[]; tags: Array<string | undefined> };
 const EMPTY_TAIL: ScrollTail = { rows: [], tags: [] };
@@ -258,32 +257,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   subView?: SubView;
   /** Sends a message typed into a sub-agent's view to the worker; resolves to the refusal, if any. Set by the window that follows the turn. */
   subAgentSteer?: (ref: import('../harness/protocol/activity-normalize.js').SubAgentRef, text: string) => Promise<string | undefined>;
-  openSubView(...args: Parameters<typeof openSubView>): ReturnType<typeof openSubView> { return openSubView.apply(this, args); }
-  closeSubView(...args: Parameters<typeof closeSubView>): ReturnType<typeof closeSubView> { return closeSubView.apply(this, args); }
-  subViewKey(...args: Parameters<typeof subViewKey>): ReturnType<typeof subViewKey> { return subViewKey.apply(this, args); }
-  paintSubView(...args: Parameters<typeof paintSubView>): ReturnType<typeof paintSubView> { return paintSubView.apply(this, args); }
   readonly onWaitingKey = (...args: Parameters<typeof onWaitingKey>): ReturnType<typeof onWaitingKey> => onWaitingKey.apply(this, args);
 
-  editTurnDraft(...args: Parameters<typeof editTurnDraft>): ReturnType<typeof editTurnDraft> { return editTurnDraft.apply(this, args); }
-
-  waitingUserMessages(...args: Parameters<typeof waitingUserMessages>): ReturnType<typeof waitingUserMessages> { return waitingUserMessages.apply(this, args); }
-
-  enterAgainReady(...args: Parameters<typeof enterAgainReady>): ReturnType<typeof enterAgainReady> { return enterAgainReady.apply(this, args); }
-
-  turnHasAnswer(...args: Parameters<typeof turnHasAnswer>): ReturnType<typeof turnHasAnswer> { return turnHasAnswer.apply(this, args); }
-
-  takeBackWaiting(...args: Parameters<typeof takeBackWaiting>): ReturnType<typeof takeBackWaiting> { return takeBackWaiting.apply(this, args); }
-
-  submitWaiting(...args: Parameters<typeof submitWaiting>): ReturnType<typeof submitWaiting> { return submitWaiting.apply(this, args); }
-
-  answerApproval(...args: Parameters<typeof answerApproval>): ReturnType<typeof answerApproval> { return answerApproval.apply(this, args); }
-
-  settleDecision(...args: Parameters<typeof settleDecision>): ReturnType<typeof settleDecision> { return settleDecision.apply(this, args); }
-
-  restoreTellingDraft(...args: Parameters<typeof restoreTellingDraft>): ReturnType<typeof restoreTellingDraft> { return restoreTellingDraft.apply(this, args); }
   readonly onResize = (...args: Parameters<typeof onResize>): ReturnType<typeof onResize> => onResize.apply(this, args);
-
-  viewportRows(...args: Parameters<typeof viewportRows>): ReturnType<typeof viewportRows> { return viewportRows.apply(this, args); }
 
   /** The repaint a resize needs, once the resize is over.
    *
@@ -308,11 +284,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** The frame being drawn is a resize's immediate one: it leaves the
    * pending resize preamble to the settled frame. */
   provisionalFrame = false;
-  repaintAfterResize(...args: Parameters<typeof repaintAfterResize>): ReturnType<typeof repaintAfterResize> { return repaintAfterResize.apply(this, args); }
-
-  rewrapIfWidthChanged(...args: Parameters<typeof rewrapIfWidthChanged>): ReturnType<typeof rewrapIfWidthChanged> { return rewrapIfWidthChanged.apply(this, args); }
-
-  clearTranscript(...args: Parameters<typeof clearTranscript>): ReturnType<typeof clearTranscript> { return clearTranscript.apply(this, args); }
 
   /** Rows retired out of the viewport, kept so the conversation above the
    * live region is still there to scroll back to on the alternate screen. */
@@ -531,111 +502,21 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.schedulePaint();
   }
 
-  activity(...args: Parameters<typeof activity>): ReturnType<typeof activity> { return activity.apply(this, args); }
-
-  setPlan(...args: Parameters<typeof setPlan>): ReturnType<typeof setPlan> { return setPlan.apply(this, args); }
-
-  settlePlan(...args: Parameters<typeof settlePlan>): ReturnType<typeof settlePlan> { return settlePlan.apply(this, args); }
-
-  activityEvent(...args: Parameters<typeof activityEvent>): ReturnType<typeof activityEvent> { return activityEvent.apply(this, args); }
-
-  settleThought(...args: Parameters<typeof settleThought>): ReturnType<typeof settleThought> { return settleThought.apply(this, args); }
-
-  markDrawn(...args: Parameters<typeof markDrawn>): ReturnType<typeof markDrawn> { return markDrawn.apply(this, args); }
-
-  joinMark(...args: Parameters<typeof joinMark>): ReturnType<typeof joinMark> { return joinMark.apply(this, args); }
-
-  joinThought(...args: Parameters<typeof joinThought>): ReturnType<typeof joinThought> { return joinThought.apply(this, args); }
-
-  panel(...args: Parameters<typeof panel>): ReturnType<typeof panel> { return panel.apply(this, args); }
-
-  panelKey(...args: Parameters<typeof panelKey>): ReturnType<typeof panelKey> { return panelKey.apply(this, args); }
-
-  waitingLabel(...args: Parameters<typeof waitingLabel>): ReturnType<typeof waitingLabel> { return waitingLabel.apply(this, args); }
-
-  updateWaitingLabel(...args: Parameters<typeof updateWaitingLabel>): ReturnType<typeof updateWaitingLabel> { return updateWaitingLabel.apply(this, args); }
-
-  joinedWaiting(...args: Parameters<typeof joinedWaiting>): ReturnType<typeof joinedWaiting> { return joinedWaiting.apply(this, args); }
-
-  signInScreen(...args: Parameters<typeof signInScreen>): ReturnType<typeof signInScreen> { return signInScreen.apply(this, args); }
-
-  startWaiting(...args: Parameters<typeof startWaiting>): ReturnType<typeof startWaiting> { return startWaiting.apply(this, args); }
-
-  turnStarting(...args: Parameters<typeof turnStarting>): ReturnType<typeof turnStarting> { return turnStarting.apply(this, args); }
-
-  toolStatus(...args: Parameters<typeof toolStatus>): ReturnType<typeof toolStatus> { return toolStatus.apply(this, args); }
-
-  turnWaits(...args: Parameters<typeof turnWaits>): ReturnType<typeof turnWaits> { return turnWaits.apply(this, args); }
-
-  waitingOnUser(...args: Parameters<typeof waitingOnUser>): ReturnType<typeof waitingOnUser> { return waitingOnUser.apply(this, args); }
-
-  scheduleWaitingTick(...args: Parameters<typeof scheduleWaitingTick>): ReturnType<typeof scheduleWaitingTick> { return scheduleWaitingTick.apply(this, args); }
-
-  stepTokens(...args: Parameters<typeof stepTokens>): ReturnType<typeof stepTokens> { return stepTokens.apply(this, args); }
-
-  setTurnUsage(...args: Parameters<typeof setTurnUsage>): ReturnType<typeof setTurnUsage> { return setTurnUsage.apply(this, args); }
-
-  setBackgroundWork(...args: Parameters<typeof setBackgroundWork>): ReturnType<typeof setBackgroundWork> { return setBackgroundWork.apply(this, args); }
-
-  pauseClock(...args: Parameters<typeof pauseClock>): ReturnType<typeof pauseClock> { return pauseClock.apply(this, args); }
-
-  resumeClock(...args: Parameters<typeof resumeClock>): ReturnType<typeof resumeClock> { return resumeClock.apply(this, args); }
-
   /** What the next prompt's composer opens with: a message that never
    * reached its turn, a cancelled one the worker hands back, or a `/`. */
   restoreDraft(value: string): void { this.queuedDraft = value; }
   /** Whether the turn that just ended was stopped: what was queued behind it must not run on its own. */
   takeStopped(): boolean { const stopped = this.turnEndedStopped; this.turnEndedStopped = false; return stopped; }
   markTurnStopped(): void { this.turnEndedStopped = true; }
-  flushWaitingSubmissions(...args: Parameters<typeof flushWaitingSubmissions>): ReturnType<typeof flushWaitingSubmissions> { return flushWaitingSubmissions.apply(this, args); }
-
-  leaveTurn(...args: Parameters<typeof leaveTurn>): ReturnType<typeof leaveTurn> { return leaveTurn.apply(this, args); }
-
-  turnStopped(...args: Parameters<typeof turnStopped>): ReturnType<typeof turnStopped> { return turnStopped.apply(this, args); }
-  turnStopping(...args: Parameters<typeof turnStopping>): ReturnType<typeof turnStopping> { return turnStopping.apply(this, args); }
-  stopSettled(...args: Parameters<typeof stopSettled>): ReturnType<typeof stopSettled> { return stopSettled.apply(this, args); }
-
-  onWaitingEnded(...args: Parameters<typeof onWaitingEnded>): ReturnType<typeof onWaitingEnded> { return onWaitingEnded.apply(this, args); }
-
-  stopWaiting(...args: Parameters<typeof stopWaiting>): ReturnType<typeof stopWaiting> { return stopWaiting.apply(this, args); }
-
-  retakeScreen(...args: Parameters<typeof retakeScreen>): ReturnType<typeof retakeScreen> { return retakeScreen.apply(this, args); }
-
-  retakeTerminalSignals(...args: Parameters<typeof retakeTerminalSignals>): ReturnType<typeof retakeTerminalSignals> { return retakeTerminalSignals.apply(this, args); }
 
   /** A resize outranks a repair: it does all a repair does, and more. */
   requestRedraw(redraw: Redraw): void {
     if (this.pendingRedraw !== 'resize') this.pendingRedraw = redraw;
   }
 
-  takeTerminalTitle(...args: Parameters<typeof takeTerminalTitle>): ReturnType<typeof takeTerminalTitle> { return takeTerminalTitle.apply(this, args); }
-
-  terminalSignals(...args: Parameters<typeof terminalSignals>): ReturnType<typeof terminalSignals> { return terminalSignals.apply(this, args); }
   /** Title and progress sequences owed to the terminal, written inside the
    * next synchronized frame rather than on their own beside it. */
   pendingSignals = '';
-
-  notifyIfAway(...args: Parameters<typeof notifyIfAway>): ReturnType<typeof notifyIfAway> { return notifyIfAway.apply(this, args); }
-
-  ofThisTurn(...args: Parameters<typeof ofThisTurn>): ReturnType<typeof ofThisTurn> { return ofThisTurn.apply(this, args); }
-
-  settleSavedStops(...args: Parameters<typeof settleSavedStops>): ReturnType<typeof settleSavedStops> { return settleSavedStops.apply(this, args); }
-
-  vendorAnswered(...args: Parameters<typeof vendorAnswered>): ReturnType<typeof vendorAnswered> { return vendorAnswered.apply(this, args); }
-
-  phase(...args: Parameters<typeof phase>): ReturnType<typeof phase> { return phase.apply(this, args); }
-
-  approval(...args: Parameters<typeof approval>): ReturnType<typeof approval> { return approval.apply(this, args); }
-
-  withdrawApproval(...args: Parameters<typeof withdrawApproval>): ReturnType<typeof withdrawApproval> { return withdrawApproval.apply(this, args); }
-
-  askQuestions(...args: Parameters<typeof askQuestions>): ReturnType<typeof askQuestions> { return askQuestions.apply(this, args); }
-
-  questionKey(...args: Parameters<typeof questionKey>): ReturnType<typeof questionKey> { return questionKey.apply(this, args); }
-
-  presentNextApproval(...args: Parameters<typeof presentNextApproval>): ReturnType<typeof presentNextApproval> { return presentNextApproval.apply(this, args); }
-
-  settleApprovals(...args: Parameters<typeof settleApprovals>): ReturnType<typeof settleApprovals> { return settleApprovals.apply(this, args); }
 
   /** Esc on an empty composer, while a turn is parked for the quota reset:
    * the interactive loop's way to stop waiting (one press, then cleared). */
@@ -647,20 +528,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.usageResetLabel = resetLabel;
     this.schedulePaint();
   }
-
-  statusText(...args: Parameters<typeof statusText>): ReturnType<typeof statusText> { return statusText.apply(this, args); }
-
-  waitingLine(...args: Parameters<typeof waitingLine>): ReturnType<typeof waitingLine> { return waitingLine.apply(this, args); }
-
-  escStops(...args: Parameters<typeof escStops>): ReturnType<typeof escStops> { return escStops.apply(this, args); }
-
-  updateWaiting(...args: Parameters<typeof updateWaiting>): ReturnType<typeof updateWaiting> { return updateWaiting.apply(this, args); }
-
-  schedulePaint(...args: Parameters<typeof schedulePaint>): ReturnType<typeof schedulePaint> { return schedulePaint.apply(this, args); }
-
-  paintWaiting(...args: Parameters<typeof paintWaiting>): ReturnType<typeof paintWaiting> { return paintWaiting.apply(this, args); }
-
-  repaint(...args: Parameters<typeof repaint>): ReturnType<typeof repaint> { return repaint.apply(this, args); }
 
   paint(...args: Parameters<typeof paint>): ReturnType<typeof paint> {
     if (this.paintsHeld) return;
@@ -683,22 +550,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** The last frame's live rows made safe, by the row as built and the width. */
   safeLiveRows = { limit: 0, rows: new Map<string, string>() };
 
-  renderFrame(...args: Parameters<typeof renderFrame>): ReturnType<typeof renderFrame> { return renderFrame.apply(this, args); }
-
-  flushFrame(...args: Parameters<typeof flushFrame>): ReturnType<typeof flushFrame> { return flushFrame.apply(this, args); }
-
-  flushAlternateFrame(...args: Parameters<typeof flushAlternateFrame>): ReturnType<typeof flushAlternateFrame> { return flushAlternateFrame.apply(this, args); }
-
-  showMention(...args: Parameters<typeof showMention>): ReturnType<typeof showMention> { return showMention.apply(this, args); }
-
-  mentionKey(...args: Parameters<typeof mentionKey>): ReturnType<typeof mentionKey> { return mentionKey.apply(this, args); }
-
-  endMention(...args: Parameters<typeof endMention>): ReturnType<typeof endMention> { return endMention.apply(this, args); }
-
-  jumpToMention(...args: Parameters<typeof jumpToMention>): ReturnType<typeof jumpToMention> { return jumpToMention.apply(this, args); }
-
-  scrollTranscript(...args: Parameters<typeof scrollTranscript>): ReturnType<typeof scrollTranscript> { return scrollTranscript.apply(this, args); }
-
   /** How much of a pending scroll to apply now, carrying the rest.
    *
    * Transcribed from Claude Code's proportional drain, which is what it runs
@@ -717,12 +568,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** True while the frame being drawn is the result of a scroll. */
   paintingScroll = false;
   scrollDrainTimer?: NodeJS.Timeout;
-  drainScroll(...args: Parameters<typeof drainScroll>): ReturnType<typeof drainScroll> { return drainScroll.apply(this, args); }
-
-  queueScroll(...args: Parameters<typeof queueScroll>): ReturnType<typeof queueScroll> { return queueScroll.apply(this, args); }
 
   stopDrainBatch?: () => void;
-  drainAtBatchEnd(...args: Parameters<typeof drainAtBatchEnd>): ReturnType<typeof drainAtBatchEnd> { return drainAtBatchEnd.apply(this, args); }
 
   /** One repaint per burst of wheel notches, not one per notch.
    *
@@ -743,46 +590,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * lands exactly where the finger left it; only the drawing is coalesced. */
   scrollPaintQueued = false;
   stopScrollBatch?: () => void;
-  scheduleScrollPaint(...args: Parameters<typeof scheduleScrollPaint>): ReturnType<typeof scheduleScrollPaint> { return scheduleScrollPaint.apply(this, args); }
 
   /** True while the reader is looking at something other than the live end. */
   get scrolledBack(): boolean { return this.alternateScrollback > 0; }
 
-  toggleLatestGroup(...args: Parameters<typeof toggleLatestGroup>): ReturnType<typeof toggleLatestGroup> { return toggleLatestGroup.apply(this, args); }
-
-  tapGroupRow(...args: Parameters<typeof tapGroupRow>): ReturnType<typeof tapGroupRow> { return tapGroupRow.apply(this, args); }
-
-  handleScrollKey(...args: Parameters<typeof handleScrollKey>): ReturnType<typeof handleScrollKey> { return handleScrollKey.apply(this, args); }
-
-  handleSelection(...args: Parameters<typeof handleSelection>): ReturnType<typeof handleSelection> { return handleSelection.apply(this, args); }
-
-  lineAtScreenRow(...args: Parameters<typeof lineAtScreenRow>): ReturnType<typeof lineAtScreenRow> { return lineAtScreenRow.apply(this, args); }
-
-  selectionText(...args: Parameters<typeof selectionText>): ReturnType<typeof selectionText> { return selectionText.apply(this, args); }
-
-  followSelectionEdge(...args: Parameters<typeof followSelectionEdge>): ReturnType<typeof followSelectionEdge> { return followSelectionEdge.apply(this, args); }
-
-  stepSelectionScroll(...args: Parameters<typeof stepSelectionScroll>): ReturnType<typeof stepSelectionScroll> { return stepSelectionScroll.apply(this, args); }
-
-  stopSelectionScroll(...args: Parameters<typeof stopSelectionScroll>): ReturnType<typeof stopSelectionScroll> { return stopSelectionScroll.apply(this, args); }
-
-  redrawSelection(...args: Parameters<typeof redrawSelection>): ReturnType<typeof redrawSelection> { return redrawSelection.apply(this, args); }
-
-  noteReadingDirection(...args: Parameters<typeof noteReadingDirection>): ReturnType<typeof noteReadingDirection> { return noteReadingDirection.apply(this, args); }
-
-  forgetScreenPosition(...args: Parameters<typeof forgetScreenPosition>): ReturnType<typeof forgetScreenPosition> { return forgetScreenPosition.apply(this, args); }
-
-  showTransientNotice(...args: Parameters<typeof showTransientNotice>): ReturnType<typeof showTransientNotice> { return showTransientNotice.apply(this, args); }
-
-  clearTransientNotice(...args: Parameters<typeof clearTransientNotice>): ReturnType<typeof clearTransientNotice> { return clearTransientNotice.apply(this, args); }
-
-  suspendToShell(...args: Parameters<typeof suspendToShell>): ReturnType<typeof suspendToShell> { return suspendToShell.apply(this, args); }
-
   readonly onContinue = (...args: Parameters<typeof onContinue>): ReturnType<typeof onContinue> => onContinue.apply(this, args);
-
-  clearInteractiveFrame(...args: Parameters<typeof clearInteractiveFrame>): ReturnType<typeof clearInteractiveFrame> { return clearInteractiveFrame.apply(this, args); }
-
-  question(...args: Parameters<typeof question>): ReturnType<typeof question> { return question.apply(this, args); }
 
   select<T>(
     title: string,
@@ -793,10 +605,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const run = select<T>;
     return run.call(this, title, options, onAction, settings);
   }
-
-  board(...args: Parameters<typeof board>): ReturnType<typeof board> { return board.apply(this, args); }
-
-  pickerHost(...args: Parameters<typeof pickerHost>): ReturnType<typeof pickerHost> { return pickerHost.apply(this, args); }
 
   /** The terminal said it lost focus and has not said it got it back. One
    * that never reports focus is always looked at. */
@@ -811,9 +619,119 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       && !this.turn && !this.composer.text && !this.queuedDraft;
   }
 
-  close(...args: Parameters<typeof close>): ReturnType<typeof close> { return close.apply(this, args); }
-
-  suspend(...args: Parameters<typeof suspend>): ReturnType<typeof suspend> { return suspend.apply(this, args); }
-
-  resume(...args: Parameters<typeof resume>): ReturnType<typeof resume> { return resume.apply(this, args); }
 }
+
+/** The prompter's behaviour lives in ./prompter/*.ts as functions of `this`; they are its methods.
+ * One table, not a forwarding method each: the forwarding was a hundred lines that said only
+ * "this name is that function". */
+const methods = {
+  openSubView,
+  closeSubView,
+  subViewKey,
+  paintSubView,
+  editTurnDraft,
+  waitingUserMessages,
+  enterAgainReady,
+  turnHasAnswer,
+  takeBackWaiting,
+  submitWaiting,
+  answerApproval,
+  settleDecision,
+  restoreTellingDraft,
+  viewportRows,
+  repaintAfterResize,
+  rewrapIfWidthChanged,
+  clearTranscript,
+  activity,
+  setPlan,
+  settlePlan,
+  activityEvent,
+  settleThought,
+  markDrawn,
+  joinMark,
+  joinThought,
+  panel,
+  panelKey,
+  waitingLabel,
+  updateWaitingLabel,
+  joinedWaiting,
+  signInScreen,
+  startWaiting,
+  turnStarting,
+  toolStatus,
+  turnWaits,
+  waitingOnUser,
+  scheduleWaitingTick,
+  stepTokens,
+  setTurnUsage,
+  setBackgroundWork,
+  pauseClock,
+  resumeClock,
+  flushWaitingSubmissions,
+  leaveTurn,
+  turnStopped,
+  turnStopping,
+  stopSettled,
+  onWaitingEnded,
+  stopWaiting,
+  retakeScreen,
+  retakeTerminalSignals,
+  takeTerminalTitle,
+  terminalSignals,
+  notifyIfAway,
+  ofThisTurn,
+  settleSavedStops,
+  vendorAnswered,
+  phase,
+  approval,
+  withdrawApproval,
+  askQuestions,
+  questionKey,
+  presentNextApproval,
+  settleApprovals,
+  statusText,
+  waitingLine,
+  escStops,
+  updateWaiting,
+  schedulePaint,
+  paintWaiting,
+  repaint,
+  renderFrame,
+  flushFrame,
+  flushAlternateFrame,
+  showMention,
+  mentionKey,
+  endMention,
+  jumpToMention,
+  scrollTranscript,
+  drainScroll,
+  queueScroll,
+  drainAtBatchEnd,
+  scheduleScrollPaint,
+  toggleLatestGroup,
+  tapGroupRow,
+  handleScrollKey,
+  handleSelection,
+  lineAtScreenRow,
+  selectionText,
+  followSelectionEdge,
+  stepSelectionScroll,
+  stopSelectionScroll,
+  redrawSelection,
+  noteReadingDirection,
+  forgetScreenPosition,
+  showTransientNotice,
+  clearTransientNotice,
+  suspendToShell,
+  clearInteractiveFrame,
+  question,
+  board,
+  pickerHost,
+  close,
+  suspend,
+  resume,
+};
+type Methods = { [K in keyof typeof methods]: OmitThisParameter<(typeof methods)[K]> };
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type, @typescript-eslint/no-unsafe-declaration-merging
+export interface TerminalHarnessPrompter extends Methods {}
+Object.assign(TerminalHarnessPrompter.prototype, methods);
