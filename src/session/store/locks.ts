@@ -384,7 +384,9 @@ export function withStateLock<T>(run: (held: StateLockHeld) => Promise<T>): Prom
 
 const LONG_HOLD_MS = 500;
 
-/** The first frame outside this file: who took the lock. */
+/** The callers that took the lock, nearest first: `writeState < persist < runTurn`. */
 function holdSite(stack: string | undefined): string | undefined {
-  return stack?.split('\n').slice(1).map((line) => line.trim()).find((line) => !line.includes('locks.'))?.slice(0, 160);
+  // Named by function: bundled, every frame is in the same file.
+  return stack?.split('\n').slice(1).map((line) => line.trim()).filter((line) => !/\bwith(State|File)Lock\b|[\\/]locks\.[jt]s/.test(line))
+    .slice(0, 3).map((line) => line.replace(/^at /, '').replace(/ \(.*\)$/, '')).join(' < ') || undefined;
 }
