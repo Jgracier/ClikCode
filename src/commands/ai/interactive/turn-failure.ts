@@ -14,7 +14,7 @@ import type { ExhaustionRetryGuard } from '../../../tui/pickers/resume-in.js';
 import { refreshSessionWorker } from '../../../worker/turn-bridge.js';
 
 /** What a failed turn changes about the loop: a notice to show, a message to send next, or the conversation it moved to. */
-export interface TurnFailureEffect { notice?: string; resend?: string; id?: string }
+interface TurnFailureEffect { notice?: string; resend?: string; id?: string }
 
 interface FailureContext {
   terminal: TerminalHarnessPrompter | undefined;

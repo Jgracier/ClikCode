@@ -30,7 +30,7 @@ import { absolutePath, shellQuote } from './thread-writer-files.js';
 /** The harness command whose calls are already Claude Code's own. */
 const CLAUDE_ORIGIN = 'claude';
 
-export interface ClaudeToolUse { name: string; input: Record<string, unknown> }
+interface ClaudeToolUse { name: string; input: Record<string, unknown> }
 
 export interface ClaudeThreadOptions {
   /** The new session's id: the file's name and every record's sessionId. */

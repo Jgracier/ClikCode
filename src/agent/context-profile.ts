@@ -48,7 +48,7 @@ const CONTEXT_PROFILES: readonly ContextProfileName[] = ['minimal', 'lean', 'ful
  * profile and know every turn ran under it. */
 export const CONTEXT_PROFILE_ENV = 'CLIKCODE_CONTEXT_PROFILE';
 
-export interface ContextProfile {
+interface ContextProfile {
   name: ContextProfileName;
   /** MCP schemas totalling more than this (tokens) are deferred behind
    * `load_mcp_tools` (mcp/deferred.ts). */

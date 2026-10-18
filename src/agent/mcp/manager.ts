@@ -28,7 +28,7 @@ import { isMcpSignInRequired, mcpOAuthProvider, mcpSignInNote, type McpAuth } fr
 import { mcpResourceTools, type McpResourceSource } from './resources.js';
 import { mcpToolDefinition, mcpToolName } from './tools.js';
 
-export interface McpTimeouts {
+interface McpTimeouts {
   /** Spawn + initialize + tools/list. Generous: `npx -y` may download first. */
   connectMs: number;
   callMs: number;
@@ -38,7 +38,7 @@ export interface McpTimeouts {
 
 const DEFAULT_TIMEOUTS: McpTimeouts = { connectMs: 30_000, callMs: 300_000, retryAfterMs: 60_000 };
 
-export interface McpToolset {
+interface McpToolset {
   tools: ToolDefinition[];
 }
 

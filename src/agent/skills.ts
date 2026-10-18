@@ -47,14 +47,14 @@ export interface Skill {
 
 interface SkippedSkill { file: string; reason: string }
 
-export interface SkillCatalog {
+interface SkillCatalog {
   skills: Skill[];
   skipped: SkippedSkill[];
   /** Same name found in a lower-precedence location. */
   shadowed: Skill[];
 }
 
-export interface SkillRoots {
+interface SkillRoots {
   cwd: string;
   stateDir: string;
   homeDir: string;

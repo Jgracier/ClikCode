@@ -121,7 +121,7 @@ print("\\x00HERMES_INVENTORY" + json.dumps({"providers": rows, "model": p.get("m
 const HERMES_OAUTH_PROVIDERS = new Set(['anthropic', 'nous', 'openai-codex', 'xai-oauth', 'qwen-oauth', 'minimax-oauth']);
 
 interface HermesConnect { id: string; label: string; detail: string; argv: string[] }
-export interface HermesInventory {
+interface HermesInventory {
   models: string[];
   configured?: string;
   labels: Record<string, string>;

@@ -64,7 +64,7 @@ function serviceAccountOf(key: string): { client_email: string; private_key: str
 
 /** Google takes up to about a minute to start accepting a service-account key it has just made: until then
  * it answers `invalid_grant: Invalid JWT Signature` for a perfectly good key. */
-export type CheckOptions = { fresh?: boolean; pause?: (ms: number) => Promise<void> };
+type CheckOptions = { fresh?: boolean; pause?: (ms: number) => Promise<void> };
 const FRESH_TRIES = 8;
 const FRESH_GAP_MS = 8_000;
 

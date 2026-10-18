@@ -44,7 +44,7 @@ export function scriptArgv(
   return ['-q', '-e', '-f', '-c', `${SIZED} ${shellQuote([binary, ...args])}`, '/dev/null'];
 }
 
-export interface PtyResult {
+interface PtyResult {
   /** False when this platform has no `script` (Windows); the caller runs the
    * vendor on plain pipes instead. */
   teed: boolean;

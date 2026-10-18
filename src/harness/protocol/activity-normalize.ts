@@ -136,12 +136,6 @@ export function normalizeActivityEvent<T extends HarnessActivityEvent>(event: T)
   return (same ? event : next) as T;
 }
 
-/** The same, for a list that may hold nothing but the shared shape already:
- * the same array when no event changed. */
-export function normalizeActivityEvents<T extends HarnessActivityEvent>(events: readonly T[]): readonly T[] {
-  const next = events.map(normalizeActivityEvent);
-  return next.every((event, index) => event === events[index]) ? events : next;
-}
 
 
 /** What a client can do with one sub-agent (the catalog's `subagents`,

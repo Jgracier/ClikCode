@@ -21,7 +21,7 @@ export interface ShellNote {
   at: string;
 }
 
-export interface ShellRunResult {
+interface ShellRunResult {
   command: string;
   output: string;
   exitCode: number | null;

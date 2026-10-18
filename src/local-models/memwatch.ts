@@ -220,7 +220,7 @@ export function parseVmStatMac(text: string): { availableBytes?: number; swapOut
 /** A model's peak footprint as measured, merged into what was measured
  * before under the same key: peaks only grow (a longer conversation fills
  * more of the prompt cache), so the larger of old and new is kept. */
-export interface FootprintRecord {
+interface FootprintRecord {
   context: number;
   cacheType: string;
   parallel: number;

@@ -8,7 +8,7 @@
  * whose id was never started does not close some other call.
  */
 
-export interface PendingWorkTracker {
+interface PendingWorkTracker {
   /** Feed every activity event the turn produced. */
   note(event: { kind: string; id?: string } | undefined): void;
   /** Tools started, by id, and never settled. */

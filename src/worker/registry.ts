@@ -209,9 +209,9 @@ export async function removeWorkerRecord(sessionId: string, token: string): Prom
  * the worker for `.owner`. It is bookkeeping -- a second window may still
  * open the chat -- and answers "is someone else showing this" for lists and
  * for the sweeps that must not drop a chat in use. */
-export type ConversationOwnerKind = 'worker' | 'turn' | 'client';
+type ConversationOwnerKind = 'worker' | 'turn' | 'client';
 
-export interface ConversationOwner {
+interface ConversationOwner {
   pid: number;
   host: string;
   kind: ConversationOwnerKind;

@@ -43,7 +43,7 @@ export interface LocalModelProgress {
   totalBytes?: number;
 }
 
-export interface EnsureLocalModelOptions {
+interface EnsureLocalModelOptions {
   /** The user's pick. Kept as their preference for later calls without
    * one; with none, the best model for this machine is chosen. */
   modelId?: string;

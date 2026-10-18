@@ -20,7 +20,7 @@ const WORK_BLOCKED_TOOL_NAMES: ReadonlySet<string> = new Set(['task', 'agent', '
 
 const USAGE_FIELDS = ['input', 'output', 'cached', 'cacheWrite', 'reasoning', 'costMicroUsd'] as const;
 
-export interface SubagentRequest extends SubagentCall {
+interface SubagentRequest extends SubagentCall {
   /** The parent's task call, which the sub-agent's activity nests under. */
   callId: string;
   signal?: AbortSignal;

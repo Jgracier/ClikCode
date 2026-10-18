@@ -11,14 +11,14 @@ import { lifecycle } from '../runtime/lifecycle-log.js';
 import { classifyAccountFailure, type AccountFailureKind } from './failover.js';
 
 /** The two steps of a turn's accounts (account-routing.ts turnAccounts) a switch uses. */
-export interface FailoverAccounts {
+interface FailoverAccounts {
   after(failure: unknown, kind: AccountFailureKind, signal?: AbortSignal): Promise<AiHarnessAccount>;
   switchTo(to: AiHarnessAccount, why: AccountFailureKind): Promise<void>;
 }
 
 /** What `carry` reports for the lifecycle line: closeMs/carryMs are subtracted
  * from the recording time; the rest is logged as given. */
-export interface CarryReport<T> { value: T; fields?: { closeMs?: number; carryMs?: number; [field: string]: unknown } }
+interface CarryReport<T> { value: T; fields?: { closeMs?: number; carryMs?: number; [field: string]: unknown } }
 
 export async function switchAccountAfterFailure<T = undefined>(input: {
   accounts: FailoverAccounts;

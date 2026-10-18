@@ -10,7 +10,7 @@
  * Narrower still where the session has an account: that account's own models
  * are what a turn on it can actually run.
  */
-export type ModelChoice = { account: string; provider: string; model: string };
+type ModelChoice = { account: string; provider: string; model: string };
 
 type Evidence = { id: string; label: string; provider: string; models: string[] };
 

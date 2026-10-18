@@ -8,7 +8,7 @@ import type { ConversationHit, Mention, ParsedQuery, SearchResult } from './engi
 import { ago, runsOn, shortId } from './format.js';
 import { maskSecrets } from './secrets.js';
 
-export interface MentionStop {
+interface MentionStop {
   hit: ConversationHit;
   /** Rank of the conversation, from 0. */
   chat: number;

@@ -87,7 +87,7 @@ function droidCall(workspace: string): (call: CanonicalToolCall) => { name: stri
   };
 }
 
-export interface DroidThreadOptions {
+interface DroidThreadOptions {
   sessionId: string;
   workspace: string;
   now: Date;

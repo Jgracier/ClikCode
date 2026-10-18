@@ -392,5 +392,5 @@ export function toolHooksFrom(config: HookConfig, onError?: (message: string) =>
   }
 }
 
-export type SubagentStopInfo = HookInfo & { stopHookActive: boolean; agentId: string; agentType: string; agentTranscriptPath: string };
-export type NotificationInfo = HookInfo & { message: string; notificationType: 'permission_prompt' | 'idle_prompt' };
+type SubagentStopInfo = HookInfo & { stopHookActive: boolean; agentId: string; agentType: string; agentTranscriptPath: string };
+type NotificationInfo = HookInfo & { message: string; notificationType: 'permission_prompt' | 'idle_prompt' };

@@ -50,7 +50,7 @@ function claudeShapedText(values: readonly JsonRecord[]): string {
 
 /** How the vendor process ended. Absent for transports with no process of
  * their own to report (fixtures, replays). */
-export interface NativeTurnProcess { exitCode?: number; stderr?: string }
+interface NativeTurnProcess { exitCode?: number; stderr?: string }
 
 /** A failure the process itself reported, carrying its streams the way a
  * transport failure does, so classification reads stderr rather than a

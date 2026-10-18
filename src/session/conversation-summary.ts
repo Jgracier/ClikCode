@@ -81,7 +81,7 @@ export function alignPrompts(turns: readonly CanonicalTurn[], prompts: readonly 
 }
 
 /** A summary a thread holds, and the requests it kept after it. */
-export interface ThreadCompaction { text: string; prompts: string[] }
+interface ThreadCompaction { text: string; prompts: string[] }
 
 const CLAUDE_PREAMBLE = /^This session is being continued from a previous conversation[^\n]*\n(?:[^\n]*\n)*?\s*Summary:\s*\n/;
 /** Claude Code's closing instructions to itself, after the summary proper. */

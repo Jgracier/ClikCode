@@ -64,7 +64,7 @@ export function uuidv7(ms: number = Date.now()): string {
 type Json = Record<string, unknown>;
 
 /** What a write needs besides the record; fixed in tests for golden output. */
-export interface CodexRolloutOptions {
+interface CodexRolloutOptions {
   threadId: string;
   workspace: string;
   cliVersion: string;

@@ -44,7 +44,7 @@ import { nodeHttp } from '../runtime/lazy-node.js';
 import type { Fit, Placement } from './choose.js';
 import type { HardwareProfile } from './hardware.js';
 
-export interface ThreadPlan { threads: number; threadsBatch: number }
+interface ThreadPlan { threads: number; threadsBatch: number }
 
 export function threadPlan(hardware: Pick<HardwareProfile, 'physicalCores' | 'logicalCores'>): ThreadPlan {
   const reserve = hardware.physicalCores <= 4 && hardware.physicalCores > 1 ? 1 : 0;
@@ -75,7 +75,7 @@ export function usesMmap(placement: Placement): boolean {
   return placement !== 'cpu';
 }
 
-export interface ServerArgsInput {
+interface ServerArgsInput {
   modelPath: string;
   projectorPath?: string;
   port: number;

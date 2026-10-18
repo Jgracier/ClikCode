@@ -17,7 +17,7 @@ interface LlamaTimings {
   cache_n?: number;
 }
 
-export interface OpenAIModelClientOptions {
+interface OpenAIModelClientOptions {
   /** Server root, with or without a trailing `/v1`. */
   baseUrl: string;
   apiKey?: string;
@@ -62,7 +62,7 @@ export interface OpenAIModelClientOptions {
 }
 
 /** Hard limits on one request, as a server enforces them with a 400. */
-export interface RequestLimits {
+interface RequestLimits {
   /** Chat messages, the system prompt included. */
   messages?: number;
   /** Conversation items: a server that counts what a message carries (a call, a result, a text) counts more than messages. */
@@ -124,7 +124,7 @@ interface WireToolCall { id: string; type: 'function'; function: { name: string;
 /** OpenRouter's `reasoning_details` entry: how the Gateway sends a block's signature out and takes it back. */
 type ReasoningDetail = { type: 'reasoning.text'; text: string; signature: string } | { type: 'reasoning.encrypted'; data: string };
 
-export type ChatMessage =
+type ChatMessage =
   | { role: 'system'; content: string }
   | { role: 'user'; content: string | ContentPart[] }
   | { role: 'assistant'; content: string | null; tool_calls?: WireToolCall[]; reasoning_details?: ReasoningDetail[] }

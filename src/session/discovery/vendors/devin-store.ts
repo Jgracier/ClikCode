@@ -37,7 +37,7 @@ function devinCall(call: CanonicalToolCall): { name: string; args: Record<string
   return undefined;
 }
 
-export interface DevinThreadOptions {
+interface DevinThreadOptions {
   now: Date;
   messageId?: () => string;
 }

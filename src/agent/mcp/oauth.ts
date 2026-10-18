@@ -60,7 +60,7 @@ export function isMcpSignInRequired(error: unknown): boolean {
 
 // ── the stored record ───────────────────────────────────────────────────────
 
-export interface McpOAuthRecord {
+interface McpOAuthRecord {
   /** The server URL this was obtained for. A different URL under the same
    * name is a different server, and none of this applies to it. */
   server: string;
@@ -106,13 +106,7 @@ export async function forgetMcpOAuth(stateDir: string, name: string): Promise<bo
   return existed;
 }
 
-/** Whether ClikCode holds (or has held) OAuth state for this server: a
- * server it signs in to itself, never one to hand a vendor. */
-export async function hasMcpOAuth(stateDir: string, name: string, url: string): Promise<boolean> {
-  return Boolean(await readMcpOAuth(stateDir, name, url));
-}
-
-export type McpSignInState = 'signed-in' | 'needs-sign-in' | 'none';
+type McpSignInState = 'signed-in' | 'needs-sign-in' | 'none';
 
 /** What ClikCode's own record says, without asking the server. */
 export async function mcpOAuthState(stateDir: string, spec: HttpSpec): Promise<McpSignInState> {
@@ -145,7 +139,7 @@ interface AuthorizationServerMetadata {
   scopes_supported?: string[];
 }
 
-export interface McpOAuthDiscovery {
+interface McpOAuthDiscovery {
   resource: string;
   issuer: string;
   authorizationEndpoint: string;
@@ -370,7 +364,7 @@ export interface McpSignInUi {
   signal?: AbortSignal;
 }
 
-export interface McpSignInOptions {
+interface McpSignInOptions {
   stateDir: string;
   spec: HttpSpec;
   ui: McpSignInUi;

@@ -11,7 +11,7 @@ import { LspConnection } from './client.js';
 
 interface ServerCandidate { command: string; args: string[] }
 
-export interface LanguageSpec {
+interface LanguageSpec {
   id: string;
   /** Named in the "nothing installed" line. */
   label: string;

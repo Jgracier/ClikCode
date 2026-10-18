@@ -26,7 +26,7 @@ export interface ListWatch {
   stop(): void;
 }
 
-export interface ListWatchOptions {
+interface ListWatchOptions {
   debounceMs?: number;
   minIntervalMs?: number;
   fallbackMs?: number;

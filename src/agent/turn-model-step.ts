@@ -14,7 +14,7 @@ import { recordUsage } from './usage.js';
 import type { TurnRuntime } from './turn-runtime.js';
 
 /** What a model step came to: its result, a retry of the loop, or the turn's end. */
-export type ModelStepOutcome =
+type ModelStepOutcome =
   | { kind: 'step'; step: ModelStepResult; streamedThisStep: string }
   | { kind: 'continue' }
   | { kind: 'done'; result: AgentTurnResult };

@@ -14,7 +14,7 @@ import { nativeProfileEnvironment } from '../transport/profile-environment.js';
  * offered as a sign-in, `models auth login --provider <id>`, which asks for
  * OAuth or a key itself. Checked against OpenClaw 2026.9.6. */
 
-export interface OpenClawInventory {
+interface OpenClawInventory {
   models: string[];
   configured?: string;
   labels: Record<string, string>;

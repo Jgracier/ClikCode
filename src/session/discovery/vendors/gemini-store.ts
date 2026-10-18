@@ -83,7 +83,7 @@ function geminiCall(workspace: string) {
   };
 }
 
-export interface GeminiThreadOptions {
+interface GeminiThreadOptions {
   sessionId: string;
   workspace: string;
   model: string | null;

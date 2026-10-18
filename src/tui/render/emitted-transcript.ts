@@ -15,7 +15,7 @@
 import { firstUnwritten, hasMessageKey, liveAssistantAt, materializedPendingTurn, messageKey, type TranscriptMessage } from './transcript-seam.js';
 
 
-export type ResumePoint = {
+type ResumePoint = {
   /** Index in the given list to start writing at. */
   firstUnwritten: number;
   /** The pending turn is already folded into this list, so the LIVE copies of

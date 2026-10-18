@@ -16,7 +16,7 @@ import type { PaletteLayout } from '../../option-picker.js';
 import { planBlockRows } from '../../render/plan-block.js';
 import type { TerminalHarnessPrompter } from '../../prompter.js';
 
-export type BandInput = {
+type BandInput = {
   composer: string; options: readonly PickerOption<string>[]; prompt: string; cursor: number; palette: PaletteLayout | undefined;
   width: number; inner: number;
 };

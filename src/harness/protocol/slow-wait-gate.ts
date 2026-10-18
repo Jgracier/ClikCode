@@ -5,7 +5,7 @@
 
 import { MIN_VISIBLE_MS, SLOW_WAIT_MS } from './timings.js';
 
-export interface SlowWaitGate {
+interface SlowWaitGate {
   /** Resolves when the wait is shown; never, for work that ended first. */
   readonly shown: Promise<void>;
   /** The work is over. Resolves once what was shown has been taken down --

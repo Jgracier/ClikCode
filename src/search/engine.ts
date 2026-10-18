@@ -58,7 +58,7 @@ export interface ParsedQuery {
   phrase: RegExp;
 }
 
-export interface SearchOptions {
+interface SearchOptions {
   /** Only conversations active at or after this time (ms). */
   sinceMs?: number;
   /** Only this conversation (its id). */

@@ -9,7 +9,7 @@ import { loginFields, loginScope, uniqueLabels, type LoginField } from './login-
 /** Paths that mean a sign-in or verification step. */
 const AUTH_PATH = /(?:^|\/)(?:login|signin|sign-in|auth|oauth|authenticate|challenge|verify|verification|mfa|otp|2fa|2sv|two-factor|sso|saml)(?:\/|$)/i;
 
-export type LoginOutcome = 'signed_in' | 'session_reused' | 'verification_needed' | 'unverified' | 'saved_login_rejected';
+type LoginOutcome = 'signed_in' | 'session_reused' | 'verification_needed' | 'unverified' | 'saved_login_rejected';
 const NEW_ACCOUNT = 'Use a different account';
 const STEP_POLLS = 60;
 const MAX_POLLS = 240;

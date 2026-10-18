@@ -14,7 +14,7 @@ import { formatToolRow } from '../../harness/protocol/tools.js';
 import { sandboxCommand, sandboxDenialHint, sandboxMissingNotice } from '../sandbox.js';
 import { describeShellChanges, shellChangesSince, snapshotBeforeShell, type ShellChanges, type ShellSnapshot } from '../shell-changes.js';
 
-export interface BashArgs { command: string; timeout_ms?: number; run_in_background?: boolean; description?: string; sandbox?: boolean }
+interface BashArgs { command: string; timeout_ms?: number; run_in_background?: boolean; description?: string; sandbox?: boolean }
 
 const BASH_DEFAULT_TIMEOUT_MS = 120_000;
 const BASH_MAX_TIMEOUT_MS = 600_000;

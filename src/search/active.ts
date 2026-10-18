@@ -15,7 +15,7 @@ import { conversationGroups, conversationTitle } from './conversations.js';
 /** A chat that changed this recently counts as recent work, live or not. */
 const RECENT_WITHIN_MS = 2 * 60 * 60 * 1000;
 
-export interface ActiveConversation {
+interface ActiveConversation {
   conversationId: string;
   sessionId: string;
   title: string;
@@ -36,7 +36,7 @@ export interface ActiveConversation {
   updatedAtMs: number;
 }
 
-export interface ActiveOptions {
+interface ActiveOptions {
   excludeConversationId?: string;
   excludeSessionId?: string;
   now?: number;

@@ -159,7 +159,7 @@ function kiroResult(call: VendorCall): { text: string; result: Record<string, un
   }
 }
 
-export interface KiroThreadOptions {
+interface KiroThreadOptions {
   sessionId: string;
   workspace: string;
   now: Date;

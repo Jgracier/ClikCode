@@ -65,7 +65,7 @@ export function gatewayModelsByMaker(models: readonly GatewayModel[]): GatewayMo
   return [...models].sort((left, right) => key(left).localeCompare(key(right)));
 }
 
-export interface GatewayModelPrice {
+interface GatewayModelPrice {
   full: { inMTok: number; outMTok: number };
   discountPercent: number;
   charged: { inMTok: number; outMTok: number };

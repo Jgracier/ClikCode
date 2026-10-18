@@ -21,7 +21,7 @@ import { nodeHttp, nodeHttps } from '../runtime/lazy-node.js';
 
 export interface DownloadProgress { bytes: number; totalBytes: number }
 
-export interface DownloadRequest {
+interface DownloadRequest {
   url: string;
   destination: string;
   sizeBytes: number;

@@ -29,7 +29,7 @@ import { loadSessionFile } from './store/records.js';
 type PendingTurn = NonNullable<HarnessSession['pendingTurn']>;
 
 /** The background work a live worker reports for a session (its record). */
-export type BackgroundOf = (sessionId: string) => WorkerRuntimeRecord['background'];
+type BackgroundOf = (sessionId: string) => WorkerRuntimeRecord['background'];
 
 /** Whether a worker process exists for a session id. Supplied by the caller so
  *  one filesystem pass answers for a whole list. */

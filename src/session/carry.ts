@@ -58,7 +58,7 @@ type CarryNativeSessionInput = {
  * Only the third is a reason to re-seed. 'present' used to return undefined
  * too -- with a comment saying "the session is where it needs to be" -- and
  * the caller then threw the thread id away and rehydrated anyway. */
-export type CarryOutcome = 'carried' | 'present' | undefined;
+type CarryOutcome = 'carried' | 'present' | undefined;
 /** Do both accounts run this harness against the same vendor home?
  *
  * A harness with no profileEnv has one home for every account by definition.

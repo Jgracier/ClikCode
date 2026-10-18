@@ -13,7 +13,7 @@ import { expandAuthPath } from '../accounts/auth-files.js';
 import { asRecord } from '../protocol/json-lines.js';
 import { countsOf, type TurnUsage } from '../protocol/turn-usage.js';
 
-export interface AcpUsageFile { path: string; field: readonly string[] }
+interface AcpUsageFile { path: string; field: readonly string[] }
 
 /** The session's usage totals so far, or undefined when the file or the
  * field is not there (a session the agent has not written yet). */

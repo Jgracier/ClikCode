@@ -54,7 +54,7 @@ export function piCall(call: CanonicalToolCall): { name: string; args: Record<st
   return undefined;
 }
 
-export interface PiThreadOptions {
+interface PiThreadOptions {
   sessionId: string;
   workspace: string;
   model: string | null;

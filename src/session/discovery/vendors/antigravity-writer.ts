@@ -51,7 +51,7 @@ const ANTIGRAVITY_WRITER_TESTED_VERSIONS = ['1.2.16'] as const;
 
 /** One field: number and value. A value of undefined, 0, false or '' is the
  * proto3 default and is left out, as agy's own Go encoder leaves it out. */
-export type ProtoField = readonly [number, ProtoValue];
+type ProtoField = readonly [number, ProtoValue];
 type ProtoValue = number | boolean | string | Uint8Array | readonly ProtoField[] | undefined;
 
 function varint(value: number, out: number[]): void {
@@ -158,7 +158,7 @@ function resultText(call: CanonicalToolCall, tool: string): string {
   return callResultText(call);
 }
 
-export interface AntigravityThreadOptions {
+interface AntigravityThreadOptions {
   cascadeId: string;
   trajectoryId: string;
   workspace: string;
@@ -176,7 +176,7 @@ interface AntigravityStepRow {
   payload: Buffer;
 }
 
-export interface AntigravityThreadRows {
+interface AntigravityThreadRows {
   trajectoryMeta: { trajectoryId: string; cascadeId: string; type: number; source: number };
   trajectoryMetadata: Buffer;
   steps: AntigravityStepRow[];

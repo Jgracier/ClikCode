@@ -152,7 +152,7 @@ function htmlToText(html: string): string {
   return title ? `Title: ${title.replace(/\s+/g, ' ')}\n\n${text}` : text;
 }
 
-export interface VettedResponse {
+interface VettedResponse {
   /** The final URL after redirects. */
   url: URL;
   status: number;

@@ -27,7 +27,7 @@ const CHECK_MS = 30_000;
 const CLEAR_MARGIN = 1.25;
 
 export interface DiskReading { path: string; device: string; total: number; free: number }
-export type DiskLevel = 'ok' | 'tight' | 'critical';
+type DiskLevel = 'ok' | 'tight' | 'critical';
 
 /** Free space under which the disk is "getting tight": 10% of it, never under 20 GB. */
 export const tightBelow = (total: number): number => Math.max(20 * GIB, total * 0.1);
@@ -64,7 +64,7 @@ export function readDisk(path: string): DiskReading | undefined {
   } catch { return undefined; }
 }
 
-export interface DiskWatchOptions {
+interface DiskWatchOptions {
   sessionId: string;
   paths: readonly (string | undefined)[];
   deliver: (note: string) => void;

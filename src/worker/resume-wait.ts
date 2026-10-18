@@ -13,7 +13,7 @@ import { writeState } from '../session/state/write.js';
 import { matchesVendorTurn } from '../turn/account-routing.js';
 import { resumeStep, type ResumeAt } from '../turn/usage-exhausted.js';
 
-export interface ResumeWaiterHost {
+interface ResumeWaiterHost {
   sessionId: string;
   /** A turn is running: the parked one waits for it, and is looked at again
    * when it ends. */
@@ -26,7 +26,7 @@ export interface ResumeWaiterHost {
   now?: () => number;
 }
 
-export interface ResumeWaiter {
+interface ResumeWaiter {
   /** Read the session and act on what is parked there (or no longer is). */
   check(): Promise<void>;
   /** Drop the parked turn; `why` is told to every window when there was one. */

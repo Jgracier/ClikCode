@@ -29,7 +29,7 @@ import { captureNativeHarnessOutput } from '../transport/native/command.js';
 import { harnessBinaryIdentity } from '../transport/native/version-memo.js';
 import { jsonMemo } from '../../session/store/json-memo.js';
 
-export interface EffortChoices {
+interface EffortChoices {
   values: string[];
   /** The level the vendor uses when none is given, where it says. */
   default?: string;

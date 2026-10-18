@@ -201,7 +201,7 @@ function condensedTurn(turn: CanonicalTurn): string {
   return `${user}<message role="assistant" condensed="true">\n${escapeFailoverContent(summary || '(no text)')}${calls}\n</message>`;
 }
 
-export interface TransferOptions {
+interface TransferOptions {
   /** Total UTF-8 budget (transferBudget). */
   maxBytes?: number;
   /** The newest turn's answer was cut off; the request is that turn's again. */

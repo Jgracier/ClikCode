@@ -84,7 +84,7 @@ function mcodeCall(call: CanonicalToolCall): { name: string; args: Record<string
   return undefined;
 }
 
-export interface McodeThreadOptions {
+interface McodeThreadOptions {
   sessionId: string;
   now: Date;
   messageId?: () => string;

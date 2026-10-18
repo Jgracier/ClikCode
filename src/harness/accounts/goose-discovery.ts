@@ -27,7 +27,7 @@ export const GOOSE_DRIVEN_HARNESSES: Readonly<Record<string, string>> = {
   'cursor-agent': 'cursor', 'copilot-acp': 'copilot', 'amp-acp': 'amp', 'pi-acp': 'pi',
 };
 
-export interface GooseProvider { id: string; label: string; configured: boolean }
+interface GooseProvider { id: string; label: string; configured: boolean }
 
 export function gooseProviders(status: unknown, ...catalogs: unknown[]): GooseProvider[] {
   const names = new Map<string, string>();

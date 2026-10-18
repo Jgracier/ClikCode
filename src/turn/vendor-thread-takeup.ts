@@ -15,7 +15,7 @@ import { turnEnvironment } from './turn-environment.js';
 import type { VendorTurnContext } from './vendor-turn-context.js';
 
 const RETRY_EDITS = { clear: ['', 'replace'], 'new-paragraph': ['\n\n', 'append'] } as const;
-export type RetryEdit = keyof typeof RETRY_EDITS;
+type RetryEdit = keyof typeof RETRY_EDITS;
 
 /** The two edits a retry makes to the answer, in the saved turn and on
  * screen alike: clear it, or start a new paragraph after it. Only these --

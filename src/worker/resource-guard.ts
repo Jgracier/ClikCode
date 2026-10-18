@@ -15,7 +15,7 @@ const STOP_INTERVAL_MS = 20_000;
 const EFFECTIVE_SHARE = 0.25;
 const SLICE_CEILING_SHARE = 0.97;
 
-export interface AgentBudget { used: number; limit: number; ratio: number }
+interface AgentBudget { used: number; limit: number; ratio: number }
 export function desktopReserve(total: number): number { return Math.max(4 * GIB, total * 0.08); }
 export function agentBudget(sample: MemorySample): AgentBudget {
   const byMachine = sample.used + sample.available - desktopReserve(sample.total);
@@ -28,7 +28,7 @@ export function agentBudget(sample: MemorySample): AgentBudget {
 export function worthStopping(unit: Unit, budget: AgentBudget): boolean {
   return unit.freeable >= Math.max(GIB, budget.limit * 0.03);
 }
-export type GuardAction = { kind: 'none' } | { kind: 'nudge'; worker: number; unit?: Unit } | { kind: 'stop'; worker: number; unit: Unit };
+type GuardAction = { kind: 'none' } | { kind: 'nudge'; worker: number; unit?: Unit } | { kind: 'stop'; worker: number; unit: Unit };
 /** Only a measured unit large enough to relieve pressure is stopped. */
 export function decideAction(budget: AgentBudget, inventory: Inventory): GuardAction {
   if (budget.ratio < NUDGE_AT || !inventory.workers.length) return { kind: 'none' };
@@ -74,7 +74,7 @@ export function ramTmpNote(): string {
   } catch { return ''; }
 }
 
-export interface ResourceGuardOptions {
+interface ResourceGuardOptions {
   sessionId: string;
   sliceDir?: string;
   /** This worker's command names, kept after the shell process exits. */

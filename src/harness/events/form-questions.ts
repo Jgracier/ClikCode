@@ -25,7 +25,7 @@ interface Field {
   integer?: boolean;
 }
 
-export interface FormQuestions {
+interface FormQuestions {
   request: HarnessQuestionRequest;
   /** The form's `content` for an answered request. */
   content(answers: HarnessQuestionAnswers): Record<string, string | number | boolean | string[]>;

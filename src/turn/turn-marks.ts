@@ -111,7 +111,7 @@ export function settledThought(open: OpenThought, now: number): TurnMark {
   };
 }
 
-export type ThoughtStep = {
+type ThoughtStep = {
   /** The thought being had after this frame. */
   thought: OpenThought | undefined;
   /** A mark to record: the one this frame settled, or a settled one it

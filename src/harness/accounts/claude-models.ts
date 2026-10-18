@@ -22,7 +22,7 @@ import { jsonMemo } from '../../session/store/json-memo.js';
 import { binaryFingerprint, sameFingerprint, type BinaryFingerprint } from '../transport/native/version-memo.js';
 import { resolveBinaryPath } from '../transport/native/binary.js';
 
-export interface ClaudeModelTable {
+interface ClaudeModelTable {
   /** Alias -> the model id it resolves to in this build. */
   aliases: Record<string, string>;
   /** Model id -> the name Claude Code itself shows for it. */

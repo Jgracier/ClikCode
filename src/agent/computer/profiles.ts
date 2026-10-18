@@ -7,7 +7,7 @@ import { readVaultRecords, removeVaultRecord, writeVaultRecord } from './credent
 export const PROFILE_KEYS = ['given_name', 'family_name', 'email', 'phone', 'address_line1', 'address_line2', 'city', 'state', 'postal_code', 'country', 'organization', 'job_title', 'website', 'birthday'] as const;
 export type ProfileKey = typeof PROFILE_KEYS[number];
 export type Profile = { label: string; fields: Partial<Record<ProfileKey, string>> };
-export type SavedProfile = Profile & { id: string };
+type SavedProfile = Profile & { id: string };
 
 const FOLDER = 'profile';
 

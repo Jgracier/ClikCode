@@ -20,7 +20,7 @@ import { stateDirectory } from '../session/store/paths.js';
 import { hasLocalDisplay, loginUrlNotice, openLoginUrl } from '../gateway/login/url.js';
 import type { SignInScreen } from '../gateway/login/vendor-sign-in.js';
 
-export interface McpAddOptions { clientId?: string; callbackPort?: string; scope?: string }
+interface McpAddOptions { clientId?: string; callbackPort?: string; scope?: string }
 
 export async function mcpAdd(name: string, target: string, args: readonly string[], options: McpAddOptions = {}): Promise<void> {
   const entry: McpServerEntry = { name, target, ...(args.length ? { args } : {}) };

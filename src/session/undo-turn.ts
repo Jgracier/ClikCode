@@ -28,7 +28,7 @@ import { loadSessionFile } from './store/records.js';
 import { conversationHolder } from '../worker/registry.js';
 import { readTurnChanges, withTurnChangesLock, writeTurnChanges, type TurnChangeRecord } from './turn-changes.js';
 
-export interface TurnUndo {
+interface TurnUndo {
   /** Files put back as they were before the turn. */
   restored: string[];
   /** Files the turn created, removed again. */

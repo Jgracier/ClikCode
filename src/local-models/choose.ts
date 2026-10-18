@@ -69,7 +69,7 @@ export function chooseCacheType(budgetBytes: number, weightBytes: number): Cache
 
 export type Placement = 'cpu' | 'gpu' | 'gpu-partial';
 
-export interface FitOptions {
+interface FitOptions {
   /** Explicit context: tried as given, not shrunk. */
   context?: number;
   vision?: boolean;

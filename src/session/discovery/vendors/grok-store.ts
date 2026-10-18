@@ -98,7 +98,7 @@ function grokCall(workspace: string) {
   };
 }
 
-export interface GrokThreadOptions {
+interface GrokThreadOptions {
   sessionId: string;
   workspace: string;
   model: string | null;

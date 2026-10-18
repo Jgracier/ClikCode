@@ -100,7 +100,7 @@ function claudeSubagentDirs(workspace: string, sessionId: string, profile: strin
   return claudeProjectDirectoryNames(workspace).map((name) => join(root, name, sessionId, 'subagents'));
 }
 
-export interface ClaudeSubagentFile { agentId: string; file: string; agentType?: string; description?: string }
+interface ClaudeSubagentFile { agentId: string; file: string; agentType?: string; description?: string }
 
 /** The transcript of the sub-agent a `Task` call (`parentCallId`) started: the
  * sidecar `agent-<id>.meta.json` names the call it belongs to (`toolUseId`). */

@@ -5,7 +5,7 @@
 /** At the worker's idle time: keep looking while the vendor's background
  * work runs (up to the ceiling), stop it past the ceiling, start a fresh
  * idle period the moment it has ended, or exit. */
-export type IdleDecision = 'recheck' | 'stop-work' | 'fresh-idle' | 'exit';
+type IdleDecision = 'recheck' | 'stop-work' | 'fresh-idle' | 'exit';
 
 export function idleDecision(input: { workRunning: boolean; workSince: number | undefined; now: number; ceilingMs: number }): IdleDecision {
   if (input.workRunning) return input.now - (input.workSince ?? input.now) < input.ceilingMs ? 'recheck' : 'stop-work';
@@ -40,7 +40,7 @@ export interface VendorIdleState {
  * vendor open, or a turn runs -- whose end starts the clock again). Never
  * closes under work: that would stop it, and liveness is only ever derived
  * from what is really running. */
-export type VendorIdleDecision = 'close' | 'later' | 'none';
+type VendorIdleDecision = 'close' | 'later' | 'none';
 
 export function vendorIdleDecision(input: VendorIdleState): VendorIdleDecision {
   if (!input.transportOpen || input.turnRunning) return 'none';

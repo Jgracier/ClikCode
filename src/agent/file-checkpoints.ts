@@ -40,7 +40,7 @@ interface CheckpointTurnSummary {
 /** What a file held before the turn changed it. */
 export type PriorImage = { existed: false } | { existed: true; content: Buffer; mode: number };
 
-export interface UndoResult {
+interface UndoResult {
   turnIds: string[];
   restored: string[];
   deleted: string[];

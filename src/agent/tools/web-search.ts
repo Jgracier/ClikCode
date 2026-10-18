@@ -23,7 +23,7 @@ interface WebSearchArgs { query: string; max_results?: number }
 
 export interface SearchResult { title: string; url: string; snippet: string }
 
-export interface SearchKeys { brave?: string; tavily?: string }
+interface SearchKeys { brave?: string; tavily?: string }
 
 type BackendName = 'Brave Search' | 'Tavily' | 'DuckDuckGo';
 
@@ -187,7 +187,7 @@ function readStoredSearchConfig(): { braveApiKey?: unknown; tavilyApiKey?: unkno
   }
 }
 
-export interface WebSearchOptions {
+interface WebSearchOptions {
   env?: NodeJS.ProcessEnv;
   readStoredConfig?: () => { braveApiKey?: unknown; tavilyApiKey?: unknown };
 }

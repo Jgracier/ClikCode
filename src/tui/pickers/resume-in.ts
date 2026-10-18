@@ -164,7 +164,7 @@ export function resumePromptForPendingTurn(pending: HarnessSession['pendingTurn'
  *  - `stayed`: nothing carried it on; `queued` are the messages that were
  *    typed behind it, taken back for the composer when nothing here could
  *    run them (each would fail the same way and offer this again). */
-export type ExhaustedTurnNext =
+type ExhaustedTurnNext =
   | { retry: string }
   | { moved: ResumedIn }
   | { waiting: ResumeAt }

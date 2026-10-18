@@ -83,7 +83,7 @@ function vibeCall(call: CanonicalToolCall): { name: string; args: Record<string,
   return undefined;
 }
 
-export interface VibeThreadOptions {
+interface VibeThreadOptions {
   sessionId: string;
   workspace: string;
   now: Date;

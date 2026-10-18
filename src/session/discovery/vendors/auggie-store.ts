@@ -66,7 +66,7 @@ function auggieCall(workspace: string): (call: CanonicalToolCall) => { name: str
   };
 }
 
-export interface AuggieThreadOptions {
+interface AuggieThreadOptions {
   sessionId: string;
   workspace: string;
   now: Date;

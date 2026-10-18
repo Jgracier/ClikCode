@@ -7,7 +7,7 @@
 import { slowWaitGate } from '../harness/protocol/slow-wait-gate.js';
 
 /** What shows the wait: the terminal's waiting band. */
-export interface WaitingBand {
+interface WaitingBand {
   startWaiting(label: string, onCancel?: (restoreDraft: boolean) => void): void;
   stopWaiting(): void;
 }

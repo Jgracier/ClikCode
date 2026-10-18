@@ -6,7 +6,7 @@ import { lifecycleLogPath } from '../runtime/lifecycle-log.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
 import { formatLatencyTable, medianLatencyByHarness, turnsLatency } from '../runtime/turn-latency.js';
 
-export interface LogsOptions { session?: string; role?: string; since?: string; lines?: string; follow?: boolean; latency?: boolean; last?: string }
+interface LogsOptions { session?: string; role?: string; since?: string; lines?: string; follow?: boolean; latency?: boolean; last?: string }
 
 type Entry = Record<string, unknown> & { t: string; pid: number; role: string; event: string; session?: string };
 

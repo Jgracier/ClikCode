@@ -143,7 +143,7 @@ export function selectedText(rows: readonly string[], selection: Selection): str
 /** Where the transcript is on screen: `length` rows kept after `trimmed`
  * older ones were dropped, `above` screen rows given to it over the live
  * region, and the view held `scrollback` rows back from its end. */
-export type TranscriptView = { length: number; trimmed: number; above: number; scrollback: number };
+type TranscriptView = { length: number; trimmed: number; above: number; scrollback: number };
 
 /** The conversation line screen row `row` shows: a transcript row's number
  * (stable while the view scrolls and old rows are trimmed), or, below the

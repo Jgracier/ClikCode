@@ -83,7 +83,7 @@ export function readServices(sliceDir: string, now: number): ServiceReading[] {
   return readings;
 }
 
-export interface IdleServicesOptions {
+interface IdleServicesOptions {
   sessionId: string;
   sliceDir: string;
   deliver: (note: string) => void;

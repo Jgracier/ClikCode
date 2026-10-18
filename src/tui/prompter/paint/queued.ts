@@ -8,7 +8,7 @@ import type { TerminalHarnessPrompter } from '../../prompter.js';
 import type { HarnessSession } from '../../../session/model.js';
 
 
-export type QueuedMessage = { role: 'user'; content: string; queueState: string; unsteered?: boolean; user: boolean };
+type QueuedMessage = { role: 'user'; content: string; queueState: string; unsteered?: boolean; user: boolean };
 
 /** The queued and waiting messages to draw. */
 export function queuedMessagesOf(

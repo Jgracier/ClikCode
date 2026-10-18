@@ -11,7 +11,7 @@ import { accountUsage } from '../../session/picker-rows.js';
 
 type Invocation = HarnessState['invocations'][number];
 
-export interface UsageReportTotals {
+interface UsageReportTotals {
   accounts: number;
   turns: number;
   inputTokens: number;
@@ -154,7 +154,7 @@ function tokensText(tokens: number, turns: number): string {
   return turns && !tokens ? '' : compactCount(tokens);
 }
 
-export interface UsageDay { day: string; turns: number; tokens: number; costUsd: number; costTurns: number; unknownCostTurns: number }
+interface UsageDay { day: string; turns: number; tokens: number; costUsd: number; costTurns: number; unknownCostTurns: number }
 
 /** The last `days` days, newest first, from the turn log and its per-day
  * rollups (invocationRollups: folded records keep tokens but no cost, so

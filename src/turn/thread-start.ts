@@ -37,7 +37,7 @@ export function keepsNoHistory(harness: AiLocalHarnessDefinition, model: string 
   return stateless.length > 0 && stateless.includes(modelProvider(harness, model) ?? '');
 }
 
-export type ThreadStart =
+type ThreadStart =
   /** Resume `written.nativeId`; send `prompt` (the request itself). */
   | { kind: 'native'; written: NativeThreadWritten; prompt: string; omitted: number }
   /** A fresh thread; send `prompt` (the transfer, ending in the request). */

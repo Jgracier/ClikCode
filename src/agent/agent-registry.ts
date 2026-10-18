@@ -7,9 +7,9 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import path from 'node:path';
 import { finishAgentWorktree, type AgentWorktree } from './worktree.js';
 
-export type AgentRecordStatus = 'running' | 'finished' | 'failed' | 'stopped' | 'interrupted';
+type AgentRecordStatus = 'running' | 'finished' | 'failed' | 'stopped' | 'interrupted';
 
-export interface AgentRecord {
+interface AgentRecord {
   id: string;
   label: string;
   status: AgentRecordStatus;

@@ -19,7 +19,7 @@ import { appendFileSync, existsSync, mkdirSync, renameSync, statSync } from 'nod
 import { join } from 'node:path';
 import { stateDirectory } from '../session/store/paths.js';
 
-export type LifecycleRole = 'window' | 'worker' | 'bridge' | 'command';
+type LifecycleRole = 'window' | 'worker' | 'bridge' | 'command';
 
 const ROTATE_BYTES = 10 * 1024 * 1024;
 const ROTATE_CHECK_EVERY = 200;

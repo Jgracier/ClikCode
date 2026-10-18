@@ -54,7 +54,7 @@ const KINDS = {
   other: (n: number, now: boolean) => `${now ? 'calling' : 'called'} ${plural(n, 'tool')}`,
 } as const;
 
-export type GroupSummary = {
+type GroupSummary = {
   /** `Ran 4 commands, read 3 files, edited 1 file`: the calls that folded. */
   calls: string;
   thoughts: number;
@@ -145,7 +145,7 @@ export function callArgs(event: HarnessActivityEvent): string[] {
   return rows;
 }
 
-export type CallDetail = {
+type CallDetail = {
   command: string;
   /** What the call was asked, for a call that is not a command. */
   args: string[];

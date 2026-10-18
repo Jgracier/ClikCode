@@ -32,7 +32,7 @@ export interface MessageDoc {
   fingerprint: string;
 }
 
-export interface SessionDoc {
+interface SessionDoc {
   id: string;
   messages: MessageDoc[];
 }

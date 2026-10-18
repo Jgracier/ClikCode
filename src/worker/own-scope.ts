@@ -248,7 +248,7 @@ exec "\${SYSTEMD_RUN:-/usr/bin/systemd-run}" "$@"
 /** Where a worker ended up: the agent slice, and its own scope there --
  * divided into an agent group and one group per command when it could be
  * (command-groups.ts). */
-export interface WorkerPlacement { sliceDir: string; scopeDir: string; divided: boolean }
+interface WorkerPlacement { sliceDir: string; scopeDir: string; divided: boolean }
 
 /** Keeps the agent's work from starving the program the user is looking at.
  * Call before any vendor process starts, so every child is born separated.

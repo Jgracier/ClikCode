@@ -98,7 +98,7 @@ function loaderTool(deferred: readonly ToolDefinition[]): ToolDefinition {
   });
 }
 
-export interface ToolExposure {
+interface ToolExposure {
   /** Every tool that may run, the loader included. */
   all: ToolDefinition[];
   /** The subset whose schemas go to the model, given the conversation so far. */

@@ -2,7 +2,7 @@
 import type { Frame, Page } from 'playwright-core';
 
 /** A page, or the frame inside it that holds the sign-in form. */
-export type LoginScope = Page | Frame;
+type LoginScope = Page | Frame;
 
 /** Sign-in forms are sometimes embedded in an iframe (payment and identity
  * providers). The page itself wins when it has inputs; otherwise the first
