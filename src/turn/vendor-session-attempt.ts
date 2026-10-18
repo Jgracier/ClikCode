@@ -208,6 +208,8 @@ function acpLaunchInput(input: {
     // would otherwise start a second copy of the agent to read.
     onSessionModels: (answer, fresh) => { void recordLiveModelCatalog(harness, account, answer, fresh).catch(() => undefined); },
     environment: launch.env && Object.keys(launch.env).length ? { ...environment, ...launch.env } : environment,
+    // The account's own config is what the agent reads: global servers it already has there are not sent again.
+    ...(account.nativeProfile ? { mcpProfile: { env: account.nativeProfile.env, path: account.nativeProfile.path } } : {}),
   };
 }
 

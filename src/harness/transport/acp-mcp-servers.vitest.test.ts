@@ -32,18 +32,18 @@ describe('the built-in ClikCode server', () => {
   }
 
   it('goes to every harness session without being recorded, naming the worker to call back', async () => {
-    const servers = await inHome(() => globalMcpServersForAcp('some-harness', {}, '/nonexistent-home'));
+    const servers = await inHome(() => globalMcpServersForAcp('some-harness', {}, undefined, '/nonexistent-home'));
     expect(servers).toEqual([{ name: 'clikcode', command: process.execPath, args: ['/opt/clikcode/index.js', 'mcp-serve'], env: [{ name: 'CLIKCODE_WORKER_PID', value: String(process.pid) }] }]);
   });
 
   it('is withheld while computer use is off', async () => {
-    const servers = await inHome(() => globalMcpServersForAcp('some-harness', {}, '/nonexistent-home'),
+    const servers = await inHome(() => globalMcpServersForAcp('some-harness', {}, undefined, '/nonexistent-home'),
       async home => { const fs = await import('node:fs/promises'); await fs.mkdir(`${home}/computer`, { recursive: true }); await fs.writeFile(`${home}/computer/settings.json`, '{"enabled":false}'); });
     expect(servers).toEqual([]);
   });
 
   it('steps aside for a server the user recorded under the same name', async () => {
-    const servers = await inHome(() => globalMcpServersForAcp('some-harness', {}, '/nonexistent-home'),
+    const servers = await inHome(() => globalMcpServersForAcp('some-harness', {}, undefined, '/nonexistent-home'),
       async home => { const fs = await import('node:fs/promises'); await fs.writeFile(`${home}/mcp.json`, JSON.stringify({ mcpServers: { clikcode: { command: 'mine', args: [] } } })); });
     expect(servers).toEqual([{ name: 'clikcode', command: 'mine', args: [], env: [] }]);
   });
