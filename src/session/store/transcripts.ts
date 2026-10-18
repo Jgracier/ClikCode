@@ -3,7 +3,8 @@
 
 import type { HarnessSession } from '../model.js';
 import { cloneData, sameData } from './data.js';
-import type { StateLockHeld } from './locks.js';
+import { withFileLock, type StateLockHeld } from './locks.js';
+import { sessionFilePath } from './paths.js';
 import { listStoredSessionIds, loadSessionFile, removeSessionFile, storeSessionFile, storeSessionTurn, type SessionFile } from './records.js';
 
 type TranscriptMessage = NonNullable<HarnessSession['messages']>[number];
@@ -102,7 +103,7 @@ async function materializeChildrenOf(parentId: string): Promise<string[]> {
     if (peek.transcriptRef.sessionId !== parentId) continue;
     const messages = await materializedMessages(peek, new Set([id]));
     const { transcriptRef: _dropped, ...rest } = peek;
-    await storeSessionFile(id, { ...rest, messages: cloneData(messages ?? []) });
+    await withSessionLock(id, () => storeSessionFile(id, { ...rest, messages: cloneData(messages ?? []) }));
     rewritten.push(id);
   }
   return rewritten;
@@ -176,7 +177,16 @@ const MIN_SHARED_MESSAGES = 2;
  * parent->child in materializeChildrenOf: a lock-order cycle that only the
  * state lock around both kept from deadlocking. */
 export async function writeSessionTranscript(_held: StateLockHeld, id: string, next: SessionTranscript, options: TranscriptWriteOptions = {}): Promise<void> {
+  await withSessionLock(id, () => storeTranscript(id, next, options, false));
+}
+
+/** One conversation's file is written by one writer at a time (its own lock), whatever else holds
+ * the shared state lock. `own`: the caller holds only this conversation's lock, so a write that
+ * would reach another conversation's file -- a history shared by reference, children to give their
+ * own copy -- is declined (false), for the caller to make under the state lock instead. */
+async function storeTranscript(id: string, next: SessionTranscript, options: TranscriptWriteOptions, own: boolean): Promise<boolean> {
   const previous = await loadSessionFile(id);
+  if (own && (options.parentSessionId || previous?.transcriptRef)) return false;
   const verbatim = next;
   // What is stored is exactly the writer's base: no merge, and history the
   // writer still holds by identity is history unchanged (a checkpoint).
@@ -191,10 +201,14 @@ export async function writeSessionTranscript(_held: StateLockHeld, id: string, n
     });
   }
   const historyUnchanged = storedBase && next.messages === options.base!.messages;
-  if (previous && !historyUnchanged && !keepsHistory(await previousHistory(), next.messages)) await materializeChildrenOf(id);
+  if (previous && !historyUnchanged && !keepsHistory(await previousHistory(), next.messages)) {
+    if (own) return false;
+    await materializeChildrenOf(id);
+  }
   if (transcriptIsEmpty(next)) {
+    if (own) return false;
     await removeSessionFile(id);
-    return;
+    return true;
   }
   const parentId = options.parentSessionId ?? previous?.transcriptRef?.sessionId;
   const built: SessionFile = (parentId && await referenceInto(parentId, id, next, options.frozen === true)) || { v: 1 as const, id, ...next };
@@ -203,6 +217,31 @@ export async function writeSessionTranscript(_held: StateLockHeld, id: string, n
   // A merged write stored something other than the writer's copy: the next
   // write from that copy must merge again, not take the fast path.
   if (next === verbatim) storedFrom.set(file, verbatim);
+  return true;
+}
+
+function withSessionLock<T>(id: string, run: () => Promise<T>): Promise<T> {
+  return withFileLock(`${sessionFilePath(id)}.lock`, run);
+}
+
+/** A conversation's transcript, written under its own lock only -- not the state lock every
+ * window and worker shares. A turn's checkpoints and its end write the whole of a long
+ * conversation (a second or more on a 20 MB one, most of it fsync); under the shared lock, every
+ * other window waited for that. `listed` is asked under this lock: a conversation deleted
+ * meanwhile is not written back. False, having written nothing, when the write is not this
+ * conversation's alone (see storeTranscript) or it is not listed: the caller then writes it under
+ * the state lock. */
+export function writeOwnTranscript(
+  id: string, next: SessionTranscript, base: SessionTranscript, listed: () => Promise<boolean>,
+  /** A streaming checkpoint may store just the running turn's journal (storeTurn); a full write stores
+   * the whole file, which is what a build that knows only `<id>.json` reads. */
+  options: { journalOnly: boolean },
+): Promise<boolean> {
+  return withSessionLock(id, async () => {
+    if (!await listed()) return false;
+    if (options.journalOnly && await storeTurn(id, next, base)) return true;
+    return storeTranscript(id, next, { base, frozen: true }, true);
+  });
 }
 
 /** A streaming turn's checkpoint: only the running turn's journal changed
@@ -211,7 +250,11 @@ export async function writeSessionTranscript(_held: StateLockHeld, id: string, n
  * written nothing, for anything else -- history changed, a new turn, or a
  * file someone else has written since -- which writeSessionTranscript then
  * stores (and merges) in full. Under the caller's state lock. */
-export async function writeSessionTurn(_held: StateLockHeld, id: string, next: SessionTranscript, base: SessionTranscript): Promise<boolean> {
+export function writeSessionTurn(_held: StateLockHeld, id: string, next: SessionTranscript, base: SessionTranscript): Promise<boolean> {
+  return withSessionLock(id, () => storeTurn(id, next, base));
+}
+
+async function storeTurn(id: string, next: SessionTranscript, base: SessionTranscript): Promise<boolean> {
   if (!next.pendingTurn || next.messages !== base.messages || next.pendingTurn.startedAt !== base.pendingTurn?.startedAt) return false;
   const previous = await loadSessionFile(id);
   if (!previous || storedFrom.get(previous) !== base) return false;
@@ -259,5 +302,5 @@ async function referenceInto(parentId: string, id: string, next: SessionTranscri
  * copy. Under the caller's state lock, like writeSessionTranscript. */
 export async function deleteSessionTranscript(_held: StateLockHeld, id: string): Promise<void> {
   await materializeChildrenOf(id);
-  await removeSessionFile(id);
+  await withSessionLock(id, () => removeSessionFile(id));
 }

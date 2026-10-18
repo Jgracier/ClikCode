@@ -10,6 +10,7 @@ import type { HarnessSession } from '../model.js';
 import { listStoredSessionIds } from '../store/records.js';
 import { stat } from 'node:fs/promises';
 import { DurableTurnCheckpoint } from '../../turn/turn-journal.js';
+import { withStateLock } from '../store/locks.js';
 
 const previousHome = process.env.CLIKCODE_HOME;
 let root: string | undefined;
@@ -291,5 +292,34 @@ describe('a streaming turn on a chat read from disk', () => {
     resetSessionStoreCache();
     const finished = (await readState({ transcripts: ['s'] })).sessions.find((item) => item.id === 's')!;
     expect(finished.messages?.at(-1)?.content.trim()).toBe('part 0 part 1 part 2');
+  });
+});
+
+describe('a conversation\'s transcript and the shared state lock', () => {
+  it('is written under its own lock while another writer holds the state lock', async () => {
+    root = await mkdtemp(join(tmpdir(), 'clikcode-write-'));
+    process.env.CLIKCODE_HOME = root;
+    const state = await readState();
+    const now = new Date().toISOString();
+    state.sessions.push({
+      id: 'own', route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', permissionMode: 'bypass',
+      createdAt: now, updatedAt: now, status: 'active', messages: [{ role: 'user', content: 'first' }],
+    } as HarnessSession);
+    await writeState(state);
+    const session = state.sessions.find((item) => item.id === 'own')!;
+    session.messages = [...session.messages!, { role: 'assistant', content: 'answered while the lock was held' }];
+    let released!: () => void;
+    const holding = withStateLock(() => new Promise<void>((resolve) => { released = resolve; }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const wrote = await Promise.race([
+      writeTranscriptCheckpoint(state, 'own', { journalOnly: false }),
+      new Promise<'waited'>((resolve) => setTimeout(() => resolve('waited'), 3_000)),
+    ]);
+    released();
+    await holding;
+    expect(wrote).toBe(true);
+    resetSessionStoreCache();
+    const stored = (await readState({ transcripts: ['own'] })).sessions.find((item) => item.id === 'own')!;
+    expect(stored.messages?.at(-1)?.content).toBe('answered while the lock was held');
   });
 });

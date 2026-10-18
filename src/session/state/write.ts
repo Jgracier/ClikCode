@@ -8,7 +8,7 @@ import { sameData } from '../store/data.js';
 import { lifecycle } from '../../runtime/lifecycle-log.js';
 import { withStateLock } from '../store/locks.js';
 import { forgetSessionArtifacts } from '../store/forget.js';
-import { deleteSessionTranscript, readSessionTranscript, writeSessionTranscript, writeSessionTurn } from '../store/transcripts.js';
+import { deleteSessionTranscript, readSessionTranscript, writeOwnTranscript, writeSessionTranscript } from '../store/transcripts.js';
 import { HarnessStateVersionError, indexStructureChanged, loadIndex, storeIndex } from './index-file.js';
 import { capInvocations } from './invocations.js';
 import { BaselinedState, DRAFT_BASELINE, STATE_BASELINE, StateBaselineData, baselineOf, baselineSession, indexFromWorking, mergedIndex, rememberBaseline } from './merge.js';
@@ -26,6 +26,16 @@ import { HarnessSecrets, readSecretsFile, sameSecret, writeSecretsFile } from '.
  * checkpoints do not come here at all: they use writeTranscriptCheckpoint,
  * which never touches the index. */
 export async function writeState(state: HarnessState): Promise<void> {
+  // Transcripts this copy already stored and only appended to are written first, each under its own
+  // conversation's lock (writeTranscriptCheckpoint): the end of a turn rewrote a 20 MB conversation
+  // under the state lock, a second during which every other window waited. What is left for the
+  // state lock is the index, and the transcripts that are not one conversation's alone.
+  if ((state as BaselinedState)[STATE_BASELINE]) {
+    for (const session of state.sessions ?? []) {
+      if (session.messages === undefined && session.pendingTurn === undefined) continue;
+      await writeTranscriptCheckpoint(state, session.id, { journalOnly: false });
+    }
+  }
   const baseline = (state as BaselinedState)[STATE_BASELINE];
   let written: StateBaselineData | undefined;
   const deleted: string[] = [];
@@ -147,20 +157,22 @@ export async function writeState(state: HarnessState): Promise<void> {
  * Returns false, having written nothing, when this is not a plain transcript
  * update -- the session is not stored (yet, or any more), or this copy never
  * read it. The caller then does a full writeState, which handles those. */
-export async function writeTranscriptCheckpoint(state: HarnessState, sessionId: string): Promise<boolean> {
+export async function writeTranscriptCheckpoint(state: HarnessState, sessionId: string, options: { journalOnly: boolean } = { journalOnly: true }): Promise<boolean> {
   const baseline = (state as BaselinedState)[STATE_BASELINE];
   const before = baseline?.sessions.get(sessionId);
   const session = state.sessions?.find((item) => item.id === sessionId);
   if (!baseline || !before || !session) return false;
-  return withStateLock(async (held) => {
-    const disk = await loadIndex();
-    if (disk && disk.version > HARNESS_STATE_VERSION) throw new HarnessStateVersionError(disk.version);
-    if (!disk?.sessions.some((item) => item.id === sessionId)) return false;
-    const now = baselineSession(session, before);
-    // Only the turn's journal changed (the common case): its own small file.
-    if (now.transcript !== before.transcript && !await writeSessionTurn(held, sessionId, now.transcript, before.transcript)) {
-      await writeSessionTranscript(held, sessionId, now.transcript, { parentSessionId: session.parentSessionId, frozen: true, base: before.transcript });
-    }
+  const now = baselineSession(session, before);
+  if (now.transcript !== before.transcript) {
+    // Under this conversation's own lock, not the state lock (writeOwnTranscript): only its file changes.
+    const listed = async (): Promise<boolean> => {
+      const disk = await loadIndex();
+      if (disk && disk.version > HARNESS_STATE_VERSION) throw new HarnessStateVersionError(disk.version);
+      return Boolean(disk?.sessions.some((item) => item.id === sessionId));
+    };
+    if (!await writeOwnTranscript(sessionId, now.transcript, before.transcript, listed, options)) return false;
+  }
+  {
     // The current baseline object: a full write may have replaced it while
     // this one waited for the lock, and that one is what later writes diff from.
     const current = (state as BaselinedState)[STATE_BASELINE]?.sessions;
@@ -170,5 +182,5 @@ export async function writeTranscriptCheckpoint(state: HarnessState, sessionId: 
       current!.set(sessionId, { ...rest, transcript: now.transcript, ...(now.messagesFrom ? { messagesFrom: now.messagesFrom } : {}) });
     }
     return true;
-  });
+  }
 }
