@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   extractLoginUrl, hasLocalDisplay, loginUrlNotice, shortenLoginUrl, stripAnsi,
 } from './url.js';
+import { loginCallbackPort, loginPortForwardHint } from './link-info.js';
 import { scriptArgv, shellQuote } from './pty.js';
 
 /** Verbatim from a pty capture of `claude login`, the flow this models. */
@@ -70,6 +71,13 @@ describe('shortenLoginUrl', () => {
 });
 
 describe('loginUrlNotice', () => {
+  it('shows the loopback callback port and SSH forwarding command', () => {
+    const url = `https://provider.example/authorize?redirect_uri=${encodeURIComponent('http://127.0.0.1:49152/callback')}`;
+    expect(loginCallbackPort(url)).toBe(49152);
+    expect(loginUrlNotice(url, {}).lines).toContain('Consent callback port 49152 · over SSH forward with ssh -L 49152:127.0.0.1:49152 <host>');
+    expect(loginCallbackPort('https://provider.example/authorize?redirect_uri=https%3A%2F%2Fexample.com%3A443%2Fcallback')).toBeUndefined();
+    expect(loginPortForwardHint(AUTH_URL)).toBeUndefined();
+  });
   it('tells a phone user to paste the code back', () => {
     expect(loginUrlNotice(AUTH_URL, {}).lines.join(' ')).toContain("phone's browser");
   });

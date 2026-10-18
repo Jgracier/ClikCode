@@ -3,6 +3,7 @@ import chalk from 'chalk';
 import { lifecycle } from '../../runtime/lifecycle-log.js';
 import type { LoginLink, SignInScreen } from '../../gateway/login/vendor-sign-in.js';
 import { hasLocalDisplay, loginUrlNotice, openLoginUrl } from '../../gateway/login/url.js';
+import { shortenLoginUrl, loginPortForwardHint } from '../../gateway/login/link-info.js';
 import { stdout as output } from 'node:process';
 import type { TerminalHarnessPrompter } from '../prompter.js';
 
@@ -31,8 +32,8 @@ export function signInScreen(this: TerminalHarnessPrompter, name: string): SignI
     if (!local) output.write(loginUrlNotice(link.url).clipboard);
     linkLines = [
       `${chalk.bold(`Sign in to ${name}`)}${link.code ? ` · confirm the code ${chalk.bold(link.code)}` : ''}`,
-      // Its own plain line: the band wraps a link rather than cutting it.
-      link.url,
+      shortenLoginUrl(link.url),
+      ...(loginPortForwardHint(link.url) ? [chalk.dim(loginPortForwardHint(link.url)!)] : []),
       chalk.dim(local ? 'opened in your browser' : 'link copied: open it on this device'),
     ];
     band();

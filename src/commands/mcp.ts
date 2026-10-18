@@ -18,6 +18,7 @@ import { mcpServerNeedsSignIn } from '../harness/mcp-sign-in.js';
 import { userMcpServers } from '../agent/mcp/manager.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { hasLocalDisplay, loginUrlNotice, openLoginUrl } from '../gateway/login/url.js';
+import { shortenLoginUrl, loginPortForwardHint } from '../gateway/login/link-info.js';
 import type { SignInScreen } from '../gateway/login/vendor-sign-in.js';
 
 interface McpAddOptions { clientId?: string; callbackPort?: string; scope?: string }
@@ -81,7 +82,7 @@ function terminalSignInUi(name: string): McpSignInUi & { done(): void } {
     show: (link) => {
       const local = hasLocalDisplay();
       if (local && !opened) { opened = true; openLoginUrl(link.url); }
-      output.write(`${local ? '' : loginUrlNotice(link.url).clipboard}\n${chalk.bold(`Sign in to ${name}`)}\n${link.url}\n${chalk.dim(local ? 'opened in your browser' : 'link copied: open it on this device')}\n`);
+      output.write(`${local ? '' : loginUrlNotice(link.url).clipboard}\n${chalk.bold(`Sign in to ${name}`)}\n${shortenLoginUrl(link.url)}\n${loginPortForwardHint(link.url) ? `${loginPortForwardHint(link.url)}\n` : ''}${chalk.dim(local ? 'opened in your browser' : 'link copied: open it on this device')}\n`);
     },
     ask: async (prompt, signal) => {
       const reader = createInterface({ input, output });

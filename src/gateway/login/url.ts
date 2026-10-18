@@ -25,6 +25,8 @@
  */
 import { spawnPortable as spawn } from '../../harness/transport/spawn.js';
 import { osc52Sequence } from '../../session/attachments.js';
+import { shortenLoginUrl, loginPortForwardHint } from './link-info.js';
+export { shortenLoginUrl } from './link-info.js';
 
 /** CSI/OSC sequences a vendor TUI colours its output with, which otherwise
  * land in the middle of a captured URL. */
@@ -55,16 +57,6 @@ export function hasLocalDisplay(environment: NodeJS.ProcessEnv = process.env): b
   return Boolean(environment.DISPLAY || environment.WAYLAND_DISPLAY);
 }
 
-/** Enough of the URL to recognise and trust it, on one line of a phone-width
- * terminal. The full URL is on the clipboard; this is only ever read. */
-export function shortenLoginUrl(url: string, maxLength = 56): string {
-  if (url.length <= maxLength) return url;
-  let host: string;
-  try { host = new URL(url).host; } catch { return `${url.slice(0, maxLength - 1)}…`; }
-  const shown = `https://${host}/…`;
-  return shown.length <= maxLength ? shown : `${shown.slice(0, maxLength - 1)}…`;
-}
-
 /** Open the URL with the desktop's own handler. Never called without a local
  * display: on a headless box this would silently do nothing useful. */
 export function openLoginUrl(url: string, platform: NodeJS.Platform = process.platform): void {
@@ -88,6 +80,7 @@ export function loginUrlNotice(url: string, environment: NodeJS.ProcessEnv = pro
     clipboard: osc52Sequence(url, environment),
     lines: [
       `ClikCode · sign-in link copied to your clipboard: ${shortenLoginUrl(url)}`,
+      ...(loginPortForwardHint(url) ? [loginPortForwardHint(url)!] : []),
       local
         ? 'A browser should have opened here; paste the link if it did not.'
         : 'Paste it into your phone\'s browser, then come back and paste any code below.',

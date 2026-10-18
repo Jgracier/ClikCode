@@ -2,6 +2,7 @@
 import type { JSX } from 'preact';
 import { useRef, useState } from 'preact/hooks';
 import { COPIED_MS } from '../../../../src/harness/protocol/timings';
+import { shortenLoginUrl, loginPortForwardHint } from '../../../../src/gateway/login/link-info';
 import { compactCount, formatElapsed } from '../../../../src/harness/protocol/format';
 import { queuedRowLabel, type ChatModel } from '../model';
 import { permissionLabel } from './picker';
@@ -117,6 +118,8 @@ export function SignInCard({ signIn }: { signIn: NonNullable<ChatModel['signIn']
   return (
     <div class="install-card signin-link" role="status" id="sign-in-link">
       <div class="install-text"><Icon name="key" /> {signIn.url ? `Sign in to ${signIn.name} in your browser` : `Signing in to ${signIn.name}…`}</div>
+      {signIn.url ? <div class="signin-code"><span class="muted">{shortenLoginUrl(signIn.url)}</span><button type="button" class="icon-button tiny" title="Copy full sign-in link" aria-label="Copy full sign-in link" onClick={() => { void navigator.clipboard?.writeText(signIn.url ?? ''); }}><Icon name="copy" /></button></div> : null}
+      {signIn.url && loginPortForwardHint(signIn.url) ? <div class="muted">{loginPortForwardHint(signIn.url)}</div> : null}
       {signIn.code ? (
         <div class="signin-code">
           <span class="muted">Confirm this code there</span>
