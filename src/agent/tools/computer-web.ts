@@ -182,7 +182,7 @@ export function changedLines(previous: string, shown: string): { text: string; c
 export async function observeComputerPage(page: Page, acceptsImages: boolean, full = false, find?: string, compact = false): Promise<ToolRunResult> {
   const raw = scrubSecrets(await maskSensitive(page, await page.ariaSnapshot({ mode: 'ai', timeout: 10_000 } as never) as string));
   // A key the page is showing is not for the model to read: capture_secret takes it.
-  const { text: shown, hidden } = hideKeyLikeText(raw);
+  const { text: shown, hidden } = hideKeyLikeText(raw.replace(/^(\s*- \/url: )(\S{160})\S+$/gm, '$1$2…'));
   if (find?.trim()) {
     const found = findInSnapshot(shown, find.trim());
     return { output: `Page: ${displayUrl(page.url())}\n\n${found ? `Lines mentioning "${find.trim()}" (with the elements around them):\n${found.slice(0, 12_000)}` : `Nothing on the page mentions "${find.trim()}". Try observe with full: true.`}` };
