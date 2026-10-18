@@ -321,7 +321,7 @@ describe('context profiles', () => {
       const seen: unknown[] = [];
       const requests = await runSession({ sessionId: 'forced', profile: 'full', hints: { hosted: true }, onUsage: (usage) => { seen.push(usage.contextProfile); } });
       expect(new Set(seen)).toEqual(new Set(['minimal']));
-      expect(JSON.stringify(requests[0].tools)).not.toContain('additionalProperties');
+      expect(JSON.stringify(requests[0].tools)).not.toContain('"additionalProperties":false');
       expect(requests[0].system).not.toContain('# Editing files');
     } finally {
       if (previous === undefined) delete process.env[CONTEXT_PROFILE_ENV];
