@@ -35,6 +35,8 @@ export function select<T>(
 
 export function board(this: TerminalHarnessPrompter, settings: ConversationBoardSettings): Promise<BoardResult | undefined> {
   lifecycle('window.board.open');
+  // Held since the turn was left (leaveTurn): the board's first frame replaces the chat.
+  this.paintsHeld = false;
   return runConversationBoard(this.pickerHost(), settings).finally(() => lifecycle('window.board.close'));
 }
 

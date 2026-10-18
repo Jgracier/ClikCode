@@ -215,14 +215,17 @@ export class ChatLoop {
     terminal.holdPaints();
     terminal.submitted(prompt);
     terminal.render(latest, account, { running: true, ...(prompt !== undefined ? { prompt } : {}) });
+    let left = false;
     try {
       const followed = await followWorkerTurn(latest.id, terminal, joinedTurn(latest, prompt));
-      if (followed.left) this.openBoard = true;
+      left = Boolean(followed.left);
+      if (left) this.openBoard = true;
     } catch (error) {
       await this.handleTurnFailure(error, { line: resendText });
     } finally {
-      // Normally released once the turn is drawn (followWorkerTurn); this is for a follow that never got there.
-      terminal.releasePaints();
+      // Normally released once the turn is drawn (followWorkerTurn); this is for a follow that never
+      // got there. Not when it was left for the board: that hold is the board's to end (leaveTurn).
+      if (!left) terminal.releasePaints();
     }
   }
 
