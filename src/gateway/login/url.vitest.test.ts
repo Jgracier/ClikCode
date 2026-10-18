@@ -71,10 +71,9 @@ describe('shortenLoginUrl', () => {
 });
 
 describe('loginUrlNotice', () => {
-  it('makes the short terminal label open the exact authorization URL', () => {
-    expect(loginLinkLine(AUTH_URL, true)).toBe(`\u001b]8;;${AUTH_URL}\u001b\\Open full consent page\u001b]8;;\u001b\\`);
-    expect(loginLinkLine(AUTH_URL, false)).toBe('Paste the copied full consent link');
-    expect(loginLinkLine(AUTH_URL, false)).not.toContain('https://claude.com/…');
+  it('shows the full authorization URL as the clickable text', () => {
+    expect(loginLinkLine(AUTH_URL, true)).toBe(`\u001b]8;;${AUTH_URL}\u001b\\${AUTH_URL}\u001b]8;;\u001b\\`);
+    expect(loginLinkLine(AUTH_URL, false)).toBe(AUTH_URL);
   });
   it('shows the loopback callback port and SSH forwarding command', () => {
     const url = `https://provider.example/authorize?redirect_uri=${encodeURIComponent('http://127.0.0.1:49152/callback')}`;

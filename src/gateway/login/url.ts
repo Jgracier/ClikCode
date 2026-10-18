@@ -18,9 +18,8 @@
  * interpreted by the terminal emulator, not the host, which is why ClikCode's
  * own /copy already lands there rather than in the server's clipboard.
  *
- * A short terminal label uses an OSC 8 link whose target is the exact OAuth
- * URL. Sending that URL to a third-party shortener would hand it a working
- * sign-in link for the user's account.
+ * The full URL is shown and linked locally. Sending it to a third-party
+ * shortener would hand it a working sign-in link for the user's account.
  */
 import { spawnPortable as spawn } from '../../harness/transport/spawn.js';
 import { osc52Sequence } from '../../session/attachments.js';
@@ -28,11 +27,11 @@ import { loginPortForwardHint } from './link-info.js';
 export { shortenLoginUrl } from './link-info.js';
 import { HYPERLINK_CLOSE, hyperlinkOpen } from '../../tui/render/hyperlinks.js';
 
-/** Short visible words with the exact authorization URL as their terminal link target. */
+/** Show the exact authorization URL as both visible text and link target. */
 export function loginLinkLine(url: string, hyperlinked = Boolean(process.stdout.isTTY) && !process.env.CLIKCODE_NO_HYPERLINKS): string {
   return hyperlinked && /^https?:\/\//.test(url) && !/[\x00-\x1f\x7f]/.test(url)
-    ? `${hyperlinkOpen(url)}Open full consent page${HYPERLINK_CLOSE}`
-    : 'Paste the copied full consent link';
+    ? `${hyperlinkOpen(url)}${url}${HYPERLINK_CLOSE}`
+    : url;
 }
 
 /** CSI/OSC sequences a vendor TUI colours its output with, which otherwise

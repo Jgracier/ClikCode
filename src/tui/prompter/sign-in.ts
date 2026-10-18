@@ -2,7 +2,7 @@
 import chalk from 'chalk';
 import { lifecycle } from '../../runtime/lifecycle-log.js';
 import type { LoginLink, SignInScreen } from '../../gateway/login/vendor-sign-in.js';
-import { hasLocalDisplay, loginLinkLine, loginUrlNotice, openLoginUrl } from '../../gateway/login/url.js';
+import { hasLocalDisplay, loginUrlNotice, openLoginUrl } from '../../gateway/login/url.js';
 import { loginPortForwardHint } from '../../gateway/login/link-info.js';
 import { stdout as output } from 'node:process';
 import type { TerminalHarnessPrompter } from '../prompter.js';
@@ -32,7 +32,7 @@ export function signInScreen(this: TerminalHarnessPrompter, name: string): SignI
     if (!local) output.write(loginUrlNotice(link.url).clipboard);
     linkLines = [
       `${chalk.bold(`Sign in to ${name}`)}${link.code ? ` · confirm the code ${chalk.bold(link.code)}` : ''}`,
-      loginLinkLine(link.url),
+      link.url,
       ...(loginPortForwardHint(link.url) ? [chalk.dim(loginPortForwardHint(link.url)!)] : []),
       chalk.dim(local ? 'opened in your browser' : 'full link copied to clipboard'),
     ];
