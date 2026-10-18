@@ -5,6 +5,7 @@ import { dropEphemeral, ephemeralSessions, holdEphemeral, sessionForceStored } f
 import { stampListFacts } from '../list-facts.js';
 import { isBlankConversation } from '../options.js';
 import { sameData } from '../store/data.js';
+import { lifecycle } from '../../runtime/lifecycle-log.js';
 import { withStateLock } from '../store/locks.js';
 import { forgetSessionArtifacts } from '../store/forget.js';
 import { deleteSessionTranscript, readSessionTranscript, writeSessionTranscript, writeSessionTurn } from '../store/transcripts.js';
@@ -29,8 +30,11 @@ export async function writeState(state: HarnessState): Promise<void> {
   let written: StateBaselineData | undefined;
   const deleted: string[] = [];
   await withStateLock(async (held) => {
+    // Where a slow write spends its time (state.write.slow): every window waits while it holds the lock.
+    const clock = { start: Date.now(), index: 0, snapshot: 0, transcripts: 0, store: 0, wrote: 0, loaded: 0 };
     const disk = await loadIndex();
     if (disk && disk.version > HARNESS_STATE_VERSION) throw new HarnessStateVersionError(disk.version);
+    clock.index = Date.now() - clock.start;
 
     // What this write stores is taken here, in one synchronous step, and is
     // exactly what it then remembers as stored. The caller may keep changing
@@ -42,6 +46,7 @@ export async function writeState(state: HarnessState): Promise<void> {
     // this caller actually opened. A light read leaves the summary alone.
     for (const session of state.sessions ?? []) stampListFacts(session);
     const taken = baselineOf(state, baseline);
+    clock.snapshot = Date.now() - clock.start - clock.index;
     const sessions = [...(state.sessions ?? [])];
     const diskIds = new Set((disk?.sessions ?? []).map((session) => session.id));
     // A draft is not a conversation. It stays off disk until it is used, or
@@ -85,10 +90,16 @@ export async function writeState(state: HarnessState): Promise<void> {
       // disk, so neither side's appended messages are lost.
       const base = before && diskIds.has(session.id) ? before.transcript : draft?.transcript;
       await writeSessionTranscript(held, session.id, transcript, { parentSessionId: session.parentSessionId, frozen: true, ...(base ? { base } : {}) });
+      clock.wrote += 1;
     }
+    clock.transcripts = Date.now() - clock.start - clock.index - clock.snapshot;
+    clock.loaded = persisted.filter((session) => session.messages !== undefined).length;
 
     // 2. The index, only when its content really differs.
     if (!disk || !sameData(next, disk)) await storeIndex(next, { backup: indexStructureChanged(disk, next) });
+    clock.store = Date.now() - clock.start - clock.index - clock.snapshot - clock.transcripts;
+    const total = Date.now() - clock.start;
+    if (total >= 300) lifecycle('state.write.slow', { ms: total, indexMs: clock.index, snapshotMs: clock.snapshot, transcriptsMs: clock.transcripts, storeMs: clock.store, wrote: clock.wrote, loaded: clock.loaded, sessions: persisted.length });
 
     // 3. Deliberate deletions last, children materialized before the parent goes.
     const remaining = new Set(next.sessions.map((session) => session.id));
