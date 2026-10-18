@@ -37,6 +37,7 @@ const RECIPES: readonly Recipe[] = [
   // 403 here means a good key on an account with no credit; only 401 is a refused key.
   { host: /(^|\.)reka\.ai$/, service: 'Reka', rejects: [401], request: bearer('https://api.reka.ai/v1/models') },
   { host: /(^|\.)publicai\.co$/, service: 'Public AI', rejects: [401], request: key => ({ url: 'https://api.publicai.co/v1/models', headers: { Authorization: `Bearer ${key}`, 'User-Agent': 'ClikCode/1.0' } }) },
+  { host: /(^|\.)akashml\.com$/, service: 'AkashML', rejects: [401], request: bearer('https://api.akashml.com/v1/models') },
   { host: /^github\.com$/, service: 'GitHub', rejects: [401], request: bearer('https://api.github.com/user') },
 ];
 
