@@ -24,7 +24,8 @@ describe('arrangeSnapshot', () => {
     expect(out).toContain('button "Create key" [ref=e7]');
     expect(out).not.toContain('Models');
     expect(out).not.toContain('Terms');
-    expect(out).toContain('lines trimmed from the middle');
+    // This page has a dialog open, so what is behind it is cut to its top; a long page with no dialog trims only its middle.
+    expect(out).toMatch(/lines trimmed from the middle|more lines of the page behind the dialog/);
     expect(out).toContain('Item number 0 ');
     expect(out).toContain('Item number 899 ');
     expect(out).not.toContain('Item number 450 ');
@@ -149,4 +150,18 @@ it('shortens a very long link address in the page view', async () => {
   const shown = (await observeComputerPage(page, false)).output;
   expect(shown.length).toBeLessThan(400);
   expect(shown).toContain('…');
+});
+
+describe('a dialog and the page behind it', () => {
+  it('keeps the dialog whole and only the top of the page behind it', () => {
+    const behind = Array.from({ length: 300 }, (_, i) => `  - link "Item ${i}" [ref=e${i}]`).join('\n');
+    const shown = arrangeSnapshot(`- main:\n${behind}\n- dialog "Create key" [ref=e900]:\n  - button "Create" [ref=e901]`);
+    expect(shown).toContain('button "Create" [ref=e901]');
+    expect(shown).toContain('more lines of the page behind the dialog');
+    expect(shown.split('\n').length).toBeLessThan(60);
+    // With no dialog the page is shown as before.
+    expect(arrangeSnapshot(`- main:\n${behind}`).split('\n').length).toBeGreaterThan(200);
+    // And full still shows everything.
+    expect(arrangeSnapshot(`- main:\n${behind}\n- dialog "x" [ref=e900]`, true).split('\n').length).toBeGreaterThan(300);
+  });
 });

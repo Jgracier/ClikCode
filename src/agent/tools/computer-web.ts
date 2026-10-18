@@ -79,6 +79,7 @@ function visibleText(): string {
 }
 
 const indentOf = (line: string): number => line.length - line.trimStart().length;
+const BEHIND_DIALOG_LINES = 40;
 const OVERLAY = /^\s*- (?:dialog|alertdialog|menu|listbox)\b/;
 const EDGE = /^\s*- (?:banner|contentinfo)\b/;
 /** A site's own side menu: dozens of links that change nothing about the task. Short ones (a breadcrumb) stay. */
@@ -123,6 +124,10 @@ export function arrangeSnapshot(snapshot: string, full = false): string {
   }
   const cap = full ? 40_000 : 14_000;
   let body = kept.join('\n');
+  // A dialog is the thing to act on: the page behind it is a few lines of context, not a second copy of the site.
+  if (!full && overlays.length && kept.length > BEHIND_DIALOG_LINES) {
+    body = [...kept.slice(0, BEHIND_DIALOG_LINES), `- (… ${kept.length - BEHIND_DIALOG_LINES} more lines of the page behind the dialog; observe with full: true to see them)`].join('\n');
+  }
   if (body.length > cap) {
     const rows = body.split('\n');
     let head = 0; let headSize = 0;
