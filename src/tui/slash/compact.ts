@@ -2,7 +2,7 @@
 
 import type { HarnessSession } from '../../session/model.js';
 import { hasConversationContent } from '../../session/options.js';
-import { persistentTransports } from '../../turn/vendor-process.js';
+import { nativeAvailableCommands, persistentTransports } from '../../turn/vendor-process.js';
 import { sessionHarness } from './context.js';
 import { AGENT_COMPACTS_ITSELF, isClikCodeAgent } from '../../session/route.js';
 
@@ -18,8 +18,9 @@ export async function compactConversation(
   if (isClikCodeAgent(session)) throw new Error(AGENT_COMPACTS_ITSELF);
   if (!hasConversationContent(session)) throw new Error('There is nothing to compact yet.');
   const harness = sessionHarness(session);
-  if (harness?.nativeSlashPassthrough && session.nativeSessionId) {
-    await send(id, `/compact${focus ? ` ${focus}` : ''}`);
+  const command = compactCommand(id, session);
+  if (command) {
+    await send(id, `${command}${focus ? ` ${focus}` : ''}`);
     return;
   }
   if (harness?.nativeOperations?.includes('compact') && session.nativeSessionId) {
@@ -28,4 +29,20 @@ export async function compactConversation(
     if (compactor?.compactThread && await compactor.compactThread(session.nativeSessionId)) return;
   }
   throw new Error(`/compact is not available for ${harness?.displayName ?? 'this provider'}.`);
+}
+
+/** The slash command that compacts this conversation in its harness, if it has one: `/compact` for a
+ * harness that takes its own slash commands, else whatever compaction command the agent itself
+ * advertised this session (ACP `available_commands_update`: `compact`, or Gemini's `compress`). */
+export function compactCommand(id: string, session: HarnessSession): string | undefined {
+  if (!session.nativeSessionId) return undefined;
+  if (sessionHarness(session)?.nativeSlashPassthrough) return '/compact';
+  const advertised = (nativeAvailableCommands.get(id) ?? []).find((command) => command.name === 'compact' || command.name === 'compress');
+  return advertised ? `/${advertised.name}` : undefined;
+}
+
+/** Whether this conversation's harness can compact it (compactConversation would not refuse). */
+export function canCompact(id: string, session: HarnessSession): boolean {
+  if (isClikCodeAgent(session) || !session.nativeSessionId) return false;
+  return Boolean(compactCommand(id, session)) || Boolean(sessionHarness(session)?.nativeOperations?.includes('compact'));
 }

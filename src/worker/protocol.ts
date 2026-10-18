@@ -52,7 +52,7 @@ export type ClientCommand =
   /** `turnId` and `submittedAt` (the window's wall clock at Enter) carry the
    * turn's latency marks across the two processes (runtime/turn-latency.ts);
    * a client without them gets a turn the worker times from its own start. */
-  | { type: 'submit'; text: string; echo: boolean; queuedTurnId?: string; turnId?: string; submittedAt?: number }
+  | { type: 'submit'; text: string; echo: boolean; queuedTurnId?: string; turnId?: string; submittedAt?: number; /** What the windows' status line says while it runs (default: thinking). */ label?: string }
   /** A message typed while a turn runs. `id` is echoed back on the
    * `submission` event that says what actually happened to it. */
   | { type: 'steer'; text: string; id?: string }
