@@ -1,6 +1,7 @@
 /** Running lines and turns for the open conversation: what is sent at once or
  * queued, the queue's drain, one turn through the worker, and how a failed
  * turn is recovered (another account, another provider, a wait for the reset). */
+import { queuedNext } from '../session/queue-next.js';
 import { existsSync } from 'node:fs';
 import { expandHomePath } from '../session/attachments.js';
 import { afterTurnFailure, prepareTurn } from '../session/attach.js';
@@ -77,17 +78,11 @@ export class BridgeTurns {
     while (!this.host.closed && this.host.sessionId) {
       const state = await readState({ transcripts: [this.host.sessionId!] });
       const session = state.sessions.find((item) => item.id === this.host.sessionId);
-      const queued = session?.queuedTurns?.[0];
-      if (!session || !queued) return;
-      if (this.host.link.stopped && queued.kind !== 'command') return;
-      // What ClikCode owes the model is the worker's to run, silently.
-      if (queued.kind === 'notification') return;
-      // Still at the head after its run: it failed and could not be taken
-      // out (the worker refuses it from then on). Sending it again would
-      // only fail the same way; it waits for the user to remove it.
-      if (queued.id === previous) return;
+      const next = session ? queuedNext(session, { stopped: this.host.link.stopped, ...(previous ? { justRan: previous } : {}) }) : undefined;
+      if (!session || !next) return;
+      const queued = next.entry;
       previous = queued.id;
-      if (queued.kind === 'command') {
+      if (next.kind === 'command') {
         if (consumeSessionTurn(session, queued.id)) await writeState(state);
         await this.host.execute(queued.text, { fromQueuedCommand: true });
       } else {

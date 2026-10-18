@@ -1,4 +1,5 @@
 /** The window loop. */
+import { queuedNext } from '../../../session/queue-next.js';
 import { diagnostic } from '../../../runtime/lifecycle-log.js';
 import { beginTurnClock, endTurnClock, markTurn } from '../../../runtime/turn-latency.js';
 import { randomUUID } from 'node:crypto';
@@ -258,7 +259,8 @@ export class ChatLoop {
       // A turn is running (another window's, or one the worker started):
       // the queued message waits behind it, so that turn is followed to its
       // end rather than the message sent into it only to be queued again.
-      const runningTurn = queued && queued.kind !== 'command' ? running : undefined;
+      const next = queuedNext(latest);
+      const runningTurn = next?.kind === 'message' ? running : undefined;
       if (runningTurn && terminal) {
         // Running out offers to carry on THAT turn (its prompt), and the
         // message queued behind it goes with the conversation -- offering
@@ -272,21 +274,21 @@ export class ChatLoop {
         // queued behind it, which "Resume in" moved here with it.
         line = this.resend;
         this.resend = undefined;
-      } else if (queued?.kind === 'command') {
+      } else if (next?.kind === 'command') {
         fromQueuedCommand = true;
         // A slash command typed while the turn was running. It runs as the
         // command it is, with the screen to itself -- which is why it waited
         // rather than running mid-stream. Consumed first: a command that
         // throws must not be retried forever on every later pass.
-        line = queued.text;
-        if (consumeSessionTurn(latest, queued.id)) await writeState(latestState);
-      } else if (queued) {
+        line = next.entry.text;
+        if (consumeSessionTurn(latest, next.entry.id)) await writeState(latestState);
+      } else if (next) {
         // No notice: a queued message is echoed into the conversation as the
         // user message it is, and the waiting row underneath says a turn is
         // running. Announcing it a third time said nothing the screen did
         // not already say.
-        line = queued.text;
-        queuedTurnId = queued.id;
+        line = next.entry.text;
+        queuedTurnId = next.entry.id;
       } else if (terminal) {
         // A turn just ended, or the prompt is coming back. Do not wait out
         // the usage tick to pick up a build that landed during the turn.
