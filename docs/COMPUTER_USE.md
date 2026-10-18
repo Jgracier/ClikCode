@@ -39,6 +39,17 @@ withheld while one holds a value). There is no "sign-in page" mode to get stuck 
   `clikcode computer profile --set phone=719-555-0123`; the agent can call `profile` (with
   `ask: true` to ask you, or `fields` to correct a value, for example a phone in the format a
   site wants). Passwords, codes and card numbers are never kept in one.
+- **Custom profile details.** A task can need more than the standard fields: registering an OAuth
+  app asks for an app name, a description, a privacy-policy address, a support email. The agent
+  asks for exactly those in one private prompt, `profile` with `ask_fields: [{key, label, match?,
+  optional?}]` (and `label` to keep them in a profile of their own, such as "ClikDeploy OAuth apps"),
+  or saves what it already knows with `custom: {key: {label, value, match}}`;
+  `clikcode computer profile --custom app_name="My App"` does the same by hand. `match` is the
+  words a form may use for the field (`["app name", "application name"]`; without it the label is
+  used). A later `fill` with no `text` takes those details from the profile, a field the agent
+  named winning over the standard field its words also suggest ("Support email" is not your
+  email). Details only: a value with a key or token in it is refused (that is `capture_secret`'s
+  job), and a password, code or card field never matches. Not filled: file uploads such as a logo.
 - **`fill` with no `text`** asks you in a private prompt (masked for password boxes), once for
   all such fields in the call; the agent is never shown the answer. This is how a signup
   form's name, address, phone and new password are filled.

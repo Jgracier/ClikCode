@@ -164,3 +164,55 @@ describe('a dialog and the page behind it', () => {
     expect(arrangeSnapshot(`- main:\n${behind}\n- dialog "x" [ref=e900]`, true).split('\n').length).toBeGreaterThan(300);
   });
 });
+
+describe('profile ask_fields and custom: an agent asks for the details a task needs', () => {
+  const withState = async (body: (stateDir: string) => Promise<void>): Promise<void> => {
+    const { setComputerEnabled } = await import('../computer/settings.js');
+    const { lockCredentialVault } = await import('../computer/credential-vault.js');
+    const { mkdtemp, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const stateDir = await mkdtemp(join(tmpdir(), 'clikcode-web-profile-'));
+    try { await setComputerEnabled(stateDir, true); await body(stateDir); } finally { lockCredentialVault(stateDir); await rm(stateDir, { recursive: true, force: true }); }
+  };
+
+  it('asks once, privately, with what is kept offered back, and saves the answers as a named profile', async () => {
+    await withState(async (stateDir) => {
+      const asked: Array<{ site: string; fields: Array<{ key: string; label: string; required: boolean; current?: string }> }> = [];
+      const ctx = { stateDir, requestPrivateLogin: async (site: string, fields: Array<{ key: string; label: string; required: boolean; current?: string }>) => {
+        asked.push({ site, fields });
+        return { app_name: 'ClikDeploy', privacy_policy_url: 'https://clikdeploy.com/legal/privacy', app_description: '' };
+      } } as never;
+      const specs = [
+        { key: 'app_name', label: 'App name', match: ['app name', 'application name'] },
+        { key: 'privacy_policy_url', label: 'Privacy policy URL' },
+        { key: 'app_description', label: 'Short description', optional: true },
+      ];
+      const first = await computerWebTool.run({ action: 'profile', label: 'ClikDeploy OAuth apps', ask_fields: specs } as never, ctx);
+      expect(first.isError).toBeFalsy();
+      expect(first.output).toContain('ClikDeploy OAuth apps: app_name=ClikDeploy, privacy_policy_url=https://clikdeploy.com/legal/privacy');
+      // Optional and left empty: not saved. One prompt, showing the title of the profile prompt.
+      expect(first.output).not.toContain('app_description');
+      expect(asked).toHaveLength(1);
+      expect(asked[0]!.site).toBe('https://profile.clikcode');
+      expect(asked[0]!.fields.map(field => [field.key, field.required])).toEqual([['app_name', true], ['privacy_policy_url', true], ['app_description', false]]);
+      // Asking again shows what is kept as the current value.
+      await computerWebTool.run({ action: 'profile', label: 'ClikDeploy OAuth apps', ask_fields: specs } as never, ctx);
+      expect(asked[1]!.fields.find(field => field.key === 'app_name')!.current).toBe('ClikDeploy');
+    });
+  });
+
+  it('saves details the agent already knows with custom, and says why a secret or a bad name is refused', async () => {
+    await withState(async (stateDir) => {
+      const ctx = { stateDir } as never;
+      const saved = await computerWebTool.run({ action: 'profile', label: 'ClikDeploy OAuth apps', custom: { redirect_uri: { label: 'Redirect URI', value: 'https://clikdeploy.com/api/connectors/oauth/callback', match: ['redirect uri', 'callback url'] } } } as never, ctx);
+      expect(saved.output).toContain('redirect_uri=https://clikdeploy.com/api/connectors/oauth/callback');
+      const secret = await computerWebTool.run({ action: 'profile', custom: { client_secret: { value: 'Zq8xW3vLm9PaRt5YcN2bKd7HgF4jS6eU' } } } as never, ctx);
+      expect(secret.isError).toBe(true);
+      expect(secret.output).toContain('looks like a key');
+      const badName = await computerWebTool.run({ action: 'profile', ask_fields: [{ key: 'App Name', label: 'x' }] } as never, { stateDir, requestPrivateLogin: async () => ({}) } as never);
+      expect(badName.isError).toBe(true);
+      expect(badName.output).toContain('lower-case');
+    });
+  });
+});
