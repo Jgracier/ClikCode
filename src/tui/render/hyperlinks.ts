@@ -17,7 +17,7 @@ function hyperlinksSupported(environment: NodeJS.ProcessEnv = process.env, isTty
   if (flag(environment.CLIKCODE_HYPERLINKS) || flag(environment.FORCE_HYPERLINK)) return true;
   if (environment.TMUX || environment.STY || /^(?:screen|tmux)/.test(environment.TERM ?? '')) return false;
   const program = (environment.TERM_PROGRAM ?? '').toLowerCase();
-  if (['iterm.app', 'wezterm', 'vscode', 'ghostty', 'hyper', 'kitty', 'rio', 'warpterminal'].includes(program)) return true;
+  if (['iterm.app', 'wezterm', 'vscode', 'ghostty', 'hyper', 'kitty', 'rio', 'warpterminal', 'termius'].includes(program)) return true;
   if (environment.KITTY_WINDOW_ID || environment.WT_SESSION || environment.KONSOLE_VERSION || environment.DOMTERM) return true;
   if (Number(environment.VTE_VERSION ?? 0) >= 5000) return true;
   return /^(?:xterm-kitty|xterm-ghostty|foot|alacritty|wezterm|contour)/.test(environment.TERM ?? '');

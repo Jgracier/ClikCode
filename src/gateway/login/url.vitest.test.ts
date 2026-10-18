@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  extractLoginUrl, hasLocalDisplay, loginUrlNotice, shortenLoginUrl, stripAnsi,
+  extractLoginUrl, hasLocalDisplay, loginLinkLine, loginUrlNotice, shortenLoginUrl, stripAnsi,
 } from './url.js';
 import { loginCallbackPort, loginPortForwardHint } from './link-info.js';
 import { scriptArgv, shellQuote } from './pty.js';
@@ -71,6 +71,11 @@ describe('shortenLoginUrl', () => {
 });
 
 describe('loginUrlNotice', () => {
+  it('makes the short terminal label open the exact authorization URL', () => {
+    expect(loginLinkLine(AUTH_URL, true)).toBe(`\u001b]8;;${AUTH_URL}\u001b\\Open full consent page\u001b]8;;\u001b\\`);
+    expect(loginLinkLine(AUTH_URL, false)).toBe('Paste the copied full consent link');
+    expect(loginLinkLine(AUTH_URL, false)).not.toContain('https://claude.com/…');
+  });
   it('shows the loopback callback port and SSH forwarding command', () => {
     const url = `https://provider.example/authorize?redirect_uri=${encodeURIComponent('http://127.0.0.1:49152/callback')}`;
     expect(loginCallbackPort(url)).toBe(49152);
