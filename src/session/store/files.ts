@@ -22,7 +22,12 @@ export async function ensurePrivateDirectory(directory: string): Promise<void> {
  * under the final name on some filesystems; without the last, the rename
  * itself may not have reached the disk. The temporary's name is unique, so
  * two writers of one path never share one. */
-export async function atomicWriteFile(path: string, data: string | Uint8Array): Promise<void> {
+export async function atomicWriteFile(path: string, data: string | Uint8Array, options: { durable?: boolean } = {}): Promise<void> {
+  // `durable: false` skips the two fsyncs (file and directory) and keeps the rename: readers still
+  // never see a torn file, and a crash can only lose this last write. For data that is rewritten
+  // every few hundred ms or is a cache. Measured 2026-10-18 on this machine: 70-700 ms per fsync
+  // under disk load, taken while every other window waited on the state lock.
+  const durable = options.durable !== false;
   const directory = dirname(path);
   await ensurePrivateDirectory(directory);
   const temporary = `${path}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
@@ -31,7 +36,7 @@ export async function atomicWriteFile(path: string, data: string | Uint8Array): 
     const handle = await open(temporary, 'w', 0o600);
     try {
       await handle.writeFile(data);
-      await handle.sync();
+      if (durable) await handle.sync();
     } finally {
       await handle.close();
     }
@@ -40,7 +45,7 @@ export async function atomicWriteFile(path: string, data: string | Uint8Array): 
   } finally {
     if (!renamed) await unlink(temporary).catch(() => undefined);
   }
-  await syncDirectory(directory);
+  if (durable) await syncDirectory(directory);
 }
 
 /** Windows cannot open a directory to sync it, and does not need to. */

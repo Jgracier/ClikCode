@@ -112,7 +112,8 @@ export async function storeSessionTurn(id: string, turn: PendingTurn): Promise<S
   const file = await loadStoredFile(id);
   if (!file?.pendingTurn || !continuesTurn(file.pendingTurn, turn)) return undefined;
   const path = sessionTurnPath(id);
-  await atomicWriteFile(path, JSON.stringify(turn));
+  // A streaming turn's journal, rewritten every checkpoint: the next one supersedes it (see atomicWriteFile).
+  await atomicWriteFile(path, JSON.stringify(turn), { durable: false });
   SESSION_STORE_STATS.fileWrites += 1;
   const info = await stat(path).catch(() => undefined);
   if (info) turnCache.set(path, { ino: info.ino, mtimeMs: info.mtimeMs, ctimeMs: info.ctimeMs, size: info.size, turn });

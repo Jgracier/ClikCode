@@ -12,6 +12,7 @@ import { pidIsAlive } from '../store/locks.js';
 import { resetSessionStoreCache } from '../store/records.js';
 import { loadInvocationLog, resetInvocationLogCache, storeInvocationLog, type Invocation, type InvocationLog, type InvocationRollup } from './invocations.js';
 import { hydrateAccountModels, resetAccountModelsCache, storeAccountModels } from './model-lists.js';
+import { hydrateAccountReadings, loadReadings, storeAccountReadings, type Readings } from './account-readings.js';
 import type { SessionMeta } from './merge.js';
 import { HARNESS_STATE_VERSION, harnessIndexPath } from './paths.js';
 
@@ -59,18 +60,19 @@ const indexFile = cachedFile(harnessIndexPath, parseIndex);
 
 /** The assembled index -- index.json, the invocation log, the model lists --
  * kept while none of its parts changed. Treated as immutable. */
-let assembled: { file: StateIndex; log: InvocationLog; index: StateIndex } | undefined;
+let assembled: { file: StateIndex; log: InvocationLog; index: StateIndex; readings: Readings } | undefined;
 
 async function assemble(file: StateIndex): Promise<StateIndex> {
   const log = await loadInvocationLog();
-  if (assembled && assembled.file === file && assembled.log === log) return assembled.index;
+  const readings = await loadReadings();
+  if (assembled && assembled.file === file && assembled.log === log && assembled.readings === readings) return assembled.index;
   let invocations = log.invocations;
   if (file.invocations.length) {
     const logged = new Set(invocations.map((invocation) => invocation.id));
     invocations = [...invocations, ...file.invocations.filter((invocation) => !logged.has(invocation.id))];
   }
-  const index = { ...file, accounts: await hydrateAccountModels(file.accounts), invocations };
-  assembled = { file, log, index };
+  const index = { ...file, accounts: hydrateAccountReadings(await hydrateAccountModels(file.accounts), readings), invocations };
+  assembled = { file, log, index, readings };
   return index;
 }
 
@@ -116,7 +118,7 @@ export async function storeIndex(index: StateIndex, options: { backup: boolean }
   await storeInvocationLog(index.invocations);
   const { invocations: _logged, ...rest } = index;
   const replacing = await indexFile.load().catch(() => undefined);
-  const file = { ...rest, accounts: await storeAccountModels(index.accounts, replacing?.accounts) };
+  const file = { ...rest, accounts: await storeAccountReadings(await storeAccountModels(index.accounts, replacing?.accounts)) };
   const raw = `${JSON.stringify(file)}\n`;
   // What is there already says the same: a rename would only wake every
   // list watching the directory, and the backup is no newer either.
