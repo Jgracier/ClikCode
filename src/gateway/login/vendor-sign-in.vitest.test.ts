@@ -245,6 +245,16 @@ describe.skipIf(process.platform === 'win32')('running a sign-in', () => {
     expect(screen.seen).toEqual(['ask API key (secret)']);
   });
 
+  it('Claude Code\'s own second Enter after a pasted code is sent for the user, never asked', async () => {
+    // claude auth login: the code is accepted, then "Login successful. Press Enter to continue…" waits for one more Enter.
+    const vendor = await script('printf "Paste code here if prompted > "\nread code\n[ "$code" = "good-code" ] || exit 4\nprintf "Login successful. Press Enter to continue...\\n"\nread more\necho bye\n');
+    const screen = ui({ ask: ['good-code'] });
+    const steps = [{ when: 'Login successful. Press Enter to continue', send: '{enter}' }];
+    await runVendorSignIn({ binary: vendor, args: [], env: {}, displayName: 'Claude Code', local: false, ui: screen.value, steps });
+    // The user was asked for the code once and for nothing else.
+    expect(screen.seen).toEqual(['ask Paste code here if prompted']);
+  });
+
   it('a search typed into a long list, then the filtered list read under the same title', async () => {
     const vendor = await script('stty raw -echo\nprintf "Choose a provider\\r\\n❯ Alpha\\r\\n  Beta\\r\\n▼ 9 more\\r\\n"\nq=$(dd bs=1 count=4 2>/dev/null)\n[ "$q" = "zeta" ] || exit 4\nprintf "\\033[2J\\033[HChoose a provider\\r\\n❯ Zeta\\r\\n  Zeta Two\\r\\n"\nk=$(dd bs=1 count=1 2>/dev/null | od -An -c | tr -d " ")\n[ "$k" = "\\\\r" ] || exit 5\n');
     const screen = ui({ choose: [2, 0], ask: ['zeta'] });
