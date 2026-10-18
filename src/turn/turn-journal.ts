@@ -133,15 +133,17 @@ export class DurableTurnCheckpoint {
     if (queuedTurnId && !consumeSessionTurn(session, queuedTurnId)) throw queuedTurnAlreadyRunError(queuedTurnId);
     const checkpoint = new DurableTurnCheckpoint(state, session);
     beginPendingTurn(session, prompt, new Date().toISOString());
+    if (!before) {
+      // The prompt does not wait for this write. A failed one never stopped the turn (it runs in
+      // memory and later writes retry), and the vendor answering is what the journal records --
+      // every later write is ordered after this one. Awaited, it was the full transcript rewritten
+      // before the prompt went out: 300-800 ms on a 24 MB conversation, under the state lock.
+      void checkpoint.enqueue().catch((error: unknown) => checkpoint.persistFailed('start', error));
+      return checkpoint;
+    }
     try {
       await checkpoint.enqueue();
     } catch (error) {
-      if (!before) {
-        // A state file that cannot be written must not stop the vendor from running:
-        // the turn proceeds in memory and every later write retries (`dirty`).
-        checkpoint.persistFailed('start', error);
-        return checkpoint;
-      }
       // A queued turn is consumed by this very write. If it did not land the
       // entry is still queued on disk, and running anyway would let it run
       // again: the turn does not start, and the entry stays (restored here,

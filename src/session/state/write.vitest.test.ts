@@ -276,6 +276,7 @@ describe('a streaming turn on a chat read from disk', () => {
     const worker = await readState({ transcripts: ['s'] });
     const session = worker.sessions.find((item) => item.id === 's')!;
     const checkpoint = await DurableTurnCheckpoint.start(worker, session, 'go');
+    await checkpoint.flush(); // the start write is not awaited by start()
     const transcript = join(root, 'sessions', 's.json');
     const started = (await stat(transcript)).mtimeMs;
     for (let step = 0; step < 3; step++) {

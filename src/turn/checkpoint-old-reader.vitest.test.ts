@@ -38,7 +38,9 @@ createdAt: at, updatedAt: at, status: 'active', messages: [{ role: 'user', conte
   } as HarnessSession;
   state.sessions.push(session);
   await writeState(state);
-  return { checkpoint: await DurableTurnCheckpoint.start(state, session, 'go', undefined), session };
+  const checkpoint = await DurableTurnCheckpoint.start(state, session, 'go', undefined);
+  await checkpoint.flush(); // the start write is not awaited by start()
+  return { checkpoint, session };
 }
 
 describe('a streaming turn, read by a build that knows only <id>.json', () => {
