@@ -329,7 +329,9 @@ export const computerWebTool = defineTool<WebArgs>({
         const why = error instanceof Error ? error.message : String(error);
         // A click that creates a key at the site cannot be undone from here: say so, or a live key is left behind unnoticed.
         const clicked = (error as { afterClick?: boolean }).afterClick ? ` The click on "${args.target ?? 'the button'}" may already have created a key at the site; if so, delete it there.` : '';
-        return { output: scrubSecrets(`${why.startsWith('Not saved') ? why : `Not saved: ${why}`}${clicked}`), isError: true };
+        // The site often says why (an error under the button, "purchase credits"): say it too, instead of only "not found".
+        const siteSaid = (error as { afterClick?: boolean }).afterClick ? await pageProblem(await computerPage(ctx.stateDir).catch(() => undefined)) : '';
+        return { output: scrubSecrets(`${why.startsWith('Not saved') ? why : `Not saved: ${why}`}${siteSaid ? ` The page says: "${siteSaid}".` : ''}${clicked}`), isError: true };
       }
       return { output: error instanceof Error ? error.message : String(error), isError: true };
     }
@@ -477,6 +479,16 @@ async function askForFills(page: Page, steps: readonly Step[], ctx: ToolContext)
     if (Object.keys(learned).length && (profile || profiles.length === 0)) await saveProfile(ctx.stateDir, { ...(profile ? { id: profile.id } : {}), fields: learned });
   }
   return steps.map(step => values.has(step) ? { ...step, text: values.get(step)! } : step);
+}
+
+/** An error or alert the page is showing right now (a line that names an error, failure or a needed payment), for a failure report. */
+export async function pageProblem(page: Page | undefined): Promise<string> {
+  if (!page) return '';
+  try {
+    const text = await page.evaluate(() => (globalThis as unknown as { document: { body: { innerText: string } } }).document.body.innerText);
+    const line = text.split('\n').map(item => item.trim()).find(item => item.length > 8 && item.length < 200 && /\b(error|failed|failure|unable|invalid|purchase|insufficient|required|not allowed|denied)\b/i.test(item));
+    return line ?? '';
+  } catch { return ''; }
 }
 
 /** Why a form will not go on: fields the browser or the page marks invalid, and a main button that is disabled. */
