@@ -445,6 +445,25 @@ export function chatSuite(): void {
       assert.notStrictEqual(typed, before, 'the editor kept the keyboard');
     });
 
+    it('lets a hidden idle chat\'s ClikCode go, and reconnects it to the same chat when shown', async () => {
+      const bridges = (): number => {
+        try { return execFileSync('pgrep', ['-P', String(process.pid), '-f', 'ide-bridge'], { encoding: 'utf8' }).split(/\s+/).filter(Boolean).length; } catch { return 0; }
+      };
+      // Something in it, so it is a stored conversation (a blank one is not kept, and reopens new).
+      await api.send('!echo parked chat');
+      await until(api, (state) => state.messages.length > 0, 'the shell line in the chat', 30_000);
+      const session = api.state.sessionId;
+      const shown = bridges();
+      assert.ok(shown >= 1, 'the side bar chat has a bridge');
+      await vscode.commands.executeCommand('workbench.action.closeAuxiliaryBar');
+      for (const by = Date.now() + 30_000; bridges() >= shown && Date.now() < by;) await sleep(500);
+      assert.strictEqual(bridges(), shown - 1, 'hidden and idle, it let its bridge go');
+      await vscode.commands.executeCommand('clikcode.open');
+      const back = await until(api, (state) => state.connection === 'ready' && bridges() === shown, 'shown again, reconnected', 60_000);
+      assert.strictEqual(back.sessionId, session, 'to the same conversation');
+      assert.ok(back.messages.length > 0, 'with what it held');
+    });
+
     it('reconnects on its own when ClikCode stops underneath it', async () => {
       const session = api.state.sessionId;
       const bridges = (): number[] => {

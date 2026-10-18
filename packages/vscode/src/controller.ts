@@ -37,6 +37,9 @@ export interface ControllerHost {
   chats(): readonly ClikCodeController[];
 }
 
+/** How long a chat stays hidden and idle before its bridge process is let go (see park). */
+const PARK_AFTER_MS = Number(process.env.CLIKCODE_PARK_AFTER_MS) > 0 ? Number(process.env.CLIKCODE_PARK_AFTER_MS) : 10 * 60 * 1000;
+
 export class ClikCodeController implements vscode.Disposable {
   private bridge: BridgeClient | undefined;
   private model: ChatModel = emptyModel();
@@ -112,9 +115,40 @@ export class ClikCodeController implements vscode.Disposable {
   /** A surface was shown, hidden, attached or closed. */
   visibilityChanged(): void {
     const visible = this.visible;
+    this.scheduleParking(visible);
+    // Parked while hidden: shown again, it reconnects to the same chat (start resumes it).
+    if (visible && !this.bridge && this.parked) { this.parked = false; void this.ensureStarted(); return; }
     if (!this.bridge || visible === this.shownToBridge) return;
     this.shownToBridge = visible;
     this.bridge.send({ type: 'visible', visible });
+  }
+
+  /** A chat hidden for PARK_AFTER_MS with nothing running in it lets its bridge go. Each open
+   * chat tab ran its own ClikCode process (200-500 MB each, seven in one window, measured
+   * 2026-10-18) and kept reading and writing the shared state for a chat nobody was looking at.
+   * The conversation lives in its worker, so nothing is lost: shown again, it reconnects. */
+  private parked = false;
+  private parkTimer: NodeJS.Timeout | undefined;
+  private scheduleParking(visible: boolean): void {
+    if (this.parkTimer) clearTimeout(this.parkTimer);
+    this.parkTimer = undefined;
+    if (visible || this.disposed) return;
+    this.parkTimer = setTimeout(() => this.park(), PARK_AFTER_MS);
+    this.parkTimer.unref?.();
+  }
+  private park(): void {
+    const bridge = this.bridge;
+    if (!bridge || this.visible || this.disposed || this.starting) return;
+    // Something in it wants the user, or runs: keep it, and look again later.
+    if (this.model.running || this.model.approvals.length || this.model.signIn || this.model.connection !== 'ready' || this.panelQuestions.size) {
+      this.scheduleParking(false);
+      return;
+    }
+    this.host.log.appendLine(`[${this.label}] hidden and idle: closing its ClikCode until it is shown again`);
+    this.bridge = undefined;
+    this.parked = true;
+    this.shownToBridge = undefined;
+    bridge.dispose();
   }
 
   /** The surface one-off messages go to: the focused one, else the most
@@ -291,6 +325,7 @@ export class ClikCodeController implements vscode.Disposable {
 
   private async start(sessionToResume?: string): Promise<void> {
     if (this.disposed) return;
+    this.parked = false;
     const log = this.host.log;
     this.setModel({ ...this.model, connection: 'starting', connectionError: undefined, remedy: undefined });
     const settings = vscode.workspace.getConfiguration('clikcode');
@@ -815,6 +850,7 @@ export class ClikCodeController implements vscode.Disposable {
   }
 
   dispose(): void {
+    if (this.parkTimer) clearTimeout(this.parkTimer);
     this.disposed = true;
     this.builds.stop();
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
