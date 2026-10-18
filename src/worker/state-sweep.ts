@@ -67,7 +67,7 @@ async function ageMs(path: string, now: number): Promise<number | undefined> {
   try { return now - (await lstat(path)).mtimeMs; } catch { return undefined; }
 }
 
-export interface SweepOptions {
+interface SweepOptions {
   now?: number;
   /** Test seam: what is in use under a root. */
   used?: (root: string) => string[] | undefined;

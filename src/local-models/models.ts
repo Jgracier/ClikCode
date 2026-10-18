@@ -38,7 +38,7 @@ async function findBySizeAndName(directory: string, name: string, size: number, 
   return found;
 }
 
-export interface FileProgress { message: string; bytes?: number; totalBytes?: number }
+interface FileProgress { message: string; bytes?: number; totalBytes?: number }
 
 async function adopt(file: CatalogFile, destination: string, onProgress: (progress: FileProgress) => void): Promise<boolean> {
   for (const directory of adoptionDirs()) {

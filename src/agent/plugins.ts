@@ -38,7 +38,7 @@ interface PluginRegistry {
   claude: Record<string, { enabled: boolean }>;
 }
 
-export interface InstalledPlugin {
+interface InstalledPlugin {
   /** Claude Code's id: `name@marketplace`. */
   id: string;
   name: string;
@@ -50,7 +50,7 @@ export interface InstalledPlugin {
 
 export interface PluginRoots { stateDir: string; home?: string }
 
-export interface PluginAgent {
+interface PluginAgent {
   name: string;
   description: string;
   /** The agent's system prompt. */

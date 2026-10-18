@@ -25,7 +25,7 @@ function childScript(): Promise<string> {
   return bundled;
 }
 
-export interface ChildResult { code: number | null; stderr: string }
+interface ChildResult { code: number | null; stderr: string }
 
 /** Runs one child scenario to completion (or `timeoutMs`, then kills it). */
 export async function runChild(home: string, args: string[], timeoutMs = 60_000): Promise<ChildResult> {

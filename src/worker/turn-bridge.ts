@@ -36,7 +36,7 @@ import { readState } from '../session/state/read.js';
 import { liveSettingsOf } from '../turn/live-settings.js';
 import { sessionTranscriptMessages } from '../turn/checkpoint.js';
 
-export interface WorkerTurnRequest {
+interface WorkerTurnRequest {
   echo: boolean;
   queuedTurnId?: string;
   /** The window's latency clock for this turn (runtime/turn-latency.ts). */
@@ -270,7 +270,7 @@ export async function runTurnThroughWorker(
 }
 
 /** What a window at its prompt should do instead of waiting for a key. */
-export type IdleWake = { line: string } | { woke: 'turn'; prompt?: string } | { woke: 'queue' };
+type IdleWake = { line: string } | { woke: 'turn'; prompt?: string } | { woke: 'queue' };
 
 /** Asks for the next line, unless the worker has something first: a turn it
  * is running that this window did not start (another window's, or a

@@ -30,7 +30,7 @@ const STALE_TURN_MS = 24 * HOUR_MS;
 /** At most this many orphans are removed per pass. */
 const MAX_ORPHANS = 500;
 
-export interface SweepReport { orphans: number; stranded: number; blank: number; settled: number }
+interface SweepReport { orphans: number; stranded: number; blank: number; settled: number }
 
 /** A turn journal nothing is running, old enough that no one is waiting on it. */
 function staleTurn(session: HarnessSession, workerIsLive: (id: string) => boolean, isOpen: (id: string) => boolean, now: number): boolean {

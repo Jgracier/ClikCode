@@ -8,7 +8,7 @@ import type { Download, Page } from 'playwright-core';
 
 const MAX_BYTES = 256 * 1024;
 
-export type DownloadWatch = { result(): Promise<string | undefined>; stop(): void };
+type DownloadWatch = { result(): Promise<string | undefined>; stop(): void };
 
 export function watchDownload(page: Page): DownloadWatch {
   let reading: Promise<string | undefined> | undefined;

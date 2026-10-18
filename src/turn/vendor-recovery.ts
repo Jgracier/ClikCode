@@ -26,7 +26,7 @@ export function echoesRefusal(text: string, failure: unknown): boolean {
   return said.length > 0 && refused.length > 0 && (refused.includes(said) || said.includes(refused));
 }
 
-export type Recovery = 'sign-in' | 'native-thread';
+type Recovery = 'sign-in' | 'native-thread';
 
 /** The recoveries a failure could take, in the order they are tried. Pure: a
  * recovery may still decline (a sign-in that fails, a compatibility turn

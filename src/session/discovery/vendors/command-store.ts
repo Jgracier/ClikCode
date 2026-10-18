@@ -90,7 +90,7 @@ function commandCall(workspace: string) {
   };
 }
 
-export interface CommandThreadOptions {
+interface CommandThreadOptions {
   sessionId: string;
   workspace: string;
   model: string | null;

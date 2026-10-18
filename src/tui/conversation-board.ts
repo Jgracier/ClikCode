@@ -44,7 +44,7 @@ export interface BoardState {
   query?: string;
 }
 
-export type BoardEffect =
+type BoardEffect =
   | { kind: 'draw' }
   | { kind: 'none' }
   | { kind: 'close' }

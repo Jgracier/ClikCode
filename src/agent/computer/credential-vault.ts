@@ -119,7 +119,7 @@ async function readCredential(stateDir: string, url: string, id: string): Promis
   return item;
 }
 
-export type SavedLogin = { id: string; label: string; rejected: boolean };
+type SavedLogin = { id: string; label: string; rejected: boolean };
 
 /** What a person recognises a login by: its non-secret fields, never the
  * password. Shown only in the user's own picker, never to the model. */

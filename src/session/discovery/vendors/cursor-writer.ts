@@ -201,7 +201,7 @@ export function cursorCallFor(call: CanonicalToolCall, workspace: string, callId
 // --------------------------------------------------------------- store ----
 
 /** What a write needs besides the record; fixed in tests for golden output. */
-export interface CursorStoreOptions {
+interface CursorStoreOptions {
   agentId: string;
   workspace: string;
   /** Epoch ms of the first entry; each later one is a millisecond on. */
@@ -213,7 +213,7 @@ export interface CursorStoreOptions {
   timeZone?: string;
 }
 
-export interface CursorStore {
+interface CursorStore {
   /** `meta.json` beside the database. */
   metaFile: { schemaVersion: 1; cwd: string; title: string };
   /** `meta` row '0', before it is hex-encoded. */

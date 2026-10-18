@@ -15,7 +15,7 @@ import { ensureRuntime, RUNTIME_BUILDS, type RuntimeBuild, type RuntimeProgress 
 
 const MIB = 1024 ** 2;
 
-export interface ListedDevice { name: string; totalBytes: number }
+interface ListedDevice { name: string; totalBytes: number }
 
 /** `llama-server --list-devices`:
  *   Vulkan0: AMD Radeon 780M Graphics (RADV PHOENIX) (33605 MiB, 31901 MiB free) */

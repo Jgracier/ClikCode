@@ -21,7 +21,7 @@ type Json = Record<string, unknown>;
 
 const record = (value: unknown): Json | undefined => value && typeof value === 'object' && !Array.isArray(value) ? value as Json : undefined;
 
-export type VendorBackgroundEvent =
+type VendorBackgroundEvent =
   | { kind: 'started'; id: string; description: string }
   | { kind: 'finished'; id: string; status: string };
 

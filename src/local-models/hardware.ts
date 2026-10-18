@@ -167,7 +167,7 @@ export function parseAmdSmi(text: string): GpuInfo[] {
   return gpus;
 }
 
-export interface WindowsProbe {
+interface WindowsProbe {
   totalRamBytes?: number;
   availableRamBytes?: number;
   physicalCores?: number;

@@ -25,7 +25,7 @@ import { mergeFields, sameData } from './data.js';
 import { atomicWriteFile } from './files.js';
 import { stateDirectory } from './paths.js';
 
-export interface JsonMemo<T> {
+interface JsonMemo<T> {
   /** The contents, kept in step with the file: re-read (and merged with this
    * process's unsaved changes) when another process has written it. The
    * returned object stays the same one; mutate it, then call changed(). */

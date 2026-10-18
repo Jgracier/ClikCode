@@ -206,7 +206,7 @@ interface MemoryWatchConfig {
   shrinks: ShrinkStep[];
 }
 
-export interface SupervisorConfig {
+interface SupervisorConfig {
   modelId: string;
   alias: string;
   context: number;

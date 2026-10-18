@@ -13,7 +13,7 @@ import { signInOutcomeSaid } from '../../account.js';
 import { runTurnThroughWorker } from '../../../worker/turn-bridge.js';
 
 /** What a turn left for the loop: whether Left was pressed to open the board. */
-export interface TurnResult { left?: boolean }
+interface TurnResult { left?: boolean }
 
 /** One turn through the worker (or in process without a terminal), with
  * the sign-in before it and the draft written for it. */

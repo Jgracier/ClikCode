@@ -55,7 +55,7 @@ export interface BackgroundWait {
   readonly quiet: boolean;
 }
 
-export interface BackgroundWaitOptions {
+interface BackgroundWaitOptions {
   /** Called once, when nothing more can arrive: close stdin. */
   onSettled(): void;
   onTaskStarted?(id: string, description: string): void;

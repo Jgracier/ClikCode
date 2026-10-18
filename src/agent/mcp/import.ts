@@ -53,7 +53,7 @@ export const IMPORT_MARKER_FILE = 'mcp-import.json';
 
 interface ImportedServer { name: string; from: string }
 interface SkippedServer { name: string; from: string; reason: string }
-export interface McpImportResult {
+interface McpImportResult {
   /** False when the import had already run, or could not run (see problem). */
   ran: boolean;
   imported: ImportedServer[];

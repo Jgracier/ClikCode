@@ -55,7 +55,7 @@ export type LiveSubmission = {
 };
 
 /** A steer already folded into the conversation by the transcript reader. */
-export type DurableSteer = { text: string; responseOffset?: number; id?: string };
+type DurableSteer = { text: string; responseOffset?: number; id?: string };
 
 /** A steer's row. `steer` marks it for TurnTranscript (not a call: it does not
  *  close the prose before it). `text` and `steerId` are what the saved

@@ -32,7 +32,7 @@ const RELEASE_WAIT_MS = 5 * 60 * 1000;
 /** How long a process the user stopped gets to exit on its own. */
 const STOP_WAIT_MS = 2_000;
 
-export interface HeldVendorOptions {
+interface HeldVendorOptions {
   sessionId: string;
   background: BackgroundWait;
   /** Close the vendor's stdin. */

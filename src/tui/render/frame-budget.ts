@@ -5,7 +5,7 @@
  * line. Every rule below is one that has already cost something.
  */
 
-export type FrameBudget = {
+type FrameBudget = {
   /** The generating band: a spinner and an elapsed clock, directly above the
    *  composer. */
   waitingRows: number;

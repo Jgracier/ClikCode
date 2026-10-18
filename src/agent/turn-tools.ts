@@ -230,7 +230,7 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
   return { executeCalls };
 }
 
-export type ToolRunner = ReturnType<typeof createToolRunner>;
+type ToolRunner = ReturnType<typeof createToolRunner>;
 
 /** Runs a step's calls and records their results. A result ends the turn
  * (ask_user put a question to the user); undefined goes on to the next step. */

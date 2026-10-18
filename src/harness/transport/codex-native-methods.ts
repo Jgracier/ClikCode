@@ -59,7 +59,7 @@ export async function compactCodexThread(peer: CodexRpcPeer, threadId: string): 
   await peer.request('thread/compact/start', { threadId });
 }
 
-export interface CodexModelInfo {
+interface CodexModelInfo {
   id: string; model: string; displayName: string; isDefault: boolean; hidden: boolean;
   /** The model's default effort and the efforts it advertises (`supportedReasoningEfforts[].reasoningEffort`). */
   defaultEffort?: string; efforts: string[];
@@ -87,7 +87,7 @@ export async function listCodexModels(peer: CodexRpcPeer, options: { includeHidd
   return models;
 }
 
-export interface CodexThreadInfo { id: string; name?: string; preview: string; cwd: string; createdAt: number; updatedAt: number }
+interface CodexThreadInfo { id: string; name?: string; preview: string; cwd: string; createdAt: number; updatedAt: number }
 
 /** Threads from the vendor (`thread/list`), newest first, in place of reading its session files.
  * `cwd` narrows to one folder; `limit` caps the total. */

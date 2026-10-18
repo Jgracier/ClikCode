@@ -37,9 +37,9 @@ interface BackgroundAgent {
   branch?: string;
 }
 
-export type SteerReady = (handler?: (text: string) => Promise<void>) => void;
+type SteerReady = (handler?: (text: string) => Promise<void>) => void;
 /** Where the agent works, once its worktree exists: recorded so its work can be found and committed after a crash. */
-export type AgentStarted = (info: { branch: string; cwd: string; root: string; base: string; repo: string }) => void;
+type AgentStarted = (info: { branch: string; cwd: string; root: string; base: string; repo: string }) => void;
 
 export class BackgroundAgents {
   private readonly agents = new Map<string, BackgroundAgent>();

@@ -4,7 +4,7 @@
 
 type ErrorSeverity = 'info' | 'warning' | 'error' | 'critical';
 
-export interface ErrorCatalogEntry {
+interface ErrorCatalogEntry {
   message: string;
   remediation?: string;
   httpStatus?: number;
@@ -89,7 +89,7 @@ export interface ProblemJson {
   details?: ProblemDetails;
 }
 
-export interface ParseProblemJsonOptions {
+interface ParseProblemJsonOptions {
   /** HTTP status of the response the body came from — used when the body omits one. */
   status?: number;
 }

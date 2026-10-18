@@ -52,8 +52,3 @@ export function buttonTitle(action: Action): string {
   const { verb, key } = ACTIONS[action];
   return `${verb[0]!.toUpperCase()}${verb.slice(1)} (${key})`;
 }
-
-/** What became of a ClikCode command typed while a turn ran: `applied` took
- * effect at once (a state write such as `/model sonnet`), `later` waits for
- * the turn boundary (it needs the screen, or must not move a running turn). */
-export type CommandOutcome = 'applied' | 'later';

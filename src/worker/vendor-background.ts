@@ -32,7 +32,7 @@ interface RunnerDependencies {
   changed: () => void;
 }
 
-export interface VendorBackgroundRunner {
+interface VendorBackgroundRunner {
   /** Register with the persistent transport (runtime.setVendorBackgroundTurnHandler). */
   readonly handle: (turn: VendorBackgroundTurn) => void;
   /** A background turn is running or waiting to. */

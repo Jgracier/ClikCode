@@ -15,7 +15,7 @@ import { runCli } from './run-cli.js';
 import { scrubSecrets } from './secret-scrubber.js';
 
 export type Destination = { to: string; with?: Record<string, string> };
-export type Template = { run: string[]; stdin?: string; about?: string };
+type Template = { run: string[]; stdin?: string; about?: string };
 
 /** `{{secret|json}}` is the key as it must sit inside a JSON string. */
 const JSON_ARGS = (fields: string): string => `{${fields}}`;

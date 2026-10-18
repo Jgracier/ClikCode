@@ -11,7 +11,7 @@ import { fileTurnRow, turnsThatEdited, type FileTurn } from '../../session/turn-
 import { conversationTitle } from '../../search/conversations.js';
 import { ago, shortId } from '../../search/format.js';
 
-export interface FileTurnRow extends FileTurn { label: string; detail: string }
+interface FileTurnRow extends FileTurn { label: string; detail: string }
 
 /** `/changes 3` is a turn; anything else is a path. */
 export function isChangesPath(args: string): boolean {

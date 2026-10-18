@@ -10,7 +10,7 @@ export type AccountFailureKind = 'quota-exhausted' | 'temporarily-throttled' | '
 /** Machine-readable failure signals. Always preferred over wording: a status
  * code or a vendor error type cannot be produced by the model talking about
  * rate limits. */
-export interface AccountFailureSignals {
+interface AccountFailureSignals {
   /** HTTP/API status (Claude's `api_error_status`, a gateway response status). */
   statusCode?: number;
   /** Vendor error type/code, e.g. 'authentication_error', 'rate_limit_error',

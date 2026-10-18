@@ -14,7 +14,7 @@ export function relaunchArgv(entry: string, sessionId?: string): string[] {
   return sessionId ? [entry, 'sessions', 'resume', sessionId] : [entry];
 }
 
-export interface BuildReplace {
+interface BuildReplace {
   /** The chat the new process reopens. Absent, it starts the way a bare
    * `clikcode` does. */
   sessionId?: string;

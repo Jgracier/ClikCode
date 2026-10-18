@@ -135,7 +135,7 @@ function extract(archive: string, into: string): Promise<void> {
   });
 }
 
-export interface InstalledRuntime {
+interface InstalledRuntime {
   build: RuntimeBuild;
   serverPath: string;
   /** Directory holding the server and its libraries; added to the

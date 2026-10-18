@@ -100,7 +100,7 @@ function kimiCall(workspace: string) {
   };
 }
 
-export interface KimiThreadOptions {
+interface KimiThreadOptions {
   sessionId: string;
   workspace: string;
   /** The session directory, as state.json records it. */

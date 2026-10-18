@@ -105,7 +105,7 @@ async function createIndex(): Promise<StateIndex> {
   return index;
 }
 
-export interface ReadStateOptions {
+interface ReadStateOptions {
   /** Which transcripts to open. The default is every one, which is what a
    * turn needs. An empty list reads the index only: titles, previews, dates. */
   transcripts?: 'all' | readonly string[];

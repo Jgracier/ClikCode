@@ -134,7 +134,7 @@ interface WrapRequest {
   readOnly?: readonly string[];
 }
 
-export type SandboxWrap =
+type SandboxWrap =
   | { sandboxed: true; invocation: Invocation }
   | { sandboxed: false; invocation: Invocation; missing?: string };
 

@@ -24,7 +24,7 @@ export interface QuestionPromptState {
   collected: Record<string, string[]>;
 }
 
-export type QuestionRow = { kind: 'option' | 'other' | 'skip'; label: string; description?: string };
+type QuestionRow = { kind: 'option' | 'other' | 'skip'; label: string; description?: string };
 
 /** The choices as drawn: the options, then "Other…" where text is welcome
  * beside them, then Skip where the question may go unanswered. */
@@ -40,7 +40,7 @@ export function startsTyping(question: HarnessQuestion): boolean {
   return question.options.length === 0;
 }
 
-export type QuestionKeyAction =
+type QuestionKeyAction =
   | { type: 'ignore' }
   | { type: 'focus' }
   | { type: 'cancel' }

@@ -65,7 +65,7 @@ export interface SignInScreen extends SignInUi {
  * ask the user and send the answer with Enter. Whichever matches first: a
  * vendor's screens depend on what the user chose. One still on screen two
  * seconds later fires again (its key was dropped). */
-export interface SignInStep { when: string; send?: string; ask?: { prompt: string; secret?: boolean } }
+interface SignInStep { when: string; send?: string; ask?: { prompt: string; secret?: boolean } }
 
 /** A device code: from the link's own `user_code`, else the first
  * `XXXX-XXXX`-shaped token printed (Grok, Amp, Kimi, Codex, Copilot all
@@ -90,7 +90,7 @@ export function chooseLoginLink(input: { printed?: string; opened?: string; loca
 }
 
 /** Something the vendor's screen is waiting on. */
-export type ScreenPrompt =
+type ScreenPrompt =
   | { kind: 'choice'; title: string; choices: readonly string[]; selected: number; style: 'arrows' | 'yes-no' | 'number' | 'sideways'; searchable?: boolean }
   | { kind: 'input'; prompt: string; secret: boolean; optional?: true };
 

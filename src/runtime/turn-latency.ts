@@ -18,7 +18,7 @@ const TURN_MARKS = [
   'submit', 'accepted', 'account', 'spawned', 'ready', 'prompt-sent',
   'first-byte', 'first-event', 'first-text', 'first-paint', 'first-text-paint', 'end',
 ] as const;
-export type TurnMarkName = (typeof TURN_MARKS)[number];
+type TurnMarkName = (typeof TURN_MARKS)[number];
 
 interface TurnClock {
   readonly turnId: string;
@@ -75,7 +75,7 @@ export function markTurn(mark: TurnMarkName, fields: Readonly<Record<string, unk
 /** One turn's breakdown, in milliseconds since submit unless named `…To…`
  * (a span between two marks). A span whose marks the turn did not reach is
  * absent. */
-export interface TurnBreakdown {
+interface TurnBreakdown {
   turnId: string;
   harness?: string;
   session?: string;

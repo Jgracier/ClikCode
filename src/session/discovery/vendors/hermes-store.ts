@@ -255,7 +255,7 @@ function hermesResult(name: string, call: CanonicalToolCall, args: Record<string
   }
 }
 
-export interface HermesThreadOptions {
+interface HermesThreadOptions {
   sessionId: string;
   workspace: string;
   model: string | null;
@@ -263,7 +263,7 @@ export interface HermesThreadOptions {
   callId?: () => string;
 }
 
-export interface HermesThreadRows {
+interface HermesThreadRows {
   session: Record<string, unknown>;
   messages: Record<string, unknown>[];
 }

@@ -89,8 +89,3 @@ const kebab = (name: string): string => name.replace(/[A-Z]/g, (letter) => `-${l
 export function lookCssVariables(): Record<string, string> {
   return Object.fromEntries(Object.entries(LOOK_HEX).map(([name, hex]) => [`--look-${kebab(name)}`, hex!]));
 }
-
-/** The same, as a rule for a stylesheet. */
-export function lookCssBlock(selector = ':root'): string {
-  return `${selector} {\n${Object.entries(lookCssVariables()).map(([name, value]) => `  ${name}: ${value};`).join('\n')}\n}`;
-}

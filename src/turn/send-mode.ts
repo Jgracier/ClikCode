@@ -12,7 +12,7 @@
 
 import type { LiveTurnInputBroker, LiveTurnInputResult } from './live-input.js';
 
-export type SendMode = 'steer' | 'queue';
+type SendMode = 'steer' | 'queue';
 
 export const SEND_MODES: readonly SendMode[] = ['steer', 'queue'];
 

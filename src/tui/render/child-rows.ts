@@ -20,7 +20,7 @@ export const CHILDREN_SHOWN = 3;
 
 type Slot = { parentId: string; label: string; offset: number; seq: number };
 
-export type ChildRow = {
+type ChildRow = {
   /** Unique within the turn. */
   id: string; parentId: string; label: string;
   /** Where it sorts, in the same (offset, seq) space as every other row. */

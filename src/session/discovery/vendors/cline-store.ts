@@ -97,7 +97,7 @@ function clineCall(workspace: string) {
   };
 }
 
-export interface ClineThreadOptions {
+interface ClineThreadOptions {
   sessionId: string;
   workspace: string;
   model: string | null;

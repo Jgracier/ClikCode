@@ -151,7 +151,7 @@ export interface VendorCall {
 }
 
 /** One model response: its text, then the calls it made. */
-export interface AssistantStep {
+interface AssistantStep {
   text: string;
   calls: VendorCall[];
 }

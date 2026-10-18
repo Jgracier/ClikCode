@@ -92,7 +92,7 @@ export class CallGrouping {
 }
 
 /** One group's kept items, for expansion. */
-export type GroupData = {
+type GroupData = {
   id: string;
   items: Array<{ id: string; entry: ActivityEntry }>;
   /** Items still running (the live group). */

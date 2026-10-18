@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import { atomicWriteFile } from '../session/store/files.js';
 import { isRemoteTarget, type McpServerEntry } from './mcp-registry.js';
 
-export type McpSignInAnswer = 'sign-in' | 'open' | 'unknown';
+type McpSignInAnswer = 'sign-in' | 'open' | 'unknown';
 
 const CACHE_FILE = 'mcp-sign-in.json';
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -85,7 +85,7 @@ async function readCache(stateDir: string): Promise<CacheRecord> {
   } catch { return {}; }
 }
 
-export interface SignInCheckOptions {
+interface SignInCheckOptions {
   stateDir: string;
   /** False when this vendor is given the server WITHOUT its headers (its
    * `mcp add` has no header flag), so the credential the entry carries never

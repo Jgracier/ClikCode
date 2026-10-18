@@ -29,7 +29,7 @@ export interface SubAgentViewState {
   frame: number;
 }
 
-export type SubAgentViewEffect =
+type SubAgentViewEffect =
   | { type: 'none' }
   | { type: 'state'; state: SubAgentViewState }
   /** Back to the main chat; the main turn is not touched. */
@@ -94,7 +94,7 @@ export function subAgentHeader(ref: SubAgentRef, frame: number): string {
   return `${look.paint.neutral('main >')} ${mark} ${ref.label}`;
 }
 
-export interface SubAgentViewHost {
+interface SubAgentViewHost {
   /** The harness's display name, for the read-only line. */
   vendor: string;
   /** The main turn's state: `main: running 3m`, `main: waiting for you`, `main: done`. */

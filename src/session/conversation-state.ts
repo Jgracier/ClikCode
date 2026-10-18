@@ -29,7 +29,7 @@ export interface TurnFacts {
   agents?: number;
 }
 
-export interface ConversationStateFacts {
+interface ConversationStateFacts {
   updatedAt: string;
   turn?: TurnFacts;
   needsYou?: boolean;
@@ -39,7 +39,7 @@ export interface ConversationStateFacts {
 
 type ConversationStateKind = 'working' | 'stalled' | 'needs-you' | 'back' | 'idle';
 
-export interface ConversationState {
+interface ConversationState {
   kind: ConversationStateKind;
   text: string;
 }

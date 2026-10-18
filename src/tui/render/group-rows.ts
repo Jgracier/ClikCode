@@ -14,7 +14,7 @@ import { tagRow } from './row-tags.js';
 import type { ActivityEntry } from './activity-log.js';
 
 /** What the reader opened: the group itself, and which of its items. */
-export type GroupOpenState = { open: boolean; items: ReadonlySet<string> };
+type GroupOpenState = { open: boolean; items: ReadonlySet<string> };
 
 /** The expansion state of every group, by group id. Kept apart from the rows
  * so a rewrite of the transcript (a toggle, a new width) reads it again. */
@@ -70,7 +70,7 @@ export function itemDetailRows(entry: ActivityEntry, room: number): string[] {
   return rows;
 }
 
-export type GroupItemLine = { id: string; line: string; entry: ActivityEntry };
+type GroupItemLine = { id: string; line: string; entry: ActivityEntry };
 
 /** The open group: `header` (already styled and indented) and one row per
  * item under it, an opened item followed by its detail. */

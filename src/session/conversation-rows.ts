@@ -58,7 +58,7 @@ export interface ConversationRow {
   section: ConversationSection;
 }
 
-export interface ConversationRowFacts {
+interface ConversationRowFacts {
   /** Which sessions have a worker process (liveWorkerSessions). */
   workerIsLive?: WorkerLiveness;
   /** Which sessions another client has open without a worker (liveWorkers). */

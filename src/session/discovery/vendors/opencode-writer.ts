@@ -79,7 +79,7 @@ function text(value: unknown): string | undefined {
 }
 
 /** One call as OpenCode would have made it. */
-export interface OpenCodeCall {
+interface OpenCodeCall {
   tool: string;
   input: Json;
   /** Shown as the tool part's title, as OpenCode titles its own. */
@@ -240,7 +240,7 @@ function producingModel(turn: CanonicalTurn, providerID: string, modelID: string
 }
 
 /** What a write needs besides the record; fixed in tests for golden output. */
-export interface OpenCodeExportOptions {
+interface OpenCodeExportOptions {
   workspace: string;
   /** `provider/model`, as ClikCode passes `--model`. */
   model: string;

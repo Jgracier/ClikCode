@@ -16,7 +16,7 @@ import { computerEnabledSync } from './computer/settings.js';
 type PermissionVerdict = 'allow' | 'ask' | 'deny';
 /** `invalidArguments`: the call named no usable path (empty, or with a NUL byte). That is a mistake in the call, not a
  * refusal: the model is told to correct it and try again, not that it may not. */
-export interface PermissionDecision { decision: PermissionVerdict; reason: string; invalidArguments?: true }
+interface PermissionDecision { decision: PermissionVerdict; reason: string; invalidArguments?: true }
 
 interface PermissionRule { tool: string; specifier?: string; raw: string }
 /** `deny` beats everything but a hard deny's own refusal (it holds in bypass

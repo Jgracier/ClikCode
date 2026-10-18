@@ -7,7 +7,7 @@ import type { HarnessSession } from '../session/model.js';
 
 /** The Gateway's reasoning levels, lowest first. `none` turns reasoning off. */
 export const GATEWAY_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
-export type GatewayEffort = (typeof GATEWAY_EFFORTS)[number];
+type GatewayEffort = (typeof GATEWAY_EFFORTS)[number];
 
 /** A Gateway session's effort when it chose one; the model's own default otherwise. */
 export function gatewayEffort(session: Pick<HarnessSession, 'effort'>): GatewayEffort | undefined {

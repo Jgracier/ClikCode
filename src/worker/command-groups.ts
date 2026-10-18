@@ -104,7 +104,7 @@ export function bestLabel(root: ProcInfo | undefined, descendants: readonly Proc
   return '';
 }
 
-export interface CommandSweep {
+interface CommandSweep {
   /** What each command group's agent ran, by group name. */
   readonly labels: ReadonlyMap<string, string>;
   sweep(): void;

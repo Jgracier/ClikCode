@@ -92,7 +92,7 @@ export function mergeActivity(prior: HarnessActivityEvent, next: HarnessActivity
   };
 }
 
-export type OutputPreview = { lines: string[]; hidden: number; fromEnd: boolean };
+type OutputPreview = { lines: string[]; hidden: number; fromEnd: boolean };
 
 /** A tool's output under its row, at most `budget` lines. A command's result
  * is at its end, and so is all a producer kept of a long stream
@@ -111,7 +111,7 @@ export function outputPreview(event: Pick<HarnessActivityEvent, 'output' | 'outp
 export const COMMAND_HEAD_LINES = 2;
 export const COMMAND_TAIL_LINES = 3;
 
-export type CommandPreview = { head: string[]; hidden: number; tail: string[] };
+type CommandPreview = { head: string[]; hidden: number; tail: string[] };
 
 /** A command's output as its first lines -- what it set out to do -- and its
  * last -- how it ended -- with the middle counted. From the whole output, or
@@ -131,7 +131,7 @@ export function commandOutputPreview(event: Pick<HarnessActivityEvent, 'output' 
   return { head: output.slice(0, COMMAND_HEAD_LINES), hidden: output.length - COMMAND_HEAD_LINES - COMMAND_TAIL_LINES, tail: output.slice(-COMMAND_TAIL_LINES) };
 }
 
-export type DiffPreview = {
+type DiffPreview = {
   files: Array<{ file: FileDiff; lines: DiffLine[] }>;
   /** Width of the line-number gutter; 0 when no line carries a number. */
   gutter: number;
@@ -270,7 +270,7 @@ function callIds(held: unknown): ReadonlySet<string> {
  * -- how much of the answer had been written -- then `seq`, the order the
  * worker first saw them in. Completion never decides it; a steer is a row
  * like any other, with the seq of its acknowledgement. */
-export type OrderedMark = { responseOffset: number; seq?: number };
+type OrderedMark = { responseOffset: number; seq?: number };
 
 /** `marks` in turn order. A row with no `seq` (a turn saved before they were
  * kept) takes its position in `marks` as its sequence, and the sort is

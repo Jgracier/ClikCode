@@ -84,7 +84,7 @@ export function formatMcpResult(result: McpCallResult, acceptsImages = false): T
   return { output: output || '(no output)', ...(result.isError ? { isError: true } : {}), ...(images.length ? { images } : {}) };
 }
 
-export interface McpToolCaller {
+interface McpToolCaller {
   (tool: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpCallResult>;
 }
 

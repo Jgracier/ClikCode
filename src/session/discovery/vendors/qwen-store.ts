@@ -82,7 +82,7 @@ function qwenCall(workspace: string) {
   };
 }
 
-export interface QwenThreadOptions {
+interface QwenThreadOptions {
   sessionId: string;
   workspace: string;
   model: string | null;

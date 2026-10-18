@@ -15,7 +15,7 @@ import { stateDirectory } from '../session/store/paths.js';
 
 
 
-export interface CustomAcpCatalog {
+interface CustomAcpCatalog {
   customAcpHarness(definition: AiCustomAcpHarnessInput): unknown;
   registerCustomHarnesses(definitions: readonly AiLocalHarnessDefinition[]): unknown;
 }

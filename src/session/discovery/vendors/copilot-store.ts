@@ -70,7 +70,7 @@ function copilotCall(workspace: string) {
   };
 }
 
-export interface CopilotThreadOptions {
+interface CopilotThreadOptions {
   sessionId: string;
   workspace: string;
   model: string | null;

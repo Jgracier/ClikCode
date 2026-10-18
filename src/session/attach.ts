@@ -149,7 +149,7 @@ export async function prepareTurn(
 
 /** What follows a turn that failed: send it again here, carry it on in the
  * chat "Resume in" moved it to, or hand text back to the composer. */
-export type TurnFailureNext = { cancelled: boolean } & ({ retry: string } | { moved: ResumedIn } | { back: string[]; waiting?: ResumeAt });
+type TurnFailureNext = { cancelled: boolean } & ({ retry: string } | { moved: ResumedIn } | { back: string[]; waiting?: ResumeAt });
 
 /** A turn failed -- one this client sent (`line`, and `sent` when a slash
  * command expanded it), one it took from the queue (`queuedTurnId`), or one

@@ -97,7 +97,7 @@ async function snapshot(page: Page): Promise<Snapshot> {
   } catch { return { tokens: [], hint: false, labelled: new Set<string>() }; } // A navigation can destroy the document mid-read.
 }
 
-export type Finder = { look(): Promise<Decision>; dispose(): void };
+type Finder = { look(): Promise<Decision>; dispose(): void };
 
 /** Take the "before" picture and start listening to the site's own requests. */
 /** With `existing`, nothing counts as already there: a key the page is showing now (an account's current key) is taken. */

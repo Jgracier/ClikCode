@@ -21,7 +21,7 @@ import { jsonMemo } from '../../../session/store/json-memo.js';
 import { resolveBinaryPath } from './binary.js';
 
 /** One harness's last inspection, tied to the file it described. */
-export interface MemoizedVersion {
+interface MemoizedVersion {
   path: string;
   mtimeMs: number;
   size: number;

@@ -36,7 +36,7 @@ export function localProgressText(update: LocalModelProgress): string {
 
 /** Where progress shows for a surface that is not this terminal: the
  * editor bridge's busy line, a label at a time. */
-export type ProgressSink = (label: string) => void;
+type ProgressSink = (label: string) => void;
 
 /** Long work with its progress on the waiting line; without a terminal, one
  * stderr line per distinct `shape` (a stage, not each percent) rather than

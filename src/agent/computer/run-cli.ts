@@ -1,7 +1,7 @@
 /** Runs one command and collects its output. The caller decides what may be said about it. */
 import { spawn } from 'node:child_process';
 
-export type CliResult = { code: number | null; text: string; missing: boolean };
+type CliResult = { code: number | null; text: string; missing: boolean };
 
 export function runCli(command: string, argv: string[], options: { stdin?: string; signal?: AbortSignal; timeoutMs?: number } = {}): Promise<CliResult> {
   return new Promise(resolve => {
