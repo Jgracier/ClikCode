@@ -19,13 +19,12 @@ describe('arrangeSnapshot', () => {
   });
 
   it('folds the header and footer, keeps the main area, and trims only the middle of a long page', () => {
-    const out = arrangeSnapshot(page);
+    const out = arrangeSnapshot(page.split('\n').filter(line => !/dialog "Add role"|combobox "Role"|button "Save"/.test(line)).join('\n'));
     expect(out).toContain('heading "API Keys"');
     expect(out).toContain('button "Create key" [ref=e7]');
     expect(out).not.toContain('Models');
     expect(out).not.toContain('Terms');
-    // This page has a dialog open, so what is behind it is cut to its top; a long page with no dialog trims only its middle.
-    expect(out).toMatch(/lines trimmed from the middle|more lines of the page behind the dialog/);
+    expect(out).toContain('lines trimmed from the middle');
     expect(out).toContain('Item number 0 ');
     expect(out).toContain('Item number 899 ');
     expect(out).not.toContain('Item number 450 ');
