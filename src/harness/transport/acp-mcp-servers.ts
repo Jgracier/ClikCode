@@ -32,7 +32,9 @@ export function builtInMcpServer(): McpServerSpec | undefined {
   return { name: BUILT_IN_MCP_NAME, transport: 'stdio', command: process.execPath, args: [entry, 'mcp-serve'], env: { CLIKCODE_WORKER_PID: String(process.pid) } };
 }
 
-export async function globalMcpServersForAcp(command: string, capabilities: Json | undefined, home: string = homedir()): Promise<Json[]> {
+export async function globalMcpServersForAcp(
+  command: string, capabilities: Json | undefined, profile?: { env: string; path: string }, home: string = homedir(),
+): Promise<Json[]> {
   if (process.env.VITEST && !process.env.CLIKCODE_HOME?.trim()) return [];
   try {
     const { servers: recorded } = await loadMcpServers(stateDirectory());
@@ -40,7 +42,7 @@ export async function globalMcpServersForAcp(command: string, capabilities: Json
     const builtIn = builtInMcpServer();
     const servers = builtIn && !recorded.some((server) => server.name === builtIn.name) ? [builtIn, ...recorded] : recorded;
     if (!servers.length) return [];
-    const { names } = await vendorMcpServerNames(command, home);
+    const { names } = await vendorMcpServerNames(command, home, profile);
     return servers.filter((server) => !names.has(server.name)).flatMap((server) => acpMcpServer(server, capabilities) ?? []);
   } catch {
     // MCP must never be the reason a turn did not run.

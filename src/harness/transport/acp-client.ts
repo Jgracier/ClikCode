@@ -79,6 +79,8 @@ export interface AcpTurnInput extends HarnessTurnObserver {
   prompt: string;
   nativeSessionId?: string;
   environment: Readonly<Record<string, string>>;
+  /** The account's isolated profile, where the agent reads its own MCP servers (acp-mcp-servers.ts). */
+  mcpProfile?: { env: string; path: string };
   permissionMode: AiHarnessPermissionMode;
   /** The mode as it stands when the agent asks to run a tool: a switch made while the turn runs applies to the next ask. */
   currentPermissionMode?: () => Promise<AiHarnessPermissionMode | undefined>;
@@ -785,7 +787,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     if (directories.length && !capabilities.sessionCapabilities?.additionalDirectories) {
       throw new Error(`${input.command} ACP does not accept additional directories (/add-dir); remove them or start from a common parent directory`);
     }
-    const sessionParams = { cwd: input.cwd, mcpServers: await globalMcpServersForAcp(input.command, capabilities), _meta: ACP_SESSION_META, ...(directories.length ? { additionalDirectories: [...directories] } : {}) };
+    const sessionParams = { cwd: input.cwd, mcpServers: await globalMcpServersForAcp(input.command, capabilities, input.mcpProfile), _meta: ACP_SESSION_META, ...(directories.length ? { additionalDirectories: [...directories] } : {}) };
     const images = input.images ?? [];
     if (images.length && capabilities.promptCapabilities?.image !== true) {
       throw Object.assign(new Error(`${input.command} ACP does not accept image prompts`), { acpUnsupportedImages: true });
