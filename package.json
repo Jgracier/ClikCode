@@ -14,6 +14,7 @@
   ],
   "scripts": {
     "build": "node scripts/build.mjs",
+    "install-local": "node scripts/install-local.mjs",
     "build:analyze": "node scripts/build.mjs --analyze",
     "build:strict": "node scripts/build.mjs --analyze --strict",
     "build:no-strict": "node scripts/build.mjs --analyze --no-strict",
