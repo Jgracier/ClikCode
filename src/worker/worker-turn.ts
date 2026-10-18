@@ -18,6 +18,8 @@ import { consumeQueuedTurn } from './consume-queued.js';
 import { sendEvent } from './broadcast-observer.js';
 import type { ClientCommand } from './protocol.js';
 import type { WorkerContext } from './worker-context.js';
+import { noteCompacted, shouldCompactBeforeSwitch } from './compact-before-switch.js';
+import { compactConversation } from '../tui/slash/compact.js';
 
 type SubmitCommand = Extract<ClientCommand, { type: 'submit' }>;
 
@@ -145,10 +147,31 @@ export function createTurnRunner(ctx: WorkerContext) {
     // Shells that finished after the turn's last step, then whatever is
     // queued next; either may start the next turn at once.
     if (agentSession.notifications.length) void ctx.queue.deliverNotifications();
-    else void ctx.queue.drainQueue().catch(ctx.queue.reportDrainFailure).finally(ctx.idle.scheduleIdleExit);
+    else {
+      void ctx.queue.drainQueue().catch(ctx.queue.reportDrainFailure).finally(() => {
+        ctx.idle.scheduleIdleExit();
+        if (turnOutcome === 'completed') void compactBeforeSwitch().catch((error: unknown) => diagnostic('worker.compact-before-switch', error instanceof Error ? error.message : String(error)));
+      });
+    }
     ctx.idle.scheduleIdleExit();
     // Parked while this turn ran (another window's "Wait for reset").
     void ctx.resumeWaiter.check();
+  };
+
+  /** A large conversation on an account that is nearly out is compacted now, while the account's
+   * cache is warm, so the switch reads a summary (compact-before-switch.ts). As a turn of its own:
+   * every window follows it, and a message sent meanwhile waits behind it. */
+  const compactBeforeSwitch = async (): Promise<void> => {
+    if (ctx.turnRunning) return;
+    const state = await readState({ transcripts: [] });
+    const session = state.sessions.find((item) => item.id === sessionId);
+    const account = session?.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
+    if (!session || !shouldCompactBeforeSwitch(state, session, account)) return;
+    noteCompacted(sessionId);
+    lifecycle('worker.compact-before-switch', { context: session.lastUsage?.contextUsed, account: account?.id.slice(0, 8) });
+    await compactConversation(sessionId, session, '', async (_id, prompt) => {
+      ctx.queue.startTurn({ type: 'submit', text: prompt, echo: false, label: 'compacting before the account switch' });
+    });
   };
 
   return async (command: SubmitCommand): Promise<void> => {
@@ -192,7 +215,7 @@ export function createTurnRunner(ctx: WorkerContext) {
     // stopWaiting is the one event every client needs regardless of outcome
     // to know a `submit` it sent has actually finished -- broadcast in
     // `finally`, covering success, a caught failure, and cancellation alike.
-    observer.startTurn('thinking', command.text);
+    observer.startTurn(command.label ?? 'thinking', command.text);
     try {
       // A background turn's record still being saved: this turn's checkpoint
       // would read the conversation without it and then write it back whole.
