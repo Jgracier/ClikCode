@@ -246,8 +246,8 @@ describe('enter again: send into the chat', () => {
 
   // The terminal's rule (enterAgainSends): no hint and no button for what
   // will not happen.
-  it('never for a message the turn already holds for its next pause, or in a turn that could not take one', () => {
-    expect(ready([{ ...message, held: true }])).toBe(false);
+  it('also for a message the turn holds for its next pause (Enter cuts the call it waits for), never in a turn that could not take one', () => {
+    expect(ready([{ ...message, held: true }])).toBe(true);
     expect(ready([message], { submissions: [{ id: 'a', text: 'first', disposition: 'queued', unsteered: true }] })).toBe(false);
   });
 
