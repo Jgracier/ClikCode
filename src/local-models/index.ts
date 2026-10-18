@@ -19,7 +19,7 @@ import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { delimiter, dirname, join } from 'node:path';
 import { memoryBudget, type MemoryBudget } from './budget.js';
 import { allLocalModels, catalogModel, type CatalogModel } from './catalog.js';
-import { chooseModel, fitModel, kvCacheBytes, meetsBar, rankModels, MIN_CONTEXT, type Fit, type Footprint, type Measurement, type RankedModel } from './choose.js';
+import { chooseModel, fitModel, kvCacheBytes, meetsBar, rankModels, type Fit, type Footprint, type Measurement, type RankedModel } from './choose.js';
 import { formatBytes } from './download.js';
 import { discoverHuggingFaceModels } from './discover.js';
 import { probeHardware, type HardwareProfile } from './hardware.js';
@@ -27,13 +27,14 @@ import { learnGpuReach, withKnownReach } from './gpu-reach.js';
 import { buildServerArgs, freePort, httpJson, threadPlan, usesMmap, waitForHealth } from './launch.js';
 import {
   heldByLiveProcess, memoryStopFile, readServerRecord, removeAllOwnLeasesSync, removeLeases, serverDir, sessionHeldElsewhere, startSupervisor, stopServer,
-  sweepOrphan, withStartLock, writeLease, type MemoryEvent, type ServerRecord, type ShrinkStep,
+  sweepOrphan, withStartLock, writeLease, type MemoryEvent, type ServerRecord,
 } from './lifecycle.js';
 import { footprintKey, latestMeasurement, machineKey, measureServer, readFootprints, readMeasurements, writeMeasurement } from './measure.js';
 import { ensureModelFile, missingBytes } from './models.js';
 import { footprintsFile, preferencesFile, serversDir } from './paths.js';
 import { ensureRuntime, selectRuntimeBuild, type RuntimeBuild } from './runtime.js';
 import { pidIsAlive } from '../session/store/locks.js';
+import { shrinkNotice, shrinkSteps, stopNotice } from './memory-steps.js';
 
 
 export interface LocalModelProgress {
@@ -151,18 +152,6 @@ function describe(model: CatalogModel, measured: Measurement | undefined): strin
   return notes.length ? notes.join(' ') : undefined;
 }
 
-function contextLabel(tokens: number): string {
-  return `${Math.round(tokens / 1024)}K`;
-}
-
-/** The supervisor's note of a restart it made to give memory back, as the
- * user reads it. */
-function shrinkNotice(event: MemoryEvent | undefined): string | undefined {
-  if (event?.action !== 'shrink' || !event.toContext) return undefined;
-  const label = catalogModel(event.modelId)?.label ?? event.modelId;
-  return `${label} was restarted at ${contextLabel(event.toContext)} context (from ${contextLabel(event.fromContext)}) to leave memory for other programs: ${event.reason}.`;
-}
-
 /** Stops the supervisors made to leave memory for other programs, oldest
  * first, each reported once: read and removed. */
 async function takeMemoryStops(): Promise<MemoryEvent[]> {
@@ -175,32 +164,6 @@ async function takeMemoryStops(): Promise<MemoryEvent[]> {
     events.push(event);
   }
   return events.sort((left, right) => left.at.localeCompare(right.at));
-}
-
-function stopNotice(stops: readonly MemoryEvent[], chosen: CatalogModel, fit: Pick<Fit, 'context'> | undefined): string | undefined {
-  const last = stops.at(-1);
-  if (!last) return undefined;
-  const label = catalogModel(last.modelId)?.label ?? last.modelId;
-  const when = new Date(last.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  const stopped = `${label} was stopped at ${when} to leave memory for other programs (${last.reason}).`;
-  if (!fit) return stopped;
-  if (last.modelId === chosen.id) return `${stopped} Restarted with ${contextLabel(fit.context)} context, which fits what is free now.`;
-  return `${stopped} Chose ${chosen.label} at ${contextLabel(fit.context)} context because it fits what is free now.`;
-}
-
-/** The restarts the supervisor may make to give memory back, least
- * drastic first: the same context without the prompt cache, then each
- * halving down to MIN_CONTEXT, all without it. A step that would free
- * nothing is left out. */
-function shrinkSteps(model: CatalogModel, fit: Fit, cacheRamMib: number, vision: boolean, args: (context: number, cacheRamMib: number) => string[]): ShrinkStep[] {
-  const steps: ShrinkStep[] = [];
-  const step = (context: number): ShrinkStep => ({
-    context, cacheRamMib: 0, kvBytes: kvCacheBytes(model.kv, context, fit.cacheType, fit.parallel), args: args(context, 0),
-    footprintKey: footprintKey({ context, cacheType: fit.cacheType, parallel: fit.parallel, vision }),
-  });
-  if (cacheRamMib > 0) steps.push(step(fit.context));
-  for (let context = Math.floor(fit.context / 2); context >= MIN_CONTEXT; context = Math.floor(context / 2)) steps.push(step(context));
-  return steps;
 }
 
 export async function ensureLocalModel(options: EnsureLocalModelOptions): Promise<LocalModelEndpoint> {
