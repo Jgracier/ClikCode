@@ -9,7 +9,7 @@ import { lifecycle } from '../../runtime/lifecycle-log.js';
 import { withStateLock } from '../store/locks.js';
 import { forgetSessionArtifacts } from '../store/forget.js';
 import { deleteSessionTranscript, readSessionTranscript, writeOwnTranscript, writeSessionTranscript } from '../store/transcripts.js';
-import { HarnessStateVersionError, indexStructureChanged, loadIndex, storeIndex } from './index-file.js';
+import { HarnessStateVersionError, indexStructureChanged, loadIndex, storeIndex, type StateIndex } from './index-file.js';
 import { capInvocations } from './invocations.js';
 import { BaselinedState, DRAFT_BASELINE, STATE_BASELINE, StateBaselineData, baselineOf, baselineSession, indexFromWorking, mergedIndex, rememberBaseline } from './merge.js';
 import { HARNESS_STATE_VERSION } from './paths.js';
@@ -109,7 +109,7 @@ export async function writeState(state: HarnessState): Promise<void> {
     if (!disk || !sameData(next, disk)) await storeIndex(next, { backup: indexStructureChanged(disk, next) });
     clock.store = Date.now() - clock.start - clock.index - clock.snapshot - clock.transcripts;
     const total = Date.now() - clock.start;
-    if (total >= 300) lifecycle('state.write.slow', { ms: total, indexMs: clock.index, snapshotMs: clock.snapshot, transcriptsMs: clock.transcripts, storeMs: clock.store, wrote: clock.wrote, loaded: clock.loaded, sessions: persisted.length });
+    if (total >= 300) lifecycle('state.write.slow', { ms: total, indexMs: clock.index, snapshotMs: clock.snapshot, transcriptsMs: clock.transcripts, storeMs: clock.store, wrote: clock.wrote, loaded: clock.loaded, sessions: persisted.length, ...(clock.store > 100 && disk ? { changed: indexChanges(disk, next) } : {}) });
 
     // 3. Deliberate deletions last, children materialized before the parent goes.
     const remaining = new Set(next.sessions.map((session) => session.id));
@@ -183,4 +183,21 @@ export async function writeTranscriptCheckpoint(state: HarnessState, sessionId: 
     }
     return true;
   }
+}
+
+/** What a write changed on the index, by record and field ("accounts:a1b2.status"), for a slow
+ * write's log line: the index is rewritten whole, and this says why it was. */
+function indexChanges(disk: StateIndex, next: StateIndex): string[] {
+  const out: string[] = [];
+  for (const key of Object.keys(next) as Array<keyof StateIndex>) {
+    if (key === 'accounts' || key === 'sessions') {
+      const before = new Map((disk[key] as Array<{ id: string }> ?? []).map((item) => [item.id, item]));
+      for (const item of next[key] as Array<{ id: string } & Record<string, unknown>>) {
+        const old = before.get(item.id) as Record<string, unknown> | undefined;
+        if (!old) { out.push(`${key}:${item.id.slice(0, 8)}+`); continue; }
+        for (const field of Object.keys(item)) if (!sameData(old[field], item[field])) out.push(`${key}:${item.id.slice(0, 8)}.${field}`);
+      }
+    } else if (!sameData(disk[key], next[key])) out.push(String(key));
+  }
+  return out.slice(0, 12);
 }
