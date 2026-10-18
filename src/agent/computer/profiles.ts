@@ -3,20 +3,24 @@
  * never go in one. Several profiles can exist (personal, company); the user picks one when more than one fits. */
 import { randomUUID } from 'node:crypto';
 import { readVaultRecords, removeVaultRecord, writeVaultRecord } from './credential-vault.js';
+import { keyShaped } from './secret-finder.js';
 
 export const PROFILE_KEYS = ['given_name', 'family_name', 'email', 'phone', 'address_line1', 'address_line2', 'city', 'state', 'postal_code', 'country', 'organization', 'job_title', 'website', 'birthday'] as const;
 export type ProfileKey = typeof PROFILE_KEYS[number];
-export type Profile = { label: string; fields: Partial<Record<ProfileKey, string>> };
+/** A field an agent asked the user for beyond the standard ones: an OAuth app's name and description, its
+ * privacy-policy address, a company's legal name. `match` is the words a form's label may use for it. */
+export type CustomField = { label: string; value: string; match?: string[] };
+export type Profile = { label: string; fields: Partial<Record<ProfileKey, string>>; custom?: Record<string, CustomField> };
 type SavedProfile = Profile & { id: string };
 
 const FOLDER = 'profile';
 
 export async function listProfiles(stateDir: string): Promise<SavedProfile[]> {
-  return (await readVaultRecords<Profile>(stateDir, FOLDER)).map(({ id, value }) => ({ id, label: value.label, fields: value.fields })).sort((a, b) => a.label.localeCompare(b.label));
+  return (await readVaultRecords<Profile>(stateDir, FOLDER)).map(({ id, value }) => ({ id, label: value.label, fields: value.fields, ...(value.custom ? { custom: value.custom } : {}) })).sort((a, b) => a.label.localeCompare(b.label));
 }
 
 /** Creates the profile, or (with an id, or a label that exists) merges these fields into it. */
-export async function saveProfile(stateDir: string, input: { id?: string; label?: string; fields: Partial<Record<string, string>> }): Promise<SavedProfile> {
+export async function saveProfile(stateDir: string, input: { id?: string; label?: string; fields: Partial<Record<string, string>>; custom?: Record<string, { label?: string; value: string; match?: string[] }> }): Promise<SavedProfile> {
   const fields: Partial<Record<ProfileKey, string>> = {};
   for (const [key, value] of Object.entries(input.fields)) {
     if (!(PROFILE_KEYS as readonly string[]).includes(key)) throw new Error(`Unknown profile field "${key}". Fields: ${PROFILE_KEYS.join(', ')}.`);
@@ -24,17 +28,50 @@ export async function saveProfile(stateDir: string, input: { id?: string; label?
   }
   const all = await listProfiles(stateDir);
   const existing = all.find(profile => profile.id === input.id) ?? (input.label ? all.find(profile => profile.label.toLowerCase() === input.label!.toLowerCase()) : undefined);
+  const custom = mergeCustom(existing?.custom, input.custom);
   const saved: SavedProfile = existing
-    ? { ...existing, label: input.id ? input.label?.trim() || existing.label : existing.label, fields: { ...existing.fields, ...fields } }
-    : { id: randomUUID(), label: input.label?.trim() || 'Personal', fields };
-  await writeVaultRecord(stateDir, FOLDER, saved.id, { label: saved.label, fields: saved.fields });
+    ? { ...existing, label: input.id ? input.label?.trim() || existing.label : existing.label, fields: { ...existing.fields, ...fields }, ...(custom ? { custom } : {}) }
+    : { id: randomUUID(), label: input.label?.trim() || 'Personal', fields, ...(custom ? { custom } : {}) };
+  await writeVaultRecord(stateDir, FOLDER, saved.id, { label: saved.label, fields: saved.fields, ...(saved.custom ? { custom: saved.custom } : {}) });
   return saved;
 }
 
 export async function removeProfile(stateDir: string, id: string): Promise<boolean> { return removeVaultRecord(stateDir, FOLDER, id); }
 
+const CUSTOM_KEY = /^[a-z][a-z0-9_]{0,39}$/;
+
+/** Throws for a custom field name that cannot be kept, so a prompt is never shown for one. */
+export function assertCustomKey(key: string): void {
+  if (!CUSTOM_KEY.test(key)) throw new Error(`A custom field name is lower-case letters, digits and underscores, starting with a letter (got "${key}").`);
+  if ((PROFILE_KEYS as readonly string[]).includes(key)) throw new Error(`"${key}" is a standard profile field: save it with fields, not custom.`);
+}
+const MAX_CUSTOM_FIELDS = 40;
+const MAX_CUSTOM_VALUE = 2000;
+
+/** The agent's own fields, merged into what is kept: a value replaces the one before it (its label and words stay
+ * unless given again). Personal and business details, never a credential: a key-shaped word is refused, because
+ * a profile is shown to the agent and typed into forms, and a secret has its own place (capture_secret). */
+function mergeCustom(existing: Record<string, CustomField> | undefined, input: Record<string, { label?: string; value: string; match?: string[] }> | undefined): Record<string, CustomField> | undefined {
+  if (!input || !Object.keys(input).length) return existing;
+  const next: Record<string, CustomField> = { ...existing };
+  for (const [key, given] of Object.entries(input)) {
+    assertCustomKey(key);
+    const value = typeof given.value === 'string' ? given.value.trim() : '';
+    if (!value) { delete next[key]; continue; }
+    if (value.length > MAX_CUSTOM_VALUE) throw new Error(`The value of "${key}" is longer than ${MAX_CUSTOM_VALUE} characters.`);
+    if (value.split(/\s+/).some(keyShaped)) throw new Error(`The value of "${key}" looks like a key or token. A profile holds details, not secrets: capture it with capture_secret instead.`);
+    const label = (given.label?.trim() || next[key]?.label || key.replace(/_/g, ' ')).slice(0, 80);
+    const match = given.match ? given.match.map(item => item.trim().toLowerCase()).filter(item => item.length >= 3 && item.length <= 60).slice(0, 8) : next[key]?.match;
+    next[key] = { label, value, ...(match?.length ? { match } : {}) };
+  }
+  if (Object.keys(next).length > MAX_CUSTOM_FIELDS) throw new Error(`A profile holds at most ${MAX_CUSTOM_FIELDS} custom fields.`);
+  return Object.keys(next).length ? next : undefined;
+}
+
 export function describeProfile(profile: SavedProfile): string {
-  return `${profile.label}: ${PROFILE_KEYS.filter(key => profile.fields[key]).map(key => `${key}=${profile.fields[key]}`).join(', ') || '(empty)'}`;
+  const standard = PROFILE_KEYS.filter(key => profile.fields[key]).map(key => `${key}=${profile.fields[key]}`);
+  const custom = Object.entries(profile.custom ?? {}).map(([key, field]) => `${key}=${field.value.length > 300 ? `${field.value.slice(0, 300)}…` : field.value}`);
+  return `${profile.label}: ${[...standard, ...custom].join(', ') || '(empty)'}`;
 }
 
 /** What a form field asks for: its autocomplete token first, then its words. */
@@ -62,9 +99,31 @@ const WORDS: [RegExp, ProfileKey][] = [
   [/birth|\bdob\b/, 'birthday'],
 ];
 
+/** A password, code or card field: never filled from a profile. */
+function isSecretField(hint: FieldHint): boolean {
+  return hint.type === 'password' || /password|passcode|one-time|verification|security.?code|\botp\b|card|cvv|cvc/.test(`${hint.autocomplete} ${hint.text}`.toLowerCase());
+}
+
+const words = (text: string): string => ` ${text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()} `;
+
+/** The custom field of this profile a form field asks for, if any: the longest of its words (or, with none given, its
+ * label and name) found whole in the form field's own words. A password, code or card field never matches. */
+export function customFieldFor(profile: { custom?: Record<string, CustomField> } | undefined, hint: FieldHint): { key: string; field: CustomField } | undefined {
+  if (!profile?.custom || isSecretField(hint)) return undefined;
+  const asked = words(hint.text);
+  let best: { key: string; field: CustomField; length: number } | undefined;
+  for (const [key, field] of Object.entries(profile.custom)) {
+    for (const phrase of field.match?.length ? field.match : [field.label, key.replace(/_/g, ' ')]) {
+      const needle = words(phrase);
+      if (needle.trim().length >= 3 && asked.includes(needle) && (!best || needle.length > best.length)) best = { key, field, length: needle.length };
+    }
+  }
+  return best ? { key: best.key, field: best.field } : undefined;
+}
+
 /** The profile field a form field wants, if any. A password, code or card field is never one. */
 export function profileKeyFor(hint: FieldHint): ProfileKey | undefined {
-  if (hint.type === 'password' || /password|passcode|one-time|verification|security.?code|\botp\b|card|cvv|cvc/.test(`${hint.autocomplete} ${hint.text}`.toLowerCase())) return undefined;
+  if (isSecretField(hint)) return undefined;
   for (const token of hint.autocomplete.toLowerCase().split(/\s+/)) if (TOKENS[token]) return TOKENS[token];
   const text = hint.text.toLowerCase();
   for (const [pattern, key] of WORDS) if (pattern.test(text)) return key;

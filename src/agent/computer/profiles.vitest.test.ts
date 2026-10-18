@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { lockCredentialVault } from './credential-vault.js';
-import { listProfiles, normalizePhone, phoneFor, profileKeyFor, removeProfile, saveProfile } from './profiles.js';
+import { customFieldFor, describeProfile, listProfiles, normalizePhone, phoneFor, profileKeyFor, removeProfile, saveProfile } from './profiles.js';
 
 let stateDir = '';
 afterEach(async () => { if (stateDir) { lockCredentialVault(stateDir); await rm(stateDir, { recursive: true, force: true }); stateDir = ''; } });
@@ -48,5 +48,56 @@ describe('profiles', () => {
     await expect(saveProfile(stateDir, { fields: { password: 'x' } })).rejects.toThrow('Unknown profile field');
     expect(await removeProfile(stateDir, first.id)).toBe(true);
     expect((await listProfiles(stateDir)).map(profile => profile.label)).toEqual(['Company']);
+  });
+});
+
+describe('custom details an agent asked for', () => {
+  const hint = (text: string, type = 'text') => ({ autocomplete: '', type, text });
+
+  it('are kept beside the standard fields, merged by key, and removed by an empty value', async () => {
+    stateDir = await mkdtemp(join(tmpdir(), 'clikcode-profiles-'));
+    const saved = await saveProfile(stateDir, { label: 'ClikDeploy apps', fields: { organization: 'ClikDeploy' }, custom: {
+      app_name: { label: 'App name', value: ' ClikDeploy ', match: ['App Name', 'application name', 'x'] },
+      privacy_policy_url: { label: 'Privacy policy', value: 'https://clikdeploy.com/legal/privacy' },
+    } });
+    expect(saved.custom).toEqual({
+      app_name: { label: 'App name', value: 'ClikDeploy', match: ['app name', 'application name'] },
+      privacy_policy_url: { label: 'Privacy policy', value: 'https://clikdeploy.com/legal/privacy' },
+    });
+    // A later value keeps the label and words; an empty one removes the field.
+    const again = await saveProfile(stateDir, { id: saved.id, fields: {}, custom: { app_name: { value: 'ClikDeploy Gateway' }, privacy_policy_url: { value: '' } } });
+    expect(again.custom).toEqual({ app_name: { label: 'App name', value: 'ClikDeploy Gateway', match: ['app name', 'application name'] } });
+    expect((await listProfiles(stateDir))[0]!.custom).toEqual(again.custom);
+    expect(describeProfile(again)).toContain('app_name=ClikDeploy Gateway');
+  });
+
+  it('refuse a secret, a standard name, a bad name and too much', async () => {
+    stateDir = await mkdtemp(join(tmpdir(), 'clikcode-profiles-'));
+    await expect(saveProfile(stateDir, { fields: {}, custom: { client_secret: { value: 'Zq8xW3vLm9PaRt5YcN2bKd7HgF4jS6eU' } } })).rejects.toThrow('looks like a key');
+    await expect(saveProfile(stateDir, { fields: {}, custom: { email: { value: 'a@b.co' } } })).rejects.toThrow('standard profile field');
+    await expect(saveProfile(stateDir, { fields: {}, custom: { 'App Name': { value: 'x' } } })).rejects.toThrow('lower-case');
+    await expect(saveProfile(stateDir, { fields: {}, custom: { app_description: { value: 'x'.repeat(2001) } } })).rejects.toThrow('longer than');
+    // A description with a URL and an email in it is not a secret.
+    const ok = await saveProfile(stateDir, { fields: {}, custom: { support: { value: 'Write to support@clikdeploy.com or see https://clikdeploy.com/support' } } });
+    expect(ok.custom?.support?.value).toContain('support@clikdeploy.com');
+  });
+
+  it('match a form field by the words the agent gave, the most specific first, and never a password, code or card', async () => {
+    stateDir = await mkdtemp(join(tmpdir(), 'clikcode-profiles-'));
+    const profile = await saveProfile(stateDir, { fields: { email: 'ada@example.com' }, custom: {
+      app_name: { label: 'App name', value: 'ClikDeploy', match: ['app name', 'application name'] },
+      support_email: { label: 'Support email', value: 'support@clikdeploy.com', match: ['support email'] },
+      homepage: { label: 'Homepage URL', value: 'https://clikdeploy.com' },
+    } });
+    expect(customFieldFor(profile, hint('Application name *'))?.field.value).toBe('ClikDeploy');
+    expect(customFieldFor(profile, hint('Support email address'))?.key).toBe('support_email');
+    // Its label and name stand in when no words were given.
+    expect(customFieldFor(profile, hint('Homepage URL'))?.key).toBe('homepage');
+    // A form's plain "Email" is the standard field's, not the support email's.
+    expect(customFieldFor(profile, hint('Email'))).toBeUndefined();
+    expect(customFieldFor(profile, hint('Favourite colour'))).toBeUndefined();
+    expect(customFieldFor(profile, hint('App name verification code'))).toBeUndefined();
+    expect(customFieldFor(profile, hint('App name', 'password'))).toBeUndefined();
+    expect(customFieldFor({ }, hint('App name'))).toBeUndefined();
   });
 });
