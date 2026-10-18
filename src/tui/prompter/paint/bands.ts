@@ -4,6 +4,7 @@ import { thoughtLine } from '../../../harness/protocol/tool-category-style.js';
 import { noticeLines } from '../../render/wrap.js';
 import { composerLayout } from '../../render/composer-layout.js';
 import { terminalCellWidth, visibleSlice, visibleTail } from '../../render/width.js';
+import { HYPERLINK_CLOSE, hyperlinkOpen, linksOn } from '../../render/hyperlinks.js';
 import type { PickerOption } from '../../../harness/prompter.js';
 import { waitingSpinnerGlyph } from '../../../harness/protocol/activity-view.js';
 import { backgroundTerminalsLabel, reasoningBody } from '../../../harness/protocol/turn-flow.js';
@@ -89,7 +90,10 @@ export function frameBands(p: TerminalHarnessPrompter, input: BandInput) {
     const room = Math.max(8, inner - 2);
     if (!/^https?:\/\/\S+$/.test(line)) return [`  ${visibleSlice(line, room)}`];
     const rows: string[] = [];
-    for (let at = 0; at < line.length; at += room) rows.push(`  ${chalk.underline(line.slice(at, at + room))}`);
+    for (let at = 0; at < line.length; at += room) {
+      const part = line.slice(at, at + room);
+      rows.push(`  ${chalk.underline(linksOn() ? `${hyperlinkOpen(line)}${part}${HYPERLINK_CLOSE}` : part)}`);
+    }
     return rows;
   }) : [];
   const signInRows = signInWrapped.length <= liveBandBudget ? signInWrapped : signInWrapped.slice(0, Math.max(0, liveBandBudget));
