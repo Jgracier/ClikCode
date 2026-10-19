@@ -11,7 +11,7 @@ import { sharedState } from '../computer/shared-state.js';
 import { savedLoginFields, savedLoginsForSite } from '../computer/credential-vault.js';
 import { loginValueFor } from '../computer/login-fill.js';
 import { addSiteNote, readSiteNotes } from '../computer/site-notes.js';
-import { assertCustomKey, customFieldFor, describeProfile, listProfiles, PROFILE_KEYS, phoneFor, birthdayFor, profileKeyFor, saveProfile, type FieldHint, type ProfileKey } from '../computer/profiles.js';
+import { assertCustomKey, customFieldFor, describeProfile, listProfiles, PASSWORD_SECRET, PROFILE_KEYS, phoneFor, birthdayFor, profileKeyFor, readProfileSecret, saveProfile, saveProfileSecret, secretFieldFor, type FieldHint, type ProfileKey } from '../computer/profiles.js';
 import { expectSignup, generatePassword, holdSignup, pendingSignupPassword, settleSignup } from '../computer/signup-login.js';
 import { loginComputerPage, loginOutcomeMessage } from '../computer/login-page.js';
 import { LoginError } from '../computer/login-error.js';
@@ -30,7 +30,7 @@ type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'u
 type WebArgs = {
   action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'profile' | 'open_email_link' | 'read_email_code' | 'notes' | 'help';
   tab?: string; at?: 'start' | 'end'; url?: string; host?: string; note?: string; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
-  new_account?: boolean; secret?: string; to?: string; with?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean; format?: string; options?: string[] }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
+  new_account?: boolean; secret?: string; to?: string; with?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean; format?: string; options?: string[]; secret?: boolean }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
 };
 
 export function webAddress(value: string | undefined): string {
@@ -275,7 +275,7 @@ const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: [
     account: { type: 'integer', description: 'open_email_link, read_email_code: Gmail account number /u/N (default 0).' },
     fields: { type: 'object', additionalProperties: { type: 'string' }, description: `profile: fields to save or correct in the user's autofill profile (${PROFILE_KEYS.join(', ')}). Leave out to list the profiles. Use it when a site wants a different format (phone as +1…, state as an abbreviation).` },
     label: { type: 'string', description: 'profile: which profile (default: the only one, or a new one called Personal).' },
-    ask_fields: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { key: { type: 'string' }, label: { type: 'string' }, match: { type: 'array', items: { type: 'string' } }, optional: { type: 'boolean' }, format: { type: 'string', description: 'Types itself as the user enters it: date (##/##/####), phone ((###) ###-####), zip, time, or a pattern where # is a digit, A a letter, * either and anything else a literal the box inserts and jumps over.' }, options: { type: 'array', items: { type: 'string' }, description: 'A fixed set of answers shown as a selector (arrow keys in the terminal, radios in VS Code) instead of a text box.' } }, required: ['key', 'label'] }, description: 'profile: ask the user, privately and in one prompt, for details a task needs beyond the standard ones, and keep them in a profile (with label, a new one) so every later fill with no text uses them. key is lower_snake_case (app_name, privacy_policy_url); label is what the user is asked; match lists the words a form may label it with (["app name","application name"]); optional fields may be left empty. Details only, never a key or password.' },
+    ask_fields: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { key: { type: 'string' }, label: { type: 'string' }, match: { type: 'array', items: { type: 'string' } }, optional: { type: 'boolean' }, format: { type: 'string', description: 'Types itself as the user enters it: date (##/##/####), phone ((###) ###-####), zip, time, or a pattern where # is a digit, A a letter, * either and anything else a literal the box inserts and jumps over.' }, options: { type: 'array', items: { type: 'string' }, description: 'A fixed set of answers shown as a selector (arrow keys in the terminal, radios in VS Code) instead of a text box.' }, secret: { type: 'boolean', description: 'The answer is a secret (a password to use for sign-ups, key "password"; a recovery code): typed hidden, kept in Secrets Manager with the profile, and never shown to you. A later fill of a password box with no text uses it.' } }, required: ['key', 'label'] }, description: 'profile: ask the user, privately and in one prompt, for details a task needs beyond the standard ones, and keep them in a profile (with label, a new one) so every later fill with no text uses them. key is lower_snake_case (app_name, privacy_policy_url); label is what the user is asked; match lists the words a form may label it with (["app name","application name"]); optional fields may be left empty. Details only; a password or code goes in with secret: true.' },
     custom: { type: 'object', additionalProperties: { type: 'object', additionalProperties: false, properties: { label: { type: 'string' }, value: { type: 'string' }, match: { type: 'array', items: { type: 'string' } } }, required: ['value'] }, description: 'profile: save custom details you already know (a redirect address, the app name you chose) into a profile, same shape as ask_fields answers: {key: {label, value, match}}.' },
     secret_name: { type: 'string', description: 'capture_secret: name to save the key under (default: the site\'s name plus "/key").' },
     send_to: { ...SEND_TO_SCHEMA, description: 'capture_secret: ' + SEND_TO_HELP },
@@ -328,16 +328,19 @@ export const computerWebTool = defineTool<WebArgs>({
         // named one, a new one, or the first) so the next fill with no text uses them.
         if (args.ask_fields?.length) {
           if (!ctx.requestPrivateLogin) throw new Error('This chat cannot ask the user privately. Save details you know with custom, or the user can run: clikcode computer profile --custom key=value');
-          for (const spec of args.ask_fields) { if (!isStandardKey(spec.key)) assertCustomKey(spec.key); if (!spec.label?.trim()) throw new Error(`ask_fields "${spec.key}" needs a label: it is what the user is asked.`); }
+          for (const spec of args.ask_fields) { if (spec.secret) assertCustomKey(spec.key, true); else if (!isStandardKey(spec.key)) assertCustomKey(spec.key); if (!spec.label?.trim()) throw new Error(`ask_fields "${spec.key}" needs a label: it is what the user is asked.`); }
           const target = args.label ? all.find(profile => profile.label.toLowerCase() === args.label!.toLowerCase()) : all[0];
-          const prompt = args.ask_fields.map((spec, index): LoginField => ({ index, key: spec.key, label: spec.label.trim(), kind: spec.options?.length ? 'choice' : 'text', required: !spec.optional, ...(spec.options?.length ? { options: spec.options } : {}), ...(spec.format ? { format: spec.format } : {}), ...(isStandardKey(spec.key) ? (target?.fields[spec.key as ProfileKey] ? { current: target.fields[spec.key as ProfileKey]! } : {}) : target?.custom?.[spec.key]?.value ? { current: target.custom[spec.key]!.value } : {}) }));
+          const prompt = args.ask_fields.map((spec, index): LoginField => ({ index, key: spec.key, label: spec.label.trim(), kind: spec.secret ? 'password' : spec.options?.length ? 'choice' : 'text', required: !spec.optional, ...(spec.options?.length ? { options: spec.options } : {}), ...(spec.format ? { format: spec.format } : {}), ...(isStandardKey(spec.key) ? (target?.fields[spec.key as ProfileKey] ? { current: target.fields[spec.key as ProfileKey]! } : {}) : target?.custom?.[spec.key]?.value ? { current: target.custom[spec.key]!.value } : {}) }));
           const answers = await ctx.requestPrivateLogin('https://profile.clikcode', prompt, ctx.signal);
           if (!answers) throw new Error('The user did not provide the details.');
-          const answered = args.ask_fields.filter(spec => (answers[spec.key] ?? '').trim());
+          const answered = args.ask_fields.filter(spec => !spec.secret && (answers[spec.key] ?? '').trim());
+          const secretAnswers = args.ask_fields.filter(spec => spec.secret && (answers[spec.key] ?? '').length);
           // A standard field (birthday, sso_email) goes where forms look for it; anything else is a custom detail.
           const fields = Object.fromEntries(answered.filter(spec => isStandardKey(spec.key)).map(spec => [spec.key, answers[spec.key]!]));
           const custom = Object.fromEntries(answered.filter(spec => !isStandardKey(spec.key)).map(spec => [spec.key, { label: spec.label, value: answers[spec.key]!, ...(spec.match ? { match: spec.match } : {}) }]));
-          return { output: `Saved. ${describeProfile(await saveProfile(ctx.stateDir, { ...(target ? { id: target.id } : { label: args.label?.trim() || 'Custom' }), fields, custom }))}` };
+          const saved = await saveProfile(ctx.stateDir, { ...(target ? { id: target.id } : { label: args.label?.trim() || 'Custom' }), fields, custom });
+          for (const spec of secretAnswers) { registerSecret(answers[spec.key]!); await saveProfileSecret(ctx.stateDir, saved.id, spec.key, answers[spec.key]!, { label: spec.label, ...(spec.match ? { match: spec.match } : {}) }); }
+          return { output: `Saved. ${describeProfile(secretAnswers.length ? (await listProfiles(ctx.stateDir)).find(item => item.id === saved.id) ?? saved : saved)}` };
         }
         // Asked for by the agent, or nothing saved yet: one private prompt shows what is saved ("Keep …", or type a
         // replacement) and asks for what is missing; the result is the profile.
@@ -547,11 +550,17 @@ async function askForFills(page: Page, steps: readonly Step[], ctx: ToolContext)
   const boxesOnPage = passwordFields.length ? await page.locator('input[type="password"]:visible').count().catch(() => 0) : 0;
   const signingUp = passwordFields.length >= 2 || boxesOnPage >= 2 || passwordFields.some(field => /new-password/i.test(field.hint.autocomplete))
     || (passwordFields.length > 0 && /sign[-_ ]?up|register|create[-_ ]?account|join|password\/(?:edit|new|reset)|(?:reset|set|new|change)[-_ ]?password/i.test(page.url()));
-  const generated = signingUp && await generatedPasswordsAllowed(ctx.stateDir) ? pendingSignupPassword(page) ?? generatePassword() : undefined;
+  // The password the user chose for sign-ups, kept in the profile as a secret, comes before one the tool writes.
+  const chosen = signingUp && profile ? await readProfileSecret(ctx.stateDir, profile, PASSWORD_SECRET) : undefined;
+  const generated = chosen ?? (signingUp && await generatedPasswordsAllowed(ctx.stateDir) ? pendingSignupPassword(page) ?? generatePassword() : undefined);
   for (const field of fields) {
     if (field.password && generated) { values.set(field.step, generated); continue; }
     const fromLogin = login ? loginValueFor(login, field) : undefined;
     if (fromLogin) { values.set(field.step, fromLogin); continue; }
+    // A secret kept with the profile (never shown to the agent) fills the box it is for: the password, a recovery code.
+    const secretKey = secretFieldFor(profile, field.hint);
+    const secret = secretKey && profile ? await readProfileSecret(ctx.stateDir, profile, secretKey) : undefined;
+    if (secret) { registerSecret(secret); values.set(field.step, secret); continue; }
     // A detail the agent asked for by name ("Support email") is more specific than the standard field its words also suggest.
     const asked = field.password ? undefined : customFieldFor(profile, field.hint);
     if (asked) { values.set(field.step, asked.field.value); continue; }

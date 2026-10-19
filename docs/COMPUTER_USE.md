@@ -202,3 +202,7 @@ What the browser tool does so a run does not depend on luck or on the user:
 - **Typed-in formats and selectors in private prompts.** A question's `format` (`date`, `phone`, `zip`, `time`, or
   a pattern such as `##/##/####`) makes the box type the pattern itself, in the terminal and in the VS Code panel;
   `options` makes it a selector.
+
+## Secrets in a profile
+
+A profile can keep secrets next to its details: the password to use for sign-ups (`password`), a recovery code, anything a form asks that is not a detail. The value goes to Secrets Manager; the profile only knows the name, and nothing returns the value to the agent. Set one with `clikcode computer profile --label Personal --secret password` (typed hidden), or the agent asks with `profile` `ask_fields` and `secret: true`. A fill with no text then puts it in the box it is for: the password secret fills password boxes on a sign-up (it is used before a generated password), another secret fills a box whose label matches its words.

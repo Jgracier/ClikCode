@@ -84,8 +84,8 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
       await (await import('../commands/computer.js')).computerTool('computer_web', { action: 'send_secret', secret, send_to: [{ to: options.to, ...(Object.keys(params).length ? { with: params } : {}) }] }, options.chat);
     });
   computer.command('profile').description('Autofill profiles an agent fills forms from (name, email, phone, address, and custom details): list, --set key=value, --custom key=value, --delete')
-    .option('--create', 'Ask for the details and save them as a profile').option('--label <name>', 'Which profile (default Personal)').option('--set <pair...>', 'key=value, for example phone=719-555-0123').option('--custom <pair...>', 'key=value of a detail beyond the standard ones, for example app_name="My App" (details only, never a key)').option('--delete <label>', 'Remove a profile')
-    .action(async (options: { label?: string; set?: string[]; custom?: string[]; delete?: string; create?: boolean }) => (await import('../commands/computer.js')).computerProfile(options));
+    .option('--create', 'Ask for the details and save them as a profile').option('--label <name>', 'Which profile (default Personal)').option('--set <pair...>', 'key=value, for example phone=719-555-0123').option('--custom <pair...>', 'key=value of a detail beyond the standard ones, for example app_name="My App" (details only, never a key)').option('--secret <name>', 'Keep a secret with the profile, typed hidden (password = the password used for sign-ups); never shown to an agent').option('--delete <label>', 'Remove a profile')
+    .action(async (options: { label?: string; set?: string[]; custom?: string[]; delete?: string; create?: boolean; secret?: string }) => (await import('../commands/computer.js')).computerProfile(options));
   computer.command('secrets').description('List the names of saved secrets, or delete one (values are never shown)')
     .option('--delete <name>', 'Delete this secret')
     .action(async (options: { delete?: string }) => (await import('../commands/computer.js')).computerSecrets(options.delete));

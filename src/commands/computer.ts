@@ -117,8 +117,8 @@ export async function computerSecrets(remove?: string): Promise<void> {
 /** Autofill profiles: list them, set fields (`--set phone=719-555-0123`), pick one with `--label`, or `--delete` by label. */
 const PROFILE_QUESTIONS: readonly [string, string][] = [['given_name', 'First name'], ['family_name', 'Last name'], ['email', 'Email'], ['phone', 'Phone (with area code)'], ['address_line1', 'Street address'], ['address_line2', 'Apartment / suite (Enter to skip)'], ['city', 'City'], ['state', 'State'], ['postal_code', 'Zip / postal code'], ['country', 'Country'], ['organization', 'Company (Enter to skip)']];
 
-export async function computerProfile(options: { label?: string; set?: string[]; custom?: string[]; delete?: string; create?: boolean }): Promise<void> {
-  const { describeProfile, listProfiles, removeProfile, saveProfile } = await import('../agent/computer/profiles.js');
+export async function computerProfile(options: { label?: string; set?: string[]; custom?: string[]; delete?: string; create?: boolean; secret?: string }): Promise<void> {
+  const { describeProfile, listProfiles, removeProfile, saveProfile, saveProfileSecret } = await import('../agent/computer/profiles.js');
   const stateDir = stateDirectory();
   const emit = (text: string, data: unknown): void => { if (isJsonDefaultMode()) emitResult({ computer: { profiles: data } }); else process.stdout.write(`${text}\n`); };
   if (options.delete) {
@@ -136,6 +136,15 @@ export async function computerProfile(options: { label?: string; set?: string[];
     rl.close();
     const saved = await saveProfile(stateDir, { label, fields });
     return emit(`Saved. ${describeProfile(saved)}`, [saved]);
+  }
+  if (options.secret) {
+    if (!process.stdin.isTTY) throw new Error('A secret is typed hidden: run this in a terminal.');
+    const profiles = await listProfiles(stateDir);
+    const target = options.label ? profiles.find(profile => profile.label.toLowerCase() === options.label!.toLowerCase()) : profiles.length === 1 ? profiles[0] : undefined;
+    if (!target) throw new Error(options.label ? `No profile named "${options.label}".` : 'Say which profile: --label <name>.');
+    const value = await readHidden(`${options.secret} for "${target.label}" (typed hidden): `);
+    await saveProfileSecret(stateDir, target.id, options.secret, value);
+    return emit(`Saved. ${describeProfile((await listProfiles(stateDir)).find(profile => profile.id === target.id) ?? target)}`, { saved: options.secret });
   }
   if (options.set?.length) {
     const fields = Object.fromEntries(options.set.map(pair => { const at = pair.indexOf('='); if (at < 1) throw new Error(`Use key=value, for example phone=719-555-0123 (got "${pair}").`); return [pair.slice(0, at), pair.slice(at + 1)]; }));
@@ -170,4 +179,19 @@ export async function computerDestinationRemove(name: string): Promise<void> {
   const removed = await removeDestination(stateDirectory(), name);
   if (isJsonDefaultMode()) return emitResult({ computer: { destination: name, removed } });
   process.stdout.write(removed ? `Removed "${name}".\n` : `"${name}" is not one you added.\n`);
+}
+
+/** One line typed without being echoed. */
+async function readHidden(question: string): Promise<string> {
+  const { createInterface } = await import('node:readline/promises');
+  const { Writable } = await import('node:stream');
+  let muted = false;
+  const out = new Writable({ write(chunk, _encoding, done) { if (!muted) process.stderr.write(chunk); done(); } });
+  const rl = createInterface({ input: process.stdin, output: out, terminal: true });
+  const asked = rl.question(question);
+  muted = true;
+  const answer = await asked;
+  rl.close();
+  process.stderr.write('\n');
+  return answer;
 }
