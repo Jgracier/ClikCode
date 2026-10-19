@@ -46,19 +46,22 @@ it('picks the key over a resource name that sits next to it on the page', () => 
   expect(keyShaped('projects/831963658327')).toBe(false);
 });
 
-it('hides a labelled key from text the agent reads, and leaves ids, urls and slugs alone', () => {
+it('hides a labelled key from text the agent reads, and leaves urls, numbers and uuids alone', () => {
   const text = `API Key ${GOOGLE_STYLE}\nlink /url: https://docs.example.com/guide/AbCdEf1234567890AbCdEf1234567890\nProject number 831963658327\nprice_1N8abcDEFghiJKLmno123456\nuuid 3f2a9c1e-7b4d-4e8a-9c21-5d6e7f809a1b`;
   const { text: shown, hidden } = hideKeyLikeText(text);
-  expect(hidden).toBe(1);
+  // The random-looking price id goes too: nothing is shown on the chance that it is harmless.
+  expect(hidden).toBe(2);
   expect(shown).not.toContain(GOOGLE_STYLE);
   expect(shown).toContain('API Key [secret hidden]');
-  for (const kept of ['https://docs.example.com/guide/AbCdEf1234567890AbCdEf1234567890', '831963658327', 'price_1N8abcDEFghiJKLmno123456', '3f2a9c1e-7b4d-4e8a-9c21-5d6e7f809a1b']) expect(shown).toContain(kept);
+  for (const kept of ['https://docs.example.com/guide/AbCdEf1234567890AbCdEf1234567890', '831963658327', '3f2a9c1e-7b4d-4e8a-9c21-5d6e7f809a1b']) expect(shown).toContain(kept);
 });
 
-it('hides a long mixed-case token on a page that invites copying, even unlabelled', () => {
+it('hides a long random-looking token wherever it sits, labelled or not, and keeps refs, words and urls', () => {
   const token = 'Zx9Kp2LmQ7vRt4YhNb6WcDfGjS8aEuI3oPxC1VnMzKq5';
   expect(hideKeyLikeText(`Your new credential is shown once ${token} copy it now`).hidden).toBe(1);
-  expect(hideKeyLikeText(`Build ${token} finished`).hidden).toBe(0);
+  expect(hideKeyLikeText(`Build ${token} finished`).hidden).toBe(1);
+  const plain = ['- button "Create the deployment pipeline" [ref=f262e355]', '- link "Documentation for the integration settings"', '  - /url: https://app.example.com/settings/applications/new'].join('\n');
+  expect(hideKeyLikeText(plain)).toEqual({ text: plain, hidden: 0 });
 });
 
 it('recognises and hides a prefixed token that has no digit, as Hugging Face tokens can', () => {
@@ -97,6 +100,6 @@ it('hides a value on the line below its label, as a definition list prints it', 
   const page = ['- term [ref=e1]: "Client ID:"', '- definition [ref=e2]: egt41tV8CRc1JqBKcVlt8V8Ck2IQmT9qL78BhfpsoYs', '- term [ref=e3]: "Secret:"', '- definition [ref=e4]: Ebb9Z06K0gR7Xi3zCgyaCOFF8cBHS9vG4RwqMTu5ZNM'].join('\n');
   const { text, hidden } = hideKeyLikeText(page);
   expect(text).not.toContain('Ebb9Z06K0gR7Xi3zCgyaCOFF8cBHS9vG4RwqMTu5ZNM');
-  expect(text).toContain('egt41tV8CRc1JqBKcVlt8V8Ck2IQmT9qL78BhfpsoYs');
-  expect(hidden).toBe(1);
+  expect(text).not.toContain('egt41tV8CRc1JqBKcVlt8V8Ck2IQmT9qL78BhfpsoYs'); // the id is random-looking too: hidden, and still capturable
+  expect(hidden).toBe(2);
 });
