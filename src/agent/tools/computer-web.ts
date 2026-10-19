@@ -26,10 +26,10 @@ import { runTailnetHandoff, tailnetAddress } from '../computer/tailnet-handoff.j
 import type { Locator, Page } from 'playwright-core';
 import type { ToolContext, ToolRunResult } from '../tool-contract.js';
 
-type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload'; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; accept_dialog?: boolean; gone?: boolean; seconds?: number };
+type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload'; target?: string; at?: 'start' | 'end'; text?: string; key?: string; direction?: 'up' | 'down'; accept_dialog?: boolean; gone?: boolean; seconds?: number };
 type WebArgs = {
   action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'profile' | 'open_email_link' | 'read_email_code' | 'notes' | 'help';
-  tab?: string; url?: string; host?: string; note?: string; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
+  tab?: string; at?: 'start' | 'end'; url?: string; host?: string; note?: string; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
   new_account?: boolean; secret?: string; to?: string; with?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean; format?: string; options?: string[] }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
 };
 
@@ -68,7 +68,12 @@ async function locate(page: Page, target: string | undefined): Promise<Locator> 
 
 /** Radios, checkboxes and switches are often visually hidden behind a styled label, and a
  * click can land on something in front: fall back to clicking the element itself. */
-async function press(target: Locator): Promise<void> {
+async function press(target: Locator, at?: 'start' | 'end'): Promise<void> {
+  // Where the middle of a label is a link ("I agree to the Terms"), the edge is the box: click there.
+  if (at) {
+    const box = await target.boundingBox({ timeout: 6_000 });
+    if (box) { await target.click({ position: { x: at === 'start' ? Math.min(6, box.width / 2) : Math.max(box.width - 6, box.width / 2), y: box.height / 2 }, timeout: 6_000 }); return; }
+  }
   // A checkbox or radio is toggled on the element itself: a pointer click at its centre can land on a link in
   // its label ("I agree to the Terms and Privacy Policy") and open that page instead.
   const toggle = await target.evaluate(node => { const input = node as unknown as { tagName: string; type?: string }; return input.tagName === 'INPUT' && (input.type === 'checkbox' || input.type === 'radio'); }, undefined, { timeout: 2_000 }).catch(() => false);
@@ -241,6 +246,7 @@ const ACTION_LIST = 'open · close · observe · click · fill · choose · pres
 const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: ['action'], properties: {
     action: { type: 'string', description: ACTION_LIST },
     tab: { type: 'string', description: 'Name of your own tab. Agents working in parallel each pass a different name on every call, so they never share, read or navigate each other\'s page. Leave out when you are the only one using the browser.' },
+    at: { type: 'string', enum: ['start', 'end'], description: 'click: click the left (start) or right (end) edge of the element instead of its middle, for a checkbox whose label has a link in the middle.' },
     url: { type: 'string', description: 'open: the website address.' },
     host: { type: 'string', description: 'notes: the site (default: the open page\'s).' },
     note: { type: 'string', description: 'notes: a step, address or gotcha worth knowing the next time this task is done on the site. Leave out to read the saved notes. Never a key or password.' },
@@ -253,7 +259,7 @@ const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: [
     direction: { type: 'string', enum: ['up', 'down'], description: 'scroll.' },
     steps: { type: ['array', 'string'], description: 'steps: what to do, in order, e.g. [{do:"fill", target:"e4", text:"My key"}, {do:"click", target:"e9"}].',
       items: { type: 'object', additionalProperties: false, required: ['do'], properties: {
-        do: { type: 'string', enum: ['click', 'fill', 'choose', 'press', 'scroll', 'wait', 'upload'] }, target: { type: 'string' }, text: { type: 'string' }, key: { type: 'string' }, direction: { type: 'string', enum: ['up', 'down'] }, accept_dialog: { type: 'boolean' }, gone: { type: 'boolean' }, seconds: { type: 'number' },
+        do: { type: 'string', enum: ['click', 'fill', 'choose', 'press', 'scroll', 'wait', 'upload'] }, target: { type: 'string' }, text: { type: 'string' }, key: { type: 'string' }, direction: { type: 'string', enum: ['up', 'down'] }, accept_dialog: { type: 'boolean' }, at: { type: 'string', enum: ['start', 'end'], description: 'click: click the left (start) or right (end) edge of the element instead of its middle, for a checkbox whose label has a link in the middle.' }, gone: { type: 'boolean' }, seconds: { type: 'number' },
       } } },
     full: { type: 'boolean', description: 'observe: include the header and footer and a longer view.' },
     accept_dialog: { type: 'boolean', description: 'click: answer yes to a browser confirm dialog the click raises ("delete this token?"). Default: declined and reported.' },
@@ -438,7 +444,7 @@ async function doStep(page: Page, step: Step, ctx?: ToolContext): Promise<StepOu
     }
     case 'click': {
       const target = await locate(page, step.target);
-      const { dialogs } = await withDialogs(page, step.accept_dialog === true, () => clickOrHint(target));
+      const { dialogs } = await withDialogs(page, step.accept_dialog === true, () => clickOrHint(target, step.at));
       return `Clicked ${step.target}.${dialogNote(dialogs, step.accept_dialog === true)}`;
     }
     case 'fill': {
@@ -713,7 +719,7 @@ export function verificationCode(text: string): string | undefined {
 
 async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRunResult> {
   if (INTERACTIONS.has(args.action)) {
-    const one: Step = { do: args.action as Step['do'], ...(args.target ? { target: args.target } : {}), ...(args.text !== undefined ? { text: args.text } : {}), ...(args.key ? { key: args.key } : {}), ...(args.direction ? { direction: args.direction } : {}), ...(args.accept_dialog ? { accept_dialog: true } : {}), ...(args.gone ? { gone: true } : {}), ...(args.seconds ? { seconds: args.seconds } : {}) };
+    const one: Step = { do: args.action as Step['do'], ...(args.at ? { at: args.at } : {}), ...(args.target ? { target: args.target } : {}), ...(args.text !== undefined ? { text: args.text } : {}), ...(args.key ? { key: args.key } : {}), ...(args.direction ? { direction: args.direction } : {}), ...(args.accept_dialog ? { accept_dialog: true } : {}), ...(args.gone ? { gone: true } : {}), ...(args.seconds ? { seconds: args.seconds } : {}) };
     return runSteps(page, [one], ctx, args.tab);
   }
   switch (args.action) {
@@ -827,8 +833,8 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
 
 /** A native dialog or separate popup window is outside the page, so a click
  * that never lands is most often that: point the agent at the desktop tool. */
-async function clickOrHint(target: Locator): Promise<void> {
-  try { await press(target); }
+async function clickOrHint(target: Locator, at?: 'start' | 'end'): Promise<void> {
+  try { await press(target, at); }
   catch (error) {
     if (!(error instanceof Error) || !/timeout/i.test(error.message)) throw error;
     throw new Error(`${error.message.split('\n')[0]} If a popup window or browser dialog is in front of the page, use computer_desktop to see and answer it.`);
