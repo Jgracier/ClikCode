@@ -103,3 +103,20 @@ it('hides a value on the line below its label, as a definition list prints it', 
   expect(text).not.toContain('egt41tV8CRc1JqBKcVlt8V8Ck2IQmT9qL78BhfpsoYs'); // the id is random-looking too: hidden, and still capturable
   expect(hidden).toBe(2);
 });
+
+it('hides a 15-character app secret that sits under or beside its label, and leaves ordinary lines alone', () => {
+  const page = ['- generic [ref=e1]: App key', '- textbox [ref=e2]: k3j9d8f7s6a5q4w', '- generic [ref=e3]: App secret', '- textbox [ref=e4]: m1n2b3v4c5x6z7l', '- heading "Settings for deployment2024" [ref=e5]'].join('\n');
+  const { text, hidden } = hideKeyLikeText(page);
+  expect(text).not.toContain('k3j9d8f7s6a5q4w');
+  expect(text).not.toContain('m1n2b3v4c5x6z7l');
+  expect(text).toContain('deployment2024');
+  expect(hidden).toBe(2);
+});
+
+it('takes a short letters-and-digits credential only when it is plainly one', async () => {
+  const { shortKeyText } = await import('./secret-capture.js');
+  expect(shortKeyText('k3j9d8f7s6a5q4w')).toBe(true);
+  expect(shortKeyText('Create new app')).toBe(false);
+  expect(shortKeyText('deployment')).toBe(false);
+  expect(shortKeyText('1x')).toBe(false);
+});
