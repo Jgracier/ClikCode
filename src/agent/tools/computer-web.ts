@@ -10,7 +10,7 @@ import { savedLoginFields, savedLoginsForSite } from '../computer/credential-vau
 import { loginValueFor } from '../computer/login-fill.js';
 import { addSiteNote, readSiteNotes } from '../computer/site-notes.js';
 import { assertCustomKey, customFieldFor, describeProfile, listProfiles, PROFILE_KEYS, phoneFor, birthdayFor, profileKeyFor, saveProfile, type FieldHint, type ProfileKey } from '../computer/profiles.js';
-import { expectSignup, generatePassword, holdSignup, settleSignup } from '../computer/signup-login.js';
+import { expectSignup, generatePassword, holdSignup, pendingSignupPassword, settleSignup } from '../computer/signup-login.js';
 import { loginComputerPage, loginOutcomeMessage } from '../computer/login-page.js';
 import { LoginError } from '../computer/login-error.js';
 import { type LoginField } from '../computer/login-fields.js';
@@ -510,8 +510,11 @@ async function askForFills(page: Page, steps: readonly Step[], ctx: ToolContext)
   // A signup form (two password boxes, a new-password box, or a sign-up page) the user has let the tool write a
   // password for: one strong password for the whole form, kept in Secrets Manager with the login, never shown.
   const passwordFields = fields.filter(field => field.password);
-  const signingUp = passwordFields.length >= 2 || passwordFields.some(field => /new-password/i.test(field.hint.autocomplete)) || (passwordFields.length > 0 && /sign[-_ ]?up|register|create[-_ ]?account|join/i.test(page.url()));
-  const generated = signingUp && await generatedPasswordsAllowed(ctx.stateDir) ? generatePassword() : undefined;
+  // A form filled one box per call shows only one password box here, so the page itself is asked how many it has.
+  const boxesOnPage = passwordFields.length ? await page.locator('input[type="password"]:visible').count().catch(() => 0) : 0;
+  const signingUp = passwordFields.length >= 2 || boxesOnPage >= 2 || passwordFields.some(field => /new-password/i.test(field.hint.autocomplete))
+    || (passwordFields.length > 0 && /sign[-_ ]?up|register|create[-_ ]?account|join|password\/(?:edit|new|reset)|(?:reset|set|new|change)[-_ ]?password/i.test(page.url()));
+  const generated = signingUp && await generatedPasswordsAllowed(ctx.stateDir) ? pendingSignupPassword(page) ?? generatePassword() : undefined;
   for (const field of fields) {
     if (field.password && generated) { values.set(field.step, generated); continue; }
     const fromLogin = login ? loginValueFor(login, field) : undefined;
