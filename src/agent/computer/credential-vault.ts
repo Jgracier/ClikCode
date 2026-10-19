@@ -92,6 +92,10 @@ export async function saveLoginFields(stateDir: string, url: string, fields: Rec
   const origin = siteOrigin(url);
   if (!Object.keys(fields).length || Object.values(fields).some(value => !value)) throw new CredentialError('Complete the visible login fields.');
   const key = await vaultKey(stateDir, true);
+  // The same account saved again (a new password after a reset) replaces the old entry: two entries for one
+  // account would leave a sign-in asking which of them, which no unattended agent can answer.
+  const username = fields.username?.trim().toLowerCase();
+  id ??= username ? (await readItems(stateDir)).find(({ item }) => sameSite(item.origin, url) && item.fields?.username?.trim().toLowerCase() === username)?.id : undefined;
   const item: Item = id ? await readCredential(stateDir, url, id) : { origin };
   const itemId = id ?? randomUUID();
   const dir = path.join(vaultDir(stateDir), 'items');
