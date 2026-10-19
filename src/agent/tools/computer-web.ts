@@ -364,7 +364,10 @@ const INTERACTIONS: ReadonlySet<string> = new Set(['click', 'fill', 'choose', 'p
 
 /** Long jobs (an API being enabled, a resource being created) finish on their own: wait for words to
  * appear (or go) instead of looking again and again. Gives up with the page as it is. */
-async function waitOn(page: Page, step: Step): Promise<string> {
+/** What one step did. `halt` means the steps after it must not run: they were written for a page that is not there yet. */
+type StepOutcome = string | { note: string; halt: true };
+
+async function waitOn(page: Page, step: Step): Promise<StepOutcome> {
   const seconds = Math.min(Math.max(Math.floor(step.seconds ?? 30), 1), 120);
   const text = step.text?.trim();
   if (!text) { await page.waitForTimeout(seconds * 1000); return `Waited ${seconds}s.`; }
@@ -374,11 +377,12 @@ async function waitOn(page: Page, step: Step): Promise<string> {
     if (shown !== (step.gone === true)) return `${step.gone ? 'Gone' : 'Appeared'}: "${text}".`;
     await page.waitForTimeout(1_000);
   }
-  throw new Error(`Still ${step.gone ? 'showing' : 'not showing'} "${text}" after ${seconds}s.`);
+  // Not an error: the page simply is not there yet. What it shows now is the answer.
+  return { note: `Still ${step.gone ? 'showing' : 'not showing'} "${text}" after ${seconds}s.`, halt: true };
 }
 
 /** One thing done to the page, in words. Throws with the reason it could not be done. */
-async function doStep(page: Page, step: Step): Promise<string> {
+async function doStep(page: Page, step: Step): Promise<StepOutcome> {
   switch (step.do) {
     case 'click': {
       const target = await locate(page, step.target);
@@ -546,21 +550,23 @@ async function runSteps(page: Page, steps: readonly Step[], ctx: ToolContext): P
     const popups: Page[] = [];
     const onPopup = (popup: Page): void => { popups.push(popup); };
     current.on('popup', onPopup);
+    let halted = false;
     try {
-      notes.push(await doStep(current, step));
+      const done = await doStep(current, step);
+      if (typeof done === 'string') notes.push(done); else { notes.push(done.note); halted = true; }
       await settle(current);
       const saved = await settleSignup(ctx.stateDir, current);
       if (saved) notes.push(saved);
     } catch (error) {
-      const message = error instanceof Error ? error.message.split('\n')[0]! : String(error);
-      // A wait that runs out, or a tab the page closed itself (a sign-in popup finishing), is information
-      // about the page, not a failed tool: the report is the same, without the red "failed".
-      const closed = /has been closed/i.test(message);
-      const benign = (step.do === 'wait' && /timeout|still (not )?(showing|showing)/i.test(message)) || closed;
-      const live = closed ? current.context().pages().filter(item => !item.isClosed()).at(-1) : undefined;
-      if (live) { current = live; adoptPage(ctx.stateDir, current); }
-      const view = await observeComputerPage(current, false).catch(() => undefined);
-      return { output: `${[...notes, `Step ${index + 1} (${step.do}${step.target ? ` ${step.target}` : ''}) ${closed ? 'ended: the tab closed itself, so this is the page that is open now' : benign ? 'did not show up in time' : `failed: ${message}`}`].join('\n')}${view ? `\n\n${view.output}` : ''}`, ...(benign ? {} : { isError: true }) };
+      // The page closing itself (a sign-in popup that finished) is read from the page, not from an error message.
+      if (current.isClosed()) {
+        const live = current.context().pages().filter(item => !item.isClosed()).at(-1);
+        if (live) { current = live; adoptPage(ctx.stateDir, current); halted = true; notes.push(`Step ${index + 1} (${step.do}): the tab closed itself, so this is the page that is open now.`); }
+      }
+      if (!halted) {
+        const view = await observeComputerPage(current, false).catch(() => undefined);
+        return { output: `${[...notes, `Step ${index + 1} (${step.do}${step.target ? ` ${step.target}` : ''}) failed: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`].join('\n')}${view ? `\n\n${view.output}` : ''}`, isError: true };
+      }
     }
     finally { current.off('popup', onPopup); }
     const next = popups.filter(popup => !popup.isClosed()).at(-1);
@@ -569,6 +575,11 @@ async function runSteps(page: Page, steps: readonly Step[], ctx: ToolContext): P
       adoptPage(ctx.stateDir, current);
       await settle(current);
       notes.push(`A new tab opened and is now the page: ${displayUrl(current.url())}`);
+    }
+    if (halted) {
+      const rest = steps.length - index - 1;
+      if (rest > 0) notes.push(`${rest} later step${rest === 1 ? ' was' : 's were'} not run.`);
+      break;
     }
   }
   const view = await observeComputerPage(current, false, false, undefined, true);

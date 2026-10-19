@@ -7,7 +7,7 @@
  * prompt. Every failure says "Not saved" and why; nothing is ever saved half-way. */
 import type { Page } from 'playwright-core';
 import { namedSecretNames, readNamedSecret, saveNamedSecret } from './credential-vault.js';
-import { copyWithSiteButton, listenForCopies, copiedSince } from './clipboard-watch.js';
+import { copyWithSiteButton, listenForCopies, copiedSince, plausibleCopy, readClipboard } from './clipboard-watch.js';
 import { secretParts, watchDownload } from './download-capture.js';
 import { LoginError } from './login-error.js';
 import { checkKey, type KeyCheck } from './key-check.js';
@@ -41,6 +41,7 @@ export async function captureSecret(input: {
   const finder = await armFinder(input.page, input.existing ?? !input.trigger);
   const download = watchDownload(input.page);
   await listenForCopies(input.page);
+  const clipboardBefore = input.trigger ? (await readClipboard(input.page))?.trim() : undefined;
   try {
     if (input.trigger) { clicked = true; await input.trigger(); }
     let value: string | undefined;
@@ -54,6 +55,12 @@ export async function captureSecret(input: {
       if (value) { via = 'a file the site handed over'; break; }
       value = await copiedSince(input.page);
       if (value) { via = 'the Copy button that was pressed'; break; }
+      // A button that copies by a route the page hook cannot see still leaves the key on the clipboard,
+      // and a clipboard that changed across the click is the click's doing.
+      if (clicked) {
+        const copied = plausibleCopy(await readClipboard(input.page));
+        if (copied && copied !== clipboardBefore) { value = copied; via = 'the clipboard after the click'; break; }
+      }
       const decision = await finder.look();
       // After a Create, the site's own Copy button is the exact answer. Without a click
       // (a key already on the page) the page's own text is trusted first, because a

@@ -3,7 +3,7 @@
  * mistaken for the key. */
 import type { Page } from 'playwright-core';
 
-type Hooked = { __clikcodeCopied?: string | null; navigator: { clipboard?: { writeText(text: string): Promise<void> } }; document: { getSelection(): { toString(): string } | null; addEventListener(type: string, listener: () => void, capture: boolean): void } };
+type Hooked = { __clikcodeCopied?: string | null; navigator: { clipboard?: { writeText(text: string): Promise<void>; write?(items: unknown[]): Promise<void> } }; document: { getSelection(): { toString(): string } | null; addEventListener(type: string, listener: () => void, capture: boolean): void; execCommand?(command: string, ...rest: unknown[]): boolean } };
 
 /** Runs in the page. Idempotent: installed once per document. */
 function hookCopy(): void {
@@ -14,6 +14,26 @@ function hookCopy(): void {
   if (clipboard) {
     const original = clipboard.writeText.bind(clipboard);
     clipboard.writeText = (text: string) => { w.__clikcodeCopied = String(text); return original(text); };
+  }
+  // Sites copy three ways: writeText, write (a ClipboardItem, which is how many dialogs do it) and the
+  // old execCommand. Missing one is how a Copy button "copies nothing".
+  if (clipboard?.write) {
+    const originalWrite = clipboard.write.bind(clipboard);
+    clipboard.write = async (items: unknown[]) => {
+      try {
+        const item = items[0] as { getType?(type: string): Promise<{ text(): Promise<string> }> } | undefined;
+        const blob = await item?.getType?.('text/plain');
+        if (blob) w.__clikcodeCopied = await blob.text();
+      } catch { /* the page's own copy still goes ahead */ }
+      return originalWrite(items);
+    };
+  }
+  if (w.document.execCommand) {
+    const originalExec = w.document.execCommand.bind(w.document);
+    w.document.execCommand = (command: string, ...rest: unknown[]) => {
+      if (command === 'copy') { const selected = String(w.document.getSelection() ?? ''); if (selected) w.__clikcodeCopied = selected; }
+      return originalExec(command, ...rest);
+    };
   }
   w.document.addEventListener('copy', () => {
     const selected = String(w.document.getSelection() ?? '');
@@ -31,7 +51,9 @@ export function plausibleCopy(value: string | null | undefined): string | undefi
 /** The site's own button for copying the new key: "Copy", "Copy key", "Copy API key to
  * clipboard", "Copy token". Buttons that copy something else (a name, an id, a cURL
  * command) say so and do not match. */
-const COPY_KEY_BUTTON = /^copy(?: (?:the |your )?(?:new )?(?:api )?(?:secret )?(?:key|token|secret|value|password))?(?: to clipboard)?$/i;
+export const COPY_KEY_BUTTON = /^copy\b(?: [\w'’-]+){0,5}?(?: to clipboard)?$/i;
+/** A button whose own name says it copies something that is not the credential. */
+export const COPIES_OTHER = /\b(?:id|identifier|name|url|uri|link|curl|command|snippet|endpoint|email|address|username)\b/i;
 
 /** What a Copy button's nearest label says it copies, as a rank: a secret, token or password
  * is the credential; an id, name or address is not. Pure so it can be tested. */
@@ -80,13 +102,24 @@ export async function copiedSince(page: Page): Promise<string | undefined> {
   return plausibleCopy(await page.evaluate(() => (globalThis as unknown as Hooked).__clikcodeCopied).catch(() => undefined));
 }
 
+/** The system clipboard as this page sees it, when the browser lets it be read. A last resort behind the
+ * page's own copy: it is trusted only when it CHANGED across the click, so something already there is never taken. */
+export async function readClipboard(page: Page): Promise<string | undefined> {
+  try { await page.context().grantPermissions(['clipboard-read', 'clipboard-write']); } catch { /* not grantable here */ }
+  return page.evaluate(async () => {
+    try { return await (globalThis as unknown as { navigator: { clipboard: { readText(): Promise<string> } } }).navigator.clipboard.readText(); } catch { return undefined; }
+  }).catch(() => undefined);
+}
+
 /** Press that button and take what the page copies. What the site itself puts on
  * the clipboard is the key by definition, so no guess about its shape is needed. */
 export async function copyWithSiteButton(page: Page, waitMs = 3_000): Promise<{ value: string; label: string } | undefined> {
-  const buttons = page.getByRole('button', { name: COPY_KEY_BUTTON }).locator('visible=true');
+  const buttons = page.getByRole('button', { name: COPY_KEY_BUTTON }).filter({ hasNotText: COPIES_OTHER }).locator('visible=true');
   let label = '';
+  let before: string | undefined;
   try {
     if (!await buttons.count()) return undefined;
+    before = await readClipboard(page);
     const chosen = await bestCopy(buttons);
     label = chosen.label;
     await page.addInitScript(hookCopy);
@@ -102,5 +135,6 @@ export async function copyWithSiteButton(page: Page, waitMs = 3_000): Promise<{ 
       return { value: found, label };
     }
   }
-  return undefined;
+  const after = plausibleCopy(await readClipboard(page));
+  return after && after !== before?.trim() ? { value: after, label } : undefined;
 }
