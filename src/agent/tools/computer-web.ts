@@ -28,9 +28,9 @@ import type { ToolContext, ToolRunResult } from '../tool-contract.js';
 
 type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload'; target?: string; at?: 'start' | 'end'; text?: string; key?: string; direction?: 'up' | 'down'; accept_dialog?: boolean; gone?: boolean; seconds?: number };
 type WebArgs = {
-  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'profile' | 'open_email_link' | 'read_email_code' | 'notes' | 'help';
+  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'profile' | 'open_email_link' | 'read_email_code' | 'notes' | 'queue' | 'help';
   tab?: string; at?: 'start' | 'end'; url?: string; host?: string; note?: string; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
-  new_account?: boolean; secret?: string; to?: string; with?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean; format?: string; options?: string[]; secret?: boolean }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
+  new_account?: boolean; secret?: string; to?: string; with?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean; format?: string; options?: string[]; secret?: boolean }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; vendor?: string; owner?: string; env?: string; task?: { vendor: string; kind?: string; status?: string; reason?: string; note?: string; owner?: string; connectors?: string[] }; tasks?: boolean; task_status?: string; task_reason?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
 };
 
 export function webAddress(value: string | undefined): string {
@@ -241,7 +241,7 @@ async function settle(page: Page): Promise<void> {
   })).catch(() => undefined); // a navigation destroys the page being watched: the next look is a new page
 }
 
-const ACTION_LIST = 'open · close · observe · click · fill · choose · press · scroll · wait · upload · steps · login · handoff · capture_secret · send_secret · profile · open_email_link · read_email_code · notes · help';
+const ACTION_LIST = 'open · close · observe · click · fill · choose · press · scroll · wait · upload · steps · login · handoff · capture_secret · send_secret · profile · open_email_link · read_email_code · notes · queue · help';
 
 const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: ['action'], properties: {
     action: { type: 'string', description: ACTION_LIST },
@@ -277,6 +277,12 @@ const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: [
     label: { type: 'string', description: 'profile: which profile (default: the only one, or a new one called Personal).' },
     ask_fields: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { key: { type: 'string' }, label: { type: 'string' }, match: { type: 'array', items: { type: 'string' } }, optional: { type: 'boolean' }, format: { type: 'string', description: 'Types itself as the user enters it: date (##/##/####), phone ((###) ###-####), zip, time, or a pattern where # is a digit, A a letter, * either and anything else a literal the box inserts and jumps over.' }, options: { type: 'array', items: { type: 'string' }, description: 'A fixed set of answers shown as a selector (arrow keys in the terminal, radios in VS Code) instead of a text box.' }, secret: { type: 'boolean', description: 'The answer is a secret (a password to use for sign-ups, key "password"; a recovery code): typed hidden, kept in Secrets Manager with the profile, and never shown to you. A later fill of a password box with no text uses it.' } }, required: ['key', 'label'] }, description: 'profile: ask the user, privately and in one prompt, for details a task needs beyond the standard ones, and keep them in a profile (with label, a new one) so every later fill with no text uses them. key is lower_snake_case (app_name, privacy_policy_url); label is what the user is asked; match lists the words a form may label it with (["app name","application name"]); optional fields may be left empty. Details only; a password or code goes in with secret: true.' },
     custom: { type: 'object', additionalProperties: { type: 'object', additionalProperties: false, properties: { label: { type: 'string' }, value: { type: 'string' }, match: { type: 'array', items: { type: 'string' } } }, required: ['value'] }, description: 'profile: save custom details you already know (a redirect address, the app name you chose) into a profile, same shape as ask_fields answers: {key: {label, value, match}}.' },
+    vendor: { type: 'string', description: 'capture_secret: the vendor the key is for, recorded with it.' },
+    owner: { type: 'string', description: 'capture_secret: the account the key or app belongs to (default: the profile\'s sign-in email).' },
+    env: { type: 'string', description: 'capture_secret: production, sandbox or test.' },
+    task: { type: 'object', additionalProperties: false, properties: { vendor: { type: 'string' }, kind: { type: 'string', enum: ['oauth-app', 'api-key', 'test-account', 'webhook', 'other'] }, status: { type: 'string', enum: ['queued', 'working', 'done', 'needs-human', 'blocked', 'no-self-serve'] }, reason: { type: 'string', enum: ['captcha', 'sms', 'email', 'payment', 'identity', 'review', 'two-factor', 'other'] }, note: { type: 'string' }, owner: { type: 'string' }, connectors: { type: 'array', items: { type: 'string' } } }, required: ['vendor'], description: 'queue: record or update one vendor task (one per vendor and kind). Set status needs-human with a reason when a person must act (captcha, sms, payment), done when finished, blocked when it cannot be done. Always record the outcome here instead of only saying it.' },
+    tasks: { type: 'boolean', description: 'queue: list the tasks (filter with task_status, task_reason) with a summary.' },
+    task_status: { type: 'string' }, task_reason: { type: 'string' },
     secret_name: { type: 'string', description: 'capture_secret: name to save the key under (default: the site\'s name plus "/key").' },
     send_to: { ...SEND_TO_SCHEMA, description: 'capture_secret: ' + SEND_TO_HELP },
   } };
@@ -320,6 +326,12 @@ export const computerWebTool = defineTool<WebArgs>({
       if (args.action === 'help') return { output: `${WEB_DESCRIPTION}\n\nArguments: ${Object.entries((WEB_PARAMETERS as { properties: Record<string, { description?: string }> }).properties).map(([name, spec]) => `${name}${spec.description ? ` (${spec.description})` : ''}`).join('; ')}` };
       if (!ACTION_LIST.split(' · ').includes(String(args.action))) throw new Error(`Unknown action "${String(args.action)}". Actions: ${ACTION_LIST}.`);
       if (args.action === 'send_secret') return storeSecretTool.run({ secret: args.secret ?? '', ...(args.to ? { to: args.to } : {}), ...(args.with ? { with: args.with } : {}), ...(args.send_to ? { send_to: args.send_to } : {}) }, ctx);
+      if (args.action === 'queue') {
+        const { describeTask, listTasks, saveTask, summarizeTasks } = await import('../computer/work-queue.js');
+        if (args.task) return { output: `Recorded. ${describeTask(await saveTask(ctx.stateDir, args.task as Parameters<typeof saveTask>[1]))}` };
+        const all = await listTasks(ctx.stateDir, { ...(args.task_status ? { status: args.task_status as never } : {}), ...(args.task_reason ? { reason: args.task_reason as never } : {}) });
+        return { output: `${summarizeTasks(all)}\n${all.map(describeTask).join('\n')}` };
+      }
       if (args.action === 'profile') {
         const known = args.custom && Object.keys(args.custom).length ? args.custom : undefined;
         if ((args.fields && Object.keys(args.fields).length) || known) return { output: `Saved. ${describeProfile(await saveProfile(ctx.stateDir, { ...(args.label ? { label: args.label } : {}), fields: args.fields ?? {}, ...(known ? { custom: known } : {}) }))}` };
@@ -808,6 +820,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       const name = args.secret_name?.trim() || `${new URL(page.url()).hostname.replace(/^www\./, '')}/key`;
       // The clipboard is one thing and a Copy button only works in the focused tab: captures take turns, each in front.
       const { length, shape, via, check, sent } = await inOrder('clipboard', async () => { await page.bringToFront().catch(() => undefined); return captureSecret({ ...(args.paste ? { paste: true } : {}), stateDir: ctx.stateDir, page, name, signal: ctx.signal,
+        meta: { vendor: args.vendor ?? new URL(page.url()).hostname.replace(/^www\./, ''), owner: args.owner ?? (await listProfiles(ctx.stateDir))[0]?.fields.sso_email, ...(args.env ? { env: args.env } : {}) },
         ...(plan?.length ? { sendTo: plan } : {}),
         ...(args.target ? { trigger: async () => { await clickOrHint(await locate(page, args.target)); } } : {}),
         ...(args.target ? { readTarget: async () => { const element = await locate(page, args.target); return (await element.inputValue({ timeout: 1_000 }).catch(() => '')) || (await element.innerText({ timeout: 1_000 }).catch(() => '')); } } : {}),

@@ -30,6 +30,8 @@ export async function captureSecret(input: {
   check?(pageUrl: string, value: string, options: { fresh: boolean }): Promise<KeyCheck>;
   /** Where the key goes once it is captured and checked, decided and approved beforehand. */
   sendTo?: readonly Destination[];
+  /** Whose it is and what for, recorded with the secret. */
+  meta?: { vendor?: string; owner?: string; env?: string };
   /** Skip looking and ask the user to paste it (the agent knows the page hides it or shows it as an image). */
   paste?: boolean;
 }): Promise<{ length: number; found: boolean; shape: string; via: string; check: KeyCheck; sent: Delivery[] }> {
@@ -104,7 +106,7 @@ export async function captureSecret(input: {
     // blob): saving it would only hide the problem. A key just made by the click is different: the site
     // shows it once, so it is kept (and held back from every destination) rather than lost.
     if (check.verdict === 'rejected' && !clicked) throw new LoginError(`Not saved: ${check.detail}. What was on the page is not a working key (it may be the key's id or another value).`);
-    await saveNamedSecret(input.stateDir, input.name, value);
+    await saveNamedSecret(input.stateDir, input.name, value, input.meta);
     // Saved first: if a destination fails, the key is still safe in Secrets Manager and can be sent again.
     const sent = input.sendTo?.length && check.verdict !== 'rejected' ? await sendToDestinations(input.stateDir, input.sendTo, value, input.signal) : [];
     return { length: value.length, found, shape: describeShape(value), via, check, sent };
