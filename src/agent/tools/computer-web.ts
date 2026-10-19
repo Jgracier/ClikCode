@@ -1,7 +1,7 @@
 /** Page-level browser actions in ClikCode's own Chrome profile. */
 import { defineTool } from '../tool-contract.js';
 import { adoptPage, closeComputerPage, computerPage, openComputerPage } from '../computer/browser.js';
-import { COMPUTER_OFF, computerEnabled } from '../computer/settings.js';
+import { COMPUTER_OFF, computerEnabled, generatedPasswordsAllowed } from '../computer/settings.js';
 import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
 import { maskSensitive, sensitiveValues } from '../computer/sensitive-fields.js';
 import { storeSecretTool } from './store-secret.js';
@@ -10,7 +10,7 @@ import { savedLoginFields, savedLoginsForSite } from '../computer/credential-vau
 import { loginValueFor } from '../computer/login-fill.js';
 import { addSiteNote, readSiteNotes } from '../computer/site-notes.js';
 import { assertCustomKey, customFieldFor, describeProfile, listProfiles, PROFILE_KEYS, phoneFor, birthdayFor, profileKeyFor, saveProfile, type FieldHint, type ProfileKey } from '../computer/profiles.js';
-import { expectSignup, settleSignup } from '../computer/signup-login.js';
+import { expectSignup, generatePassword, settleSignup } from '../computer/signup-login.js';
 import { loginComputerPage, loginOutcomeMessage } from '../computer/login-page.js';
 import { LoginError } from '../computer/login-error.js';
 import { type LoginField } from '../computer/login-fields.js';
@@ -507,7 +507,13 @@ async function askForFills(page: Page, steps: readonly Step[], ctx: ToolContext)
       if (account) login = await savedLoginFields(ctx.stateDir, page.url(), account.id).catch(() => undefined);
     }
   }
+  // A signup form (two password boxes, a new-password box, or a sign-up page) the user has let the tool write a
+  // password for: one strong password for the whole form, kept in Secrets Manager with the login, never shown.
+  const passwordFields = fields.filter(field => field.password);
+  const signingUp = passwordFields.length >= 2 || passwordFields.some(field => /new-password/i.test(field.hint.autocomplete)) || (passwordFields.length > 0 && /sign[-_ ]?up|register|create[-_ ]?account|join/i.test(page.url()));
+  const generated = signingUp && await generatedPasswordsAllowed(ctx.stateDir) ? generatePassword() : undefined;
   for (const field of fields) {
+    if (field.password && generated) { values.set(field.step, generated); continue; }
     const fromLogin = login ? loginValueFor(login, field) : undefined;
     if (fromLogin) { values.set(field.step, fromLogin); continue; }
     // A detail the agent asked for by name ("Support email") is more specific than the standard field its words also suggest.
@@ -518,6 +524,7 @@ async function askForFills(page: Page, steps: readonly Step[], ctx: ToolContext)
     if (known) { values.set(field.step, key === 'phone' ? phoneFor(known, field.placeholder, field.current) : key === 'birthday' ? birthdayFor(known, `${field.label} ${field.placeholder}`) : known); continue; }
     ask.push({ step: field.step, key, field: { index: ask.length, key: `fill${ask.length}`, label: field.label || String(field.step.target), kind: field.password ? 'password' : 'text', required: true } });
   }
+  if (generated) { registerSecret(generated); expectSignup(page, generated); }
   if (ask.length) {
     if (!ctx.requestPrivateLogin) throw new Error('Fill needs text: this chat cannot ask the user privately.');
     const answers = await ctx.requestPrivateLogin(origin, ask.map(item => item.field), ctx.signal);

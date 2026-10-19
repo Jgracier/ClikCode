@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import type { Page } from 'playwright-core';
+import { generatePassword } from './signup-login.js';
 import { lockCredentialVault, savedLoginFields, savedLoginsForSite } from './credential-vault.js';
 import { expectSignup, settleSignup } from './signup-login.js';
 
@@ -33,4 +34,11 @@ it('keeps the login of a signup only after the password fields are gone, with th
   expect((await savedLoginFields(stateDir, 'https://signup.example.com/', login!.id)).password).toBe('Zq9-correct-horse');
   // Once saved it is not saved again.
   expect(await settleSignup(stateDir, page)).toBeUndefined();
+});
+
+it('makes a 24-character password with every class, differently each time', () => {
+  const first = generatePassword();
+  expect(first).toHaveLength(24);
+  expect(first).toMatch(/[a-z]/); expect(first).toMatch(/[A-Z]/); expect(first).toMatch(/\d/); expect(first).toMatch(/[!@#$%^*_-]/);
+  expect(generatePassword()).not.toBe(first);
 });
