@@ -44,3 +44,15 @@ export async function setGeneratedPasswords(stateDir: string, allowed: boolean):
 }
 
 export const COMPUTER_OFF = 'Computer use is off. Run `clikcode computer on` to enable it.';
+
+/** Off unless the user turned it on: a private prompt the browser tool would show (a password, a code, an account
+ * choice) is instead parked in the vendor queue as needs-human, and the agent is told to move on. For a long run
+ * over many vendors that nobody sits through. */
+export async function unattendedEnabled(stateDir: string): Promise<boolean> {
+  try { return (JSON.parse(await fs.readFile(computerSettingsPath(stateDir), 'utf8')) as { unattended?: unknown }).unattended === true; }
+  catch { return false; }
+}
+
+export async function setUnattended(stateDir: string, on: boolean): Promise<void> {
+  await writeSettings(stateDir, { unattended: on });
+}
