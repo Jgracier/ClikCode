@@ -16,10 +16,12 @@ const fake = async (name: string, script: string): Promise<void> => { await writ
 
 it('ships a few destinations as plain data, each naming the slots the agent fills', async () => {
   const all = await loadDestinations(dir);
-  expect(Object.keys(all)).toEqual(['clikdeploy-secret', 'clikdeploy-app-secret', 'clikdeploy-compute', 'clikdeploy-connector', 'github-secret']);
+  expect(Object.keys(all)).toEqual(['clikdeploy-secret', 'clikdeploy-app-secret', 'clikdeploy-compute', 'clikdeploy-connector', 'clikdeploy-connection', 'clikdeploy-connection-basic', 'github-secret']);
   expect(slotsOf(all['clikdeploy-secret']!)).toEqual(['key']);
   expect(slotsOf(all['clikdeploy-compute']!)).toEqual(['provider', 'field']);
   expect(slotsOf(all['clikdeploy-connector']!)).toEqual(['integration', 'client_id']);
+  expect(slotsOf(all['clikdeploy-connection']!)).toEqual(['integration']);
+  expect(slotsOf(all['clikdeploy-connection-basic']!)).toEqual(['integration', 'username']);
   expect(slotsOf(all['github-secret']!)).toEqual(['key', 'repo']);
 });
 
@@ -127,4 +129,14 @@ it('reads a plan a harness handed over as JSON text, because its cached schema d
   expect(normalizeSendTo('[{"to":"github-secret","with":{"repo":"a/b","key":"K_KEY"}}]')).toHaveLength(1);
   expect(normalizeSendTo('clikdeploy-secret')).toEqual([{ to: 'clikdeploy-secret' }]);
   expect(normalizeSendTo('{broken')).toBeUndefined();
+});
+
+it('connects a vendor key as a ClikDeploy connection through the product\'s own connect capability, the key JSON-escaped and never in a flag', async () => {
+  await fake('clikdeploy', `printf '%s\\n' "$@" > "${dir}/argv"; echo '{"status":"success","data":{"success":true,"data":{"status":"active"}}}'`);
+  const secret = 'ab"c\\d_0123456789';
+  const [result] = await sendToDestinations(dir, [{ to: 'clikdeploy-connection', with: { integration: 'ipinfo' } }], secret);
+  expect(result).toMatchObject({ ok: true, label: 'clikdeploy-connection (ipinfo)' });
+  const argv = (await readFile(join(dir, 'argv'), 'utf8')).split('\n');
+  expect(argv.slice(0, 3)).toEqual(['tools', 'run', 'connect_connector']);
+  expect(JSON.parse(argv[argv.indexOf('--args-json') + 1]!)).toEqual({ integrationId: 'ipinfo', apiKey: secret });
 });

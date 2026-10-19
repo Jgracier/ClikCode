@@ -219,3 +219,12 @@ A profile can keep secrets next to its details: the password to use for sign-ups
 - **Sign-in order** (said to the agent on every sign-in or sign-up page): Google ("Continue with Google", no password, no email check), else GitHub (GitHub has no Google sign-in of its own, so it signs in with the saved GitHub login and a verification code read from the profile's mailbox), else the profile's email and `password` secret. A site with a free-form username uses the profile's `preferred_username`.
 - **The profile answers sign-ins**: `login` with no saved login for a site fills the profile's sign-in email and its `password` secret instead of asking. Anything else it is asked (a one-time code, an account choice) is asked as before.
 - **`clikcode computer unattended on`**: a private prompt about a site is never shown. The need is parked in the queue (`needs-human`, with a reason from what was asked: `captcha`, `two-factor`, `sms`, else `other`) and the agent is told to go on to the next vendor. The profile prompts are always shown, because they are the user's own. Clear the queue in batches: `clikcode computer queue --status needs-human`.
+
+## Onboarding a ClikDeploy connector
+
+The `onboard-connector` skill (`~/.claude/skills/onboard-connector/SKILL.md`) is the whole loop: research the vendor's docs, write the
+spec through ClikDeploy's MCP tools (`search_tools` finds them; nothing is pinned), sign up (Google first, then Google through GitHub,
+then the profile email + hidden password), `capture_secret`, `send_secret` to the built-in `clikdeploy-connection` destination
+(`clikdeploy-connection-basic` for username + password), then test and publish. Captcha, SMS, payment, attestation and phone-approval
+steps go to the queue (`queue`) and the loop moves on. ClikDeploy never browses; ClikCode never touches a spec's internals beyond the
+schema ClikDeploy serves (`connector_spec_guide`).
