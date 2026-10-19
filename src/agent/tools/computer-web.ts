@@ -552,8 +552,15 @@ async function runSteps(page: Page, steps: readonly Step[], ctx: ToolContext): P
       const saved = await settleSignup(ctx.stateDir, current);
       if (saved) notes.push(saved);
     } catch (error) {
+      const message = error instanceof Error ? error.message.split('\n')[0]! : String(error);
+      // A wait that runs out, or a tab the page closed itself (a sign-in popup finishing), is information
+      // about the page, not a failed tool: the report is the same, without the red "failed".
+      const closed = /has been closed/i.test(message);
+      const benign = (step.do === 'wait' && /timeout|still (not )?(showing|showing)/i.test(message)) || closed;
+      const live = closed ? current.context().pages().filter(item => !item.isClosed()).at(-1) : undefined;
+      if (live) { current = live; adoptPage(ctx.stateDir, current); }
       const view = await observeComputerPage(current, false).catch(() => undefined);
-      return { output: `${[...notes, `Step ${index + 1} (${step.do}${step.target ? ` ${step.target}` : ''}) failed: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`].join('\n')}${view ? `\n\n${view.output}` : ''}`, isError: true };
+      return { output: `${[...notes, `Step ${index + 1} (${step.do}${step.target ? ` ${step.target}` : ''}) ${closed ? 'ended: the tab closed itself, so this is the page that is open now' : benign ? 'did not show up in time' : `failed: ${message}`}`].join('\n')}${view ? `\n\n${view.output}` : ''}`, ...(benign ? {} : { isError: true }) };
     }
     finally { current.off('popup', onPopup); }
     const next = popups.filter(popup => !popup.isClosed()).at(-1);
