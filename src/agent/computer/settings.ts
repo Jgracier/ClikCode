@@ -18,12 +18,29 @@ export function computerEnabledSync(stateDir: string): boolean {
   catch { return true; }
 }
 
-export async function setComputerEnabled(stateDir: string, enabled: boolean): Promise<void> {
+async function writeSettings(stateDir: string, change: Record<string, boolean>): Promise<void> {
   const file = computerSettingsPath(stateDir);
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  let current: Record<string, unknown> = {};
+  try { current = JSON.parse(await fs.readFile(file, 'utf8')) as Record<string, unknown>; } catch { /* none yet */ }
   const temp = `${file}.${process.pid}.tmp`;
-  await fs.writeFile(temp, `${JSON.stringify({ enabled })}\n`, { mode: 0o600 });
+  await fs.writeFile(temp, `${JSON.stringify({ ...current, ...change })}\n`, { mode: 0o600 });
   await fs.rename(temp, file);
+}
+
+export async function setComputerEnabled(stateDir: string, enabled: boolean): Promise<void> {
+  await writeSettings(stateDir, { enabled });
+}
+
+/** Off unless the user turned it on: may the browser tool make up a strong password for a signup form it fills,
+ * keep it in Secrets Manager with the login, and never show it. */
+export async function generatedPasswordsAllowed(stateDir: string): Promise<boolean> {
+  try { return (JSON.parse(await fs.readFile(computerSettingsPath(stateDir), 'utf8')) as { generatePasswords?: unknown }).generatePasswords === true; }
+  catch { return false; }
+}
+
+export async function setGeneratedPasswords(stateDir: string, allowed: boolean): Promise<void> {
+  await writeSettings(stateDir, { generatePasswords: allowed });
 }
 
 export const COMPUTER_OFF = 'Computer use is off. Run `clikcode computer on` to enable it.';

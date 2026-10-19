@@ -194,3 +194,11 @@ What the browser tool does so a run does not depend on luck or on the user:
   Google consent screen that asks for calendar, mail, files or contacts is flagged for declining.
 - **Notes per site.** `notes` saves what worked (URL, order of screens, gotchas) for a host and shows it
   again when a page on that host is opened. Keys and passwords are refused.
+
+- **Generated passwords (off by default).** `clikcode computer passwords on` lets the browser tool make up a
+  24-character password for a signup form (two password boxes, a new-password box, or a sign-up page). It is
+  typed into the form, kept in Secrets Manager with the login once the form is gone, and never shown. Without it
+  a signup form asks the user for the password privately.
+- **Typed-in formats and selectors in private prompts.** A question's `format` (`date`, `phone`, `zip`, `time`, or
+  a pattern such as `##/##/####`) makes the box type the pattern itself, in the terminal and in the VS Code panel;
+  `options` makes it a selector.

@@ -1,4 +1,4 @@
-import { computerEnabled, setComputerEnabled } from '../agent/computer/settings.js';
+import { computerEnabled, generatedPasswordsAllowed, setComputerEnabled, setGeneratedPasswords } from '../agent/computer/settings.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { emitResult } from '../cli/structured-output.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
@@ -16,6 +16,18 @@ export async function computerStatus(): Promise<void> {
   process.stdout.write(enabled
     ? 'Computer use is on. The agent can open URLs and control the desktop when a task needs it.\n'
     : 'Computer use is off. Run `clikcode computer on` to make it available.\n');
+}
+
+/** `clikcode computer passwords on|off`: may the browser tool make up and keep a strong password for a signup form. */
+export async function computerGeneratedPasswords(setting: string | undefined): Promise<void> {
+  const dir = stateDirectory();
+  if (setting === 'on' || setting === 'off') await setGeneratedPasswords(dir, setting === 'on');
+  else if (setting) throw new Error('Say on or off: clikcode computer passwords on');
+  const allowed = await generatedPasswordsAllowed(dir);
+  if (isJsonDefaultMode()) return emitResult({ computer: { generatedPasswords: allowed } });
+  process.stdout.write(allowed
+    ? 'Generated passwords are on: for a signup form the browser tool makes up a strong password, keeps it in Secrets Manager with the login, and never shows it.\n'
+    : 'Generated passwords are off: a signup form asks you for the password privately. Turn on with `clikcode computer passwords on`.\n');
 }
 
 export async function computerSetEnabled(enabled: boolean): Promise<void> {
