@@ -27,7 +27,8 @@ export async function saveProfile(stateDir: string, input: { id?: string; label?
     if (typeof value === 'string' && value.trim()) fields[key as ProfileKey] = (key === 'phone' ? normalizePhone(value) : value.trim()).slice(0, 200);
   }
   const all = await listProfiles(stateDir);
-  const existing = all.find(profile => profile.id === input.id) ?? (input.label ? all.find(profile => profile.label.toLowerCase() === input.label!.toLowerCase()) : undefined);
+  // With neither an id nor a label, the only profile there is is the one meant: a second "Personal" would only split the user's details in two.
+  const existing = all.find(profile => profile.id === input.id) ?? (input.label ? all.find(profile => profile.label.toLowerCase() === input.label!.toLowerCase()) : !input.id && all.length === 1 ? all[0] : undefined);
   const custom = mergeCustom(existing?.custom, input.custom);
   const saved: SavedProfile = existing
     ? { ...existing, label: input.id ? input.label?.trim() || existing.label : existing.label, fields: { ...existing.fields, ...fields }, ...(custom ? { custom } : {}) }

@@ -11,7 +11,7 @@ import { copyWithSiteButton, listenForCopies, copiedSince, plausibleCopy, readCl
 import { secretParts, watchDownload } from './download-capture.js';
 import { LoginError } from './login-error.js';
 import { checkKey, type KeyCheck } from './key-check.js';
-import { armFinder } from './secret-finder.js';
+import { armFinder, keyShaped } from './secret-finder.js';
 import { sendToDestinations, type Delivery, type Destination } from './secret-destinations.js';
 import { registerSecret } from './secret-scrubber.js';
 
@@ -21,6 +21,8 @@ export async function captureSecret(input: {
   stateDir: string; page: Page; name: string; signal?: AbortSignal;
   /** The click that makes the site show or hand over the key, done after the page is watched. */
   trigger?(): Promise<void>;
+  /** The text of the target element itself, for when the target IS the key (a field or a line of text) rather than a button that makes one. */
+  readTarget?(): Promise<string | undefined>;
   /** Take a key the page already shows, instead of one that appears after a click. Default: when there is no click. */
   existing?: boolean;
   ask(name: string, hint: string, signal: AbortSignal): Promise<string | undefined>;
@@ -43,9 +45,12 @@ export async function captureSecret(input: {
   await listenForCopies(input.page);
   const clipboardBefore = input.trigger ? (await readClipboard(input.page))?.trim() : undefined;
   try {
-    if (input.trigger) { clicked = true; await input.trigger(); }
     let value: string | undefined;
     let via = 'the page';
+    // A target that is itself key-shaped text is the key: nothing needs clicking.
+    const own = input.paste ? undefined : (await input.readTarget?.().catch(() => undefined))?.trim();
+    if (own && keyShaped(own)) { value = own; via = 'the text of the target itself'; }
+    else if (input.trigger) { clicked = true; await input.trigger(); }
     let ambiguous = false;
     let presses = 0; // the site's Copy button is pressed a couple of times at most: a button that copies nothing is not worth 3 s a poll
     for (let poll = 0; poll < (input.paste ? 0 : LOOK_POLLS) && !value; poll++) {

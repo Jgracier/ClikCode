@@ -346,7 +346,8 @@ export const computerWebTool = defineTool<WebArgs>({
       try {
         if (ctx.signal?.aborted) throw new Error('Stopped.');
         const done = await Promise.race([stopped, act(page, args, ctx)]);
-        return done.isError ? done : withSignInHints(done, page, ctx.stateDir);
+        // The page the batch ended on, which is not `page` when a popup took over.
+        return done.isError ? done : withSignInHints(done, await computerPage(ctx.stateDir).catch(() => page), ctx.stateDir);
       } finally { ctx.signal?.removeEventListener('abort', onAbort); }
     } catch (error) {
       // A sign-in's own errors may echo what was typed, so only its planned messages are shown; a capture's are always the real reason.
@@ -721,6 +722,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       const { length, shape, via, check, sent } = await captureSecret({ ...(args.paste ? { paste: true } : {}), stateDir: ctx.stateDir, page, name, signal: ctx.signal,
         ...(plan?.length ? { sendTo: plan } : {}),
         ...(args.target ? { trigger: async () => { await clickOrHint(await locate(page, args.target)); } } : {}),
+        ...(args.target ? { readTarget: async () => { const element = await locate(page, args.target); return (await element.inputValue({ timeout: 1_000 }).catch(() => '')) || (await element.innerText({ timeout: 1_000 }).catch(() => '')); } } : {}),
         ask: async (secretName, hint, signal) => {
           if (!ctx.requestPrivateSecret) throw new LoginError('Not saved: this chat cannot show a private prompt, and the key could not be found on its own.');
           return ctx.requestPrivateSecret(secretName, hint, signal);
