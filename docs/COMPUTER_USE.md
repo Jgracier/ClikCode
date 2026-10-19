@@ -108,11 +108,12 @@ where the key goes and `{{slot}}` for anything the agent fills in:
 ```
 send_to: { to: "clikdeploy-secret",  with: { key: "SALAD_API_KEY" } }
 send_to: { to: "clikdeploy-compute", with: { provider: "GCP", field: "serviceAccountJson" } }
+send_to: { to: "clikdeploy-connector", with: { integration: "googlesheets", client_id: "1234-abc.apps.googleusercontent.com" } }
 send_to: [ ...several of those... ]
 ```
 
-Four ship as plain data (`clikdeploy-secret`, `clikdeploy-app-secret`,
-`clikdeploy-compute`, `github-secret`). You add your own with one line, and the agent
+Five ship as plain data (`clikdeploy-secret`, `clikdeploy-app-secret`,
+`clikdeploy-compute`, `clikdeploy-connector`, `github-secret`). You add your own with one line, and the agent
 can then use it by name; an unknown name is answered with the full list:
 
 ```
