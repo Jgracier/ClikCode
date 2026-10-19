@@ -34,6 +34,10 @@ export const DEFAULT_DESTINATIONS: Readonly<Record<string, Template>> = {
   // API key (the CLI's own sign-in): no code and no password, as long as the connector has no client stored.
   'clikdeploy-connector': { about: "a ClikDeploy connector's OAuth app (integration, client_id); the key is its client secret; client_id may be secret:<saved name>", vaultSlots: ['client_id'],
     run: ['clikdeploy', 'tools', 'run', 'admin_platform_save_connector_credentials', '--args-json', JSON_ARGS('"integrationId":"{{integration}}","clientId":"{{client_id}}","clientSecret":"{{secret|json}}"'), '--confirm'] },
+  // A vendor key becomes a ClikDeploy connection for the signed-in account (the CLI's own sign-in): the same capability the product's
+  // Connect button uses, so the key is probed before it is stored and never passes through the agent. The connector must exist and be enabled.
+  'clikdeploy-connection': { about: "a ClikDeploy connector connection from an API key (integration)", run: ['clikdeploy', 'tools', 'run', 'connect_connector', '--args-json', JSON_ARGS('"integrationId":"{{integration}}","apiKey":"{{secret|json}}"'), '--confirm'] },
+  'clikdeploy-connection-basic': { about: "a ClikDeploy connector connection from a username and the secret as its password (integration, username)", run: ['clikdeploy', 'tools', 'run', 'connect_connector', '--args-json', JSON_ARGS('"integrationId":"{{integration}}","username":"{{username}}","password":"{{secret|json}}"'), '--confirm'] },
   'github-secret': { about: 'a GitHub repository secret (repo, key)', run: ['gh', 'secret', 'set', '{{key}}', '--repo', '{{repo}}'], stdin: '{{secret}}' },
 };
 
