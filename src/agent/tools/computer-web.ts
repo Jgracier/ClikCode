@@ -39,6 +39,7 @@ export function webAddress(value: string | undefined): string {
 }
 
 const REF = /^(?:f\d+)?e\d+$/;
+const isStandardKey = (key: string): boolean => (PROFILE_KEYS as readonly string[]).includes(key);
 
 /** What `target` points at: a [ref=eN] from the last view (any element, named or not, in any frame),
  * or visible text for the controls of a sign-in page, which are listed by name without references. */
@@ -319,13 +320,16 @@ export const computerWebTool = defineTool<WebArgs>({
         // named one, a new one, or the first) so the next fill with no text uses them.
         if (args.ask_fields?.length) {
           if (!ctx.requestPrivateLogin) throw new Error('This chat cannot ask the user privately. Save details you know with custom, or the user can run: clikcode computer profile --custom key=value');
-          for (const spec of args.ask_fields) { assertCustomKey(spec.key); if (!spec.label?.trim()) throw new Error(`ask_fields "${spec.key}" needs a label: it is what the user is asked.`); }
+          for (const spec of args.ask_fields) { if (!isStandardKey(spec.key)) assertCustomKey(spec.key); if (!spec.label?.trim()) throw new Error(`ask_fields "${spec.key}" needs a label: it is what the user is asked.`); }
           const target = args.label ? all.find(profile => profile.label.toLowerCase() === args.label!.toLowerCase()) : all[0];
-          const prompt = args.ask_fields.map((spec, index): LoginField => ({ index, key: spec.key, label: spec.label.trim(), kind: 'text', required: !spec.optional, ...(target?.custom?.[spec.key]?.value ? { current: target.custom[spec.key]!.value } : {}) }));
+          const prompt = args.ask_fields.map((spec, index): LoginField => ({ index, key: spec.key, label: spec.label.trim(), kind: 'text', required: !spec.optional, ...(isStandardKey(spec.key) ? (target?.fields[spec.key as ProfileKey] ? { current: target.fields[spec.key as ProfileKey]! } : {}) : target?.custom?.[spec.key]?.value ? { current: target.custom[spec.key]!.value } : {}) }));
           const answers = await ctx.requestPrivateLogin('https://profile.clikcode', prompt, ctx.signal);
           if (!answers) throw new Error('The user did not provide the details.');
-          const custom = Object.fromEntries(args.ask_fields.filter(spec => (answers[spec.key] ?? '').trim()).map(spec => [spec.key, { label: spec.label, value: answers[spec.key]!, ...(spec.match ? { match: spec.match } : {}) }]));
-          return { output: `Saved. ${describeProfile(await saveProfile(ctx.stateDir, { ...(target ? { id: target.id } : { label: args.label?.trim() || 'Custom' }), fields: {}, custom }))}` };
+          const answered = args.ask_fields.filter(spec => (answers[spec.key] ?? '').trim());
+          // A standard field (birthday, sso_email) goes where forms look for it; anything else is a custom detail.
+          const fields = Object.fromEntries(answered.filter(spec => isStandardKey(spec.key)).map(spec => [spec.key, answers[spec.key]!]));
+          const custom = Object.fromEntries(answered.filter(spec => !isStandardKey(spec.key)).map(spec => [spec.key, { label: spec.label, value: answers[spec.key]!, ...(spec.match ? { match: spec.match } : {}) }]));
+          return { output: `Saved. ${describeProfile(await saveProfile(ctx.stateDir, { ...(target ? { id: target.id } : { label: args.label?.trim() || 'Custom' }), fields, custom }))}` };
         }
         // Asked for by the agent, or nothing saved yet: one private prompt shows what is saved ("Keep …", or type a
         // replacement) and asks for what is missing; the result is the profile.
