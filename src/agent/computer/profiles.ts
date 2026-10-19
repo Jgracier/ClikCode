@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { readVaultRecords, removeVaultRecord, writeVaultRecord } from './credential-vault.js';
 import { keyShaped } from './secret-finder.js';
 
-export const PROFILE_KEYS = ['given_name', 'family_name', 'email', 'phone', 'address_line1', 'address_line2', 'city', 'state', 'postal_code', 'country', 'organization', 'job_title', 'website', 'birthday'] as const;
+export const PROFILE_KEYS = ['given_name', 'family_name', 'email', 'phone', 'address_line1', 'address_line2', 'city', 'state', 'postal_code', 'country', 'organization', 'job_title', 'website', 'birthday', 'sso_email'] as const;
 export type ProfileKey = typeof PROFILE_KEYS[number];
 /** A field an agent asked the user for beyond the standard ones: an OAuth app's name and description, its
  * privacy-policy address, a company's legal name. `match` is the words a form's label may use for it. */

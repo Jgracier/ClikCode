@@ -8,6 +8,7 @@ import { storeSecretTool } from './store-secret.js';
 import { sharedState } from '../computer/shared-state.js';
 import { savedLoginFields, savedLoginsForSite } from '../computer/credential-vault.js';
 import { loginValueFor } from '../computer/login-fill.js';
+import { addSiteNote, readSiteNotes } from '../computer/site-notes.js';
 import { assertCustomKey, customFieldFor, describeProfile, listProfiles, PROFILE_KEYS, phoneFor, profileKeyFor, saveProfile, type FieldHint, type ProfileKey } from '../computer/profiles.js';
 import { expectSignup, settleSignup } from '../computer/signup-login.js';
 import { loginComputerPage, loginOutcomeMessage } from '../computer/login-page.js';
@@ -25,8 +26,8 @@ import type { ToolContext, ToolRunResult } from '../tool-contract.js';
 
 type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait'; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; accept_dialog?: boolean; gone?: boolean; seconds?: number };
 type WebArgs = {
-  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'profile' | 'open_email_link' | 'help';
-  url?: string; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
+  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'profile' | 'open_email_link' | 'read_email_code' | 'notes' | 'help';
+  url?: string; host?: string; note?: string; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
   new_account?: boolean; secret?: string; to?: string; with?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
 };
 
@@ -228,11 +229,13 @@ async function settle(page: Page): Promise<void> {
   })).catch(() => undefined); // a navigation destroys the page being watched: the next look is a new page
 }
 
-const ACTION_LIST = 'open · close · observe · click · fill · choose · press · scroll · wait · steps · login · handoff · capture_secret · send_secret · profile · open_email_link · help';
+const ACTION_LIST = 'open · close · observe · click · fill · choose · press · scroll · wait · steps · login · handoff · capture_secret · send_secret · profile · open_email_link · read_email_code · notes · help';
 
 const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: ['action'], properties: {
     action: { type: 'string', description: ACTION_LIST },
     url: { type: 'string', description: 'open: the website address.' },
+    host: { type: 'string', description: 'notes: the site (default: the open page\'s).' },
+    note: { type: 'string', description: 'notes: a step, address or gotcha worth knowing the next time this task is done on the site. Leave out to read the saved notes. Never a key or password.' },
     target: { type: 'string', description: 'click, fill, capture_secret: a [ref=…] from the page view (e5, or f1e2 inside a frame), or the visible text of a sign-in page control.' },
     text: { type: 'string', description: 'fill: the text. Leave it out for what only the user knows (name, address, phone, a password): the user is asked privately, once for all such fields in the call, and you are not shown the answer. wait: the words to wait for.' },
     gone: { type: 'boolean', description: 'wait: wait for the text to disappear instead of appear.' },
@@ -247,15 +250,15 @@ const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: [
     full: { type: 'boolean', description: 'observe: include the header and footer and a longer view.' },
     accept_dialog: { type: 'boolean', description: 'click: answer yes to a browser confirm dialog the click raises ("delete this token?"). Default: declined and reported.' },
     new_account: { type: 'boolean', description: 'login: ask for a different account instead of the saved one.' },
-    paste: { type: 'boolean', description: 'capture_secret: do not look for the key; ask the user to paste it privately (when the page hides it or shows it as an image). With target, that button is still clicked first.' },
+    paste: { type: 'boolean', description: 'capture_secret: only when the user has said they will paste it: skip looking and ask them privately. Never use it because capture failed; reveal, copy or rotate the key instead.' },
     secret: { type: 'string', description: 'send_secret: name a key was saved under (send it again, or somewhere else, without seeing it). With to and with, or send_to.' },
     to: { type: 'string', description: 'send_secret: destination name, e.g. clikdeploy-secret.' },
     with: { type: ['object', 'string'], description: 'send_secret: values for the destination slots, e.g. {key:"SALAD_API_KEY"}.' },
     ask: { type: 'boolean', description: 'profile: ask the user now for name, email, phone and address and save them as a profile (also happens when none exists).' },
-    from: { type: 'string', description: 'open_email_link: sender (name or address) of the email in the signed-in Gmail.' },
-    subject: { type: 'string', description: 'open_email_link: words from the subject.' },
+    from: { type: 'string', description: 'open_email_link, read_email_code: sender (name or address) of the email in the signed-in Gmail.' },
+    subject: { type: 'string', description: 'open_email_link, read_email_code: words from the subject.' },
     link: { type: 'string', description: 'open_email_link: words or domain of the link to open (default: the first real link in the message).' },
-    account: { type: 'integer', description: 'open_email_link: Gmail account number /u/N (default 0).' },
+    account: { type: 'integer', description: 'open_email_link, read_email_code: Gmail account number /u/N (default 0).' },
     fields: { type: 'object', additionalProperties: { type: 'string' }, description: `profile: fields to save or correct in the user's autofill profile (${PROFILE_KEYS.join(', ')}). Leave out to list the profiles. Use it when a site wants a different format (phone as +1…, state as an abbreviation).` },
     label: { type: 'string', description: 'profile: which profile (default: the only one, or a new one called Personal).' },
     ask_fields: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { key: { type: 'string' }, label: { type: 'string' }, match: { type: 'array', items: { type: 'string' } }, optional: { type: 'boolean' } }, required: ['key', 'label'] }, description: 'profile: ask the user, privately and in one prompt, for details a task needs beyond the standard ones, and keep them in a profile (with label, a new one) so every later fill with no text uses them. key is lower_snake_case (app_name, privacy_policy_url); label is what the user is asked; match lists the words a form may label it with (["app name","application name"]); optional fields may be left empty. Details only, never a key or password.' },
@@ -266,7 +269,7 @@ const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: [
 
 const WEB_DESCRIPTION = [
     "Drive ClikCode's own Chrome (its own saved profile; it starts by itself). open and observe return the page, with a [ref=…] on each element: pass a ref as target (or visible text) to click or fill. After an action you get only what changed (and any open dialog); observe shows the whole page again. A new tab or popup the page opens is followed automatically.",
-    'Actions: open (a URL) · observe (the page again; full: true adds header and footer; find: "words" shows only the lines that mention them, for a long page) · click · fill · choose (an option of a dropdown: target + text) · press · scroll · wait (for text to appear or go, up to 2 minutes; for jobs that finish on their own) · steps (several of those in order, one call, stops at the first failure) · login · handoff · capture_secret · profile · open_email_link (find the newest email from a sender in the signed-in Gmail and open a link in it, one call: verification and sign-in emails) · close.',
+    'Actions: open (a URL) · observe (the page again; full: true adds header and footer; find: "words" shows only the lines that mention them, for a long page) · click · fill · choose (an option of a dropdown: target + text) · press · scroll · wait (for text to appear or go, up to 2 minutes; for jobs that finish on their own) · steps (several of those in order, one call, stops at the first failure) · login · handoff · capture_secret · profile · open_email_link (find the newest email from a sender in the signed-in Gmail and open a link in it, one call: verification and sign-in emails) · notes (read or add what was learned on a site: the URL that worked, the order of screens, what was missing; shown again whenever a page on that host is opened, so write one when a task finally works) · read_email_code (the one-time code in the newest email from a sender, read in a tab of its own, so a sign-up that wants an emailed code does not need the user) · close.',
     'Each chat has its own tab. The user\'s autofill profile (name, email, phone, address, and any custom details you asked for with profile ask_fields) fills forms for you: fill a field with no text and it is filled from the profile, or the user is asked once and the answer is kept. If a site wants another format, fill that field with the exact text, and save the corrected value with action profile and fields. When a site offers Continue/Sign in with Google and the browser is already signed in to Google, prefer it: no new password or email check. Every page can be read, including sign-in and signup forms; the values of password, code and card fields are masked. For anything only the user knows (a password, a code, an address, a phone number), fill the field with no text: a saved login for the site or the profile fills it, else the user is asked privately, and you are not shown the answer. That is all a sign-in or signup needs: fill the fields, click Next, repeat. (login does the same in one action for a plain email-then-password sign-in.) Never ask for a password or code in chat. When a sign-in page offers different ways in (root or IAM, another account), ask the user with ask_user, click their choice, then login. handoff returns a phone link for a CAPTCHA or MFA at once; give it to the user, then call handoff again to wait until they finish.',
     'Work through the whole task you were given without checking in at each step. Ask real choices (project, account, role set) once, up front, in one question; after that ask only when genuinely blocked (a sign-in they must type, a payment).',
     'API keys: go to the key page, set the options, then capture_secret with target = the final Create button and a send_to plan. It presses the site\'s Copy button or reads the file it hands over, checks the key against its service, saves it to ClikCode Secrets Manager and sends it where send_to says. You never see the key. With no target it takes a key the page already shows; never click Regenerate just to see one.',
@@ -295,7 +298,9 @@ export const computerWebTool = defineTool<WebArgs>({
     }
   },
   describe: async (args) => `ClikCode browser: ${args.action}${args.url ? ` ${args.url}` : ''}${args.target ? ` ${args.target}` : ''}${args.action === 'fill' ? ` (${args.text?.length ?? 0} characters)` : ''}`,
-  async run(args, ctx) {
+  // One chat's browser calls run in the order they were made. The model can send two at once (a capture and
+  // the click that closes the dialog it reads), and a one-time key does not survive that race.
+  run: (args, ctx) => inOrder(ctx.stateDir, async (): Promise<ToolRunResult> => {
     try {
       if (!(await computerEnabled(ctx.stateDir))) throw new Error(COMPUTER_OFF);
       if (args.action === 'help') return { output: `${WEB_DESCRIPTION}\n\nArguments: ${Object.entries((WEB_PARAMETERS as { properties: Record<string, { description?: string }> }).properties).map(([name, spec]) => `${name}${spec.description ? ` (${spec.description})` : ''}`).join('; ')}` };
@@ -340,7 +345,8 @@ export const computerWebTool = defineTool<WebArgs>({
       ctx.signal?.addEventListener('abort', onAbort, { once: true });
       try {
         if (ctx.signal?.aborted) throw new Error('Stopped.');
-        return await Promise.race([stopped, act(page, args, ctx)]);
+        const done = await Promise.race([stopped, act(page, args, ctx)]);
+        return done.isError ? done : withSignInHints(done, page, ctx.stateDir);
       } finally { ctx.signal?.removeEventListener('abort', onAbort); }
     } catch (error) {
       // A sign-in's own errors may echo what was typed, so only its planned messages are shown; a capture's are always the real reason.
@@ -355,18 +361,27 @@ export const computerWebTool = defineTool<WebArgs>({
       }
       return { output: error instanceof Error ? error.message : String(error), isError: true };
     }
-  },
+  }),
 });
+
+const queues = sharedState('computer-web-queue', () => new Map<string, Promise<unknown>>());
+export function inOrder<T>(key: string, job: () => Promise<T>): Promise<T> {
+  const run = (queues.get(key) ?? Promise.resolve()).then(job, job);
+  const tail = run.catch(() => undefined);
+  queues.set(key, tail);
+  void tail.then(() => { if (queues.get(key) === tail) queues.delete(key); });
+  return run;
+}
 
 const handoffs = sharedState('handoffs', () => new Map<string, { link: Promise<string>; done: Promise<{ ok: true } | { ok: false; message: string }>; stop: AbortController }>());
 
 const INTERACTIONS: ReadonlySet<string> = new Set(['click', 'fill', 'choose', 'press', 'scroll', 'wait']);
 
-/** Long jobs (an API being enabled, a resource being created) finish on their own: wait for words to
- * appear (or go) instead of looking again and again. Gives up with the page as it is. */
 /** What one step did. `halt` means the steps after it must not run: they were written for a page that is not there yet. */
 type StepOutcome = string | { note: string; halt: true };
 
+/** Long jobs (an API being enabled, a resource being created) finish on their own: wait for words to
+ * appear (or go) instead of looking again and again. Gives up with the page as it is, and says so. */
 async function waitOn(page: Page, step: Step): Promise<StepOutcome> {
   const seconds = Math.min(Math.max(Math.floor(step.seconds ?? 30), 1), 120);
   const text = step.text?.trim();
@@ -564,7 +579,8 @@ async function runSteps(page: Page, steps: readonly Step[], ctx: ToolContext): P
         if (live) { current = live; adoptPage(ctx.stateDir, current); halted = true; notes.push(`Step ${index + 1} (${step.do}): the tab closed itself, so this is the page that is open now.`); }
       }
       if (!halted) {
-        const view = await observeComputerPage(current, false).catch(() => undefined);
+        // What changed, not the whole page again: a failed step in a long batch used to repeat thousands of tokens.
+        const view = await observeComputerPage(current, false, false, undefined, true).catch(() => undefined);
         return { output: `${[...notes, `Step ${index + 1} (${step.do}${step.target ? ` ${step.target}` : ''}) failed: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`].join('\n')}${view ? `\n\n${view.output}` : ''}`, isError: true };
       }
     }
@@ -587,28 +603,81 @@ async function runSteps(page: Page, steps: readonly Step[], ctx: ToolContext): P
   return { output: `${notes.join('\n')}\n\n${view.output}${problems.length ? `\n\nOn the form: ${problems.join('; ')}.` : ''}` };
 }
 
+/** What a Google sign-in page needs decided, said where the agent is already looking. The account is the
+ * profile's `sso_email` (the one every site was signed up with, so a returning site finds its account); a
+ * consent screen asking for more than a sign-in needs is flagged, because "Continue" there hands a site
+ * the user's calendar, mail or files. */
+export async function withSignInHints(result: ToolRunResult, page: Page, stateDir: string): Promise<ToolRunResult> {
+  let url: URL;
+  try { url = new URL(page.url()); } catch { return result; }
+  if (url.hostname !== 'accounts.google.com') return result;
+  const hints: string[] = [];
+  if (/accountchooser/.test(url.pathname)) {
+    const email = (await listProfiles(stateDir)).map(profile => profile.fields.sso_email).find(Boolean);
+    hints.push(email ? `Sign-in account: pick ${email} (the profile's sso_email): click target "${email}".` : 'Several accounts are listed and the profile has no sso_email: pick the one the task is for, and save it with profile fields {sso_email} so the next sign-in needs no choice.');
+  } else if (/consent/.test(url.pathname)) {
+    const text = await page.evaluate(() => (globalThis as unknown as { document: { body: { innerText: string } } }).document.body.innerText).catch(() => '');
+    const broad = /(?:see, edit, share|read, compose|permanently delete|all (?:the )?(?:calendars|emails|files|contacts)|your (?:calendar|mail|drive|contacts))/i.exec(text)?.[0];
+    if (broad) hints.push(`This consent screen asks for more than a sign-in ("${broad}"). Decline it with Cancel unless the task is to give that access.`);
+  }
+  return hints.length ? { ...result, output: `${result.output}\n\n${hints.join('\n')}` } : result;
+}
+
+/** The newest message matching from/subject in the signed-in Gmail, opened; its body. Waits for one that has just been sent. */
+async function openLatestEmail(page: Page, args: WebArgs): Promise<Locator> {
+  if (!args.from && !args.subject) throw new Error(`${args.action} needs from or subject.`);
+  const query = [args.from ? `from:(${args.from})` : '', args.subject ? `subject:(${args.subject})` : '', 'newer_than:1d'].filter(Boolean).join(' ');
+  await page.goto(`https://mail.google.com/mail/u/${args.account ?? 0}/#search/${encodeURIComponent(query)}`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  const row = page.locator('tr.zA').first();
+  // A message just sent may not be indexed yet: look again a few times before saying it is not there.
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (await row.waitFor({ timeout: 10_000 }).then(() => true, () => false)) break;
+    if (attempt === 3) throw new Error(`No email matched ${query}. If Gmail asked to sign in, sign in first with login; use account to pick another Gmail /u/N.`);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+  }
+  await row.click();
+  const body = page.locator('.a3s:visible').last();
+  await body.waitFor({ timeout: 15_000 });
+  await page.locator('.ajR').last().click({ timeout: 1_500 }).catch(() => undefined); // "show trimmed content"
+  return body;
+}
+
+/** The one-time code in an email: a 4-8 character code that the text calls a code, else a lone 6-digit number. */
+export function verificationCode(text: string): string | undefined {
+  const flat = text.replace(/\s+/g, ' ');
+  const named = /\b(?:verification|security|confirmation|login|sign[- ]?in|one[- ]time|access)?\s*code\b[^A-Za-z0-9]{0,20}([A-Z0-9]{4,8})\b/i.exec(flat)
+    ?? /\b([A-Z0-9]{4,8})\b[^.]{0,30}\bis your (?:\w+ )?code\b/i.exec(flat);
+  if (named && /\d/.test(named[1]!)) return named[1];
+  const sixes = [...new Set(flat.match(/(?<![\w.-])\d{6}(?![\w-])/g) ?? [])];
+  return sixes.length === 1 ? sixes[0] : undefined;
+}
+
 async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRunResult> {
   if (INTERACTIONS.has(args.action)) {
     const one: Step = { do: args.action as Step['do'], ...(args.target ? { target: args.target } : {}), ...(args.text !== undefined ? { text: args.text } : {}), ...(args.key ? { key: args.key } : {}), ...(args.direction ? { direction: args.direction } : {}), ...(args.accept_dialog ? { accept_dialog: true } : {}), ...(args.gone ? { gone: true } : {}), ...(args.seconds ? { seconds: args.seconds } : {}) };
     return runSteps(page, [one], ctx);
   }
   switch (args.action) {
-    case 'open': await page.goto(webAddress(args.url), { waitUntil: 'domcontentloaded', timeout: 30_000 }); await settle(page); return observeComputerPage(page, ctx.acceptsImages === true);
+    case 'open': {
+      await page.goto(webAddress(args.url), { waitUntil: 'domcontentloaded', timeout: 30_000 });
+      await settle(page);
+      const seen = await observeComputerPage(page, ctx.acceptsImages === true);
+      const notes = await readSiteNotes(ctx.stateDir, new URL(page.url()).hostname).catch(() => '');
+      return notes ? { ...seen, output: `Notes from earlier on this site:\n${notes}\n\n${seen.output}` } : seen;
+    }
+    case 'notes': {
+      const host = args.host?.trim() || new URL(page.url()).hostname;
+      if (!args.note) return { output: (await readSiteNotes(ctx.stateDir, host)) || `No notes for ${host} yet.` };
+      return { output: `Saved. Notes for ${host}:\n${await addSiteNote(ctx.stateDir, host, args.note)}` };
+    }
     case 'observe': return observeComputerPage(page, ctx.acceptsImages === true, args.full === true, args.find);
     case 'steps':
       const list = typeof args.steps === 'string' ? (() => { try { return JSON.parse(args.steps) as Step[]; } catch { return undefined; } })() : args.steps;
       if (!Array.isArray(list) || !list.length) throw new Error('steps needs a list, e.g. [{"do":"click","target":"e5"}].');
       return runSteps(page, list, ctx);
     case 'open_email_link': {
-      const query = [args.from ? `from:(${args.from})` : '', args.subject ? `subject:(${args.subject})` : '', 'newer_than:2d'].filter(Boolean).join(' ');
-      if (!args.from && !args.subject) throw new Error('open_email_link needs from or subject.');
-      await page.goto(`https://mail.google.com/mail/u/${args.account ?? 0}/#search/${encodeURIComponent(query)}`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-      const row = page.locator('tr.zA').first();
-      await row.waitFor({ timeout: 25_000 }).catch(() => { throw new Error(`No email matched ${query}. If Gmail asked to sign in, sign in first with login; the message may also not have arrived yet (try again in a few seconds).`); });
-      await row.click();
-      await page.locator('.a3s:visible').last().waitFor({ timeout: 15_000 });
-      await page.locator('.ajR').last().click({ timeout: 1_500 }).catch(() => undefined); // "show trimmed content"
-      const links = await page.locator('.a3s:visible').last().locator('a[href]').evaluateAll(nodes => nodes.map(node => ({ href: (node as unknown as { href: string }).href, text: (node as unknown as { textContent: string | null }).textContent ?? '' })));
+      const body = await openLatestEmail(page, args);
+      const links = await body.locator('a[href]').evaluateAll(nodes => nodes.map(node => ({ href: (node as unknown as { href: string }).href, text: (node as unknown as { textContent: string | null }).textContent ?? '' })));
       const real = links.map(link => { try { const u = new URL(link.href); return { ...link, href: u.hostname.endsWith('google.com') && u.pathname === '/url' ? u.searchParams.get('q') ?? link.href : link.href }; } catch { return link; } })
         .filter(link => /^https:/.test(link.href) && !/unsubscribe|accounts\.google\.com|mail\.google\.com|privacy|terms/i.test(link.href));
       const wanted = args.link?.toLowerCase();
@@ -617,6 +686,17 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       await page.goto(pick.href, { waitUntil: 'domcontentloaded', timeout: 30_000 });
       await settle(page);
       return observeComputerPage(page, ctx.acceptsImages === true);
+    }
+    case 'read_email_code': {
+      // A one-time sign-up or sign-in code is short-lived and meant to be typed, so it is returned as text
+      // (an API key never is). The page the code is for is left as it was: Gmail is read in a tab of its own.
+      const mail = await page.context().newPage();
+      try {
+        const text = await (await openLatestEmail(mail, args)).innerText();
+        const code = verificationCode(text);
+        if (!code) throw new Error(`The email from ${args.from ?? args.subject} has no code in it. It says: "${text.replace(/\s+/g, ' ').slice(0, 160)}".`);
+        return { output: `Code: ${code}. Type it into the page that asked for it; it is already waiting in the tab you left.` };
+      } finally { await mail.close().catch(() => undefined); }
     }
     case 'login': {
       const outcome = await loginComputerPage({ stateDir: ctx.stateDir, page, signal: ctx.signal, newAccount: args.new_account === true,
