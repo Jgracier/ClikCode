@@ -27,7 +27,7 @@ import type { ToolContext, ToolRunResult } from '../tool-contract.js';
 type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait'; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; accept_dialog?: boolean; gone?: boolean; seconds?: number };
 type WebArgs = {
   action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'profile' | 'open_email_link' | 'read_email_code' | 'notes' | 'help';
-  url?: string; host?: string; note?: string; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
+  tab?: string; url?: string; host?: string; note?: string; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
   new_account?: boolean; secret?: string; to?: string; with?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
 };
 
@@ -233,6 +233,7 @@ const ACTION_LIST = 'open · close · observe · click · fill · choose · pres
 
 const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: ['action'], properties: {
     action: { type: 'string', description: ACTION_LIST },
+    tab: { type: 'string', description: 'Name of your own tab. Agents working in parallel each pass a different name on every call, so they never share, read or navigate each other\'s page. Leave out when you are the only one using the browser.' },
     url: { type: 'string', description: 'open: the website address.' },
     host: { type: 'string', description: 'notes: the site (default: the open page\'s).' },
     note: { type: 'string', description: 'notes: a step, address or gotcha worth knowing the next time this task is done on the site. Leave out to read the saved notes. Never a key or password.' },
@@ -300,7 +301,7 @@ export const computerWebTool = defineTool<WebArgs>({
   describe: async (args) => `ClikCode browser: ${args.action}${args.url ? ` ${args.url}` : ''}${args.target ? ` ${args.target}` : ''}${args.action === 'fill' ? ` (${args.text?.length ?? 0} characters)` : ''}`,
   // One chat's browser calls run in the order they were made. The model can send two at once (a capture and
   // the click that closes the dialog it reads), and a one-time key does not survive that race.
-  run: (args, ctx) => inOrder(ctx.stateDir, async (): Promise<ToolRunResult> => {
+  run: (args, ctx) => inOrder(args.tab ? `${ctx.stateDir}#${args.tab}` : ctx.stateDir, async (): Promise<ToolRunResult> => {
     try {
       if (!(await computerEnabled(ctx.stateDir))) throw new Error(COMPUTER_OFF);
       if (args.action === 'help') return { output: `${WEB_DESCRIPTION}\n\nArguments: ${Object.entries((WEB_PARAMETERS as { properties: Record<string, { description?: string }> }).properties).map(([name, spec]) => `${name}${spec.description ? ` (${spec.description})` : ''}`).join('; ')}` };
@@ -334,9 +335,9 @@ export const computerWebTool = defineTool<WebArgs>({
         }
         return { output: all.map(describeProfile).join('\n') };
       }
-      if (args.action === 'close') { await closeComputerPage(ctx.stateDir); return { output: 'This chat\'s tab is closed.' }; }
+      if (args.action === 'close') { await closeComputerPage(ctx.stateDir, args.tab); return { output: 'This chat\'s tab is closed.' }; }
       if (args.action === 'open') webAddress(args.url);
-      const page = args.action === 'open' || args.action === 'open_email_link' ? await openComputerPage(ctx.stateDir) : await computerPage(ctx.stateDir);
+      const page = args.action === 'open' || args.action === 'open_email_link' ? await openComputerPage(ctx.stateDir, args.tab) : await computerPage(ctx.stateDir, args.tab);
       // Playwright cannot be interrupted mid-call, so a stop returns at once
       // and the browser carries on harmlessly in the background.
       let onAbort = (): void => undefined;
@@ -347,7 +348,7 @@ export const computerWebTool = defineTool<WebArgs>({
         if (ctx.signal?.aborted) throw new Error('Stopped.');
         const done = await Promise.race([stopped, act(page, args, ctx)]);
         // The page the batch ended on, which is not `page` when a popup took over.
-        return done.isError ? done : withSignInHints(done, await computerPage(ctx.stateDir).catch(() => page), ctx.stateDir);
+        return done.isError ? done : withSignInHints(done, await computerPage(ctx.stateDir, args.tab).catch(() => page), ctx.stateDir);
       } finally { ctx.signal?.removeEventListener('abort', onAbort); }
     } catch (error) {
       // A sign-in's own errors may echo what was typed, so only its planned messages are shown; a capture's are always the real reason.
@@ -357,7 +358,7 @@ export const computerWebTool = defineTool<WebArgs>({
         // A click that creates a key at the site cannot be undone from here: say so, or a live key is left behind unnoticed.
         const clicked = (error as { afterClick?: boolean }).afterClick ? ` The click on "${args.target ?? 'the button'}" may already have created a key at the site; if so, delete it there.` : '';
         // The site often says why (an error under the button, "purchase credits"): say it too, instead of only "not found".
-        const siteSaid = (error as { afterClick?: boolean }).afterClick ? await pageProblem(await computerPage(ctx.stateDir).catch(() => undefined)) : '';
+        const siteSaid = (error as { afterClick?: boolean }).afterClick ? await pageProblem(await computerPage(ctx.stateDir, args.tab).catch(() => undefined)) : '';
         return { output: scrubSecrets(`${why.startsWith('Not saved') ? why : `Not saved: ${why}`}${siteSaid ? ` The page says: "${siteSaid}".` : ''}${clicked}`), isError: true };
       }
       return { output: error instanceof Error ? error.message : String(error), isError: true };
@@ -557,7 +558,7 @@ export async function formProblems(page: Page): Promise<string[]> {
 }
 
 /** Does the steps in order, following a new tab or popup, and returns the page as it ends up. */
-async function runSteps(page: Page, steps: readonly Step[], ctx: ToolContext): Promise<ToolRunResult> {
+async function runSteps(page: Page, steps: readonly Step[], ctx: ToolContext, tab?: string): Promise<ToolRunResult> {
   const notes: string[] = [];
   let current = page;
   steps = await askForFills(page, steps, ctx);
@@ -577,7 +578,7 @@ async function runSteps(page: Page, steps: readonly Step[], ctx: ToolContext): P
       // The page closing itself (a sign-in popup that finished) is read from the page, not from an error message.
       if (current.isClosed()) {
         const live = current.context().pages().filter(item => !item.isClosed()).at(-1);
-        if (live) { current = live; adoptPage(ctx.stateDir, current); halted = true; notes.push(`Step ${index + 1} (${step.do}): the tab closed itself, so this is the page that is open now.`); }
+        if (live) { current = live; adoptPage(ctx.stateDir, current, tab); halted = true; notes.push(`Step ${index + 1} (${step.do}): the tab closed itself, so this is the page that is open now.`); }
       }
       if (!halted) {
         // What changed, not the whole page again: a failed step in a long batch used to repeat thousands of tokens.
@@ -589,7 +590,7 @@ async function runSteps(page: Page, steps: readonly Step[], ctx: ToolContext): P
     const next = popups.filter(popup => !popup.isClosed()).at(-1);
     if (next) {
       current = next;
-      adoptPage(ctx.stateDir, current);
+      adoptPage(ctx.stateDir, current, tab);
       await settle(current);
       notes.push(`A new tab opened and is now the page: ${displayUrl(current.url())}`);
     }
@@ -656,7 +657,7 @@ export function verificationCode(text: string): string | undefined {
 async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRunResult> {
   if (INTERACTIONS.has(args.action)) {
     const one: Step = { do: args.action as Step['do'], ...(args.target ? { target: args.target } : {}), ...(args.text !== undefined ? { text: args.text } : {}), ...(args.key ? { key: args.key } : {}), ...(args.direction ? { direction: args.direction } : {}), ...(args.accept_dialog ? { accept_dialog: true } : {}), ...(args.gone ? { gone: true } : {}), ...(args.seconds ? { seconds: args.seconds } : {}) };
-    return runSteps(page, [one], ctx);
+    return runSteps(page, [one], ctx, args.tab);
   }
   switch (args.action) {
     case 'open': {
@@ -675,7 +676,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
     case 'steps':
       const list = typeof args.steps === 'string' ? (() => { try { return JSON.parse(args.steps) as Step[]; } catch { return undefined; } })() : args.steps;
       if (!Array.isArray(list) || !list.length) throw new Error('steps needs a list, e.g. [{"do":"click","target":"e5"}].');
-      return runSteps(page, list, ctx);
+      return runSteps(page, list, ctx, args.tab);
     case 'open_email_link': {
       const body = await openLatestEmail(page, args);
       const links = await body.locator('a[href]').evaluateAll(nodes => nodes.map(node => ({ href: (node as unknown as { href: string }).href, text: (node as unknown as { textContent: string | null }).textContent ?? '' })));
@@ -708,7 +709,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       const failed = outcome === 'unverified' || outcome === 'saved_login_rejected';
       // Signed in: the page you landed on comes with it, so there is nothing more to ask for.
       const landed = failed ? undefined : await (async () => {
-        try { return await observeComputerPage(page.isClosed() ? await computerPage(ctx.stateDir) : page, false); }
+        try { return await observeComputerPage(page.isClosed() ? await computerPage(ctx.stateDir, args.tab) : page, false); }
         catch { return undefined; } // the sign-in worked whether or not the page can be read
       })();
       return { output: `${loginOutcomeMessage(outcome)}${landed ? `\n\n${landed.output}` : ''}`, ...(failed ? { isError: true } : {}) };
@@ -719,14 +720,15 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       const planProblem = plan?.length ? await destinationProblem(ctx.stateDir, plan) : undefined;
       if (planProblem) throw new Error(`${planProblem} Nothing was clicked.`);
       const name = args.secret_name?.trim() || `${new URL(page.url()).hostname.replace(/^www\./, '')}/key`;
-      const { length, shape, via, check, sent } = await captureSecret({ ...(args.paste ? { paste: true } : {}), stateDir: ctx.stateDir, page, name, signal: ctx.signal,
+      // The clipboard is one thing and a Copy button only works in the focused tab: captures take turns, each in front.
+      const { length, shape, via, check, sent } = await inOrder('clipboard', async () => { await page.bringToFront().catch(() => undefined); return captureSecret({ ...(args.paste ? { paste: true } : {}), stateDir: ctx.stateDir, page, name, signal: ctx.signal,
         ...(plan?.length ? { sendTo: plan } : {}),
         ...(args.target ? { trigger: async () => { await clickOrHint(await locate(page, args.target)); } } : {}),
         ...(args.target ? { readTarget: async () => { const element = await locate(page, args.target); return (await element.inputValue({ timeout: 1_000 }).catch(() => '')) || (await element.innerText({ timeout: 1_000 }).catch(() => '')); } } : {}),
         ask: async (secretName, hint, signal) => {
           if (!ctx.requestPrivateSecret) throw new LoginError('Not saved: this chat cannot show a private prompt, and the key could not be found on its own.');
           return ctx.requestPrivateSecret(secretName, hint, signal);
-        } });
+        } }); });
       const refused = check.verdict === 'rejected';
       const lines = [
         `SAVED "${name}" in ClikCode Secrets Manager (${length} characters, ${shape}, taken from ${via}). You were not shown the key; if that does not match what you expected (an id where a secret should be), delete it and capture again.`,

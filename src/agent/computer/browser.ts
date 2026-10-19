@@ -99,32 +99,36 @@ async function browserFor(stateDir: string, start: boolean): Promise<Connected> 
 }
 
 /** This process is one chat's worker, so the tab it holds is that chat's own: another chat
- * in the same Chrome never has its page read, clicked or followed by this one. */
+ * in the same Chrome never has its page read, clicked or followed by this one. One process can also
+ * serve several agents at once (an MCP server shared by sub-agents), which is why a call may name its
+ * own `tab`: calls with different names never share, read or navigate each other's page. */
 const owned = sharedState('browser-owned', () => new Map<string, Page[]>());
+const ownerKey = (stateDir: string, tab?: string): string => (tab ? `${stateDir}\u0000${tab}` : stateDir);
 
 /** The newest tab still open; a popup that closed itself (a sign-in window) hands back to the page that opened it. */
-function mine(stateDir: string): Page | undefined {
-  const stack = (owned.get(stateDir) ?? []).filter(page => !page.isClosed());
-  owned.set(stateDir, stack);
+function mine(stateDir: string, tab?: string): Page | undefined {
+  const key = ownerKey(stateDir, tab);
+  const stack = (owned.get(key) ?? []).filter(page => !page.isClosed());
+  owned.set(key, stack);
   return stack.at(-1);
 }
 
 /** Make `page` this chat's tab (a popup the chat's own page opened). */
-export function adoptPage(stateDir: string, page: Page): void { owned.set(stateDir, [...(owned.get(stateDir) ?? []).filter(old => old !== page), page]); }
+export function adoptPage(stateDir: string, page: Page, tab?: string): void { const key = ownerKey(stateDir, tab); owned.set(key, [...(owned.get(key) ?? []).filter(old => old !== page), page]); }
 
 /** This chat's tab, opened in the shared Chrome the first time it is needed. */
-export async function openComputerPage(stateDir: string): Promise<Page> {
+export async function openComputerPage(stateDir: string, tab?: string): Promise<Page> {
   const { context } = await browserFor(stateDir, true);
-  const existing = mine(stateDir);
+  const existing = mine(stateDir, tab);
   if (existing) return existing;
   const page = await context.newPage();
-  adoptPage(stateDir, page);
+  adoptPage(stateDir, page, tab);
   return page;
 }
 
-export async function computerPage(stateDir: string): Promise<Page> {
+export async function computerPage(stateDir: string, tab?: string): Promise<Page> {
   await browserFor(stateDir, false);
-  const page = mine(stateDir);
+  const page = mine(stateDir, tab);
   if (!page) throw new Error('This chat has no open tab. Open a URL with computer_web first.');
   return page;
 }
@@ -149,9 +153,10 @@ export async function allComputerPages(stateDir: string): Promise<Page[]> {
 }
 
 /** Close this chat's tab only: the Chrome and every other chat's tab stay as they are. */
-export async function closeComputerPage(stateDir: string): Promise<void> {
-  const pages = owned.get(stateDir) ?? [];
-  owned.delete(stateDir);
+export async function closeComputerPage(stateDir: string, tab?: string): Promise<void> {
+  const key = ownerKey(stateDir, tab);
+  const pages = owned.get(key) ?? [];
+  owned.delete(key);
   for (const page of pages) await page.close().catch(() => undefined);
 }
 
