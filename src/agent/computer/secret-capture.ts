@@ -122,6 +122,7 @@ export async function captureSecret(input: {
 /** A short credential (a 15-character app key) that the page names by being the very element the agent
  * pointed at: letters and digits only, with both, so a label or a word is never taken for one. */
 export function shortKeyText(text: string): boolean {
+  if (/^\d{20,100}$/.test(text)) return true; // a long numeric secret
   return text.length >= 12 && text.length <= 64 && /^[A-Za-z0-9_-]+$/.test(text) && /\d/.test(text) && /[A-Za-z]/.test(text);
 }
 

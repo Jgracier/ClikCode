@@ -120,3 +120,12 @@ it('takes a short letters-and-digits credential only when it is plainly one', as
   expect(shortKeyText('deployment')).toBe(false);
   expect(shortKeyText('1x')).toBe(false);
 });
+
+it('hides a long all-digit secret but keeps ordinary numbers', () => {
+  const page = ['- textbox [ref=e1]: 165134870952786737708671071718696116644', '- generic [ref=e2]: Project number 831963658327', '- generic [ref=e3]: Phone 7197443850'].join('\n');
+  const { text, hidden } = hideKeyLikeText(page);
+  expect(text).not.toContain('165134870952786737708671071718696116644');
+  expect(text).toContain('831963658327');
+  expect(text).toContain('7197443850');
+  expect(hidden).toBe(1);
+});
