@@ -52,7 +52,10 @@ export function startStuckWatchdog(sessionId: string, options: { stuckMs?: numbe
   const thread = new Worker(WATCHDOG_THREAD, {
     eval: true,
     workerData: { beats: beats.buffer, stuckMs, checkMs: Math.min(10_000, Math.max(50, Math.floor(stuckMs / 6))), log, sessionId },
-    resourceLimits: { maxOldGenerationSizeMb: 8, maxYoungGenerationSizeMb: 2 },
+    // The fixed watchdog script uses only a few MB, but Node/V8 needs more
+    // headroom while creating its isolate. A tiny heap limit can abort the
+    // entire session process before its socket is ready (SIGILL in OS::Abort).
+    // The agent slice bounds the process; no user code runs in this thread.
     stdout: false, stderr: false,
   });
   thread.unref();
