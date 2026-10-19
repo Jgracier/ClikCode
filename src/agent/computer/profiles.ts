@@ -1,8 +1,10 @@
 /** Autofill profiles: the name, address and phone a person types into every signup form, kept once so an
- * agent fills a form without asking again. Personal data, not secrets: passwords, codes and card numbers
- * never go in one. Several profiles can exist (personal, company); the user picks one when more than one fits. */
+ * agent fills a form without asking again. Details are shown to the agent. A profile can also hold secrets
+ * (the password for sign-ups, a recovery code): only their names are in the profile record, the values live in
+ * Secrets Manager, and nothing returns one to the agent; a form field is filled from it without being shown it.
+ * Several profiles can exist (personal, company); the user picks one when more than one fits. */
 import { randomUUID } from 'node:crypto';
-import { readVaultRecords, removeVaultRecord, writeVaultRecord } from './credential-vault.js';
+import { deleteNamedSecret, readNamedSecret, readVaultRecords, removeVaultRecord, saveNamedSecret, writeVaultRecord } from './credential-vault.js';
 import { keyShaped } from './secret-finder.js';
 
 export const PROFILE_KEYS = ['given_name', 'family_name', 'email', 'phone', 'address_line1', 'address_line2', 'city', 'state', 'postal_code', 'country', 'organization', 'job_title', 'website', 'birthday', 'sso_email'] as const;
@@ -10,13 +12,17 @@ export type ProfileKey = typeof PROFILE_KEYS[number];
 /** A field an agent asked the user for beyond the standard ones: an OAuth app's name and description, its
  * privacy-policy address, a company's legal name. `match` is the words a form's label may use for it. */
 export type CustomField = { label: string; value: string; match?: string[] };
-export type Profile = { label: string; fields: Partial<Record<ProfileKey, string>>; custom?: Record<string, CustomField> };
+/** A secret kept with a profile: its name and the words a form may label it with. The value is never here. */
+export type SecretField = { label: string; match?: string[] };
+/** The secret that fills any password box on a sign-up or sign-in the profile is used for. */
+export const PASSWORD_SECRET = 'password';
+export type Profile = { label: string; fields: Partial<Record<ProfileKey, string>>; custom?: Record<string, CustomField>; secrets?: Record<string, SecretField> };
 type SavedProfile = Profile & { id: string };
 
 const FOLDER = 'profile';
 
 export async function listProfiles(stateDir: string): Promise<SavedProfile[]> {
-  return (await readVaultRecords<Profile>(stateDir, FOLDER)).map(({ id, value }) => ({ id, label: value.label, fields: value.fields, ...(value.custom ? { custom: value.custom } : {}) })).sort((a, b) => a.label.localeCompare(b.label));
+  return (await readVaultRecords<Profile>(stateDir, FOLDER)).map(({ id, value }) => ({ id, label: value.label, fields: value.fields, ...(value.custom ? { custom: value.custom } : {}), ...(value.secrets ? { secrets: value.secrets } : {}) })).sort((a, b) => a.label.localeCompare(b.label));
 }
 
 /** Creates the profile, or (with an id, or a label that exists) merges these fields into it. */
@@ -33,20 +39,46 @@ export async function saveProfile(stateDir: string, input: { id?: string; label?
   const saved: SavedProfile = existing
     ? { ...existing, label: input.id ? input.label?.trim() || existing.label : existing.label, fields: { ...existing.fields, ...fields }, ...(custom ? { custom } : {}) }
     : { id: randomUUID(), label: input.label?.trim() || 'Personal', fields, ...(custom ? { custom } : {}) };
-  await writeVaultRecord(stateDir, FOLDER, saved.id, { label: saved.label, fields: saved.fields, ...(saved.custom ? { custom: saved.custom } : {}) });
+  await writeVaultRecord(stateDir, FOLDER, saved.id, { label: saved.label, fields: saved.fields, ...(saved.custom ? { custom: saved.custom } : {}), ...(saved.secrets ? { secrets: saved.secrets } : {}) });
   return saved;
 }
 
-export async function removeProfile(stateDir: string, id: string): Promise<boolean> { return removeVaultRecord(stateDir, FOLDER, id); }
+export async function removeProfile(stateDir: string, id: string): Promise<boolean> {
+  const profile = (await listProfiles(stateDir)).find(item => item.id === id);
+  for (const key of Object.keys(profile?.secrets ?? {})) await deleteNamedSecret(stateDir, secretName(id, key)).catch(() => false);
+  return removeVaultRecord(stateDir, FOLDER, id);
+}
+
+const secretName = (id: string, key: string): string => `profile/${id.slice(0, 8)}/${key}`;
+
+/** Keeps a secret with the profile: the value goes to Secrets Manager, the profile record only learns its name. */
+export async function saveProfileSecret(stateDir: string, id: string, key: string, value: string, spec: { label?: string; match?: string[] } = {}): Promise<void> {
+  assertCustomKey(key, true);
+  const profile = (await listProfiles(stateDir)).find(item => item.id === id);
+  if (!profile) throw new Error('No such profile.');
+  if (!value) throw new Error(`The secret "${key}" is empty.`);
+  await saveNamedSecret(stateDir, secretName(id, key), value);
+  const label = (spec.label?.trim() || profile.secrets?.[key]?.label || key.replace(/_/g, ' ')).slice(0, 80);
+  const match = spec.match ? spec.match.map(item => item.trim().toLowerCase()).filter(item => item.length >= 3 && item.length <= 60).slice(0, 8) : profile.secrets?.[key]?.match;
+  if (Object.keys(profile.secrets ?? {}).length >= MAX_SECRETS && !profile.secrets?.[key]) throw new Error(`A profile holds at most ${MAX_SECRETS} secrets.`);
+  const secrets = { ...profile.secrets, [key]: { label, ...(match?.length ? { match } : {}) } };
+  await writeVaultRecord(stateDir, FOLDER, id, { label: profile.label, fields: profile.fields, ...(profile.custom ? { custom: profile.custom } : {}), secrets });
+}
+
+/** For filling a form box only: callers must never put the value in model-visible output. */
+export async function readProfileSecret(stateDir: string, profile: { id: string; secrets?: Record<string, SecretField> }, key: string): Promise<string | undefined> {
+  return profile.secrets?.[key] ? readNamedSecret(stateDir, secretName(profile.id, key)).catch(() => undefined) : undefined;
+}
 
 const CUSTOM_KEY = /^[a-z][a-z0-9_]{0,39}$/;
 
 /** Throws for a custom field name that cannot be kept, so a prompt is never shown for one. */
-export function assertCustomKey(key: string): void {
+export function assertCustomKey(key: string, secret = false): void {
   if (!CUSTOM_KEY.test(key)) throw new Error(`A custom field name is lower-case letters, digits and underscores, starting with a letter (got "${key}").`);
-  if ((PROFILE_KEYS as readonly string[]).includes(key)) throw new Error(`"${key}" is a standard profile field: save it with fields, not custom.`);
+  if (!secret && (PROFILE_KEYS as readonly string[]).includes(key)) throw new Error(`"${key}" is a standard profile field: save it with fields, not custom.`);
 }
 const MAX_CUSTOM_FIELDS = 40;
+const MAX_SECRETS = 20;
 const MAX_CUSTOM_VALUE = 2000;
 
 /** The agent's own fields, merged into what is kept: a value replaces the one before it (its label and words stay
@@ -72,7 +104,8 @@ function mergeCustom(existing: Record<string, CustomField> | undefined, input: R
 export function describeProfile(profile: SavedProfile): string {
   const standard = PROFILE_KEYS.filter(key => profile.fields[key]).map(key => `${key}=${profile.fields[key]}`);
   const custom = Object.entries(profile.custom ?? {}).map(([key, field]) => `${key}=${field.value.length > 300 ? `${field.value.slice(0, 300)}…` : field.value}`);
-  return `${profile.label}: ${[...standard, ...custom].join(', ') || '(empty)'}`;
+  const secrets = Object.keys(profile.secrets ?? {}).map(key => `${key}=(secret, hidden)`);
+  return `${profile.label}: ${[...standard, ...custom, ...secrets].join(', ') || '(empty)'}`;
 }
 
 /** What a form field asks for: its autocomplete token first, then its words. */
@@ -120,6 +153,23 @@ export function customFieldFor(profile: { custom?: Record<string, CustomField> }
     }
   }
   return best ? { key: best.key, field: best.field } : undefined;
+}
+
+/** The secret of this profile a form field asks for: the password secret for any password box, another secret by its
+ * words (a "recovery code" box). Unlike details, secrets are the only thing that fills a password, code or card field. */
+export function secretFieldFor(profile: { secrets?: Record<string, SecretField> } | undefined, hint: FieldHint): string | undefined {
+  if (!profile?.secrets) return undefined;
+  if (hint.type === 'password' && profile.secrets[PASSWORD_SECRET] && !/one-time|verification|security.?code|\botp\b|current-password/i.test(`${hint.autocomplete} ${hint.text}`)) return PASSWORD_SECRET;
+  const asked = words(hint.text);
+  let best: { key: string; length: number } | undefined;
+  for (const [key, field] of Object.entries(profile.secrets)) {
+    if (key === PASSWORD_SECRET) continue;
+    for (const phrase of field.match?.length ? field.match : [field.label, key.replace(/_/g, ' ')]) {
+      const needle = words(phrase);
+      if (needle.trim().length >= 3 && asked.includes(needle) && (!best || needle.length > best.length)) best = { key, length: needle.length };
+    }
+  }
+  return best?.key;
 }
 
 /** The profile field a form field wants, if any. A password, code or card field is never one. */

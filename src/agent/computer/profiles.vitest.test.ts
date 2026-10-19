@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { lockCredentialVault } from './credential-vault.js';
-import { birthdayFor, customFieldFor, describeProfile, listProfiles, normalizePhone, phoneFor, profileKeyFor, removeProfile, saveProfile } from './profiles.js';
+import { birthdayFor, customFieldFor, describeProfile, listProfiles, normalizePhone, phoneFor, profileKeyFor, readProfileSecret, removeProfile, saveProfile, saveProfileSecret, secretFieldFor } from './profiles.js';
+import { namedSecretNames } from './credential-vault.js';
 
 let stateDir = '';
 afterEach(async () => { if (stateDir) { lockCredentialVault(stateDir); await rm(stateDir, { recursive: true, force: true }); stateDir = ''; } });
@@ -128,4 +129,27 @@ it('splits a saved birth date into the part a form field asks for', () => {
 it('recognises the day, month and year boxes of a split date of birth by their placeholders', () => {
   for (const text of ['dd', 'yyyy', 'mm', 'Birth year', 'Date of birth', 'bday']) expect(profileKeyFor({ autocomplete: '', type: 'text', text }), text).toBe('birthday');
   expect(profileKeyFor({ autocomplete: 'bday-year', type: 'text', text: 'Year' })).toBe('birthday');
+});
+
+describe('profile secrets', () => {
+  it('keeps the value out of the profile, fills the password box and a matching box, and goes with the profile', async () => {
+    stateDir = await mkdtemp(join(tmpdir(), 'profile-secret-'));
+    const profile = await saveProfile(stateDir, { label: 'Personal', fields: { given_name: 'Ada' } });
+    await saveProfileSecret(stateDir, profile.id, 'password', 'Zx9!correct-horse');
+    await saveProfileSecret(stateDir, profile.id, 'recovery_code', 'RC-12345-67890', { match: ['recovery code'] });
+    const [saved] = await listProfiles(stateDir);
+    expect(JSON.stringify(saved)).not.toContain('correct-horse');
+    expect(JSON.stringify(saved)).not.toContain('RC-12345');
+    expect(describeProfile(saved!)).toContain('password=(secret, hidden)');
+    expect(describeProfile(saved!)).not.toContain('correct-horse');
+    expect(await readProfileSecret(stateDir, saved!, 'password')).toBe('Zx9!correct-horse');
+    expect(secretFieldFor(saved, { autocomplete: 'new-password', type: 'password', text: 'Password' })).toBe('password');
+    expect(secretFieldFor(saved, { autocomplete: 'one-time-code', type: 'password', text: 'Verification code' })).toBeUndefined();
+    expect(secretFieldFor(saved, { autocomplete: '', type: 'text', text: 'Enter your recovery code' })).toBe('recovery_code');
+    expect(secretFieldFor(saved, { autocomplete: '', type: 'text', text: 'First name' })).toBeUndefined();
+    await saveProfile(stateDir, { id: profile.id, fields: { city: 'Denver' } });
+    expect(Object.keys((await listProfiles(stateDir))[0]!.secrets ?? {})).toEqual(['password', 'recovery_code']);
+    await removeProfile(stateDir, profile.id);
+    expect(await namedSecretNames(stateDir)).toEqual([]);
+  });
 });
