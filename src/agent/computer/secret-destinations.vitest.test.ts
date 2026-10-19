@@ -4,13 +4,14 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { addDestination, destinationProblem, loadDestinations, normalizeSendTo, removeDestination, sendToDestinations, slotsOf } from './secret-destinations.js';
 import { forgetSecrets, registerSecret } from './secret-scrubber.js';
+import { lockCredentialVault, saveNamedSecret } from './credential-vault.js';
 
 const VALUE = 'salad_live_9f8e7d6c5b4a39281706';
 let dir = '';
 let bin = '';
 const oldPath = process.env.PATH;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'clikcode-dest-')); bin = join(dir, 'bin'); await mkdir(bin); process.env.PATH = `${bin}:${oldPath}`; registerSecret(VALUE); });
-afterEach(async () => { process.env.PATH = oldPath; forgetSecrets(); await rm(dir, { recursive: true, force: true }); });
+afterEach(async () => { process.env.PATH = oldPath; forgetSecrets(); lockCredentialVault(dir); await rm(dir, { recursive: true, force: true }); });
 const fake = async (name: string, script: string): Promise<void> => { await writeFile(join(bin, name), `#!/bin/sh\n${script}\n`); await chmod(join(bin, name), 0o755); };
 
 it('ships a few destinations as plain data, each naming the slots the agent fills', async () => {
@@ -57,6 +58,25 @@ it('registers a connector\'s OAuth app: the client id from the agent, the secret
   // A slot that is not a plain id is refused before anything runs.
   expect(await destinationProblem(dir, [{ to: 'clikdeploy-connector', with: { integration: 'googlesheets', client_id: '--evil' } }])).toContain('needs with.client_id');
   expect(await destinationProblem(dir, [{ to: 'clikdeploy-connector', with: { integration: 'googlesheets' } }])).toContain('needs with.client_id');
+});
+
+it('a client id the agent never saw: client_id may name a saved secret, read from the vault only when it is sent', async () => {
+  await saveNamedSecret(dir, 'google/connectors-client-id', '1234567890-abcdefghij.apps.googleusercontent.com');
+  await fake('clikdeploy', `printf '%s\\n' "$@" > "${dir}/argv"; echo '{}'`);
+  const plan = [{ to: 'clikdeploy-connector', with: { integration: 'googlesheets', client_id: 'secret:google/connectors-client-id' } }];
+  expect(await destinationProblem(dir, plan)).toBeUndefined();
+  const [result] = await sendToDestinations(dir, plan, 'GOCSPX-clientsecret0123456789abcd');
+  expect(result).toMatchObject({ ok: true, label: 'clikdeploy-connector (googlesheets, secret:google/connectors-client-id)' });
+  const argv = (await readFile(join(dir, 'argv'), 'utf8')).split('\n');
+  expect(JSON.parse(argv[argv.indexOf('--args-json') + 1]!)).toEqual({ integrationId: 'googlesheets', clientId: '1234567890-abcdefghij.apps.googleusercontent.com', clientSecret: 'GOCSPX-clientsecret0123456789abcd' });
+  // A name that is not saved is refused before anything runs, and a slot that is not a vault slot never reads one.
+  expect(await destinationProblem(dir, [{ to: 'clikdeploy-connector', with: { integration: 'googlesheets', client_id: 'secret:no/such' } }])).toContain('not in the Secrets Manager');
+  // Any other slot takes "secret:..." as the plain text it is: the vault is never read for it.
+  await sendToDestinations(dir, [{ to: 'clikdeploy-secret', with: { key: 'secret:google/connectors-client-id' } }], 'a-value');
+  const other = (await readFile(join(dir, 'argv'), 'utf8')).split('\n');
+  const sent = JSON.parse(other[other.indexOf('--args-json') + 1]!) as { key: string; value: string };
+  expect(sent).toEqual({ key: 'secret:google/connectors-client-id', value: 'a-value' });
+  expect(JSON.stringify(sent)).not.toContain('apps.googleusercontent.com');
 });
 
 it('reads a key containing {{...}} text as plain text, not as a slot', async () => {

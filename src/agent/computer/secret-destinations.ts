@@ -12,10 +12,13 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { runCli } from './run-cli.js';
+import { namedSecretNames, readNamedSecret } from './credential-vault.js';
 import { scrubSecrets } from './secret-scrubber.js';
 
 export type Destination = { to: string; with?: Record<string, string> };
-type Template = { run: string[]; stdin?: string; about?: string };
+/** `vaultSlots`: slots whose value may be `secret:<saved name>`, read from the vault when it is sent, so the agent
+ * never sees it. For a value that is not a secret but looks like one to every filter (an OAuth client id). */
+type Template = { run: string[]; stdin?: string; about?: string; vaultSlots?: string[] };
 
 /** `{{secret|json}}` is the key as it must sit inside a JSON string. */
 const JSON_ARGS = (fields: string): string => `{${fields}}`;
@@ -29,7 +32,7 @@ export const DEFAULT_DESTINATIONS: Readonly<Record<string, Template>> = {
     run: ['clikdeploy', 'tools', 'run', 'admin_compute_save_credentials', '--args-json', JSON_ARGS('"provider":"{{provider}}","credentials":{"{{field}}":"{{secret|json}}"}'), '--confirm'] },
   // The secret is the OAuth client secret; the client id is not one and is a slot. Adding needs only the admin's
   // API key (the CLI's own sign-in): no code and no password, as long as the connector has no client stored.
-  'clikdeploy-connector': { about: "a ClikDeploy connector's OAuth app (integration, client_id); the key is its client secret",
+  'clikdeploy-connector': { about: "a ClikDeploy connector's OAuth app (integration, client_id); the key is its client secret; client_id may be secret:<saved name>", vaultSlots: ['client_id'],
     run: ['clikdeploy', 'tools', 'run', 'admin_platform_save_connector_credentials', '--args-json', JSON_ARGS('"integrationId":"{{integration}}","clientId":"{{client_id}}","clientSecret":"{{secret|json}}"'), '--confirm'] },
   'github-secret': { about: 'a GitHub repository secret (repo, key)', run: ['gh', 'secret', 'set', '{{key}}', '--repo', '{{repo}}'], stdin: '{{secret}}' },
 };
@@ -49,6 +52,7 @@ const EXAMPLE = 'Example: {"to":"clikdeploy-secret","with":{"key":"SALAD_API_KEY
 const NAME = /^[a-z][a-z0-9-]{1,40}$/;
 /** A slot value goes into a command line: no quotes, no leading dash that a program could read as a flag. */
 const SAFE_VALUE = /^[A-Za-z0-9_][\w.@:/ -]{0,119}$/;
+const VAULT_REF = /^secret:([A-Za-z0-9][\w./-]{0,80})$/;
 const SLOT = /\{\{([a-z][a-z0-9_]*)(\|json)?\}\}/g;
 
 export const destinationsFile = (stateDir: string): string => path.join(stateDir, 'computer', 'destinations.json');
@@ -98,8 +102,14 @@ export async function destinationProblem(stateDir: string, list: readonly unknow
     if (!d || typeof d !== 'object' || typeof d.to !== 'string') return `${at} needs {to: "<destination>", with: {...}}. ${EXAMPLE}`;
     const template = all[d.to];
     if (!template) return `${at}: no destination named "${d.to}". Known: ${describeKnown(all)}. The user adds more with \`clikcode computer destination add\`. ${EXAMPLE}`;
+    const saved = template.vaultSlots?.length ? await namedSecretNames(stateDir).catch(() => [] as string[]) : [];
     for (const slot of slotsOf(template)) {
       const value = d.with?.[slot];
+      const ref = typeof value === 'string' && template.vaultSlots?.includes(slot) ? VAULT_REF.exec(value) : null;
+      if (ref) {
+        if (!saved.includes(ref[1]!)) return `${at}: with.${slot} names a saved secret "${ref[1]}" that is not in the Secrets Manager.`;
+        continue;
+      }
       if (typeof value !== 'string' || !SAFE_VALUE.test(value)) return `${at}: "${d.to}" needs with.${slot} (letters, digits, dot, dash, underscore, slash; not starting with a dash). ${EXAMPLE}`;
     }
   }
@@ -128,8 +138,19 @@ export async function sendToDestinations(stateDir: string, list: readonly Destin
   const out: Delivery[] = [];
   for (const d of list) {
     const template = all[d.to]!;
-    const params = d.with ?? {};
-    const label = `${d.to}${Object.keys(params).length ? ` (${Object.values(params).join(', ')})` : ''}`;
+    const given = d.with ?? {};
+    const label = `${d.to}${Object.keys(given).length ? ` (${Object.values(given).join(', ')})` : ''}`;
+    // A vault slot is read here, at the last moment: the agent only ever named the secret.
+    const params: Record<string, string> = {};
+    let unreadable: string | undefined;
+    for (const [slot, raw] of Object.entries(given)) {
+      const ref = template.vaultSlots?.includes(slot) ? VAULT_REF.exec(raw) : null;
+      if (!ref) { params[slot] = raw; continue; }
+      const stored = (await readNamedSecret(stateDir, ref[1]!).catch(() => '')).trim();
+      if (!stored || !SAFE_VALUE.test(stored)) { unreadable = `The saved secret "${ref[1]}" is missing or is not a plain id, so ${slot} could not be filled.`; break; }
+      params[slot] = stored;
+    }
+    if (unreadable) { out.push({ label, ok: false, message: unreadable }); continue; }
     const [program, ...args] = template.run.map(part => fill(part, params, value));
     // A value goes to the program on stdin when the template says so: then it is in no command line.
     const result = await runCli(program!, args, { ...(template.stdin !== undefined ? { stdin: fill(template.stdin, params, value) } : {}), signal, timeoutMs: 90_000 });
