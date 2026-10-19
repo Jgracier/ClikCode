@@ -654,6 +654,13 @@ async function openLatestEmail(page: Page, args: WebArgs): Promise<Locator> {
     if (attempt === 3) throw new Error(`No email matched ${query}. If Gmail asked to sign in, sign in first with login; use account to pick another Gmail /u/N.`);
     await page.reload({ waitUntil: 'domcontentloaded' });
   }
+  // Gmail's search defaults to "most relevant", which is not the newest: a reset link from an hour ago can come first.
+  const relevant = page.getByRole('button', { name: /showing most relevant/i });
+  if (await relevant.count()) {
+    await relevant.first().click({ timeout: 3_000 }).catch(() => undefined);
+    await page.getByRole('menuitemradio', { name: /most recent/i }).click({ timeout: 3_000 }).catch(() => undefined);
+    await page.waitForTimeout(800);
+  }
   await row.click();
   // Gmail folds a thread to its first message and its unread ones: expand them all, so the last body is the newest
   // message (a reset link from five minutes ago, not the stale one from the start of the thread).
