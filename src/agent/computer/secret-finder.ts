@@ -134,11 +134,14 @@ export function hideKeyLikeText(text: string): { text: string; hidden: number } 
   const copyHint = WORTH_SAVING_HINT.test(text);
   let hidden = 0;
   text = text.replace(SECRET_UUID, (match, label?: string) => { hidden++; return typeof label === 'string' ? `${label}[secret hidden]` : '[secret hidden]'; });
+  // A long run of digits is an id or a secret (a 39-digit client secret), not a number a person reads: 24 or more digits are hidden.
+  const longNumber = (bare: string): boolean => /^\d{24,}$/.test(bare);
   const randomLooking = (bare: string): boolean => keyShaped(bare) && (mixedCase(bare) || PREFIXED.test(bare) || (bare.length >= 32 && /^[0-9a-f]+$/i.test(bare)));
   const lines = text.split('\n').map(line => {
     const isUrl = /^\s*- \/url:/.test(line);
     return line.replace(/[A-Za-z0-9_\-+/=.:~]{24,}/g, token => {
       const bare = token.replace(/[.,;:)]+$/, '');
+      if (longNumber(bare)) { if (isUrl) return token; hidden++; return '[secret hidden]'; }
       if (!keyShaped(bare)) return token;
       // A URL line keeps its address, except a value a label or an invitation to copy has marked as a key.
       const marked = (mixedCase(bare) && labelled.has(bare)) || (copyHint && bare.length >= 32);
