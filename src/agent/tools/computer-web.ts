@@ -66,6 +66,10 @@ async function locate(page: Page, target: string | undefined): Promise<Locator> 
 /** Radios, checkboxes and switches are often visually hidden behind a styled label, and a
  * click can land on something in front: fall back to clicking the element itself. */
 async function press(target: Locator): Promise<void> {
+  // A checkbox or radio is toggled on the element itself: a pointer click at its centre can land on a link in
+  // its label ("I agree to the Terms and Privacy Policy") and open that page instead.
+  const toggle = await target.evaluate(node => { const input = node as unknown as { tagName: string; type?: string }; return input.tagName === 'INPUT' && (input.type === 'checkbox' || input.type === 'radio'); }, undefined, { timeout: 2_000 }).catch(() => false);
+  if (toggle) { await target.evaluate(node => (node as unknown as { click(): void }).click(), undefined, { timeout: 3_000 }); return; }
   try { await target.click({ timeout: 6_000 }); }
   catch (error) {
     if (!(error instanceof Error) || !/timeout/i.test(error.message)) throw error;
