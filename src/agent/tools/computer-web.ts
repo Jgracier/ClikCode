@@ -678,17 +678,28 @@ export async function withSignInHints(result: ToolRunResult, page: Page, stateDi
   return hints.length ? { ...result, output: `${result.output}\n\n${hints.join('\n')}` } : result;
 }
 
+/** A navigation retried through a changing network (a laptop or tailnet switching routes fails a page load with ERR_NETWORK_CHANGED). */
+async function withNetworkRetry<T>(run: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try { return await run(); }
+    catch (error) {
+      if (attempt >= 3 || !(error instanceof Error) || !/ERR_NETWORK_CHANGED|ERR_INTERNET_DISCONNECTED|ERR_NETWORK_IO_SUSPENDED/.test(error.message)) throw error;
+      await new Promise(resolve => setTimeout(resolve, 1_500 * (attempt + 1)));
+    }
+  }
+}
+
 /** The newest message matching from/subject in the signed-in Gmail, opened; its body. Waits for one that has just been sent. */
 async function openLatestEmail(page: Page, args: WebArgs): Promise<Locator> {
   if (!args.from && !args.subject) throw new Error(`${args.action} needs from or subject.`);
   const query = [args.from ? `from:(${args.from})` : '', args.subject ? `subject:(${args.subject})` : '', 'newer_than:1d'].filter(Boolean).join(' ');
-  await page.goto(`https://mail.google.com/mail/u/${args.account ?? 0}/#search/${encodeURIComponent(query)}`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await withNetworkRetry(() => page.goto(`https://mail.google.com/mail/u/${args.account ?? 0}/#search/${encodeURIComponent(query)}`, { waitUntil: 'domcontentloaded', timeout: 30_000 }));
   const row = page.locator('tr.zA').first();
   // A message just sent may not be indexed yet: look again a few times before saying it is not there.
   for (let attempt = 0; attempt < 4; attempt++) {
     if (await row.waitFor({ timeout: 10_000 }).then(() => true, () => false)) break;
     if (attempt === 3) throw new Error(`No email matched ${query}. If Gmail asked to sign in, sign in first with login; use account to pick another Gmail /u/N.`);
-    await page.reload({ waitUntil: 'domcontentloaded' });
+    await withNetworkRetry(() => page.reload({ waitUntil: 'domcontentloaded' }));
   }
   // Gmail's search defaults to "most relevant", which is not the newest: a reset link from an hour ago can come first.
   const relevant = page.getByRole('button', { name: /showing most relevant/i });
@@ -724,7 +735,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
   }
   switch (args.action) {
     case 'open': {
-      await page.goto(webAddress(args.url), { waitUntil: 'domcontentloaded', timeout: 30_000 });
+      await withNetworkRetry(() => page.goto(webAddress(args.url), { waitUntil: 'domcontentloaded', timeout: 30_000 }));
       await settle(page);
       await settleSignup(ctx.stateDir, page);
       const seen = await observeComputerPage(page, ctx.acceptsImages === true);
