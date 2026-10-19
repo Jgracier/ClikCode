@@ -32,3 +32,25 @@ describe('work queue', () => {
     await expect(saveTask(stateDir, { vendor: 'd', status: 'nope' as never })).rejects.toThrow('Unknown status');
   });
 });
+
+describe('secret records', () => {
+  it('records vendor, owner and dates, keeps the first date on a rotation, and backfills old secrets from their name', async () => {
+    stateDir = await mkdtemp(join(tmpdir(), 'secret-meta-'));
+    const { saveNamedSecret, namedSecretInfo, backfillSecretMeta, readNamedSecret } = await import('./credential-vault.js');
+    await saveNamedSecret(stateDir, 'netlify/client-id', 'one', { vendor: 'netlify', owner: 'a@b.test' });
+    await saveNamedSecret(stateDir, 'netlify/client-id', 'two');
+    const [info] = await namedSecretInfo(stateDir);
+    expect(info!.meta).toMatchObject({ vendor: 'netlify', owner: 'a@b.test' });
+    expect(info!.meta!.rotatedAt).toBeDefined();
+    expect(await readNamedSecret(stateDir, 'netlify/client-id')).toBe('two');
+    await saveNamedSecret(stateDir, 'dropbox/client-secret', 'v');
+    await saveNamedSecret(stateDir, 'plainname', 'v');
+    const done = await backfillSecretMeta(stateDir, 'owner@x.test');
+    expect(done.sort()).toEqual(['dropbox/client-secret', 'plainname']);
+    const byName = Object.fromEntries((await namedSecretInfo(stateDir)).map(item => [item.name, item.meta]));
+    expect(byName['dropbox/client-secret']).toMatchObject({ vendor: 'dropbox', owner: 'owner@x.test' });
+    expect(byName['plainname']).toMatchObject({ owner: 'owner@x.test' });
+    expect(byName['plainname']!.vendor).toBeUndefined();
+    expect(await readNamedSecret(stateDir, 'dropbox/client-secret')).toBe('v');
+  });
+});

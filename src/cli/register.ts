@@ -90,8 +90,8 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .option('--status <status>', 'Only this status').option('--reason <reason>', 'Only tasks waiting for this reason').option('--set <status>', 'Record a status for --vendor').option('--vendor <name>').option('--kind <kind>').option('--note <text>').option('--owner <email>').option('--import-ledger <file>', 'Load a vendor ledger JSON ({vendor: {ids, status, note}})')
     .action(async (options: { status?: string; reason?: string; set?: string; vendor?: string; kind?: string; note?: string; owner?: string; importLedger?: string }) => (await import('../commands/computer.js')).computerQueue(options));
   computer.command('secrets').description('List the names of saved secrets, or delete one (values are never shown)')
-    .option('--delete <name>', 'Delete this secret')
-    .action(async (options: { delete?: string }) => (await import('../commands/computer.js')).computerSecrets(options.delete));
+    .option('--delete <name>', 'Delete this secret').option('--backfill', 'Record a vendor (and --owner) on secrets saved before records existed').option('--owner <email>', 'With --backfill: the account these belong to')
+    .action(async (options: { delete?: string; backfill?: boolean; owner?: string }) => (await import('../commands/computer.js')).computerSecrets(options.delete, options.backfill ? { ...(options.owner ? { owner: options.owner } : {}) } : undefined));
   const destination = computer.command('destination').description('Where captured keys can be sent: named commands with a {{secret}} slot');
   destination.command('list').description('Show every destination and the values the agent fills in')
     .action(async () => (await import('../commands/computer.js')).computerDestinations());
