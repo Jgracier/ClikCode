@@ -79,3 +79,16 @@ it('remembers a refused password, and a new save clears it', async () => {
   expect((await savedLoginsForSite(dir, url))[0]!.rejected).toBe(false);
   expect((await savedLoginFields(dir, url, id)).password).toBe('new');
 });
+
+it('keeps one entry for an account saved again, with its newest password', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'clikcode-vault-same-'));
+  try {
+    await saveLoginFields(dir, 'https://app.example.com/login', { username: 'Me@Example.com', password: 'first-pass-1' });
+    await saveLoginFields(dir, 'https://app.example.com/login', { username: 'me@example.com', password: 'second-pass-2' });
+    await saveLoginFields(dir, 'https://app.example.com/login', { username: 'other@example.com', password: 'other-pass-3' });
+    const logins = await savedLoginsForSite(dir, 'https://app.example.com/');
+    expect(logins).toHaveLength(2);
+    const mine = logins.find(login => login.label.toLowerCase() === 'me@example.com')!;
+    expect((await savedLoginFields(dir, 'https://app.example.com/', mine.id)).password).toBe('second-pass-2');
+  } finally { lockCredentialVault(dir); await rm(dir, { recursive: true, force: true }); }
+});
