@@ -5,7 +5,7 @@ import { afterEach, expect, it } from 'vitest';
 import type { Page } from 'playwright-core';
 import { generatePassword } from './signup-login.js';
 import { lockCredentialVault, savedLoginFields, savedLoginsForSite } from './credential-vault.js';
-import { expectSignup, settleSignup } from './signup-login.js';
+import { expectSignup, holdSignup, settleSignup } from './signup-login.js';
 
 let stateDir = '';
 afterEach(async () => { if (stateDir) { lockCredentialVault(stateDir); await rm(stateDir, { recursive: true, force: true }); stateDir = ''; } });
@@ -41,4 +41,20 @@ it('makes a 24-character password with every class, differently each time', () =
   expect(first).toHaveLength(24);
   expect(first).toMatch(/[a-z]/); expect(first).toMatch(/[A-Z]/); expect(first).toMatch(/\d/); expect(first).toMatch(/[!@#$%^*_-]/);
   expect(generatePassword()).not.toBe(first);
+});
+
+it('keeps a generated password at once, then corrects the email once the form is gone', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-signup-'));
+  const state = { passwords: 2 };
+  const page = formPage(state);
+  await holdSignup(stateDir, page, 'Gen-4-ever-Zq9', 'me@example.com');
+  const [early] = await savedLoginsForSite(stateDir, 'https://signup.example.com/');
+  expect(early?.label).toBe('me@example.com');
+  expect((await savedLoginFields(stateDir, 'https://signup.example.com/', early!.id)).password).toBe('Gen-4-ever-Zq9');
+  state.passwords = 0;
+  await settleSignup(stateDir, page);
+  const all = await savedLoginsForSite(stateDir, 'https://signup.example.com/');
+  expect(all).toHaveLength(1);
+  expect(all[0]?.label).toBe('ada@example.com');
+  expect((await savedLoginFields(stateDir, 'https://signup.example.com/', all[0]!.id)).password).toBe('Gen-4-ever-Zq9');
 });

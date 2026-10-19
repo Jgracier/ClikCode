@@ -10,7 +10,7 @@ import { savedLoginFields, savedLoginsForSite } from '../computer/credential-vau
 import { loginValueFor } from '../computer/login-fill.js';
 import { addSiteNote, readSiteNotes } from '../computer/site-notes.js';
 import { assertCustomKey, customFieldFor, describeProfile, listProfiles, PROFILE_KEYS, phoneFor, birthdayFor, profileKeyFor, saveProfile, type FieldHint, type ProfileKey } from '../computer/profiles.js';
-import { expectSignup, generatePassword, settleSignup } from '../computer/signup-login.js';
+import { expectSignup, generatePassword, holdSignup, settleSignup } from '../computer/signup-login.js';
 import { loginComputerPage, loginOutcomeMessage } from '../computer/login-page.js';
 import { LoginError } from '../computer/login-error.js';
 import { type LoginField } from '../computer/login-fields.js';
@@ -524,7 +524,7 @@ async function askForFills(page: Page, steps: readonly Step[], ctx: ToolContext)
     if (known) { values.set(field.step, key === 'phone' ? phoneFor(known, field.placeholder, field.current) : key === 'birthday' ? birthdayFor(known, `${field.label} ${field.placeholder}`) : known); continue; }
     ask.push({ step: field.step, key, field: { index: ask.length, key: `fill${ask.length}`, label: field.label || String(field.step.target), kind: field.password ? 'password' : 'text', required: true } });
   }
-  if (generated) { registerSecret(generated); expectSignup(page, generated); }
+  if (generated) { registerSecret(generated); await holdSignup(ctx.stateDir, page, generated, profile?.fields.sso_email ?? profile?.fields.email); }
   if (ask.length) {
     if (!ctx.requestPrivateLogin) throw new Error('Fill needs text: this chat cannot ask the user privately.');
     const answers = await ctx.requestPrivateLogin(origin, ask.map(item => item.field), ctx.signal);
@@ -680,6 +680,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
     case 'open': {
       await page.goto(webAddress(args.url), { waitUntil: 'domcontentloaded', timeout: 30_000 });
       await settle(page);
+      await settleSignup(ctx.stateDir, page);
       const seen = await observeComputerPage(page, ctx.acceptsImages === true);
       const notes = await readSiteNotes(ctx.stateDir, new URL(page.url()).hostname).catch(() => '');
       return notes ? { ...seen, output: `Notes from earlier on this site:\n${notes}\n\n${seen.output}` } : seen;
