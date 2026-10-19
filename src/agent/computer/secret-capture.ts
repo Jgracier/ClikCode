@@ -49,7 +49,7 @@ export async function captureSecret(input: {
     let via = 'the page';
     // A target that is itself key-shaped text is the key: nothing needs clicking.
     const own = input.paste ? undefined : (await input.readTarget?.().catch(() => undefined))?.trim();
-    if (own && keyShaped(own)) { value = own; via = 'the text of the target itself'; }
+    if (own && (keyShaped(own) || shortKeyText(own))) { value = own; via = 'the text of the target itself'; }
     else if (input.trigger) { clicked = true; await input.trigger(); }
     let ambiguous = false;
     let presses = 0; // the site's Copy button is pressed a couple of times at most: a button that copies nothing is not worth 3 s a poll
@@ -117,6 +117,12 @@ export async function captureSecret(input: {
     stop.abort();
     input.signal?.removeEventListener('abort', outer);
   }
+}
+
+/** A short credential (a 15-character app key) that the page names by being the very element the agent
+ * pointed at: letters and digits only, with both, so a label or a word is never taken for one. */
+export function shortKeyText(text: string): boolean {
+  return text.length >= 12 && text.length <= 64 && /^[A-Za-z0-9_-]+$/.test(text) && /\d/.test(text) && /[A-Za-z]/.test(text);
 }
 
 /** What kind of text the value is, never the text: enough for the agent to notice an id where a secret should be. */

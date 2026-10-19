@@ -147,5 +147,16 @@ export function hideKeyLikeText(text: string): { text: string; hidden: number } 
       return '[secret hidden]';
     });
   });
-  return { text: lines.join('\n'), hidden };
+  // A short credential (a 15-character app key and secret) is too short for the shape rules above, but a
+  // letters-and-digits token on, or right under, a line that names a secret, token, key or password is one.
+  const NAMED = /\b(?:secret|token|api[ _-]?key|app[ _-]?key|client[ _-]?secret|password|credential)s?\b/i;
+  const guarded = lines.map((line, index) => {
+    if (!NAMED.test(line) && !(index > 0 && NAMED.test(lines[index - 1]!))) return line;
+    return line.replace(/(?<![\w-])[A-Za-z0-9_-]{12,23}(?![\w-])/g, token => {
+      if (!/\d/.test(token) || !/[A-Za-z]/.test(token) || /^ref=|^f\d*e\d+$/.test(token)) return token;
+      hidden++;
+      return '[secret hidden]';
+    });
+  });
+  return { text: guarded.join('\n'), hidden };
 }
