@@ -58,3 +58,11 @@ it('keeps a generated password at once, then corrects the email once the form is
   expect(all[0]?.label).toBe('ada@example.com');
   expect((await savedLoginFields(stateDir, 'https://signup.example.com/', all[0]!.id)).password).toBe('Gen-4-ever-Zq9');
 });
+
+it('keeps one login when the same generated password is held again for the same form', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-signup-'));
+  const page = formPage({ passwords: 2 });
+  await holdSignup(stateDir, page, 'Same-Gen-9', 'me@example.com');
+  await holdSignup(stateDir, page, 'Same-Gen-9', 'me@example.com');
+  expect(await savedLoginsForSite(stateDir, 'https://signup.example.com/')).toHaveLength(1);
+});

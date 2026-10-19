@@ -11,12 +11,16 @@ const pending = sharedState('signup-pending', () => new WeakMap<Page, Pending>()
 const PASSWORD_FIELD = 'input[type="password"]';
 const NAME_FIELD = 'input[type="email"], input[autocomplete="username"], input[autocomplete="email"]';
 
+/** The password this page's signup form already has (a form filled one box per call needs the same value in both). */
+export function pendingSignupPassword(page: Page): string | undefined { return pending.get(page)?.password; }
+
 export function expectSignup(page: Page, password: string): void { pending.set(page, { password }); }
 
 /** A password the tool made up: kept in the vault at once, under the account email it is most likely for, so a signup
  * that is submitted, redirected or abandoned half-way never loses it. settleSignup later corrects the email to the
  * one the form really held. */
 export async function holdSignup(stateDir: string, page: Page, password: string, username: string | undefined): Promise<void> {
+  if (pending.get(page)?.password === password) return; // the same form, filled box by box: already kept
   const held: Pending = { password, ...(username ? { username } : {}) };
   if (username) held.itemId = await saveLoginFields(stateDir, page.url(), { username, password });
   pending.set(page, held);
