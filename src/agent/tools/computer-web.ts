@@ -1,4 +1,6 @@
 /** Page-level browser actions in ClikCode's own Chrome profile. */
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { defineTool } from '../tool-contract.js';
 import { adoptPage, closeComputerPage, computerPage, openComputerPage } from '../computer/browser.js';
 import { COMPUTER_OFF, computerEnabled, generatedPasswordsAllowed } from '../computer/settings.js';
@@ -24,9 +26,9 @@ import { runTailnetHandoff, tailnetAddress } from '../computer/tailnet-handoff.j
 import type { Locator, Page } from 'playwright-core';
 import type { ToolContext, ToolRunResult } from '../tool-contract.js';
 
-type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait'; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; accept_dialog?: boolean; gone?: boolean; seconds?: number };
+type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload'; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; accept_dialog?: boolean; gone?: boolean; seconds?: number };
 type WebArgs = {
-  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'profile' | 'open_email_link' | 'read_email_code' | 'notes' | 'help';
+  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'profile' | 'open_email_link' | 'read_email_code' | 'notes' | 'help';
   tab?: string; url?: string; host?: string; note?: string; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
   new_account?: boolean; secret?: string; to?: string; with?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean; format?: string; options?: string[] }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
 };
@@ -234,7 +236,7 @@ async function settle(page: Page): Promise<void> {
   })).catch(() => undefined); // a navigation destroys the page being watched: the next look is a new page
 }
 
-const ACTION_LIST = 'open · close · observe · click · fill · choose · press · scroll · wait · steps · login · handoff · capture_secret · send_secret · profile · open_email_link · read_email_code · notes · help';
+const ACTION_LIST = 'open · close · observe · click · fill · choose · press · scroll · wait · upload · steps · login · handoff · capture_secret · send_secret · profile · open_email_link · read_email_code · notes · help';
 
 const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: ['action'], properties: {
     action: { type: 'string', description: ACTION_LIST },
@@ -251,7 +253,7 @@ const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: [
     direction: { type: 'string', enum: ['up', 'down'], description: 'scroll.' },
     steps: { type: ['array', 'string'], description: 'steps: what to do, in order, e.g. [{do:"fill", target:"e4", text:"My key"}, {do:"click", target:"e9"}].',
       items: { type: 'object', additionalProperties: false, required: ['do'], properties: {
-        do: { type: 'string', enum: ['click', 'fill', 'choose', 'press', 'scroll', 'wait'] }, target: { type: 'string' }, text: { type: 'string' }, key: { type: 'string' }, direction: { type: 'string', enum: ['up', 'down'] }, accept_dialog: { type: 'boolean' }, gone: { type: 'boolean' }, seconds: { type: 'number' },
+        do: { type: 'string', enum: ['click', 'fill', 'choose', 'press', 'scroll', 'wait', 'upload'] }, target: { type: 'string' }, text: { type: 'string' }, key: { type: 'string' }, direction: { type: 'string', enum: ['up', 'down'] }, accept_dialog: { type: 'boolean' }, gone: { type: 'boolean' }, seconds: { type: 'number' },
       } } },
     full: { type: 'boolean', description: 'observe: include the header and footer and a longer view.' },
     accept_dialog: { type: 'boolean', description: 'click: answer yes to a browser confirm dialog the click raises ("delete this token?"). Default: declined and reported.' },
@@ -275,7 +277,7 @@ const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: [
 
 const WEB_DESCRIPTION = [
     "Drive ClikCode's own Chrome (its own saved profile; it starts by itself). open and observe return the page, with a [ref=…] on each element: pass a ref as target (or visible text) to click or fill. After an action you get only what changed (and any open dialog); observe shows the whole page again. A new tab or popup the page opens is followed automatically.",
-    'Actions: open (a URL) · observe (the page again; full: true adds header and footer; find: "words" shows only the lines that mention them, for a long page) · click · fill · choose (an option of a dropdown: target + text) · press · scroll · wait (for text to appear or go, up to 2 minutes; for jobs that finish on their own) · steps (several of those in order, one call, stops at the first failure) · login · handoff · capture_secret · profile · open_email_link (find the newest email from a sender in the signed-in Gmail and open a link in it, one call: verification and sign-in emails) · notes (read or add what was learned on a site: the URL that worked, the order of screens, what was missing; shown again whenever a page on that host is opened, so write one when a task finally works) · read_email_code (the one-time code in the newest email from a sender, read in a tab of its own, so a sign-up that wants an emailed code does not need the user) · close.',
+    'Actions: open (a URL) · observe (the page again; full: true adds header and footer; find: "words" shows only the lines that mention them, for a long page) · click · fill · choose (an option of a dropdown: target + text) · press · scroll · wait (for text to appear or go, up to 2 minutes; for jobs that finish on their own) · steps (several of those in order, one call, stops at the first failure) · login · handoff · capture_secret · profile · open_email_link (find the newest email from a sender in the signed-in Gmail and open a link in it, one call: verification and sign-in emails) · upload (a file input or its button + text: the name of a profile file detail ending _file such as logo_file; only files the user saved in the profile can be sent) · notes (read or add what was learned on a site: the URL that worked, the order of screens, what was missing; shown again whenever a page on that host is opened, so write one when a task finally works) · read_email_code (the one-time code in the newest email from a sender, read in a tab of its own, so a sign-up that wants an emailed code does not need the user) · close.',
     'Each chat has its own tab. The user\'s autofill profile (name, email, phone, address, and any custom details you asked for with profile ask_fields) fills forms for you: fill a field with no text and it is filled from the profile, or the user is asked once and the answer is kept. If a site wants another format, fill that field with the exact text, and save the corrected value with action profile and fields. When a site offers Continue/Sign in with Google and the browser is already signed in to Google, prefer it: no new password or email check. Every page can be read, including sign-in and signup forms; the values of password, code and card fields are masked. For anything only the user knows (a password, a code, an address, a phone number), fill the field with no text: a saved login for the site or the profile fills it, else the user is asked privately, and you are not shown the answer. That is all a sign-in or signup needs: fill the fields, click Next, repeat. (login does the same in one action for a plain email-then-password sign-in.) Never ask for a password or code in chat. When a sign-in page offers different ways in (root or IAM, another account), ask the user with ask_user, click their choice, then login. handoff returns a phone link for a CAPTCHA or MFA at once; give it to the user, then call handoff again to wait until they finish.',
     'Work through the whole task you were given without checking in at each step. Ask real choices (project, account, role set) once, up front, in one question; after that ask only when genuinely blocked (a sign-in they must type, a payment).',
     'API keys: go to the key page, set the options, then capture_secret with target = the final Create button and a send_to plan. It presses the site\'s Copy button or reads the file it hands over, checks the key against its service, saves it to ClikCode Secrets Manager and sends it where send_to says. You never see the key. With no target it takes a key the page already shows; never click Regenerate just to see one.',
@@ -385,7 +387,20 @@ export function inOrder<T>(key: string, job: () => Promise<T>): Promise<T> {
 
 const handoffs = sharedState('handoffs', () => new Map<string, { link: Promise<string>; done: Promise<{ ok: true } | { ok: false; message: string }>; stop: AbortController }>());
 
-const INTERACTIONS: ReadonlySet<string> = new Set(['click', 'fill', 'choose', 'press', 'scroll', 'wait']);
+const INTERACTIONS: ReadonlySet<string> = new Set(['click', 'fill', 'choose', 'press', 'scroll', 'wait', 'upload']);
+
+/** The profile file an upload step names (`text` is the detail's name, e.g. logo_file): saved by the user, ending _file, and present on disk. */
+export async function approvedFile(ctx: ToolContext | undefined, name: string | undefined): Promise<string> {
+  if (!ctx || !name || !/_file$/.test(name)) throw new Error('Upload needs text naming a profile file detail ending _file, such as logo_file. Save one with profile custom.');
+  for (const profile of await listProfiles(ctx.stateDir)) {
+    const value = profile.custom?.[name]?.value;
+    if (value) {
+      try { if ((await fs.stat(value)).isFile()) return value; } catch { /* reported below */ }
+      throw new Error(`The file saved as ${name} is not on this computer: ${path.basename(value)}.`);
+    }
+  }
+  throw new Error(`The profile has no ${name}. The user can add it with: clikcode computer profile --custom ${name}=/path/to/file`);
+}
 
 /** What one step did. `halt` means the steps after it must not run: they were written for a page that is not there yet. */
 type StepOutcome = string | { note: string; halt: true };
@@ -407,8 +422,20 @@ async function waitOn(page: Page, step: Step): Promise<StepOutcome> {
 }
 
 /** One thing done to the page, in words. Throws with the reason it could not be done. */
-async function doStep(page: Page, step: Step): Promise<StepOutcome> {
+async function doStep(page: Page, step: Step, ctx?: ToolContext): Promise<StepOutcome> {
   switch (step.do) {
+    case 'upload': {
+      // Only a file the user put in their profile (a custom detail whose name ends _file, such as logo_file) can be sent to a site.
+      const file = await approvedFile(ctx, step.text);
+      const target = await locate(page, step.target);
+      const isFileInput = await target.evaluate(node => { const input = node as unknown as { tagName: string; type?: string }; return input.tagName === 'INPUT' && input.type === 'file'; }).catch(() => false);
+      if (isFileInput) await target.setInputFiles(file, { timeout: 10_000 });
+      else {
+        const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: 8_000 }), clickOrHint(target)]);
+        await chooser.setFiles(file);
+      }
+      return `Uploaded ${path.basename(file)} (${step.text}) to ${step.target}.`;
+    }
     case 'click': {
       const target = await locate(page, step.target);
       const { dialogs } = await withDialogs(page, step.accept_dialog === true, () => clickOrHint(target));
@@ -589,7 +616,7 @@ async function runSteps(page: Page, steps: readonly Step[], ctx: ToolContext, ta
     current.on('popup', onPopup);
     let halted = false;
     try {
-      const done = await doStep(current, step);
+      const done = await doStep(current, step, ctx);
       if (typeof done === 'string') notes.push(done); else { notes.push(done.note); halted = true; }
       await settle(current);
       const saved = await settleSignup(ctx.stateDir, current);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { inOrder, withSignInHints, verificationCode, arrangeSnapshot, changedLines, collapseOptions, displayUrl, computerWebTool, findInSnapshot } from './computer-web.js';
+import { approvedFile, inOrder, withSignInHints, verificationCode, arrangeSnapshot, changedLines, collapseOptions, displayUrl, computerWebTool, findInSnapshot } from './computer-web.js';
 
 describe('arrangeSnapshot', () => {
   const longMiddle = Array.from({ length: 900 }, (_, index) => `    - link "Item number ${index} of the long list" [ref=e${100 + index}]`).join('\n');
@@ -255,5 +255,29 @@ describe('inOrder', () => {
     await expect(slow).rejects.toThrow('boom');
     expect(await fast).toBe('b');
     expect(log).toEqual(['a start', 'a end', 'b']);
+  });
+});
+
+describe('approvedFile', () => {
+  it('lets an upload send only a file the user saved in the profile under a _file name', async () => {
+    const { mkdtemp, rm, writeFile } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { saveProfile } = await import('../computer/profiles.js');
+    const dir = await mkdtemp(join(tmpdir(), 'clikcode-upload-'));
+    const ctx = { stateDir: dir } as never;
+    const files = join(process.cwd(), 'uploads-test-readable');
+    await (await import('node:fs/promises')).mkdir(files, { recursive: true });
+    try {
+      const logo = join(files, 'logo.png');
+      await writeFile(logo, 'x');
+      await saveProfile(dir, { fields: {}, custom: { logo_file: { value: logo }, notes: { value: logo } } });
+      expect(await approvedFile(ctx, 'logo_file')).toBe(logo);
+      await expect(approvedFile(ctx, 'notes')).rejects.toThrow('ending _file');
+      await expect(approvedFile(ctx, '/etc/passwd')).rejects.toThrow('ending _file');
+      await expect(approvedFile(ctx, 'other_file')).rejects.toThrow('no other_file');
+      await saveProfile(dir, { fields: {}, custom: { gone_file: { value: join(files, 'missing.png') } } });
+      await expect(approvedFile(ctx, 'gone_file')).rejects.toThrow('not on this computer');
+    } finally { await rm(dir, { recursive: true, force: true }); await rm(files, { recursive: true, force: true }); }
   });
 });
