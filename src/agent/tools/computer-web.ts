@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { defineTool } from '../tool-contract.js';
 import { adoptPage, closeComputerPage, computerPage, openComputerPage } from '../computer/browser.js';
-import { COMPUTER_OFF, computerEnabled, generatedPasswordsAllowed } from '../computer/settings.js';
+import { COMPUTER_OFF, computerEnabled, generatedPasswordsAllowed, unattendedEnabled } from '../computer/settings.js';
 import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
 import { maskSensitive, sensitiveValues } from '../computer/sensitive-fields.js';
 import { storeSecretTool } from './store-secret.js';
@@ -17,6 +17,8 @@ import { loginComputerPage, loginOutcomeMessage } from '../computer/login-page.j
 import { LoginError } from '../computer/login-error.js';
 import { type LoginField } from '../computer/login-fields.js';
 import { registerSecret, scrubSecrets, showsSecret } from '../computer/secret-scrubber.js';
+import { profileLoginAnswers } from '../computer/profile-login.js';
+import { Parked, park } from '../computer/parking.js';
 import { hideKeyLikeText } from '../computer/secret-finder.js';
 import { dialogNote, withDialogs } from '../computer/page-dialogs.js';
 import { SEND_TO_HELP, SEND_TO_SCHEMA } from './store-secret.js';
@@ -291,7 +293,7 @@ const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: [
 const WEB_DESCRIPTION = [
     "Drive ClikCode's own Chrome (its own saved profile; it starts by itself). open and observe return the page, with a [ref=…] on each element: pass a ref as target (or visible text) to click or fill. After an action you get only what changed (and any open dialog); observe shows the whole page again. A new tab or popup the page opens is followed automatically.",
     'Actions: open (a URL) · observe (the page again; full: true adds header and footer; find: "words" shows only the lines that mention them, for a long page) · click · fill · choose (an option of a dropdown: target + text) · press · scroll · wait (for text to appear or go, up to 2 minutes; for jobs that finish on their own) · steps (several of those in order, one call, stops at the first failure) · login · handoff · capture_secret · profile · open_email_link (find the newest email from a sender in the signed-in Gmail and open a link in it, one call: verification and sign-in emails) · upload (a file input or its button + text: the name of a profile file detail ending _file such as logo_file; only files the user saved in the profile can be sent) · notes (read or add what was learned on a site: the URL that worked, the order of screens, what was missing; shown again whenever a page on that host is opened, so write one when a task finally works) · read_email_code (the one-time code in the newest email from a sender, read in a tab of its own, so a sign-up that wants an emailed code does not need the user) · close.',
-    'Each chat has its own tab. The user\'s autofill profile (name, email, phone, address, and any custom details you asked for with profile ask_fields) fills forms for you: fill a field with no text and it is filled from the profile, or the user is asked once and the answer is kept. If a site wants another format, fill that field with the exact text, and save the corrected value with action profile and fields. When a site offers Continue/Sign in with Google and the browser is already signed in to Google, prefer it: no new password or email check. Every page can be read, including sign-in and signup forms; the values of password, code and card fields are masked. For anything only the user knows (a password, a code, an address, a phone number), fill the field with no text: a saved login for the site or the profile fills it, else the user is asked privately, and you are not shown the answer. That is all a sign-in or signup needs: fill the fields, click Next, repeat. (login does the same in one action for a plain email-then-password sign-in.) Never ask for a password or code in chat. When a sign-in page offers different ways in (root or IAM, another account), ask the user with ask_user, click their choice, then login. handoff returns a phone link for a CAPTCHA or MFA at once; give it to the user, then call handoff again to wait until they finish.',
+    'Each chat has its own tab. The user\'s autofill profile (name, email, phone, address, and any custom details you asked for with profile ask_fields) fills forms for you: fill a field with no text and it is filled from the profile, or the user is asked once and the answer is kept. If a site wants another format, fill that field with the exact text, and save the corrected value with action profile and fields. When a site offers Continue/Sign in with Google and the browser is already signed in to Google, prefer it: no new password or email check. If it offers GitHub and not Google, use Continue with GitHub (sign in to GitHub with the saved login; there is no Google sign-in inside GitHub). Only when neither is offered, fill the form with no text: the profile email and password fill it. Every page can be read, including sign-in and signup forms; the values of password, code and card fields are masked. For anything only the user knows (a password, a code, an address, a phone number), fill the field with no text: a saved login for the site or the profile fills it, else the user is asked privately, and you are not shown the answer. That is all a sign-in or signup needs: fill the fields, click Next, repeat. (login does the same in one action for a plain email-then-password sign-in.) Never ask for a password or code in chat. When a sign-in page offers different ways in (root or IAM, another account), ask the user with ask_user, click their choice, then login. handoff returns a phone link for a CAPTCHA or MFA at once; give it to the user, then call handoff again to wait until they finish.',
     'Work through the whole task you were given without checking in at each step. Ask real choices (project, account, role set) once, up front, in one question; after that ask only when genuinely blocked (a sign-in they must type, a payment).',
     'API keys: go to the key page, set the options, then capture_secret with target = the final Create button and a send_to plan. It presses the site\'s Copy button or reads the file it hands over, checks the key against its service, saves it to ClikCode Secrets Manager and sends it where send_to says. You never see the key. With no target it takes a key the page already shows; never click Regenerate just to see one.',
   ].join('\n');
@@ -321,7 +323,12 @@ export const computerWebTool = defineTool<WebArgs>({
   describe: async (args) => `ClikCode browser: ${args.action}${args.url ? ` ${args.url}` : ''}${args.target ? ` ${args.target}` : ''}${args.action === 'fill' ? ` (${args.text?.length ?? 0} characters)` : ''}`,
   // One chat's browser calls run in the order they were made. The model can send two at once (a capture and
   // the click that closes the dialog it reads), and a one-time key does not survive that race.
-  run: (args, ctx) => inOrder(args.tab ? `${ctx.stateDir}#${args.tab}` : ctx.stateDir, async (): Promise<ToolRunResult> => {
+  run: (args, hostCtx) => inOrder(args.tab ? `${hostCtx.stateDir}#${args.tab}` : hostCtx.stateDir, async (): Promise<ToolRunResult> => {
+    // Unattended: a private prompt about a site (a password, a code, an account choice) is parked in the queue, not shown.
+    // The profile prompts are the user's own and are always shown.
+    const ctx: ToolContext = await unattendedEnabled(hostCtx.stateDir) && hostCtx.requestPrivateLogin
+      ? { ...hostCtx, requestPrivateLogin: (site, fields, signal) => site === 'https://profile.clikcode' ? hostCtx.requestPrivateLogin!(site, fields, signal) : park(hostCtx.stateDir, site, fields) }
+      : hostCtx;
     try {
       if (!(await computerEnabled(ctx.stateDir))) throw new Error(COMPUTER_OFF);
       if (args.action === 'help') return { output: `${WEB_DESCRIPTION}\n\nArguments: ${Object.entries((WEB_PARAMETERS as { properties: Record<string, { description?: string }> }).properties).map(([name, spec]) => `${name}${spec.description ? ` (${spec.description})` : ''}`).join('; ')}` };
@@ -384,6 +391,7 @@ export const computerWebTool = defineTool<WebArgs>({
       } finally { ctx.signal?.removeEventListener('abort', onAbort); }
     } catch (error) {
       // A sign-in's own errors may echo what was typed, so only its planned messages are shown; a capture's are always the real reason.
+      if (error instanceof Parked) return { output: error.message, isError: true };
       if (args.action === 'login') return { output: error instanceof LoginError ? error.message : 'Private login did not finish. Check the browser and try again.', isError: true };
       if (args.action === 'capture_secret') {
         const why = error instanceof Error ? error.message : String(error);
@@ -687,7 +695,12 @@ async function runSteps(page: Page, steps: readonly Step[], ctx: ToolContext, ta
 export async function withSignInHints(result: ToolRunResult, page: Page, stateDir: string): Promise<ToolRunResult> {
   let url: URL;
   try { url = new URL(page.url()); } catch { return result; }
-  if (url.hostname !== 'accounts.google.com') return result;
+  if (url.hostname !== 'accounts.google.com') {
+    // A sign-in or sign-up page: say which way in to take (Google, else GitHub, else the profile's email and password).
+    const text = await page.evaluate(() => (globalThis as unknown as { document: { body: { innerText: string } } }).document.body.innerText.slice(0, 20_000)).catch(() => '');
+    const hint = signInMethodHint(signInProviders(text));
+    return hint ? { ...result, output: `${result.output}\n\n${hint}` } : result;
+  }
   const hints: string[] = [];
   if (/accountchooser/.test(url.pathname)) {
     const email = (await listProfiles(stateDir)).map(profile => profile.fields.sso_email).find(Boolean);
@@ -698,6 +711,22 @@ export async function withSignInHints(result: ToolRunResult, page: Page, stateDi
     if (broad) hints.push(`This consent screen asks for more than a sign-in ("${broad}"). Decline it with Cancel unless the task is to give that access.`);
   }
   return hints.length ? { ...result, output: `${result.output}\n\n${hints.join('\n')}` } : result;
+}
+
+/** Which "continue with" providers a page's text offers. */
+export function signInProviders(text: string): { google: boolean; github: boolean } {
+  const offers = (name: string) => new RegExp(`(?:continue|sign ?(?:in|up)|log ?in|register)\\s+(?:in\\s+)?(?:with|using|via)\\s+${name}\\b`, 'i').test(text);
+  return { google: offers('google'), github: offers('github') };
+}
+
+/**
+ * The way in to take on a sign-in or sign-up page, in the user's order: Google (no password, no email check), else
+ * GitHub, else the profile's email and password. Nothing is said about a page that offers neither.
+ */
+export function signInMethodHint(offered: { google: boolean; github: boolean }): string | undefined {
+  if (offered.google) return 'This page offers Google: use it ("Continue with Google" / "Sign in with Google") instead of a password or a new account; the account chooser follows.';
+  if (offered.github) return 'This page offers GitHub and not Google: use "Continue with GitHub". GitHub has no Google sign-in of its own: if GitHub asks to sign in, use login with the saved GitHub account, and read any verification code with read_email_code.';
+  return undefined;
 }
 
 /** A navigation retried through a changing network (a laptop or tailnet switching routes fails a page load with ERR_NETWORK_CHANGED). */
@@ -810,6 +839,9 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
     case 'login': {
       const outcome = await loginComputerPage({ stateDir: ctx.stateDir, page, signal: ctx.signal, newAccount: args.new_account === true,
         ask: async (site, fields, signal) => {
+          // The profile's email and password secret answer a sign-in with no saved login; anything else is asked.
+          const fromProfile = await profileLoginAnswers(ctx.stateDir, fields);
+          if (fromProfile) return fromProfile;
           if (!ctx.requestPrivateLogin) throw new LoginError('This chat cannot show private login fields.');
           return ctx.requestPrivateLogin(site, fields, signal);
         }, onVerification: () => ctx.emitOutput?.('Approve the sign-in or finish verification in the open browser.\n') });
