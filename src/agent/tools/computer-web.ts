@@ -28,9 +28,9 @@ import type { ToolContext, ToolRunResult } from '../tool-contract.js';
 
 type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload'; target?: string; at?: 'start' | 'end'; text?: string; key?: string; direction?: 'up' | 'down'; accept_dialog?: boolean; gone?: boolean; seconds?: number };
 type WebArgs = {
-  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'profile' | 'open_email_link' | 'read_email_code' | 'notes' | 'queue' | 'help';
+  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'profile' | 'open_email_link' | 'read_email_code' | 'notes' | 'queue' | 'network' | 'help';
   tab?: string; at?: 'start' | 'end'; url?: string; host?: string; note?: string; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
-  new_account?: boolean; secret?: string; to?: string; with?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean; format?: string; options?: string[]; secret?: boolean }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; vendor?: string; owner?: string; env?: string; task?: { vendor: string; kind?: string; status?: string; reason?: string; note?: string; owner?: string; connectors?: string[] }; tasks?: boolean; task_status?: string; task_reason?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
+  new_account?: boolean; secret?: string; to?: string; with?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean; format?: string; options?: string[]; secret?: boolean }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; vendor?: string; owner?: string; env?: string; task?: { vendor: string; kind?: string; status?: string; reason?: string; note?: string; owner?: string; connectors?: string[] }; bodies?: boolean; tasks?: boolean; task_status?: string; task_reason?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
 };
 
 export function webAddress(value: string | undefined): string {
@@ -241,7 +241,7 @@ async function settle(page: Page): Promise<void> {
   })).catch(() => undefined); // a navigation destroys the page being watched: the next look is a new page
 }
 
-const ACTION_LIST = 'open · close · observe · click · fill · choose · press · scroll · wait · upload · steps · login · handoff · capture_secret · send_secret · profile · open_email_link · read_email_code · notes · queue · help';
+const ACTION_LIST = 'open · close · observe · click · fill · choose · press · scroll · wait · upload · steps · login · handoff · capture_secret · send_secret · profile · open_email_link · read_email_code · notes · queue · network · help';
 
 const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: ['action'], properties: {
     action: { type: 'string', description: ACTION_LIST },
@@ -281,6 +281,7 @@ const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: [
     owner: { type: 'string', description: 'capture_secret: the account the key or app belongs to (default: the profile\'s sign-in email).' },
     env: { type: 'string', description: 'capture_secret: production, sandbox or test.' },
     task: { type: 'object', additionalProperties: false, properties: { vendor: { type: 'string' }, kind: { type: 'string', enum: ['oauth-app', 'api-key', 'test-account', 'webhook', 'other'] }, status: { type: 'string', enum: ['queued', 'working', 'done', 'needs-human', 'blocked', 'no-self-serve'] }, reason: { type: 'string', enum: ['captcha', 'sms', 'email', 'payment', 'identity', 'review', 'two-factor', 'other'] }, note: { type: 'string' }, owner: { type: 'string' }, connectors: { type: 'array', items: { type: 'string' } } }, required: ['vendor'], description: 'queue: record or update one vendor task (one per vendor and kind). Set status needs-human with a reason when a person must act (captcha, sms, payment), done when finished, blocked when it cannot be done. Always record the outcome here instead of only saying it.' },
+    bodies: { type: 'boolean', description: 'network: also show request and answer bodies (truncated, key-like values hidden). Default: shapes only.' },
     tasks: { type: 'boolean', description: 'queue: list the tasks (filter with task_status, task_reason) with a summary.' },
     task_status: { type: 'string' }, task_reason: { type: 'string' },
     secret_name: { type: 'string', description: 'capture_secret: name to save the key under (default: the site\'s name plus "/key").' },
@@ -775,6 +776,14 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       const list = typeof args.steps === 'string' ? (() => { try { return JSON.parse(args.steps) as Step[]; } catch { return undefined; } })() : args.steps;
       if (!Array.isArray(list) || !list.length) throw new Error('steps needs a list, e.g. [{"do":"click","target":"e5"}].');
       return runSteps(page, list, ctx, args.tab);
+    case 'network': {
+      // Does the steps (or just waits and reloads nothing) while recording the page's API calls: the vendor's own web app
+      // shows the real endpoint, method and answer shape when documentation is thin. Header values are never shown.
+      const list = typeof args.steps === 'string' ? (() => { try { return JSON.parse(args.steps) as Step[]; } catch { return undefined; } })() : args.steps;
+      const { recordNetwork, describeCalls } = await import('../computer/network-capture.js');
+      const { result, calls, dropped } = await recordNetwork(page, async () => Array.isArray(list) && list.length ? runSteps(page, list, ctx, args.tab) : (await page.waitForTimeout((args.seconds ?? 5) * 1000), undefined), { ...(args.find ? { find: args.find } : {}), ...(args.bodies ? { bodies: true } : {}) });
+      return { output: `${result?.output ? `${result.output}\n\n` : ''}${describeCalls(calls, dropped)}`, ...(result?.isError ? { isError: true } : {}) };
+    }
     case 'open_email_link': {
       const body = await openLatestEmail(page, args, ctx.stateDir);
       const links = await body.locator('a[href]').evaluateAll(nodes => nodes.map(node => ({ href: (node as unknown as { href: string }).href, text: (node as unknown as { textContent: string | null }).textContent ?? '' })));

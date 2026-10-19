@@ -100,7 +100,7 @@ export async function computerTool(tool: string, args: Record<string, unknown>, 
 }
 
 /** The vault's saved secrets, by name only: no chat or worker is needed to look at your own files. */
-export async function computerSecrets(remove?: string): Promise<void> {
+export async function computerSecrets(remove?: string, backfill?: { owner?: string }): Promise<void> {
   const { deleteNamedSecret } = await import('../agent/computer/credential-vault.js');
   const stateDir = stateDirectory();
   if (remove) {
@@ -109,7 +109,13 @@ export async function computerSecrets(remove?: string): Promise<void> {
     process.stdout.write(removed ? `Deleted "${remove}".\n` : `No secret named "${remove}".\n`);
     return;
   }
-  const { namedSecretInfo } = await import('../agent/computer/credential-vault.js');
+  const { namedSecretInfo, backfillSecretMeta } = await import('../agent/computer/credential-vault.js');
+  if (backfill) {
+    const done = await backfillSecretMeta(stateDir, backfill.owner);
+    if (isJsonDefaultMode()) return emitResult({ computer: { backfilled: done } });
+    process.stdout.write(`Recorded a vendor${backfill.owner ? ' and owner' : ''} on ${done.length} secret${done.length === 1 ? '' : 's'}.\n`);
+    return;
+  }
   const info = await namedSecretInfo(stateDir);
   if (isJsonDefaultMode()) return emitResult({ computer: { secrets: info.map(item => item.name), details: info } });
   process.stdout.write(info.length ? `${info.map(({ name, meta }) => `  ${name}${meta ? `  (${[meta.vendor, meta.owner, meta.env, `saved ${meta.createdAt.slice(0, 10)}`, meta.rotatedAt ? `rotated ${meta.rotatedAt.slice(0, 10)}` : ''].filter(Boolean).join(', ')})` : ''}`).join('\n')}\n` : 'No secrets are saved.\n');

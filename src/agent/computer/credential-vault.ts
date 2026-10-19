@@ -196,6 +196,8 @@ export async function saveNamedSecret(stateDir: string, name: string, value: str
   // A second save of the same name is a rotation: the first date stays, and what was given before stays unless given again.
   let before: { value?: string; meta?: SecretMeta } = {};
   try { before = JSON.parse(open(key, aad, await fs.readFile(file, 'utf8'))) as typeof before; } catch { /* a new secret */ }
+  // A secret saved before records existed was made when its file was.
+  if (before.value !== undefined && !before.meta) { const made = await fs.stat(file).then(info => info.mtime.toISOString(), () => undefined); if (made) before.meta = { createdAt: made }; }
   const now = new Date().toISOString();
   const kept = (field: 'vendor' | 'owner' | 'env'): Partial<SecretMeta> => { const v = meta[field]?.trim() || before.meta?.[field]; return v ? { [field]: v } : {}; };
   const saved: SecretMeta = { ...kept('vendor'), ...kept('owner'), ...kept('env'), createdAt: before.meta?.createdAt ?? now, ...(before.value !== undefined && before.value !== value ? { rotatedAt: now } : before.meta?.rotatedAt ? { rotatedAt: before.meta.rotatedAt } : {}) };
@@ -269,4 +271,16 @@ export async function removeVaultRecord(stateDir: string, folder: string, id: st
   if (!RECORD_FOLDER.test(folder) || !/^[0-9a-f-]{36}$/i.test(id)) throw new CredentialError('Invalid vault record.');
   try { await fs.unlink(path.join(vaultDir(stateDir), folder, `${id}.json`)); return true; }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw new CredentialError('The record could not be removed.'); }
+}
+
+/** Gives every secret saved before records existed a vendor (the first part of its name, "netlify/client-id" is netlify). The value is untouched and never leaves this file. */
+export async function backfillSecretMeta(stateDir: string, owner?: string): Promise<string[]> {
+  const done: string[] = [];
+  for (const { name, meta } of await namedSecretInfo(stateDir)) {
+    const vendor = name.includes('/') ? name.split('/')[0] : undefined;
+    if ((meta?.vendor || !vendor) && (meta?.owner || !owner)) continue;
+    await saveNamedSecret(stateDir, name, await readNamedSecret(stateDir, name), { ...(vendor && !meta?.vendor ? { vendor } : {}), ...(owner && !meta?.owner ? { owner } : {}) });
+    done.push(name);
+  }
+  return done;
 }
