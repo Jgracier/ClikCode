@@ -54,3 +54,17 @@ describe('secret records', () => {
     expect(await readNamedSecret(stateDir, 'dropbox/client-secret')).toBe('v');
   });
 });
+
+describe('sign-in method hints', () => {
+  it('prefers Google, then GitHub, and says nothing when neither is offered', async () => {
+    const { signInMethodHint, signInProviders } = await import('../tools/computer-web.js');
+    expect(signInProviders('Log in\nContinue with Google\nContinue with GitHub')).toEqual({ google: true, github: true });
+    expect(signInProviders('Sign up with GitHub or use email')).toEqual({ google: false, github: true });
+    expect(signInProviders('Sign in using Google')).toEqual({ google: true, github: false });
+    expect(signInProviders('Welcome. Google Docs, GitHub Pages')).toEqual({ google: false, github: false });
+    expect(signInMethodHint({ google: true, github: true })).toContain('offers Google');
+    expect(signInMethodHint({ google: false, github: true })).toContain('GitHub and not Google');
+    expect(signInMethodHint({ google: false, github: true })).toContain('no Google sign-in of its own');
+    expect(signInMethodHint({ google: false, github: false })).toBeUndefined();
+  });
+});
