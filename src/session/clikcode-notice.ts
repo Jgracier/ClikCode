@@ -14,6 +14,11 @@ export const CLIKCODE_NOTICE_TAG = '[ClikCode] ';
 /** formatShellNotifications (agent/session-state.ts): `[background shell <id> exited ...] <command>`, a monitor's `... output]` and a `[scheduled wakeup <id>]`. */
 const SHELL_NOTICE = /^\[(?:background shell \S+ (?:exited|was stopped|output)|scheduled wakeup \S+\])/;
 
+/** Claude Code's own first message after a compaction: the summary it wrote, handed back to itself to continue from.
+ * It is the model's input, not something the user said, and a compaction already announces itself ("Compact
+ * conversation"); drawing it as a prompt made a compaction read as the user pasting a summary. */
+const COMPACTION_SUMMARY = /^This session is being continued from a previous conversation that ran out of context\./;
+
 export function isClikCodeNotice(text: string): boolean {
-  return text.startsWith(CLIKCODE_NOTICE_TAG) || SHELL_NOTICE.test(text);
+  return text.startsWith(CLIKCODE_NOTICE_TAG) || SHELL_NOTICE.test(text) || COMPACTION_SUMMARY.test(text);
 }

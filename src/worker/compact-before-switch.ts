@@ -18,7 +18,9 @@ import { vendorWindows } from '../harness/accounts/usage-reading.js';
 import { nextUsableFailoverAccount, turnBackendForAccount } from '../turn/account-routing.js';
 import { canCompact } from '../tui/slash/compact.js';
 
-export const COMPACT_AT_USED_PCT = 95;
+/** 10% left, not 5%: a compaction is itself a long call on the account that is nearly out, and with 5% room a
+ * big conversation ran the account dry before the summary was written. */
+export const COMPACT_AT_USED_PCT = 90;
 export const COMPACT_ABOVE_TOKENS = 150_000;
 const RETRY_AFTER_MS = 30 * 60_000;
 const lastCompacted = new Map<string, number>();

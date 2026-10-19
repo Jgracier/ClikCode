@@ -34,6 +34,13 @@ describe('compacting a large conversation before its account runs out', () => {
   });
 });
 
+describe('the threshold', () => {
+  it('starts at 10% left: 89% used waits, 90% used compacts', () => {
+    expect(shouldCompactBeforeSwitch(state(account('a', 89), account('b', 10)), session(), account('a', 89) as never, now)).toBe(false);
+    expect(shouldCompactBeforeSwitch(state(account('a', 90), account('b', 10)), session(), account('a', 90) as never, now)).toBe(true);
+  });
+});
+
 describe('which harnesses can compact', () => {
   it('Claude by its own /compact; an ACP agent by the compaction command it advertised; others not at all', () => {
     expect(compactCommand('c', session())).toBe('/compact');
