@@ -655,6 +655,9 @@ async function openLatestEmail(page: Page, args: WebArgs): Promise<Locator> {
     await page.reload({ waitUntil: 'domcontentloaded' });
   }
   await row.click();
+  // Gmail folds a thread to its first message and its unread ones: expand them all, so the last body is the newest
+  // message (a reset link from five minutes ago, not the stale one from the start of the thread).
+  await page.locator('[aria-label="Expand all"]').first().click({ timeout: 2_000 }).catch(() => undefined);
   const body = page.locator('.a3s:visible').last();
   await body.waitFor({ timeout: 15_000 });
   await page.locator('.ajR').last().click({ timeout: 1_500 }).catch(() => undefined); // "show trimmed content"
