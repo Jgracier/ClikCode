@@ -187,12 +187,33 @@ function secretFile(stateDir: string, name: string): { file: string; aad: string
   const hash = createHash('sha256').update(name.toLowerCase()).digest('hex').slice(0, 32);
   return { file: path.join(vaultDir(stateDir), 'secrets', `${hash}.json`), aad: `secret:${hash}` };
 }
-export async function saveNamedSecret(stateDir: string, name: string, value: string): Promise<void> {
+/** What a secret is for and who owns it, kept beside the value so a long list of credentials can be audited and rotated. */
+export type SecretMeta = { vendor?: string; owner?: string; env?: string; createdAt: string; rotatedAt?: string };
+export async function saveNamedSecret(stateDir: string, name: string, value: string, meta: { vendor?: string; owner?: string; env?: string } = {}): Promise<void> {
   if (!value) throw new CredentialError('The secret is empty.');
   const { file, aad } = secretFile(stateDir, name);
   const key = await vaultKey(stateDir, true);
+  // A second save of the same name is a rotation: the first date stays, and what was given before stays unless given again.
+  let before: { value?: string; meta?: SecretMeta } = {};
+  try { before = JSON.parse(open(key, aad, await fs.readFile(file, 'utf8'))) as typeof before; } catch { /* a new secret */ }
+  const now = new Date().toISOString();
+  const kept = (field: 'vendor' | 'owner' | 'env'): Partial<SecretMeta> => { const v = meta[field]?.trim() || before.meta?.[field]; return v ? { [field]: v } : {}; };
+  const saved: SecretMeta = { ...kept('vendor'), ...kept('owner'), ...kept('env'), createdAt: before.meta?.createdAt ?? now, ...(before.value !== undefined && before.value !== value ? { rotatedAt: now } : before.meta?.rotatedAt ? { rotatedAt: before.meta.rotatedAt } : {}) };
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  await fs.writeFile(file, seal(key, aad, JSON.stringify({ name, value })), { mode: 0o600 });
+  await fs.writeFile(file, seal(key, aad, JSON.stringify({ name, value, meta: saved })), { mode: 0o600 });
+}
+/** Names with their records, never the values. */
+export async function namedSecretInfo(stateDir: string): Promise<{ name: string; meta?: SecretMeta }[]> {
+  const dir = path.join(vaultDir(stateDir), 'secrets');
+  let files: string[];
+  try { files = await fs.readdir(dir); } catch { return []; }
+  const key = await vaultKey(stateDir, false);
+  const out: { name: string; meta?: SecretMeta }[] = [];
+  for (const file of files) {
+    try { const { name, meta } = JSON.parse(open(key, `secret:${file.replace(/\.json$/, '')}`, await fs.readFile(path.join(dir, file), 'utf8'))) as { name: string; meta?: SecretMeta }; out.push({ name, ...(meta ? { meta } : {}) }); }
+    catch { /* an unreadable file is skipped, never shown */ }
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 export async function readNamedSecret(stateDir: string, name: string): Promise<string> {
   const { file, aad } = secretFile(stateDir, name);

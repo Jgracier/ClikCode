@@ -101,7 +101,7 @@ export async function computerTool(tool: string, args: Record<string, unknown>, 
 
 /** The vault's saved secrets, by name only: no chat or worker is needed to look at your own files. */
 export async function computerSecrets(remove?: string): Promise<void> {
-  const { deleteNamedSecret, namedSecretNames } = await import('../agent/computer/credential-vault.js');
+  const { deleteNamedSecret } = await import('../agent/computer/credential-vault.js');
   const stateDir = stateDirectory();
   if (remove) {
     const removed = await deleteNamedSecret(stateDir, remove);
@@ -109,9 +109,10 @@ export async function computerSecrets(remove?: string): Promise<void> {
     process.stdout.write(removed ? `Deleted "${remove}".\n` : `No secret named "${remove}".\n`);
     return;
   }
-  const names = await namedSecretNames(stateDir);
-  if (isJsonDefaultMode()) return emitResult({ computer: { secrets: names } });
-  process.stdout.write(names.length ? `${names.map(name => `  ${name}`).join('\n')}\n` : 'No secrets are saved.\n');
+  const { namedSecretInfo } = await import('../agent/computer/credential-vault.js');
+  const info = await namedSecretInfo(stateDir);
+  if (isJsonDefaultMode()) return emitResult({ computer: { secrets: info.map(item => item.name), details: info } });
+  process.stdout.write(info.length ? `${info.map(({ name, meta }) => `  ${name}${meta ? `  (${[meta.vendor, meta.owner, meta.env, `saved ${meta.createdAt.slice(0, 10)}`, meta.rotatedAt ? `rotated ${meta.rotatedAt.slice(0, 10)}` : ''].filter(Boolean).join(', ')})` : ''}`).join('\n')}\n` : 'No secrets are saved.\n');
 }
 
 /** Autofill profiles: list them, set fields (`--set phone=719-555-0123`), pick one with `--label`, or `--delete` by label. */
@@ -194,4 +195,29 @@ async function readHidden(question: string): Promise<string> {
   rl.close();
   process.stderr.write('\n');
   return answer;
+}
+
+/** The vendor set-up queue: list it, or record a task. */
+export async function computerQueue(options: { status?: string; reason?: string; set?: string; vendor?: string; kind?: string; note?: string; owner?: string; importLedger?: string }): Promise<void> {
+  const { describeTask, listTasks, saveTask, summarizeTasks } = await import('../agent/computer/work-queue.js');
+  const stateDir = stateDirectory();
+  if (options.importLedger) {
+    const { readFile } = await import('node:fs/promises');
+    const ledger = JSON.parse(await readFile(options.importLedger, 'utf8')) as Record<string, { ids?: string[]; status?: string; note?: string }>;
+    const map: Record<string, string> = { done: 'done', blocked: 'blocked', 'no-self-serve': 'no-self-serve', 'todo-capture': 'queued' };
+    let count = 0;
+    for (const [vendor, entry] of Object.entries(ledger)) {
+      await saveTask(stateDir, { vendor, kind: 'oauth-app', status: (map[entry.status ?? ''] ?? 'queued') as never, ...(entry.note ? { note: entry.note } : {}), ...(entry.ids?.length ? { connectors: entry.ids } : {}) });
+      count++;
+    }
+    return void process.stdout.write(`Imported ${count} vendors into the queue.\n`);
+  }
+  if (options.set) {
+    if (!options.vendor) throw new Error('Say which vendor: --vendor <name>.');
+    const saved = await saveTask(stateDir, { vendor: options.vendor, status: options.set as never, ...(options.kind ? { kind: options.kind as never } : {}), ...(options.reason ? { reason: options.reason as never } : {}), ...(options.note ? { note: options.note } : {}), ...(options.owner ? { owner: options.owner } : {}) });
+    return void process.stdout.write(`Recorded. ${describeTask(saved)}\n`);
+  }
+  const all = await listTasks(stateDir, { ...(options.status ? { status: options.status as never } : {}), ...(options.reason ? { reason: options.reason as never } : {}) });
+  if (isJsonDefaultMode()) return emitResult({ computer: { tasks: all } });
+  process.stdout.write(`${summarizeTasks(all)}\n${all.map(describeTask).join('\n')}\n`);
 }
