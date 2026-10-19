@@ -124,3 +124,8 @@ it('splits a saved birth date into the part a form field asks for', () => {
   expect(birthdayFor('06/18/1998', 'Date of birth dd/mm/yyyy')).toBe('18/06/1998');
   expect(birthdayFor('1998', 'Birth year')).toBe('1998');
 });
+
+it('recognises the day, month and year boxes of a split date of birth by their placeholders', () => {
+  for (const text of ['dd', 'yyyy', 'mm', 'Birth year', 'Date of birth', 'bday']) expect(profileKeyFor({ autocomplete: '', type: 'text', text }), text).toBe('birthday');
+  expect(profileKeyFor({ autocomplete: 'bday-year', type: 'text', text: 'Year' })).toBe('birthday');
+});

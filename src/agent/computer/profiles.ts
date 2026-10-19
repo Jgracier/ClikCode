@@ -81,7 +81,7 @@ export type FieldHint = { autocomplete: string; type: string; text: string };
 const TOKENS: Record<string, ProfileKey> = {
   'given-name': 'given_name', 'family-name': 'family_name', email: 'email', tel: 'phone', 'tel-national': 'phone', 'street-address': 'address_line1',
   'address-line1': 'address_line1', 'address-line2': 'address_line2', 'address-level2': 'city', 'address-level1': 'state', 'postal-code': 'postal_code',
-  country: 'country', 'country-name': 'country', organization: 'organization', 'organization-title': 'job_title', url: 'website', bday: 'birthday',
+  country: 'country', 'country-name': 'country', organization: 'organization', 'organization-title': 'job_title', url: 'website', bday: 'birthday', 'bday-day': 'birthday', 'bday-month': 'birthday', 'bday-year': 'birthday',
 };
 const WORDS: [RegExp, ProfileKey][] = [
   [/first.?name|given.?name|forename|\bfname\b/, 'given_name'],
@@ -97,7 +97,7 @@ const WORDS: [RegExp, ProfileKey][] = [
   [/company|organi[sz]ation|employer|business.?name/, 'organization'],
   [/job.?title|position|\brole\b/, 'job_title'],
   [/website|\burl\b/, 'website'],
-  [/birth|\bdob\b/, 'birthday'],
+  [/birth|\bdob\b|\bbday\b|\b(?:dd|mm|yyyy)\b/, 'birthday'],
 ];
 
 /** A password, code or card field: never filled from a profile. */
