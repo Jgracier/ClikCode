@@ -68,11 +68,15 @@ export async function captureSecret(input: {
       else if (decision.kind === 'ambiguous') { ambiguous = true; break; }
     }
     const found = !!value;
-    if (!value) {
-      const hint = `${input.paste ? `Copy the ${input.name} from the site` : ambiguous ? 'More than one possible key on the page' : 'Could not find the key on its own'}. Paste it here`;
-      value = await input.ask(input.name, hint, input.signal ? AbortSignal.any([stop.signal, input.signal]) : stop.signal);
+    if (!value && input.paste) {
+      value = await input.ask(input.name, `Copy the ${input.name} from the site. Paste it here`, input.signal ? AbortSignal.any([stop.signal, input.signal]) : stop.signal);
+      if (!value) throw new LoginError('Not saved: no key was found and none was pasted.');
     }
-    if (!value) throw new LoginError('Not saved: no key was found and none was pasted.');
+    // The user is never the fallback: someone who cannot see the key on the page cannot paste it either.
+    // The agent is told what is left to try.
+    if (!value) {
+      throw new LoginError(`Not saved: ${ambiguous ? 'more than one possible key is on the page' : 'the key could not be read from the page'}. Do not ask the user. Try another way: press the control that shows it ("Show", "Reveal", an eye icon) and capture that, target the Copy button or the text itself, or rotate/refresh the secret and capture straight away.`);
+    }
     if (!found) via = 'pasted by the user';
     registerSecret(value);
     for (const part of secretParts(value)) registerSecret(part);
