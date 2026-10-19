@@ -2,6 +2,7 @@
 import type { JSX } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { ACTIVITY_PREVIEW_LINES } from '../../../../src/harness/protocol/activity-view';
+import { applyInputMask, maskComplete, maskPattern } from '../../../../src/harness/events/input-mask';
 import { APPROVAL_GUARD_MS, approvalHeading, approvalKeyAction } from '../../../../src/tui/render/approval-keys';
 import { type Approval } from '../model';
 import type { HarnessQuestion, HarnessQuestionResult } from '../protocol';
@@ -103,6 +104,9 @@ export function QuestionCard({ approval, position, total, onAnswer }: {
   useEffect(() => { if (request.questions.length === 1) card.current?.querySelector<HTMLInputElement>('input[type="radio"]')?.focus(); }, []);
   const valuesOf = (question: HarnessQuestion, held: Record<string, string[]> = picks): string[] => {
     const text = question.secret ? (typed[question.id] ?? '') : (typed[question.id] ?? '').trim();
+    // A formatted answer is only an answer once the whole pattern is filled.
+    const pattern = maskPattern(question.format);
+    if (pattern && text && !maskComplete(text, pattern)) return held[question.id] ?? [];
     const chosen = held[question.id] ?? [];
     if (question.multiSelect) return text ? [...chosen, text] : chosen;
     return text ? [text] : chosen;
@@ -154,11 +158,15 @@ export function QuestionCard({ approval, position, total, onAnswer }: {
             );
           })}
           {question.allowFreeText || question.options.length === 0 ? (
-            <input type={question.secret && question.maskInput !== false ? 'password' : 'text'} class="approval-note-input question-text" autocomplete="off"
+            <input type={question.secret && question.maskInput !== false ? 'password' : 'text'} class="approval-note-input question-text" autocomplete="off" inputMode={maskPattern(question.format) && !/[A*]/.test(maskPattern(question.format)!) ? 'numeric' : undefined}
               aria-label={question.options.length ? `${question.prompt} (other answer)` : question.prompt}
               placeholder={question.options.length ? 'Other…' : 'Type your answer…'} value={typed[question.id] ?? ''}
               onInput={(event) => {
-                const text = (event.target as HTMLInputElement).value;
+                const input = event.target as HTMLInputElement;
+                const pattern = maskPattern(question.format);
+                // The box types the pattern itself, exactly as the terminal's does.
+                const text = pattern ? applyInputMask(input.value, pattern, input.value.length < (typed[question.id] ?? '').length) : input.value;
+                if (pattern && input.value !== text) input.value = text;
                 setTyped((held) => ({ ...held, [question.id]: text }));
                 if (text && !question.multiSelect) setPicks((held) => ({ ...held, [question.id]: [] }));
               }}

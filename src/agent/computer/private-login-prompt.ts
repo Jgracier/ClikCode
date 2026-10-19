@@ -20,8 +20,8 @@ export async function askPrivateLogin(
       ? { id: field.key, prompt: field.label, options: (field.options ?? []).map(label => ({ label })), secret: true }
       : field.current
         // Known already: it starts in the box, to edit or leave alone.
-        ? { id: field.key, prompt: field.label, options: [], initial: field.current, secret: true, maskInput: false }
-        : { id: field.key, prompt: askFor(field), options: [], secret: true, maskInput: field.kind === 'password', ...(field.required ? {} : { optional: true }) }),
+        ? { id: field.key, prompt: field.label, options: [], initial: field.current, secret: true, maskInput: false, ...(field.format ? { format: field.format } : {}) }
+        : { id: field.key, prompt: askFor(field), options: [], secret: true, maskInput: field.kind === 'password', ...(field.format ? { format: field.format, maskInput: false } : {}), ...(field.required ? {} : { optional: true }) }),
   }, signal);
   if (result.kind !== 'answered') return undefined;
   const values = Object.fromEntries(fields.map(field => [field.key, result.answers[field.key]?.[0] ?? '']));

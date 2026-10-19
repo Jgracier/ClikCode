@@ -150,3 +150,21 @@ export function normalizePhone(value: string): string {
   if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
   return value.trim().startsWith('+') ? `+${digits}` : digits;
 }
+
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+/** The part of a saved birth date (MM/DD/YYYY) a form field wants, judged from its words: a year box, a day box, a month
+ * box or select, or the whole date in the order the placeholder shows. */
+export function birthdayFor(value: string, words = ''): string {
+  const match = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(value.trim());
+  if (!match) return value.trim();
+  const [, month, day, year] = match as unknown as [string, string, string, string];
+  const hint = words.toLowerCase();
+  if (/\b(yyyy|year)\b/.test(hint) && !/\b(mm|dd|month|day)\b/.test(hint)) return year;
+  if (/\b(dd|day)\b/.test(hint) && !/\b(mm|month|yyyy|year)\b/.test(hint)) return day;
+  if (/\b(mm|month)\b/.test(hint) && !/\b(dd|day|yyyy|year)\b/.test(hint)) return /\bmm\b/.test(hint) ? month : MONTHS[Number(month) - 1] ?? month;
+  const order = /\d{2}[-/. ]\d{2}[-/. ]\d{4}|dd[-/. ]mm|mm[-/. ]dd|yyyy[-/. ]mm/.exec(hint)?.[0] ?? '';
+  if (/^yyyy/.test(order)) return `${year}-${month}-${day}`;
+  if (/^dd/.test(order)) return `${day}/${month}/${year}`;
+  return `${month}/${day}/${year}`;
+}

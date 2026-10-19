@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { lockCredentialVault } from './credential-vault.js';
-import { customFieldFor, describeProfile, listProfiles, normalizePhone, phoneFor, profileKeyFor, removeProfile, saveProfile } from './profiles.js';
+import { birthdayFor, customFieldFor, describeProfile, listProfiles, normalizePhone, phoneFor, profileKeyFor, removeProfile, saveProfile } from './profiles.js';
 
 let stateDir = '';
 afterEach(async () => { if (stateDir) { lockCredentialVault(stateDir); await rm(stateDir, { recursive: true, force: true }); stateDir = ''; } });
@@ -111,4 +111,16 @@ it('merges into the only profile when neither an id nor a label is given', async
     expect(all).toHaveLength(1);
     expect(all[0]).toMatchObject({ id: first.id, fields: { given_name: 'Ada', sso_email: 'ada@example.com' } });
   } finally { await rm(stateDir, { recursive: true, force: true }); }
+});
+
+it('splits a saved birth date into the part a form field asks for', () => {
+  expect(birthdayFor('06/18/1998', 'Birth year')).toBe('1998');
+  expect(birthdayFor('06/18/1998', 'yyyy')).toBe('1998');
+  expect(birthdayFor('06/08/1998', 'Day')).toBe('08');
+  expect(birthdayFor('06/18/1998', 'dd')).toBe('18');
+  expect(birthdayFor('06/18/1998', 'Month')).toBe('June');
+  expect(birthdayFor('06/18/1998', 'mm')).toBe('06');
+  expect(birthdayFor('06/18/1998', 'Date of birth mm/dd/yyyy')).toBe('06/18/1998');
+  expect(birthdayFor('06/18/1998', 'Date of birth dd/mm/yyyy')).toBe('18/06/1998');
+  expect(birthdayFor('1998', 'Birth year')).toBe('1998');
 });
