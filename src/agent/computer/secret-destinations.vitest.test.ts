@@ -15,9 +15,10 @@ const fake = async (name: string, script: string): Promise<void> => { await writ
 
 it('ships a few destinations as plain data, each naming the slots the agent fills', async () => {
   const all = await loadDestinations(dir);
-  expect(Object.keys(all)).toEqual(['clikdeploy-secret', 'clikdeploy-app-secret', 'clikdeploy-compute', 'github-secret']);
+  expect(Object.keys(all)).toEqual(['clikdeploy-secret', 'clikdeploy-app-secret', 'clikdeploy-compute', 'clikdeploy-connector', 'github-secret']);
   expect(slotsOf(all['clikdeploy-secret']!)).toEqual(['key']);
   expect(slotsOf(all['clikdeploy-compute']!)).toEqual(['provider', 'field']);
+  expect(slotsOf(all['clikdeploy-connector']!)).toEqual(['integration', 'client_id']);
   expect(slotsOf(all['github-secret']!)).toEqual(['key', 'repo']);
 });
 
@@ -41,6 +42,21 @@ it('fills the key in JSON-escaped, and the slots from the agent, then relays the
   expect(argv.slice(0, 3)).toEqual(['tools', 'run', 'admin_compute_save_credentials']);
   const sent = JSON.parse(argv[argv.indexOf('--args-json') + 1]!) as { provider: string; credentials: Record<string, string> };
   expect(sent).toEqual({ provider: 'GCP', credentials: { serviceAccountJson: json } });
+});
+
+it('registers a connector\'s OAuth app: the client id from the agent, the secret JSON-escaped, no code or password asked', async () => {
+  await fake('clikdeploy', `printf '%s\\n' "$@" > "${dir}/argv"; echo '{"status":"success","data":{"success":true,"data":{"applied":true}}}'`);
+  const secret = 'GOCSPX-a"b\\c_d-0123456789';
+  const [result] = await sendToDestinations(dir, [{ to: 'clikdeploy-connector', with: { integration: 'googlesheets', client_id: '1234-abc.apps.googleusercontent.com' } }], secret);
+  expect(result).toMatchObject({ ok: true, label: 'clikdeploy-connector (googlesheets, 1234-abc.apps.googleusercontent.com)' });
+  const argv = (await readFile(join(dir, 'argv'), 'utf8')).split('\n');
+  expect(argv.slice(0, 3)).toEqual(['tools', 'run', 'admin_platform_save_connector_credentials']);
+  expect(argv).toContain('--confirm');
+  expect(argv.some(arg => /password|totp/i.test(arg))).toBe(false);
+  expect(JSON.parse(argv[argv.indexOf('--args-json') + 1]!)).toEqual({ integrationId: 'googlesheets', clientId: '1234-abc.apps.googleusercontent.com', clientSecret: secret });
+  // A slot that is not a plain id is refused before anything runs.
+  expect(await destinationProblem(dir, [{ to: 'clikdeploy-connector', with: { integration: 'googlesheets', client_id: '--evil' } }])).toContain('needs with.client_id');
+  expect(await destinationProblem(dir, [{ to: 'clikdeploy-connector', with: { integration: 'googlesheets' } }])).toContain('needs with.client_id');
 });
 
 it('reads a key containing {{...}} text as plain text, not as a slot', async () => {

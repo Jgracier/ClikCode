@@ -27,6 +27,10 @@ export const DEFAULT_DESTINATIONS: Readonly<Record<string, Template>> = {
     run: ['clikdeploy', 'tools', 'run', 'set_secret', '--args-json', JSON_ARGS('"appId":"{{app}}","key":"{{key}}","value":"{{secret|json}}"'), '--confirm'] },
   'clikdeploy-compute': { about: 'one field of a ClikDeploy compute provider card (provider, field)',
     run: ['clikdeploy', 'tools', 'run', 'admin_compute_save_credentials', '--args-json', JSON_ARGS('"provider":"{{provider}}","credentials":{"{{field}}":"{{secret|json}}"}'), '--confirm'] },
+  // The secret is the OAuth client secret; the client id is not one and is a slot. Adding needs only the admin's
+  // API key (the CLI's own sign-in): no code and no password, as long as the connector has no client stored.
+  'clikdeploy-connector': { about: "a ClikDeploy connector's OAuth app (integration, client_id); the key is its client secret",
+    run: ['clikdeploy', 'tools', 'run', 'admin_platform_save_connector_credentials', '--args-json', JSON_ARGS('"integrationId":"{{integration}}","clientId":"{{client_id}}","clientSecret":"{{secret|json}}"'), '--confirm'] },
   'github-secret': { about: 'a GitHub repository secret (repo, key)', run: ['gh', 'secret', 'set', '{{key}}', '--repo', '{{repo}}'], stdin: '{{secret}}' },
 };
 
