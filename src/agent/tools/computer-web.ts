@@ -9,7 +9,7 @@ import { sharedState } from '../computer/shared-state.js';
 import { savedLoginFields, savedLoginsForSite } from '../computer/credential-vault.js';
 import { loginValueFor } from '../computer/login-fill.js';
 import { addSiteNote, readSiteNotes } from '../computer/site-notes.js';
-import { assertCustomKey, customFieldFor, describeProfile, listProfiles, PROFILE_KEYS, phoneFor, profileKeyFor, saveProfile, type FieldHint, type ProfileKey } from '../computer/profiles.js';
+import { assertCustomKey, customFieldFor, describeProfile, listProfiles, PROFILE_KEYS, phoneFor, birthdayFor, profileKeyFor, saveProfile, type FieldHint, type ProfileKey } from '../computer/profiles.js';
 import { expectSignup, settleSignup } from '../computer/signup-login.js';
 import { loginComputerPage, loginOutcomeMessage } from '../computer/login-page.js';
 import { LoginError } from '../computer/login-error.js';
@@ -28,7 +28,7 @@ type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait'; tar
 type WebArgs = {
   action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'profile' | 'open_email_link' | 'read_email_code' | 'notes' | 'help';
   tab?: string; url?: string; host?: string; note?: string; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
-  new_account?: boolean; secret?: string; to?: string; with?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
+  new_account?: boolean; secret?: string; to?: string; with?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean; format?: string; options?: string[] }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
 };
 
 export function webAddress(value: string | undefined): string {
@@ -267,7 +267,7 @@ const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: [
     account: { type: 'integer', description: 'open_email_link, read_email_code: Gmail account number /u/N (default 0).' },
     fields: { type: 'object', additionalProperties: { type: 'string' }, description: `profile: fields to save or correct in the user's autofill profile (${PROFILE_KEYS.join(', ')}). Leave out to list the profiles. Use it when a site wants a different format (phone as +1…, state as an abbreviation).` },
     label: { type: 'string', description: 'profile: which profile (default: the only one, or a new one called Personal).' },
-    ask_fields: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { key: { type: 'string' }, label: { type: 'string' }, match: { type: 'array', items: { type: 'string' } }, optional: { type: 'boolean' } }, required: ['key', 'label'] }, description: 'profile: ask the user, privately and in one prompt, for details a task needs beyond the standard ones, and keep them in a profile (with label, a new one) so every later fill with no text uses them. key is lower_snake_case (app_name, privacy_policy_url); label is what the user is asked; match lists the words a form may label it with (["app name","application name"]); optional fields may be left empty. Details only, never a key or password.' },
+    ask_fields: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { key: { type: 'string' }, label: { type: 'string' }, match: { type: 'array', items: { type: 'string' } }, optional: { type: 'boolean' }, format: { type: 'string', description: 'Types itself as the user enters it: date (##/##/####), phone ((###) ###-####), zip, time, or a pattern where # is a digit, A a letter, * either and anything else a literal the box inserts and jumps over.' }, options: { type: 'array', items: { type: 'string' }, description: 'A fixed set of answers shown as a selector (arrow keys in the terminal, radios in VS Code) instead of a text box.' } }, required: ['key', 'label'] }, description: 'profile: ask the user, privately and in one prompt, for details a task needs beyond the standard ones, and keep them in a profile (with label, a new one) so every later fill with no text uses them. key is lower_snake_case (app_name, privacy_policy_url); label is what the user is asked; match lists the words a form may label it with (["app name","application name"]); optional fields may be left empty. Details only, never a key or password.' },
     custom: { type: 'object', additionalProperties: { type: 'object', additionalProperties: false, properties: { label: { type: 'string' }, value: { type: 'string' }, match: { type: 'array', items: { type: 'string' } } }, required: ['value'] }, description: 'profile: save custom details you already know (a redirect address, the app name you chose) into a profile, same shape as ask_fields answers: {key: {label, value, match}}.' },
     secret_name: { type: 'string', description: 'capture_secret: name to save the key under (default: the site\'s name plus "/key").' },
     send_to: { ...SEND_TO_SCHEMA, description: 'capture_secret: ' + SEND_TO_HELP },
@@ -322,7 +322,7 @@ export const computerWebTool = defineTool<WebArgs>({
           if (!ctx.requestPrivateLogin) throw new Error('This chat cannot ask the user privately. Save details you know with custom, or the user can run: clikcode computer profile --custom key=value');
           for (const spec of args.ask_fields) { if (!isStandardKey(spec.key)) assertCustomKey(spec.key); if (!spec.label?.trim()) throw new Error(`ask_fields "${spec.key}" needs a label: it is what the user is asked.`); }
           const target = args.label ? all.find(profile => profile.label.toLowerCase() === args.label!.toLowerCase()) : all[0];
-          const prompt = args.ask_fields.map((spec, index): LoginField => ({ index, key: spec.key, label: spec.label.trim(), kind: 'text', required: !spec.optional, ...(isStandardKey(spec.key) ? (target?.fields[spec.key as ProfileKey] ? { current: target.fields[spec.key as ProfileKey]! } : {}) : target?.custom?.[spec.key]?.value ? { current: target.custom[spec.key]!.value } : {}) }));
+          const prompt = args.ask_fields.map((spec, index): LoginField => ({ index, key: spec.key, label: spec.label.trim(), kind: spec.options?.length ? 'choice' : 'text', required: !spec.optional, ...(spec.options?.length ? { options: spec.options } : {}), ...(spec.format ? { format: spec.format } : {}), ...(isStandardKey(spec.key) ? (target?.fields[spec.key as ProfileKey] ? { current: target.fields[spec.key as ProfileKey]! } : {}) : target?.custom?.[spec.key]?.value ? { current: target.custom[spec.key]!.value } : {}) }));
           const answers = await ctx.requestPrivateLogin('https://profile.clikcode', prompt, ctx.signal);
           if (!answers) throw new Error('The user did not provide the details.');
           const answered = args.ask_fields.filter(spec => (answers[spec.key] ?? '').trim());
@@ -336,7 +336,7 @@ export const computerWebTool = defineTool<WebArgs>({
         if (args.ask || !all.length) {
           if (!ctx.requestPrivateLogin) throw new Error('This chat cannot ask the user privately. Save a profile with fields, or the user can run: clikcode computer profile --set key=value');
           const current = (args.label ? all.find(profile => profile.label.toLowerCase() === args.label!.toLowerCase()) : all[0])?.fields ?? {};
-          const asked = PROFILE_PROMPT.map(([key, label, required], index): LoginField => ({ index, key, label, kind: 'text', required, ...(current[key as ProfileKey] ? { current: current[key as ProfileKey]! } : {}) }));
+          const asked = PROFILE_PROMPT.map(([key, label, required], index): LoginField => ({ index, key, label, kind: 'text', required, ...(PROFILE_FORMATS[key] ? { format: PROFILE_FORMATS[key] } : {}), ...(current[key as ProfileKey] ? { current: current[key as ProfileKey]! } : {}) }));
           const answers = await ctx.requestPrivateLogin('https://profile.clikcode', asked, ctx.signal);
           if (!answers) throw new Error('The user did not provide the profile.');
           return { output: `Saved. ${describeProfile(await saveProfile(ctx.stateDir, { ...(args.label ? { label: args.label } : all[0] ? { id: all[0].id } : {}), fields: answers }))}` };
@@ -463,7 +463,9 @@ async function describeField(target: Locator): Promise<{ label: string; password
   }).catch(() => ({ label: '', password: false, hint: { autocomplete: '', type: 'text', text: '' }, placeholder: '', current: '' }));
 }
 
-const PROFILE_PROMPT: readonly [string, string, boolean][] = [['given_name', 'First name', true], ['family_name', 'Last name', true], ['email', 'Email', true], ['phone', 'Phone (with area code)', true], ['address_line1', 'Street address', true], ['address_line2', 'Apartment / suite (optional)', false], ['city', 'City', true], ['state', 'State', true], ['postal_code', 'Zip / postal code', true], ['country', 'Country', true], ['organization', 'Company (optional)', false]];
+/** Fields that type themselves as they are entered (06/18/1998, (719) 744-3850). */
+const PROFILE_FORMATS: Readonly<Record<string, string>> = { phone: 'phone', birthday: 'date' };
+const PROFILE_PROMPT: readonly [string, string, boolean][] = [['given_name', 'First name', true], ['family_name', 'Last name', true], ['email', 'Email', true], ['phone', 'Phone (with area code)', true], ['address_line1', 'Street address', true], ['address_line2', 'Apartment / suite (optional)', false], ['city', 'City', true], ['state', 'State', true], ['postal_code', 'Zip / postal code', true], ['country', 'Country', true], ['organization', 'Company (optional)', false], ['birthday', 'Date of birth (month/day/year)', false]];
 
 const profileChoice = sharedState('profile-choice', () => new Map<string, string>());
 
@@ -513,7 +515,7 @@ async function askForFills(page: Page, steps: readonly Step[], ctx: ToolContext)
     if (asked) { values.set(field.step, asked.field.value); continue; }
     const key = field.password ? undefined : profileKeyFor(field.hint);
     const known = key ? profile?.fields[key] : undefined;
-    if (known) { values.set(field.step, key === 'phone' ? phoneFor(known, field.placeholder, field.current) : known); continue; }
+    if (known) { values.set(field.step, key === 'phone' ? phoneFor(known, field.placeholder, field.current) : key === 'birthday' ? birthdayFor(known, `${field.label} ${field.placeholder}`) : known); continue; }
     ask.push({ step: field.step, key, field: { index: ask.length, key: `fill${ask.length}`, label: field.label || String(field.step.target), kind: field.password ? 'password' : 'text', required: true } });
   }
   if (ask.length) {

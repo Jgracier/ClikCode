@@ -35,6 +35,8 @@ export interface HarnessQuestion {
   maskInput?: boolean;
   /** A free-text question that starts with this text in the box, for the user to edit or leave alone (a saved value). */
   initial?: string;
+  /** A free-text question typed into a pattern (`date`, `phone`, `zip`, `time`, or a pattern such as `##/##/####`): literals are inserted and jumped over as the user types, and only a complete entry is accepted. */
+  format?: string;
   /** The user may leave it unanswered (shown as a Skip row). */
   optional?: boolean;
 }

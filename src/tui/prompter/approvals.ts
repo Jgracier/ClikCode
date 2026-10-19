@@ -1,4 +1,5 @@
 /** Approvals and questions: queueing a request, presenting the next, answering and withdrawing it, and the question prompt keys. */
+import { applyInputMask, maskComplete, maskPattern } from '../../harness/events/input-mask.js';
 import { lifecycle } from '../../runtime/lifecycle-log.js';
 import { decisionRow, isApprovalWaitPhase } from '../../harness/protocol/turn-flow.js';
 import { ApprovalPreview, ApprovalRequest } from '../render/approval-block.js';
@@ -172,6 +173,9 @@ export function questionKey(this: TerminalHarnessPrompter, turn: WaitingTurn, pe
     case 'submit': {
       if (state.typing) {
         const text = state.question.secret ? turn.draft : turn.draft.trim();
+        // A formatted answer counts only when the whole pattern is filled.
+        const pattern = maskPattern(state.question.format);
+        if (pattern && text && !maskComplete(text, pattern)) return;
         if (!text) {
           if (state.question.multiSelect && state.picked.size) return finish(questionValues(state, undefined));
           if (state.question.optional) return finish([]);
@@ -181,7 +185,16 @@ export function questionKey(this: TerminalHarnessPrompter, turn: WaitingTurn, pe
       }
       return finish(questionValues(state, undefined));
     }
-    case 'type': this.editTurnDraft(turn, key); return;
+    case 'type': {
+      const pattern = maskPattern(state.question.format);
+      if (!pattern) { this.editTurnDraft(turn, key); return; }
+      // The box types the pattern itself: literals appear and are jumped over, Backspace walks back past them.
+      const before = turn.draft;
+      this.editTurnDraft(turn, key);
+      const shaped = applyInputMask(turn.draft, pattern, turn.draft.length < before.length);
+      if (shaped !== turn.draft) { turn.draft = shaped; turn.cursor = shaped.length; this.updateWaiting(); }
+      return;
+    }
   }
 }
 
