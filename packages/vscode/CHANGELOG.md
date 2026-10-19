@@ -5,6 +5,13 @@ section covers a release line.
 
 ## 0.2
 
+- **A compaction no longer shows up as a message you wrote.** Claude Code hands its own summary back to
+  itself after `/compact`; the panel drew that as your prompt. It is now hidden, like other notes only the
+  model reads, and the compaction shows as "Compact conversation".
+- **Compaction starts at 10% left** on an account that is about to run out, so the switch to the next
+  account happens on a small conversation, and a spent-limit message from a leftover process is treated as
+  the account running out instead of being written into the chat.
+
 - **Works on its own.** The extension ships with a copy of ClikCode and runs it when no `clikcode`
   is installed, so installing it from the Marketplace is the whole setup. An installed ClikCode
   still takes precedence, so the editor and the terminal stay on one build.
