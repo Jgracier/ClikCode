@@ -91,3 +91,12 @@ it('hides a lower-case UUID secret key, in a snippet and under a "Secret Key:" l
   const labelled = hideKeyLikeText(`Secret Key:\n${uuid}\nCopy and store your secret key. It will only be shown once.`);
   expect(labelled.text).not.toContain(uuid);
 });
+
+it('hides a value on the line below its label, as a definition list prints it', async () => {
+  const { hideKeyLikeText } = await import('./secret-finder.js');
+  const page = ['- term [ref=e1]: "Client ID:"', '- definition [ref=e2]: egt41tV8CRc1JqBKcVlt8V8Ck2IQmT9qL78BhfpsoYs', '- term [ref=e3]: "Secret:"', '- definition [ref=e4]: Ebb9Z06K0gR7Xi3zCgyaCOFF8cBHS9vG4RwqMTu5ZNM'].join('\n');
+  const { text, hidden } = hideKeyLikeText(page);
+  expect(text).not.toContain('Ebb9Z06K0gR7Xi3zCgyaCOFF8cBHS9vG4RwqMTu5ZNM');
+  expect(text).toContain('egt41tV8CRc1JqBKcVlt8V8Ck2IQmT9qL78BhfpsoYs');
+  expect(hidden).toBe(1);
+});

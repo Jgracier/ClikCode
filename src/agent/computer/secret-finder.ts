@@ -138,5 +138,17 @@ export function hideKeyLikeText(text: string): { text: string; hidden: number } 
     hidden++;
     return '[secret hidden]';
   });
-  return { text: out, hidden };
+  // A definition list puts the label and the value on separate lines ("Secret:" then the value): the
+  // value belongs to the label right above it.
+  const lines = out.split('\n');
+  for (let index = 1; index < lines.length; index++) {
+    if (!/\b(?:secret|token|api[ _-]?key|password|credential)s?\b/i.test(lines[index - 1]!)) continue;
+    lines[index] = lines[index]!.replace(/[A-Za-z0-9_\-+/=.:~]{24,}/g, token => {
+      const bare = token.replace(/[.,;:)]+$/, '');
+      if (!keyShaped(bare) || !mixedCase(bare)) return token;
+      hidden++;
+      return '[secret hidden]';
+    });
+  }
+  return { text: lines.join('\n'), hidden };
 }

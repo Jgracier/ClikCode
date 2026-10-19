@@ -101,3 +101,14 @@ describe('custom details an agent asked for', () => {
     expect(customFieldFor({ }, hint('App name'))).toBeUndefined();
   });
 });
+
+it('merges into the only profile when neither an id nor a label is given', async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'clikcode-profile-one-'));
+  try {
+    const first = await saveProfile(stateDir, { label: 'Home', fields: { given_name: 'Ada' } });
+    await saveProfile(stateDir, { fields: { sso_email: 'ada@example.com' } });
+    const all = await listProfiles(stateDir);
+    expect(all).toHaveLength(1);
+    expect(all[0]).toMatchObject({ id: first.id, fields: { given_name: 'Ada', sso_email: 'ada@example.com' } });
+  } finally { await rm(stateDir, { recursive: true, force: true }); }
+});
