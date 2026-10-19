@@ -799,7 +799,8 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
     }
     case 'handoff': {
       // The link is returned at once; the handoff runs on, and a second handoff call waits for the user to finish.
-      let running = handoffs.get(ctx.stateDir);
+      const handoffKey = args.tab ? `${ctx.stateDir}#${args.tab}` : ctx.stateDir;
+      let running = handoffs.get(handoffKey);
       if (!running) {
         const stop = new AbortController();
         let resolveLink!: (link: string) => void; let failLink!: (error: Error) => void;
@@ -808,11 +809,11 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
         // The phone reaches this computer directly over the user's Tailscale network: no relay, no third party.
         const host = tailnetAddress();
         if (!host) throw new Error('A handoff needs this computer and your phone on the same Tailscale network, and this computer is not on one (no Tailscale address). Install Tailscale and sign in on both, or finish this step at the computer.');
-        const done = runTailnetHandoff({ stateDir: ctx.stateDir, host, signal: stop.signal, onLink: resolveLink })
+        const done = runTailnetHandoff({ stateDir: ctx.stateDir, host, signal: stop.signal, onLink: resolveLink, ...(args.tab ? { tab: args.tab } : {}) })
           .then(() => ({ ok: true as const }), (error: unknown) => { failLink(error instanceof Error ? error : new Error(String(error))); return { ok: false as const, message: error instanceof Error ? error.message : String(error) }; })
-          .finally(() => { handoffs.delete(ctx.stateDir); });
+          .finally(() => { handoffs.delete(handoffKey); });
         running = { link, done, stop };
-        handoffs.set(ctx.stateDir, running);
+        handoffs.set(handoffKey, running);
         const url = await Promise.race([running.link, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('The phone link did not come up.')), 45_000))]);
         return { output: `Phone link over Tailscale (the phone must be on the same tailnet; valid 10 minutes, one use): ${url}\nTell the user to open it and finish the browser step (CAPTCHA, MFA). Then call handoff again to wait until they are done.` };
       }

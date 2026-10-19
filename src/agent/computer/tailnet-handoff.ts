@@ -47,7 +47,7 @@ function sameToken(a: string, b: string): boolean {
 }
 
 export async function runTailnetHandoff(input: {
-  stateDir: string; host: string; signal?: AbortSignal; onLink(link: string): void;
+  stateDir: string; host: string; tab?: string; signal?: AbortSignal; onLink(link: string): void;
 }): Promise<void> {
   const token = randomBytes(24).toString('base64url');
   let finish!: () => void;
@@ -61,7 +61,7 @@ export async function runTailnetHandoff(input: {
       if (over) { response.writeHead(410).end(); return; }
       response.setHeader('cache-control', 'no-store');
       if (request.method === 'GET' && (!rest || rest === '/')) { response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(PAGE); return; }
-      const page = await computerPage(input.stateDir);
+      const page = await computerPage(input.stateDir, input.tab);
       if (request.method === 'GET' && rest === '/frame.jpg') {
         let image = await page.screenshot({ type: 'jpeg', quality: 50, scale: 'css', timeout: 10_000 });
         if (image.length > 900_000) image = await page.screenshot({ type: 'jpeg', quality: 28, scale: 'css', timeout: 10_000 });
