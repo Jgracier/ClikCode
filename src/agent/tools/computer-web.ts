@@ -690,10 +690,12 @@ async function withNetworkRetry<T>(run: () => Promise<T>): Promise<T> {
 }
 
 /** The newest message matching from/subject in the signed-in Gmail, opened; its body. Waits for one that has just been sent. */
-async function openLatestEmail(page: Page, args: WebArgs): Promise<Locator> {
+async function openLatestEmail(page: Page, args: WebArgs, stateDir: string): Promise<Locator> {
   if (!args.from && !args.subject) throw new Error(`${args.action} needs from or subject.`);
+  // The mailbox is the profile's sign-in account (every sign-up used it), not whichever Gmail happens to be first.
+  const mailbox = args.account ?? (await listProfiles(stateDir)).map(profile => profile.fields.sso_email).find(Boolean) ?? 0;
   const query = [args.from ? `from:(${args.from})` : '', args.subject ? `subject:(${args.subject})` : '', 'newer_than:1d'].filter(Boolean).join(' ');
-  await withNetworkRetry(() => page.goto(`https://mail.google.com/mail/u/${args.account ?? 0}/#search/${encodeURIComponent(query)}`, { waitUntil: 'domcontentloaded', timeout: 30_000 }));
+  await withNetworkRetry(() => page.goto(`https://mail.google.com/mail/u/${mailbox}/#search/${encodeURIComponent(query)}`, { waitUntil: 'domcontentloaded', timeout: 30_000 }));
   const row = page.locator('tr.zA').first();
   // A message just sent may not be indexed yet: look again a few times before saying it is not there.
   for (let attempt = 0; attempt < 4; attempt++) {
@@ -753,7 +755,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       if (!Array.isArray(list) || !list.length) throw new Error('steps needs a list, e.g. [{"do":"click","target":"e5"}].');
       return runSteps(page, list, ctx, args.tab);
     case 'open_email_link': {
-      const body = await openLatestEmail(page, args);
+      const body = await openLatestEmail(page, args, ctx.stateDir);
       const links = await body.locator('a[href]').evaluateAll(nodes => nodes.map(node => ({ href: (node as unknown as { href: string }).href, text: (node as unknown as { textContent: string | null }).textContent ?? '' })));
       const real = links.map(link => { try { const u = new URL(link.href); return { ...link, href: u.hostname.endsWith('google.com') && u.pathname === '/url' ? u.searchParams.get('q') ?? link.href : link.href }; } catch { return link; } })
         .filter(link => /^https:/.test(link.href) && !/unsubscribe|accounts\.google\.com|mail\.google\.com|privacy|terms/i.test(link.href));
@@ -769,7 +771,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       // (an API key never is). The page the code is for is left as it was: Gmail is read in a tab of its own.
       const mail = await page.context().newPage();
       try {
-        const text = await (await openLatestEmail(mail, args)).innerText();
+        const text = await (await openLatestEmail(mail, args, ctx.stateDir)).innerText();
         const code = verificationCode(text);
         if (!code) throw new Error(`The email from ${args.from ?? args.subject} has no code in it. It says: "${text.replace(/\s+/g, ' ').slice(0, 160)}".`);
         return { output: `Code: ${code}. Type it into the page that asked for it; it is already waiting in the tab you left.` };
