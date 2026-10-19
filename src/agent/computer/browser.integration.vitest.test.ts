@@ -165,6 +165,12 @@ it.skipIf(!smoke)('acts on anything by reference, several steps at a time, and f
     expect(stopped.output).toContain('the page has changed since it was read');
     expect(stopped.output).toContain('Page: ');
 
+    // A wait that runs out is the page's answer, not a failed tool: the batch stops there and the rest is said not to have run.
+    const waited = await run({ action: 'steps', steps: [{ do: 'wait', text: 'never-on-this-page-xyz', seconds: 1 }, { do: 'click', target: 'e99999' }] });
+    expect(waited.isError).toBeUndefined();
+    expect(waited.output).toContain('Still not showing "never-on-this-page-xyz"');
+    expect(waited.output).toContain('1 later step was not run');
+
     // A click that opens a new tab: that tab becomes the page, and the answer says so.
     const opened = await run({ action: 'click', target: refOf(fresh, 'button', 'Open another') });
     expect(opened.output).toContain('A new tab opened and is now the page');
