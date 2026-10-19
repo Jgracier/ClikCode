@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { arrangeSnapshot, changedLines, collapseOptions, displayUrl, computerWebTool, findInSnapshot } from './computer-web.js';
+import { inOrder, withSignInHints, verificationCode, arrangeSnapshot, changedLines, collapseOptions, displayUrl, computerWebTool, findInSnapshot } from './computer-web.js';
 
 describe('arrangeSnapshot', () => {
   const longMiddle = Array.from({ length: 900 }, (_, index) => `    - link "Item number ${index} of the long list" [ref=e${100 + index}]`).join('\n');
@@ -214,5 +214,46 @@ describe('profile ask_fields and custom: an agent asks for the details a task ne
       expect(badName.isError).toBe(true);
       expect(badName.output).toContain('lower-case');
     });
+  });
+});
+
+describe('verificationCode', () => {
+  it('reads the code a verification email names, and refuses a guess when several numbers compete', () => {
+    expect(verificationCode('Your HubSpot verification code is 482913. It expires in 10 minutes.')).toBe('482913');
+    expect(verificationCode('Verification code: A7K9QX')).toBe('A7K9QX');
+    expect(verificationCode('Use 551234 to sign in to Slack')).toBe('551234');
+    expect(verificationCode('Order 123456 and ticket 654321 are ready')).toBeUndefined();
+    expect(verificationCode('Welcome aboard, nothing to enter')).toBeUndefined();
+  });
+});
+
+describe('withSignInHints', () => {
+  const stub = (url: string, text = ''): never => ({ url: () => url, evaluate: async () => text }) as never;
+  it('names the profile\'s sign-in account at a Google account chooser and flags a consent screen that asks for more than a sign-in', async () => {
+    const { mkdtemp, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { saveProfile } = await import('../computer/profiles.js');
+    const dir = await mkdtemp(join(tmpdir(), 'clikcode-hints-'));
+    try {
+      const ok = { output: 'Page: x' };
+      expect((await withSignInHints(ok, stub('https://accounts.google.com/v3/signin/accountchooser?x=1'), dir)).output).toContain('no sso_email');
+      await saveProfile(dir, { fields: { sso_email: 'me@example.com' } });
+      expect((await withSignInHints(ok, stub('https://accounts.google.com/v3/signin/accountchooser?x=1'), dir)).output).toContain('click target "me@example.com"');
+      expect((await withSignInHints(ok, stub('https://accounts.google.com/signin/oauth/v3/consent', 'See, edit, share, and permanently delete all the calendars'), dir)).output).toContain('Decline it with Cancel');
+      expect((await withSignInHints(ok, stub('https://accounts.google.com/signin/oauth/id', 'Name and profile picture'), dir)).output).toBe('Page: x');
+      expect(await withSignInHints(ok, stub('https://example.com/'), dir)).toBe(ok);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe('inOrder', () => {
+  it('runs calls made together one after another, and keeps going after one throws', async () => {
+    const log: string[] = [];
+    const slow = inOrder('chat', async () => { log.push('a start'); await new Promise(resolve => setTimeout(resolve, 30)); log.push('a end'); throw new Error('boom'); });
+    const fast = inOrder('chat', async () => { log.push('b'); return 'b'; });
+    await expect(slow).rejects.toThrow('boom');
+    expect(await fast).toBe('b');
+    expect(log).toEqual(['a start', 'a end', 'b']);
   });
 });

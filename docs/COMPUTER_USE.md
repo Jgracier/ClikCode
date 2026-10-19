@@ -173,3 +173,24 @@ this protects against a copied folder, not against other programs running as you
   exists.
 - `computer_desktop observe` is refused while a browser tab holds a typed password, code or
   card number, since a screenshot would show it. Acting is allowed.
+
+## Doing a long run of sign-ups and app registrations
+
+What the browser tool does so a run does not depend on luck or on the user:
+
+- **Waits report state.** A `wait` whose words do not appear is the page's answer, not a failed tool: the
+  batch stops there, says how many later steps did not run, and shows what changed. A tab that closes
+  itself (a sign-in popup) is read from the page's own state and the batch carries on from the tab left.
+- **Calls run in order.** Two `computer_web` calls made together run one after the other, so a capture
+  and the click that closes the one-time dialog it reads cannot race.
+- **Capture takes every copy route.** `writeText`, `write` (ClipboardItem), `execCommand("copy")`, then the
+  clipboard itself when it changed across the click. Copy buttons with qualifiers ("Copy client secret")
+  are recognised; buttons that copy an id, name, link or command are not. The user is never the fallback:
+  a failed capture tells the agent to reveal, copy or rotate, and `paste` is only for when the user said
+  they would paste.
+- **Emailed codes.** `read_email_code` (from/subject, optional Gmail account) reads the newest message in
+  the signed-in Gmail in a tab of its own and returns the one-time code.
+- **Sign-in choices.** The profile's `sso_email` is the account to pick at a Google account chooser, and a
+  Google consent screen that asks for calendar, mail, files or contacts is flagged for declining.
+- **Notes per site.** `notes` saves what worked (URL, order of screens, gotchas) for a host and shows it
+  again when a page on that host is opened. Keys and passwords are refused.
