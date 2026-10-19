@@ -123,32 +123,29 @@ export async function armFinder(page: Page, existing = false): Promise<Finder> {
   };
 }
 
-/** Hides credential-looking values in text the agent is about to read (a page's
- * accessibility text): a long unbroken mixed-case token that follows a word like
- * "API key", or any one when the page invites copying. Ordinary ids, URLs and
- * lower-case slugs are left alone. */
+/** Hides credential-looking values in text the agent is about to read (a page's accessibility text).
+ *
+ * Default-deny: a long, unbroken, random-looking token is hidden wherever it sits, because every leak so far
+ * was a page layout a "hide it only after the word secret" rule did not expect. What is kept is what the
+ * agent needs: page refs, URLs (their own lines), UUIDs and ordinary words. A hidden value is never lost to
+ * the agent: capture_secret takes it from the page without showing it. */
 export function hideKeyLikeText(text: string): { text: string; hidden: number } {
   const labelled = labelledValues(text);
   const copyHint = WORTH_SAVING_HINT.test(text);
   let hidden = 0;
   text = text.replace(SECRET_UUID, (match, label?: string) => { hidden++; return typeof label === 'string' ? `${label}[secret hidden]` : '[secret hidden]'; });
-  const out = text.replace(/[A-Za-z0-9_\-+/=.:~]{24,}/g, token => {
-    const bare = token.replace(/[.,;:)]+$/, '');
-    if (!keyShaped(bare) || !((mixedCase(bare) && labelled.has(bare)) || (copyHint && bare.length >= 32))) return token;
-    hidden++;
-    return '[secret hidden]';
-  });
-  // A definition list puts the label and the value on separate lines ("Secret:" then the value): the
-  // value belongs to the label right above it.
-  const lines = out.split('\n');
-  for (let index = 1; index < lines.length; index++) {
-    if (!/\b(?:secret|token|api[ _-]?key|password|credential)s?\b/i.test(lines[index - 1]!)) continue;
-    lines[index] = lines[index]!.replace(/[A-Za-z0-9_\-+/=.:~]{24,}/g, token => {
+  const randomLooking = (bare: string): boolean => keyShaped(bare) && (mixedCase(bare) || PREFIXED.test(bare) || (bare.length >= 32 && /^[0-9a-f]+$/i.test(bare)));
+  const lines = text.split('\n').map(line => {
+    const isUrl = /^\s*- \/url:/.test(line);
+    return line.replace(/[A-Za-z0-9_\-+/=.:~]{24,}/g, token => {
       const bare = token.replace(/[.,;:)]+$/, '');
-      if (!keyShaped(bare) || !mixedCase(bare)) return token;
+      if (!keyShaped(bare)) return token;
+      // A URL line keeps its address, except a value a label or an invitation to copy has marked as a key.
+      const marked = (mixedCase(bare) && labelled.has(bare)) || (copyHint && bare.length >= 32);
+      if (isUrl ? !marked : !(marked || randomLooking(bare))) return token;
       hidden++;
       return '[secret hidden]';
     });
-  }
+  });
   return { text: lines.join('\n'), hidden };
 }
