@@ -50,6 +50,7 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   computer.command('status').description('Show whether computer use is on').action(async () => (await import('../commands/computer.js')).computerStatus());
   computer.command('on').description('Make computer use available for new turns').action(async () => (await import('../commands/computer.js')).computerSetEnabled(true));
   computer.command('off').description('Stop offering computer tools in new turns').action(async () => (await import('../commands/computer.js')).computerSetEnabled(false));
+  computer.command('unattended [setting]').description('on or off: park what needs you (a password, a code, an account choice) in the queue and go on, instead of asking (default off)').action(async (setting?: string) => (await import('../commands/computer.js')).computerUnattended(setting));
   computer.command('passwords [setting]').description('on or off: let the browser tool make up and keep a strong password for signup forms (default off)').action(async (setting?: string) => (await import('../commands/computer.js')).computerGeneratedPasswords(setting));
   computer.command('inspect').description('Show visible login field names without their values').action(async () => (await import('../commands/computer.js')).computerInspect());
   computer.command('login [url]').description('Open a login URL if given, then ask privately in the current chat')

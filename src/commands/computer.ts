@@ -30,6 +30,18 @@ export async function computerGeneratedPasswords(setting: string | undefined): P
     : 'Generated passwords are off: a signup form asks you for the password privately. Turn on with `clikcode computer passwords on`.\n');
 }
 
+export async function computerUnattended(setting: string | undefined): Promise<void> {
+  const { setUnattended, unattendedEnabled } = await import('../agent/computer/settings.js');
+  const dir = stateDirectory();
+  if (setting === 'on' || setting === 'off') await setUnattended(dir, setting === 'on');
+  else if (setting) throw new Error('Say on or off: clikcode computer unattended on');
+  const on = await unattendedEnabled(dir);
+  if (isJsonDefaultMode()) return emitResult({ computer: { unattended: on } });
+  process.stdout.write(on
+    ? 'Unattended is on: a password, code or account choice the browser tool would ask you for is parked in the queue (needs-human, with the reason) and the agent goes on to the next vendor. See them with `clikcode computer queue --status needs-human`.\n'
+    : 'Unattended is off: the browser tool asks you privately. Turn on with `clikcode computer unattended on`.\n');
+}
+
 export async function computerSetEnabled(enabled: boolean): Promise<void> {
   await setComputerEnabled(stateDirectory(), enabled);
   if (!enabled) { await closeComputerBrowser(stateDirectory()); lockCredentialVault(stateDirectory()); }
