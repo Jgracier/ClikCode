@@ -39,6 +39,13 @@ export function setLifecycleSession(sessionId: string | undefined): void {
   session = sessionId;
 }
 
+/** A process serving several conversations at once (an editor's shared
+ * bridge) names the one the code that is logging runs for. */
+let sessionSource: (() => string | undefined) | undefined;
+export function setLifecycleSessionSource(source: (() => string | undefined) | undefined): void {
+  sessionSource = source;
+}
+
 export function lifecycleLogPath(): string {
   return join(stateDirectory(), 'logs', 'lifecycle.log');
 }
@@ -65,7 +72,8 @@ export function lifecycle(event: string, fields: Readonly<Record<string, unknown
       try { if (statSync(path).size > ROTATE_BYTES) renameSync(path, `${path}.1`); } catch { /* fail-open-ok: absent, or another process rotated it */ }
     }
     // Who wrote it last, so a fact can never pass for the writer's own pid.
-    const line = JSON.stringify({ ...fields, t: new Date().toISOString(), pid: process.pid, role, ...(session ? { session } : {}), event });
+    const current = sessionSource ? sessionSource() : session;
+    const line = JSON.stringify({ ...fields, t: new Date().toISOString(), pid: process.pid, role, ...(current ? { session: current } : {}), event });
     appendFileSync(path, `${line}\n`, { encoding: 'utf8', mode: 0o600 });
   } catch { /* fail-open-ok: logging must never break what it records */ }
 }
