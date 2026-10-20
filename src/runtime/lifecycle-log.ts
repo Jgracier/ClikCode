@@ -43,10 +43,13 @@ export function lifecycleLogPath(): string {
   return join(stateDirectory(), 'logs', 'lifecycle.log');
 }
 
+/** Set by the test setup (vitest.setup.ts): the suite drives many processes
+ * against throwaway homes and has no use for their log. */
+let silenced = false;
+export function silenceLifecycleLog(): void { silenced = true; }
+
 function enabled(): boolean {
-  // The suite drives many processes against throwaway homes; a test that
-  // wants the log sets CLIKCODE_LIFECYCLE_LOG.
-  return !process.env.VITEST || process.env.CLIKCODE_LIFECYCLE_LOG === '1';
+  return !silenced || process.env.CLIKCODE_LIFECYCLE_LOG === '1';
 }
 
 /** Record one moment. `fields` are small facts -- ids, counts, reasons,

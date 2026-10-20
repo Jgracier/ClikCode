@@ -13,6 +13,7 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll } from 'vitest';
+import { silenceLifecycleLog } from './src/runtime/lifecycle-log.js';
 
 const root = mkdtempSync(join(tmpdir(), 'cc-t-'));
 const scratch = join(root, 'tmp');
@@ -20,6 +21,7 @@ mkdirSync(scratch);
 process.env.HOME = root;
 process.env.CLIKCODE_HOME = join(root, '.clikcode');
 process.env.TMPDIR = scratch;
+silenceLifecycleLog();
 
 afterAll(() => {
   rmSync(root, { recursive: true, force: true, maxRetries: 3 });
