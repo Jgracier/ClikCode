@@ -1690,7 +1690,7 @@ SCENARIOS = {
         'cols': 80, 'rows': 36,
         'turns': [{'blocks': ['Hello there, all good.']}],
         'steps': [
-            ('type', 'check the ledger'), ('wait_for', 'Hello there, all good.', 40), ('settle', 1.5), ('snap', 'closed'),
+            ('type', 'check the ledger'), ('wait_for', 'Hello there, all good.', 40), ('settle', 4), ('snap', 'closed'),
             ('type', '/provider'), ('wait_for', 'Choose a provider', 25), ('settle', 0.6), ('snap', 'open'),
             ('keys', '\x1b'), ('settle', 1.2), ('snap', 'back'),
         ],
