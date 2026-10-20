@@ -25,6 +25,14 @@ export function panicMessage(stderr: string): string | undefined {
  * pipes. Output completeness matters, so `close` is preferred, but callers
  * must never hang on a process that is already gone. */
 const CLOSE_AFTER_EXIT_MS = 500;
+/** After the leader of a detached child's group exits, how long what it left in
+ * its group (MCP servers, shells, daemons) gets between SIGTERM and SIGKILL. */
+const GROUP_REAP_MS = 2_000;
+
+/** Signal process group `pgid`; false when it has no member left. */
+function signalGroup(pgid: number, signal: NodeJS.Signals): boolean {
+  try { process.kill(-pgid, signal); return true; } catch { return false; }
+}
 
 interface JsonRpcRequestOptions {
   /** No timeout when omitted: a prompt request legitimately runs for hours. */
@@ -158,6 +166,9 @@ export class JsonRpcPeer {
   private shutdownPromise?: Promise<void>;
   private readonly exitWaiters: Array<() => void> = [];
   private readonly signalCleanup: Array<() => void> = [];
+  /** The group is to outlive its leader (keepGroup). */
+  private groupKept = false;
+  private groupReaped = false;
 
   constructor(private readonly child: ChildProcess, private readonly options: JsonRpcPeerOptions) {
     child.stdout?.setEncoding?.('utf8');
@@ -257,6 +268,27 @@ export class JsonRpcPeer {
     return new Promise((resolve) => { this.exitWaiters.push(resolve); });
   }
 
+  /** Whether the child's process group is left running when its leader exits.
+   * By default it is not: a vendor that exits (or crashes) leaves its MCP servers,
+   * shells and daemons in its group, and they get SIGTERM, then SIGKILL after
+   * GROUP_REAP_MS. A retired session (persistent-session.ts retire) keeps its
+   * group: its work runs on after the vendor. Released (false) after the leader
+   * has gone, the group is reaped now. */
+  keepGroup(keep = true): void {
+    this.groupKept = keep;
+    if (!keep && this.exited) this.reapGroup();
+  }
+
+  /** The leader is gone: end what it left in its group, unless kept. Once. */
+  private reapGroup(): void {
+    const pgid = this.child.pid;
+    if (this.groupKept || this.groupReaped || this.options.detached !== true || process.platform === 'win32' || !pgid) return;
+    this.groupReaped = true;
+    if (!signalGroup(pgid, 'SIGTERM')) return;
+    const timer = setTimeout(() => { signalGroup(pgid, 'SIGKILL'); }, GROUP_REAP_MS);
+    timer.unref?.();
+  }
+
   kill(signal: NodeJS.Signals = 'SIGTERM'): void {
     if (this.exited) return;
     killProcessTreePortable(this.child, signal, this.options.detached === true);
@@ -270,6 +302,7 @@ export class JsonRpcPeer {
   }
 
   private async runShutdown(options: JsonRpcShutdownOptions): Promise<void> {
+    // The leader already went: its group was reaped as it did (reapGroup), unless kept.
     if (this.exited) return;
     const graceMs = options.graceMs ?? 2000;
     const killMs = options.killMs ?? 3000;
@@ -311,6 +344,7 @@ export class JsonRpcPeer {
     this.exitSignal = signal;
     for (const cleanup of this.signalCleanup.splice(0)) cleanup();
     for (const waiter of this.exitWaiters.splice(0)) waiter();
+    this.reapGroup();
   }
 
   private handleClose(cause?: Error): void {

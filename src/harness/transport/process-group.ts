@@ -20,12 +20,21 @@ import { basename } from 'node:path';
 /** One live (not zombie) member of a process group. */
 export interface GroupProcess { ppid: number; name: string }
 
-/** The live members of process group `pgid`: parent and command name. */
+/** The live members of process group `pgid`: parent and command name. Empty
+ * when they cannot be read (see readProcessGroup). */
 export async function processGroup(pgid: number, platform: NodeJS.Platform = process.platform): Promise<Map<number, GroupProcess>> {
+  return await readProcessGroup(pgid, platform) ?? new Map();
+}
+
+/** processGroup, but undefined when the process table could not be read at all
+ * (/proc unreadable, `ps` failing): "no members" and "could not look" differ to
+ * a caller that ends work when its process is gone. */
+export async function readProcessGroup(pgid: number, platform: NodeJS.Platform = process.platform): Promise<Map<number, GroupProcess> | undefined> {
   const members = new Map<number, GroupProcess>();
   if (platform === 'win32' || !Number.isInteger(pgid) || pgid <= 1) return members;
   if (platform === 'linux') {
-    const entries = await readdir('/proc').catch(() => [] as string[]);
+    const entries = await readdir('/proc').catch(() => undefined);
+    if (!entries) return undefined;
     await Promise.all(entries.filter((name) => /^\d+$/.test(name)).map(async (name) => {
       const stat = await readFile(`/proc/${name}/stat`, 'utf8').catch(() => undefined);
       if (!stat) return;
@@ -38,13 +47,12 @@ export async function processGroup(pgid: number, platform: NodeJS.Platform = pro
     }));
     return members;
   }
-  return new Promise((resolve) => {
+  return new Promise<Map<number, GroupProcess> | undefined>((resolve) => {
     execFile('ps', ['-A', '-o', 'pid=,ppid=,pgid=,stat=,comm='], { timeout: 5_000 }, (error, stdout) => {
-      if (!error) {
-        for (const line of stdout.split('\n')) {
-          const [pid, ppid, group, state, ...command] = line.trim().split(/\s+/);
-          if (Number(group) === pgid && !state?.startsWith('Z')) members.set(Number(pid), { ppid: Number(ppid), name: basename(command.join(' ')) });
-        }
+      if (error) { resolve(undefined); return; }
+      for (const line of stdout.split('\n')) {
+        const [pid, ppid, group, state, ...command] = line.trim().split(/\s+/);
+        if (Number(group) === pgid && !state?.startsWith('Z')) members.set(Number(pid), { ppid: Number(ppid), name: basename(command.join(' ')) });
       }
       resolve(members);
     });

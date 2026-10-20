@@ -4,6 +4,7 @@ import { lifecycle } from '../runtime/lifecycle-log.js';
 import { existingSessionAgents } from '../agent/background-agents.js';
 import { idleDecision, vendorIdleDecision } from './idle-decisions.js';
 import { hasHeldVendorProcess, whenHeldVendorGone } from '../harness/transport/native/held-vendor.js';
+import { ABANDONED_WORK_MS } from '../harness/transport/persistent-session.js';
 import { closePersistentTransport, hasPersistentTransport, persistentWorkRunning } from '../turn/vendor-process.js';
 import { runningShellCount } from '../agent/session-state.js';
 import { stopBackgroundShell } from '../agent/tools/bash.js';
@@ -26,8 +27,9 @@ export const BUILD_WATCH_MS = Number(process.env.CLIKCODE_WORKER_BUILD_WATCH_MS)
 /** A background shell keeps an otherwise idle worker alive -- its exit is
  * owed to the model -- but not for ever: this long after it started, with
  * nobody attached and no turn running, it is stopped, and the model is told
- * so like any other exit. */
-const ABANDONED_SHELL_MS = 24 * 60 * 60 * 1000;
+ * so like any other exit. The same ceiling as work a retired vendor process
+ * runs on (persistent-session.ts). */
+const ABANDONED_SHELL_MS = ABANDONED_WORK_MS;
 /** How often a worker that reached its idle time looks again at vendor work
  * still running between turns (a process's exit gives no event to another
  * process's parent). */
