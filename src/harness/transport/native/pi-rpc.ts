@@ -26,7 +26,7 @@ export function piRpcSteer(id: string, text: string): string {
 /** After `agent_end` pi may still retry, compact or run a queued message;
  * `agent_settled` says it will not. A pi too old to send it is closed this
  * long after `agent_end` instead. */
-export const PI_SETTLE_FALLBACK_MS = 15_000;
+const PI_SETTLE_FALLBACK_MS = 15_000;
 
 /** Tracks one pi RPC turn: which steers still await their `response`, and
  * when the turn is over and stdin may be closed. */

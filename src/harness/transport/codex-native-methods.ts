@@ -87,27 +87,3 @@ export async function listCodexModels(peer: CodexRpcPeer, options: { includeHidd
   return models;
 }
 
-interface CodexThreadInfo { id: string; name?: string; preview: string; cwd: string; createdAt: number; updatedAt: number }
-
-/** Threads from the vendor (`thread/list`), newest first, in place of reading its session files.
- * `cwd` narrows to one folder; `limit` caps the total. */
-export async function listCodexThreads(peer: CodexRpcPeer, options: { cwd?: string; searchTerm?: string; limit?: number } = {}): Promise<CodexThreadInfo[]> {
-  const threads: CodexThreadInfo[] = [];
-  const limit = options.limit ?? 100;
-  let cursor: string | null = null;
-  do {
-    const page: Record<string, any> = await peer.request('thread/list', {
-      cursor, limit: Math.min(100, limit - threads.length), sortKey: 'updated_at', sortDirection: 'desc',
-      ...(options.cwd ? { cwd: options.cwd } : {}), ...(options.searchTerm ? { searchTerm: options.searchTerm } : {}),
-    });
-    for (const entry of Array.isArray(page.data) ? page.data : []) {
-      if (typeof entry?.id !== 'string') continue;
-      threads.push({
-        id: entry.id, ...(typeof entry.name === 'string' && entry.name ? { name: entry.name } : {}), preview: String(entry.preview ?? ''),
-        cwd: String(entry.cwd ?? ''), createdAt: Number(entry.createdAt ?? 0), updatedAt: Number(entry.updatedAt ?? 0),
-      });
-    }
-    cursor = threads.length < limit && typeof page.nextCursor === 'string' && page.nextCursor ? page.nextCursor : null;
-  } while (cursor);
-  return threads;
-}
