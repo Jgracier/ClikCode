@@ -119,6 +119,9 @@ export function schedulePaint(this: TerminalHarnessPrompter, delay = PAINT_COALE
   if (this.responsePaintTimer || this.closed || this.suspended || this.selecting || this.paletteActive) return;
   this.responsePaintTimer = setTimeout(() => {
     this.responsePaintTimer = undefined;
+    // A resize burst in progress: the settled repaint draws the turn at its final size. A key's echo
+    // does not come through here, so typing is never held.
+    if (this.resizePaintTimer) return;
     if (!this.closed && !this.selecting && !this.paletteActive) {
       if (this.turn) this.paintWaiting(this.turn);
       else this.repaint();

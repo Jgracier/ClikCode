@@ -1702,6 +1702,73 @@ SCENARIOS = {
         'snap_contains': {'open': ['\n  › ', 'Choose a provider'], 'closed': ['\n  › ', 'Hello there, all good.'], 'back': ['\n  › ']},
         'snap_lacks': {'back': ['Choose a provider']},
     },
+    # The footer is one height from before a turn to after it. The composer
+    # stays on its row when the turn starts, a thought appears and goes, text
+    # arrives, a background terminal comes and goes, and the turn ends; the
+    # chat row above does not hop while a thought or the terminals' count
+    # comes and goes.
+    'footer-steady-through-turn': {
+        'cols': 80, 'rows': 36,
+        'turns': [{'blocks': ['Hello there, all good.']}, {'emits': [
+            {'op': 'sleep', 'ms': 1500},
+            {'op': 'thought', 'heading': 'Weighing', 'text': 'Reading the config to see where the retry lives.'},
+            {'op': 'sleep', 'ms': 3000},
+            {'op': 'text', 'text': 'Second answer streams in.\n\n'},
+            {'op': 'background', 'tasks': [{'type': 'local_bash', 'description': 'npm run dev'}]},
+            {'op': 'sleep', 'ms': 3000},
+            {'op': 'background', 'tasks': []},
+            {'op': 'sleep', 'ms': 3000}]}],
+        'steps': [
+            ('type', 'check the ledger'), ('wait_for', 'Hello there, all good.', 40), ('settle', 1.5), ('snap', 'closed'),
+            ('type', 'and again'), ('settle', 0.8), ('snap', 'started'),
+            ('wait_for', 'Reading the config', 20), ('settle', 0.4), ('snap', 'thought'),
+            ('wait_for', 'Second answer streams in.', 20), ('settle', 0.5), ('snap', 'text'),
+            ('wait_for', '1 background terminal running', 20), ('settle', 0.5), ('snap', 'terminal'),
+            ('settle', 3.2), ('snap', 'terminal-gone'),
+            ('wait_for', 'Worked for', 30), ('settle', 1.5), ('snap', 'ended'),
+        ],
+        'watch': [],
+        'snap_composer_same': ['started', 'thought', 'text', 'terminal', 'terminal-gone', 'ended'],
+        'snap_pair_same_row': [('started', 'thought', 'and again'), ('text', 'terminal', 'Second answer streams in.'), ('terminal', 'terminal-gone', 'Second answer streams in.')],
+        'snap_contains': {'thought': ['Reading the config'], 'terminal': ['1 background terminal running']},
+        'snap_lacks': {'text': ['Reading the config'], 'terminal-gone': ['background terminal']},
+    },
+    # A notice appears over the chat and expires without the composer or the chat moving.
+    'notice-keeps-the-composer': {
+        'cols': 80, 'rows': 36,
+        'turns': [{'blocks': ['Hello there, all good.']}],
+        'steps': [
+            ('type', 'check the ledger'), ('wait_for', 'Hello there, all good.', 40), ('settle', 1.5), ('snap', 'closed'),
+            ('keys', '\x03'), ('wait_for', 'Press Ctrl+C again to exit', 10), ('settle', 0.3), ('snap', 'notice'),
+            ('settle', 2.6), ('snap', 'expired'),
+        ],
+        'watch': [],
+        'snap_composer_same': ['notice', 'expired'],
+        'snap_same_row': [('notice', 'Grok Build  •'), ('expired', 'Grok Build  •'), ('notice', 'Hello there, all good.'), ('expired', 'Hello there, all good.')],
+        'snap_contains': {'notice': ['Press Ctrl+C again to exit']},
+        'snap_lacks': {'expired': ['Press Ctrl+C again to exit']},
+    },
+    # Typing while a turn animates does not blink the caret.
+    'caret-steady-while-animating': {
+        'cols': 80, 'rows': 36,
+        'turns': [{'emits': [{'op': 'text', 'text': 'Working through it.\n\n'}, {'op': 'sleep', 'ms': 5000}, {'op': 'text', 'text': 'Done now.'}]}],
+        'steps': [
+            ('type', 'start the long one'), ('wait_for', 'Working through it.', 30), ('settle', 0.8),
+            ('keys', 'ab'), ('settle', 0.2), ('cursor_quiet', 2.0), ('keys', 'cd'), ('cursor_quiet', 0.8),
+            ('wait_for', 'Done now.', 20), ('settle', 1),
+        ],
+        'watch': [],
+    },
+    # A key typed in the middle of a resize burst echoes at once; the burst clears the screen once.
+    'resize-burst-echoes-keys': {
+        'cols': 70, 'rows': 40,
+        'turns': [{'blocks': ['Hello there, all good.']}],
+        'steps': [
+            ('type', 'check the ledger'), ('wait_for', 'Hello there, all good.', 40), ('settle', 1.5),
+            ('resize_burst_typing', 'Z'), ('settle', 0.5),
+        ],
+        'watch': [], 'final_contains': ['Hello there, all good.'],
+    },
     # Effort moved to High in its row, then Tab → "Make default for every
     # harness": the value saved is the one shown (it saved the value Settings
     # opened with), and Settings stays open on the row (it closed).
@@ -2573,6 +2640,38 @@ def run(name, spec, entry, keep):
             mouse_reset = b'\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h'
             resets = raw[before:].count(mouse_reset)
             if resets != 1: problems.append(f'resize burst sent {resets} mouse resets, expected one')
+            clears = raw[before:].count(b'\x1b[2J')
+            if os.environ.get('SHOW_SNAPS'): print(f'RESIZE {len(raw) - before} bytes, {clears} clears')
+            if clears != 1: problems.append(f'resize burst cleared the screen {clears}x, expected once')
+        elif step[0] == 'cursor_quiet':
+            # The caret is left alone while frames draw under it (a spinner, a streaming answer): no hide and no show.
+            before = len(raw)
+            pump(step[1])
+            new = bytes(raw[before:])
+            hides, shows = new.count(b'\x1b[?25l'), new.count(b'\x1b[?25h')
+            frames_seen = new.count(b'\x1b[?2026h')
+            if os.environ.get('SHOW_SNAPS'): print(f'CURSOR {frames_seen} frames, {len(new)} bytes, {hides} hides, {shows} shows')
+            if frames_seen < 3: problems.append(f'cursor_quiet saw only {frames_seen} frames: nothing was animating')
+            if hides or shows: problems.append(f'the caret was hidden {hides}x and shown {shows}x across {frames_seen} frames')
+        elif step[0] == 'resize_burst_typing':
+            # A burst of size changes with a key typed in the middle of it: the key echoes at once (inside the
+            # settle window), and the whole burst blanks the screen once.
+            before = len(raw)
+            # Back to back, no pump between: the signals must all land inside the 120ms settle.
+            for n, lines in enumerate((63, 40, 32)):
+                fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', lines, 70, 0, 0))
+                screen.resize(lines=lines, columns=70)
+                if n == 1:
+                    os.write(fd, step[1].encode())
+            pump(0.08)
+            if step[1] not in '\n'.join(screen.display): problems.append(f'{step[1]!r} typed during a resize burst did not echo before the burst settled')
+            pump(0.8)
+            burst = bytes(raw[before:])
+            clears = burst.count(b'\x1b[2J')
+            if os.environ.get('SHOW_RAW'): print('BURST', [(m.start(), burst[max(0,m.start()-120):m.start()+10]) for m in re.finditer(rb'\x1b\[2J', burst)])
+            if os.environ.get('SHOW_SNAPS'): print(f'RESIZE {len(burst)} bytes, {clears} clears, {burst.count(b"?2026h")} frames')
+            if clears != 1: problems.append(f'the resize burst cleared the screen {clears}x, expected once')
+            if step[1] not in '\n'.join(screen.display): problems.append(f'{step[1]!r} is gone after the resize settled')
         elif step[0] == 'quiet':
             # Nothing on screen changes, so nothing may be written: a frame
             # that changes nothing used to toggle the cursor regardless.
@@ -2734,6 +2833,20 @@ def run(name, spec, entry, keep):
             return rows_with[-1] if rows_with else None
         if last_row(name) is None: problems.append(f'{phrase!r} not on the {name!r} screen')
         elif last_row(name) != last_row('closed'): problems.append(f'{phrase!r} is on row {last_row(name)} on the {name!r} screen, was on row {last_row("closed")}')
+    # The composer stays on its screen row in every named snapshot, as it was in 'closed'.
+    def composer_row(snap):
+        rows_with = [i for i, line in enumerate(snaps.get(snap, [])) if re.match(r'^  ›( |$)', line)]
+        return rows_with[-1] if rows_with else None
+    for name in spec.get('snap_composer_same', []):
+        if composer_row(name) is None: problems.append(f'no composer on the {name!r} screen')
+        elif composer_row(name) != composer_row('closed'): problems.append(f'the composer is on row {composer_row(name)} on the {name!r} screen, was on row {composer_row("closed")}')
+    # A phrase on the same row in two named snapshots (a chat row across an event).
+    for first, second, phrase in spec.get('snap_pair_same_row', []):
+        def row_in(snap):
+            rows_with = [i for i, line in enumerate(snaps.get(snap, [])) if phrase in line]
+            return rows_with[-1] if rows_with else None
+        if row_in(first) is None or row_in(second) is None: problems.append(f'{phrase!r} not on both the {first!r} and {second!r} screens')
+        elif row_in(first) != row_in(second): problems.append(f'{phrase!r} moved from row {row_in(first)} ({first!r}) to row {row_in(second)} ({second!r})')
     # Rows right under a row, in order: the first of them is the very next row.
     for name, (anchor, phrases) in spec.get('snap_rows_after', {}).items():
         rows_of = [line for line in snaps.get(name, [])]
