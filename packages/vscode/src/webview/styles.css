@@ -261,7 +261,6 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
 .working-label { color: var(--vscode-foreground); }
 .working-hint { margin-left: auto; }
 @keyframes pulse { 0%, 100% { opacity: 0.35; transform: scale(0.85); } 50% { opacity: 1; transform: scale(1); } }
-@keyframes spin { to { transform: rotate(360deg); } }
 .plan-card { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; background: var(--subtle); }
 .plan-head { display: flex; align-items: center; gap: 8px; font-weight: 600; margin-bottom: 4px; }
 .plan-head .muted { font-weight: 400; margin-left: auto; }
@@ -596,24 +595,10 @@ body.vscode-high-contrast .keylist-row.active { outline: 1px dashed var(--vscode
   animation: shimmer var(--shimmer-cycle, 2s) steps(var(--shimmer-steps, 16)) infinite;
 }
 @keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
-/* A running sub-agent: its name sweeps like the working line
-   while that row is still running. Still when the user asks for less motion. */
-.activity.running .live-name {
-  background: linear-gradient(90deg, currentColor 0%, currentColor 38%, color-mix(in srgb, currentColor 35%, var(--vscode-editor-foreground, #fff)) 50%, currentColor 62%, currentColor 100%);
-  background-size: 300% 100%;
-  -webkit-background-clip: text; background-clip: text;
-  -webkit-text-fill-color: transparent;
-  animation: shimmer var(--shimmer-cycle, 2s) steps(var(--shimmer-steps, 16)) infinite;
-}
 @media (prefers-reduced-motion: reduce) {
-  .working .working-label, .activity.running .live-name { background: none; -webkit-text-fill-color: currentColor; animation: none; }
+  .working .working-label { background: none; -webkit-text-fill-color: currentColor; animation: none; }
 }
 .working-wrap { margin-top: 6px; }
-.pinned-progress { border-left: 2px solid var(--vscode-textLink-foreground); margin: 6px 0 0; padding: 2px 0 2px 8px; }
-.pinned-progress-toggle { display: flex; align-items: center; gap: 6px; width: 100%; padding: 3px 2px; border: 0; background: transparent; text-align: left; }
-.pinned-progress-toggle:hover { background: var(--hover); }
-.pinned-progress-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pinned-progress-detail { max-height: 45vh; overflow-y: auto; padding: 4px 0; }
 .working-wrap .working { margin-top: 0; }
 .working-wrap .reasoning { margin-top: 4px; }
 .working-thought { color: var(--muted); }

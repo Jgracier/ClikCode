@@ -1,6 +1,6 @@
 /** A turn's tool calls, thoughts and decisions as rows. */
 import type { JSX } from 'preact';
-import { useContext, useState } from 'preact/hooks';
+import { useState } from 'preact/hooks';
 import { activityOutcome, commandOutputPreview, diffPreview, diffTotals, DIFF_PREVIEW_LINES, LIVE_OUTPUT_LINES, liveWaitKind, outputPreview, previewLinesFor, toolUses } from '../../../../src/harness/protocol/activity-view';
 import { activityResult, decisionRow, exploreRuns, exploreSummary, reasoningBody, reasoningHeading, tensedLabel, thoughtRow } from '../../../../src/harness/protocol/turn-flow';
 import { LOOK } from './look';
@@ -10,8 +10,8 @@ import { liveChildren, type Activity, type DecisionEntry, type LiveChild, type T
 import type { FileDiff } from '../protocol';
 import { post } from './bus';
 import { pathIn, relative } from './format';
-import { Animating, Icon, Spinner } from './ui';
-import { activityMore, decisionBadge, foldedSummary, runGroupSummary, runGroupView, runItemKey, runItemStandsAlone, shimmerStyle, type RunItem } from './flow';
+import { Icon, Spinner } from './ui';
+import { activityMore, decisionBadge, foldedSummary, runGroupSummary, runGroupView, runItemKey, runItemStandsAlone, type RunItem } from './flow';
 
 /** The mark at a row's start: the terminal's own glyphs (look.ts), one for every
  * tool whatever its category and whichever harness made it. A running row
@@ -29,18 +29,16 @@ export function toneOf(status: 'running' | 'done' | 'error' | 'stopped'): string
 
 
 /** A tool label with the path in it made a link to the file. */
-export function ActivityLabel({ label, workspace, shimmer }: { label: string; workspace?: string; shimmer?: boolean }): JSX.Element {
-  const className = shimmer ? 'activity-text live-name' : 'activity-text';
-  const style = shimmer ? shimmerStyle(label) : undefined;
+export function ActivityLabel({ label, workspace }: { label: string; workspace?: string }): JSX.Element {
   const found = pathIn(label);
-  if (!found) return <span class={className} style={style} title={label}>{relative(label, workspace)}</span>;
+  if (!found) return <span class="activity-text" title={label}>{relative(label, workspace)}</span>;
   const before = relative(label.slice(0, found.index), workspace);
   const written = found.path + (found.line ? `:${found.line}` : '');
   const after = relative(label.slice(found.index + written.length), workspace);
   // Shown relative to the workspace, opened by the path the tool used.
   const shown = relative(found.path, workspace) + (found.line ? `:${found.line}` : '');
   return (
-    <span class={className} style={style} title={label}>
+    <span class="activity-text" title={label}>
       {before}
       <a href="#" class="file-link" data-file={found.path} data-line={found.line} title={`Open ${found.path}`}>{shown}</a>
       {after}
@@ -123,8 +121,10 @@ export function Clock({ since }: { since: number }): JSX.Element | null {
   return now - since >= 1000 ? <span class="activity-outcome">{formatElapsed(now - since)}</span> : null;
 }
 
-/** One running child of a sub-agent, on its own line with its own spinner;
- * the newest carries the parent's count (as the terminal's row does). */
+/** One running child of a sub-agent, on its own line under the agent's row
+ * (still: the agent's row is the one animation); the newest carries the
+ * parent's count (as the terminal's row does). Live while the agent runs,
+ * since running rows are drawn in the live flow. */
 export function ChildLine({ live }: { live: LiveChild }): JSX.Element {
   const uses = live.newest ? live.parent.childTools : undefined;
   return (
@@ -158,7 +158,6 @@ export function ActivityRow({ activity, workspace, userIndex }: { activity: Acti
   const totals = activity.diff?.length ? diffTotals(activity.diff) : undefined;
   const agentRunning = status === 'running' && (Boolean(activity.agent)
     || liveWaitKind({ kind: 'tool-start', label: activity.label, agent: activity.agent, category: activity.category }) === 'agent');
-  const animating = useContext(Animating);
   const change = (action: 'view' | 'revert') => (event: MouseEvent): void => {
     event.stopPropagation();
     post({ type: 'change', action, key: activity.key, ...(userIndex === undefined ? {} : { userIndex }) });
@@ -166,12 +165,13 @@ export function ActivityRow({ activity, workspace, userIndex }: { activity: Acti
   return (
     <div class={`activity ${status}`}>
       <div class="activity-line">
-        {/* Every running row spins for itself, in its category's colour, on
-            the page's one clock (the working line spins for the turn). */}
+        {/* Every running row spins for itself on the page's one clock: dots for
+            a call, a ring for a sub-agent. The row is the same one that turns
+            done, so nothing moves. */}
         <span class={`activity-status ${toneOf(status)}`} aria-label={status}>
           {status === 'running' ? <Spinner tone="tone-accent" agent={agentRunning} /> : <ActivityGlyph status={status} />}
         </span>
-        <ActivityLabel label={status === 'stopped' ? activity.label : tensedLabel(activity.label, status === 'running')} workspace={workspace} shimmer={agentRunning && animating} />
+        <ActivityLabel label={status === 'stopped' ? activity.label : tensedLabel(activity.label, status === 'running')} workspace={workspace} />
         {status === 'stopped' ? <span class="activity-outcome stopped">stopped</span> : null}
         {status === 'error' ? <span class="activity-outcome failed-word">failed</span> : null}
         {activity.decision ? <span class={`activity-outcome activity-decision ${decisionBadge(activity.decision).tone}`}>{decisionBadge(activity.decision).text}</span> : null}
