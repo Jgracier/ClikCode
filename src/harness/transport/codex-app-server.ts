@@ -18,6 +18,7 @@ import { compactCodexThread, codexTurnStartParams, listCodexModels } from './cod
 import { asRecord } from '../protocol/json-lines.js';
 import { countsOf, turnShareOf, turnStopReason, type TurnUsage } from '../protocol/turn-usage.js';
 import { BackgroundTurnChannel } from './background-turn.js';
+import { BackgroundWorkTracker } from './background-work.js';
 import { CANCEL_SETTLE_MS, PersistentSession, runOneTurn, turnFailure, type PersistentSessionOptions } from './persistent-session.js';
 
 type JsonObject = Record<string, unknown>;
@@ -342,12 +343,11 @@ interface BackgroundRun extends Stream {
   vendorTurnId?: string;
 }
 
-/** Work still running on the vendor's side: a tool item of our thread that
- * has not completed, or a sub-agent thread that is active. */
-interface PendingWork { label: string; turnId?: string }
-
 class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, BackgroundRun> implements CodexSession {
-  private readonly pendingWork = new Map<string, PendingWork>();
+  /** Work still running on the vendor's side (background-work.ts): a tool item of our thread that
+   * has not completed (`item:<id>`), or a sub-agent thread that is active (`agent:<thread id>`).
+   * Its level is the background terminals last told (trackTerminals). */
+  private readonly work = new BackgroundWorkTracker();
   /** Approval prompts open, by JSON-RPC request id: released by serverRequest/resolved. */
   private readonly openApprovals = new Map<string, () => void>();
   /** An open item of a sub-agent's thread -> the sub-agent row it belongs to
@@ -381,7 +381,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
       failed: (error) => {
         // Prefer the server's structured error over the transport's message.
         Object.assign(error, (error as { errorKind?: string }).errorKind ? {} : codexErrorKind(turn.lastError ?? error), codexStructuredFields(turn.lastError, error));
-        keepFailedWork = this.pendingWork.size > 0;
+        keepFailedWork = this.work.count() > 0;
         // A failed *turn* leaves a healthy server; anything else is unknown.
         if (!keepFailedWork && !(error as { codexTurnFailed?: boolean }).codexTurnFailed) this.dropLive(error);
       },
@@ -396,8 +396,8 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
         this.live?.peer.rejectPending(new Error('Codex turn ended'), (method) => method !== 'turn/interrupt');
         // A parent failure does not stop items the server already started.
         // Leave that server to finish them before retrying or switching.
-        if (!succeeded && !keepFailedWork) { this.pendingWork.clear(); this.settleBackground(); }
-        else if (this.pendingWork.size && this.live) {
+        if (!succeeded && !keepFailedWork) { this.work.endAll(); this.settleBackground(); }
+        else if (this.work.count() && this.live) {
           const run = this.openBackground('background-work', undefined, turn.items);
           // The background turn starts knowing what runs.
           if (run && this.terminalCount) run.observer.onBackgroundWork?.({ terminals: this.terminalCount });
@@ -430,17 +430,12 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
   }
 
   protected pendingCount(): number {
-    return this.pendingWork.size;
-  }
-
-  protected hasActiveSubagents(): boolean {
-    return [...this.pendingWork.keys()].some((key) => key.startsWith('agent:'));
+    return this.work.count();
   }
 
   protected clearPending(): void {
-    this.pendingWork.clear();
+    this.work.clear();
     this.terminals.clear();
-    this.terminalCount = 0;
     this.compactWaiter?.fail(new Error('Codex app-server closed before it finished compacting'));
   }
 
@@ -498,7 +493,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
       const channel = new BackgroundTurnChannel('codex-app-server', reason);
       return {
         channel, observer: channel.observer, lastAgentMessage: '', streamedMessage: '', sawActivity: false,
-        items: new Map([...(items ?? [])].filter(([id]) => this.pendingWork.has(`item:${id}`))), output: new Map(), thoughts: new Map(),
+        items: new Map([...(items ?? [])].filter(([id]) => this.work.has(`item:${id}`))), output: new Map(), thoughts: new Map(),
         ...(vendorTurnId ? { vendorTurnId } : {}),
       };
     });
@@ -513,7 +508,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
    * Codex command is a unified-exec process, so counting from its start would
    * make the indicator flash for each `ls`. */
   private readonly terminals = new Map<string, { processId?: string; background: boolean }>();
-  private terminalCount = 0;
+  private get terminalCount(): number { return this.work.fullLevel().terminals; }
 
   private trackTerminals(target: Stream | undefined, method: string, params: JsonObject): void {
     if (method === 'item/started' || method === 'item/completed') {
@@ -532,25 +527,16 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
   }
 
   /** Tells `target` the number of background terminals when it changed. */
-  private announceTerminals(target: Stream | undefined, force = false): void {
+  private announceTerminals(target: Stream | undefined): void {
     const count = [...this.terminals.values()].filter((terminal) => terminal.background).length;
-    if (count === this.terminalCount && !force) return;
-    this.terminalCount = count;
+    if (count === this.terminalCount) return;
+    this.work.replaceLevel({ terminals: count });
     target?.observer.onBackgroundWork?.({ terminals: count });
   }
 
   private settleBackground(): void {
     const run = this.background;
-    if (run && !run.vendorTurnId && this.pendingWork.size === 0) this.finishBackground('completed');
-  }
-
-  private workStarted(key: string, work: PendingWork, target: Stream | undefined): void {
-    if (this.pendingWork.has(key)) return;
-    this.pendingWork.set(key, work);
-  }
-
-  private workFinished(key: string, target: Stream | undefined): boolean {
-    return this.pendingWork.delete(key);
+    if (run && !run.vendorTurnId && this.work.count() === 0) this.finishBackground('completed');
   }
 
   private async ensureLive(input: CodexAppServerTurnInput, threadKey: string): Promise<LiveServer> {
@@ -805,7 +791,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     }
     if (vendorTurn) return this.openBackground('vendor-turn', vendorTurn);
     const childStarted = !ours && method === 'turn/started';
-    if ((this.pendingWork.size || childStarted) && CONTENT_NOTIFICATION.test(method)) return this.openBackground('background-work');
+    if ((this.work.count() || childStarted) && CONTENT_NOTIFICATION.test(method)) return this.openBackground('background-work');
     return undefined;
   }
 
@@ -832,9 +818,9 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     if (item.type === 'subAgentActivity' && typeof item.agentThreadId === 'string') {
       const key = `agent:${item.agentThreadId}`;
       if (item.kind === 'started' && method === 'item/started') {
-        this.workStarted(key, { label: subAgentLabel(item.agentPath) }, target);
+        this.work.start({ id: key, kind: 'agent', label: subAgentLabel(item.agentPath) });
         target?.observer.onActivity?.({ kind: 'tool-start', label: subAgentLabel(item.agentPath), agent: true, id: key });
-      } else if (item.kind === 'completed' && this.workFinished(key, target)) {
+      } else if (item.kind === 'completed' && this.work.end(key)) {
         target?.observer.onActivity?.({ kind: 'tool-done', label: subAgentLabel(item.agentPath), agent: true, id: key });
       }
       return;
@@ -843,9 +829,9 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     const key = `item:${item.id}`;
     if (method === 'item/started') {
       if (codexActivityForItem(item, false)?.kind === 'tool-start') {
-        this.workStarted(key, { label: String(item.type), ...(typeof params.turnId === 'string' ? { turnId: params.turnId } : {}) }, target);
+        this.work.start({ id: key, kind: 'tool', label: String(item.type) });
       }
-    } else this.workFinished(key, target);
+    } else this.work.end(key);
   }
 
   /** A sub-agent thread: one row per sub-agent, open while it works, and its
@@ -854,14 +840,13 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
   private otherThread(target: Stream | undefined, method: string, params: JsonObject, threadId: string): void {
     const key = `agent:${threadId}`;
     if (method === 'turn/started') {
-      const known = this.pendingWork.get(key);
-      if (!known) {
-        this.workStarted(key, { label: 'subagent' }, target);
+      if (!this.work.has(key)) {
+        this.work.start({ id: key, kind: 'agent', label: 'subagent' });
         target?.observer.onActivity?.({ kind: 'tool-start', label: 'subagent', agent: true, id: key });
       }
     } else if (method === 'turn/completed') {
-      const known = this.pendingWork.get(key);
-      if (known && this.workFinished(key, target)) {
+      const known = this.work.end(key);
+      if (known) {
         const failed = ((params.turn as JsonObject | undefined) ?? {}).status === 'failed';
         target?.observer.onActivity?.({ kind: failed ? 'tool-error' : 'tool-done', label: known.label, agent: true, id: key });
       }
