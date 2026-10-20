@@ -25,7 +25,8 @@ import { lifecycle } from '../../runtime/lifecycle-log.js';
 import { globalMcpServersForAcp } from './acp-mcp-servers.js';
 import { BackgroundAgentRows } from '../events/background-agent-rows.js';
 import { agentResult, limitSentence, VendorTasks, type RunningWork } from './handoff-work.js';
-import { backgroundWork, mergeBackgroundWork, type BackgroundWork } from '../protocol/background-agents.js';
+import { BackgroundWorkTracker } from './background-work.js';
+import { backgroundWork, type BackgroundWork } from '../protocol/background-agents.js';
 import { markTurn } from '../../runtime/turn-latency.js';
 import { OTHER_ORG_THINKING_TITLE } from '../protocol/claude-thinking-notice.js';
 
@@ -595,22 +596,19 @@ const toolRunning = (update: Json): boolean => update.status === 'pending' || up
 const toolSettled = (update: Json): boolean => update.status === 'completed' || update.status === 'failed';
 
 class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, BackgroundRun> implements AcpSession {
-  /** Tool calls the agent started and has not settled, within the turn or
-   * background turn that is receiving updates. */
-  private readonly pendingTools = new Map<string, string>();
-  private readonly pendingAgents = new Set<string>();
+  /** What the vendor runs (background-work.ts). Items: tool calls the agent started and has not
+   * settled, within the turn or background turn that is receiving updates. Level: the background
+   * work the vendor's level says is running (claude-agent-acp's `_claude/sdkMessage`
+   * background_tasks_changed) -- kept between turns: it holds the worker while anything runs,
+   * tells the next turn and the background turn what is going on, and ends the background turn
+   * when it empties. A level is per vendor process: it resets with the live child. */
+  private readonly work = new BackgroundWorkTracker();
   /** Background Agent calls: the call completes at launch, the agent runs on
    * and its row stays open until its own `task_notification` (heldAgentFrame). */
   private readonly heldAgents = new BackgroundAgentRows();
   /** Claude's background tasks, with each agent's task: what a conversation that moves on has to
    * answer for (handoff-work.ts). Per vendor process. */
   private readonly vendorTasks = new VendorTasks();
-  /** The background work the vendor's level says is running (claude-agent-acp's
-   * `_claude/sdkMessage` background_tasks_changed). Kept between turns: it
-   * holds the worker while anything runs, tells the next turn and the
-   * background turn what is going on, and ends the background turn when it
-   * empties. A level is per vendor process: it resets with the live child. */
-  private backgroundLevel?: BackgroundWork;
   private sessionId?: string;
   private lastCumulativeChunks = false;
   /** The agent's out-of-turn message so far, for an agent that re-sends it whole. */
@@ -644,7 +642,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     this.relayedMessage = '';
     // What already runs (a terminal an earlier turn started) is the new
     // turn's indicator from its first frame.
-    if (this.backgroundLevel) input.onBackgroundWork?.(this.fullLevel());
+    if (this.work.level) input.onBackgroundWork?.(this.work.fullLevel());
     return this.runActive(turn, input.signal, failure, () => turn.flowing = this.flow(turn, argv).catch((error: unknown) => {
       if (!(error as { acpStaleTurn?: boolean } | null)?.acpStaleTurn || turn.done) throw error;
       // The prompt went to the cancelled turn's process, which is gone now:
@@ -661,7 +659,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
         // The parent may have failed while a tool is still active.
         // Its child is the only process that can finish that tool; keep it
         // until the tool settles, even though this parent prompt failed.
-        if (!this.pendingTools.size) this.dropLive(error);
+        if (!this.work.count()) this.dropLive(error);
       },
       ended: () => {
         input.onSteerReady?.(undefined);
@@ -671,12 +669,12 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
         // An unsettled tool call belongs to the still-live vendor, even
         // after its parent request ends. Route its later events into the
         // worker's background turn and keep the process alive until it ends.
-        if (!(this.live && (this.backgroundLevel || this.pendingTools.size))) for (const event of this.heldAgents.settle('tool-done')) input.onActivity?.(event);
-        if (this.live && (this.pendingTools.size || this.backgroundLevel)) {
+        if (!(this.live && (this.work.level || this.work.count()))) for (const event of this.heldAgents.settle('tool-done')) input.onActivity?.(event);
+        if (this.live && (this.work.count() || this.work.level)) {
           const run = this.openBackground('background-work');
           if (run) {
             // What runs now is the background turn's indicator from its first frame.
-            if (this.backgroundLevel) run.observer.onBackgroundWork?.(this.fullLevel());
+            if (this.work.level) run.observer.onBackgroundWork?.(this.work.fullLevel());
             return;
           }
         }
@@ -692,26 +690,15 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
   protected clearPending(): void {
     // Tasks are the process's: they go when it does, not when a turn ends.
     if (!this.live) this.vendorTasks.clear();
-    this.pendingTools.clear();
-    this.pendingAgents.clear();
+    this.work.clear();
     this.heldAgents.settle('tool-done');
-    this.backgroundLevel = undefined;
   }
-
-  /** The level with every kind named (a zero is "none", not unknown). */
-  private fullLevel(): { agents: number; terminals: number; workflows: number } {
-    const level = this.backgroundLevel ?? {};
-    return { agents: level.agents ?? 0, terminals: level.terminals ?? 0, workflows: level.workflows ?? 0 };
-  }
-
-  protected hasActiveSubagents(): boolean { return this.pendingAgents.size > 0; }
 
   protected pendingCount(): number {
     // Cleared at each answer (see `ended` above): between turns only tools a
     // background turn is following count, and the work the vendor's own
     // level says still runs.
-    const level = this.backgroundLevel;
-    return this.background ? this.pendingTools.size + (level ? (level.agents ?? 0) + (level.terminals ?? 0) + (level.workflows ?? 0) : 0) : 0;
+    return this.background ? this.work.total() : 0;
   }
 
   protected interrupt(turn: ActiveTurn, live: LiveAgent): boolean {
@@ -1052,7 +1039,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
    * and a sub-agent's call is open for the sub-agent's whole run. Between
    * calls nothing is lost. */
   private steerSafe(turn: ActiveTurn): boolean {
-    return !turn.done && this.turn === turn && this.pendingTools.size === 0 && turn.approvals === 0;
+    return !turn.done && this.turn === turn && this.work.count() === 0 && turn.approvals === 0;
   }
 
   /** The turn's steer handler. Sent now when nothing would be interrupted;
@@ -1237,7 +1224,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     this.trackTool(target, update);
     if (target) this.deliver(target, update, totals);
     const run = this.background;
-    if (run && target === run && this.pendingTools.size === 0) {
+    if (run && target === run && this.work.count() === 0) {
       // The end of a background turn is the vendor's to say: the last tool it
       // was waiting for settled, or the agent's own end-of-turn bookkeeping
       // arrived. Nothing else ends it but the process going or the user.
@@ -1291,14 +1278,12 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     if (!id) return;
     if (update.rawInput !== undefined) this.vendorTasks.call(id, update.rawInput);
     if (toolSettled(update)) {
-      this.pendingTools.delete(id);
-      this.pendingAgents.delete(id);
-      if (target && target === this.turn && this.pendingTools.size === 0) {
+      this.work.end(id);
+      if (target && target === this.turn && this.work.count() === 0) {
         this.steerPause(this.turn);
       }
     } else if (update.sessionUpdate === 'tool_call' ? toolRunning(update) : update.status === 'in_progress' || update.status === 'pending') {
-      if (!this.pendingTools.has(id)) this.pendingTools.set(id, String(update.title ?? 'tool'));
-      if (acpActivityEvent(update)?.agent) this.pendingAgents.add(id);
+      this.work.start({ id, kind: 'tool', label: String(update.title ?? 'tool') });
     }
   }
 
@@ -1475,21 +1460,20 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
    * runs and nothing else is following (a terminal outliving its turn), and
    * ended when the level empties and no tool is left. */
   private backgroundWorkChanged(params: Json, update: BackgroundWork): void {
-    const before = this.backgroundLevel;
-    this.backgroundLevel = mergeBackgroundWork(before, update);
+    this.work.replaceLevel(update);
     let target = this.liveTarget(params);
     let opened = false;
     const expected = this.turn?.sessionId ?? this.sessionId;
     const ours = typeof params.sessionId !== 'string' || !expected || params.sessionId === expected;
-    if (!target && ours && !this.turn && this.backgroundLevel && this.live) {
+    if (!target && ours && !this.turn && this.work.level && this.live) {
       target = this.openBackground('background-work');
       opened = Boolean(target);
     }
     // What a freshly opened run is told is the whole level.
-    if (target) target.observer.onBackgroundWork?.(opened ? this.fullLevel() : update);
+    if (target) target.observer.onBackgroundWork?.(opened ? this.work.fullLevel() : update);
     const run = this.background;
     if (!run || run.channel.done) return;
-    if (!this.backgroundLevel && target === run && this.pendingTools.size === 0 && !this.heldAgents.size) this.finishBackground('completed');
+    if (!this.work.level && target === run && this.work.count() === 0 && !this.heldAgents.size) this.finishBackground('completed');
   }
 
   /** A background task's start or end (handoff-work.ts). An agent's end is told with its result, or,
@@ -1514,7 +1498,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     const target = this.liveTarget(params);
     target?.observer.onActivity?.(event);
     const run = this.background;
-    if (event.kind !== 'tool-start' && run && target === run && !this.backgroundLevel && this.pendingTools.size === 0 && !this.heldAgents.size) this.finishBackground('completed');
+    if (event.kind !== 'tool-start' && run && target === run && !this.work.level && this.work.count() === 0 && !this.heldAgents.size) this.finishBackground('completed');
   }
 
   /** claude-agent-acp pushes the identity it runs as (`_auth/status_update`
@@ -1623,8 +1607,8 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     // The call being asked about is open from here, whether or not the agent
     // announced it first: a steer now would cancel it once it runs.
     const callId = typeof params.toolCall?.toolCallId === 'string' ? params.toolCall.toolCallId as string : undefined;
-    const opened = Boolean(turn && callId && !this.pendingTools.has(callId));
-    if (opened) this.pendingTools.set(callId!, String(params.toolCall?.title ?? 'tool'));
+    const opened = Boolean(turn && callId && !this.work.has(callId));
+    if (opened) this.work.start({ id: callId!, kind: 'tool', label: String(params.toolCall?.title ?? 'tool') });
     if (!accepted) {
       const title = String(params.toolCall?.title ?? params.toolCall?.name ?? 'Approve tool');
       const detail = [
@@ -1650,8 +1634,8 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     }
     // Refused, it never runs; an agent that reports it failed settles it too.
     if (opened && !accepted && turn) {
-      this.pendingTools.delete(callId!);
-      if (this.pendingTools.size === 0) {
+      this.work.end(callId!);
+      if (this.work.count() === 0) {
         this.steerPause(turn);
       }
     }
