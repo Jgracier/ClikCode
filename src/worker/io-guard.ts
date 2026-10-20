@@ -4,7 +4,7 @@
 import { mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { lifecycle } from '../runtime/lifecycle-log.js';
-import { stateDirectory } from '../session/store/paths.js';
+import { safeRecordFileName, stateDirectory } from '../session/store/paths.js';
 import { COMMAND_GROUP } from './command-groups.js';
 
 const MIB = 2 ** 20;
@@ -18,6 +18,8 @@ const MIN_MACHINE_SHARE = 0.5;
 const STOP_AFTER_MS = 20_000;
 const STOP_COOLDOWN_MS = 60_000;
 const SETTLE_MS = 30_000;
+const GLOBAL_WARN_COOLDOWN_MS = 60 * 60_000;
+const OWNED_WARN_COOLDOWN_MS = 30 * 60_000;
 
 type IoCounters = Map<string, { bytes: number; operations: number }>;
 export function parseIoStat(value: string): IoCounters {
@@ -144,10 +146,10 @@ function readReading(scopeDir: string, labels: ReadonlyMap<string, string>, now:
 
 const gbps = (bytesPerSecond: number): string => `${(bytesPerSecond / MIB).toFixed(0)} MiB/s`;
 export function ioNudge(candidate: Candidate, pressure: number): string {
-  return `Disk I/O is stalling the machine (${pressure.toFixed(0)}% full stall time). Your \`${candidate.command.label}\` is issuing about ${gbps(candidate.bytesPerSecond)} on the busy device. Reduce parallel builds or use a smaller run until I/O recovers.`;
+  return `Disk I/O is stalling the machine (${pressure.toFixed(0)}% full stall time). Your \`${candidate.command.label}\` is issuing about ${gbps(candidate.bytesPerSecond)} on the busy device. Continue the task with less disk I/O: reduce this command's parallel jobs, narrow its targets, or reuse existing build output where appropriate. Suggest the specific change you can make; do not pause solely because of this warning.`;
 }
-function ioGlobalNudge(pressure: number): string {
-  return `Disk I/O is stalling the machine (${pressure.toFixed(0)}% full stall time). ClikCode has not identified your command as the cause. Avoid starting more disk-heavy builds until the current work clears.`;
+export function ioGlobalNudge(pressure: number): string {
+  return `Disk I/O is stalling the machine (${pressure.toFixed(0)}% full stall time). ClikCode has not identified a command in this conversation as the cause. This is informational: continue the user's task. If your next step would add substantial disk I/O, choose a narrower run or fewer parallel jobs when practical. Suggest a concrete change only if it fits your work; do not pause or stop solely because of this warning.`;
 }
 export function ioStopNote(candidate: Candidate, pressure: number): string {
   return `ClikCode stopped \`${candidate.command.label}\` and its child processes after sustained disk I/O stalls (${pressure.toFixed(0)}% full stall time). It was issuing about ${gbps(candidate.bytesPerSecond)} and over half of the device's I/O. Use fewer parallel jobs or a smaller run; do not rerun the same command unchanged.`;
@@ -166,14 +168,24 @@ interface IoGuardOptions {
 
 function lastStopPath(): string { return join(stateDirectory(), 'io-guard.last-stop'); }
 function ineffectivePath(): string { return join(stateDirectory(), 'io-guard.ineffective'); }
+function warningPath(sessionId: string, kind: 'global' | 'owned'): string {
+  return join(stateDirectory(), 'io-guard-warnings', `${safeRecordFileName(sessionId)}.${kind}`);
+}
 function fileTime(path: string): number { try { return Number(readFileSync(path, 'utf8')) || 0; } catch { return 0; } }
+function warningDue(sessionId: string, kind: 'global' | 'owned', at: number): boolean {
+  const path = warningPath(sessionId, kind);
+  const last = fileTime(path);
+  const cooldown = kind === 'global' ? GLOBAL_WARN_COOLDOWN_MS : OWNED_WARN_COOLDOWN_MS;
+  if (last > 0 && at >= last && at - last < cooldown) return false;
+  try { mkdirSync(join(stateDirectory(), 'io-guard-warnings'), { recursive: true, mode: 0o700 }); writeFileSync(path, String(at), { mode: 0o600 }); } catch { /* fail-open-ok */ }
+  return true;
+}
 
 export function startIoGuard(options: IoGuardOptions): () => void {
   const now = options.now ?? Date.now;
   const read = options.read ?? ((at: number) => readReading(options.scopeDir, options.labels, at));
   const stop = options.stop ?? ((path: string) => { try { writeFileSync(join(path, 'cgroup.kill'), '1'); return true; } catch { return false; } });
   let previous: Reading | undefined;
-  let warningSent: 'none' | 'global' | 'owned' = 'none';
   let highSince: number | undefined;
   let candidateSince: number | undefined;
   let candidatePath: string | undefined;
@@ -188,7 +200,6 @@ export function startIoGuard(options: IoGuardOptions): () => void {
       pending = undefined;
     }
     if (current.pressure < CLEAR_PRESSURE) {
-      warningSent = 'none';
       highSince = undefined;
       try { rmSync(ineffectivePath(), { force: true }); } catch { /* fail-open-ok */ }
     }
@@ -201,12 +212,10 @@ export function startIoGuard(options: IoGuardOptions): () => void {
     if (candidate && candidate.command.path === candidatePath) candidateSince ??= current.at;
     else { candidatePath = candidate?.command.path; candidateSince = candidate ? current.at : undefined; }
     if (current.pressure < WARN_PRESSURE) return;
-    if (candidate && warningSent !== 'owned') {
-      warningSent = 'owned';
+    if (candidate && warningDue(options.sessionId, 'owned', current.at)) {
       lifecycle('io.nudge', { session: options.sessionId, label: candidate.command.label, pressure: current.pressure, bytesPerSecond: candidate.bytesPerSecond });
       options.deliver(ioNudge(candidate, current.pressure));
-    } else if (!candidate && warningSent === 'none') {
-      warningSent = 'global';
+    } else if (!candidate && warningDue(options.sessionId, 'global', current.at)) {
       lifecycle('io.nudge', { session: options.sessionId, pressure: current.pressure });
       options.deliver(ioGlobalNudge(current.pressure));
     }
