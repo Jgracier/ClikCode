@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { setTimeout as pause } from 'node:timers/promises';
-import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core';
+import type { Browser, BrowserContext, Page } from 'playwright-core';
 import { computerHostFile, computerProfile } from './browser-host.js';
 import { sharedState } from './shared-state.js';
 
@@ -17,6 +17,7 @@ async function connect(stateDir: string): Promise<Connected | undefined> {
   catch { return undefined; }
   if (!Number.isInteger(port) || port < 1 || port > 65535) return undefined;
   try {
+    const { chromium } = await import('playwright-core');
     const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, { timeout: 3_000 });
     const context = browser.contexts()[0];
     if (!context) { await browser.close(); return undefined; }

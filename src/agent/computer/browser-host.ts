@@ -1,7 +1,6 @@
 /** Detached owner of ClikCode's Chrome profile. Workers connect over local CDP. */
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { chromium } from 'playwright-core';
 
 export function computerProfile(stateDir: string): string { return path.join(stateDir, 'computer', 'chrome'); }
 export function computerHostFile(stateDir: string): string { return path.join(stateDir, 'computer', 'host.json'); }
@@ -25,6 +24,7 @@ export async function launchFirst<T>(launch: (channel: string) => Promise<T>, ch
 export async function runComputerHost(stateDir: string): Promise<void> {
   const profile = computerProfile(stateDir);
   await fs.mkdir(profile, { recursive: true, mode: 0o700 });
+  const { chromium } = await import('playwright-core');
   const context = await launchFirst(channel => chromium.launchPersistentContext(profile, {
     channel, headless: false, viewport: null, acceptDownloads: true,
     // Playwright's default --enable-automation and Chrome's port-0 debugging

@@ -16,7 +16,7 @@
  * this loop on purpose. */
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { parse as parseYaml } from 'yaml';
+import { lazyModule } from '../runtime/lazy-module.js';
 import { enabledPluginSkillDirs } from './plugins.js';
 
 export const SKILL_FILE = 'SKILL.md';
@@ -80,13 +80,15 @@ function looseFields(block: string): Record<string, unknown> {
   return fields;
 }
 
+const yaml = lazyModule<typeof import('yaml')>('yaml');
+
 export function parseFrontmatter(text: string): ParsedFrontmatter {
   const source = text.replace(/^﻿/, '');
   const match = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(source);
   if (!match) return { error: 'no YAML frontmatter (the file must start with a --- block)' };
   const body = source.slice(match[0].length);
   try {
-    const value: unknown = parseYaml(match[1]);
+    const value: unknown = yaml().parse(match[1]);
     if (value && typeof value === 'object' && !Array.isArray(value)) return { fields: value as Record<string, unknown>, body };
     return { error: 'frontmatter is not a key/value mapping' };
   } catch (error) {

@@ -5,7 +5,6 @@
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { GGMLQuantizationType, gguf } from '@huggingface/gguf';
 import { allLocalModels, registerRemoteModels, type CatalogModel, type KvGeometry } from './catalog.js';
 import { discoveredModelsFile } from './paths.js';
 
@@ -73,21 +72,24 @@ function geometry(metadata: Record<string, unknown>): KvGeometry | undefined {
     sliding: { layers: slidingLayers, kvHeads: slidingHeads, keyLength: slidingKey, valueLength: slidingValue, window } };
 }
 
-/** Bytes per block, and elements per block. Unsupported tensor types make
- * the candidate ineligible rather than letting an optimistic estimate pass. */
-const TENSOR_LAYOUT = new Map<number, [number, number]>([
-  [GGMLQuantizationType.F32, [4, 1]], [GGMLQuantizationType.F16, [2, 1]], [GGMLQuantizationType.BF16, [2, 1]],
-  [GGMLQuantizationType.Q4_0, [18, 32]], [GGMLQuantizationType.Q4_1, [20, 32]],
-  [GGMLQuantizationType.Q5_0, [22, 32]], [GGMLQuantizationType.Q5_1, [24, 32]],
-  [GGMLQuantizationType.Q8_0, [34, 32]], [GGMLQuantizationType.Q8_1, [36, 32]],
-  [GGMLQuantizationType.Q2_K, [84, 256]], [GGMLQuantizationType.Q3_K, [110, 256]],
-  [GGMLQuantizationType.Q4_K, [144, 256]], [GGMLQuantizationType.Q5_K, [176, 256]],
-  [GGMLQuantizationType.Q6_K, [210, 256]], [GGMLQuantizationType.Q8_K, [292, 256]],
-  [GGMLQuantizationType.MXFP4, [17, 32]],
+/** Bytes per block, and elements per block, by ggml tensor type id (the ids
+ * are @huggingface/gguf's GGMLQuantizationType, written out so that package
+ * loads only when a header is fetched; a test pins them to the enum).
+ * Unsupported tensor types make the candidate ineligible rather than letting
+ * an optimistic estimate pass. */
+export const TENSOR_LAYOUT = new Map<number, [number, number]>([
+  [0 /* F32 */, [4, 1]], [1 /* F16 */, [2, 1]], [30 /* BF16 */, [2, 1]],
+  [2 /* Q4_0 */, [18, 32]], [3 /* Q4_1 */, [20, 32]],
+  [6 /* Q5_0 */, [22, 32]], [7 /* Q5_1 */, [24, 32]],
+  [8 /* Q8_0 */, [34, 32]], [9 /* Q8_1 */, [36, 32]],
+  [10 /* Q2_K */, [84, 256]], [11 /* Q3_K */, [110, 256]],
+  [12 /* Q4_K */, [144, 256]], [13 /* Q5_K */, [176, 256]],
+  [14 /* Q6_K */, [210, 256]], [15 /* Q8_K */, [292, 256]],
+  [39 /* MXFP4 */, [17, 32]],
 ]);
 
 export function remoteModelFromHeader(
-  repo: HubModel, file: HubFile, header: Awaited<ReturnType<typeof gguf>>,
+  repo: HubModel, file: HubFile, header: Awaited<ReturnType<typeof import('@huggingface/gguf').gguf>>,
 ): CatalogModel | undefined {
   const sizeBytes = file.lfs?.size ?? file.size;
   const sha256 = file.lfs?.sha256;
@@ -133,7 +135,7 @@ export function remoteModelFromHeader(
 
 async function inspect(repo: HubModel, file: HubFile): Promise<CatalogModel | undefined> {
   const url = `https://huggingface.co/${repo.id}/resolve/${repo.sha}/${encodeURIComponent(file.rfilename)}`;
-  try { return remoteModelFromHeader(repo, file, await gguf(url)); }
+  try { return remoteModelFromHeader(repo, file, await (await import('@huggingface/gguf')).gguf(url)); }
   catch { return undefined; }
 }
 
