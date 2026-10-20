@@ -17,7 +17,7 @@ export function paint(this: TerminalHarnessPrompter, composer: string, options: 
   const session = this.currentSession;
   if (!session || this.suspended) return;
   if (this.subView && !this.turn) this.closeSubView();
-  if (this.subView) { this.paintSubView(); return; }
+  if (this.subView) { this.pickerOverlay = []; this.paintSubView(); return; }
   if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
   this.responsePaintTimer = undefined;
   this.composer = {
@@ -82,7 +82,12 @@ export function paint(this: TerminalHarnessPrompter, composer: string, options: 
   });
   liveConversation.push(...queuedMessageRows(queuedMessages, enterAt, escAt, inner, userRows));
   const conversationLines = liveConversationLines(liveConversation, true);
-  const { footer, composerStart } = buildFooter.call(this, { inner, rowWidth, width, prompt, options, selected, palette, session, targetHeight, bands });
+  const { footer, composerStart, pickerRows } = buildFooter.call(this, { inner, rowWidth, width, prompt, options, selected, palette, session, targetHeight, bands });
+  // The list covers chat rows just above the footer. The footer (usage, composer, title, provider)
+  // keeps its height, so it stays on the same screen rows while the list is open and while a choice
+  // is applied. A list inside the footer grew it, and the composer left the screen.
+  this.pickerOverlay = pickerRows;
+  this.chromeRows = footer.length;
   // The live region is bounded by the viewport: it is erased and redrawn as
   // one block every frame, so it can never be taller than the terminal. A
   // construct that settles only when it closes -- a table still receiving

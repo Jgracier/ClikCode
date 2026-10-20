@@ -53,9 +53,11 @@ export function frameRowBudget(input: {
   // All or nothing: a palette with one or two rows is its own border and no
   // options, which reads as a broken frame rather than a short list.
   const paletteRows = available >= PALETTE_MIN_ROWS ? available : 0;
-  // What an approval would be left with must stay above its own minimum: the
-  // indicator is information, the approval is the turn being blocked.
-  const indicatorRows = input.indicator && input.waiting && optionalRows - paletteRows > APPROVAL_MIN_ROWS ? 1 : 0;
+  // The list covers chat above the footer (paint/frame.ts). It does not take a
+  // footer row, so the indicator stays for as long as the approval still has
+  // its minimum: dropping the indicator while a list is open shortens the
+  // footer, and the composer moves.
+  const indicatorRows = input.indicator && input.waiting && optionalRows > APPROVAL_MIN_ROWS ? 1 : 0;
   return { waitingRows, noticeRows, indicatorRows, paletteRows, optionalRows: optionalRows - indicatorRows };
 }
 

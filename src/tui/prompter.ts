@@ -164,6 +164,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * width wraps the whole conversation again (see rewrapTranscript). */
   transcriptColumns = output.columns || 0;
   usageLabel?: string;
+  /** The account the info line names. A render that does not say keeps the last one, so the line
+   * does not drop it and put it back between two paints of the same conversation. */
+  shownAccount?: string;
+  /** An open list, drawn over the chat just above the footer (frame-flush.ts). Empty when none. */
+  pickerOverlay: string[] = [];
+  /** How many live rows at the bottom are the footer. The overlay sits above them and never on them. */
+  chromeRows = 0;
   usageResetLabel?: string;
   selecting = false;
   /** True while the slash palette (inside question()) has its own fixed-capacity
@@ -414,7 +421,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     return held ? stable.length + 1 : this.transcriptMessages(session).length;
   }
 
-  render(session: HarnessSession, _account?: string, journal?: JournalState): void {
+  render(session: HarnessSession, account?: string, journal?: JournalState): void {
+    if (account !== undefined) this.shownAccount = account;
+    else if (this.currentSession?.id !== session.id) this.shownAccount = undefined;
     if (this.currentSession?.id !== session.id) {
       setLifecycleSession(session.id);
       lifecycle('window.conversation', { from: this.currentSession?.id ?? null, harness: session.nativeHarness ?? session.route });

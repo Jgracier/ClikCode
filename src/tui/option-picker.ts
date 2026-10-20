@@ -17,6 +17,8 @@ export interface PaletteLayout {
   hint?: string;
   hideCursor?: boolean;
   headings?: boolean;
+  /** Named above the list. The composer stays the composer's: this is not typed into it. */
+  title?: string;
 }
 
 /** What the picker needs from the frame that owns the screen. */
@@ -144,8 +146,8 @@ export function runOptionPicker<T>(
         // Every key that acts on the row: Enter steps to the next value, Tab
         // opens its actions. And the list's own layout (headings), so the
         // rows do not shift sideways as the cursor lands here.
-        host.paint(title, renderOptions, selected, '', 0, {
-          capacity, hideCursor: true, headings: true,
+        host.paint('', renderOptions, selected, '\u203a ', 0, {
+          capacity, hideCursor: true, headings: true, title,
           hint: [
             keyHintFor(`\u2190\u2192 or 1-${selectedOption.inline.choices.length}`, 'choose'), keyHintFor('enter', 'next'),
             ...(selectedOption.actions?.length ? [keyHintFor('tab', 'options')] : []),
@@ -165,7 +167,7 @@ export function runOptionPicker<T>(
       const hint = query
         ? `"${query}" - ${visible.length} match${visible.length === 1 ? '' : 'es'} · ${keys}`
         : `${total} total · ${keys}${total > capacity - 2 ? ' · type to filter' : ''}`;
-      host.paint(title, renderOptions, selected, '', 0, { capacity, hideCursor: true, headings: true, hint });
+      host.paint('', renderOptions, selected, '\u203a ', 0, { capacity, hideCursor: true, headings: true, title, hint });
     };
     let finished = false;
     /** The keyboard, taken on opening and again whenever a screen this one

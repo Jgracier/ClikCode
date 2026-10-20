@@ -18,8 +18,9 @@ export type FooterInput = {
   bands: ReturnType<typeof frameBands>;
 };
 
-/** The footer's rows and where the composer starts in them. */
-export function buildFooter(this: TerminalHarnessPrompter, input: FooterInput): { footer: string[]; composerStart: number } {
+/** The footer's rows, where the composer starts in them, and an open list.
+ * The list is not part of the footer: a footer that grows moves the composer, and the chat with it. */
+export function buildFooter(this: TerminalHarnessPrompter, input: FooterInput): { footer: string[]; composerStart: number; pickerRows: string[] } {
   const { inner, rowWidth, width, prompt, options, selected, palette, session, targetHeight, bands } = input;
   const {
     noticeShown, noticeRows, waitingRows, paletteRows: paletteCapacity, indicatorRows, indicatorText, approvalRows,
@@ -36,8 +37,10 @@ export function buildFooter(this: TerminalHarnessPrompter, input: FooterInput): 
   // above the composer shifts when the status goes.
   if (!this.turn) footer.push('', ...(targetHeight >= 5 && !approvalRows.length ? [''] : []));
   footer.push(...noticeShown.slice(0, noticeRows).map((row) => `  ${chalk.yellow(row)}`));
+  const pickerRows: string[] = [];
   if (paletteCapacity) {
-    footer.push(...paletteBandRows(options as readonly PaletteEntry[], selected, paletteCapacity, width, {
+    if (palette?.title) pickerRows.push(`  ${chalk.bold(visibleSlice(palette.title, Math.max(1, inner)))}`);
+    pickerRows.push(...paletteBandRows(options as readonly PaletteEntry[], selected, paletteCapacity, width, {
       ...(palette?.headings ? { headings: true } : {}), ...(palette?.hint ? { hint: palette.hint } : {}),
     }));
   }
@@ -78,7 +81,11 @@ export function buildFooter(this: TerminalHarnessPrompter, input: FooterInput): 
   // the title the way they used to.
   // A name cut from the chat's first message is already on screen as that message: the rule says a name only when it adds something.
   // The board's composer starts a NEW conversation, so it carries no title: the last chat's name there read as its draft.
-  const titleRule = paintTitleRule(rowWidth, palette?.headings || session.nameSource === 'message' ? undefined : session.name || undefined);
+  // A picker names itself above its list, so the chat's name stays on this rule.
+  // Clearing it while the list is open rewrites the rule under the composer.
+  // The board sets headings and no title: its composer starts a new chat, and
+  // the chat that was open is not named there.
+  const titleRule = paintTitleRule(rowWidth, (palette?.headings && !palette.title) || session.nameSource === 'message' ? undefined : session.name || undefined);
   footer.push(titleRule);
   // Provider, model, effort and directory are one statement -- what this
   // conversation is running as -- so they read as one line in one colour
@@ -97,6 +104,6 @@ export function buildFooter(this: TerminalHarnessPrompter, input: FooterInput): 
     footer.splice(0, footer.length, ...fitted.rows);
     composerStart = fitted.composerStart;
   }
-  return { footer, composerStart };
+  return { footer, composerStart, pickerRows };
 }
 

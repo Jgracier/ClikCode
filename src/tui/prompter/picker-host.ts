@@ -6,11 +6,12 @@ import { runConversationBoard, type BoardResult, type ConversationBoardSettings 
 import type { TerminalHarnessPrompter } from '../prompter.js';
 import { EMPTY_COMPOSER } from './state.js';
 
-/** Remove a completed palette/picker as one frame. Painting an empty
- * composer here left its borders/status rows alive while the selected slash
- * command ran, which looked like a composer floating above blank space. */
+/** The list is gone: draw the conversation again, composer included, before the choice is applied.
+ * Blanking the screen here left the composer unseen for as long as that took (a provider switch
+ * inspects the harness and resolves a model before it renders), and the chat hopped when it returned. */
 export function clearInteractiveFrame(this: TerminalHarnessPrompter): void {
-  this.renderFrame([], [], 0, 1, true);
+  this.pickerOverlay = [];
+  this.repaint({ keepPalette: false });
 }
 
 /** Provider/model/effort pickers share the same frame and palette layout as
