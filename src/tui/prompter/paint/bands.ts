@@ -1,4 +1,4 @@
-/** The fixed bands of a frame (notice, palette, approval, thought, sign-in, plan, panel) and the rows left for the composer. */
+/** The fixed bands of a frame (palette, approval, thought, sign-in, plan, panel) and the rows left for the composer. */
 import chalk from 'chalk';
 import { thoughtLine } from '../../../harness/protocol/tool-category-style.js';
 import { noticeLines } from '../../render/wrap.js';
@@ -12,7 +12,7 @@ import { backgroundTerminalsLabel, reasoningBody } from '../../../harness/protoc
 import { approvalBlockRows } from '../../render/approval-block.js';
 import { APPROVAL_GUARD_MS } from '../../render/approval-keys.js';
 import { questionBlockRows } from '../../render/question-block.js';
-import { APPROVAL_MIN_ROWS, frameRowBudget } from '../../render/frame-budget.js';
+import { APPROVAL_MIN_ROWS, FOOTER_CHROME_ROWS, MIN_COMPOSER_ROWS, frameRowBudget } from '../../render/frame-budget.js';
 import { panelRows as panelBandRows } from '../../render/footer-rows.js';
 import type { PaletteLayout } from '../../option-picker.js';
 import { planBlockRows } from '../../render/plan-block.js';
@@ -62,14 +62,13 @@ export function frameBands(p: TerminalHarnessPrompter, input: BandInput) {
   // an elapsed clock in a fixed place are status, while a sentence being
   // rewritten under the eye is the thing that made reading impossible.
   const notice = p.mentionFocus?.status ?? p.transientNotice;
+  // A notice is drawn over the chat above the footer, like a list: a notice
+  // that took footer rows moved the composer when it came and again when it
+  // expired.
   const noticeShown = notice ? noticeLines(notice, inner) : [];
   const indicatorText = p.turn ? backgroundTerminalsLabel(p.backgroundTerminals) : undefined;
-  const budget = frameRowBudget({
-    targetHeight, waiting: Boolean(p.turn), notice: noticeShown.length, requestedPaletteCapacity,
-    indicator: indicatorText !== undefined,
-  });
-  const { waitingRows, noticeRows, paletteRows, indicatorRows } = budget;
-  let optionalRows = budget.optionalRows;
+  const budget = frameRowBudget({ targetHeight, waiting: Boolean(p.turn), requestedPaletteCapacity });
+  const { waitingRows, paletteRows, optionalRows } = budget;
   const composerWidth = Math.max(8, inner - terminalCellWidth(prompt));
   // The software keyboard can make a mobile SSH viewport dramatically
   // shorter between two keystrokes. Bound the composer by what remains in
@@ -95,11 +94,13 @@ export function frameBands(p: TerminalHarnessPrompter, input: BandInput) {
     })
     : [];
   let liveBandBudget = Math.max(0, optionalRows - approvalRows.length - 2);
-  // The newest words of the reasoning: it is read as it is written.
+  // The newest words of the reasoning: it is read as it is written. It is
+  // drawn in the blank row over the status, which exists whether or not there
+  // is a thought: a row of its own appeared with the first thought and went
+  // with the first text, once for every reasoning/acting cycle of a turn.
   const thought = p.thought ? reasoningBody(p.thought.text) : '';
-  const thoughtRows = p.turn && thought && !approval && liveBandBudget > 0
-    ? [`  ${thoughtLine(visibleTail(thought, Math.max(1, inner - 2)))}`] : [];
-  liveBandBudget -= thoughtRows.length;
+  const thoughtRow = p.turn && thought && !approval && waitingRows >= 2
+    ? `  ${thoughtLine(visibleTail(thought, Math.max(1, inner - 2)))}` : undefined;
   // A link sign-in's link is wrapped, never cut: on a phone it is read (and
   // its code typed) from here.
   const signInWrapped = p.turn ? p.signInLines.flatMap((line) => {
@@ -111,7 +112,12 @@ export function frameBands(p: TerminalHarnessPrompter, input: BandInput) {
   const signInRows = signInWrapped.length <= liveBandBudget ? signInWrapped : signInWrapped.slice(0, Math.max(0, liveBandBudget));
   liveBandBudget -= signInRows.length;
   const planGlyph = p.turn && !p.reducedMotion ? waitingSpinnerGlyph(p.waitingFrame) : undefined;
-  const planRows = planBlockRows(p.planEntries, width, liveBandBudget, planGlyph);
+  const planShown = planBlockRows(p.planEntries, width, liveBandBudget, planGlyph);
+  // The plan's height only grows during a turn: a step done or added changes
+  // its rows, and a block that shrank and grew with them moved the chat at
+  // every update. Rows it no longer needs stay blank until the turn ends.
+  p.planHold = p.turn ? Math.max(p.planHold, Math.min(planShown.length, liveBandBudget)) : 0;
+  const planRows = p.turn ? [...planShown, ...Array.from({ length: Math.max(0, Math.min(p.planHold, liveBandBudget) - planShown.length) }, () => '')] : planShown;
   liveBandBudget -= planRows.length;
   let panelRows: string[] = [];
   const panel = p.panelState;
@@ -121,12 +127,12 @@ export function frameBands(p: TerminalHarnessPrompter, input: BandInput) {
     panelRows = shown.rows;
   }
   const maxComposerRows = Math.max(
-    1, targetHeight - 3 - noticeRows - waitingRows - indicatorRows - approvalRows.length - thoughtRows.length - signInRows.length - planRows.length - panelRows.length,
+    MIN_COMPOSER_ROWS, targetHeight - FOOTER_CHROME_ROWS - waitingRows - approvalRows.length - signInRows.length - planRows.length - panelRows.length,
   );
   const composerRows = composerLayout(composer, cursor, composerWidth, maxComposerRows);
   return {
-    targetHeight, noticeShown, noticeRows, waitingRows, paletteRows, indicatorRows, indicatorText, approvalRows,
-    thoughtRows, signInRows, planRows, panelRows, maxComposerRows, composerRows,
+    targetHeight, noticeShown, waitingRows, paletteRows, indicatorText, approvalRows,
+    thoughtRow, signInRows, planRows, panelRows, maxComposerRows, composerRows,
   };
 }
 

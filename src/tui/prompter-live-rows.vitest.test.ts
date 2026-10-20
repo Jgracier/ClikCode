@@ -84,7 +84,7 @@ describe('the background terminals indicator (standard section 10)', () => {
     } finally { rl.close(); }
   });
 
-  it('is not drawn when nothing runs, and not on a terminal too short to spare the row', () => {
+  it('is not drawn when nothing runs, and takes no row of its own on a short terminal', () => {
     const idle = window();
     try {
       vi.advanceTimersByTime(300);
@@ -94,7 +94,9 @@ describe('the background terminals indicator (standard section 10)', () => {
     try {
       short.rl.setBackgroundWork({ terminals: 3 });
       vi.advanceTimersByTime(300);
-      expect(short.screen()).not.toContain('background terminal');
+      // It rides the status line (or the blank row over it): no row is added.
+      expect(short.screen()).toContain('3 background terminals running');
+      expect(short.screen()).not.toMatch(/\[9;1H[^\u001b]*background terminal/);
     } finally { short.rl.close(); }
   });
 });

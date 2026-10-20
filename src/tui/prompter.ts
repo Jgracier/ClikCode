@@ -234,6 +234,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   planEntries: readonly PlanEntry[] = [];
   /** The length of the answer when this turn's plan first appeared (settlePlan). */
   planStart: number | undefined;
+  /** The most rows the plan block has had this turn: it keeps that height (blank rows) so the chat does not move as steps change. */
+  planHold = 0;
   streamingBlocks = createStreamingBlockParser();
   /** Re-installs the key listener and raw mode after Ctrl+Z / `fg`. */
   resumeInput?: () => void;
