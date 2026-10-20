@@ -18,16 +18,36 @@ const FLUSH_WINDOWS_MS = 10_000;
 /** How long running agents get to commit their work when the worker must go. */
 const AGENT_WIND_DOWN_MS = 30_000;
 
+/** Per step (out-of-turn settle, vendor close, language servers) before shutdown moves on. */
+const STEP_MS = 15_000;
+/** The whole shutdown: past this it exits whatever is still pending. */
+export const SHUTDOWN_CEILING_MS = 90_000;
+
+/** Runs one shutdown step for at most `ms`: a step that throws or hangs is
+ * logged (lifecycle `worker.shutdown.stalled`, naming it) and shutdown goes on. */
+export async function boundedStep(step: string, work: () => Promise<unknown> | undefined, ms = STEP_MS): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  const stalled = new Promise<void>((resolve) => { timer = setTimeout(() => { lifecycle('worker.shutdown.stalled', { step, afterMs: ms }); resolve(); }, ms); timer.unref(); });
+  try { await Promise.race([Promise.resolve(work()).then(() => undefined, () => undefined), stalled]); } finally { clearTimeout(timer); }
+}
+
 export function createShutdown(ctx: WorkerContext) {
   const { observer, sessionId, token, hold, socketPath, connections } = ctx;
   /** Once: a second signal while the first shutdown is still recording
    * what it stopped must not exit underneath that write. */
   let shuttingDown: Promise<void> | undefined;
+  /** The step the shutdown is in, named when the ceiling is hit. */
+  let currentStep = 'start';
   const shutdown = (reason: string): Promise<void> => {
-    // Every step below is bounded (a vendor gets seconds, then is killed; a
-    // state write gives up after its lock wait). A step that throws must
-    // still end in an exit: a rejected shutdown never reached it.
-    shuttingDown ??= shutdownOnce(reason).catch(() => process.exit(0));
+    // Every step below is bounded (boundedStep, the wind-down and flush
+    // timers), and the whole shutdown has a ceiling: a step that hangs
+    // would otherwise leave shuttingDown set and every later signal doing
+    // nothing. A step that throws must still end in an exit too.
+    if (!shuttingDown) {
+      const ceiling = setTimeout(() => { lifecycle('worker.shutdown.stalled', { step: currentStep, afterMs: SHUTDOWN_CEILING_MS }); process.exit(0); }, SHUTDOWN_CEILING_MS);
+      ceiling.unref();
+      shuttingDown = shutdownOnce(reason).catch(() => process.exit(0));
+    }
     return shuttingDown;
   };
   /** The worker itself must go (not a replacement: that waits for agents to finish, worker-idle.ts):
@@ -47,7 +67,8 @@ export function createShutdown(ctx: WorkerContext) {
   const shutdownOnce = async (reason: string): Promise<void> => {
     lifecycle('worker.shutdown', { reason, turnRunning: ctx.turnRunning, clients: observer.attachedCount });
     // A message the vendor was saying on its own is kept, not lost with the worker.
-    await ctx.outOfTurn?.settle().catch(() => undefined);
+    currentStep = 'out-of-turn settle';
+    await boundedStep(currentStep, () => ctx.outOfTurn?.settle());
     // Background shells the agent tools started are spawned DETACHED on
     // everything but Windows, so they outlive this process rather than dying
     // with it. disposeSessionState is the only thing that kills them and had
@@ -58,15 +79,19 @@ export function createShutdown(ctx: WorkerContext) {
     //
     // Nothing is queued for the model about what this stops: killing
     // ClikCode leaves no turn behind and no text.
+    currentStep = 'agent wind-down';
     await windDownAgents(reason);
     disposeSessionState(stateDirectory(), sessionId, `ClikCode's worker for this conversation stopped (${reason})`);
     // Codex app-server and ACP children are spawned detached too, and were
     // orphaned the same way.
-    await closePersistentTransport().catch(() => undefined);
+    currentStep = 'vendor close';
+    await boundedStep(currentStep, () => closePersistentTransport());
     // The lsp tool's language servers live as long as this worker.
-    await shutdownLanguageServers().catch(() => undefined);
+    currentStep = 'language servers';
+    await boundedStep(currentStep, () => shutdownLanguageServers());
     // The tab this chat opened in the shared Chrome goes with it, so tabs do not pile up (Chrome and other chats' tabs stay).
     await Promise.race([closeComputerPage(stateDirectory()).catch(() => undefined), new Promise<void>((resolve) => { setTimeout(resolve, 3_000).unref(); })]);
+    currentStep = 'window flush';
     const flushed: Promise<void>[] = [];
     for (const connection of connections.keys()) {
       sendEvent(connection, { type: 'shutdown', reason });
@@ -84,6 +109,7 @@ export function createShutdown(ctx: WorkerContext) {
     // the turn's end, and showed it running until it was reopened.
     await Promise.race([Promise.all(flushed), new Promise<void>((resolve) => { setTimeout(resolve, FLUSH_WINDOWS_MS).unref(); })]);
     ctx.server.close();
+    currentStep = 'record cleanup';
     // Only what is still this worker's: the record and socket of a worker
     // that replaced it are that worker's to remove.
     observer.onAwaitingApproval = undefined;
