@@ -560,7 +560,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     const key = JSON.stringify([input.binary, input.cwd, input.environment ?? {}, threadKey]);
     // The global MCP servers go on the launch line (acp-mcp-servers.ts), read when a
     // server is started: like an ACP session's, they are fixed for that server's life.
-    const mcp = this.reusable(key) ? { args: [], env: {} } : codexMcpLaunch(await globalMcpServers('codex', input.mcpProfile));
+    const mcp = this.reusable(key) ? { args: [], env: {} } : codexMcpLaunch(await globalMcpServers('codex', input.mcpProfile), { ...process.env, ...input.environment });
     return this.liveFor(key, 'Codex app-server restarted', {
       binary: input.binary, argv: ['app-server', '--stdio', ...mcp.args], cwd: input.cwd, environment: { ...input.environment, ...mcp.env },
       peer: {

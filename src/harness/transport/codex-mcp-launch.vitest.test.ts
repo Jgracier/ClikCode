@@ -54,7 +54,10 @@ describe('the global MCP servers on the Codex app-server launch', () => {
     expect(argv.slice(0, 2)).toEqual(['app-server', '--stdio']);
     expect(argv).toContain('mcp_servers.docs.command="docs-mcp"');
     expect(argv).toContain('mcp_servers.docs.args=["--stdio"]');
-    expect(argv).toContain('mcp_servers.docs.env={DOCS_KEY="k"}');
+    // Its key is forwarded by name, not written on the command line.
+    expect(argv).toContain('mcp_servers.docs.env_vars=["DOCS_KEY"]');
+    expect(argv.join(' ')).not.toContain('DOCS_KEY="k"');
+    expect(env.DOCS_KEY).toBe('k');
     expect(argv).toContain('mcp_servers.linear.url="https://mcp.linear.app/mcp"');
     expect(argv.some((arg) => arg.startsWith('mcp_servers.shared.'))).toBe(false);
     const headers = argv.find((arg) => arg.startsWith('mcp_servers.linear.env_http_headers='))!;
