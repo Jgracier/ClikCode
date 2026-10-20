@@ -109,12 +109,15 @@ where the key goes and `{{slot}}` for anything the agent fills in:
 send_to: { to: "clikdeploy-secret",  with: { key: "SALAD_API_KEY" } }
 send_to: { to: "clikdeploy-compute", with: { provider: "GCP", field: "serviceAccountJson" } }
 send_to: { to: "clikdeploy-connector", with: { integration: "googlesheets", client_id: "1234-abc.apps.googleusercontent.com" } }
+send_to: { to: "clikdeploy-connection", with: { integration: "acme" } }
 send_to: [ ...several of those... ]
 ```
 
-Five ship as plain data (`clikdeploy-secret`, `clikdeploy-app-secret`,
-`clikdeploy-compute`, `clikdeploy-connector`, `github-secret`). You add your own with one line, and the agent
+Six ship as plain data (`clikdeploy-secret`, `clikdeploy-app-secret`,
+`clikdeploy-compute`, `clikdeploy-connector`, `clikdeploy-connection`, `github-secret`). ClikDeploy destinations send secret-bearing JSON on stdin, so the credential is absent from process arguments. You add your own with one line, and the agent
 can then use it by name; an unknown name is answered with the full list:
+
+After ClikDeploy records a full connector test, `clikcode computer proof <id>` reads ClikDeploy's current verdict and updates a local `connector-proof` queue task. ClikCode stores that verdict for work tracking; ClikDeploy alone decides whether the connector is proven and publishable.
 
 ```
 clikcode computer destination add my-vault --stdin "{{secret}}" -- vault kv put secret/{{path}} value=-

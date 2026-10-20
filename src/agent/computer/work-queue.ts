@@ -9,7 +9,7 @@ export type TaskStatus = typeof TASK_STATUSES[number];
 /** Why a person is needed, so the waiting list can be worked through by kind (all the captchas at once). */
 export const TASK_REASONS = ['captcha', 'sms', 'email', 'payment', 'identity', 'review', 'two-factor', 'other'] as const;
 export type TaskReason = typeof TASK_REASONS[number];
-export const TASK_KINDS = ['oauth-app', 'api-key', 'test-account', 'webhook', 'other'] as const;
+export const TASK_KINDS = ['oauth-app', 'api-key', 'test-account', 'webhook', 'connector-proof', 'other'] as const;
 export type TaskKind = typeof TASK_KINDS[number];
 
 export type Task = {

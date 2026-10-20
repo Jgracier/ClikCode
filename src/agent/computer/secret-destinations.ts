@@ -25,20 +25,20 @@ const JSON_ARGS = (fields: string): string => `{${fields}}`;
 
 export const DEFAULT_DESTINATIONS: Readonly<Record<string, Template>> = {
   'clikdeploy-secret': { about: 'a ClikDeploy platform secret (key)',
-    run: ['clikdeploy', 'tools', 'run', 'admin_platform_set_secret', '--args-json', JSON_ARGS('"key":"{{key}}","value":"{{secret|json}}"'), '--confirm'] },
+    run: ['clikdeploy', 'tools', 'run', 'admin_platform_set_secret', '--args-json', '-', '--confirm'], stdin: JSON_ARGS('"key":"{{key}}","value":"{{secret|json}}"') },
   'clikdeploy-app-secret': { about: 'a ClikDeploy app secret (app, key)',
-    run: ['clikdeploy', 'tools', 'run', 'set_secret', '--args-json', JSON_ARGS('"appId":"{{app}}","key":"{{key}}","value":"{{secret|json}}"'), '--confirm'] },
+    run: ['clikdeploy', 'tools', 'run', 'set_secret', '--args-json', '-', '--confirm'], stdin: JSON_ARGS('"appId":"{{app}}","key":"{{key}}","value":"{{secret|json}}"') },
   'clikdeploy-compute': { about: 'one field of a ClikDeploy compute provider card (provider, field)',
-    run: ['clikdeploy', 'tools', 'run', 'admin_compute_save_credentials', '--args-json', JSON_ARGS('"provider":"{{provider}}","credentials":{"{{field}}":"{{secret|json}}"}'), '--confirm'] },
+    run: ['clikdeploy', 'tools', 'run', 'admin_compute_save_credentials', '--args-json', '-', '--confirm'], stdin: JSON_ARGS('"provider":"{{provider}}","credentials":{"{{field}}":"{{secret|json}}"}') },
   // The secret is the OAuth client secret; the client id is not one and is a slot. Adding needs only the admin's
   // API key (the CLI's own sign-in): no code and no password, as long as the connector has no client stored.
   'clikdeploy-connector': { about: "a ClikDeploy connector's OAuth app (integration, client_id); the key is its client secret; client_id may be secret:<saved name>", vaultSlots: ['client_id'],
-    run: ['clikdeploy', 'tools', 'run', 'admin_platform_save_connector_credentials', '--args-json', JSON_ARGS('"integrationId":"{{integration}}","clientId":"{{client_id}}","clientSecret":"{{secret|json}}"'), '--confirm'] },
-  // A vendor key becomes a ClikDeploy connection for the signed-in account (the CLI's own sign-in): the same capability the product's
-  // Connect button uses, so the key is probed before it is stored and never passes through the agent. The connector must exist and be enabled.
-  'clikdeploy-connection': { about: "a ClikDeploy connector connection from an API key (integration)", run: ['clikdeploy', 'tools', 'run', 'connect_connector', '--args-json', JSON_ARGS('"integrationId":"{{integration}}","apiKey":"{{secret|json}}"'), '--confirm'] },
-  // The username is an identifier, not a secret, but a vendor may hide it from the browser like one (Mux's token id): it may be given as secret:<saved name> and is read from the vault without being shown.
-  'clikdeploy-connection-basic': { about: "a ClikDeploy connector connection from a username and the secret as its password (integration, username; username may be secret:<saved name>)", vaultSlots: ['username'], run: ['clikdeploy', 'tools', 'run', 'connect_connector', '--args-json', JSON_ARGS('"integrationId":"{{integration}}","username":"{{username}}","password":"{{secret|json}}"'), '--confirm'] },
+    run: ['clikdeploy', 'tools', 'run', 'admin_platform_save_connector_credentials', '--args-json', '-', '--confirm'], stdin: JSON_ARGS('"integrationId":"{{integration}}","clientId":"{{client_id}}","clientSecret":"{{secret|json}}"') },
+  'clikdeploy-connection': { about: 'connect an API key to a ClikDeploy connector (integration) for the signed-in account',
+    run: ['clikdeploy', 'tools', 'run', 'connect_connector', '--args-json', '-', '--confirm'], stdin: JSON_ARGS('"integrationId":"{{integration}}","apiKey":"{{secret|json}}"') },
+  // Some vendors expose a token id as the basic-auth username. It can be read from the vault at send time.
+  'clikdeploy-connection-basic': { about: 'connect a username and password to a ClikDeploy connector (integration, username; username may be secret:<saved name>)', vaultSlots: ['username'],
+    run: ['clikdeploy', 'tools', 'run', 'connect_connector', '--args-json', '-', '--confirm'], stdin: JSON_ARGS('"integrationId":"{{integration}}","username":"{{username}}","password":"{{secret|json}}"') },
   'github-secret': { about: 'a GitHub repository secret (repo, key)', run: ['gh', 'secret', 'set', '{{key}}', '--repo', '{{repo}}'], stdin: '{{secret}}' },
 };
 
