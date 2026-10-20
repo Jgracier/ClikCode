@@ -1,6 +1,5 @@
-/** What a failed vendor attempt does next: each recovery is a named step that
- * says whether the turn runs again ('retry') or leaves the choice to the next
- * one ('pass'); when none applies the turn moves to another account. */
+/** What a failed vendor attempt does next: a sign-in or a fresh thread retries
+ * on the same account (once each); anything else moves the turn to another account. */
 import { forgetNativeThread } from '../session/native-thread.js';
 import { diagnostic, lifecycle } from '../runtime/lifecycle-log.js';
 import { closeStandby, leavePersistentTransport, standbyFor } from './vendor-process.js';
@@ -12,7 +11,7 @@ import { continueAnswer, editAnswer, retell } from './vendor-thread-takeup.js';
 import { signInForTurn } from './vendor-sign-in.js';
 import type { AttemptRecord } from './vendor-attempt.js';
 import type { VendorObserver } from './vendor-observer.js';
-import type { AttemptState, VendorTurnContext } from './vendor-turn-context.js';
+import type { VendorTurnContext } from './vendor-turn-context.js';
 
 /** Whether an attempt's streamed text is only the account refusal it then
  * failed with ("You've hit your session limit · resets 3:50pm" streamed as
@@ -26,23 +25,6 @@ export function echoesRefusal(text: string, failure: unknown): boolean {
   return said.length > 0 && refused.length > 0 && (refused.includes(said) || said.includes(refused));
 }
 
-type Recovery = 'sign-in' | 'native-thread';
-
-/** The recoveries a failure could take, in the order they are tried. Pure: a
- * recovery may still decline (a sign-in that fails, a compatibility turn
- * already in use) and the next is tried. */
-export function recoveryCandidates(facts: {
-  failureKind: AccountFailureKind;
-  attempt: Pick<AttemptState, 'authRetried' | 'nativeThreadRetried'>;
-}): Recovery[] {
-  const { failureKind, attempt } = facts;
-  const order: Recovery[] = [];
-  if (failureKind === 'authentication-required' && !attempt.authRetried) order.push('sign-in');
-  if (failureKind === 'native-thread-invalid' && !attempt.nativeThreadRetried) order.push('native-thread');
-  return order;
-}
-
-type Decision = 'retry' | 'pass';
 type Failed = AttemptRecord & { failure: Error; failureKind: AccountFailureKind };
 
 /** Reactive counterpart to aiHarnessSelect's proactive login check: a
@@ -50,11 +32,11 @@ type Failed = AttemptRecord & { failure: Error; failureKind: AccountFailureKind 
  * all (harnessNeedsLogin returns false without one), so its first real
  * failure signal is the turn itself erroring out. The account is marked
  * signed out by accounts.after, if signing in here does not fix it. */
-async function retryAfterSignIn(ctx: VendorTurnContext, failed: Failed): Promise<Decision> {
-  if (!await signInForTurn(ctx, failed.environment)) return 'pass';
+async function retryAfterSignIn(ctx: VendorTurnContext, failed: Failed): Promise<boolean> {
+  if (!await signInForTurn(ctx, failed.environment)) return false;
   // The failed reply may already be on screen; the retry replaces it.
   editAnswer(ctx, 'clear');
-  return 'retry';
+  return true;
 }
 
 /** Confirmed live: switching this session to a different account of the same
@@ -63,20 +45,14 @@ async function retryAfterSignIn(ctx: VendorTurnContext, failed: Failed): Promise
  * thread id ends up invalid degrades to "start fresh with real context
  * replayed": session.messages is the durable, vendor-agnostic source of
  * truth, and nativeSessionId is a disposable optimization. */
-async function retryOnFreshThread(ctx: VendorTurnContext, failed: Failed): Promise<Decision> {
+async function retryOnFreshThread(ctx: VendorTurnContext, failed: Failed): Promise<void> {
   ctx.attempt.nativeThreadRetried = true;
   // The one notice of this recovery; the flag above makes it once per attempt.
   diagnostic('vendor.thread-not-resumed', `${ctx.harness.displayName} could not resume its thread; continuing on a new one with the conversation carried over`);
   await leavePersistentTransport(ctx.session.id);
   forgetNativeThread(ctx.session);
   ctx.turnText = await retell(ctx, ctx.askedText, 'clear', Boolean(ctx.session.pendingTurn?.outputStarted || failed.cliOutputStarted));
-  return 'retry';
 }
-
-const RECOVERIES: Record<Recovery, (ctx: VendorTurnContext, failed: Failed) => Promise<Decision>> = {
-  'sign-in': retryAfterSignIn,
-  'native-thread': retryOnFreshThread,
-};
 
 /** Moves the turn to the next account and sets up what its retry sends.
  * Where a switch spends its time, one line per switch (account-switch.ts):
@@ -160,9 +136,8 @@ export async function recoverFromFailure(ctx: VendorTurnContext, observer: Vendo
     message: (failure instanceof Error ? failure.message : String(failure)).slice(0, 8000),
   });
   const failed: Failed = { ...record, failure, failureKind };
-  const candidates = recoveryCandidates({ failureKind, attempt: ctx.attempt });
-  for (const recovery of candidates) {
-    if (await RECOVERIES[recovery](ctx, failed) === 'retry') return;
-  }
+  // signInForTurn marks the attempt's one sign-in (attempt.authRetried).
+  if (failureKind === 'authentication-required' && !ctx.attempt.authRetried && await retryAfterSignIn(ctx, failed)) return;
+  if (failureKind === 'native-thread-invalid' && !ctx.attempt.nativeThreadRetried) { await retryOnFreshThread(ctx, failed); return; }
   await switchAccount(ctx, failed);
 }
