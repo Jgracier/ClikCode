@@ -37,7 +37,8 @@ export const DEFAULT_DESTINATIONS: Readonly<Record<string, Template>> = {
   // A vendor key becomes a ClikDeploy connection for the signed-in account (the CLI's own sign-in): the same capability the product's
   // Connect button uses, so the key is probed before it is stored and never passes through the agent. The connector must exist and be enabled.
   'clikdeploy-connection': { about: "a ClikDeploy connector connection from an API key (integration)", run: ['clikdeploy', 'tools', 'run', 'connect_connector', '--args-json', JSON_ARGS('"integrationId":"{{integration}}","apiKey":"{{secret|json}}"'), '--confirm'] },
-  'clikdeploy-connection-basic': { about: "a ClikDeploy connector connection from a username and the secret as its password (integration, username)", run: ['clikdeploy', 'tools', 'run', 'connect_connector', '--args-json', JSON_ARGS('"integrationId":"{{integration}}","username":"{{username}}","password":"{{secret|json}}"'), '--confirm'] },
+  // The username is an identifier, not a secret, but a vendor may hide it from the browser like one (Mux's token id): it may be given as secret:<saved name> and is read from the vault without being shown.
+  'clikdeploy-connection-basic': { about: "a ClikDeploy connector connection from a username and the secret as its password (integration, username; username may be secret:<saved name>)", vaultSlots: ['username'], run: ['clikdeploy', 'tools', 'run', 'connect_connector', '--args-json', JSON_ARGS('"integrationId":"{{integration}}","username":"{{username}}","password":"{{secret|json}}"'), '--confirm'] },
   'github-secret': { about: 'a GitHub repository secret (repo, key)', run: ['gh', 'secret', 'set', '{{key}}', '--repo', '{{repo}}'], stdin: '{{secret}}' },
 };
 
