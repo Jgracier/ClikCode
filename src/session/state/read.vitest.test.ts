@@ -70,4 +70,25 @@ describe('harness state normalization', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('writes nothing itself: what it normalized is stored by the next write', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'clikcode-state-'));
+    process.env.CLIKCODE_HOME = root;
+    const now = new Date().toISOString();
+    await storedIndex(root, {
+      sessions: [{ id: 'local', route: 'local', accountId: null, provider: null, model: null, effort: 'medium', permissionMode: 'workspace-write', createdAt: now, updatedAt: now, status: 'active' }],
+    });
+    try {
+      const before = await readFile(join(root, 'index.json'), 'utf8');
+      const state = await readState();
+      expect(state.sessions[0]?.permissionMode).toBe('ask');
+      await readState({ transcripts: [] });
+      expect(await readFile(join(root, 'index.json'), 'utf8')).toBe(before);
+      await writeState(state);
+      const stored = JSON.parse(await readFile(join(root, 'index.json'), 'utf8')) as { sessions: Array<{ permissionMode: string; conversationId?: string }> };
+      expect(stored.sessions[0]).toMatchObject({ permissionMode: 'ask', conversationId: 'local' });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
