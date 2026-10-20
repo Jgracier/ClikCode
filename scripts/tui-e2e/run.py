@@ -490,6 +490,22 @@ SCENARIOS = {
         'snap_contains': {'menu': ['/model', '/sessions']},
         'snap_lacks': {'closed': ['/model']},
     },
+    # Said with no turn open (a background agent finishing): the words stream onto the screen as
+    # the vendor sends them, appear once, and are in the conversation after a restart.
+    'out-of-turn-streams-live': {
+        'turns': [{'blocks': ['The agent is running in the background.'],
+                   'after': [{'op': 'sleep', 'ms': 1500},
+                             {'op': 'say', 'ms': 400, 'text': 'Background agent finished: alpha bravo charlie delta echo foxtrot golf hotel india juliet.'}]}],
+        'steps': [
+            ('type', 'start the agent'), ('wait_for', 'The agent is running in the background.', 30),
+            ('wait_for', 'alpha bravo', 15), ('snap', 'streaming'),
+            ('wait_for', 'india juliet.', 15), ('settle', 3), ('snap', 'done'),
+            ('restart',), ('keys', '\x1b[D'), ('settle', 2), ('keys', '\r'), ('wait_for', 'india juliet.', 15), ('settle', 1),
+        ],
+        'watch': [],
+        'snap_lacks': {'streaming': ['india juliet.']},
+        'final_once': ['Background agent finished: alpha bravo charlie delta echo foxtrot golf hotel india juliet.'],
+    },
     # The board's small print. Empty, it says so. Deleting asks about the
     # chat by its preview (every new one is "Untitled chat"), offers no
     # filter on a two-row list, and says Esc closes -- not "exit", which it

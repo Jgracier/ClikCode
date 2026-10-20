@@ -215,6 +215,9 @@ export function createTurnRunner(ctx: WorkerContext) {
     // stopWaiting is the one event every client needs regardless of outcome
     // to know a `submit` it sent has actually finished -- broadcast in
     // `finally`, covering success, a caught failure, and cancellation alike.
+    // What the vendor was saying on its own is saved first: this turn's journal reads the conversation, and its
+    // live view takes the windows over from that one.
+    if (ctx.outOfTurn.active) await ctx.outOfTurn.settle();
     observer.startTurn(command.label ?? 'thinking', command.text);
     try {
       // A background turn's record still being saved: this turn's checkpoint

@@ -8,23 +8,48 @@ const { createOutOfTurnRelay, isLimitRefusal } = await import('./out-of-turn.js'
 const { BroadcastObserver } = await import('./broadcast-observer.js');
 
 describe('a vendor speaking with no turn open', () => {
-  it('is recorded in the conversation and told live to every attached window', async () => {
-    const observer = new BroadcastObserver();
+  const windows = (observer: InstanceType<typeof BroadcastObserver>): WorkerEvent[][] => {
     const seen: WorkerEvent[][] = [[], []];
     for (const events of seen) {
       observer.attach({ destroyed: false, writableLength: 0, write: (frame: string) => { events.push(JSON.parse(frame) as WorkerEvent); return true; } } as unknown as Socket);
     }
+    return seen;
+  };
+
+  it('streams each chunk to every window as it comes, before anything is saved, and saves the message once', async () => {
+    recorded.length = 0;
+    const observer = new BroadcastObserver();
+    const seen = windows(observer);
     const session = { id: 's1', messages: [{ role: 'assistant', content: 'The build finished.' }] };
-    const ctx = { sessionId: 's1', observer, io: { currentSessionAndAccount: async () => ({ session, account: 'work' }) } } as never;
-    createOutOfTurnRelay(ctx)({ kind: 'message', text: 'The build finished.', mode: 'append' });
-    await vi.waitFor(() => expect(seen[1]!.some((event) => event.type === 'out-of-turn')).toBe(true));
-    expect(recorded).toEqual([{ kind: 'message', text: 'The build finished.', mode: 'append' }]);
+    const ctx = { sessionId: 's1', observer, idle: { scheduleIdleExit: () => undefined }, io: { currentSessionAndAccount: async () => ({ session, account: 'work' }) } } as never;
+    const { relay, settle } = createOutOfTurnRelay(ctx);
+    relay({ kind: 'message', text: 'The build ', mode: 'append' });
+    relay({ kind: 'message', text: 'finished.', mode: 'append' });
+    // Shown at once, synchronously: nothing waits on the conversation being read or written.
+    expect(recorded).toEqual([]);
     for (const events of seen) {
-      expect(events.map((event) => event.type)).toEqual(['snapshot', 'out-of-turn']);
-      expect(events[0]).toMatchObject({ type: 'snapshot', session: { messages: [{ content: 'The build finished.' }] } });
-      expect(events[0]).not.toHaveProperty('live');
-      expect(events[1]).toEqual({ type: 'out-of-turn', kind: 'message', text: 'The build finished.', mode: 'append' });
+      expect(events.map((event) => event.type)).toEqual(['waiting-start', 'delta', 'delta']);
+      expect(events.filter((event) => event.type === 'delta').map((event) => (event as { text: string }).text).join('')).toBe('The build finished.');
     }
+    await settle();
+    expect(recorded).toEqual([{ kind: 'message', text: 'The build finished.', mode: 'replace' }]);
+    for (const events of seen) {
+      expect(events.map((event) => event.type)).toContain('waiting-stop');
+      expect(events.find((event) => event.type === 'snapshot')).toMatchObject({ session: { messages: [{ content: 'The build finished.' }] } });
+    }
+  });
+
+  it('saves on its own once the vendor goes quiet', async () => {
+    recorded.length = 0;
+    const observer = new BroadcastObserver();
+    const ctx = { sessionId: 's1', observer, idle: { scheduleIdleExit: () => undefined }, io: { currentSessionAndAccount: async () => ({ session: { id: 's1' }, account: 'work' }) } } as never;
+    vi.useFakeTimers();
+    try {
+      createOutOfTurnRelay(ctx).relay({ kind: 'message', text: 'Done.', mode: 'append' });
+      expect(recorded).toEqual([]);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(recorded).toEqual([{ kind: 'message', text: 'Done.', mode: 'replace' }]);
+    } finally { vi.useRealTimers(); }
   });
 });
 
