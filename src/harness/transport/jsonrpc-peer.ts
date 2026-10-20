@@ -29,8 +29,8 @@ const CLOSE_AFTER_EXIT_MS = 500;
 interface JsonRpcRequestOptions {
   /** No timeout when omitted: a prompt request legitimately runs for hours. */
   timeoutMs?: number;
-  /** Treat the timeout as an idle window: any inbound message restarts it.
-   * Used for history-replaying setup calls that stream while they work. */
+  /** Treat the timeout as an idle window: anything from the child (a message,
+   * output, stderr) restarts it. Setup calls stream while they work. */
   idleReset?: boolean;
   /** Told the id the request went out under, for a protocol-level cancel
    * (MCP's `notifications/cancelled` names the request it abandons). */
@@ -165,6 +165,7 @@ export class JsonRpcPeer {
     child.stdout?.on('data', (chunk: string | Buffer) => this.receive(String(chunk)));
     child.stderr?.on('data', (chunk: string | Buffer) => {
       this.stderrTail = `${this.stderrTail}${String(chunk)}`.slice(-NOISE_LIMIT);
+      this.stillAlive();
       const panic = panicMessage(this.stderrTail);
       if (panic === undefined || this.isClosed) return;
       // A Rust agent that panics keeps its process alive with nothing left to
@@ -221,7 +222,11 @@ export class JsonRpcPeer {
       if (options.timeoutMs !== undefined && options.timeoutMs > 0) {
         entry.timer = setTimeout(() => {
           if (!this.pending.delete(id)) return;
-          reject(Object.assign(new JsonRpcError(`${this.options.label} ${method} timed out after ${Math.round(options.timeoutMs! / 1000)}s`), { code: 'ERR_JSONRPC_TIMEOUT' }));
+          const seconds = Math.round(options.timeoutMs! / 1000);
+          const message = entry.idleReset
+            ? `${this.options.label} stalled at ${method}: nothing from it for ${seconds}s`
+            : `${this.options.label} ${method} timed out after ${seconds}s`;
+          reject(Object.assign(new JsonRpcError(message), { code: 'ERR_JSONRPC_TIMEOUT' }));
         }, options.timeoutMs);
       }
       this.pending.set(id, entry);
@@ -320,8 +325,15 @@ export class JsonRpcPeer {
     this.options.onClose?.(error);
   }
 
+  /** Anything from the child -- a message, a partial line, stderr -- is a sign
+   * of life: an idle-window request's clock starts again. */
+  private stillAlive(): void {
+    for (const entry of this.pending.values()) if (entry.idleReset) entry.timer?.refresh();
+  }
+
   private receive(chunk: string): void {
     if (this.isClosed) return;
+    this.stillAlive();
     // The vendor's first byte after the prompt went out (once per turn).
     markTurn('first-byte');
     for (const line of this.lines.push(chunk)) if (line.trim()) this.handleLine(line);
@@ -337,7 +349,6 @@ export class JsonRpcPeer {
       this.stdoutNoise = `${this.stdoutNoise}${line}\n`.slice(-NOISE_LIMIT);
       return;
     }
-    for (const entry of this.pending.values()) if (entry.idleReset) entry.timer?.refresh();
     const hasId = message.id !== undefined && message.id !== null;
     if (typeof message.method === 'string') {
       if (hasId) this.handleServerRequest(message.method, message.params ?? {}, message.id);
