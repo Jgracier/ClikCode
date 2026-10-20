@@ -39,10 +39,12 @@ export function resetSessionStoreCache(): void {
 }
 
 /** What a file is now, as one comparable string: a write of it (atomic, so a
- * new inode) or any change to it changes this. Undefined: no such file. */
+ * new inode; or in place, so a new mtime) changes this. Not the ctime: a
+ * second name given to the file (migration's hard link) changes that, and
+ * the file is the same. Undefined: no such file. */
 export async function fileIdentity(path: string): Promise<string | undefined> {
   const info = await stat(path).catch(() => undefined);
-  return info ? `${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}` : undefined;
+  return info ? `${info.ino}:${info.size}:${info.mtimeMs}` : undefined;
 }
 
 /** `<id>.json` parsed, or undefined (none, or damaged: then set aside as

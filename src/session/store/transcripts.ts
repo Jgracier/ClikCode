@@ -251,7 +251,11 @@ async function legacyIntake(id: string, log: ChatLog): Promise<LegacyIntake | un
   const intake: LegacyIntake = {
     add, steady,
     ...(turnChanged ? { pending: { turn: theirTurn } } : {}),
-    base: { file: identity, count: theirs.length, digest: messagesDigest(theirs), pending: legacy ? pendingDigest(theirTurn) : base.pending, at: log.messages.length + add.length },
+    // A file that went away keeps what was taken in of it: should that build
+    // write it again (its copy, plus anything new), only the new is taken in.
+    base: legacy
+      ? { file: identity, count: theirs.length, digest: messagesDigest(theirs), pending: pendingDigest(theirTurn), at: log.messages.length + add.length }
+      : { ...base, file: identity },
   };
   if (identity !== null && steady) intakes.set(log, { identity, intake });
   return intake;
