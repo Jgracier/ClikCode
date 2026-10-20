@@ -36,7 +36,7 @@ export function transcriptOf(session: HarnessSession): SessionTranscript {
  * the file (records.ts replaces it when the file changes), and resolving
  * returns the cached array while nothing up the chain changed -- so one stat
  * per hop decides, and a parent edited in place by anything is still seen.
- * Never mutated: readers clone. */
+ * Never mutated: readers get it frozen (readSessionTranscript). */
 const materialized = new WeakMap<SessionFile, { from: readonly TranscriptMessage[] | undefined; messages: TranscriptMessage[] }>();
 
 async function materializedMessages(file: SessionFile, seen: Set<string>, walk = { cycle: false }): Promise<TranscriptMessage[] | undefined> {
@@ -56,16 +56,29 @@ async function materializedMessages(file: SessionFile, seen: Set<string>, walk =
   return messages;
 }
 
-/** Reads one conversation's transcript with any parent reference resolved. The
- * result is a private copy the caller may mutate. */
+/** Frozen through and through, once: readers are handed the cached history
+ * itself rather than a copy of it (a 27 MB conversation is 100,000-odd
+ * objects), so a caller that changes it in place fails there instead of
+ * changing every later read. A frozen message is also safe to share as it is
+ * (state/merge.ts baselineList). */
+function deepFreeze(value: unknown): void {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return;
+  Object.freeze(value);
+  for (const item of Object.values(value)) deepFreeze(item);
+}
+
+/** Reads one conversation's transcript with any parent reference resolved.
+ * `messages` is the cached history, frozen: callers must not change it in
+ * place (replace the array instead). `pendingTurn` is the caller's own copy. */
 export async function readSessionTranscript(id: string): Promise<SessionTranscript> {
   const file = await loadSessionFile(id);
   if (!file) return {};
   const messages = await materializedMessages(file, new Set([id]));
-  return cloneData({
+  if (messages) deepFreeze(messages);
+  return {
     ...(messages !== undefined ? { messages } : {}),
-    ...(file.pendingTurn !== undefined ? { pendingTurn: file.pendingTurn } : {}),
-  });
+    ...(file.pendingTurn !== undefined ? { pendingTurn: cloneData(file.pendingTurn) } : {}),
+  };
 }
 
 function sameMessage(left: TranscriptMessage | undefined, right: TranscriptMessage | undefined): boolean {

@@ -323,3 +323,42 @@ describe('a conversation\'s transcript and the shared state lock', () => {
     expect(stored.messages?.at(-1)?.content).toBe('answered while the lock was held');
   });
 });
+
+describe('a history as read', () => {
+  it('is the cached copy itself, frozen, and a turn end copies only what it added', async () => {
+    root = await mkdtemp(join(tmpdir(), 'clikcode-write-'));
+    process.env.CLIKCODE_HOME = root;
+    const seed = await readState();
+    const now = new Date().toISOString();
+    seed.sessions.push({
+      id: 's', route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', permissionMode: 'bypass',
+      createdAt: now, updatedAt: now, status: 'active',
+      messages: Array.from({ length: 50 }, (_, index) => ({ role: index % 2 ? 'assistant' as const : 'user' as const, content: `message ${index}`, origin: { harness: 'h', route: 'local' } })),
+      pendingTurn: { prompt: 'go', response: 'so far', startedAt: now, updatedAt: now },
+    } as HarnessSession);
+    await writeState(seed);
+    const first = (await readState({ transcripts: ['s'] })).sessions.find((item) => item.id === 's')!;
+    const state = await readState({ transcripts: ['s'] });
+    const session = state.sessions.find((item) => item.id === 's')!;
+    // One cached history for every reader: not cloned per read, and not changeable in place.
+    expect(session.messages).toBe(first.messages);
+    expect(Object.isFrozen(session.messages)).toBe(true);
+    expect(Object.isFrozen(session.messages![3]!.origin)).toBe(true);
+    expect(() => { (session.messages![0] as { content: string }).content = 'x'; }).toThrow(TypeError);
+    // The running turn's journal is each reader's own.
+    session.pendingTurn!.response += ' and more';
+    expect(first.pendingTurn!.response).toBe('so far');
+    // The baseline shares the read history instead of copying it.
+    expect((state as BaselinedState)[STATE_BASELINE]!.sessions.get('s')!.transcript.messages).toBe(session.messages);
+    const read = session.messages!;
+    session.messages = [...read, { role: 'user', content: 'next' }, { role: 'assistant', content: 'answer' }];
+    delete session.pendingTurn;
+    await writeState(state);
+    const kept = (state as BaselinedState)[STATE_BASELINE]!.sessions.get('s')!.transcript.messages!;
+    expect(kept[10]).toBe(read[10]);
+    expect(kept.at(-1)).not.toBe(session.messages.at(-1));
+    resetSessionStoreCache();
+    const stored = (await readState({ transcripts: ['s'] })).sessions.find((item) => item.id === 's')!;
+    expect(stored.messages).toEqual(session.messages);
+  });
+});
