@@ -298,7 +298,7 @@ describe('a session worker waits for what it should', () => {
       const seen = await events();
       for (const event of ['process.start', 'worker.client.attach', 'worker.turn.start', 'worker.turn.end', 'worker.idle']) expect(seen).toContain(event);
       expect(seen.indexOf('worker.turn.start')).toBeLessThan(seen.indexOf('worker.turn.end'));
-    } finally { delete process.env.CLIKCODE_LIFECYCLE_LOG; }
+    } finally { process.env.CLIKCODE_LIFECYCLE_LOG = '0'; }
   }, 60_000);
 
   it('idle-exits even when its home was deleted under it (a test run ending)', async () => {

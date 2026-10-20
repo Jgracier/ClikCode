@@ -28,7 +28,7 @@ export { shortenLoginUrl } from './link-info.js';
 import { HYPERLINK_CLOSE, hyperlinkOpen } from '../../tui/render/hyperlinks.js';
 
 /** Show the exact authorization URL as both visible text and link target. */
-export function loginLinkLine(url: string, hyperlinked = Boolean(process.stdout.isTTY) && !process.env.CLIKCODE_NO_HYPERLINKS): string {
+export function loginLinkLine(url: string, hyperlinked = Boolean(process.stdout.isTTY)): string {
   return hyperlinked && /^https?:\/\//.test(url) && !/[\x00-\x1f\x7f]/.test(url)
     ? `${hyperlinkOpen(url)}${url}${HYPERLINK_CLOSE}`
     : url;

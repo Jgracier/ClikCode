@@ -15,7 +15,7 @@
  * It does not touch anything it did not make: vendor profiles, chat history,
  * and downloaded models are the user's. A sweep runs shortly after a worker
  * starts and every six hours; a marker keeps workers that start together from
- * all sweeping. CLIKCODE_STATE_SWEEP=0 turns it off. */
+ * all sweeping. */
 import { readdirSync, readlinkSync } from 'node:fs';
 import { lstat, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import { join, sep } from 'node:path';
@@ -121,7 +121,6 @@ export async function sweepState(options: SweepOptions = {}): Promise<{ ran: boo
 
 /** The sweep on its schedule. Returns what stops it. */
 export function startStateSweep(): () => void {
-  if (process.env.CLIKCODE_STATE_SWEEP === '0') return () => undefined;
   const run = (): void => {
     void sweepState().catch((error: unknown) => lifecycle('state.sweep.error', { message: error instanceof Error ? error.message : String(error) }));
   };
