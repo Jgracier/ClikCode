@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ioCandidate, ioDelta, ioNudge, ioPressure, ioStopNote, parseDiskstats, parseIoStat, startIoGuard, type Reading } from './io-guard.js';
+import { ioCandidate, ioDelta, ioGlobalNudge, ioNudge, ioPressure, ioStopNote, parseDiskstats, parseIoStat, startIoGuard, type Reading } from './io-guard.js';
 
 const MIB = 2 ** 20;
 const counters = (bytes: number) => new Map([['259:0', { bytes, operations: bytes / 4096 }]]);
@@ -27,6 +27,9 @@ describe('disk I/O guard', () => {
 
   it('warns without stopping when other work dominates the disk', () => {
     vi.useFakeTimers();
+    const home = mkdtempSync(join(tmpdir(), 'clikcode-io-guard-'));
+    const oldHome = process.env.CLIKCODE_HOME;
+    process.env.CLIKCODE_HOME = home;
     const notes: string[] = [];
     let index = 0;
     const readings = Array.from({ length: 8 }, (_, i) => sample(1_000 + i * 5_000, 25, i * 100 * MIB, i * 10 * MIB));
@@ -36,9 +39,42 @@ describe('disk I/O guard', () => {
     try {
       vi.advanceTimersByTime(40_000);
       expect(notes).toHaveLength(1);
-      expect(notes[0]).toContain('has not identified your command as the cause');
+      expect(notes[0]).toContain('has not identified a command in this conversation as the cause');
       expect(stop).not.toHaveBeenCalled();
-    } finally { close(); }
+    } finally {
+      close();
+      if (oldHome === undefined) delete process.env.CLIKCODE_HOME; else process.env.CLIKCODE_HOME = oldHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps an informational warning quiet through pressure dips and worker restarts', () => {
+    vi.useFakeTimers();
+    const home = mkdtempSync(join(tmpdir(), 'clikcode-io-guard-'));
+    const oldHome = process.env.CLIKCODE_HOME;
+    process.env.CLIKCODE_HOME = home;
+    const notes: string[] = [];
+    const times = [1_000, 6_000, 11_000, 16_000, 21_000, 26_000, 31_000];
+    const pressures = [6, 6, 1, 6, 6, 1, 6];
+    let index = 0;
+    const run = () => startIoGuard({ sessionId: 'bouncing', scopeDir: '/unused', labels: new Map(),
+      read: () => ({ ...sample(times[index]!, pressures[index]!, index++ * 100 * MIB, 0), commands: [] }),
+      deliver: (note) => notes.push(note) });
+    const first = run();
+    try {
+      vi.advanceTimersByTime(25_000);
+      first();
+      const second = run();
+      try { vi.advanceTimersByTime(10_000); } finally { second(); }
+      expect(notes).toHaveLength(1);
+      expect(notes[0]).toContain('continue the user\'s task');
+      expect(notes[0]).toContain('narrower run or fewer parallel jobs');
+      expect(notes[0]).not.toContain('Avoid starting');
+    } finally {
+      first();
+      if (oldHome === undefined) delete process.env.CLIKCODE_HOME; else process.env.CLIKCODE_HOME = oldHome;
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it('selects an owned issuer only when it dominates machine I/O', () => {
@@ -47,6 +83,8 @@ describe('disk I/O guard', () => {
     // 12 MiB/s is below the byte threshold but enough small I/Os to qualify.
     expect(owned?.machineShare).toBe(0.6);
     expect(ioNudge(owned!, 20)).toContain('npm test');
+    expect(ioNudge(owned!, 20)).toContain('narrow its targets');
+    expect(ioGlobalNudge(20)).toContain('informational');
     expect(ioStopNote(owned!, 20)).toContain('do not rerun');
     expect(ioCandidate(first, sample(6_000, 20, 100 * MIB, 10 * MIB))).toBeUndefined();
     expect(ioCandidate(first, sample(6_000, 20, 100 * MIB, 60 * MIB, '1:3'))).toBeUndefined();
