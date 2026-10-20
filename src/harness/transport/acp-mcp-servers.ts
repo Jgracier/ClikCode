@@ -109,16 +109,34 @@ const tomlKey = (key: string): string => (/^[A-Za-z0-9_-]+$/.test(key) ? key : J
  * through `env_http_headers`. The variable names hold SECRET, which Codex's
  * default shell environment policy leaves out of the commands it runs. Codex
  * has no legacy SSE transport and takes only names of letters, digits, `_` and
- * `-`: those servers are left out. */
-export function codexMcpLaunch(servers: readonly McpServerSpec[]): { args: string[]; env: Record<string, string> } {
+ * `-`: those servers are left out.
+ *
+ * A local server's environment is the same: a variable whose name says it is a secret
+ * (a key, a token, a password) is set in the app-server's own environment and named in
+ * `env_vars` (Codex forwards it to that server by name), so it is not on the command line
+ * either, where any `ps` reads it. Two cases stay in the `env` table instead: a name the
+ * app-server already inherits with another value (forwarding would change Codex's own
+ * environment), and a name another server needs with a different value. `inherited` is
+ * the environment the app-server is started with. */
+const SECRET_NAME = /KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH/i;
+export function codexMcpLaunch(servers: readonly McpServerSpec[], inherited: NodeJS.ProcessEnv = {}): { args: string[]; env: Record<string, string> } {
   const args: string[] = [];
   const env: Record<string, string> = {};
   for (const server of servers) {
     if (!/^[A-Za-z0-9_-]+$/.test(server.name)) continue;
     const prefix = `mcp_servers.${server.name}`;
     if (server.transport === 'stdio') {
-      const table = Object.entries(server.env).map(([key, value]) => `${tomlKey(key)}=${JSON.stringify(value)}`).join(',');
-      args.push('-c', `${prefix}.command=${JSON.stringify(server.command)}`, '-c', `${prefix}.args=${JSON.stringify(server.args)}`, ...(table ? ['-c', `${prefix}.env={${table}}`] : []));
+      const plain: string[] = [];
+      const forwarded: string[] = [];
+      for (const [key, value] of Object.entries(server.env)) {
+        const forwardable = SECRET_NAME.test(key) && /^[A-Za-z_][A-Za-z0-9_]*$/.test(key)
+          && (env[key] === undefined || env[key] === value) && (inherited[key] === undefined || inherited[key] === value);
+        if (forwardable) { env[key] = value; forwarded.push(JSON.stringify(key)); }
+        else plain.push(`${tomlKey(key)}=${JSON.stringify(value)}`);
+      }
+      args.push('-c', `${prefix}.command=${JSON.stringify(server.command)}`, '-c', `${prefix}.args=${JSON.stringify(server.args)}`,
+        ...(plain.length ? ['-c', `${prefix}.env={${plain.join(',')}}`] : []),
+        ...(forwarded.length ? ['-c', `${prefix}.env_vars=[${forwarded.join(',')}]`] : []));
       continue;
     }
     if (server.transport !== 'http') continue;

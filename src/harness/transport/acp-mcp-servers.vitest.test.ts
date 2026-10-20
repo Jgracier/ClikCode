@@ -94,6 +94,26 @@ describe('the global servers for Codex', () => {
     expect(launch.args.join(' ')).not.toContain('s3cret');
   });
 
+  it('keeps a local server\'s secret variables off the command line: forwarded by name, unless that would clash', () => {
+    const servers = [
+      { name: 'docs', transport: 'stdio', command: 'docs-mcp', args: [], env: { DOCS_API_KEY: 'k-1', DOCS_REGION: 'eu' } },
+      { name: 'other', transport: 'stdio', command: 'other-mcp', args: [], env: { DOCS_API_KEY: 'k-2', OTHER_TOKEN: 't-2' } },
+      { name: 'proxy', transport: 'stdio', command: 'proxy-mcp', args: [], env: { OPENAI_API_KEY: 'sk-mcp' } },
+    ] as const;
+    const launch = codexMcpLaunch(servers, { OPENAI_API_KEY: 'sk-codex-own' });
+    // docs: the secret is forwarded, the plain value stays a table entry.
+    expect(launch.args).toContain('mcp_servers.docs.env={DOCS_REGION="eu"}');
+    expect(launch.args).toContain('mcp_servers.docs.env_vars=["DOCS_API_KEY"]');
+    // other: DOCS_API_KEY has another value already forwarded, so it stays in its table; its own token is forwarded.
+    expect(launch.args).toContain('mcp_servers.other.env={DOCS_API_KEY="k-2"}');
+    expect(launch.args).toContain('mcp_servers.other.env_vars=["OTHER_TOKEN"]');
+    // proxy: Codex already runs with its own OPENAI_API_KEY; forwarding would replace it.
+    expect(launch.args).toContain('mcp_servers.proxy.env={OPENAI_API_KEY="sk-mcp"}');
+    expect(launch.env).toEqual({ DOCS_API_KEY: 'k-1', OTHER_TOKEN: 't-2' });
+    expect(launch.args.join(' ')).not.toContain('k-1');
+    expect(launch.args.join(' ')).not.toContain('t-2');
+  });
+
   it('hands Codex the recorded servers it does not already have, with a stored sign-in as the bearer', async () => {
     await inHome(async (state, home) => {
       const fs = await import('node:fs/promises');
