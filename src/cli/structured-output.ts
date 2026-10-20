@@ -1,5 +1,7 @@
-import { stringify } from 'yaml';
+import { lazyModule } from '../runtime/lazy-module.js';
 import { isJsonDefaultMode } from './output-mode.js';
+
+const yaml = lazyModule<typeof import('yaml')>('yaml');
 
 /**
  * A command's result, in the one shape for how it is being read.
@@ -16,5 +18,5 @@ export function emitResult(obj: unknown): void {
     process.stdout.write(`${JSON.stringify(obj)}\n`);
     return;
   }
-  process.stdout.write(`${stringify(obj, { lineWidth: 0 }).trimEnd()}\n`);
+  process.stdout.write(`${yaml().stringify(obj, { lineWidth: 0 }).trimEnd()}\n`);
 }
