@@ -46,6 +46,7 @@ function build(options: { sessionReadMs?: number; sessionFails?: boolean } = {})
     activeController: undefined, activeLiveInput: undefined, activeSubmissions: undefined, activeRestoreDraft: undefined,
     submitsInFlight: 0, pendingCancel: undefined, stopAnnounced: false, resumingTurn: false, retireWhenIdle: false,
     vendorBackground: { busy: false, settled: async () => undefined, saveSuperseded: async () => undefined, userTurnEnded: () => undefined },
+    outOfTurn: { relay: () => undefined, active: false, settle: async () => undefined },
     resumeWaiter: { pending: false, cancel: async () => undefined, check: async () => undefined },
     idle: { vendorUsed: () => undefined, scheduleIdleExit: () => undefined, retireBlocker: () => undefined },
     io: {

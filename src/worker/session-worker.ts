@@ -112,7 +112,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     turnRunning: false, activeQueuedTurnId: undefined, draining: false, stalledQueuedTurnId: undefined,
     idleTimer: undefined, activeController: undefined, activeLiveInput: undefined, activeSubmissions: undefined,
     activeRestoreDraft: undefined, submitsInFlight: 0, pendingCancel: undefined, stopAnnounced: false, resumingTurn: false, retireWhenIdle: false, recordWrite: Promise.resolve(),
-  } as Omit<WorkerContext, 'vendorBackground' | 'resumeWaiter' | 'io' | 'idle' | 'queue' | 'runTurn' | 'shutdown' | 'server'> as WorkerContext;
+  } as Omit<WorkerContext, 'vendorBackground' | 'outOfTurn' | 'resumeWaiter' | 'io' | 'idle' | 'queue' | 'runTurn' | 'shutdown' | 'server'> as WorkerContext;
   ctx.io = createWorkerIo(ctx);
 
   // --- Vendor background turns (persistent transports) -------------------
@@ -124,8 +124,10 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   ctx.vendorBackground = createVendorBackgroundRunner({
     sessionId, observer, userTurnRunning: () => ctx.turnRunning, changed: () => { ctx.idle.vendorUsed(); ctx.idle.scheduleIdleExit(); },
   });
-  setVendorBackgroundTurnHandler(sessionId, ctx.vendorBackground.handle);
-  setOutOfTurnHandler(sessionId, createOutOfTurnRelay(ctx));
+  ctx.outOfTurn = createOutOfTurnRelay(ctx);
+  // What the vendor was saying on its own is saved, and its live view ended, before its own turn takes the windows.
+  setVendorBackgroundTurnHandler(sessionId, (turn) => { void ctx.outOfTurn.settle().then(() => ctx.vendorBackground.handle(turn)); });
+  setOutOfTurnHandler(sessionId, ctx.outOfTurn.relay);
   // -------------------------------------------------------------------------
   ctx.idle = createIdleControl(ctx);
 

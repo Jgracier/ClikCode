@@ -1,5 +1,6 @@
 /** What one session worker's parts share, held in one object: the conversation's
  * identity, the turn and queue flags, the timers, and the parts themselves. */
+import type { OutOfTurn } from './out-of-turn.js';
 import type { Server, Socket } from 'node:net';
 import type Conf from 'conf';
 import type { LiveTurnInputBroker } from '../turn/live-input.js';
@@ -90,6 +91,8 @@ export interface WorkerContext {
 
   // The parts, assigned as they are built.
   vendorBackground: ReturnType<typeof createVendorBackgroundRunner>;
+  /** What the vendor says with no turn open, streamed live and saved once said (out-of-turn.ts). */
+  outOfTurn: OutOfTurn;
   resumeWaiter: ReturnType<typeof createResumeWaiter>;
   io: WorkerIo;
   idle: IdleControl;

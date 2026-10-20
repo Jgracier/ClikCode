@@ -367,7 +367,13 @@ if ((argv[0] === 'agent' && argv.includes('stdio')) || argv.includes('--acp')) {
     // task it left running ending ({ op: 'sleep' } and { op: 'background' }).
     for (const event of turn.after ?? []) {
       if (event.op === 'sleep') await sleep(event.ms);
-      else if (event.op === 'background') {
+      // Words with no prompt open: what Claude says when a background agent it started finishes.
+      else if (event.op === 'say') {
+        for (const piece of event.text.match(/\S+\s*/g) ?? []) {
+          await sleep(event.ms ?? 200);
+          update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: piece } });
+        }
+      } else if (event.op === 'background') {
         send({ method: '_claude/sdkMessage', params: { sessionId, message: { type: 'system', subtype: 'background_tasks_changed',
           tasks: (event.tasks ?? []).map((task, index) => ({ task_id: `bg${index}`, task_type: task.type, description: task.description ?? task.type })) } } });
       }

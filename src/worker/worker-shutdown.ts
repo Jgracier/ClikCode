@@ -46,6 +46,8 @@ export function createShutdown(ctx: WorkerContext) {
   };
   const shutdownOnce = async (reason: string): Promise<void> => {
     lifecycle('worker.shutdown', { reason, turnRunning: ctx.turnRunning, clients: observer.attachedCount });
+    // A message the vendor was saying on its own is kept, not lost with the worker.
+    await ctx.outOfTurn?.settle().catch(() => undefined);
     // Background shells the agent tools started are spawned DETACHED on
     // everything but Windows, so they outlive this process rather than dying
     // with it. disposeSessionState is the only thing that kills them and had
