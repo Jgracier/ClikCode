@@ -148,6 +148,14 @@ export async function runAgentTurn(input: {
     seededOk = true;
     // The Gateway refused this machine's sign-in before anything ran: sign in
     // (sign-in-for-turn.ts) and ask again, once, as a vendor turn does.
+    // Not the shared failover step (account-routing.ts accountAfterFailure), on purpose: that step
+    // moves a turn among state.accounts of one provider, and this route has none -- the Gateway is
+    // the one sign-in of this machine (attributed 'gateway'/'clikcode-local', no account record), so
+    // there it could only mark nothing and end "All accounts exhausted". The fix here is signing the
+    // machine in again, taking the request back out of the agent's memory and rebuilding the model
+    // client. Nor is the 'account-switch' stop below a failover: it is the user moving the
+    // conversation to an account between model steps (stepClientRefresher), which session-turn.ts
+    // follows by running the request there.
     let signInTried = false;
     let harnessTurn: Awaited<ReturnType<typeof runAgentSessionTurn>>;
     for (;;) {
