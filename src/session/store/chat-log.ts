@@ -17,7 +17,16 @@
  * closed) lands whole or not at all. A line without its `\n` is a write still
  * going on or one a crash cut short: it is not read, and the next append
  * starts on a fresh line so it can never join it. A complete line that does
- * not parse is skipped -- damage loses that record, never the chat. */
+ * not parse is skipped -- damage loses that record, never the chat.
+ *
+ * The streaming journal (a turn's answer so far, four times a second) is not
+ * a record here: appended, it would add the whole answer again at every step;
+ * overwritten in place at the log's tail, a crash mid-write can leave the
+ * old record's end behind the new one's start -- a line that may even parse.
+ * So it is `<id>.pending`, replaced whole by rename: a reader sees one step or
+ * the next. Not `<id>.turn`, the same journal for `<id>.json` (records.ts):
+ * builds that predate the log remove that file whenever they write
+ * `<id>.json` and lay it over their own copy of the chat. */
 
 import { randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';

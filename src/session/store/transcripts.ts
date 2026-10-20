@@ -70,8 +70,12 @@
  * -- O(what was added), never the history -- after anything another writer
  * appended meanwhile, without repeating what that writer already stored of
  * the same messages; the journal is recorded when the writer changed it.
- * Anything else (the writer rewrote history) is the three-way merge below,
- * and the file rewritten whole. A record that adds messages or ends the turn
+ * That is the three-way merge's "writer only appended" case (mergeTranscripts),
+ * computed from where the base is known to stand in the log (positions)
+ * instead of by comparing histories; anything else -- the writer rewrote
+ * history, or its base's place is not known -- goes through the merge
+ * itself, and is appended when the result extends the log, else the file is
+ * rewritten whole. A record that adds messages or ends the turn
  * is synced; a turn's start or a journal step is not (a crash loses at most
  * that step, never a message). */
 
@@ -91,7 +95,6 @@ import { withFileLock, type StateLockHeld } from './locks.js';
 import { sessionFilePath, sessionLegacyBackupPath, sessionLockPath, sessionLogPath } from './paths.js';
 import { continuesTurn, fileIdentity, giveLegacyChildrenTheirCopy, loadLegacyFile, readLegacyTranscript, removeLegacyFiles, type LegacyTranscript, type SessionFile } from './records.js';
 
-export type { TranscriptRef } from './records.js';
 
 /** The unbounded part of a conversation, as callers see it (always materialized). */
 export interface SessionTranscript {

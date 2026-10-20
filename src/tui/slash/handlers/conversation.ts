@@ -150,7 +150,7 @@ export const conversationHandlers = {
   },
   fork: async ({ state, session, words }) => {
     // `/fork @N [name]`: only through user message N and its answer. Stored
-    // as a reference into this conversation's history (TranscriptRef).
+    // as its own copy of that history (store/transcripts.ts: copy on fork).
     const at = forkPoint(words[0]);
     if (at !== undefined) words.shift();
     const messages = sessionTranscriptMessages(session);

@@ -6,7 +6,7 @@
  * re-reading them on a timer while a row spins: a turn starting or ending, or
  * a worker exiting, writes one of them.
  *
- * A streaming turn rewrites its session file several times a second, so
+ * A streaming turn rewrites its journal file several times a second, so
  * changes are coalesced: the first change in a quiet period is reported
  * after `debounceMs`, and never more often than once per `minIntervalMs`.
  *

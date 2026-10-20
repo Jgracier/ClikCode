@@ -20,8 +20,8 @@ import { HarnessSecrets, readSecretsFile, sameSecret, writeSecretsFile } from '.
  *
  * Callers legitimately hold one state object across a whole turn. Each
  * record is diffed against the snapshot the caller last agreed with:
- * untouched records are left alone on disk, a changed transcript rewrites
- * that one session file, and the index is rewritten only if its merged
+ * untouched records are left alone on disk, a changed transcript appends to
+ * that one conversation's log, and the index is rewritten only if its merged
  * content differs from what is already there. A streaming turn's 250ms
  * checkpoints do not come here at all: they use writeTranscriptCheckpoint,
  * which never touches the index. */
