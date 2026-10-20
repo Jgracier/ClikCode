@@ -15,7 +15,7 @@
  * Layout: ~/.local/share/clikcode/release/{dist,package.json,node_modules -> checkout's}, swapped
  * in whole by a rename, and ~/.local/bin/clikcode -> release/dist/index.js. */
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, symlinkSync, lstatSync, readlinkSync, unlinkSync } from 'node:fs';
+import { realpathSync, cpSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, symlinkSync, lstatSync, readlinkSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -51,7 +51,8 @@ mkdirSync(next, { recursive: true });
 cpSync(dist, join(next, 'dist'), { recursive: true });
 cpSync(join(repo, 'package.json'), join(next, 'package.json'));
 // The bundle leaves npm packages external: they resolve through the checkout's node_modules.
-symlinkSync(join(repo, 'node_modules'), join(next, 'node_modules'));
+// Its real path: run from a worktree whose node_modules is itself a link, the install must not point into the worktree.
+symlinkSync(realpathSync(join(repo, 'node_modules')), join(next, 'node_modules'));
 execFileSync(process.execPath, [join(next, 'dist', 'index.js'), '--version'], { stdio: 'ignore' });
 
 const old = join(share, `release.old.${process.pid}`);
