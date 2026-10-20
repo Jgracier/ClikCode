@@ -24,6 +24,24 @@ describe('terminalCellWidth', () => {
   });
 });
 
+describe('fullwidth and compatibility forms', () => {
+  it('are two cells, and their neighbours one', () => {
+    expect(terminalCellWidth('\uff21')).toBe(2); // fullwidth A
+    expect(terminalCellWidth('\uff01\uff10')).toBe(4); // ! and 0
+    expect(terminalCellWidth('\uff5e')).toBe(2);
+    expect(terminalCellWidth('\uff60')).toBe(2);
+    expect(terminalCellWidth('\uffe0\uffe6')).toBe(4); // cent sign .. won sign
+    expect(terminalCellWidth('\ufe30\ufe50')).toBe(4);
+    expect(terminalCellWidth('\ufe6b')).toBe(2);
+    // Halfwidth forms and the ASCII-adjacent block edges stay one cell.
+    expect(terminalCellWidth('\uff61')).toBe(1);
+    expect(terminalCellWidth('\uff71')).toBe(1);
+    expect(terminalCellWidth('\uffe8')).toBe(1);
+    expect(terminalCellWidth('\ufe20')).toBe(0);
+    expect(terminalCellWidth('a\uff21b')).toBe(4);
+  });
+});
+
 describe('a path cut to fit', () => {
   it('drops leading folders, keeping the last one whole', () => {
     expect(visiblePathTail('~/projects/clikcode', 40)).toBe('~/projects/clikcode');

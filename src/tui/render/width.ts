@@ -89,6 +89,8 @@ function isWideCodePoint(code: number): boolean {
   return code <= 0x115f || code === 0x2329 || code === 0x232a
     || (code >= 0x2e80 && code <= 0xa4cf) || (code >= 0xac00 && code <= 0xd7a3)
     || (code >= 0xf900 && code <= 0xfaff)
+    // CJK compatibility forms and small forms, fullwidth forms and signs.
+    || (code >= 0xfe30 && code <= 0xfe6f) || (code >= 0xff01 && code <= 0xff60) || (code >= 0xffe0 && code <= 0xffe6)
     // A regional-indicator pair renders as one two-cell flag.
     || (code >= 0x1f1e6 && code <= 0x1f1ff)
     || (code >= 0x1f300 && code <= 0x1faff) || (code >= 0x20000 && code <= 0x3fffd);
