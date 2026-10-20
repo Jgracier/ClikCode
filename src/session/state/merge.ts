@@ -209,6 +209,22 @@ export function baselineOf(state: HarnessState, previous?: StateBaselineData): S
   };
 }
 
+/** Take `stored` -- an account as it is on disk now -- as this copy's record of
+ * it, as if just read: in the working copy (the same object, so whoever holds
+ * it sees it) and in the baseline, so a later write does not store its fields
+ * as this copy's own change over a newer one. A record this copy changed and
+ * has not written yet is left as it is. */
+export function refreshAccount(state: HarnessState, stored: AiHarnessAccount): void {
+  const working = state.accounts.find((account) => account.id === stored.id);
+  if (!working || working === stored) return;
+  const baseline = (state as BaselinedState)[STATE_BASELINE];
+  const at = baseline ? baseline.accounts.findIndex((account) => account.id === stored.id) : -1;
+  if (baseline && at >= 0 && !sameData(baseline.accounts[at], working)) return;
+  for (const key of Object.keys(working)) delete (working as unknown as Record<string, unknown>)[key];
+  Object.assign(working, cloneData(stored));
+  if (baseline && at >= 0) baseline.accounts[at] = cloneData(stored);
+}
+
 export function rememberBaseline(state: HarnessState, baseline: StateBaselineData = baselineOf(state)): HarnessState {
   return hidden(state, STATE_BASELINE, baseline);
 }

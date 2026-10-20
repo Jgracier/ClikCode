@@ -209,13 +209,27 @@ describe('stored-usage account switch', () => {
   });
 
   it('still skips a spent window after a later turn; emptiness does not go stale', () => {
-    const spent = account('spent', {
-      usage: { at: earlier, label: 'weekly 0% left', windows: [{ name: 'weekly', usedPct: 100, resetsAt: later }] } as AiHarnessAccount['usage'],
+    const spentBy = (at: string) => account('spent', {
+      usage: { at, label: 'weekly 0% left', windows: [{ name: 'weekly', usedPct: 100, resetsAt: later }] } as AiHarnessAccount['usage'],
     });
     const invocations = [
       { id: 'later-turn', accountId: 'spent', provider: 'anthropic', at: new Date().toISOString(), totalTokens: 50, latencyMs: 1 },
     ];
-    expect(nextUsableFailoverAccount(state([spent], invocations), account('current'), () => true, new Map())).toBeUndefined();
+    // Read spent just now: not tried, a later turn on it notwithstanding.
+    expect(nextUsableFailoverAccount(state([spentBy(new Date().toISOString())], invocations), account('current'), () => true, new Map())).toBeUndefined();
+    // Read spent a day ago and not since: behind any account that can take the turn, and tried
+    // only when there is none (the vendor's answer decides).
+    expect(nextUsableFailoverAccount(state([spentBy(earlier), account('open')], invocations), account('current'), () => true, new Map())?.id).toBe('open');
+    expect(nextUsableFailoverAccount(state([spentBy(earlier)], invocations), account('current'), () => true, new Map())?.id).toBe('spent');
+  });
+
+  it('tries the longest-unconfirmed spent account first, and never one this turn already tried', () => {
+    const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+    const older = account('older', { quotaState: 'exhausted', quotaExhaustedAt: minutesAgo(30), quotaRetryAt: later });
+    const newer = account('newer', { quotaState: 'exhausted', quotaExhaustedAt: minutesAgo(5), quotaRetryAt: later });
+    const current = account('current');
+    expect(nextUsableFailoverAccount(state([current, newer, older]), current, () => true, new Map())?.id).toBe('older');
+    expect(nextUsableFailoverAccount(state([current, newer, older]), current, () => true, new Map([['older', Date.now()]]))?.id).toBe('newer');
   });
 
   it('lets a refused account back in once every spent window has reset', () => {
@@ -332,6 +346,38 @@ describe('the failover step both account backends take', () => {
       matchesBackend: () => true, persist: async () => undefined, current: () => current, adopt: () => undefined,
     });
     expect((await accounts.after(new Error("You've hit your usage limit. try again at 12:12 PM."), 'quota-exhausted')).id).toBe('other');
+  });
+
+  it('does not move to an account another process just marked spent, and stores nothing of that read as its own', async () => {
+    const disk = await readState({ transcripts: [] });
+    disk.accounts = disk.accounts.filter((item) => !['mine', 'marked', 'open'].includes(item.id));
+    disk.accounts.push(account('mine'), account('marked'), account('open', { label: 'open' }));
+    await writeState(disk);
+    // This turn's copy, read before another process marked `marked` spent and relabelled `open`.
+    const held = await readState({ transcripts: [] });
+    const other = await readState({ transcripts: [] });
+    const marked = other.accounts.find((item) => item.id === 'marked')!;
+    marked.quotaState = 'exhausted';
+    marked.quotaExhaustedAt = new Date().toISOString();
+    marked.quotaRetryAt = later;
+    other.accounts.find((item) => item.id === 'open')!.usage = { at: new Date().toISOString(), label: 'weekly 99% left', windows: [{ name: 'weekly', usedPct: 1, resetsAt: later }] } as AiHarnessAccount['usage'];
+    await writeState(other);
+    const mine = held.accounts.find((item) => item.id === 'mine')!;
+    const accounts = turnAccounts({
+      state: held, session: { id: 's', accountId: 'mine' } as HarnessSession,
+      matchesBackend: () => true, persist: () => writeState(held), current: () => mine, adopt: () => undefined,
+    });
+    const to = await accounts.after(new Error('quota reached'), 'quota-exhausted');
+    expect(to.id).toBe('open');
+    // The turn's own record, brought up to date.
+    expect(to).toBe(held.accounts.find((item) => item.id === 'open'));
+    expect(to.usage?.label).toBe('weekly 99% left');
+    // The held copy of `marked` was not touched, and a write from it keeps the other process's mark.
+    expect(held.accounts.find((item) => item.id === 'marked')!.quotaState).toBeUndefined();
+    await writeState(held);
+    const stored = (await readState({ transcripts: [] })).accounts;
+    expect(stored.find((item) => item.id === 'marked')!.quotaState).toBe('exhausted');
+    expect(stored.find((item) => item.id === 'mine')!.quotaState).toBe('exhausted');
   });
 
   it('stops on model capacity instead of trying the account that still has usage', async () => {
