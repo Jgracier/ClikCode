@@ -19,7 +19,7 @@ import { asRecord } from '../protocol/json-lines.js';
 import { countsOf, turnShareOf, turnStopReason, type TurnUsage } from '../protocol/turn-usage.js';
 import { BackgroundTurnChannel } from './background-turn.js';
 import { BackgroundWorkTracker } from './background-work.js';
-import { CANCEL_SETTLE_MS, PersistentSession, runOneTurn, turnFailure, type PersistentSessionOptions } from './persistent-session.js';
+import { CANCEL_SETTLE_MS, PersistentSession, runOneTurn, turnFailure, type PersistentSessionOptions, type VendorWorkSession } from './persistent-session.js';
 
 type JsonObject = Record<string, unknown>;
 
@@ -51,18 +51,12 @@ export interface CodexAppServerTurnInput extends HarnessTurnObserver {
 
 type CodexErrorKind = 'quota' | 'auth' | 'other';
 
-export interface CodexSession {
+export interface CodexSession extends VendorWorkSession {
   runTurn(input: CodexAppServerTurnInput): Promise<CodexAppServerTurnResult>;
   /** Steer the active turn. Rejects when no turn is running. */
   steer(text: string): Promise<void>;
   /** Interrupt the active turn; the child survives if it acknowledges in 2s. */
   cancel(): void;
-  close(): Promise<void>;
-  /** Work the vendor is still doing between turns (persistent-session.ts). */
-  backgroundWorkRunning(): Promise<boolean>;
-  /** The conversation is leaving this process with work still running in it (persistent-session.ts). */
-  retire(): Promise<boolean>;
-  readonly retiredWork: { agents: number; terminals: number };
   /** Compact the thread natively (`thread/compact/start`) and settle on the vendor's own
    * `thread/compacted`. False when no server holds that thread (nothing was done). */
   compactThread(threadId: string): Promise<boolean>;
@@ -344,9 +338,8 @@ interface BackgroundRun extends Stream {
 }
 
 class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, BackgroundRun> implements CodexSession {
-  /** Work still running on the vendor's side (background-work.ts): a tool item of our thread that
-   * has not completed (`item:<id>`), or a sub-agent thread that is active (`agent:<thread id>`).
-   * Its level is the background terminals last told (trackTerminals). */
+  /** Work still running on the vendor's side (background-work.ts): our thread's open tool items
+   * (`item:<id>`) and active sub-agent threads (`agent:<thread id>`); its level, the background terminals. */
   private readonly work = new BackgroundWorkTracker();
   /** Approval prompts open, by JSON-RPC request id: released by serverRequest/resolved. */
   private readonly openApprovals = new Map<string, () => void>();
@@ -840,10 +833,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
   private otherThread(target: Stream | undefined, method: string, params: JsonObject, threadId: string): void {
     const key = `agent:${threadId}`;
     if (method === 'turn/started') {
-      if (!this.work.has(key)) {
-        this.work.start({ id: key, kind: 'agent', label: 'subagent' });
-        target?.observer.onActivity?.({ kind: 'tool-start', label: 'subagent', agent: true, id: key });
-      }
+      if (this.work.start({ id: key, kind: 'agent', label: 'subagent' })) target?.observer.onActivity?.({ kind: 'tool-start', label: 'subagent', agent: true, id: key });
     } else if (method === 'turn/completed') {
       const known = this.work.end(key);
       if (known) {

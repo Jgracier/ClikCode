@@ -65,6 +65,16 @@ export interface PersistentSessionOptions {
   retiredCeilingMs?: number;
 }
 
+/** What a persistent session's owner reads of the work its vendor left running (vendor-process.ts). */
+export interface VendorWorkSession {
+  close(): Promise<void>;
+  /** Work the vendor is still doing between turns (backgroundWorkRunning). */
+  backgroundWorkRunning(): Promise<boolean>;
+  /** The conversation is leaving this process with work still running in it (retire). */
+  retire(): Promise<boolean>;
+  readonly retiredWork: { agents: number; terminals: number };
+}
+
 /** A retired process (retire): its group, and the work in it still running. */
 interface Retirement {
   root: number; peer: JsonRpcPeer; work: BackgroundWorkTracker<RunningWork>;
@@ -177,8 +187,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     const commands = await this.leftCommands();
     const agents = this.runningAgents();
     if (!commands.size && !agents.length) return false;
-    const work = new BackgroundWorkTracker<RunningWork>((ended) => this.retiredEnded(ended));
-    for (const item of [...commands.values(), ...agents]) work.start(item);
+    const work = new BackgroundWorkTracker<RunningWork>((ended) => this.retiredEnded(ended), [...commands.values(), ...agents]);
     const retirement: Retirement = { root, peer: this.live.peer, work };
     this.retirement = retirement;
     // Its work runs on even after the vendor itself exits (jsonrpc-peer.ts keepGroup).

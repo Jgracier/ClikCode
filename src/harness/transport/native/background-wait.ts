@@ -69,9 +69,8 @@ interface BackgroundWaitOptions {
 export function createBackgroundWait(options: BackgroundWaitOptions): BackgroundWait {
   /** Main-agent background tasks (background-work.ts). */
   const tasks = new BackgroundWorkTracker();
-  /** Agent task ids as the stream names them, kept apart from `tasks` (behavior as it was): an
-   * agent listed in `background_tasks_changed` counts as agent work even when its task is not ours
-   * to wait for, and only the end of a task of ours removes one. */
+  /** Agent task ids, apart from `tasks`: a listed agent is agent work even when its task is not
+   * ours to wait for, and only the end of a task of ours removes one. */
   const agents = new Set<string>();
   let hadAgent = false;
   const notOurs = new Set<string>();
