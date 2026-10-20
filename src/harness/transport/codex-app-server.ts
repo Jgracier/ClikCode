@@ -1,4 +1,4 @@
-import { codexBuiltInMcpArgs } from './acp-mcp-servers.js';
+import { codexMcpLaunch, globalMcpServers } from './acp-mcp-servers.js';
 import { askHarnessQuestion, CANCELLED, type HarnessQuestion, type HarnessQuestionRequest, type HarnessQuestionResult } from '../events/question.js';
 import { formToQuestions } from '../events/form-questions.js';
 import { activityOutput } from '../protocol/activity-events.js';
@@ -34,6 +34,8 @@ export interface CodexAppServerTurnInput extends HarnessTurnObserver {
   currentPermissionMode?: () => Promise<AiHarnessPermissionMode | undefined>;
   images?: readonly string[];
   environment?: Readonly<Record<string, string>>;
+  /** The account's isolated profile, where Codex reads its own MCP servers (acp-mcp-servers.ts). */
+  mcpProfile?: { env: string; path: string };
   signal?: AbortSignal;
   /** Open the thread (start the server, resume or start it) and stop
    *  before the turn: the next turn on this session starts at turn/start
@@ -551,12 +553,16 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     return this.pendingWork.delete(key);
   }
 
-  private ensureLive(input: CodexAppServerTurnInput, threadKey: string): LiveServer {
+  private async ensureLive(input: CodexAppServerTurnInput, threadKey: string): Promise<LiveServer> {
     // Config and extra thread params are fixed when a thread is opened: changing them
     // means a fresh server that resumes the thread. Permission mode is not here: it is
     // sent with every turn/start (codexTurnStartParams), so changing it restarts nothing.
-    return this.liveFor(JSON.stringify([input.binary, input.cwd, input.environment ?? {}, threadKey]), 'Codex app-server restarted', {
-      binary: input.binary, argv: ['app-server', '--stdio', ...codexBuiltInMcpArgs()], cwd: input.cwd, environment: input.environment,
+    const key = JSON.stringify([input.binary, input.cwd, input.environment ?? {}, threadKey]);
+    // The global MCP servers go on the launch line (acp-mcp-servers.ts), read when a
+    // server is started: like an ACP session's, they are fixed for that server's life.
+    const mcp = this.reusable(key) ? { args: [], env: {} } : codexMcpLaunch(await globalMcpServers('codex', input.mcpProfile));
+    return this.liveFor(key, 'Codex app-server restarted', {
+      binary: input.binary, argv: ['app-server', '--stdio', ...mcp.args], cwd: input.cwd, environment: { ...input.environment, ...mcp.env },
       peer: {
         label: 'Codex app-server',
         jsonrpcVersion: false,
@@ -570,7 +576,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     const { input } = turn;
     const settings = codexPermissionSettings(input.permissionMode);
     const overrides = { ...(input.configOverrides ? { config: input.configOverrides } : {}), ...(input.extraThreadParams ?? {}) };
-    const live = this.ensureLive(input, JSON.stringify(overrides));
+    const live = await this.ensureLive(input, JSON.stringify(overrides));
     const { peer } = live;
     // No clock on setup: see the ACP client. A dead app-server rejects these on exit.
     const setup: { timeoutMs?: number } = {};

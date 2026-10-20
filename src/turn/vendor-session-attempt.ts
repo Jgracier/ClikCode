@@ -65,7 +65,7 @@ export async function runVendorSessionAttempt(input: {
     : undefined;
   try {
     if (transport === 'codex-app-server') {
-      const launch = codexLaunchInput({ harness, session, model, effort, environment, live: run.liveSettings });
+      const launch = codexLaunchInput({ harness, account, session, model, effort, environment, live: run.liveSettings });
       // The user's own option going unapplied is theirs to know -- once per
       // chat and set of options, not as a note on every turn.
       const ignored = launch.unmapped.join(', ');
@@ -236,9 +236,9 @@ export function prepareAcpStandby(input: {
  * for a failover's standby alike (see acpLaunchInput). `unmapped`: the
  * chat's own options the app-server has no place for. */
 function codexLaunchInput(input: {
-  harness: AiLocalHarnessDefinition; session: HarnessSession; model: string | null; effort?: string; environment: Record<string, string>; live?: LiveSettings;
+  harness: AiLocalHarnessDefinition; account: AiHarnessAccount; session: HarnessSession; model: string | null; effort?: string; environment: Record<string, string>; live?: LiveSettings;
 }): { input: Omit<CodexAppServerTurnInput, 'prompt'>; unmapped: readonly string[] } {
-  const { harness, session, model, effort, environment, live } = input;
+  const { harness, account, session, model, effort, environment, live } = input;
   const overrides = appServerThreadOverrides(localHarnessCapabilityManifest(harness).options, session.harnessOptions);
   const configOverrides = { ...(overrides.configOverrides ? overrides.configOverrides : {}) };
   return {
@@ -249,6 +249,8 @@ function codexLaunchInput(input: {
       ...(live ? { currentPermissionMode: async () => live.permissionMode } : {}),
       ...(Object.keys(configOverrides).length ? { configOverrides } : {}),
       ...(overrides.extraThreadParams ? { extraThreadParams: overrides.extraThreadParams } : {}),
+      // The account's own config is what Codex reads: global servers it already has there are not sent again.
+      ...(account.nativeProfile ? { mcpProfile: { env: account.nativeProfile.env, path: account.nativeProfile.path } } : {}),
       // Codex reports its own quota on this connection during the turn,
       // which is the same figure codexUsageProbe otherwise spawns a whole
       // second app-server to ask for.
