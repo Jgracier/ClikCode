@@ -47,7 +47,7 @@ export function workingStatus(live: LiveTurn | undefined, asking: boolean, now: 
 /** How many of a running turn's earliest groups fold under "N earlier
  * steps": all but the newest `visible`, and never one still running. Five
  * agents started in parallel and two calls after them hid the first agents
- * -- and their spinners -- while they ran, where the terminal keeps every
+ * -- and their running rows -- while they ran, where the terminal keeps every
  * running row in view. */
 export function foldedGroupCount(groups: ReadonlyArray<{ rows: ReadonlyArray<Pick<Activity, 'kind'>> }>, visible: number): number {
   const firstRunning = groups.findIndex((group) => group.rows.some((row) => row.kind === 'tool-start'));
@@ -96,7 +96,7 @@ export function foldedSummary(activities: readonly Activity[]): string {
 }
 
 /** The live background work beside the status, in the same words as the CLI's
- * pinned band. The closing line still owns the turn's final counts. */
+ * status line. The closing line still owns the turn's final counts. */
 export function workingIndicator(live: Pick<LiveTurn, 'background'> | undefined): string | undefined {
   const work = live?.background;
   const agents = work?.agents ?? 0;

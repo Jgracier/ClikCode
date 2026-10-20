@@ -58,7 +58,10 @@ export function TurnFlow(props: {
       parts.push(<ThoughtRow key={`h${items[0]!.thought!.seq}`} thought={items[0]!.thought!} />);
       return;
     }
-    if (props.live && !closed) {
+    // A run that still has a call running stays rows even when prose follows
+    // it: the row that is running must not fold away under it, and must turn
+    // done where it stands.
+    if (props.live && (!closed || items.some((item) => item.activity?.kind === 'tool-start'))) {
       let batch: Activity[] = [];
       const flushBatch = (): void => {
         if (batch.length) parts.push(<ActivityRun key={`r${batch[0]!.key}`} activities={batch} workspace={props.workspace} />);
@@ -203,17 +206,20 @@ export function Plan({ plan, folded = false, running = false }: { plan: ChatMode
 /** Rows of one run of calls shown before the earlier ones fold away. */
 export const VISIBLE_ACTIVITIES = 6;
 
-/** The working line: what the turn is doing (turn-flow's rule: waiting on you,
- * the open call's verb, the reasoning's own heading, or how long it has
- * thought), in the colour of that work, a shimmer passing over it (CSS). A
- * running sub-agent keeps its own spinner on its chat row.
- * The thought being had is this line's tooltip, and opens under it. Ticks
- * on its own. */
 /** The working line's clock and token meter. The count steps on the page's
  * spinner clock, as the terminal's does on its tick, and never falls within a
- * turn (liveMeter); the clock beside it reads once a second. */
+ * turn (liveMeter); the clock beside it reads once a second and is its own
+ * component, so the spinner's steps redraw only the count. */
 export function WorkingDetail({ live, usage }: { live: LiveTurn; usage?: TurnUsage }): JSX.Element {
+  return <span class="muted" aria-hidden="true"><ElapsedClock live={live} /><TokenMeter live={live} usage={usage} /></span>;
+}
+
+function ElapsedClock({ live }: { live: LiveTurn }): JSX.Element {
   const now = useNow();
+  return <>{workingDetail(liveElapsedMs(live, now), undefined)}</>;
+}
+
+function TokenMeter({ live, usage }: { live: LiveTurn; usage?: TurnUsage }): JSX.Element | null {
   useSpinFrame();
   const shown = useRef({ turn: live.startedAt, tokens: 0 });
   // A new turn starts its count again.
@@ -221,9 +227,17 @@ export function WorkingDetail({ live, usage }: { live: LiveTurn; usage?: TurnUsa
   const thoughtChars = (live.thought?.text.length ?? 0) + (live.reasoning ?? []).reduce((sum, item) => sum + (item.text?.length ?? 0), 0);
   const meter = liveMeter({ shown: shown.current.tokens, usage, responseChars: live.text.length, thoughtChars });
   shown.current.tokens = meter.tokens;
-  return <span class="muted" aria-hidden="true">{workingDetail(liveElapsedMs(live, now), meter.label)}</span>;
+  return meter.label ? <>{` · ${meter.label}`}</> : null;
 }
 
+/** The working line: what the turn is doing (turn-flow's rule: waiting on you,
+ * the open call's verb, the reasoning's own heading, or how long it has
+ * thought), in the colour of that work, a shimmer passing over it (CSS). It is
+ * the turn's waiting animation: while a call or sub-agent runs, that row
+ * spins for itself (dots for a call, a ring for an agent) and this line keeps
+ * only its shimmer, so no two spinners step in lockstep. Background work, which
+ * has no row, is named beside it. The thought being had is this line's
+ * tooltip, and opens under it. */
 export function Working({ live, asking, usage, reconnecting: away = false }: { live: LiveTurn | undefined; asking: boolean; usage?: TurnUsage; reconnecting?: boolean }): JSX.Element {
   const now = useNow(!away);
   const [open, setOpen] = useState(false);
@@ -231,13 +245,16 @@ export function Working({ live, asking, usage, reconnecting: away = false }: { l
   // Not working: waiting on the user, or the bridge coming back. A still
   // mark, no shimmer, no clock.
   const held = asking || away;
+  // A running row spins for itself; this line then keeps a still mark.
+  const rowRunning = Boolean(live?.activities.some((activity) => activity.kind === 'tool-start'));
+  const background = workingIndicator(live);
   const thought = asking ? undefined : live?.thought?.text;
   return (
     <div class="working-wrap">
       <div class={`working status-${status.tone}`} role="status">
         {/* Waiting on the user is not working: a still dot, as the terminal
             shows it, and no clock -- it is stopped. */}
-        {held ? <span class={`spinner ${status.toneClass}`} aria-hidden="true">●</span>
+        {held || rowRunning ? <span class={`spinner ${status.toneClass}`} aria-hidden="true">●</span>
           : <Spinner tone={live && turnStalled(now - live.activeAt) ? 'tone-stopped' : status.toneClass} />}
         <span class={workingLabelClass(status.toneClass, held)} style={held ? undefined : shimmerStyle(status.label)} title={thought ? (thought.length > 600 ? `…${thought.slice(-600)}` : thought) : undefined}>{status.label}</span>
         {thought ? (
@@ -246,35 +263,9 @@ export function Working({ live, asking, usage, reconnecting: away = false }: { l
         ) : null}
         {/* Not announced: a clock changing every second would be read out. */}
         {live && !held ? <WorkingDetail live={live} usage={usage} /> : null}
-        {/* Counts live in the expandable band immediately above this row. */}
+        {background ? <span class="muted working-background">{background}</span> : null}
       </div>
       {open && thought ? <Reasoning text={thought} /> : null}
-    </div>
-  );
-}
-
-/** Running calls stay beside the status as they do in the terminal. Their
- * latest step is one line; a click shows the other live rows and background
- * counts. Settled calls return to their place in the transcript. */
-export function PinnedProgress({ live, workspace }: { live: LiveTurn; workspace?: string }): JSX.Element | null {
-  const [open, setOpen] = useState(false);
-  const running = live.activities.filter((activity) => activity.kind === 'tool-start');
-  const background = workingIndicator(live);
-  if (!running.length && !background) return null;
-  const latest = running.at(-1);
-  const label = latest?.child || latest?.label || background || '';
-  return (
-    <div class="pinned-progress">
-      <button type="button" class="pinned-progress-toggle" aria-expanded={open} onClick={() => setOpen(!open)}
-        title={open ? 'Hide live progress' : 'Show live progress'}>
-        {latest ? <Spinner tone="tone-accent" /> : <Icon name="pulse" />}
-        <span class="pinned-progress-label">{label}</span>
-        <span class="muted">{open ? 'Hide' : 'Show progress'}</span>
-      </button>
-      {open ? <div class="pinned-progress-detail">
-        {running.length ? <RunGroups groups={exploreRuns(running.slice(-8))} workspace={workspace} /> : null}
-        {background ? <div class="muted working-background">{background}</div> : null}
-      </div> : null}
     </div>
   );
 }
@@ -308,18 +299,19 @@ export function ActivityRun({ activities, workspace }: { activities: Activity[];
 
 /** The running turn as the terminal lays it out: each call (and each message
  * sent into the turn) where it happened in the answer, the paragraphs around
- * it, the newest still streaming; then the working line. */
+ * it, the newest still streaming; then the working line. A running call or
+ * sub-agent is a row in that flow like any finished one, with a running mark,
+ * and becomes done in place -- no separate band, so nothing moves. */
 export const LiveTurnView = memo(({ live, workspace, asking, plan, notes, turn, away, usage }: {
   live: LiveTurn | undefined; workspace?: string; asking: boolean; plan: ChatModel['plan']; notes: Note[]; turn?: number; away: boolean; usage?: TurnUsage;
 }): JSX.Element => (
   <div class="message assistant live" aria-busy="true">
     {live ? (
-      <TurnFlow text={live.text} activities={live.activities.filter((activity) => activity.kind !== 'tool-start')} thoughts={live.reasoning} steers={live.steers} workspace={workspace} live={{ startedAt: live.startedAt }}
+      <TurnFlow text={live.text} activities={live.activities} thoughts={live.reasoning} steers={live.steers} workspace={workspace} live={{ startedAt: live.startedAt }}
         {...(live.planAt ? { plan: { entries: plan, at: live.planAt } } : {})}
         {...(live.decisions?.length ? { decisions: live.decisions } : {})}
         {...(turn !== undefined ? { notes: notes.filter((note) => note.turn === turn) } : {})} />
     ) : null}
-    {live ? <PinnedProgress live={live} workspace={workspace} /> : null}
     <Working live={live} asking={asking} reconnecting={away} {...(usage ? { usage } : {})} />
   </div>
 ));
