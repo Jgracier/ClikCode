@@ -3,7 +3,7 @@ import chalk from 'chalk';
 import type { PaletteEntry } from '../../command-palette.js';
 import { terminalCellWidth, visibleSlice } from '../../render/width.js';
 import type { PickerOption } from '../../../harness/prompter.js';
-import { fitFooterForApproval } from '../../render/frame-budget.js';
+import { fitFooterForApproval, hasBandBlank } from '../../render/frame-budget.js';
 import { paletteRows as paletteBandRows } from '../../render/footer-rows.js';
 import type { PaletteLayout } from '../../option-picker.js';
 import { composerUsageLabel, paintTitleRule, paintUsageRule } from '../../render/waiting.js';
@@ -18,13 +18,13 @@ export type FooterInput = {
   bands: ReturnType<typeof frameBands>;
 };
 
-/** The footer's rows, where the composer starts in them, and an open list.
- * The list is not part of the footer: a footer that grows moves the composer, and the chat with it. */
+/** The footer's rows, where the composer starts in them, and the rows drawn over the chat above it (a notice, an open list).
+ * Neither is part of the footer: a footer that grows moves the composer, and the chat with it. */
 export function buildFooter(this: TerminalHarnessPrompter, input: FooterInput): { footer: string[]; composerStart: number; pickerRows: string[] } {
   const { inner, rowWidth, width, prompt, options, selected, palette, session, targetHeight, bands } = input;
   const {
-    noticeShown, noticeRows, waitingRows, paletteRows: paletteCapacity, indicatorRows, indicatorText, approvalRows,
-    thoughtRows, signInRows, planRows, panelRows, composerRows,
+    noticeShown, waitingRows, paletteRows: paletteCapacity, indicatorText, approvalRows,
+    thoughtRow, signInRows, planRows, panelRows, composerRows,
   } = bands;
   const meta = this.statusText(inner);
   const footer: string[] = [];
@@ -35,9 +35,9 @@ export function buildFooter(this: TerminalHarnessPrompter, input: FooterInput): 
   // The row count is the same on both sides of a turn's end -- the band's
   // blank and its status line become two blank rows -- so nothing under or
   // above the composer shifts when the status goes.
-  if (!this.turn) footer.push('', ...(targetHeight >= 5 && !approvalRows.length ? [''] : []));
-  footer.push(...noticeShown.slice(0, noticeRows).map((row) => `  ${chalk.yellow(row)}`));
-  const pickerRows: string[] = [];
+  if (!this.turn) footer.push('', ...(hasBandBlank(targetHeight) && !approvalRows.length ? [''] : []));
+  // Rows drawn over the chat, just above the footer: a notice, then an open list.
+  const pickerRows: string[] = noticeShown.map((row) => `  ${chalk.yellow(row)}`);
   if (paletteCapacity) {
     if (palette?.title) pickerRows.push(`  ${chalk.bold(visibleSlice(palette.title, Math.max(1, inner)))}`);
     pickerRows.push(...paletteBandRows(options as readonly PaletteEntry[], selected, paletteCapacity, width, {
@@ -46,19 +46,23 @@ export function buildFooter(this: TerminalHarnessPrompter, input: FooterInput): 
   }
   footer.push(...panelRows, ...planRows);
   const aboveApproval = footer.length;
-  const midRows = [...thoughtRows, ...(signInRows.length ? ['', ...signInRows] : [])];
+  const midRows = signInRows.length ? ['', ...signInRows] : [];
   footer.push(...approvalRows, ...midRows);
   // The generating band: a blank above the status where the height has the
-  // row for it. The status itself is always drawn while a turn runs.
-  const statusBlank = waitingRows >= 2 && this.turn ? '' : undefined;
-  const statusRow = this.turn ? `  ${visibleSlice(this.waitingLine(this.turn, Math.max(1, inner)), Math.max(1, inner))}` : undefined;
+  // row for it. The status itself is always drawn while a turn runs. The
+  // blank row is also where the newest words of the reasoning are drawn, and
+  // where the background-terminals count goes when the status line has no room
+  // for it: both come and go without the footer changing height.
+  const statusText = this.turn ? this.waitingLine(this.turn, Math.max(1, inner)) : undefined;
+  const indicatorLine = indicatorText !== undefined ? chalk.dim(` · ${indicatorText}`) : undefined;
+  const indicatorFits = statusText !== undefined && indicatorLine !== undefined
+    && terminalCellWidth(statusText) + terminalCellWidth(indicatorLine) <= Math.max(1, inner);
+  const statusRow = statusText !== undefined
+    ? `  ${indicatorFits ? `${statusText}${indicatorLine}` : visibleSlice(statusText, Math.max(1, inner))}` : undefined;
+  const upper = thoughtRow ?? (!indicatorFits && indicatorText !== undefined ? `  ${chalk.dim(visibleSlice(indicatorText, Math.max(1, inner)))}` : '');
+  const statusBlank = waitingRows >= 2 && this.turn ? upper : undefined;
   if (statusBlank !== undefined) footer.push(statusBlank);
   if (statusRow !== undefined) footer.push(statusRow);
-  // Background terminals the vendor runs: one dim row under the status,
-  // not drawn at zero, and the first row a short terminal gives up.
-  const indicatorRow = indicatorRows && indicatorText !== undefined
-    ? `  ${chalk.dim(visibleSlice(indicatorText, Math.max(1, inner)))}` : undefined;
-  if (indicatorRow !== undefined) footer.push(indicatorRow);
   // Usage lives on the upper composer border, mirroring the title on the
   // lower border. A spent window replaces the percentage with the reset
   // itself (`Resets 5:34PM`); a spent balance says `Out Of Credits`.
@@ -98,7 +102,6 @@ export function buildFooter(this: TerminalHarnessPrompter, input: FooterInput): 
   if (approvalRows.length && footer.length > targetHeight) {
     const fitted = fitFooterForApproval({
       above: footer.slice(0, aboveApproval), approval: approvalRows, mid: midRows, blank: statusBlank, status: statusRow,
-      indicator: indicatorRow,
       usageRule, composer: composerFooter, titleRule, meta: metaRow, height: targetHeight,
     });
     footer.splice(0, footer.length, ...fitted.rows);

@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { APPROVAL_MIN_ROWS, fitFooterForApproval, frameRowBudget } from './frame-budget';
 
 const budget = (over: Partial<Parameters<typeof frameRowBudget>[0]> = {}) =>
-  frameRowBudget({ targetHeight: 40, waiting: false, notice: 0, requestedPaletteCapacity: 0, ...over });
+  frameRowBudget({ targetHeight: 40, waiting: false, requestedPaletteCapacity: 0, ...over });
 
 describe('how many rows each band of a frame gets', () => {
   it('reserves TWO rows for the generating band, never one', () => {
@@ -29,20 +29,10 @@ describe('how many rows each band of a frame gets', () => {
 
   it('never returns a negative budget, however short the viewport', () => {
     for (const targetHeight of [0, 1, 2, 3, 4]) {
-      const result = budget({ targetHeight, waiting: true, notice: 1, requestedPaletteCapacity: 8 });
+      const result = budget({ targetHeight, waiting: true, requestedPaletteCapacity: 8 });
       expect(result.optionalRows, `height ${targetHeight}`).toBeGreaterThanOrEqual(0);
       expect(result.paletteRows, `height ${targetHeight}`).toBeGreaterThanOrEqual(0);
     }
-  });
-
-  it('gives a wrapped notice its rows, as many as are left', () => {
-    expect(budget({ notice: 3 }).noticeRows).toBe(3);
-    expect(budget({ notice: 3, targetHeight: 6 }).noticeRows).toBe(2);
-  });
-
-  it('gives the notice a row only when one is left to give', () => {
-    expect(budget({ notice: 1 }).noticeRows).toBe(1);
-    expect(budget({ notice: 1, targetHeight: 4 }).noticeRows).toBe(0);
   });
 
   it('gives the palette nothing rather than a border with no options in it', () => {
@@ -55,12 +45,6 @@ describe('how many rows each band of a frame gets', () => {
 
   it('never gives the palette more than it asked for', () => {
     expect(budget({ requestedPaletteCapacity: 5, targetHeight: 80 }).paletteRows).toBe(5);
-  });
-
-  it('takes the bands in order, so the palette sees what the notice left', () => {
-    const withNotice = budget({ notice: 1, requestedPaletteCapacity: 40, targetHeight: 10 });
-    const without = budget({ notice: false, requestedPaletteCapacity: 40, targetHeight: 10 });
-    expect(withNotice.paletteRows).toBe(without.paletteRows - 1);
   });
 });
 
@@ -97,34 +81,17 @@ describe('a footer that must hold an approval', () => {
   });
 });
 
-describe('the background-terminals indicator row', () => {
-  const withIndicator = (over: Partial<Parameters<typeof frameRowBudget>[0]> = {}) =>
-    frameRowBudget({ targetHeight: 40, waiting: true, notice: 0, requestedPaletteCapacity: 0, indicator: true, ...over });
-
-  it('is one row under the status, only while a turn runs and a terminal does', () => {
-    expect(withIndicator().indicatorRows).toBe(1);
-    expect(withIndicator().optionalRows).toBe(40 - 4 - 2 - 1);
-    expect(withIndicator({ indicator: false }).indicatorRows).toBe(0);
-    expect(withIndicator({ waiting: false }).indicatorRows).toBe(0);
+describe('rows that come and go take no row of the footer', () => {
+  it('leaves the same room for the composer with or without a turn-time notice or indicator', () => {
+    // They are drawn inside rows that exist (the blank over the status, the
+    // chat above the footer), so the budget has no input for them.
+    expect(Object.keys(frameRowBudget({ targetHeight: 40, waiting: true, requestedPaletteCapacity: 0 })).sort())
+      .toEqual(['optionalRows', 'paletteRows', 'waitingRows']);
   });
 
-  it('is dropped before the approval block, the notice or the spinner on a short terminal', () => {
-    // Left over after the fixed footer and the status, the indicator needs
-    // more than an approval's own minimum (APPROVAL_MIN_ROWS) to stay.
-    const rows = (targetHeight: number) => withIndicator({ targetHeight });
-    expect(rows(9).indicatorRows).toBe(1);
-    expect(rows(8).indicatorRows).toBe(0);
-    for (const height of [3, 4, 5, 6, 7, 8]) {
-      expect(rows(height).waitingRows, `status at ${height}`).toBeGreaterThanOrEqual(1);
-      expect(rows(height).optionalRows, `approval room at ${height}`).toBe(budget({ waiting: true, targetHeight: height }).optionalRows);
-    }
-  });
-
-  it('stays while a list is open, because the list covers chat and takes no footer row', () => {
-    const open = withIndicator({ targetHeight: 40, requestedPaletteCapacity: 8 });
-    const closed = withIndicator({ targetHeight: 40 });
-    expect(open.indicatorRows).toBe(1);
-    expect(open.indicatorRows).toBe(closed.indicatorRows);
+  it('keeps a list from taking footer rows too', () => {
+    const open = frameRowBudget({ targetHeight: 40, waiting: true, requestedPaletteCapacity: 8 });
+    const closed = frameRowBudget({ targetHeight: 40, waiting: true, requestedPaletteCapacity: 0 });
     expect(open.waitingRows).toBe(closed.waitingRows);
     expect(open.paletteRows).toBe(8);
   });
