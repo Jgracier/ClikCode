@@ -19,6 +19,7 @@ import { createStreamState } from '../harness/events/adapters.js';
 import { reportStructuredLine } from '../harness/events/structured.js';
 import { captureNativeHarness } from '../harness/transport/native/command.js';
 import { captureNativeHarnessTurn, createTurnInput, createTurnRelease } from '../harness/transport/native/turn.js';
+import { nativeMcpConfig } from '../harness/transport/native/mcp-config.js';
 import { createBackgroundWait, streamJsonUserMessage } from '../harness/transport/native/background-wait.js';
 import { createPiRpcTurn, piRpcPrompt, piRpcSteer } from '../harness/transport/native/pi-rpc.js';
 import { settleHeldVendor } from './turn-steps.js';
@@ -169,6 +170,9 @@ export async function runVendorCliAttempt(input: {
   }
   const stdinText = turn.promptInput !== 'stdin' ? undefined
     : piRpc ? await piRpcPrompt(turnText, images) : heldInput ? streamJsonUserMessage(turnText) : turnText;
+  // The global MCP servers, for a harness that takes them per run (Amp's --mcp-config).
+  const mcp = await nativeMcpConfig(harness);
+  argv.unshift(...mcp.argv);
   try {
     turnOutput = await captureNativeHarnessTurn(harness, argv, environment, {
     cwd: session.workspace,
@@ -240,6 +244,8 @@ export async function runVendorCliAttempt(input: {
     },
     });
   } finally {
+    // Read by the vendor at its start; the process is gone (or held, past its start).
+    void mcp.dispose();
     // Whatever ended the process, input to it has nowhere to go now --
     // unless it was handed on still running.
     if (background && !held) {

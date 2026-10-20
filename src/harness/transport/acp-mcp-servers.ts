@@ -64,6 +64,10 @@ async function withSignIn(stateDir: string, spec: HttpSpec): Promise<HttpSpec | 
  * its sign-in. Never throws: MCP must never be the reason a turn did not run. */
 export async function globalMcpServers(
   command: string, profile?: { env: string; path: string }, home: string = homedir(),
+  /** False for a harness that takes its servers only in a file or on its command line:
+   * a server that needs ClikCode's stored sign-in is left out, since its token is never
+   * written anywhere new. */
+  signIns = true,
 ): Promise<McpServerSpec[]> {
   try {
     const stateDir = stateDirectory();
@@ -74,7 +78,11 @@ export async function globalMcpServers(
     if (!servers.length) return [];
     const { names } = await vendorMcpServerNames(command, home, profile);
     const wanted = servers.filter((server) => !names.has(server.name));
-    const resolved = await Promise.all(wanted.map((server) => server.transport === 'stdio' ? server : withSignIn(stateDir, server).catch(() => undefined)));
+    const resolved = await Promise.all(wanted.map(async (server) => {
+      if (server.transport === 'stdio') return server;
+      if (!signIns) return await mcpOAuthState(stateDir, server) === 'none' ? server : undefined;
+      return withSignIn(stateDir, server);
+    }).map((pending) => pending.catch(() => undefined)));
     return resolved.filter((server): server is McpServerSpec => server !== undefined);
   } catch {
     return [];
