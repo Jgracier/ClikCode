@@ -12,6 +12,7 @@
 import { readFile } from 'node:fs/promises';
 import { asRecord, type JsonRecord } from '../protocol/json-lines.js';
 import { redactSecrets } from '../../agent/security.js';
+import { BackgroundWorkTracker } from './background-work.js';
 
 /** How much of an agent's result goes to the conversation. */
 const RESULT_CHARS = 4_000;
@@ -81,14 +82,15 @@ export function endsWithLimitRefusal(reply: string): string | undefined {
   return REPLY_REFUSAL.exec(reply.trimEnd())?.[0];
 }
 
-interface Task { type: string; description: string; prompt?: string; background: boolean }
+/** A task as tracked: foreground ones too, whose end is still read. */
+type Task = RunningWork & { background: boolean };
 
 /** Claude Code's background tasks, from its `task_started` / `task_notification` frames (the same
  * frames as stream-json lines or claude-agent-acp's raw `_claude/sdkMessage`). Only work that runs
  * on past its call: a backgrounded agent or shell, not a foreground one whose call result is its end,
  * and not a sub-agent's own tasks (its agent answers for them). */
 export class VendorTasks {
-  private readonly tasks = new Map<string, Task>();
+  private readonly tasks = new BackgroundWorkTracker<Task>();
   /** Agent prompts from the launching calls, by call id: a `task_started` may not carry one. */
   private readonly prompts = new Map<string, string>();
   private readonly byCall = new Map<string, string>();
@@ -112,17 +114,22 @@ export class VendorTasks {
       const type = String(record.task_type ?? (typeof record.subagent_type === 'string' ? 'local_agent' : ''));
       if (record.owned_by_subagent === true || (type !== 'local_agent' && type !== 'local_bash')) return undefined;
       const prompt = typeof record.prompt === 'string' && record.prompt ? record.prompt : call ? this.prompts.get(call) : undefined;
-      this.tasks.set(id, { type, description: String(record.description ?? ''), ...(prompt ? { prompt } : {}), background: record.is_backgrounded !== false });
+      const agent = type === 'local_agent';
+      // A task started again is the task as it is now.
+      this.tasks.end(id);
+      this.tasks.start({
+        id, kind: agent ? 'agent' : 'command', label: String(record.description ?? '') || (agent ? 'background agent' : 'background command'),
+        ...(prompt ? { prompt } : {}), background: record.is_backgrounded !== false,
+      });
       if (call) this.byCall.set(call, id);
       return undefined;
     }
     if (record.subtype !== 'task_notification') return undefined;
-    const task = this.tasks.get(id);
+    const task = this.tasks.end(id);
     if (!task) return undefined;
-    this.tasks.delete(id);
     for (const [key, value] of this.byCall) if (value === id) this.byCall.delete(key);
     return {
-      work: this.work(id, task),
+      work: work(task),
       status: String(record.status ?? 'completed'),
       summary: typeof record.summary === 'string' ? record.summary : '',
       ...(typeof record.output_file === 'string' && record.output_file ? { outputFile: record.output_file } : {}),
@@ -131,15 +138,11 @@ export class VendorTasks {
 
   /** Backgrounded work still running. */
   running(): RunningWork[] {
-    return [...this.tasks].filter(([, task]) => task.background).map(([id, task]) => this.work(id, task));
+    return this.tasks.running().filter((task) => task.background).map(work);
   }
 
   clear(): void { this.tasks.clear(); this.byCall.clear(); }
-
-  private work(id: string, task: Task): RunningWork {
-    return {
-      id, kind: task.type === 'local_agent' ? 'agent' : 'command', label: task.description || (task.type === 'local_agent' ? 'background agent' : 'background command'),
-      ...(task.prompt ? { prompt: task.prompt } : {}),
-    };
-  }
 }
+
+/** A task as the conversation is told it. */
+const work = ({ background: _background, ...task }: Task): RunningWork => task;
