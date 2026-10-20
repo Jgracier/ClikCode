@@ -90,6 +90,8 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   computer.command('queue').description('The vendor set-up queue (OAuth apps, API keys, test accounts): list it, filter with --status/--reason, record with --set <status> --vendor <name>')
     .option('--status <status>', 'Only this status').option('--reason <reason>', 'Only tasks waiting for this reason').option('--set <status>', 'Record a status for --vendor').option('--vendor <name>').option('--kind <kind>').option('--note <text>').option('--owner <email>').option('--import-ledger <file>', 'Load a vendor ledger JSON ({vendor: {ids, status, note}})')
     .action(async (options: { status?: string; reason?: string; set?: string; vendor?: string; kind?: string; note?: string; owner?: string; importLedger?: string }) => (await import('../commands/computer.js')).computerQueue(options));
+  computer.command('proof <id>').description('Read ClikDeploy’s current connector proof verdict and sync the local work queue')
+    .action(async (id: string) => (await import('../commands/computer.js')).computerConnectorProof(id));
   computer.command('secrets').description('List the names of saved secrets, or delete one (values are never shown)')
     .option('--delete <name>', 'Delete this secret').option('--backfill', 'Record a vendor (and --owner) on secrets saved before records existed').option('--owner <email>', 'With --backfill: the account these belong to')
     .action(async (options: { delete?: string; backfill?: boolean; owner?: string }) => (await import('../commands/computer.js')).computerSecrets(options.delete, options.backfill ? { ...(options.owner ? { owner: options.owner } : {}) } : undefined));
