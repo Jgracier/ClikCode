@@ -30,6 +30,7 @@ import { startResourceGuard } from './resource-guard.js';
 import { createCommandSweep } from './command-groups.js';
 import { useConversationTmp } from './conversation-tmp.js';
 import { startDiskWatch } from './disk-watch.js';
+import { startIoGuard } from './io-guard.js';
 import { startIdleServices } from './idle-services.js';
 import { startStateSweep } from './state-sweep.js';
 import { startStuckWatchdog } from './stuck-watchdog.js';
@@ -168,6 +169,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       ...(placement?.divided ? { sliceDir: placement.sliceDir, remembered: { scopeDir: placement.scopeDir, labels: commands!.labels } } : {}),
       deliver: deliverNote,
     });
+    if (commands && placement?.scopeDir) startIoGuard({ sessionId, scopeDir: placement.scopeDir, labels: commands.labels, deliver: deliverNote });
     startDiskWatch({ sessionId, paths: [stateDirectory(), session.workspace], deliver: deliverNote });
     if (placement?.divided) startIdleServices({ sessionId, sliceDir: placement.sliceDir, deliver: deliverNote });
   }
