@@ -341,7 +341,7 @@ export async function transcriptIdentity(id: string): Promise<string | undefined
 // ---------------------------------------------------------------------------
 
 /** Test hook: called at each step of a migration; throwing there is a failure (or crash) at that step. */
-export const MIGRATION_FAULTS: { at?: (step: 'read' | 'write' | 'sync' | 'verify' | 'backup' | 'rename') => void } = {};
+export const MIGRATION_FAULTS: { at?: (step: 'read' | 'write' | 'sync' | 'verify' | 'backup' | 'rename' | 'placed') => void } = {};
 
 async function syncDirectory(directory: string): Promise<void> {
   if (process.platform === 'win32') return;
@@ -419,6 +419,7 @@ async function migrate(id: string): Promise<ChatLog | undefined> {
   } finally {
     if (!placed) await unlink(temporary).catch(() => undefined);
   }
+  fault('placed');
   await syncDirectory(dirname(path));
   const log = await loadChatLog(id);
   if (!log) throw new Error(`the history of conversation ${id} vanished as it was moved`);
