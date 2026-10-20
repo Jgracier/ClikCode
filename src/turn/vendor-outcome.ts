@@ -44,7 +44,8 @@ export async function settleAttempt(ctx: VendorTurnContext, observer: VendorObse
     result = { ...result, isError: true, errorMessage: replyError.notice, ...(replyError.statusCode !== undefined ? { statusCode: replyError.statusCode } : {}) };
     record.result = result;
   }
-  if (result.isError) await settleHeldVendor(session.id, prompter, signal);
+  // A failed attempt does not wait on its account's agents: on a spent account they may never end.
+  if (result.isError) await settleHeldVendor(session.id, prompter, signal, { wait: false, from: { harness: harness.command, accountId: ctx.account.id } });
   if (!session.nativeSessionId && result.nativeSessionId) { session.nativeSessionId = result.nativeSessionId; session.nativeThreadAccountId = ctx.account.id; }
   if (!result.isError && !session.nativeSessionPreallocated) await adoptListedNativeId(harness, session, environment);
   if (session.nativeSessionId) observer.keepTransport(record.transport);

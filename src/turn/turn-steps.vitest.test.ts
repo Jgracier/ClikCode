@@ -2,13 +2,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 
 const held = vi.hoisted(() => ({
-  has: vi.fn(), wait: vi.fn(async () => undefined), release: vi.fn(async () => undefined),
+  has: vi.fn(), wait: vi.fn(async (..._args: unknown[]) => true), release: vi.fn(async () => undefined), stop: vi.fn(async () => undefined),
+  reported: vi.fn(),
 }));
 vi.mock('../harness/transport/native/held-vendor.js', () => ({
-  hasHeldVendorProcess: held.has, waitForHeldVendorSubagents: held.wait, releaseHeldVendorProcess: held.release,
+  hasHeldVendorProcess: held.has, waitForHeldVendorSubagents: held.wait, releaseHeldVendorProcess: held.release, stopHeldVendorProcess: held.stop,
 }));
+vi.mock('./vendor-process.js', () => ({ reportEndedWork: held.reported }));
 
-import { setPlanMode, settleHeldVendor, unfinishedUsageRecorder } from './turn-steps.js';
+import { HELD_AGENTS_WAIT_MS, setPlanMode, settleHeldVendor, unfinishedUsageRecorder } from './turn-steps.js';
 
 describe('unfinishedUsageRecorder', () => {
   const base = { sessionId: 's', accountId: 'a', provider: 'p', model: 'm', startedAt: Date.now() };
@@ -56,7 +58,7 @@ describe('setPlanMode', () => {
 });
 
 describe('settleHeldVendor', () => {
-  beforeEach(() => { held.has.mockReset(); held.wait.mockClear(); held.release.mockClear(); });
+  beforeEach(() => { held.has.mockReset(); held.wait.mockClear(); held.release.mockClear(); held.stop.mockClear(); held.reported.mockClear(); });
   it('does nothing when no vendor is held', async () => {
     held.has.mockReturnValue(false);
     const prompter = { phase: vi.fn() };
@@ -67,11 +69,32 @@ describe('settleHeldVendor', () => {
   it('waits for its subagents, then releases it, saying so', async () => {
     held.has.mockReturnValue(true);
     const order: string[] = [];
-    held.wait.mockImplementation(async () => { order.push('wait'); });
+    held.wait.mockImplementation(async () => { order.push('wait'); return true; });
     held.release.mockImplementation(async () => { order.push('release'); });
     const prompter = { phase: vi.fn() };
     await settleHeldVendor('s', prompter as never);
     expect(prompter.phase).toHaveBeenCalledWith('waiting for running work');
     expect(order).toEqual(['wait', 'release']);
+    expect(held.stop).not.toHaveBeenCalled();
+    expect(held.reported).not.toHaveBeenCalled();
+  });
+  it('waits at most the ceiling, then stops it and tells its agents cut off', async () => {
+    held.has.mockReturnValue(true);
+    held.wait.mockResolvedValueOnce(false);
+    await settleHeldVendor('s', undefined, undefined, { from: { harness: 'claude' } });
+    expect(held.wait).toHaveBeenCalledWith('s', undefined, HELD_AGENTS_WAIT_MS);
+    expect(held.release).not.toHaveBeenCalled();
+    expect(held.stop).toHaveBeenCalledWith('s');
+    expect(held.reported).toHaveBeenCalledWith('s', [expect.objectContaining({ kind: 'agent', outcome: 'cut-off' })], { harness: 'claude' });
+  });
+  it('does not wait at all after a failed attempt', async () => {
+    held.has.mockReturnValue(true);
+    held.wait.mockResolvedValueOnce(false);
+    const prompter = { phase: vi.fn() };
+    await settleHeldVendor('s', prompter as never, undefined, { wait: false });
+    expect(held.wait).toHaveBeenCalledWith('s', undefined, 0);
+    expect(prompter.phase).not.toHaveBeenCalled();
+    expect(held.stop).toHaveBeenCalled();
+    expect(held.reported.mock.calls[0]![1][0].tail).toMatch(/failed/);
   });
 });
