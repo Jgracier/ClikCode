@@ -120,9 +120,12 @@ describe('the background-terminals indicator row', () => {
     }
   });
 
-  it('never takes a row the palette was given', () => {
-    const result = withIndicator({ targetHeight: 12, requestedPaletteCapacity: 8 });
-    expect(result.paletteRows + result.indicatorRows + result.noticeRows).toBeLessThanOrEqual(result.optionalRows + result.paletteRows + result.indicatorRows + result.noticeRows);
-    expect(result.optionalRows).toBeGreaterThanOrEqual(0);
+  it('stays while a list is open, because the list covers chat and takes no footer row', () => {
+    const open = withIndicator({ targetHeight: 40, requestedPaletteCapacity: 8 });
+    const closed = withIndicator({ targetHeight: 40 });
+    expect(open.indicatorRows).toBe(1);
+    expect(open.indicatorRows).toBe(closed.indicatorRows);
+    expect(open.waitingRows).toBe(closed.waitingRows);
+    expect(open.paletteRows).toBe(8);
   });
 });

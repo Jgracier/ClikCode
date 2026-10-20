@@ -1683,6 +1683,25 @@ SCENARIOS = {
         'steps': [('keys', '/c'), ('settle', 1), ('snap', 'c'), ('keys', 'o'), ('settle', 1), ('snap', 'co')],
         'watch': [], 'snap_contains': {'c': ['❯ /c'], 'co': ['❯ /co']}, 'snap_lacks': {'c': ['❯ /account'], 'co': ['❯ /account']},
     },
+    # A provider list covers the chat above the composer. The composer, the
+    # info line and the chat above the list stay on their rows, and closing
+    # the list does not blank the screen while the choice is applied.
+    'provider-list-keeps-the-composer': {
+        'cols': 80, 'rows': 36,
+        'turns': [{'blocks': ['Hello there, all good.']}],
+        'steps': [
+            ('type', 'check the ledger'), ('wait_for', 'Hello there, all good.', 40), ('settle', 1.5), ('snap', 'closed'),
+            ('type', '/provider'), ('wait_for', 'Choose a provider', 25), ('settle', 0.6), ('snap', 'open'),
+            ('keys', '\x1b'), ('settle', 1.2), ('snap', 'back'),
+        ],
+        'watch': [],
+        'snap_same_row': [
+            ('open', 'Grok Build  •'), ('back', 'Grok Build  •'),
+            ('back', 'Hello there, all good.'),
+        ],
+        'snap_contains': {'open': ['\n  › ', 'Choose a provider'], 'closed': ['\n  › ', 'Hello there, all good.'], 'back': ['\n  › ']},
+        'snap_lacks': {'back': ['Choose a provider']},
+    },
     # Effort moved to High in its row, then Tab → "Make default for every
     # harness": the value saved is the one shown (it saved the value Settings
     # opened with), and Settings stays open on the row (it closed).

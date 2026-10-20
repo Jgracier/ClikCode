@@ -78,7 +78,10 @@ export function frameBands(p: TerminalHarnessPrompter, input: BandInput) {
   // Never omitted (standard section 8): short of room the block degrades to
   // its question and keys (one row at the least), and the rows around it
   // give way first (fitFooterForApproval, below).
-  const approvalSpace = Math.max(APPROVAL_MIN_ROWS, optionalRows - paletteRows);
+  // The list is not in this budget. It is drawn over the chat, above the footer
+  // (frame-flush.ts), so giving it rows here would shrink the composer, the
+  // plan or an approval, and the composer would move when the list opened.
+  const approvalSpace = Math.max(APPROVAL_MIN_ROWS, optionalRows);
   const approvalRows = approval?.question
     ? questionBlockRows(approval.question.state, width, Math.min(approvalSpace, Math.max(6, Math.floor(targetHeight * 0.6))), {
       guarded: Date.now() - approval.shownAt < APPROVAL_GUARD_MS, needsFocus: approval.needsFocus, focused: approval.focused,
@@ -91,7 +94,7 @@ export function frameBands(p: TerminalHarnessPrompter, input: BandInput) {
       canTell: Boolean(p.turn?.submit), telling: Boolean(p.tellingInstead),
     })
     : [];
-  let liveBandBudget = Math.max(0, optionalRows - paletteRows - approvalRows.length - 2);
+  let liveBandBudget = Math.max(0, optionalRows - approvalRows.length - 2);
   // The newest words of the reasoning: it is read as it is written.
   const thought = p.thought ? reasoningBody(p.thought.text) : '';
   const thoughtRows = p.turn && thought && !approval && liveBandBudget > 0
@@ -108,17 +111,17 @@ export function frameBands(p: TerminalHarnessPrompter, input: BandInput) {
   const signInRows = signInWrapped.length <= liveBandBudget ? signInWrapped : signInWrapped.slice(0, Math.max(0, liveBandBudget));
   liveBandBudget -= signInRows.length;
   const planGlyph = p.turn && !p.reducedMotion ? waitingSpinnerGlyph(p.waitingFrame) : undefined;
-  const planRows = paletteRows || p.selecting ? [] : planBlockRows(p.planEntries, width, liveBandBudget, planGlyph);
+  const planRows = planBlockRows(p.planEntries, width, liveBandBudget, planGlyph);
   liveBandBudget -= planRows.length;
   let panelRows: string[] = [];
   const panel = p.panelState;
-  if (panel && !paletteRows && !approval && !p.selecting && liveBandBudget >= 3) {
+  if (panel && !approval && liveBandBudget >= 3) {
     const shown = panelBandRows(panel, inner, liveBandBudget, targetHeight);
     Object.assign(panel, { page: shown.page, total: shown.total, offset: shown.offset });
     panelRows = shown.rows;
   }
   const maxComposerRows = Math.max(
-    1, targetHeight - 3 - paletteRows - noticeRows - waitingRows - indicatorRows - approvalRows.length - thoughtRows.length - signInRows.length - planRows.length - panelRows.length,
+    1, targetHeight - 3 - noticeRows - waitingRows - indicatorRows - approvalRows.length - thoughtRows.length - signInRows.length - planRows.length - panelRows.length,
   );
   const composerRows = composerLayout(composer, cursor, composerWidth, maxComposerRows);
   return {

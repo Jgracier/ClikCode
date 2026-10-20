@@ -159,6 +159,21 @@ export function flushAlternateFrame(
     rows = rows.map((row, index) => (index < transcriptRows ? highlightWords(row, words) : row));
   }
   if (this.selection) rows = highlightSelectionAt(rows, rows.map((_, row) => this.lineAtScreenRow(row)), this.selection);
+  // An open list covers the rows just above the footer and nothing else. The footer stays, so the
+  // composer stays, and every chat row above the list stays on its screen row. Covering them by
+  // growing the footer moved both.
+  const overlay = this.pickerOverlay;
+  const chrome = this.chromeRows;
+  if (overlay.length && chrome > 0 && shownLive.length >= chrome) {
+    const limit = Math.max(1, (output.columns || 100) - 1);
+    const clip = (row: string): string => closeOpenHyperlink(visibleSlice(sanitizeTerminalText(row, { keepSgr: true, singleLine: true }), limit));
+    const footerStart = rows.length - chrome;
+    const at = footerStart - overlay.length;
+    for (const [offset, row] of overlay.entries()) {
+      const index = at + offset;
+      if (index >= 0 && index < footerStart) rows[index] = clip(row);
+    }
+  }
   // Only what changed. A keystroke changes the composer's row and nothing
   // else, and rewriting the whole screen for it costs kilobytes per key on
   // a phone link -- long enough for a client's own prediction popup to
