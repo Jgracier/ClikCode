@@ -12,6 +12,8 @@ import type { TurnRunOptions } from './session-turn.js';
 import type { NativeTurnResult } from '../harness/protocol/turn-result.js';
 import { nativeTurnResult } from '../harness/protocol/turn-result.js';
 import { parseJsonRecord } from '../harness/protocol/json-lines.js';
+import { ProcessCost } from '../harness/protocol/running-cost.js';
+import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import { aiderHistoryNotice, aiderHistoryReply, aiderStdoutReply } from '../harness/events/aider.js';
 import { createStreamState } from '../harness/events/adapters.js';
 import { reportStructuredLine } from '../harness/events/structured.js';
@@ -104,6 +106,11 @@ export async function runVendorCliAttempt(input: {
    * arrived. Only a harness whose output is one document at exit (or text)
    * leaves it to be read afterwards. */
   let sawLineUsage = false;
+  // A Claude-shaped `result` carries its PROCESS's running cost, not the turn's
+  // (running-cost.ts); a resumed Claude conversation may have restored the
+  // cost it had reached. Every other reading is the turn's own and untouched.
+  const processCost = harness.parser === 'claude-stream-json' ? new ProcessCost(harness.command === 'claude' && !createdHere) : undefined;
+  const turnCost = (usage: TurnUsage): TurnUsage => processCost && usage.costUsd !== undefined ? { ...usage, costUsd: processCost.note(usage.costUsd) } : usage;
   // A stream-json stdin stays open while the vendor has background work
   // running, so the turn it starts when that work finishes reaches this
   // conversation instead of being killed at exit (background-wait.ts).
@@ -186,6 +193,7 @@ export async function runVendorCliAttempt(input: {
       // itself.
       const outcome = reportStructuredLine(harness, lineText, {
         ...sharedObserver,
+        onUsage: (usage) => sharedObserver.onUsage?.(turnCost(usage)),
         onResponseDelta: (text, mode) => {
           onOutputStart();
           sharedObserver.onResponseDelta?.(text, mode ?? 'append');
@@ -265,6 +273,6 @@ export async function runVendorCliAttempt(input: {
     cliResult = { ...cliResult, text: reply };
   }
   if (!cliResult.isError) confirmNativeSession();
-  if (!sawLineUsage && cliResult.usage) sharedObserver.onUsage?.(cliResult.usage);
+  if (!sawLineUsage && cliResult.usage) sharedObserver.onUsage?.(turnCost(cliResult.usage));
   return cliResult;
 }
