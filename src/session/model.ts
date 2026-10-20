@@ -273,6 +273,10 @@ export interface HarnessDefaultSettings {
   /** Global only: what a message typed mid-turn does (`/send`,
    *  turn/send-mode.ts). Absent means steer. */
   sendMode?: 'steer' | 'queue';
+  /** Global only: the live context size, in tokens, at which a finished turn
+   *  is followed by a compaction (session/compact-setting.ts). 0 is off;
+   *  absent means the default. */
+  compactAt?: number;
 }
 
 export interface HarnessState {
