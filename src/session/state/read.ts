@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import type { HarnessSession, HarnessState } from '../model.js';
 import { ephemeralSessions } from '../ephemeral.js';
 import { markFromIndex, markTranscriptLoaded, sessionFromIndex, transcriptWasLoaded } from '../list-facts.js';
-import { cloneData, sameData } from '../store/data.js';
+import { cloneData } from '../store/data.js';
 import { withStateLock } from '../store/locks.js';
 import { readSessionTranscript } from '../store/transcripts.js';
 import { StateIndex, loadIndex, storeIndex } from './index-file.js';
@@ -15,7 +15,6 @@ import { hidden } from '../store/data.js';
 import { HARNESS_STATE_VERSION } from './paths.js';
 import { HarnessSecrets, readLocalApiToken, readSecretsFile } from './secrets.js';
 import { HARNESS_DEFAULT_SETTINGS, normalizedConversation, normalizedPermissionMode, normalizedSessionPermission, normalizedStatus } from './settings.js';
-import { writeState } from './write.js';
 
 async function assembleState(index: StateIndex, secrets: HarnessSecrets, transcripts: 'all' | ReadonlySet<string>): Promise<HarnessState> {
   const sessions = await Promise.all(index.sessions.map(async (meta): Promise<HarnessSession> => {
@@ -126,9 +125,8 @@ export async function readState(options?: ReadStateOptions): Promise<HarnessStat
   rememberBaseline(raw);
   const normalized = normalizedState(raw);
   hidden(normalized, STATE_BASELINE, (raw as BaselinedState)[STATE_BASELINE]);
-  // A newer layout is shown as faithfully as possible and never written to.
-  if (index.version > HARNESS_STATE_VERSION) return withDrafts(normalized);
-  if (!sameData(normalized, raw)) await writeState(normalized);
+  // A read never writes: the baseline is the state as stored, so what normalizing changed is stored
+  // by the next write of this copy, like any change of its own. (A newer layout is never written to.)
   return withDrafts(normalized);
 }
 
