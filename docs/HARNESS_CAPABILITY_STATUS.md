@@ -1,13 +1,13 @@
 # Harness capability status
 
-Checked against the ClikCode catalog on 2026-10-10 (rows changed that day: Codex, Amp, Droid, Qwen Code, Cline, Hermes, Command Code, Deep Agents Code, Devin). A listed control is a ClikCode integration, not proof that every vendor account or model accepts it. `ACP` model discovery means ClikCode asks the agent's session for models when it offers them; an empty or refused response cannot become a complete list. Server-sourced model lists refresh after five minutes, with the last list shown while a picker refreshes.
+Checked against the ClikCode catalog on 2026-10-10 (rows changed that day: Codex, Amp, Droid, Qwen Code, Cline, Hermes, Command Code, Deep Agents Code, Devin; the Codex model source corrected 2026-10-20). The catalog has 29 harnesses (counted from `AI_LOCAL_HARNESSES` on 2026-10-20): 22 run over ACP, Codex over its own app-server, and six as one-shot CLIs (Aider, Amp, Antigravity, Pi, OpenClaw, Continue). A listed control is a ClikCode integration, not proof that every vendor account or model accepts it. `ACP` model discovery means ClikCode asks the agent's session for models when it offers them; an empty or refused response cannot become a complete list. Server-sourced model lists refresh after five minutes, with the last list shown while a picker refreshes.
 
 | Harness | Model source | Effort | Permissions | Free-plan models | Account usage |
 | --- | --- | --- | --- | --- | --- |
 | Claude Code | Installed vendor model table | Yes | Ask, bypass, auto | - | Direct probe, and its turn stream |
 | Grok Build | Vendor CLI | Yes (minimal to max) | Ask, bypass, auto | Plan's own list | Direct probe (ACP extension call) |
 | Gemini CLI | ACP when available | No declared control | Ask, bypass, auto | - | Learned after refusals |
-| Codex | Vendor model cache (the server's `model/list` is declared, not yet read) | Yes, per model | Ask, bypass, auto | Plan's own list | Direct probe |
+| Codex | The running app-server's `model/list`, for this account (`models_cache.json` when no server is live) | Yes, per model | Ask, bypass, auto | Plan's own list | Direct probe |
 | OpenCode | Vendor CLI | Yes | Ask (`OPENCODE_PERMISSION` edit/bash = ask), bypass; plan mode | Zero-price models in its list | Learned after refusals |
 | Copilot | Its own server, for this account (`models.list`); public models.dev catalog only when that fails | Yes, over ACP (levels from `copilot --help`) | Ask, bypass | Plan's own list | Direct probe (`account.getQuota`) |
 | Aider | Configured providers and their caches | No declared control | Bypass only (`--yes-always`); no ask (see below) | `:free` models | Learned after refusals |
@@ -87,3 +87,22 @@ Each was a real signed-in two-turn session in `scripts/vendor-sandbox.mjs`, comp
 | Cursor Agent | Only `stopReason` | Nothing: Cursor's ACP sends no usage, and its session store keeps none |
 
 Hermes was not re-checked: its model provider returned HTTP 429. The other ACP harnesses could not run a turn (see the verification table).
+
+## Global MCP servers: which harness gets them, 2026-10-20
+
+The servers recorded for ClikCode (`<state dir>/mcp.json`, `clikcode mcp add`), and ClikCode's built-in `clikcode` server while computer use is on, are handed to a harness per run; nothing is written into a vendor's own config (`src/harness/transport/acp-mcp-servers.ts`). A server already named in the harness's own config (the catalog's `managers.mcp.serverFiles`, read from the account's profile when it has one) is left out, so it never runs twice. A remote server ClikCode holds an OAuth sign-in for goes with `Authorization: Bearer <token>`, read and refreshed by `src/agent/mcp/oauth.ts` when the session or process is opened; one recorded as needing a sign-in is left out (a vendor handed it would start a browser sign-in of its own).
+
+| Harness | How the servers reach it | What it takes |
+| --- | --- | --- |
+| The 22 ACP harnesses | `mcpServers` of `session/new`, `session/load`, `session/resume` | Local (stdio) servers always; HTTP and SSE only when the agent's `initialize` advertises `mcpCapabilities.http` / `.sse`. Headers, a stored bearer included, travel in the request, not on a command line. |
+| Codex | `-c mcp_servers.<name>.*` overrides on the `app-server --stdio` launch | Local servers (`command`, `args`, `env`) and streamable HTTP (`url`, `env_http_headers`). Header values go in the app-server's environment (`CLIKCODE_MCP_SECRET_<n>`), never on its command line. No SSE (Codex has none), and only names of letters, digits, `_` and `-`. A local server's `env` is on the command line, as for the built-in server. Read when the app-server starts: a change applies to the next one. |
+| Amp | `--mcp-config <file>` (catalog `turn.mcpConfigArgv`), merged by Amp over its own settings | Local and HTTP servers, in a 0600 file in its own temporary directory, removed after the run. Servers that need ClikCode's stored sign-in are left out: their tokens are not written anywhere new. |
+| Aider | None | Aider has no MCP client. |
+| Pi | None | Pi has no MCP client; it is extended with its own extensions (`-e`). |
+| Antigravity | None per run | Its MCP servers are its own configuration (`agy mcp`); no per-run flag or environment variable is known. |
+| OpenClaw | None per run | Its MCP servers are its own configuration (`openclaw mcp`); no per-run flag is known. |
+| Continue | None per run | `cn --mcp` takes Continue Hub slugs (`owner/package`, an option row), not a local server definition. |
+
+Not deduplicated: an ACP harness whose catalog entry declares no MCP config file (Mistral Vibe, OpenHands, Deep Agents Code, Devin, Junie, MiniMax Code) is handed every global server; one it also has of its own runs twice. Not verified live: Codex reading `env_http_headers` from the app-server's environment, and Amp's `--mcp-config` taking a file path (both from their published configuration, not a run). A token refreshed while a session or app-server is open is not handed to it; the next session or process gets the new one.
+
+The one-time import into mcp.json (`src/agent/mcp/import.ts`) is kept. It is not the same job as the per-session dedupe: the dedupe stops a vendor getting a server twice, while the import gives ClikCode's own agent the servers the user configured in their vendors before `clikcode mcp add` wrote mcp.json -- without it those servers would be missing from ClikCode's agent and from the harnesses that have no config of their own.
