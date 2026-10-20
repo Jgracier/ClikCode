@@ -88,6 +88,6 @@ describe('the session modes, and selection mode', () => {
     }
     expect(redrawPreamble('repair')).toBe('\u001b[?25l\u001b[?7l\u001b[2J\u001b[H');
     // A reply settling never clears.
-    expect(redrawPreamble(undefined)).toBe('\u001b[?25l\u001b[?7l');
+    expect(redrawPreamble(undefined)).toBe('\u001b[?7l');
   });
 });

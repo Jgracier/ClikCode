@@ -54,10 +54,6 @@ export function renderFrame(
 
 export function flushFrame(this: TerminalHarnessPrompter): void {
   if (this.closed || this.suspended) return;
-  // A streaming answer may request a frame while the phone is still
-  // changing size. Keep its durable rows, but wait for the final geometry
-  // before drawing; repaintAfterResize supplies the fresh live rows.
-  if (this.resizePaintTimer) return;
   const pending = this.pendingLive;
   if (!pending) return;
   this.pendingLive = undefined;
@@ -249,14 +245,22 @@ export function flushAlternateFrame(
   if (!updates.length && !modes && !signals && park === this.lastPark && showCursor === this.cursorShown) return;
   // The preamble goes with rows, never alone: a clear with nothing after
   // it would only blank the screen, so a resize or repair waits for them.
-  const draw = updates.length ? `${redrawPreamble(this.provisionalFrame ? undefined : this.pendingRedraw)}${updates.join('')}` : '';
-  if (updates.length && !this.provisionalFrame) this.pendingRedraw = undefined;
-  const cursor = showCursor && (updates.length || !this.cursorShown) ? '\u001b[?25h'
-    : !showCursor && !updates.length && this.cursorShown !== false ? '\u001b[?25l' : '';
+  // While a resize burst is still settling a frame (a keystroke's echo, a
+  // streaming row) is an ordinary diff; the clear and the mouse modes go with
+  // the one settled repaint, so the screen is blanked once per burst.
+  const redraw = this.resizePaintTimer && this.pendingRedraw === 'resize' ? undefined : this.pendingRedraw;
+  const draw = updates.length ? `${redrawPreamble(redraw)}${updates.join('')}` : '';
+  if (updates.length && redraw === this.pendingRedraw) this.pendingRedraw = undefined;
+  // The caret changes state only when it has to: hidden by a clear (so shown
+  // again after it), by a list that asks for it, or never shown yet. A
+  // frame that merely moves rows under a visible caret does not touch it.
+  const visibleBefore = updates.length > 0 && redraw !== undefined ? false : this.cursorShown;
+  const hideFirst = !showCursor && visibleBefore !== false ? '\u001b[?25l' : '';
+  const cursor = showCursor && visibleBefore !== true ? '\u001b[?25h' : '';
   // One synchronized update (DEC 2026): a terminal that supports it shows
   // the frame whole or not at all, never half-drawn; one that does not
   // ignores the two sequences. restoreTerminal closes it on any exit.
-  const frame = `\u001b[?2026h${modes}${signals}${draw}${park}${cursor}\u001b[?2026l`;
+  const frame = `\u001b[?2026h${modes}${signals}${hideFirst}${draw}${park}${cursor}\u001b[?2026l`;
   this.lastPark = park;
   this.cursorShown = showCursor;
   this.frameInFlight = true;
