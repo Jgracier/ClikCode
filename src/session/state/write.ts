@@ -1,7 +1,7 @@
 /** Writing a HarnessState back. */
 
 import type { HarnessState } from '../model.js';
-import { dropEphemeral, ephemeralSessions, holdEphemeral, sessionForceStored } from '../ephemeral.js';
+import { draftPinned, dropEphemeral, ephemeralSessions, holdEphemeral, sessionForceStored } from '../ephemeral.js';
 import { stampListFacts } from '../list-facts.js';
 import { isBlankConversation } from '../options.js';
 import { sameData } from '../store/data.js';
@@ -65,7 +65,7 @@ export async function writeState(state: HarnessState): Promise<void> {
     // is how an empty chat an older build stored gets removed.
     const writing = new Set(sessions.map((session) => session.id));
     for (const session of ephemeralSessions()) {
-      if (!writing.has(session.id)) dropEphemeral(session.id);
+      if (!writing.has(session.id) && !draftPinned(session.id)) dropEphemeral(session.id);
     }
     for (const session of sessions) {
       if (isBlankConversation(session) && !diskIds.has(session.id) && !sessionForceStored(session.id)) holdEphemeral(session);

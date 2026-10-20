@@ -473,6 +473,12 @@
           "scope": "machine",
           "markdownDescription": "Path to the `clikcode` executable or its `dist/index.js`. Empty: found on `PATH`. Install ClikCode with `npm install -g clikcode@latest` (or, without the npm registry, `npm install -g https://github.com/Jgracier/ClikCode/releases/latest/download/clikcode.tgz`)."
         },
+        "clikcode.sharedProcess": {
+          "type": "boolean",
+          "default": true,
+          "scope": "machine",
+          "markdownDescription": "Run every ClikCode chat of this window (the side bar and each chat tab) from one ClikCode process. Off: each chat starts a process of its own, as before (about 120-330 MB each)."
+        },
         "clikcode.nodePath": {
           "type": "string",
           "default": "",

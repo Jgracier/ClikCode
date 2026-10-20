@@ -22,6 +22,7 @@ import { writeState } from '../session/state/write.js';
 import type { HarnessSession } from '../session/model.js';
 import { isClikCodeAgent, isGatewayService } from '../session/route.js';
 import { claimConversation, leaveConversation, openConversation, resolveSessionModel } from '../session/attach.js';
+import { pinDraft, unpinDraft } from '../session/ephemeral.js';
 import { synchronizeNativeTranscript } from '../turn/handoff.js';
 import { nativeUsageReading, recheckRecoveredAccounts } from '../harness/accounts/account-usage.js';
 import { gatewayCreditLabel } from '../gateway/credit-label.js';
@@ -268,6 +269,7 @@ export class IdeBridge {
   /** Leaves `id` unless another chat of this process still shows it. */
   private async leave(id: string): Promise<void> {
     if (this.elsewhere().has(id)) return;
+    unpinDraft(id);
     await leaveConversation(id);
   }
 
@@ -321,7 +323,7 @@ export class IdeBridge {
   // ---- conversations -------------------------------------------------------
 
   private async open(workspace: string, mode: 'new' | 'continue' | 'resume', ref?: string): Promise<void> {
-    const id = await openConversation(workspace, mode, ref, { sameWorkspace: true });
+    const id = await openConversation(workspace, mode, ref, { sameWorkspace: true, pin: true });
     const { session } = await this.current(id);
     // As a terminal does on open: a conversation with no provider gets the one
     // the user is signed in to, without asking; with none, the first message
@@ -350,6 +352,7 @@ export class IdeBridge {
       await this.leave(previous);
     }
     this.sessionId = id;
+    pinDraft(id);
     setLifecycleSession(id);
     lifecycle('bridge.conversation');
     this.preparedRoute = undefined;

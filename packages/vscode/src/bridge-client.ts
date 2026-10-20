@@ -3,7 +3,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import type { IdeEvent, IdeRequest } from './protocol';
+import type { IdeEvent, IdeHostRequest, IdeRequest } from './protocol';
 import { entryBuild, type Runtime } from './runtime';
 
 type Pending = { resolve: (data: unknown) => void; reject: (error: Error) => void };
@@ -22,74 +22,47 @@ function isIdeEvent(message: unknown): message is IdeEvent {
   return typeof message === 'object' && message !== null && typeof (message as { type?: unknown }).type === 'string';
 }
 
-export class BridgeClient extends EventEmitter<BridgeClientEvents> {
+/** A chat's connection to a bridge: a process of its own (BridgeClient) or
+ * its share of the window's one process (bridge-pool.ts SharedChannel). */
+export abstract class BridgeEndpoint extends EventEmitter<BridgeClientEvents> {
   private readonly pending = new Map<string, Pending>();
-  private exited = false;
-  readonly build: string | undefined;
-  private readonly stderrClosed: Promise<void>;
+  protected exited = false;
 
-  private constructor(private readonly child: ChildProcess, readonly runtime: Runtime) {
+  constructor(readonly runtime: Runtime, readonly build: string | undefined) {
     super();
-    this.build = entryBuild(runtime.entry);
-    child.on('message', (message) => {
-      if (!isIdeEvent(message)) return;
-      if (message.type === 'result') {
-        const pending = this.pending.get(message.requestId);
-        if (pending) {
-          this.pending.delete(message.requestId);
-          if (message.ok) pending.resolve(message.data);
-          else pending.reject(new Error(message.error ?? 'request failed'));
-        }
-      }
-      this.emit('event', message);
-    });
-    const logLines = (prefix: string) => {
-      let buffer = '';
-      return (chunk: Buffer) => {
-        buffer += chunk.toString('utf8');
-        const lines = buffer.split(/\r?\n/);
-        buffer = lines.pop() ?? '';
-        for (const line of lines) if (line.trim()) this.emit('log', `${prefix}${line}`);
-      };
-    };
-    child.stdout?.on('data', logLines(''));
-    child.stderr?.on('data', logLines(''));
-    this.stderrClosed = child.stderr ? new Promise((resolve) => child.stderr!.once('close', () => resolve())) : Promise.resolve();
-    child.on('error', (error) => this.emit('log', `bridge process error: ${error.message}`));
-    child.on('exit', (code, signal) => {
-      this.exited = true;
-      for (const pending of this.pending.values()) pending.reject(new Error('ClikCode stopped'));
-      this.pending.clear();
-      this.emit('exit', { code, signal });
-    });
   }
 
-  static start(runtime: Runtime, cwd: string | undefined): BridgeClient {
-    const child = spawn(runtime.node, [runtime.entry, 'ide-bridge'], {
-      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
-      env: bridgeEnvironment(process.env, runtime.env),
-      ...(cwd ? { cwd } : {}),
-      windowsHide: true,
-    });
-    return new BridgeClient(child, runtime);
-  }
-
+  /** False when the request could not be handed to the bridge (it is gone):
+   * the caller owns telling the user, and clearing what waited on it. */
+  abstract send(request: IdeRequest): boolean;
+  /** Leaves the bridge: asks it to close the conversation cleanly. */
+  abstract dispose(): void;
   /** Resolves once everything the process wrote to stderr has been logged,
    * or after `timeoutMs` (a detached grandchild can hold stderr open). */
-  logDrained(timeoutMs: number): Promise<void> {
-    return Promise.race([this.stderrClosed, new Promise<void>((resolve) => setTimeout(resolve, timeoutMs).unref())]);
-  }
+  abstract logDrained(timeoutMs: number): Promise<void>;
 
   get running(): boolean {
     return !this.exited;
   }
 
-  /** False when the request could not be handed to the bridge (it is gone):
-   * the caller owns telling the user, and clearing what waited on it. */
-  send(request: IdeRequest): boolean {
-    if (this.exited || !this.child.connected) return false;
-    try { this.child.send(request); } catch { return false; }
-    return true;
+  protected receive(message: IdeEvent): void {
+    if (message.type === 'result') {
+      const pending = this.pending.get(message.requestId);
+      if (pending) {
+        this.pending.delete(message.requestId);
+        if (message.ok) pending.resolve(message.data);
+        else pending.reject(new Error(message.error ?? 'request failed'));
+      }
+    }
+    this.emit('event', message);
+  }
+
+  protected markExited(code: number | null, signal: NodeJS.Signals | null): void {
+    if (this.exited) return;
+    this.exited = true;
+    for (const pending of this.pending.values()) pending.reject(new Error('ClikCode stopped'));
+    this.pending.clear();
+    this.emit('exit', { code, signal });
   }
 
   /** A request answered by a `result` event carrying its requestId. */
@@ -107,6 +80,58 @@ export class BridgeClient extends EventEmitter<BridgeClientEvents> {
       });
       this.send({ ...request, requestId } as IdeRequest);
     });
+  }
+}
+
+export class BridgeClient extends BridgeEndpoint {
+  private readonly stderrClosed: Promise<void>;
+
+  private constructor(private readonly child: ChildProcess, runtime: Runtime) {
+    super(runtime, entryBuild(runtime.entry));
+    child.on('message', (message) => {
+      if (isIdeEvent(message)) this.receive(message);
+    });
+    const logLines = (prefix: string) => {
+      let buffer = '';
+      return (chunk: Buffer) => {
+        buffer += chunk.toString('utf8');
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop() ?? '';
+        for (const line of lines) if (line.trim()) this.emit('log', `${prefix}${line}`);
+      };
+    };
+    child.stdout?.on('data', logLines(''));
+    child.stderr?.on('data', logLines(''));
+    this.stderrClosed = child.stderr ? new Promise((resolve) => child.stderr!.once('close', () => resolve())) : Promise.resolve();
+    child.on('error', (error) => this.emit('log', `bridge process error: ${error.message}`));
+    child.on('exit', (code, signal) => this.markExited(code, signal));
+  }
+
+  /** `extraEnv`: what the pool adds to ask for a shared process. */
+  static start(runtime: Runtime, cwd: string | undefined, extraEnv: Readonly<Record<string, string>> = {}): BridgeClient {
+    const child = spawn(runtime.node, [runtime.entry, 'ide-bridge'], {
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+      env: { ...bridgeEnvironment(process.env, runtime.env), ...extraEnv },
+      ...(cwd ? { cwd } : {}),
+      windowsHide: true,
+    });
+    return new BridgeClient(child, runtime);
+  }
+
+  logDrained(timeoutMs: number): Promise<void> {
+    return Promise.race([this.stderrClosed, new Promise<void>((resolve) => setTimeout(resolve, timeoutMs).unref())]);
+  }
+
+  send(request: IdeRequest): boolean {
+    return this.post(request);
+  }
+
+  /** Any message to the process: a chat's request, or a shared process's
+   * envelope (bridge-pool.ts). */
+  post(message: IdeRequest | IdeHostRequest): boolean {
+    if (this.exited || !this.child.connected) return false;
+    try { this.child.send(message); } catch { return false; }
+    return true;
   }
 
   /** Asks the bridge to leave the conversation cleanly, then makes sure. */
