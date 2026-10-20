@@ -10,13 +10,19 @@ import { isTurnCancelled, turnCancelledError } from '../../agent/cancellation.js
 import { spawnPortable } from './spawn.js';
 import { JsonRpcPeer, type JsonRpcPeerOptions } from './jsonrpc-peer.js';
 import type { BackgroundTurnChannel, BackgroundTurnEnd, OutOfTurnRelay, VendorBackgroundTurnHandler } from './background-turn.js';
-import { commandLine, commandRoots, outputFile, processGroup, processGroupMembers, toolCallWork } from './process-group.js';
+import { commandLine, commandRoots, outputFile, processGroup, processGroupMembers, readProcessGroup, toolCallWork } from './process-group.js';
 import { readFile } from 'node:fs/promises';
 import { redactSecrets } from '../../agent/security.js';
 import type { EndedWork, RunningWork, WorkEndedHandler } from './handoff-work.js';
 
 /** How often a retired process's commands are looked at. */
 const RETIRED_POLL_MS = 3_000;
+/** How long work handed off with a retired process (retire) may run with nobody
+ * waiting on it: past this, what is left is told as cut off and the process and
+ * its group are closed. The same ceiling as a background shell the worker itself
+ * keeps (worker-idle.ts ABANDONED_SHELL_MS): a vendor that never reports its
+ * agent done, or a command that never ends, does not keep a process for ever. */
+export const ABANDONED_WORK_MS = 24 * 60 * 60 * 1000;
 /** How much of a finished command's output goes to the conversation. */
 const OUTPUT_TAIL_CHARS = 4_000;
 
@@ -54,10 +60,17 @@ export interface PersistentSessionOptions {
   workEnded?: WorkEndedHandler;
   /** SETUP_IDLE_MS, shortened by tests. */
   setupIdleMs?: number;
+  /** ABANDONED_WORK_MS, shortened by tests. */
+  retiredCeilingMs?: number;
 }
 
 /** A retired process (retire): its group, and the work in it still running. */
-interface Retirement { root: number; commands: Map<number, RunningWork>; agents: Map<string, RunningWork>; timer?: NodeJS.Timeout }
+interface Retirement {
+  root: number; peer: JsonRpcPeer; commands: Map<number, RunningWork>; agents: Map<string, RunningWork>;
+  timer?: NodeJS.Timeout;
+  /** ABANDONED_WORK_MS from the retirement. */
+  ceiling?: NodeJS.Timeout;
+}
 
 interface PersistentLive { peer: JsonRpcPeer; key: string; pid?: number }
 interface PersistentTurn { done: boolean; fail: (error: Error) => void }
@@ -93,6 +106,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
   private readonly onWorkEnded?: WorkEndedHandler;
   /** The request options of a setup step (SETUP_IDLE_MS). */
   protected readonly setupRequest: { timeoutMs: number; idleReset: true };
+  private readonly retiredCeilingMs: number;
   /** Set once the conversation has left this process with work still running in it (retire). */
   private retirement?: Retirement;
   /** The child's process group when the current turn's prompt went out
@@ -110,6 +124,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     this.outOfTurnRelay = options.outOfTurn;
     this.onWorkEnded = options.workEnded;
     this.setupRequest = { timeoutMs: options.setupIdleMs ?? SETUP_IDLE_MS, idleReset: true };
+    this.retiredCeilingMs = options.retiredCeilingMs ?? ABANDONED_WORK_MS;
   }
 
   /** Where what the vendor says out of turn goes: nowhere once retired -- the conversation is
@@ -161,27 +176,56 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     const commands = await this.leftCommands();
     const agents = new Map(this.runningAgents().map((work) => [work.id, work]));
     if (!commands.size && !agents.size) return false;
-    const retirement: Retirement = { root, commands, agents };
+    const retirement: Retirement = { root, peer: this.live.peer, commands, agents };
     this.retirement = retirement;
+    // Its work runs on even after the vendor itself exits (jsonrpc-peer.ts keepGroup).
+    retirement.peer.keepGroup();
     lifecycle('vendor.retired', { transport: this.label, commands: commands.size, agents: agents.size });
     // What was following its work in the conversation ends: the conversation is elsewhere.
     this.finishBackground('superseded');
     const poll = async (): Promise<void> => {
       if (this.retirement !== retirement) return;
       // The group outlives its leader: a command still runs after the vendor itself has gone.
-      const group = await processGroup(retirement.root).catch(() => undefined);
-      if (!group) { retirement.timer = setTimeout(() => void poll(), RETIRED_POLL_MS); return; }
-      const ended: EndedWork[] = [];
-      for (const [pid, work] of retirement.commands) {
-        if (group.has(pid)) continue;
-        retirement.commands.delete(pid);
-        ended.push({ ...work, outcome: 'finished', tail: await outputTail(work.outputFile) });
+      // Unreadable (no /proc, `ps` failing) is not "ended": nothing is told on a failed read,
+      // and the ceiling bounds how long it is looked at.
+      const group = await readProcessGroup(retirement.root).catch(() => undefined);
+      if (this.retirement !== retirement) return;
+      if (group) {
+        const ended: EndedWork[] = [];
+        for (const [pid, work] of retirement.commands) {
+          if (group.has(pid)) continue;
+          retirement.commands.delete(pid);
+          ended.push({ ...work, outcome: 'finished', tail: await outputTail(work.outputFile) });
+        }
+        this.retiredEnded(ended);
       }
-      this.retiredEnded(ended);
       if (this.retirement === retirement && retirement.commands.size) retirement.timer = setTimeout(() => void poll(), RETIRED_POLL_MS);
     };
-    retirement.timer = setTimeout(() => void poll(), RETIRED_POLL_MS);
+    if (commands.size) retirement.timer = setTimeout(() => void poll(), RETIRED_POLL_MS);
+    retirement.ceiling = setTimeout(() => void this.retiredCeiling(retirement), this.retiredCeilingMs);
+    retirement.ceiling.unref?.();
     return true;
+  }
+
+  /** Retired work still running at the ceiling (ABANDONED_WORK_MS): told as cut off, with what it
+   * wrote so far, and the process and its group closed. */
+  private async retiredCeiling(retirement: Retirement): Promise<void> {
+    if (this.retirement !== retirement || this.isClosed) return;
+    const hours = Math.round(this.retiredCeilingMs / 3_600_000);
+    const note = `Stopped: it was still running ${hours ? `${hours} hour${hours === 1 ? '' : 's'}` : 'a long time'} after the conversation moved on, with nothing waiting on it.`;
+    const commands = [...retirement.commands.values()];
+    const agents = [...retirement.agents.values()];
+    retirement.commands.clear();
+    retirement.agents.clear();
+    const ended: EndedWork[] = [
+      ...await Promise.all(commands.map(async (work): Promise<EndedWork> => {
+        const tail = await outputTail(work.outputFile);
+        return { ...work, outcome: 'cut-off', tail: tail ? `${tail}\n${note}` : note };
+      })),
+      ...agents.map((work): EndedWork => ({ ...work, outcome: 'cut-off', tail: note })),
+    ];
+    lifecycle('vendor.retired.ceiling', { transport: this.label, commands: commands.length, agents: agents.length });
+    this.retiredEnded(ended);
   }
 
   /** Retired, and the vendor went: its agents went with it, cut off. Its commands are still
@@ -201,6 +245,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     if (ended.length) { try { this.onWorkEnded?.(ended); } catch { /* fail-open-ok: the owner's bookkeeping */ } }
     if (!retirement.commands.size && !retirement.agents.size) {
       if (retirement.timer) clearTimeout(retirement.timer);
+      if (retirement.ceiling) clearTimeout(retirement.ceiling);
       void this.close().catch(() => undefined);
     }
   }
@@ -287,7 +332,12 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
   }
 
   async close(): Promise<void> {
-    if (this.retirement?.timer) clearTimeout(this.retirement.timer);
+    const retirement = this.retirement;
+    if (retirement?.timer) clearTimeout(retirement.timer);
+    if (retirement?.ceiling) clearTimeout(retirement.ceiling);
+    // Closed, a retired process's group goes with it -- its vendor may have exited
+    // long ago, leaving the group to its work (keepGroup).
+    retirement?.peer.keepGroup(false);
     this.isClosed = true;
     if (this.turn) this.cancelTurn(this.turn);
     this.finishBackground('closed');
