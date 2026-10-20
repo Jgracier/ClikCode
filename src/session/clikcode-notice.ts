@@ -11,8 +11,11 @@
 
 /** What every notice ClikCode writes itself begins with. */
 export const CLIKCODE_NOTICE_TAG = '[ClikCode] ';
-/** formatShellNotifications (agent/session-state.ts): `[background shell <id> exited ...] <command>`, a monitor's `... output]` and a `[scheduled wakeup <id>]`. */
-const SHELL_NOTICE = /^\[(?:background shell \S+ (?:exited|was stopped|output)|scheduled wakeup \S+\])/;
+/** formatShellNotifications (agent/session-state.ts): `[background shell <id> exited ...] <command>`, a monitor's
+ * `... output]`, `[background agent <id> finished]` and a `[scheduled wakeup <id>]`; and work a vendor process ran on
+ * after the conversation left it (worker/handed-off-work.ts): `[background command <id> finished]`, `[background agent
+ * <id> was cut off: ...]`. */
+const SHELL_NOTICE = /^\[(?:background (?:shell|command|agent) \S+ (?:exited|was stopped|output|finished|was interrupted|was cut off)|scheduled wakeup \S+\])/;
 
 /** Claude Code's own first message after a compaction: the summary it wrote, handed back to itself to continue from.
  * It is the model's input, not something the user said, and a compaction already announces itself ("Compact

@@ -7,9 +7,9 @@ import type { HarnessTurnTransport } from '../harness/transport/select.js';
 import type { CodexSession } from '../harness/transport/codex-app-server.js';
 import type { AcpSession } from '../harness/transport/acp-client.js';
 import type { VendorBackgroundTurn, VendorBackgroundTurnHandler } from '../harness/transport/background-turn.js';
-import { turnCancelledError } from '../agent/cancellation.js';
 import { outOfTurnRecorder } from './out-of-turn-record.js';
 import type { OutOfTurnRelay } from '../harness/transport/background-turn.js';
+import type { EndedWork } from '../harness/transport/handoff-work.js';
 
 /** ACP `available_commands_update`, per ClikCode session, for the slash registry. */
 export const nativeAvailableCommands = new Map<string, readonly HarnessAvailableCommand[]>();
@@ -37,6 +37,36 @@ const outOfTurnFor = (sessionId: string): OutOfTurnRelay => {
   return (said) => { const handler = outOfTurnHandlers.get(sessionId); if (handler) handler(said); else void record(said); };
 };
 
+/** Who answers for work a vendor process ran after the conversation left it, and for agents the
+ * usage limit cut off (handoff-work.ts), per conversation: the session worker (each becomes a
+ * notification turn on the account the conversation is on now). `from` is the process's harness
+ * and account. */
+export type WorkEndedHandler = (ended: readonly EndedWork[], from: { harness?: string; accountId?: string }) => void;
+const workEndedHandlers = new Map<string, WorkEndedHandler>();
+export function setWorkEndedHandler(sessionId: string, handler: WorkEndedHandler | undefined): void {
+  if (handler) workEndedHandlers.set(sessionId, handler);
+  else workEndedHandlers.delete(sessionId);
+}
+/** The harness and account a child key (vendorChildKey) was made for. */
+function keyOwner(key: string): { harness?: string; accountId?: string } {
+  try {
+    const [harness, accountId] = JSON.parse(key) as unknown[];
+    return { ...(typeof harness === 'string' ? { harness } : {}), ...(typeof accountId === 'string' ? { accountId } : {}) };
+  } catch { return {}; }
+}
+
+/** The options every vendor child of `sessionId` is made with. */
+function childOptions(sessionId: string, key: string) {
+  return {
+    backgroundTurns: (turn: VendorBackgroundTurn) => vendorBackgroundTurnHandlers.get(sessionId)?.(turn),
+    outOfTurn: outOfTurnFor(sessionId),
+    workEnded: (ended: readonly EndedWork[]) => {
+      workEndedHandlers.get(sessionId)?.(ended, keyOwner(key));
+      retiredWorkChanged(sessionId);
+    },
+  };
+}
+
 const vendorBackgroundTurnHandlers = new Map<string, VendorBackgroundTurnHandler>();
 export function setVendorBackgroundTurnHandler(sessionId: string, handler: VendorBackgroundTurnHandler | undefined): void {
   if (handler) vendorBackgroundTurnHandlers.set(sessionId, handler);
@@ -63,7 +93,7 @@ export function vendorChildKey(
 export function persistentTransportFor(sessionId: string, transport: HarnessTurnTransport, key: string): PersistentTransport {
   const existing = persistentTransports.get(sessionId);
   if (existing && existing.key === key && existing.transport === transport) return existing;
-  if (existing) void closePersistentTransport(sessionId);
+  if (existing) void leaveTransport(sessionId, existing);
   // A standby opened for exactly this launch (prepareAcpStandby) becomes the
   // live child: its agent is started and its thread loaded already.
   const standby = standbyTransports.get(sessionId);
@@ -72,7 +102,7 @@ export function persistentTransportFor(sessionId: string, transport: HarnessTurn
     persistentTransports.set(sessionId, standby.transport);
     return standby.transport;
   }
-  const background = { backgroundTurns: (turn: VendorBackgroundTurn) => vendorBackgroundTurnHandlers.get(sessionId)?.(turn), outOfTurn: outOfTurnFor(sessionId) };
+  const background = childOptions(sessionId, key);
   const created: PersistentTransport = {
     key, transport, session: transport === 'codex-app-server' ? TRANSPORT_SESSIONS.codex(background) : TRANSPORT_SESSIONS.acp(background),
   };
@@ -84,32 +114,86 @@ export function hasPersistentTransport(sessionId: string): boolean {
   return persistentTransports.has(sessionId);
 }
 
-/** Whether this session's persistent vendor is still doing work between
- * turns: its worker stays up for it rather than closing the child under it. */
-export async function persistentWorkRunning(sessionId: string): Promise<boolean> {
-  return await persistentTransports.get(sessionId)?.session.backgroundWorkRunning?.().catch(() => false) ?? false;
-}
+/** Processes a conversation left with work still running in them (leavePersistentTransport). */
+const retiredTransports = new Map<string, Set<PersistentTransport>>();
 
-/** Do not retire an account's vendor while work it started is still running.
- * The worker receives the late tool events through its background channel;
- * once they settle, the native thread can be copied to the next account. */
-export async function waitForPersistentWork(sessionId: string, signal?: AbortSignal): Promise<void> {
-  while (await persistentWorkRunning(sessionId)) {
-    if (signal?.aborted) throw turnCancelledError();
-    await new Promise<void>((resolve) => setTimeout(resolve, 200));
+/** The retired processes of `sessionId` still running work; the rest are forgotten. */
+async function retiredRunning(sessionId: string): Promise<PersistentTransport[]> {
+  const set = retiredTransports.get(sessionId);
+  if (!set) return [];
+  const running: PersistentTransport[] = [];
+  for (const retired of [...set]) {
+    if (await retired.session.backgroundWorkRunning().catch(() => false)) running.push(retired);
+    else set.delete(retired);
   }
-  if (signal?.aborted) throw turnCancelledError();
+  if (!set.size) retiredTransports.delete(sessionId);
+  return running;
 }
 
+/** Whether work this session's vendors started is still running -- in the process the conversation
+ * uses, or one it left: its worker stays up for it rather than ending it. */
+export async function persistentWorkRunning(sessionId: string): Promise<boolean> {
+  if (await persistentTransports.get(sessionId)?.session.backgroundWorkRunning?.().catch(() => false)) return true;
+  return (await retiredRunning(sessionId)).length > 0;
+}
+
+/** Who is told what the processes a conversation left still run (the session worker: a list shows
+ * the conversation working while they do). */
+type RetiredWorkListener = (work: { agents: number; terminals: number }) => void;
+const retiredWorkListeners = new Map<string, RetiredWorkListener>();
+export function setRetiredWorkListener(sessionId: string, listener: RetiredWorkListener | undefined): void {
+  if (listener) retiredWorkListeners.set(sessionId, listener);
+  else retiredWorkListeners.delete(sessionId);
+}
+/** Tell the listener what `sessionId`'s retired processes run now. */
+function retiredWorkChanged(sessionId: string): void {
+  const listener = retiredWorkListeners.get(sessionId);
+  if (!listener) return;
+  const work = { agents: 0, terminals: 0 };
+  for (const retired of retiredTransports.get(sessionId) ?? []) {
+    work.agents += retired.session.retiredWork.agents;
+    work.terminals += retired.session.retiredWork.terminals;
+  }
+  try { listener(work); } catch { /* fail-open-ok: the owner's bookkeeping */ }
+}
+
+/** Retire `live` (persistent-session.ts retire) when it still runs work, else close it. */
+async function leaveTransport(sessionId: string, live: PersistentTransport): Promise<void> {
+  if (await live.session.retire().catch(() => false)) {
+    const set = retiredTransports.get(sessionId) ?? new Set<PersistentTransport>();
+    set.add(live);
+    retiredTransports.set(sessionId, set);
+    retiredWorkChanged(sessionId);
+    return;
+  }
+  await live.session.close().catch(() => undefined);
+}
+
+/** The conversation is moving off its vendor process -- another account, provider, workspace or
+ * sign-in. Nothing that process runs is waited on, and nothing is killed: work still running stays
+ * with it, and its end is told to the conversation's account of the moment (setWorkEndedHandler). */
+export async function leavePersistentTransport(sessionId: string, only?: { accountId: string }): Promise<void> {
+  const live = persistentTransports.get(sessionId);
+  if (!live) return;
+  // Only the process on that account: by now the conversation may run on another's.
+  if (only && keyOwner(live.key).accountId !== only.accountId) return;
+  persistentTransports.delete(sessionId);
+  await leaveTransport(sessionId, live);
+}
+
+/** End this session's vendor processes and their work (a stop, a closing worker); every session's
+ * when `sessionId` is undefined. */
 export async function closePersistentTransport(sessionId?: string): Promise<void> {
   // Everything at once (the worker going away): standbys too.
   if (sessionId === undefined) await Promise.all([...standbyTransports.keys()].map((id) => closeStandby(id)));
-  const ids = sessionId === undefined ? [...persistentTransports.keys()] : [sessionId];
+  const ids = sessionId === undefined ? [...new Set([...persistentTransports.keys(), ...retiredTransports.keys()])] : [sessionId];
   await Promise.all(ids.map(async (id) => {
     const live = persistentTransports.get(id);
-    if (!live) return;
-    persistentTransports.delete(id);
-    await live.session.close().catch(() => undefined);
+    const retired = [...retiredTransports.get(id) ?? []];
+    retiredTransports.delete(id);
+    if (live) persistentTransports.delete(id);
+    await Promise.all([live, ...retired].map((item) => item?.session.close().catch(() => undefined)));
+    if (retired.length) retiredWorkChanged(id);
   }));
 }
 
@@ -130,7 +214,7 @@ export function standbyFor(sessionId: string, accountId: string): StandbyTranspo
 export function openStandby(sessionId: string, accountId: string, transport: HarnessTurnTransport, key: string,
   prepare: (session: CodexSession | AcpSession) => Promise<void>): StandbyTransport {
   void closeStandby(sessionId);
-  const background = { backgroundTurns: (turn: VendorBackgroundTurn) => vendorBackgroundTurnHandlers.get(sessionId)?.(turn), outOfTurn: outOfTurnFor(sessionId) };
+  const background = childOptions(sessionId, key);
   const created: PersistentTransport = {
     key, transport, session: transport === 'codex-app-server' ? TRANSPORT_SESSIONS.codex(background) : TRANSPORT_SESSIONS.acp(background),
   };

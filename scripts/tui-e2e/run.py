@@ -1806,6 +1806,40 @@ SCENARIOS = {
         'watch': [], 'snap_contains': {'after': ['Switched to ', 'is out of usage']},
         'final_contains': ['Switched to ', 'is out of usage'], 'never': ['usage exhausted', 'All accounts exhausted'],
     },
+    # A background agent the usage limit cuts off (Claude: the agent fails with "You've hit your session
+    # limit", then says the sentence itself): with no key pressed, the account is marked out, and the agent
+    # is started again on the other account with its own task. Nothing waits on the spent account.
+    'agent-cut-off-by-limit-moves-on': {
+        'turns': [{'blocks': ['First answer on the first account.']},
+                  {'emits': [{'op': 'agent-bg', 'id': 't1', 'task': 'a1', 'description': 'Open B5 games', 'prompt': 'Check the games endpoints'}],
+                   'blocks': ['Started the games agent.'],
+                   'after': [{'op': 'sleep', 'ms': 1500},
+                             {'op': 'task-end', 'id': 't1', 'task': 'a1', 'status': 'failed', 'summary': "Agent terminated early due to an API error: You've hit your session limit · resets 7:50am (America/Denver)"},
+                             {'op': 'say', 'ms': 30, 'whole': True, 'text': "You've hit your session limit · resets 7:50am (America/Denver)"}]},
+                  {'blocks': ['Restarted here, task {has:Check the games endpoints}.']}],
+        'steps': [('type', 'hello'), ('wait_for', 'First answer on the first account.', 40), ('settle', 1),
+                  ('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 2),
+                  ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'), ('settle', 6),
+                  ('type', 'start the games agent'), ('wait_for', 'Started the games agent.', 40),
+                  ('wait_for', 'Restarted here, task', 60), ('settle', 2), ('snap', 'after')],
+        'watch': [], 'snap_contains': {'after': ['Restarted here, task carried.']},
+        'never': ['waiting for running work', "You've hit your session limit", 'All accounts exhausted'],
+    },
+    # A background command still running when the conversation moves to another account: the next turn
+    # starts at once (nothing waits on the old account), the command runs on, and its output goes to the
+    # account the conversation is on when it ends.
+    'background-command-follows-the-switch': {
+        'turns': [{'emits': [{'op': 'spawn-bg', 'cmd': 'sleep 25; echo all checks passed'}], 'blocks': ['Started the checks in the background.']},
+                  {'blocks': ['Carried on on the other account.']},
+                  {'blocks': ['The checks result: {has:all checks passed}.']}],
+        'steps': [('type', 'start the checks'), ('wait_for', 'Started the checks in the background.', 40), ('settle', 1),
+                  ('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 2),
+                  ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'), ('settle', 3),
+                  ('type', 'carry on'), ('wait_for', 'Carried on on the other account.', 15),
+                  ('wait_for', 'The checks result:', 60), ('settle', 2), ('snap', 'after')],
+        'watch': [], 'snap_contains': {'after': ['The checks result: carried.']},
+        'never': ['waiting for running work', '[background command'],
+    },
     # A turn the vendor refuses as signed out signs in mid-turn and is
     # answered, and says nothing of the sign-in.
     'mid-turn-sign-in-is-said': {

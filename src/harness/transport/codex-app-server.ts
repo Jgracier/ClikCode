@@ -57,6 +57,9 @@ export interface CodexSession {
   close(): Promise<void>;
   /** Work the vendor is still doing between turns (persistent-session.ts). */
   backgroundWorkRunning(): Promise<boolean>;
+  /** The conversation is leaving this process with work still running in it (persistent-session.ts). */
+  retire(): Promise<boolean>;
+  readonly retiredWork: { agents: number; terminals: number };
   /** Compact the thread natively (`thread/compact/start`) and settle on the vendor's own
    * `thread/compacted`. False when no server holds that thread (nothing was done). */
   compactThread(threadId: string): Promise<boolean>;

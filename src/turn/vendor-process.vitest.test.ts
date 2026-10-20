@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
-import { persistentTransports, vendorChildKey, waitForPersistentWork } from './vendor-process.js';
+import { closePersistentTransport, leavePersistentTransport, persistentTransports, persistentWorkRunning, vendorChildKey } from './vendor-process.js';
 
 const harness = { command: 'codex' } as AiLocalHarnessDefinition;
 const account: AiHarnessAccount = {
@@ -18,26 +18,44 @@ describe('vendor child reuse', () => {
 });
 
 describe('account handoff while vendor work is running', () => {
-  afterEach(() => { persistentTransports.delete('work-test'); });
+  afterEach(() => { persistentTransports.delete('work-test'); void closePersistentTransport('work-test'); });
 
-  it('waits for the old process to finish its work before returning', async () => {
-    let running = true;
-    persistentTransports.set('work-test', { key: 'a', transport: 'acp', session: { backgroundWorkRunning: async () => running } } as never);
-    let settled = false;
-    const waiting = waitForPersistentWork('work-test').then(() => { settled = true; });
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(settled).toBe(false);
-    running = false;
-    await waiting;
-    expect(settled).toBe(true);
+  const fake = (running: boolean) => {
+    const calls: string[] = [];
+    let work = running;
+    const session = {
+      backgroundWorkRunning: async () => work,
+      retire: async () => { calls.push('retire'); return work; },
+      close: async () => { calls.push('close'); work = false; },
+      retiredWork: { agents: 0, terminals: running ? 1 : 0 },
+    };
+    return { session, calls, finish: () => { work = false; } };
+  };
+
+  it('leaves a process with work running to it: not waited on, not closed, and still the conversation\'s work', async () => {
+    const old = fake(true);
+    persistentTransports.set('work-test', { key: JSON.stringify(['claude', 'acct-a']), transport: 'acp', session: old.session } as never);
+    await leavePersistentTransport('work-test');
+    expect(old.calls).toEqual(['retire']);
+    expect(persistentTransports.has('work-test')).toBe(false);
+    expect(await persistentWorkRunning('work-test')).toBe(true);
+    old.finish();
+    expect(await persistentWorkRunning('work-test')).toBe(false);
   });
 
-  it('lets a cancelled turn leave the old process running', async () => {
-    persistentTransports.set('work-test', { key: 'a', transport: 'acp', session: { backgroundWorkRunning: async () => true } } as never);
-    const controller = new AbortController();
-    const waiting = waitForPersistentWork('work-test', controller.signal);
-    controller.abort();
-    await expect(waiting).rejects.toMatchObject({ code: 'ERR_TURN_CANCELLED' });
+  it('closes a process with nothing running', async () => {
+    const old = fake(false);
+    persistentTransports.set('work-test', { key: JSON.stringify(['claude', 'acct-a']), transport: 'acp', session: old.session } as never);
+    await leavePersistentTransport('work-test');
+    expect(old.calls).toEqual(['retire', 'close']);
+    expect(await persistentWorkRunning('work-test')).toBe(false);
+  });
+
+  it('leaves only the process of the account named: the conversation may be on another by then', async () => {
+    const current = fake(true);
+    persistentTransports.set('work-test', { key: JSON.stringify(['claude', 'acct-b']), transport: 'acp', session: current.session } as never);
+    await leavePersistentTransport('work-test', { accountId: 'acct-a' });
+    expect(current.calls).toEqual([]);
     expect(persistentTransports.has('work-test')).toBe(true);
   });
 });

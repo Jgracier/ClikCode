@@ -10,7 +10,22 @@ import { isTurnCancelled, turnCancelledError } from '../../agent/cancellation.js
 import { spawnPortable } from './spawn.js';
 import { JsonRpcPeer, type JsonRpcPeerOptions } from './jsonrpc-peer.js';
 import type { BackgroundTurnChannel, BackgroundTurnEnd, OutOfTurnRelay, VendorBackgroundTurnHandler } from './background-turn.js';
-import { processGroup, processGroupMembers, toolCallWork } from './process-group.js';
+import { commandLine, commandRoots, outputFile, processGroup, processGroupMembers, toolCallWork } from './process-group.js';
+import { readFile } from 'node:fs/promises';
+import { redactSecrets } from '../../agent/security.js';
+import type { EndedWork, RunningWork, WorkEndedHandler } from './handoff-work.js';
+
+/** How often a retired process's commands are looked at. */
+const RETIRED_POLL_MS = 3_000;
+/** How much of a finished command's output goes to the conversation. */
+const OUTPUT_TAIL_CHARS = 4_000;
+
+/** The end of what a command wrote to `file`, secrets redacted. */
+async function outputTail(file: string | undefined): Promise<string> {
+  if (!file) return '';
+  const text = await readFile(file, 'utf8').catch(() => '');
+  return redactSecrets(text.length > OUTPUT_TAIL_CHARS ? `...${text.slice(-OUTPUT_TAIL_CHARS)}` : text);
+}
 
 /** How long a cancelled turn gets to unwind before its child is killed. */
 export const CANCEL_SETTLE_MS = 2000;
@@ -24,7 +39,13 @@ export interface PersistentSessionOptions {
   /** Receives what the vendor says with no prompt open and no tool running: it
    * goes into the conversation, and nothing is shown as working for it. */
   outOfTurn?: OutOfTurnRelay;
+  /** Told the work that ends after the conversation left this process (retire), and each agent the
+   * account's usage limit cut off. */
+  workEnded?: WorkEndedHandler;
 }
+
+/** A retired process (retire): its group, and the work in it still running. */
+interface Retirement { root: number; commands: Map<number, RunningWork>; agents: Map<string, RunningWork>; timer?: NodeJS.Timeout }
 
 interface PersistentLive { peer: JsonRpcPeer; key: string; pid?: number }
 interface PersistentTurn { done: boolean; fail: (error: Error) => void }
@@ -56,7 +77,10 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
   protected isClosed = false;
   private readonly spawn: PersistentSpawn;
   private readonly onBackgroundTurn?: VendorBackgroundTurnHandler;
-  protected readonly relay?: OutOfTurnRelay;
+  private readonly outOfTurnRelay?: OutOfTurnRelay;
+  private readonly onWorkEnded?: WorkEndedHandler;
+  /** Set once the conversation has left this process with work still running in it (retire). */
+  private retirement?: Retirement;
   /** The child's process group when the current turn's prompt went out
    * (promptSent): what was already running -- the vendor, its MCP servers. */
   private atPrompt?: Promise<Set<number>>;
@@ -69,7 +93,116 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
   constructor(options: PersistentSessionOptions, private readonly label: string) {
     this.spawn = options.spawn ?? ((binary, argv, spawnOptions) => spawnPortable(binary, [...argv], spawnOptions));
     this.onBackgroundTurn = options.backgroundTurns;
-    this.relay = options.outOfTurn;
+    this.outOfTurnRelay = options.outOfTurn;
+    this.onWorkEnded = options.workEnded;
+  }
+
+  /** Where what the vendor says out of turn goes: nowhere once retired -- the conversation is
+   * another process's now, and this one's follow-ups are not its words. */
+  protected get relay(): OutOfTurnRelay | undefined {
+    return this.retirement ? undefined : this.outOfTurnRelay;
+  }
+
+  /** Whether the conversation has left this process (retire). */
+  get retired(): boolean { return Boolean(this.retirement); }
+
+  /** What a retired process still runs, by kind. */
+  get retiredWork(): { agents: number; terminals: number } {
+    const retirement = this.isClosed ? undefined : this.retirement;
+    return { agents: retirement?.agents.size ?? 0, terminals: retirement?.commands.size ?? 0 };
+  }
+
+  /** Agents the vendor is running in the background (ACP: Claude's `task_*` frames). */
+  protected runningAgents(): RunningWork[] { return []; }
+
+  /** The commands tool calls left running, one per command (commandRoots), with what they run and
+   * where their output goes. */
+  private async leftCommands(): Promise<Map<number, RunningWork>> {
+    const commands = new Map<number, RunningWork>();
+    const root = this.live?.pid;
+    if (this.isClosed || !this.live || this.live.peer.closed || !root || !this.leftRunning.size) return commands;
+    const group = await processGroup(root);
+    for (const pid of this.leftRunning) if (!group.has(pid)) this.leftRunning.delete(pid);
+    for (const pid of commandRoots(group, this.leftRunning, toolCallWork(group, root, this.leftRunning))) {
+      const [label, output] = await Promise.all([commandLine(pid), outputFile(pid)]);
+      commands.set(pid, { id: String(pid), kind: 'command', label: label ?? group.get(pid)?.name ?? 'background command', ...(output ? { outputFile: output } : {}) });
+    }
+    return commands;
+  }
+
+  /** What would be lost by closing this process now. */
+  async runningWork(): Promise<RunningWork[]> {
+    return [...(await this.leftCommands()).values(), ...this.runningAgents()];
+  }
+
+  /** The conversation is leaving this process for another account or provider. Nothing it runs is
+   * waited on, and nothing is killed with it: it takes no more turns and says nothing more into the
+   * conversation, its commands and agents run on, and each one's end goes to `workEnded`. Closed
+   * once nothing is left. False when nothing was running: the caller closes it. */
+  async retire(): Promise<boolean> {
+    if (this.retirement) return true;
+    const root = this.live?.pid;
+    if (this.isClosed || !this.live || this.live.peer.closed || !root) return false;
+    const commands = await this.leftCommands();
+    const agents = new Map(this.runningAgents().map((work) => [work.id, work]));
+    if (!commands.size && !agents.size) return false;
+    const retirement: Retirement = { root, commands, agents };
+    this.retirement = retirement;
+    lifecycle('vendor.retired', { transport: this.label, commands: commands.size, agents: agents.size });
+    // What was following its work in the conversation ends: the conversation is elsewhere.
+    this.finishBackground('superseded');
+    const poll = async (): Promise<void> => {
+      if (this.retirement !== retirement) return;
+      // The group outlives its leader: a command still runs after the vendor itself has gone.
+      const group = await processGroup(retirement.root).catch(() => undefined);
+      if (!group) { retirement.timer = setTimeout(() => void poll(), RETIRED_POLL_MS); return; }
+      const ended: EndedWork[] = [];
+      for (const [pid, work] of retirement.commands) {
+        if (group.has(pid)) continue;
+        retirement.commands.delete(pid);
+        ended.push({ ...work, outcome: 'finished', tail: await outputTail(work.outputFile) });
+      }
+      this.retiredEnded(ended);
+      if (this.retirement === retirement && retirement.commands.size) retirement.timer = setTimeout(() => void poll(), RETIRED_POLL_MS);
+    };
+    retirement.timer = setTimeout(() => void poll(), RETIRED_POLL_MS);
+    return true;
+  }
+
+  /** Retired, and the vendor went: its agents went with it, cut off. Its commands are still
+   * looked at -- a command can outlive the process that started it. */
+  private retiredVendorGone(): void {
+    const retirement = this.retirement;
+    if (!retirement?.agents.size) return;
+    const ended = [...retirement.agents.values()].map((work): EndedWork => ({ ...work, outcome: 'cut-off', tail: 'The process running it ended before it finished.' }));
+    retirement.agents.clear();
+    this.retiredEnded(ended);
+  }
+
+  /** Retired: work that ended is told, and the process is closed once nothing is left. */
+  private retiredEnded(ended: readonly EndedWork[]): void {
+    const retirement = this.retirement;
+    if (!retirement) return;
+    if (ended.length) { try { this.onWorkEnded?.(ended); } catch { /* fail-open-ok: the owner's bookkeeping */ } }
+    if (!retirement.commands.size && !retirement.agents.size) {
+      if (retirement.timer) clearTimeout(retirement.timer);
+      void this.close().catch(() => undefined);
+    }
+  }
+
+  /** An agent ended (`task_notification`). Retired: told, whatever its end. Otherwise only an agent
+   * the account's usage limit cut off: its own process can no longer start it again, the conversation's
+   * next account can. */
+  protected agentEnded(ended: EndedWork): void {
+    const retirement = this.retirement;
+    if (retirement) {
+      if (!retirement.agents.delete(ended.id)) return;
+      this.retiredEnded([ended]);
+      return;
+    }
+    if (ended.outcome === 'cut-off' && ended.limit) {
+      try { this.onWorkEnded?.([ended]); } catch { /* fail-open-ok: the owner's bookkeeping */ }
+    }
   }
 
   /** Forget the vendor work being tracked as still running. */
@@ -96,6 +229,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
    * (session-worker.ts) instead of closing the child under it, and reports
    * it stopped when it must close it. */
   async backgroundWorkRunning(): Promise<boolean> {
+    if (this.retirement) return this.retirement.commands.size + this.retirement.agents.size > 0;
     if (this.isClosed || !this.live || this.live.peer.closed) return false;
     if (this.pendingCount() > 0) return true;
     const root = this.live.pid;
@@ -138,6 +272,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
   }
 
   async close(): Promise<void> {
+    if (this.retirement?.timer) clearTimeout(this.retirement.timer);
     this.isClosed = true;
     if (this.turn) this.cancelTurn(this.turn);
     this.finishBackground('closed');
@@ -152,7 +287,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
 
   /** Throws unless a turn may start now. `name` labels the errors. */
   protected assertIdle(name: string): void {
-    if (this.isClosed) throw new Error(`${name} session is closed`);
+    if (this.isClosed || this.retirement) throw new Error(`${name} session is closed`);
     if (this.turn) throw new Error(`${name} session already has an active turn`);
   }
 
@@ -257,6 +392,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
         ...launch.peer,
         detached,
         onClose: (error) => {
+          this.retiredVendorGone();
           if (this.live === live) {
             this.live = undefined;
             this.finishBackground('closed');
@@ -275,7 +411,8 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
    * the one already open. Without an owner the vendor's out-of-turn work is
    * not surfaced. */
   protected openBackgroundRun(create: () => B): B | undefined {
-    if (!this.onBackgroundTurn || this.isClosed) return undefined;
+    // Retired: what it does now is not the conversation's (retire).
+    if (!this.onBackgroundTurn || this.isClosed || this.retirement) return undefined;
     // A stopped turn still unwinding: what the vendor says now is that turn's
     // tail (a chunk already on its way when the stop landed), not new work.
     // Opened as a background turn it showed "thinking" after Ctrl+C, with

@@ -22,6 +22,7 @@ import { PersistentSession, runOneTurn, turnFailure, type PersistentSessionOptio
 import { lifecycle } from '../../runtime/lifecycle-log.js';
 import { globalMcpServersForAcp } from './acp-mcp-servers.js';
 import { BackgroundAgentRows } from '../events/background-agent-rows.js';
+import { agentResult, limitSentence, VendorTasks, type RunningWork } from './handoff-work.js';
 import { backgroundWork, mergeBackgroundWork, type BackgroundWork } from '../protocol/background-agents.js';
 import { markTurn } from '../../runtime/turn-latency.js';
 import { OTHER_ORG_THINKING_TITLE } from '../protocol/claude-thinking-notice.js';
@@ -131,6 +132,9 @@ export interface AcpSession {
   close(): Promise<void>;
   /** Work the vendor is still doing between turns (persistent-session.ts). */
   backgroundWorkRunning(): Promise<boolean>;
+  /** The conversation is leaving this process with work still running in it (persistent-session.ts). */
+  retire(): Promise<boolean>;
+  readonly retiredWork: { agents: number; terminals: number };
 }
 
 export function acpResponseDelta(update: Json): string | undefined {
@@ -590,6 +594,9 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
   /** Background Agent calls: the call completes at launch, the agent runs on
    * and its row stays open until its own `task_notification` (heldAgentFrame). */
   private readonly heldAgents = new BackgroundAgentRows();
+  /** Claude's background tasks, with each agent's task: what a conversation that moves on has to
+   * answer for (handoff-work.ts). Per vendor process. */
+  private readonly vendorTasks = new VendorTasks();
   /** The background work the vendor's level says is running (claude-agent-acp's
    * `_claude/sdkMessage` background_tasks_changed). Kept between turns: it
    * holds the worker while anything runs, tells the next turn and the
@@ -664,7 +671,13 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     });
   }
 
+  protected runningAgents(): RunningWork[] {
+    return this.vendorTasks.running().filter((work) => work.kind === 'agent');
+  }
+
   protected clearPending(): void {
+    // Tasks are the process's: they go when it does, not when a turn ends.
+    if (!this.live) this.vendorTasks.clear();
     this.pendingTools.clear();
     this.pendingAgents.clear();
     this.heldAgents.settle('tool-done');
@@ -1241,6 +1254,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     if (update.sessionUpdate !== 'tool_call' && update.sessionUpdate !== 'tool_call_update') return;
     const id = typeof update.toolCallId === 'string' ? update.toolCallId : undefined;
     if (!id) return;
+    if (update.rawInput !== undefined) this.vendorTasks.call(id, update.rawInput);
     if (toolSettled(update)) {
       this.pendingTools.delete(id);
       this.pendingAgents.delete(id);
@@ -1399,7 +1413,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     // `_claude/rateLimit` are activity only: the structured readings ride
     // session/update's _meta.
     const message = method === '_claude/sdkMessage' && params.message && typeof params.message === 'object' ? params.message as Json : undefined;
-    if (message) this.heldAgentFrame(params, message);
+    if (message) { this.heldAgentFrame(params, message); this.taskFrame(message); }
     const update = message ? backgroundWork(message) : undefined;
     if (update) return this.backgroundWorkChanged(params, update);
     const target = this.liveTarget(params);
@@ -1428,6 +1442,19 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     const run = this.background;
     if (!run || run.channel.done) return;
     if (!this.backgroundLevel && target === run && this.pendingTools.size === 0 && !this.heldAgents.size) this.finishBackground('completed');
+  }
+
+  /** A background task's start or end (handoff-work.ts). An agent's end is told with its result, or,
+   * when it stopped short, the vendor's own reason -- its usage-limit sentence among them. */
+  private taskFrame(message: Json): void {
+    const ended = this.vendorTasks.frame(message);
+    if (!ended || ended.work.kind !== 'agent') return;
+    const finished = ended.status === 'completed';
+    const limit = finished ? undefined : limitSentence(ended.summary);
+    void (async () => {
+      const tail = (finished ? await agentResult(ended.outputFile) : '') || ended.summary;
+      this.agentEnded({ ...ended.work, outcome: finished ? 'finished' : 'cut-off', tail, ...(limit ? { limit } : {}) });
+    })().catch(() => undefined);
   }
 
   /** A background Agent's lifecycle, from the raw `task_*` frames

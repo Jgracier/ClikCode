@@ -3,7 +3,7 @@ import chalk from 'chalk';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { syncAccountIdentityAfterLogin, withSignIn } from '../commands/account.js';
 import { harnessLoginArgvForModel, modelProvider } from '../runtime/lazy-bridge.js';
-import { closePersistentTransport } from './vendor-process.js';
+import { leavePersistentTransport } from './vendor-process.js';
 import type { VendorTurnContext } from './vendor-turn-context.js';
 
 /** A sign-in that was refused up front because nobody can do it here: a
@@ -27,7 +27,7 @@ export async function signInForTurn(ctx: VendorTurnContext, environment: Readonl
   // person at that terminal: a piped send fails as not signed in.
   if (!signInArgv || (!prompter && !process.stdin.isTTY)) return false;
   ctx.attempt.authRetried = true;
-  await closePersistentTransport(session.id);
+  await leavePersistentTransport(session.id);
   const signIn = { ...harness, loginArgv: signInArgv };
   const signInName = signInArgv === harness.loginArgv ? harness.displayName : `${harness.displayName} › ${model ? modelProvider(harness, model) : ''}`;
   // A worker has no terminal: its client runs the sign-in and says when it

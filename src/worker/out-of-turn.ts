@@ -3,7 +3,7 @@
 import { outOfTurnRecorder } from '../turn/out-of-turn-record.js';
 import { classifyAccountFailure } from '../turn/failover.js';
 import { recordQuotaRefusal } from '../turn/account-outcome.js';
-import { closePersistentTransport } from '../turn/vendor-process.js';
+import { leavePersistentTransport } from '../turn/vendor-process.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import type { OutOfTurnRelay } from '../harness/transport/background-turn.js';
@@ -61,15 +61,33 @@ export function createOutOfTurnRelay(ctx: WorkerContext): OutOfTurn {
 
   const relay: OutOfTurnRelay = (said) => {
     // A vendor process still alive on an account that ran out answers on its own with the refusal. That is the
-    // account being spent, not something the model said: it is marked so the next turn moves on, the old process
-    // is closed so it says nothing more, and the sentence is not written into the conversation.
-    if (said.kind === 'message' && isLimitRefusal(said.text)) {
+    // account being spent, not something the model said: it is marked so the next turn moves on, the conversation
+    // leaves the old process so it says nothing more (work still running in it is kept, and answered for:
+    // handoff-work.ts), and the sentence is not written into the conversation.
+    // Read as the message so far: a vendor that sends the sentence in pieces has it shown as it comes,
+    // and taken back once it is known for what it is.
+    const sofar = said.kind === 'message' && open?.kind === 'message' && said.mode === 'append' ? open.text + said.text : said.text;
+    if (said.kind === 'message' && isLimitRefusal(sofar)) {
+      if (open?.kind === 'message') {
+        if (timer) clearTimeout(timer);
+        timer = undefined;
+        const shown = open;
+        open = undefined;
+        ctx.observer.response('', 'replace');
+        if (ctx.observer.turnGeneration === shown.generation) {
+          void ctx.io.currentSessionAndAccount().then(({ session, account }) => {
+            if (ctx.observer.turnGeneration === shown.generation) ctx.observer.endTurn(session, account);
+          }, () => undefined);
+        }
+      }
       void (async () => {
         const state = await readState({ transcripts: [] });
         const session = state.sessions.find((item) => item.id === ctx.sessionId);
         const account = session?.nativeThreadAccountId ? state.accounts.find((item) => item.id === session.nativeThreadAccountId) : undefined;
-        if (account) { recordQuotaRefusal(state, account, new Error(said.text)); await writeState(state); }
-        await closePersistentTransport(ctx.sessionId);
+        if (!account) return;
+        recordQuotaRefusal(state, account, new Error(sofar));
+        await writeState(state);
+        await leavePersistentTransport(ctx.sessionId, { accountId: account.id });
       })().catch(() => undefined);
       return;
     }

@@ -9,8 +9,8 @@ import { nativeGeneratedTitle } from '../session/discovery/titles.js';
 import { writeState } from '../session/state/write.js';
 import { emitHarnessOutput } from '../harness/output.js';
 import type { TurnUsage } from '../harness/protocol/turn-usage.js';
-import { recordSuccessfulAccountTurn } from './account-outcome.js';
-import { persistentWorkRunning, waitForPersistentWork } from './vendor-process.js';
+import { recordQuotaRefusal, recordSuccessfulAccountTurn } from './account-outcome.js';
+import { endsWithLimitRefusal } from '../harness/transport/handoff-work.js';
 import { settleHeldVendor } from './turn-steps.js';
 import { completeTurnCheckpoint } from './turn-journal.js';
 import { recordInvocation, showStopReason } from './turn-output.js';
@@ -43,10 +43,6 @@ export async function settleAttempt(ctx: VendorTurnContext, observer: VendorObse
     }
     result = { ...result, isError: true, errorMessage: replyError.notice, ...(replyError.statusCode !== undefined ? { statusCode: replyError.statusCode } : {}) };
     record.result = result;
-  }
-  if (result.isError && await persistentWorkRunning(session.id)) {
-    prompter?.phase('waiting for running work');
-    await waitForPersistentWork(session.id, signal);
   }
   if (result.isError) await settleHeldVendor(session.id, prompter, signal);
   if (!session.nativeSessionId && result.nativeSessionId) { session.nativeSessionId = result.nativeSessionId; session.nativeThreadAccountId = ctx.account.id; }
@@ -82,7 +78,12 @@ export async function completeVendorTurn(ctx: VendorTurnContext, observer: Vendo
   }
   const usage = observer.usage() as TurnUsage | undefined;
   const invocation = recordInvocation(state, { sessionId: session.id, accountId: ctx.account.id, provider: harness.provider, model: ctx.model, startedAt: ctx.startedAt, usage });
-  recordSuccessfulAccountTurn(ctx.account);
+  // Claude answers a background agent's end with its refusal when the account has just run out, and
+  // the prompt still ends as answered. That is the account spent, not served: recorded as a refusal, so
+  // the next turn moves on -- recorded as a success it cleared the mark and set the 100% reading aside.
+  const refusal = endsWithLimitRefusal(session.pendingTurn?.response ?? result.text ?? '');
+  if (refusal) recordQuotaRefusal(state, ctx.account, new Error(refusal));
+  else recordSuccessfulAccountTurn(ctx.account);
   showStopReason(prompter, usage?.stopReason);
   const completedText = await completeTurnCheckpoint(session, ctx.checkpoint, result.text, {
     ...(harness.titleSource === 'vendor'

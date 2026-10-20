@@ -3,7 +3,7 @@
  * one ('pass'); when none applies the turn moves to another account. */
 import { forgetNativeThread } from '../session/native-thread.js';
 import { diagnostic, lifecycle } from '../runtime/lifecycle-log.js';
-import { closePersistentTransport, closeStandby, standbyFor } from './vendor-process.js';
+import { closeStandby, leavePersistentTransport, standbyFor } from './vendor-process.js';
 import { moveThreadToAccount } from '../session/carry.js';
 import { switchAccountAfterFailure } from './account-switch.js';
 import { classifyAccountFailure, type AccountFailureKind } from './failover.js';
@@ -67,7 +67,7 @@ async function retryOnFreshThread(ctx: VendorTurnContext, failed: Failed): Promi
   ctx.attempt.nativeThreadRetried = true;
   // The one notice of this recovery; the flag above makes it once per attempt.
   diagnostic('vendor.thread-not-resumed', `${ctx.harness.displayName} could not resume its thread; continuing on a new one with the conversation carried over`);
-  await closePersistentTransport(ctx.session.id);
+  await leavePersistentTransport(ctx.session.id);
   forgetNativeThread(ctx.session);
   ctx.turnText = await retell(ctx, ctx.askedText, 'clear', Boolean(ctx.session.pendingTurn?.outputStarted || failed.cliOutputStarted));
   return 'retry';
@@ -98,7 +98,7 @@ async function switchAccount(ctx: VendorTurnContext, failed: Failed): Promise<vo
       const wrote = refusalOnly ? wroteBefore : Boolean(session.pendingTurn?.outputStarted || cliOutputStarted);
       // Closing after the last tool settled lets the vendor flush its own
       // transcript before the receiving account copies it.
-      await closePersistentTransport(session.id);
+      await leavePersistentTransport(session.id);
       const closeMs = Date.now() - switchAt - chooseMs;
       // The account this turn opened a standby for, its thread loaded as it
       // stood before this turn: taken up when the attempt wrote nothing, so

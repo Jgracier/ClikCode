@@ -8,7 +8,7 @@ import { harnessCanRunTurns, harnessSupportsImages, localHarnessForCommand, loca
 import type { prepareAttachments } from '../session/attachments.js';
 import { sessionTranscriptMessages } from './checkpoint.js';
 import { turnAccounts, turnBackendForAccount } from './account-routing.js';
-import { closePersistentTransport } from './vendor-process.js';
+import { leavePersistentTransport } from './vendor-process.js';
 import { startTurnCheckpoint, type DurableTurnCheckpoint } from './turn-journal.js';
 import type { TurnObserver } from './observer.js';
 import type { TurnRunOptions } from './session-turn.js';
@@ -117,7 +117,7 @@ export async function createVendorTurnContext(input: {
   const accounts = turnAccounts({
     state, session, prompter, matchesBackend: (item) => turnBackendForAccount(item) === 'vendor',
     persist: () => checkpoint.persistNow(), current: () => context.account, adopt: (to) => { context.account = to; },
-    beforeSwitch: () => closePersistentTransport(session.id),
+    beforeSwitch: () => leavePersistentTransport(session.id),
   });
   const context: VendorTurnContext = {
     state, session, harness, text, startedAt, signal, run, prompter, checkpoint, accounts,
