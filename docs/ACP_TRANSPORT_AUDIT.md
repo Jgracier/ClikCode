@@ -2,7 +2,7 @@
 
 Checked on Linux on 2026-09-30 against the [official ACP registry](https://agentclientprotocol.com/get-started/registry). The registry verifies that an agent advertises authentication in its ACP handshake. That does not establish that a particular account can finish a turn, that the adapter preserves the vendor's native sessions, or that it carries every ClikCode control.
 
-ClikCode catalogs 29 harnesses. Twenty-one now prefer ACP for a new ordinary chat. Existing vendor sessions retain the transport that created them; the structured CLI remains available when an ACP agent cannot carry a requested image, model, or reasoning setting. These are compatibility paths, not parallel guesses at the same session ID.
+ClikCode catalogs 29 harnesses (recounted from the catalog on 2026-10-20). Twenty-two now run a new ordinary chat over ACP; Codex uses its own app-server, and Aider, Amp, Antigravity, Pi, OpenClaw and Continue run as one-shot CLIs. Existing vendor sessions retain the transport that created them; the structured CLI remains available when an ACP agent cannot carry a requested image, model, or reasoning setting. These are compatibility paths, not parallel guesses at the same session ID.
 
 | Existing harness | Registry integration | Decision and evidence |
 | --- | --- | --- |
