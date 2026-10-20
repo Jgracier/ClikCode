@@ -6,6 +6,7 @@
  * how long the conversation is. */
 
 import { readSessionTranscript } from '../session/store/transcripts.js';
+import { cloneData } from '../session/store/data.js';
 import type { WorkerEvent } from './protocol.js';
 
 type Snapshot = Extract<WorkerEvent, { type: 'snapshot' }>;
@@ -25,7 +26,8 @@ async function savedMessages(sessionId: string, count: number): Promise<NonNulla
     await new Promise((resolve) => setTimeout(resolve, READ_AGAIN_MS));
     messages = (await readSessionTranscript(sessionId)).messages ?? [];
   }
-  return messages.length > count ? messages.slice(0, count) : messages;
+  // The stored history itself (frozen): the window gets its own copy.
+  return cloneData(messages.length > count ? messages.slice(0, count) : messages);
 }
 
 /** The snapshot a window's consumers expect: whole. One that arrived whole

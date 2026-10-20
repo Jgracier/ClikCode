@@ -121,7 +121,9 @@ interface ListSource<T> { list: readonly T[]; length: number; last: T | undefine
  * the invocation log, on every 250 ms checkpoint of a streaming turn. Lists
  * here only ever grow or are replaced: nothing rewrites an entry in the
  * middle of one in place. Any other change falls back to comparing the whole
- * list, and a copy only when it really differs. */
+ * list, and a copy only when it really differs -- of the entries that are not
+ * frozen: a history as read is (store/transcripts.ts), so a turn's end copies
+ * the messages it added, not the conversation. */
 function baselineList<T>(
   working: readonly T[] | undefined, kept: readonly T[] | undefined, from: ListSource<T> | undefined,
 ): { copy: T[] | undefined; from: ListSource<T> | undefined } {
@@ -131,7 +133,11 @@ function baselineList<T>(
     (from?.list === working && from.length === working.length && from.last === source.last
       && sameData(kept[kept.length - 1], source.last))
     || sameData(kept, working));
-  return { copy: unchanged ? kept as T[] : cloneData(working as T[]), from: source };
+  // A frozen entry (a history as read: store/transcripts.ts) cannot change, so the copy shares it.
+  const copy = unchanged ? kept as T[]
+    : Object.isFrozen(working) ? working as T[]
+      : working.map((item) => (Object.isFrozen(item) ? item : cloneData(item)));
+  return { copy, from: source };
 }
 
 export interface StateBaselineData {

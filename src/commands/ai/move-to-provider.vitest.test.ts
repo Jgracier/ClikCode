@@ -64,7 +64,7 @@ describe('moveToProvider', () => {
     await onClaude({ pendingTurn: undefined });
     await moveToProvider('s1', 'codex', { model: 'gpt-5' });
     const state = await readState();
-    state.sessions[0]!.messages!.push({ role: 'user', content: 'still?' }, { role: 'assistant', content: 'PLUM', origin: { harness: 'codex', route: 'local', provider: 'openai', model: 'gpt-5' } });
+    state.sessions[0]!.messages = [...state.sessions[0]!.messages!, { role: 'user', content: 'still?' }, { role: 'assistant', content: 'PLUM', origin: { harness: 'codex', route: 'local', provider: 'openai', model: 'gpt-5' } }];
     state.sessions[0]!.nativeSessionId = 'codex-thread';
     await writeState(state);
     await moveToProvider('s1', 'claude', { model: 'opus' });

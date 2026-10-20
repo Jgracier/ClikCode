@@ -67,7 +67,10 @@ describe('a fork that shares its parent\'s history', () => {
 
     // Another process appends to the child meanwhile.
     const other = await readState();
-    other.sessions.find((item) => item.id === 'c')!.messages!.push({ role: 'assistant', content: 'from elsewhere' });
+    const theirs = other.sessions.find((item) => item.id === 'c')!;
+    // A history as read is frozen: a writer replaces it.
+    expect(() => theirs.messages!.push({ role: 'assistant', content: 'in place' })).toThrow(TypeError);
+    theirs.messages = [...theirs.messages!, { role: 'assistant', content: 'from elsewhere' }];
     await writeState(other);
 
     // This one undoes the parent's last exchange: the child must not change.
