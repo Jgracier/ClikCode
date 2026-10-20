@@ -30,6 +30,16 @@ async function outputTail(file: string | undefined): Promise<string> {
 /** How long a cancelled turn gets to unwind before its child is killed. */
 export const CANCEL_SETTLE_MS = 2000;
 
+/** How long a setup request (handshake, session or thread open, model and mode
+ * changes) may go with nothing at all from the agent before it is given up as
+ * stalled. An idle window, not a deadline: any message or output restarts it,
+ * so a cold `session/load` streaming a huge thread is never cut off. MEASURED
+ * 2026-10-20 over ~400 ACP setups in lifecycle.log (`vendor.acp.ready`): the
+ * slowest whole setup took 11s and the slowest thread load 7.5s; five minutes
+ * of total silence is far past anything a live agent does. The prompt turn
+ * itself has no clock: an agent legitimately works for hours. */
+export const SETUP_IDLE_MS = 5 * 60_000;
+
 type PersistentSpawn = (binary: string, argv: readonly string[], options: SpawnOptions) => ChildProcess;
 
 export interface PersistentSessionOptions {
@@ -42,6 +52,8 @@ export interface PersistentSessionOptions {
   /** Told the work that ends after the conversation left this process (retire), and each agent the
    * account's usage limit cut off. */
   workEnded?: WorkEndedHandler;
+  /** SETUP_IDLE_MS, shortened by tests. */
+  setupIdleMs?: number;
 }
 
 /** A retired process (retire): its group, and the work in it still running. */
@@ -79,6 +91,8 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
   private readonly onBackgroundTurn?: VendorBackgroundTurnHandler;
   private readonly outOfTurnRelay?: OutOfTurnRelay;
   private readonly onWorkEnded?: WorkEndedHandler;
+  /** The request options of a setup step (SETUP_IDLE_MS). */
+  protected readonly setupRequest: { timeoutMs: number; idleReset: true };
   /** Set once the conversation has left this process with work still running in it (retire). */
   private retirement?: Retirement;
   /** The child's process group when the current turn's prompt went out
@@ -95,6 +109,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     this.onBackgroundTurn = options.backgroundTurns;
     this.outOfTurnRelay = options.outOfTurn;
     this.onWorkEnded = options.workEnded;
+    this.setupRequest = { timeoutMs: options.setupIdleMs ?? SETUP_IDLE_MS, idleReset: true };
   }
 
   /** Where what the vendor says out of turn goes: nowhere once retired -- the conversation is

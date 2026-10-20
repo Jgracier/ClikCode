@@ -752,16 +752,15 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     const cold = !live.capabilities;
     let threadLoadMs = 0;
     const { peer } = live;
-    // Setup requests carry no clock. A starting agent answers when it is ready
-    // (cold start under load is slow, not broken); a dead one rejects them when
-    // its process exits, and Esc or the turn ending rejects them too.
-    const setup: { timeoutMs?: number } = {};
-    // Past the handshake, a request waits on the agent's backend, which is
-    // still starting: Claude Code connects every MCP server before it takes a
-    // control request, and its adapter answers set_config_option only once
-    // Claude Code has. That can take far longer than a handshake, and is not a
-    // fault. No clock; Esc still cancels it.
-    const control: { timeoutMs?: number } = {};
+    // Setup requests -- the handshake, the session or thread, model, mode and
+    // effort -- are bounded by an idle window (SETUP_IDLE_MS): anything from the
+    // agent restarts it, so a cold start or a huge thread streaming in is never
+    // cut off, but an agent that is alive and says nothing for minutes fails the
+    // turn naming the step it stalled at, instead of blocking until Esc.
+    // Claude Code connects every MCP server before it takes a control request:
+    // slow, and inside that window.
+    const setup = this.setupRequest;
+    const control = this.setupRequest;
     // Said once, only for an agent this turn started (one already running
     // answers at once), and only when it is slow to: not a flash every turn.
     let announced = Boolean(live.capabilities);
@@ -799,7 +798,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     // (`authenticate`): its own browser login showed no link on ClikCode's
     // screen and, from a phone, waited for ever (Devin, 2026-10-06). The error
     // reaches the turn, which signs in on ClikCode's screen like any other.
-    const call = (method: string, params: Json, options: { timeoutMs?: number } = setup): Promise<Json> =>
+    const call = (method: string, params: Json, options: { timeoutMs?: number; idleReset?: boolean } = setup): Promise<Json> =>
       peer.request(method, params, options);
     const capabilities = live.capabilities;
     const directories = input.additionalDirectories ?? [];
@@ -825,10 +824,9 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     }
     if (wanted) {
       if (live.sessionId !== wanted) {
-        // No clock on the load either: it streams the whole history, or
+        // Only the idle window on the load: it streams the whole history, or
         // answers when a starting agent is ready. A dead agent rejects it on
-        // exit, Esc or the turn ending rejects it, and the `connecting` phase
-        // says what it waits on.
+        // exit, and the `connecting` phase says what it waits on.
         this.sessionTotals = {};
         this.costStartUnknown = input.command === 'claude';
         if (!capabilities.sessionCapabilities?.resume && !capabilities.loadSession) throw new Error(`${input.command} ACP cannot load sessions`);

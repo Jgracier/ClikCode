@@ -578,8 +578,9 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     const overrides = { ...(input.configOverrides ? { config: input.configOverrides } : {}), ...(input.extraThreadParams ?? {}) };
     const live = await this.ensureLive(input, JSON.stringify(overrides));
     const { peer } = live;
-    // No clock on setup: see the ACP client. A dead app-server rejects these on exit.
-    const setup: { timeoutMs?: number } = {};
+    // Setup is bounded by an idle window, as in the ACP client (SETUP_IDLE_MS); a
+    // dead app-server rejects these on exit. turn/start is the turn: no clock.
+    const setup = this.setupRequest;
     const stillRunning = (): void => { if (turn.done) throw turnCancelledError(); };
     if (!live.initialized) {
       await peer.request('initialize', { clientInfo: { name: 'clikcode', title: 'ClikCode', version: '1' }, capabilities: { experimentalApi: false, requestAttestation: false } }, setup);
@@ -602,7 +603,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
         // Only the thread is wanted; its history is already ClikCode's.
         // Without excludeTurns Codex sends every turn back and says the
         // full-history hydration is deprecated (0.155.1).
-        ? await peer.request('thread/resume', { threadId: wanted, excludeTurns: true, ...params }, { ...setup, idleReset: true })
+        ? await peer.request('thread/resume', { threadId: wanted, excludeTurns: true, ...params }, setup)
         : await peer.request('thread/start', params, setup);
       stillRunning();
       const thread = (threadResult.thread as JsonObject | undefined) ?? {};
@@ -624,7 +625,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     const turnResult = await peer.request('turn/start', codexTurnStartParams({
       threadId, prompt: input.prompt, images: input.images, cwd: input.cwd, model: input.model, effort: input.effort,
       permissionMode: input.permissionMode,
-    }), setup);
+    }), {});
     stillRunning();
     turn.turnId = String(((turnResult.turn as JsonObject) ?? {}).id ?? '');
     if (!turn.turnId) throw new Error('Codex app-server did not return a turn id');

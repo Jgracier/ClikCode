@@ -208,6 +208,24 @@ describe('JSON-RPC peer', () => {
     expect(settled).toHaveBeenCalledTimes(1);
   });
 
+  it('counts any output, stderr included, as the server still working, and names the stalled step', async () => {
+    vi.useFakeTimers();
+    const child = new FakeChild();
+    const peer = peerFor(child);
+    const load = peer.request('session/load', {}, { timeoutMs: 1000, idleReset: true });
+    const assertion = expect(load).rejects.toMatchObject({ code: 'ERR_JSONRPC_TIMEOUT', message: 'fake stalled at session/load: nothing from it for 1s' });
+    for (let index = 0; index < 3; index += 1) {
+      await vi.advanceTimersByTimeAsync(800);
+      child.stderr.write('loading MCP servers...\n');
+      await vi.advanceTimersByTimeAsync(800);
+      child.stdout.write('{"partial":');
+      await vi.advanceTimersByTimeAsync(1);
+    }
+    expect(peer.pendingCount).toBe(1);
+    await vi.advanceTimersByTimeAsync(1001);
+    await assertion;
+  });
+
   it('routes notifications and server requests, answering unknown methods with -32601', async () => {
     const child = new FakeChild();
     const notes: string[] = [];
