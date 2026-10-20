@@ -245,5 +245,7 @@ export async function computerConnectorProof(id: string): Promise<void> {
   const { syncConnectorProof } = await import('../agent/computer/connector-proof.js');
   const { proof, task } = await syncConnectorProof(stateDirectory(), id);
   if (isJsonDefaultMode()) return emitResult({ computer: { connectorProof: proof, task } });
-  process.stdout.write(`${id}: ${proof.ready ? 'proven' : 'not proven'}${proof.coverage ? ` (${proof.coverage.passing}/${proof.coverage.total} live checks)` : ''}\n${proof.problems.join('\n')}\n`);
+  const left = proof.missing?.length ? proof.missing.map((m) => `  - ${m.item}: ${m.fix}`).join('\n') : proof.problems.map((p) => `  - ${p}`).join('\n');
+  const finished = proof.done?.length ? `\nFinished: ${proof.done.join(', ')}` : '';
+  process.stdout.write(`${id}: ${proof.ready ? 'finished' : 'not finished'}${proof.coverage ? ` (${proof.coverage.passing}/${proof.coverage.total} live checks)` : ''}${finished}\n${left ? `Left to do:\n${left}\n` : ''}${proof.next ? `Next: ${proof.next}\n` : ''}`);
 }

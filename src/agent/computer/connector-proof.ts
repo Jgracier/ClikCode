@@ -11,6 +11,10 @@ export type ConnectorProof = {
   testsDigest: string;
   coverage: { total: number; passing: number; writesNotRun?: number; deliveriesNotRun?: number } | null;
   problems: string[];
+  /** ClikDeploy's checklist (absent from an older ClikDeploy): what is finished, what is left with a one-line fix each, and the first thing to do. */
+  done?: string[];
+  missing?: Array<{ area: string; item: string; fix: string }>;
+  next?: string | null;
 };
 
 export function parseConnectorProof(text: string, id: string): ConnectorProof {
@@ -36,7 +40,7 @@ export async function syncConnectorProof(stateDir: string, id: string): Promise<
     connectors: [id],
     note: proof.ready
       ? `ClikDeploy proof ${proof.specVersion} ${proof.testsDigest}: ${proof.coverage?.passing ?? 0}/${proof.coverage?.total ?? 0} live checks`
-      : proof.problems.slice(0, 3).join('; '),
+      : proof.next ?? proof.problems.slice(0, 3).join('; '),
   });
   return { proof, task };
 }

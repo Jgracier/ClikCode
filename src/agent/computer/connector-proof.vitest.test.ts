@@ -28,3 +28,17 @@ it('uses the remote verdict to mark a local proof task done, without receiving c
   expect(task).toMatchObject({ vendor: 'acme', kind: 'connector-proof', status: 'done' });
   expect(await readFile(join(dir, 'argv'), 'utf8')).toContain('connector_proof');
 });
+
+it('keeps ClikDeploy\'s next step as the note on an unfinished connector, and tolerates an older ClikDeploy without a checklist', async () => {
+  dir = await mkdtemp(join(tmpdir(), 'proof-'));
+  const bin = join(dir, 'bin'); await mkdir(bin);
+  const verdict = (extra: object) => JSON.stringify({ status: 'success', data: { success: true, data: { id: 'acme', ready: false, specVersion: 'v-1', testsDigest: 't-1', coverage: null, problems: ['connector.logo: add a logo'], ...extra } } });
+  await writeFile(join(bin, 'clikdeploy'), `#!/bin/sh\ncat <<'EOF'\n${verdict({ done: ['Name'], missing: [{ area: 'identity', item: 'connector.logo', fix: 'add a logo' }], next: 'connector.logo: add a logo' })}\nEOF\n`);
+  await chmod(join(bin, 'clikdeploy'), 0o755);
+  process.env.PATH = `${bin}:${oldPath}`;
+  const { task } = await syncConnectorProof(dir, 'acme');
+  expect(task).toMatchObject({ status: 'queued', note: 'connector.logo: add a logo' });
+  await writeFile(join(bin, 'clikdeploy'), `#!/bin/sh\ncat <<'EOF'\n${verdict({})}\nEOF\n`);
+  expect((await syncConnectorProof(dir, 'acme')).task.note).toBe('connector.logo: add a logo');
+});
+
