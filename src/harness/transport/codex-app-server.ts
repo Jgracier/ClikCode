@@ -246,6 +246,12 @@ export function codexUsageLimitRefusal(rateLimits: unknown): { message: string; 
   return { message: `You've hit your usage limit.${at}`, codexErrorInfo: 'usageLimitExceeded' };
 }
 
+/** A rate-limit snapshot that tells something of the plan: a window, or a limit reached. */
+function codexSnapshotSaysSomething(snapshot: JsonObject): boolean {
+  const reached = snapshot.rateLimitReachedType ?? snapshot.rate_limit_reached_type;
+  return Boolean(asRecord(snapshot.primary) || asRecord(snapshot.secondary) || (reached !== undefined && reached !== null && reached !== ''));
+}
+
 /** What the user is approving: the command and where it runs, or the files. */
 function codexApprovalDetail(params: JsonObject, item?: JsonObject): string {
   const lines: string[] = [];
@@ -457,6 +463,24 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     const info = thread?.codexErrorInfo ?? thread?.codex_error_info ?? refusal?.codexErrorInfo;
     const error = Object.assign(new Error(text), flags, info !== undefined ? { codexErrorInfo: info } : {}, stderrTail ? { stderrTail } : {});
     return Object.assign(error, codexErrorKind(error));
+  }
+
+  /** Codex gave up on the thread. It says why right after -- `error`, then turn/completed with the same
+   * error ("You've hit your usage limit", `usageLimitExceeded`) -- but a turn/completed may never follow.
+   * Its messages come in order, so the answer to a request sent now comes after everything it said before
+   * reading it: the turn ends on the vendor's own reason if it gave one, else as a system error. The
+   * request is the account's rate limits, so a spent plan is told even when no reason came. */
+  private settleSystemError(turn: ActiveTurn): void {
+    const peer = this.live?.peer;
+    const end = (): void => {
+      if (turn.done || turn !== this.turn) return;
+      turn.complete(this.vendorFailure(turn, 'Codex reported a system error on this thread', { codexSystemError: true }));
+    };
+    if (!peer) return end();
+    peer.request('account/rateLimits/read', undefined as never, { timeoutMs: CANCEL_SETTLE_MS }).then((answer) => {
+      const read = asRecord(asRecord(answer)?.rateLimits);
+      if (read && codexSnapshotSaysSomething(read)) turn.rateLimits = read;
+    }, () => undefined).finally(end);
   }
 
   protected closedTurnError(turn: ActiveTurn, error: Error): Error {
@@ -946,8 +970,12 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
         observer.onUsage?.(turnUsage.usage);
       }
     } else if (method === 'account/rateLimits/updated') {
+      // Codex reports each limit on its own: the plan's (`codex`, with its 5h and weekly windows) and others
+      // (`premium`: credits, no windows), back to back. One with no windows and no limit reached says nothing
+      // of the plan, and must not replace the reading that does -- it came between a window at 100% and the
+      // refusal, and the spent plan was read as an unexplained system error.
       const snapshot = asRecord(params.rateLimits);
-      if (snapshot) target.rateLimits = snapshot;
+      if (snapshot && codexSnapshotSaysSomething(snapshot)) target.rateLimits = snapshot;
       observer.onRateLimits?.(params.rateLimits);
     } else if (method === 'turn/completed') {
       const completedTurn = (params.turn as JsonObject) ?? {};
@@ -975,10 +1003,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
       this.openApprovals.get(id)?.();
     } else if (method === 'thread/status/changed') {
       const status = asRecord(params.status);
-      if (status?.type === 'systemError' && target === this.turn) {
-        // Codex gave up on the thread; a turn/completed may never follow.
-        (target as ActiveTurn).complete(this.vendorFailure(target, 'Codex reported a system error on this thread', { codexSystemError: true }));
-      } else if (Array.isArray(status?.activeFlags) && status.activeFlags.includes('waitingOnUserInput')) observer.onPhase?.('waiting for input in Codex');
+      if (status?.type === 'systemError' && target === this.turn) this.settleSystemError(target as ActiveTurn); else if (Array.isArray(status?.activeFlags) && status.activeFlags.includes('waitingOnUserInput')) observer.onPhase?.('waiting for input in Codex');
     } else if (method === 'item/autoApprovalReview/started' || method === 'autoApprovalReview/strictReviewRequired') {
       observer.onPhase?.('reviewing an approval');
     } else if (method === 'mcpServer/startupStatus/updated') {
