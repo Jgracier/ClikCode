@@ -5,6 +5,11 @@ section covers a release line.
 
 ## 0.2
 
+- **One ClikCode process per window, not one per chat.** The side bar and every chat tab used to start
+  a ClikCode of their own (120-330 MB each; six or seven in a busy window). They now share one, which
+  exits when the last chat closes; a chat that closes leaves the others running. Turn
+  `clikcode.sharedProcess` off to go back to a process per chat. An installed ClikCode older than
+  this extension still gets one per chat.
 - **A compaction no longer shows up as a message you wrote.** Claude Code hands its own summary back to
   itself after `/compact`; the panel drew that as your prompt. It is now hidden, like other notes only the
   model reads, and the compaction shows as "Compact conversation".

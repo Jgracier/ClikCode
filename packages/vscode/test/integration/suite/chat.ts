@@ -362,10 +362,17 @@ export function chatSuite(): void {
       for (const shownBy = Date.now() + 10_000; chatTabs().length < 3 && Date.now() < shownBy;) await sleep(200);
       const tabs = chatTabs();
       assert.strictEqual(tabs.length, 3, 'three chat tabs in the editor');
+      const bridgeProcesses = (): number => {
+        try { return execFileSync('pgrep', ['-P', String(process.pid), '-f', 'ide-bridge'], { encoding: 'utf8' }).split(/\s+/).filter(Boolean).length; } catch { return 0; }
+      };
+      // One ClikCode for the window (bridge-pool.ts), not one per chat.
+      for (const by = Date.now() + 10_000; bridgeProcesses() > 1 && Date.now() < by;) await sleep(200);
+      assert.strictEqual(bridgeProcesses(), 1, 'the side bar and the three tabs share one bridge process');
       await screenshot('tabs');
       await vscode.window.tabGroups.close(tabs);
       for (const closeBy = Date.now() + 10_000; api.tabs && Date.now() < closeBy;) await sleep(200);
       assert.strictEqual(api.tabs, 0);
+      assert.strictEqual(bridgeProcesses(), 1, 'closing the tabs left the side bar\'s process running');
       await vscode.commands.executeCommand('clikcode.open');
       await sleep(500);
     });

@@ -1,6 +1,6 @@
 /** Requests to the bridge: how long each kind may take, and what is said when
  * one cannot be delivered. */
-import type { BridgeClient } from '../bridge-client';
+import type { BridgeEndpoint } from '../bridge-client';
 import type { IdeRequest } from '../protocol';
 
 /** Deadlines (ms) for what the bridge is asked. */
@@ -17,7 +17,7 @@ export const TIMEOUT = {
 
 /** Hands a request to the bridge; when it is gone the user is told (through
  * `warn`), not left waiting on something that will never be heard. */
-export function deliver(bridge: BridgeClient | undefined, request: IdeRequest, what: string, warn: (text: string) => void): boolean {
+export function deliver(bridge: BridgeEndpoint | undefined, request: IdeRequest, what: string, warn: (text: string) => void): boolean {
   if (bridge?.send(request)) return true;
   warn(`${what} was not delivered: ClikCode is not connected. Try again once it has reconnected.`);
   return false;
