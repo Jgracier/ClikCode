@@ -424,7 +424,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
    * Bounded by the setup's own idle window; close() stops waiting at once. */
   protected settleSetup(setup: Promise<unknown>): void {
     let release!: () => void;
-    const settled = new Promise<void>((resolve) => { release = resolve; void setup.then(resolve, resolve); });
+    const settled = new Promise<void>((resolve) => { release = resolve; void setup.then(() => resolve(), () => resolve()); });
     this.releaseSetup = release;
     const settling: Promise<void> = settled.finally(() => {
       if (this.releaseSetup === release) this.releaseSetup = undefined;
@@ -464,7 +464,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     binary: string; argv: readonly string[]; cwd: string; environment?: Readonly<Record<string, string>>;
     peer: Omit<JsonRpcPeerOptions, 'detached' | 'onClose'>;
   }, fields: Omit<L, 'peer' | 'key'>): L {
-    if (this.reusable(key)) {
+    if (this.live && this.reusable(key)) {
       markTurn('spawned', { reused: true, transport: this.label });
       return this.live;
     }
