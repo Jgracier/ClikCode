@@ -364,7 +364,9 @@ export class ClikCodeController implements vscode.Disposable {
         // and the new bridge's snapshot says where it got to (and re-asks any
         // approval it is waiting on).
         this.setModel({ ...this.model, connection: 'starting', approvals: [], busy: undefined, signIn: undefined, connectionError: undefined });
-        setTimeout(() => { if (!this.disposed && !this.bridge) void this.ensureStarted(); }, 500);
+        // At once: AutoReconnect already limits this to one a minute, and a
+        // fixed pause only made the panel wait on a guess.
+        void this.ensureStarted();
         return;
       }
       this.setModel(connectionLost(this.model, {
@@ -410,15 +412,14 @@ export class ClikCodeController implements vscode.Disposable {
       if (this.bridge !== bridge) return;
       this.shownToBridge = undefined;
       this.visibilityChanged();
-      const resume = sessionToResume ?? this.model.sessionId ?? (this.first?.mode === 'resume' ? this.first.sessionId : undefined);
-      const mode = resume ? 'resume' : this.first?.mode ?? settings.get<'continue' | 'new'>('startWith') ?? 'continue';
-      await bridge.call({ type: 'open', workspace: this.workspaceFolder(), mode, ...(resume ? { sessionId: resume } : {}), features: IDE_FEATURES }).catch(async (error: unknown) => {
-        // A new chat nothing was sent in was never stored: reconnecting (a
-        // rebuild, clikcode.restart) has nothing to resume, and failing here
-        // left the panel dead. It is still a new chat.
-        if (!resume || !/no chat matches/.test(errorText(error))) throw error;
-        await bridge.call({ type: 'open', workspace: this.workspaceFolder(), mode: 'new', features: IDE_FEATURES });
-      });
+      // A new chat nothing was sent in was never stored: reconnecting (a
+      // rebuild, clikcode.restart) has nothing to resume, and resuming it
+      // failed and left the panel dead. This window knows it is empty, so it
+      // opens a new chat directly rather than learning that from an error.
+      const neverStored = !sessionToResume && Boolean(this.model.sessionId) && !this.model.messages.length && !this.model.running && !this.model.pendingPrompt;
+      const resume = neverStored ? undefined : sessionToResume ?? this.model.sessionId ?? (this.first?.mode === 'resume' ? this.first.sessionId : undefined);
+      const mode = neverStored ? 'new' : resume ? 'resume' : this.first?.mode ?? settings.get<'continue' | 'new'>('startWith') ?? 'continue';
+      await bridge.call({ type: 'open', workspace: this.workspaceFolder(), mode, ...(resume ? { sessionId: resume } : {}), features: IDE_FEATURES });
     } catch (error) {
       if (this.bridge !== bridge) return; // replaced, or refused as incompatible (already reported)
       const message = errorText(error);
@@ -763,13 +764,14 @@ export class ClikCodeController implements vscode.Disposable {
       default:
         break;
     }
-    await this.ensureStarted();
-    const bridge = this.bridge;
-    if (!bridge?.running) throw new Error('ClikCode is not connected.');
+    // open() starts the bridge itself.
     if (request.method === 'open') {
       await this.open(request.mode, request.sessionId);
       return undefined;
     }
+    await this.ensureStarted();
+    const bridge = this.bridge;
+    if (!bridge?.running) throw new Error('ClikCode is not connected.');
     if (request.method === 'query') {
       const data = await bridge.call({ type: 'query', query: request.query, ...(request.provider ? { provider: request.provider } : {}), ...(request.network ? { network: true } : {}) }, TIMEOUT.query);
       if (request.query !== 'conversations') return data;
