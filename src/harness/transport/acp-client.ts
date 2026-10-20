@@ -13,6 +13,7 @@ import { eventDiff } from '../../agent/line-diff.js';
 import { commandOutcome } from '../protocol/activity-events.js';
 import { categoryOf, commandText, formatToolRow, isAgentToolName, toolLabel } from '../protocol/tools.js';
 import { acpSessionTotals, normalizeTurnUsage, turnShareOf, turnStopReason, type TurnUsage } from '../protocol/turn-usage.js';
+import { costBase } from '../protocol/running-cost.js';
 import { claudeRateLimitReading } from '../accounts/usage-reading.js';
 import { activityOutput, editDiffFromInput, thoughtLabel, toolCall } from '../protocol/activity-events.js';
 import { turnCancelledError } from '../../agent/cancellation.js';
@@ -613,6 +614,11 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
    * process: an agent that restores its totals on load says so before the
    * prompt, and one that does not (Hermes) starts again from zero. */
   private sessionTotals: TurnUsage = {};
+  /** The live session was loaded, not created, and the vendor may have restored
+   * the cost it had reached before this process (Claude does): the first cost
+   * reading then says where the conversation stands, not what a turn cost.
+   * Per process, like sessionTotals. */
+  private costStartUnknown = false;
 
   constructor(options: PersistentSessionOptions) {
     super(options, 'ACP');
@@ -824,6 +830,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
         // exit, Esc or the turn ending rejects it, and the `connecting` phase
         // says what it waits on.
         this.sessionTotals = {};
+        this.costStartUnknown = input.command === 'claude';
         if (!capabilities.sessionCapabilities?.resume && !capabilities.loadSession) throw new Error(`${input.command} ACP cannot load sessions`);
         const method = capabilities.sessionCapabilities?.resume ? 'session/resume' : 'session/load';
         try {
@@ -843,6 +850,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       turn.sessionId = wanted;
     } else {
       this.sessionTotals = {};
+      this.costStartUnknown = false;
       const started = await waitOnStart(call('session/new', sessionParams, setup));
       stillRunning();
       const sessionId = String(started.sessionId ?? '');
@@ -1188,6 +1196,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     // Running totals are the session's, whoever is listening: taken during a
     // session/load replay (the baseline) and after a prompt was answered.
     const totals = ofChild ? undefined : acpSessionTotals(update);
+    if (totals?.costUsd !== undefined) this.noteRunningCost(totals.costUsd);
     if (totals) this.sessionTotals = { ...this.sessionTotals, ...totals };
     // session/load replays the old conversation as ordinary updates. Nothing
     // before our own prompt belongs to this turn -- but command palettes are
@@ -1364,6 +1373,19 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       Object.assign(usage, share);
       if (Object.keys(usage).length) input.onUsage?.(usage);
     }
+  }
+
+  /** The agent's cost is its process's running total (running-cost.ts): a
+   * reading below the one before means it began again, and a resumed Claude
+   * conversation's first reading is where it stands, not a turn's cost. Moves
+   * the point each open stream measures its share from. */
+  private noteRunningCost(reading: number): void {
+    const last = this.sessionTotals.costUsd;
+    for (const stream of [this.turn, this.background]) {
+      if (!stream) continue;
+      stream.base = { ...stream.base, costUsd: costBase(stream.base.costUsd, last, reading, this.costStartUnknown) };
+    }
+    this.costStartUnknown = false;
   }
 
   /** Kiro reports no tokens. Its `_kiro.dev/metadata` notification carries
