@@ -38,6 +38,8 @@
  * is between turns).
  */
 
+import { BackgroundWorkTracker } from '../background-work.js';
+
 type Json = Record<string, unknown>;
 
 export interface BackgroundWait {
@@ -65,7 +67,11 @@ interface BackgroundWaitOptions {
 }
 
 export function createBackgroundWait(options: BackgroundWaitOptions): BackgroundWait {
-  const tasks = new Map<string, string>();
+  /** Main-agent background tasks (background-work.ts). */
+  const tasks = new BackgroundWorkTracker();
+  /** Agent task ids as the stream names them, kept apart from `tasks` (behavior as it was): an
+   * agent listed in `background_tasks_changed` counts as agent work even when its task is not ours
+   * to wait for, and only the end of a task of ours removes one. */
   const agents = new Set<string>();
   let hadAgent = false;
   const notOurs = new Set<string>();
@@ -73,7 +79,7 @@ export function createBackgroundWait(options: BackgroundWaitOptions): Background
   let followUpOwed = false;
   let settled = false;
   const finish = (id: string, status: string): boolean => {
-    if (!tasks.delete(id)) return false;
+    if (!tasks.end(id)) return false;
     agents.delete(id);
     options.onTaskFinished?.(id, status);
     return true;
@@ -81,14 +87,13 @@ export function createBackgroundWait(options: BackgroundWaitOptions): Background
   const check = (): void => {
     if (settled || turnOpen || followUpOwed) return;
     options.onQuiet?.();
-    if (settled || tasks.size > 0) return;
+    if (settled || tasks.count() > 0) return;
     settled = true;
     options.onSettled();
   };
   const track = (id: string, description: string, agent = false): void => {
     if (agent) { agents.add(id); hadAgent = true; }
-    if (tasks.has(id) || notOurs.has(id)) return;
-    tasks.set(id, description);
+    if (notOurs.has(id) || !tasks.start({ id, kind: agent ? 'agent' : 'command', label: description })) return;
     options.onTaskStarted?.(id, description);
   };
   return {
@@ -134,7 +139,7 @@ export function createBackgroundWait(options: BackgroundWaitOptions): Background
       if (settled) return;
       turnOpen = true;
     },
-    get pending() { return tasks.size; },
+    get pending() { return tasks.count(); },
     get agentWork() { return hadAgent && (agents.size > 0 || turnOpen || followUpOwed); },
     get settled() { return settled; },
     get quiet() { return !turnOpen && !followUpOwed; },
