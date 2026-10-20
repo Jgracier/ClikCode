@@ -133,10 +133,13 @@ export async function releaseHeldLocalModel(sessionId: string): Promise<void> {
  * a local model only for the conversation it is showing, and only while
  * that conversation is on ClikCode Local. This one check covers every way
  * a session can leave (/provider, /settings route, /accounts use, /resume,
- * /new), rather than a release call at each of them. */
-export async function reconcileLocalModelLeases(showing: HarnessSession | undefined): Promise<void> {
+ * /new), rather than a release call at each of them. `elsewhere`: the
+ * conversations other clients in this same process show (an editor's shared
+ * bridge serves every chat of its window): theirs are theirs to reconcile. */
+export async function reconcileLocalModelLeases(showing: HarnessSession | undefined, elsewhere: ReadonlySet<string> = new Set()): Promise<void> {
   for (const sessionId of [...held]) {
     if (showing?.id === sessionId && showing.route === 'clikcode-local') continue;
+    if (elsewhere.has(sessionId) && showing?.id !== sessionId) continue;
     await releaseHeldLocalModel(sessionId);
   }
 }

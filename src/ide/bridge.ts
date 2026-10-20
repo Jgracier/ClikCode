@@ -52,6 +52,14 @@ import type { InteractiveSlashOutcome } from '../tui/slash/interactive-keys.js';
 
 const USAGE_REFRESH_MS = 15_000;
 
+/** The other chats a shared bridge process serves (bridge-mux.ts): what they
+ * show is theirs. Leaving a conversation one of them still shows would drop
+ * its presence -- held once per process -- and could discard it as blank;
+ * reconciling local-model leases would release theirs. */
+export interface BridgeSiblings {
+  showingElsewhere(self: IdeBridge): ReadonlySet<string>;
+}
+
 export class IdeBridge {
   readonly prompter: IdePrompter;
   private sessionId: string | undefined;
@@ -83,7 +91,7 @@ export class IdeBridge {
   private readonly link: WorkerLink;
   private readonly turns: BridgeTurns;
 
-  constructor(private readonly config: Conf, private readonly channel: IdeChannel) {
+  constructor(private readonly config: Conf, private readonly channel: IdeChannel, private readonly siblings?: BridgeSiblings) {
     this.prompter = new IdePrompter(channel);
     const bridge = this;
     this.host = {
@@ -244,8 +252,23 @@ export class IdeBridge {
     for (const pending of this.signIns.values()) pending.reject(new Error('the editor closed'));
     this.signIns.clear();
     this.link.detach();
-    await reconcileLocalModelLeases(undefined).catch(() => undefined);
-    if (this.sessionId) await leaveConversation(this.sessionId);
+    await reconcileLocalModelLeases(undefined, this.elsewhere()).catch(() => undefined);
+    if (this.sessionId) await this.leave(this.sessionId);
+  }
+
+  /** The conversation this chat shows, if any. */
+  get conversation(): string | undefined {
+    return this.sessionId;
+  }
+
+  private elsewhere(): ReadonlySet<string> {
+    return this.siblings?.showingElsewhere(this) ?? new Set();
+  }
+
+  /** Leaves `id` unless another chat of this process still shows it. */
+  private async leave(id: string): Promise<void> {
+    if (this.elsewhere().has(id)) return;
+    await leaveConversation(id);
   }
 
   /** One job at a time, in order -- until a job opens a vendor sign-in. That
@@ -324,7 +347,7 @@ export class IdeBridge {
     if (previous && previous !== id) {
       if (this.link.worker?.sessionId === previous) this.link.worker.client.send({ type: 'release' });
       this.link.detach();
-      await leaveConversation(previous);
+      await this.leave(previous);
     }
     this.sessionId = id;
     setLifecycleSession(id);
@@ -369,7 +392,7 @@ export class IdeBridge {
    * for one that moved off it. Mirrors the interactive loop's preparedRoute. */
   private async prepareRoute(): Promise<void> {
     const { session } = await this.current();
-    await reconcileLocalModelLeases(session).catch(() => undefined);
+    await reconcileLocalModelLeases(session, this.elsewhere()).catch(() => undefined);
     const key = `${session.id} ${session.route}`;
     if (key === this.preparedRoute) return;
     this.preparedRoute = key;
@@ -443,7 +466,7 @@ export function captureStdout(channel: IdeChannel, stream: NodeJS.WriteStream = 
   }) as NodeJS.WriteStream['write'];
 }
 
-function ideInstallReporter(channel: IdeChannel): HarnessInstallReporter {
+export function ideInstallReporter(channel: IdeChannel): HarnessInstallReporter {
   return {
     start: (label) => channel.send({ type: 'busy', label }),
     done: () => channel.send({ type: 'busy' }),
@@ -458,6 +481,12 @@ export async function runIdeBridge(config: Conf): Promise<void> {
   // Command results as records, which the editor renders -- never as text
   // drawn for a terminal that is not there.
   process.env.CLIKCODE_OUTPUT_MODE = 'json';
+  // An editor that serves every chat of a window from one process asks for
+  // it (bridge-mux.ts); any other caller gets one conversation per process.
+  if (process.env.CLIKCODE_IDE_MULTIPLEX === '1') {
+    const { runMultiplexedBridge } = await import('./bridge-mux.js');
+    return runMultiplexedBridge(config, send);
+  }
   let bridge: IdeBridge | undefined;
   const channel: IdeChannel = {
     send: (event: IdeEvent) => {
