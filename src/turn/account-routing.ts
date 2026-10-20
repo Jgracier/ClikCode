@@ -9,6 +9,8 @@ import { accountSwitchNotice, accountVerification, verificationNotice, type Acco
 import { recordQuotaRefusal } from './account-outcome.js';
 import { isTurnCancelled, turnCancelledError } from '../agent/cancellation.js';
 import { readState } from '../session/state/read.js';
+import { loadIndex } from '../session/state/index-file.js';
+import { refreshAccount } from '../session/state/merge.js';
 import type { TurnObserver } from './observer.js';
 
 /** Credentials do not select a transport by themselves: tool-style providers
@@ -58,11 +60,27 @@ function resetPassedSince(account: AiHarnessAccount, triedAt: number, now: numbe
   return Number.isFinite(at) && at > triedAt && at <= now;
 }
 
+/** When the vendor last said this account's usage: a reading it answered or a
+ * refusal. An ask that failed confirms nothing (Codex's free plan answers with
+ * no windows, and a carried 5-day-old figure kept looking fresh). */
+function confirmedAt(account: AiHarnessAccount): number {
+  return Math.max(
+    account.usage && !account.usage.failed ? Date.parse(account.usage.at) || Number.NEGATIVE_INFINITY : Number.NEGATIVE_INFINITY,
+    Date.parse(account.quotaExhaustedAt ?? '') || Number.NEGATIVE_INFINITY,
+  );
+}
+
 /** The account a failover moves to: same provider and transport, signed in,
- * not held for verification, not out of quota, not already tried -- most
- * reported room first, an account with no figure after those. Reads stored
- * state only (a live probe per candidate is what made a switch take minutes)
- * and writes nothing. */
+ * not held for verification. First the accounts that can take a turn and were
+ * not tried yet (one already tried only once the reset its refusal named has
+ * passed: "All accounts exhausted" was said a minute after the first account
+ * had come back), most reported room first, one with no figure after those.
+ * Then, with none of those, one held as spent that no one has confirmed within
+ * USAGE_RECHECK_MS, the longest unconfirmed first: it gets a real attempt
+ * rather than being written off on an old record, and a refusal re-stamps it,
+ * so repeated sends try it at most once per interval. Reads `state` only (a
+ * live probe per candidate is what made a switch take minutes) and writes
+ * nothing. */
 export function nextUsableFailoverAccount(
   state: HarnessState,
   current: AiHarnessAccount,
@@ -71,42 +89,18 @@ export function nextUsableFailoverAccount(
   attempted: ReadonlyMap<string, number>,
   now: number = Date.now(),
 ): AiHarnessAccount | undefined {
-  const room = (account: AiHarnessAccount): number => reportedRoom(account, now) ?? -1;
+  const usable = (candidate: AiHarnessAccount): boolean => accountCanTakeTurn(candidate, now)
+    && (!attempted.has(candidate.id) || resetPassedSince(candidate, attempted.get(candidate.id)!, now));
+  const unconfirmed = (candidate: AiHarnessAccount): boolean => !attempted.has(candidate.id)
+    && candidate.status === 'ready' && !candidate.verification && now - confirmedAt(candidate) >= USAGE_RECHECK_MS;
+  const rank = (account: AiHarnessAccount): [tier: number, order: number] => usable(account)
+    ? [0, -(reportedRoom(account, now) ?? -1)]
+    : [1, confirmedAt(account)];
   return state.accounts
-    // One this turn already tried is tried again only once the reset its
-    // refusal named has passed: "All accounts exhausted" was said a minute
-    // after the first account had come back.
-    .filter((candidate) => candidate.id !== current.id && (!attempted.has(candidate.id) || resetPassedSince(candidate, attempted.get(candidate.id)!, now))
-      && candidate.provider === current.provider && matchesTransport(candidate) && accountCanTakeTurn(candidate, now))
-    .sort((left, right) => room(right) - room(left))[0];
-}
-
-/** After a refusal, with no account that shows room: one whose "spent" no
- * one has confirmed within USAGE_RECHECK_MS -- by a reading the vendor
- * answered or a refusal; an ask that failed confirms nothing (Codex's free
- * plan answers with no windows, and a carried 5-day-old figure kept looking
- * fresh) --
- * gets a real attempt rather than being written off on an old record. The
- * vendor's answer decides; a refusal re-stamps the account, so repeated
- * sends try it at most once per interval. Signed out or held for
- * verification is not a usage question and is not tried. */
-function staleHeldFailoverAccount(
-  state: HarnessState,
-  current: AiHarnessAccount,
-  matchesTransport: (candidate: AiHarnessAccount) => boolean,
-  attempted: ReadonlyMap<string, number>,
-  now: number = Date.now(),
-): AiHarnessAccount | undefined {
-  const confirmedAt = (account: AiHarnessAccount): number => Math.max(
-    account.usage && !account.usage.failed ? Date.parse(account.usage.at) || Number.NEGATIVE_INFINITY : Number.NEGATIVE_INFINITY,
-    Date.parse(account.quotaExhaustedAt ?? '') || Number.NEGATIVE_INFINITY,
-  );
-  return state.accounts
-    .filter((candidate) => candidate.id !== current.id && !attempted.has(candidate.id)
-      && candidate.provider === current.provider && matchesTransport(candidate)
-      && candidate.status === 'ready' && !candidate.verification && now - confirmedAt(candidate) >= USAGE_RECHECK_MS)
-    // The longest unconfirmed first: the likeliest to have come back.
-    .sort((left, right) => confirmedAt(left) - confirmedAt(right))[0];
+    .filter((candidate) => candidate.id !== current.id && candidate.provider === current.provider && matchesTransport(candidate)
+      && (usable(candidate) || unconfirmed(candidate)))
+    .map((account) => ({ account, rank: rank(account) }))
+    .sort((left, right) => left.rank[0] - right.rank[0] || left.rank[1] - right.rank[1])[0]?.account;
 }
 
 /** The account a turn starts on. A chat leaves its own account before a
@@ -147,26 +141,25 @@ export function terminalFailoverError(input: {
   return new Error(usageExhaustedMessage());
 }
 
-/** Copy the eligibility fields a probe or another chat wrote, onto the
- * accounts this turn is holding. A turn keeps the copy it read at the start,
- * so a window that came back during the turn was still "spent" here and the
- * usage refusal ended as an error instead of moving. The account that just
- * refused is left as this turn recorded it. */
-async function adoptStoredEligibility(state: HarnessState, exceptId?: string): Promise<void> {
-  const stored = await readState({ transcripts: [] });
-  const byId = new Map(stored.accounts.map((account) => [account.id, account]));
-  for (const account of state.accounts) {
-    if (account.id === exceptId) continue;
-    const fresh = byId.get(account.id);
-    if (!fresh) continue;
-    account.status = fresh.status;
-    account.verification = fresh.verification;
-    account.quotaState = fresh.quotaState;
-    account.quotaExhaustedAt = fresh.quotaExhaustedAt;
-    account.quotaRetryAt = fresh.quotaRetryAt;
-    account.usage = fresh.usage;
-    account.plan = fresh.plan;
-  }
+/** The turn's accounts as stored now: a probe or another chat may have marked
+ * one spent, signed one in or read room on one since this turn read its copy,
+ * and a turn that chose from that copy moved to an account just marked spent,
+ * or ended a usage refusal as an error with a window back. Read to choose only
+ * (the cached index, nothing cloned): the turn's copy is not changed, so its
+ * next write cannot store these fields as its own. `own`: the account that just
+ * refused, as this turn recorded it. */
+async function storedView(state: HarnessState, own?: AiHarnessAccount): Promise<HarnessState> {
+  const stored = new Map(((await loadIndex().catch(() => undefined))?.accounts ?? []).map((account) => [account.id, account]));
+  return { ...state, accounts: state.accounts.map((account) => account === own ? account : stored.get(account.id) ?? account) };
+}
+
+/** The turn's own record of `account` (chosen from storedView), brought up to
+ * date with it: as if just read, so not stored as a change of this turn's. */
+function chosen(state: HarnessState, account: AiHarnessAccount): AiHarnessAccount {
+  const own = state.accounts.find((item) => item.id === account.id);
+  if (!own) return account;
+  if (own !== account) refreshAccount(state, account);
+  return own;
 }
 
 /** Where a turn stands across its failed attempts. */
@@ -239,13 +232,10 @@ export async function accountAfterFailure(input: {
     input.notice?.(verificationNotice(verification));
   }
   await input.persist();
-  // Other chats and the usage probe write the account record this turn is
-  // not holding. Re-read them after the refusal is saved, so an account that
-  // has usage now is the one the turn moves to.
-  await adoptStoredEligibility(state, account.id);
-  const fallback = nextUsableFailoverAccount(state, account, input.matchesBackend, tally.attempted)
-    ?? staleHeldFailoverAccount(state, account, input.matchesBackend, tally.attempted);
-  if (fallback) return fallback;
+  // Chosen from the accounts as stored after the refusal is saved.
+  const view = await storedView(state, account);
+  const fallback = nextUsableFailoverAccount(view, account, input.matchesBackend, tally.attempted);
+  if (fallback) return chosen(state, fallback);
   throw terminalFailoverError({
     state, current: account, matchesBackend: input.matchesBackend,
     exhaustedAny: tally.exhaustedAny, lastFailure: failure, lastOtherFailure: tally.lastOtherFailure,
@@ -323,11 +313,17 @@ export function turnAccounts(input: {
     /** Moves off a spent account before the first attempt; true when it did.
      * `carry` runs first, while the account is still the old one. */
     async start(carry?: (to: AiHarnessAccount) => Promise<void>): Promise<boolean> {
-      await adoptStoredEligibility(state);
-      const initial = initialAccountChoice(state, input.current(), matchesBackend, tally.attempted);
-      if (initial.kind !== 'switch') return false;
-      await carry?.(initial.account);
-      await switchTo(initial.account, 'quota-exhausted');
+      const view = await storedView(state);
+      const current = input.current();
+      const stored = view.accounts.find((item) => item.id === current.id) ?? current;
+      const initial = initialAccountChoice(view, stored, matchesBackend, tally.attempted);
+      if (initial.kind !== 'switch') {
+        chosen(state, stored);
+        return false;
+      }
+      const to = chosen(state, initial.account);
+      await carry?.(to);
+      await switchTo(to, 'quota-exhausted');
       return true;
     },
     /** accountAfterFailure for the current account. */
