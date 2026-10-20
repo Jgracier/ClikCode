@@ -6,17 +6,16 @@
  * "the command that printed X" is findable too. Offsets into that text are
  * the anchors search hands out.
  *
- * The cache is keyed on the files a transcript is made of -- its own and
- * each parent a fork reference points into -- by mtime and size. Never a
+ * The cache is keyed on the files a transcript is made of (transcriptIdentity:
+ * its log and `<id>.json`, or for a chat still in that older format, that
+ * file and each parent a fork reference points into). Never a
  * clock: an unchanged file is never read again, and a changed one is never
  * served stale, however soon after it was written. */
 
-import { stat } from 'node:fs/promises';
 import type { TranscriptMessage } from '../session/model.js';
 import type { ConversationGroup } from './conversations.js';
 import { sessionFilePath } from '../session/store/paths.js';
-import { loadSessionFile } from '../session/store/records.js';
-import { readSessionTranscript } from '../session/store/transcripts.js';
+import { readSessionTranscript, transcriptIdentity } from '../session/store/transcripts.js';
 import { readTurnActivities } from '../turn/turn-activities.js';
 
 export interface MessageDoc {
@@ -62,7 +61,7 @@ function messageDoc(message: TranscriptMessage): MessageDoc {
   return { role: message.role, text, lower: text.toLowerCase(), contentLength: content.length, fingerprint: fingerprintOf(message.role, text) };
 }
 
-interface CacheEntry { chain: string[]; key: string; doc: SessionDoc }
+interface CacheEntry { key: string; doc: SessionDoc }
 
 /** By session file path, so two state directories (tests) never share. */
 const cache = new Map<string, CacheEntry>();
@@ -79,37 +78,14 @@ export function resetCorpusCache(): void {
   views.clear();
 }
 
-/** The identity of a transcript: each file it is read from. Undefined when
- * its own file is gone. */
-async function identity(chain: readonly string[]): Promise<string | undefined> {
-  const parts = await Promise.all(chain.map(async (id, index) => {
-    const info = await stat(sessionFilePath(id)).catch(() => undefined);
-    if (!info) return index === 0 ? undefined : `${id}:-`;
-    return `${id}:${info.mtimeMs}:${info.size}`;
-  }));
-  return parts.includes(undefined) ? undefined : parts.join('|');
-}
-
-/** The session and every parent its history is read through. */
-async function referenceChain(id: string): Promise<string[]> {
-  const chain = [id];
-  let ref = (await loadSessionFile(id))?.transcriptRef;
-  while (ref && !chain.includes(ref.sessionId) && chain.length < 64) {
-    chain.push(ref.sessionId);
-    ref = (await loadSessionFile(ref.sessionId))?.transcriptRef;
-  }
-  return chain;
-}
-
 /** One session's searchable messages, read only when its files changed. */
 export async function sessionDoc(id: string): Promise<SessionDoc | undefined> {
   const path = sessionFilePath(id);
   const cached = cache.get(path);
-  if (cached && await identity(cached.chain) === cached.key) return cached.doc;
-  const chain = await referenceChain(id);
   // Taken before the read: a write landing during it changes the identity,
   // so the next query reads again rather than keeping a stale copy.
-  const key = await identity(chain);
+  const key = await transcriptIdentity(id);
+  if (cached && key !== undefined && key === cached.key) return cached.doc;
   if (key === undefined) {
     cache.delete(path);
     return undefined;
@@ -117,7 +93,7 @@ export async function sessionDoc(id: string): Promise<SessionDoc | undefined> {
   const transcript = await readSessionTranscript(id);
   STATS.builds += 1;
   const doc: SessionDoc = { id, messages: (transcript.messages ?? []).map(messageDoc) };
-  cache.set(path, { chain, key, doc });
+  cache.set(path, { key, doc });
   return doc;
 }
 

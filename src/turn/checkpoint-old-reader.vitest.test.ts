@@ -6,12 +6,19 @@ import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import { resetHarnessStateCaches } from '../session/state/index-file.js';
 import type { HarnessSession } from '../session/model.js';
+import { parseChatLog } from '../session/store/chat-log.js';
 import { DurableTurnCheckpoint } from './turn-journal.js';
 
-/** A streaming turn writes its journal to `sessions/<id>.turn`; builds that
- * predate that file read `sessions/<id>.json` alone (store/records.ts). These
- * read that file the way such a build does -- the whole of it, nothing else --
- * and write it the way such a build does, never touching `<id>.turn`. */
+/** A chat this build starts lives in its message log, `sessions/<id>.jsonl`,
+ * with the streaming journal in `<id>.pending`; builds that predate the log
+ * read `sessions/<id>.json` alone (store/transcripts.ts, the mixed-build
+ * rule). These read and write that file the way such a build does -- the
+ * whole of it, nothing else.
+ *
+ * Contract changed on purpose (2026-10-20): such a build used to see this
+ * build's running turn in `<id>.json`, which therefore had to be rewritten
+ * whole at every turn's start, steer and end. It now sees a note that the
+ * chat moved; what it writes into `<id>.json` is still taken in here. */
 const previousHome = process.env.CLIKCODE_HOME;
 let root = '';
 afterEach(async () => {
@@ -22,10 +29,12 @@ afterEach(async () => {
 });
 
 const transcriptPath = (): string => join(root, 'sessions', 's.json');
-const turnPath = (): string => join(root, 'sessions', 's.turn');
+const pendingPath = (): string => join(root, 'sessions', 's.pending');
 const oldRead = async (): Promise<{ messages?: Array<{ role: string; content: string }>; pendingTurn?: NonNullable<HarnessSession['pendingTurn']> }> =>
   JSON.parse(await readFile(transcriptPath(), 'utf8'));
+const stored = async () => parseChatLog(await readFile(join(root, 'sessions', 's.jsonl'), 'utf8'));
 const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 300));
+const current = async () => { resetHarnessStateCaches(); return (await readState()).sessions.find((item) => item.id === 's')!; };
 
 async function started(): Promise<{ checkpoint: DurableTurnCheckpoint; session: HarnessSession }> {
   root = await mkdtemp(join(tmpdir(), 'clikcode-old-reader-'));
@@ -44,29 +53,26 @@ createdAt: at, updatedAt: at, status: 'active', messages: [{ role: 'user', conte
 }
 
 describe('a streaming turn, read by a build that knows only <id>.json', () => {
-  it('sees the turn running with its prompt and steers while it streams, and the finished answer after', async () => {
+  it('sees a note that the chat moved, which no turn here ever rewrites; the turn is whole in the log', async () => {
     const { checkpoint } = await started();
+    const before = await readFile(transcriptPath(), 'utf8');
+    expect((await oldRead()).messages).toEqual([expect.objectContaining({ role: 'assistant', storedInLog: true })]);
+    expect((await oldRead()).pendingTurn).toBeUndefined();
     checkpoint.response('part one ');
     await tick();
-    const during = await oldRead();
-    expect(during.pendingTurn).toMatchObject({ prompt: 'go' });
-    expect(during.messages?.map((message) => message.content)).toEqual(['earlier', 'yes']);
-
-    // Anything else written during the turn carries the journal as it is now.
+    expect((await stored()).pending).toMatchObject({ prompt: 'go' });
     await checkpoint.steer({ id: 'st', text: 'also this', submittedAt: new Date().toISOString() } as never);
-    const steered = await oldRead();
-    expect(steered.pendingTurn?.steers?.map((steer) => steer.text)).toEqual(['also this']);
-    expect(steered.pendingTurn?.response).toBe('part one ');
-
+    expect((await stored()).pending?.steers?.map((steer) => steer.text)).toEqual(['also this']);
     checkpoint.response('part two');
     await tick();
     await checkpoint.complete('part one part two');
-    const after = await oldRead();
+    expect(await readFile(transcriptPath(), 'utf8')).toBe(before);
+    const after = await current();
     expect(after.pendingTurn).toBeUndefined();
     // The steer landed inside a block, so it follows that block whole: never a cut through the
     // middle of a sentence (standard 1.5 / 3; the live view draws it there too).
-    expect(after.messages?.slice(2).map((message) => message.content.trim())).toEqual(['go', 'part one part two', 'also this']);
-    await expect(stat(turnPath())).rejects.toThrow();
+    expect(after.messages?.map((message) => message.content.trim())).toEqual(['earlier', 'yes', 'go', 'part one part two', 'also this']);
+    await expect(stat(pendingPath())).rejects.toThrow();
   });
 
   it('splits the answer at a steer that landed between blocks', async () => {
@@ -77,35 +83,36 @@ describe('a streaming turn, read by a build that knows only <id>.json', () => {
     checkpoint.response('part two');
     await tick();
     await checkpoint.complete('part one\n\npart two');
-    const after = await oldRead();
+    const after = await current();
     expect(after.messages?.slice(2).map((message) => message.content.trim())).toEqual(['go', 'part one', 'also this', 'part two']);
   });
 
-  it('keeps the streamed journal when such a build rewrites <id>.json mid-turn, and drops it when that build ends the turn', async () => {
+  it('takes in a message such a build appends to <id>.json mid-turn, and keeps the streamed journal', async () => {
     const { checkpoint } = await started();
     checkpoint.response('streamed');
     await tick();
-    // An older build appends a message elsewhere in the file and stores it back.
+    // An older build appends a message to the file it sees and stores it back.
     const file = await oldRead();
     await writeFile(transcriptPath(), JSON.stringify({ ...file, messages: [...file.messages!, { role: 'user', content: 'from an old window' }] }));
-    resetHarnessStateCaches();
-    const merged = (await readState()).sessions.find((item) => item.id === 's')!;
+    const merged = await current();
     expect(merged.pendingTurn?.response).toBe('streamed');
-    expect(merged.messages?.at(-1)?.content).toBe('from an old window');
+    expect(merged.messages?.map((message) => message.content)).toEqual(['earlier', 'yes', 'from an old window']);
 
-    // That build then ends the turn (it removes the journal; <id>.turn stays).
-    const { pendingTurn: _ended, ...rest } = await oldRead();
+    // That build never saw this turn, so nothing it writes ends it here.
+    const { pendingTurn: _none, ...rest } = await oldRead();
     await writeFile(transcriptPath(), JSON.stringify(rest));
-    resetHarnessStateCaches();
-    expect((await readState()).sessions.find((item) => item.id === 's')?.pendingTurn).toBeUndefined();
-    await checkpoint.flush();
+    expect((await current()).pendingTurn?.response).toBe('streamed');
+    await checkpoint.complete('streamed, done');
+    const done = await current();
+    expect(done.messages?.map((message) => message.content)).toEqual(['earlier', 'yes', 'from an old window', 'go', 'streamed, done']);
   });
 
   it('ignores a leftover journal from another turn', async () => {
     const { checkpoint } = await started();
-    await writeFile(turnPath(), JSON.stringify({ prompt: 'go', startedAt: '2000-01-01T00:00:00.000Z', updatedAt: '2999-01-01T00:00:00.000Z', outputStarted: true, response: 'stale' }));
-    resetHarnessStateCaches();
-    const read = (await readState()).sessions.find((item) => item.id === 's')!;
+    for (const name of ['s.pending', 's.turn']) {
+      await writeFile(join(root, 'sessions', name), JSON.stringify({ prompt: 'go', startedAt: '2000-01-01T00:00:00.000Z', updatedAt: '2999-01-01T00:00:00.000Z', outputStarted: true, response: 'stale' }));
+    }
+    const read = await current();
     expect(read.pendingTurn?.prompt).toBe('go');
     expect(read.pendingTurn?.response).toBeUndefined();
     await checkpoint.complete('done');
@@ -118,8 +125,7 @@ describe('steering a turn', () => {
     const submission = { id: 'held', text: 'steer me', submittedAt: new Date().toISOString() };
     await checkpoint.queue(submission, { held: true });
     await checkpoint.steer(submission);
-    const disk = await oldRead() as { queuedTurns?: unknown[]; pendingTurn?: { steers?: unknown[] } };
-    expect(disk.pendingTurn?.steers).toHaveLength(1);
+    expect((await stored()).pending?.steers).toHaveLength(1);
     expect(session.queuedTurns ?? []).toHaveLength(0);
   });
 

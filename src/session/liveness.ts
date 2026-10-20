@@ -24,7 +24,7 @@
 
 import type { HarnessSession } from './model.js';
 import { listWorkerRecords, liveOpenConversations, type WorkerRuntimeRecord } from '../worker/registry.js';
-import { loadSessionFile } from './store/records.js';
+import { readStoredPendingTurn } from './store/transcripts.js';
 
 type PendingTurn = NonNullable<HarnessSession['pendingTurn']>;
 
@@ -96,7 +96,7 @@ export async function livePendingTurns(
 ): Promise<Map<string, PendingTurn>> {
   const pending = new Map<string, PendingTurn>();
   await Promise.all(sessions.filter((session) => session.status === 'active' && workerIsLive(session.id)).map(async (session) => {
-    const turn = (await loadSessionFile(session.id).catch(() => undefined))?.pendingTurn;
+    const turn = await readStoredPendingTurn(session.id).catch(() => undefined);
     if (turn && !turn.failedAt) { pending.set(session.id, turn); return; }
     const work = background(session.id);
     if (work) pending.set(session.id, backgroundAsTurn(work));
