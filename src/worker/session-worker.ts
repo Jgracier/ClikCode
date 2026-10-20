@@ -57,11 +57,21 @@ import { createResourceNoteDelivery } from './resource-note-delivery.js';
 /** A command is in a group of its own within this long of starting. */
 const COMMAND_SWEEP_MS = 1_000;
 
-async function ownConversation(sessionId: string): Promise<ConversationHold | undefined> {
+/** How long a starting worker waits for a scripted turn or command that holds
+ * its conversation before it gives up (such a turn can run for minutes). */
+const OWN_CONVERSATION_MAX_WAIT_MS = 30 * 60 * 1000;
+
+export async function ownConversation(
+  sessionId: string, maxWaitMs = OWN_CONVERSATION_MAX_WAIT_MS, take: typeof takeConversation = takeConversation,
+): Promise<ConversationHold | undefined> {
+  const deadline = Date.now() + maxWaitMs;
   for (;;) {
-    const taken = await takeConversation(sessionId, 'worker');
+    const taken = await take(sessionId, 'worker');
     if ('hold' in taken) return taken.hold;
     if (taken.holder.kind === 'worker') return undefined;
+    if (Date.now() >= deadline) {
+      throw new Error(`the conversation ${sessionId} is still held by a ${taken.holder.kind} (pid ${taken.holder.pid}) after ${Math.round(maxWaitMs / 1000)}s; the worker did not start`);
+    }
     await new Promise((resolveWait) => setTimeout(resolveWait, 250));
   }
 }
