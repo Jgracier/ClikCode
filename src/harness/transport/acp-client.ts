@@ -20,7 +20,7 @@ import { turnCancelledError } from '../../agent/cancellation.js';
 import { type JsonRpcPeer } from './jsonrpc-peer.js';
 import { panicMessage } from './rust-panic.js';
 import { BackgroundTurnChannel } from './background-turn.js';
-import { PersistentSession, runOneTurn, turnFailure, type PersistentSessionOptions } from './persistent-session.js';
+import { PersistentSession, runOneTurn, turnFailure, type PersistentSessionOptions, type VendorWorkSession } from './persistent-session.js';
 import { lifecycle } from '../../runtime/lifecycle-log.js';
 import { globalMcpServersForAcp } from './acp-mcp-servers.js';
 import { BackgroundAgentRows } from '../events/background-agent-rows.js';
@@ -125,17 +125,11 @@ export interface AcpTurnInput extends HarnessTurnObserver {
 
 interface AcpTurnResult { text: string; nativeSessionId: string }
 
-export interface AcpSession {
+export interface AcpSession extends VendorWorkSession {
   runTurn(input: AcpTurnInput): Promise<AcpTurnResult>;
   /** Cancel the active turn, if any. The child stays alive when it honours
    * session/cancel within two seconds. */
   cancel(): void;
-  close(): Promise<void>;
-  /** Work the vendor is still doing between turns (persistent-session.ts). */
-  backgroundWorkRunning(): Promise<boolean>;
-  /** The conversation is leaving this process with work still running in it (persistent-session.ts). */
-  retire(): Promise<boolean>;
-  readonly retiredWork: { agents: number; terminals: number };
 }
 
 export function acpResponseDelta(update: Json): string | undefined {
@@ -596,12 +590,9 @@ const toolRunning = (update: Json): boolean => update.status === 'pending' || up
 const toolSettled = (update: Json): boolean => update.status === 'completed' || update.status === 'failed';
 
 class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, BackgroundRun> implements AcpSession {
-  /** What the vendor runs (background-work.ts). Items: tool calls the agent started and has not
-   * settled, within the turn or background turn that is receiving updates. Level: the background
-   * work the vendor's level says is running (claude-agent-acp's `_claude/sdkMessage`
-   * background_tasks_changed) -- kept between turns: it holds the worker while anything runs,
-   * tells the next turn and the background turn what is going on, and ends the background turn
-   * when it empties. A level is per vendor process: it resets with the live child. */
+  /** What the vendor runs (background-work.ts). Items: tool calls not yet settled, in the turn or
+   * background turn receiving updates. Level: claude-agent-acp's `background_tasks_changed`, kept
+   * between turns (it holds the worker, and its emptying ends the background turn) until the child goes. */
   private readonly work = new BackgroundWorkTracker();
   /** Background Agent calls: the call completes at launch, the agent runs on
    * and its row stays open until its own `task_notification` (heldAgentFrame). */

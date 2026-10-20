@@ -12,7 +12,7 @@
 import { readFile } from 'node:fs/promises';
 import { asRecord, type JsonRecord } from '../protocol/json-lines.js';
 import { redactSecrets } from '../../agent/security.js';
-import { BackgroundWorkTracker } from './background-work.js';
+import { BackgroundWorkTracker, type WorkItem } from './background-work.js';
 
 /** How much of an agent's result goes to the conversation. */
 const RESULT_CHARS = 4_000;
@@ -36,17 +36,8 @@ export async function agentResult(file: string | undefined): Promise<string> {
   return '';
 }
 
-export interface RunningWork {
-  /** The vendor's id for it (Claude's task id), or the command's pid. */
-  id: string;
-  kind: 'command' | 'agent';
-  /** The command line, or the agent's description. */
-  label: string;
-  /** An agent's task, as it was given: what starting it again needs. */
-  prompt?: string;
-  /** Where a command writes its output. */
-  outputFile?: string;
-}
+/** Work the conversation answers for: a command or an agent (background-work.ts). */
+export type RunningWork = WorkItem & { kind: 'command' | 'agent' };
 
 export interface EndedWork extends RunningWork {
   /** `finished`: it ran to its end. `cut-off`: it stopped before it could --
@@ -93,7 +84,6 @@ export class VendorTasks {
   private readonly tasks = new BackgroundWorkTracker<Task>();
   /** Agent prompts from the launching calls, by call id: a `task_started` may not carry one. */
   private readonly prompts = new Map<string, string>();
-  private readonly byCall = new Map<string, string>();
 
   /** A tool call's input: an Agent call's prompt is kept for its task. */
   call(id: string | undefined, input: unknown): void {
@@ -109,8 +99,8 @@ export class VendorTasks {
     if (record.type !== 'system') return undefined;
     const id = typeof record.task_id === 'string' ? record.task_id : undefined;
     if (!id) return undefined;
-    const call = typeof record.tool_use_id === 'string' ? record.tool_use_id : undefined;
     if (record.subtype === 'task_started') {
+      const call = typeof record.tool_use_id === 'string' ? record.tool_use_id : undefined;
       const type = String(record.task_type ?? (typeof record.subagent_type === 'string' ? 'local_agent' : ''));
       if (record.owned_by_subagent === true || (type !== 'local_agent' && type !== 'local_bash')) return undefined;
       const prompt = typeof record.prompt === 'string' && record.prompt ? record.prompt : call ? this.prompts.get(call) : undefined;
@@ -121,13 +111,11 @@ export class VendorTasks {
         id, kind: agent ? 'agent' : 'command', label: String(record.description ?? '') || (agent ? 'background agent' : 'background command'),
         ...(prompt ? { prompt } : {}), background: record.is_backgrounded !== false,
       });
-      if (call) this.byCall.set(call, id);
       return undefined;
     }
     if (record.subtype !== 'task_notification') return undefined;
     const task = this.tasks.end(id);
     if (!task) return undefined;
-    for (const [key, value] of this.byCall) if (value === id) this.byCall.delete(key);
     return {
       work: work(task),
       status: String(record.status ?? 'completed'),
@@ -141,7 +129,7 @@ export class VendorTasks {
     return this.tasks.running().filter((task) => task.background).map(work);
   }
 
-  clear(): void { this.tasks.clear(); this.byCall.clear(); }
+  clear(): void { this.tasks.clear(); }
 }
 
 /** A task as the conversation is told it. */
