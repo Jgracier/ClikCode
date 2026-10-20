@@ -8,8 +8,8 @@ import { cgroupProbe, processProbe, type Inventory, type MemorySample, type Prob
 
 const GIB = 2 ** 30;
 const TICK_MS = 2_000;
-export const NUDGE_AT = 0.85;
-export const NUDGE_REARM_BELOW = 0.75;
+const NUDGE_AT = 0.85;
+const NUDGE_REARM_BELOW = 0.75;
 export const SETTLE_MS = 15_000;
 const STOP_INTERVAL_MS = 20_000;
 const EFFECTIVE_SHARE = 0.25;
@@ -25,7 +25,7 @@ export function agentBudget(sample: MemorySample): AgentBudget {
   return { used: sample.used, limit, ratio: sample.critical ? Math.max(ratio, 1) : ratio };
 }
 
-export function worthStopping(unit: Unit, budget: AgentBudget): boolean {
+function worthStopping(unit: Unit, budget: AgentBudget): boolean {
   return unit.freeable >= Math.max(GIB, budget.limit * 0.03);
 }
 type GuardAction = { kind: 'none' } | { kind: 'nudge'; worker: number; unit?: Unit } | { kind: 'stop'; worker: number; unit: Unit };
@@ -64,7 +64,7 @@ function ineffectiveMarker(): string { return join(stateDirectory(), 'resource-g
 function lastStopAt(): number { try { return Number(readFileSync(marker(), 'utf8')) || 0; } catch { return 0; } }
 function ineffective(): boolean { try { return readFileSync(ineffectiveMarker(), 'utf8').length > 0; } catch { return false; } }
 /** Set when /tmp is a RAM disk holding enough to matter. Stopping a command does not free it. */
-export function ramTmpNote(): string {
+function ramTmpNote(): string {
   try {
     if (!/^tmpfs \/tmp /m.test(readFileSync('/proc/mounts', 'utf8'))) return '';
     const stat = statfsSync('/tmp');

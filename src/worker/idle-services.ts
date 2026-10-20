@@ -21,13 +21,13 @@ import { WORKER_PID_ENV } from './own-scope.js';
 
 const GIB = 2 ** 30;
 const HOUR_MS = 60 * 60 * 1000;
-export const MIN_AGE_MS = 12 * HOUR_MS;
+const MIN_AGE_MS = 12 * HOUR_MS;
 /** How long the CPU is watched before a service can be called idle. */
-export const WATCH_MS = 30 * 60 * 1000;
+const WATCH_MS = 30 * 60 * 1000;
 /** Mean CPU, as a share of one core, under which a service is idle. */
-export const IDLE_CPU = 0.01;
+const IDLE_CPU = 0.01;
 /** Not worth a note below this. */
-export const MIN_HELD = 256 * 2 ** 20;
+const MIN_HELD = 256 * 2 ** 20;
 const CHECK_MS = 10 * 60 * 1000;
 const CLOCK_TICKS = 100;
 
@@ -66,7 +66,7 @@ function ageOf(pid: string, now: number): number | undefined {
   return Number.isFinite(start) ? now - (Number(boot[1]) * 1000 + (start / CLOCK_TICKS) * 1000) : undefined;
 }
 
-export function readServices(sliceDir: string, now: number): ServiceReading[] {
+function readServices(sliceDir: string, now: number): ServiceReading[] {
   const readings: ServiceReading[] = [];
   let names: string[];
   try { names = readdirSync(sliceDir).filter((name) => name.endsWith('.service')); } catch { return readings; }

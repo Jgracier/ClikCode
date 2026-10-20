@@ -23,11 +23,11 @@ import { lifecycle } from '../runtime/lifecycle-log.js';
 import { stateDirectory } from '../session/store/paths.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-export const TMP_MAX_AGE_MS = 3 * DAY_MS;
+const TMP_MAX_AGE_MS = 3 * DAY_MS;
 /** When nothing can say whether a process is still using an entry. */
-export const TMP_MAX_AGE_BLIND_MS = 7 * DAY_MS;
-export const NOTE_MAX_AGE_MS = 7 * DAY_MS;
-export const SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const TMP_MAX_AGE_BLIND_MS = 7 * DAY_MS;
+const NOTE_MAX_AGE_MS = 7 * DAY_MS;
+const SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const SWEEP_MIN_GAP_MS = 60 * 60 * 1000;
 const FIRST_SWEEP_DELAY_MS = 60_000;
 

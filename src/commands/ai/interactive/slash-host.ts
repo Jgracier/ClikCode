@@ -20,7 +20,7 @@ import { interactiveSessionPicker } from '../../../tui/pickers/session.js';
 import type { InteractiveSlashOutcome } from '../../../tui/slash/interactive-keys.js';
 import { BOARD_COMMANDS } from './board.js';
 
-export async function showSession(terminal: TerminalHarnessPrompter | undefined, target: string): Promise<void> {
+async function showSession(terminal: TerminalHarnessPrompter | undefined, target: string): Promise<void> {
   const shown = await readState({ transcripts: [target] });
   const session = shown.sessions.find((item) => item.id === target);
   if (session) terminal?.render(session, session.accountId ? shown.accounts.find((item) => item.id === session.accountId)?.label : undefined);

@@ -33,7 +33,7 @@ import { BOARD_OWNS } from './board.js';
 /** What the loop reads and writes of the window while it runs, shared with
  * the setup's own timers: the conversation this window is on, and the
  * state its slash palette completes arguments from. */
-export interface WindowRef { id: string; paletteState: Pick<HarnessState, 'accounts' | 'sessions'> }
+interface WindowRef { id: string; paletteState: Pick<HarnessState, 'accounts' | 'sessions'> }
 
 /** Everything the window's setup built, handed to the loop. */
 export interface ChatWindow {

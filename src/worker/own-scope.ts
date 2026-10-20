@@ -77,7 +77,7 @@ export function adoptArgs(unit: string, pid: number): string[] {
  * Swap is bounded too: swapped agent pages count toward neither RAM limit.
  * No MemoryHigh. A soft cap throttles every agent while the guard, which
  * stops only the one large command, is what should react (2026-10-13). */
-export const AGENT_MEMORY_SHARES = { max: 0.8, swap: 0.1 } as const;
+const AGENT_MEMORY_SHARES = { max: 0.8, swap: 0.1 } as const;
 
 /** What to set on a slice that is already running with no cap. A finite value
  * is a user's choice and is left alone. Nothing is set when the slice is

@@ -19,7 +19,7 @@ const READ_AGAIN_TIMES = 4;
  * state describes it. The file may already be ahead (a turn finished since the
  * worker looked); the messages after `count` belong to the snapshot that
  * follows, and drawn now they would sit beside the live turn that wrote them. */
-export async function savedMessages(sessionId: string, count: number): Promise<NonNullable<Snapshot['session']['messages']>> {
+async function savedMessages(sessionId: string, count: number): Promise<NonNullable<Snapshot['session']['messages']>> {
   let messages = (await readSessionTranscript(sessionId)).messages ?? [];
   for (let again = 0; messages.length < count && again < READ_AGAIN_TIMES; again += 1) {
     await new Promise((resolve) => setTimeout(resolve, READ_AGAIN_MS));
