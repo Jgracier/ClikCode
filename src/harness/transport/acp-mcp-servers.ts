@@ -35,7 +35,6 @@ export function builtInMcpServer(): McpServerSpec | undefined {
 export async function globalMcpServersForAcp(
   command: string, capabilities: Json | undefined, profile?: { env: string; path: string }, home: string = homedir(),
 ): Promise<Json[]> {
-  if (process.env.VITEST && !process.env.CLIKCODE_HOME?.trim()) return [];
   try {
     const { servers: recorded } = await loadMcpServers(stateDirectory());
     // A server the user recorded under this name wins; the built-in one steps aside.

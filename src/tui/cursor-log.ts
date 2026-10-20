@@ -34,10 +34,6 @@ function rotateIfLarge(path: string): void {
 }
 
 export function logCursorEvent(line: string): void {
-  // VITEST: the suite drives a stubbed terminal against the real home
-  // directory, and these lines per test process are noise that buries the one
-  // session anybody wants to read.
-  if (process.env.VITEST) return;
   // Resizes belong to the input budget: they are the event the scrolling
   // reports turn on, and the frame budget is spent within a second of startup.
   const isInput = line.startsWith('input ') || line.startsWith('scroll ') || line.startsWith('resize ');

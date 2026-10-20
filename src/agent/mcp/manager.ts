@@ -310,12 +310,8 @@ async function loadAllServers(stateDir: string): Promise<{ servers: McpServerSpe
 }
 
 /** The process-wide manager for one state directory: what a turn builder
- * (the gateway route today, the local route next) calls for its extraTools.
- *
- * Under vitest with no CLIKCODE_HOME the answer is always empty, so a test
- * of the turn wiring never starts the developer's real servers. */
+ * (the gateway route today, the local route next) calls for its extraTools. */
 export async function mcpToolsForTurn(stateDir: string, signal?: AbortSignal, builtins: readonly McpServerSpec[] = []): Promise<McpToolset> {
-  if (process.env.VITEST && !process.env.CLIKCODE_HOME?.trim()) return { tools: [] };
   builtinServers = builtins;
   if (!signal) return sharedToolset(stateDir);
   // A cancel while a slow server is still starting ends the wait at once;
@@ -363,7 +359,6 @@ async function sharedToolset(stateDir: string): Promise<McpToolset> {
  * `npx -y` servers take seconds. Never throws; a server that will not start
  * is reported by the turn that wanted it, as before. */
 export function prepareMcp(stateDir: string, builtins: readonly McpServerSpec[] = []): void {
-  if (process.env.VITEST && !process.env.CLIKCODE_HOME?.trim()) return;
   builtinServers = builtins;
   void sharedToolset(stateDir).catch(() => undefined);
 }

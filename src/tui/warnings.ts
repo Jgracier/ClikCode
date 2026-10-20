@@ -12,7 +12,7 @@ import { stateDirectory } from '../session/store/paths.js';
 let installed = false;
 
 export function logProcessWarnings(): void {
-  if (installed || process.env.VITEST) return;
+  if (installed) return;
   installed = true;
   process.removeAllListeners('warning');
   process.on('warning', (warning) => {
