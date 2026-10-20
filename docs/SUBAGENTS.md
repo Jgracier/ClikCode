@@ -82,8 +82,8 @@ with Right, the read-only line, back with Left.
   tested. Everything else is read-only with the line saying why.
 - A background sub-agent's row now stays running until the vendor says the agent ended, where the vendor says so: Claude Code (stream-json `task_started`/`task_progress`/`task_notification`, and over claude-agent-acp the same frames as `_claude/sdkMessage`), Cursor (`subagent_spawned`/`subagent_state_update`), Codex (`subAgentActivity` and the child thread's `turn/completed`), the own agent (`continuesAs`). `events/background-agent-rows.ts`; `subagent-lifecycle-conformance.vitest.test.ts`.
 - Not done: the VS Code panel; reopening a finished sub-agent in a reopened
-  chat; reading a Codex child thread live in the view (the reader exists,
-  `codexThreadRows`, but the view is not connected to `thread/read`); the own
+  chat; reading a Codex child thread live in the view (nothing reads
+  `thread/read` for it; an unused reader was removed 2026-10-20); the own
   agent's sub-agents (Gateway `session` steer: `BackgroundAgents.send` exists
   but is not reachable from a window).
 - The webview does receive `call.input`: the worker broadcasts the whole

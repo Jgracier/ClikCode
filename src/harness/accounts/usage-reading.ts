@@ -70,7 +70,7 @@ export function usageWindow(name: string, usedPct: unknown, resetsAt?: unknown):
 
 /** A window's name as it reads on screen: "Monthly", "Weekly", "5h". The
  * stored name stays as the vendor path wrote it; only the label changes. */
-export function usageWindowTitle(name: string): string {
+function usageWindowTitle(name: string): string {
   return name ? name[0]!.toUpperCase() + name.slice(1) : name;
 }
 

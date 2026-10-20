@@ -128,31 +128,6 @@ export async function readClaudeSubagent(workspace: string, sessionId: string, p
   return found && text !== undefined ? { agentId: found.agentId, rows: claudeTranscriptRows(text) } : undefined;
 }
 
-/** A Codex child thread, from `thread/read {threadId, includeTurns: true}`
- * (probed against codex 0.162.1: the child answers with its own turns). Items
- * the activity mapper (`codexActivityForItem`) knows become calls; user and
- * agent messages become the prompt and the prose. */
-export function codexThreadRows(thread: unknown, activityFor: (item: Json, completed: boolean) => HarnessActivityEvent | undefined): SubAgentRow[] {
-  const rows = new Rows();
-  const turns = record(thread)?.turns;
-  for (const turn of Array.isArray(turns) ? turns : []) {
-    const items = record(turn)?.items;
-    for (const raw of Array.isArray(items) ? items : []) {
-      const item = record(raw);
-      if (!item) continue;
-      if (item.type === 'userMessage') rows.prompt(textOf(item.content));
-      else if (item.type === 'agentMessage' && typeof item.text === 'string') rows.text(item.text);
-      else {
-        const started = activityFor(item, false);
-        if (started) rows.activity(started);
-        const settled = activityFor(item, true);
-        if (settled && settled.kind !== 'tool-start') rows.activity(settled);
-      }
-    }
-  }
-  return rows.rows;
-}
-
 /** The live frames: the sub-agent's calls so far, from events that carry its
  * row id as `parentId` (any harness that publishes child frames). */
 export function liveSubAgentRows(events: readonly HarnessActivityEvent[], parentId: string): SubAgentRow[] {

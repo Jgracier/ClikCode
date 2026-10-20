@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { codexTurnPermissionParams, codexTurnStartParams, compactCodexThread, listCodexModels, listCodexThreads, type CodexRpcPeer } from './codex-native-methods.js';
+import { codexTurnPermissionParams, codexTurnStartParams, compactCodexThread, listCodexModels, type CodexRpcPeer } from './codex-native-methods.js';
 
 function scripted(pages: Record<string, Record<string, any>[]>): { peer: CodexRpcPeer; calls: Array<{ method: string; params: Record<string, any> }> } {
   const calls: Array<{ method: string; params: Record<string, any> }> = [];
@@ -31,11 +31,5 @@ describe('Codex native app-server methods', () => {
     const models = await listCodexModels(peer);
     expect(models.map((model) => [model.model, model.efforts, model.isDefault])).toEqual([['gpt-a', ['low', 'high'], true], ['gpt-b', [], false]]);
     expect(calls[1]!.params.cursor).toBe('c2');
-  });
-
-  it('lists threads newest first, narrowed to a folder', async () => {
-    const { peer, calls } = scripted({ 'thread/list': [{ data: [{ id: 't1', preview: 'p', cwd: '/w', createdAt: 1, updatedAt: 2, name: 'n' }], nextCursor: null }] });
-    expect(await listCodexThreads(peer, { cwd: '/w' })).toEqual([{ id: 't1', name: 'n', preview: 'p', cwd: '/w', createdAt: 1, updatedAt: 2 }]);
-    expect(calls[0]!.params).toMatchObject({ cwd: '/w', sortKey: 'updated_at', sortDirection: 'desc' });
   });
 });

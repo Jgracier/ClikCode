@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { HarnessActivityEvent } from '../prompter.js';
-import { callDetail, groupSummary, groupSummaryText, runsOf, standsAlone } from './call-groups.js';
+import { callDetail, groupSummary, groupSummaryText, standsAlone } from './call-groups.js';
 
 const call = (id: string, category: HarnessActivityEvent['category'], label: string, extra: Partial<HarnessActivityEvent> = {}) => ({
   id, event: { kind: 'tool-done' as const, label, ...(category ? { category } : {}), id, ...extra },
@@ -61,11 +61,5 @@ describe('what an expanded call shows', () => {
 
   it('is the command only where the saved call has no output', () => {
     expect(callDetail({ kind: 'tool-done', label: 'Read a.ts', category: 'read' })).toEqual({ command: 'Read a.ts', args: [], output: [], earlier: 0 });
-  });
-});
-
-describe('runs', () => {
-  it('splits where the answer moved on', () => {
-    expect(runsOf([{ offset: 0 }, { offset: 0 }, { offset: 12 }, { offset: 12 }, { offset: 40 }]).map((run) => run.length)).toEqual([2, 2, 1]);
   });
 });

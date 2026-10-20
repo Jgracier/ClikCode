@@ -4,7 +4,7 @@
  * A pattern: `#` a digit, `A` a letter, `*` a letter or digit; anything else is a literal the box
  * inserts itself. Pure, so the terminal and the VS Code panel apply exactly the same rule. */
 
-export const INPUT_FORMATS: Readonly<Record<string, string>> = {
+const INPUT_FORMATS: Readonly<Record<string, string>> = {
   date: '##/##/####',
   phone: '(###) ###-####',
   zip: '#####',

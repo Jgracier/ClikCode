@@ -15,7 +15,7 @@ export type GroupThought = { durationMs: number; heading?: string; text?: string
 export type GroupItem = { id: string; event?: HarnessActivityEvent; thought?: GroupThought };
 
 /** Output lines an expanded call shows. */
-export const DETAIL_OUTPUT_LINES = 20;
+const DETAIL_OUTPUT_LINES = 20;
 /** Output lines an expanded call that failed shows: all that was kept. */
 export const FAILED_OUTPUT_LINES = 60;
 /** Lines of a sub-agent's answer an expansion shows. */
@@ -169,16 +169,3 @@ export function callDetail(event: HarnessActivityEvent, lines = event.kind === '
   };
 }
 
-/** Consecutive items with no prose between them (the same offset into the
- * answer) are one run. A snapshot rule for a surface that does not hold a
- * group open the way the terminal does. */
-export function runsOf<T extends { offset?: number }>(items: readonly T[]): T[][] {
-  const runs: T[][] = [];
-  for (const item of items) {
-    const run = runs[runs.length - 1];
-    const tail = run?.[run.length - 1];
-    if (run && tail && tail.offset !== undefined && tail.offset === item.offset) run.push(item);
-    else runs.push([item]);
-  }
-  return runs;
-}

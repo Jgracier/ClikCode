@@ -32,9 +32,6 @@ export type Action = keyof typeof ACTIONS;
 /** The notice once a turn has been stopped. */
 export const STOPPED = 'Stopped';
 
-/** The VS Code command that stops the turn, as the palette lists it. */
-export const STOP_TURN_COMMAND = 'Stop Turn';
-
 /** `ctrl+c stop`: an action's key and verb, as every hint words it. */
 export function keyHint(action: Action): string {
   const { verb, key } = ACTIONS[action];

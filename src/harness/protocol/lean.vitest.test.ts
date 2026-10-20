@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { callOutcomeParts, costShownInline, endLineShown, endLineUsageShown, failedOutputTail } from './lean.js';
+import { callOutcomeParts, endLineShown, endLineUsageShown, failedOutputTail } from './lean.js';
 
 describe('lean thresholds', () => {
   it('ends on a line only for a long turn or a turn that changed files', () => {
@@ -13,9 +13,6 @@ describe('lean thresholds', () => {
     expect(endLineUsageShown({ input: 15_000, output: 5_000 })).toBe(true);
     expect(endLineUsageShown({ input: 10, costUsd: 0.049 })).toBe(false);
     expect(endLineUsageShown({ input: 10, costUsd: 0.05 })).toBe(true);
-    expect(costShownInline(0.04)).toBe(false);
-    expect(costShownInline(0.05)).toBe(true);
-    expect(costShownInline(undefined)).toBe(false);
   });
   it('shows exit only when non-zero and duration from 5s', () => {
     const words = (ms: number): string => `${ms / 1000}s`;

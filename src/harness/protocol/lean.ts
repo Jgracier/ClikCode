@@ -6,13 +6,13 @@ import type { FileDiff } from '../../agent/line-diff.js';
 import type { TurnUsage } from './turn-usage.js';
 
 /** A turn this long ends on its summary line even if it changed nothing. */
-export const END_LINE_MIN_MS = 10_000;
+const END_LINE_MIN_MS = 10_000;
 /** Tokens and cost join the end line only for a turn this large... */
-export const END_USAGE_MIN_TOKENS = 20_000;
+const END_USAGE_MIN_TOKENS = 20_000;
 /** ...or this expensive (also when the editor shows a chat's cost inline). */
-export const COST_INLINE_MIN_USD = 0.05;
+const COST_INLINE_MIN_USD = 0.05;
 /** A call's `(exit N · duration)` shows a duration only from this long. */
-export const CALL_DURATION_MIN_MS = 5_000;
+const CALL_DURATION_MIN_MS = 5_000;
 /** The usage figure sits in the footer when this much or less is left. */
 /** Under a failed call: the last this many lines of its output. */
 export const FAILED_OUTPUT_LINES = 3;
@@ -28,11 +28,6 @@ export function endLineShown(ms: number, filesChanged: number): boolean {
 export function endLineUsageShown(usage?: Pick<TurnUsage, 'input' | 'output' | 'costUsd'>): boolean {
   if (!usage) return false;
   return (usage.input ?? 0) + (usage.output ?? 0) >= END_USAGE_MIN_TOKENS || (usage.costUsd ?? 0) >= COST_INLINE_MIN_USD;
-}
-
-/** Whether a cost is worth a figure of its own. */
-export function costShownInline(costUsd: number | undefined): boolean {
-  return costUsd !== undefined && Number.isFinite(costUsd) && costUsd >= COST_INLINE_MIN_USD;
 }
 
 /** The `exit N` and duration parts of a call's `(exit N · duration)`: shown

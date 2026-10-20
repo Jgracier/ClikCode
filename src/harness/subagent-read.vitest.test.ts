@@ -2,8 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { claudeTranscriptRows, codexThreadRows, findClaudeSubagent, liveSubAgentRows, readClaudeSubagent } from './subagent-read.js';
-import { codexActivityForItem } from './transport/codex-app-server.js';
+import { claudeTranscriptRows, findClaudeSubagent, liveSubAgentRows, readClaudeSubagent } from './subagent-read.js';
 
 const line = (value: unknown): string => JSON.stringify(value);
 const transcript = [
@@ -43,16 +42,6 @@ describe('findClaudeSubagent', () => {
     expect(await findClaudeSubagent('/w/proj', 'sess1', 'toolu_1', profile)).toMatchObject({ agentId: 'aa1', agentType: 'explore' });
     expect(await findClaudeSubagent('/w/proj', 'sess1', 'toolu_x', profile)).toBeUndefined();
     expect((await readClaudeSubagent('/w/proj', 'sess1', 'toolu_1', profile))?.rows.length).toBe(4);
-  });
-});
-
-describe('codexThreadRows', () => {
-  it('reads a child thread as prompt, call and prose', () => {
-    const rows = codexThreadRows({ turns: [{ items: [
-      { type: 'userMessage', content: [{ type: 'text', text: 'Reply OK' }] },
-      { type: 'agentMessage', id: 'm', text: 'OK' },
-    ] }] }, codexActivityForItem);
-    expect(rows).toEqual([{ kind: 'prompt', text: 'Reply OK' }, { kind: 'text', text: 'OK' }]);
   });
 });
 
