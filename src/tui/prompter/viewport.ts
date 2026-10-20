@@ -18,8 +18,9 @@ export function viewportRows(this: TerminalHarnessPrompter): number {
 export function onResize(this: TerminalHarnessPrompter): void {
   if (!this.closed) {
     // The settled repaint redraws everything at the new size, and a change
-    // of width wraps the transcript again from its source first.
-    this.forgetScreenPosition();
+    // of width wraps the transcript again from its source first. Until then
+    // a frame asked for (a key's echo, the spinner) is a diff against what
+    // was drawn: a full frame per signal is what swallowed swipes.
     logCursorEvent(`resize screen=${output.columns}x${output.rows} raw=${terminalModes.rawMode} alternate=${terminalModes.alternateScreen}`);
     // A phone sends several size changes while its keyboard moves. They are
     // debounced into ONE repaint: the clear and the phone's mouse sequence go
