@@ -47,6 +47,12 @@ export function setWorkEndedHandler(sessionId: string, handler: WorkEndedHandler
   if (handler) workEndedHandlers.set(sessionId, handler);
   else workEndedHandlers.delete(sessionId);
 }
+/** Tell `sessionId`'s handler of work that ended outside a persistent child: the agents of a held
+ * CLI process a turn did not wait for (turn-steps.ts settleHeldVendor). */
+export function reportEndedWork(sessionId: string, ended: readonly EndedWork[], from: { harness?: string; accountId?: string } = {}): void {
+  if (!ended.length) return;
+  try { workEndedHandlers.get(sessionId)?.(ended, from); } catch { /* fail-open-ok: the owner's bookkeeping */ }
+}
 /** The harness and account a child key (vendorChildKey) was made for. */
 function keyOwner(key: string): { harness?: string; accountId?: string } {
   try {

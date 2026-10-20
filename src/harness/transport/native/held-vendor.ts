@@ -172,11 +172,16 @@ export function whenHeldVendorGone(sessionId: string): Promise<void> {
 }
 
 /** Before the next prompt or account copy, let a held Claude subagent finish
- * in the process that owns it. A background shell may be released normally. */
-export async function waitForHeldVendorSubagents(sessionId: string, signal?: AbortSignal): Promise<void> {
+ * in the process that owns it. A background shell may be released normally.
+ * True once none is running; false when `ceilingMs` passed first (the caller
+ * decides what becomes of them: turn-steps.ts settleHeldVendor). */
+export async function waitForHeldVendorSubagents(sessionId: string, signal?: AbortSignal, ceilingMs = Number.POSITIVE_INFINITY): Promise<boolean> {
+  const until = Date.now() + ceilingMs;
   while (held.get(sessionId)?.agentWork) {
     if (signal?.aborted) throw turnCancelledError();
-    await new Promise<void>((resolve) => setTimeout(resolve, 200));
+    if (Date.now() >= until) return false;
+    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(200, Math.max(0, until - Date.now()))));
   }
   if (signal?.aborted) throw turnCancelledError();
+  return true;
 }

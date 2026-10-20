@@ -94,6 +94,15 @@ describe('a Claude turn that leaves background tasks running', () => {
     await vi.waitFor(() => expect(hasHeldVendorProcess('held-agent')).toBe(false), { timeout: 5000 });
   });
 
+  it('stops waiting for a subagent at the ceiling, saying it is still running', async () => {
+    await runTurn('held-agent-ceiling', null, false, true, true);
+    expect(hasHeldVendorProcess('held-agent-ceiling')).toBe(true);
+    expect(await waitForHeldVendorSubagents('held-agent-ceiling', undefined, 0)).toBe(false);
+    expect(await waitForHeldVendorSubagents('held-agent-ceiling', undefined, 300)).toBe(false);
+    await stopHeldVendorProcess('held-agent-ceiling');
+    expect(await waitForHeldVendorSubagents('held-agent-ceiling', undefined, 0)).toBe(true);
+  });
+
   it('ends at the first result, and the follow-up arrives as a background turn', async () => {
     const { output, turns, elapsedMs } = await runTurn('held-a', 400);
     expect(output.exitCode).toBe(0);
