@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { BridgeClient } from './bridge-client';
 import type { WebviewSurface } from './chat-view';
 import { diffModel } from './model-patch';
+import { DraftRestores, LatestRead } from './controller/reads';
 import { answeredApproval, applyEvent, connectionLost, conversationAttention, emptyModel, preparing, rejectedPrompt, submittingPrompt, takenBackText, withNote, typedDuringTurn, type ChatModel } from './model';
 import type { IdeAccounts, IdeChatSettings, IdeConversation, IdeEvent, IdeFeature, IdeRequest, IdeProvider, IdeSlashCommand, IdeUiRequest, HarnessQuestionResult, WorkerEvent } from './protocol';
 import { bridgeCommandMissing, bridgeCompatibility, tooOldToStartMessage, versionSkew, type Remedy } from './compat';
@@ -62,7 +63,9 @@ export class ClikCodeController implements vscode.Disposable {
   /** A full read is pending in the coalesced refresh (refreshStructured). */
   private refreshFull = false;
   private refreshedFor = '';
-  private readonly subscriptions: vscode.Disposable[] = [];
+  /** The newest structured read begun (readStructured): older ones are dropped. */
+  private readonly structuredRead = new LatestRead();
+  private readonly draftRestores = new DraftRestores();
   /** Pasted images: path -> sent in a message yet. */
   private readonly images = new Map<string, boolean>();
   private imageDir: Promise<string> | undefined;
@@ -264,6 +267,7 @@ export class ClikCodeController implements vscode.Disposable {
     const bridge = this.bridge;
     if (!bridge?.running) return;
     const sessionId = this.model.sessionId;
+    const read = this.structuredRead.begin();
     const [settings, providers, accounts] = await Promise.all([
       onlyAccount ? Promise.resolve(this.model.chatSettings) : bridge.call<IdeChatSettings>({ type: 'query', query: 'chat-settings' }, TIMEOUT.structured).catch(() => undefined),
       onlyAccount ? Promise.resolve(undefined) : bridge.call<IdeProvider[]>({ type: 'query', query: 'providers' }, TIMEOUT.structured).catch(() => undefined),
@@ -271,12 +275,15 @@ export class ClikCodeController implements vscode.Disposable {
     ]);
     if (this.model.sessionId !== sessionId) return;
     const provider = providers?.find((item) => item.current) ?? (onlyAccount ? this.model.provider : undefined);
+    // A failed accounts read says nothing about the account: keep what is
+    // shown. An older read landing after a newer one would put an older account
+    // back (a switch, then a slow answer from before it).
     const currentAccount = accounts?.accounts.find((account) => account.current);
     this.setModel({
       ...this.model,
       ...(settings ? { chatSettings: settings } : {}),
       ...(provider ? { provider } : {}),
-      currentAccount,
+      ...(accounts && this.structuredRead.current(read) ? { currentAccount } : {}),
     });
   }
 
@@ -505,7 +512,7 @@ export class ClikCodeController implements vscode.Disposable {
         return;
       case 'restore-draft':
         this.setModel(rejectedPrompt(this.model));
-        this.post({ type: 'setDraft', text: event.text });
+        this.restoreDraft(event.text);
         return;
       case 'usage':
         this.refreshStructured(true);
@@ -583,7 +590,7 @@ export class ClikCodeController implements vscode.Disposable {
       if (text !== undefined) this.post({ type: 'insert', text });
       return;
     }
-    if (event.type === 'restore-draft') this.post({ type: 'setDraft', text: event.text });
+    if (event.type === 'restore-draft') this.restoreDraft(event.text);
     // A message typed during the turn that could not be sent comes back to
     // the composer, as the terminal restores it for editing.
     if (event.type === 'submission' && event.disposition === 'error') {
@@ -593,6 +600,12 @@ export class ClikCodeController implements vscode.Disposable {
     if (event.type === 'waiting-stop') {
       this.changes.forgetAll();
     }
+  }
+
+  /** The composer gets a failed send's words back once, whichever of the two
+   * reports of that failure (the bridge's, the worker's) arrives first. */
+  private restoreDraft(text: string): void {
+    if (this.draftRestores.take(text)) this.post({ type: 'setDraft', text });
   }
 
   hasApproval(id: string): boolean {
@@ -855,7 +868,6 @@ export class ClikCodeController implements vscode.Disposable {
     this.builds.stop();
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     if (this.postTimer) clearTimeout(this.postTimer);
-    for (const subscription of this.subscriptions) subscription.dispose();
     this.dropQuestions();
     this.bridge?.dispose();
     this.bridge = undefined;

@@ -42,8 +42,13 @@ export function applySession(model: ChatModel, session: HarnessSession, account?
   else if (model.sessionId === session.id && model.providerId !== undefined && model.providerId !== providerId
     && !model.messages.length && !model.running && !model.pendingPrompt && model.notes.length) model = { ...model, notes: [] };
   const pending = session.pendingTurn;
+  // What the account has used belongs to that account: a switch leaves the
+  // old one's figures until the new account's `usage` event, which must not be
+  // shown as the new account's meanwhile.
+  const switched = model.account !== undefined && model.account !== account;
   return {
     ...model,
+    ...(switched ? { accountUsage: undefined, accountUsageNext: undefined, accountUsageDetail: undefined } : {}),
     ...(label ? { modelLabel: label } : {}),
     sessionId: session.id,
     title: session.name,
