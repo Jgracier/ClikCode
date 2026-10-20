@@ -6,7 +6,6 @@ import { adoptListedNativeId } from '../session/discovery/cli-listing.js';
 import { keepsNoHistory } from './thread-start.js';
 import { forgetNativeThread } from '../session/native-thread.js';
 import { nativeGeneratedTitle } from '../session/discovery/titles.js';
-import { writeState } from '../session/state/write.js';
 import { emitHarnessOutput } from '../harness/output.js';
 import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import { recordQuotaRefusal, recordSuccessfulAccountTurn } from './account-outcome.js';
@@ -91,6 +90,7 @@ export async function completeVendorTurn(ctx: VendorTurnContext, observer: Vendo
       ? { vendor: () => nativeGeneratedTitle(harness, session.nativeSessionId, session.workspace, environment) }
       : {}),
   });
-  await writeState(state);
+  // No write of its own: complete() wrote `state` whole (writeState), the invocation and the
+  // account's outcome above with it; a failed write leaves the journal dirty for the turn's flush.
   if (!prompter) emitHarnessOutput({ session, text: completedText, usage: { attributedBy: harness.command, ...usage }, invocation, ...ctx.accounts.switched() });
 }

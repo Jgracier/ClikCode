@@ -123,6 +123,11 @@ describe('a failover standby', () => {
     expect(saved.accountId).toBe('acct-b');
     // The second attempt ran on the standby child, not a cold one.
     expect(asked[1]!.child).toBe(standbys[0]);
+    // The turn's end is stored by the journal's completing write alone: the invocation and the
+    // accounts' outcomes with it.
+    const stored = await readState({ transcripts: [] });
+    expect(stored.invocations.some((item) => item.sessionId === 's1' && item.accountId === 'acct-b')).toBe(true);
+    expect(stored.accounts.find((item) => item.id === 'acct-a')?.quotaState).toBe('exhausted');
   });
 
   it('copies a CLI harness\'s thread before its attempt, so a refusal hands over without copying again', async () => {
