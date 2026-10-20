@@ -273,3 +273,39 @@ describe('anchoring the viewport on the tapped row', () => {
     expect(anchoredScrollback({ line: 3, height: 1, row: 10, fit: false }, { length: 8, trimmed: 5, above: 20 })).toBeUndefined();
   });
 });
+
+describe('one spinner per running row', () => {
+  const BRAILLE = /[⠀-⣿]/;
+  const running = (id: string, label: string, extra: Partial<HarnessActivityEvent> = {}) => event(id, 'tool-start', label, extra);
+
+  it('writes a sub-agent retired while it runs with a still mark, never a frozen spinner frame', () => {
+    const { p, rows } = kit({ reducedMotion: false, waitingFrame: 3 });
+    const tools = rows.groupedRows(turn([running('a1', 'Explore the repo', { agent: true })]), false, new CallGrouping());
+    const agent = tools.find((tool) => tool.agent)!;
+    const released = (agent.released ?? []).map(strip).join('\n');
+    expect(released).toContain('○');
+    expect(released).toContain('· running');
+    expect(released).not.toMatch(BRAILLE);
+    // Live, the same row still turns.
+    expect(strip(agent.lines.join('\n'))).toMatch(BRAILLE);
+    expect(p).toBeDefined();
+  });
+
+  it('keeps a group head still while a call of its run spins in a row of its own', () => {
+    const live = (pending: boolean) => {
+      const { p, rows } = kit({
+        reducedMotion: false, waitingFrame: 2,
+        ...(pending ? { pendingApproval: { callId: 'c3' } } : {}),
+      });
+      const entries = turn([running('c1', 'Read a.ts', { category: 'read' }), running('c2', 'Read b.ts', { category: 'read' }), running('c3', '$ make', { category: 'run' })]);
+      p.liveResponse = '';
+      return rows.groupedRows(entries, false, new CallGrouping()).map((tool) => strip(tool.lines.join('\n')));
+    };
+    const alone = live(false).join('\n');
+    expect(alone).toMatch(BRAILLE);
+    const withSibling = live(true);
+    const spinning = withSibling.filter((text) => BRAILLE.test(text));
+    expect(spinning).toHaveLength(1);
+    expect(withSibling.join('\n')).toContain('$ make');
+  });
+});

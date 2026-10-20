@@ -111,7 +111,10 @@ export function frameBands(p: TerminalHarnessPrompter, input: BandInput) {
   }) : [];
   const signInRows = signInWrapped.length <= liveBandBudget ? signInWrapped : signInWrapped.slice(0, Math.max(0, liveBandBudget));
   liveBandBudget -= signInRows.length;
-  const planGlyph = p.turn && !p.reducedMotion ? waitingSpinnerGlyph(p.waitingFrame) : undefined;
+  // The step in progress turns only when it is the single one: several would spin in step with each other
+  // and with the status line, saying nothing the status does not.
+  const activeSteps = p.planEntries.filter((entry) => entry.status === 'in_progress').length;
+  const planGlyph = p.turn && !p.reducedMotion && activeSteps === 1 ? waitingSpinnerGlyph(p.waitingFrame) : undefined;
   const planShown = planBlockRows(p.planEntries, width, liveBandBudget, planGlyph);
   // The plan's height only grows during a turn: a step done or added changes
   // its rows, and a block that shrank and grew with them moved the chat at

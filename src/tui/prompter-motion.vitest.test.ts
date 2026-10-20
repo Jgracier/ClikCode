@@ -79,6 +79,25 @@ describe('the status line motion', () => {
     } finally { rl.close(); }
   });
 
+  it('schedules no tick at all while an approval waits, and starts again when it is answered', async () => {
+    const { rl, frame } = open();
+    try {
+      const asked = rl.approval('Run make?', 'make clean');
+      vi.advanceTimersByTime(500);
+      const timers = vi.getTimerCount();
+      const turn = (rl as unknown as { turn: { timer?: unknown } }).turn;
+      expect(turn.timer).toBeUndefined();
+      vi.advanceTimersByTime(5000);
+      expect(vi.getTimerCount()).toBeLessThanOrEqual(timers);
+      (rl as unknown as { onWaitingKey(k: string): void }).onWaitingKey('y');
+      await asked;
+      const before = frame();
+      expect(turn.timer).toBeDefined();
+      vi.advanceTimersByTime(SPIN_MS * 5 + 1);
+      expect(frame()).toBeGreaterThan(before);
+    } finally { rl.close(); }
+  });
+
   it('shows the spinner, one word and the clock: no token meter, the key that stops it', () => {
     const { rl, line } = open();
     try {
