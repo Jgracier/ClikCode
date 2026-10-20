@@ -309,6 +309,11 @@ export function scheduleWaitingTick(this: TerminalHarnessPrompter): void {
   if (turn.timer) clearTimeout(turn.timer);
   turn.timer = undefined;
   if (this.closed) return;
+  // Waiting on the user, the clock is stopped and not drawn and nothing
+  // animates: a tick would wake the whole pipeline once a second for a frame
+  // identical to the last. Answering (resumeClock) or the sign-in ending
+  // schedules the next one.
+  if (this.waitingOnUser()) { this.waitingTickFast = false; return; }
   const now = Date.now();
   // Reduced motion never animates: the band ticks for the clock alone.
   this.waitingTickFast = !this.reducedMotion && !turn.cancelled && turnAnimating(this.turnWaits());
@@ -364,7 +369,7 @@ export function pauseClock(this: TerminalHarnessPrompter): void {
   turn.clock = pauseTurnClock(turn.clock, Date.now());
   turn.activeAt = Date.now();
   // Blocked on the user: the frame stops now, not at the next spinner tick.
-  if (turn.timer) this.scheduleWaitingTick();
+  this.scheduleWaitingTick();
 }
 
 /** Whatever the turn waited on the user for has been answered (or the
@@ -375,7 +380,7 @@ export function resumeClock(this: TerminalHarnessPrompter): void {
   turn.clock = resumeTurnClock(turn.clock, Date.now());
   // Time spent on the user's answer is not the turn going quiet.
   turn.activeAt = Date.now();
-  if (turn.timer) this.scheduleWaitingTick();
+  this.scheduleWaitingTick();
 }
 
 export async function flushWaitingSubmissions(this: TerminalHarnessPrompter): Promise<void> {

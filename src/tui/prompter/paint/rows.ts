@@ -71,6 +71,9 @@ export function createRowBuilders(p: TerminalHarnessPrompter, conversationInner:
 }
 export type RowBuilders = ReturnType<typeof createRowBuilders>;
 
+/** The mark of a sub-agent row retired while it still runs. */
+const RELEASED_MARK = '○';
+
 /** A call as a settling row: its own, or merged into a run of reads. */
 export function createToolRows(p: TerminalHarnessPrompter, builders: RowBuilders) {
   const { underCall, activityRows, conversationInner } = builders;
@@ -120,14 +123,15 @@ export function createToolRows(p: TerminalHarnessPrompter, builders: RowBuilders
     // build or test run is visibly working instead of a bare timer.
     const live = entry.event ? outputPreviewRows({ ...entry.event, outputTail: true }, LIVE_OUTPUT_LINES).map(underCall) : [];
     // A sub-agent that has to be retired while it still runs: the same text
-    // with a static glyph and `running`; when it settles one completion row
+    // with a still mark and `running`; when it settles one completion row
     // is appended (`✓ <label> (N tool uses · ...)`), and its live children
     // are named by a `↳ <label>` line (transcript.ts).
     const agentRows = entry.event?.agent ? (() => {
       const label = tensedLabel(entry.event.label, true);
       const settled = renderActivityLine({ ...entry.event, kind: 'tool-done' })[0]?.trim() ?? label;
       return {
-        released: open(['', `  ${runningChatLine(label, 0, kind).trim()} ${chalk.dim('· running')}`]),
+        // Written into scrollback once and never redrawn: a still mark, not a spinner frozen mid-turn.
+        released: open(['', `  ${runningChatLine(label, 0, kind, RELEASED_MARK).trim()} ${chalk.dim('· running')}`]),
         completed: open(['', `  ${look.paint.success('✓')} ${settled}`]),
         childHeader: [`    ${chalk.dim(`↳ ${entry.event.label}`)}`],
       };
@@ -162,14 +166,18 @@ export function createToolRows(p: TerminalHarnessPrompter, builders: RowBuilders
    * it is the one summary row. Opened by a tap or Ctrl+O (p.groupExpansion),
    * it grows where it is: the items listed right under the header, each
    * opened to its detail -- the same rows live and reopened. */
-  const groupRow = (run: CallRun<ActivityEntry & GroupRow>, folded: ReadonlyArray<ActivityEntry & GroupRow>, ended: boolean, id: string, gid: string): SettlingTool => {
+  const groupRow = (run: CallRun<ActivityEntry & GroupRow>, folded: ReadonlyArray<ActivityEntry & GroupRow>, ended: boolean, id: string, gid: string, siblingSpins = false): SettlingTool => {
     const first = folded[0]!;
     const running = !ended && folded.some((member) => member.event.kind === 'tool-start');
     const order = { ...(first.sequence === undefined ? {} : { seq: first.sequence }) };
     const state = p.groupExpansion.get(gid);
     const items = (live: boolean) => folded.map((member, index) => ({ id: itemIdOf(member, index), line: live ? liveItemLine(member, ended) : (member.lines[0] ?? ''), entry: member }));
     if (!run.done) {
-      const head = running
+      // One spinner per running row: when a call of this run stands alone and spins in its own row, the
+      // group's head keeps its still glyph instead of turning in step with it.
+      const head = running && siblingSpins
+        ? `  ${toolGlyph()} ${summaryLine(run.items, true, true)}`
+        : running
         ? `  ${runningChatLine(summaryLine(run.items, true, true), p.reducedMotion ? 0 : p.waitingFrame, 'tool').trim()}`
         : `  ${summaryLine(run.items, false, false, state.open)}`;
       if (state.open) {
@@ -204,7 +212,7 @@ export function createToolRows(p: TerminalHarnessPrompter, builders: RowBuilders
     const aloneRows = alones.map((item) => single(item, false));
     const gid = groupIdOf(run);
     p.callGroups.set({ id: gid, items: folded.map((item, index) => ({ id: itemIdOf(item, index), entry: item })), running: !run.done && run.items.some((item) => item.event.kind === 'tool-start') });
-    return [groupRow(run, folded, ended, `grp:${run.key}`, gid), ...aloneRows];
+    return [groupRow(run, folded, ended, `grp:${run.key}`, gid, aloneRows.some((row) => !row.done)), ...aloneRows];
   };
   /** The turn's rows, runs of calls and thoughts grouped. A finished call
    * waits in the live region while its run is open: the next may join it. */

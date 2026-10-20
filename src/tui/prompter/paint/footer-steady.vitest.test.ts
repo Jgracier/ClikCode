@@ -85,4 +85,19 @@ describe('the footer keeps its height', () => {
     expect(strip(written.join(''))).not.toContain('Weighing two approaches');
     expect(thoughtRow).toBeGreaterThan(0);
   });
+
+  it('turns the plan glyph only for a single step in progress', () => {
+    rl.startWaiting('thinking', () => undefined, async () => ({ kind: 'sent' }) as never);
+    const plan = (): string => {
+      written.length = 0;
+      vi.advanceTimersByTime(300);
+      return written.join('').replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '');
+    };
+    rl.setPlan([{ content: 'alpha step', status: 'in_progress' }, { content: 'beta step', status: 'pending' }] as never);
+    expect(plan()).toMatch(/[\u2800-\u28ff] alpha step/);
+    rl.setPlan([{ content: 'alpha step', status: 'in_progress' }, { content: 'beta step', status: 'in_progress' }] as never);
+    const two = plan();
+    expect(two).toContain('◐ alpha step');
+    expect(two).toContain('◐ beta step');
+  });
 });

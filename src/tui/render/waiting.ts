@@ -24,8 +24,10 @@ export function rightLabeledRule(width: number, label?: string): string {
  * turn's clock stays on that line, so this row has none. */
 export function runningChatLine(
   label: string, frame: number, kind: 'command' | 'agent' | 'tool',
+  /** A still mark in the spinner's place, for a row that is written once and never redrawn. */
+  still?: string,
 ): string {
-  const spinner = look.paint.accent(kind === 'agent' ? agentSpinnerGlyph(frame) : waitingSpinnerGlyph(frame));
+  const spinner = look.paint.accent(still ?? (kind === 'agent' ? agentSpinnerGlyph(frame) : waitingSpinnerGlyph(frame)));
   // A title that already says it is one ("Agent worker 0") is not told again.
   const verb = kind === 'agent' && !/^agent\b/i.test(label) ? 'agent ' : '';
   return `  ${spinner}  ${verb}${label}`;
