@@ -365,13 +365,18 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     return error;
   }
 
+  /** Whether liveFor(`key`) would reuse the running child rather than spawn one. */
+  protected reusable(key: string): boolean {
+    return Boolean(this.live && !this.live.peer.closed && this.live.key === key);
+  }
+
   /** The live child for `key`, spawning one (and dropping the old one with
    * `restarted`) when there is none or its key changed. */
   protected liveFor(key: string, restarted: string, launch: {
     binary: string; argv: readonly string[]; cwd: string; environment?: Readonly<Record<string, string>>;
     peer: Omit<JsonRpcPeerOptions, 'detached' | 'onClose'>;
   }, fields: Omit<L, 'peer' | 'key'>): L {
-    if (this.live && !this.live.peer.closed && this.live.key === key) {
+    if (this.reusable(key)) {
       markTurn('spawned', { reused: true, transport: this.label });
       return this.live;
     }
