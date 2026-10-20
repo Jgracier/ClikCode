@@ -21,24 +21,13 @@ export function onResize(this: TerminalHarnessPrompter): void {
     // of width wraps the transcript again from its source first.
     this.forgetScreenPosition();
     logCursorEvent(`resize screen=${output.columns}x${output.rows} raw=${terminalModes.rawMode} alternate=${terminalModes.alternateScreen}`);
-    // A phone sends several size changes while its keyboard moves: one
-    // settled repaint carries the phone's resize sequence (redrawPreamble)
-    // inside its frame. Written here, the modes went out interleaved with
-    // frames in flight, once per intermediate size.
-    const first = !this.resizePaintTimer;
+    // A phone sends several size changes while its keyboard moves. They are
+    // debounced into ONE repaint: the clear and the phone's mouse sequence go
+    // out once, inside that frame (redrawPreamble), and nothing is drawn full
+    // at an intermediate size first -- that was a second blank of the screen
+    // 120ms before the settled one. A frame asked for meanwhile (a keystroke's
+    // echo, a streaming row) is an ordinary diff and is not held back.
     this.requestRedraw('resize');
-    // The first size of a burst is drawn at once, rows only: waiting out
-    // the settle left the old layout on a resized screen for 120ms. The
-    // phone's sequence still goes out once, with the settled frame.
-    if (first && !this.suspended) {
-      this.provisionalFrame = true;
-      try {
-        this.rewrapIfWidthChanged();
-        this.repaint();
-      } finally {
-        this.provisionalFrame = false;
-      }
-    }
     // No height probe here: it jumps the cursor to the bottom-right corner
     // and asks, at exactly the moment a swipe is being recognised. The size
     // the terminal announces is what the layout uses.
@@ -53,8 +42,7 @@ export function repaintAfterResize(this: TerminalHarnessPrompter): void {
     lifecycle('window.resize', { cols: output.columns, rows: output.rows });
     if (this.closed || this.suspended) return;
     this.rewrapIfWidthChanged();
-    // Whole, whatever the immediate frame already drew: the preamble this
-    // frame carries clears the screen.
+    // Whole: the preamble this frame carries clears the screen, once.
     this.forgetScreenPosition();
     this.repaint();
   }, RESIZE_SETTLE_MS);

@@ -288,9 +288,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * the size has stopped changing. Short enough not to be seen, long enough to
    * land after the client has finished. */
   resizePaintTimer?: NodeJS.Timeout;
-  /** The frame being drawn is a resize's immediate one: it leaves the
-   * pending resize preamble to the settled frame. */
-  provisionalFrame = false;
 
   /** Rows retired out of the viewport, kept so the conversation above the
    * live region is still there to scroll back to on the alternate screen. */

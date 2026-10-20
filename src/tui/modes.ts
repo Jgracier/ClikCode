@@ -101,10 +101,14 @@ export function sessionModesOff(leavingAlternateScreen: boolean): string {
  * (a reply settling) never clears. Autowrap goes off before any row. */
 export type Redraw = 'resize' | 'repair';
 export function redrawPreamble(redraw: Redraw | undefined): string {
+  // Autowrap off goes before every frame; the caret is hidden only where the
+  // screen is cleared. An ordinary diff frame leaves it alone: the cursor is
+  // parked absolutely at the end of the frame, and hiding and showing it on
+  // every spinner tick made the caret blink under the user's typing.
   const hide = '\u001b[?25l\u001b[?7l';
   if (redraw === 'resize') return `${SELECTION_MODE.active ? '' : ENABLE_MOUSE_TRACKING}${hide}\u001b[2J\u001b[H`;
   if (redraw === 'repair') return `${hide}\u001b[2J\u001b[H`;
-  return hide;
+  return '\u001b[?7l';
 }
 
 /** Mode changes asked for between frames (/select): the next frame writes
