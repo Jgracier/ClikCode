@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { highlightSelection, lineAtRow, lineText, scrollShift, selectedText, selectionAction, selectionIsEmpty, shiftedRow } from './selection.js';
+import { highlightSelectionAt, lineAtRow, lineText, scrollShift, selectedText, selectionAction, selectionIsEmpty, shiftedRow } from './selection.js';
 
 const plain = (text: string): string => text.replace(/\u001b\[[0-9;]*m/g, '');
 const rows = [
@@ -52,22 +52,25 @@ describe('the text a selection copies', () => {
   });
 });
 
+/** Screen rows shown as lines 0, 1, 2, ... */
+const highlightOf = (rows: readonly string[], selection: Parameters<typeof highlightSelectionAt>[2]): string[] => highlightSelectionAt(rows, rows.map((_, index) => index), selection);
+
 describe('the highlight', () => {
   it('marks only the selected cells and keeps every colour', () => {
-    const [first] = highlightSelection(rows, { anchor: { row: 0, col: 2 }, head: { row: 0, col: 6 } });
+    const [first] = highlightOf(rows, { anchor: { row: 0, col: 2 }, head: { row: 0, col: 6 } });
     expect(plain(first!)).toBe(plain(rows[0]!));
     expect(first).toContain('\u001b[36m');
     expect(first).toMatch(/\u001b\[7m.*Hello.*\u001b\[27m/);
   });
 
   it('survives a colour reset inside the range', () => {
-    const [first] = highlightSelection(rows, { anchor: { row: 0, col: 2 }, head: { row: 0, col: 12 } });
+    const [first] = highlightOf(rows, { anchor: { row: 0, col: 2 }, head: { row: 0, col: 12 } });
     // The reset after "Hello" is followed by inverse again, so "there" stays marked.
     expect(first).toContain('\u001b[39m\u001b[7m');
   });
 
   it('leaves rows outside the selection untouched', () => {
-    const highlighted = highlightSelection(rows, { anchor: { row: 0, col: 0 }, head: { row: 0, col: 3 } });
+    const highlighted = highlightOf(rows, { anchor: { row: 0, col: 0 }, head: { row: 0, col: 3 } });
     expect(highlighted.slice(1)).toEqual(rows.slice(1));
   });
 });

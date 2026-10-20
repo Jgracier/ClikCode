@@ -12,6 +12,12 @@ import type { TerminalHarnessPrompter } from '../prompter.js';
 import { ALTERNATE_TRANSCRIPT_ROWS } from './state.js';
 import { anchoredScrollback } from './group-actions.js';
 
+/** A row as the terminal may be given it: only SGR escapes, one line, no hyperlink left open, and
+ * never the last column. The one place a row is made safe. */
+function safeRow(row: string, limit: number): string {
+  return closeOpenHyperlink(visibleSlice(sanitizeTerminalText(row, { keepSgr: true, singleLine: true }), limit));
+}
+
 /** One frame: `finished` rows are retired into the transcript, and the live
  * region below them is replaced. */
 export function renderFrame(
@@ -29,14 +35,12 @@ export function renderFrame(
   // above already budgets for this; clipping here means a new row builder
   // cannot reintroduce it.
   const limit = Math.max(1, (output.columns || 100) - 1);
-  const safeRow = (row: string): string =>
-    closeOpenHyperlink(visibleSlice(sanitizeTerminalText(row, { keepSgr: true, singleLine: true }), limit));
   // Most live rows are the same from one frame to the next (the footer, the
   // answer's settled lines), so each is made safe once while it stays.
   const known = this.safeLiveRows.limit === limit ? this.safeLiveRows.rows : new Map<string, string>();
   const rows = new Map<string, string>();
   const safeLive = live.map((row) => {
-    const safe = known.get(row) ?? safeRow(row);
+    const safe = known.get(row) ?? safeRow(row, limit);
     rows.set(row, safe);
     return safe;
   });
@@ -44,10 +48,10 @@ export function renderFrame(
   // Frames that coalesce while a write drains accumulate their finished rows
   // instead of replacing them. A live row dropped here is drawn again by the
   // frame that replaces it; a retired row would simply be lost.
-  this.pendingFinished.push(...finished.map(safeRow));
+  this.pendingFinished.push(...finished.map((row) => safeRow(row, limit)));
   this.pendingLive = {
     live: safeLive, cursorRow, cursorColumn, hideCursor, tags: [...liveTags],
-    ...(tail ? { tail: { rows: tail.rows.map(safeRow), tags: [...tail.tags] } } : {}),
+    ...(tail ? { tail: { rows: tail.rows.map((row) => safeRow(row, limit)), tags: [...tail.tags] } } : {}),
   };
   if (!this.frameInFlight) this.flushFrame();
 }
@@ -145,9 +149,8 @@ export function flushAlternateFrame(
   const shownLive = scrolled > 0 ? live.slice(0, Math.max(0, height - above)) : live;
   let rows = [...shownTranscript, ...shownLive];
   while (rows.length < height) rows.unshift('');
-  // Never taller than the screen: a terminal clamps a row below it onto the last one, which is the
-  // composer's own. The history gives up its top rows, not the live block its bottom ones.
-  if (rows.length > height) rows = rows.slice(rows.length - height);
+  // Never taller than the screen, by construction: the live rows are at most `height` and the history
+  // gets exactly the rows they leave (`above`), so there is nothing to cut.
   this.frameLayout = { live: [...live], tags: (pending.tags ?? []).slice(-height) };
   if (this.mentionFocus?.words.length) {
     const words = this.mentionFocus.words;
@@ -162,12 +165,11 @@ export function flushAlternateFrame(
   const chrome = this.chromeRows;
   if (overlay.length && chrome > 0 && shownLive.length >= chrome) {
     const limit = Math.max(1, (output.columns || 100) - 1);
-    const clip = (row: string): string => closeOpenHyperlink(visibleSlice(sanitizeTerminalText(row, { keepSgr: true, singleLine: true }), limit));
     const footerStart = rows.length - chrome;
     const at = footerStart - overlay.length;
     for (const [offset, row] of overlay.entries()) {
       const index = at + offset;
-      if (index >= 0 && index < footerStart) rows[index] = clip(row);
+      if (index >= 0 && index < footerStart) rows[index] = safeRow(row, limit);
     }
   }
   // Only what changed. A keystroke changes the composer's row and nothing
