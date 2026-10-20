@@ -2,10 +2,9 @@
  * streamed to every attached window as it arrives, and kept in the conversation once said. */
 import { outOfTurnRecorder } from '../turn/out-of-turn-record.js';
 import { classifyAccountFailure } from '../turn/failover.js';
-import { recordQuotaRefusal } from '../turn/account-outcome.js';
+import { storeQuotaRefusal } from '../turn/account-outcome.js';
 import { leavePersistentTransport } from '../turn/vendor-process.js';
 import { readState } from '../session/state/read.js';
-import { writeState } from '../session/state/write.js';
 import type { OutOfTurnRelay } from '../harness/transport/background-turn.js';
 import type { WorkerContext } from './worker-context.js';
 import { thoughtLabel } from '../harness/protocol/activity-events.js';
@@ -81,13 +80,9 @@ export function createOutOfTurnRelay(ctx: WorkerContext): OutOfTurn {
         }
       }
       void (async () => {
-        const state = await readState({ transcripts: [] });
-        const session = state.sessions.find((item) => item.id === ctx.sessionId);
-        const account = session?.nativeThreadAccountId ? state.accounts.find((item) => item.id === session.nativeThreadAccountId) : undefined;
-        if (!account) return;
-        recordQuotaRefusal(state, account, new Error(sofar));
-        await writeState(state);
-        await leavePersistentTransport(ctx.sessionId, { accountId: account.id });
+        const accountId = (await readState({ transcripts: [] })).sessions.find((item) => item.id === ctx.sessionId)?.nativeThreadAccountId;
+        if (!accountId || !await storeQuotaRefusal(accountId, new Error(sofar))) return;
+        await leavePersistentTransport(ctx.sessionId, { accountId });
       })().catch(() => undefined);
       return;
     }

@@ -5,9 +5,7 @@
  * agent left running is (worker-queue.ts deliverNotifications). An agent the limit cut off also
  * marks its account spent, so that turn runs on the next one. */
 import { diagnostic, lifecycle } from '../runtime/lifecycle-log.js';
-import { readState } from '../session/state/read.js';
-import { writeState } from '../session/state/write.js';
-import { recordQuotaRefusal } from '../turn/account-outcome.js';
+import { storeQuotaRefusal } from '../turn/account-outcome.js';
 import type { EndedWork } from '../harness/transport/handoff-work.js';
 import type { WorkEndedHandler } from '../turn/vendor-process.js';
 import type { WorkerContext } from './worker-context.js';
@@ -33,11 +31,7 @@ export function createWorkEndedHandler(ctx: WorkerContext): WorkEndedHandler {
     void (async () => {
       // The vendor's own "you are out": its account is spent, and the notification turn runs on the next one.
       const limit = ended.find((work) => work.limit)?.limit;
-      if (limit && from.accountId) {
-        const state = await readState({ transcripts: [] });
-        const account = state.accounts.find((item) => item.id === from.accountId);
-        if (account) { recordQuotaRefusal(state, account, new Error(limit)); await writeState(state); }
-      }
+      if (limit && from.accountId) await storeQuotaRefusal(from.accountId, new Error(limit));
       await ctx.io.recordNotificationText(formatEndedWork(ended));
       ctx.io.broadcastQueueChanged();
       if (!ctx.turnRunning) await ctx.queue.drainQueue();
