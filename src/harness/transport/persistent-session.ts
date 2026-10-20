@@ -14,6 +14,7 @@ import { commandLine, commandRoots, outputFile, processGroup, processGroupMember
 import { readFile } from 'node:fs/promises';
 import { redactSecrets } from '../../agent/security.js';
 import type { EndedWork, RunningWork, WorkEndedHandler } from './handoff-work.js';
+import { BackgroundWorkTracker } from './background-work.js';
 
 /** How often a retired process's commands are looked at. */
 const RETIRED_POLL_MS = 3_000;
@@ -66,7 +67,7 @@ export interface PersistentSessionOptions {
 
 /** A retired process (retire): its group, and the work in it still running. */
 interface Retirement {
-  root: number; peer: JsonRpcPeer; commands: Map<number, RunningWork>; agents: Map<string, RunningWork>;
+  root: number; peer: JsonRpcPeer; work: BackgroundWorkTracker<RunningWork>;
   timer?: NodeJS.Timeout;
   /** ABANDONED_WORK_MS from the retirement. */
   ceiling?: NodeJS.Timeout;
@@ -139,7 +140,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
   /** What a retired process still runs, by kind. */
   get retiredWork(): { agents: number; terminals: number } {
     const retirement = this.isClosed ? undefined : this.retirement;
-    return { agents: retirement?.agents.size ?? 0, terminals: retirement?.commands.size ?? 0 };
+    return { agents: retirement?.work.count('agent') ?? 0, terminals: retirement?.work.count('command') ?? 0 };
   }
 
   /** Agents the vendor is running in the background (ACP: Claude's `task_*` frames). */
@@ -174,13 +175,15 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     const root = this.live?.pid;
     if (this.isClosed || !this.live || this.live.peer.closed || !root) return false;
     const commands = await this.leftCommands();
-    const agents = new Map(this.runningAgents().map((work) => [work.id, work]));
-    if (!commands.size && !agents.size) return false;
-    const retirement: Retirement = { root, peer: this.live.peer, commands, agents };
+    const agents = this.runningAgents();
+    if (!commands.size && !agents.length) return false;
+    const work = new BackgroundWorkTracker<RunningWork>((ended) => this.retiredEnded(ended));
+    for (const item of [...commands.values(), ...agents]) work.start(item);
+    const retirement: Retirement = { root, peer: this.live.peer, work };
     this.retirement = retirement;
     // Its work runs on even after the vendor itself exits (jsonrpc-peer.ts keepGroup).
     retirement.peer.keepGroup();
-    lifecycle('vendor.retired', { transport: this.label, commands: commands.size, agents: agents.size });
+    lifecycle('vendor.retired', { transport: this.label, commands: commands.size, agents: agents.length });
     // What was following its work in the conversation ends: the conversation is elsewhere.
     this.finishBackground('superseded');
     const poll = async (): Promise<void> => {
@@ -192,14 +195,14 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
       if (this.retirement !== retirement) return;
       if (group) {
         const ended: EndedWork[] = [];
-        for (const [pid, work] of retirement.commands) {
-          if (group.has(pid)) continue;
-          retirement.commands.delete(pid);
-          ended.push({ ...work, outcome: 'finished', tail: await outputTail(work.outputFile) });
+        for (const command of work.running('command')) {
+          if (group.has(Number(command.id))) continue;
+          work.end(command.id);
+          ended.push({ ...command, outcome: 'finished', tail: await outputTail(command.outputFile) });
         }
-        this.retiredEnded(ended);
+        work.told(ended);
       }
-      if (this.retirement === retirement && retirement.commands.size) retirement.timer = setTimeout(() => void poll(), RETIRED_POLL_MS);
+      if (this.retirement === retirement && work.count('command')) retirement.timer = setTimeout(() => void poll(), RETIRED_POLL_MS);
     };
     if (commands.size) retirement.timer = setTimeout(() => void poll(), RETIRED_POLL_MS);
     retirement.ceiling = setTimeout(() => void this.retiredCeiling(retirement), this.retiredCeilingMs);
@@ -213,10 +216,8 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     if (this.retirement !== retirement || this.isClosed) return;
     const hours = Math.round(this.retiredCeilingMs / 3_600_000);
     const note = `Stopped: it was still running ${hours ? `${hours} hour${hours === 1 ? '' : 's'}` : 'a long time'} after the conversation moved on, with nothing waiting on it.`;
-    const commands = [...retirement.commands.values()];
-    const agents = [...retirement.agents.values()];
-    retirement.commands.clear();
-    retirement.agents.clear();
+    const commands = retirement.work.endAll('command');
+    const agents = retirement.work.endAll('agent');
     const ended: EndedWork[] = [
       ...await Promise.all(commands.map(async (work): Promise<EndedWork> => {
         const tail = await outputTail(work.outputFile);
@@ -225,17 +226,15 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
       ...agents.map((work): EndedWork => ({ ...work, outcome: 'cut-off', tail: note })),
     ];
     lifecycle('vendor.retired.ceiling', { transport: this.label, commands: commands.length, agents: agents.length });
-    this.retiredEnded(ended);
+    retirement.work.told(ended);
   }
 
   /** Retired, and the vendor went: its agents went with it, cut off. Its commands are still
    * looked at -- a command can outlive the process that started it. */
   private retiredVendorGone(): void {
     const retirement = this.retirement;
-    if (!retirement?.agents.size) return;
-    const ended = [...retirement.agents.values()].map((work): EndedWork => ({ ...work, outcome: 'cut-off', tail: 'The process running it ended before it finished.' }));
-    retirement.agents.clear();
-    this.retiredEnded(ended);
+    if (!retirement?.work.count('agent')) return;
+    retirement.work.told(retirement.work.endAll('agent').map((work): EndedWork => ({ ...work, outcome: 'cut-off', tail: 'The process running it ended before it finished.' })));
   }
 
   /** Retired: work that ended is told, and the process is closed once nothing is left. */
@@ -243,7 +242,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     const retirement = this.retirement;
     if (!retirement) return;
     if (ended.length) { try { this.onWorkEnded?.(ended); } catch { /* fail-open-ok: the owner's bookkeeping */ } }
-    if (!retirement.commands.size && !retirement.agents.size) {
+    if (!retirement.work.count()) {
       if (retirement.timer) clearTimeout(retirement.timer);
       if (retirement.ceiling) clearTimeout(retirement.ceiling);
       void this.close().catch(() => undefined);
@@ -256,8 +255,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
   protected agentEnded(ended: EndedWork): void {
     const retirement = this.retirement;
     if (retirement) {
-      if (!retirement.agents.delete(ended.id)) return;
-      this.retiredEnded([ended]);
+      if (retirement.work.end(ended.id)) retirement.work.told([ended]);
       return;
     }
     if (ended.outcome === 'cut-off' && ended.limit) {
@@ -269,8 +267,6 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
   protected abstract clearPending(): void;
   /** Vendor work the protocol itself says is still running (Codex items). */
   protected abstract pendingCount(): number;
-  /** A live subagent is allowed to finish even if it is silent for an hour. */
-  protected hasActiveSubagents(): boolean { return false; }
 
   /** The transport is about to send the turn's prompt (awaited first): what
    * runs in the child's group from here on, and is still running when the
@@ -289,7 +285,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
    * (session-worker.ts) instead of closing the child under it, and reports
    * it stopped when it must close it. */
   async backgroundWorkRunning(): Promise<boolean> {
-    if (this.retirement) return this.retirement.commands.size + this.retirement.agents.size > 0;
+    if (this.retirement) return this.retirement.work.count() > 0;
     if (this.isClosed || !this.live || this.live.peer.closed) return false;
     if (this.pendingCount() > 0) return true;
     const root = this.live.pid;
