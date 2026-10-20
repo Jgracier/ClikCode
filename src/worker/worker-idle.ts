@@ -39,24 +39,47 @@ const VENDOR_WORK_RECHECK_MS = 30 * 1000;
  * CLIKCODE_VENDOR_IDLE_CLOSE_MS overrides it for tests. */
 const VENDOR_IDLE_CLOSE_MS = Number(process.env.CLIKCODE_VENDOR_IDLE_CLOSE_MS) > 0 ? Number(process.env.CLIKCODE_VENDOR_IDLE_CLOSE_MS) : 15 * 60 * 1000;
 
+/** What can hold a worker (heldReason). */
+const HELD = {
+  turn: 'a turn is running', vendorBackground: 'vendor background work is running', vendorWork: 'the vendor is still running work it started',
+  agents: 'background agents are running', notification: 'a notification is on its way to the model', wakeup: 'a scheduled wakeup is pending',
+  quotaWait: 'waiting for a quota reset', heldVendor: 'a vendor is still finishing its background work', shell: 'a background shell is running',
+} as const;
+
 export function createIdleControl(ctx: WorkerContext) {
   const { observer, sessionId, agentSession } = ctx;
-  /** Why this worker cannot be replaced right now, or undefined when it can.
-   * Anything it is doing for the conversation counts -- a turn, the queue
-   * being drained, vendor background work, a shell or a notification the
-   * model is owed -- because replacing it would lose that work. Clients do
-   * not; an idle window simply attaches to the replacement next time. */
-  const retireBlocker = (): string | undefined => {
-    if (ctx.turnRunning || ctx.draining) return 'a turn is running';
-    if (ctx.vendorBackground.busy) return 'vendor background work is running';
-    if (hasHeldVendorProcess(sessionId)) return 'a vendor is still finishing its background work';
-    if (vendorWorkSince !== undefined) return 'the vendor is still running work it started';
-    if (existingSessionAgents(agentSession)?.running()) return 'background agents are running';
-    if (runningShellCount(agentSession) > 0) return 'a background shell is running';
-    if (agentSession.notifications.length) return 'a notification is on its way to the model';
-    if (agentSession.wakeups.size) return 'a scheduled wakeup is pending';
+  /** The ONE list of what holds this worker: the first reason, or undefined
+   * when nothing does. Anything it is doing for the conversation counts -- a
+   * turn, vendor background work, a shell, a notification or a wakeup the
+   * model is owed -- because replacing it or exiting would lose that work.
+   * The two callers differ in exactly three entries, each deliberately:
+   *  - 'retire' (replacing for a newer build): the queue being drained counts
+   *    (a notification turn is about to start); windows do not (an idle window
+   *    attaches to the replacement); a parked quota-reset wait does not (the
+   *    successor sends it, startsSuccessor); vendor work the idle check found
+   *    still running (vendorWorkSince) counts, as the vendor would be closed.
+   *  - 'idle' (the idle exit): windows and the quota-reset wait count; the
+   *    queue being drained does not (idleReached re-checks it after its wait
+   *    and a finished drain that starts no turn would leave no timer armed);
+   *    vendorWorkSince does not (the recheck timer it describes is the one
+   *    scheduleIdleExit is about to replace).
+   * Held vendor and shells come last: the idle caller arms special waits for
+   * exactly those two once nothing earlier holds the worker. */
+  const heldReason = (scope: 'retire' | 'idle'): string | undefined => {
+    const retire = scope === 'retire';
+    if (ctx.turnRunning || (retire && ctx.draining)) return HELD.turn;
+    if (ctx.vendorBackground.busy) return HELD.vendorBackground;
+    if (!retire && observer.attachedCount > 0) return `${observer.attachedCount} window(s) attached`;
+    if (retire && vendorWorkSince !== undefined) return HELD.vendorWork;
+    if (existingSessionAgents(agentSession)?.running()) return HELD.agents;
+    if (agentSession.notifications.length) return HELD.notification;
+    if (agentSession.wakeups.size) return HELD.wakeup;
+    if (!retire && ctx.resumeWaiter.pending) return HELD.quotaWait;
+    if (hasHeldVendorProcess(sessionId)) return HELD.heldVendor;
+    if (runningShellCount(agentSession) > 0) return HELD.shell;
     return undefined;
   };
+  const retireBlocker = (): string | undefined => heldReason('retire');
 
   /** Idle means no client, no turn, no background shell whose exit the
    * model is still owed, and no notification on its way to it. A running
@@ -98,35 +121,33 @@ export function createIdleControl(ctx: WorkerContext) {
   const scheduleIdleExit = (): void => {
     if (ctx.idleTimer) clearTimeout(ctx.idleTimer);
     ctx.idleTimer = undefined;
-    noteIdle(ctx.turnRunning ? 'held: a turn is running' : ctx.vendorBackground.busy ? 'held: vendor background work'
-      : observer.attachedCount > 0 ? `held: ${observer.attachedCount} window(s) attached` : existingSessionAgents(agentSession)?.running() ? `held: ${existingSessionAgents(agentSession)!.running()} background agent(s)` : agentSession.notifications.length ? 'held: a notification to deliver' : agentSession.wakeups.size ? `held: ${agentSession.wakeups.size} scheduled wakeup(s)`
-        : ctx.resumeWaiter.pending ? 'held: waiting for a quota reset' : hasHeldVendorProcess(sessionId) ? 'held: a vendor finishing background work'
-          : runningShellCount(agentSession) > 0 ? `held: ${runningShellCount(agentSession)} background shell(s)` : `idle: exits in ${Math.round(IDLE_EXIT_MS / 1000)}s`);
+    const held = heldReason('idle');
+    noteIdle(held ? `held: ${held}` : `idle: exits in ${Math.round(IDLE_EXIT_MS / 1000)}s`);
     // A newer build asked for this worker while it was busy: the moment it is
     // not, it goes, and the next window to need one starts that build.
     if (ctx.retireWhenIdle && !retireBlocker()) retireIfFree();
     else leaveIfStaleBuild();
-    // A scheduled wakeup is owed to the model: the worker that holds its
-    // timer must stay up to fire it (the longest is an hour).
-    if (ctx.turnRunning || ctx.vendorBackground.busy || observer.attachedCount > 0 || existingSessionAgents(agentSession)?.running() || agentSession.notifications.length || agentSession.wakeups.size) return;
-    // A turn parked for a quota reset: this worker is what sends it.
-    if (ctx.resumeWaiter.pending) return;
     // A vendor kept running for its own background work (held-vendor.ts):
     // idling out would close it and stop that work unreported. It is
     // bounded by its own ceiling; once it is gone the idle clock starts.
-    if (hasHeldVendorProcess(sessionId)) {
+    if (held === HELD.heldVendor) {
       if (!awaitingHeldVendor) {
         awaitingHeldVendor = true;
         void whenHeldVendorGone(sessionId).then(() => { awaitingHeldVendor = false; scheduleIdleExit(); });
       }
       return;
     }
-    if (runningShellCount(agentSession) > 0) {
+    // A running shell instead arms the abandoned-shell ceiling. (Not covered by
+    // idleDecision's ceiling, which only bounds the vendor's own work.)
+    if (held === HELD.shell) {
       const oldest = Math.min(...[...agentSession.shells.values()].filter((shell) => shell.status === 'running').map((shell) => shell.startedAt));
       ctx.idleTimer = setTimeout(stopAbandonedShells, Math.max(0, oldest + ABANDONED_SHELL_MS - Date.now()));
       ctx.idleTimer.unref();
       return;
     }
+    // Everything else (a turn, windows, agents, a notification or wakeup owed
+    // to the model, a parked quota reset this worker sends) just holds it.
+    if (held) return;
     ctx.idleTimer = setTimeout(() => { void idleReached(); }, IDLE_EXIT_MS);
     ctx.idleTimer.unref();
   };
@@ -197,7 +218,7 @@ export function createIdleControl(ctx: WorkerContext) {
     }
     scheduleIdleExit();
   };
-  return { retireBlocker, retireIfFree, leaveIfStaleBuild, noteIdle, scheduleIdleExit, vendorUsed };
+  return { heldReason, retireBlocker, retireIfFree, leaveIfStaleBuild, noteIdle, scheduleIdleExit, vendorUsed };
 }
 
 export type IdleControl = ReturnType<typeof createIdleControl>;
