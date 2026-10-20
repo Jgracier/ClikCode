@@ -183,12 +183,11 @@ function mergeTranscripts(base: SessionTranscript, next: SessionTranscript, disk
 const MIN_SHARED_MESSAGES = 2;
 
 /** Persists one conversation's transcript, under the caller's state lock (it
- * may materialize children and create parent references).
- *
- * Every session file is written only under the state lock, so no per-session
- * lock is taken. There used to be one per file, nested child->parent here and
- * parent->child in materializeChildrenOf: a lock-order cycle that only the
- * state lock around both kept from deadlocking. */
+ * may materialize children and create parent references), and under that
+ * conversation's own lock (withSessionLock), which every writer of its file
+ * takes. One order only: a child's lock inside its parent's
+ * (materializeChildrenOf, under the state lock), never the other way round,
+ * and writeOwnTranscript holds its own conversation's alone. */
 export async function writeSessionTranscript(_held: StateLockHeld, id: string, next: SessionTranscript, options: TranscriptWriteOptions = {}): Promise<void> {
   await withSessionLock(id, () => storeTranscript(id, next, options, false));
 }
@@ -257,16 +256,12 @@ export function writeOwnTranscript(
   });
 }
 
-/** A streaming turn's checkpoint: only the running turn's journal changed
- * since `base`, which is exactly what this process last stored. Stores that
- * journal on its own (records.ts) and returns true; returns false, having
- * written nothing, for anything else -- history changed, a new turn, or a
- * file someone else has written since -- which writeSessionTranscript then
- * stores (and merges) in full. Under the caller's state lock. */
-export function writeSessionTurn(_held: StateLockHeld, id: string, next: SessionTranscript, base: SessionTranscript): Promise<boolean> {
-  return withSessionLock(id, () => storeTurn(id, next, base));
-}
-
+/** A streaming turn's checkpoint (writeOwnTranscript, journalOnly): only the
+ * running turn's journal changed since `base`, which is exactly what this
+ * process last stored. Stores that journal on its own (records.ts) and returns
+ * true; false, having written nothing, for anything else -- history changed, a
+ * new turn, or a file someone else has written since -- which is then stored
+ * (and merged) in full. Under the conversation's own lock. */
 async function storeTurn(id: string, next: SessionTranscript, base: SessionTranscript): Promise<boolean> {
   if (!next.pendingTurn || next.messages !== base.messages || next.pendingTurn.startedAt !== base.pendingTurn?.startedAt) return false;
   const previous = await loadSessionFile(id);
