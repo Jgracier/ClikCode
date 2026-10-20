@@ -16,7 +16,7 @@
  * draft that was left on disk is still dropped the next time this process
  * writes state without that chat in hand (launch does this).
  */
-import { forceStoreSession, sessionForceStored, unforceStoreSession } from './ephemeral.js';
+import { draftPinned, forceStoreSession, sessionForceStored, unforceStoreSession } from './ephemeral.js';
 import { sessionFromIndex } from './list-facts.js';
 import { liveWorkers, type WorkerLiveness } from './liveness.js';
 import type { HarnessSession } from './model.js';
@@ -39,7 +39,7 @@ export function blankChatSweepable(
   session: HarnessSession, workerIsLive: WorkerLiveness, now = Date.now(), isOpen: WorkerLiveness = () => false,
 ): boolean {
   if (!isBlankConversation(session)) return false;
-  if (!sessionFromIndex(session)) return true;
+  if (!sessionFromIndex(session)) return !draftPinned(session.id);
   if (sessionForceStored(session.id) || isOpen(session.id) || workerIsLive(session.id)) return false;
   return now - (Date.parse(session.updatedAt) || 0) > STORED_BLANK_GRACE_MS;
 }

@@ -1,14 +1,16 @@
 /** One chat: a ClikCode connection (`clikcode ide-bridge`), the ChatModel it
  * feeds, and the webviews showing it. The side bar is one chat; every editor
- * tab is another, each with its own bridge, so each shows its own
- * conversation -- the bridge is one conversation at a time, like a terminal. */
+ * tab is another, each with its own connection, so each shows its own
+ * conversation -- a connection is one conversation at a time, like a
+ * terminal. The connections of a window share one process (bridge-pool.ts). */
 import { PAINT_COALESCE_MS } from '../../../src/harness/protocol/timings';
 import { errorText, userError } from '../../../src/harness/protocol/errors';
 import * as vscode from 'vscode';
 import { homedir, tmpdir } from 'node:os';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { BridgeClient } from './bridge-client';
+import type { BridgeEndpoint } from './bridge-client';
+import { bridgePool } from './bridge-pool';
 import type { WebviewSurface } from './chat-view';
 import { diffModel } from './model-patch';
 import { DraftRestores, LatestRead } from './controller/reads';
@@ -42,7 +44,7 @@ export interface ControllerHost {
 const PARK_AFTER_MS = Number(process.env.CLIKCODE_PARK_AFTER_MS) > 0 ? Number(process.env.CLIKCODE_PARK_AFTER_MS) : 10 * 60 * 1000;
 
 export class ClikCodeController implements vscode.Disposable {
-  private bridge: BridgeClient | undefined;
+  private bridge: BridgeEndpoint | undefined;
   private model: ChatModel = emptyModel();
   private readonly changed = new vscode.EventEmitter<ChatModel>();
   readonly onDidChange = this.changed.event;
@@ -126,10 +128,11 @@ export class ClikCodeController implements vscode.Disposable {
     this.bridge.send({ type: 'visible', visible });
   }
 
-  /** A chat hidden for PARK_AFTER_MS with nothing running in it lets its bridge go. Each open
-   * chat tab ran its own ClikCode process (200-500 MB each, seven in one window, measured
-   * 2026-10-18) and kept reading and writing the shared state for a chat nobody was looking at.
-   * The conversation lives in its worker, so nothing is lost: shown again, it reconnects. */
+  /** A chat hidden for PARK_AFTER_MS with nothing running in it lets its bridge go: it kept
+   * reading and writing the shared state (usage, presence) for a chat nobody was looking at, and
+   * -- before the window's chats shared one process (bridge-pool.ts) -- held a ClikCode process
+   * of its own (200-500 MB each, seven in one window, measured 2026-10-18). The conversation
+   * lives in its worker, so nothing is lost: shown again, it reconnects. */
   private parked = false;
   private parkTimer: NodeJS.Timeout | undefined;
   private scheduleParking(visible: boolean): void {
@@ -346,7 +349,7 @@ export class ClikCodeController implements vscode.Disposable {
       return;
     }
     log.appendLine(`[${this.label}] Starting ${runtime.entry} (${runtime.entrySource}) with ${runtime.node} (${runtime.nodeSource})`);
-    const bridge = BridgeClient.start(runtime, this.workspaceFolder());
+    const bridge = bridgePool.connect(runtime, this.workspaceFolder(), settings.get<boolean>('sharedProcess', true));
     this.bridge = bridge;
     this.builds.watch(runtime.entry);
     const startLog: string[] = [];
@@ -432,7 +435,7 @@ export class ClikCodeController implements vscode.Disposable {
   /** The bridge cannot drive this extension: stop it, and say why in the
    * chat's banner, which offers the update that fixes it. Not a toast as
    * well: it said the banner's words again, once for every open chat. */
-  private incompatible(bridge: BridgeClient, message: string, remedy: Exclude<Remedy, 'install'>): void {
+  private incompatible(bridge: BridgeEndpoint, message: string, remedy: Exclude<Remedy, 'install'>): void {
     if (this.bridge !== bridge) return;
     this.bridge = undefined;
     bridge.dispose();

@@ -13,6 +13,7 @@ import { writeState } from './state/write.js';
 import { takeConversation, type ConversationHold } from '../worker/registry.js';
 import { blankChatSweepable, discardIfBlank, ensureSessionOnDisk } from './blank.js';
 import { liveWorkers } from './liveness.js';
+import { pinDraft } from './ephemeral.js';
 import { sweepStateDaily } from './state/sweep.js';
 import { chatNamed, latestChat } from './options.js';
 import type { HarnessSession, HarnessState } from './model.js';
@@ -42,7 +43,7 @@ export function activateSession(session: HarnessSession): boolean {
  * it prefers this workspace's and falls back to any.
  */
 export async function openConversation(
-  workspace: string, mode: 'new' | 'continue' | 'resume', ref?: string, options: { sameWorkspace?: boolean } = {},
+  workspace: string, mode: 'new' | 'continue' | 'resume', ref?: string, options: { sameWorkspace?: boolean; pin?: boolean } = {},
 ): Promise<string> {
   const state = await readState({ transcripts: [] });
   // Housekeeping, in the background and at most daily (session/state/sweep.ts).
@@ -75,6 +76,8 @@ export async function openConversation(
   state.sessions = state.sessions.filter((item) => !blankChatSweepable(item, isLive, Date.now(), isOpen));
   const fresh = launchSession(state, workspace);
   state.sessions.push(fresh);
+  // Pinned before it is written: a sibling chat's write must not drop it (ephemeral.ts pinDraft).
+  if (options.pin) pinDraft(fresh.id);
   await writeState(state);
   return fresh.id;
 }

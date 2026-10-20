@@ -238,7 +238,7 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
     vscode.workspace.registerTextDocumentContentProvider(DiffDocuments.scheme, diffs),
     vscode.workspace.registerTextDocumentContentProvider(DiffDocuments.madeScheme, diffs),
     vscode.workspace.onDidChangeConfiguration((event) => {
-      if (event.affectsConfiguration('clikcode.path') || event.affectsConfiguration('clikcode.nodePath')) for (const controller of all()) void controller.restart();
+      if (event.affectsConfiguration('clikcode.path') || event.affectsConfiguration('clikcode.nodePath') || event.affectsConfiguration('clikcode.sharedProcess')) for (const controller of all()) void controller.restart();
     }),
     vscode.window.registerWebviewPanelSerializer(PANEL_TYPE, {
       deserializeWebviewPanel: async (panel, state: unknown) => {

@@ -48,6 +48,25 @@ export function dropEphemeral(id: string): void {
   overlay().delete(id);
 }
 
+/** Drafts a client in this process is showing. A process used to show one
+ * chat, so any draft missing from the state it wrote, or found by a new
+ * chat's sweep, was one it had left. An editor's shared bridge shows several
+ * at once (ide/bridge-mux.ts): one chat's write or new chat must not drop
+ * another's draft. Pinned by the IDE bridge while shown, unpinned as it leaves. */
+const pinned = new Set<string>();
+
+export function pinDraft(id: string): void {
+  pinned.add(id);
+}
+
+export function unpinDraft(id: string): void {
+  pinned.delete(id);
+}
+
+export function draftPinned(id: string): boolean {
+  return pinned.has(id);
+}
+
 export function forceStoreSession(id: string): void {
   forced.add(id);
 }
