@@ -115,8 +115,6 @@ export interface AcpTurnInput extends HarnessTurnObserver {
   /** Per-harness options. With `argv` these are the only options; without it
    * they are appended to the locally derived model/effort/permission flags. */
   extraArgv?: readonly string[];
-  /** The adapter handshake's timeout (initialize). Requests that wait on the
-   *  agent starting up are bounded by the idle budget instead. */
   /** Open the session -- start the agent, load the thread, apply model,
    *  mode and effort -- and stop before the prompt: the next turn on this
    *  session then starts at the prompt (a failover's standby account). */
@@ -872,7 +870,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       }
       turn.sessionId = wanted;
     } else if (unclaimed) {
-      turn.sessionId = live.sessionId;
+      turn.sessionId = live.unclaimed!;
     } else {
       this.sessionTotals = {};
       this.costStartUnknown = false;
