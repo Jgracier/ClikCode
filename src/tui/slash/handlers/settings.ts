@@ -91,7 +91,7 @@ export const settingsHandlers = {
     if (!setting) return emitHarnessOutput({ panel: 'settings', session, account: state.accounts.find((item) => item.id === session.accountId)?.label });
     if (setting === 'global') {
       const [key, ...rest] = words;
-      if (!key || !rest.length) throw new Error('usage: /settings global <effort|permissions|send> <value>');
+      if (!key || !rest.length) throw new Error('usage: /settings global <effort|permissions|send|compact> <value>');
       await aiSettingsSetGlobal(key, rest.join(' '), false);
       return emitHarnessOutput({ panel: 'settings-updated', text: `Global default updated: ${key} = ${rest.join(' ')}` });
     }
