@@ -140,3 +140,19 @@ it('connects a vendor key as a ClikDeploy connection through the product\'s own 
   expect(argv.slice(0, 3)).toEqual(['tools', 'run', 'connect_connector']);
   expect(JSON.parse(argv[argv.indexOf('--args-json') + 1]!)).toEqual({ integrationId: 'ipinfo', apiKey: secret });
 });
+
+it('a username the vendor hides from the browser (Mux\'s token id): the basic-auth username may name a saved secret, read from the vault only when sent', async () => {
+  await saveNamedSecret(dir, 'mux/token-id', '3f2a9c1e-token-id-uuid');
+  await fake('clikdeploy', `printf '%s\\n' "$@" > "${dir}/argv"; echo '{}'`);
+  const plan = [{ to: 'clikdeploy-connection-basic', with: { integration: 'mux', username: 'secret:mux/token-id' } }];
+  expect(await destinationProblem(dir, plan)).toBeUndefined();
+  const [result] = await sendToDestinations(dir, plan, 'the-token-secret-0123456789');
+  expect(result).toMatchObject({ ok: true });
+  const argv = (await readFile(join(dir, 'argv'), 'utf8')).split('\n');
+  expect(JSON.parse(argv[argv.indexOf('--args-json') + 1]!)).toEqual({ integrationId: 'mux', username: '3f2a9c1e-token-id-uuid', password: 'the-token-secret-0123456789' });
+  // A plain username still goes through as written, and a name that is not saved is refused before anything runs.
+  await sendToDestinations(dir, [{ to: 'clikdeploy-connection-basic', with: { integration: 'upstash', username: 'me@example.com' } }], 'k-0123456789abcdef');
+  const plain = (await readFile(join(dir, 'argv'), 'utf8')).split('\n');
+  expect(JSON.parse(plain[plain.indexOf('--args-json') + 1]!)).toMatchObject({ username: 'me@example.com' });
+  expect(await destinationProblem(dir, [{ to: 'clikdeploy-connection-basic', with: { integration: 'mux', username: 'secret:no/such' } }])).toContain('not in the Secrets Manager');
+});
