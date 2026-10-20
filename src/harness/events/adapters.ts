@@ -4,6 +4,7 @@ import type { AiLocalHarnessDefinition } from '../definition.js';
 import { aiderLine } from './aider.js';
 import { CLINE_ANSWER_KINDS, clineLine, type ClineState } from './cline.js';
 import { BackgroundAgentRows } from './background-agent-rows.js';
+import type { BackgroundWorkTracker } from '../transport/background-work.js';
 import { ClaudeBlocks } from './claude-stream.js';
 import { parseNativeActivityEventsFromValue, thoughtLabel, type NativeActivityEvent } from '../protocol/activity-events.js';
 import { nativeActivityPhaseFromValue } from '../protocol/activity-line.js';
@@ -67,7 +68,7 @@ export interface StreamState {
   /** Background shells a stream announces by call and ends by notification
    * (Cursor's `shellToolCall` with `isBackground`, then `task_notification`
    * naming its shell id): background terminals, by shell id. */
-  backgroundShells?: Set<string>;
+  backgroundShells?: BackgroundWorkTracker;
 }
 
 /** A fresh state for one turn attempt. */

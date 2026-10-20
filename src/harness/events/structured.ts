@@ -22,6 +22,7 @@ import { MENTIONS_TASK_TOOL, MENTIONS_TODO_TOOL, planFromRecord } from '../proto
 import { parseJsonRecord, type JsonRecord } from '../protocol/json-lines.js';
 import { backgroundWork, type BackgroundWorkUpdate } from '../protocol/background-agents.js';
 import { vendorBackgroundEvent } from '../transport/native/background-task.js';
+import { BackgroundWorkTracker } from '../transport/background-work.js';
 import { nativeSelfReportFromValue, type NativeSelfReport } from '../protocol/turn-usage.js';
 import type { HarnessTurnObserver } from './turn-observer.js';
 import type { AiLocalHarnessDefinition } from '../definition.js';
@@ -51,12 +52,11 @@ function backgroundShellWork(record: JsonRecord, turn: StreamState): BackgroundW
   const event = record.type === 'tool_call' || (record.type === 'system' && record.subtype === 'task_notification')
     ? vendorBackgroundEvent(record) : undefined;
   if (!event) return undefined;
-  const shells = turn.backgroundShells ??= new Set<string>();
+  const shells = turn.backgroundShells ??= new BackgroundWorkTracker();
   if (event.kind === 'started') {
-    if (record.type !== 'tool_call' || shells.has(event.id)) return undefined;
-    shells.add(event.id);
-  } else if (!shells.delete(event.id)) return undefined;
-  return { terminals: shells.size };
+    if (record.type !== 'tool_call' || !shells.start({ id: event.id, kind: 'command', label: event.description })) return undefined;
+  } else if (!shells.end(event.id)) return undefined;
+  return { terminals: shells.count() };
 }
 
 /** Report one stdout line. Returns only what the turn loop still has to do
