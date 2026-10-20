@@ -45,15 +45,19 @@ export function createWorkerIo(ctx: WorkerContext) {
    * through the same queue as a message typed during a turn, and never
    * drawn. Only the live worker records them; a stopping one does not. */
   const recordNotifications = async (notes: readonly ShellNotification[]): Promise<void> => {
-    if (!notes.length) return;
+    if (notes.length) await recordNotificationText(formatShellNotifications(notes));
+  };
+  /** One notification the model alone reads, queued as its own turn (recordNotifications). */
+  const recordNotificationText = async (text: string): Promise<void> => {
+    if (!text) return;
     const latest = await readState({ transcripts: [sessionId] });
     const found = latest.sessions.find((item) => item.id === sessionId);
     if (!found) return;
     const submittedAt = new Date().toISOString();
-    enqueueSessionTurn(found, { id: randomUUID(), text: formatShellNotifications(notes), submittedAt, kind: 'notification' }, submittedAt);
+    enqueueSessionTurn(found, { id: randomUUID(), text, submittedAt, kind: 'notification' }, submittedAt);
     await writeState(latest);
   };
-  return { currentSessionAndAccount, note, broadcastQueueChanged, showEveryWindow, recordNotifications };
+  return { currentSessionAndAccount, note, broadcastQueueChanged, showEveryWindow, recordNotifications, recordNotificationText };
 }
 
 export type WorkerIo = ReturnType<typeof createWorkerIo>;

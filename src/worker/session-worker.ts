@@ -21,7 +21,8 @@ import { statSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
 import Conf from 'conf';
 import { readState } from '../session/state/read.js';
-import { setOutOfTurnHandler, setVendorBackgroundTurnHandler } from '../turn/vendor-process.js';
+import { setOutOfTurnHandler, setRetiredWorkListener, setVendorBackgroundTurnHandler, setWorkEndedHandler } from '../turn/vendor-process.js';
+import { createWorkEndedHandler } from './handed-off-work.js';
 import { BroadcastObserver } from './broadcast-observer.js';
 import { createVendorBackgroundRunner } from './vendor-background.js';
 import { createResumeWaiter } from './resume-wait.js';
@@ -129,6 +130,9 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   // What the vendor was saying on its own is saved, and its live view ended, before its own turn takes the windows.
   setVendorBackgroundTurnHandler(sessionId, (turn) => { void ctx.outOfTurn.settle().then(() => ctx.vendorBackground.handle(turn)); });
   setOutOfTurnHandler(sessionId, ctx.outOfTurn.relay);
+  // Work a process the conversation left runs on, and agents the usage limit cut off: each end is told
+  // to the account the conversation is on now (worker/handed-off-work.ts).
+  setWorkEndedHandler(sessionId, createWorkEndedHandler(ctx));
   // -------------------------------------------------------------------------
   ctx.idle = createIdleControl(ctx);
 
@@ -205,12 +209,20 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     return ctx.recordWrite;
   };
   observer.onAwaitingApproval = (awaitingApproval) => { awaiting = awaitingApproval; return rewriteRecord(); };
-  observer.onBackgroundWork = (work) => {
+  // What the vendor process in use says runs, and what processes the conversation left still run
+  // (turn/vendor-process.ts retired): both are this conversation's work, and a list shows it working.
+  let liveWork: { agents?: number; terminals?: number; workflows?: number } | undefined;
+  let leftWork: { agents: number; terminals: number } | undefined;
+  const backgroundChanged = (): Promise<void> | undefined => {
+    const sum = { agents: (liveWork?.agents ?? 0) + (leftWork?.agents ?? 0), terminals: (liveWork?.terminals ?? 0) + (leftWork?.terminals ?? 0), workflows: liveWork?.workflows ?? 0 };
+    const work = sum.agents || sum.terminals || sum.workflows ? Object.fromEntries(Object.entries(sum).filter(([, count]) => count > 0)) : undefined;
     const counts = (value: { agents?: number; terminals?: number; workflows?: number } | undefined): string => `${value?.agents ?? 0}/${value?.terminals ?? 0}/${value?.workflows ?? 0}`;
     if (counts(work) === counts(background)) return undefined;
     background = work ? { ...work, since: background?.since ?? new Date().toISOString() } : undefined;
     return rewriteRecord();
   };
+  observer.onBackgroundWork = (work) => { liveWork = work; return backgroundChanged(); };
+  setRetiredWorkListener(sessionId, (work) => { leftWork = work; void backgroundChanged(); ctx.idle.scheduleIdleExit(); });
   process.on('SIGTERM', () => { void ctx.shutdown('SIGTERM'); });
   process.on('SIGINT', () => { void ctx.shutdown('SIGINT'); });
   ctx.idle.scheduleIdleExit();

@@ -336,6 +336,22 @@ if ((argv[0] === 'agent' && argv.includes('stdio')) || argv.includes('--acp')) {
           break;
         }
         case 'usage': update({ sessionUpdate: 'usage_update', used: event.used, size: event.size, ...(event.cost ? { cost: { amount: event.cost, currency: 'USD' } } : {}) }); break;
+        // A background Agent as claude-agent-acp reports one: the call, its task (raw SDK frame), the
+        // call completing at launch. `task-end` (after) is its end.
+        // A command run in the background, as Claude's Bash tool does: a shell of the agent's own, its
+        // output in a file, and the call answered at once.
+        case 'spawn-bg': {
+          const { spawn } = await import('node:child_process');
+          const { openSync } = await import('node:fs');
+          spawn('sh', ['-c', event.cmd], { stdio: ['ignore', openSync(`${process.cwd()}/bg-${Date.now()}.out`, 'w'), 'ignore'] });
+          update({ sessionUpdate: 'tool_call', toolCallId: event.id ?? 'bg', title: event.cmd, kind: 'execute', status: 'completed', rawInput: { command: event.cmd, run_in_background: true } });
+          break;
+        }
+        case 'agent-bg':
+          update({ sessionUpdate: 'tool_call', toolCallId: event.id, title: 'Agent', kind: 'think', status: 'pending', rawInput: { description: event.description, prompt: event.prompt, run_in_background: true } });
+          send({ method: '_claude/sdkMessage', params: { sessionId, message: { type: 'system', subtype: 'task_started', task_id: event.task, tool_use_id: event.id, task_type: 'local_agent', description: event.description, subagent_type: 'general-purpose', is_backgrounded: true } } });
+          update({ sessionUpdate: 'tool_call_update', toolCallId: event.id, status: 'completed' });
+          break;
         case 'background':
           send({ method: '_claude/sdkMessage', params: { sessionId, message: { type: 'system', subtype: 'background_tasks_changed',
             tasks: (event.tasks ?? []).map((task, index) => ({ task_id: `bg${index}`, task_type: task.type, description: task.description ?? task.type,
@@ -345,7 +361,7 @@ if ((argv[0] === 'agent' && argv.includes('stdio')) || argv.includes('--acp')) {
         default: throw new Error(`fake grok: unknown emit ${event.op}`);
       }
     }
-    for (const [index, block] of (turn.blocks ?? []).map((text) => text.replace('{answers}', answers).replace('{received}', received)).entries()) {
+    for (const [index, block] of (turn.blocks ?? []).map((text) => text.replace('{answers}', answers).replace('{received}', received).replace(/\{has:([^}]+)\}/g, (_all, phrase) => (said.includes(phrase) ? 'carried' : 'missing'))).entries()) {
       for (const piece of block.match(/\S+\s*/g) ?? []) {
         if (cancelled) break;
         await sleep(Number(process.env.FAKE_DELAY_MS ?? 120));
@@ -367,9 +383,13 @@ if ((argv[0] === 'agent' && argv.includes('stdio')) || argv.includes('--acp')) {
     // task it left running ending ({ op: 'sleep' } and { op: 'background' }).
     for (const event of turn.after ?? []) {
       if (event.op === 'sleep') await sleep(event.ms);
+      else if (event.op === 'task-end') {
+        send({ method: '_claude/sdkMessage', params: { sessionId, message: { type: 'system', subtype: 'task_notification', task_id: event.task, tool_use_id: event.id, status: event.status, summary: event.summary, output_file: '/nonexistent' } } });
+      }
       // Words with no prompt open: what Claude says when a background agent it started finishes.
       else if (event.op === 'say') {
-        for (const piece of event.text.match(/\S+\s*/g) ?? []) {
+        // `whole`: one chunk, as Claude sends its own synthetic messages (a limit refusal).
+        for (const piece of event.whole ? [event.text] : event.text.match(/\S+\s*/g) ?? []) {
           await sleep(event.ms ?? 200);
           update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: piece } });
         }

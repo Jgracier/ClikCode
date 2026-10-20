@@ -14,7 +14,7 @@
  * elsewhere on Unix; Windows has no process groups to read, and reports
  * none. */
 import { execFile } from 'node:child_process';
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile, readlink } from 'node:fs/promises';
 import { basename } from 'node:path';
 
 /** One live (not zombie) member of a process group. */
@@ -103,6 +103,44 @@ export function toolCallWork(group: ReadonlyMap<number, GroupProcess>, root: num
     }
   }
   return work;
+}
+
+/** The commands behind `work` (toolCallWork): one per command, keyed by the shell a tool call ran
+ * it in -- the loop `until ...; do sleep 5; done` is its shell, not the `sleep` running this second
+ * -- or by the process itself when its shell is gone (reparented). */
+export function commandRoots(group: ReadonlyMap<number, GroupProcess>, candidates: ReadonlySet<number>, work: ReadonlySet<number>): Set<number> {
+  const roots = new Set<number>();
+  for (const pid of work) {
+    let top = pid;
+    const seen = new Set<number>([pid]);
+    for (let parent = group.get(pid)?.ppid; parent !== undefined && group.has(parent) && !seen.has(parent); parent = group.get(parent)?.ppid) {
+      seen.add(parent);
+      if (candidates.has(parent) && isShellName(group.get(parent)!.name)) top = parent;
+    }
+    roots.add(top);
+  }
+  return roots;
+}
+
+/** What `pid` runs, as a person reads it: a shell's script (`bash -c '<script>'`), else its argv.
+ * Linux only (/proc); elsewhere undefined. */
+export async function commandLine(pid: number, platform: NodeJS.Platform = process.platform): Promise<string | undefined> {
+  if (platform !== 'linux') return undefined;
+  const raw = await readFile(`/proc/${pid}/cmdline`, 'utf8').catch(() => undefined);
+  if (!raw) return undefined;
+  const argv = raw.split('\0').filter(Boolean);
+  const script = argv.findIndex((arg) => arg === '-c' || /^-\w*c$/.test(arg));
+  const text = script >= 0 && argv[script + 1] ? argv[script + 1]! : argv.join(' ');
+  // Claude Code's wrapper: `source <snapshot> ... && eval '<command>' < /dev/null && pwd -P >| <file>`.
+  const wrapped = /\beval '((?:[^']|'\\'')*)'/.exec(text)?.[1];
+  return (wrapped !== undefined ? wrapped.replace(/'\\''/g, "'") : text).trim() || undefined;
+}
+
+/** The file `pid` writes its output to (its stdout), when that is a file. Linux only. */
+export async function outputFile(pid: number, platform: NodeJS.Platform = process.platform): Promise<string | undefined> {
+  if (platform !== 'linux') return undefined;
+  const target = await readlink(`/proc/${pid}/fd/1`).catch(() => undefined);
+  return target?.startsWith('/') && !target.startsWith('/dev/') && !target.startsWith('/proc/') ? target.replace(/ \(deleted\)$/, '') : undefined;
 }
 
 /** Whether process `pid` is still alive. */

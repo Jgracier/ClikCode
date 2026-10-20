@@ -3,7 +3,7 @@ import type { HarnessSession, HarnessState } from '../session/model.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
 import { moveThreadToAccount, reconcileNativeThread } from '../session/carry.js';
 import type { prepareAttachments } from '../session/attachments.js';
-import { closePersistentTransport, closeStandby, persistentWorkRunning, waitForPersistentWork } from './vendor-process.js';
+import { closeStandby, leavePersistentTransport } from './vendor-process.js';
 import { settleHeldVendor } from './turn-steps.js';
 import type { TurnRunOptions } from './session-turn.js';
 import { runAttempt } from './vendor-attempt.js';
@@ -18,7 +18,7 @@ async function settleThread(ctx: VendorTurnContext): Promise<void> {
   const { session, harness } = ctx;
   const held = session.nativeThreadAccountId;
   // A vendor process from the account being left may still have it open.
-  if (held && held !== ctx.account.id) await closePersistentTransport(session.id);
+  if (held && held !== ctx.account.id) await leavePersistentTransport(session.id);
   const outcome = await reconcileNativeThread(session, harness, ctx.state.accounts, ctx.account);
   if (outcome === 'carried' || outcome === 'forgotten' || session.nativeThreadAccountId !== held) await ctx.checkpoint.persistNow();
 }
@@ -29,17 +29,13 @@ async function startVendorTurn(ctx: VendorTurnContext): Promise<void> {
   // The old CLI finishes its Agent calls and their follow-up, and closing it
   // flushes its thread before a new account reads the copy.
   await settleHeldVendor(session.id, prompter, signal);
-  // A previous reply may have left Agent calls running. Even a manual account
-  // choice for this next prompt cannot close or copy their still-changing
-  // thread; let them finish in the original process first.
-  if (await persistentWorkRunning(session.id)) {
-    prompter?.phase('waiting for running work');
-    await waitForPersistentWork(session.id, signal);
-  }
+  // Work a previous reply left running (a background command, a sub-agent) is not waited on: on
+  // this process it runs on beside this turn, and a process the conversation leaves keeps it, its
+  // end told to the account the conversation is on by then (handoff-work.ts).
   // The thread goes with the conversation, as on a switch mid-turn; only
   // one that cannot be carried starts afresh.
   if (await ctx.accounts.start(async (to) => {
-    await closePersistentTransport(session.id);
+    await leavePersistentTransport(session.id);
     await moveThreadToAccount(session, harness, ctx.account, to);
   })) {
     await checkpoint.persistNow();

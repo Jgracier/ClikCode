@@ -6,7 +6,7 @@ import { spawnPortable as spawn } from '../../harness/transport/spawn.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { compactPath } from '../../harness/protocol/labels.js';
 import { writeState } from '../../session/state/write.js';
-import { closePersistentTransport } from '../../turn/vendor-process.js';
+import { leavePersistentTransport } from '../../turn/vendor-process.js';
 import { decodeAttachmentPath, expandHomePath } from '../../session/attachments.js';
 import { optionForControl } from '../../session/options.js';
 import { sessionHarness } from './context.js';
@@ -69,7 +69,7 @@ export async function changeSessionWorkspace(state: HarnessState, session: Harne
   forgetNativeThread(session);
   session.updatedAt = new Date().toISOString();
   await writeState(state);
-  await closePersistentTransport(session.id);
+  await leavePersistentTransport(session.id);
   return `Working directory is now ${compactPath(path)}.${droppedNative ? ' The native session belonged to the previous directory, so the next turn starts a fresh one with this conversation replayed.' : ''}`;
 }
 
@@ -89,6 +89,6 @@ export async function addSessionDirectory(state: HarnessState, session: HarnessS
   session.updatedAt = new Date().toISOString();
   await writeState(state);
   // A live ACP child took its option argv at spawn.
-  await closePersistentTransport(session.id);
+  await leavePersistentTransport(session.id);
   return `${harness.displayName} can now also work in ${compactPath(path)}.`;
 }
