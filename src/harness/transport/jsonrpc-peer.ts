@@ -11,16 +11,6 @@ type JsonRpcMessage = Record<string, any>;
 
 const NOISE_LIMIT = 8000;
 
-/** What a Rust panic report on stderr says went wrong ("The application
- * panicked (crashed). Message: ..."), once its message line is complete;
- * undefined for none. Colours are stripped. */
-export function panicMessage(stderr: string): string | undefined {
-  // eslint-disable-next-line no-control-regex
-  const plain = stderr.replace(/\u001b\[[0-9;]*m/g, '');
-  if (!/The application panicked|thread '[^']*' panicked at/.test(plain)) return undefined;
-  const message = /Message:\s*([^\n]*)\n/.exec(plain) ?? /panicked at [^\n]*:\n([^\n]+)\n/.exec(plain);
-  return message ? message[1]!.trim() || 'it panicked' : undefined;
-}
 /** `exit` can precede `close` indefinitely when a grandchild inherited the
  * pipes. Output completeness matters, so `close` is preferred, but callers
  * must never hang on a process that is already gone. */
@@ -61,6 +51,11 @@ export interface JsonRpcPeerOptions {
   onNotification?: (method: string, params: JsonRpcMessage) => void;
   /** Fired exactly once, after every pending request has been rejected. */
   onClose?: (error: Error) => void;
+  /** Why the child has crashed, read from its stderr so far, while its process
+   * stays alive with nothing left to answer; undefined while it has not. The
+   * transport closes and the child is stopped. (A Rust agent's panic report:
+   * rust-panic.ts.) */
+  crashReport?: (stderr: string) => string | undefined;
 }
 
 interface JsonRpcShutdownOptions {
@@ -177,12 +172,9 @@ export class JsonRpcPeer {
     child.stderr?.on('data', (chunk: string | Buffer) => {
       this.stderrTail = `${this.stderrTail}${String(chunk)}`.slice(-NOISE_LIMIT);
       this.stillAlive();
-      const panic = panicMessage(this.stderrTail);
-      if (panic === undefined || this.isClosed) return;
-      // A Rust agent that panics keeps its process alive with nothing left to
-      // answer (kiro-cli 2.23.1: "first agent loop request should never fail"),
-      // and a turn waited on it until the idle ceiling.
-      this.handleClose(new Error(`the agent crashed: ${panic}`));
+      const crash = this.options.crashReport?.(this.stderrTail);
+      if (crash === undefined || this.isClosed) return;
+      this.handleClose(new Error(`the agent crashed: ${crash}`));
       killProcessTreePortable(this.child, 'SIGTERM', this.options.detached === true);
     });
     // A child that exits mid-write raises EPIPE asynchronously on the stream.

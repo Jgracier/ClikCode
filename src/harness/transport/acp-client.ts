@@ -18,6 +18,7 @@ import { claudeRateLimitReading } from '../accounts/usage-reading.js';
 import { activityOutput, editDiffFromInput, thoughtLabel, toolCall } from '../protocol/activity-events.js';
 import { turnCancelledError } from '../../agent/cancellation.js';
 import { type JsonRpcPeer } from './jsonrpc-peer.js';
+import { panicMessage } from './rust-panic.js';
 import { BackgroundTurnChannel } from './background-turn.js';
 import { PersistentSession, runOneTurn, turnFailure, type PersistentSessionOptions } from './persistent-session.js';
 import { lifecycle } from '../../runtime/lifecycle-log.js';
@@ -751,6 +752,8 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       binary: input.binary, argv, cwd: input.cwd, environment: input.environment,
       peer: {
         label: `${input.command} ACP`,
+        // Kiro (Rust) panics and stays alive: read as the crash it is.
+        crashReport: panicMessage,
         onRequest: (method, params, id) => method === 'session/request_permission' ? this.permission(params, id)
           : method === 'elicitation/create' ? this.elicitation(params, id) : undefined,
         onNotification: (method, params) => {
