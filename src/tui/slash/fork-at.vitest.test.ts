@@ -18,7 +18,9 @@ const { aiSessionCommand } = await import('./handlers');
 const { readState } = await import('../../session/state/read');
 const { writeState } = await import('../../session/state/write');
 const { forceStoreSession, unforceStoreSession } = await import('../../session/ephemeral');
-const { loadSessionFile } = await import('../../session/store/records');
+const { readFile } = await import('node:fs/promises');
+const { parseChatLog } = await import('../../session/store/chat-log');
+const { sessionLogPath } = await import('../../session/store/paths');
 
 const conversation: TranscriptMessage[] = [
   { role: 'user', content: 'first question' }, { role: 'assistant', content: 'first answer' },
@@ -55,7 +57,7 @@ describe('/fork @N', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it('forks through message N, as a reference into the original, with no vendor thread', async () => {
+  it('forks through message N, as its own copy of the original history, with no vendor thread', async () => {
     const state = await readState();
     const now = new Date().toISOString();
     state.sessions.push({
@@ -74,8 +76,10 @@ describe('/fork @N', () => {
     expect(fork.parentSessionId).toBe('s1');
     const original = (await readState()).sessions.find((item) => item.id === 's1')!;
     expect(original.messages).toHaveLength(8);
-    // Stored as a reference into the original's history, not a second copy.
-    const stored = await loadSessionFile(forkId);
-    expect(stored?.transcriptRef).toEqual({ sessionId: 's1', uptoIndex: 2 });
+    // Stored as its own copy of the history it was forked with (layout adapted 2026-10-20: it was a
+    // reference into the original's `<id>.json`; in the message log a fork copies, so no write of
+    // one chat ever reaches another's file).
+    const stored = parseChatLog(await readFile(sessionLogPath(forkId!), 'utf8'));
+    expect(stored.messages.map((message) => message.content)).toEqual(['first question', 'first answer']);
   });
 });

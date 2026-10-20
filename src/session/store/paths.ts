@@ -26,9 +26,33 @@ export function sessionFilePath(id: string): string {
   return join(sessionsDirectory(), `${safeRecordFileName(id)}.json`);
 }
 
-/** The running turn's journal while it streams (records.ts). Not `.json`:
- * every build lists sessions by that suffix, and an id may itself end in
- * `.turn`, whose transcript is then `<id>.turn.json` -- never this name. */
+/** The streaming journal builds before the message log wrote beside `<id>.json`
+ * (records.ts); read, never written, by this one. Not `.json`: every build
+ * lists sessions by that suffix, and an id may itself end in `.turn`, whose
+ * transcript is then `<id>.turn.json` -- never this name. */
 export function sessionTurnPath(id: string): string {
   return join(sessionsDirectory(), `${safeRecordFileName(id)}.turn`);
+}
+
+/** A conversation's message log (chat-log.ts). No other name ends in `.jsonl`,
+ * and builds that predate it list sessions by `.json` only, so they never see it. */
+export function sessionLogPath(id: string): string {
+  return join(sessionsDirectory(), `${safeRecordFileName(id)}.jsonl`);
+}
+
+/** The running turn's journal while its answer streams (chat-log.ts). */
+export function sessionPendingPath(id: string): string {
+  return join(sessionsDirectory(), `${safeRecordFileName(id)}.pending`);
+}
+
+/** `<id>.json` as it was when its chat moved to the log: a second name for the
+ * same file (a hard link), so the bytes outlive any later rewrite of `<id>.json`. */
+export function sessionLegacyBackupPath(id: string): string {
+  return join(sessionsDirectory(), `${safeRecordFileName(id)}.json-v1`);
+}
+
+/** Per-conversation lock, the same name every build since per-session locks
+ * takes for writing `<id>.json`: one lock covers the chat's files in both formats. */
+export function sessionLockPath(id: string): string {
+  return `${sessionFilePath(id)}.lock`;
 }

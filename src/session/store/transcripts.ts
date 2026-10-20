@@ -1,26 +1,102 @@
-/** A conversation as a list of messages: reading one, appending to it,
- * forking it, and the shared-prefix rule that keeps a fork cheap. */
+/** A conversation's transcript -- its messages and its running turn -- on disk.
+ *
+ * FORMATS
+ *
+ * - `<id>.jsonl`, the message log (chat-log.ts): a header, then one record per
+ *   line, only ever appended to. A turn's end is one appended line; a history
+ *   rewritten (undo, clear) replaces the file whole, atomically. Every chat
+ *   this build writes is in this format. A fork holds its own copy of the
+ *   history it was forked with (copy on fork): nothing ever refers into
+ *   another chat's log, so no write of one chat ever has to touch another.
+ * - `<id>.pending`: the running turn's journal while its answer streams,
+ *   newer than the log's `p` record for the same turn (same prompt and start,
+ *   no older). Replaced whole, unsynced, four times a second; removed by the
+ *   next record that sets or ends the journal in the log.
+ * - `<id>.json` (records.ts): how builds before the log stored a chat, the
+ *   whole of it in one file -- a fork possibly only a reference into its
+ *   parent's `<id>.json` -- with `<id>.turn`, the newer journal such a build
+ *   streams. Read for as long as it exists; never written by this build,
+ *   except two things, both creations or what such a build would do: the
+ *   stub for a chat born here (below), and a fork's own copy before the chat
+ *   its reference points into is deleted (giveLegacyChildrenTheirCopy).
+ * - `<id>.json-v1`: a second name (hard link, else a copy) for `<id>.json` as
+ *   it was when its chat moved to the log, so those bytes survive any later
+ *   rewrite of `<id>.json`. Removed only when the chat is deleted.
+ *
+ * One lock per conversation, `<id>.json.lock` -- the lock builds since
+ * per-session locks take to write `<id>.json` -- covers every write of these
+ * files, so a migration or an intake (below) never races such a build.
+ *
+ * MIGRATION (lazy, lossless). A chat stays in `<id>.json` until this build
+ * first writes it. Then, under the chat's lock: read `<id>.json` (its
+ * identity -- inode, size, times -- the same before and after the read);
+ * write the log beside it under a temporary name and sync it; read that back
+ * and check it holds exactly the same messages and journal; give `<id>.json`
+ * its second name; rename the log into place. Only that rename moves the
+ * chat to the log: a failure or a crash at any earlier step leaves the chat
+ * whole in `<id>.json`, which nothing has changed, and the next write starts
+ * over. `<id>.json` itself is never changed or removed by migration. States:
+ * (a) no log -- read from `<id>.json`; (b) log present -- read from the log,
+ * plus whatever `<id>.json` gained since the log last took it in.
+ *
+ * BUILDS THAT PREDATE THE LOG (the mixed-build rule). They know `<id>.json`
+ * and `<id>.turn` only, and never open, change or remove `<id>.jsonl`,
+ * `<id>.pending` or `<id>.json-v1` (no name they list, sweep or delete ends
+ * like those). What such a build sees:
+ *
+ * - a chat not yet migrated: everything, as before;
+ * - a migrated chat: the chat as it was when it migrated, plus what builds
+ *   like it wrote since -- nothing this build added;
+ * - a chat born here: a stub `<id>.json` holding one note (marked
+ *   `storedInLog`, which this build never shows or takes in) that the chat
+ *   lives in a newer format. Without it such a build read the chat as empty,
+ *   and its blank-chat sweep would drop it from the list.
+ *
+ * What such a build writes into `<id>.json` after the chat moved is taken
+ * in, never lost: the log's `legacy` record says what of `<id>.json` it
+ * holds (its identity, message count and digest, and journal digest). When
+ * `<id>.json` is no longer that file, a read shows -- and the next write here
+ * appends, with a new `legacy` record -- the messages it gained beyond that
+ * many (when its first that-many are still the ones taken in; any shared with
+ * what this build appended meanwhile are not repeated), and its running turn
+ * if it changed it. Should it have rewritten those messages instead (an undo
+ * there), the messages past the longest prefix it shares with the log are
+ * taken in: an undo made in such a build is not applied here, and nothing it
+ * holds is lost (`store.legacy-diverged` is logged). What such a build
+ * streams into `<id>.turn` is seen here once it next writes `<id>.json`.
+ *
+ * WRITING. A writer hands the transcript it holds and the one it last agreed
+ * with on disk (its base). History that only grew since the base is appended
+ * -- O(what was added), never the history -- after anything another writer
+ * appended meanwhile, without repeating what that writer already stored of
+ * the same messages; the journal is recorded when the writer changed it.
+ * Anything else (the writer rewrote history) is the three-way merge below,
+ * and the file rewritten whole. A record that adds messages or ends the turn
+ * is synced; a turn's start or a journal step is not (a crash loses at most
+ * that step, never a message). */
 
+import { createHash, randomBytes } from 'node:crypto';
+import { constants } from 'node:fs';
+import { copyFile, link, open, readFile, rename, stat, unlink } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import type { HarnessSession } from '../model.js';
+import { lifecycle } from '../../runtime/lifecycle-log.js';
+import {
+  appendChatLog, chatLogText, loadChatLog, loadPendingFile, parseChatLog, removeChatLog, removePendingFile, storePendingFile, writeChatLog,
+  type ChatLog, type LegacyBase, type LogRecord, type PendingTurn, type TranscriptMessage,
+} from './chat-log.js';
 import { cloneData, sameData } from './data.js';
+import { ensurePrivateDirectory } from './files.js';
 import { withFileLock, type StateLockHeld } from './locks.js';
-import { sessionFilePath } from './paths.js';
-import { listStoredSessionIds, loadSessionFile, removeSessionFile, storeSessionFile, storeSessionTurn, type SessionFile } from './records.js';
+import { sessionFilePath, sessionLegacyBackupPath, sessionLockPath, sessionLogPath } from './paths.js';
+import { continuesTurn, fileIdentity, giveLegacyChildrenTheirCopy, loadLegacyFile, readLegacyTranscript, removeLegacyFiles, type LegacyTranscript, type SessionFile } from './records.js';
 
-type TranscriptMessage = NonNullable<HarnessSession['messages']>[number];
+export type { TranscriptRef } from './records.js';
 
 /** The unbounded part of a conversation, as callers see it (always materialized). */
 export interface SessionTranscript {
   messages?: TranscriptMessage[];
   pendingTurn?: HarnessSession['pendingTurn'];
-}
-
-/** A fork shares its parent's history up to an offset instead
- * of storing a second copy of it. */
-export interface TranscriptRef { sessionId: string; uptoIndex: number }
-
-function transcriptIsEmpty(transcript: SessionTranscript): boolean {
-  return transcript.messages === undefined && transcript.pendingTurn === undefined;
 }
 
 export function transcriptOf(session: HarnessSession): SessionTranscript {
@@ -30,63 +106,19 @@ export function transcriptOf(session: HarnessSession): SessionTranscript {
   };
 }
 
-/** Each file's history with its parent references resolved, by the parsed
- * file it came from, valid while its parent's resolved history is the very
- * array it was built from. A loaded file object stands for one version of
- * the file (records.ts replaces it when the file changes), and resolving
- * returns the cached array while nothing up the chain changed -- so one stat
- * per hop decides, and a parent edited in place by anything is still seen.
- * Never mutated: readers get it frozen (readSessionTranscript). */
-const materialized = new WeakMap<SessionFile, { from: readonly TranscriptMessage[] | undefined; messages: TranscriptMessage[] }>();
-
-async function materializedMessages(file: SessionFile, seen: Set<string>, walk = { cycle: false }): Promise<TranscriptMessage[] | undefined> {
-  const ref = file.transcriptRef;
-  if (!ref) return file.messages;
-  let parentMessages: TranscriptMessage[] | undefined;
-  if (!seen.has(ref.sessionId)) {
-    seen.add(ref.sessionId);
-    const parent = await loadSessionFile(ref.sessionId);
-    parentMessages = parent ? await materializedMessages(parent, seen, walk) : undefined;
-  } else walk.cycle = true;
-  const cached = materialized.get(file);
-  if (cached && !walk.cycle && cached.from === parentMessages) return cached.messages;
-  const messages = [...(parentMessages ?? []).slice(0, ref.uptoIndex), ...(file.messages ?? [])];
-  // A walk cut short by a cycle is that walk's answer, not the file's.
-  if (!walk.cycle) materialized.set(file, { from: parentMessages, messages });
-  return messages;
+function withSessionLock<T>(id: string, run: () => Promise<T>): Promise<T> {
+  return withFileLock(sessionLockPath(id), run);
 }
 
-/** Frozen through and through, once: readers are handed the cached history
- * itself rather than a copy of it (a 27 MB conversation is 100,000-odd
- * objects), so a caller that changes it in place fails there instead of
- * changing every later read. A frozen message is also safe to share as it is
- * (state/merge.ts baselineList). */
-function deepFreeze(value: unknown): void {
-  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return;
-  Object.freeze(value);
-  for (const item of Object.values(value)) deepFreeze(item);
-}
-
-/** Reads one conversation's transcript with any parent reference resolved.
- * `messages` is the cached history, frozen: callers must not change it in
- * place (replace the array instead). `pendingTurn` is the caller's own copy. */
-export async function readSessionTranscript(id: string): Promise<SessionTranscript> {
-  const file = await loadSessionFile(id);
-  if (!file) return {};
-  const messages = await materializedMessages(file, new Set([id]));
-  if (messages) deepFreeze(messages);
-  return {
-    ...(messages !== undefined ? { messages } : {}),
-    ...(file.pendingTurn !== undefined ? { pendingTurn: cloneData(file.pendingTurn) } : {}),
-  };
-}
+// ---------------------------------------------------------------------------
+// Comparing histories
+// ---------------------------------------------------------------------------
 
 function sameMessage(left: TranscriptMessage | undefined, right: TranscriptMessage | undefined): boolean {
-  return !!left && !!right && left.role === right.role && left.content === right.content && sameData(left, right);
+  return !!left && !!right && (left === right || (left.role === right.role && left.content === right.content && sameData(left, right)));
 }
 
 function commonPrefixLength(left: readonly TranscriptMessage[], right: readonly TranscriptMessage[]): number {
-  // The history last stored, stored again: the checkpoint of a streaming turn.
   if (left === right) return left.length;
   const limit = Math.min(left.length, right.length);
   let index = 0;
@@ -94,54 +126,12 @@ function commonPrefixLength(left: readonly TranscriptMessage[], right: readonly 
   return index;
 }
 
-/** A parent's history may only ever grow while children point into it. */
-function keepsHistory(before: readonly TranscriptMessage[] | undefined, after: readonly TranscriptMessage[] | undefined): boolean {
-  const old = before ?? [];
-  return commonPrefixLength(old, after ?? []) === old.length;
+function extendsHistory(prefix: readonly TranscriptMessage[], list: readonly TranscriptMessage[]): boolean {
+  return list.length >= prefix.length && commonPrefixLength(prefix, list) === prefix.length;
 }
 
-/** Gives every child that points into `parentId` its own full copy. Called
- * before the parent's existing history is rewritten or removed, so a child can
- * never silently change or lose messages. Runs under the caller's state lock:
- * that is what guarantees no new reference is being created while this scans. */
-async function materializeChildrenOf(parentId: string): Promise<string[]> {
-  const rewritten: string[] = [];
-  for (const id of await listStoredSessionIds()) {
-    if (id === parentId) continue;
-    const peek = await loadSessionFile(id);
-    if (!peek?.transcriptRef) continue;
-    // A grandchild resolves through its own parent, which is handled here too
-    // because materializing is by value: once the direct child owns its copy,
-    // nothing beneath it depends on `parentId` any more.
-    if (peek.transcriptRef.sessionId !== parentId) continue;
-    const messages = await materializedMessages(peek, new Set([id]));
-    const { transcriptRef: _dropped, ...rest } = peek;
-    await withSessionLock(id, () => storeSessionFile(id, { ...rest, messages: cloneData(messages ?? []) }));
-    rewritten.push(id);
-  }
-  return rewritten;
-}
-
-interface TranscriptWriteOptions {
-  /** Session whose history this one may share (its fork parent). */
-  parentSessionId?: string;
-  /** `next` is a baseline copy that nothing will change (state/merge.ts), so
-   * it is stored as it is instead of copied again. Its unchanged history is
-   * then recognised by identity on the next write (commonPrefixLength). */
-  frozen?: boolean;
-  /** The transcript the writer last agreed with on disk. Given, `next` is
-   * merged with whatever another process stored since (mergeTranscripts)
-   * instead of replacing it. */
-  base?: SessionTranscript;
-}
-
-/** Each file this process stored, and the transcript it stored verbatim. A
- * file on disk that is still the one written from the writer's base needs no
- * merge -- the common case, a checkpoint following its own last write. */
-const storedFrom = new WeakMap<SessionFile, SessionTranscript>();
-
-/** Three-way merge of a transcript: `base` the writer last agreed with,
- * `next` the writer's copy, `disk` what is stored now.
+/** Three-way merge of a transcript a writer rewrote: `base` the writer last
+ * agreed with, `next` the writer's copy, `disk` what is stored now.
  *
  * - Disk still holds `base`: `next`.
  * - The writer only appended to `base`: disk as it is, then the writer's
@@ -168,10 +158,6 @@ function mergeTranscripts(base: SessionTranscript, next: SessionTranscript, disk
   } else if (theyAppended) messages = [...mine, ...theirs.slice(before.length)];
   else messages = next.messages;
   const pendingTurn = sameData(base.pendingTurn, next.pendingTurn) ? disk.pendingTurn : next.pendingTurn;
-  // Nothing of disk's to add: the writer's own copy, so what is stored is
-  // recognised as written from it (storedFrom). A fresh object here made
-  // every later write of a streaming turn merge again, and none ever took
-  // the journal path: the whole transcript was rewritten per checkpoint.
   if (messages === next.messages && pendingTurn === next.pendingTurn) return next;
   return {
     ...(messages !== undefined ? { messages } : {}),
@@ -179,136 +165,415 @@ function mergeTranscripts(base: SessionTranscript, next: SessionTranscript, disk
   };
 }
 
-/** Below this, a reference saves nothing worth the indirection. */
-const MIN_SHARED_MESSAGES = 2;
+/** Where a history a writer holds stands in the log: every message in it is
+ * in the log of generation `gen`, which had `end` messages when that was last
+ * true. A writer whose base is known here appends without comparing its
+ * history with the log's at all. Arrays registered here are never changed:
+ * reads hand out frozen ones and writers' bases are copies nothing mutates. */
+const positions = new WeakMap<readonly TranscriptMessage[], { gen: string; end: number }>();
 
-/** Persists one conversation's transcript, under the caller's state lock (it
- * may materialize children and create parent references), and under that
- * conversation's own lock (withSessionLock), which every writer of its file
- * takes. One order only: a child's lock inside its parent's
- * (materializeChildrenOf, under the state lock), never the other way round,
- * and writeOwnTranscript holds its own conversation's alone. */
-export async function writeSessionTranscript(_held: StateLockHeld, id: string, next: SessionTranscript, options: TranscriptWriteOptions = {}): Promise<void> {
-  await withSessionLock(id, () => storeTranscript(id, next, options, false));
+// ---------------------------------------------------------------------------
+// Builds that predate the log: what `<id>.json` gained since it was taken in
+// ---------------------------------------------------------------------------
+
+const digests = new WeakMap<readonly TranscriptMessage[], { count: number; digest: string }>();
+
+function messagesDigest(messages: readonly TranscriptMessage[], count = messages.length): string {
+  const known = digests.get(messages);
+  if (known?.count === count) return known.digest;
+  const hash = createHash('sha256');
+  for (let index = 0; index < count; index += 1) hash.update(JSON.stringify(messages[index])).update('\n');
+  const digest = hash.digest('hex');
+  digests.set(messages, { count, digest });
+  return digest;
 }
 
-/** One conversation's file is written by one writer at a time (its own lock), whatever else holds
- * the shared state lock. `own`: the caller holds only this conversation's lock, so a write that
- * would reach another conversation's file -- a history shared by reference, children to give their
- * own copy -- is declined (false), for the caller to make under the state lock instead. */
-async function storeTranscript(id: string, next: SessionTranscript, options: TranscriptWriteOptions, own: boolean): Promise<boolean> {
-  const previous = await loadSessionFile(id);
-  if (own && (options.parentSessionId || previous?.transcriptRef)) return false;
-  const verbatim = next;
-  // What is stored is exactly the writer's base: no merge, and history the
-  // writer still holds by identity is history unchanged (a checkpoint).
-  const storedBase = previous && options.base && storedFrom.get(previous) === options.base;
-  let previousMessages: TranscriptMessage[] | undefined;
-  const previousHistory = async (): Promise<TranscriptMessage[] | undefined> => (
-    previousMessages ??= previous ? await materializedMessages(previous, new Set([id])) : undefined);
-  if (options.base && previous && !storedBase) {
-    next = mergeTranscripts(options.base, next, {
-      ...(await previousHistory() !== undefined ? { messages: previousMessages } : {}),
-      ...(previous.pendingTurn !== undefined ? { pendingTurn: previous.pendingTurn } : {}),
+function pendingDigest(turn: PendingTurn | undefined): string {
+  return createHash('sha256').update(JSON.stringify(turn ?? null)).digest('hex');
+}
+
+const EMPTY_BASE: Omit<LegacyBase, 'file'> = { count: 0, digest: messagesDigest([]), pending: pendingDigest(undefined), at: 0 };
+
+interface LegacyIntake {
+  /** Messages `<id>.json` gained that the log does not hold yet. */
+  add: TranscriptMessage[];
+  /** Its running turn, when it changed it (`turn` undefined: it ended it). */
+  pending?: { turn: PendingTurn | undefined };
+  /** What the log has taken in, once these are added. */
+  base: LegacyBase;
+  /** False: read while it changed; shown, never recorded (readLegacySteady). */
+  steady: boolean;
+}
+
+/** `<id>.json` read with its identity unchanged across the read. `steady`
+ * false: it kept changing (a writer that takes no chat lock), and `identity`
+ * may not be the version read -- not to be recorded as taken in. */
+async function readLegacySteady(id: string): Promise<{ identity: string | null; legacy: LegacyTranscript | undefined; steady: boolean }> {
+  const path = sessionFilePath(id);
+  let identity = (await fileIdentity(path)) ?? null;
+  for (let attempt = 0; ; attempt += 1) {
+    const legacy = identity === null ? undefined : await readLegacyTranscript(id);
+    const after = (await fileIdentity(path)) ?? null;
+    if (after === identity) return { identity, legacy, steady: true };
+    if (attempt >= 4) return { identity: after, legacy, steady: false };
+    identity = after;
+  }
+}
+
+const intakes = new WeakMap<ChatLog, { identity: string; intake: LegacyIntake }>();
+
+/** What `<id>.json` holds that `log` has not taken in yet, or undefined when
+ * it is still the file the log last took in. Reads nothing else: one stat. */
+async function legacyIntake(id: string, log: ChatLog): Promise<LegacyIntake | undefined> {
+  const known = log.legacy?.file ?? null;
+  const now = (await fileIdentity(sessionFilePath(id))) ?? null;
+  if (now === known) return undefined;
+  const memo = intakes.get(log);
+  if (memo && memo.identity === now) return memo.intake;
+  const { identity, legacy, steady } = await readLegacySteady(id);
+  if (identity === known) return undefined;
+  const base = log.legacy ?? { file: null, ...EMPTY_BASE };
+  const theirs = legacy?.messages ?? [];
+  let add: TranscriptMessage[] = [];
+  if (!legacy) {
+    // Gone, or set aside as damaged: nothing to take in, and not a delete.
+  } else if (theirs.length >= base.count && messagesDigest(theirs, base.count) === base.digest) {
+    const gained = theirs.slice(base.count);
+    // The same messages both sides stored (a stale turn each settled) once.
+    const since = log.messages.slice(Math.min(base.at, log.messages.length));
+    add = gained.slice(commonPrefixLength(since, gained));
+  } else {
+    add = theirs.slice(commonPrefixLength(log.messages, theirs));
+    lifecycle('store.legacy-diverged', { session: id, legacyMessages: theirs.length, logMessages: log.messages.length, takenIn: add.length });
+  }
+  const theirTurn = legacy?.pendingTurn;
+  const turnChanged = legacy !== undefined && pendingDigest(theirTurn) !== base.pending;
+  const intake: LegacyIntake = {
+    add, steady,
+    ...(turnChanged ? { pending: { turn: theirTurn } } : {}),
+    base: { file: identity, count: theirs.length, digest: messagesDigest(theirs), pending: legacy ? pendingDigest(theirTurn) : base.pending, at: log.messages.length + add.length },
+  };
+  if (identity !== null && steady) intakes.set(log, { identity, intake });
+  return intake;
+}
+
+// ---------------------------------------------------------------------------
+// Reading
+// ---------------------------------------------------------------------------
+
+interface LogView { messages: readonly TranscriptMessage[] | undefined; pending: PendingTurn | undefined }
+
+const views = new WeakMap<ChatLog, { intake: LegacyIntake; view: LogView }>();
+
+/** The log with what `<id>.json` gained laid over it, as a reader sees it. */
+function logView(log: ChatLog, intake: LegacyIntake | undefined): LogView {
+  if (!intake) {
+    if (log.hasMessages && !positions.has(log.messages)) positions.set(log.messages, { gen: log.gen, end: log.messages.length });
+    return { messages: log.hasMessages ? log.messages : undefined, pending: log.pending };
+  }
+  const known = views.get(log);
+  if (known?.intake === intake) return known.view;
+  const view: LogView = {
+    messages: intake.add.length ? Object.freeze([...log.messages, ...intake.add]) : log.hasMessages || intake.base.count ? log.messages : undefined,
+    pending: intake.pending ? intake.pending.turn : log.pending,
+  };
+  views.set(log, { intake, view });
+  return view;
+}
+
+/** The running turn's journal as readers see it: the log's, or the newer
+ * streamed step of that same turn in `<id>.pending`. */
+async function streamedTurn(id: string, pending: PendingTurn | undefined): Promise<PendingTurn | undefined> {
+  if (!pending) return undefined;
+  const streamed = await loadPendingFile(id);
+  return streamed && continuesTurn(pending, streamed) ? streamed : pending;
+}
+
+/** Reads one conversation's transcript, in whichever format it is stored.
+ * `messages` is the cached history, frozen: callers must not change it in
+ * place (replace the array instead). `pendingTurn` is the caller's own copy. */
+export async function readSessionTranscript(id: string): Promise<SessionTranscript> {
+  const log = await loadChatLog(id);
+  if (!log) {
+    const legacy = await readLegacyTranscript(id);
+    if (!legacy) return {};
+    return {
+      ...(legacy.messages !== undefined ? { messages: legacy.messages as TranscriptMessage[] } : {}),
+      ...(legacy.pendingTurn !== undefined ? { pendingTurn: cloneData(legacy.pendingTurn) } : {}),
+    };
+  }
+  const view = logView(log, await legacyIntake(id, log));
+  const pendingTurn = await streamedTurn(id, view.pending);
+  return {
+    ...(view.messages !== undefined ? { messages: view.messages as TranscriptMessage[] } : {}),
+    ...(pendingTurn !== undefined ? { pendingTurn: cloneData(pendingTurn) } : {}),
+  };
+}
+
+/** Just the running turn's journal, as readSessionTranscript would return it (not a copy: do not change it). */
+export async function readStoredPendingTurn(id: string): Promise<PendingTurn | undefined> {
+  const log = await loadChatLog(id);
+  if (!log) return (await readLegacyTranscript(id))?.pendingTurn;
+  return streamedTurn(id, logView(log, await legacyIntake(id, log)).pending);
+}
+
+/** What a read of `id`'s messages depends on, as one string that changes
+ * whenever any of those files does; undefined when the chat has no file. */
+export async function transcriptIdentity(id: string): Promise<string | undefined> {
+  const log = await fileIdentity(sessionLogPath(id));
+  const own = await fileIdentity(sessionFilePath(id));
+  if (log) return `log:${log}|json:${own ?? '-'}`;
+  if (!own) return undefined;
+  // A fork stored by reference reads through its parents' `<id>.json`.
+  const parts = [`${id}:${own}`];
+  const seen = new Set([id]);
+  let ref = (await loadLegacyFile(id))?.transcriptRef;
+  while (ref && !seen.has(ref.sessionId) && seen.size < 64) {
+    seen.add(ref.sessionId);
+    parts.push(`${ref.sessionId}:${(await fileIdentity(sessionFilePath(ref.sessionId))) ?? '-'}`);
+    ref = (await loadLegacyFile(ref.sessionId))?.transcriptRef;
+  }
+  return parts.join('|');
+}
+
+// ---------------------------------------------------------------------------
+// Migration and the stub
+// ---------------------------------------------------------------------------
+
+/** Test hook: called at each step of a migration; throwing there is a failure (or crash) at that step. */
+export const MIGRATION_FAULTS: { at?: (step: 'read' | 'write' | 'sync' | 'verify' | 'backup' | 'rename') => void } = {};
+
+async function syncDirectory(directory: string): Promise<void> {
+  if (process.platform === 'win32') return;
+  const handle = await open(directory, 'r').catch(() => undefined);
+  if (!handle) return;
+  try { await handle.sync(); } catch { /* fail-open-ok: some filesystems refuse a directory fsync */ } finally { await handle.close(); }
+}
+
+/** A second name for `<id>.json` as it is now (see the module header). */
+async function keepLegacyCopy(id: string): Promise<void> {
+  const source = sessionFilePath(id);
+  const sourceInfo = await stat(source);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const target = attempt === 0 ? sessionLegacyBackupPath(id) : `${sessionLegacyBackupPath(id)}-${Date.now()}${attempt}`;
+    const existing = await stat(target).catch(() => undefined);
+    if (existing) {
+      if (existing.ino === sourceInfo.ino && existing.dev === sourceInfo.dev) return;
+      continue; // an earlier copy (an earlier version of the file) is kept as it is
+    }
+    try {
+      await link(source, target);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'EEXIST') continue;
+      // No hard links here: a copy, which never replaces anything.
+      try {
+        await copyFile(source, target, constants.COPYFILE_EXCL);
+        return;
+      } catch (copyError) {
+        if ((copyError as NodeJS.ErrnoException).code === 'EEXIST') continue;
+        throw copyError;
+      }
+    }
+  }
+  throw new Error(`could not keep a copy of ${source}`);
+}
+
+/** Moves a chat from `<id>.json` to the log (see MIGRATION). Under the chat's
+ * lock. Undefined, having changed nothing, when there is no `<id>.json` to move. */
+async function migrate(id: string): Promise<ChatLog | undefined> {
+  const fault = MIGRATION_FAULTS.at ?? (() => undefined);
+  fault('read');
+  const { identity, legacy, steady } = await readLegacySteady(id);
+  if (!steady) throw new Error(`${sessionFilePath(id)} kept changing while it was read; the conversation stays in it until the next write`);
+  if (!legacy || identity === null) return undefined;
+  const messages = legacy.messages;
+  const pending = legacy.pendingTurn;
+  const base: LegacyBase = { file: identity, count: messages?.length ?? 0, digest: messagesDigest(messages ?? []), pending: pendingDigest(pending), at: messages?.length ?? 0 };
+  const path = sessionLogPath(id);
+  const temporary = `${path}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+  const started = Date.now();
+  let placed = false;
+  try {
+    await ensurePrivateDirectory(dirname(path));
+    fault('write');
+    const handle = await open(temporary, 'wx', 0o600);
+    try {
+      await handle.writeFile(chatLogText(id, { ...(messages ? { messages } : {}), ...(pending ? { pending } : {}), legacy: base }));
+      fault('sync');
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    fault('verify');
+    const back = parseChatLog(await readFile(temporary, 'utf8'));
+    if (back.skipped || back.hasMessages !== (messages !== undefined) || !sameData(back.messages, messages ?? []) || !sameData(back.pending, pending) || !sameData(back.legacy, base)) {
+      throw new Error(`the history of conversation ${id} did not read back as written; it stays in ${sessionFilePath(id)}`);
+    }
+    fault('backup');
+    await keepLegacyCopy(id);
+    fault('rename');
+    await rename(temporary, path);
+    placed = true;
+  } finally {
+    if (!placed) await unlink(temporary).catch(() => undefined);
+  }
+  await syncDirectory(dirname(path));
+  const log = await loadChatLog(id);
+  if (!log) throw new Error(`the history of conversation ${id} vanished as it was moved`);
+  // The history just read is exactly the log's: a writer holding it appends straight on.
+  if (messages && log.messages.length === messages.length) positions.set(messages, { gen: log.gen, end: messages.length });
+  lifecycle('store.migrated', { session: id, messages: messages?.length ?? 0, bytes: log.size, ms: Date.now() - started });
+  return log;
+}
+
+const STUB_NOTE = 'This conversation is stored in a newer format that this version of ClikCode cannot read. Update ClikCode to see it and go on with it.';
+
+/** `<id>.json` for a chat born in the log, for builds that predate the log
+ * (see the module header). Created only where there is none: linked into
+ * place from a temporary, so an existing file is never replaced. */
+async function writeStub(id: string): Promise<string | undefined> {
+  const path = sessionFilePath(id);
+  const stub: SessionFile = { v: 1, id, messages: [{ role: 'assistant', content: STUB_NOTE, storedInLog: true } as TranscriptMessage] };
+  const temporary = `${path}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+  try {
+    const handle = await open(temporary, 'wx', 0o600);
+    try { await handle.writeFile(JSON.stringify(stub)); } finally { await handle.close(); }
+    await link(temporary, path);
+  } catch (error) {
+    // Already there (an older build wrote one meanwhile: taken in like any), or no links: no stub.
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') lifecycle('store.stub-failed', { session: id, error: (error as Error).message });
+  } finally {
+    await unlink(temporary).catch(() => undefined);
+  }
+  return fileIdentity(path);
+}
+
+// ---------------------------------------------------------------------------
+// Writing
+// ---------------------------------------------------------------------------
+
+function changedTurn(before: PendingTurn | undefined, after: PendingTurn | undefined): boolean {
+  return !sameData(before, after);
+}
+
+/** Appends one record, synced when it adds messages or ends the turn, and
+ * retires a streamed journal the record supersedes. */
+async function commit(id: string, log: ChatLog, record: LogRecord): Promise<void> {
+  if (record.add === undefined && record.p === undefined && record.legacy === undefined) return;
+  const durable = (record.add?.length ?? 0) > 0 || record.p === null || record.legacy !== undefined;
+  await appendChatLog(id, log, [record], { durable });
+  if (record.p !== undefined) await removePendingFile(id);
+}
+
+/** Persists `next` as one conversation's transcript. Under that
+ * conversation's lock; see WRITING in the module header. */
+async function storeTranscript(id: string, next: SessionTranscript, base: SessionTranscript | undefined): Promise<void> {
+  let log = await loadChatLog(id) ?? await migrate(id);
+  if (!log) {
+    // A conversation new to disk. Nothing in it: nothing to store.
+    if (next.messages === undefined && next.pendingTurn === undefined) return;
+    await writeChatLog(id, { ...(next.messages ? { messages: next.messages } : {}), ...(next.pendingTurn ? { pending: next.pendingTurn } : {}) });
+    const born = await loadChatLog(id);
+    if (born && next.messages) positions.set(next.messages, { gen: born.gen, end: next.messages.length });
+    const stub = await writeStub(id);
+    if (born && stub) await commit(id, born, { legacy: { file: stub, ...EMPTY_BASE, at: born.messages.length } });
+    return;
+  }
+  if (log.foreign) throw new Error(`the history of conversation ${id} was written by a newer ClikCode; this one does not change it`);
+  const intake = await legacyIntake(id, log);
+  if (intake && !intake.steady) throw new Error(`${sessionFilePath(id)} kept changing while it was read; nothing was written`);
+  if (intake) {
+    await commit(id, log, {
+      ...(intake.add.length ? { add: intake.add } : {}),
+      ...(intake.pending ? { p: intake.pending.turn ?? null } : {}),
+      legacy: intake.base,
     });
+    log = (await loadChatLog(id))!;
   }
-  const historyUnchanged = storedBase && next.messages === options.base!.messages;
-  if (previous && !historyUnchanged && !keepsHistory(await previousHistory(), next.messages)) {
-    if (own) return false;
-    await materializeChildrenOf(id);
+  const nextMessages = next.messages;
+  const at = base?.messages ? positions.get(base.messages) : undefined;
+  if (base?.messages && nextMessages && at && at.gen === log.gen && at.end <= log.messages.length && extendsHistory(base.messages, nextMessages)) {
+    // Only appended since the base, which is all in the log: append the rest.
+    const ours = nextMessages.slice(base.messages.length);
+    const add = ours.slice(commonPrefixLength(log.messages.slice(at.end), ours));
+    await commit(id, log, {
+      ...(add.length ? { add } : {}),
+      ...(changedTurn(base.pendingTurn, next.pendingTurn) ? { p: next.pendingTurn ?? null } : {}),
+    });
+    positions.set(nextMessages, { gen: log.gen, end: log.messages.length + add.length });
+    return;
   }
-  if (transcriptIsEmpty(next)) {
-    if (own) return false;
-    await removeSessionFile(id);
-    return true;
+  const disk: SessionTranscript = {
+    ...(log.hasMessages ? { messages: log.messages as TranscriptMessage[] } : {}),
+    ...(log.pending ? { pendingTurn: log.pending } : {}),
+  };
+  let merged = base ? mergeTranscripts(base, next, disk) : next;
+  // A transcript whose messages were never read says nothing about them: they stay.
+  if (merged.messages === undefined && disk.messages !== undefined) merged = { ...merged, messages: disk.messages };
+  const diskMessages = log.messages;
+  const mergedMessages = merged.messages;
+  if ((mergedMessages ? extendsHistory(diskMessages, mergedMessages) : !log.hasMessages)) {
+    const add = mergedMessages ? mergedMessages.slice(diskMessages.length) : undefined;
+    await commit(id, log, {
+      ...(add && (add.length || !log.hasMessages) ? { add } : {}),
+      ...(changedTurn(log.pending, merged.pendingTurn) ? { p: merged.pendingTurn ?? null } : {}),
+    });
+    if (mergedMessages && mergedMessages === nextMessages) positions.set(nextMessages, { gen: log.gen, end: diskMessages.length + (add?.length ?? 0) });
+    return;
   }
-  const parentId = options.parentSessionId ?? previous?.transcriptRef?.sessionId;
-  const built: SessionFile = (parentId && await referenceInto(parentId, id, next, options.frozen === true)) || { v: 1 as const, id, ...next };
-  const file = options.frozen ? built : cloneData(built);
-  await storeSessionFile(id, file);
-  // A merged write stored something other than the writer's copy: the next
-  // write from that copy must merge again, not take the fast path.
-  if (next === verbatim) storedFrom.set(file, verbatim);
-  return true;
+  // History rewritten: the whole file, atomically. What the log took in of `<id>.json` stays taken in.
+  const legacy = log.legacy ? { ...log.legacy, at: Math.min(log.legacy.at, mergedMessages?.length ?? 0) } : undefined;
+  await writeChatLog(id, { ...(mergedMessages ? { messages: mergedMessages } : {}), ...(merged.pendingTurn ? { pending: merged.pendingTurn } : {}), ...(legacy ? { legacy } : {}) });
+  await removePendingFile(id);
+  const rewritten = await loadChatLog(id);
+  if (rewritten && mergedMessages && mergedMessages === nextMessages) positions.set(nextMessages, { gen: rewritten.gen, end: nextMessages.length });
 }
 
-function withSessionLock<T>(id: string, run: () => Promise<T>): Promise<T> {
-  return withFileLock(`${sessionFilePath(id)}.lock`, run);
+/** Persists one conversation's transcript, under the caller's state lock and
+ * that conversation's own. `base`: the transcript the writer last agreed with
+ * on disk; without one, `next` replaces what is stored. */
+export async function writeSessionTranscript(_held: StateLockHeld, id: string, next: SessionTranscript, options: { base?: SessionTranscript } = {}): Promise<void> {
+  await withSessionLock(id, () => storeTranscript(id, next, options.base));
 }
 
-/** A conversation's transcript, written under its own lock only -- not the state lock every
- * window and worker shares. A turn's checkpoints and its end write the whole of a long
- * conversation (a second or more on a 20 MB one, most of it fsync); under the shared lock, every
- * other window waited for that. `listed` is asked under this lock: a conversation deleted
- * meanwhile is not written back. False, having written nothing, when the write is not this
- * conversation's alone (see storeTranscript) or it is not listed: the caller then writes it under
- * the state lock. */
+/** A conversation's transcript, written under its own lock only -- not the
+ * state lock every window and worker shares. `listed` is asked under this
+ * lock: a conversation deleted meanwhile is not written back (false). */
 export function writeOwnTranscript(
   id: string, next: SessionTranscript, base: SessionTranscript, listed: () => Promise<boolean>,
-  /** A streaming checkpoint may store just the running turn's journal (storeTurn); a full write stores
-   * the whole file, which is what a build that knows only `<id>.json` reads. */
+  /** A streaming checkpoint may store just the running turn's journal (`<id>.pending`). */
   options: { journalOnly: boolean },
 ): Promise<boolean> {
   return withSessionLock(id, async () => {
     if (!await listed()) return false;
-    if (options.journalOnly && await storeTurn(id, next, base)) return true;
-    return storeTranscript(id, next, { base, frozen: true }, true);
+    if (options.journalOnly && await storeStreamedTurn(id, next, base)) return true;
+    await storeTranscript(id, next, base);
+    return true;
   });
 }
 
-/** A streaming turn's checkpoint (writeOwnTranscript, journalOnly): only the
- * running turn's journal changed since `base`, which is exactly what this
- * process last stored. Stores that journal on its own (records.ts) and returns
- * true; false, having written nothing, for anything else -- history changed, a
- * new turn, or a file someone else has written since -- which is then stored
- * (and merged) in full. Under the conversation's own lock. */
-async function storeTurn(id: string, next: SessionTranscript, base: SessionTranscript): Promise<boolean> {
-  if (!next.pendingTurn || next.messages !== base.messages || next.pendingTurn.startedAt !== base.pendingTurn?.startedAt) return false;
-  const previous = await loadSessionFile(id);
-  if (!previous || storedFrom.get(previous) !== base) return false;
-  const file = await storeSessionTurn(id, next.pendingTurn);
-  if (!file) return false;
-  storedFrom.set(file, next);
+/** A streaming turn's step: only its journal changed since `base`, and the
+ * log already holds that turn. Stored in `<id>.pending` alone; false, having
+ * written nothing, for anything else. */
+async function storeStreamedTurn(id: string, next: SessionTranscript, base: SessionTranscript): Promise<boolean> {
+  const turn = next.pendingTurn;
+  if (!turn || next.messages !== base.messages || turn.startedAt !== base.pendingTurn?.startedAt) return false;
+  const log = await loadChatLog(id);
+  if (!log || log.foreign || !log.pending || log.pending.startedAt !== turn.startedAt || log.pending.prompt !== turn.prompt) return false;
+  await storePendingFile(id, turn);
   return true;
 }
 
-/** How much of a parent's history a child's messages share, by the parent's
- * resolved history and the child's history array: a streaming checkpoint stores the same
- * history again and again, and comparing it with the parent's every time was
- * a walk over both whole conversations per write. */
-const sharedWith = new WeakMap<readonly TranscriptMessage[], { parent: readonly TranscriptMessage[]; shared: number }>();
-
-/** `next` stored as a reference into `parentId`'s history, when that shares
- * enough of it and cannot form a cycle. `frozen`: next's arrays never change
- * (see TranscriptWriteOptions), so what they share may be remembered. */
-async function referenceInto(parentId: string, id: string, next: SessionTranscript, frozen: boolean): Promise<SessionFile | undefined> {
-  if (parentId === id || !next.messages || next.messages.length < MIN_SHARED_MESSAGES) return undefined;
-  const parent = await loadSessionFile(parentId);
-  if (!parent) return undefined;
-  // A reference must never lead back here, or both histories vanish.
-  for (let hop = parent.transcriptRef, guard = 0; hop; guard += 1) {
-    if (hop.sessionId === id || guard > 64) return undefined;
-    hop = (await loadSessionFile(hop.sessionId))?.transcriptRef;
-  }
-  const parentMessages = await materializedMessages(parent, new Set([parentId])) ?? [];
-  const known = frozen ? sharedWith.get(next.messages) : undefined;
-  let shared: number;
-  if (known?.parent === parentMessages) shared = known.shared;
-  else {
-    shared = commonPrefixLength(parentMessages, next.messages);
-    if (frozen) sharedWith.set(next.messages, { parent: parentMessages, shared });
-  }
-  if (shared < MIN_SHARED_MESSAGES) return undefined;
-  return {
-    v: 1 as const, id, transcriptRef: { sessionId: parentId, uptoIndex: shared },
-    messages: next.messages.slice(shared),
-    ...(next.pendingTurn !== undefined ? { pendingTurn: next.pendingTurn } : {}),
-  };
-}
-
-/** Removes a conversation's transcript, first giving its children their own
- * copy. Under the caller's state lock, like writeSessionTranscript. */
+/** Removes a conversation's transcript in both formats, first giving any
+ * `<id>.json` fork that refers into its `<id>.json` its own copy. Under the
+ * caller's state lock, like writeSessionTranscript. */
 export async function deleteSessionTranscript(_held: StateLockHeld, id: string): Promise<void> {
-  await materializeChildrenOf(id);
-  await withSessionLock(id, () => removeSessionFile(id));
+  await giveLegacyChildrenTheirCopy(id, withSessionLock);
+  await withSessionLock(id, async () => {
+    await removeChatLog(id);
+    await removePendingFile(id);
+    await removeLegacyFiles(id);
+  });
 }

@@ -24,7 +24,7 @@ import { FileCheckpointStore } from '../agent/file-checkpoints.js';
 import { turnChanges, unwindChanges } from '../agent/diff-unwind.js';
 import { realpathNearest } from '../agent/security.js';
 import type { HarnessSession } from './model.js';
-import { loadSessionFile } from './store/records.js';
+import { readStoredPendingTurn } from './store/transcripts.js';
 import { conversationHolder } from '../worker/registry.js';
 import { readTurnChanges, withTurnChangesLock, writeTurnChanges, type TurnChangeRecord } from './turn-changes.js';
 
@@ -137,7 +137,7 @@ export async function turnIsRunning(sessionId: string): Promise<boolean> {
   const holder = await conversationHolder(sessionId).catch(() => undefined);
   if (!holder) return false;
   if (holder.kind === 'turn') return true;
-  return Boolean((await loadSessionFile(sessionId).catch(() => undefined))?.pendingTurn);
+  return Boolean(await readStoredPendingTurn(sessionId).catch(() => undefined));
 }
 
 export async function undoLastTurn(

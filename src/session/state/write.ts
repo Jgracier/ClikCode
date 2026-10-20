@@ -26,10 +26,9 @@ import { HarnessSecrets, readSecretsFile, sameSecret, writeSecretsFile } from '.
  * checkpoints do not come here at all: they use writeTranscriptCheckpoint,
  * which never touches the index. */
 export async function writeState(state: HarnessState): Promise<void> {
-  // Transcripts this copy already stored and only appended to are written first, each under its own
-  // conversation's lock (writeTranscriptCheckpoint): the end of a turn rewrote a 20 MB conversation
-  // under the state lock, a second during which every other window waited. What is left for the
-  // state lock is the index, and the transcripts that are not one conversation's alone.
+  // Transcripts of chats this copy read from disk are written first, each under its own
+  // conversation's lock only (writeTranscriptCheckpoint): every other window goes on meanwhile.
+  // What is left for the state lock is the index, and the transcripts of chats not listed yet.
   if ((state as BaselinedState)[STATE_BASELINE]) {
     for (const session of state.sessions ?? []) {
       if (session.messages === undefined && session.pendingTurn === undefined) continue;
@@ -99,7 +98,7 @@ export async function writeState(state: HarnessState): Promise<void> {
       // Merged with what another process stored since this copy agreed with
       // disk, so neither side's appended messages are lost.
       const base = before && diskIds.has(session.id) ? before.transcript : draft?.transcript;
-      await writeSessionTranscript(held, session.id, transcript, { parentSessionId: session.parentSessionId, frozen: true, ...(base ? { base } : {}) });
+      await writeSessionTranscript(held, session.id, transcript, base ? { base } : {});
       clock.wrote += 1;
     }
     clock.transcripts = Date.now() - clock.start - clock.index - clock.snapshot;
@@ -147,9 +146,9 @@ export async function writeState(state: HarnessState): Promise<void> {
  * The index is the list -- titles, dates, accounts -- shared by every
  * process, and nothing on it changes while an answer streams. Rewriting it
  * (with a backup) four times a second per worker was most of what ClikCode
- * wrote to disk. Here only the transcript is merged and stored -- and when
- * only the running turn's journal changed, just that journal (records.ts
- * says what builds that predate that file see) -- and only the
+ * wrote to disk. Here only the transcript is stored -- and when only the
+ * running turn's journal changed, just that journal (store/transcripts.ts
+ * says what builds that predate the message log see) -- and only the
  * transcript part of the baseline moves forward: any field of the record the
  * turn changed meanwhile (its date, its last usage) is still a difference the
  * next full writeState stores, at the turn's end at the latest.

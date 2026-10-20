@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readState } from '../state/read.js';
 import { writeState, writeTranscriptCheckpoint } from '../state/write.js';
 import { resetHarnessStateCaches } from '../state/index-file.js';
 import type { HarnessSession } from '../model.js';
+import { parseChatLog } from './chat-log.js';
 
 const previousHome = process.env.CLIKCODE_HOME;
 let root = '';
@@ -22,10 +23,15 @@ const chat = (id: string, messages: HarnessSession['messages'], extra: Partial<H
 createdAt: now, updatedAt: now, status: 'active', messages, ...extra,
 } as HarnessSession);
 const said = (count: number, prefix = 'm') => Array.from({ length: count }, (_, index) => ({ role: index % 2 ? 'assistant' as const : 'user' as const, content: `${prefix}${index}` }));
-const raw = async (id: string) => JSON.parse(await readFile(join(root, 'sessions', `${id}.json`), 'utf8'));
+// The chat's own log, parsed as the store parses it.
+const log = async (id: string) => parseChatLog(await readFile(join(root, 'sessions', `${id}.jsonl`), 'utf8'));
 
-describe('a fork that shares its parent\'s history', () => {
-  it('stays a reference through streamed checkpoints and reads back whole', async () => {
+// Layout adapted (2026-10-20): a fork used to be stored as a reference into its
+// parent's `<id>.json` (transcriptRef); in the message log it holds its own
+// copy (copy on fork). The behavior asserted -- what reads back, what streams
+// where, what survives the parent's rewrite and another writer -- is the same.
+describe('a fork of another chat', () => {
+  it('holds its own copy through streamed checkpoints and reads back whole', async () => {
     root = await mkdtemp(join(tmpdir(), 'clikcode-fork-'));
     process.env.CLIKCODE_HOME = root;
     const state = await readState();
@@ -39,13 +45,12 @@ describe('a fork that shares its parent\'s history', () => {
     for (let step = 0; step < 3; step++) {
       child.pendingTurn.response += `part${step} `;
       expect(await writeTranscriptCheckpoint(state, 'c')).toBe(true);
-      const stored = await raw('c');
-      expect(stored.transcriptRef).toEqual({ sessionId: 'p', uptoIndex: 6 });
-      expect(stored.messages).toEqual([{ role: 'user', content: 'forked' }]);
-      // The streamed answer goes to the turn's own file; the transcript keeps
+      const stored = await log('c');
+      expect(stored.messages).toEqual(child.messages);
+      // The streamed answer goes to the turn's own file; the log keeps
       // the journal as the turn started.
-      expect(stored.pendingTurn.response).toBe('');
-      const turn = JSON.parse(await readFile(join(root, 'sessions', 'c.turn'), 'utf8'));
+      expect(stored.pending!.response).toBe('');
+      const turn = JSON.parse(await readFile(join(root, 'sessions', 'c.pending'), 'utf8'));
       expect(turn.response).toBe(child.pendingTurn.response);
     }
     resetHarnessStateCaches();
@@ -63,7 +68,7 @@ describe('a fork that shares its parent\'s history', () => {
     state.sessions.push(child);
     await writeState(state);
     await writeState(state);
-    expect((await raw('c')).transcriptRef).toBeDefined();
+    expect((await log('c')).messages).toEqual(child.messages);
 
     // Another process appends to the child meanwhile.
     const other = await readState();
@@ -75,9 +80,11 @@ describe('a fork that shares its parent\'s history', () => {
 
     // This one undoes the parent's last exchange: the child must not change.
     const parent = state.sessions.find((item) => item.id === 'p')!;
+    const childLog = await stat(join(root, 'sessions', 'c.jsonl'));
     parent.messages = parent.messages!.slice(0, 4);
     await writeState(state);
-    expect((await raw('c')).transcriptRef).toBeUndefined();
+    // The parent's rewrite never touches the child's file.
+    expect(await stat(join(root, 'sessions', 'c.jsonl'))).toMatchObject({ ino: childLog.ino, size: childLog.size, mtimeMs: childLog.mtimeMs });
 
     // And appends to the child from its own (older) copy.
     child.messages = [...child.messages!, { role: 'assistant', content: 'from here' }];

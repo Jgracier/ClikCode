@@ -4,8 +4,7 @@ import type { HarnessSession, TranscriptMessage } from '../session/model.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import { resetHarnessStateCaches } from '../session/state/index-file.js';
-import { sessionFilePath } from '../session/store/paths.js';
-import { loadSessionFile } from '../session/store/records.js';
+import { sessionFilePath, sessionLogPath } from '../session/store/paths.js';
 import { conversationGroups } from './conversations.js';
 import { conversationView, corpusBuilds, resetCorpusCache, sessionDoc } from './corpus.js';
 import { parseQuery, parseSince, recencyBoost, searchConversations, titleMatch } from './engine.js';
@@ -105,8 +104,8 @@ describe('searchConversations', () => {
     const shared = [user('the parrot protocol'), assistant('parrot protocol explained')];
     await store(chat('root', shared, { name: 'Old title', updatedAt: daysAgo(5), conversationId: 'root' }));
     await store(chat('fork', [...shared, user('more parrot protocol')], { name: 'New title', updatedAt: daysAgo(1), conversationId: 'root', parentSessionId: 'root' }));
-    // The fork is stored as a reference into its parent's history.
-    expect((await loadSessionFile('fork'))?.transcriptRef?.sessionId).toBe('root');
+    // The fork holds its own copy of the shared history (it used to be a reference into its parent's).
+    expect((await readFile(sessionLogPath('fork'), 'utf8')).split('\n').filter((line) => line.includes('"add"'))).toHaveLength(3);
     const result = (await searchConversations('parrot protocol', { now: NOW }))!;
     expect(result.hits).toHaveLength(1);
     const hit = result.hits[0]!;
@@ -230,14 +229,17 @@ describe('the transcript cache', () => {
   it('notices a change by mtime even at the same size', async () => {
     await store(chat('same-size', [user('alpha one')]));
     await sessionDoc('same-size');
-    const path = sessionFilePath('same-size');
+    // The chat's message log, edited in place (layout adapted 2026-10-20: it was `<id>.json`).
+    const path = sessionLogPath('same-size');
     await writeFile(path, (await readFile(path, 'utf8')).replace('alpha one', 'omega one'));
     const later = new Date(Date.now() + 5000);
     await utimes(path, later, later);
     expect((await sessionDoc('same-size'))!.messages[0]!.text).toBe('omega one');
   });
 
-  it('keys a fork on its parent file too', async () => {
+  it('keys a fork on its own files only: it holds its own copy', async () => {
+    // Adapted 2026-10-20: a fork was a reference into its parent's file, so the parent's file was
+    // part of its key. In the message log a fork holds its own copy and the parent's changes are not its.
     const shared = [user('alpha one'), assistant('beta two')];
     await store(chat('parent', shared, { conversationId: 'parent' }));
     await store(chat('child', [...shared, user('gamma')], { conversationId: 'parent', parentSessionId: 'parent' }));
@@ -246,8 +248,11 @@ describe('the transcript cache', () => {
     await sessionDoc('child');
     expect(corpusBuilds()).toBe(built);
     const later = new Date(Date.now() + 5000);
-    await utimes(sessionFilePath('parent'), later, later);
+    await utimes(sessionLogPath('parent'), later, later);
     expect((await sessionDoc('child'))!.messages.map((message) => message.text)).toEqual(['alpha one', 'beta two', 'gamma']);
+    expect(corpusBuilds()).toBe(built);
+    await utimes(sessionLogPath('child'), later, later);
+    await sessionDoc('child');
     expect(corpusBuilds()).toBe(built + 1);
   });
 });
