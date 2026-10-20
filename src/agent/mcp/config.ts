@@ -3,9 +3,10 @@
  * The source is `<state dir>/mcp.json`, in the same `{ "mcpServers": { … } }`
  * shape Cursor, Kimi and Claude's project file use. `clikcode mcp add` (and
  * the Tools picker) writes it here. These are the global servers: a vendor
- * harness does not read this file, but ACP sessions are handed them
- * (transport/acp-mcp-servers.ts) beside the servers the harness has of its
- * own. ClikCode never writes into a vendor's config.
+ * harness does not read this file, but every harness that takes servers per
+ * run is handed them -- ACP sessions, the Codex app-server launch, Amp's
+ * --mcp-config (harness/transport/acp-mcp-servers.ts) -- beside the servers
+ * the harness has of its own. ClikCode never writes into a vendor's config.
  *
  * The file is read, never assumed to be ClikCode's alone: a user may edit it by
  * hand, so the keys other tools write (`env`, `headers`, `type`, `disabled`)
