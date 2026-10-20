@@ -48,10 +48,6 @@ export function Composer(props: {
   const pastes = useRef(0);
   const history = useMemo(() => promptHistory(model.messages), [model.messages]);
   const connected = model.connection === 'ready' && Boolean(model.sessionId);
-  /** Sent while ClikCode was reconnecting or moving to a new build (a second
-   * or so): the message stays in the box and goes once the chat is ready. */
-  const [held, setHeld] = useState(false);
-
   const autosize = (): void => {
     const element = textarea.current;
     if (!element) return;
@@ -114,11 +110,11 @@ export function Composer(props: {
     // Enter again: nothing typed, a message already waiting. It goes into
     // the chat. The turn, and any sub-agent it started, keeps running.
     if (!text.trim() && !attachments.length && enterAgainReady(model)) { post({ type: 'send-queued' }); return; }
-    if (!text.trim() && !attachments.length) { setHeld(false); return; }
+    if (!text.trim() && !attachments.length) return;
     const message = composeMessage(text, attachments);
     if (!message) return;
-    if (!connected) { setHeld(true); return; }
-    setHeld(false);
+    // Not connected is the controller's to wait out (send awaits the start):
+    // the message is drawn at once and comes back as a draft if it fails.
     post({ type: 'send', text: message, id: uid() });
     recall.current = undefined;
     pastes.current = 0;
@@ -127,8 +123,6 @@ export function Composer(props: {
     save({ draft: '' });
     setSuggestions([]);
   };
-
-  useEffect(() => { if (connected && held) send(); }, [connected]);
 
   // Esc during a turn (stop, or deny a pending approval) is the page's
   // (main.tsx): it bubbles there unless the suggestions took it.
@@ -362,7 +356,7 @@ export function Composer(props: {
               disabled={!connected} onClick={send}><Icon name="debug-step-over" /></button>
           ) : !model.running || text.trim() ? (
             <button type="button" id="send-button" class="send" aria-label={model.running ? 'Send into the running turn' : 'Send (Enter)'}
-              title={held ? 'Sends once ClikCode is connected' : model.running ? 'Steer (Enter)' : 'Send (Enter)'} data-held={held ? 'true' : undefined}
+              title={model.running ? 'Steer (Enter)' : 'Send (Enter)'}
               disabled={!text.trim() && !attachments.length} onClick={send}><Icon name={model.running ? 'debug-step-into' : 'arrow-up'} /></button>
           ) : null}
         </div>

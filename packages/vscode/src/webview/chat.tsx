@@ -38,7 +38,6 @@ const History = memo(({ sessionId, messages, traces, notes, workspace, reveal }:
   // prompts are not the user's and get none).
   const promptNumbers = useMemo(() => new Map(userMessageIndexes(messages).map((at, position) => [at, position + 1])), [messages]);
   const [shown, setShown] = useState(WINDOW);
-  useEffect(() => { setShown(WINDOW); }, [sessionId]);
   // A message /search went to is drawn, however far back it is.
   useEffect(() => { if (reveal !== undefined && messages.length - reveal > shown) setShown(messages.length - reveal + WINDOW / 4); }, [reveal, messages.length]);
   const start = Math.max(0, messages.length - shown);
@@ -124,7 +123,7 @@ export function Transcript({ model, reveal }: { model: ChatModel; reveal?: numbe
   return (
     <Animating.Provider value={!reconnecting(model)}>
       <div class="transcript" role="log" aria-live="off" aria-relevant="additions">
-        <History sessionId={model.sessionId} messages={model.messages} traces={model.traces} notes={model.notes} workspace={model.workspace} reveal={reveal} />
+        <History key={model.sessionId ?? 'none'} sessionId={model.sessionId} messages={model.messages} traces={model.traces} notes={model.notes} workspace={model.workspace} reveal={reveal} />
         {parts}
         <FinalAnswer running={model.running} messages={model.messages} />
       </div>
