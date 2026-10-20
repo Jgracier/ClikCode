@@ -36,8 +36,8 @@ const VENDOR_WORK_RECHECK_MS = 30 * 1000;
  * agent) and the MCP servers it started are closed, even with a window
  * open -- they are most of a conversation's memory. The worker stays; the
  * next turn starts the vendor again and resumes its thread natively.
- * CLIKCODE_VENDOR_IDLE_CLOSE_MS overrides it for tests. */
-const VENDOR_IDLE_CLOSE_MS = Number(process.env.CLIKCODE_VENDOR_IDLE_CLOSE_MS) > 0 ? Number(process.env.CLIKCODE_VENDOR_IDLE_CLOSE_MS) : 15 * 60 * 1000;
+ */
+const VENDOR_IDLE_CLOSE_MS = 15 * 60 * 1000;
 
 /** What can hold a worker (heldReason). */
 const HELD = {

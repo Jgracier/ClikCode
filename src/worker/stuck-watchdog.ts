@@ -11,8 +11,7 @@
  * answer any window or finish any turn. The thread logs it and kills the
  * process -- the worker deciding about itself; nothing else ever does. A
  * conversation the worker owed something finds it gone and starts a new one,
- * as after any crash. CLIKCODE_WORKER_WATCHDOG=0 turns it off (a debugger
- * paused on the event loop looks exactly like this). */
+ * as after any crash. */
 import { Worker } from 'node:worker_threads';
 import { lifecycleLogPath } from '../runtime/lifecycle-log.js';
 
@@ -41,7 +40,6 @@ setInterval(() => {
 `;
 
 export function startStuckWatchdog(sessionId: string, options: { stuckMs?: number; beatMs?: number } = {}): (() => void) | undefined {
-  if (process.env.CLIKCODE_WORKER_WATCHDOG === '0') return undefined;
   const stuckMs = options.stuckMs ?? STUCK_MS;
   const beatMs = options.beatMs ?? BEAT_MS;
   const beats = new Int32Array(new SharedArrayBuffer(4));

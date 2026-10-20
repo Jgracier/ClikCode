@@ -12,7 +12,6 @@ export const hyperlinkOpen = (href: string): string => `\u001b]8;;${href}\u001b\
  * detected from inside it; CLIKCODE_HYPERLINKS=1 opts in there. */
 function hyperlinksSupported(environment: NodeJS.ProcessEnv = process.env, isTty = Boolean(process.stdout.isTTY)): boolean {
   const flag = (value: string | undefined): boolean => value !== undefined && value !== '' && value !== '0' && value.toLowerCase() !== 'false';
-  if (flag(environment.CLIKCODE_NO_HYPERLINKS)) return false;
   if (!isTty || (environment.TERM ?? '').toLowerCase() === 'dumb') return false;
   if (flag(environment.CLIKCODE_HYPERLINKS) || flag(environment.FORCE_HYPERLINK)) return true;
   if (environment.TMUX || environment.STY || /^(?:screen|tmux)/.test(environment.TERM ?? '')) return false;

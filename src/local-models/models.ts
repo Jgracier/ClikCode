@@ -1,7 +1,7 @@
 /** Getting a catalog model's files onto this machine.
  *
  * A model already on disk elsewhere -- fetched by hand or by another tool
- * into ~/Models, or a directory listed in CLIKCODE_LOCAL_MODEL_DIRS -- is
+ * into ~/Models -- is
  * adopted instead of downloaded again: a file with the same name and size
  * is hashed, and only an exact SHA-256 match is used, hard-linked into
  * ClikCode's store (copied when it is on another disk). Anything else is
@@ -9,7 +9,7 @@
 
 import { copyFile, link, mkdir, readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { delimiter, dirname, join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { CatalogFile } from './catalog.js';
 import { checkDiskSpace, downloadVerified, formatBytes, isDownloaded, sha256File } from './download.js';
 import { modelsDir } from './paths.js';
@@ -23,8 +23,7 @@ function huggingFaceUrl(file: CatalogFile): string {
 }
 
 function adoptionDirs(): string[] {
-  const configured = (process.env.CLIKCODE_LOCAL_MODEL_DIRS ?? '').split(delimiter).filter(Boolean);
-  return [...configured, join(homedir(), 'Models')];
+  return [join(homedir(), 'Models')];
 }
 
 async function findBySizeAndName(directory: string, name: string, size: number, depth: number): Promise<string[]> {
