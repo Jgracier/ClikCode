@@ -244,14 +244,33 @@ describe('a build that predates the log', () => {
     expect(contents(after.messages)).toEqual([...contents(said(6)), 'new 1', 'after the old undo']);
   });
 
-  it('deleted its copy: the chat here is not touched', async () => {
+  it('deleted its copy: the chat here is not touched, and its copy written back later adds only what is new', async () => {
     await home();
     await legacyChat('gone', { messages: said(2) });
     await appendHere('gone', { role: 'user', content: 'new' });
+    const copy = await readFile(path('gone.json'), 'utf8');
     await rm(path('gone.json'));
     expect(contents((await stored('gone')).messages)).toEqual([...contents(said(2)), 'new']);
     await appendHere('gone', { role: 'user', content: 'again' });
     expect(contents((await stored('gone')).messages)).toEqual([...contents(said(2)), 'new', 'again']);
+    // That build still held the chat, and stores it back with one more message.
+    const file = JSON.parse(copy);
+    file.messages.push({ role: 'user', content: 'from the old copy' });
+    await writeFile(path('gone.json'), JSON.stringify(file));
+    expect(contents((await stored('gone')).messages)).toEqual([...contents(said(2)), 'new', 'again', 'from the old copy']);
+  });
+
+  it('migration does not make <id>.json look changed afterwards (its second name is not a write)', async () => {
+    await home();
+    await legacyChat('quiet', { messages: said(4) });
+    await appendHere('quiet', { role: 'user', content: 'new' });
+    const log = parseChatLog(await readFile(path('quiet.jsonl'), 'utf8'));
+    await appendHere('quiet', { role: 'user', content: 'newer' });
+    const after = (await readFile(path('quiet.jsonl'), 'utf8')).split('\n').filter(Boolean);
+    // Header, the legacy record, four messages, then exactly the two appends: no intake record.
+    expect(after.filter((line) => line.includes('"legacy"'))).toHaveLength(1);
+    expect(after).toHaveLength(2 + 4 + 2);
+    expect(log.legacy?.count).toBe(4);
   });
 });
 
