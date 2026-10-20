@@ -24,7 +24,7 @@ export function agentsReport(running: readonly AgentSummary[], others: readonly 
   ].join('\n\n');
 }
 
-export function stopConfirmation(targets: readonly AgentSummary[]): string {
+function stopConfirmation(targets: readonly AgentSummary[]): string {
   return `This would stop ${targets.length} running agent${targets.length === 1 ? '' : 's'}: ${targets.map((agent) => `${agent.id} (${agent.label})`).join(', ')}. Their work so far is committed to their branches. Confirm with: /agents stop ${targets.length === 1 ? targets[0]!.id : 'all'} confirm`;
 }
 

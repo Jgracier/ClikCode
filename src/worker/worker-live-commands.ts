@@ -22,12 +22,12 @@ const HARD_STOP_AFTER_MS = 8000;
 const STOP_CONFIRM_WINDOW_MS = 30_000;
 
 /** A Stop that is the user's own plain key. A script's abort signal or a programmatic stop is a decision already made. */
-export function stopHoldsForAgents(command: { origin?: CancelOrigin }): boolean {
+function stopHoldsForAgents(command: { origin?: CancelOrigin }): boolean {
   const trigger = command.origin?.trigger;
   return trigger === undefined || trigger === 'esc' || trigger === 'ctrl-c' || trigger === 'editor-stop';
 }
 
-export function subAgentStopNote(labels: readonly string[]): string {
+function subAgentStopNote(labels: readonly string[]): string {
   const named = labels.slice(0, 4).map((label) => `"${label.slice(0, 50)}"`).join(', ') + (labels.length > 4 ? ` and ${labels.length - 4} more` : '');
   return `Stop held: ${labels.length} sub-agent${labels.length === 1 ? ' is' : 's are'} running (${named}), and stopping the turn would end ${labels.length === 1 ? 'it' : 'them'}. Press Esc or Ctrl+C again within 30s to stop anyway; otherwise nothing was interrupted. Messages you type still steer.`;
 }

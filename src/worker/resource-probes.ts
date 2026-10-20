@@ -19,7 +19,7 @@ import { AGENT_GROUP, bestLabel, COMMAND_GROUP, commandLabel, findCommands, grou
 import { WORKER_PID_ENV } from './own-scope.js';
 
 /** How a unit is stopped: its cgroup, or its process tree. */
-export type StopTarget = { cgroup: string } | { pids: number[]; root: number; command: string; startedAt?: string };
+type StopTarget = { cgroup: string } | { pids: number[]; root: number; command: string; startedAt?: string };
 
 /** Something that can be stopped, as its probe accounts it. */
 export interface Unit {
@@ -65,7 +65,7 @@ const isWorker = (command: string | undefined): boolean => !!command && /\ssessi
 // --- Linux: cgroups ------------------------------------------------------------
 
 /** Every agent in the slice stalled on memory this much of the last 10 s: critical. */
-export const STALL_CRITICAL_PERCENT = 10;
+const STALL_CRITICAL_PERCENT = 10;
 
 function readNumber(path: string): number | undefined {
   try {
@@ -96,7 +96,7 @@ export function cgroupFreeable(dir: string): number {
   return Math.max(chargedHere, residentProcesses);
 }
 
-export function sampleSlice(sliceDir: string): MemorySample | undefined {
+function sampleSlice(sliceDir: string): MemorySample | undefined {
   try {
     const meminfo = readFileSync('/proc/meminfo', 'utf8');
     const field = (name: string): number => Number(new RegExp(`^${name}:\\s+(\\d+)`, 'm').exec(meminfo)?.[1] ?? 0) * 1024;
@@ -225,7 +225,7 @@ function windowsStartedAt(value: unknown): string | undefined {
   return Number.isFinite(Date.parse(value)) ? value : undefined;
 }
 
-export async function readProcessTable(platform: NodeJS.Platform = process.platform): Promise<TableEntry[]> {
+async function readProcessTable(platform: NodeJS.Platform = process.platform): Promise<TableEntry[]> {
   try {
     const command = platform === 'win32' ? 'powershell.exe' : 'ps';
     const args = platform === 'win32'

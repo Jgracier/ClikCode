@@ -443,7 +443,7 @@ export function captureStdout(channel: IdeChannel, stream: NodeJS.WriteStream = 
   }) as NodeJS.WriteStream['write'];
 }
 
-export function ideInstallReporter(channel: IdeChannel): HarnessInstallReporter {
+function ideInstallReporter(channel: IdeChannel): HarnessInstallReporter {
   return {
     start: (label) => channel.send({ type: 'busy', label }),
     done: () => channel.send({ type: 'busy' }),

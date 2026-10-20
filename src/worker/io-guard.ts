@@ -19,7 +19,7 @@ const STOP_AFTER_MS = 20_000;
 const STOP_COOLDOWN_MS = 60_000;
 const SETTLE_MS = 30_000;
 
-export type IoCounters = Map<string, { bytes: number; operations: number }>;
+type IoCounters = Map<string, { bytes: number; operations: number }>;
 export function parseIoStat(value: string): IoCounters {
   const result: IoCounters = new Map();
   for (const line of value.split('\n')) {
@@ -48,14 +48,14 @@ export function ioPressure(text: string): number | undefined {
   const value = Number(/^full\s+avg10=([\d.]+)/m.exec(text)?.[1]);
   return Number.isFinite(value) ? value : undefined;
 }
-export function ioSomePressure(text: string): number | undefined {
+function ioSomePressure(text: string): number | undefined {
   const value = Number(/^some\s+avg10=([\d.]+)/m.exec(text)?.[1]);
   return Number.isFinite(value) ? value : undefined;
 }
 
-export interface CommandReading { path: string; label: string; identity: string; counters: IoCounters; stalled: number }
+interface CommandReading { path: string; label: string; identity: string; counters: IoCounters; stalled: number }
 export interface Reading { pressure: number; machine: IoCounters; commands: CommandReading[]; at: number }
-export interface Candidate { command: CommandReading; device: string; bytesPerSecond: number; operationsPerSecond: number; machineShare: number }
+interface Candidate { command: CommandReading; device: string; bytesPerSecond: number; operationsPerSecond: number; machineShare: number }
 
 /** Require an owned command to account for most physical I/O on its device.
  * This prevents killing a command that is only waiting on an external Docker
@@ -146,7 +146,7 @@ const gbps = (bytesPerSecond: number): string => `${(bytesPerSecond / MIB).toFix
 export function ioNudge(candidate: Candidate, pressure: number): string {
   return `Disk I/O is stalling the machine (${pressure.toFixed(0)}% full stall time). Your \`${candidate.command.label}\` is issuing about ${gbps(candidate.bytesPerSecond)} on the busy device. Reduce parallel builds or use a smaller run until I/O recovers.`;
 }
-export function ioGlobalNudge(pressure: number): string {
+function ioGlobalNudge(pressure: number): string {
   return `Disk I/O is stalling the machine (${pressure.toFixed(0)}% full stall time). ClikCode has not identified your command as the cause. Avoid starting more disk-heavy builds until the current work clears.`;
 }
 export function ioStopNote(candidate: Candidate, pressure: number): string {

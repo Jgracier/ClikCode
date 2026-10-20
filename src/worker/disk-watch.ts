@@ -56,7 +56,7 @@ export function diskNote(level: 'tight' | 'critical', reading: DiskReading, hasD
     : `Disk is getting tight: ${where}. Before starting more large builds, downloads or image pulls, free space: delete build output, caches and temp files you created${docker}.`;
 }
 
-export function readDisk(path: string): DiskReading | undefined {
+function readDisk(path: string): DiskReading | undefined {
   try {
     const stat = statfsSync(path);
     const size = Number(stat.bsize);

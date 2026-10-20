@@ -21,7 +21,7 @@ const AGENT_WIND_DOWN_MS = 30_000;
 /** Per step (out-of-turn settle, vendor close, language servers) before shutdown moves on. */
 const STEP_MS = 15_000;
 /** The whole shutdown: past this it exits whatever is still pending. */
-export const SHUTDOWN_CEILING_MS = 90_000;
+const SHUTDOWN_CEILING_MS = 90_000;
 
 /** Runs one shutdown step for at most `ms`: a step that throws or hangs is
  * logged (lifecycle `worker.shutdown.stalled`, naming it) and shutdown goes on. */

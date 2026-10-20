@@ -16,7 +16,7 @@ import { Worker } from 'node:worker_threads';
 import { lifecycleLogPath } from '../runtime/lifecycle-log.js';
 
 const BEAT_MS = 5_000;
-export const STUCK_MS = 3 * 60_000;
+const STUCK_MS = 3 * 60_000;
 
 /** The thread: plain JavaScript, run from this string, so it needs nothing from the bundle. */
 export const WATCHDOG_THREAD = `

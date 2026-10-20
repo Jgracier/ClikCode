@@ -18,7 +18,7 @@ export function isLimitRefusal(text: string): boolean {
 
 /** Quiet this long after the last chunk and the message is over: it is saved, and the windows'
  * live view of it ends. The vendor sends no end-of-message for text said outside a turn. */
-export const OUT_OF_TURN_SETTLE_MS = 1_500;
+const OUT_OF_TURN_SETTLE_MS = 1_500;
 
 export interface OutOfTurn {
   relay: OutOfTurnRelay;
