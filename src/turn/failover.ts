@@ -75,32 +75,15 @@ const AUTH_TEXT = /(?:not authenticated|authentication (?:is )?(?:required|faile
 // expired", "Quota exceeded ... Please sign in to Google AI Studio" -- so
 // these are read only once the quota wording has had its say.
 const AUTH_LOOSE_TEXT = /(?:has expired\b|\bsign (?:in|up) (?:to|or) |please (?:log|sign) ?in)/i;
-// Both halves of "ran out" matter, because vendors write it either way
-// round. Captured verbatim from real refusals on this machine:
-//   antigravity  'RESOURCE_EXHAUSTED (code 429): Individual quota reached.
-//                 ... Resets in 76h57m39s.'
-//   copilot      'You have exceeded your monthly quota'
-// Neither matched before: the first says "quota reached" where the pattern
-// wanted exceeded/exhausted, and the second puts the verb BEFORE the noun.
-// Both were therefore classified 'other' and shown as "account failed …
-// retrying", which is how a spent plan came to read like a crash.
-// 'spend limit' is Command Code's own wording, confirmed from the CLI's own
-// installed dist (command-code@1.62.1, the status label constant
-// SPEND_LIMIT_REACHED: "Spend limit reached"). It names a configured spend
-// cap rather than a usage/plan/quota window, so it did not match the
-// existing "…limit" alternation, which only covers usage/session/plan/
-// weekly/monthly/daily.
-// Cursor's own error codes (cursor-agent 2026.09.26's ErrorDetails enum):
-// FREE_USER_USAGE_LIMIT / PRO_USER_USAGE_LIMIT / USAGE_PRICING_REQUIRED for a
-// spent plan, *_RATE_LIMIT_EXCEEDED and RATE_LIMITED for throttling.
-// "Upgrade your plan/account to continue" is Cursor's ActionRequiredError
-// action `upgrade` (cursor-agent 2026.09.26): it is written into the chat as
-// an agent_message_chunk, not as a structured error code. Same for "Add a
-// payment method to continue" (action `payment`).
-// A limit counts only with the verb that says it was reached, on either side
-// of the noun: "used 80% of your weekly limit", "the plan limit for file
-// uploads is 10MB" and "exceeded the session limit of 200 tool calls" name a
-// limit, not a spent account.
+/** A spent plan, account or credit balance, in the wordings real refusals use. Notes that still
+ * decide matches:
+ * - "ran out" is written either way round ("quota reached", "exceeded your monthly quota").
+ * - Cursor's codes (FREE_/PRO_USER_USAGE_LIMIT, USAGE_PRICING_REQUIRED) and its chat-text actions
+ *   ("Upgrade your plan to continue", "Add a payment method to continue"); Command Code's
+ *   "Spend limit reached".
+ * - A limit counts only with the verb that says it was reached: "used 80% of your weekly limit",
+ *   "the plan limit for file uploads is 10MB" and "exceeded the session limit of 200 tool calls"
+ *   name a limit, not a spent account. */
 const QUOTA_TEXT = /(?:\b(?:FREE|PRO)_USER_USAGE_LIMIT\b|\bUSAGE_PRICING_REQUIRED|\bPROMOTION_MODEL_LIMIT_REACHED\b|UsageLimitError\b|quota (?:has been |is )?(?:exceeded|exhausted|reached|used up)|quota\b[^.\n]{0,40}\bused up|quota to reset|(?:weekly|monthly|daily|\d+-?hour) (?:\w+ )?limit (?:has been )?reached|\bacu limit|usage (?:limit )?exceeded|usage (?:is )?(?:paused|frozen)|paused usage|insufficient[_ ](?:\w+ )?(?:balance|funds|credits?)|not enough credits|no credits|credits? (?:is |are )?(?:exhausted|depleted)|billing (?:issue|error)|exceeded (?:your |the )?(?:\w+ ){0,3}quota|resource[_ ]exhausted|insufficient[_ ]quota|(?:usage|session|plan|weekly|monthly|daily|spend|request) limit (?:has been |was |is )?(?:reached|exceeded|hit)\b|\b(?:reached|hit|exceeded) (?:your|the|its) (?:[\w-]+ ){0,2}(?:usage|session|plan|weekly|monthly|daily|spend|request) limit\b(?! of \d)|usage is at (?:its|your|the) (?:\w+ )?limit\b|you(?:'ve| have) hit your limit|(?:free )?trial (?:has )?(?:expired|ended)|credits? exhausted|(?:ran|run) out of (?:usage|quota)|out of credits|(?:add|buy|purchase) (?:more )?credits|insufficient credits|billing (?:hard )?limit|payment required|(?:balance|funds|credit) (?:is )?(?:exhausted|depleted)|insufficient (?:balance|funds|credit)|upgrade your (?:plan|account) to continue|add a payment method to continue)/i;
 /** A request too big for the model's window: it says "exceeded" and "limit"
  *  as a refusal does, and no other account would take it either. */
@@ -178,12 +161,17 @@ export function accountFailureReason(kind: AccountFailureKind): string {
  * text (mixed error text can otherwise surface a doc/help link ahead of the
  * actual verification step). */
 export function accountVerification(error: unknown): { url?: string } | undefined {
-  const carried = (error ?? {}) as { stderrTail?: unknown; message?: unknown };
-  const text = [carried.stderrTail, carried.message].filter((part): part is string => typeof part === 'string').join('\n');
+  const text = carriedErrorText(error);
   if (!INELIGIBLE_TEXT.test(text)) return undefined;
   const urls = [...text.matchAll(/https:\/\/[^\s"')]+/g)].map((match) => match[0]);
   const url = urls.find((candidate) => /^https:\/\/accounts\.google\.com\//.test(candidate)) ?? urls[0];
   return url ? { url } : {};
+}
+
+/** A failure's vendor diagnostics and message, joined: what the hints below read. */
+function carriedErrorText(error: unknown): string {
+  const carried = (error ?? {}) as { stderrTail?: unknown; message?: unknown };
+  return [carried.stderrTail, carried.message].filter((part): part is string => typeof part === 'string').join('\n');
 }
 
 const DURATION_UNIT_MS: Record<string, number> = { d: 86_400_000, h: 3_600_000, m: 60_000, s: 1_000 };
@@ -198,8 +186,7 @@ const DURATION_UNIT_MS: Record<string, number> = { d: 86_400_000, h: 3_600_000, 
  * earliest it can mean, so an account is at worst tried early and refused
  * again -- never parked for a day it did not need. */
 export function quotaRetryHint(error: unknown, now: number = Date.now()): string | undefined {
-  const carried = (error ?? {}) as { stderrTail?: unknown; message?: unknown };
-  const text = [carried.stderrTail, carried.message].filter((part): part is string => typeof part === 'string').join('\n');
+  const text = carriedErrorText(error);
   const phrase = /(?:resets?|try again|retry(?: again)?)\s+(?:in|after)\s+((?:\d+(?:\.\d+)?\s*(?:days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)(?![a-z])[\s,]*(?:and\s+)?)+)/i.exec(text)?.[1];
   if (phrase) {
     let total = 0;
@@ -226,8 +213,7 @@ export function quotaRetryHint(error: unknown, now: number = Date.now()): string
  * window"), in milliseconds. That is not a reset instant — see
  * quotaRetryHint, which parks the account for the whole window as a last resort. */
 export function quotaRollingWindowMs(error: unknown): number | undefined {
-  const carried = (error ?? {}) as { stderrTail?: unknown; message?: unknown };
-  const text = [carried.stderrTail, carried.message].filter((part): part is string => typeof part === 'string').join('\n');
+  const text = carriedErrorText(error);
   const hours = Number(/rolling (\d+)[- ]hour window/i.exec(text)?.[1]);
   return hours > 0 ? hours * 3_600_000 : undefined;
 }
