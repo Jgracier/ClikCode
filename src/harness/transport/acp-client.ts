@@ -509,6 +509,10 @@ interface LiveAgent {
   /** A prompt of this process was cancelled: the agent may still be unwinding
    * it when the next prompt arrives (see vendorBusyNotice). */
   cancelled?: boolean;
+  /** A session/new that finished after its turn was cancelled (interrupt): open
+   * here and never handed to the conversation, so the next new conversation on
+   * this child takes it rather than opening another. */
+  unclaimed?: string;
 }
 
 /** A message typed during the turn, waiting for a moment it can be steered
@@ -561,6 +565,10 @@ interface ActiveTurn extends Stream {
   done: boolean;
   sessionId?: string;
   prompt?: Promise<unknown>;
+  /** The turn's flow, from setup to answer. */
+  flowing?: Promise<unknown>;
+  /** Cancelled mid-setup: the setup finishes in the background (interrupt). */
+  setupContinues?: boolean;
   fail: (error: Error) => void;
   /** Messages waiting to be steered in, oldest first. */
   held: HeldSteer[];
@@ -638,7 +646,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     // What already runs (a terminal an earlier turn started) is the new
     // turn's indicator from its first frame.
     if (this.backgroundLevel) input.onBackgroundWork?.(this.fullLevel());
-    return this.runActive(turn, input.signal, failure, () => this.flow(turn, argv).catch((error: unknown) => {
+    return this.runActive(turn, input.signal, failure, () => turn.flowing = this.flow(turn, argv).catch((error: unknown) => {
       if (!(error as { acpStaleTurn?: boolean } | null)?.acpStaleTurn || turn.done) throw error;
       // The prompt went to the cancelled turn's process, which is gone now:
       // the same prompt, once, on a fresh process that resumes the session.
@@ -659,7 +667,8 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       ended: () => {
         input.onSteerReady?.(undefined);
         this.releaseSteers(turn);
-        this.live?.peer.rejectPending(new Error(`${input.command} ACP turn ended`), (method) => method !== 'session/prompt');
+        // A setup left to finish (interrupt) keeps its requests.
+        if (!turn.setupContinues) this.live?.peer.rejectPending(new Error(`${input.command} ACP turn ended`), (method) => method !== 'session/prompt');
         // An unsettled tool call belongs to the still-live vendor, even
         // after its parent request ends. Route its later events into the
         // worker's background turn and keep the process alive until it ends.
@@ -708,7 +717,17 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
 
   protected interrupt(turn: ActiveTurn, live: LiveAgent): boolean {
     const prompt = turn.prompt;
-    if (!prompt || !turn.sessionId) return false;
+    if (!prompt || !turn.sessionId) {
+      // Mid-setup (a cold start, a multi-minute session/load): only the turn is
+      // cancelled. The setup finishes on this child in the background, bounded
+      // by its idle window, and the next turn starts where it ended instead of
+      // loading the thread again on a new child. A turn cancelled while it was
+      // still waiting on such a setup (Esc again) gives up on the child.
+      if (!turn.flowing) return !this.setupSettling;
+      turn.setupContinues = true;
+      this.settleSetup(turn.flowing);
+      return true;
+    }
     // The agent answers the prompt with stopReason `cancelled` once it has
     // unwound. Give it two seconds so the session stays resumable.
     live.peer.notify('session/cancel', { sessionId: turn.sessionId });
@@ -816,7 +835,8 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     // every session it was given until told otherwise -- claude-agent-acp runs a whole Claude CLI
     // (and its MCP servers) per session: MEASURED 2026-10-10, one worker held five of them, each
     // with a full set of MCP servers, after its conversation's thread moved between accounts.
-    if (live.sessionId && live.sessionId !== wanted && capabilities.sessionCapabilities?.close) {
+    const unclaimed = !wanted && live.unclaimed !== undefined && live.unclaimed === live.sessionId;
+    if (live.sessionId && live.sessionId !== wanted && !unclaimed && capabilities.sessionCapabilities?.close) {
       const previous = live.sessionId;
       live.sessionId = undefined;
       // fail-open-ok: the agent ending it already, or not knowing it, leaves nothing to close.
@@ -838,26 +858,32 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
         } catch (error) {
           throw markMissingThread(error, wanted);
         }
-        stillRunning();
+        // Recorded before the turn's own check: a load finished after Esc is
+        // this child's, and the next turn starts on it.
         live.sessionId = wanted;
         live.models = loaded?.models ?? { configOptions: loaded?.configOptions };
         live.modes = loaded?.modes;
         live.configOptions = loaded?.configOptions;
         if (loaded) input.onSessionModels?.(loaded, false);
+        stillRunning();
       }
       turn.sessionId = wanted;
+    } else if (unclaimed) {
+      turn.sessionId = live.sessionId;
     } else {
       this.sessionTotals = {};
       this.costStartUnknown = false;
       const started = await waitOnStart(call('session/new', sessionParams, setup));
-      stillRunning();
       const sessionId = String(started.sessionId ?? '');
       if (!sessionId) throw new Error(`${input.command} ACP did not return a session id`);
+      // Recorded before the turn's own check, as a load is.
       live.sessionId = sessionId;
+      live.unclaimed = sessionId;
       live.models = started.models ?? { configOptions: started.configOptions };
       live.modes = started.modes;
       live.configOptions = started.configOptions;
       input.onSessionModels?.(started, true);
+      stillRunning();
       turn.sessionId = sessionId;
     }
     // Agents that publish a model list take the choice over the protocol; a
@@ -944,6 +970,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       throw Object.assign(new Error(`${input.command} ACP does not offer effort control`), { acpUnsupportedEffort: true });
     }
     this.sessionId = turn.sessionId;
+    if (live.unclaimed === turn.sessionId) live.unclaimed = undefined;
     if (!wanted) await input.onSessionId?.(turn.sessionId);
     stillRunning();
     if (input.prepareOnly) {

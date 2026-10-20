@@ -292,6 +292,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     if (this.turn) this.cancelTurn(this.turn);
     this.finishBackground('closed');
     this.clearPending();
+    this.releaseSetup?.();
     if (this.settling) await this.settling;
     const live = this.live;
     this.live = undefined;
@@ -320,7 +321,8 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     let succeeded = false;
     try {
       if (this.settling) await this.settling;
-      if (signal?.aborted) throw turnCancelledError();
+      // Cancelled while it waited: nothing of it may start now.
+      if (signal?.aborted || turn.done) throw turnCancelledError();
       const running = flow();
       running.catch(() => undefined);
       const result = await Promise.race([running, failure]);
@@ -346,7 +348,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     this.closePrompts();
     const live = this.live;
     const error = turnCancelledError();
-    // Mid-setup there is nothing to cancel politely.
+    // False: nothing can be asked of the vendor, and the child goes.
     if (live && !this.interrupt(turn, live)) this.dropLive(error);
     turn.fail(error);
   }
@@ -358,6 +360,27 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
       const timer = setTimeout(() => { onTimeout?.(); if (this.live === live) this.dropLive(turnCancelledError()); resolve(); }, CANCEL_SETTLE_MS);
       wait(() => { clearTimeout(timer); resolve(); });
     }).finally(() => { this.settling = undefined; });
+  }
+
+  /** Ends the wait on a setup let finish in the background (settleSetup). */
+  private releaseSetup?: () => void;
+
+  /** Whether a cancelled turn's setup is still finishing in the background. */
+  protected get setupSettling(): boolean { return Boolean(this.releaseSetup); }
+
+  /** A turn cancelled mid-setup: the setup it started (`setup`, its flow) is left
+   * to finish on the live child -- a multi-minute session load is not thrown away
+   * with the child -- and the next turn waits for it, then starts where it ended.
+   * Bounded by the setup's own idle window; close() stops waiting at once. */
+  protected settleSetup(setup: Promise<unknown>): void {
+    let release!: () => void;
+    const settled = new Promise<void>((resolve) => { release = resolve; void setup.then(resolve, resolve); });
+    this.releaseSetup = release;
+    const settling: Promise<void> = settled.finally(() => {
+      if (this.releaseSetup === release) this.releaseSetup = undefined;
+      if (this.settling === settling) this.settling = undefined;
+    });
+    this.settling = settling;
   }
 
   /** Children this session let go of itself: their exit is not the current turn's failure. */
