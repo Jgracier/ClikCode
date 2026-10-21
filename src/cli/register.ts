@@ -4,7 +4,7 @@
  * The `gateway` group is the only part that talks to a remote platform.
  */
 import { untilStopped } from './stop-signal.js';
-import type { Command } from 'commander';
+import { Option, type Command } from 'commander';
 import type Conf from 'conf';
 
 /** A command's handler, loaded when the command runs: `clikcode --version`
@@ -40,6 +40,17 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
       : (await import('../ide/bridge.js')).runIdeBridge(config)));
   // What ClikCode Remote reads of an installation it made: version, commit, installation id.
   program.command('remote-info', { hidden: true }).action(async () => (await import('../remote/info.js')).printRemoteInfo());
+  // /update from a shell: this machine's ClikCode, the way it was installed.
+  // `--entry`: read the install from that entry instead of this one (an
+  // editor updating the ClikCode it runs; tests).
+  program.command('update [commit]').description('Update this machine\'s ClikCode the way it was installed (a commit: ClikCode Remote installs only)')
+    .addOption(new Option('--entry <path>').hideHelp())
+    .action(async (commit: string | undefined, options: { entry?: string }) => {
+      const { parseCommitArgument, updateThisMachine } = await import('../remote/self-update.js');
+      const target = parseCommitArgument(commit ?? '');
+      const result = await updateThisMachine({ ...(target ? { commit: target } : {}), ...(options.entry ? { entry: options.entry } : {}), line: (text) => process.stdout.write(`${text}\n`) });
+      process.stdout.write(`${result.text}\n`);
+    });
   program.command('ide-terminal <spec>', { hidden: true }).action(async (spec: string) => (await import('../ide/terminal.js')).runIdeTerminal(spec));
   // The search /search runs, from a shell: the same engine and ranking.
   program.command('search <words...>').description('Find the conversations that mention something, any provider, most mentions first (--json: each hit and its first mention)')

@@ -248,8 +248,8 @@ a time in your chat:
    against the published `SHASUMS256.txt` (no sudo);
 3. git: required — without it the install stops and says how to get it
    (`xcode-select --install` on macOS, the package manager on Linux);
-4. a shallow clone into `~/.local/share/clikcode/src` (or a fetch and reset of
-   that clone; one with local changes is left alone);
+4. a shallow clone into `~/.local/share/clikcode/src` (or a fetch and hard
+   reset of that clone: the directory is ClikCode's own);
 5. `pnpm install --frozen-lockfile` and `pnpm run install-local`, which links
    `~/.local/bin/clikcode`;
 6. the new `~/.local/bin/clikcode` asked for its version and installation id.
@@ -260,12 +260,27 @@ Nothing is copied from this machine — no accounts, sign-ins or settings: the
 other machine signs in to its providers from scratch, in its own chats.
 Windows machines are listed but not supported yet.
 
-Choosing an added machine offers **Update ClikCode** (offered as "needs
-update" when it runs another commit than this one) and **Remove**: forget it
+A machine is kept at this machine's build: when it runs another commit, the
+board updates it to this build's commit in the background (fetched by sha,
+built, installed), once per machine per commit, and its chats switch to the
+new build only once they are quiet — never mid-turn. A failed update is shown
+("update failed") and not retried in a loop. A build with no commit of its own
+(the npm package) updates nothing by itself.
+
+Choosing an added machine offers **Update ClikCode** (to this build's
+commit), **Updates: automatic / ask first** (ask first: it is shown as "needs
+update" and updated only when you say so) and **Remove**: forget it
 here, and optionally uninstall it there (`~/.local/share/clikcode` and the
 `~/.local/bin/clikcode` link) — its own chats and accounts in `~/.clikcode`
 are deleted only if you choose that too. The machines are kept in
 `~/.clikcode/remote/machines.json`.
+
+`/update [commit]` updates ClikCode on the machine the chat runs on — in a
+chat on another machine, that machine. A ClikCode Remote install is reset to
+GitHub `main` (or the commit) and rebuilt; the npm package runs
+`npm install -g clikcode@latest`; a developer checkout is left alone, and
+`/update` says what to run in it. `clikcode update` does the same from a
+shell.
 
 ## Moving a conversation to another tool
 
@@ -316,6 +331,7 @@ when you would rather type than pick.
 | --- | --- |
 | `clikcode` | Open (or resume) the default interactive session |
 | `clikcode doctor` | Which tools are installed, their versions and what each can do |
+| `clikcode update [commit]` | Update this machine's ClikCode the way it was installed |
 | `clikcode accounts providers` | Every supported tool and how it signs in |
 | `clikcode accounts login <tool> [--label <label>]` | Run that tool's own login, kept separate from your others |
 | `clikcode accounts list` / `status` / `logout` / `remove` | Your accounts: what they are called, and what is left on each |
@@ -345,7 +361,7 @@ and `--debug` adds the stack and HTTP detail when something fails.
 Most of the time you will not type any of those. You will be in a session,
 where everything is a slash away.
 
-Pressing `/` opens a searchable list of ClikCode's 46 commands. Ten are pinned
+Pressing `/` opens a searchable list of ClikCode's 47 commands. Ten are pinned
 at the top, in the order people reach for them: resume a conversation, pick a
 tool, an account on it, then its model, start over, change what needs your
 approval, then settings, sessions, status and help. (The terminal leaves
@@ -454,6 +470,7 @@ Command Code and Auggie get it as their own option.
 | `/context` | how much of the model's context this conversation is using |
 | `/usage [all]` (also `/cost`) | quota, tokens, and cost for the provider you are in, and this chat; `all` for every provider and the last seven days |
 | `/doctor` | check your installed tools and accounts |
+| `/update [commit]` | update ClikCode on the machine this chat runs on ([ClikCode Remote](#your-other-machines-clikcode-remote)) |
 | `/help` | all commands |
 
 A command that doesn't apply right now — no provider chosen yet, or a

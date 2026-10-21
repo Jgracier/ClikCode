@@ -66,6 +66,9 @@ export function createSlashHost(host: BridgeHost, turns: Pick<BridgeTurns, 'with
     runManager: (harness, label, argv, environment) =>
       host.runInTerminal({ command: harness.command, mode: 'run', argv }, { environment, name: `${harness.displayName} ${label}` }),
     exported: (path) => host.channel.send({ type: 'open-file', path }),
+    // Each step of /update, as the chat's own notice (in a terminal client
+    // of a chat on this machine too: remote/terminal-chat.ts shows them).
+    line: (text) => host.channel.send({ type: 'notice', message: text, level: 'info' }),
     // The terminal's walk, where the editor can show it.
     ...(host.features.has('search-walk') ? {
       browseSearch: (query: string) => browseSearch(searchScreen(host), query, (label, work) => turns.withBusy(label, work)),

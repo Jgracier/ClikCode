@@ -37,6 +37,8 @@ import { interactiveToolsPicker } from '../pickers/tools.js';
 import { interactiveSettingsPicker } from '../pickers/settings.js';
 import { doctorSummary } from '../doctor-summary.js';
 import { interactiveRemotePicker } from '../pickers/remote.js';
+import { parseCommitArgument, updateThisMachine } from '../../remote/self-update.js';
+import { localMachineName } from '../../remote/board-rows.js';
 import { emitHarnessOutput } from '../../harness/output.js';
 import { sendModeOf, SEND_MODE_DETAIL, SEND_MODES } from '../../turn/send-mode.js';
 import { aiSessionCommand, lastAnswer, slashRouteTurn } from './handlers.js';
@@ -102,6 +104,9 @@ export interface SlashHost {
   exported?(path: string): void;
   /** A file attached by naming it: the attachments now queued. */
   attached?(attachments: readonly string[]): void;
+  /** A progress line in the chat (each step of /remote's install, of
+   * /update). Absent: the prompter's activity line, else an output record. */
+  line?(text: string): void;
   /** The client's own answer to a command, before the shared handlers: a
    * command it replaced, or its own list. Undefined to carry on. */
   intercept?(route: CommandRoute, session: HarnessSession, harness: AiLocalHarnessDefinition | undefined): Promise<InteractiveSlashOutcome | undefined> | InteractiveSlashOutcome | undefined;
@@ -232,6 +237,11 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
   if (!availability.available) throw new Error(availability.reason ?? `/${route.entry.name} is not available here.`);
   const text = `/${route.entry.name}${route.args ? ` ${route.args}` : ''}`;
   const { args } = route;
+  const progressLine = (panel: string) => (line: string): void => {
+    if (host.line) host.line(line);
+    else if (rl.activity) rl.activity(line);
+    else emitHarnessOutput({ panel, text: line });
+  };
   const handlers: Record<InteractiveSlashHandlerKey, () => Promise<InteractiveSlashOutcome | void>> = {
     exit: async () => { await aiSessionLeave(id); return { exit: true }; },
     new: async () => ({ id: await newConversation(id), ...(args ? { prompt: args, echo: true } : {}) }),
@@ -405,10 +415,14 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
     // ClikCode Remote: the other machines on the board (tui/pickers/remote.ts).
     remote: async () => {
       if (!host.canPick) throw new Error('/remote opens a list: run it in the interactive ClikCode session.');
-      return interactiveRemotePicker({
-        prompter: rl, ask: host.ask, withBusy: host.withBusy,
-        line: (line) => (rl.activity ? rl.activity(line) : emitHarnessOutput({ panel: 'remote', text: line })),
-      });
+      return interactiveRemotePicker({ prompter: rl, ask: host.ask, withBusy: host.withBusy, line: progressLine('remote') });
+    },
+    // This machine's ClikCode -- the machine that owns this chat, which is
+    // where this runs (remote/self-update.ts). Busy work, not a turn.
+    update: async () => {
+      const commit = parseCommitArgument(args);
+      const result = await host.withBusy(`updating ClikCode on ${localMachineName()}`, () => updateThisMachine({ ...(commit ? { commit } : {}), line: progressLine('update') }));
+      return { notice: result.text };
     },
     doctor: async () => {
       const report = await host.withBusy('checking harnesses…', () => doctorSummary(state));

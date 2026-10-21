@@ -44,7 +44,7 @@ export const SLASH_HANDLER_KEYS = [
   'provider', 'accounts', 'login', 'logout', 'gateway',
   'model', 'effort', 'fast', 'permissions', 'sandbox', 'computer', 'send', 'options', 'capabilities', 'settings',
   'sessions', 'resume', 'search', 'rename', 'fork', 'redo', 'archive', 'delete',
-  'usage', 'doctor', 'agents', 'remote',
+  'usage', 'doctor', 'agents', 'remote', 'update',
 ] as const;
 export type SlashHandlerKey = typeof SLASH_HANDLER_KEYS[number];
 
@@ -242,6 +242,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('usage', 'Info', 'quota, tokens, and cost for this provider', { aliases: ['cost'], argHint: '[all]' }),
   entry('agents', 'Tools', 'background agents: list them, or stop one (Esc and Ctrl+C never do)', { argHint: '[stop <id>|stop all] [confirm]', duringTurn: 'apply' }),
   entry('doctor', 'Info', 'check installed harnesses and accounts'),
+  entry('update', 'Info', "update ClikCode on the machine this chat runs on: to GitHub main, or a commit for a ClikCode Remote install", { argHint: '[commit]' }),
   entry('help', 'Info', 'all commands'),
 ];
 

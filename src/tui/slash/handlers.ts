@@ -45,6 +45,13 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
   provider: INTERACTIVE_ONLY('provider'),
   resume: INTERACTIVE_ONLY('resume'),
   remote: INTERACTIVE_ONLY('remote'),
+  // This machine's ClikCode, the way it was installed (remote/self-update.ts).
+  update: async ({ args }) => {
+    const { parseCommitArgument, updateThisMachine } = await import('../../remote/self-update.js');
+    const commit = parseCommitArgument(args);
+    const result = await updateThisMachine({ ...(commit ? { commit } : {}), line: (text) => emitHarnessOutput({ panel: 'update', text }) });
+    emitHarnessOutput({ panel: 'update', text: result.text });
+  },
 };
 
 export async function aiSessionCommand(id: string, input: string, options: { inferred?: boolean; signal?: AbortSignal } = {}): Promise<string> {

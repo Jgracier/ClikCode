@@ -120,4 +120,23 @@ describe('one dispatch for every client', () => {
     expect(await dispatchLine(recordingHost(), 's1', '/mcp logout remote')).toEqual({});
     expect(existsSync(join(home, 'mcp-oauth', 'remote.json'))).toBe(false);
   });
+
+  it('runs /update as busy work on this machine, its steps as lines, and leaves a developer checkout alone', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'cc-dispatch-repo-'));
+    mkdirSync(join(repo, '.git'));
+    mkdirSync(join(repo, 'dist'));
+    writeFileSync(join(repo, 'dist', 'cli.js'), '');
+    const entry = process.argv[1];
+    process.argv[1] = join(repo, 'dist', 'cli.js');
+    try {
+      const busy: string[] = [];
+      const lines: string[] = [];
+      const host = recordingHost({ withBusy: (label, work) => { busy.push(label); return work(); }, line: (text) => { lines.push(text); } });
+      const outcome = await dispatchLine(host, 's1', '/update');
+      expect(outcome.notice).toMatch(new RegExp(`developer checkout \\(${repo}\\); /update does not touch a checkout\\. To update it, run \`git pull && pnpm run install-local\` in ${repo}\\.$`));
+      expect(busy).toEqual([expect.stringMatching(/^updating ClikCode on /)]);
+      expect(outcome.prompt).toBeUndefined();
+      await expect(dispatchLine(host, 's1', '/update main')).rejects.toThrow(/7 to 40 hex/);
+    } finally { process.argv[1] = entry; }
+  });
 });
