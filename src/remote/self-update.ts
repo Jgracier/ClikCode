@@ -105,10 +105,11 @@ export async function updateThisMachine(options: SelfUpdateOptions): Promise<Sel
   const install = await detectInstall(options.entry ?? process.argv[1] ?? '', options.home);
 
   if (install.kind === 'checkout') {
-    const repo = install.repo ?? 'that checkout';
     return {
       kind: 'checkout', updated: false,
-      text: `This ClikCode on ${where} is built from a developer checkout${install.repo ? ` (${install.repo})` : ''}; /update does not touch a checkout. To update it, run \`git pull && pnpm run install-local\` in ${repo}.`,
+      text: install.repo
+        ? `This ClikCode on ${where} is built from a developer checkout (${install.repo}); /update does not touch a checkout. To update it, run \`git pull && pnpm run install-local\` in ${install.repo}.`
+        : `This ClikCode on ${where} was not installed by ClikCode Remote or npm, and is not a checkout /update could name; it is left alone. Update it the way it was installed.`,
     };
   }
 

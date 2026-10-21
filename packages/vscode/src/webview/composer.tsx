@@ -12,6 +12,7 @@ import { post, request, save, saved, uid } from './bus';
 import { formatTurnUsage, titleCase } from './format';
 import { AccountMenu, agentName, EffortMenu, effortLabel, knownProviders, ModeMenu, modelWithEffort, providerChoosesModel, ProviderModelPicker } from './picker';
 import { MachineMenu } from './screens';
+import { machineChip } from './machine-text';
 import { focusHere, Icon, KeyList, type ListRow } from './ui';
 import { composeMessage, promptHistory, sameRange, tokenAtCaret, type Attachment } from './composer-text';
 import { commandRows, fileRows } from './composer-suggestions';
@@ -50,6 +51,7 @@ export function Composer(props: {
   const pastes = useRef(0);
   const history = useMemo(() => promptHistory(model.messages), [model.messages]);
   const connected = model.connection === 'ready' && Boolean(model.sessionId);
+  const chip = machineChip(model);
   const autosize = (): void => {
     const element = textarea.current;
     if (!element) return;
@@ -381,10 +383,12 @@ export function Composer(props: {
         {menu === 'mode' ? <ModeMenu model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
         {menu === 'machines' ? <MachineMenu model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
         <StatusButtons model={model} menu={menu} setMenu={setMenu} connected={connected} />
-        <button type="button" id="machines-button" class={`status-account${menu === 'machines' ? ' open' : ''}`} data-popover-anchor aria-haspopup="dialog" aria-expanded={menu === 'machines'}
-          title={`Machine: ${model.machine ?? 'This machine'}`} onClick={() => setMenu(menu === 'machines' ? undefined : 'machines')}>
-          <Icon name="remote" /><span class="status-label">{model.machine ?? 'This machine'}</span><Icon name="chevron-down" />
+        <button type="button" id="machines-button" class={`status-account${menu === 'machines' ? ' open' : ''}${chip.update ? ' needs-update' : ''}`} data-popover-anchor aria-haspopup="dialog" aria-expanded={menu === 'machines'}
+          title={chip.title} onClick={() => setMenu(menu === 'machines' ? undefined : 'machines')}>
+          <Icon name="remote" /><span class="status-label">{chip.label}</span><Icon name="chevron-down" />
         </button>
+        {chip.update && model.machineId ? <button type="button" id="machine-update-button" class="link small" title={`Update ClikCode on ${model.machine ?? 'this machine'} to this editor's build`}
+          onClick={() => { void request({ method: 'updateMachine', machineId: model.machineId! }).catch((error: Error) => props.onError(error.message)); }}>Update</button> : null}
         <span class="spacer" />
         <BusyLine label={busy && !installing && !model.signIn ? busy : undefined} />
         {model.chatCost ? <span class="muted status-cost" title="What this chat has cost so far">{model.chatCost}</span> : null}

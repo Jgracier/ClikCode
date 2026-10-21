@@ -11,6 +11,8 @@ import { DiffDocuments } from './ui';
 import { registerCustomAcpCommands } from './custom-acp';
 import { mentionFromEditor, mentionFromUri, rememberSelections } from './mentions';
 import { useBundledClikcode } from './runtime';
+import { localClikcodeCommit } from './chat-machine';
+import { remoteDirectory } from './remote-directory';
 import type { WebviewMenu } from './webview-protocol';
 
 /** What activate() returns: used by the integration tests, and a stable
@@ -55,6 +57,8 @@ export function statusText(model: ChatModel): { text: string; tooltip: string } 
 
 export function activate(context: vscode.ExtensionContext): ClikCodeApi {
   useBundledClikcode(context.extensionPath);
+  // Other machines are kept at the commit of the ClikCode this editor runs.
+  remoteDirectory.configureLocalCommit(localClikcodeCommit);
   const log = vscode.window.createOutputChannel('ClikCode');
   // Integration tests keep the log where the runner can read it.
   const logFile = context.extensionMode === vscode.ExtensionMode.Test ? process.env.CLIKCODE_IT_LOG : undefined;

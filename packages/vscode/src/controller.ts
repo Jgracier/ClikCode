@@ -8,10 +8,12 @@ import { errorText, userError } from '../../../src/harness/protocol/errors';
 import * as vscode from 'vscode';
 import type { BridgeEndpoint } from './bridge-client';
 import { LocalChatMachine, openRequest, RemoteChatMachine, type ChatMachine } from './chat-machine';
-import { remoteDirectory } from './remote-directory';
+import { machineUpdateOf, remoteDirectory } from './remote-directory';
+import { localMachineName } from '../../../src/remote/board-rows';
 import { installOnMachine, type InstallReporter } from '../../../src/remote/install';
 import { discoverMachines, readTailscaleStatus } from '../../../src/remote/tailscale';
 import { forgetMachine, newMachineRecord, readMachines, updateMachine, updateMachines } from '../../../src/remote/machines';
+import { installedRecord } from '../../../src/remote/updates';
 import { validateSshTarget, withUser } from '../../../src/remote/shell';
 import { defaultLoginUser } from '../../../src/remote/ssh';
 import type { WebviewSurface } from './chat-view';
@@ -726,7 +728,38 @@ export class ClikCodeController implements vscode.Disposable {
     this.bridge?.dispose();
     this.bridge = undefined;
     this.setModel({ ...emptyModel(), connection: 'starting', ...(machine.name ? { machine: machine.name, machineId: machine.id } : {}) });
+    await this.refreshMachineUpdate();
     await this.start(sessionId, mode);
+  }
+
+  /** Whether the chat's machine needs an update, for the composer's chip. */
+  private async refreshMachineUpdate(): Promise<void> {
+    const machine = this.machine;
+    const next = machine.kind === 'remote' ? machineUpdateOf(await remoteDirectory.machine(machine.id).catch(() => undefined)) : undefined;
+    if (this.machine !== machine || this.disposed) return;
+    if (JSON.stringify(next) === JSON.stringify(this.model.machineUpdate)) return;
+    const { machineUpdate: _previous, ...rest } = this.model;
+    this.setModel(next ? { ...rest, machineUpdate: next } : rest);
+  }
+
+  /** Update ClikCode on a machine, with VS Code's progress; then the lists
+   * and the chip read it again. */
+  async updateMachine(machineId: string): Promise<void> {
+    const machine = await this.machineFor(machineId);
+    if (!machine) throw new Error('That machine is no longer added.');
+    const name = machine.name ?? localMachineName();
+    const updating = vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Updating ClikCode on ${name}`, cancellable: false },
+      (progress) => machine.update((line) => { progress.report({ message: line }); this.host.log.appendLine(`[update ${name}] ${line}`); }));
+    // The menus show it updating meanwhile.
+    for (const surface of this.surfaces) surface.post({ type: 'conversations-changed' });
+    void this.refreshMachineUpdate();
+    try {
+      const said = await updating;
+      void vscode.window.showInformationMessage(said);
+    } finally {
+      await this.refreshMachineUpdate();
+      for (const surface of this.surfaces) surface.post({ type: 'conversations-changed' });
+    }
   }
 
   private async connectDiscovered(machineId: string): Promise<string> {
@@ -760,16 +793,14 @@ export class ClikCodeController implements vscode.Disposable {
     if (!outcome?.ok) throw new Error(outcome?.message ?? 'The remote install did not complete.');
     const info = outcome.info;
     const machine = existing ?? newMachineRecord({
-      name: found.name, sshTarget: target, os: found.os, ready: true,
+      name: found.name, sshTarget: target, os: found.os,
       tailscale: { nodeId: found.nodeId, ...(found.dnsName ? { dnsName: found.dnsName } : {}) },
-      installed: { version: info.version, ...(info.commit ? { commit: info.commit } : {}), at: new Date().toISOString() },
-      ...(info.installationId ? { installationId: info.installationId } : {}),
     });
+    if (!existing) installedRecord(machine, info);
     const duplicate = !info.installationId ? undefined : (await readMachines()).find((item) => item.id !== machine.id && item.installationId === info.installationId);
     if (!duplicate && existing) await updateMachine(machine.id, (record) => {
-      record.sshTarget = target; record.ready = true;
-      record.installed = { version: info.version, ...(info.commit ? { commit: info.commit } : {}), at: new Date().toISOString() };
-      if (info.installationId) record.installationId = info.installationId;
+      record.sshTarget = target;
+      installedRecord(record, info);
     });
     else if (!duplicate) await updateMachines((machines) => [...machines, machine]);
     else if (existing) await forgetMachine(existing.id);
@@ -825,6 +856,7 @@ export class ClikCodeController implements vscode.Disposable {
           this.remoteWatchCount += 1;
           this.remoteWatchRelease ??= remoteDirectory.watch(() => {
             for (const item of this.surfaces) item.post({ type: 'conversations-changed' });
+            void this.refreshMachineUpdate();
           });
         } else if (this.remoteWatchCount > 0 && --this.remoteWatchCount === 0) {
           this.remoteWatchRelease?.();
@@ -833,8 +865,13 @@ export class ClikCodeController implements vscode.Disposable {
         return undefined;
       case 'machines': {
         const local = await this.conversationsOn(this.local.id).catch(() => []);
-        return remoteDirectory.machines(local, request.discover);
+        const listed = await remoteDirectory.machines(local, request.discover);
+        void this.refreshMachineUpdate();
+        return listed;
       }
+      case 'updateMachine':
+        await this.updateMachine(request.machineId);
+        return undefined;
       case 'selectMachine':
         await this.selectMachine(request.machineId);
         return undefined;

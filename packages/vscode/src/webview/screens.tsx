@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ChatModel } from '../model';
 import type { ListedConversation } from '../webview-protocol';
 import type { ListedMachine } from '../remote-directory';
+import { machineMeta, offersUpdate } from './machine-text';
 import { listen, request } from './bus';
 import { useNow } from './clock';
 import { conversationState, SECTION_TITLES, type ConversationSection } from '../../../../src/session/conversation-state';
@@ -204,8 +205,8 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
   const machineRows: ListRow[] = (machines ?? []).map((machine) => ({
     key: machine.id,
     onSelect: () => { lastHistoryMachine = machine.id; setMachineId(machine.id); setShowMachines(false); setSearch(''); },
-    render: () => <div class="conversation"><div class="conversation-main"><div class="conversation-title">{machine.name}</div></div>
-      <span class="conversation-meta">{machine.state} · {machine.chats} chats{machine.needsYou ? ` · ${machine.needsYou} need you` : ''}</span></div>,
+    render: () => <div class="conversation" title={machine.updateError}><div class="conversation-main"><div class="conversation-title">{machine.name}</div></div>
+      <span class="conversation-meta">{machineMeta(machine, '')}</span></div>,
   }));
 
   return (
@@ -255,14 +256,20 @@ export function MachineMenu(props: { model: ChatModel; onClose: () => void; onEr
       (error: Error) => { setSwitching(false); props.onError(error.message); },
     );
   };
+  const update = (machine: ListedMachine): void => {
+    void request({ method: 'updateMachine', machineId: machine.id }).catch((error: Error) => props.onError(error.message));
+  };
   const available = (machines ?? []).filter((machine) => !machine.id.startsWith('tailscale:'));
   const discovered = (machines ?? []).filter((machine) => machine.id.startsWith('tailscale:'));
   const rows: ListRow[] = [
     { key: 'saved-heading', heading: true, render: () => <>Your machines</> },
     ...available.map((machine): ListRow => ({
       key: machine.id, disabled: switching || machine.state === 'offline', onSelect: () => select(machine),
-      render: () => <div class="conversation"><div class="conversation-main"><div class="conversation-title">{machine.name}</div></div>
-        <span class="conversation-meta">{machine.id === (props.model.machineId ?? 'local') ? 'current · ' : ''}{machine.state} · {machine.chats} chats</span></div>,
+      render: () => <div class="conversation" title={machine.updateError}><div class="conversation-main"><div class="conversation-title">{machine.name}</div></div>
+        <span class="conversation-meta">{machineMeta({ ...machine, needsYou: 0 }, props.model.machineId ?? 'local')}</span>
+        {offersUpdate(machine) ? <button type="button" class="link small machine-update" data-row-action
+          title={machine.id === 'local' ? 'Update ClikCode on this machine, the way it was installed' : `Update ClikCode on ${machine.name} to this editor's build`}
+          onClick={() => update(machine)}>Update</button> : null}</div>,
     })),
     ...(discovered.length ? [{ key: 'tailnet-heading', heading: true, render: () => <>On your tailnet</> } satisfies ListRow] : []),
     ...discovered.map((machine): ListRow => ({

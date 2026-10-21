@@ -196,6 +196,9 @@ export interface ChatModel {
   /** Name of the SSH machine that owns this chat; absent for this machine. */
   machine?: string;
   machineId?: string;
+  /** That machine's ClikCode is not this editor's build: it needs an update,
+   * is being updated, or its last update failed (`error`). */
+  machineUpdate?: MachineUpdate;
   harness?: string;
   /** The provider id `choose provider` takes: a harness command, `gateway`,
    * or `clikcode-local`. */
@@ -275,3 +278,5 @@ export type TurnMark = {
    * parent's row). */
   child?: LiveChild;
 };
+
+export interface MachineUpdate { state: 'needs' | 'updating' | 'failed'; error?: string }
