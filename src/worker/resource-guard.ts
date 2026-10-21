@@ -52,12 +52,14 @@ export function nudgeNote(budget: AgentBudget, conversations: number, unit?: Uni
   return [
     `Memory is getting tight: agents are using ${gb(budget.used)} of ${gb(budget.limit)} available to them across ${conversations} conversation${conversations === 1 ? '' : 's'}.`,
     unit ? `Your \`${unit.label}\` holds about ${gb(unit.freeable)}.` : '',
-    'Prefer targeted tests and fewer parallel workers before starting more heavy work.',
+    unit
+      ? 'Continue the task with less memory: run targeted tests, use fewer parallel workers, or finish and close this command before starting another large one. Choose the smallest change that fits your work.'
+      : 'Continue the task. For your next heavy step, use targeted tests, fewer parallel workers, or a smaller batch. If none applies, keep working; no command in this conversation was identified as the cause.',
   ].filter(Boolean).join(' ');
 }
 export function stopNote(budget: AgentBudget, conversations: number, unit: Unit, platform: NodeJS.Platform = process.platform): string {
   const how = platform === 'win32' ? 'terminated by ClikCode (taskkill)' : 'killed by ClikCode (SIGKILL)';
-  return `ClikCode stopped \`${unit.label}\` and its child processes because it held about ${gb(unit.freeable)} while agents used ${gb(budget.used)} of ${gb(budget.limit)} across ${conversations} conversations. It was ${how} for resource pressure, not a test failure. Use targeted tests, fewer workers, or smaller runs; do not rerun the same command unchanged.`;
+  return `ClikCode stopped \`${unit.label}\` and its child processes because it held about ${gb(unit.freeable)} while agents used ${gb(budget.used)} of ${gb(budget.limit)} across ${conversations} conversations. It was ${how} for resource pressure, not a test failure. Continue the task with targeted tests, fewer workers, or smaller runs; do not rerun the same command unchanged.`;
 }
 function marker(): string { return join(stateDirectory(), 'resource-guard.last-stop'); }
 function ineffectiveMarker(): string { return join(stateDirectory(), 'resource-guard.ineffective'); }
@@ -70,7 +72,7 @@ export function ramTmpNote(): string {
     const stat = statfsSync('/tmp');
     const used = Number(stat.bsize) * (Number(stat.blocks) - Number(stat.bavail));
     if (!(used >= 4 * GIB)) return '';
-    return ` /tmp is RAM here and holds about ${gb(used)}; deleting those files frees memory, stopping a command does not.`;
+    return ` /tmp is RAM here and holds about ${gb(used)}; remove only temporary files you created and no longer need. Stopping a command does not free those files.`;
   } catch { return ''; }
 }
 
