@@ -23,8 +23,10 @@
 import { homedir } from 'node:os';
 import type Conf from 'conf';
 import type { AiHarnessAccount, AiHarnessPermissionMode, AiLocalHarnessDefinition } from '../harness/definition.js';
-import type { ChatMovedTo, HarnessSession, HarnessState } from './model.js';
-import type { ChatExport, ImportPlan, ImportResult, MoveNames, MoveRequest } from './move-chat.js';
+import type { ChatMovedTo, HarnessSession, HarnessState, TranscriptMessage } from './model.js';
+import { createHash } from 'node:crypto';
+import type { ChatExport, ChatHave, ImportPlan, ImportResult, MoveNames, MoveRequest } from './move-chat.js';
+import { STALE_BASE } from './move-chat.js';
 import { readState } from './state/read.js';
 import { writeState } from './state/write.js';
 import { resolveDefaultSettings } from './state/settings.js';
@@ -45,9 +47,47 @@ const MOVED_ALREADY = (session: HarnessSession): string => `This chat moved to $
  * asked -- only when one is running at all. */
 export interface ExportOptions { turnRunning?: () => Promise<boolean> }
 
+/** A chat's messages as it exports them: every one keeps whose it was, as
+ * when a provider takes a conversation over (leaveProvider). What a target
+ * holds (`chat-have`) is hashed in this same form, so a copy that moved away
+ * and back matches what the other machine got from it. */
+function exportedMessages(session: HarnessSession): TranscriptMessage[] {
+  const origin = messageOrigin(session);
+  return sessionTranscriptMessages(session).map((message) => (message.origin ? message : { ...message, origin })) as TranscriptMessage[];
+}
+
+/** JSON with every object's keys in order: the same message hashes the same on either machine. */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, item: unknown) => (item && typeof item === 'object' && !Array.isArray(item)
+    ? Object.fromEntries(Object.keys(item).sort().map((key) => [key, (item as Record<string, unknown>)[key]]))
+    : item));
+}
+
+/** A hash of messages, as `chat-have` and a delta's `base` name them. */
+export function chatMessagesHash(messages: readonly unknown[]): string {
+  const hash = createHash('sha256');
+  for (const message of messages) hash.update(canonicalJson(message)).update('\n');
+  return hash.digest('hex');
+}
+
+/** The copy of a chat that moved away from this machine: what a move back reuses (importChat). */
+function movedAwayCopy(state: HarnessState, id: string): HarnessSession | undefined {
+  return state.sessions.find((item) => item.id === id && item.movedTo);
+}
+
+/** What this machine holds of the chat already: the copy that moved away from
+ * here, if any -- the one a move back takes up again. */
+export async function chatHave(id: string): Promise<ChatHave | null> {
+  const state = await readState({ transcripts: [id] });
+  const session = movedAwayCopy(state, id);
+  if (!session) return null;
+  const messages = exportedMessages(session);
+  return messages.length ? { messages: messages.length, hash: chatMessagesHash(messages) } : null;
+}
+
 const TURN_RUNS = 'A turn is still running in this conversation -- move it when the turn ends, or stop it first.';
 
-export async function exportChat(id: string, options: ExportOptions = {}): Promise<ChatExport> {
+export async function exportChat(id: string, options: ExportOptions = {}, since?: ChatHave): Promise<ChatExport> {
   const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
@@ -66,12 +106,14 @@ export async function exportChat(id: string, options: ExportOptions = {}): Promi
   // move that does not happen syncs it as any open would.
   const { synchronizeNativeTranscript } = await import('../turn/handoff.js');
   await synchronizeNativeTranscript(state, session);
-  // Every message keeps whose it was, as when a provider takes a conversation over (leaveProvider).
-  const origin = messageOrigin(session);
-  const messages = sessionTranscriptMessages(session).map((message) => (message.origin ? message : { ...message, origin }));
+  let messages = exportedMessages(session);
+  // The target holds this chat's first messages already: only the rest goes.
+  const base = since && Number.isInteger(since.messages) && since.messages > 0 && since.messages <= messages.length
+    && chatMessagesHash(messages.slice(0, since.messages)) === since.hash ? { messages: since.messages, hash: since.hash } : undefined;
+  if (base) messages = messages.slice(base.messages);
   const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId)?.label : undefined;
   return {
-    version: 1, sessionId: session.id, conversationId: session.conversationId ?? session.id,
+    ...(base ? { version: 2 as const, base } : { version: 1 as const }), sessionId: session.id, conversationId: session.conversationId ?? session.id,
     ...(session.name ? { name: session.name } : {}), ...(session.nameSource ? { nameSource: session.nameSource } : {}),
     createdAt: session.createdAt, messages,
     ...(session.summary ? { summary: session.summary } : {}), ...(session.plan ? { plan: session.plan } : {}),
@@ -252,8 +294,17 @@ export function moveNoteText(names: MoveNames, from: string | undefined, to: str
  * no chat by that id, or has only the copy that moved away from here (it is
  * taken up again); a live chat of the same id here keeps its own. */
 export async function importChat(chat: ChatExport, names: MoveNames, facts: MoveFacts): Promise<ImportResult> {
-  if (chat?.version !== 1 || !Array.isArray(chat.messages)) throw new Error('This ClikCode cannot read that chat: update ClikCode on both machines.');
+  const delta = chat?.version === 2 && chat.base;
+  if (!(chat?.version === 1 || delta) || !Array.isArray(chat.messages)) throw new Error('This ClikCode cannot read that chat: update ClikCode on both machines.');
   const state = await readState({ transcripts: [chat.sessionId] });
+  let messages = chat.messages;
+  if (delta) {
+    // A move back: the first messages are the ones the copy here holds, as it said (chatHave).
+    const copy = movedAwayCopy(state, chat.sessionId);
+    const held = copy ? exportedMessages(copy) : [];
+    if (held.length < delta.messages || chatMessagesHash(held.slice(0, delta.messages)) !== delta.hash) throw new Error(STALE_BASE);
+    messages = [...held.slice(0, delta.messages), ...chat.messages];
+  }
   const planned = await planImport(state, chat, facts);
   const existing = state.sessions.find((item) => item.id === chat.sessionId);
   const { randomUUID } = await import('node:crypto');
@@ -263,7 +314,7 @@ export async function importChat(chat: ChatExport, names: MoveNames, facts: Move
     ...planned.session,
     id, createdAt: chat.createdAt || now, updatedAt: now, status: 'active', workspace: planned.folder,
     ...(chat.name ? { name: chat.name } : {}), ...(chat.nameSource ? { nameSource: chat.nameSource } : {}),
-    messages: chat.messages,
+    messages,
     ...(chat.summary ? { summary: chat.summary } : {}), ...(chat.plan ? { plan: chat.plan } : {}),
     moveNote: moveNoteText(names, chat.source?.folder, planned.folder),
   };
@@ -295,8 +346,10 @@ export async function answerMoveRequest(config: Conf | undefined, request: MoveR
     case 'export-chat': {
       const id = request.sessionId ?? currentId;
       if (!id) throw new Error('No conversation is open.');
-      return exportChat(id, options);
+      return exportChat(id, options, request.since);
     }
+    case 'chat-have':
+      return chatHave(request.sessionId);
     case 'import-chat': {
       // A client from before moves were one step plans first: answered as
       // before (what would change, nothing imported), and its import follows.

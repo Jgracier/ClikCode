@@ -66,6 +66,7 @@ function readyRevision(bridge: BridgeEndpoint): Promise<number> {
 export function moveEnd(bridge: BridgeEndpoint, name: string, revision: number): MoveEnd {
   return {
     name,
+    revision,
     call: <T>(request: MoveRequest): Promise<T> => (revision < MOVE_REVISION
       ? Promise.reject(new Error(`ClikCode on ${name} is too old to move chats: update it first.`))
       : bridge.call<T>(request, TIMEOUT.choose)),
@@ -76,6 +77,7 @@ export function moveEnd(bridge: BridgeEndpoint, name: string, revision: number):
 export function channelEnd(channel: LinkChannel, name: string): MoveEnd {
   return {
     name,
+    get revision() { return channel.revision; },
     call: <T>(request: MoveRequest): Promise<T> => (channel.revision < MOVE_REVISION
       ? Promise.reject(new Error(`ClikCode on ${name} is too old to move chats: update it first.`))
       : channel.request<T>(request)),
@@ -905,7 +907,7 @@ export class ClikCodeController implements vscode.Disposable {
         ? channelEnd(channel, targetName)
         : await viewing.then(async ({ bridge: endpoint }) => moveEnd(endpoint, targetName, await readyRevision(endpoint)));
       const outcome = await moveChat(moveEnd(bridge, this.machine.name ?? localMachineName(), this.revision), there, sessionId);
-      this.host.log.appendLine(`[${this.label}] moved ${sessionId} to ${targetName} as ${outcome.sessionId}${outcome.changes.length ? ` (${outcome.changes.join(' ')})` : ''}`);
+      this.host.log.appendLine(`[${this.label}] moved ${sessionId} to ${targetName} as ${outcome.sessionId}${outcome.reused ? ` (sent ${outcome.sent} messages; ${outcome.reused} were there already)` : ''}${outcome.changes.length ? ` (${outcome.changes.join(' ')})` : ''}`);
       await this.openOnMachine(id, 'resume', outcome.sessionId);
     } finally {
       channel?.close();

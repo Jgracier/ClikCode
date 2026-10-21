@@ -10,6 +10,7 @@ import type { HarnessPrompter, PickerOption } from '../harness/prompter.js';
 import type { ChatMovedTo } from '../session/model.js';
 import { moveChat, movedChatMachine, type MoveEnd, type MoveRequest } from '../session/move-chat.js';
 import { readState } from '../session/state/read.js';
+import { IDE_PROTOCOL } from '../ide/protocol-version.js';
 import { chooseOption } from '../tui/pickers/choose.js';
 import { localMachineName } from './board-rows.js';
 import { RemoteMachines, type LinkChannel } from './connection.js';
@@ -29,6 +30,7 @@ export function localMoveEnd(): MoveEnd {
   let config: Conf | undefined;
   return {
     name: localMachineName(),
+    revision: IDE_PROTOCOL.revision,
     call: async <T>(request: MoveRequest): Promise<T> => {
       config ??= new Conf({ projectName: 'clikcode', configFileMode: 0o600 });
       const { answerMoveRequest } = await import('../session/move.js');
@@ -42,6 +44,7 @@ export function localMoveEnd(): MoveEnd {
 export function remoteMoveEnd(bridge: Pick<TerminalBridge, 'revision' | 'request'>, machine: Pick<RemoteMachine, 'name'>): MoveEnd {
   return {
     name: machine.name,
+    get revision() { return bridge.revision; },
     call: async <T>(request: MoveRequest): Promise<T> => {
       if (bridge.revision < MOVE_REVISION) throw new Error(`ClikCode on ${machine.name} is too old to move chats: update it (/update in one of its chats, or /remote).`);
       return bridge.request<T>(request);
