@@ -704,7 +704,8 @@ SCENARIOS = {
         'steps': [
             ('type', 'hello there'), ('wait_for', 'First answer here.', 30), ('settle', 1),
             ('type', '/machine'), ('wait_for', 'Move this chat to', 20), ('wait_for', 'devbox', 10), ('settle', 1), ('snap', 'picker'),
-            ('keys', '\x1b[B'), ('keys', '\r'), ('wait_for', 'Moved to devbox', 60), ('settle', 2), ('snap', 'moved'),
+            # One pick: nothing asked, nothing said -- the info line names the machine it is on now.
+            ('keys', '\x1b[B'), ('keys', '\r'), ('wait_for', 'devbox  •', 60), ('settle', 2), ('snap', 'moved'),
             ('type', 'where are you now'), ('wait_for', 'Answered on devbox.', 60), ('settle', 1), ('snap', 'answered'),
             ('type', 'and again'), ('wait_for', 'Second answer on devbox.', 60), ('settle', 1), ('snap', 'again'),
             # Told once, with the first turn there; the second turn is only what was typed.
@@ -715,12 +716,12 @@ SCENARIOS = {
         'watch': [],
         'snap_contains': {
             'picker': ['Move this chat to', 'devbox'],
-            'moved': ['Moved to devbox', 'hello there', 'First answer here.'],
+            'moved': ['devbox  •', 'hello there', 'First answer here.'],
             'answered': ['where are you now', 'Answered on devbox.'],
             'again': ['and again', 'Second answer on devbox.'],
         },
-        'snap_lacks': {'moved': ['is not signed in', 'Moving to devbox:'], 'answered': ['moved from', 'clikcode_resource_note']},
-        'never': ['ENOENT', 'This conversation moved from', 'clikcode_resource_note', 'Connection to devbox'],
+        'snap_lacks': {'moved': ['is not signed in', 'Moving to devbox', 'Moved to'], 'answered': ['moved from', 'clikcode_resource_note']},
+        'never': ['ENOENT', 'This conversation moved from', 'clikcode_resource_note', 'Connection to devbox', 'Moved to devbox', 'Moving to devbox'],
     },
     # A chat on a machine whose ClikCode is another build: said once on opening it, with where
     # to update it. Nothing is updated without the user.
