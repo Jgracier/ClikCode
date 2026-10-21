@@ -423,10 +423,15 @@ describe('/remote', () => {
     const fallback = await defaultLoginUser('guarded');
     const { remoteHost, asked, lines } = scripted({
       'ClikCode Remote': (options) => options.find((option) => option.label.startsWith('Add by SSH address'))!.value,
+      // The user it refused is named in the list's title, not offered; root is.
+      [`Log in to guarded as (not ${fallback})`]: (options) => {
+        expect(options.map((option) => option.label)).toEqual(['root', 'Another user…']);
+        return options[1]!.value;
+      },
     }, ['guarded', 'carol']);
     const outcome = await interactiveRemotePicker(remoteHost);
-    // The user it refused is named, not offered again as the default.
-    expect(asked).toEqual(['SSH address (user@host, host, or a Host alias)', `Log in to guarded as which user? (it refused ${fallback})`]);
+    expect(asked).toEqual(['SSH address (user@host, host, or a Host alias)', 'User']);
+    expect(lines.some((line) => line.startsWith('! ') && /refused the login/.test(line))).toBe(true);
     expect(outcome.notice).toMatch(/guarded is added/);
     expect(lines.filter((line) => line.startsWith('✓')).length).toBe(6);
     const [machine] = await readMachines();
@@ -437,8 +442,10 @@ describe('/remote', () => {
   it('asks only once: a second refusal stops with what to do', async () => {
     await updateMachines(() => []);
     host(root, 'fortress', { users: ['nobody-you-know'] });
+    const fallbackUser = await defaultLoginUser('fortress');
     const { remoteHost, asked, lines } = scripted({
       'ClikCode Remote': (options) => options.find((option) => option.label.startsWith('Add by SSH address'))!.value,
+      [`Log in to fortress as (not ${fallbackUser})`]: () => '__other__',
     }, ['fortress', 'mallory']);
     expect(await interactiveRemotePicker(remoteHost)).toEqual({});
     expect(asked.length).toBe(2);
