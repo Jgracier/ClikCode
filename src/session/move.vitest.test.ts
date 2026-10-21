@@ -12,7 +12,7 @@ import type { HarnessSession, HarnessState } from './model.js';
 import { readState } from './state/read.js';
 import { writeState } from './state/write.js';
 import { exportChat, importChat, markMoved, planImport, type MoveFacts } from './move.js';
-import { chatHasContent, moveChat, type ChatExport, type MoveEnd, type MoveRequest } from './move-chat.js';
+import { chatHasContent, moveChat, CHAT_HAVE_REVISION, type ChatExport, type MoveEnd, type MoveRequest } from './move-chat.js';
 import { answerMoveRequest } from './move.js';
 import { withMoveNote } from '../turn/resource-notes.js';
 import { completeTurnCheckpoint } from '../turn/turn-journal.js';
@@ -247,6 +247,128 @@ describe('a move between two machines', () => {
     const { conversationList } = await import('../ide/queries.js');
     const rows = await conversationList(await readState({ transcripts: [] }), undefined);
     expect(rows.find((row) => row.id === 's4')?.movedTo).toBe('imac');
+  });
+});
+
+describe('a move sends only what the target lacks', () => {
+  const sent: string[] = [];
+  const imports: ChatExport[] = [];
+  /** A machine at the revision that answers chat-have; `before` runs ahead of each request. */
+  const end = (machine: string, name: string, before?: (request: MoveRequest) => Promise<void>): MoveEnd => ({
+    name, revision: CHAT_HAVE_REVISION,
+    call: async <T>(request: MoveRequest): Promise<T> => {
+      const since = request.type === 'export-chat' && request.since ? ` since ${request.since.messages}` : '';
+      sent.push(`${name} ${request.type}${since}`);
+      if (request.type === 'import-chat') imports.push(request.chat);
+      await before?.(request);
+      on(machine);
+      return await answerMoveRequest(undefined, request) as T;
+    },
+  });
+  beforeEach(() => { sent.length = 0; imports.length = 0; });
+  const said = (count: number): HarnessSession['messages'] => Array.from({ length: count }, (_, index) => ({ role: index % 2 ? 'assistant' : 'user', content: `turn ${index}` }));
+  const addOn = async (machine: string, id: string, extra: NonNullable<HarnessSession['messages']>): Promise<void> => {
+    on(machine);
+    const current = await readState({ transcripts: [id] });
+    const session = current.sessions.find((item) => item.id === id)!;
+    session.messages = [...session.messages!, ...extra];
+    await writeState(current);
+  };
+  const messagesOn = async (machine: string, id: string) => {
+    on(machine);
+    return (await readState({ transcripts: [id] })).sessions.find((item) => item.id === id)!.messages;
+  };
+
+  it('back to a machine that holds the old copy: only the new turns travel, and the chat there is whole', async () => {
+    on('h1');
+    await writeState(state([chat({ id: 'd1', conversationId: 'cd1', messages: said(174) })]));
+    on('h2');
+    await writeState(state([]));
+    // Away: the target holds nothing of it, so all of it goes.
+    const away = await moveChat(end('h1', 'linux'), end('h2', 'prod'), 'd1');
+    expect(away).toMatchObject({ moved: true, reused: 0, sent: 174 });
+    expect(sent).toEqual(['prod chat-have', 'linux export-chat', 'prod import-chat', 'linux mark-moved']);
+    expect(imports[0]).toMatchObject({ version: 1 });
+    expect(imports[0]!.base).toBeUndefined();
+
+    // Three more turns there, then back: the 174 are not sent again.
+    await addOn('h2', 'd1', [{ role: 'user', content: 'on prod' }, { role: 'assistant', content: 'Done on prod.' }, { role: 'user', content: 'and one more' }]);
+    sent.length = 0; imports.length = 0;
+    const back = await moveChat(end('h2', 'prod'), end('h1', 'linux'), 'd1');
+    expect(back).toMatchObject({ moved: true, sessionId: 'd1', reused: 174, sent: 3 });
+    expect(sent).toEqual(['linux chat-have', 'prod export-chat since 174', 'linux import-chat', 'prod mark-moved']);
+    expect(imports[0]).toMatchObject({ version: 2, base: { messages: 174 } });
+    expect(imports[0]!.messages.map((message) => message.content)).toEqual(['on prod', 'Done on prod.', 'and one more']);
+    // Here: the whole conversation, exactly as the other machine had it.
+    const here = await messagesOn('h1', 'd1');
+    const there = await messagesOn('h2', 'd1');
+    expect(here).toHaveLength(177);
+    // As a whole-chat move would have left it: the other machine's messages, each saying whose it was.
+    const origin = { harness: 'claude', route: 'local', provider: 'anthropic', model: 'opus' };
+    expect(here).toEqual(there!.map((message) => ({ ...message, origin: message.origin ?? origin })));
+    on('h1');
+    const session = (await readState({ transcripts: ['d1'] })).sessions.find((item) => item.id === 'd1')!;
+    expect(session.movedTo).toBeUndefined();
+    expect(session.moveNote).toContain('moved from prod');
+
+    // And away again: the other machine's copy is a prefix, so only the new turn goes.
+    await addOn('h1', 'd1', [{ role: 'assistant', content: 'Back on linux.' }]);
+    sent.length = 0;
+    expect(await moveChat(end('h1', 'linux'), end('h2', 'prod'), 'd1')).toMatchObject({ reused: 177, sent: 1 });
+    const again = await messagesOn('h2', 'd1');
+    expect(again).toHaveLength(178);
+    expect(again!.slice(0, 177)).toEqual(here);
+    expect(again![177]).toMatchObject({ content: 'Back on linux.', origin });
+  });
+
+  it('a copy there that differs from this chat\'s start gets the whole chat', async () => {
+    on('i1');
+    await writeState(state([chat({ id: 'd2', conversationId: 'cd2', messages: said(6) })]));
+    on('i2');
+    // The old copy there says something else at its start (this chat was rewound and went another way).
+    await writeState(state([chat({ id: 'd2', conversationId: 'cd2', messages: [{ role: 'user', content: 'something else' }, ...said(6).slice(1, 4)], movedTo: { machine: 'linux', sessionId: 'd2', at: now } })]));
+    const moved = await moveChat(end('i1', 'linux'), end('i2', 'prod'), 'd2');
+    expect(moved).toMatchObject({ reused: 0, sent: 6 });
+    expect(sent).toEqual(['prod chat-have', 'linux export-chat since 4', 'prod import-chat', 'linux mark-moved']);
+    expect((await messagesOn('i2', 'd2'))!.map((message) => message.content)).toEqual(said(6)!.map((message) => message.content));
+  });
+
+  it('a copy there that changed after it said what it holds: the whole chat is sent instead', async () => {
+    on('j1');
+    await writeState(state([chat({ id: 'd3', conversationId: 'cd3', messages: said(8) })]));
+    on('j2');
+    await writeState(state([chat({ id: 'd3', conversationId: 'cd3', messages: said(6), movedTo: { machine: 'linux', sessionId: 'd3', at: now } })]));
+    let changed = false;
+    const target = end('j2', 'prod', async (request) => {
+      if (request.type !== 'import-chat' || changed) return;
+      changed = true;
+      on('j2');
+      const current = await readState({ transcripts: ['d3'] });
+      current.sessions[0]!.messages = [{ role: 'user', content: 'rewritten' }, ...said(6)!.slice(1)];
+      await writeState(current);
+    });
+    const moved = await moveChat(end('j1', 'linux'), target, 'd3');
+    expect(moved).toMatchObject({ reused: 0, sent: 8 });
+    expect(sent).toEqual(['prod chat-have', 'linux export-chat since 6', 'prod import-chat', 'linux export-chat', 'prod import-chat', 'linux mark-moved']);
+    expect(await messagesOn('j2', 'd3')).toHaveLength(8);
+  });
+
+  it('a target from before chat-have is not asked, and gets the whole chat', async () => {
+    on('k1');
+    await writeState(state([chat({ id: 'd4', conversationId: 'cd4', messages: said(4) })]));
+    on('k2');
+    await writeState(state([chat({ id: 'd4', conversationId: 'cd4', messages: said(2), movedTo: { machine: 'linux', sessionId: 'd4', at: now } })]));
+    const old = { ...end('k2', 'prod'), revision: 4 };
+    expect(await moveChat(end('k1', 'linux'), old, 'd4')).toMatchObject({ reused: 0, sent: 4 });
+    expect(sent).toEqual(['linux export-chat', 'prod import-chat', 'linux mark-moved']);
+  });
+
+  it('an importer refuses a delta whose base it does not hold', async () => {
+    on('l1');
+    await writeState(state([]));
+    const delta: ChatExport = { ...exported(), version: 2, base: { messages: 3, hash: 'nope' } };
+    await expect(importChat(delta, names, facts())).rejects.toThrow(/changed/);
+    expect((await readState({ transcripts: [] })).sessions).toEqual([]);
   });
 });
 

@@ -46,7 +46,12 @@ async function onProd<T>(work: () => Promise<T>): Promise<T> {
 const sent: string[] = [];
 const recorded = (end: MoveEnd): MoveEnd => ({
   name: end.name,
-  call: <T>(request: MoveRequest): Promise<T> => { sent.push(`${end.name} ${request.type}${'dryRun' in request ? ' (dry run)' : ''}`); return end.call<T>(request); },
+  get revision() { return end.revision; },
+  call: <T>(request: MoveRequest): Promise<T> => {
+    const since = request.type === 'export-chat' && request.since ? ` since ${request.since.messages}` : '';
+    sent.push(`${end.name} ${request.type}${since}${'dryRun' in request ? ' (dry run)' : ''}`);
+    return end.call<T>(request);
+  },
 });
 const until = async <T>(check: () => Promise<T | undefined | false>, ms = 20_000): Promise<T> => {
   const end = Date.now() + ms;
@@ -113,7 +118,9 @@ describe.skipIf(!built)('moving a chat between two machines, over the real bridg
       const there = await moveChat(recorded(localMoveEnd()), recorded(remoteMoveEnd(bridge, { name: 'prod' })), 'here-1');
       expect(there).toMatchObject({ moved: true, sessionId: 'here-1', folder: prod.home });
       // One pick: the chat sent once, nothing planned first.
-      expect(sent).toEqual([`${localMoveEnd().name} export-chat`, 'prod import-chat', `${localMoveEnd().name} mark-moved`]);
+      // Asked first what it holds of the chat (nothing): then all of it goes.
+      expect(sent).toEqual(['prod chat-have', `${localMoveEnd().name} export-chat`, 'prod import-chat', `${localMoveEnd().name} mark-moved`]);
+      expect(there).toMatchObject({ reused: 0, sent: 2 });
       // Warm there before anything is sent: its worker is up.
       const warmed = await until(() => onProd(() => readWorkerRecord('here-1')));
       expect(alive(warmed.pid)).toBe(true);
@@ -142,8 +149,9 @@ describe.skipIf(!built)('moving a chat between two machines, over the real bridg
       });
       sent.length = 0;
       const back = await moveChat(recorded(remoteMoveEnd(bridge, { name: 'prod' })), recorded(localMoveEnd()), 'here-1');
-      expect(back).toMatchObject({ moved: true, sessionId: 'here-1', folder: folderHere });
-      expect(sent).toEqual(['prod export-chat', `${localMoveEnd().name} import-chat`, 'prod mark-moved']);
+      // Only what this machine lacks travels: the two turns said on prod.
+      expect(back).toMatchObject({ moved: true, sessionId: 'here-1', folder: folderHere, reused: 2, sent: 2 });
+      expect(sent).toEqual([`${localMoveEnd().name} chat-have`, 'prod export-chat since 2', `${localMoveEnd().name} import-chat`, 'prod mark-moved']);
       // Warm here now, and prod's worker for it gone.
       const home = await until(() => readWorkerRecord('here-1'));
       expect(alive(home.pid)).toBe(true);
@@ -151,6 +159,7 @@ describe.skipIf(!built)('moving a chat between two machines, over the real bridg
       const again = (await read()).sessions.find((item) => item.id === 'here-1')!;
       expect(again.movedTo).toBeUndefined();
       expect(again.messages).toHaveLength(4);
+      expect(again.messages!.map((message) => message.content)).toEqual(['read the parser', 'It reads tokens.', 'on prod now', 'Done on prod.']);
       expect(again.moveNote).toContain(`moved from prod (folder ${prod.home})`);
       expect((await onProd(read)).sessions.find((item) => item.id === 'here-1')!.movedTo).toMatchObject({ machine: expect.any(String), sessionId: 'here-1' });
     } finally { bridge.close(); }
