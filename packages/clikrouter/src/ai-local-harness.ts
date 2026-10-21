@@ -560,6 +560,10 @@ export interface AiLocalHarnessDefinition {
    * no-op for this harness — declared here so callers can say so instead of
    * silently accepting a setting that changes nothing. */
   permissionModes?: readonly AiHarnessPermissionMode[];
+  /** The vendor refuses bypass when it runs as root, unless IS_SANDBOX is set: Claude Code
+   * (`claude-agent-acp` permissions/modes.js `ALLOW_BYPASS = !IS_ROOT || !!process.env.IS_SANDBOX`;
+   * the CLI refuses --dangerously-skip-permissions as root the same way). */
+  bypassRefusedAsRoot?: boolean;
   /** Exact vendor argv for each normalized permission choice. An empty argv is
    * deliberate: it means the vendor's unflagged default implements that mode. */
   permissionArgv?: Readonly<Partial<Record<AiHarnessPermissionMode, {
@@ -900,7 +904,7 @@ const HARNESS_INSTALLERS = {
 } as const satisfies Readonly<Record<string, AiHarnessInstaller>>;
 
 const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
-  { command: 'claude', modelStrategy: 'claude-table', quotaProbe: true, nativeStateDir: '.claude', modelCatalogFiles: ['settings.json'], subagents: { read: 'transcript', steer: 'relay' }, capabilities: { childActivity: true, thinking: true, plan: true, usage: true, toolOutput: true, backgroundAgents: true, backgroundTerminals: true, workflows: true }, provider: 'anthropic', displayName: 'Claude Code', titleSource: 'vendor', defaultModel: 'opus', tier: 'primary', transport: 'acp', acp: { binary: 'claude-agent-acp', npmPackage: '@agentclientprotocol/claude-agent-acp@0.84.0', argv: [], inheritCliOptions: false, listsModels: false, effortConfigId: 'effort', planModeId: 'plan', sharedSessions: true }, integration: 'structured', parser: 'claude-stream-json', memoryFile: 'CLAUDE.md', nativeSlashPassthrough: true, customCommandDirs: ['.claude/commands', '~/.claude/commands'], effortValues: ['low', 'medium', 'high', 'xhigh', 'max'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'claude', authFiles: [{ path: '${CLAUDE_CONFIG_DIR:-~/.claude}/.credentials.json' }], authEnv: ['ANTHROPIC_API_KEY'], npmPackage: '@anthropic-ai/claude-code', loginArgv: ['auth', 'login'], loginSteps: [{ when: 'Login successful. Press Enter to continue', send: '{enter}' }], statusArgv: ['auth', 'status'], logoutArgv: ['auth', 'logout'], modelArgvPrefix: ['--model'], effortArgvPrefix: ['--effort'], permissionModes: ['ask', 'bypass', 'auto'], permissions: { ask: { argv: ['--permission-mode', 'manual', '--permission-prompts', 'none'], acpModeId: 'default' }, bypass: { argv: ['--permission-mode', 'bypassPermissions', '--permission-prompts', 'none', '--allow-dangerously-skip-permissions'], acpModeId: 'bypassPermissions' }, auto: { argv: ['--permission-mode', 'auto', '--permission-prompts', 'none'], acpModeId: 'auto' } }, turnEnv: { CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' }, profileEnv: 'CLAUDE_CONFIG_DIR', turn: { startArgv: ['-p', '--verbose', '--input-format', 'stream-json', '--output-format', 'stream-json', '--include-partial-messages'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], promptInput: 'stdin', stdinFormat: 'stream-json', stdinArgv: [], output: 'json-lines', responseFields: ['result'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'] } },
+  { command: 'claude', modelStrategy: 'claude-table', quotaProbe: true, nativeStateDir: '.claude', modelCatalogFiles: ['settings.json'], subagents: { read: 'transcript', steer: 'relay' }, capabilities: { childActivity: true, thinking: true, plan: true, usage: true, toolOutput: true, backgroundAgents: true, backgroundTerminals: true, workflows: true }, provider: 'anthropic', displayName: 'Claude Code', titleSource: 'vendor', defaultModel: 'opus', tier: 'primary', transport: 'acp', acp: { binary: 'claude-agent-acp', npmPackage: '@agentclientprotocol/claude-agent-acp@0.84.0', argv: [], inheritCliOptions: false, listsModels: false, effortConfigId: 'effort', planModeId: 'plan', sharedSessions: true }, integration: 'structured', parser: 'claude-stream-json', memoryFile: 'CLAUDE.md', nativeSlashPassthrough: true, customCommandDirs: ['.claude/commands', '~/.claude/commands'], effortValues: ['low', 'medium', 'high', 'xhigh', 'max'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'claude', authFiles: [{ path: '${CLAUDE_CONFIG_DIR:-~/.claude}/.credentials.json' }], authEnv: ['ANTHROPIC_API_KEY'], npmPackage: '@anthropic-ai/claude-code', loginArgv: ['auth', 'login'], loginSteps: [{ when: 'Login successful. Press Enter to continue', send: '{enter}' }], statusArgv: ['auth', 'status'], logoutArgv: ['auth', 'logout'], modelArgvPrefix: ['--model'], effortArgvPrefix: ['--effort'], bypassRefusedAsRoot: true, permissionModes: ['ask', 'bypass', 'auto'], permissions: { ask: { argv: ['--permission-mode', 'manual', '--permission-prompts', 'none'], acpModeId: 'default' }, bypass: { argv: ['--permission-mode', 'bypassPermissions', '--permission-prompts', 'none', '--allow-dangerously-skip-permissions'], acpModeId: 'bypassPermissions' }, auto: { argv: ['--permission-mode', 'auto', '--permission-prompts', 'none'], acpModeId: 'auto' } }, turnEnv: { CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' }, profileEnv: 'CLAUDE_CONFIG_DIR', turn: { startArgv: ['-p', '--verbose', '--input-format', 'stream-json', '--output-format', 'stream-json', '--include-partial-messages'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], promptInput: 'stdin', stdinFormat: 'stream-json', stdinArgv: [], output: 'json-lines', responseFields: ['result'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'] } },
   // Grok Build speaks Claude Code's stream-json shape exactly -- verified live
   // against `grok -p --output-format streaming-messages-json`, whose first
   // line is {"type":"system","subtype":"init","session_id":…} and whose last
@@ -2174,8 +2178,16 @@ export function harnessSupportsModelSelection(harness: AiLocalHarnessDefinition)
   return harness.modelArgvPrefix !== undefined || Boolean(harness.acp && harness.acp.listsModels !== false);
 }
 
+/** `mode` is one this harness refuses on this machine: bypass for a vendor that refuses it as root,
+ * run here as root without IS_SANDBOX. Answered where the chat runs -- the machine that owns it. */
+export function permissionModeRefusedHere(harness: Pick<AiLocalHarnessDefinition, 'bypassRefusedAsRoot'>, mode: AiHarnessPermissionMode): boolean {
+  if (mode !== 'bypass' || !harness.bypassRefusedAsRoot || typeof process === 'undefined') return false;
+  return process.getuid?.() === 0 && !process.env.IS_SANDBOX;
+}
+
 export function harnessSupportsPermissionMode(harness: AiLocalHarnessDefinition, mode: AiHarnessPermissionMode): boolean {
   if (!harness.permissionModes?.includes(mode)) return false;
+  if (permissionModeRefusedHere(harness, mode)) return false;
   // Declaring the mode is not enough: something has to actually carry it to
   // the vendor, or selecting it would silently do nothing -- which is the one
   // outcome a permission control must never have.

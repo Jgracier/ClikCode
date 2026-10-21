@@ -24,7 +24,9 @@ import { TurnRecorder } from '../session/turn-changes.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { beginTurnClock, currentTurnId, endTurnClock, markTurn, setTurnHarness } from '../runtime/turn-latency.js';
 import { randomUUID } from 'node:crypto';
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
+import { writeState } from '../session/state/write.js';
+import { harnessSupportsPermissionMode, localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { folderExists, missingFolderMessage } from '../runtime/machine-folder.js';
 
 /** Options supplied by any caller of a turn. */
@@ -85,6 +87,15 @@ export async function runSessionTurn(
   // Opening the chat again moves it to this machine's home (session/attach.ts).
   if (session.workspace && !folderExists(session.workspace)) {
     throw new Error(`${missingFolderMessage(session.workspace)}. Open the chat again to continue it in ${homedir()}.`);
+  }
+  // A mode the harness refuses on this machine (Claude Code's bypass as root) is not sent to fail
+  // the turn: the chat goes on in auto, and is told so once.
+  const harness = !isClikCodeAgent(session) && session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+  if (harness?.bypassRefusedAsRoot && session.permissionMode === 'bypass' && !harnessSupportsPermissionMode(harness, 'bypass')) {
+    session.permissionMode = harnessSupportsPermissionMode(harness, 'auto') ? 'auto' : 'ask';
+    session.updatedAt = new Date().toISOString();
+    await writeState(state);
+    run.prompter?.activity(`Bypass is not available for ${harness.displayName} running as root on ${hostname()}; this chat now uses ${session.permissionMode === 'auto' ? 'Auto' : 'Ask'}.`);
   }
   setTurnHarness(session.nativeHarness ?? session.route);
   // A session that left ClikCode Local lets go of the model this process
