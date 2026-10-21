@@ -50,8 +50,11 @@ export type IdeUiResult =
 
 export type IdeRequest =
   /** Show a conversation: `resume` an id, `continue` the workspace's latest,
-   * or start a `new` one in `workspace`. */
-  | { type: 'open'; requestId: string; workspace: string; mode: 'new' | 'continue' | 'resume'; sessionId?: string; features?: readonly IdeFeature[] }
+   * or start a `new` one in `workspace`. `workspace` is a folder of the
+   * machine running the bridge: a client on another machine names none (or
+   * one that machine listed), and the bridge takes its own -- a resumed chat
+   * keeps its saved workspace, a new one starts in this machine's home. */
+  | { type: 'open'; requestId: string; workspace?: string; mode: 'new' | 'continue' | 'resume'; sessionId?: string; features?: readonly IdeFeature[] }
   /** A composer line, exactly as typed: conversation, `/command`, or `!shell`.
    * During a turn it steers (or queues); `id` comes back on the worker's
    * `submission` event. */

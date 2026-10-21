@@ -142,7 +142,7 @@ export class IdeBridge {
         this.features = new Set(request.features ?? []);
         this.enqueue(async () => {
           try {
-            await this.open(request.workspace, request.mode, request.sessionId);
+            await this.open(request.workspace ?? '', request.mode, request.sessionId);
             this.channel.send({ type: 'result', requestId: request.requestId, ok: true, data: { sessionId: this.sessionId } });
           } catch (error) {
             this.channel.send({ type: 'result', requestId: request.requestId, ok: false, error: messageOf(error) });
