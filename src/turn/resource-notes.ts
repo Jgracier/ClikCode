@@ -15,12 +15,23 @@ function readNotes(sessionId: string): string[] {
     return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
   } catch { return []; }
 }
+/** A warning is a current measurement, not a history of every crossing.
+ * Keep the latest pending reading of each kind; actual stop notices remain
+ * separate because each tells the agent which command ended. */
+function warningKey(note: string): string | undefined {
+  if (note.includes('Disk I/O is stalling the machine')) return note.includes('Your `') ? 'io-owned' : 'io-global';
+  if (note.includes('Memory is getting tight:')) return 'memory';
+  if (note.includes('Disk is getting tight:') || note.includes('Disk is almost full:')) return 'disk-space';
+  return undefined;
+}
 /** The worker owns the conversation; only it writes a pending notice. */
 export function holdResourceNote(sessionId: string, note: string): void {
   const path = pathFor(sessionId);
   mkdirSync(join(stateDirectory(), 'resource-notes'), { recursive: true, mode: 0o700 });
   const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify([...readNotes(sessionId), wrapResourceNote(note)]), { mode: 0o600 });
+  const key = warningKey(note);
+  const pending = readNotes(sessionId).filter((held) => !key || warningKey(held) !== key);
+  writeFileSync(tmp, JSON.stringify([...pending, wrapResourceNote(note)]), { mode: 0o600 });
   renameSync(tmp, path);
 }
 /** Attach queued notices to the next outgoing turn, then consume them. */
