@@ -21,6 +21,9 @@ process.env.HOME = root;
 process.env.CLIKCODE_HOME = join(root, '.clikcode');
 process.env.TMPDIR = scratch;
 process.env.CLIKCODE_LIFECYCLE_LOG = '0';
+// Workers a test spawns are replaced for a newer build at once, not after a quiet period
+// (worker-idle.ts RETIRE_QUIET_MS; worker-retire-quiet.vitest.test.ts tests the wait itself).
+process.env.CLIKCODE_WORKER_RETIRE_QUIET_MS ??= '0';
 
 afterAll(() => {
   rmSync(root, { recursive: true, force: true, maxRetries: 3 });

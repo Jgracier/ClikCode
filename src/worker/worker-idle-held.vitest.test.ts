@@ -13,7 +13,7 @@ const build = (over: Record<string, unknown> = {}) => {
   const ctx = {
     observer: { attachedCount: 0 }, sessionId: 'held-reason',
     agentSession: { shells: new Map(), notifications: [] as unknown[], wakeups: new Map() },
-    turnRunning: false, draining: false, vendorBackground: { busy: false }, resumeWaiter: { pending: false },
+    turnRunning: false, draining: false, vendorBackground: { busy: false }, outOfTurn: { active: false }, resumeWaiter: { pending: false },
     idleTimer: undefined as NodeJS.Timeout | undefined, homeGone: () => false, shutdown: vi.fn(),
     ...over,
   };

@@ -24,6 +24,15 @@ const IDLE_EXIT_MS = Number(process.env.CLIKCODE_WORKER_IDLE_EXIT_MS) > 0 ? Numb
  * CLIKCODE_WORKER_BUILD_WATCH_MS overrides it for tests. */
 export const BUILD_WATCH_MS = Number(process.env.CLIKCODE_WORKER_BUILD_WATCH_MS) > 0 ? Number(process.env.CLIKCODE_WORKER_BUILD_WATCH_MS) : 15_000;
 
+/** A newer build replaces a worker only after this long with nothing happening in it: no turn,
+ * no vendor activity, no window coming or going. The vendor works in bursts -- out of turn,
+ * after a background task ends -- with gaps between them that look idle, and a window reload is
+ * a disconnect of a second; retiring in either cut a running turn off. Replacing is silent: the
+ * next window to need the conversation attaches to the new build.
+ * CLIKCODE_WORKER_RETIRE_QUIET_MS overrides it for tests. */
+export const RETIRE_QUIET_MS = Number(process.env.CLIKCODE_WORKER_RETIRE_QUIET_MS) >= 0 && process.env.CLIKCODE_WORKER_RETIRE_QUIET_MS
+  ? Number(process.env.CLIKCODE_WORKER_RETIRE_QUIET_MS) : 30_000;
+
 /** A background shell keeps an otherwise idle worker alive -- its exit is
  * owed to the model -- but not for ever: this long after it started, with
  * nobody attached and no turn running, it is stopped, and the model is told
@@ -70,7 +79,7 @@ export function createIdleControl(ctx: WorkerContext) {
   const heldReason = (scope: 'retire' | 'idle'): string | undefined => {
     const retire = scope === 'retire';
     if (ctx.turnRunning || (retire && ctx.draining)) return HELD.turn;
-    if (ctx.vendorBackground.busy) return HELD.vendorBackground;
+    if (ctx.vendorBackground.busy || ctx.outOfTurn.active) return HELD.vendorBackground;
     if (!retire && observer.attachedCount > 0) return `${observer.attachedCount} window(s) attached`;
     if (retire && vendorWorkSince !== undefined) return HELD.vendorWork;
     if (existingSessionAgents(agentSession)?.running()) return HELD.agents;
@@ -101,11 +110,24 @@ export function createIdleControl(ctx: WorkerContext) {
    * and owes the model a turn to say so. Checked again at every idle edge
    * and build-watch tick, so it goes once the work has ended. */
   let retireCheck: Promise<void> | undefined;
+  let quietTimer: NodeJS.Timeout | undefined;
+  /** How much longer until this worker has been quiet for RETIRE_QUIET_MS (0: it has). */
+  const quietLeft = (): number => Math.max(0, observer.lastActivityAt + RETIRE_QUIET_MS - Date.now());
   const retireIfFree = (): void => {
+    const left = quietLeft();
+    if (left > 0) {
+      // Not yet quiet: looked at again once it could be. Whatever happens meanwhile pushes it on.
+      noteIdle('held: replacing for the newer build once it is quiet');
+      if (!quietTimer) {
+        quietTimer = setTimeout(() => { quietTimer = undefined; if (ctx.retireWhenIdle) retireIfFree(); else leaveIfStaleBuild(); }, left);
+        quietTimer.unref();
+      }
+      return;
+    }
     retireCheck ??= (async () => {
       const running = await persistentWorkRunning(sessionId);
       // Something started meanwhile: its own edge checks again.
-      if (retireBlocker()) return;
+      if (retireBlocker() || quietLeft() > 0) return;
       if (running) { noteIdle('held: retiring once the vendor\'s work ends'); return; }
       void ctx.shutdown('replaced by a newer ClikCode build');
     })().catch(() => undefined).finally(() => { retireCheck = undefined; });
