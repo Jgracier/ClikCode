@@ -130,5 +130,8 @@ export async function updateThisMachine(options: SelfUpdateOptions): Promise<Sel
   const outcome = await runManagedUpdate(run, where, progress, { ...(options.commit ? { commit: options.commit } : {}), running: running.commit ?? '' });
   if (!outcome.ok) throw new Error(`${outcome.step}: ${outcome.message}`);
   if (outcome.upToDate) return { kind: 'managed', updated: false, text: `ClikCode ${short(outcome.to)} on ${where} is already up to date.` };
-  return { kind: 'managed', updated: true, text: `ClikCode ${short(outcome.from ?? running.commit)} → ${short(outcome.to)} on ${where}; ${SWITCH}.` };
+  const from = outcome.from ?? running.commit;
+  // Already at the target, but not running it (an earlier build that failed): built again.
+  if (from === outcome.to) return { kind: 'managed', updated: true, text: `ClikCode ${short(outcome.to)} on ${where} is built and installed again; ${SWITCH}.` };
+  return { kind: 'managed', updated: true, text: `ClikCode ${short(from)} → ${short(outcome.to)} on ${where}; ${SWITCH}.` };
 }

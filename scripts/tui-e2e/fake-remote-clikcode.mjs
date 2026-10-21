@@ -15,6 +15,12 @@
  * Every request it gets is logged to ~/.fake-remote/bridge.log, so a test
  * can check which requests the board and opened chat sent.
  *
+ * `/update [commit]` sent in a chat runs THIS checkout's real ClikCode
+ * (`$FAKE_CLIKCODE_CLI update --entry ~/.local/bin/clikcode`, set by the
+ * test in the machine's env) on this machine, as the real bridge's /update
+ * would: its step lines and its answer come back as the chat's notices,
+ * with a busy line while it runs.
+ *
  * It owns its chats' folders as the real one does (session/attach.ts): a
  * chat is opened in a folder of THIS machine -- $FAKE_MACHINE, set by
  * fake-ssh.mjs, since the fake machines share the client's filesystem --
@@ -22,6 +28,7 @@
  * is its home instead, said as a warning notice. */
 import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync, watchFile, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
 import { dirname, join, sep } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -87,6 +94,25 @@ lines.on('line', (line) => {
   } else if (request.type === 'send' && opened.has(message.chat)) {
     const id = opened.get(message.chat);
     const session = sessionFor(id);
+    if (/^\/update(\s|$)/.test(request.text) && process.env.FAKE_CLIKCODE_CLI) {
+      const chat = message.chat;
+      const notice = (text, level = 'info') => send({ type: 'chat', chat, event: { type: 'notice', level, message: text } });
+      send({ type: 'chat', chat, event: { type: 'busy', label: `updating ClikCode on ${machineName}` } });
+      const args = request.text.split(/\s+/).slice(1).filter(Boolean);
+      const child = spawn(process.execPath, [process.env.FAKE_CLIKCODE_CLI, 'update', ...args, '--entry', join(home, '.local', 'bin', 'clikcode')], { cwd: home, stdio: ['ignore', 'pipe', 'pipe'] });
+      let stderr = '';
+      // As the real bridge: the steps during the busy line, the answer after it.
+      let answer;
+      createInterface({ input: child.stdout }).on('line', (line) => { if (!line.trim()) return; if (answer) notice(answer); answer = line; });
+      child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+      child.once('close', (code) => {
+        send({ type: 'chat', chat, event: { type: 'busy' } });
+        if (code !== 0) notice(stderr.trim().split('\n').pop() || `update exited ${code}`, 'error');
+        else if (answer) notice(answer);
+        send({ type: 'chat', chat, event: { type: 'send-complete', id: request.id } });
+      });
+      return;
+    }
     if (request.text === '/provider') {
       choices.set(message.chat, request.id);
       send({ type: 'chat', chat: message.chat, event: { type: 'ui-request', id: 'provider-choice', request: {

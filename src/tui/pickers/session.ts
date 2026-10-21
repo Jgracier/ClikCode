@@ -33,7 +33,7 @@ import { conversationIdFor } from '../../session/conversation-rows.js';
 import { aiSessionCommand } from '../slash/handlers.js';
 import { chooseOption } from './choose.js';
 import { RemoteMachines } from '../../remote/connection.js';
-import { isRemoteRowValue, localMachineName, remoteConversationOption, parseRemoteRowValue } from '../../remote/board-rows.js';
+import { isRemoteRowValue, localMachineName, remoteConversationOption, parseRemoteRowValue, updateText } from '../../remote/board-rows.js';
 
 type AdoptableNativeSession = {
   harness: AiLocalHarnessDefinition;
@@ -421,7 +421,7 @@ export async function interactiveSessionPicker(
           { label: localMachineName(), detail: '· this machine', value: 'local' },
           ...(remote?.views().map((view) => ({
             label: view.machine.name,
-            detail: `· ${view.state}${view.chats.length ? ` · ${view.chats.length} chats` : ''}`,
+            detail: `· ${view.state}${view.chats.length ? ` · ${view.chats.length} chats` : ''}${view.state === 'offline' ? '' : updateText(view)}`,
             value: view.machine.id,
           })) ?? []),
         ],
