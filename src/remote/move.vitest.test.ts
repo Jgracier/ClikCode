@@ -10,7 +10,8 @@ import { dirname, join, resolve } from 'node:path';
 // @ts-expect-error -- a plain .mjs fixture module
 import { host } from '../../scripts/tui-e2e/fake-remote.mjs';
 import type { HarnessSession, HarnessState } from '../session/model.js';
-import { moveChat } from '../session/move-chat.js';
+import { moveChat, type MoveEnd, type MoveRequest } from '../session/move-chat.js';
+import { listWorkerRecords, readWorkerRecord } from '../worker/registry.js';
 import { newMachineRecord, updateMachines } from './machines.js';
 import { localMoveEnd, movedChatPlace, remoteMoveEnd } from './move-terminal.js';
 import { TerminalBridge } from './terminal-chat.js';
@@ -39,6 +40,22 @@ async function onProd<T>(work: () => Promise<T>): Promise<T> {
   process.env.CLIKCODE_HOME = join(prod.home, '.clikcode');
   try { return await work(); } finally { process.env.CLIKCODE_HOME = previous; }
 }
+/** Each request a machine is asked, by name. */
+const sent: string[] = [];
+const recorded = (end: MoveEnd): MoveEnd => ({
+  name: end.name,
+  call: <T>(request: MoveRequest): Promise<T> => { sent.push(`${end.name} ${request.type}${'dryRun' in request ? ' (dry run)' : ''}`); return end.call<T>(request); },
+});
+const until = async <T>(check: () => Promise<T | undefined | false>, ms = 20_000): Promise<T> => {
+  const end = Date.now() + ms;
+  for (;;) {
+    const value = await check();
+    if (value) return value;
+    if (Date.now() > end) throw new Error('timed out');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+};
+const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const read = async () => (await import('../session/state/read.js')).readState({ transcripts: ['here-1', 'prod-1'] });
 const write = async (state: HarnessState) => (await import('../session/state/write.js')).writeState(state);
 
@@ -55,14 +72,23 @@ beforeAll(async () => {
   writeFileSync(join(bin, 'claude'), fakeClaude, { mode: 0o755 });
   process.env.PATH = `${bin}:${dirname(process.execPath)}:/usr/bin:/bin`;
   process.env.FAKE_SSH_ROOT = root;
-  prod = host(root, 'prod', {});
+  prod = host(root, 'prod', { env: { CLIKCODE_OWN_SCOPE: '0' } });
   writeFileSync(join(prod.bin, 'claude'), fakeClaude, { mode: 0o755 });
   mkdirSync(join(prod.home, '.local', 'bin'), { recursive: true });
   writeFileSync(join(prod.home, '.local', 'bin', 'clikcode'), `#!/bin/sh\nexec ${process.execPath} ${entry} "$@"\n`, { mode: 0o755 });
   await updateMachines(() => [newMachineRecord({ name: 'prod', sshTarget: 'prod', ready: true })]);
+  // Workers this process starts (the chat moved here, warmed) run this build.
+  process.env.CLIKCODE_WORKER_ENTRY = entry;
+  process.env.CLIKCODE_OWN_SCOPE = '0';
 });
 
-afterAll(() => {
+afterAll(async () => {
+  // Every worker either machine still runs, stopped.
+  for (const records of [await listWorkerRecords(), await onProd(listWorkerRecords)]) {
+    for (const record of records) { try { process.kill(record.pid, 'SIGTERM'); } catch { /* gone */ } }
+  }
+  delete process.env.CLIKCODE_WORKER_ENTRY;
+  delete process.env.CLIKCODE_OWN_SCOPE;
   delete process.env.FAKE_SSH_ROOT;
   process.env.PATH = savedEnv.PATH;
   process.env.HOME = savedEnv.HOME;
@@ -72,12 +98,24 @@ describe.skipIf(!built)('moving a chat between two machines, over the real bridg
   it('moves a chat from here to the other machine, and back', async () => {
     const folderHere = mkdtempSync(join(tmpdir(), 'cc-move-here-'));
     await write(stateOf([chat({ id: 'here-1', conversationId: 'conv-1', name: 'Fix the parser', workspace: folderHere, nativeSessionId: 'thread-here' })]));
+    // The chat has a worker here, as one being used does.
+    const { WorkerClient } = await import('../worker/client.js');
+    const attached = await WorkerClient.attach('here-1');
+    const before = (await readWorkerRecord('here-1'))!;
+    attached.close();
     const bridge = new TerminalBridge('prod');
     try {
       await bridge.connected();
-      const asked: string[] = [];
-      const there = await moveChat(localMoveEnd(), remoteMoveEnd(bridge, { name: 'prod' }), 'here-1', async (text) => { asked.push(text); return true; });
+      sent.length = 0;
+      const there = await moveChat(recorded(localMoveEnd()), recorded(remoteMoveEnd(bridge, { name: 'prod' })), 'here-1');
       expect(there).toMatchObject({ moved: true, sessionId: 'here-1', folder: prod.home });
+      // One pick: the chat sent once, nothing planned first.
+      expect(sent).toEqual([`${localMoveEnd().name} export-chat`, 'prod import-chat', `${localMoveEnd().name} mark-moved`]);
+      // Warm there before anything is sent: its worker is up.
+      const warmed = await until(() => onProd(() => readWorkerRecord('here-1')));
+      expect(alive(warmed.pid)).toBe(true);
+      // Gone here: the copy left is read-only, and its worker does not idle out holding it.
+      await until(async () => !alive(before.pid));
 
       // On the other machine: the conversation, in its own home, no vendor thread, the note for its agent.
       const remote = (await onProd(read)).sessions.find((item) => item.id === 'here-1')!;
@@ -99,14 +137,19 @@ describe.skipIf(!built)('moving a chat between two machines, over the real bridg
         moved.messages = [...moved.messages!, { role: 'user', content: 'on prod now' }, { role: 'assistant', content: 'Done on prod.' }];
         await write(state);
       });
-      const back = await moveChat(remoteMoveEnd(bridge, { name: 'prod' }), localMoveEnd(), 'here-1', async () => true);
+      sent.length = 0;
+      const back = await moveChat(recorded(remoteMoveEnd(bridge, { name: 'prod' })), recorded(localMoveEnd()), 'here-1');
       expect(back).toMatchObject({ moved: true, sessionId: 'here-1', folder: folderHere });
+      expect(sent).toEqual(['prod export-chat', `${localMoveEnd().name} import-chat`, 'prod mark-moved']);
+      // Warm here now, and prod's worker for it gone.
+      const home = await until(() => readWorkerRecord('here-1'));
+      expect(alive(home.pid)).toBe(true);
+      await until(async () => !alive(warmed.pid));
       const again = (await read()).sessions.find((item) => item.id === 'here-1')!;
       expect(again.movedTo).toBeUndefined();
       expect(again.messages).toHaveLength(4);
       expect(again.moveNote).toContain(`moved from prod (folder ${prod.home})`);
       expect((await onProd(read)).sessions.find((item) => item.id === 'here-1')!.movedTo).toMatchObject({ machine: expect.any(String), sessionId: 'here-1' });
-      expect(asked).toEqual([]);
     } finally { bridge.close(); }
   }, 120_000);
 
@@ -115,7 +158,7 @@ describe.skipIf(!built)('moving a chat between two machines, over the real bridg
     const bridge = new TerminalBridge('prod');
     try {
       await bridge.connected();
-      const moved = await moveChat(remoteMoveEnd(bridge, { name: 'prod' }), localMoveEnd(), 'prod-1', async () => true);
+      const moved = await moveChat(remoteMoveEnd(bridge, { name: 'prod' }), localMoveEnd(), 'prod-1');
       expect(moved).toMatchObject({ moved: true, sessionId: 'prod-1', folder: process.env.HOME });
       const local = (await read()).sessions.find((item) => item.id === 'prod-1')!;
       expect(local).toMatchObject({ name: 'On prod', workspace: process.env.HOME, conversationId: 'conv-2' });
@@ -124,7 +167,7 @@ describe.skipIf(!built)('moving a chat between two machines, over the real bridg
       const remote = (await onProd(read)).sessions.find((item) => item.id === 'prod-1')!;
       expect(remote.movedTo).toMatchObject({ sessionId: 'prod-1' });
       // It is read-only there now: a second move of it is refused by that machine.
-      await expect(moveChat(remoteMoveEnd(bridge, { name: 'prod' }), localMoveEnd(), 'prod-1', async () => true)).rejects.toThrow(/moved to/);
+      await expect(moveChat(remoteMoveEnd(bridge, { name: 'prod' }), localMoveEnd(), 'prod-1')).rejects.toThrow(/moved to/);
     } finally { bridge.close(); }
   }, 120_000);
 });

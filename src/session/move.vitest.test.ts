@@ -12,11 +12,19 @@ import type { HarnessSession, HarnessState } from './model.js';
 import { readState } from './state/read.js';
 import { writeState } from './state/write.js';
 import { exportChat, importChat, markMoved, planImport, type MoveFacts } from './move.js';
-import { chatHasContent, moveChat, moveConfirmation, type ChatExport, type MoveEnd, type MoveRequest } from './move-chat.js';
+import { chatHasContent, moveChat, type ChatExport, type MoveEnd, type MoveRequest } from './move-chat.js';
 import { answerMoveRequest } from './move.js';
 import { withMoveNote } from '../turn/resource-notes.js';
 import { completeTurnCheckpoint } from '../turn/turn-journal.js';
 import { normalizeImportedTranscript } from '../turn/failover-prompt.js';
+
+// The worker side of a move: started warm where it arrives, retired where it left (worker/client.ts).
+const workers = vi.hoisted(() => ({ warmed: [] as string[], retired: [] as string[] }));
+vi.mock('../worker/client.js', () => ({
+  warmSessionWorker: async (id: string) => { workers.warmed.push(id); },
+  retireMovedWorker: async (id: string) => { workers.retired.push(id); },
+  runningWorker: async () => false,
+}));
 
 const now = '2026-10-21T00:00:00.000Z';
 const names = { source: 'linux', target: 'clikdeploy-prod' };
@@ -60,7 +68,7 @@ beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), 'cc-move-home-'));
   vi.spyOn(process, 'getuid').mockReturnValue(1000);
 });
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); for (const key of Object.keys(machines)) delete machines[key]; });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); for (const key of Object.keys(machines)) delete machines[key]; workers.warmed = []; workers.retired = []; });
 
 describe('what the machine it goes to keeps', () => {
   it('keeps everything it can, and says nothing when nothing changes', async () => {
@@ -105,8 +113,8 @@ describe('what the machine it goes to keeps', () => {
     const theirs = account({ label: 'gracierdigital@gmail.com' });
     const plan = await planImport(state([], [theirs]), exported(), facts());
     expect(plan.session.permissionMode).toBe('auto');
-    const text = moveConfirmation(names.target, plan.changes);
-    expect(text).toBe('Moving to clikdeploy-prod: account justin@webpro.ai is not signed in there; using gracierdigital@gmail.com. Bypass → Auto (root).');
+    // Not asked about: what changed is in the log, and the info line shows the result.
+    expect(plan.changes).toEqual(['account justin@webpro.ai is not signed in there; using gracierdigital@gmail.com.', 'Bypass → Auto (root).']);
   });
 
   it('keeps the model only when the account there lists it, and effort only when offered', async () => {
@@ -141,10 +149,16 @@ describe('what the machine it goes to keeps', () => {
 });
 
 describe('a move between two machines', () => {
+  const sent: string[] = [];
   const end = (machine: string, name: string): MoveEnd => ({
     name,
-    call: async <T>(request: MoveRequest): Promise<T> => { on(machine); return await answerMoveRequest(undefined, request) as T; },
+    call: async <T>(request: MoveRequest): Promise<T> => {
+      sent.push(`${name} ${request.type}${'dryRun' in request ? ' (dry run)' : ''}`);
+      on(machine);
+      return await answerMoveRequest(undefined, request) as T;
+    },
   });
+  beforeEach(() => { sent.length = 0; });
 
   it('carries the conversation, leaves one live copy, and tells the agent once, unseen', async () => {
     on('a');
@@ -154,10 +168,13 @@ describe('a move between two machines', () => {
     mkdirSync(join(machines.b!), { recursive: true });
     await writeState(state([], [account({ label: 'justin@webpro.ai' })]));
     vi.stubEnv('HOME', home);
-    const asked: string[] = [];
-    const outcome = await moveChat(end('a', 'linux'), end('b', 'clikdeploy-prod'), 's1', async (text) => { asked.push(text); return true; });
+    const outcome = await moveChat(end('a', 'linux'), end('b', 'clikdeploy-prod'), 's1');
     expect(outcome).toMatchObject({ moved: true, sessionId: 's1', changes: [] });
-    expect(asked).toEqual([]);
+    // The chat goes once: no dry run first.
+    expect(sent).toEqual(['linux export-chat', 'clikdeploy-prod import-chat', 'linux mark-moved']);
+    // Warmed where it arrived; the copy it left has its worker retired.
+    expect(workers.warmed).toEqual(['s1']);
+    expect(workers.retired).toEqual(['s1']);
 
     // There: the whole conversation, its name and id, no vendor thread, the folder there.
     on('b');
@@ -176,19 +193,28 @@ describe('a move between two machines', () => {
     await expect(runSessionTurn({} as never, 's1', 'go on')).rejects.toThrow('This chat moved to clikdeploy-prod; continue it there.');
   });
 
-  it('asks first when something changes, and moves nothing when the answer is no', async () => {
+  it('asks nothing when something changes: it moves, keeping what that machine allows', async () => {
     on('c');
     await writeState(state([chat({ id: 's2', conversationId: 'c2' })], [account({ id: 'mine', label: 'justin@webpro.ai' })]));
     on('d');
-    await writeState(state([], [account({ label: 'gracierdigital@gmail.com' })]));
-    const asked: string[] = [];
-    const outcome = await moveChat(end('c', 'linux'), end('d', 'imac'), 's2', async (text) => { asked.push(text); return false; });
-    expect(outcome).toEqual({ moved: false });
-    expect(asked).toEqual(['Moving to imac: account justin@webpro.ai is not signed in there; using gracierdigital@gmail.com.']);
+    const theirs = account({ label: 'gracierdigital@gmail.com' });
+    await writeState(state([], [theirs]));
+    const outcome = await moveChat(end('c', 'linux'), end('d', 'imac'), 's2');
+    expect(outcome).toMatchObject({ moved: true, sessionId: 's2', changes: ['account justin@webpro.ai is not signed in there; using gracierdigital@gmail.com.'] });
+    expect(sent.filter((line) => line.includes('import-chat'))).toEqual(['imac import-chat']);
     on('d');
-    expect((await readState({ transcripts: [] })).sessions).toEqual([]);
+    expect((await readState({ transcripts: [] })).sessions[0]).toMatchObject({ id: 's2', accountId: theirs.id });
     on('c');
-    expect((await readState({ transcripts: [] })).sessions[0]!.movedTo).toBeUndefined();
+    expect((await readState({ transcripts: [] })).sessions[0]!.movedTo).toMatchObject({ machine: 'imac' });
+  });
+
+  it('an older client’s dry run is answered with what would change, and imports nothing', async () => {
+    on('c2');
+    await writeState(state([], [account({ label: 'gracierdigital@gmail.com' })]));
+    const plan = await answerMoveRequest(undefined, { type: 'import-chat', chat: exported(), names, dryRun: true } as MoveRequest);
+    expect(plan).toEqual({ changes: ['account justin@webpro.ai is not signed in there; using gracierdigital@gmail.com.'], folder: expect.any(String) });
+    expect((await readState({ transcripts: [] })).sessions).toEqual([]);
+    expect(workers.warmed).toEqual([]);
   });
 
   it('moving back takes the copy left there up again, in its folder, with what was said meanwhile', async () => {
