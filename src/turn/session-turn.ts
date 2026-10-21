@@ -24,6 +24,8 @@ import { TurnRecorder } from '../session/turn-changes.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { beginTurnClock, currentTurnId, endTurnClock, markTurn, setTurnHarness } from '../runtime/turn-latency.js';
 import { randomUUID } from 'node:crypto';
+import { homedir } from 'node:os';
+import { folderExists, missingFolderMessage } from '../runtime/machine-folder.js';
 
 /** Options supplied by any caller of a turn. */
 export interface TurnRunOptions {
@@ -76,6 +78,14 @@ export async function runSessionTurn(
   const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
+  // The one check before anything runs in the chat's folder -- ClikCode's agent, a
+  // vendor CLI, an ACP or app-server child. A folder this machine does not have
+  // (named by another machine, or removed since) would otherwise surface as
+  // `spawn <binary> ENOENT`, which reads as a harness that is not installed.
+  // Opening the chat again moves it to this machine's home (session/attach.ts).
+  if (session.workspace && !folderExists(session.workspace)) {
+    throw new Error(`${missingFolderMessage(session.workspace)}. Open the chat again to continue it in ${homedir()}.`);
+  }
   setTurnHarness(session.nativeHarness ?? session.route);
   // A session that left ClikCode Local lets go of the model this process
   // held for it (a worker that ran its earlier turns, say).

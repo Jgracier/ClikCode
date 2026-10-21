@@ -51,6 +51,9 @@ export interface JsonRpcPeerOptions {
   onNotification?: (method: string, params: JsonRpcMessage) => void;
   /** Fired exactly once, after every pending request has been rejected. */
   onClose?: (error: Error) => void;
+  /** The child failed to start (its `error` event): what to say instead of
+   * Node's error, which every pending request and onClose then carry. */
+  startFailure?: (error: Error) => Error;
   /** Why the child has crashed, read from its stderr so far, while its process
    * stays alive with nothing left to answer; undefined while it has not. The
    * transport closes and the child is stopped. (A Rust agent's panic report:
@@ -182,7 +185,11 @@ export class JsonRpcPeer {
     child.stdin?.on('error', () => undefined);
     child.stdout?.on('error', () => undefined);
     child.stderr?.on('error', () => undefined);
-    child.once('error', (error) => { this.markExited(null, null); this.handleClose(error instanceof Error ? error : new Error(String(error))); });
+    child.once('error', (error) => {
+      this.markExited(null, null);
+      const cause = error instanceof Error ? error : new Error(String(error));
+      this.handleClose(this.options.startFailure?.(cause) ?? cause);
+    });
     child.once('exit', (code, signal) => {
       this.markExited(code, signal);
       if (this.isClosed) return;

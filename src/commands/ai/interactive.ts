@@ -27,14 +27,17 @@ import { ChatLoop } from './interactive/loop.js';
 // its detached worker can finish an in-flight turn and serve a reconnect.
 
 export async function aiSessionOpenDefault(config: Conf, options: { continue?: boolean } = {}): Promise<void> {
-  await aiSessionInteractive(config, await openConversation(process.cwd(), options.continue ? 'continue' : 'new'));
+  await aiSessionInteractive(config, await openConversation(process.cwd(), options.continue ? 'continue' : 'new', undefined, { notice: sayOnOpen }));
 }
 
 export async function aiSessionResume(config: Conf, ref: string): Promise<void> {
   // A window a newer build replaced, on a draft: the draft comes with it.
   adoptHandedOverDraft();
-  await aiSessionInteractive(config, await openConversation(process.cwd(), 'resume', ref));
+  await aiSessionInteractive(config, await openConversation(process.cwd(), 'resume', ref, { notice: sayOnOpen }));
 }
+
+/** What opening the chat changed (a folder this machine does not have: session/attach.ts). */
+const sayOnOpen = (message: string): void => { process.stderr.write(`${message}\n`); };
 
 async function aiSessionInteractive(config: Conf, id: string): Promise<void> {
   // Fetched while the app starts, so Copilot's model list is there the first

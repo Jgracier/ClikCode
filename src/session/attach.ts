@@ -8,6 +8,8 @@
  * Presence is bookkeeping, never a lock: any number of clients can have a
  * chat open, and its worker serializes their turns (worker/turn-bridge.ts).
  */
+import { homedir } from 'node:os';
+import { folderExists, missingFolderMessage } from '../runtime/machine-folder.js';
 import { readState } from './state/read.js';
 import { writeState } from './state/write.js';
 import { takeConversation, type ConversationHold } from '../worker/registry.js';
@@ -43,8 +45,14 @@ export function activateSession(session: HarnessSession): boolean {
  * it prefers this workspace's and falls back to any.
  */
 export async function openConversation(
-  workspace: string, mode: 'new' | 'continue' | 'resume', ref?: string, options: { sameWorkspace?: boolean; pin?: boolean } = {},
+  requested: string, mode: 'new' | 'continue' | 'resume', ref?: string,
+  options: { sameWorkspace?: boolean; pin?: boolean; notice?: (message: string) => void } = {},
 ): Promise<string> {
+  // A chat is in a folder of the machine that owns it. One this machine does not
+  // have -- named by an editor on another machine, or none named -- is this
+  // machine's home: a vendor started in a missing folder fails as `spawn <binary> ENOENT`.
+  const home = homedir();
+  const workspace = requested && folderExists(requested) ? requested : home;
   const state = await readState({ transcripts: [] });
   // Housekeeping, in the background and at most daily (session/state/sweep.ts).
   void sweepStateDaily().catch(() => undefined);
@@ -66,9 +74,19 @@ export async function openConversation(
     session = latestChat(candidates, workspace);
   }
   if (session) {
-    if (activateSession(session)) await writeState(state);
+    let changed = activateSession(session);
+    // A saved chat whose folder is not on this machine (or is gone) goes on in its home,
+    // and the user is told: its turns would otherwise fail before the vendor started.
+    if (session.workspace && !folderExists(session.workspace)) {
+      options.notice?.(`${missingFolderMessage(session.workspace)}; this chat continues in ${home}.`);
+      session.workspace = home;
+      session.updatedAt = new Date().toISOString();
+      changed = true;
+    }
+    if (changed) await writeState(state);
     return session.id;
   }
+  if (requested && workspace !== requested) options.notice?.(`${missingFolderMessage(requested)}; this chat opens in ${home}.`);
   // Empty chats are not conversations: the one this opens is not stored
   // until something happens in it, and earlier ones left behind go now --
   // but not one another process stored and is about to use.

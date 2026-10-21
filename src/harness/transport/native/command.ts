@@ -3,6 +3,7 @@
 import { spawnPortable as spawn, terminatePortable } from '../spawn.js';
 import { NativeHarnessSpec, binaryOnPath } from './binary.js';
 import { ensureNativeHarness } from './inspect.js';
+import { notInstalledMessage, spawnFailure } from '../../../runtime/machine-folder.js';
 
 export function run(command: string, args: readonly string[], envOverrides: Readonly<Record<string, string>> = {}): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -29,7 +30,7 @@ export function run(command: string, args: readonly string[], envOverrides: Read
     if (process.platform !== 'win32') process.once('SIGHUP', onHangup);
     child.once('error', (error) => {
       cleanup();
-      reject(error);
+      reject(spawnFailure(error, { name: command, binary: command }));
     });
     child.once('exit', (code, signal) => {
       cleanup();
@@ -66,7 +67,7 @@ export async function captureNativeHarnessOutput(spec: NativeHarnessSpec, args: 
   // of harnesses nobody chose just now, and choosing is what installs one.
   // Everything that runs a harness because the user asked for it installed
   // it first (install.ts).
-  if (!await binaryOnPath(spec.binary)) throw Object.assign(new Error(`${spec.displayName} is not installed (no \`${spec.binary}\` on PATH)`), { code: 'ENOENT' });
+  if (!await binaryOnPath(spec.binary)) throw Object.assign(new Error(notInstalledMessage(spec.displayName, spec.binary)), { code: 'ENOENT' });
   return new Promise((resolve, reject) => {
     const child = spawn(spec.binary, [...args], { stdio: [stdinText === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], env: { ...process.env, ...envOverrides }, ...(cwd ? { cwd } : {}) });
     if (stdinText !== undefined) {
@@ -102,7 +103,7 @@ export async function captureNativeHarnessOutput(spec: NativeHarnessSpec, args: 
       }
     });
     child.stderr!.on('data', (chunk: string) => { if (stderr.length < 16 * 1024) stderr += chunk; });
-    child.once('error', (error) => finish(error));
+    child.once('error', (error) => finish(spawnFailure(error, { name: spec.displayName, binary: spec.binary, cwd })));
     // `close`, not `exit`: exit can fire before the stdout pipe has drained,
     // and a child that prints its JSON and exits at once (OpenClaw) was read
     // back as empty.

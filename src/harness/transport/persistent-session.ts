@@ -15,6 +15,7 @@ import { readFile } from 'node:fs/promises';
 import { redactSecrets } from '../../agent/security.js';
 import type { EndedWork, RunningWork, WorkEndedHandler } from './handoff-work.js';
 import { BackgroundWorkTracker } from './background-work.js';
+import { spawnFailure } from '../../runtime/machine-folder.js';
 
 /** How often a retired process's commands are looked at. */
 const RETIRED_POLL_MS = 3_000;
@@ -466,8 +467,10 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
   /** The live child for `key`, spawning one (and dropping the old one with
    * `restarted`) when there is none or its key changed. */
   protected liveFor(key: string, restarted: string, launch: {
+    /** The harness, as a person names it: "<name> is not installed on <machine>". */
+    name: string;
     binary: string; argv: readonly string[]; cwd: string; environment?: Readonly<Record<string, string>>;
-    peer: Omit<JsonRpcPeerOptions, 'detached' | 'onClose'>;
+    peer: Omit<JsonRpcPeerOptions, 'detached' | 'onClose' | 'startFailure'>;
   }, fields: Omit<L, 'peer' | 'key'>): L {
     if (this.live && this.reusable(key)) {
       markTurn('spawned', { reused: true, transport: this.label });
@@ -489,6 +492,8 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
       peer: new JsonRpcPeer(child, {
         ...launch.peer,
         detached,
+        // Node says `spawn <binary> ENOENT` for a missing folder and a missing program alike.
+        startFailure: (error) => spawnFailure(error, launch),
         onClose: (error) => {
           this.retiredVendorGone();
           if (this.live === live) {

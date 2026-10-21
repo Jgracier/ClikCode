@@ -3,6 +3,7 @@
 
 import { lifecycle } from '../../../runtime/lifecycle-log.js';
 import { markTurn } from '../../../runtime/turn-latency.js';
+import { spawnFailure } from '../../../runtime/machine-folder.js';
 import { killProcessTreePortable, spawnPortable as spawn } from '../spawn.js';
 import { NativeHarnessSpec } from './binary.js';
 import { ensureNativeHarness } from './inspect.js';
@@ -320,7 +321,7 @@ export async function captureNativeHarnessTurn(
         try { onReleasedExit({}); } catch { /* fail-open-ok: the owner's bookkeeping */ }
         return;
       }
-      reject(error);
+      reject(spawnFailure(error, { name: spec.displayName, binary: spec.binary, cwd: options.cwd }));
     });
     // 'exit' fires when the process ends, which can be BEFORE its stdio pipes
     // have been drained: resolving there loses the last buffered line, which
