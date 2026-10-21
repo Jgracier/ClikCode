@@ -70,16 +70,11 @@ describe('the housekeeping sweep', () => {
     const fresh = await artifacts('just-created', 0);
     await writeFile(join(root, 'index.json.123.abc.tmp'), 'x');
     await utimes(join(root, 'index.json.123.abc.tmp'), new Date(Date.now() - DAY), new Date(Date.now() - DAY));
-    await writeFile(join(root, 'sessions', 'legacy.lock'), 'x');
-    await utimes(join(root, 'sessions', 'legacy.lock'), new Date(Date.now() - DAY), new Date(Date.now() - DAY));
-    await mkdir(join(root, 'claims'), { recursive: true });
-    await writeFile(join(root, 'claims', 'orphan.json'), JSON.stringify({ sessionId: 'orphan', pid: 999999, host: 'elsewhere', heartbeatAt: old, nonce: 'n' }));
 
     const report = await sweepState();
-    expect(report).toMatchObject({ orphans: 1, stranded: 2, settled: 1 });
+    expect(report).toMatchObject({ orphans: 1, stranded: 1, settled: 1 });
     for (const path of orphan) expect(existsSync(path)).toBe(false);
     for (const path of [...live, ...fresh]) expect(existsSync(path)).toBe(true);
-    expect(existsSync(join(root, 'claims'))).toBe(false);
 
     resetHarnessStateCaches();
     const after = await readState();

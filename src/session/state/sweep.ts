@@ -7,7 +7,7 @@
  * nothing depends on it running, and a failure only means the next one
  * tries again. */
 
-import { rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { stat, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { blankChatSweepable } from '../blank.js';
 import { sessionFromIndex } from '../list-facts.js';
@@ -65,8 +65,6 @@ export async function sweepState(now = Date.now()): Promise<SweepReport> {
   }
   if (changed) await writeState(state);
 
-  // Presence records of builds that kept them as claims/<id>.json: nothing reads them.
-  await rm(join(stateDirectory(), 'claims'), { recursive: true, force: true }).catch(() => undefined);
   // Every name a live chat's artifacts can have (the stores encode ids).
   const names = new Set(state.sessions.flatMap((session) => [session.id, safeRecordFileName(session.id), session.id.replace(/[^A-Za-z0-9._-]/g, '_')]));
   const root = stateDirectory();
