@@ -21,7 +21,6 @@ function artifactPaths(id: string): string[] {
   const paths = [
     join(root, 'turn-changes', `${record}.json`),
     join(root, 'turn-changes', `${record}.json.lock`),
-    join(sessionsDirectory(), `${record}.lock`),
     join(sessionsDirectory(), `${record}.resume-in.lock`),
     // Normally removed with the transcript; one a build that predates it
     // left behind when it deleted the transcript goes here.
@@ -52,17 +51,15 @@ export async function sessionIdsWithArtifacts(): Promise<Set<string>> {
 
 /** Leftovers a crashed process could not clean up: atomic-write temporaries
  * (`*.tmp`) and claim staging files (`*.new`) nothing has touched for
- * `olderThanMs` -- live ones are milliseconds old -- and the per-session
- * `sessions/<id>.lock` files of builds before the single state lock, which
- * nothing creates any more. Locks still in use are never touched here: one
- * could be re-created between the look and the removal. Returns how many went. */
+ * `olderThanMs` -- live ones are milliseconds old. Locks are never touched
+ * here: one could be re-created between the look and the removal. Returns
+ * how many went. */
 export async function removeStrandedFiles(olderThanMs: number, now = Date.now()): Promise<number> {
   const root = stateDirectory();
   let removed = 0;
   for (const directory of [root, sessionsDirectory(), join(root, 'turn-changes'), join(root, 'cache')]) {
     for (const name of await readdir(directory).catch(() => [] as string[])) {
-      const legacyLock = directory === sessionsDirectory() && /^[^.]+\.lock$/.test(name);
-      if (!/\.(tmp|new)$/.test(name) && !legacyLock) continue;
+      if (!/\.(tmp|new)$/.test(name)) continue;
       const path = join(directory, name);
       const info = await stat(path).catch(() => undefined);
       if (!info?.isFile() || now - info.mtimeMs < olderThanMs) continue;
