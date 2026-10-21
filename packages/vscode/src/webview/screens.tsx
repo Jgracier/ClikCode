@@ -235,7 +235,6 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
  * menu's. A Tailscale machine not added yet is installed first. */
 export function MachineMenu(props: { model: ChatModel; onClose: () => void; onError: (message: string) => void }): JSX.Element {
   const [machines, setMachines] = useState<ListedMachine[]>();
-  const [switching, setSwitching] = useState(false);
   const empty = !props.model.messages.length && !props.model.pendingPrompt;
   useEffect(() => {
     let active = true;
@@ -251,13 +250,11 @@ export function MachineMenu(props: { model: ChatModel; onClose: () => void; onEr
     return () => { active = false; stop(); release(); };
   }, []);
 
+  // One pick moves the chat: the menu closes at once, and the chip and the
+  // info line name the machine once it is there. Only a failure is said.
   const select = (machine: ListedMachine): void => {
-    if (switching) return;
-    setSwitching(true);
-    void request({ method: 'moveToMachine', machineId: machine.id }).then(
-      () => props.onClose(),
-      (error: Error) => { setSwitching(false); props.onError(error.message); },
-    );
+    void request({ method: 'moveToMachine', machineId: machine.id }).catch((error: Error) => props.onError(error.message));
+    props.onClose();
   };
   const update = (machine: ListedMachine): void => {
     void request({ method: 'updateMachine', machineId: machine.id }).catch((error: Error) => props.onError(error.message));
@@ -267,7 +264,7 @@ export function MachineMenu(props: { model: ChatModel; onClose: () => void; onEr
   const rows: ListRow[] = [
     { key: 'saved-heading', heading: true, render: () => <>{empty ? 'Start this chat on' : 'Move this chat to'}</> },
     ...available.map((machine): ListRow => ({
-      key: machine.id, disabled: switching || machine.state === 'offline', onSelect: () => select(machine),
+      key: machine.id, disabled: machine.state === 'offline', onSelect: () => select(machine),
       render: () => <div class="conversation" title={machine.updateError}><div class="conversation-main"><div class="conversation-title">{machine.name}</div></div>
         <span class="conversation-meta">{machineMeta({ ...machine, needsYou: 0 }, props.model.machineId ?? 'local')}</span>
         {offersUpdate(machine) ? <button type="button" class="link small machine-update" data-row-action
@@ -276,13 +273,13 @@ export function MachineMenu(props: { model: ChatModel; onClose: () => void; onEr
     })),
     ...(discovered.length ? [{ key: 'tailnet-heading', heading: true, render: () => <>On your tailnet</> } satisfies ListRow] : []),
     ...discovered.map((machine): ListRow => ({
-      key: machine.id, disabled: switching || machine.state !== 'available', onSelect: () => select(machine),
+      key: machine.id, disabled: machine.state !== 'available', onSelect: () => select(machine),
       render: () => <div class="conversation"><div class="conversation-main"><div class="conversation-title">{machine.name}</div></div>
         <span class="conversation-meta">{machine.state === 'available' ? 'Connect · install from GitHub main' : machine.state === 'unsupported' ? 'Windows is not supported yet' : 'offline'}</span></div>,
     })),
   ];
   return <Popover label={empty ? 'Start this chat on' : 'Move this chat to'} onClose={props.onClose} class="picker history-menu" id="machines-menu">
-    <Loading waiting={!machines || switching}>{switching ? (empty ? 'Connecting to machine…' : 'Moving this chat…') : 'Finding machines…'}</Loading>
+    <Loading waiting={!machines}>Finding machines…</Loading>
     <KeyList id="machine-switch-list" rows={rows} label="Machines" initialKey={props.model.machineId ?? 'local'}
       onEscape={props.onClose} rightSelect emptyText={machines ? 'No machines found.' : undefined} />
   </Popover>;

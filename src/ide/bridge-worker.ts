@@ -5,7 +5,7 @@ import { withSignIn } from '../commands/account.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { WorkerClient } from '../worker/client.js';
-import { cancelOrigin, type WorkerEvent } from '../worker/protocol.js';
+import { cancelOrigin, MOVED_REASON, type WorkerEvent } from '../worker/protocol.js';
 import { messageOf, TurnFailed } from './bridge-support.js';
 import type { BridgeHost } from './bridge-host.js';
 
@@ -28,7 +28,12 @@ export class WorkerLink {
     this.worker = { sessionId, client };
     this.workerTurnRunning = initial.type === 'snapshot' && Boolean(initial.live);
     this.host.channel.send({ type: 'worker', sessionId, event: initial });
-    client.on('event', (event: WorkerEvent) => this.onWorkerEvent(sessionId, client, event));
+    /** Its chat moved to another machine: read-only here, so no worker is started for it again. */
+    let movedAway = false;
+    client.on('event', (event: WorkerEvent) => {
+      if (event.type === 'shutdown' && event.reason === MOVED_REASON) movedAway = true;
+      this.onWorkerEvent(sessionId, client, event);
+    });
     client.on('close', () => {
       if (this.worker?.client !== client) return;
       const midTurn = this.workerTurnRunning || Boolean(this.turnWaiter);
@@ -39,7 +44,7 @@ export class WorkerLink {
       // this window for reading too slowly. Attach to it again (or to its
       // replacement): its snapshot says whether a turn still runs, and a
       // panel told nothing else would show one for ever.
-      if (this.host.closed || this.host.sessionId !== sessionId) return;
+      if (this.host.closed || this.host.sessionId !== sessionId || movedAway) return;
       this.host.enqueue(async () => {
         if (this.host.closed || this.host.sessionId !== sessionId || this.worker) return;
         await this.workerFor(sessionId).catch(() => undefined);

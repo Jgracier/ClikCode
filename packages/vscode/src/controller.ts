@@ -9,6 +9,7 @@ import * as vscode from 'vscode';
 import type { BridgeEndpoint } from './bridge-client';
 import { LocalChatMachine, openRequest, RemoteChatMachine, type ChatMachine } from './chat-machine';
 import { machineUpdateOf, remoteDirectory } from './remote-directory';
+import type { LinkChannel } from '../../../src/remote/connection';
 import { pinnedUpdateLine } from '../../../src/remote/updates';
 import { localMachineName } from '../../../src/remote/board-rows';
 import { installOnMachine, type InstallReporter } from '../../../src/remote/install';
@@ -68,6 +69,16 @@ export function moveEnd(bridge: BridgeEndpoint, name: string, revision: number):
     call: <T>(request: MoveRequest): Promise<T> => (revision < MOVE_REVISION
       ? Promise.reject(new Error(`ClikCode on ${name} is too old to move chats: update it first.`))
       : bridge.call<T>(request, TIMEOUT.choose)),
+  };
+}
+
+/** A machine's side of a move, over a chat channel on the machine menu's connection to it. */
+export function channelEnd(channel: LinkChannel, name: string): MoveEnd {
+  return {
+    name,
+    call: <T>(request: MoveRequest): Promise<T> => (channel.revision < MOVE_REVISION
+      ? Promise.reject(new Error(`ClikCode on ${name} is too old to move chats: update it first.`))
+      : channel.request<T>(request)),
   };
 }
 
@@ -659,6 +670,11 @@ export class ClikCodeController implements vscode.Disposable {
     // that turn (steered or queued once it runs), never a second bubble.
     const during = this.model.running || preparing(this.model);
     if (ordinary && !during) this.setModel(submittingPrompt(this.model, prompt));
+    // Typed while the chat moves: it goes to the chat where it is going.
+    if (this.moving) {
+      await this.moving.catch(() => undefined);
+      if (ordinary && !during && !this.model.pendingPrompt) this.setModel(submittingPrompt(this.model, prompt));
+    }
     const epoch = this.prepareEpoch;
     try { await this.ensureStarted(); }
     catch (error) {
@@ -835,32 +851,57 @@ export class ClikCodeController implements vscode.Disposable {
   }
 
   /** The machine chip: the chat's machine is one of its settings, so
-   * choosing another moves this chat there (session/move.ts). A Tailscale
-   * machine not added yet is installed first. */
+   * choosing another moves this chat there (session/move.ts) -- one pick,
+   * nothing asked and nothing said: the chip and the info line name where it
+   * is now. The move goes over the connection the machine menu already has
+   * to that machine, while the chat's own connection there is made beside it.
+   * A Tailscale machine not added yet is installed first. */
   async moveToMachine(machineId: string): Promise<void> {
+    // Before anything waits: the menu closing must not end the connection the move uses.
+    const release = remoteDirectory.hold();
+    const moving = this.moveChatTo(machineId);
+    this.moving = moving;
+    try { await moving; } finally {
+      if (this.moving === moving) this.moving = undefined;
+      release();
+    }
+  }
+
+  /** A move in progress (moveToMachine): a message typed meanwhile waits for it. */
+  private moving: Promise<void> | undefined;
+
+  private async moveChatTo(machineId: string): Promise<void> {
+    // As the chat is when chosen: a message typed from here on waits for the move.
+    const empty = !chatHasContent({ messages: this.model.messages }) && !this.model.pendingPrompt && !this.model.running;
+    const busy = this.model.running || preparing(this.model);
     const id = machineId.startsWith('tailscale:') ? await this.connectDiscovered(machineId) : machineId;
     if (this.starting) await this.starting.catch(() => undefined);
     if (id === this.machine.id) return;
     const target = await this.machineFor(id);
     if (!target || !await target.reachable()) throw new Error('That machine is offline.');
     // Nothing said in it yet: nothing to move. It is a new chat there.
-    if (!chatHasContent({ messages: this.model.messages }) && !this.model.pendingPrompt && !this.model.running) return this.openOnMachine(id, 'new');
-    if (this.model.running || preparing(this.model)) throw new Error('A turn is running in this chat: move it when the turn ends, or stop it first.');
+    if (empty) return await this.openOnMachine(id, 'new');
+    if (busy) throw new Error('A turn is running in this chat: move it when the turn ends, or stop it first.');
     await this.ensureStarted();
     const bridge = this.bridge;
     const sessionId = this.model.sessionId;
     if (!bridge?.running || !sessionId) throw new Error('ClikCode is not connected.');
     const targetName = target.name ?? localMachineName();
-    const channel = await target.connect((line) => this.host.log.appendLine(`[${this.label} move] ${line}`));
+    // The chat's connection there, made now and kept until the chat opens on it (one shared connection).
+    const viewing = target.connect((line) => this.host.log.appendLine(`[${this.label} move] ${line}`));
+    viewing.catch(() => undefined);
+    const channel = target.kind === 'remote' ? await remoteDirectory.channel(id).catch(() => undefined) : undefined;
     try {
-      const revision = await readyRevision(channel.bridge);
-      const outcome = await moveChat(moveEnd(bridge, this.machine.name ?? localMachineName(), this.revision), moveEnd(channel.bridge, targetName, revision), sessionId,
-        async (text) => (await vscode.window.showWarningMessage(text, { modal: true }, 'Move')) === 'Move');
-      if (!outcome.moved) return;
-      this.host.log.appendLine(`[${this.label}] moved ${sessionId} to ${targetName} as ${outcome.sessionId}`);
+      const there = channel
+        ? channelEnd(channel, targetName)
+        : await viewing.then(async ({ bridge: endpoint }) => moveEnd(endpoint, targetName, await readyRevision(endpoint)));
+      const outcome = await moveChat(moveEnd(bridge, this.machine.name ?? localMachineName(), this.revision), there, sessionId);
+      this.host.log.appendLine(`[${this.label}] moved ${sessionId} to ${targetName} as ${outcome.sessionId}${outcome.changes.length ? ` (${outcome.changes.join(' ')})` : ''}`);
       await this.openOnMachine(id, 'resume', outcome.sessionId);
-      this.note(`Moved to ${targetName} · ${outcome.folder}`);
-    } finally { channel.bridge.dispose(); }
+    } finally {
+      channel?.close();
+      void viewing.then(({ bridge: endpoint }) => endpoint.dispose(), () => undefined);
+    }
   }
 
   /** A chat that moved, open here read-only: the moved one, on its machine. */

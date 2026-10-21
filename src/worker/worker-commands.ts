@@ -16,7 +16,7 @@ import { askPrivateLogin } from '../agent/computer/private-login-prompt.js';
 import { runSharedComputerTool } from './computer-tool.js';
 import { homedir } from 'node:os';
 import { sendEvent, windowReadsSaved } from './broadcast-observer.js';
-import type { ClientCommand } from './protocol.js';
+import { MOVED_REASON, type ClientCommand } from './protocol.js';
 import { createAgentsCommand } from './worker-agents.js';
 import { createLiveCommands } from './worker-live-commands.js';
 import type { ConnectionState, WorkerContext } from './worker-context.js';
@@ -70,7 +70,7 @@ export function createCommandHandler(ctx: WorkerContext) {
   /** `retire`: the worker decides, not the window asking. `presented` is the
    * token of a question asked on its own (no attach): checked here, and the
    * answer goes to the asker directly, because it is not in the broadcast. */
-  const handleRetire = async (socket: Socket, presented?: string): Promise<void> => {
+  const handleRetire = async (socket: Socket, presented?: string, moved?: boolean): Promise<void> => {
     if (presented !== undefined && presented !== token) {
       sendEvent(socket, { type: 'attach-rejected', reason: 'stale or invalid token' });
       socket.end();
@@ -87,14 +87,34 @@ export function createCommandHandler(ctx: WorkerContext) {
       return;
     }
     // Told before it goes, so an asker that never attached still hears it.
-    if (presented !== undefined) sendEvent(socket, { type: 'shutdown', reason: 'replaced by a newer ClikCode build' });
-    void ctx.shutdown('replaced by a newer ClikCode build');
+    const reason = moved ? MOVED_REASON : 'replaced by a newer ClikCode build';
+    if (presented !== undefined) sendEvent(socket, { type: 'shutdown', reason });
+    void ctx.shutdown(reason);
     return;
   };
 
-  return async (socket: Socket, command: ClientCommand, connection: ConnectionState): Promise<void> => {
+  /** `warm`: ready for the first turn now, before it is sent -- its route's
+   * servers, and the vendor with the conversation loaded (vendor-warm.ts).
+   * A turn sent meanwhile waits for it (worker-turn.ts). */
+  const warm = (): void => {
+    if (ctx.warming || ctx.turnRunning) return;
+    ctx.warming = (async () => {
+      await prepareForRoute();
+      const { warmVendor } = await import('../turn/vendor-warm.js');
+      if (await warmVendor(sessionId)) ctx.idle.vendorUsed();
+    })().catch((error: unknown) => {
+      lifecycle('worker.warm.failed', { message: error instanceof Error ? error.message : String(error) });
+    }).finally(() => { ctx.warming = undefined; });
+  };
+
+  return Object.assign(async (socket: Socket, command: ClientCommand, connection: ConnectionState): Promise<void> => {
     if (command.type === 'attach') { await handleAttach(socket, command, connection); return; }
-    if (command.type === 'retire' && command.token !== undefined) { await handleRetire(socket, command.token); return; }
+    if (command.type === 'retire' && command.token !== undefined) { await handleRetire(socket, command.token, command.reason === 'moved'); return; }
+    if (command.type === 'warm') {
+      if (command.token !== token) { sendEvent(socket, { type: 'attach-rejected', reason: 'stale or invalid token' }); socket.end(); return; }
+      warm();
+      return;
+    }
     if (connection.attaching) await connection.attaching.catch(() => undefined);
     if (!connection.attached) return;
     if (command.type === 'submit') {
@@ -180,7 +200,7 @@ export function createCommandHandler(ctx: WorkerContext) {
     // Another window's turn may be using them: a turn keeps what it started,
     // and the turn's own end releases them if nobody is left.
     if (command.type === 'release') { if (!ctx.turnRunning) await releaseMcp(); return; }
-    if (command.type === 'retire') { await handleRetire(socket); return; }
+    if (command.type === 'retire') { await handleRetire(socket, undefined, command.reason === 'moved'); return; }
     if (command.type === 'detach') { socket.end(); return; }
     if (command.type === 'unqueue') { await live.handleUnqueue(socket, command); return; }
     if (command.type === 'agents') { sendEvent(socket, await agentsCommand(command)); return; }
@@ -188,5 +208,5 @@ export function createCommandHandler(ctx: WorkerContext) {
     if (command.type === 'cancel') { await live.handleCancel(socket, command); return; }
     if (command.type === 'steer') { await live.handleSteer(socket, command); return; }
     if (command.type === 'steer-subagent') { await live.handleSteerSubagent(socket, command); return; }
-  };
+  }, { warm });
 }

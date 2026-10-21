@@ -25,7 +25,7 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   // undocumented-but-listed, since running it by hand does something real
   // (binds a socket, writes a runtime record) that only makes sense as a
   // spawn target.
-  program.command('session-worker <id>', { hidden: true }).action((id: string) => later(() => import('../worker/session-worker.js'), 'runSessionWorker')(id));
+  program.command('session-worker <id>', { hidden: true }).option('--warm').action((id: string, options: { warm?: boolean }) => later(() => import('../worker/session-worker.js'), 'runSessionWorker')(id, { warm: Boolean(options.warm) }));
   program.command('mcp-serve').description("Serve ClikCode's computer tools to a harness over MCP (stdio); started for you in every harness session")
     .action(async () => (await import('../commands/mcp-serve.js')).mcpServe());
   program.command('computer-host <stateDir>', { hidden: true }).action(async (stateDir: string) => (await import('../agent/computer/browser-host.js')).runComputerHost(stateDir));

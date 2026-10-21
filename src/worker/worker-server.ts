@@ -30,7 +30,9 @@ export function createWorkerServer(ctx: WorkerContext, handleCommand: (socket: C
       // The conversation is closed on every terminal that had it: nothing
       // local stays running for it. A running turn keeps what it is using;
       // the next turn starts servers again if it needs them.
-      if (observer.attachedCount === 0 && !ctx.turnRunning) void releaseMcp();
+      // A connection that never attached (a question on its own: retire, warm)
+      // closed no conversation.
+      if (wasAttached && observer.attachedCount === 0 && !ctx.turnRunning) void releaseMcp();
       ctx.idle.scheduleIdleExit();
     });
     socket.on('error', () => socket.destroy());

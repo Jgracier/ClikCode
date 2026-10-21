@@ -42,7 +42,7 @@ export interface ChatExport {
 export interface MoveNames { source: string; target: string }
 
 export interface ImportPlan {
-  /** What will not be as it was, one sentence each. Empty: nothing changes. */
+  /** What will not be as it was, one sentence each (for the log: nothing asks). */
   changes: string[];
   /** The folder the chat goes on in there. */
   folder: string;
@@ -54,10 +54,12 @@ export interface ImportResult extends ImportPlan {
   installationId: string;
 }
 
-/** What a move asks a machine's ClikCode, as the bridge takes it (ide/protocol.ts). */
+/** What a move asks a machine's ClikCode, as the bridge takes it (ide/protocol.ts).
+ * An older client may still send `dryRun` on import-chat: it is ignored, and
+ * the chat is imported (it is sent once now; nothing is planned up front). */
 export type MoveRequest =
   | { type: 'export-chat'; sessionId?: string }
-  | { type: 'import-chat'; chat: ChatExport; names: MoveNames; dryRun?: boolean }
+  | { type: 'import-chat'; chat: ChatExport; names: MoveNames }
   | { type: 'mark-moved'; sessionId: string; movedTo: Omit<ChatMovedTo, 'at'> };
 
 /** A chat that moved is read-only here: what to say instead of acting on it. */
@@ -76,28 +78,19 @@ export interface MoveEnd {
   call<T>(request: MoveRequest): Promise<T>;
 }
 
-export type MoveOutcome =
-  | { moved: true; sessionId: string; folder: string; changes: string[] }
-  | { moved: false };
+export interface MoveOutcome { moved: true; sessionId: string; folder: string; changes: string[] }
 
-/** The move itself, from whichever client: export there, plan here, ask only
- * if something changes, import, then mark the old copy moved. `confirm` gets
- * the one sentence that says what changes. */
-export async function moveChat(
-  source: MoveEnd, target: MoveEnd, sessionId: string, confirm: (text: string) => Promise<boolean>,
-): Promise<MoveOutcome> {
+/** The move itself, from whichever client: one pick, nothing asked. Export
+ * there, import here (the chat sent once; the importer keeps what it can of
+ * the settings and says nothing up front -- a turn it cannot run says so when
+ * it is sent, as any new chat there would), then mark the old copy moved. The
+ * importer warms the chat on its machine; marking moved lets the old copy's
+ * worker go. */
+export async function moveChat(source: MoveEnd, target: MoveEnd, sessionId: string): Promise<MoveOutcome> {
   const chat = await source.call<ChatExport>({ type: 'export-chat', sessionId });
-  const names = { source: source.name, target: target.name };
-  const plan = await target.call<ImportPlan>({ type: 'import-chat', chat, names, dryRun: true });
-  if (plan.changes.length && !await confirm(moveConfirmation(target.name, plan.changes))) return { moved: false };
-  const imported = await target.call<ImportResult>({ type: 'import-chat', chat, names });
+  const imported = await target.call<ImportResult>({ type: 'import-chat', chat, names: { source: source.name, target: target.name } });
   await source.call({ type: 'mark-moved', sessionId: chat.sessionId, movedTo: { machine: target.name, installationId: imported.installationId, sessionId: imported.sessionId } });
   return { moved: true, sessionId: imported.sessionId, folder: imported.folder, changes: imported.changes };
-}
-
-/** What the confirmation says: only what changes. */
-export function moveConfirmation(target: string, changes: readonly string[]): string {
-  return `Moving to ${target}: ${changes.join(' ')}`;
 }
 
 /** The machine a moved chat went to, among the ones a client knows: 'local'

@@ -16,8 +16,9 @@
  * another commit than this build is updated to it in the background
  * (updates.ts), and the connection made again once it is. */
 import type { ChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
-import type { IdeConversation, IdeHostEvent, IdeHostRequest } from '../ide/protocol.js';
+import type { IdeConversation, IdeEvent, IdeHostEvent, IdeHostRequest, IdeRequest } from '../ide/protocol.js';
 import { IDE_PROTOCOL } from '../ide/protocol-version.js';
 import { bridgeScript } from './install.js';
 import { autoUpdates, localBuildCommit, type AutoUpdates } from './updates.js';
@@ -67,6 +68,24 @@ export interface LinkOptions {
   autoUpdates?: AutoUpdates;
 }
 
+/** A request answered by a `result`, without its id (the channel gives it one). */
+type Answered<T = IdeRequest> = T extends { requestId: string } ? Omit<T, 'requestId'> : never;
+
+/** A chat channel of its own on a machine's connection (the board's), for a
+ * few requests -- a move's -- without opening another SSH connection. */
+export interface LinkChannel {
+  /** Which additive requests the ClikCode there answers (protocol-version.ts). */
+  readonly revision: number;
+  request<T = unknown>(request: Answered): Promise<T>;
+  close(): void;
+}
+
+interface OpenChannel {
+  ready: () => void;
+  failed: (error: Error) => void;
+  pending: Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>;
+}
+
 /** One machine's connection, reconnecting until stopped. */
 export class RemoteLink {
   private child: ChildProcess | undefined;
@@ -86,6 +105,9 @@ export class RemoteLink {
    * reads as connected meanwhile -- nothing about it changed for the user. */
   private retiring = false;
   readonly view: MachineView;
+  /** What the bridge there said in its host-ready (1 when it did not say). */
+  private revision = 1;
+  private readonly channels = new Map<string, OpenChannel>();
 
   constructor(machine: RemoteMachine, private readonly changed: () => void, private readonly options: LinkOptions = {}) {
     this.view = {
@@ -135,6 +157,7 @@ export class RemoteLink {
     child.once('close', (code) => {
       clearTimeout(this.readyTimer);
       if (this.child === child) this.child = undefined;
+      this.dropChannels(new Error(`The connection to ${machine.name} ended`));
       const retired = this.retiring;
       this.retiring = false;
       if (this.stopped) return;
@@ -170,12 +193,14 @@ export class RemoteLink {
       machine.needsUpdate = outdated;
       // Current now: an old failure no longer says anything.
       if (!outdated) delete machine.updateError;
+      this.revision = event.revision ?? 1;
       this.set({ state: 'connected', needsUpdate: outdated, error: undefined, ...(outdated ? {} : { updateError: undefined }) });
       this.send({ type: 'chat-attach', chat: CHAT });
       if (outdated && this.options.autoUpdate !== false) this.autoUpdate(localCommit);
       return;
     }
     if (event.type === 'host-retiring') { this.retiring = true; return; }
+    if (event.type === 'chat' && this.channels.has(event.chat)) { this.onChannelEvent(this.channels.get(event.chat)!, event.event); return; }
     if (event.type !== 'chat' || event.chat !== CHAT) return;
     const inner = event.event;
     if (inner.type === 'ready') {
@@ -191,6 +216,57 @@ export class RemoteLink {
       }
       if (this.queryAgain) { this.queryAgain = false; this.query(); }
     }
+  }
+
+  private onChannelEvent(channel: OpenChannel, event: IdeEvent): void {
+    if (event.type === 'ready') { channel.ready(); return; }
+    if (event.type !== 'result') return;
+    const waiter = channel.pending.get(event.requestId);
+    if (!waiter) return;
+    channel.pending.delete(event.requestId);
+    if (event.ok) waiter.resolve(event.data);
+    else waiter.reject(new Error(event.error ?? 'Remote request failed'));
+  }
+
+  private dropChannels(error: Error): void {
+    const open = [...this.channels.values()];
+    this.channels.clear();
+    for (const channel of open) {
+      channel.failed(error);
+      for (const waiter of channel.pending.values()) waiter.reject(error);
+    }
+  }
+
+  /** A chat channel on this connection, once the ClikCode there has it open;
+   * undefined while the machine is not connected. */
+  async channel(): Promise<LinkChannel | undefined> {
+    if (this.view.state !== 'connected' || !this.child) return undefined;
+    const chat = `clikcode-move-${randomUUID()}`;
+    const open: OpenChannel = { ready: () => undefined, failed: () => undefined, pending: new Map() };
+    const ready = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`No answer from ${this.view.machine.name}`)), READY_TIMEOUT_MS);
+      timer.unref();
+      open.ready = () => { clearTimeout(timer); resolve(); };
+      open.failed = (error) => { clearTimeout(timer); reject(error); };
+    });
+    this.channels.set(chat, open);
+    this.send({ type: 'chat-attach', chat });
+    try { await ready; } catch (error) { this.channels.delete(chat); throw error; }
+    const revision = this.revision;
+    return {
+      revision,
+      request: <T>(request: Answered): Promise<T> => {
+        if (!this.channels.has(chat)) return Promise.reject(new Error(`The connection to ${this.view.machine.name} ended`));
+        const requestId = randomUUID();
+        const answered = new Promise<unknown>((resolve, reject) => open.pending.set(requestId, { resolve, reject }));
+        this.send({ type: 'chat', chat, request: { ...request, requestId } as IdeRequest });
+        return answered as Promise<T>;
+      },
+      close: () => {
+        if (!this.channels.delete(chat)) return;
+        this.send({ type: 'chat', chat, request: { type: 'close' } });
+      },
+    };
   }
 
   /** Brings the machine to this build when its policy says so; once it is,
@@ -326,6 +402,11 @@ export class RemoteMachines {
 
   views(): readonly MachineView[] {
     return this.links.map((link) => link.view);
+  }
+
+  /** A chat channel on the connection to a machine, while it is connected. */
+  async channel(machineId: string): Promise<LinkChannel | undefined> {
+    return this.links.find((link) => link.view.machine.id === machineId)?.channel();
   }
 
   /** Connects to a machine again: its ClikCode was just updated. */
