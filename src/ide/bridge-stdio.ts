@@ -41,8 +41,12 @@ export async function runStdioBridge(): Promise<void> {
   lines.on('close', hangUp);
   process.on('SIGTERM', hangUp);
   process.on('SIGHUP', hangUp);
-  // 'close', not 'exit': by then the child's stdout and IPC channel are drained too.
-  const code = await new Promise<number>((resolve) => child.once('close', (exitCode) => resolve(exitCode ?? 0)));
+  const code = await new Promise<number>((resolve) => child.once('exit', (exitCode) => resolve(exitCode ?? 0)));
+  // Its last messages (a retiring bridge's `host-retiring`) can still be in
+  // the channel at its exit: they are relayed once the channel has closed.
+  // Not 'close': that waits on the child's stdout, which anything it started
+  // may still hold.
+  if (child.connected) await new Promise<void>((resolve) => { child.once('disconnect', resolve); setTimeout(resolve, 1_000).unref(); });
   // A pipe's writes are asynchronous: the child's last message (a retiring
   // bridge's `host-retiring`) must reach the other end before this exits.
   process.stdout.write('', () => process.exit(code));
