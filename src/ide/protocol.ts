@@ -97,7 +97,8 @@ export type IdeRequest =
   | { type: 'visible'; visible: boolean }
   /** Revision 4: moving a chat to another machine (session/move.ts). The
    * client asks the machine it is on to `export-chat`, the one it goes to to
-   * `import-chat` (`dryRun`: only what would change), then the first to
+   * `import-chat` (once: nothing is asked first; a `dryRun` from an older
+   * client is still answered with what would change), then the first to
    * `mark-moved`. Answered by a `result`. */
   | (MoveRequest & { requestId: string })
   | { type: 'close' };

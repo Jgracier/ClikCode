@@ -76,7 +76,9 @@ export async function ownConversation(
   }
 }
 
-export async function runSessionWorker(sessionId: string): Promise<void> {
+/** `warm`: started for a chat that just moved here (worker/client.ts
+ * warmSessionWorker): it gets the conversation ready for its first turn. */
+export async function runSessionWorker(sessionId: string, options: { warm?: boolean } = {}): Promise<void> {
   const config = new Conf({ projectName: 'clikcode', configFileMode: 0o600 });
   const state = await readState({ transcripts: [sessionId] });
   const session = state.sessions.find((item) => item.id === sessionId);
@@ -124,6 +126,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     turnRunning: false, activeQueuedTurnId: undefined, draining: false, stalledQueuedTurnId: undefined,
     idleTimer: undefined, activeController: undefined, activeLiveInput: undefined, activeSubmissions: undefined,
     activeRestoreDraft: undefined, submitsInFlight: 0, pendingCancel: undefined, stopAnnounced: false, resumingTurn: false, retireWhenIdle: false, recordWrite: Promise.resolve(),
+    warming: undefined,
   } as Omit<WorkerContext, 'vendorBackground' | 'outOfTurn' | 'resumeWaiter' | 'io' | 'idle' | 'queue' | 'runTurn' | 'shutdown' | 'server'> as WorkerContext;
   ctx.io = createWorkerIo(ctx);
 
@@ -163,7 +166,8 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   ctx.queue = createWorkerQueue(ctx);
   ctx.runTurn = createTurnRunner(ctx);
   ctx.agentSession.onNotification = () => { void ctx.queue.deliverNotifications(); };
-  ctx.server = createWorkerServer(ctx, createCommandHandler(ctx));
+  const handleCommand = createCommandHandler(ctx);
+  ctx.server = createWorkerServer(ctx, handleCommand);
   ctx.shutdown = createShutdown(ctx);
   // A loop of its own that never yields would keep this worker -- and what it
   // holds -- forever: a thread ends it (worker/stuck-watchdog.ts).
@@ -249,6 +253,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     ctx.idle.leaveIfStaleBuild();
   }, BUILD_WATCH_MS);
   buildWatch.unref();
+  if (options.warm) handleCommand.warm();
   // A notification a previous worker recorded but never ran.
   void ctx.queue.drainQueue().catch(ctx.queue.reportDrainFailure);
   // A turn parked for the reset by a window, or left by a worker before this.

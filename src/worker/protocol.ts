@@ -109,7 +109,17 @@ export type ClientCommand =
    * worker's `token` it is a question on its own: no attach, no snapshot, and
    * the asker is told `shutdown` or `retire-declined` directly. Without one
    * (an older client) it is answered only after an attach. */
-  | { type: 'retire'; token?: string };
+  | { type: 'retire'; token?: string; /** The chat moved to another machine (session/move.ts): said so in the shutdown. */ reason?: 'moved' }
+  /** With the worker's token, a question on its own (no attach): get the
+   * conversation ready for its first turn -- its route's MCP servers, and on
+   * a vendor route the vendor started and the thread loaded, up to the prompt
+   * (turn/vendor-warm.ts). Sent for a chat that just moved here. */
+  | { type: 'warm'; token: string };
+
+/** The `shutdown` reason of a worker whose chat moved to another machine
+ * (worker/client.ts retireMovedWorker): a window that hears it does not
+ * start another worker for the read-only copy. */
+export const MOVED_REASON = 'the chat moved to another machine';
 
 /** One tool row of the running turn, and how much of its answer had streamed
  * when it happened -- where it sits between the answer's paragraphs. The same

@@ -11,12 +11,15 @@
  * The importing machine decides everything about its own side: which of the
  * chat's settings it can keep (its harnesses, its accounts, what its vendor
  * allows -- Claude Code refuses bypass as root), and the folder: the one this
- * conversation used on this machine before, else its home. `planImport` says
- * what would change, for the confirmation; `importChat` does it.
+ * conversation used on this machine before, else its home. Nothing is asked:
+ * `importChat` keeps what it can (`planImport`, its own first step) and the
+ * chat's info line shows where it is and what it runs on.
  *
- * The imported chat has no vendor thread: its first turn takes the
- * conversation up the way a provider switch does (turn/thread-start.ts),
- * with a note to the agent, unseen, that it moved (moveNote). */
+ * The imported chat has no vendor thread: it is taken up the way a provider
+ * switch does (turn/thread-start.ts) -- ahead of the first turn, by the worker
+ * the import starts warm (turn/vendor-warm.ts) -- with a note to the agent,
+ * unseen, that it moved (moveNote). The copy left behind is read-only, and
+ * its worker goes. */
 import { homedir } from 'node:os';
 import type Conf from 'conf';
 import type { AiHarnessAccount, AiHarnessPermissionMode, AiLocalHarnessDefinition } from '../harness/definition.js';
@@ -37,16 +40,32 @@ const MOVED_ALREADY = (session: HarnessSession): string => `This chat moved to $
 
 // ---- the machine it leaves ---------------------------------------------------
 
-export async function exportChat(id: string): Promise<ChatExport> {
+/** How the exporting side knows whether a turn runs: a client that follows
+ * the chat's worker already says (the editor's bridge); else its worker is
+ * asked -- only when one is running at all. */
+export interface ExportOptions { turnRunning?: () => Promise<boolean> }
+
+const TURN_RUNS = 'A turn is still running in this conversation -- move it when the turn ends, or stop it first.';
+
+export async function exportChat(id: string, options: ExportOptions = {}): Promise<ChatExport> {
   const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
   if (session.movedTo) throw new Error(MOVED_ALREADY(session));
-  const { refuseWhileTurnRuns } = await import('../commands/ai/conversations.js');
-  await refuseWhileTurnRuns(id);
+  if (options.turnRunning) {
+    if (await options.turnRunning()) throw new Error(TURN_RUNS);
+  } else {
+    const { runningWorker } = await import('../worker/client.js');
+    if (await runningWorker(id)) {
+      const { refuseWhileTurnRuns } = await import('../commands/ai/conversations.js');
+      await refuseWhileTurnRuns(id);
+    }
+  }
   // What was said in the vendor's own CLI is part of the conversation too.
+  // Only the copy sent: this one is marked moved next (and read-only), and a
+  // move that does not happen syncs it as any open would.
   const { synchronizeNativeTranscript } = await import('../turn/handoff.js');
-  if (await synchronizeNativeTranscript(state, session)) await writeState(state);
+  await synchronizeNativeTranscript(state, session);
   // Every message keeps whose it was, as when a provider takes a conversation over (leaveProvider).
   const origin = messageOrigin(session);
   const messages = sessionTranscriptMessages(session).map((message) => (message.origin ? message : { ...message, origin }));
@@ -81,6 +100,9 @@ export async function markMoved(id: string, movedTo: Omit<ChatMovedTo, 'at'>): P
   delete session.moveNote;
   session.updatedAt = new Date().toISOString();
   await writeState(state);
+  // Read-only now: its worker, and the vendor it holds, go rather than idle out.
+  const { retireMovedWorker } = await import('../worker/client.js');
+  await retireMovedWorker(id).catch(() => undefined);
 }
 
 // ---- the machine it goes to --------------------------------------------------
@@ -259,21 +281,26 @@ export async function importChat(chat: ChatExport, names: MoveNames, facts: Move
     const { aiHarnessSelect } = await import('../commands/ai/harness.js');
     await aiHarnessSelect(session.nativeHarness, id, { emit: false, signIn: false }).catch(() => undefined);
   }
+  // Warm here now, so the first reply comes at warm speed (turn/vendor-warm.ts).
+  const { warmSessionWorker } = await import('../worker/client.js');
+  await warmSessionWorker(id).catch(() => undefined);
   return { sessionId: id, changes: planned.changes, folder: planned.folder, installationId: state.installationId };
 }
 
 /** One move request, answered by this machine's ClikCode: the bridge's
  * `export-chat` / `import-chat` / `mark-moved`, and the terminal's own chat
  * in-process. */
-export async function answerMoveRequest(config: Conf | undefined, request: MoveRequest, currentId?: string): Promise<unknown> {
+export async function answerMoveRequest(config: Conf | undefined, request: MoveRequest, currentId?: string, options: ExportOptions = {}): Promise<unknown> {
   switch (request.type) {
     case 'export-chat': {
       const id = request.sessionId ?? currentId;
       if (!id) throw new Error('No conversation is open.');
-      return exportChat(id);
+      return exportChat(id, options);
     }
     case 'import-chat': {
-      if (request.dryRun) {
+      // A client from before moves were one step plans first: answered as
+      // before (what would change, nothing imported), and its import follows.
+      if ((request as { dryRun?: unknown }).dryRun) {
         const state = await readState({ transcripts: [] });
         const { changes, folder } = await planImport(state, request.chat, machineFacts(config));
         return { changes, folder } satisfies ImportPlan;

@@ -19,11 +19,10 @@ import type { LiveTurnInputResult } from '../turn/live-input.js';
 import type { SignInScreen } from '../gateway/login/vendor-sign-in.js';
 import { parseSlashInput } from '../tui/slash/registry.js';
 import { chatHasContent } from '../session/move-chat.js';
-import { moveTerminalChat, offerMovedChat, remoteMoveEnd } from './move-terminal.js';
+import { moveTerminalChat, offerMovedChat, remoteMoveEnd, type Here } from './move-terminal.js';
 
-/** A chat on another machine to show: `chatId`, or a new one there when
- * absent; `notice` is said once it is open (a move's "Moved to …"). */
-export interface RemoteChatSelection { machineId: string; chatId?: string; notice?: string }
+/** A chat on another machine to show: `chatId`, or a new one there when absent. */
+export interface RemoteChatSelection { machineId: string; chatId?: string }
 
 type RemoteOpen = Omit<Extract<IdeRequest, { type: 'open' }>, 'requestId'>;
 /** A request answered by a `result`, without its id (the bridge gives it one). */
@@ -293,8 +292,6 @@ export async function runRemoteChat(
           ? `ClikCode on ${machine.name} is updated${outcome.info.commit ? ` to ${outcome.info.commit.slice(0, 8)}` : ''}; its chats switch over once they are quiet.`
           : `Updating ClikCode on ${machine.name} failed: ${outcome.message} Type /update to update it.`), () => undefined);
       }
-      if (!rejoining && selection.notice) terminal.activity(selection.notice);
-      choice = { ...choice, notice: undefined };
       // A chat that moved on from there: offered where it went (it is read-only there).
       if (!rejoining && session?.movedTo) {
         const next = await offerMovedChat(terminal, session.movedTo);
@@ -320,7 +317,7 @@ export async function runRemoteChat(
         if (!line) continue;
         // /machine: this chat moves to another machine (move-terminal.ts), from the one it is on.
         if (parseSlashInput(line)?.head === 'machine') {
-          const next = await moveTerminalChat(terminal, { remote: choice }, session?.id ?? choice.chatId ?? '', Boolean(session && chatHasContent(session)),
+          const next: Here | undefined = await moveTerminalChat(terminal, { remote: choice }, session?.id ?? choice.chatId ?? '', Boolean(session && chatHasContent(session)),
             remoteMoveEnd(bridge, machine), startBridge).catch((error: unknown) => { terminal.activity(error instanceof Error ? error.message : String(error)); return undefined; });
           if (!next) continue;
           if ('local' in next) return next.local;

@@ -272,3 +272,23 @@ export function prepareCodexStandby(input: {
   const launch = codexLaunchInput(input).input;
   return standbyOf(input, 'codex-app-server', async (child) => { await (child as CodexSession).runTurn({ ...launch, prompt: '', prepareOnly: true }); });
 }
+
+/** This conversation's own vendor child, opened up to the prompt before its
+ * first turn is sent (a chat that just moved here, vendor-warm.ts): the turn
+ * then takes it as its live child (persistentTransportFor, same key) and
+ * starts at the prompt. A child that could not be opened is closed: the turn
+ * opens its own, as it would have. */
+export async function prepareVendorAhead(input: {
+  harness: AiLocalHarnessDefinition; account: AiHarnessAccount; session: HarnessSession; transport: 'acp' | 'codex-app-server';
+  model: string | null; effort?: string; environment: Record<string, string>;
+}): Promise<void> {
+  const { harness, account, session, transport, environment } = input;
+  const live = persistentTransportFor(session.id, transport, vendorChildKey(harness, account, environment, session.workspace));
+  try {
+    if (transport === 'codex-app-server') await (live.session as CodexSession).runTurn({ ...codexLaunchInput(input).input, prompt: '', prepareOnly: true });
+    else await (live.session as AcpSession).runTurn({ ...acpLaunchInput(input), prompt: '', prepareOnly: true });
+  } catch (error) {
+    await closePersistentTransport(session.id);
+    throw error;
+  }
+}

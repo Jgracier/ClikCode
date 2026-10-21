@@ -206,6 +206,9 @@ export function createTurnRunner(ctx: WorkerContext) {
       // A background turn's record still being saved: this turn's checkpoint
       // would read the conversation without it and then write it back whole.
       await ctx.vendorBackground.settled();
+      // The vendor being opened ahead of this turn (a chat that moved here):
+      // the turn starts on it once it is ready, instead of opening a second.
+      if (ctx.warming) await ctx.warming;
       if (controller.signal.aborted) throw turnCancelledError();
       const running = runSessionTurn(config, sessionId, command.text, controller.signal, {
         onWorkFinished: () => { ctx.turnWorkDone = true; },

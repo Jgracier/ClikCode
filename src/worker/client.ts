@@ -37,17 +37,17 @@ function delay(ms: number): Promise<void> {
  * `.ts` files under plain `node file.ts` -- only a real build produces
  * something directly runnable, so a raw-source entry point is not an option
  * here the way it might be in a project that runs TypeScript unbuilt). */
-function workerSpawnArgv(sessionId: string): string[] {
+function workerSpawnArgv(sessionId: string, extra: readonly string[] = []): string[] {
   const entry = process.env.CLIKCODE_WORKER_ENTRY ?? process.argv[1]!;
-  return [entry, 'session-worker', sessionId];
+  return [entry, 'session-worker', sessionId, ...extra];
 }
 
 /** Starts the worker process, detached. From outside the user's systemd
  * manager (an SSH session) the user manager starts it, so it lands in the
  * agent slice like every other worker (own-scope.ts userManagerLaunch); if
  * that cannot be done, it is started directly, as everywhere else. */
-function launchWorker(sessionId: string): void {
-  const argv = workerSpawnArgv(sessionId);
+function launchWorker(sessionId: string, extra: readonly string[] = []): void {
+  const argv = workerSpawnArgv(sessionId, extra);
   let started = false;
   const direct = (): void => {
     if (started) return;
@@ -124,7 +124,7 @@ const ATTACH_ANSWER_MS = 30_000;
  *
  * A question on its own: it is not an attach, so the worker neither reads the
  * conversation nor sends a snapshot of it to a window that would throw it away. */
-function askToRetire(record: WorkerRuntimeRecord): Promise<'retired' | 'declined' | 'unanswered'> {
+function askToRetire(record: WorkerRuntimeRecord, reason?: 'moved'): Promise<'retired' | 'declined' | 'unanswered'> {
   return new Promise((resolveAnswer) => {
     const socket = connect(record.socketPath);
     const frames = new FrameDecoder();
@@ -138,7 +138,7 @@ function askToRetire(record: WorkerRuntimeRecord): Promise<'retired' | 'declined
     };
     const timer = setTimeout(() => answer('unanswered'), RETIRE_ANSWER_MS);
     socket.on('connect', () => {
-      socket.write(encodeFrame({ type: 'retire', token: record.token } satisfies ClientCommand));
+      socket.write(encodeFrame({ type: 'retire', token: record.token, ...(reason ? { reason } : {}) } satisfies ClientCommand));
     });
     socket.on('data', (chunk) => {
       for (const message of frames.push(chunk) as WorkerEvent[]) {
@@ -214,6 +214,46 @@ async function findRunningWorker(sessionId: string): Promise<WorkerRuntimeRecord
  * old record's token then is refused ("stale or invalid token"). */
 async function recordIsLive(record: WorkerRuntimeRecord): Promise<boolean> {
   return processAlive(record.pid) && workerIsReachable(record.socketPath);
+}
+
+/** A chat that just arrived on this machine (moved here): its worker is
+ * started -- or the one running is asked -- to warm it, the way a failover's
+ * standby is opened (turn/vendor-warm.ts): the vendor started and the
+ * conversation loaded into it, no model call. Returns once that is asked;
+ * the warming is the worker's, so the move never waits on it. */
+export async function warmSessionWorker(sessionId: string): Promise<void> {
+  const record = await findRunningWorker(sessionId);
+  if (!record) {
+    lifecycle('client.worker.spawn', { worker: sessionId, warm: true });
+    launchWorker(sessionId, ['--warm']);
+    return;
+  }
+  await tellWorker(record, { type: 'warm', token: record.token });
+}
+
+/** Whether the conversation has a worker running now (nothing is attached). */
+export async function runningWorker(sessionId: string): Promise<boolean> {
+  return Boolean(await findRunningWorker(sessionId));
+}
+
+/** A chat that moved off this machine is read-only here: its worker -- and
+ * the vendor and MCP servers it holds -- is asked to go now rather than idle
+ * out. It decides, as for any retirement: busy, it goes once it is not. */
+export async function retireMovedWorker(sessionId: string): Promise<void> {
+  const record = await findRunningWorker(sessionId);
+  if (record) await askToRetire(record, 'moved');
+}
+
+/** One command to a worker, on a connection of its own (no attach): written,
+ * and the connection ended. */
+function tellWorker(record: WorkerRuntimeRecord, command: ClientCommand): Promise<void> {
+  return new Promise((resolveTold) => {
+    const socket = connect(record.socketPath);
+    const done = (): void => { clearTimeout(timer); socket.destroy(); resolveTold(); };
+    const timer = setTimeout(done, RETIRE_ANSWER_MS);
+    socket.on('connect', () => { socket.end(encodeFrame(command), done); });
+    socket.on('error', done);
+  });
 }
 
 /** The connection ended before the worker said anything. */

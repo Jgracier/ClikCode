@@ -2,7 +2,7 @@
  * link, and its updates: a machine is kept at the commit of the ClikCode this
  * editor runs (its `remote-info`), by the machine's policy
  * (src/remote/updates.ts), and the Update action runs the same update. */
-import { RemoteMachines, type MachineView } from '../../../src/remote/connection';
+import { RemoteMachines, type LinkChannel, type MachineView } from '../../../src/remote/connection';
 import { localMachineName } from '../../../src/remote/board-rows';
 import type { InstallOutcome, InstallReporter } from '../../../src/remote/install';
 import { readMachines } from '../../../src/remote/machines';
@@ -79,8 +79,27 @@ class RemoteDirectory {
   }
 
   watch(listener: () => void): () => void {
-    this.listeners.add(listener);
+    const release = this.watchWith(listener);
     void this.ensure().then(() => listener()).catch(() => listener());
+    return release;
+  }
+
+  /** Keeps the machines' connections open, if they are, until released
+   * (the menu that opened them may close meanwhile). Opens none. */
+  hold(): () => void {
+    if (!this.links) return () => undefined;
+    const keep = (): void => undefined;
+    return this.watchWith(keep);
+  }
+
+  /** A chat channel on the connection the machine menu already has to a
+   * machine (a move goes over it), or undefined when there is none open. */
+  async channel(machineId: string): Promise<LinkChannel | undefined> {
+    return this.links?.channel(machineId);
+  }
+
+  private watchWith(listener: () => void): () => void {
+    this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);
       if (this.listeners.size) return;

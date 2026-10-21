@@ -88,6 +88,10 @@ export interface WorkerContext {
   /** The last write of this worker's record: an approval's state, chained
    * so the file ends as the last state told. */
   recordWrite: Promise<void>;
+  /** The conversation being got ready for its first turn (a chat that moved
+   * here, worker-commands.ts `warm`): a turn waits for it, then starts on
+   * the vendor it opened. */
+  warming: Promise<void> | undefined;
 
   // The parts, assigned as they are built.
   vendorBackground: ReturnType<typeof createVendorBackgroundRunner>;

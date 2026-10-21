@@ -274,7 +274,12 @@ export class IdeBridge {
     const { requestId, ...move } = request;
     try {
       const { answerMoveRequest } = await import('../session/move.js');
-      const data = await answerMoveRequest(this.config, move, this.sessionId);
+      // This bridge follows the chat's worker: it knows whether a turn runs,
+      // without a second connection to ask (and one left attached after).
+      const following = (move.type === 'export-chat' ? move.sessionId ?? this.sessionId : undefined) === this.link.worker?.sessionId;
+      // Read-only once moved: its worker goes (session/move.ts markMoved), and is not followed here any more.
+      if (move.type === 'mark-moved' && move.sessionId === this.link.worker?.sessionId) this.link.detach();
+      const data = await answerMoveRequest(this.config, move, this.sessionId, following ? { turnRunning: async () => this.link.running } : {});
       this.channel.send({ type: 'result', requestId, ok: true, ...(data === undefined ? {} : { data }) });
       if (move.type === 'mark-moved' && move.sessionId === this.sessionId) await this.emitSession().catch(() => undefined);
     } catch (error) {
