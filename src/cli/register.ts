@@ -32,7 +32,14 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   // An editor extension's client (ide/bridge.ts), over an IPC channel the
   // extension opens; and the terminal it runs a vendor sign-in in. Hidden for
   // the same reason as session-worker: neither is anything to type.
-  program.command('ide-bridge', { hidden: true }).action(async () => (await import('../ide/bridge.js')).runIdeBridge(config));
+  // `--stdio`: the same bridge over stdin/stdout, for ClikCode Remote's SSH
+  // connection from another machine (ide/bridge-stdio.ts).
+  program.command('ide-bridge', { hidden: true }).option('--stdio', 'speak JSON lines on stdin/stdout instead of an IPC channel')
+    .action(async (options: { stdio?: boolean }) => (options.stdio
+      ? (await import('../ide/bridge-stdio.js')).runStdioBridge()
+      : (await import('../ide/bridge.js')).runIdeBridge(config)));
+  // What ClikCode Remote reads of an installation it made: version, commit, installation id.
+  program.command('remote-info', { hidden: true }).action(async () => (await import('../remote/info.js')).printRemoteInfo());
   program.command('ide-terminal <spec>', { hidden: true }).action(async (spec: string) => (await import('../ide/terminal.js')).runIdeTerminal(spec));
   // The search /search runs, from a shell: the same engine and ranking.
   program.command('search <words...>').description('Find the conversations that mention something, any provider, most mentions first (--json: each hit and its first mention)')

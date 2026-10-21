@@ -349,7 +349,11 @@ export type IdeHostRequest =
 
 export type IdeHostEvent =
   /** First, instead of `ready`: this process serves chats. */
-  | { type: 'host-ready'; version: string; protocol: number; revision: number; build?: string; pid: number }
+  | { type: 'host-ready'; version: string; protocol: number; revision: number; build?: string; pid: number;
+    /** The git commit of the build (version.ts CLIKCODE_COMMIT), and this
+     * ClikCode state's installation id: what ClikCode Remote compares and
+     * dedupes machines by (src/remote). Absent from a bridge before them. */
+    commit?: string; installationId?: string }
   | { type: 'chat'; chat: string; event: IdeEvent }
   /** The chat's `close` is done: it left its conversation. */
   | { type: 'chat-closed'; chat: string };

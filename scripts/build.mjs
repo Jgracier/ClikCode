@@ -23,6 +23,7 @@
  *   - every package cli.js imports at runtime is in package.json `dependencies`
  *   - harness-catalog.cjs contains no node_modules code at all
  * */
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmod, readFile, mkdir, writeFile } from 'node:fs/promises';
 import { builtinModules } from 'node:module';
@@ -44,6 +45,11 @@ process.chdir(root);
 const analyze = process.argv.includes('--analyze');
 const strict = !process.argv.includes('--no-strict');
 const pkg = JSON.parse(await readFile('package.json', 'utf8'));
+// The commit this build is of, for ClikCode Remote's version handshake (src/remote): two machines
+// on the same commit run the same code. Empty outside a git checkout (a packed tarball).
+const commit = (() => {
+  try { return execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return ''; }
+})();
 
 /**
  * Inlined into cli.js. Pure JS, no native addons, no runtime file lookups
@@ -80,7 +86,7 @@ const common = {
   target: 'node22',
   logLevel: 'info',
   metafile: true,
-  define: { __CLIKCODE_VERSION__: JSON.stringify(pkg.version) },
+  define: { __CLIKCODE_VERSION__: JSON.stringify(pkg.version), __CLIKCODE_COMMIT__: JSON.stringify(commit) },
 };
 
 // Inlined CommonJS packages (commander, cross-spawn, conf's ajv, …) call

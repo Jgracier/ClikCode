@@ -22,7 +22,8 @@ import type Conf from 'conf';
 import { lifecycle, setLifecycleSessionSource } from '../runtime/lifecycle-log.js';
 import { setHarnessInstallReporter } from '../harness/transport/native/install.js';
 import { currentWorkerBuild } from '../worker/registry.js';
-import { CLIKCODE_VERSION } from '../version.js';
+import { CLIKCODE_COMMIT, CLIKCODE_VERSION } from '../version.js';
+import { readState } from '../session/state/read.js';
 import { IdeBridge, captureStdout, ideInstallReporter, type BridgeSiblings } from './bridge.js';
 import type { IdeChannel } from './prompter.js';
 import type { IdeEvent, IdeHostEvent, IdeHostRequest, IdeRequest } from './protocol.js';
@@ -133,6 +134,12 @@ export async function runMultiplexedBridge(config: Conf, send: NonNullable<typeo
   });
   process.on('disconnect', () => { lifecycle('bridge.stop', { reason: 'editor disconnected', chats: host.size }); void host.shutdown().finally(() => process.exit(0)); });
   process.on('SIGTERM', () => { lifecycle('bridge.stop', { reason: 'SIGTERM', chats: host.size }); void host.shutdown().finally(() => process.exit(0)); });
-  send({ type: 'host-ready', version: CLIKCODE_VERSION, protocol: IDE_PROTOCOL.version, revision: IDE_PROTOCOL.revision, ...(currentWorkerBuild() ? { build: currentWorkerBuild() } : {}), pid: process.pid } satisfies IdeHostEvent, undefined, {}, () => undefined);
+  // Which installation this is (ClikCode Remote tells machines apart by it): the index only.
+  const installationId = await readState({ transcripts: [] }).then((state) => state.installationId, () => undefined);
+  send({
+    type: 'host-ready', version: CLIKCODE_VERSION, protocol: IDE_PROTOCOL.version, revision: IDE_PROTOCOL.revision,
+    ...(currentWorkerBuild() ? { build: currentWorkerBuild() } : {}), pid: process.pid,
+    ...(CLIKCODE_COMMIT ? { commit: CLIKCODE_COMMIT } : {}), ...(installationId ? { installationId } : {}),
+  } satisfies IdeHostEvent, undefined, {}, () => undefined);
   await new Promise<void>(() => { /* lives as long as the channel */ });
 }
