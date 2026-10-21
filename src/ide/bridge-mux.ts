@@ -15,7 +15,10 @@
  * alone while a sibling still shows that conversation (BridgeSiblings).
  *
  * The editor owns the lifetime: it disconnects when its last chat leaves,
- * and the process exits on that disconnect, as a one-chat bridge does.
+ * and the process exits on that disconnect, as a one-chat bridge does. The
+ * one exception is a newer ClikCode installed meanwhile: once every chat is
+ * quiet the process says `host-retiring`, closes them all and exits, and the
+ * editor connects again to the new build (bridge-retire.ts).
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type Conf from 'conf';
@@ -28,6 +31,7 @@ import { IdeBridge, captureStdout, ideInstallReporter, type BridgeSiblings } fro
 import type { IdeChannel } from './prompter.js';
 import type { IdeEvent, IdeHostEvent, IdeHostRequest, IdeRequest } from './protocol.js';
 import { IDE_PROTOCOL } from './protocol-version.js';
+import { watchForNewerBuild } from './bridge-retire.js';
 
 /** What the host needs of a chat's bridge (IdeBridge; a test's stand-in). */
 export interface MuxChat {
@@ -36,6 +40,9 @@ export interface MuxChat {
   shutdown(): Promise<void>;
   readonly conversation: string | undefined;
   readonly quietOutput: number;
+  /** What keeps a newer build from replacing the process now (IdeBridge.retireBlocker). */
+  retireBlocker(): string | undefined;
+  readonly lastActivityAt: number;
 }
 
 interface Chat { id: string; bridge: MuxChat; channel: IdeChannel; closing?: Promise<void> }
@@ -44,6 +51,8 @@ export class MultiplexHost {
   private readonly chats = new Map<string, Chat>();
   private readonly current = new AsyncLocalStorage<Chat>();
   private stopping: Promise<void> | undefined;
+  /** A chat joining or leaving is activity too. */
+  private changedAt = Date.now();
 
   constructor(
     private readonly send: (event: IdeHostEvent) => void,
@@ -73,8 +82,34 @@ export class MultiplexHost {
     return this.chats.size;
   }
 
+  /** What keeps a newer build from replacing this process: the first chat's reason. */
+  retireBlocker(): string | undefined {
+    if (this.stopping) return 'stopping';
+    for (const chat of this.chats.values()) {
+      if (chat.closing) return 'a chat is closing';
+      const blocker = chat.bridge.retireBlocker();
+      if (blocker) return blocker;
+    }
+    return undefined;
+  }
+
+  /** When anything last happened in any chat. */
+  get lastActivityAt(): number {
+    return Math.max(this.changedAt, ...[...this.chats.values()].map((chat) => chat.bridge.lastActivityAt));
+  }
+
+  /** Leaves for a newer build: says so (`host-retiring`) before anything
+   * else, so the editor reads what follows -- each chat closed, then the
+   * process gone -- as a reconnect, not a failure. */
+  retire(): Promise<void> {
+    if (this.stopping) return this.stopping;
+    this.send({ type: 'host-retiring', reason: 'newer-build' });
+    return this.shutdown();
+  }
+
   handle(message: IdeHostRequest | IdeRequest): void {
     if (this.stopping) return;
+    if (message.type === 'chat-attach' || (message.type === 'chat' && message.request.type === 'close')) this.changedAt = Date.now();
     if (message.type === 'chat-attach') { this.attach(message.chat); return; }
     if (message.type === 'chat') {
       const chat = this.chats.get(message.chat);
@@ -121,8 +156,11 @@ export class MultiplexHost {
 export async function runMultiplexedBridge(config: Conf, send: NonNullable<typeof process.send>): Promise<void> {
   // Not passed on to the workers and vendors this process starts.
   delete process.env.CLIKCODE_IDE_MULTIPLEX;
+  // The last event before a retirement exit is what tells the editor to
+  // reconnect: the exit waits until it has left (IPC writes asynchronously).
+  let sent: Promise<void> = Promise.resolve();
   const host = new MultiplexHost(
-    (event) => { if (process.connected) send(event, undefined, {}, () => undefined); },
+    (event) => { if (process.connected) sent = new Promise((resolve) => send(event, undefined, {}, () => resolve())); },
     (channel, siblings) => new IdeBridge(config, channel, siblings),
   );
   const log = (line: string): void => { process.stderr.write(`${line}\n`); };
@@ -134,6 +172,12 @@ export async function runMultiplexedBridge(config: Conf, send: NonNullable<typeo
   });
   process.on('disconnect', () => { lifecycle('bridge.stop', { reason: 'editor disconnected', chats: host.size }); void host.shutdown().finally(() => process.exit(0)); });
   process.on('SIGTERM', () => { lifecycle('bridge.stop', { reason: 'SIGTERM', chats: host.size }); void host.shutdown().finally(() => process.exit(0)); });
+  // A newer ClikCode installed while the editor stays connected: leave once quiet.
+  watchForNewerBuild({
+    blocker: () => host.retireBlocker(),
+    lastActivityAt: () => host.lastActivityAt,
+    retire: () => { void host.retire().then(() => sent).finally(() => process.exit(0)); },
+  });
   // Which installation this is (ClikCode Remote tells machines apart by it): the index only.
   // Never long: an editor waits on host-ready, and a state lock held elsewhere must not hold it.
   const installationId = await Promise.race([
@@ -147,3 +191,4 @@ export async function runMultiplexedBridge(config: Conf, send: NonNullable<typeo
   } satisfies IdeHostEvent, undefined, {}, () => undefined);
   await new Promise<void>(() => { /* lives as long as the channel */ });
 }
+

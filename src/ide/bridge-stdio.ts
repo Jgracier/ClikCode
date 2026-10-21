@@ -12,7 +12,9 @@
  *
  * The other end closing stdin (the SSH connection dropped or was closed) is
  * the editor disconnecting: the child's channel is closed and it exits, as
- * a bridge does when its editor goes. No port is opened. */
+ * a bridge does when its editor goes. No port is opened. A bridge that
+ * leaves for a newer build (bridge-retire.ts) ends this relay with it: the
+ * client connects again, which starts the new build's relay and bridge. */
 import { fork } from 'node:child_process';
 import { createInterface } from 'node:readline';
 
@@ -39,6 +41,9 @@ export async function runStdioBridge(): Promise<void> {
   lines.on('close', hangUp);
   process.on('SIGTERM', hangUp);
   process.on('SIGHUP', hangUp);
-  const code = await new Promise<number>((resolve) => child.once('exit', (exitCode) => resolve(exitCode ?? 0)));
-  process.exit(code);
+  // 'close', not 'exit': by then the child's stdout and IPC channel are drained too.
+  const code = await new Promise<number>((resolve) => child.once('close', (exitCode) => resolve(exitCode ?? 0)));
+  // A pipe's writes are asynchronous: the child's last message (a retiring
+  // bridge's `host-retiring`) must reach the other end before this exits.
+  process.stdout.write('', () => process.exit(code));
 }

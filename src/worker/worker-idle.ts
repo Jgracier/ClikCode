@@ -9,6 +9,7 @@ import { closePersistentTransport, hasPersistentTransport, persistentWorkRunning
 import { runningShellCount } from '../agent/session-state.js';
 import { stopBackgroundShell } from '../agent/tools/bash.js';
 import { currentWorkerBuild } from './registry.js';
+import { BUILD_WATCH_MS, RETIRE_QUIET_MS } from './build-retire.js';
 import type { WorkerContext } from './worker-context.js';
 
 /** No attached client and no turn running, for this long: the worker exits
@@ -20,18 +21,9 @@ import type { WorkerContext } from './worker-context.js';
  * that motivated this design did. CLIKCODE_WORKER_IDLE_EXIT_MS overrides it
  * for tests that need to watch a worker decide to exit. */
 const IDLE_EXIT_MS = Number(process.env.CLIKCODE_WORKER_IDLE_EXIT_MS) > 0 ? Number(process.env.CLIKCODE_WORKER_IDLE_EXIT_MS) : 30 * 60 * 1000;
-/** How often an idle worker checks whether a rebuild replaced its entry.
- * CLIKCODE_WORKER_BUILD_WATCH_MS overrides it for tests. */
-export const BUILD_WATCH_MS = Number(process.env.CLIKCODE_WORKER_BUILD_WATCH_MS) > 0 ? Number(process.env.CLIKCODE_WORKER_BUILD_WATCH_MS) : 15_000;
-
-/** A newer build replaces a worker only after this long with nothing happening in it: no turn,
- * no vendor activity, no window coming or going. The vendor works in bursts -- out of turn,
- * after a background task ends -- with gaps between them that look idle, and a window reload is
- * a disconnect of a second; retiring in either cut a running turn off. Replacing is silent: the
- * next window to need the conversation attaches to the new build.
- * CLIKCODE_WORKER_RETIRE_QUIET_MS overrides it for tests. */
-export const RETIRE_QUIET_MS = Number(process.env.CLIKCODE_WORKER_RETIRE_QUIET_MS) >= 0 && process.env.CLIKCODE_WORKER_RETIRE_QUIET_MS
-  ? Number(process.env.CLIKCODE_WORKER_RETIRE_QUIET_MS) : 30_000;
+/** How often an idle worker looks for a newer build, and how long it must be quiet before one
+ * replaces it: build-retire.ts, as the editor's bridge uses the same two. */
+export { BUILD_WATCH_MS, RETIRE_QUIET_MS };
 
 /** A background shell keeps an otherwise idle worker alive -- its exit is
  * owed to the model -- but not for ever: this long after it started, with

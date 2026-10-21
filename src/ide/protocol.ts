@@ -324,7 +324,12 @@ export type IdeEvent =
   | { type: 'closed'; sessionId: string }
   /** Something a conversations list shows may have changed (a turn started
    * or ended, a worker exited): query it again. Sent while a list is open. */
-  | { type: 'conversations-changed' };
+  | { type: 'conversations-changed' }
+  /** Revision 3. The bridge is leaving for a newer ClikCode build installed
+   * since it started (bridge-retire.ts): it does so only while quiet, closes
+   * the chat as on a disconnect, and exits. Not an error: start the bridge
+   * again and re-open the same chat. A client from before this sees a close. */
+  | { type: 'retiring'; reason: 'newer-build' };
 
 /** What `ide-terminal` runs: one of a vendor's own interactive commands,
  * with a real terminal. Base64 JSON on the command line, so no shell ever
@@ -363,4 +368,8 @@ export type IdeHostEvent =
     commit?: string; installationId?: string }
   | { type: 'chat'; chat: string; event: IdeEvent }
   /** The chat's `close` is done: it left its conversation. */
-  | { type: 'chat-closed'; chat: string };
+  | { type: 'chat-closed'; chat: string }
+  /** Revision 3: the process is leaving for a newer build (the per-chat
+   * `retiring` says why); every chat is closed and the process exits next.
+   * Connect again, at once and without telling the user. */
+  | { type: 'host-retiring'; reason: 'newer-build' };
