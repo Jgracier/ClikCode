@@ -17,10 +17,17 @@ import { needsUpdate } from './connection.js';
 import { spawnSsh, sshArgv } from './ssh.js';
 import type { LiveTurnInputResult } from '../turn/live-input.js';
 import type { SignInScreen } from '../gateway/login/vendor-sign-in.js';
+import { parseSlashInput } from '../tui/slash/registry.js';
+import { chatHasContent } from '../session/move-chat.js';
+import { moveTerminalChat, offerMovedChat, remoteMoveEnd } from './move-terminal.js';
 
-export interface RemoteChatSelection { machineId: string; chatId: string }
+/** A chat on another machine to show: `chatId`, or a new one there when
+ * absent; `notice` is said once it is open (a move's "Moved to …"). */
+export interface RemoteChatSelection { machineId: string; chatId?: string; notice?: string }
 
 type RemoteOpen = Omit<Extract<IdeRequest, { type: 'open' }>, 'requestId'>;
+/** A request answered by a `result`, without its id (the bridge gives it one). */
+type Answered<T = IdeRequest> = T extends { requestId: string } ? Omit<T, 'requestId'> : never;
 
 /** Resuming a chat on another machine names no folder: this terminal's cwd
  * is a folder of this machine, and the chat keeps its own saved workspace
@@ -33,7 +40,8 @@ export function remoteResume(chatId: string): RemoteOpen {
 export type RemoteBridgeStarter = (target: string) => ChildProcessWithoutNullStreams;
 const sshBridge: RemoteBridgeStarter = (target) => spawnSsh(target, bridgeScript());
 
-class TerminalBridge {
+/** One chat channel into a machine's ClikCode (its multiplexed bridge, over ssh). */
+export class TerminalBridge {
   private readonly child: ChildProcessWithoutNullStreams;
   private readonly chat = randomUUID();
   private readonly pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
@@ -43,13 +51,15 @@ class TerminalBridge {
   private error = '';
   /** Its ClikCode is another build than this one (connection.ts needsUpdate). */
   outdated = false;
+  /** Which additive requests it answers (protocol-version.ts); 1 when it did not say. */
+  revision = 1;
   /** It said it is leaving for a newer build installed there (ide/bridge-retire.ts):
    * the close that follows is a reconnect, not a lost connection. */
   retiring = false;
   onEvent: (event: IdeEvent) => void = () => undefined;
   onClose: (error: Error) => void = () => undefined;
 
-  constructor(target: string, start: RemoteBridgeStarter) {
+  constructor(target: string, start: RemoteBridgeStarter = sshBridge) {
     this.child = start(target);
     this.child.stderr.on('data', (chunk: Buffer) => { this.error = `${this.error}${chunk.toString('utf8')}`.slice(-2000); });
     this.child.stdin.on('error', () => undefined);
@@ -61,6 +71,7 @@ class TerminalBridge {
         try { message = JSON.parse(line) as IdeHostEvent; } catch { return; }
         if (message.type === 'host-ready') {
           this.outdated = needsUpdate(message);
+          this.revision = message.revision ?? 1;
           this.send({ type: 'chat-attach', chat: this.chat });
           return;
         }
@@ -96,11 +107,11 @@ class TerminalBridge {
     this.child.stdin.write(`${JSON.stringify(message)}\n`);
   }
   post(request: IdeRequest): void { this.send({ type: 'chat', chat: this.chat, request }); }
-  request(request: RemoteOpen): Promise<unknown> {
+  request<T = unknown>(request: Answered): Promise<T> {
     const requestId = randomUUID();
     const result = new Promise<unknown>((resolve, reject) => this.pending.set(requestId, { resolve, reject }));
     this.post({ ...request, requestId } as IdeRequest);
-    return result;
+    return result as Promise<T>;
   }
   close(): void {
     if (this.stopped) return;
@@ -267,8 +278,11 @@ export async function runRemoteChat(
     };
     try {
       await bridge.connected();
+      const selection: RemoteChatSelection = choice;
       // Intent only: the chat is in one of the remote's own folders (session/attach.ts).
-      await bridge.request(remoteResume(choice.chatId));
+      const opened = await bridge.request<{ sessionId?: string } | undefined>(selection.chatId ? remoteResume(selection.chatId) : { type: 'open', mode: 'new' });
+      // A new chat there is that chat from here on: a rejoin resumes it.
+      if (!selection.chatId && opened?.sessionId) choice = { ...selection, chatId: opened.sessionId };
       // After the open, whose chat clears the rows before it. Updated from here only by the
       // machine's own policy (remote/updates.ts): a production machine set to ask is
       // updated when the user says so.
@@ -278,6 +292,14 @@ export async function runRemoteChat(
         void started?.done.then((outcome) => terminal.activity(outcome.ok
           ? `ClikCode on ${machine.name} is updated${outcome.info.commit ? ` to ${outcome.info.commit.slice(0, 8)}` : ''}; its chats switch over once they are quiet.`
           : `Updating ClikCode on ${machine.name} failed: ${outcome.message} Type /update to update it.`), () => undefined);
+      }
+      if (!rejoining && selection.notice) terminal.activity(selection.notice);
+      choice = { ...choice, notice: undefined };
+      // A chat that moved on from there: offered where it went (it is read-only there).
+      if (!rejoining && session?.movedTo) {
+        const next = await offerMovedChat(terminal, session.movedTo);
+        if (next && 'local' in next) return next.local;
+        if (next) { choice = next.remote; continue; }
       }
       if (draft) terminal.restoreDraft(draft);
       draft = undefined;
@@ -296,6 +318,15 @@ export async function runRemoteChat(
           continue;
         }
         if (!line) continue;
+        // /machine: this chat moves to another machine (move-terminal.ts), from the one it is on.
+        if (parseSlashInput(line)?.head === 'machine') {
+          const next = await moveTerminalChat(terminal, { remote: choice }, session?.id ?? choice.chatId ?? '', Boolean(session && chatHasContent(session)),
+            remoteMoveEnd(bridge, machine), startBridge).catch((error: unknown) => { terminal.activity(error instanceof Error ? error.message : String(error)); return undefined; });
+          if (!next) continue;
+          if ('local' in next) return next.local;
+          choice = next.remote;
+          break;
+        }
         const id = randomUUID();
         const complete = new Promise<void>((resolve, reject) => completions.set(id, { resolve, reject }));
         sending = line;
