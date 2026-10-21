@@ -1,5 +1,6 @@
-/** When the bridge goes away or the installed ClikCode changes under it. */
-import { unwatchFile, watchFile } from 'node:fs';
+/** When the bridge goes away. (A newer installed ClikCode is the bridge's own
+ * to notice: it says `retiring` and exits once quiet, src/ide/bridge-retire.ts,
+ * and the controller reconnects at once onto the same chat.) */
 
 /** A bridge that dies after it was ready (killed, crashed, the machine slept
  * through it) comes back on its own, onto the same conversation; the worker
@@ -14,32 +15,4 @@ export class AutoReconnect {
     this.last = now;
     return true;
   }
-}
-
-/** Watches the ClikCode entry file: a build is several files written in turn,
- * so a change is reported once it has settled. */
-export class BuildWatcher {
-  private entry: string | undefined;
-  private settle: NodeJS.Timeout | undefined;
-
-  constructor(private readonly onSettled: () => void) {}
-
-  watch(entry: string): void {
-    if (this.entry === entry) return;
-    this.stop();
-    this.entry = entry;
-    watchFile(entry, { interval: 2_000 }, this.changed);
-  }
-
-  stop(): void {
-    if (this.entry) unwatchFile(this.entry, this.changed);
-    this.entry = undefined;
-    if (this.settle) clearTimeout(this.settle);
-    this.settle = undefined;
-  }
-
-  private readonly changed = (): void => {
-    if (this.settle) clearTimeout(this.settle);
-    this.settle = setTimeout(() => { this.settle = undefined; this.onSettled(); }, 1_500);
-  };
 }

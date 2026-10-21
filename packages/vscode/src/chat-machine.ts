@@ -37,8 +37,6 @@ export type PastedReference = ReturnType<typeof pastedReference>;
 
 export interface MachineConnection {
   bridge: BridgeEndpoint;
-  /** A ClikCode entry on this computer, watched for a new build (BuildWatcher); none for another machine. */
-  watchEntry?: string;
 }
 
 export interface ChatMachine {
@@ -142,7 +140,7 @@ export class LocalChatMachine implements ChatMachine {
   async connect(log: (line: string) => void): Promise<MachineConnection> {
     const runtime = await resolveRuntime({ path: settings().get<string>('path'), nodePath: settings().get<string>('nodePath') });
     log(`Starting ${runtime.entry} (${runtime.entrySource}) with ${runtime.node} (${runtime.nodeSource})`);
-    return { bridge: bridgePool.connect(runtime, this.workspaceForOpen(), settings().get<boolean>('sharedProcess', true)), watchEntry: runtime.entry };
+    return { bridge: bridgePool.connect(runtime, this.workspaceForOpen(), settings().get<boolean>('sharedProcess', true)) };
   }
 
   workspaceForOpen(): string {
