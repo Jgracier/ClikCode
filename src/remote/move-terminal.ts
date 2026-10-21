@@ -49,39 +49,49 @@ export function remoteMoveEnd(bridge: Pick<TerminalBridge, 'revision' | 'request
   };
 }
 
-/** The machines to choose from, with whether each answers now, over `links`. */
-async function machineRows(current: string, machines: readonly RemoteMachine[], links: RemoteMachines | undefined): Promise<Array<PickerOption<string> & { offline?: string }>> {
-  const states = new Map<string, string | undefined>();
-  if (links) {
-    const settled = (): boolean => links.views().every((view) => view.state !== 'connecting');
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, STATE_WAIT_MS);
-      timer.unref?.();
-      const check = (): void => { if (settled()) { clearTimeout(timer); resolve(); } };
-      links.onChange(check);
-      check();
-    });
-    for (const view of links.views()) states.set(view.machine.id, view.state === 'connected' ? undefined : view.state === 'offline' ? 'offline' : 'not answering');
-  }
-  return [
+/** The machines to choose from. The list opens at once: a machine still
+ * connecting says so, and its row is redrawn as it answers (or after
+ * STATE_WAIT_MS, as not answering). Picking one still connecting waits for it. */
+function machineList(current: string, machines: readonly RemoteMachine[], links: RemoteMachines | undefined): {
+  rows: () => Array<PickerOption<string> & { offline?: string }>; refresh: Promise<unknown>[];
+} {
+  const started = Date.now();
+  const stateOf = (id: string): string | undefined => {
+    const view = links?.views().find((item) => item.machine.id === id);
+    if (!view || view.state === 'connected') return undefined;
+    if (view.state === 'offline') return 'offline';
+    return Date.now() - started < STATE_WAIT_MS ? 'connecting' : 'not answering';
+  };
+  const rows = (): Array<PickerOption<string> & { offline?: string }> => [
     { label: localMachineName(), detail: current === 'local' ? '· this chat is here' : '· this machine', value: 'local' },
     ...machines.map((machine) => {
-      const offline = states.get(machine.id);
+      const state = stateOf(machine.id);
+      const offline = state === 'connecting' ? undefined : state;
       return {
         label: machine.name,
-        detail: `· ${[current === machine.id ? 'this chat is here' : undefined, offline].filter(Boolean).join(' · ') || 'connected'}`,
+        detail: `· ${[current === machine.id ? 'this chat is here' : undefined, state].filter(Boolean).join(' · ') || 'connected'}`,
         value: machine.id, ...(offline ? { offline } : {}),
       };
     }),
   ];
+  // A redraw each time a machine answers, and one when the wait is over.
+  const refresh = links ? [
+    ...machines.map((machine) => new Promise<void>((resolve) => {
+      const check = (): void => { if (links.views().find((view) => view.machine.id === machine.id)?.state !== 'connecting') resolve(); };
+      links.onChange(check);
+      check();
+    })),
+    new Promise<void>((resolve) => { setTimeout(resolve, STATE_WAIT_MS).unref?.(); }),
+  ] : [];
+  return { rows, refresh };
 }
 
 /** Which machine to move to; undefined when it stays (Esc, its own machine, an offline one). */
 async function pickMachine(prompter: HarnessPrompter, current: string, machines: readonly RemoteMachine[], links: RemoteMachines | undefined): Promise<{ id: string; machine?: RemoteMachine } | undefined> {
-  const rows = await machineRows(current, machines, links);
-  const picked = await chooseOption(prompter, 'Move this chat to', rows);
+  const list = machineList(current, machines, links);
+  const picked = await chooseOption(prompter, 'Move this chat to', list.rows(), undefined, { startAt: current, refreshedOptions: list.rows, refresh: list.refresh });
   if (!picked || picked === current) return undefined;
-  const row = rows.find((item) => item.value === picked);
+  const row = list.rows().find((item) => item.value === picked);
   if (row?.offline) throw new Error(`${row.label} is ${row.offline}: the chat stays here.`);
   if (picked === 'local') return { id: 'local' };
   const machine = machines.find((item) => item.id === picked);
