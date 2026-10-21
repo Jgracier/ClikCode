@@ -147,16 +147,31 @@ async function runInstall(host: RemoteHost, machine: RemoteMachine, update: bool
     const outcome = await host.withBusy(`${update ? 'updating' : 'installing'} ClikCode on ${machine.name}`, () => installOnMachine(target, stepLines(host), { update }));
     if (outcome.ok || !outcome.auth || asked) return { outcome, machine };
     asked = true;
-    host.line(`${chalk.red('✗')} ${outcome.message}`);
-    // The user it refused: the one in the target, else the one ssh used by default.
-    // Offering it again as the default would only fail the same way.
-    const refused = targetUser(target) ?? await defaultLoginUser(target);
-    const answer = (await host.ask(`Log in to ${targetHost(target)} as which user? (it refused ${refused})`))?.trim();
+    // Not a failure yet: why it is asking, then a list to answer with. The
+    // composer's prompt is one line, too short to carry the question.
+    host.line(`${chalk.yellow('!')} ${outcome.message}`);
+    const answer = await chooseLoginUser(host, machine.name, target);
     if (!answer) return { outcome, machine };
     target = withUser(target, answer);
     machine.sshTarget = target;
     await updateMachine(machine.id, (record) => { record.sshTarget = target; });
   }
+}
+
+const OTHER_USER = '__other__';
+
+/** Which user to log in as, after the login was refused: root (what servers
+ * and Tailscale SSH policies most often allow) or one typed. The user it
+ * refused, the one in the target or else ssh's default, is not offered again. */
+async function chooseLoginUser(host: RemoteHost, name: string, target: string): Promise<string | undefined> {
+  const refused = targetUser(target) ?? await defaultLoginUser(target);
+  const options: PickerOption<string>[] = [
+    ...(refused === 'root' ? [] : [{ label: 'root', detail: '· installs in /root', value: 'root' }]),
+    { label: 'Another user…', detail: '· type its name', value: OTHER_USER },
+  ];
+  const chosen = await chooseOption(host.prompter, `Log in to ${name} as (not ${refused})`, options);
+  if (chosen !== OTHER_USER) return chosen;
+  return (await host.ask('User'))?.trim() || undefined;
 }
 
 async function addMachine(host: RemoteHost, machine: RemoteMachine, recorded = false): Promise<InteractiveSlashOutcome> {
