@@ -135,6 +135,8 @@ if ((argv[0] === 'agent' && argv.includes('stdio')) || argv.includes('--acp')) {
     // prompt ClikCode sends on its own (a title, a probe) just gets an answer.
     const matched = !profile.promptMatch || said.includes(profile.promptMatch);
     logEmit({ ev: 'recv', what: 'session/prompt', matched });
+    // FAKE_PROMPT_LOG: every prompt's text, one JSON string a line -- what the agent was told.
+    if (process.env.FAKE_PROMPT_LOG) appendFileSync(process.env.FAKE_PROMPT_LOG, `${JSON.stringify(said)}\n`);
     const received = /pasted row 1\n[\s\S]*pasted row 12/.test(said) && !said.includes('[Pasted text') ? 'whole' : 'missing';
     const turn = matched ? nextTurn() : { blocks: ['ok'] };
     cancelled = false;

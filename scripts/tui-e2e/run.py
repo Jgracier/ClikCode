@@ -253,6 +253,49 @@ def remote_fake(commit=None):
     return setup
 
 
+def remote_move():
+    """`setup` for moving a chat to another machine (/machine): the fake `ssh`
+    (fake-ssh.mjs) and one fake machine, `devbox`, already added, running THIS
+    build's real ClikCode (its bridge, its worker, its turns) in a HOME, user
+    and state of its own, with the fake Grok there signed in. Grok is signed
+    in here too. The fake Grok there logs every prompt to remote-prompts.log,
+    so a step can count what the agent there was told. No real machine or vendor."""
+    def setup(context):
+        import subprocess, datetime, uuid
+        fakes = os.path.join(REPO, 'scripts', 'tui-e2e')
+        shutil.copy(os.path.join(fakes, 'fake-grok.mjs'), os.path.join(context['fakebin'], 'grok'))
+        os.chmod(os.path.join(context['fakebin'], 'grok'), 0o755)
+        os.symlink(os.path.join(fakes, 'fake-ssh.mjs'), os.path.join(context['fakebin'], 'ssh'))
+        os.makedirs(os.path.join(context['home'], '.grok'))
+        open(os.path.join(context['home'], '.grok', 'auth.json'), 'w').write('{}')
+        world_root = os.path.join(context['root'], 'remote')
+        os.makedirs(world_root)
+        # A short name: the worker's socket there is in its TMPDIR, inside this scenario's
+        # temporary root, and a Unix socket path has to fit in 108 bytes.
+        target = 'devbox'
+        made = json.loads(subprocess.check_output(['node', os.path.join(fakes, 'fake-remote.mjs'), 'host', world_root, target, json.dumps({'env': {
+            'FAKE_TURNS': json.dumps([{'blocks': ['Answered on devbox.']}, {'blocks': ['Second answer on devbox.']}]),
+            'FAKE_STATE': os.path.join(context['root'], 'remote-turn-counter'), 'FAKE_PROMPT_LOG': os.path.join(context['root'], 'remote-prompts.log'),
+            'FAKE_FAMILY': 'claude',
+        }})]))
+        remote_home, remote_bin = made['home'], made['bin']
+        shutil.copy(os.path.join(fakes, 'fake-grok.mjs'), os.path.join(remote_bin, 'grok'))
+        os.chmod(os.path.join(remote_bin, 'grok'), 0o755)
+        os.makedirs(os.path.join(remote_home, '.grok'))
+        open(os.path.join(remote_home, '.grok', 'auth.json'), 'w').write('{}')
+        os.makedirs(os.path.join(remote_home, '.local', 'bin'))
+        launcher = os.path.join(remote_home, '.local', 'bin', 'clikcode')
+        open(launcher, 'w').write(f"#!/bin/sh\nexec {os.path.realpath(shutil.which('node'))} {os.path.abspath(context['entry'])} \"$@\"\n")
+        os.chmod(launcher, 0o755)
+        os.makedirs(os.path.join(context['state'], 'remote'))
+        now = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+        record = {'id': str(uuid.uuid4()), 'name': 'devbox', 'sshTarget': target, 'addedAt': now, 'ready': True, 'updates': 'ask'}
+        with open(os.path.join(context['state'], 'remote', 'machines.json'), 'w') as handle:
+            json.dump({'version': 1, 'machines': [record]}, handle)
+        context['env'].update({'FAKE_SSH_ROOT': world_root})
+    return setup
+
+
 SCENARIOS = {
     'two-blocks-with-tool': {
         'turns': [TWO_BLOCKS],
@@ -650,6 +693,34 @@ SCENARIOS = {
         'snap_composer_same': ['list', 'installed', 'opened'],
         'snap_pair_same_row': [('board', 'board-updated', 'Fix the login page'), ('board', 'board-updated', 'Write the migration tests')],
         'never': ['Windows machines', 'ENOENT'],
+    },
+    # /machine: the chat's machine is one of its settings, and choosing another
+    # moves the chat there -- its conversation, on devbox's own ClikCode -- and
+    # the next message is answered there, by devbox's agent, told once (and
+    # unseen) that the chat moved. Nothing changes, so nothing is asked.
+    'machine-move-chat': {
+        'setup': remote_move(), 'startup': 4, 'no_dup_check': 'the transcript is drawn again on the other machine',
+        'turns': [{'blocks': ['First answer here.']}],
+        'steps': [
+            ('type', 'hello there'), ('wait_for', 'First answer here.', 30), ('settle', 1),
+            ('type', '/machine'), ('wait_for', 'Move this chat to', 20), ('wait_for', 'devbox', 10), ('settle', 1), ('snap', 'picker'),
+            ('keys', '\x1b[B'), ('keys', '\r'), ('wait_for', 'Moved to devbox', 60), ('settle', 2), ('snap', 'moved'),
+            ('type', 'where are you now'), ('wait_for', 'Answered on devbox.', 60), ('settle', 1), ('snap', 'answered'),
+            ('type', 'and again'), ('wait_for', 'Second answer on devbox.', 60), ('settle', 1), ('snap', 'again'),
+            # Told once, with the first turn there; the second turn is only what was typed.
+            ('expect_file_count', 'remote-prompts.log', 'This conversation moved from', 1),
+            ('expect_file_count', 'remote-prompts.log', 'Earlier in this chat', 1),
+            ('expect_file_count', 'remote-prompts.log', '"and again"', 1),
+        ],
+        'watch': [],
+        'snap_contains': {
+            'picker': ['Move this chat to', 'devbox'],
+            'moved': ['Moved to devbox', 'hello there', 'First answer here.'],
+            'answered': ['where are you now', 'Answered on devbox.'],
+            'again': ['and again', 'Second answer on devbox.'],
+        },
+        'snap_lacks': {'moved': ['is not signed in', 'Moving to devbox:'], 'answered': ['moved from', 'clikcode_resource_note']},
+        'never': ['ENOENT', 'This conversation moved from', 'clikcode_resource_note', 'Connection to devbox'],
     },
     # A chat on a machine whose ClikCode is another build: said once on opening it, with where
     # to update it. Nothing is updated without the user.
@@ -2841,6 +2912,11 @@ def run(name, spec, entry, keep):
             deadline = time.time() + (step[4] if len(step) > 4 else 20)
             while len(opened_by()) < step[3] and time.time() < deadline: pump(0.2)
             if len(opened_by()) < step[3]: problems.append(f'chat {step[2]} on {step[1]} was opened by {len(opened_by())} bridge process(es), expected {step[3]}')
+        elif step[0] == 'expect_file_count':
+            # ('expect_file_count', path under the scenario root, text, n): the file holds text exactly n times.
+            path = os.path.join(root, step[1])
+            found = open(path, errors='replace').read().count(step[2]) if os.path.exists(path) else 0
+            if found != step[3]: problems.append(f'{step[1]} holds {step[2]!r} {found} time(s), expected {step[3]}')
         elif step[0] == 'damage_and_redraw':
             # Simulate cells lost by the client: the app's cached frame is still
             # intact, but the emulated display is blank. Ctrl+L must rebuild it.
