@@ -42,6 +42,11 @@ export function compactThreshold(settings: { compactAt?: unknown } | undefined, 
   return Math.max(MIN_COMPACT_AT_TOKENS, Math.min(configured, Math.floor(contextWindow * COMPACT_WINDOW_SHARE)));
 }
 
+/** A measured token count, short: `670k`, `1.2m`. */
+export function tokenSize(tokens: number): string {
+  return tokens >= 1_000_000 ? `${Math.round(tokens / 100_000) / 10}m` : `${Math.round(tokens / 1000)}k`;
+}
+
 export function compactAtLabel(settings: { compactAt?: unknown } | undefined): string {
   const set = settings?.compactAt;
   if (set === 0) return 'off';

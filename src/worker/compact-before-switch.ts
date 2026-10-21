@@ -36,6 +36,11 @@ export function shouldCompactBeforeSwitch(
   return Boolean(nextUsableFailoverAccount(state, account, (item) => turnBackendForAccount(item) === 'vendor', new Map()));
 }
 
+/** What the conversation says of the compaction ClikCode ran (TranscriptMessage.automatic). */
+export function compactBeforeSwitchNotice(account: Pick<AiHarnessAccount, 'label'> | undefined): string {
+  return `Compacted before switching accounts: ${account?.label ?? 'this account'} is nearly out of usage`;
+}
+
 export function noteCompacted(sessionId: string, now: number = Date.now()): void {
   lastCompacted.set(sessionId, now);
 }

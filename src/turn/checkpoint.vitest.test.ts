@@ -77,6 +77,37 @@ describe('durable turn checkpoints', () => {
     }
   });
 
+  it('keeps why ClikCode sent a prompt itself, from the saved journal to the message it commits as', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'clikcode-automatic-turn-'));
+    const previous = process.env.CLIKCODE_HOME;
+    process.env.CLIKCODE_HOME = home;
+    try {
+      const { startTurnCheckpoint } = await import('./turn-journal.js');
+      const { readState } = await import('../session/state/read.js');
+      const { canonicalRecord } = await import('../session/canonical.js');
+      const why = 'Compacted automatically: the context was 670k tokens, over the 250k setting (/settings global compact)';
+      const target = { ...session(), id: randomUUID() };
+      const checkpoint = await startTurnCheckpoint({ v: 1, sessions: [target], accounts: [] } as never, target, '/compact', { automatic: why });
+      await checkpoint.persistNow();
+      const saved = (await readState({ transcripts: [target.id] })).sessions.find((item) => item.id === target.id)!;
+      expect(saved.pendingTurn).toMatchObject({ prompt: '/compact', automatic: why });
+      finishPendingTurn(saved, 'Compacted.', stamp(5));
+      // The vendor was sent /compact; the conversation says why ClikCode sent it.
+      expect(saved.messages?.at(-2)).toEqual({ role: 'user', content: '/compact', automatic: why });
+      // Not the user's request to a model reading the conversation, nor to the provider taking it up.
+      expect(textTranscript(saved.messages!)).toEqual([{ role: 'user', content: 'Earlier' }, { role: 'assistant', content: 'Done' }, { role: 'assistant', content: 'Compacted.' }]);
+      expect(canonicalRecord(saved).turns.at(-1)).toMatchObject({ user: '', assistant: 'Compacted.' });
+      // A /compact the user typed is theirs, as before.
+      const typed = session();
+      beginPendingTurn(typed, '/compact', stamp(0));
+      expect(sessionTranscriptMessages(typed).at(-1)).toEqual({ role: 'user', content: '/compact' });
+    } finally {
+      if (previous === undefined) delete process.env.CLIKCODE_HOME;
+      else process.env.CLIKCODE_HOME = previous;
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it('keeps a failed partial turn for continuation and reopens an empty retry', () => {
     const target = session();
     beginPendingTurn(target, 'Continue', stamp(0));

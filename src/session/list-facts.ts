@@ -40,9 +40,9 @@ function previewFromTranscript(session: HarnessSession, limit = 48): string | un
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     // A notice ClikCode sent in the user's place is not something they asked.
-    if (message?.role === 'user' && message.content.trim() && !isClikCodeNotice(message.content)) { text = message.content; break; }
+    if (message?.role === 'user' && message.content.trim() && !message.automatic && !isClikCodeNotice(message.content)) { text = message.content; break; }
   }
-  const pending = session.pendingTurn?.prompt;
+  const pending = session.pendingTurn?.automatic ? undefined : session.pendingTurn?.prompt;
   if (pending && !isClikCodeNotice(pending)) text ??= pending;
   if (!text?.trim()) return undefined;
   const line = text.replace(/\s+/g, ' ').trim();

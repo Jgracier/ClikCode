@@ -31,6 +31,9 @@ export interface TurnRunOptions {
   /** What the user changes mid-turn, held by the worker (turn/live-settings.ts). Seeded here. */
   liveSettings?: LiveSettings;
   queuedTurnId?: string;
+  /** ClikCode sends this prompt itself, and why: saved with it and drawn as
+   * ClikCode's notice instead of the user's message (TranscriptMessage.automatic). */
+  automatic?: string;
   /** A worker keeps ONE app-server / ACP child per open session and closes
    * it itself; a turn run anywhere else stays one-shot. */
   persistentTransports?: boolean;

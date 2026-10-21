@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { forgetCompactedByContext, noteCompactedByContext, shouldCompactByContext, workerIsBusy, COMPACT_REGROWTH_TOKENS } from './compact-by-context.js';
+import { compactByContextNotice, forgetCompactedByContext, noteCompactedByContext, shouldCompactByContext, workerIsBusy, COMPACT_REGROWTH_TOKENS } from './compact-by-context.js';
 import { compactAtLabel, compactThreshold, DEFAULT_COMPACT_AT_TOKENS, parseCompactAt } from '../session/compact-setting.js';
 import { applyDefaultSetting } from '../session/options.js';
 import { nativeAvailableCommands } from '../turn/vendor-process.js';
@@ -107,5 +107,12 @@ describe('the setting', () => {
     expect(() => applyDefaultSetting({ model: undefined } as never, 'compact', '300k')).toThrow('unknown setting');
     expect(compactAtLabel({})).toBe('250k tokens (default)');
     expect(compactAtLabel({ compactAt: 0 })).toBe('off');
+  });
+});
+
+describe('what the conversation says of it', () => {
+  it('names the size it was and the setting it passed', () => {
+    expect(compactByContextNotice(settings(), session({}, 670_000))).toBe('Compacted automatically: the context was 670k tokens, over the 250k setting (/settings global compact)');
+    expect(compactByContextNotice(settings(), session({}, 1_240_000, 2_000_000))).toContain('was 1.2m tokens');
   });
 });

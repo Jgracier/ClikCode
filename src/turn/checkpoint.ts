@@ -139,7 +139,7 @@ export function sessionTranscriptMessages(session: HarnessSession): Message[] {
   // A continuation's prompt in a journal an older build wrote was ClikCode's,
   // not the user's: its answer follows the interrupted one directly.
   if (pending.prompt !== LEGACY_INTERRUPTED_TURN_REQUEST) {
-    messages.push({ role: 'user', content: pending.prompt, ...(pending.attachments?.length ? { attachments: [...pending.attachments] } : {}) });
+    messages.push({ role: 'user', content: pending.prompt, ...(pending.attachments?.length ? { attachments: [...pending.attachments] } : {}), ...(pending.automatic ? { automatic: pending.automatic } : {}) });
   }
   const response = pending.response ?? '';
   // Each call goes with the part of the answer it happened in: a steer
@@ -213,7 +213,7 @@ export function runningActivityLabel(pending: HarnessSession['pendingTurn']): st
  * The session's date moves here and when the turn finishes, not on every
  * streamed delta: it is an index field, and the index is not rewritten while
  * an answer streams (writeTranscriptCheckpoint). */
-export function beginPendingTurn(session: HarnessSession, prompt: string, now: string): void {
+export function beginPendingTurn(session: HarnessSession, prompt: string, now: string, automatic?: string): void {
   const pending = session.pendingTurn;
   // The same request, and it never produced output. A retry is that one
   // line, not a second copy of it in the transcript.
@@ -227,6 +227,7 @@ export function beginPendingTurn(session: HarnessSession, prompt: string, now: s
   resetUserWait(session.id);
   session.pendingTurn = {
     prompt, ...(session.attachments?.length ? { attachments: [...session.attachments] } : {}),
+    ...(automatic ? { automatic } : {}),
     startedAt: now, updatedAt: now, outputStarted: false,
   };
   session.updatedAt = now;

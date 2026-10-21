@@ -9,7 +9,7 @@
  * and the model's window. Never repeats: after it runs, the context has to shrink (it worked) or
  * grow by a margin (it did not) before it may run again. */
 import type { HarnessSession, HarnessState } from '../session/model.js';
-import { compactThreshold } from '../session/compact-setting.js';
+import { compactThreshold, tokenSize } from '../session/compact-setting.js';
 import { canCompact } from '../tui/slash/compact.js';
 
 /** A compaction that left the context where it was is not tried again until it has grown by this much. */
@@ -40,6 +40,14 @@ export function shouldCompactByContext(state: Pick<HarnessState, 'globalSettings
   if (before !== undefined && used < before + COMPACT_REGROWTH_TOKENS) return false;
   if (session.queuedTurns?.some((entry) => entry.kind !== 'notification')) return false;
   return canCompact(session.id, session);
+}
+
+/** What the conversation says of a size compaction ClikCode ran (TranscriptMessage.automatic). */
+export function compactByContextNotice(state: Pick<HarnessState, 'globalSettings'>, session: HarnessSession): string {
+  const threshold = compactThreshold(state.globalSettings, session.lastUsage?.contextWindow);
+  const used = contextTokens(session);
+  if (threshold === undefined || used === undefined) return 'Compacted automatically: the context had grown large (/settings global compact)';
+  return `Compacted automatically: the context was ${tokenSize(used)} tokens, over the ${tokenSize(threshold)} setting (/settings global compact)`;
 }
 
 export function noteCompactedByContext(session: HarnessSession): void {
