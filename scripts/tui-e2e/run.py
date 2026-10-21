@@ -168,14 +168,16 @@ def signed_in_fake(binary, auth_path, auth_text):
     return setup
 
 
-def remote_installed(updates, pnpm_delay=0):
+def remote_installed(updates, pnpm_delay=0, current=False):
     """`setup` for ClikCode Remote keeping a machine current: the fakes of
     remote_fake, a repository whose main has moved on, and `devbox` already
     added (its record in this machine's machines.json, policy `updates`) and
     installed at the OLDER commit. This build stands for main's newer commit
     (CLIKCODE_REMOTE_LOCAL_COMMIT): the fake repository cannot hold this
     checkout's own. `/update` in a devbox chat runs this checkout's real
-    ClikCode there (fake-remote-clikcode.mjs). No real machine or network."""
+    ClikCode there (fake-remote-clikcode.mjs). `current`: this build stands
+    for the installed commit instead, so the machine is up to date. No real
+    machine or network."""
     def setup(context):
         import subprocess, datetime, uuid
         fakes = os.path.join(REPO, 'scripts', 'tui-e2e')
@@ -204,7 +206,7 @@ def remote_installed(updates, pnpm_delay=0):
             json.dump({'version': 1, 'machines': [record]}, handle)
         context['env'].update({
             'FAKE_SSH_ROOT': world_root, 'CLIKCODE_REMOTE_REPO_URL': made['repoUrl'], 'CLIKCODE_REMOTE_NODE_MIRROR': made['mirrorUrl'],
-            'CLIKCODE_REMOTE_LOCAL_COMMIT': made['commit'],
+            'CLIKCODE_REMOTE_LOCAL_COMMIT': made['first'] if current else made['commit'],
         })
         context['remote'] = {'first': made['first'], 'commit': made['commit']}
     return setup
@@ -708,6 +710,33 @@ SCENARIOS = {
         },
         'snap_lacks': {'machines': ['updating ClikCode'], 'after': ['needs update']},
         'never': ['ENOENT', 'updating ClikCode…'],
+    },
+    # The machine's ClikCode is updated while one of its chats is open here and quiet: the
+    # bridge there leaves for the new build (src/ide/bridge-retire.ts, emulated by
+    # fake-remote-clikcode.mjs), and the chat connects again to a new bridge process and goes on --
+    # nothing said, what was being typed still in the composer.
+    'remote-chat-bridge-rebuild': {
+        'setup': remote_installed('ask', current=True), 'startup': 4, 'no_dup_check': 'lists and progress lines, no transcript',
+        'turns': [{'blocks': ['unused']}],
+        'steps': [
+            ('settle', 2),
+            ('keys', '\x1b[D'), ('wait_for', '← machines', 20), ('keys', '\x1b[D'), ('wait_for', '2 chats', 30), ('settle', 1),
+            ('keys', '\x1b[B'), ('keys', '\x1b[C'), ('wait_for', 'Fix the login page', 20), ('settle', 0.5),
+            ('keys', '\x1b[C'), ('settle', 3),
+            ('type', 'say: before the update'), ('wait_for', 'Said: before the update', 15), ('settle', 1),
+            ('keys', 'say: after the update'), ('settle', 1), ('snap', 'typed'),
+            ('remote_rebuild', 'devbox.tail-fake.ts.net'),
+            ('expect_remote_opens', 'devbox.tail-fake.ts.net', 'c1', 2, 30), ('settle', 2), ('snap', 'rejoined'),
+            ('keys', '\r'), ('wait_for', 'Said: after the update', 15), ('settle', 1), ('snap', 'after'),
+        ],
+        'watch': [],
+        'snap_contains': {
+            'typed': ['› say: after the update'],
+            'rejoined': ['Said: before the update', '› say: after the update'],
+            'after': ['Said: before the update', 'Said: after the update'],
+        },
+        'snap_lacks': {'rejoined': ['another ClikCode build', 'closed', 'Connection to']},
+        'never': ['This conversation closed', 'Connection to devbox', 'interrupted', 'ENOENT', 'No answer from'],
     },
     'single-block': {
         'turns': [{'blocks': ['Hello there, all good.']}],
@@ -2799,6 +2828,19 @@ def run(name, spec, entry, keep):
             json.dump(index, open(index_file, 'w'))
         elif step[0] == 'touch_entry':
             os.utime(entry, None)
+        elif step[0] == 'remote_rebuild':
+            # A newer ClikCode build installed on a fake machine (fake-remote-clikcode.mjs ~/.fake-remote/build).
+            open(os.path.join(env['FAKE_SSH_ROOT'], 'hosts', step[1], 'home', '.fake-remote', 'build'), 'w').write(str(time.time()))
+            pump(0.3)
+        elif step[0] == 'expect_remote_opens':
+            # ('expect_remote_opens', host, chat, n, timeout): that chat was opened by n different bridge processes there.
+            opens_log = os.path.join(env['FAKE_SSH_ROOT'], 'hosts', step[1], 'home', '.fake-remote', 'opens.log')
+            def opened_by():
+                try: return {json.loads(line)['pid'] for line in open(opens_log) if line.strip() and json.loads(line)['chat'] == step[2]}
+                except OSError: return set()
+            deadline = time.time() + (step[4] if len(step) > 4 else 20)
+            while len(opened_by()) < step[3] and time.time() < deadline: pump(0.2)
+            if len(opened_by()) < step[3]: problems.append(f'chat {step[2]} on {step[1]} was opened by {len(opened_by())} bridge process(es), expected {step[3]}')
         elif step[0] == 'damage_and_redraw':
             # Simulate cells lost by the client: the app's cached frame is still
             # intact, but the emulated display is blank. Ctrl+L must rebuild it.
