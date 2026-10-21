@@ -13,10 +13,12 @@
  * kinds: a new one is a compile error in both implementations, not a
  * forgotten `if (remote)` somewhere in the controller. */
 import * as vscode from 'vscode';
+import { spawn } from 'node:child_process';
 import { homedir, tmpdir } from 'node:os';
+import { createInterface } from 'node:readline';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { remoteTerminalScript } from '../../../src/remote/install';
+import { parseRemoteInfo, remoteTerminalScript } from '../../../src/remote/install';
 import { removeRemoteImage, uploadRemoteImage } from '../../../src/remote/image';
 import type { RemoteMachine } from '../../../src/remote/machines';
 import { sshArgv } from '../../../src/remote/ssh';
@@ -71,7 +73,45 @@ export interface ChatMachine {
   runSignIn(event: SignInEvent, bridge: BridgeEndpoint, workspace: string | undefined): Promise<void>;
   /** A path the chat names, in an editor; rejects with what to say instead. */
   openFile(path: string, options: { line?: number; workspace?: string; preview: boolean }): Promise<void>;
+  /** Updates the ClikCode that runs this machine's chats -- this
+   * computer's the way it was installed (`clikcode update`, which leaves a
+   * developer checkout alone and says what to run), another machine's over
+   * SSH to the commit this editor runs. Each step goes to `report`; resolves
+   * with what to say, rejects naming the step that failed. */
+  update(report: (line: string) => void): Promise<string>;
   dispose(): void;
+}
+
+/** The commit of the ClikCode this editor runs (its `remote-info`): what
+ * other machines are kept at. Undefined for a build with none. */
+export async function localClikcodeCommit(): Promise<string | undefined> {
+  const runtime = await resolveRuntime({ path: settings().get<string>('path'), nodePath: settings().get<string>('nodePath') });
+  const stdout = await new Promise<string>((resolve, reject) => {
+    const child = spawn(runtime.node, [runtime.entry, 'remote-info'], { env: { ...process.env, ...runtime.env }, stdio: ['ignore', 'pipe', 'ignore'] });
+    let out = '';
+    child.stdout.on('data', (chunk: Buffer) => { out += chunk.toString('utf8'); });
+    child.once('error', reject);
+    child.once('close', (code) => (code === 0 ? resolve(out) : reject(new Error(`remote-info exited ${code ?? '?'}`))));
+  });
+  return parseRemoteInfo(stdout.trim().split('\n').pop())?.commit;
+}
+
+/** `clikcode update` of the ClikCode this editor runs, its lines reported;
+ * its last line is what it says. */
+export function runClikcodeUpdate(runtime: { node: string; entry: string; env: Record<string, string> }, report: (line: string) => void): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(runtime.node, [runtime.entry, 'update'], { env: { ...process.env, ...runtime.env }, stdio: ['ignore', 'pipe', 'pipe'] });
+    const said: string[] = [];
+    let stderr = '';
+    createInterface({ input: child.stdout }).on('line', (line) => { if (!line.trim()) return; said.push(line); report(line); });
+    child.stderr.on('data', (chunk: Buffer) => { stderr = `${stderr}${chunk.toString('utf8')}`.slice(-4000); });
+    child.once('error', reject);
+    child.once('close', (code) => {
+      if (code === 0 && said.length) { resolve(said.at(-1)!); return; }
+      const last = stderr.trim().split('\n').filter(Boolean).pop() ?? said.at(-1) ?? `exit ${code ?? '?'}`;
+      reject(new Error(/unknown command 'update'/.test(stderr) ? 'This ClikCode is older than `clikcode update`: update it the way it was installed.' : last.replace(/^error:\s*/i, '')));
+    });
+  });
 }
 
 /** The `open` request a chat sends: the folder only when its machine names one. */
@@ -174,6 +214,11 @@ export class LocalChatMachine implements ChatMachine {
     await vscode.window.showTextDocument(document, { preview: options.preview, ...(position ? { selection: new vscode.Range(position, position) } : {}) });
   }
 
+  async update(report: (line: string) => void): Promise<string> {
+    const runtime = await resolveRuntime({ path: settings().get<string>('path'), nodePath: settings().get<string>('nodePath') });
+    return runClikcodeUpdate(runtime, report);
+  }
+
   dispose(): void {
     void this.imageDir?.then((dir) => rm(dir, { recursive: true, force: true }), () => undefined);
   }
@@ -259,6 +304,15 @@ export class RemoteChatMachine implements ChatMachine {
    * here would be another file. */
   openFile(path: string): Promise<void> {
     return Promise.reject(new Error(`${path} is on ${this.record.name}; open that workspace through VS Code Remote SSH to edit it.`));
+  }
+
+  async update(report: (line: string) => void): Promise<string> {
+    const outcome = await remoteDirectory.update(this.record.id, {
+      start: (step, index, total) => report(`${index}/${total} ${step}`),
+      done: (step, detail) => report(`✓ ${step}${detail ? ` · ${detail}` : ''}`),
+    });
+    if (!outcome.ok) throw new Error(`${outcome.step}: ${outcome.message}`);
+    return `ClikCode on ${this.record.name} is updated${outcome.info.commit ? ` to ${outcome.info.commit.slice(0, 8)}` : ''}; its chats switch over once they are quiet.`;
   }
 
   dispose(): void {

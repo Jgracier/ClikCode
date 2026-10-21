@@ -60,6 +60,8 @@ export type WebviewRequest =
   | { method: 'machines'; discover?: boolean }
   | { method: 'machineConversations'; machineId: string }
   | { method: 'selectMachine'; machineId: string }
+  /** Update ClikCode on a machine ('local': this computer's, as /update does). */
+  | { method: 'updateMachine'; machineId: string }
   | { method: 'openOnMachine'; machineId: string; mode: 'new' | 'resume'; sessionId?: string }
   | { method: 'query'; query: IdeQueryName; provider?: string; network?: boolean }
   | { method: 'choose'; choice: IdeChoice }

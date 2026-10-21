@@ -29,6 +29,7 @@ export function freshFor(model: ChatModel): ChatModel {
     ...emptyModel(), connection: model.connection,
     ...(model.machine ? { machine: model.machine } : {}),
     ...(model.machineId ? { machineId: model.machineId } : {}),
+    ...(model.machineUpdate ? { machineUpdate: model.machineUpdate } : {}),
     ...(model.version ? { version: model.version } : {}), ...(model.revision ? { revision: model.revision } : {}),
   };
 }
