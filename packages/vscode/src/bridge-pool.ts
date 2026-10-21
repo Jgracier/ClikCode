@@ -13,7 +13,9 @@
  * leaves, the process is disconnected and exits. A process that died takes
  * every chat with it, and each reconnects (AutoReconnect) -- into one new
  * process, not one each. A new build gets a new process; the old one exits
- * when its last chat has moved.
+ * when its last chat has moved -- or by itself, once every chat in it is
+ * quiet: it says `host-retiring` (src/ide/bridge-retire.ts), each chat hears
+ * `retiring` and its exit, and reconnects at once into a new process.
  *
  * A ClikCode from before shared processes answers with a plain `ready`: its
  * process becomes the first chat's own, and every other chat gets one of its
@@ -78,7 +80,7 @@ function poolKey(runtime: Runtime): string {
 }
 
 class SharedHost {
-  private state: 'starting' | 'shared' | 'single' | 'draining' | 'gone' = 'starting';
+  private state: 'starting' | 'shared' | 'single' | 'draining' | 'retiring' | 'gone' = 'starting';
   private readonly proc: MultiplexBridge;
   /** Chats in this process, oldest first. */
   private readonly channels = new Map<string, SharedChannel>();
@@ -155,7 +157,14 @@ class SharedHost {
       this.fallBack(message);
       return;
     }
-    if (message.type === 'chat') this.channels.get(message.chat)?.deliver(message.event);
+    if (message.type === 'chat') { this.channels.get(message.chat)?.deliver(message.event); return; }
+    // Leaving for a newer build: no chat joins it any more, and each one in it
+    // is told why the exit that follows is not a failure.
+    if (message.type === 'host-retiring' && this.state === 'shared') {
+      this.state = 'retiring';
+      this.pool.gone();
+      for (const channel of this.channels.values()) channel.deliver({ type: 'retiring', reason: message.reason });
+    }
   }
 
   /** An older ClikCode: one conversation per process. This one becomes the

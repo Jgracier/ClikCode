@@ -23,9 +23,9 @@ import { DraftRestores, LatestRead } from './controller/reads';
 import { answeredApproval, applyEvent, connectionLost, conversationAttention, emptyModel, preparing, rejectedPrompt, submittingPrompt, takenBackText, withNote, typedDuringTurn, type ChatModel } from './model';
 import type { IdeAccounts, IdeChatSettings, IdeConversation, IdeEvent, IdeFeature, IdeRequest, IdeProvider, IdeSlashCommand, IdeUiRequest, HarnessQuestionResult, WorkerEvent } from './protocol';
 import { bridgeCommandMissing, bridgeCompatibility, tooOldToStartMessage, versionSkew, type Remedy } from './compat';
-import { entryBuild, RuntimeError } from './runtime';
+import { RuntimeError } from './runtime';
 import { ChangeViews } from './controller/changes';
-import { AutoReconnect, BuildWatcher } from './controller/reconnect';
+import { AutoReconnect } from './controller/reconnect';
 import { deliver, TIMEOUT } from './controller/requests';
 import { DiffDocuments, openSignInLink } from './ui';
 import type { FromWebview, ListedConversation, ToWebview, WebviewRequest } from './webview-protocol';
@@ -63,13 +63,14 @@ export class ClikCodeController implements vscode.Disposable {
   private readonly panelQuestions = new Map<string, WebviewSurface>();
   private readonly changes: ChangeViews;
   private readonly reconnect = new AutoReconnect();
-  private readonly builds = new BuildWatcher(() => { void this.moveToNewBuild(); });
+  /** The bridge that said it is leaving for a newer build (`retiring`): its
+   * exit is a reconnect onto that build, not a failure. */
+  private retiring: BridgeEndpoint | undefined;
   /** Queued messages being taken back to edit, by id: their text goes back in
    * the composer when the worker answers `removed`. */
   private readonly takingBack = new Map<string, string>();
   private readonly surfaces = new Set<WebviewSurface>();
   private starting: Promise<void> | undefined;
-  private restartingForBuild = false;
   private disposed = false;
   private postTimer: NodeJS.Timeout | undefined;
   private refreshTimer: NodeJS.Timeout | undefined;
@@ -256,7 +257,6 @@ export class ClikCodeController implements vscode.Disposable {
    * and a toast for every finished turn was noise. */
   private turnEnded(): void {
     if (!this.visible) this.finishedUnseen = true;
-    void this.moveToNewBuild();
   }
 
   /** The composer footer's facts: this chat's setting choices, its provider,
@@ -362,19 +362,23 @@ export class ClikCodeController implements vscode.Disposable {
     const bridge = connection.bridge;
     // Switched to another machine while this one connected: not this chat's any more.
     if (this.machine !== machine || this.disposed) { bridge.dispose(); return; }
-    if (connection.watchEntry) this.builds.watch(connection.watchEntry);
-    else this.builds.stop();
     this.bridge = bridge;
     const startLog: string[] = [];
     bridge.on('log', (line) => { log.appendLine(`[${this.label}] ${line}`); if (startLog.length < 200) startLog.push(line); });
+    bridge.on('event', (event) => { if (event.type === 'retiring') this.retiring = bridge; });
     bridge.on('exit', ({ code, signal }) => {
       if (this.bridge !== bridge) return;
       log.appendLine(`[${this.label}] ClikCode exited (${signal ?? code})`);
       this.dropQuestions();
       if (this.disposed) return;
+      // It left for a newer ClikCode build (src/ide/bridge-retire.ts), only while
+      // nothing was happening: back at once, on that build, onto the same chat,
+      // with nothing said -- and not counted against AutoReconnect's one a minute.
+      const retired = this.retiring === bridge;
+      this.retiring = undefined;
       // Back on its own when it had been ready (see AutoReconnect).
-      if (this.reconnect.take(this.model.connection === 'ready')) {
-        log.appendLine(`[${this.label}] reconnecting`);
+      if (retired || this.reconnect.take(this.model.connection === 'ready')) {
+        log.appendLine(`[${this.label}] ${retired ? 'ClikCode was updated; reconnecting on the new build' : 'reconnecting'}`);
         this.bridge = undefined;
         // The turn keeps its place on screen: the worker is still running it,
         // and the new bridge's snapshot says where it got to (and re-asks any
@@ -466,23 +470,6 @@ export class ClikCodeController implements vscode.Disposable {
     await starting;
   }
 
-  /** ClikCode was reinstalled since the bridge started: move onto the new
-   * build while nothing is happening, so the worker is retired onto it too.
-   * Watched for, never done in the way of a message: a send used to restart
-   * the bridge first, and one stood 30 s before it went out. A running turn
-   * moves when it ends (turnEnded). */
-  private async moveToNewBuild(): Promise<void> {
-    const bridge = this.bridge;
-    if (!bridge || this.disposed || this.model.running || this.model.connection !== 'ready' || this.restartingForBuild) return;
-    const now = entryBuild(bridge.runtime.entry);
-    if (!now || !bridge.build || now === bridge.build) return;
-    this.restartingForBuild = true;
-    try {
-      this.host.log.appendLine('ClikCode was updated; reconnecting on the new build.');
-      await this.restart();
-    } finally { this.restartingForBuild = false; }
-  }
-
   /** Link sign-ins whose link this chat already opened. */
   private readonly openedSignIns = new Set<string>();
 
@@ -492,6 +479,8 @@ export class ClikCodeController implements vscode.Disposable {
   }
 
   private onBridgeEvent(event: IdeEvent): void {
+    // Said by the bridge itself before it exits for a newer build: see start's exit.
+    if (event.type === 'retiring') return;
     this.setModel(applyEvent(this.model, event));
     // `/send` changed how mid-turn messages go: the composer says so.
     if (event.type === 'output' && typeof event.payload.sendMode === 'string') this.refreshStructured(false);
@@ -1014,7 +1003,6 @@ export class ClikCodeController implements vscode.Disposable {
     this.remoteWatchRelease?.();
     if (this.parkTimer) clearTimeout(this.parkTimer);
     this.disposed = true;
-    this.builds.stop();
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     if (this.postTimer) clearTimeout(this.postTimer);
     this.dropQuestions();
