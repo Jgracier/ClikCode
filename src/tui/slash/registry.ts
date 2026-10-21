@@ -216,7 +216,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
       : { available: false, reason: 'Speed is a ClikDeploy Gateway choice: it picks among the providers of one model.' }),
   }),
   entry('permissions', 'Settings', 'approval behavior', {
-    argHint: '[ask|bypass|auto]', duringTurn: 'apply',
+    aliases: ['permission'], argHint: '[ask|bypass|auto]', duringTurn: 'apply',
     availability: (session, harness) => notOffered('Permission modes', bothRoutes('setting permissions')(session, harness), harness,
       (found) => sessionPermissionModes(session ?? { route: 'local' }, found).length > 0, session),
   }),

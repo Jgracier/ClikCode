@@ -11,6 +11,7 @@ import type { Mention } from '../webview-protocol';
 import { post, request, save, saved, uid } from './bus';
 import { formatTurnUsage, titleCase } from './format';
 import { AccountMenu, agentName, EffortMenu, effortLabel, knownProviders, ModeMenu, modelWithEffort, providerChoosesModel, ProviderModelPicker } from './picker';
+import { HistoryMenu } from './screens';
 import { focusHere, Icon, KeyList, type ListRow } from './ui';
 import { composeMessage, promptHistory, sameRange, tokenAtCaret, type Attachment } from './composer-text';
 import { commandRows, fileRows } from './composer-suggestions';
@@ -97,7 +98,11 @@ export function Composer(props: {
       const next = `${text.slice(0, token.start)}${value}${text.slice(caret)}`;
       update(next, token.start + value.length);
     };
-    const run = (command: string): void => { setText(''); save({ draft: '' }); setSuggestions([]); post({ type: 'send', text: command, id: uid() }); };
+    const run = (command: string): void => {
+      setText(''); save({ draft: '' }); setSuggestions([]);
+      if (/^\/permissions?$/i.test(command.trim())) setMenu('mode');
+      else post({ type: 'send', text: command, id: uid() });
+    };
     const shown = (rows: ListRow[]): void => { if (live) setSuggestions(rows); };
     if (token.kind === '/') {
       commandRows(token.query, `${model.sessionId}|${model.providerId}|${model.model}`, { replace, run }).then(shown, () => setSuggestions([]));
@@ -114,6 +119,10 @@ export function Composer(props: {
     if (!text.trim() && !attachments.length) return;
     const message = composeMessage(text, attachments);
     if (!message) return;
+    if (!attachments.length && /^\/permissions?$/i.test(message.trim())) {
+      setText(''); save({ draft: '' }); setSuggestions([]); setMenu('mode');
+      return;
+    }
     // Not connected is the controller's to wait out (send awaits the start):
     // the message is drawn at once and comes back as a draft if it fails.
     post({ type: 'send', text: message, id: uid() });
@@ -370,7 +379,12 @@ export function Composer(props: {
       <div class="composer-status">
         {menu === 'account' ? <AccountMenu model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
         {menu === 'mode' ? <ModeMenu model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
+        {menu === 'machines' ? <HistoryMenu model={model} initialScreen="machines" onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
         <StatusButtons model={model} menu={menu} setMenu={setMenu} connected={connected} />
+        <button type="button" id="machines-button" class={`status-account${menu === 'machines' ? ' open' : ''}`} data-popover-anchor aria-haspopup="dialog" aria-expanded={menu === 'machines'}
+          title={`Machine: ${model.machine ?? 'This machine'}`} onClick={() => setMenu(menu === 'machines' ? undefined : 'machines')}>
+          <Icon name="remote" /><span class="status-label">{model.machine ?? 'This machine'}</span><Icon name="chevron-down" />
+        </button>
         <span class="spacer" />
         <BusyLine label={busy && !installing && !model.signIn ? busy : undefined} />
         {model.chatCost ? <span class="muted status-cost" title="What this chat has cost so far">{model.chatCost}</span> : null}

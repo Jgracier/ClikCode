@@ -5,13 +5,12 @@ import { COPIED_MS } from '../../../../src/harness/protocol/timings';
 import { loginPortForwardHint } from '../../../../src/gateway/login/link-info';
 import { compactCount, formatElapsed } from '../../../../src/harness/protocol/format';
 import { queuedRowLabel, type ChatModel } from '../model';
-import { permissionLabel } from './picker';
 import { post, uid } from './bus';
 import { Icon, Spinner, useSlowWait } from './ui';
 import { useNow } from './clock';
 import type { Attachment } from './composer-text';
 
-export type Menu = 'provider' | 'model' | 'effort' | 'mode' | 'account' | undefined;
+export type Menu = 'provider' | 'model' | 'effort' | 'mode' | 'machines' | 'account' | undefined;
 
 /** Messages waiting for the turn to end: each can be taken back or removed. */
 export function QueueRows({ model, enterAgain, firstWaiting }: { model: ChatModel; enterAgain: boolean; firstWaiting: number }): JSX.Element {
@@ -48,7 +47,7 @@ export function AttachmentChips({ attachments, onExpand, onRemove }: { attachmen
   );
 }
 
-/** The status row's account and permissions buttons, which open their menus. */
+/** The status row's account button, which opens its menu. */
 export function StatusButtons({ model, menu, setMenu, connected }: { model: ChatModel; menu: Menu; setMenu: (menu: Menu) => void; connected: boolean }): JSX.Element {
   const account = model.currentAccount;
   return (
@@ -58,14 +57,6 @@ export function StatusButtons({ model, menu, setMenu, connected }: { model: Chat
         <button type="button" id="account-button" class={`status-account${menu === 'account' ? ' open' : ''}`} data-popover-anchor aria-haspopup="dialog" aria-expanded={menu === 'account'}
           title={account ? `${account.label}: this provider's accounts` : 'Gateway credit'} disabled={!connected} onClick={() => setMenu(menu === 'account' ? undefined : 'account')}>
           <Icon name={account?.problem ? 'warning' : account ? 'account' : 'credit-card'} /><span class="status-label">{account?.label ?? 'Credit'}</span><Icon name="chevron-down" />
-        </button>
-      ) : null}
-      {/* Permissions belong to how this chat runs, beside whose account it runs on. */}
-      {model.chatSettings?.permissions ? (
-        <button type="button" id="mode-button" class={`status-account${menu === 'mode' ? ' open' : ''}`} data-popover-anchor aria-haspopup="dialog" aria-expanded={menu === 'mode'}
-          title={`Permissions: ${model.chatSettings.plan ? 'Plan mode' : permissionLabel(model.permissions)}`} disabled={!connected} onClick={() => setMenu(menu === 'mode' ? undefined : 'mode')}>
-          <Icon name={model.chatSettings.plan ? 'list-tree' : model.permissions === 'bypass' ? 'unlock' : 'shield'} />
-          <span class="status-label">{model.chatSettings.plan ? 'Plan' : permissionLabel(model.permissions)}</span><Icon name="chevron-down" />
         </button>
       ) : null}
     </>
