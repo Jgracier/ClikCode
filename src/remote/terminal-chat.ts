@@ -227,10 +227,11 @@ export async function runRemoteChat(
     };
     try {
       await bridge.connected();
-      // Never updated from here: a production machine is updated when the user says so.
-      if (bridge.outdated) terminal.activity(`${machine.name} runs another ClikCode build than this one. Update it from /remote.`);
       // No folder of this machine's: the chat is in one of the remote's own (session/attach.ts).
       await bridge.request({ type: 'open', mode: 'resume', sessionId: choice.chatId, workspace: '' });
+      // After the open, whose chat clears the rows before it. Never updated from here: a
+      // production machine is updated when the user says so.
+      if (bridge.outdated) terminal.activity(`${machine.name} runs another ClikCode build than this one. Update it from /remote.`);
       if (draft) terminal.restoreDraft(draft);
       draft = undefined;
       for (;;) {
