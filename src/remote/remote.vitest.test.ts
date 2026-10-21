@@ -472,3 +472,29 @@ describe('/remote', () => {
     expect(existsSync(join(home, '.clikcode'))).toBe(true);
   });
 });
+
+describe('ide-bridge --stdio (the built CLI)', () => {
+  const entry = join(REPO, 'dist', 'index.js');
+  const built = existsSync(entry) && readFileSync(join(REPO, 'dist', 'cli.js'), 'utf8').includes('bridge-stdio');
+  it.skipIf(!built)('relays the multiplexed bridge as JSON lines, and exits when stdin closes', async () => {
+    const { spawn } = await import('node:child_process');
+    const { createInterface } = await import('node:readline');
+    const child = spawn(process.execPath, [entry, 'ide-bridge', '--stdio'], { env: { ...process.env, CLIKCODE_IDE_MULTIPLEX: '1' }, stdio: ['pipe', 'pipe', 'pipe'] });
+    const events: Array<{ type: string; chat?: string; event?: { type: string; data?: unknown } }> = [];
+    const nonJson: string[] = [];
+    createInterface({ input: child.stdout }).on('line', (line) => {
+      let event;
+      try { event = JSON.parse(line); } catch { nonJson.push(line); return; }
+      events.push(event);
+      const send = (message: unknown) => child.stdin.write(`${JSON.stringify(message)}\n`);
+      if (event.type === 'host-ready') send({ type: 'chat-attach', chat: 'b' });
+      if (event.type === 'chat' && event.event.type === 'ready') send({ type: 'chat', chat: 'b', request: { type: 'query', requestId: 'q', query: 'conversations' } });
+      if (event.type === 'chat' && event.event.type === 'result') child.stdin.end();
+    });
+    const code = await new Promise<number | null>((resolve) => child.once('exit', resolve));
+    expect(nonJson).toEqual([]);
+    expect(code).toBe(0);
+    expect(events[0]).toMatchObject({ type: 'host-ready', protocol: 1, installationId: expect.any(String) });
+    expect(events.at(-1)).toMatchObject({ type: 'chat', chat: 'b', event: { type: 'result', ok: true, data: [] } });
+  }, 30_000);
+});
