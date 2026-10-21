@@ -22,7 +22,7 @@ import { join } from 'node:path';
 import type { CanonicalRecord, CanonicalToolCall } from '../../canonical.js';
 import { type NativeSessionEnvironment, type NativeSessionStore, type NativeThreadWriter } from '../stores.js';
 import { assistantSteps, callCommand, callResultText, requestText, sequentialIds, testedVersion } from './thread-writer-files.js';
-import { carrySqliteSession, progressQuery, type SqliteCarrySpec } from './sqlite-carry.js';
+import { carrySqliteSession, openVendorDatabase, progressQuery, tableColumns, type CarryDb, type SqliteCarrySpec } from './sqlite-carry.js';
 
 function devinRoot(environment: NativeSessionEnvironment): string {
   const data = environment.XDG_DATA_HOME?.trim() || join(environment.HOME?.trim() || homedir(), '.local', 'share');
@@ -71,12 +71,6 @@ export function devinMessages(record: CanonicalRecord, options: DevinThreadOptio
   return messages;
 }
 
-type Db = {
-  exec(sql: string): void;
-  prepare(sql: string): { run(...values: unknown[]): unknown; all(...values: unknown[]): unknown[] };
-  close(): void;
-};
-
 const SESSION_COLUMNS = [
   'id', 'working_directory', 'backend_type', 'model', 'agent_mode', 'created_at', 'last_activity_at', 'title',
   'main_chain_id', 'shell_last_seen_index', 'workspace_dirs', 'hidden',
@@ -99,12 +93,10 @@ const devinThreadWriter: NativeThreadWriter = {
     const sessionId = `clikcode-${randomBytes(6).toString('hex')}`;
     const seconds = Math.floor(now.getTime() / 1000);
     const title = record.turns.find((turn) => turn.user.trim())?.user.trim().replace(/\s+/g, ' ').slice(0, 80) ?? 'ClikCode conversation';
-    let db: Db | undefined;
+    let db: CarryDb | undefined;
     try {
-      const sqlite = await import('node:sqlite') as { DatabaseSync: new (path: string) => Db };
-      db = new sqlite.DatabaseSync(database);
-      db.exec('PRAGMA busy_timeout = 3000');
-      const have = (table: string): Set<string> => new Set((db!.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name));
+      db = await openVendorDatabase(database);
+      const have = (table: string): Set<string> => tableColumns(db!, table);
       const sessions = have('sessions');
       const nodes = have('message_nodes');
       if (!SESSION_COLUMNS.every((name) => sessions.has(name)) || !NODE_COLUMNS.every((name) => nodes.has(name))) return undefined;

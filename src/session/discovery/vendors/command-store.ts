@@ -40,7 +40,7 @@ import {
   nativeDataRoot, type NativeSessionEnvironment, type NativeSessionFile, type NativeSessionStore, type NativeThreadWriter,
 } from '../stores.js';
 import {
-  assistantSteps, callResultText, callShape, requestText, sequentialIds, testedVersion, writeFileAtomic,
+  assistantSteps, callResultText, callShape, requestText, sequentialIds, stepContent, testedVersion, writeFileAtomic,
 } from './thread-writer-files.js';
 
 export function commandProjectSlug(workspace: string): string {
@@ -112,13 +112,7 @@ export function commandThreadLines(record: CanonicalRecord, options: CommandThre
     if (request.trim() || !parentId) append({ role: 'user', content: [{ type: 'text', text: request.trim() ? request : '(continue)' }] }, 'user');
     const model = turn.origin.model ?? options.model ?? 'unknown';
     for (const step of assistantSteps(turn, map, callId)) {
-      append({
-        role: 'assistant',
-        content: [
-          ...(step.text ? [{ type: 'text', text: step.text }] : []),
-          ...step.calls.map((call) => ({ type: 'tool_use', id: call.id, name: call.name, input: call.args })),
-        ],
-      }, 'model', model);
+      append({ role: 'assistant', content: stepContent(step, 'tool_use') }, 'model', model);
       if (step.calls.length) {
         append({
           role: 'user',

@@ -37,11 +37,11 @@ import { dirname, isAbsolute, join, normalize } from 'node:path';
 import type { CanonicalRecord, CanonicalToolCall } from '../../canonical.js';
 import { type NativeSessionEnvironment, type NativeSessionStore, type NativeThreadWriter } from '../stores.js';
 import {
-  assistantSteps, callCommand, callPath, callResultText, inputString, isWriteCall, requestText, sequentialIds,
-  testedVersion,
+  assistantSteps, callCommand, callPath, inputString, isWriteCall, requestText, sequentialIds, testedVersion,
 } from './thread-writer-files.js';
+import { piStepMessages } from './pi-store.js';
 import { writeDirectoryAtomic } from './thread-writer-directory.js';
-import { carrySqliteSession, type CarryDb, type CarrySchema, type SqliteCarrySpec } from './sqlite-carry.js';
+import { carrySqliteSession, openVendorDatabase, tableColumns, type CarryDb, type CarrySchema, type SqliteCarrySpec } from './sqlite-carry.js';
 
 /** mcode's data dir for an environment (its own `MINIMAX_DATA_DIR ||
  *  MAVIS_DATA_DIR || ~/.minimax`). */
@@ -91,11 +91,6 @@ interface McodeThreadOptions {
   turnId?: () => string;
 }
 
-const ZERO_USAGE = {
-  input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
-
 const randomId = (): string => randomBytes(32).toString('base64url').slice(0, 43);
 
 /** The conversation as mcode 0.5 stores it in `messages.jsonl`. */
@@ -122,22 +117,7 @@ export function mcodeThreadLines(record: CanonicalRecord, options: McodeThreadOp
     const model = turn.origin.model ?? 'unknown';
     const provider = turn.origin.provider ?? turn.origin.harness ?? 'clikcode';
     for (const step of assistantSteps(turn, mcodeCall, callId)) {
-      append('msg-', {
-        role: 'assistant',
-        content: [
-          ...(step.text ? [{ type: 'text', text: step.text }] : []),
-          ...step.calls.map((call) => ({ type: 'toolCall', id: call.id, name: call.name, arguments: call.args })),
-        ],
-        api: 'openai-completions', provider, model, usage: ZERO_USAGE,
-        stopReason: step.calls.length ? 'toolUse' : 'stop',
-      });
-      for (const call of step.calls) {
-        append('msg-', {
-          role: 'toolResult', toolCallId: call.id, toolName: call.name,
-          content: [{ type: 'text', text: callResultText(call.call) }],
-          isError: call.call.status !== 'done',
-        });
-      }
+      for (const message of piStepMessages(step, provider, model)) append('msg-', message);
     }
   }
   return `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`;
@@ -151,12 +131,6 @@ export function mcodeSessionRelativeDir(sessionId: string, now: Date): string {
   const encoded = Buffer.from(sessionId, 'utf8').toString('base64').replace(/=+$/, '');
   return `${date.replace(/-/g, '/')}/${time.replace(/[:.]/g, '-')}-session_${encoded}`;
 }
-
-type Db = {
-  exec(sql: string): void;
-  prepare(sql: string): { run(...values: unknown[]): unknown; get(...values: unknown[]): unknown; all(...values: unknown[]): unknown[] };
-  close(): void;
-};
 
 /** sha256 of `[]`, the revision mcode records for a new session's history. */
 const EMPTY_HISTORY_REVISION = `sha256:${createHash('sha256').update('[]').digest('hex')}`;
@@ -174,12 +148,10 @@ const CHECKPOINT_COLUMNS = ['session_id', 'migrated_at_ms', 'source', 'message_c
 async function registerSession(
   database: string, row: { sessionId: string; workspace: string; title: string; relativeDir: string; nowMs: number },
 ): Promise<boolean> {
-  let db: Db | undefined;
+  let db: CarryDb | undefined;
   try {
-    const sqlite = await import('node:sqlite') as { DatabaseSync: new (path: string) => Db };
-    db = new sqlite.DatabaseSync(database);
-    db.exec('PRAGMA busy_timeout = 3000');
-    const have = (table: string): Set<string> => new Set((db!.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name));
+    db = await openVendorDatabase(database);
+    const have = (table: string): Set<string> => tableColumns(db!, table);
     const sessions = have('local_runtime_sessions');
     const checkpoints = have('local_runtime_pi_history_file_migrations');
     if (!SESSION_COLUMNS.every((name) => sessions.has(name))) return false;

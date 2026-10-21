@@ -14,8 +14,7 @@ import {
   type NativeSessionEnvironment, type NativeSessionFile, type NativeSessionStore, type NativeThreadWriter,
 } from '../stores.js';
 import {
-  assistantSteps, callCommand, callPath, callResultText, inputString, isWriteCall, requestText, sequentialIds,
-  testedVersion, writeFileAtomic,
+  type AssistantStep, assistantSteps, callCommand, callPath, callResultText, inputString, isWriteCall, requestText, sequentialIds, stepContent, testedVersion, writeFileAtomic,
 } from './thread-writer-files.js';
 
 function piRoot(environment: NativeSessionEnvironment): string {
@@ -72,6 +71,22 @@ const ZERO_USAGE = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
+/** A step as Pi's messages: the assistant's, then each call's result. */
+export function piStepMessages(step: AssistantStep, provider: string, model: string): Record<string, unknown>[] {
+  return [
+    {
+      role: 'assistant', content: stepContent(step, 'toolCall'),
+      api: 'openai-completions', provider, model, usage: ZERO_USAGE,
+      stopReason: step.calls.length ? 'toolUse' : 'stop',
+    },
+    ...step.calls.map((call) => ({
+      role: 'toolResult', toolCallId: call.id, toolName: call.name,
+      content: [{ type: 'text', text: callResultText(call.call) }],
+      isError: call.call.status !== 'done',
+    })),
+  ];
+}
+
 /** The thread as Pi 0.87 writes it (session format version 3): a header,
  *  then one `message` entry per user message, assistant response and tool
  *  result, each parented on the one before. No system message: Pi declares
@@ -100,22 +115,7 @@ export function piThreadLines(record: CanonicalRecord, options: PiThreadOptions)
     const model = turn.origin.model ?? options.model ?? 'unknown';
     const provider = turn.origin.provider ?? turn.origin.harness ?? 'clikcode';
     for (const step of assistantSteps(turn, options.mapCall ?? piCall, callId)) {
-      append({
-        role: 'assistant',
-        content: [
-          ...(step.text ? [{ type: 'text', text: step.text }] : []),
-          ...step.calls.map((call) => ({ type: 'toolCall', id: call.id, name: call.name, arguments: call.args })),
-        ],
-        api: 'openai-completions', provider, model, usage: ZERO_USAGE,
-        stopReason: step.calls.length ? 'toolUse' : 'stop',
-      });
-      for (const call of step.calls) {
-        append({
-          role: 'toolResult', toolCallId: call.id, toolName: call.name,
-          content: [{ type: 'text', text: callResultText(call.call) }],
-          isError: call.call.status !== 'done',
-        });
-      }
+      for (const message of piStepMessages(step, provider, model)) append(message);
     }
   }
   return `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`;
