@@ -253,19 +253,24 @@ describe('a move between two machines', () => {
 describe('a move sends only what the target lacks', () => {
   const sent: string[] = [];
   const imports: ChatExport[] = [];
+  /** Whether each import arrived packed: to a target at revision 5 it does. */
+  const packedSeen: boolean[] = [];
   /** A machine at the revision that answers chat-have; `before` runs ahead of each request. */
   const end = (machine: string, name: string, before?: (request: MoveRequest) => Promise<void>): MoveEnd => ({
     name, revision: CHAT_HAVE_REVISION,
     call: async <T>(request: MoveRequest): Promise<T> => {
       const since = request.type === 'export-chat' && request.since ? ` since ${request.since.messages}` : '';
       sent.push(`${name} ${request.type}${since}`);
-      if (request.type === 'import-chat') imports.push(request.chat);
+      if (request.type === 'import-chat') {
+        packedSeen.push('packed' in request.chat);
+        imports.push(await (await import('./move.js')).unpackChat(request.chat));
+      }
       await before?.(request);
       on(machine);
       return await answerMoveRequest(undefined, request) as T;
     },
   });
-  beforeEach(() => { sent.length = 0; imports.length = 0; });
+  beforeEach(() => { sent.length = 0; imports.length = 0; packedSeen.length = 0; });
   const said = (count: number): HarnessSession['messages'] => Array.from({ length: count }, (_, index) => ({ role: index % 2 ? 'assistant' : 'user', content: `turn ${index}` }));
   const addOn = async (machine: string, id: string, extra: NonNullable<HarnessSession['messages']>): Promise<void> => {
     on(machine);
@@ -287,6 +292,7 @@ describe('a move sends only what the target lacks', () => {
     // Away: the target holds nothing of it, so all of it goes.
     const away = await moveChat(end('h1', 'linux'), end('h2', 'prod'), 'd1');
     expect(away).toMatchObject({ moved: true, reused: 0, sent: 174 });
+    expect(packedSeen).toEqual([true]);
     expect(sent).toEqual(['prod chat-have', 'linux export-chat', 'prod import-chat', 'linux mark-moved']);
     expect(imports[0]).toMatchObject({ version: 1 });
     expect(imports[0]!.base).toBeUndefined();
@@ -361,6 +367,8 @@ describe('a move sends only what the target lacks', () => {
     const old = { ...end('k2', 'prod'), revision: 4 };
     expect(await moveChat(end('k1', 'linux'), old, 'd4')).toMatchObject({ reused: 0, sent: 4 });
     expect(sent).toEqual(['linux export-chat', 'prod import-chat', 'linux mark-moved']);
+    // Not packed: an older ClikCode could not open it.
+    expect(packedSeen).toEqual([false]);
   });
 
   it('an importer refuses a delta whose base it does not hold', async () => {
@@ -402,5 +410,18 @@ describe('an empty chat', () => {
   it('has nothing to move', () => {
     expect(chatHasContent({ messages: [] })).toBe(false);
     expect(chatHasContent({ messages: [{ role: 'user', content: 'x' }] })).toBe(true);
+  });
+});
+
+describe('a chat as it travels', () => {
+  it('is packed to a fraction of its size and unpacked exactly', async () => {
+    const { packChat, unpackChat } = await import('./move.js');
+    const messages = Array.from({ length: 200 }, (_, index) => ({ role: index % 2 ? 'assistant' as const : 'user' as const, content: `turn ${index}: ${'the same kind of text again and again. '.repeat(40)}` }));
+    const chat = { version: 1 as const, sessionId: 's', conversationId: 'c', createdAt: '', messages, settings: { route: 'local' as const, provider: null, model: null, effort: 'high' }, source: {} } as never;
+    const packed = await packChat(chat);
+    expect(packed).toMatchObject({ sessionId: 's', count: 200 });
+    expect(packed.packed.length).toBeLessThan(JSON.stringify(chat).length / 3);
+    expect(await unpackChat(packed)).toEqual(chat);
+    expect(await unpackChat(chat)).toBe(chat);
   });
 });

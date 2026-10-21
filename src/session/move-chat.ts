@@ -16,6 +16,17 @@ export interface ChatHave { messages: number; hash: string }
  * importer from before deltas refuses version 2 rather than import half a
  * chat (it is never sent one: the client asks `chat-have` first, which such a
  * machine does not answer). */
+/** A ChatExport as it travels between machines (revision 5): gzipped JSON, base64. A chat is
+ * mostly repeated text, so it is about a quarter of the size -- and the client in the middle
+ * passes it on unopened, needing only these few fields. */
+export interface PackedChat {
+  packed: string;
+  sessionId: string;
+  base?: ChatHave;
+  /** How many messages it carries. */
+  count: number;
+}
+
 export interface ChatExport {
   version: 1 | 2;
   base?: ChatHave;
@@ -71,11 +82,11 @@ export interface ImportResult extends ImportPlan {
 export type MoveRequest =
   /** `since`: what the target holds (its `chat-have`). When this chat's first
    * messages are exactly those, only the rest is exported (version 2). */
-  | { type: 'export-chat'; sessionId?: string; since?: ChatHave }
+  | { type: 'export-chat'; sessionId?: string; since?: ChatHave; /** Answer a PackedChat (an older ClikCode ignores it). */ pack?: boolean }
   /** Revision 5: what this machine holds of the chat already (the copy that
    * moved away from here), or null. */
   | { type: 'chat-have'; sessionId: string }
-  | { type: 'import-chat'; chat: ChatExport; names: MoveNames }
+  | { type: 'import-chat'; chat: ChatExport | PackedChat; names: MoveNames }
   | { type: 'mark-moved'; sessionId: string; movedTo: Omit<ChatMovedTo, 'at'> };
 
 /** A chat that moved is read-only here: what to say instead of acting on it. */
@@ -129,20 +140,22 @@ export async function moveChat(source: MoveEnd, target: MoveEnd, sessionId: stri
   const have = (target.revision ?? 0) >= CHAT_HAVE_REVISION
     ? await target.call<ChatHave | null>({ type: 'chat-have', sessionId }).catch(() => null)
     : null;
-  let chat = await source.call<ChatExport>({ type: 'export-chat', sessionId, ...(validHave(have) ? { since: have } : {}) });
+  // Packed only for a target that can open it; an older source answers unpacked, which any target reads.
+  const pack = (target.revision ?? 0) >= CHAT_HAVE_REVISION;
+  let chat = await source.call<ChatExport | PackedChat>({ type: 'export-chat', sessionId, ...(validHave(have) ? { since: have } : {}), ...(pack ? { pack } : {}) });
   let imported: ImportResult;
   try {
     imported = await target.call<ImportResult>({ type: 'import-chat', chat, names });
   } catch (error) {
     // Its copy changed since it said: all of it, then.
     if (!chat.base || !String((error as Error)?.message ?? error).includes(STALE_BASE)) throw error;
-    chat = await source.call<ChatExport>({ type: 'export-chat', sessionId });
+    chat = await source.call<ChatExport | PackedChat>({ type: 'export-chat', sessionId, ...(pack ? { pack } : {}) });
     imported = await target.call<ImportResult>({ type: 'import-chat', chat, names });
   }
   await source.call({ type: 'mark-moved', sessionId: chat.sessionId, movedTo: { machine: target.name, installationId: imported.installationId, sessionId: imported.sessionId } });
   return {
     moved: true, sessionId: imported.sessionId, folder: imported.folder, changes: imported.changes,
-    reused: chat.base?.messages ?? 0, sent: chat.messages.length,
+    reused: chat.base?.messages ?? 0, sent: 'packed' in chat ? chat.count : chat.messages.length,
   };
 }
 

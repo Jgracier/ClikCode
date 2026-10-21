@@ -25,7 +25,9 @@ import type Conf from 'conf';
 import type { AiHarnessAccount, AiHarnessPermissionMode, AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { ChatMovedTo, HarnessSession, HarnessState, TranscriptMessage } from './model.js';
 import { createHash } from 'node:crypto';
-import type { ChatExport, ChatHave, ImportPlan, ImportResult, MoveNames, MoveRequest } from './move-chat.js';
+import { promisify } from 'node:util';
+import { gunzip, gzip } from 'node:zlib';
+import type { ChatExport, ChatHave, ImportPlan, ImportResult, MoveNames, MoveRequest, PackedChat } from './move-chat.js';
 import { STALE_BASE } from './move-chat.js';
 import { readState } from './state/read.js';
 import { writeState } from './state/write.js';
@@ -346,7 +348,8 @@ export async function answerMoveRequest(config: Conf | undefined, request: MoveR
     case 'export-chat': {
       const id = request.sessionId ?? currentId;
       if (!id) throw new Error('No conversation is open.');
-      return exportChat(id, options, request.since);
+      const chat = await exportChat(id, options, request.since);
+      return request.pack ? packChat(chat) : chat;
     }
     case 'chat-have':
       return chatHave(request.sessionId);
@@ -355,10 +358,10 @@ export async function answerMoveRequest(config: Conf | undefined, request: MoveR
       // before (what would change, nothing imported), and its import follows.
       if ((request as { dryRun?: unknown }).dryRun) {
         const state = await readState({ transcripts: [] });
-        const { changes, folder } = await planImport(state, request.chat, machineFacts(config));
+        const { changes, folder } = await planImport(state, await unpackChat(request.chat), machineFacts(config));
         return { changes, folder } satisfies ImportPlan;
       }
-      return importChat(request.chat, request.names, machineFacts(config));
+      return importChat(await unpackChat(request.chat), request.names, machineFacts(config));
     }
     case 'mark-moved':
       await markMoved(request.sessionId, request.movedTo);
@@ -366,4 +369,20 @@ export async function answerMoveRequest(config: Conf | undefined, request: MoveR
     default:
       throw new Error('unknown move request');
   }
+}
+
+const gzipped = promisify(gzip);
+const gunzipped = promisify(gunzip);
+
+/** A chat as it travels (PackedChat): compressed off the event loop. */
+export async function packChat(chat: ChatExport): Promise<PackedChat> {
+  return {
+    packed: (await gzipped(Buffer.from(JSON.stringify(chat)))).toString('base64'),
+    sessionId: chat.sessionId, ...(chat.base ? { base: chat.base } : {}), count: chat.messages.length,
+  };
+}
+
+export async function unpackChat(chat: ChatExport | PackedChat): Promise<ChatExport> {
+  if (!('packed' in chat)) return chat;
+  return JSON.parse((await gunzipped(Buffer.from(chat.packed, 'base64'))).toString('utf8')) as ChatExport;
 }
