@@ -81,6 +81,10 @@ export class RemoteLink {
   private cacheDirty = false;
   /** The connection is being made again (after an update): no offline in between. */
   private reconnecting = false;
+  /** The bridge there said it is leaving for a newer build (ide/bridge-retire.ts):
+   * its close is followed at once by a new connection, and the machine still
+   * reads as connected meanwhile -- nothing about it changed for the user. */
+  private retiring = false;
   readonly view: MachineView;
 
   constructor(machine: RemoteMachine, private readonly changed: () => void, private readonly options: LinkOptions = {}) {
@@ -131,10 +135,12 @@ export class RemoteLink {
     child.once('close', (code) => {
       clearTimeout(this.readyTimer);
       if (this.child === child) this.child = undefined;
+      const retired = this.retiring;
+      this.retiring = false;
       if (this.stopped) return;
-      if (this.reconnecting) {
+      if (this.reconnecting || retired) {
         this.reconnecting = false;
-        this.set({ state: 'connecting', error: undefined });
+        if (!retired) this.set({ state: 'connecting', error: undefined });
         this.connect();
         return;
       }
@@ -169,6 +175,7 @@ export class RemoteLink {
       if (outdated && this.options.autoUpdate !== false) this.autoUpdate(localCommit);
       return;
     }
+    if (event.type === 'host-retiring') { this.retiring = true; return; }
     if (event.type !== 'chat' || event.chat !== CHAT) return;
     const inner = event.event;
     if (inner.type === 'ready') {

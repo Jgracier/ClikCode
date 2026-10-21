@@ -29,6 +29,10 @@ export function remoteResume(chatId: string): RemoteOpen {
   return { type: 'open', mode: 'resume', sessionId: chatId };
 }
 
+/** Starts the machine's bridge (`ide-bridge --stdio` over ssh); a test's own. */
+export type RemoteBridgeStarter = (target: string) => ChildProcessWithoutNullStreams;
+const sshBridge: RemoteBridgeStarter = (target) => spawnSsh(target, bridgeScript());
+
 class TerminalBridge {
   private readonly child: ChildProcessWithoutNullStreams;
   private readonly chat = randomUUID();
@@ -39,11 +43,14 @@ class TerminalBridge {
   private error = '';
   /** Its ClikCode is another build than this one (connection.ts needsUpdate). */
   outdated = false;
+  /** It said it is leaving for a newer build installed there (ide/bridge-retire.ts):
+   * the close that follows is a reconnect, not a lost connection. */
+  retiring = false;
   onEvent: (event: IdeEvent) => void = () => undefined;
   onClose: (error: Error) => void = () => undefined;
 
-  constructor(target: string) {
-    this.child = spawnSsh(target, bridgeScript());
+  constructor(target: string, start: RemoteBridgeStarter) {
+    this.child = start(target);
     this.child.stderr.on('data', (chunk: Buffer) => { this.error = `${this.error}${chunk.toString('utf8')}`.slice(-2000); });
     this.child.stdin.on('error', () => undefined);
     this.ready = new Promise<void>((resolve, reject) => {
@@ -57,6 +64,7 @@ class TerminalBridge {
           this.send({ type: 'chat-attach', chat: this.chat });
           return;
         }
+        if (message.type === 'host-retiring') { this.retiring = true; return; }
         if (message.type !== 'chat' || message.chat !== this.chat) return;
         const event = message.event;
         if (event.type === 'ready') { clearTimeout(timer); resolve(); }
@@ -144,17 +152,26 @@ export function outdatedNotice(machine: Pick<RemoteMachine, 'name' | 'updates' |
   return `${differs}. ${how}`;
 }
 
-/** Returns the local chat to resume, or opens another selected remote chat. */
+/** Returns the local chat to resume, or opens another selected remote chat.
+ *
+ * A bridge there that leaves for a newer ClikCode build (it does so only while
+ * the chat is quiet, ide/bridge-retire.ts) is connected to again at once and
+ * the same chat resumed, with nothing said: what was being typed stays in the
+ * composer (prompt-input.ts keeps an interrupted prompt's draft). Any other
+ * close is a lost connection, said as before. */
 export async function runRemoteChat(
   terminal: TerminalHarnessPrompter, localId: string, first: RemoteChatSelection, firstDraft?: string,
+  startBridge: RemoteBridgeStarter = sshBridge,
 ): Promise<string | undefined> {
   let choice: RemoteChatSelection | undefined = first;
   let draft = firstDraft;
+  /** Connecting again after the bridge there retired: the opening notices were said already. */
+  let rejoining = false;
   while (choice) {
     const machine = (await readMachines()).find((item) => item.id === choice!.machineId && item.ready);
     if (!machine) throw new Error('That remote machine is no longer added. Open /remote to add it again.');
     terminal.remoteMachineName = machine.name;
-    const bridge = new TerminalBridge(machine.sshTarget);
+    const bridge = new TerminalBridge(machine.sshTarget, startBridge);
     let session: HarnessSession | undefined;
     let account: string | undefined;
     let running = false;
@@ -163,6 +180,8 @@ export async function runRemoteChat(
     let finishTurn: (() => void) | undefined;
     let turnEnd: Promise<void> | undefined;
     let lastError: Error | undefined;
+    /** A line sent and not yet answered. */
+    let sending: string | undefined;
     const completions = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
     const promptController = new AbortController();
     const signIns = new Map<string, SignInScreen>();
@@ -253,7 +272,7 @@ export async function runRemoteChat(
       // After the open, whose chat clears the rows before it. Updated from here only by the
       // machine's own policy (remote/updates.ts): a production machine set to ask is
       // updated when the user says so.
-      if (bridge.outdated) {
+      if (bridge.outdated && !rejoining) {
         const started = await autoUpdates.consider(machine).catch(() => undefined);
         terminal.activity(outdatedNotice(machine, Boolean(started)));
         void started?.done.then((outcome) => terminal.activity(outcome.ok
@@ -262,6 +281,7 @@ export async function runRemoteChat(
       }
       if (draft) terminal.restoreDraft(draft);
       draft = undefined;
+      rejoining = false;
       for (;;) {
         if (waitingInput) await turnEnd;
         const line = leftTurn ? BOARD_LINE : (await terminal.question('› ', [], { leftArrowCommand: BOARD_LINE, signal: promptController.signal })).trim();
@@ -278,10 +298,19 @@ export async function runRemoteChat(
         if (!line) continue;
         const id = randomUUID();
         const complete = new Promise<void>((resolve, reject) => completions.set(id, { resolve, reject }));
+        sending = line;
         bridge.post({ type: 'send', text: pinnedUpdateLine(line, localBuildCommit()), id });
         await complete;
+        sending = undefined;
         if (lastError) { terminal.activity(lastError.message); lastError = undefined; }
       }
+    } catch (error) {
+      if (!bridge.retiring) throw error;
+      rejoining = true;
+      // Sent as it left: a bridge leaving takes nothing more, so the line was
+      // never run. Back in the composer, for Enter on the new build.
+      if (sending !== undefined) draft = sending;
+      continue;
     } finally { promptController.abort(); for (const screen of signIns.values()) screen.stop(); bridge.close(); terminal.remoteMachineName = undefined; }
   }
   return undefined;
