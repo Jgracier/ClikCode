@@ -699,6 +699,79 @@ describe('a chat on the machine that owns it', () => {
   }, 60_000);
 });
 
+/** The machine's ClikCode is updated while a chat there is open and quiet: the bridge serving
+ * it -- this build's real one, over the fake ssh -- leaves for the new build, and the chat
+ * connects again and resumes with nothing said (ide/bridge-retire.ts). The "release" is a
+ * one-line entry importing this build, so rewriting it is a new build there. */
+describe('a chat whose machine is updated under it', () => {
+  const entry = join(REPO, 'dist', 'index.js');
+  const built = existsSync(entry) && readFileSync(join(REPO, 'dist', 'cli.js'), 'utf8').includes('bridge-retire');
+  it.skipIf(!built)('reconnects onto the new build and goes on, with no error', async () => {
+    const machineHome = join(root, 'hosts', 'renewed', 'home');
+    const release = join(machineHome, 'release', 'index.mjs');
+    host(root, 'renewed', { env: { CLIKCODE_WORKER_BUILD_WATCH_MS: '100', CLIKCODE_WORKER_RETIRE_QUIET_MS: '300' } });
+    mkdirSync(join(machineHome, 'release'), { recursive: true });
+    mkdirSync(join(machineHome, '.local', 'bin'), { recursive: true });
+    writeFileSync(release, `import ${JSON.stringify(entry)};\n`);
+    writeFileSync(join(machineHome, '.local', 'bin', 'clikcode'), `#!/bin/sh\nexec ${process.execPath} ${release} "$@"\n`, { mode: 0o755 });
+    const previous = process.env.CLIKCODE_HOME;
+    process.env.CLIKCODE_HOME = join(machineHome, '.clikcode');
+    try {
+      const { writeState } = await import('../session/state/write.js');
+      await writeState({
+        sessions: [{ id: 'kept', conversationId: 'kept', route: 'local', accountId: null, provider: 'claude', model: 'm', effort: 'high',
+          permissionMode: 'ask', nativeHarness: 'claude', messages: [{ role: 'user', content: 'hi' }], workspace: machineHome,
+          createdAt: '2026-10-21T00:00:00.000Z', updatedAt: '2026-10-21T00:00:00.000Z', status: 'active' }],
+        accounts: [], invocations: [], providerSettings: {}, globalSettings: { effort: 'medium', permissionMode: 'ask' },
+      } as never);
+    } finally {
+      if (previous === undefined) delete process.env.CLIKCODE_HOME; else process.env.CLIKCODE_HOME = previous;
+    }
+    const machine = newMachineRecord({ name: 'renewed', sshTarget: 'renewed', ready: true });
+    await updateMachines(() => [machine]);
+    const said: string[] = [];
+    const prompts: Array<(line: string) => void> = [];
+    const terminal = new Proxy({}, {
+      get: (_target, key) => {
+        if (key === 'question') {
+          return (_prompt: string, _items: unknown, options: { signal?: AbortSignal }) => new Promise<string>((resolve, reject) => {
+            const interrupted = () => reject(Object.assign(new Error('interrupted'), { code: 'ERR_PROMPT_INTERRUPTED' }));
+            if (options.signal?.aborted) { interrupted(); return; }
+            options.signal?.addEventListener('abort', interrupted, { once: true });
+            prompts.push(resolve);
+          });
+        }
+        if (key === 'activity') return (line: string) => said.push(line);
+        if (key === 'then') return undefined;
+        return () => undefined;
+      },
+      set: () => true,
+    }) as never;
+    const { runRemoteChat } = await import('./terminal-chat.js');
+    const bridges = () => (existsSync(join(root, 'ssh.log')) ? readFileSync(join(root, 'ssh.log'), 'utf8') : '').split('\n').filter((line) => line.includes('"renewed"') && line.includes('ide-bridge')).length;
+    const before = bridges();
+    const outcome = runRemoteChat(terminal, 'local-1', { machineId: machine.id, chatId: 'kept' }).then(() => 'returned', (error: Error) => error.message);
+    await until(() => prompts.length === 1, 30_000);
+    expect(bridges() - before).toBe(1);
+    // The update: a new entry where the old one was.
+    writeFileSync(release, `import ${JSON.stringify(entry)};\n// a newer build\n`);
+    await until(() => prompts.length === 2, 30_000);
+    expect(bridges() - before).toBe(2);
+    const log = readFileSync(join(machineHome, '.clikcode', 'logs', 'lifecycle.log'), 'utf8');
+    expect(log).toContain('bridge.retire');
+    expect(log).toContain('replaced by a newer ClikCode build');
+    // Still the same chat, and it answers: a setting changed on the new bridge.
+    prompts[1]!('/effort low');
+    await until(() => prompts.length === 3, 30_000);
+    expect(said.filter((line) => /error|closed|lost|failed/i.test(line))).toEqual([]);
+    // Done: a connection that ends for good still ends the chat.
+    const { spawnSync } = await import('node:child_process');
+    // Only this test's processes: the path is in its own temporary directory.
+    spawnSync('pkill', ['-f', release]);
+    expect(await outcome).toBe('interrupted');
+  }, 120_000);
+});
+
 describe('/update in a chat on another machine', () => {
   it('goes to the editor\'s build when no commit is named, so automatic updates do not undo it', async () => {
     const { pinnedUpdateLine } = await import('./updates.js');
