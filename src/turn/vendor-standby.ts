@@ -1,6 +1,7 @@
 /** Opening the failover account's standby beside an attempt on an account near its limit. */
 import type { AiHarnessAccount } from '../harness/definition.js';
-import { vendorWindows } from '../harness/accounts/usage-reading.js';
+import { quotaRefusalHolds, vendorWindows } from '../harness/accounts/usage-reading.js';
+import type { HarnessState } from '../session/model.js';
 import { carryNativeSession } from '../session/carry.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import { nextUsableFailoverAccount, turnBackendForAccount } from './account-routing.js';
@@ -10,11 +11,32 @@ import type { VendorTransport } from './vendor-observer.js';
 import { turnEffort, type VendorTurnContext } from './vendor-turn-context.js';
 
 /** How much of a window an account has used before a turn on it opens a
- * standby for the account a failover would move to (worth a second vendor
- * child only when a refusal is likely). */
-const STANDBY_AT_USED_PCT = 80;
-function nearUsageLimit(account: AiHarnessAccount): boolean {
-  return vendorWindows(account).some((window) => !window.advisory && window.usedPct >= STANDBY_AT_USED_PCT);
+ * standby for the account a failover would move to: a second vendor child
+ * (for Claude, a whole agent with its own MCP servers) is worth starting only
+ * when a refusal is likely. 80% opened one on most turns of an account with a
+ * weekly window in the 80s and days left in it (2026-10-21), nowhere near a
+ * refusal. */
+export const STANDBY_AT_USED_PCT = 90;
+
+/** Whether a turn on this account is close enough to a refusal to open a
+ * standby: a window that can stop it, still current (a figure from a window
+ * that has since reset describes last period), at STANDBY_AT_USED_PCT or
+ * more; or a refusal from the vendor that nothing since overrules. */
+export function nearUsageLimit(account: AiHarnessAccount, now: number = Date.now()): boolean {
+  return quotaRefusalHolds(account, now) || vendorWindows(account).some((window) => !window.advisory
+    && window.usedPct >= STANDBY_AT_USED_PCT
+    && (window.resetsAt === undefined || Date.parse(window.resetsAt) > now));
+}
+
+/** The account a standby would be opened for beside a turn on `account`, or
+ * none: only when `account` is near its limit, and only when there is another
+ * account a failover could move to. Never because a turn started or a chat
+ * was opened or moved. */
+export function standbyAccountFor(
+  state: HarnessState, account: AiHarnessAccount, now: number = Date.now(),
+): AiHarnessAccount | undefined {
+  if (!nearUsageLimit(account, now)) return undefined;
+  return nextUsableFailoverAccount(state, account, (item) => turnBackendForAccount(item) === 'vendor', new Map(), now);
 }
 
 /** An account close to its limit may refuse this turn. The account a
@@ -30,9 +52,9 @@ function nearUsageLimit(account: AiHarnessAccount): boolean {
 export async function openFailoverStandby(ctx: VendorTurnContext, transport: VendorTransport): Promise<void> {
   const { state, session, harness, account, model, run, attempt } = ctx;
   const persistentStandby = (transport === 'acp' || transport === 'codex-app-server') && Boolean(run.persistentTransports);
-  if (!((persistentStandby || transport === 'structured-cli' || transport === 'text-cli') && !attempt.standbyOpened && nearUsageLimit(account))) return;
+  if (!((persistentStandby || transport === 'structured-cli' || transport === 'text-cli') && !attempt.standbyOpened)) return;
   attempt.standbyOpened = true;
-  const next = nextUsableFailoverAccount(state, account, (item) => turnBackendForAccount(item) === 'vendor', new Map());
+  const next = standbyAccountFor(state, account);
   const threadReady = !next ? false : !session.nativeSessionId || session.nativeSessionPreallocated ? true
     : Boolean(await carryNativeSession({
       harness, nativeId: session.nativeSessionId, workspace: session.workspace,
