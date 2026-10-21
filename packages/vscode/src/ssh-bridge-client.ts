@@ -16,7 +16,8 @@ export class SshBridgeClient extends MultiplexBridge {
     lines.on('line', (line) => {
       try {
         const event = JSON.parse(line) as IdeEvent | IdeHostEvent;
-        if (event && typeof event.type === 'string') this.emit('event', event as IdeEvent);
+        // As BridgeClient: a `result` settles its call() here too (a one-chat bridge adopted by the pool).
+        if (event && typeof event.type === 'string') this.receive(event as IdeEvent);
       } catch { this.emit('log', 'Remote ClikCode sent an invalid bridge message.'); }
     });
     let stderr = '';

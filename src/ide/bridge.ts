@@ -153,7 +153,8 @@ export class IdeBridge {
     const usage = setInterval(() => { if (this.shown) void this.refreshUsage().catch(() => undefined); }, USAGE_REFRESH_MS);
     usage.unref();
     this.timers.push(usage);
-    this.channel.send({ type: 'ready', version: CLIKCODE_VERSION, protocol: IDE_PROTOCOL.version, revision: IDE_PROTOCOL.revision, ...(currentWorkerBuild() ? { build: currentWorkerBuild() } : {}), pid: process.pid });
+    const build = currentWorkerBuild();
+    this.channel.send({ type: 'ready', version: CLIKCODE_VERSION, protocol: IDE_PROTOCOL.version, revision: IDE_PROTOCOL.revision, ...(build ? { build } : {}), pid: process.pid });
   }
 
   /** What keeps a newer build from replacing this bridge now (bridge-retire.ts):
