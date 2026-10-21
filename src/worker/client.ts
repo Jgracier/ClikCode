@@ -231,6 +231,15 @@ export async function warmSessionWorker(sessionId: string): Promise<void> {
   await tellWorker(record, { type: 'warm', token: record.token });
 }
 
+/** The conversation's worker to send a command to without attaching: the one
+ * running, else one started for it (as `WorkerClient.attach` would). */
+export async function workerForCommands(sessionId: string): Promise<WorkerRuntimeRecord> {
+  const running = await usableWorker(sessionId);
+  if (running) return running;
+  await ensureSessionOnDisk(sessionId);
+  return spawnSessionWorker(sessionId);
+}
+
 /** Whether the conversation has a worker running now (nothing is attached). */
 export async function runningWorker(sessionId: string): Promise<boolean> {
   return Boolean(await findRunningWorker(sessionId));

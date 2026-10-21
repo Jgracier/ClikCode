@@ -79,7 +79,9 @@ export type ClientCommand =
   /** A private website login requested from this conversation, including a vendor harness chat. */
   | { type: 'computer-login'; id: string; url?: string; newAccount?: true; manage?: true }
   /** A shared computer tool run in this chat's worker (the MCP server and the CLI send these). */
-  | { type: 'computer-tool'; id: string; tool: string; args: Record<string, unknown> }
+  /** `token`: sent without an attach, on a connection that is not a window
+   * (the MCP server's one connection to its chat). Absent: from an attached client. */
+  | { type: 'computer-tool'; id: string; tool: string; args: Record<string, unknown>; token?: string }
   /** The vendor sign-in a `sign-in-request` asked for has finished, on the
    * client's own terminal; `error` when it failed. */
   | { type: 'sign-in-response'; id: string; error?: string }

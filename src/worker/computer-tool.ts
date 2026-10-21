@@ -16,11 +16,13 @@ import type { TurnObserver } from '../turn/observer.js';
 
 export const SHARED_COMPUTER_TOOLS: readonly ToolDefinition[] = ([computerWebTool, computerDesktopTool] as unknown as ToolDefinition[]).map(hotTool);
 
-/** A private prompt needs a window that can show it; this call's own client cannot. */
+/** A private prompt needs a window that can show it; the caller is not one. */
 const NO_WINDOW = 'No chat window is open to show the prompt. Open this chat in the terminal or VS Code.';
 
 export async function runSharedComputerTool(input: {
-  observer: TurnObserver; stateDir: string; homeDir: string; tool: string; args: Record<string, unknown>; signal: AbortSignal; windows: () => number;
+  observer: TurnObserver; stateDir: string; homeDir: string; tool: string; args: Record<string, unknown>; signal: AbortSignal;
+  /** Chat windows that can show a private prompt, the caller not counted. */
+  windows: () => number;
 }): Promise<{ ok: boolean; output: string }> {
   const tool = SHARED_COMPUTER_TOOLS.find(candidate => candidate.name === input.tool);
   if (!tool) return { ok: false, output: `Unknown tool "${input.tool}". Available: ${SHARED_COMPUTER_TOOLS.map(entry => entry.name).join(', ')}.` };
@@ -28,7 +30,7 @@ export async function runSharedComputerTool(input: {
     if (!await computerEnabled(input.stateDir)) return { ok: false, output: COMPUTER_OFF };
     const problems = validateAgainstSchema(input.args, tool.parameters);
     if (problems.length) return { ok: false, output: `Invalid arguments: ${problems.join('; ')}` };
-    const needWindow = (): void => { if (input.windows() < 2) throw new LoginError(NO_WINDOW); };
+    const needWindow = (): void => { if (input.windows() < 1) throw new LoginError(NO_WINDOW); };
     const context: Partial<ToolContext> = {
       cwd: process.cwd(), stateDir: input.stateDir, homeDir: input.homeDir, signal: input.signal,
       requestPrivateLogin: async (site, fields, signal) => { needWindow(); return askPrivateLogin(input.observer, site, fields, signal); },
