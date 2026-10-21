@@ -43,7 +43,7 @@ describe('resource guard', () => {
     const sleepOnly = tableInventory(processes.filter((item) => ![102, 103, 104].includes(item.pid)));
     expect(decideAction(over, sleepOnly)).toEqual({ kind: 'nudge', worker: 200 });
     expect(nudgeNote(over, 2)).not.toContain('sleep');
-    expect(nudgeNote(over, 2, sleepOnly.units[0])).toContain('Prefer targeted tests');
+    expect(nudgeNote(over, 2, sleepOnly.units[0])).toContain('Continue the task with less memory');
     const agentOnly = tableInventory(processes.filter((item) => [100, 101, 200, 201].includes(item.pid)));
     expect(decideAction(over, agentOnly)).toEqual({ kind: 'nudge', worker: 100 });
   });
