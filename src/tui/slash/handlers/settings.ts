@@ -1,3 +1,4 @@
+import { hostname } from 'node:os';
 import { aiSessionCommand } from '../handlers.js';
 /** /permissions, /sandbox, /send and /settings. */
 import { isAiHarnessRoute, isClikCodeAgent, ROUTE_CHOICES_TEXT } from '../../../session/route.js';
@@ -31,6 +32,10 @@ export const settingsHandlers = {
     if (!value) {
       if (!controls.length) throw new Error(`${harness!.displayName} does not map ClikCode's permission modes to a real flag.`);
       return emitHarnessOutput({ panel: 'permissions', session, controls });
+    }
+    // Refused here, where the chat runs (Claude Code as root): said, not saved to fail the next turn.
+    if (value === 'bypass' && harness?.bypassRefusedAsRoot && !controls.includes('bypass')) {
+      throw new Error(`Bypass is not available for ${harness.displayName} running as root on ${hostname()}. Use ask or auto.`);
     }
     if (agent) {
       if (!controls.includes(value as AiHarnessPermissionMode)) throw new Error('permissions must be ask, bypass, or auto');
