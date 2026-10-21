@@ -24,6 +24,21 @@ describe('resource notes', () => {
     expect(withResourceNotes('other', 'untouched')).toBe('untouched');
   });
 
+  it('keeps the latest pending warning of each kind but preserves stop notices', () => {
+    holdResourceNote('coalesced', 'Disk I/O is stalling the machine (5% full stall time). ClikCode has not identified your command.');
+    holdResourceNote('coalesced', 'ClikCode stopped `npm test` for disk I/O pressure.');
+    holdResourceNote('coalesced', 'Disk I/O is stalling the machine (20% full stall time). ClikCode has not identified your command.');
+    holdResourceNote('coalesced', 'Memory is getting tight: 20 GB used.');
+    holdResourceNote('coalesced', 'Memory is getting tight: 25 GB used.');
+    holdResourceNote('coalesced', 'Disk is getting tight: 20 GB free.');
+    holdResourceNote('coalesced', 'Disk is almost full: 5 GB free.');
+    const sent = withResourceNotes('coalesced', 'continue');
+    expect(sent).not.toContain('5% full stall');
+    expect(sent).not.toContain('20 GB used');
+    expect(sent).not.toContain('20 GB free');
+    for (const text of ['ClikCode stopped `npm test`', '20% full stall', '25 GB used', '5 GB free', 'continue']) expect(sent).toContain(text);
+  });
+
   it('never reach the transcript: cut off a turn, a steered-in one dropped', () => {
     holdResourceNote('s2', 'memory is tight');
     const sent = withResourceNotes('s2', 'fix the bug');

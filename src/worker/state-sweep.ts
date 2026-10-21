@@ -11,6 +11,8 @@
  *   fails if the directory is gone.
  * - `resource-notes/`: notes held for a next turn that never came. Advice
  *   from a week ago about memory is not advice.
+ * - `io-guard-warnings/`: per-conversation warning timestamps older than a
+ *   week, long past their rate limit.
  *
  * It does not touch anything it did not make: vendor profiles, chat history,
  * and downloaded models are the user's. A sweep runs shortly after a worker
@@ -107,13 +109,15 @@ export async function sweepState(options: SweepOptions = {}): Promise<{ ran: boo
     }
   }
 
-  const notesRoot = join(home, 'resource-notes');
-  try {
-    for (const name of await readdir(notesRoot)) {
-      const age = await ageMs(join(notesRoot, name), now);
-      if (age !== undefined && age >= NOTE_MAX_AGE_MS) await remove(join(notesRoot, name));
-    }
-  } catch { /* fail-open-ok: no notes were ever held */ }
+  for (const root of ['resource-notes', 'io-guard-warnings']) {
+    const path = join(home, root);
+    try {
+      for (const name of await readdir(path)) {
+        const age = await ageMs(join(path, name), now);
+        if (age !== undefined && age >= NOTE_MAX_AGE_MS) await remove(join(path, name));
+      }
+    } catch { /* fail-open-ok: this kind of state was never written */ }
+  }
 
   lifecycle('state.sweep', { removed });
   return { ran: true, removed };

@@ -67,11 +67,33 @@ describe('disk I/O guard', () => {
       const second = run();
       try { vi.advanceTimersByTime(10_000); } finally { second(); }
       expect(notes).toHaveLength(1);
-      expect(notes[0]).toContain('continue the user\'s task');
-      expect(notes[0]).toContain('narrower run or fewer parallel jobs');
+      expect(notes[0]).toContain('Continue the task');
+      expect(notes[0]).toContain('reduce its parallel jobs');
       expect(notes[0]).not.toContain('Avoid starting');
     } finally {
       first();
+      if (oldHome === undefined) delete process.env.CLIKCODE_HOME; else process.env.CLIKCODE_HOME = oldHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('rearms a global warning only after disk pressure stays clear for five minutes', () => {
+    vi.useFakeTimers();
+    const home = mkdtempSync(join(tmpdir(), 'clikcode-io-guard-'));
+    const oldHome = process.env.CLIKCODE_HOME;
+    process.env.CLIKCODE_HOME = home;
+    const notes: string[] = [];
+    const times = [1_000, 6_000, 11_000, 311_000, 316_000, 321_000];
+    const pressures = [6, 6, 1, 1, 6, 6];
+    let index = 0;
+    const close = startIoGuard({ sessionId: 'recovered', scopeDir: '/unused', labels: new Map(),
+      read: () => ({ ...sample(times[index]!, pressures[index]!, index++ * 100 * MIB, 0), commands: [] }),
+      deliver: (note) => notes.push(note) });
+    try {
+      vi.advanceTimersByTime(30_000);
+      expect(notes).toHaveLength(2);
+    } finally {
+      close();
       if (oldHome === undefined) delete process.env.CLIKCODE_HOME; else process.env.CLIKCODE_HOME = oldHome;
       rmSync(home, { recursive: true, force: true });
     }
@@ -83,8 +105,8 @@ describe('disk I/O guard', () => {
     // 12 MiB/s is below the byte threshold but enough small I/Os to qualify.
     expect(owned?.machineShare).toBe(0.6);
     expect(ioNudge(owned!, 20)).toContain('npm test');
-    expect(ioNudge(owned!, 20)).toContain('narrow its targets');
-    expect(ioGlobalNudge(20)).toContain('informational');
+    expect(ioNudge(owned!, 20)).toContain('run only the needed targets');
+    expect(ioGlobalNudge(20)).toContain('Continue the task');
     expect(ioStopNote(owned!, 20)).toContain('do not rerun');
     expect(ioCandidate(first, sample(6_000, 20, 100 * MIB, 10 * MIB))).toBeUndefined();
     expect(ioCandidate(first, sample(6_000, 20, 100 * MIB, 60 * MIB, '1:3'))).toBeUndefined();

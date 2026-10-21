@@ -36,14 +36,16 @@ describe('state sweep', () => {
     const busy = make('t/bbbbbbbb/busy-build', 9, true);
     const staleNote = make('resource-notes/s1.json', 8);
     const freshNote = make('resource-notes/s2.json', 1);
+    const staleWarning = make('io-guard-warnings/s1.global', 8);
+    const freshWarning = make('io-guard-warnings/s2.global', 1);
     const history = make('sessions/chat.json', 60);
     const profile = make('profiles/kiro/state', 60, true);
 
     const result = await sweepState({ used: () => [join(busy, 'inside')] });
 
-    expect(result).toEqual({ ran: true, removed: 3 });
-    for (const gone of [oldFile, oldDir, staleNote]) expect(existsSync(gone)).toBe(false);
-    for (const kept of [recent, busy, freshNote, history, profile, join(home, 't/aaaaaaaa'), join(home, 't/bbbbbbbb')]) expect(existsSync(kept)).toBe(true);
+    expect(result).toEqual({ ran: true, removed: 4 });
+    for (const gone of [oldFile, oldDir, staleNote, staleWarning]) expect(existsSync(gone)).toBe(false);
+    for (const kept of [recent, busy, freshNote, freshWarning, history, profile, join(home, 't/aaaaaaaa'), join(home, 't/bbbbbbbb')]) expect(existsSync(kept)).toBe(true);
   });
 
   it('removes only what is a week old where it cannot tell what a process is using', async () => {
