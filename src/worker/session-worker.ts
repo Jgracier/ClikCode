@@ -97,9 +97,9 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   // What ClikCode leaves under its own state directory is removed when old (worker/state-sweep.ts).
   startStateSweep();
   const socketPath = socketPathFor(sessionId);
-  // A worker from a build before the hold existed takes none, and still
-  // answers: it keeps the conversation. Anything else at the path is left
-  // over from a worker that is gone, and binding over it is safe.
+  // A worker that still answers at the path keeps the conversation, even
+  // without a hold (its owner file lost or judged stale). Anything else at
+  // the path is left over from a worker that is gone, and binding over it is safe.
   if (await workerIsReachable(socketPath)) { await hold.release(); return; }
   await unlink(socketPath).catch(() => undefined);
   const observer = new BroadcastObserver();
