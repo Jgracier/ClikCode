@@ -270,7 +270,19 @@ export interface HarnessSession {
    * history the named session carries on (its turns
    * the other lacked were merged into it first). Kept, never listed. */
   foldedInto?: string;
+  /** The chat went on on another machine (/machine, the editor's machine
+   * chip): this copy is read-only, and opening it offers the moved one
+   * (session/move.ts). One live copy, always. */
+  movedTo?: ChatMovedTo;
+  /** Imported from another machine: what the agent is told, unseen, with the
+   * first turn here -- that files and processes from before are on the other
+   * machine. Never in the transcript; cleared when that turn completes. */
+  moveNote?: string;
 }
+
+/** Where a moved chat went: the machine by name as the mover knew it (and
+ * its installation id, which other clients find it by), and its id there. */
+export interface ChatMovedTo { machine: string; installationId?: string; sessionId: string; at: string }
 
 export interface HarnessDefaultSettings {
   effort: string;

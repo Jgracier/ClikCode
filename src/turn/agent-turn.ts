@@ -27,7 +27,7 @@ import { ConversationStore } from '../agent/conversation.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
-import { withResourceNotes } from './resource-notes.js';
+import { withMoveNote, withResourceNotes } from './resource-notes.js';
 
 /** The account and model as the user has them now, before each model step.
  * Leaving this agent route hands the conversation to that account without
@@ -86,7 +86,7 @@ export async function runAgentTurn(input: {
   // Images are not refused: the agent loop runs on this machine and reads the
   // attached files with its own tools (run-turn.ts names them).
   // Resource notes ClikCode held for this conversation ride the same way (turn/resource-notes.ts).
-  const turnText = withResourceNotes(session.id, `${text}${prepared.textContext}`);
+  const turnText = withMoveNote(session, withResourceNotes(session.id, `${text}${prepared.textContext}`));
   // Before the checkpoint, so a route that cannot serve a turn (the Gateway
   // not signed in, ClikCode Local's engine absent) fails without recording
   // a turn that never ran.

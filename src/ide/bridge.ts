@@ -242,6 +242,11 @@ export class IdeBridge {
       case 'watch-conversations':
         this.watchConversations(request.on);
         return;
+      case 'export-chat':
+      case 'import-chat':
+      case 'mark-moved':
+        this.track(this.answerMove(request));
+        return;
       case 'search-key': {
         const answer = this.searchKey;
         this.searchKey = undefined;
@@ -260,6 +265,20 @@ export class IdeBridge {
       default:
         // An editor newer than this ClikCode: a request it does not know.
         return;
+    }
+  }
+
+  /** A move to or from this machine (session/move.ts): the chat this bridge
+   * shows is exported when none is named, and shown again once marked moved. */
+  private async answerMove(request: Extract<IdeRequest, { type: 'export-chat' | 'import-chat' | 'mark-moved' }>): Promise<void> {
+    const { requestId, ...move } = request;
+    try {
+      const { answerMoveRequest } = await import('../session/move.js');
+      const data = await answerMoveRequest(this.config, move, this.sessionId);
+      this.channel.send({ type: 'result', requestId, ok: true, ...(data === undefined ? {} : { data }) });
+      if (move.type === 'mark-moved' && move.sessionId === this.sessionId) await this.emitSession().catch(() => undefined);
+    } catch (error) {
+      this.channel.send({ type: 'result', requestId, ok: false, error: messageOf(error) });
     }
   }
 

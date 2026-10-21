@@ -25,6 +25,8 @@
  *   3  the bridge leaves for a newer installed build once quiet, saying so
  *      first (`host-retiring`, or `retiring` from a one-chat bridge): an
  *      event only, so an older editor just sees the bridge close
+ *   4  `export-chat`, `import-chat` and `mark-moved`: a chat moved to
+ *      another machine (session/move.ts)
  *
  * ClikCode and the extension are published separately (the CLI first, in the
  * same ClikDeploy run), so a bump reaches npm before the extension that
@@ -32,7 +34,7 @@
  */
 export const IDE_PROTOCOL = {
   version: 1,
-  revision: 3,
+  revision: 4,
   oldestSupported: 1,
   oldestRevision: 2,
 } as const;

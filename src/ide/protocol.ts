@@ -19,6 +19,7 @@
 import type { ConversationSection, TurnFacts } from '../session/conversation-state.js';
 import type { HarnessSession } from '../session/model.js';
 import type { WorkerEvent } from '../worker/protocol.js';
+import type { MoveRequest } from '../session/move-chat.js';
 
 export type { WorkerEvent };
 
@@ -94,6 +95,11 @@ export type IdeRequest =
    * them re-reading every account was most of what ClikCode wrote while
    * idle. Shown until said otherwise; an older bridge ignores it. */
   | { type: 'visible'; visible: boolean }
+  /** Revision 4: moving a chat to another machine (session/move.ts). The
+   * client asks the machine it is on to `export-chat`, the one it goes to to
+   * `import-chat` (`dryRun`: only what would change), then the first to
+   * `mark-moved`. Answered by a `result`. */
+  | (MoveRequest & { requestId: string })
   | { type: 'close' };
 
 /** What an editor handles beyond the base protocol, named with `open`; the
@@ -200,6 +206,8 @@ export interface IdeConversation {
   /** Where the terminal board lists it: Working (generating), Recent (last
    * 24 hours), Older. Absent from a bridge before this field. */
   section?: ConversationSection;
+  /** It went on on another machine (named so): read-only here. */
+  movedTo?: string;
   current: boolean;
 }
 

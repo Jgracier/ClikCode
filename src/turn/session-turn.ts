@@ -28,6 +28,7 @@ import { homedir, hostname } from 'node:os';
 import { writeState } from '../session/state/write.js';
 import { harnessSupportsPermissionMode, localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { folderExists, missingFolderMessage } from '../runtime/machine-folder.js';
+import { movedChatMessage } from '../session/move-chat.js';
 
 /** Options supplied by any caller of a turn. */
 export interface TurnRunOptions {
@@ -80,6 +81,9 @@ export async function runSessionTurn(
   const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
+  // One live copy: a chat that went on on another machine is read-only here (session/move.ts).
+  const moved = movedChatMessage(session);
+  if (moved) throw new Error(moved);
   // The one check before anything runs in the chat's folder -- ClikCode's agent, a
   // vendor CLI, an ACP or app-server child. A folder this machine does not have
   // (named by another machine, or removed since) would otherwise surface as

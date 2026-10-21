@@ -9,6 +9,7 @@ import { completeVendorTurn, settleAttempt } from './vendor-outcome.js';
 import { recoverFromFailure } from './vendor-recovery.js';
 import { takeUp } from './vendor-thread-takeup.js';
 import { createVendorTurnContext, type VendorTurnContext } from './vendor-turn-context.js';
+import { withMoveNote } from './resource-notes.js';
 
 /** The thread under the account this turn runs on (session/carry.ts). */
 async function settleThread(ctx: VendorTurnContext): Promise<void> {
@@ -64,6 +65,9 @@ export async function sendVendorTurn(input: AccountTurnInput): Promise<void> {
   const ctx = await createVendorTurnContext(input);
   try {
     await startVendorTurn(ctx);
+    // A chat that just moved here: the agent is told so, ahead of everything
+    // the turn sends -- the taken-up conversation included (session/move.ts).
+    ctx.turnText = withMoveNote(ctx.session, ctx.turnText);
     const observer = createVendorObserver(ctx);
     ctx.askedText = ctx.turnText;
     for (;;) {
