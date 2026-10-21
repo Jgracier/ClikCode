@@ -12,6 +12,7 @@ import { interactiveSessionPicker } from '../tui/pickers/session.js';
 import { BOARD_COMMANDS, BOARD_LINE } from '../commands/ai/interactive/board.js';
 import { bridgeScript, remoteTerminalScript } from './install.js';
 import { readMachines } from './machines.js';
+import { needsUpdate } from './connection.js';
 import { spawnSsh, sshArgv } from './ssh.js';
 import type { LiveTurnInputResult } from '../turn/live-input.js';
 import type { SignInScreen } from '../gateway/login/vendor-sign-in.js';
@@ -26,6 +27,8 @@ class TerminalBridge {
   private stopped = false;
   private closing = false;
   private error = '';
+  /** Its ClikCode is another build than this one (connection.ts needsUpdate). */
+  outdated = false;
   onEvent: (event: IdeEvent) => void = () => undefined;
   onClose: (error: Error) => void = () => undefined;
 
@@ -39,7 +42,11 @@ class TerminalBridge {
       lines.on('line', (line) => {
         let message: IdeHostEvent;
         try { message = JSON.parse(line) as IdeHostEvent; } catch { return; }
-        if (message.type === 'host-ready') { this.send({ type: 'chat-attach', chat: this.chat }); return; }
+        if (message.type === 'host-ready') {
+          this.outdated = needsUpdate(message);
+          this.send({ type: 'chat-attach', chat: this.chat });
+          return;
+        }
         if (message.type !== 'chat' || message.chat !== this.chat) return;
         const event = message.event;
         if (event.type === 'ready') { clearTimeout(timer); resolve(); }
@@ -220,7 +227,10 @@ export async function runRemoteChat(
     };
     try {
       await bridge.connected();
-      await bridge.request({ type: 'open', mode: 'resume', sessionId: choice.chatId, workspace: process.cwd() });
+      // Never updated from here: a production machine is updated when the user says so.
+      if (bridge.outdated) terminal.activity(`${machine.name} runs another ClikCode build than this one. Update it from /remote.`);
+      // No folder of this machine's: the chat is in one of the remote's own (session/attach.ts).
+      await bridge.request({ type: 'open', mode: 'resume', sessionId: choice.chatId, workspace: '' });
       if (draft) terminal.restoreDraft(draft);
       draft = undefined;
       for (;;) {

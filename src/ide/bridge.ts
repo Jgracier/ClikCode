@@ -11,8 +11,6 @@
  * One conversation at a time, like a terminal: `open` switches, and a slash
  * command that moves the conversation (/new, /fork, /resume) switches too.
  */
-import { homedir } from 'node:os';
-import { statSync } from 'node:fs';
 import { stripVTControlCharacters } from 'node:util';
 import { panelParts, renderPanelText } from '../harness/output.js';
 import { lifecycle, setLifecycleSession } from '../runtime/lifecycle-log.js';
@@ -325,10 +323,9 @@ export class IdeBridge {
   // ---- conversations -------------------------------------------------------
 
   private async open(workspace: string, mode: 'new' | 'continue' | 'resume', ref?: string): Promise<void> {
-    // A folder this machine does not have (an editor on another machine named one of its own) is
-    // this machine's home instead: a vendor started in a missing folder fails as `spawn <binary> ENOENT`.
-    const folder = workspace && isDirectory(workspace) ? workspace : homedir();
-    const id = await openConversation(folder, mode, ref, { sameWorkspace: true, pin: true });
+    // A folder this machine does not have is its home instead, said as a notice (session/attach.ts).
+    const notices: string[] = [];
+    const id = await openConversation(workspace, mode, ref, { sameWorkspace: true, pin: true, notice: (message) => notices.push(message) });
     const { session } = await this.current(id);
     // As a terminal does on open: a conversation with no provider gets the one
     // the user is signed in to, without asking; with none, the first message
@@ -336,6 +333,7 @@ export class IdeBridge {
     if (!session.nativeHarness && !isClikCodeAgent(session)) await autoSelectSessionHarness(id).catch(() => false);
     await resolveSessionModel(id);
     await this.switchTo(id);
+    for (const message of notices) this.channel.send({ type: 'notice', message, level: 'warning' });
     void this.synchronizeOpened(id);
   }
 
@@ -516,8 +514,4 @@ export async function runIdeBridge(config: Conf): Promise<void> {
   process.on('SIGTERM', () => { lifecycle('bridge.stop', { reason: 'SIGTERM' }); void running.shutdown().finally(() => process.exit(0)); });
   running.start();
   await new Promise<void>(() => { /* lives as long as the channel */ });
-}
-
-function isDirectory(path: string): boolean {
-  try { return statSync(path).isDirectory(); } catch { return false; }
 }

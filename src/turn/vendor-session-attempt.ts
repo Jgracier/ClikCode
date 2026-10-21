@@ -183,7 +183,7 @@ function acpLaunchInput(input: {
     throw new Error(`${harness.displayName} ACP does not accept the selected CLI-only options. Clear them before sending.`);
   }
   return {
-    binary: launch.binary, command: harness.command,
+    binary: launch.binary, command: harness.command, displayName: harness.displayName,
     argv: launch.modeArgv, optionPlacement: launch.optionPlacement,
     extraArgv: [...launch.optionArgv, ...optionArgv],
     ...(session.nativeSessionId ? { nativeSessionId: session.nativeSessionId } : {}),

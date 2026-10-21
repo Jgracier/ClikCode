@@ -77,6 +77,8 @@ const ACP_CLIENT_CAPABILITIES = {
 export interface AcpTurnInput extends HarnessTurnObserver {
   binary: string;
   command: string;
+  /** The harness as a person names it (Claude Code); `command` when absent. */
+  displayName?: string;
   cwd: string;
   /** Extra roots the agent may work in (`/add-dir`): sent with session/new|load|resume when the agent advertises `sessionCapabilities.additionalDirectories`. */
   additionalDirectories?: readonly string[];
@@ -725,7 +727,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     // Model, effort and permission flags are launch arguments: a change means
     // a new child, which then resumes the same session.
     return this.liveFor(JSON.stringify([input.binary, argv, input.cwd, input.environment]), `${input.command} ACP restarted`, {
-      binary: input.binary, argv, cwd: input.cwd, environment: input.environment,
+      name: input.displayName ?? input.command, binary: input.binary, argv, cwd: input.cwd, environment: input.environment,
       peer: {
         label: `${input.command} ACP`,
         // Kiro (Rust) panics and stays alive: read as the crash it is.

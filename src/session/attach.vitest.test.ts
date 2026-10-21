@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { hostname, tmpdir } from 'node:os';
+import { homedir, hostname, tmpdir } from 'node:os';
+import { machineName } from '../runtime/machine-folder';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { afterTurnFailure, claimConversation, leaveConversation, openConversation, releaseConversationClaim } from './attach';
@@ -82,10 +83,39 @@ describe('a client attached to a conversation', () => {
   });
 
   it('continues the latest chat, in this workspace only when asked', async () => {
-    await writeState(stateWith(session({ workspace: '/elsewhere', status: 'closed' })));
-    expect(await openConversation('/work', 'continue')).toBe('s1');
+    const elsewhere = mkdtempSync(join(tmpdir(), 'cc-attach-elsewhere-'));
+    const work = mkdtempSync(join(tmpdir(), 'cc-attach-work-'));
+    await writeState(stateWith(session({ workspace: elsewhere, status: 'closed' })));
+    expect(await openConversation(work, 'continue')).toBe('s1');
     expect((await stored())?.status).toBe('active');
-    expect(await openConversation('/work', 'continue', undefined, { sameWorkspace: true })).not.toBe('s1');
+    expect(await openConversation(work, 'continue', undefined, { sameWorkspace: true })).not.toBe('s1');
+  });
+
+  // The machine that owns a chat runs it in a folder of its own: a folder named by
+  // another machine is this one's home, and the user is told.
+  const missing = '/clikcode-test-no-such-folder/on-the-editor-machine';
+
+  it('opens a new chat in this machine\'s home when the folder named is not here, or none is', async () => {
+    const notices: string[] = [];
+    const foreign = await openConversation(missing, 'new', undefined, { notice: (message) => notices.push(message) });
+    expect((await stored(foreign))?.workspace).toBe(homedir());
+    expect(notices).toEqual([`The folder ${missing} does not exist on ${machineName()}; this chat opens in ${homedir()}.`]);
+    const unnamed = await openConversation('', 'new', undefined, { notice: (message) => notices.push(message) });
+    expect((await stored(unnamed))?.workspace).toBe(homedir());
+    expect(notices).toHaveLength(1);
+    const here = mkdtempSync(join(tmpdir(), 'cc-attach-here-'));
+    expect((await stored(await openConversation(here, 'new')))?.workspace).toBe(here);
+  });
+
+  it('resumes a chat whose folder is not on this machine in its home, and says so', async () => {
+    await writeState(stateWith(session({ workspace: missing })));
+    const notices: string[] = [];
+    expect(await openConversation('', 'resume', 's1', { notice: (message) => notices.push(message) })).toBe('s1');
+    expect((await stored())?.workspace).toBe(homedir());
+    expect(notices).toEqual([`The folder ${missing} does not exist on ${machineName()}; this chat continues in ${homedir()}.`]);
+    // Said once: the chat is in its home now.
+    await openConversation('', 'resume', 's1', { notice: (message) => notices.push(message) });
+    expect(notices).toHaveLength(1);
   });
 
   it('resumes a chat by the start of its id, and says what it accepts when nothing matches', async () => {
