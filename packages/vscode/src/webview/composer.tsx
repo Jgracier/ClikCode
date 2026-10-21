@@ -59,7 +59,9 @@ export function Composer(props: {
   /** Long pastes held as chips in this message so far: their numbers. */
   const pastes = useRef(0);
   const history = useMemo(() => promptHistory(model.messages), [model.messages]);
-  const connected = model.connection === 'ready' && Boolean(model.sessionId);
+  // Reconnecting under a chat already on screen (a machine switch, a new build) is not a
+  // disconnection to draw: what is typed waits for the connection (controller send).
+  const connected = (model.connection === 'ready' || model.connection === 'starting') && Boolean(model.sessionId);
   const chip = machineChip(model);
   const autosize = (): void => {
     const element = textarea.current;

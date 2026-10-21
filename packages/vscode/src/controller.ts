@@ -769,9 +769,18 @@ export class ClikCodeController implements vscode.Disposable {
     const previous = this.bridge;
     this.bridge = undefined;
     previous?.dispose();
-    this.setModel({ ...emptyModel(), connection: 'starting', ...(machine.name ? { machine: machine.name, machineId: machine.id } : {}) });
-    await this.refreshMachineUpdate();
-    await this.start(sessionId, mode);
+    // The chat stays on screen while its connection moves, as it does for an account switch:
+    // only the machine on the chip and the info line changes now, and the session the new
+    // machine sends replaces it in place (the same conversation, for a move). Clearing it here
+    // blanked the whole panel until that machine answered.
+    const { machine: _machine, machineId: _machineId, machineUpdate: _update, ...kept } = this.model;
+    this.setModel({ ...kept, connection: 'starting', approvals: [], busy: undefined, signIn: undefined, connectionError: undefined, ...(machine.name ? { machine: machine.name, machineId: machine.id } : {}) });
+    // As ensureStarted's start, so a message or a click while it connects waits for this one
+    // instead of starting another (the composer stays usable through the switch).
+    const starting = this.start(sessionId, mode).finally(() => { if (this.starting === starting) this.starting = undefined; });
+    this.starting = starting;
+    void this.refreshMachineUpdate();
+    await starting;
   }
 
   /** Whether the chat's machine needs an update, for the composer's chip. */
