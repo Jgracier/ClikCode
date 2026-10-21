@@ -164,6 +164,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * width wraps the whole conversation again (see rewrapTranscript). */
   transcriptColumns = output.columns || 0;
   usageLabel?: string;
+  /** The owner of a conversation reached over SSH, shown in the status line. */
+  remoteMachineName?: string;
   /** An open list, drawn over the chat just above the footer (frame-flush.ts). Empty when none. */
   pickerOverlay: string[] = [];
   /** How many live rows at the bottom are the footer. The overlay sits above them and never on them. */

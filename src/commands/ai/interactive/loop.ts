@@ -26,6 +26,7 @@ import { turnFailureEffect } from './turn-failure.js';
 import { runTimedTurn } from './run-turn.js';
 import { createSlashHost, openConversationPicker, runShellInChat } from './slash-host.js';
 import type { ChatWindow } from './window.js';
+import { runRemoteChat } from '../../../remote/terminal-chat.js';
 
 /** What one read of the next line came to: another pass, the end of the loop, or a line to run. */
 type NextLine = 'continue' | 'exit' | PickedLine;
@@ -376,6 +377,16 @@ export class ChatLoop {
       const outcome = await dispatchLine(host, this.id, line, { fromQueuedCommand });
       if (outcome.notice) this.notice = outcome.notice;
       if (outcome.exit) return 'exit';
+      if (outcome.remote && terminal) {
+        await leaveConversation(this.id);
+        try {
+          const localId = await runRemoteChat(terminal, this.id, outcome.remote, outcome.draft);
+          if (localId) this.id = localId;
+        } finally {
+          await claimConversation(this.id).catch(() => undefined);
+        }
+        return;
+      }
       if (outcome.id && outcome.id !== this.id) {
         // Leaving a chat nothing happened in: it does not stay behind.
         await leaveConversation(this.id);

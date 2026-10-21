@@ -33,7 +33,7 @@ import { conversationIdFor } from '../../session/conversation-rows.js';
 import { aiSessionCommand } from '../slash/handlers.js';
 import { chooseOption } from './choose.js';
 import { RemoteMachines } from '../../remote/connection.js';
-import { boardRowsWithMachines, isRemoteRowValue, REMOTE_OPEN_LATER } from '../../remote/board-rows.js';
+import { isRemoteRowValue, localMachineName, remoteConversationOption, parseRemoteRowValue } from '../../remote/board-rows.js';
 
 type AdoptableNativeSession = {
   harness: AiLocalHarnessDefinition;
@@ -167,6 +167,7 @@ const MANAGE_ACTIONS = [
   { label: 'Fork', value: 'fork' },
   { label: 'Archive', value: 'archive' },
 ] as const;
+let lastBoardMachine = 'local';
 
 /** One list for finding a conversation and managing it.
  *
@@ -177,7 +178,7 @@ export async function interactiveSessionPicker(rl: HarnessPrompter, currentId: s
 export async function interactiveSessionPicker(
   rl: HarnessPrompter, currentId: string, boardCommands: readonly PickerOption<string>[] | undefined,
   hooks?: { onSessionsSettled?: () => boolean },
-): Promise<{ id: string; draft?: string } | { new: true } | { compose: string } | { command: string } | { notice: string } | undefined>;
+): Promise<{ id: string; draft?: string } | { new: true } | { compose: string } | { command: string } | { notice: string } | { remote: { machineId: string; chatId: string }; draft?: string } | undefined>;
 export async function interactiveSessionPicker(
   rl: HarnessPrompter, currentId: string,
   /** The commands a board's `/` offers. Given, and the terminal can draw it,
@@ -186,7 +187,7 @@ export async function interactiveSessionPicker(
   /** The board calls `onSessionsSettled` when running chats finish and the
    * list is idle. A true return leaves the board up until the process exits. */
   hooks?: { onSessionsSettled?: () => boolean },
-): Promise<{ id: string; draft?: string } | { new: true } | { compose: string } | { command: string } | { notice: string } | undefined> {
+): Promise<{ id: string; draft?: string } | { new: true } | { compose: string } | { command: string } | { notice: string } | { remote: { machineId: string; chatId: string }; draft?: string } | undefined> {
   const onBoard = Boolean(boardCommands && rl.board);
   // Titles, previews and dates live on the index. The transcript is read
   // when the chat is opened, not to draw this list.
@@ -261,7 +262,7 @@ export async function interactiveSessionPicker(
   const lookingGone = discovery.catch(() => undefined).then(() => looking.end());
   const refreshes = [early, discovery, looking.shown, lookingGone];
   let listRevision = 0;
-  let built: { discovering: boolean; slow: boolean; discovered: AdoptableNativeSession[]; revision: number; second: number; options: PickerOption<string>[] } | undefined;
+  let built: { machine: string; discovering: boolean; slow: boolean; discovered: AdoptableNativeSession[]; revision: number; second: number; options: PickerOption<string>[] } | undefined;
   /** Re-check workers and the turns they are generating, and have the board
    * draw what changed: a spinner starts, or stops when the turn is over. */
   let activityRefresh: Promise<void> | undefined;
@@ -283,7 +284,12 @@ export async function interactiveSessionPicker(
   };
 
   const histories = new Map<string, PickerOption<string>[]>();
-  const buildFresh = (): PickerOption<string>[] => {
+  const buildFresh = (machine = 'local'): PickerOption<string>[] => {
+    if (onBoard && machine !== 'local') {
+      const view = remote?.views().find((item) => item.machine.id === machine);
+      if (!view) return [];
+      return view.chats.map((chat) => remoteConversationOption(view, chat, Date.now()));
+    }
     histories.clear();
     // Built when the list changes, so a row's `working 3m` is as of then.
     const now = Date.now();
@@ -334,9 +340,6 @@ export async function interactiveSessionPicker(
     if (!onBoard) for (const option of options) option.label = conversationLabel(option, 0);
     // On the board its composer is how a conversation starts.
     if (!onBoard) options.unshift({ label: '+ New conversation', detail: '· same provider and model', value: NEW_CONVERSATION_VALUE });
-    // The other machines ClikCode Remote added, each in its own sections
-    // below this one's (remote/board-rows.ts); none added, nothing changes.
-    if (remote) return boardRowsWithMachines(options, remote.views(), now);
     return options;
   };
   // Asked for on every keypress (the list redraws, and a picker re-reads its
@@ -344,13 +347,13 @@ export async function interactiveSessionPicker(
   // landing or the watch below, so the rows are rebuilt only then -- not all
   // five hundred of them per arrow press. And once a second while a turn
   // runs: its `working 3m` counts up, and it can turn `stalled`.
-  const buildOptions = (): PickerOption<string>[] => {
+  const buildOptions = (machine = 'local'): PickerOption<string>[] => {
     const counting = rows.some((row) => row.pending) || Boolean(remote?.views().some((view) => view.state !== 'offline' && view.chats.some((chat) => chat.activity === 'working')));
     const second = counting ? Math.floor(Date.now() / 1000) : 0;
-    if (built && built.discovering === discovering && built.slow === slowDiscovery && built.discovered === discovered && built.revision === listRevision && built.second === second) {
+    if (built && built.machine === machine && built.discovering === discovering && built.slow === slowDiscovery && built.discovered === discovered && built.revision === listRevision && built.second === second) {
       return built.options;
     }
-    built = { discovering, slow: slowDiscovery, discovered, revision: listRevision, second, options: buildFresh() };
+    built = { machine, discovering, slow: slowDiscovery, discovered, revision: listRevision, second, options: buildFresh(machine) };
     return built.options;
   };
   // A turn starting or ending, or a worker exiting, writes the state or
@@ -414,6 +417,16 @@ export async function interactiveSessionPicker(
       })?.value;
       const result = await rl.board!({
         conversations: buildOptions, commands: boardCommands!, refresh: refreshes, onAction: manage,
+        machines: () => [
+          { label: localMachineName(), detail: '· this machine', value: 'local' },
+          ...(remote?.views().map((view) => ({
+            label: view.machine.name,
+            detail: `· ${view.state}${view.chats.length ? ` · ${view.chats.length} chats` : ''}`,
+            value: view.machine.id,
+          })) ?? []),
+        ],
+        initialMachine: remote?.views().some((view) => view.machine.id === lastBoardMachine) ? lastBoardMachine : 'local',
+        onMachineSelected: (machineId) => { lastBoardMachine = machineId; },
         listChanged: (redraw) => { listChanged = redraw; },
         ...(initial ? { initial } : {}),
         ...(hooks?.onSessionsSettled ? { onSessionsSettled: hooks.onSessionsSettled } : {}),
@@ -447,9 +460,10 @@ export async function interactiveSessionPicker(
   // state rather than show a stale row), so it opens again on what changed.
   if (!selected && actedOn) return interactiveSessionPicker(rl, currentId, boardCommands, hooks);
   if (!selected) return undefined;
-  // Step one of ClikCode Remote shows the other machines' chats; opening
-  // one there is not built yet, and is not pretended.
-  if (isRemoteRowValue(selected)) return { notice: REMOTE_OPEN_LATER };
+  if (isRemoteRowValue(selected)) {
+    const remote = parseRemoteRowValue(selected);
+    return remote?.chatId ? { remote, ...(draft ? { draft } : {}) } : undefined;
+  }
   if (selected === NEW_CONVERSATION_VALUE) return { new: true };
   if (selected === PENDING_DISCOVERY_VALUE) {
     await discovery;

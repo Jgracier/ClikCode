@@ -11,6 +11,10 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { BridgeEndpoint } from './bridge-client';
 import { bridgePool } from './bridge-pool';
+import { remoteDirectory } from './remote-directory';
+import { sshArgv } from '../../../src/remote/ssh';
+import { remoteTerminalScript } from '../../../src/remote/install';
+import { uploadRemoteImage, removeRemoteImage } from '../../../src/remote/image';
 import type { WebviewSurface } from './chat-view';
 import { diffModel } from './model-patch';
 import { DraftRestores, LatestRead } from './controller/reads';
@@ -45,6 +49,11 @@ const PARK_AFTER_MS = Number(process.env.CLIKCODE_PARK_AFTER_MS) > 0 ? Number(pr
 
 export class ClikCodeController implements vscode.Disposable {
   private bridge: BridgeEndpoint | undefined;
+  private remoteMachineId?: string;
+  private remoteWorkspace?: string;
+  private remoteWatchRelease?: () => void;
+  private remoteWatchCount = 0;
+  private readonly remoteImages = new Map<string, string>();
   private model: ChatModel = emptyModel();
   private readonly changed = new vscode.EventEmitter<ChatModel>();
   readonly onDidChange = this.changed.event;
@@ -228,7 +237,11 @@ export class ClikCodeController implements vscode.Disposable {
     for (const [path, sent] of this.images) {
       if (!sent || model.queued.some((item) => item.text.includes(path))) continue;
       this.images.delete(path);
-      void rm(path, { force: true });
+      const target = this.remoteImages.get(path);
+      if (target) {
+        this.remoteImages.delete(path);
+        void removeRemoteImage(target, path);
+      } else void rm(path, { force: true });
     }
   }
 
@@ -313,6 +326,7 @@ export class ClikCodeController implements vscode.Disposable {
   }
 
   private workspaceFolder(): string {
+    if (this.remoteMachineId) return this.remoteWorkspace ?? homedir();
     const active = vscode.window.activeTextEditor?.document.uri;
     const folder = (active && vscode.workspace.getWorkspaceFolder(active)) ?? vscode.workspace.workspaceFolders?.[0];
     return folder?.uri.fsPath ?? homedir();
@@ -333,25 +347,34 @@ export class ClikCodeController implements vscode.Disposable {
     return starting;
   }
 
-  private async start(sessionToResume?: string): Promise<void> {
+  private async start(sessionToResume?: string, modeOverride?: 'new' | 'resume'): Promise<void> {
     if (this.disposed) return;
     this.parked = false;
     const log = this.host.log;
     this.setModel({ ...this.model, connection: 'starting', connectionError: undefined, remedy: undefined });
     const settings = vscode.workspace.getConfiguration('clikcode');
-    let runtime;
-    try {
-      runtime = await resolveRuntime({ path: settings.get<string>('path'), nodePath: settings.get<string>('nodePath') });
-    } catch (error) {
-      const message = errorText(error);
-      log.appendLine(message);
-      this.setModel({ ...this.model, connection: 'error', connectionError: message, remedy: error instanceof RuntimeError && error.kind === 'clikcode-missing' ? 'install' : undefined });
-      return;
+    let bridge: BridgeEndpoint;
+    if (this.remoteMachineId) {
+      const view = await remoteDirectory.machine(this.remoteMachineId);
+      if (!view) throw new Error('The selected machine is no longer added.');
+      log.appendLine(`[${this.label}] Connecting to ${view.machine.name} over SSH`);
+      bridge = bridgePool.connectRemote(view.machine);
+      this.builds.stop();
+    } else {
+      let runtime;
+      try {
+        runtime = await resolveRuntime({ path: settings.get<string>('path'), nodePath: settings.get<string>('nodePath') });
+      } catch (error) {
+        const message = errorText(error);
+        log.appendLine(message);
+        this.setModel({ ...this.model, connection: 'error', connectionError: message, remedy: error instanceof RuntimeError && error.kind === 'clikcode-missing' ? 'install' : undefined });
+        return;
+      }
+      log.appendLine(`[${this.label}] Starting ${runtime.entry} (${runtime.entrySource}) with ${runtime.node} (${runtime.nodeSource})`);
+      bridge = bridgePool.connect(runtime, this.workspaceFolder(), settings.get<boolean>('sharedProcess', true));
+      this.builds.watch(runtime.entry);
     }
-    log.appendLine(`[${this.label}] Starting ${runtime.entry} (${runtime.entrySource}) with ${runtime.node} (${runtime.nodeSource})`);
-    const bridge = bridgePool.connect(runtime, this.workspaceFolder(), settings.get<boolean>('sharedProcess', true));
     this.bridge = bridge;
-    this.builds.watch(runtime.entry);
     const startLog: string[] = [];
     bridge.on('log', (line) => { log.appendLine(`[${this.label}] ${line}`); if (startLog.length < 200) startLog.push(line); });
     bridge.on('exit', ({ code, signal }) => {
@@ -421,7 +444,7 @@ export class ClikCodeController implements vscode.Disposable {
       // opens a new chat directly rather than learning that from an error.
       const neverStored = !sessionToResume && Boolean(this.model.sessionId) && !this.model.messages.length && !this.model.running && !this.model.pendingPrompt;
       const resume = neverStored ? undefined : sessionToResume ?? this.model.sessionId ?? (this.first?.mode === 'resume' ? this.first.sessionId : undefined);
-      const mode = neverStored ? 'new' : resume ? 'resume' : this.first?.mode ?? settings.get<'continue' | 'new'>('startWith') ?? 'continue';
+      const mode = modeOverride ?? (neverStored ? 'new' : resume ? 'resume' : this.first?.mode ?? settings.get<'continue' | 'new'>('startWith') ?? 'continue');
       await bridge.call({ type: 'open', workspace: this.workspaceFolder(), mode, ...(resume ? { sessionId: resume } : {}), features: IDE_FEATURES });
     } catch (error) {
       if (this.bridge !== bridge) return; // replaced, or refused as incompatible (already reported)
@@ -492,7 +515,11 @@ export class ClikCodeController implements vscode.Disposable {
       case 'sign-in': {
         const bridge = this.bridge;
         if (!bridge) return;
-        void runInTerminal({
+        const remoteTarget = this.remoteMachineId ? bridge.runtime.entry.slice('remote:'.length) : undefined;
+        void runInTerminal(remoteTarget ? {
+          name: `sign in to ${event.name} on ${remoteTarget}`,
+          node: 'ssh', args: sshArgv(remoteTarget, remoteTerminalScript(event.spec), ['-tt']), env: {},
+        } : {
           name: `sign in to ${event.name}`,
           node: bridge.runtime.node,
           args: [bridge.runtime.entry, 'ide-terminal', event.spec],
@@ -512,6 +539,7 @@ export class ClikCodeController implements vscode.Disposable {
         if (event.done) this.openedSignIns.delete(event.id);
         return;
       case 'open-file':
+        if (this.remoteMachineId) { this.note(`${event.path} is on ${this.model.machine ?? 'the remote machine'}.`, 'info'); return; }
         void vscode.window.showTextDocument(vscode.Uri.file(event.path), { preview: false });
         return;
       case 'restore-draft':
@@ -711,6 +739,38 @@ export class ClikCodeController implements vscode.Disposable {
     }
   }
 
+  async openOnMachine(machineId: string, mode: 'new' | 'resume', sessionId?: string): Promise<void> {
+    if (this.starting) await this.starting;
+    if (machineId === 'local' && !this.remoteMachineId) return this.open(mode, sessionId);
+    const view = machineId === 'local' ? undefined : await remoteDirectory.machine(machineId);
+    if (machineId !== 'local' && (!view || view.state === 'offline')) throw new Error('That machine is offline.');
+    this.remoteWorkspace = mode === 'resume' ? view?.chats.find((chat) => chat.id === sessionId)?.workspace : undefined;
+    if (machineId === this.remoteMachineId) return this.open(mode, sessionId);
+    this.remoteMachineId = machineId === 'local' ? undefined : machineId;
+    this.bridge?.dispose();
+    this.bridge = undefined;
+    this.setModel({ ...emptyModel(), connection: 'starting', ...(view ? { machine: view.machine.name, machineId: view.machine.id } : {}) });
+    await this.start(sessionId, mode);
+  }
+
+  private async localConversations(): Promise<IdeConversation[]> {
+    if (!this.remoteMachineId) {
+      await this.ensureStarted();
+      return (await this.bridge?.call<IdeConversation[]>({ type: 'query', query: 'conversations' })) ?? [];
+    }
+    const settings = vscode.workspace.getConfiguration('clikcode');
+    const runtime = await resolveRuntime({ path: settings.get<string>('path'), nodePath: settings.get<string>('nodePath') });
+    const bridge = bridgePool.connect(runtime, undefined);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Local ClikCode did not start.')), TIMEOUT.start);
+        bridge.on('event', (event) => { if (event.type === 'ready') { clearTimeout(timeout); resolve(); } });
+        bridge.once('exit', () => { clearTimeout(timeout); reject(new Error('Local ClikCode stopped.')); });
+      });
+      return await bridge.call<IdeConversation[]>({ type: 'query', query: 'conversations' });
+    } finally { bridge.dispose(); }
+  }
+
   async slashCommands(): Promise<IdeSlashCommand[]> {
     await this.ensureStarted();
     return (await this.bridge?.call<IdeSlashCommand[]>({ type: 'query', query: 'slash-commands' })) ?? [];
@@ -731,12 +791,34 @@ export class ClikCodeController implements vscode.Disposable {
       case 'watchConversations':
         // No bridge yet: the list's slow poll covers it until one answers.
         this.bridge?.send({ type: 'watch-conversations', on: request.on });
+        if (request.on) {
+          this.remoteWatchCount += 1;
+          this.remoteWatchRelease ??= remoteDirectory.watch(() => {
+            for (const item of this.surfaces) item.post({ type: 'conversations-changed' });
+          });
+        } else if (this.remoteWatchCount > 0 && --this.remoteWatchCount === 0) {
+          this.remoteWatchRelease?.();
+          this.remoteWatchRelease = undefined;
+        }
+        return undefined;
+      case 'machines': {
+        const local = await this.localConversations().catch(() => []);
+        return remoteDirectory.machines(local);
+      }
+      case 'machineConversations':
+        if (request.machineId === 'local') return this.localConversations();
+        return remoteDirectory.conversations(request.machineId);
+      case 'openOnMachine':
+        await this.openOnMachine(request.machineId, request.mode, request.sessionId);
         return undefined;
       case 'files':
+        if (this.remoteMachineId) return [];
         return searchWorkspaceFiles(request.text);
       case 'paste':
+        if (this.remoteMachineId) return undefined;
         return pastedReference(request.text);
       case 'mentions':
+        if (this.remoteMachineId) return [];
         return request.uris.flatMap((text) => {
           try {
             const uri = vscode.Uri.parse(text.trim(), true);
@@ -754,6 +836,14 @@ export class ClikCodeController implements vscode.Disposable {
         return undefined;
       }
       case 'saveImage': {
+        if (this.remoteMachineId) {
+          const view = await remoteDirectory.machine(this.remoteMachineId);
+          if (!view) throw new Error('The remote machine is no longer added.');
+          const path = await uploadRemoteImage(view.machine.sshTarget, request.name, Buffer.from(request.dataBase64, 'base64'));
+          this.images.set(path, false);
+          this.remoteImages.set(path, view.machine.sshTarget);
+          return path;
+        }
         // A directory of this chat's own (mkdtemp: 0700, a fresh name, so no
         // other user can read it or plant a link in it), emptied as each
         // image's turn ends and removed with the chat.
@@ -860,6 +950,7 @@ export class ClikCodeController implements vscode.Disposable {
         this.host.log.appendLine(`[${this.label} page] ${message.text}`);
         return;
       case 'openFile':
+        if (this.remoteMachineId) { void this.fail(`${message.path} is on ${this.model.machine ?? 'the remote machine'}; open that workspace through VS Code Remote SSH to edit it.`); return; }
         void openWorkspaceFile(message.path, message.line, this.model.workspace ?? this.workspaceFolder()).catch(() => this.fail(userError(`open ${message.path}`)));
         return;
       default:
@@ -868,6 +959,7 @@ export class ClikCodeController implements vscode.Disposable {
   }
 
   dispose(): void {
+    this.remoteWatchRelease?.();
     if (this.parkTimer) clearTimeout(this.parkTimer);
     this.disposed = true;
     this.builds.stop();
@@ -877,6 +969,7 @@ export class ClikCodeController implements vscode.Disposable {
     this.bridge?.dispose();
     this.bridge = undefined;
     this.changed.dispose();
+    for (const [path, target] of this.remoteImages) if (!this.images.get(path)) void removeRemoteImage(target, path);
     void this.imageDir?.then((dir) => rm(dir, { recursive: true, force: true }), () => undefined);
   }
 }

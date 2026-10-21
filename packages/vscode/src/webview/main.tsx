@@ -151,6 +151,7 @@ function Header({ model, onMenu, history, setHistory, onError }: { model: ChatMo
   return (
     <header class="topbar">
       <span class="title-text" title={title}>{title}</span>
+      {model.machine ? <span class="muted" title={`Chat on ${model.machine}`}>· {model.machine}</span> : null}
       <span class="spacer" />
       <IconButton id="new-chat" icon="add" label={`New chat (${shortcut('N')})`} onClick={() => { void request({ method: 'open', mode: 'new' }); }} />
       <span data-popover-anchor><IconButton id="history-button" icon="history" label="Conversations" active={history} onClick={() => { setMore(false); setHistory(!history); }} /></span>
@@ -418,7 +419,7 @@ function App(): JSX.Element {
           </div>
         ) : null}
         {search ? <SearchBar focus={search} /> : null}
-        <Composer model={model} handle={composer} onError={setError} />
+        <Composer model={model} handle={composer} onError={setError} onOpenHistory={() => setHistory(true)} />
       </main>
       {question ? <Sheet key={question.id} question={question} items={question.items} answer={(result) => answer(question.id, result)} /> : null}
       {error ? <Toast key={error.id} message={error.message} onClose={() => setError(undefined)} /> : null}

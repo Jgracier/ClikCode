@@ -6,14 +6,14 @@
  *   remote-info            {version, commit, installationId}
  *   ide-bridge --stdio     the multiplexed bridge protocol as JSON lines:
  *                          host-ready, a chat's ready, `query conversations`
- *                          from ~/.fake-remote/chats.json, and
+ *                          from ~/.fake-remote/chats.json, opening one,
  *                          `conversations-changed` when that file changes
  *
  * ~/.fake-remote/later.json ({afterMs, chats}) replaces the list that long
  * after the first connection starts watching.
  *
  * Every request it gets is logged to ~/.fake-remote/bridge.log, so a test
- * can check the board only ever asked to read. */
+ * can check which requests the board and opened chat sent. */
 import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, unlinkSync, watchFile, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -40,6 +40,18 @@ if (command !== 'ide-bridge' || flag !== '--stdio') { console.error(`fake clikco
 const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 send({ type: 'host-ready', version: '1.0.0', protocol: 1, revision: 2, pid: process.pid, ...(commit ? { commit } : {}), installationId });
 let watching = false;
+const opened = new Map();
+const sessions = new Map();
+const choices = new Map();
+const sessionFor = (id) => {
+  let session = sessions.get(id);
+  if (!session) {
+    session = { id, route: 'local', accountId: null, provider: 'Grok Build', model: 'grok-4', effort: 'medium',
+      name: chats().find((chat) => chat.id === id)?.title ?? 'Remote chat', createdAt: '', updatedAt: '', status: 'active', messages: [] };
+    sessions.set(id, session);
+  }
+  return session;
+};
 const lines = createInterface({ input: process.stdin });
 lines.on('line', (line) => {
   let message;
@@ -50,6 +62,33 @@ lines.on('line', (line) => {
   const request = message.request;
   if (request.type === 'query' && request.query === 'conversations') {
     send({ type: 'chat', chat: message.chat, event: { type: 'result', requestId: request.requestId, ok: true, data: chats() } });
+  } else if (request.type === 'open' && request.mode === 'resume' && chats().some((chat) => chat.id === request.sessionId)) {
+    opened.set(message.chat, request.sessionId);
+    send({ type: 'chat', chat: message.chat, event: { type: 'session', session: sessionFor(request.sessionId) } });
+    send({ type: 'chat', chat: message.chat, event: { type: 'result', requestId: request.requestId, ok: true, data: { sessionId: request.sessionId } } });
+  } else if (request.type === 'send' && opened.has(message.chat)) {
+    const id = opened.get(message.chat);
+    const session = sessionFor(id);
+    if (request.text === '/provider') {
+      choices.set(message.chat, request.id);
+      send({ type: 'chat', chat: message.chat, event: { type: 'ui-request', id: 'provider-choice', request: {
+        kind: 'pick', title: 'Choose a provider', canGoBack: false,
+        items: [{ label: 'Grok Build' }, { label: 'Claude Code' }],
+      } } });
+      return;
+    }
+    session.messages.push({ role: 'user', content: request.text }, { role: 'assistant', content: 'Remote answer received.' });
+    send({ type: 'chat', chat: message.chat, event: { type: 'turn-start', sessionId: id, prompt: request.text } });
+    send({ type: 'chat', chat: message.chat, event: { type: 'worker', sessionId: id, event: { type: 'delta', text: 'Remote answer received.', mode: 'append' } } });
+    send({ type: 'chat', chat: message.chat, event: { type: 'worker', sessionId: id, event: { type: 'snapshot', session, account: undefined } } });
+    send({ type: 'chat', chat: message.chat, event: { type: 'worker', sessionId: id, event: { type: 'waiting-stop' } } });
+    send({ type: 'chat', chat: message.chat, event: { type: 'send-complete', id: request.id } });
+  } else if (request.type === 'ui-response' && request.id === 'provider-choice' && choices.has(message.chat)) {
+    const session = sessionFor(opened.get(message.chat));
+    session.provider = request.result.index === 1 ? 'Claude Code' : 'Grok Build';
+    send({ type: 'chat', chat: message.chat, event: { type: 'session', session } });
+    send({ type: 'chat', chat: message.chat, event: { type: 'send-complete', id: choices.get(message.chat) } });
+    choices.delete(message.chat);
   } else if (request.type === 'watch-conversations' && request.on && !watching) {
     watching = true;
     watchFile(join(fake, 'chats.json'), { interval: 100 }, () => send({ type: 'chat', chat: message.chat, event: { type: 'conversations-changed' } }));

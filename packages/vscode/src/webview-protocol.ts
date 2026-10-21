@@ -57,6 +57,9 @@ export type ToWebview =
   | { type: 'probe'; id: string; action: 'query' | 'click' | 'type' | 'key' | 'paste'; selector: string; text?: string };
 
 export type WebviewRequest =
+  | { method: 'machines' }
+  | { method: 'machineConversations'; machineId: string }
+  | { method: 'openOnMachine'; machineId: string; mode: 'new' | 'resume'; sessionId?: string }
   | { method: 'query'; query: IdeQueryName; provider?: string; network?: boolean }
   | { method: 'choose'; choice: IdeChoice }
   /** A conversations list opened (`on`) or closed: ClikCode tells it of

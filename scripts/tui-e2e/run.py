@@ -194,7 +194,7 @@ def remote_fake():
         chat = lambda id, title, minutes, preview: {'id': id, 'title': title, 'updatedAt': iso(minutes), 'messages': 4, 'preview': preview, 'section': 'active', 'current': False}
         tool('host', world_root, 'devbox.tail-fake.ts.net', json.dumps({
             'chats': [chat('c1', 'Fix the login page', 5, 'the button does nothing'), chat('c2', 'Write the migration tests', 30, 'cover the rollback')],
-            'later': {'afterMs': 3000, 'chats': [chat('c1', 'Fix the login page', 0, 'now it submits twice'), chat('c2', 'Write the migration tests', 30, 'cover the rollback')]},
+            'later': {'afterMs': 6000, 'chats': [chat('c1', 'Fix the login page', 0, 'now it submits twice'), chat('c2', 'Write the migration tests', 30, 'cover the rollback')]},
             **({'commit': found.group(1)} if found else {}),
         }))
         status = os.path.join(world_root, 'tailscale.json')
@@ -572,22 +572,33 @@ SCENARIOS = {
         'steps': [
             ('settle', 2), ('snap', 'closed'),
             ('type', '/remote'), ('wait_for', 'On your tailnet', 15), ('wait_for', 'macbook', 10), ('settle', 1), ('snap', 'list'),
-            ('keys', '\r'), ('wait_for', '6/6 Checking the install', 60), ('wait_for', 'devbox is added', 15), ('settle', 1), ('snap', 'installed'),
-            ('keys', '\x1b[D'), ('wait_for', 'Fix the login page', 20), ('settle', 0.5), ('snap', 'board'),
+            ('keys', '\r'), ('wait_for', 'devbox is added', 60), ('settle', 1), ('snap', 'installed'),
+            ('keys', '\x1b[D'), ('wait_for', '← machines', 20), ('snap', 'local-chats'),
+            ('keys', '\x1b[D'), ('wait_for', 'devbox', 20), ('snap', 'machines'),
+            ('keys', '\x1b[B'), ('keys', '\x1b[C'), ('wait_for', 'Fix the login page', 20), ('settle', 0.5), ('snap', 'board'),
             ('wait_for', 'now it submits twice', 20), ('settle', 0.5), ('snap', 'board-updated'),
-            # Opening a chat on another machine is step two: it says so, and opens nothing.
-            ('keys', '\r'), ('wait_for', 'Opening chats on other machines comes next', 10), ('settle', 1), ('snap', 'opened'),
+            ('keys', '\x1b[C'), ('wait_for', 'Fix the login page', 10), ('snap', 'opened'),
+            ('type', 'check the remote'), ('wait_for', 'Remote answer received.', 15), ('snap', 'answered'),
+            ('type', '/provider'), ('wait_for', 'Choose a provider', 10), ('keys', '\x1b[B'), ('keys', '\r'),
+            ('wait_for', 'Claude Code', 10), ('snap', 'provider-changed'),
+            ('keys', '\x1b[D'), ('wait_for', 'Write the migration tests', 20), ('snap', 'back-to-chats'),
+            ('keys', '\x1b[D'), ('wait_for', 'Machines', 10), ('snap', 'back-to-machines'),
         ],
         'watch': [],
         'snap_contains': {
             'list': ['ClikCode Remote', 'On your tailnet', 'devbox', 'imac', 'macbook', 'winbox  · windows · online · not supported yet', 'Add by SSH address'],
-            'installed': ['Installing ClikCode on devbox', '1/6 Checking the machine', '2/6 Node.js', '3/6 git', '4/6 Getting ClikCode from GitHub', '5/6 Building and installing', '6/6 Checking the install'],
-            'board': ['devbox · Recent', 'Fix the login page', 'the button does nothing', 'Write the migration tests'],
-            'board-updated': ['devbox · Recent', 'now it submits twice'],
+            'installed': ['Installing ClikCode on devbox', '1/6 Checking the machine', '2/6 Node.js', '3/6 git', '4/6 Getting ClikCode from GitHub', '5/6 Building and installing', 'devbox is added'],
+            'machines': ['Machines', 'devbox'],
+            'board': ['Fix the login page', 'the button does nothing', 'Write the migration tests'],
+            'board-updated': ['now it submits twice'],
+            'answered': ['Remote answer received.'],
+            'provider-changed': ['Claude Code', 'devbox'],
+            'back-to-chats': ['Fix the login page', 'Write the migration tests'],
+            'back-to-machines': ['Machines', 'devbox'],
         },
         'snap_lacks': {'list': ['studios-imac', 'old-server', 'iphone', 'gaming-pc', 'friends-laptop'], 'board': ['needs update'], 'board-updated': ['the button does nothing']},
         'snap_composer_same': ['list', 'installed', 'opened'],
-        'snap_pair_same_row': [('board', 'board-updated', 'Fix the login page'), ('board', 'board-updated', 'Write the migration tests'), ('board', 'board-updated', 'devbox · Recent')],
+        'snap_pair_same_row': [('board', 'board-updated', 'Fix the login page'), ('board', 'board-updated', 'Write the migration tests')],
         'never': ['Windows machines'],
     },
     'single-block': {

@@ -144,6 +144,7 @@ export async function conversationList(state: HarnessState, currentId: string | 
     return {
       id: latest.id,
       title: titled,
+      workspace: latest.workspace,
       ...(latest.route === 'gateway' ? { provider: 'ClikDeploy Gateway' } : latest.route === 'clikcode-local' ? { provider: CLIKCODE_LOCAL_LABEL } : harness ? { provider: harness.displayName } : {}),
       updatedAt: latest.updatedAt,
       messages: opened ? messages.length : (latest.listMessageCount ?? 0),

@@ -83,7 +83,12 @@ export abstract class BridgeEndpoint extends EventEmitter<BridgeClientEvents> {
   }
 }
 
-export class BridgeClient extends BridgeEndpoint {
+/** A process that can carry several chat channels, whether IPC or SSH. */
+export abstract class MultiplexBridge extends BridgeEndpoint {
+  abstract post(message: IdeRequest | IdeHostRequest): boolean;
+}
+
+export class BridgeClient extends MultiplexBridge {
   private readonly stderrClosed: Promise<void>;
 
   private constructor(private readonly child: ChildProcess, runtime: Runtime) {

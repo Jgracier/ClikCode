@@ -81,15 +81,21 @@ export function KeyList(props: {
   inputRef?: { current: HTMLInputElement | null };
   onEscape?: () => void;
   onBack?: () => void;
+  rightSelect?: boolean;
+  initialKey?: string;
   emptyText?: string;
   id?: string;
 }): JSX.Element {
   const choosable = props.rows.filter((row) => !row.heading && !row.disabled);
-  const [active, setActive] = useState(0);
+  const [selectedKey, setSelectedKey] = useState(props.initialKey);
   const listRef = useRef<HTMLDivElement>(null);
-  const activeKey = choosable[Math.min(active, choosable.length - 1)]?.key;
+  const active = Math.max(0, choosable.findIndex((row) => row.key === selectedKey));
+  const activeKey = choosable[active]?.key;
   const rowsKey = choosable.map((row) => row.key).join('\u0000');
-  useEffect(() => { setActive(0); }, [rowsKey]);
+  useEffect(() => {
+    if (selectedKey && choosable.some((row) => row.key === selectedKey)) return;
+    setSelectedKey(choosable.find((row) => row.key === props.initialKey)?.key ?? choosable[0]?.key);
+  }, [rowsKey, props.initialKey]);
   useLayoutEffect(() => {
     const element = listRef.current?.querySelector('[data-active="true"]');
     (element as HTMLElement | null)?.scrollIntoView?.({ block: 'nearest' });
@@ -97,11 +103,11 @@ export function KeyList(props: {
   const idFor = (key: string): string => `${props.id ?? 'list'}-row-${key.replace(/[^\w-]/g, '_')}`;
 
   const onKey = (event: KeyboardEvent): void => {
-    if (event.key === 'ArrowDown') { event.preventDefault(); setActive((value) => Math.min(choosable.length - 1, value + 1)); return; }
-    if (event.key === 'ArrowUp') { event.preventDefault(); setActive((value) => Math.max(0, value - 1)); return; }
-    if (event.key === 'PageDown') { event.preventDefault(); setActive((value) => Math.min(choosable.length - 1, value + 8)); return; }
-    if (event.key === 'PageUp') { event.preventDefault(); setActive((value) => Math.max(0, value - 8)); return; }
-    if (event.key === 'Enter' && !event.isComposing) {
+    if (event.key === 'ArrowDown') { event.preventDefault(); setSelectedKey(choosable[Math.min(choosable.length - 1, active + 1)]?.key); return; }
+    if (event.key === 'ArrowUp') { event.preventDefault(); setSelectedKey(choosable[Math.max(0, active - 1)]?.key); return; }
+    if (event.key === 'PageDown') { event.preventDefault(); setSelectedKey(choosable[Math.min(choosable.length - 1, active + 8)]?.key); return; }
+    if (event.key === 'PageUp') { event.preventDefault(); setSelectedKey(choosable[Math.max(0, active - 8)]?.key); return; }
+    if ((event.key === 'Enter' && !event.isComposing) || (props.rightSelect && event.key === 'ArrowRight')) {
       const row = choosable.find((item) => item.key === activeKey);
       if (row?.onSelect) { event.preventDefault(); row.onSelect(); }
       return;
@@ -141,7 +147,7 @@ export function KeyList(props: {
           <div key={row.key} id={idFor(row.key)} role="option" aria-selected={isActive} aria-disabled={row.disabled || undefined}
             class={`keylist-row${isActive ? ' active' : ''}${row.disabled ? ' disabled' : ''}`} data-active={isActive ? 'true' : undefined}
             data-key={row.key}
-            onMouseMove={() => { const index = choosable.indexOf(row); if (index >= 0 && index !== active) setActive(index); }}
+            onMouseMove={() => { if (row.key !== activeKey) setSelectedKey(row.key); }}
             onClick={(event) => { if ((event.target as HTMLElement).closest('[data-row-action]')) return; if (!row.disabled) row.onSelect?.(); }}>
             {row.render()}
           </div>

@@ -20,20 +20,32 @@
  * own, as before.
  */
 import { randomUUID } from 'node:crypto';
-import { BridgeClient, BridgeEndpoint } from './bridge-client';
+import { BridgeClient, BridgeEndpoint, MultiplexBridge } from './bridge-client';
+import { SshBridgeClient } from './ssh-bridge-client';
+import type { RemoteMachine } from '../../../src/remote/machines';
 import type { IdeEvent, IdeHostEvent, IdeRequest } from './protocol';
 import { entryBuild, type Runtime } from './runtime';
 
 export const MULTIPLEX_ENV: Readonly<Record<string, string>> = { CLIKCODE_IDE_MULTIPLEX: '1' };
 
-type Starter = (runtime: Runtime, cwd: string | undefined, extraEnv?: Readonly<Record<string, string>>) => BridgeClient;
+type Starter = (runtime: Runtime, cwd: string | undefined, extraEnv?: Readonly<Record<string, string>>) => MultiplexBridge;
 
 export class BridgePool {
   private readonly hosts = new Map<string, SharedHost>();
   /** Runtimes whose ClikCode cannot share a process: a chat each. */
   private readonly single = new Set<string>();
 
-  constructor(private readonly start: Starter = (runtime, cwd, extraEnv) => BridgeClient.start(runtime, cwd, extraEnv)) {}
+  constructor(private readonly start: Starter = (runtime, cwd, extraEnv) => runtime.entry.startsWith('remote:')
+    ? SshBridgeClient.start(runtime.entry.slice('remote:'.length), runtime)
+    : BridgeClient.start(runtime, cwd, extraEnv)) {}
+
+  /** One SSH bridge per remote machine, shared by its chats in this window. */
+  connectRemote(machine: RemoteMachine): BridgeEndpoint {
+    const runtime: Runtime = {
+      node: 'ssh', entry: `remote:${machine.sshTarget}`, env: {}, nodeSource: 'path', entrySource: 'setting',
+    };
+    return this.connect(runtime, undefined);
+  }
 
   /** A chat's connection: into this runtime's shared process (started if
    * there is none, or the one there is is on its way out), or -- `shared`
@@ -67,7 +79,7 @@ function poolKey(runtime: Runtime): string {
 
 class SharedHost {
   private state: 'starting' | 'shared' | 'single' | 'draining' | 'gone' = 'starting';
-  private readonly proc: BridgeClient;
+  private readonly proc: MultiplexBridge;
   /** Chats in this process, oldest first. */
   private readonly channels = new Map<string, SharedChannel>();
 
