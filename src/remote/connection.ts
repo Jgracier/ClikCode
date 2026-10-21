@@ -10,13 +10,17 @@
  * that cannot be reached is offline, shown with the chats it had last time
  * (the cache in machines.json), and tried again with a growing pause. No
  * port is opened on either machine: the bridge speaks over ssh's own
- * stdin/stdout. */
+ * stdin/stdout.
+ *
+ * One thing is changed there, by the machine's own policy: a ClikCode on
+ * another commit than this build is updated to it in the background
+ * (updates.ts), and the connection made again once it is. */
 import type { ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import type { IdeConversation, IdeHostEvent, IdeHostRequest } from '../ide/protocol.js';
 import { IDE_PROTOCOL } from '../ide/protocol-version.js';
-import { CLIKCODE_COMMIT } from '../version.js';
 import { bridgeScript } from './install.js';
+import { autoUpdates, localBuildCommit, type AutoUpdates } from './updates.js';
 import { readMachines, updateMachine, type RemoteMachine } from './machines.js';
 import { spawnSsh } from './ssh.js';
 
@@ -31,12 +35,16 @@ export interface MachineView {
   chats: readonly IdeConversation[];
   /** Why it is offline, in ssh's words. */
   error?: string;
+  /** Its ClikCode is being updated to this build's (updates.ts). */
+  updating?: boolean;
+  /** Why its last update failed. */
+  updateError?: string;
 }
 
 /** The ClikCode commit (and protocol) of a remote's `host-ready` differs
  * from this build's: it needs an update. Unknown on either side is not a
  * difference -- nothing to compare. */
-export function needsUpdate(ready: { commit?: string; protocol?: number }, localCommit: string | undefined = CLIKCODE_COMMIT): boolean {
+export function needsUpdate(ready: { commit?: string; protocol?: number }, localCommit: string | undefined = localBuildCommit()): boolean {
   if (ready.protocol !== undefined && ready.protocol !== IDE_PROTOCOL.version) return true;
   return Boolean(ready.commit && localCommit && ready.commit !== localCommit);
 }
@@ -51,6 +59,12 @@ export interface LinkOptions {
   spawn?: (target: string, script: string) => ChildProcess;
   localCommit?: string;
   backoffMs?: readonly number[];
+  /** Update an outdated machine by its policy (default on). Off where the
+   * connection only shows the machine's state while the user chooses what
+   * to do with it (/remote's list). */
+  autoUpdate?: boolean;
+  /** The automatic updates to go through (tests give their own). */
+  autoUpdates?: AutoUpdates;
 }
 
 /** One machine's connection, reconnecting until stopped. */
@@ -65,10 +79,15 @@ export class RemoteLink {
   private queryAgain = false;
   private cacheTimer: NodeJS.Timeout | undefined;
   private cacheDirty = false;
+  /** The connection is being made again (after an update): no offline in between. */
+  private reconnecting = false;
   readonly view: MachineView;
 
   constructor(machine: RemoteMachine, private readonly changed: () => void, private readonly options: LinkOptions = {}) {
-    this.view = { machine, state: 'connecting', needsUpdate: Boolean(machine.needsUpdate), chats: machine.chats ?? [] };
+    this.view = {
+      machine, state: 'connecting', needsUpdate: Boolean(machine.needsUpdate), chats: machine.chats ?? [],
+      ...(machine.updateError ? { updateError: machine.updateError } : {}),
+    };
   }
 
   start(): void {
@@ -113,6 +132,12 @@ export class RemoteLink {
       clearTimeout(this.readyTimer);
       if (this.child === child) this.child = undefined;
       if (this.stopped) return;
+      if (this.reconnecting) {
+        this.reconnecting = false;
+        this.set({ state: 'connecting', error: undefined });
+        this.connect();
+        return;
+      }
       const said = stderr.trim().split('\n').filter(Boolean).pop();
       this.lost(said ?? `the connection ended (exit ${code ?? '?'})`);
     });
@@ -132,12 +157,16 @@ export class RemoteLink {
     if (event.type === 'host-ready') {
       clearTimeout(this.readyTimer);
       this.attempt = 0;
-      const outdated = needsUpdate(event, this.options.localCommit ?? CLIKCODE_COMMIT);
+      const localCommit = this.options.localCommit ?? localBuildCommit();
+      const outdated = needsUpdate(event, localCommit);
       const machine = this.view.machine;
       if (event.installationId && !machine.installationId) machine.installationId = event.installationId;
       machine.needsUpdate = outdated;
-      this.set({ state: 'connected', needsUpdate: outdated, error: undefined });
+      // Current now: an old failure no longer says anything.
+      if (!outdated) delete machine.updateError;
+      this.set({ state: 'connected', needsUpdate: outdated, error: undefined, ...(outdated ? {} : { updateError: undefined }) });
       this.send({ type: 'chat-attach', chat: CHAT });
+      if (outdated && this.options.autoUpdate !== false) this.autoUpdate(localCommit);
       return;
     }
     if (event.type !== 'chat' || event.chat !== CHAT) return;
@@ -155,6 +184,43 @@ export class RemoteLink {
       }
       if (this.queryAgain) { this.queryAgain = false; this.query(); }
     }
+  }
+
+  /** Brings the machine to this build when its policy says so; once it is,
+   * connects again, to the new build's bridge. */
+  private autoUpdate(localCommit: string | undefined): void {
+    const machine = this.view.machine;
+    void (async () => {
+      const started = await (this.options.autoUpdates ?? autoUpdates).consider(machine, localCommit);
+      if (!started) return;
+      this.set({ updating: true });
+      const outcome = await started.done;
+      if (outcome.ok) {
+        delete machine.updateError;
+        this.set({ updating: false, updateError: undefined });
+        this.reconnect();
+      } else {
+        machine.updateError = `${outcome.step}: ${outcome.message}`;
+        this.set({ updating: false, updateError: machine.updateError });
+      }
+    })().catch(() => this.set({ updating: false }));
+  }
+
+  /** Ends this connection and makes it again at once (a new build there). */
+  reconnect(): void {
+    if (this.stopped) return;
+    this.attempt = 0;
+    const child = this.child;
+    if (!child) {
+      clearTimeout(this.retry);
+      this.retry = undefined;
+      this.set({ state: 'connecting', error: undefined });
+      this.connect();
+      return;
+    }
+    this.reconnecting = true;
+    child.stdin?.end();
+    child.kill('SIGTERM');
   }
 
   /** One query at a time; a change during one asks once more after it. */
@@ -184,6 +250,7 @@ export class RemoteLink {
       record.chats = [...chats];
       record.lastSeen = new Date().toISOString();
       record.needsUpdate = outdated;
+      if (!outdated) delete record.updateError;
       if (machine.installationId) record.installationId = machine.installationId;
     }, { durable: false }).then(() => undefined, () => undefined);
   }
@@ -252,6 +319,11 @@ export class RemoteMachines {
 
   views(): readonly MachineView[] {
     return this.links.map((link) => link.view);
+  }
+
+  /** Connects to a machine again: its ClikCode was just updated. */
+  reconnect(machineId: string): void {
+    this.links.find((link) => link.view.machine.id === machineId)?.reconnect();
   }
 
   async close(): Promise<void> {

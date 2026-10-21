@@ -8,14 +8,16 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 // @ts-expect-error -- a plain .mjs fixture module
-import { host, tailscaleFixture, world } from '../../scripts/tui-e2e/fake-remote.mjs';
+import { host, installAt, tailscaleFixture, world } from '../../scripts/tui-e2e/fake-remote.mjs';
 import { shellQuote, validateSshTarget, withUser } from './shell.js';
 import { defaultLoginUser, runSsh, sshArgv, sshFailure, sshFailureMessage } from './ssh.js';
 import { discoverMachines, readTailscaleStatus, type TailscaleStatus } from './tailscale.js';
 import { buildScript, installOnMachine, nodeIsNewEnough, sourceScript, uninstallFromMachine, type InstallStep } from './install.js';
 import { needsUpdate, RemoteLink, RemoteMachines, type MachineView } from './connection.js';
 import { machinesPath, newMachineRecord, readMachines, updateMachines, type RemoteMachine } from './machines.js';
-import { boardRowsWithMachines, isRemoteRowValue, NEEDS_YOU_GROUP } from './board-rows.js';
+import { boardRowsWithMachines, isRemoteRowValue, machineHeading, NEEDS_YOU_GROUP } from './board-rows.js';
+import { autoUpdateDecision, AutoUpdates } from './updates.js';
+import { outdatedNotice } from './terminal-chat.js';
 import { interactiveRemotePicker, notYetAdded, type RemoteHost } from '../tui/pickers/remote.js';
 import type { IdeConversation } from '../ide/protocol.js';
 import type { HarnessPrompter, PickerOption, PickerSettings } from '../harness/prompter.js';
@@ -348,7 +350,7 @@ describe('the board’s connections', () => {
   it('marks a machine on another commit as needing an update', async () => {
     host(root, 'behind', { commit: 'f'.repeat(40) });
     expect((await installOnMachine('behind', steps().reporter)).ok).toBe(true);
-    const link = new RemoteLink(newMachineRecord({ name: 'behind', sshTarget: 'behind', ready: true }), () => undefined, { localCommit: fakeWorld.commit });
+    const link = new RemoteLink(newMachineRecord({ name: 'behind', sshTarget: 'behind', ready: true }), () => undefined, { localCommit: fakeWorld.commit, autoUpdate: false });
     link.start();
     try {
       await until(() => link.view.state === 'connected');
@@ -505,6 +507,22 @@ describe('/remote', () => {
     expect(stripAnsi(listed[3]!.detail!)).toBe('· macOS · last seen 2d ago · install ClikCode');
   });
 
+  it('switches a machine between automatic updates and asking first', async () => {
+    const record: RemoteMachine = newMachineRecord({ name: 'prod', sshTarget: 'prod', ready: true });
+    await updateMachines(() => [record]);
+    let offered: readonly PickerOption<unknown>[] = [];
+    const { remoteHost } = scripted({
+      'ClikCode Remote': () => `machine:${record.id}`,
+      prod: (options) => { offered = options; return 'policy'; },
+    }, []);
+    expect((await interactiveRemotePicker(remoteHost)).notice).toMatch(/^prod is updated only when you say so/);
+    expect(offered.map((option) => option.label)).toEqual(['Update ClikCode', 'Updates: automatic', 'Remove']);
+    expect((await readMachines())[0]).toMatchObject({ updates: 'ask' });
+    expect((await interactiveRemotePicker(remoteHost)).notice).toMatch(/^prod is updated to this build by itself/);
+    expect(offered[1]!.label).toBe('Updates: ask first');
+    expect((await readMachines())[0]).toMatchObject({ updates: 'auto' });
+  });
+
   it('forgets a machine, and uninstalls there only when chosen', async () => {
     const { home } = host(root, 'retiring');
     expect((await installOnMachine('retiring', steps().reporter)).ok).toBe(true);
@@ -521,6 +539,106 @@ describe('/remote', () => {
     expect(existsSync(join(home, '.local', 'share', 'clikcode', 'src'))).toBe(false);
     expect(existsSync(join(home, '.clikcode'))).toBe(true);
   });
+});
+
+describe('keeping machines at this build', () => {
+  const gitIn = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+
+  it('decides: only an outdated machine, only by policy auto, only with a commit to match, once per commit', () => {
+    const auto = { id: 'm', updates: 'auto' as const };
+    const none = new Set<string>();
+    expect(autoUpdateDecision(auto, false, 'c1', none)).toEqual({ update: false, reason: 'current' });
+    expect(autoUpdateDecision(auto, true, 'c1', none)).toEqual({ update: true, commit: 'c1' });
+    // A record from before the field is automatic.
+    expect(autoUpdateDecision({ id: 'm' }, true, 'c1', none)).toEqual({ update: true, commit: 'c1' });
+    expect(autoUpdateDecision({ id: 'm', updates: 'ask' }, true, 'c1', none)).toEqual({ update: false, reason: 'ask' });
+    // A packed build has no commit: nothing to match it to.
+    expect(autoUpdateDecision(auto, true, undefined, none)).toEqual({ update: false, reason: 'no-commit' });
+    expect(autoUpdateDecision(auto, true, 'c1', new Set(['m\0c1']))).toEqual({ update: false, reason: 'attempted' });
+    expect(autoUpdateDecision(auto, true, 'c2', new Set(['m\0c1']))).toEqual({ update: true, commit: 'c2' });
+    expect(newMachineRecord({ name: 'n', sshTarget: 'n' }).updates).toBe('auto');
+  });
+
+  it('tries each machine once per commit, one update at a time, failed or not', async () => {
+    await updateMachines(() => []);
+    const runs: string[] = [];
+    let finish: (ok: boolean) => void = () => undefined;
+    const updates = new AutoUpdates((machine, commit) => {
+      runs.push(`${machine.name}@${commit}`);
+      return new Promise((resolve) => { finish = (ok) => resolve(ok ? { ok: true, info: { version: '1', commit }, probe: { os: 'Linux', arch: 'x86_64', home: '/h' } } : { ok: false, step: 'Building and installing', message: 'boom' }); });
+    });
+    const machine = newMachineRecord({ name: 'box', sshTarget: 'box', ready: true });
+    const first = await updates.consider(machine, 'c1');
+    const second = await updates.consider(machine, 'c1');
+    expect(first && second && first.done === second.done).toBe(true);
+    finish(false);
+    expect(await first!.done).toMatchObject({ ok: false });
+    expect(await updates.consider(machine, 'c1')).toBeUndefined();
+    expect(await updates.consider({ ...machine, updates: 'ask' }, 'c2')).toBeUndefined();
+    const next = await updates.consider(machine, 'c2');
+    finish(true);
+    expect(await next!.done).toMatchObject({ ok: true });
+    expect(runs).toEqual(['box@c1', 'box@c2']);
+  });
+
+  it('updates an outdated machine to this build’s commit by itself, then connects to the new build', async () => {
+    const older = gitIn(fakeWorld.work, 'rev-parse', 'HEAD~1');
+    const { home } = host(root, 'lagging');
+    installAt(root, 'lagging', fakeWorld.repoUrl, older);
+    const machine = newMachineRecord({ name: 'lagging', sshTarget: 'lagging', ready: true });
+    await updateMachines(() => [machine]);
+    const seen: string[] = [];
+    const link = new RemoteLink(machine, () => { seen.push(stripAnsi(machineHeading(link.view, Date.now()))); }, { localCommit: fakeWorld.commit, autoUpdates: new AutoUpdates() });
+    link.start();
+    try {
+      await until(() => seen.includes('lagging · updating ClikCode…'), 30_000);
+      await until(() => link.view.state === 'connected' && !link.view.updating && !link.view.needsUpdate, 60_000);
+    } finally { await link.stop(); }
+    expect(seen).toContain('lagging · needs update (/remote)');
+    expect(seen.at(-1)).toBe('lagging');
+    expect(gitIn(join(home, '.local', 'share', 'clikcode', 'src'), 'rev-parse', 'HEAD')).toBe(fakeWorld.commit);
+    const [record] = await readMachines();
+    expect(record).toMatchObject({ needsUpdate: false, installed: { commit: fakeWorld.commit } });
+    expect(record!.updateError).toBeUndefined();
+  }, 120_000);
+
+  it('leaves a machine set to ask alone, saying it needs an update', async () => {
+    const older = gitIn(fakeWorld.work, 'rev-parse', 'HEAD~1');
+    const { home } = host(root, 'careful');
+    installAt(root, 'careful', fakeWorld.repoUrl, older);
+    const machine = newMachineRecord({ name: 'careful', sshTarget: 'careful', ready: true, updates: 'ask' });
+    await updateMachines(() => [machine]);
+    const link = new RemoteLink(machine, () => undefined, { localCommit: fakeWorld.commit, autoUpdates: new AutoUpdates() });
+    link.start();
+    try {
+      await until(() => link.view.state === 'connected');
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(link.view).toMatchObject({ needsUpdate: true });
+      expect(link.view.updating).toBeFalsy();
+    } finally { await link.stop(); }
+    expect(gitIn(join(home, '.local', 'share', 'clikcode', 'src'), 'rev-parse', 'HEAD')).toBe(older);
+    expect(outdatedNotice(machine, false)).toBe('careful runs another ClikCode build than this one. Type /update to update it, or choose it in /remote.');
+  }, 60_000);
+
+  it('records a failed update and does not try that commit again', async () => {
+    const older = gitIn(fakeWorld.work, 'rev-parse', 'HEAD~1');
+    host(root, 'stuck');
+    installAt(root, 'stuck', fakeWorld.repoUrl, older);
+    const machine = newMachineRecord({ name: 'stuck', sshTarget: 'stuck', ready: true });
+    await updateMachines(() => [machine]);
+    const updates = new AutoUpdates();
+    const link = new RemoteLink(machine, () => undefined, { localCommit: 'd'.repeat(40), autoUpdates: updates, backoffMs: [50] });
+    link.start();
+    try {
+      await until(() => Boolean(link.view.updateError), 60_000);
+      expect(link.view).toMatchObject({ needsUpdate: true, updating: false });
+      expect(stripAnsi(machineHeading(link.view, Date.now()))).toBe('stuck · update failed (/remote)');
+    } finally { await link.stop(); }
+    const [record] = await readMachines();
+    expect(record!.updateError).toMatch(/^Getting ClikCode from GitHub: .*has no commit d{40}/);
+    expect(await updates.consider(record!, 'd'.repeat(40))).toBeUndefined();
+    expect(outdatedNotice(record!, false)).toMatch(/^stuck runs another ClikCode build than this one, and updating it failed \(Getting ClikCode/);
+  }, 60_000);
 });
 
 describe('ide-bridge --stdio (the built CLI)', () => {

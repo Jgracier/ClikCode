@@ -344,8 +344,11 @@ export async function installOnMachine(target: string, reporter: InstallReporter
     reporter.done('git', probe.git);
   }
 
+  // No `running` commit: over SSH every update is built and checked.
   const updated = await runManagedUpdate(sshRunner(target), target, progress, options.commit ? { commit: options.commit } : {});
-  return updated.ok ? { ok: true, info: updated.info, probe, ...(updated.from ? { from: updated.from } : {}) } : updated;
+  if (!updated.ok) return updated;
+  if (updated.upToDate) return fail('Checking the install', `ClikCode on ${target} was not checked.`);
+  return { ok: true, info: updated.info, probe, ...(updated.from ? { from: updated.from } : {}) };
 }
 
 // ---- the managed clone's update: one implementation, run over SSH or here --
