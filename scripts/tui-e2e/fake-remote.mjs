@@ -120,6 +120,7 @@ export function host(root, name, options = {}) {
   }));
   writeFileSync(join(home, '.fake-remote', 'chats.json'), JSON.stringify(options.chats ?? []));
   if (options.commit) writeFileSync(join(home, '.fake-remote', 'commit'), options.commit);
+  if (options.later) writeFileSync(join(home, '.fake-remote', 'later.json'), JSON.stringify(options.later));
   return { machine, home, bin };
 }
 

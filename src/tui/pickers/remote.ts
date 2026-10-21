@@ -84,7 +84,7 @@ export async function interactiveRemotePicker(host: RemoteHost): Promise<Interac
     for (const machine of notYetAdded(discovered, machines)) {
       rows.push({
         label: machine.name,
-        detail: `· ${machine.os} · ${machine.online ? 'online' : `last seen ${machine.lastSeen ? relativeTime(machine.lastSeen, now) : 'a while ago'}`} · install ClikCode`,
+        detail: `· ${machine.os} · ${machine.online ? 'online' : `last seen ${machine.lastSeen ? relativeTime(machine.lastSeen, now) : 'a while ago'}`} · ${machine.os === 'windows' ? 'not supported yet' : 'install ClikCode'}`,
         value: `tailscale:${machine.nodeId}`,
         group: TAILNET,
       });
@@ -97,6 +97,9 @@ export async function interactiveRemotePicker(host: RemoteHost): Promise<Interac
     });
     return rows;
   };
+  // Tailscale answers locally in milliseconds: the list opens with its
+  // machines in it, at its full height, rather than growing a row at a time.
+  await Promise.race([tailscale, new Promise((resolve) => setTimeout(resolve, 1500).unref())]);
   let chosen: string | undefined;
   try {
     chosen = await chooseOption(rl, 'ClikCode Remote', options(), undefined, {
