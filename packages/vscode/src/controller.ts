@@ -331,7 +331,8 @@ export class ClikCodeController implements vscode.Disposable {
   }
 
   private workspaceFolder(): string {
-    if (this.remoteMachineId) return this.remoteWorkspace ?? homedir();
+    // Another machine's folders are its own: none known, its bridge picks its home (bridge.ts open).
+    if (this.remoteMachineId) return this.remoteWorkspace ?? '';
     const active = vscode.window.activeTextEditor?.document.uri;
     const folder = (active && vscode.workspace.getWorkspaceFolder(active)) ?? vscode.workspace.workspaceFolders?.[0];
     return folder?.uri.fsPath ?? homedir();
