@@ -2,12 +2,13 @@
 import { RemoteMachines, type MachineView } from '../../../src/remote/connection';
 import { localMachineName } from '../../../src/remote/board-rows';
 import { readMachines } from '../../../src/remote/machines';
+import { discoverMachines, notYetAdded, readTailscaleStatus } from '../../../src/remote/tailscale';
 import type { IdeConversation } from './protocol';
 
 export interface ListedMachine {
   id: string;
   name: string;
-  state: 'local' | MachineView['state'];
+  state: 'local' | MachineView['state'] | 'available' | 'unavailable' | 'unsupported';
   chats: number;
   needsYou: number;
 }
@@ -40,15 +41,27 @@ class RemoteDirectory {
     };
   }
 
-  async machines(localChats: readonly IdeConversation[]): Promise<ListedMachine[]> {
+  async machines(localChats: readonly IdeConversation[], discover = false): Promise<ListedMachine[]> {
     const links = await this.ensure();
+    const saved = await readMachines();
+    const tailnet = discover ? await readTailscaleStatus() : {};
+    const discovered = tailnet.status ? notYetAdded(discoverMachines(tailnet.status), saved.filter((machine) => machine.ready)) : [];
     return [
       { id: 'local', name: localMachineName(), state: 'local', chats: localChats.length, needsYou: localChats.filter((chat) => chat.needsYou).length },
       ...links.views().map((view): ListedMachine => ({
         id: view.machine.id, name: view.machine.name, state: view.state, chats: view.chats.length,
         needsYou: view.state === 'offline' ? 0 : view.chats.filter((chat) => chat.needsYou).length,
       })),
+      ...discovered.map((machine): ListedMachine => ({
+        id: `tailscale:${machine.nodeId}`, name: machine.name,
+        state: machine.os === 'windows' ? 'unsupported' : machine.online ? 'available' : 'unavailable',
+        chats: 0, needsYou: 0,
+      })),
     ];
+  }
+
+  async refresh(): Promise<void> {
+    await (await this.ensure()).refresh();
   }
 
   async conversations(machineId: string): Promise<IdeConversation[]> {

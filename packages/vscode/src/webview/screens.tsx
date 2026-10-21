@@ -227,3 +227,53 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
     </Popover>
   );
 }
+
+/** The composer machine chip switches directly to a machine. Chat history
+ * stays in the header, where choosing a specific conversation belongs. */
+export function MachineMenu(props: { model: ChatModel; onClose: () => void; onError: (message: string) => void }): JSX.Element {
+  const [machines, setMachines] = useState<ListedMachine[]>();
+  const [switching, setSwitching] = useState(false);
+  useEffect(() => {
+    let active = true;
+    const load = (): void => {
+      void request<ListedMachine[]>({ method: 'machines', discover: true }).then(
+        (next) => { if (active) setMachines(next); },
+        (error: Error) => { if (active) props.onError(error.message); },
+      );
+    };
+    load();
+    const stop = listen((message) => { if (message.type === 'conversations-changed') load(); });
+    const release = holdConversationWatch();
+    return () => { active = false; stop(); release(); };
+  }, []);
+
+  const select = (machine: ListedMachine): void => {
+    if (switching) return;
+    setSwitching(true);
+    void request({ method: 'selectMachine', machineId: machine.id }).then(
+      () => props.onClose(),
+      (error: Error) => { setSwitching(false); props.onError(error.message); },
+    );
+  };
+  const available = (machines ?? []).filter((machine) => !machine.id.startsWith('tailscale:'));
+  const discovered = (machines ?? []).filter((machine) => machine.id.startsWith('tailscale:'));
+  const rows: ListRow[] = [
+    { key: 'saved-heading', heading: true, render: () => <>Your machines</> },
+    ...available.map((machine): ListRow => ({
+      key: machine.id, disabled: switching || machine.state === 'offline', onSelect: () => select(machine),
+      render: () => <div class="conversation"><div class="conversation-main"><div class="conversation-title">{machine.name}</div></div>
+        <span class="conversation-meta">{machine.id === (props.model.machineId ?? 'local') ? 'current · ' : ''}{machine.state} · {machine.chats} chats</span></div>,
+    })),
+    ...(discovered.length ? [{ key: 'tailnet-heading', heading: true, render: () => <>On your tailnet</> } satisfies ListRow] : []),
+    ...discovered.map((machine): ListRow => ({
+      key: machine.id, disabled: switching || machine.state !== 'available', onSelect: () => select(machine),
+      render: () => <div class="conversation"><div class="conversation-main"><div class="conversation-title">{machine.name}</div></div>
+        <span class="conversation-meta">{machine.state === 'available' ? 'Connect · install from GitHub main' : machine.state === 'unsupported' ? 'Windows is not supported yet' : 'offline'}</span></div>,
+    })),
+  ];
+  return <Popover label="Machines" onClose={props.onClose} class="picker history-menu" id="machines-menu">
+    <Loading waiting={!machines || switching}>{switching ? 'Connecting to machine…' : 'Finding machines…'}</Loading>
+    <KeyList id="machine-switch-list" rows={rows} label="Machines" initialKey={props.model.machineId ?? 'local'}
+      onEscape={props.onClose} rightSelect emptyText={machines ? 'No machines found.' : undefined} />
+  </Popover>;
+}
