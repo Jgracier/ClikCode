@@ -151,6 +151,8 @@ const requestsOf = (machine: string) => world.bridges.filter((bridge) => bridge.
 /** What the chat shows besides its conversation: a note, a toast, a dialog. */
 const said = (controller: ClikCodeController): string[] => [...world.warnings, ...world.notes, ...((controller.state as { notes?: Array<{ text: string }> }).notes ?? []).map((note) => note.text)];
 
+type ChatModelLike = { messages: unknown[]; sessionId?: string; machine?: string };
+
 describe('the machine chip', () => {
   it('moves this chat to the machine chosen, and shows it there: one import, nothing asked or said', async () => {
     const controller = await startChat({ messages: 2 });
@@ -166,6 +168,20 @@ describe('the machine chip', () => {
     expect(open).not.toHaveProperty('workspace');
     expect(controller.state.sessionId).toBe('s1');
     expect(said(controller)).toEqual([]);
+  });
+
+  it('keeps the chat on screen the whole time it moves, as an account switch does', async () => {
+    const controller = await startChat({ messages: 2 });
+    const shown: Array<{ messages: number; sessionId?: string; machine?: string }> = [];
+    const internal = controller as unknown as { setModel(model: ChatModelLike): void };
+    const setModel = internal.setModel.bind(controller);
+    internal.setModel = (model) => { shown.push({ messages: model.messages.length, sessionId: model.sessionId, machine: model.machine }); setModel(model); };
+    await controller.moveToMachine('m1');
+    await until(() => controller.state.connection === 'ready' && controller.state.machine === 'prod');
+    // Never an empty panel: the conversation stays, and the machine is the one thing that changes.
+    expect(shown.length).toBeGreaterThan(0);
+    expect(shown.filter((model) => model.messages === 0 || !model.sessionId)).toEqual([]);
+    expect(shown.find((model) => model.machine === 'prod')).toBeDefined();
   });
 
   it('moves even when something changes there, without a dialog or a notice', async () => {
