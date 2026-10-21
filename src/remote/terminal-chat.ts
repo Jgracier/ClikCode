@@ -11,7 +11,8 @@ import type { TerminalHarnessPrompter } from '../tui/prompter.js';
 import { interactiveSessionPicker } from '../tui/pickers/session.js';
 import { BOARD_COMMANDS, BOARD_LINE } from '../commands/ai/interactive/board.js';
 import { bridgeScript, remoteTerminalScript } from './install.js';
-import { readMachines } from './machines.js';
+import { readMachines, updatePolicy, type RemoteMachine } from './machines.js';
+import { autoUpdates, localBuildCommit } from './updates.js';
 import { needsUpdate } from './connection.js';
 import { spawnSsh, sshArgv } from './ssh.js';
 import type { LiveTurnInputResult } from '../turn/live-input.js';
@@ -133,6 +134,16 @@ async function runSignIn(target: string, spec: string, terminal: TerminalHarness
   } finally { terminal.resume(); }
 }
 
+/** What a chat on a machine with another ClikCode build says on opening:
+ * that it is being brought to this build, or how to update it. */
+export function outdatedNotice(machine: Pick<RemoteMachine, 'name' | 'updates' | 'updateError'>, updating: boolean, localCommit = localBuildCommit()): string {
+  const differs = `${machine.name} runs another ClikCode build than this one`;
+  if (updating) return `${differs}: updating it to this one's${localCommit ? ` (${localCommit.slice(0, 8)})` : ''} in the background; its chats switch over once they are quiet.`;
+  const how = 'Type /update to update it, or choose it in /remote.';
+  if (machine.updateError && updatePolicy(machine) === 'auto') return `${differs}, and updating it failed (${machine.updateError}). ${how}`;
+  return `${differs}. ${how}`;
+}
+
 /** Returns the local chat to resume, or opens another selected remote chat. */
 export async function runRemoteChat(
   terminal: TerminalHarnessPrompter, localId: string, first: RemoteChatSelection, firstDraft?: string,
@@ -238,9 +249,16 @@ export async function runRemoteChat(
       await bridge.connected();
       // Intent only: the chat is in one of the remote's own folders (session/attach.ts).
       await bridge.request(remoteResume(choice.chatId));
-      // After the open, whose chat clears the rows before it. Never updated from here: a
-      // production machine is updated when the user says so.
-      if (bridge.outdated) terminal.activity(`${machine.name} runs another ClikCode build than this one. Update it from /remote.`);
+      // After the open, whose chat clears the rows before it. Updated from here only by the
+      // machine's own policy (remote/updates.ts): a production machine set to ask is
+      // updated when the user says so.
+      if (bridge.outdated) {
+        const started = await autoUpdates.consider(machine).catch(() => undefined);
+        terminal.activity(outdatedNotice(machine, Boolean(started)));
+        void started?.done.then((outcome) => terminal.activity(outcome.ok
+          ? `ClikCode on ${machine.name} is updated${outcome.info.commit ? ` to ${outcome.info.commit.slice(0, 8)}` : ''}; its chats switch over once they are quiet.`
+          : `Updating ClikCode on ${machine.name} failed: ${outcome.message} Type /update to update it.`), () => undefined);
+      }
       if (draft) terminal.restoreDraft(draft);
       draft = undefined;
       for (;;) {

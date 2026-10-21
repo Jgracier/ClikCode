@@ -36,6 +36,18 @@ export interface RemoteMachine {
   chats?: IdeConversation[];
   /** Its bridge's commit differs from this machine's build. */
   needsUpdate?: boolean;
+  /** 'auto': ClikCode brings it to this build's commit by itself when it
+   * differs (remote/updates.ts). 'ask': only when the user says so. A record
+   * without the field is 'auto'. */
+  updates?: UpdatePolicy;
+  /** Why the last update of it failed; cleared by one that succeeds. */
+  updateError?: string;
+}
+
+export type UpdatePolicy = 'auto' | 'ask';
+
+export function updatePolicy(machine: Pick<RemoteMachine, 'updates'>): UpdatePolicy {
+  return machine.updates === 'ask' ? 'ask' : 'auto';
 }
 
 interface MachinesFile { version: 1; machines: RemoteMachine[] }
@@ -79,7 +91,7 @@ export function updateMachine(id: string, patch: (machine: RemoteMachine) => voi
 }
 
 export function newMachineRecord(input: Pick<RemoteMachine, 'name' | 'sshTarget'> & Partial<RemoteMachine>): RemoteMachine {
-  return { id: randomUUID(), addedAt: new Date().toISOString(), ...input };
+  return { id: randomUUID(), addedAt: new Date().toISOString(), updates: 'auto', ...input };
 }
 
 export function forgetMachine(id: string): Promise<RemoteMachine[]> {

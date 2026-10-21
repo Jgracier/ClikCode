@@ -70,8 +70,14 @@ export function machineHeading(view: MachineView, now: number, section?: Convers
     const seen = view.machine.lastSeen ? `, last seen ${relativeTime(view.machine.lastSeen, now)}` : '';
     return chalk.dim(`${name} · offline${seen}`);
   }
-  const update = view.needsUpdate ? ' · needs update (/remote)' : '';
-  return `${name}${section ? ` · ${SECTION_TITLES[section]}` : ''}${update}`;
+  return `${name}${section ? ` · ${SECTION_TITLES[section]}` : ''}${updateText(view)}`;
+}
+
+/** How its ClikCode is, when that is not simply current. */
+export function updateText(view: Pick<MachineView, 'needsUpdate' | 'updating' | 'updateError'>): string {
+  if (view.updating) return ' · updating ClikCode…';
+  if (!view.needsUpdate) return '';
+  return view.updateError ? ` · ${chalk.yellow('update failed')} (/remote)` : ' · needs update (/remote)';
 }
 
 /** The board's rows with the other machines in: `local` is this machine's

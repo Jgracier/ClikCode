@@ -7,14 +7,17 @@
  *
  * Choosing a new machine installs ClikCode there from GitHub main
  * (remote/install.ts), a step at a time, each step's line in the chat; then
- * its chats are on the board. Choosing an added one offers to update or
- * remove it. Nothing from this machine is copied to the other one. */
+ * its chats are on the board. Choosing an added one offers to update it (to
+ * this build's commit, the one it is kept at), whether it is updated by
+ * itself or only when asked (remote/updates.ts), or to remove it. Nothing
+ * from this machine is copied to the other one. */
 import chalk from 'chalk';
 import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
 import { relativeTime } from '../../harness/protocol/format.js';
 import { chooseOption } from './choose.js';
 import { RemoteMachines, type MachineView } from '../../remote/connection.js';
-import { forgetMachine, newMachineRecord, readMachines, updateMachine, updateMachines, type RemoteMachine } from '../../remote/machines.js';
+import { forgetMachine, newMachineRecord, readMachines, updateMachine, updateMachines, updatePolicy, type RemoteMachine } from '../../remote/machines.js';
+import { installedRecord, localBuildCommit, updateRemoteMachine } from '../../remote/updates.js';
 import { discoverMachines, notYetAdded, readTailscaleStatus, type DiscoveredMachine } from '../../remote/tailscale.js';
 import { installOnMachine, uninstallFromMachine, type InstallOutcome, type InstallReporter } from '../../remote/install.js';
 import { defaultLoginUser } from '../../remote/ssh.js';
@@ -41,7 +44,9 @@ export function machineStateText(machine: RemoteMachine, view: MachineView | und
   if (!machine.ready) return 'install not finished';
   if (!view || view.state === 'connecting') return 'checking…';
   if (view.state === 'offline') return `offline${machine.lastSeen ? ` · last seen ${relativeTime(machine.lastSeen, now)}` : ''}`;
-  return view.needsUpdate ? chalk.yellow('needs update') : 'connected';
+  if (view.updating) return 'updating ClikCode…';
+  if (!view.needsUpdate) return 'connected';
+  return chalk.yellow(view.updateError ? 'needs update · the last update failed' : 'needs update');
 }
 
 /** Discovered machines not already added (by Tailscale node, by name it is
@@ -53,7 +58,9 @@ export async function interactiveRemotePicker(host: RemoteHost): Promise<Interac
   const machines = await readMachines();
   // The added machines' state comes from connecting to them, for as long as
   // this list is open.
-  const connections = await new RemoteMachines().open();
+  // Only to show their state: nothing is updated by itself while the user
+  // is choosing what to do with a machine.
+  const connections = await new RemoteMachines({ autoUpdate: false }).open();
   let discovered: DiscoveredMachine[] = [];
   let tailscaleError: string | undefined;
   const tailscale = readTailscaleStatus().then(({ status, error }) => {
@@ -132,13 +139,17 @@ function stepLines(host: RemoteHost): InstallReporter {
 }
 
 /** Runs the install (or update) and says how it went; on a refused login,
- * asks once which user to log in as, and remembers it for the machine. */
+ * asks once which user to log in as, and remembers it for the machine. An
+ * update goes to this build's commit when it has one (else GitHub main). */
 async function runInstall(host: RemoteHost, machine: RemoteMachine, update: boolean): Promise<{ outcome: InstallOutcome; machine: RemoteMachine }> {
   let target = machine.sshTarget;
   let asked = false;
+  const commit = update ? localBuildCommit() : undefined;
   for (;;) {
-    host.line(`${update ? 'Updating' : 'Installing'} ClikCode on ${machine.name} (${target}) from GitHub main`);
-    const outcome = await host.withBusy(`${update ? 'updating' : 'installing'} ClikCode on ${machine.name}`, () => installOnMachine(target, stepLines(host), { update }));
+    host.line(`${update ? 'Updating' : 'Installing'} ClikCode on ${machine.name} (${target}) ${commit ? `to this build's commit ${commit.slice(0, 8)}` : 'from GitHub main'}`);
+    const outcome = await host.withBusy(`${update ? 'updating' : 'installing'} ClikCode on ${machine.name}`, () => (update
+      ? updateRemoteMachine({ ...machine, sshTarget: target }, stepLines(host), commit ? { commit } : {})
+      : installOnMachine(target, stepLines(host))));
     if (outcome.ok || !outcome.auth || asked) return { outcome, machine };
     asked = true;
     // Not a failure yet: why it is asking, then a list to answer with. The
@@ -184,27 +195,39 @@ async function addMachine(host: RemoteHost, machine: RemoteMachine, recorded = f
   const existing = info.installationId ? (await readMachines()).find((other) => other.id !== machine.id && other.installationId === info.installationId) : undefined;
   if (existing) {
     await forgetMachine(machine.id);
-    await updateMachine(existing.id, (record) => { record.installed = { version: info.version, ...(info.commit ? { commit: info.commit } : {}), at: new Date().toISOString() }; record.needsUpdate = false; record.ready = true; });
+    await updateMachine(existing.id, (record) => installedRecord(record, info));
     return { notice: `${machine.name} is ${existing.name}, already added: it is up to date now.` };
   }
   await updateMachine(machine.id, (record) => {
-    record.ready = true;
-    record.installed = { version: info.version, ...(info.commit ? { commit: info.commit } : {}), at: new Date().toISOString() };
-    if (info.installationId) record.installationId = info.installationId;
+    installedRecord(record, info);
     record.lastSeen = new Date().toISOString();
-    record.needsUpdate = false;
   });
   return { notice: `${machine.name} is added. Its chats are on the board (← on an empty prompt). Sign in to providers there from its own chats.` };
 }
 
 async function manageMachine(host: RemoteHost, machine: RemoteMachine): Promise<InteractiveSlashOutcome> {
+  const commit = localBuildCommit();
+  const auto = updatePolicy(machine) === 'auto';
+  if (machine.updateError) host.line(`${chalk.yellow('!')} The last update of ${machine.name} failed: ${machine.updateError}`);
   const action = await chooseOption(host.prompter, machine.name, [
     machine.ready
-      ? { label: 'Update ClikCode', detail: '· to GitHub main', value: 'update' }
+      ? { label: 'Update ClikCode', detail: commit ? `· to this build's commit ${commit.slice(0, 8)}` : '· to GitHub main', value: 'update' }
       : { label: 'Finish installing', detail: '· from GitHub main', value: 'install' },
+    {
+      label: `Updates: ${auto ? 'automatic' : 'ask first'}`,
+      detail: auto ? "· it is brought to this build's commit by itself; choose to ask first" : '· only when you update it; choose to update it by itself',
+      value: 'policy',
+    },
     { label: 'Remove', detail: '· forget it here; optionally uninstall ClikCode there', value: 'remove' },
   ]);
   if (action === 'install') return addMachine(host, machine, true);
+  if (action === 'policy') {
+    const updates = auto ? 'ask' : 'auto';
+    await updateMachine(machine.id, (record) => { record.updates = updates; });
+    return { notice: updates === 'ask'
+      ? `${machine.name} is updated only when you say so: from here, or /update in one of its chats.`
+      : `${machine.name} is updated to this build by itself when it differs; its chats switch over once they are quiet.` };
+  }
   if (action === 'update') {
     const { outcome } = await runInstall(host, machine, true);
     if (!outcome.ok) {
@@ -212,13 +235,7 @@ async function manageMachine(host: RemoteHost, machine: RemoteMachine): Promise<
       return {};
     }
     const { info } = outcome;
-    await updateMachine(machine.id, (record) => {
-      record.ready = true;
-      record.installed = { version: info.version, ...(info.commit ? { commit: info.commit } : {}), at: new Date().toISOString() };
-      if (info.installationId) record.installationId = info.installationId;
-      record.needsUpdate = false;
-    });
-    return { notice: `ClikCode on ${machine.name} is updated${info.commit ? ` to ${info.commit.slice(0, 8)}` : ''}.` };
+    return { notice: `ClikCode on ${machine.name} is updated${info.commit ? ` to ${info.commit.slice(0, 8)}` : ''}; its chats switch over once they are quiet.` };
   }
   if (action !== 'remove') return {};
   const how = await chooseOption(host.prompter, `Remove ${machine.name}`, [
