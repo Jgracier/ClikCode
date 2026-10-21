@@ -7,7 +7,7 @@ import { type SlashHandlerKey } from './registry.js';
  * the waiting UI). Every other registry command falls through to
  * HEADLESS_SLASH_HANDLERS with its output shown in a panel. */
 const INTERACTIVE_SLASH_HANDLER_KEYS = [
-  'exit', 'new', 'redraw', 'provider', 'accounts', 'model', 'effort', 'permissions', 'sandbox', 'computer', 'send', 'options', 'capabilities',
+  'exit', 'new', 'redraw', 'provider', 'accounts', 'machine', 'model', 'effort', 'permissions', 'sandbox', 'computer', 'send', 'options', 'capabilities',
   'settings', 'sessions', 'resume', 'search', 'rename', 'archive', 'delete', 'mention', 'review', 'init', 'compact',
   'export', 'memory', 'doctor', 'login', 'logout', 'fork', 'redo', 'changes', 'copy', 'gateway', 'remote', 'update',
 ] as const satisfies readonly SlashHandlerKey[];
@@ -17,8 +17,9 @@ export type InteractiveSlashHandlerKey = typeof INTERACTIVE_SLASH_HANDLER_KEYS[n
 export interface InteractiveSlashOutcome {
   /** Adopt this session (a new conversation, a fork, a resumed chat). */
   id?: string;
-  /** An SSH machine owns the selected conversation. */
-  remote?: { machineId: string; chatId: string };
+  /** An SSH machine owns the selected conversation (a new one there when
+   * no `chatId`; `notice` said once it is open). */
+  remote?: { machineId: string; chatId?: string; notice?: string };
   exit?: boolean;
   notice?: string;
   /** Run this as a turn on the (possibly just adopted) session. */

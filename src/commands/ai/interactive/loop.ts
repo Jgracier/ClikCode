@@ -26,7 +26,8 @@ import { turnFailureEffect } from './turn-failure.js';
 import { runTimedTurn } from './run-turn.js';
 import { createSlashHost, openConversationPicker, runShellInChat } from './slash-host.js';
 import type { ChatWindow } from './window.js';
-import { runRemoteChat } from '../../../remote/terminal-chat.js';
+import { runRemoteChat, type RemoteChatSelection } from '../../../remote/terminal-chat.js';
+import { offerMovedChat } from '../../../remote/move-terminal.js';
 
 /** What one read of the next line came to: another pass, the end of the loop, or a line to run. */
 type NextLine = 'continue' | 'exit' | PickedLine;
@@ -335,6 +336,17 @@ export class ChatLoop {
     }
   }
 
+  /** A chat on another machine, in this window, until it comes back to one here. */
+  private async openRemote(terminal: TerminalHarnessPrompter, selection: RemoteChatSelection, draft?: string): Promise<void> {
+    await leaveConversation(this.id);
+    try {
+      const localId = await runRemoteChat(terminal, this.id, selection, draft);
+      if (localId) this.id = localId;
+    } finally {
+      await claimConversation(this.id).catch(() => undefined);
+    }
+  }
+
   private async handleLine(next: PickedLine): Promise<'exit' | undefined> {
     const { terminal, rl, config, beginBuildReplace } = this;
     const { queuedTurnId, fromQueuedCommand } = next;
@@ -378,13 +390,7 @@ export class ChatLoop {
       if (outcome.notice) this.notice = outcome.notice;
       if (outcome.exit) return 'exit';
       if (outcome.remote && terminal) {
-        await leaveConversation(this.id);
-        try {
-          const localId = await runRemoteChat(terminal, this.id, outcome.remote, outcome.draft);
-          if (localId) this.id = localId;
-        } finally {
-          await claimConversation(this.id).catch(() => undefined);
-        }
+        await this.openRemote(terminal, outcome.remote, outcome.draft);
         return;
       }
       if (outcome.id && outcome.id !== this.id) {
@@ -392,6 +398,13 @@ export class ChatLoop {
         await leaveConversation(this.id);
         this.id = outcome.id;
         await claimConversation(this.id).catch(() => undefined);
+        // A chat that moved to another machine is read-only here: offered where it went.
+        const opened = (await readState({ transcripts: [] })).sessions.find((item) => item.id === this.id);
+        if (opened?.movedTo && terminal) {
+          const next = await offerMovedChat(terminal, opened.movedTo);
+          if (next && 'remote' in next) { await this.openRemote(terminal, next.remote); return; }
+          if (next) { await leaveConversation(this.id); this.id = next.local; await claimConversation(this.id).catch(() => undefined); }
+        }
       }
       if (outcome.draft !== undefined) terminal?.restoreDraft(outcome.draft);
       if (outcome.prompt) await this.runInteractiveTurn(this.id, outcome.prompt, { echo: outcome.echo !== false });

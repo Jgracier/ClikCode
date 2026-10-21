@@ -45,6 +45,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
   provider: INTERACTIVE_ONLY('provider'),
   resume: INTERACTIVE_ONLY('resume'),
   remote: INTERACTIVE_ONLY('remote'),
+  machine: INTERACTIVE_ONLY('machine'),
   // This machine's ClikCode, the way it was installed (remote/self-update.ts).
   update: async ({ args }) => {
     const { parseCommitArgument, updateThisMachine } = await import('../../remote/self-update.js');

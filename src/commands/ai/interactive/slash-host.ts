@@ -130,6 +130,18 @@ return {
       attached: (attachments) => emitHarnessOutput({ panel: 'attachments', attachments }),
     } satisfies Pick<SlashHost, 'attached'>),
     ...(terminal ? {
+      // /machine: the chat moves to the machine chosen (remote/move-terminal.ts).
+      moveToMachine: async (id: string) => {
+        const { localMoveEnd, moveTerminalChat } = await import('../../../remote/move-terminal.js');
+        const { chatHasContent } = await import('../../../session/move-chat.js');
+        const session = (await readState({ transcripts: [id] })).sessions.find((item) => item.id === id);
+        if (!session) throw new Error(`AI session "${id}" was not found`);
+        const next = await moveTerminalChat(rl, { local: id }, id, chatHasContent(session), localMoveEnd());
+        if (!next) return {};
+        return 'local' in next ? { id: next.local } : { remote: next.remote };
+      },
+    } satisfies Pick<SlashHost, 'moveToMachine'> : {}),
+    ...(terminal ? {
       browseSearch: (query: string) => browseSearch(terminal, query, withWaiting),
       walkTurns: (turns, start) => walkTurns(terminal, turns, start),
     } satisfies Pick<SlashHost, 'browseSearch' | 'walkTurns'> : {}),

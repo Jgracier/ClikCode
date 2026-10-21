@@ -104,6 +104,9 @@ export interface SlashHost {
   exported?(path: string): void;
   /** A file attached by naming it: the attachments now queued. */
   attached?(attachments: readonly string[]): void;
+  /** /machine: move the chat to another machine (remote/move-terminal.ts).
+   * Absent: this client chooses the machine another way (the editor's chip). */
+  moveToMachine?(id: string): Promise<InteractiveSlashOutcome>;
   /** A progress line in the chat (each step of /remote's install, of
    * /update). Absent: the prompter's activity line, else an output record. */
   line?(text: string): void;
@@ -411,6 +414,11 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
       const memory = await readMemoryFile(session);
       await host.editFile(memory.path, session.workspace ?? process.cwd());
       return {};
+    },
+    // The chat's machine, like its provider: choosing another moves the chat there.
+    machine: async () => {
+      if (!host.moveToMachine) throw new Error('Choose the machine with the machine chip under the message box: the chat moves there.');
+      return host.moveToMachine(id);
     },
     // ClikCode Remote: the other machines on the board (tui/pickers/remote.ts).
     remote: async () => {

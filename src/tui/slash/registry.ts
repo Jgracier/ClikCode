@@ -41,7 +41,7 @@ export const SLASH_PALETTE_PINNED: readonly string[] = [
 export const SLASH_HANDLER_KEYS = [
   'help', 'status', 'new', 'redraw', 'exit', 'compact', 'context', 'export', 'history', 'copy', 'select', 'changes',
   'review', 'init', 'memory', 'diff', 'cwd', 'add-dir', 'mention',
-  'provider', 'accounts', 'login', 'logout', 'gateway',
+  'provider', 'accounts', 'machine', 'login', 'logout', 'gateway',
   'model', 'effort', 'fast', 'permissions', 'sandbox', 'computer', 'send', 'options', 'capabilities', 'settings',
   'sessions', 'resume', 'search', 'rename', 'fork', 'redo', 'archive', 'delete',
   'usage', 'doctor', 'agents', 'remote', 'update',
@@ -184,6 +184,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
 
   entry('provider', 'Provider', 'choose a provider', { aliases: ['switch'] }),
   entry('account', 'Provider', 'switch, add or remove accounts', { aliases: ['accounts'], handlerKey: 'accounts', argHint: '[label|login|add|remove …]', duringTurn: 'apply' }),
+  entry('machine', 'Provider', 'move this chat to another machine (this one, or one added in /remote)'),
   entry('login', 'Provider', 'sign in to the current provider', { availability: needsHarness('signing in') }),
   entry('logout', 'Provider', 'sign the current account out', { availability: needsHarness('signing out') }),
   entry('gateway', 'Provider', 'route this conversation through ClikDeploy Gateway'),
