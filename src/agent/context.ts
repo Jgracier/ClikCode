@@ -1,4 +1,4 @@
-/** System prompt assembly, token estimation and compaction.
+/** System prompt assembly and token estimation.
  *
  * THE SYSTEM PROMPT MUST BE BYTE-STABLE ACROSS TURNS. A provider's prompt
  * cache and llama.cpp's KV-cache reuse skip only the identical prefix of a
@@ -14,19 +14,12 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnPortable, terminatePortable } from '../harness/transport/spawn.js';
-import type { ConversationItem, ModelClient, TokenUsage } from './model-client.js';
+import type { ConversationItem, TokenUsage } from './model-client.js';
 import { OUTPUT_CAPS, readDenyReason, resolvePath } from './security.js';
 import { CONVERSATION_TOOLS_NOTE } from '../search/tools.js';
 
 export const DEFAULT_CONTEXT_WINDOW = 128_000;
-const COMPACTION_THRESHOLD = 0.8;
 const MEMORY_CAP_BYTES = 32 * 1024;
-const KEEP_RECENT_ITEMS = 6;
-/** Most conversation items sent in one request. The Gateway refuses more than 2000 with a plain 400,
- * and eliding old tool results shortens items without removing them, so a long run of small calls
- * can reach the bound while using a fraction of the context window. Summarizing at this count
- * leaves room for what one step adds (up to 64 calls, each a call item and a result item). */
-export const MAX_REQUEST_ITEMS = 1500;
 
 // The instructions, by section. Lean and full send all of them, joined by a
 // blank line, exactly as before profiles existed; minimal leaves out the two
@@ -307,29 +300,6 @@ export function estimateContextTokens(system: string, items: readonly Conversati
   return estimateTextTokens(system) + items.reduce((sum, item) => sum + estimateItemTokens(item), 0);
 }
 
-/** Where compaction starts, in tokens. 80% of a large window, but never
- * less than ~8k tokens of headroom below the top: the check runs BEFORE a
- * step, and that step's reply plus the next tool result must still fit. On
- * the 16-32k windows a local model runs with, 20% is 3-6k tokens, which one
- * file read overflows -- and an overflow costs a failed request (seconds to
- * minutes of prompt reading on a CPU) before compaction runs anyway. */
-export function compactionThreshold(contextWindow: number | undefined): number {
-  const window = contextWindow && contextWindow > 0 ? contextWindow : DEFAULT_CONTEXT_WINDOW;
-  const headroom = Math.max(window * (1 - COMPACTION_THRESHOLD), Math.min(8_192, window * 0.3));
-  return Math.floor(window - headroom);
-}
-
-/** How much the context must grow after a compaction before another is
- * considered: a tenth of the window, at least 4k tokens. */
-export function compactionRegrowth(contextWindow: number | undefined): number {
-  const window = contextWindow && contextWindow > 0 ? contextWindow : DEFAULT_CONTEXT_WINDOW;
-  return Math.max(4_096, Math.floor(window * 0.1));
-}
-
-export function shouldCompact(contextTokens: number, contextWindow: number | undefined): boolean {
-  return contextTokens >= compactionThreshold(contextWindow);
-}
-
 /** Largest tool result handed to the model, in bytes: the profile's ceiling
  * (30 KB unless the full profile raises it), but at most about a tenth of a
  * small window (~4 bytes a token), so one bash log or file read cannot fill
@@ -338,125 +308,4 @@ export function shouldCompact(contextTokens: number, contextWindow: number | und
 export function toolOutputCap(contextWindow: number | undefined, ceilingBytes: number = OUTPUT_CAPS.toolOutputBytes): number {
   const window = contextWindow && contextWindow > 0 ? contextWindow : DEFAULT_CONTEXT_WINDOW;
   return Math.min(ceilingBytes, Math.max(8 * 1024, Math.floor(window * 4 * 0.1)));
-}
-
-// ── compaction ───────────────────────────────────────────────────────────────
-
-const ELIDE_KEEP_CHARS = 600;
-
-/** Stage 1: shrink old tool results to head+tail, and stop showing the
- * images old ones carried (their text still says what each was). Cheap, no
- * model call, and usually what is actually filling the window. */
-function elideOldToolResults(items: readonly ConversationItem[], keepRecent = KEEP_RECENT_ITEMS): ConversationItem[] {
-  const boundary = Math.max(0, items.length - keepRecent);
-  return items.map((item, index) => {
-    if (index >= boundary || item.type !== 'tool_result') return item;
-    const hasImages = !!item.images?.length;
-    if (!hasImages && item.output.length <= ELIDE_KEEP_CHARS * 2 + 80) return item;
-    const { images: _images, ...rest } = item;
-    const imageNote = hasImages ? '\n[The image this showed is no longer shown, to save context; read the file again to see it.]' : '';
-    if (item.output.length <= ELIDE_KEEP_CHARS * 2 + 80) return { ...rest, output: `${item.output}${imageNote}` };
-    const dropped = item.output.length - ELIDE_KEEP_CHARS * 2;
-    return { ...rest, output: `${item.output.slice(0, ELIDE_KEEP_CHARS)}\n… [${dropped} characters elided to save context] …\n${item.output.slice(-ELIDE_KEEP_CHARS)}${imageNote}` };
-  });
-}
-
-/** Past this, a tool result still among the recent items is shrunk when
- * compaction would otherwise leave the context over its target. */
-const RECENT_RESULT_LIMIT_CHARS = 16_000;
-/** What each end of such a result keeps: bounded, so the result that was
- * shrunk is never more than twice this plus a line. */
-const RECENT_RESULT_KEEP_CHARS = 4_000;
-
-/** Stage 1b: the recent tool results that are themselves most of the window.
- * Old ones are elided by `elideOldToolResults`; without this a few huge recent
- * ones left every compaction above its target, and compaction ran again before
- * every step. */
-function shrinkRecentToolResults(items: readonly ConversationItem[]): ConversationItem[] {
-  return items.map((item) => {
-    if (item.type !== 'tool_result' || item.output.length <= RECENT_RESULT_LIMIT_CHARS) return item;
-    const dropped = item.output.length - RECENT_RESULT_KEEP_CHARS * 2;
-    return { ...item, output: `${item.output.slice(0, RECENT_RESULT_KEEP_CHARS)}\n… [${dropped} characters elided to save context; run the tool again for a narrower result] …\n${item.output.slice(-RECENT_RESULT_KEEP_CHARS)}` };
-  });
-}
-
-/** Never split a tool_call from its tool_result: move the cut earlier until
- * the kept tail starts on a clean boundary. */
-function safeCut(items: readonly ConversationItem[], keepRecent: number): number {
-  let cut = Math.max(0, items.length - keepRecent);
-  while (cut > 0 && (items[cut].type === 'tool_result' || items[cut - 1].type === 'tool_call')) cut--;
-  return cut;
-}
-
-const SUMMARY_SYSTEM = `You compress a coding-agent conversation so the work can continue with less context. Write a dense summary covering: the user's goal and explicit constraints; decisions made and why; every file read or changed with what matters about it (paths, functions, line references); commands run and their significant results; errors hit and how they were resolved; the current state; and the exact next steps. Preserve identifiers, paths and error text verbatim. Do not address the user. Do not call tools.`;
-
-/** The summary request is itself a model call: it must fit. Over this the oldest part is dropped (the newest work matters most to what follows). */
-export const SUMMARY_INPUT_MAX_CHARS = 400_000;
-
-export function renderForSummary(items: readonly ConversationItem[]): string {
-  const text = renderAllForSummary(items);
-  if (text.length <= SUMMARY_INPUT_MAX_CHARS) return text;
-  return `[earlier part of the conversation omitted: it was too long to summarize in one request]\n\n${text.slice(-SUMMARY_INPUT_MAX_CHARS)}`;
-}
-
-function renderAllForSummary(items: readonly ConversationItem[]): string {
-  return items.filter((item) => item.type !== 'reasoning').map((item) => {
-    if (item.type === 'text') return `${item.role.toUpperCase()}: ${item.text}`;
-    if (item.type === 'summary') return `EARLIER SUMMARY: ${item.text}`;
-    if (item.type === 'tool_call') return `TOOL CALL ${item.name} ${JSON.stringify(item.args).slice(0, 2000)}`;
-    return `TOOL RESULT ${item.name}${item.isError ? ' (error)' : ''}: ${item.output.slice(0, 4000)}`;
-  }).join('\n\n');
-}
-
-interface CompactionInput {
-  items: readonly ConversationItem[];
-  modelClient: ModelClient;
-  signal?: AbortSignal;
-  keepRecent?: number;
-  /** When given, stage 2 only runs if stage 1 left the context above it. */
-  targetTokens?: number;
-  /** Stage 1 alone is not enough while there are more items than this: eliding shortens items, it does not remove them. */
-  maxItems?: number;
-  system?: string;
-}
-
-interface CompactionResult {
-  items: ConversationItem[];
-  stage: 'none' | 'elided' | 'summarized';
-  summary?: string;
-  kept?: ConversationItem[];
-  usage?: TokenUsage;
-}
-
-export async function compactConversation(input: CompactionInput): Promise<CompactionResult> {
-  const keepRecent = input.keepRecent ?? KEEP_RECENT_ITEMS;
-  const elided = elideOldToolResults(input.items, keepRecent);
-  const changed = elided.some((item, index) => item !== input.items[index]);
-  if (input.targetTokens !== undefined && estimateContextTokens(input.system ?? '', elided) < input.targetTokens && (input.maxItems === undefined || elided.length <= input.maxItems)) {
-    return { items: elided, stage: changed ? 'elided' : 'none' };
-  }
-  const stillOver = (candidate: readonly ConversationItem[]): boolean =>
-    input.targetTokens === undefined || estimateContextTokens(input.system ?? '', candidate) >= input.targetTokens;
-  const cut = safeCut(elided, keepRecent);
-  if (cut < 2) {
-    const shrunk = stillOver(elided) ? shrinkRecentToolResults(elided) : elided;
-    return { items: shrunk, stage: changed || shrunk.some((item, index) => item !== elided[index]) ? 'elided' : 'none' };
-  }
-  const kept = elided.slice(cut);
-  const step = await input.modelClient.step({
-    system: SUMMARY_SYSTEM,
-    items: [{ type: 'text', role: 'user', text: `Summarize this conversation so far:\n\n${renderForSummary(elided.slice(0, cut))}` }],
-    tools: [],
-    signal: input.signal,
-    onTextDelta: () => undefined,
-  });
-  const summary = step.text.trim();
-  // A failed summary must not destroy context: keep the elided form instead.
-  if (!summary) return { items: elided, stage: changed ? 'elided' : 'none', usage: step.usage };
-  const summarized: ConversationItem[] = [{ type: 'summary', text: summary }, ...kept];
-  // What was kept may itself be over the target (a few huge recent results):
-  // shrunk here, so the next step does not start above the line again.
-  const items = stillOver(summarized) ? shrinkRecentToolResults(summarized) : summarized;
-  const keptItems = items.slice(1);
-  return { items, stage: 'summarized', summary, kept: keptItems, usage: step.usage };
 }

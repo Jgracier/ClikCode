@@ -18,10 +18,6 @@ import { consumeQueuedTurn } from './consume-queued.js';
 import { sendEvent } from './broadcast-observer.js';
 import type { ClientCommand } from './protocol.js';
 import type { WorkerContext } from './worker-context.js';
-import { compactBeforeSwitchNotice, noteCompacted, shouldCompactBeforeSwitch } from './compact-before-switch.js';
-import { compactByContextNotice, contextTokens, noteCompactedByContext, shouldCompactByContext, workerIsBusy } from './compact-by-context.js';
-import { persistentWorkRunning } from '../turn/vendor-process.js';
-import { compactConversation } from '../tui/slash/compact.js';
 
 type SubmitCommand = Extract<ClientCommand, { type: 'submit' }>;
 
@@ -152,54 +148,11 @@ export function createTurnRunner(ctx: WorkerContext) {
     else {
       void ctx.queue.drainQueue().catch(ctx.queue.reportDrainFailure).finally(() => {
         ctx.idle.scheduleIdleExit();
-        if (turnOutcome === 'completed') void compactBeforeSwitch().catch((error: unknown) => diagnostic('worker.compact-before-switch', error instanceof Error ? error.message : String(error)));
       });
     }
     ctx.idle.scheduleIdleExit();
     // Parked while this turn ran (another window's "Wait for reset").
     void ctx.resumeWaiter.check();
-  };
-
-  /** One compaction at a time, from either trigger. */
-  let compactionStarting = false;
-
-  /** A large conversation is compacted after a completed turn, as a turn of its own (every window
-   * follows it, and a message sent meanwhile waits behind it): on an account that is nearly out,
-   * while its cache is warm, so the switch reads a summary (compact-before-switch.ts); or once its
-   * context passes the user's size threshold (compact-by-context.ts). */
-  const compactBeforeSwitch = async (): Promise<void> => {
-    if (ctx.turnRunning || compactionStarting) return;
-    compactionStarting = true;
-    try {
-      const state = await readState({ transcripts: [] });
-      const session = state.sessions.find((item) => item.id === sessionId);
-      const account = session?.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
-      if (!session) return;
-      let label: string;
-      let automatic: string;
-      if (shouldCompactBeforeSwitch(state, session, account)) {
-        noteCompacted(sessionId);
-        lifecycle('worker.compact-before-switch', { context: session.lastUsage?.contextUsed, account: account?.id.slice(0, 8) });
-        label = 'compacting before the account switch';
-        automatic = compactBeforeSwitchNotice(account);
-      } else if (shouldCompactByContext(state, session)) {
-        // Not while anything of the conversation's is still going: queued notifications, the
-        // vendor's own background turn or out-of-turn words, work it left running.
-        if (workerIsBusy({
-          turnRunning: ctx.turnRunning, compactionStarting: false, notifications: agentSession.notifications.length,
-          backgroundTurn: ctx.vendorBackground.busy, outOfTurn: ctx.outOfTurn.active, vendorWorkRunning: await persistentWorkRunning(sessionId),
-        }) || ctx.turnRunning) return;
-        noteCompactedByContext(session);
-        lifecycle('worker.compact-by-context', { context: contextTokens(session), window: session.lastUsage?.contextWindow });
-        label = 'compacting a large conversation';
-        automatic = compactByContextNotice(state, session);
-      } else return;
-      await compactConversation(sessionId, session, '', async (_id, prompt) => {
-        ctx.queue.startTurn({ type: 'submit', text: prompt, echo: false, label, automatic });
-      });
-    } finally {
-      compactionStarting = false;
-    }
   };
 
   return async (command: SubmitCommand): Promise<void> => {

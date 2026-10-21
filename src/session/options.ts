@@ -29,7 +29,6 @@ import { forgetNativeThread } from './native-thread.js';
 import type { ConversationRow } from './conversation-rows.js';
 import { conversationState, turnFacts } from './conversation-state.js';
 import { parseSendMode } from '../turn/send-mode.js';
-import { parseCompactAt } from './compact-setting.js';
 
 /** Effort words every harness understands, narrowed per harness by
  * harnessSupportsEffort. */
@@ -268,10 +267,6 @@ export function applyDefaultSetting(target: Partial<HarnessDefaultSettings & { m
     // Global only: how a message typed mid-turn is delivered is the user's
     // habit, not a provider's.
     target.sendMode = parseSendMode(value);
-  } else if (normalizedKey === 'compact' && !('model' in target) && !harness) {
-    // Global only, like send: how large a context the user will pay to re-read.
-    const tokens = parseCompactAt(value);
-    if (tokens === undefined) delete target.compactAt; else target.compactAt = tokens;
   } else if (normalizedKey === 'model' && 'model' in target) {
     target.model = normalizeModelWord(value) ?? undefined;
   } else {

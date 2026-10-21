@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { renderForSummary, SUMMARY_INPUT_MAX_CHARS, buildSystemPrompt, compactionThreshold, environmentNote, needsEnvironmentNote, staticInstructions, toolOutputCap } from './context.js';
+import { buildSystemPrompt, environmentNote, needsEnvironmentNote, staticInstructions, toolOutputCap } from './context.js';
 import type { ConversationItem } from './model-client.js';
 
 /** A fake git whose answers can change between calls, as a real repo's do. */
@@ -61,14 +61,6 @@ describe('environment note', () => {
 });
 
 describe('window-sized limits', () => {
-  it('compacts at 80% of a large window but keeps ~8k tokens of headroom in a small one', () => {
-    expect(compactionThreshold(200_000)).toBe(160_000);
-    expect(compactionThreshold(undefined)).toBe(102_400);
-    expect(compactionThreshold(32_768)).toBe(32_768 - 8_192);
-    // Tiny windows: 30% headroom rather than nothing left at all.
-    expect(compactionThreshold(8_192)).toBe(Math.floor(8_192 * 0.7));
-  });
-
   it('caps one tool result at a tenth of a small window, never above 30 KB', () => {
     expect(toolOutputCap(undefined)).toBe(30 * 1024);
     expect(toolOutputCap(1_000_000)).toBe(30 * 1024);
@@ -163,14 +155,5 @@ describe('instruction files', () => {
     await fs.writeFile(path.join(w.cwd, 'AGENTS.md'), 'SMALL');
     expect(await w.prompt()).not.toMatch(/not loaded because/);
     await fs.rm(w.root, { recursive: true, force: true });
-  });
-});
-
-describe('renderForSummary', () => {
-  it('bounds the whole request, keeping the newest items', () => {
-    const items: ConversationItem[] = Array.from({ length: 1500 }, (_, i) => ({ type: 'text', role: 'user', text: `${i === 1499 ? 'NEWEST' : 'x'}${'y'.repeat(4000)}` }));
-    const out = renderForSummary(items);
-    expect(out.length).toBeLessThan(SUMMARY_INPUT_MAX_CHARS + 200);
-    expect(out).toContain('NEWEST');
   });
 });

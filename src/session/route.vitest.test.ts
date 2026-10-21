@@ -81,10 +81,10 @@ describe('a ClikCode Local session is ClikCode\'s own agent', () => {
     }
   });
 
-  it('does not offer /compact on either agent route, because the agent compacts itself', async () => {
+  it('does not offer /compact on either agent route', async () => {
     for (const routed of [local(), gateway()]) {
-      expect(resolveSlashCommand('compact')!.availability(routed, undefined)).toMatchObject({ available: false, reason: expect.stringContaining('compacts its context') });
-      await expect(compactConversation(routed.id, routed, '', async () => undefined)).rejects.toThrow(/compacts its context/);
+      expect(resolveSlashCommand('compact')!.availability(routed, undefined)).toMatchObject({ available: false, reason: expect.stringContaining('only available for vendor harnesses') });
+      await expect(compactConversation(routed.id, routed, '', async () => undefined)).rejects.toThrow(/only available for vendor harnesses/);
     }
   });
 

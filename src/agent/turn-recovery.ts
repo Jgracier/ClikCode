@@ -1,4 +1,4 @@
-/** What the agent loop does about a model step that failed: classify it, wait, retry or compact. */
+/** What the agent loop does about a model step that failed: classify it, wait or retry. */
 import { turnCancelledError } from './cancellation.js';
 import type { HarnessErrorKind } from './model-client.js';
 
@@ -36,17 +36,11 @@ const RETRYABLE_STEP_CODES = new Set(['MODEL_ERROR', 'INTERNAL_ERROR', 'MODEL_RA
 export const MAX_STOP_HOOK_CONTINUES = 3;
 
 /** What to do about a model step that failed before streaming anything.
- * `compact`: the request did not fit the model (the Gateway's
- * CONTEXT_TOO_LARGE, "Compact and retry"). `retry`: a transient failure --
- * a retryable code, a 5xx, or no response at all. Everything else -- credit,
+ * `retry`: a transient failure -- a retryable code, a 5xx, or no response at all. Everything else -- credit,
  * sign-in, a rejected request, no model, the kill switch -- is the answer. */
-export function stepRecovery(error: unknown): 'compact' | 'retry' | undefined {
+export function stepRecovery(error: unknown): 'retry' | undefined {
   const record = (error ?? {}) as { code?: unknown; statusCode?: unknown; kind?: unknown; message?: unknown };
   const code = typeof record.code === 'string' ? record.code : undefined;
-  if (code === 'CONTEXT_TOO_LARGE') return 'compact';
-  // The Gateway bounds a request's item count and answers a plain 400 (not CONTEXT_TOO_LARGE): the
-  // conversation is too long in entries, which only summarizing shortens.
-  if (record.statusCode === 400 && typeof record.message === 'string' && /items exceeds \d+ entries/i.test(record.message)) return 'compact';
   if (code && RETRYABLE_STEP_CODES.has(code)) return 'retry';
   if (code) return undefined;
   const status = typeof record.statusCode === 'number' ? record.statusCode : undefined;

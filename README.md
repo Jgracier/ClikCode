@@ -373,7 +373,7 @@ reference reads better that way. All of them, grouped as `/help` groups them:
 | Command | What it does |
 | --- | --- |
 | `/new [first message]` (also `/clear`, `/reset`) | start a fresh conversation (the current one stays resumable) |
-| `/compact [focus]` | the tool's own compaction of this conversation, where it has one (ClikCode's own agent compacts by itself) |
+| `/compact [focus]` | ask the selected vendor harness to compact this conversation, where it supports the command |
 | `/history` | show this conversation; a summary carried for its opening turns comes first |
 | `/copy` | copy the last answer |
 | `/export [path]` | write the transcript as markdown |
@@ -426,20 +426,7 @@ not reversed.
 | `/send [steer\|queue]` | messages typed mid-turn: steer them into the running turn at its next pause (where the agent takes steering; elsewhere they queue, and say so), or queue them for after it. Global; bare `/send` shows the two |
 | `/options` | provider-specific modes and controls |
 | `/capabilities` | what the selected provider supports |
-| `/settings [tools\|route\|account\|model\|effort\|permissions\|option\|global\|provider …]` | configure this workspace. Bare, the settings screen; `tools` goes straight to MCP servers, skills and agents; `option <id> <value\|default>` sets one of the tool's own options; `global <effort\|permissions\|send\|compact> <value>` and `provider <id> <model\|effort\|permissions> <value>` (or `provider <id> clear`) set defaults |
-
-**Compaction by context size.** Every step of an agent loop re-reads the whole
-context, so a long conversation costs more per step the larger it gets.
-After a finished turn that leaves the live context at or over a threshold,
-ClikCode compacts it with the harness's own compaction (Claude's `/compact`,
-Codex's thread compaction, an ACP agent's advertised `compact`/`compress`),
-as a turn of its own that every window follows. Set it with
-`/settings global compact <size>`: `250k` (the default), `1m`, any size of at
-least `50k`, `off`, or `default`. The size is the harness's own reported
-context, held to 80% of the model's window. It never runs mid-turn, with a
-message queued, or while background work is running, and does not repeat until
-the context has fallen back under the threshold or grown 50k past where it
-last ran. A harness with no compaction is skipped.
+| `/settings [tools\|route\|account\|model\|effort\|permissions\|option\|global\|provider …]` | configure this workspace. Bare, the settings screen; `tools` goes straight to MCP servers, skills and agents; `option <id> <value\|default>` sets one of the tool's own options; `global <effort\|permissions\|send> <value>` and `provider <id> <model\|effort\|permissions> <value>` (or `provider <id> clear`) set defaults |
 
 **Plan mode** is a row in `/settings`: read-only, plan and change nothing. On
 Claude Code and ClikCode's own agent it is kept on the chat until you approve

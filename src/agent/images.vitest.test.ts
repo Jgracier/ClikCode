@@ -2,7 +2,6 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { compactConversation } from './context.js';
 import { ConversationStore } from './conversation.js';
 import { sniffImage } from './images.js';
 import { gatewayModelClient } from './models/for-session.js';
@@ -179,19 +178,6 @@ describe('read_file shows images', () => {
     // A model that cannot see images gets the tool text alone.
     await gatewayModelClient({ baseUrl: 'http://gateway.test', apiKey: 'k', fetchImpl }).step({ system: 's', tools: [], onTextDelta: () => undefined, items });
     expect(sent?.messages.at(-1)).toEqual({ role: 'tool', tool_call_id: 'b', content: '1\tx' });
-  });
-
-  it('stops showing old tool images when compacting, and says so', async () => {
-    const items: ConversationItem[] = [
-      { type: 'tool_call', id: 'a', name: 'read_file', args: { path: 'pixel.png' } },
-      { type: 'tool_result', id: 'a', name: 'read_file', output: 'pixel.png is an image', images: [{ mimeType: 'image/png', data: PIXEL_PNG }] },
-      ...Array.from({ length: 12 }, (_, index): ConversationItem => ({ type: 'text', role: index % 2 ? 'assistant' : 'user', text: `turn ${index}` })),
-    ];
-    const compacted = await compactConversation({ items, modelClient: new ScriptedModelClient([]), keepRecent: 4, targetTokens: 1_000_000 });
-    expect(compacted.stage).toBe('elided');
-    const result = compacted.items[1] as Extract<ConversationItem, { type: 'tool_result' }>;
-    expect(result.images).toBeUndefined();
-    expect(result.output).toContain('no longer shown');
   });
 
   it('reads the type and size from the header, not the name', () => {

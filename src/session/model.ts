@@ -59,9 +59,8 @@ export type TranscriptMessage = {
   /** The steer this user message was, when it was typed into a running turn.
    *  The live copy and this one are the same message, matched by this id. */
   id?: string;
-  /** On a user message ClikCode sent itself (a `/compact` it ran after a
-   * turn): why, said as ClikCode's notice. `content` is what the vendor was
-   * sent; it is drawn as this notice, not as the user's request. */
+  /** Legacy automatic compaction notice. Kept so saved conversations still
+   * draw the notice instead of showing `/compact` as the user's request. */
   automatic?: string;
   /** Whose turn a message was: an answer is stamped when its turn is
    * committed (checkpoint.ts sessionTranscriptMessages), every message when
@@ -279,10 +278,6 @@ export interface HarnessDefaultSettings {
   /** Global only: what a message typed mid-turn does (`/send`,
    *  turn/send-mode.ts). Absent means steer. */
   sendMode?: 'steer' | 'queue';
-  /** Global only: the live context size, in tokens, at which a finished turn
-   *  is followed by a compaction (session/compact-setting.ts). 0 is off;
-   *  absent means the default. */
-  compactAt?: number;
 }
 
 export interface HarnessState {
