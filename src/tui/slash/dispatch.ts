@@ -36,6 +36,8 @@ import { interactiveHarnessOptionPicker } from '../pickers/options.js';
 import { interactiveToolsPicker } from '../pickers/tools.js';
 import { interactiveSettingsPicker } from '../pickers/settings.js';
 import { doctorSummary } from '../doctor-summary.js';
+import { interactiveRemotePicker } from '../pickers/remote.js';
+import { emitHarnessOutput } from '../../harness/output.js';
 import { sendModeOf, SEND_MODE_DETAIL, SEND_MODES } from '../../turn/send-mode.js';
 import { aiSessionCommand, lastAnswer, slashRouteTurn } from './handlers.js';
 import { copyToClipboard } from '../../session/attachments.js';
@@ -399,6 +401,14 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
       const memory = await readMemoryFile(session);
       await host.editFile(memory.path, session.workspace ?? process.cwd());
       return {};
+    },
+    // ClikCode Remote: the other machines on the board (tui/pickers/remote.ts).
+    remote: async () => {
+      if (!host.canPick) throw new Error('/remote opens a list: run it in the interactive ClikCode session.');
+      return interactiveRemotePicker({
+        prompter: rl, ask: host.ask, withBusy: host.withBusy,
+        line: (line) => (rl.activity ? rl.activity(line) : emitHarnessOutput({ panel: 'remote', text: line })),
+      });
     },
     doctor: async () => {
       const report = await host.withBusy('checking harnesses…', () => doctorSummary(state));

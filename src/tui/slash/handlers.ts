@@ -44,6 +44,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
   options: INTERACTIVE_ONLY('options'),
   provider: INTERACTIVE_ONLY('provider'),
   resume: INTERACTIVE_ONLY('resume'),
+  remote: INTERACTIVE_ONLY('remote'),
 };
 
 export async function aiSessionCommand(id: string, input: string, options: { inferred?: boolean; signal?: AbortSignal } = {}): Promise<string> {
