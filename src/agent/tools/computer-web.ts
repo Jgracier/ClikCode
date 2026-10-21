@@ -11,7 +11,7 @@ import { sharedState } from '../computer/shared-state.js';
 import { savedLoginFields, savedLoginsForSite } from '../computer/credential-vault.js';
 import { loginValueFor } from '../computer/login-fill.js';
 import { addSiteNote, readSiteNotes } from '../computer/site-notes.js';
-import { assertCustomKey, customFieldFor, describeProfile, listProfiles, PASSWORD_SECRET, PROFILE_KEYS, phoneFor, birthdayFor, profileKeyFor, readProfileSecret, saveProfile, saveProfileSecret, secretFieldFor, type FieldHint, type ProfileKey } from '../computer/profiles.js';
+import { assertCustomKey, bestProfileFor, customFieldFor, describeProfile, listProfiles, PASSWORD_SECRET, PROFILE_KEYS, phoneFor, birthdayFor, profileKeyFor, readProfileSecret, saveProfile, saveProfileSecret, secretFieldFor, type FieldHint, type ProfileKey } from '../computer/profiles.js';
 import { expectSignup, generatePassword, holdSignup, pendingSignupPassword, settleSignup } from '../computer/signup-login.js';
 import { loginComputerPage, loginOutcomeMessage } from '../computer/login-page.js';
 import { LoginError } from '../computer/login-error.js';
@@ -528,7 +528,7 @@ const profileChoice = sharedState('profile-choice', () => new Map<string, string
 
 /** Fills that name no text: a saved profile covers what it can (name, address, phone), the user is asked
  * once, privately, for the rest, and what they answer is kept in the profile for next time. */
-async function askForFills(page: Page, steps: readonly Step[], ctx: ToolContext): Promise<Step[]> {
+async function askForFills(page: Page, steps: readonly Step[], ctx: ToolContext, label?: string): Promise<Step[]> {
   const blank = steps.filter(step => step.do === 'fill' && step.text === undefined);
   if (!blank.length) return [...steps];
   const origin = new URL(page.url()).origin;
@@ -536,15 +536,10 @@ async function askForFills(page: Page, steps: readonly Step[], ctx: ToolContext)
   const profiles = await listProfiles(ctx.stateDir);
   let profile = profiles.length === 1 ? profiles[0] : undefined;
   if (profiles.length > 1) {
+    // Never ask which profile: choose the one that fits this form best (see bestProfileFor), and keep the choice for this site.
     const remembered = profileChoice.get(`${ctx.stateDir}|${origin}`);
-    profile = profiles.find(candidate => candidate.id === remembered);
-    const wanted = fields.some(field => { const key = profileKeyFor(field.hint); return (key && profiles.some(candidate => candidate.fields[key])) || profiles.some(candidate => customFieldFor(candidate, field.hint)); });
-    if (!profile && wanted && ctx.requestPrivateLogin) {
-      const labels = profiles.map(candidate => candidate.label);
-      const answer = await ctx.requestPrivateLogin(origin, [{ index: -1, key: 'profile', label: 'Fill this form with which profile?', kind: 'choice', required: true, options: labels }], ctx.signal);
-      profile = profiles[labels.indexOf(answer?.profile ?? '')];
-      if (profile) profileChoice.set(`${ctx.stateDir}|${origin}`, profile.id);
-    }
+    profile = profiles.find(candidate => candidate.id === remembered) ?? bestProfileFor(profiles, fields.map(field => field.hint), label);
+    if (profile) profileChoice.set(`${ctx.stateDir}|${origin}`, profile.id);
   }
   const values = new Map<Step, string>();
   const ask: { step: Step; key: ProfileKey | undefined; field: LoginField }[] = [];
@@ -641,10 +636,10 @@ export async function formProblems(page: Page): Promise<string[]> {
 }
 
 /** Does the steps in order, following a new tab or popup, and returns the page as it ends up. */
-async function runSteps(page: Page, steps: readonly Step[], ctx: ToolContext, tab?: string): Promise<ToolRunResult> {
+async function runSteps(page: Page, steps: readonly Step[], ctx: ToolContext, tab?: string, profileLabel?: string): Promise<ToolRunResult> {
   const notes: string[] = [];
   let current = page;
-  steps = await askForFills(page, steps, ctx);
+  steps = await askForFills(page, steps, ctx, profileLabel);
   for (const [index, step] of steps.entries()) {
     // Only a tab the chat's own page opens is followed; another chat's tabs are not this chat's business.
     const popups: Page[] = [];
@@ -784,7 +779,7 @@ export function verificationCode(text: string): string | undefined {
 async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRunResult> {
   if (INTERACTIONS.has(args.action)) {
     const one: Step = { do: args.action as Step['do'], ...(args.at ? { at: args.at } : {}), ...(args.target ? { target: args.target } : {}), ...(args.text !== undefined ? { text: args.text } : {}), ...(args.key ? { key: args.key } : {}), ...(args.direction ? { direction: args.direction } : {}), ...(args.accept_dialog ? { accept_dialog: true } : {}), ...(args.gone ? { gone: true } : {}), ...(args.seconds ? { seconds: args.seconds } : {}) };
-    return runSteps(page, [one], ctx, args.tab);
+    return runSteps(page, [one], ctx, args.tab, args.label);
   }
   switch (args.action) {
     case 'open': {
@@ -804,13 +799,13 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
     case 'steps':
       const list = typeof args.steps === 'string' ? (() => { try { return JSON.parse(args.steps) as Step[]; } catch { return undefined; } })() : args.steps;
       if (!Array.isArray(list) || !list.length) throw new Error('steps needs a list, e.g. [{"do":"click","target":"e5"}].');
-      return runSteps(page, list, ctx, args.tab);
+      return runSteps(page, list, ctx, args.tab, args.label);
     case 'network': {
       // Does the steps (or just waits and reloads nothing) while recording the page's API calls: the vendor's own web app
       // shows the real endpoint, method and answer shape when documentation is thin. Header values are never shown.
       const list = typeof args.steps === 'string' ? (() => { try { return JSON.parse(args.steps) as Step[]; } catch { return undefined; } })() : args.steps;
       const { recordNetwork, describeCalls } = await import('../computer/network-capture.js');
-      const { result, calls, dropped } = await recordNetwork(page, async () => Array.isArray(list) && list.length ? runSteps(page, list, ctx, args.tab) : (await page.waitForTimeout((args.seconds ?? 5) * 1000), undefined), { ...(args.find ? { find: args.find } : {}), ...(args.bodies ? { bodies: true } : {}) });
+      const { result, calls, dropped } = await recordNetwork(page, async () => Array.isArray(list) && list.length ? runSteps(page, list, ctx, args.tab, args.label) : (await page.waitForTimeout((args.seconds ?? 5) * 1000), undefined), { ...(args.find ? { find: args.find } : {}), ...(args.bodies ? { bodies: true } : {}) });
       return { output: `${result?.output ? `${result.output}\n\n` : ''}${describeCalls(calls, dropped)}`, ...(result?.isError ? { isError: true } : {}) };
     }
     case 'open_email_link': {

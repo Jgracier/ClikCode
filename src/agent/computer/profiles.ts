@@ -218,3 +218,19 @@ export function birthdayFor(value: string, words = ''): string {
   if (/^dd/.test(order)) return `${day}/${month}/${year}`;
   return `${month}/${day}/${year}`;
 }
+
+
+/**
+ * Which saved profile fills a form when there are several. Nobody is asked: an unattended run cannot answer, and a person who
+ * keeps two profiles (a personal one, one for a bot account) meant "the one that fits this form". Score = how many of the form's
+ * blank fields the profile can fill (standard or custom detail); ties go to the profile with more saved details, then to the one
+ * called Personal, then to the first saved. `label` (the call's `label` argument) wins when it names a profile.
+ */
+export function bestProfileFor<P extends SavedProfile>(profiles: readonly P[], hints: readonly FieldHint[], label?: string): P | undefined {
+  if (profiles.length <= 1) return profiles[0];
+  const named = label ? profiles.find(candidate => candidate.label.toLowerCase() === label.trim().toLowerCase()) : undefined;
+  if (named) return named;
+  const score = (candidate: P): number => hints.filter(hint => { const key = profileKeyFor(hint); return (key && candidate.fields[key]) || customFieldFor(candidate, hint); }).length;
+  const size = (candidate: P): number => Object.keys(candidate.fields).length + Object.keys(candidate.custom ?? {}).length;
+  return [...profiles].sort((a, b) => score(b) - score(a) || size(b) - size(a) || Number(b.label === 'Personal') - Number(a.label === 'Personal'))[0];
+}
