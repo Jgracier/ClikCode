@@ -168,7 +168,7 @@ def signed_in_fake(binary, auth_path, auth_text):
     return setup
 
 
-def remote_fake():
+def remote_fake(commit=None):
     """`setup` for ClikCode Remote: a FAKE `ssh` and `tailscale` in fakebin
     (fake-ssh.mjs, fake-tailscale.mjs), a fake repository and Node mirror
     standing in for GitHub and nodejs.org, and one fake machine,
@@ -186,16 +186,19 @@ def remote_fake():
         os.makedirs(world_root)
         tool = lambda *args: json.loads(subprocess.check_output(['node', os.path.join(fakes, 'fake-remote.mjs'), *args], env={**os.environ, 'PATH': os.environ['PATH']}))
         made = tool('world', world_root)
-        # The remote runs this build's commit, so it does not read "needs update".
+        # The remote runs this build's commit, so it does not read "needs update" -- unless `commit` says another.
         cli = open(os.path.join(os.path.dirname(context['entry']), 'cli.js')).read()
         found = re.search(r'CLIKCODE_COMMIT = "([0-9a-f]{40})"', cli)
         now = datetime.datetime.now(datetime.timezone.utc)
         iso = lambda minutes: (now - datetime.timedelta(minutes=minutes)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
         chat = lambda id, title, minutes, preview: {'id': id, 'title': title, 'updatedAt': iso(minutes), 'messages': 4, 'preview': preview, 'section': 'active', 'current': False}
+        # c1 was saved in a folder of THIS (the client's) machine, as an editor once made one:
+        # the machine that owns it does not have it (fake-ssh.mjs FAKE_MACHINE) and says so.
+        stale = {**chat('c1', 'Fix the login page', 5, 'the button does nothing'), 'workspace': context['home']}
         tool('host', world_root, 'devbox.tail-fake.ts.net', json.dumps({
-            'chats': [chat('c1', 'Fix the login page', 5, 'the button does nothing'), chat('c2', 'Write the migration tests', 30, 'cover the rollback')],
-            'later': {'afterMs': 6000, 'chats': [chat('c1', 'Fix the login page', 0, 'now it submits twice'), chat('c2', 'Write the migration tests', 30, 'cover the rollback')]},
-            **({'commit': found.group(1)} if found else {}),
+            'chats': [stale, chat('c2', 'Write the migration tests', 30, 'cover the rollback')],
+            'later': {'afterMs': 6000, 'chats': [{**chat('c1', 'Fix the login page', 0, 'now it submits twice'), 'workspace': context['home']}, chat('c2', 'Write the migration tests', 30, 'cover the rollback')]},
+            **({'commit': commit} if commit else {'commit': found.group(1)} if found else {}),
         }))
         status = os.path.join(world_root, 'tailscale.json')
         open(status, 'w').write(subprocess.check_output(['node', os.path.join(fakes, 'fake-remote.mjs'), 'tailscale']).decode())
@@ -577,7 +580,7 @@ SCENARIOS = {
             ('keys', '\x1b[D'), ('wait_for', 'devbox', 20), ('snap', 'machines'),
             ('keys', '\x1b[B'), ('keys', '\x1b[C'), ('wait_for', 'Fix the login page', 20), ('settle', 0.5), ('snap', 'board'),
             ('wait_for', 'now it submits twice', 20), ('settle', 0.5), ('snap', 'board-updated'),
-            ('keys', '\x1b[C'), ('wait_for', 'Fix the login page', 10), ('snap', 'opened'),
+            ('keys', '\x1b[C'), ('wait_for', 'Fix the login page', 10), ('wait_for', 'The folder /', 10), ('snap', 'opened'),
             ('type', 'check the remote'), ('wait_for', 'Remote answer received.', 15), ('snap', 'answered'),
             ('type', '/provider'), ('wait_for', 'Choose a provider', 10), ('keys', '\x1b[B'), ('keys', '\r'),
             ('wait_for', 'Claude Code', 10), ('snap', 'provider-changed'),
@@ -591,15 +594,36 @@ SCENARIOS = {
             'machines': ['Machines', 'devbox'],
             'board': ['Fix the login page', 'the button does nothing', 'Write the migration tests'],
             'board-updated': ['now it submits twice'],
+            # Its scenario path is too long for the row; the words after it are cut.
+            'opened': ['The folder /'],
             'answered': ['Remote answer received.'],
             'provider-changed': ['Claude Code', 'devbox'],
             'back-to-chats': ['Fix the login page', 'Write the migration tests'],
             'back-to-machines': ['Machines', 'devbox'],
         },
-        'snap_lacks': {'list': ['studios-imac', 'old-server', 'iphone', 'gaming-pc', 'friends-laptop'], 'board': ['needs update'], 'board-updated': ['the button does nothing']},
+        'snap_lacks': {'list': ['studios-imac', 'old-server', 'iphone', 'gaming-pc', 'friends-laptop'], 'board': ['needs update'], 'board-updated': ['the button does nothing'],
+                       'opened': ['another ClikCode build', 'ENOENT']},
         'snap_composer_same': ['list', 'installed', 'opened'],
         'snap_pair_same_row': [('board', 'board-updated', 'Fix the login page'), ('board', 'board-updated', 'Write the migration tests')],
-        'never': ['Windows machines'],
+        'never': ['Windows machines', 'ENOENT'],
+    },
+    # A chat on a machine whose ClikCode is another build: said once on opening it, with where
+    # to update it. Nothing is updated without the user.
+    'remote-outdated-chat-notice': {
+        'setup': remote_fake(commit='0' * 40), 'startup': 4, 'no_dup_check': 'lists and progress lines, no transcript',
+        'turns': [{'blocks': ['unused']}],
+        'steps': [
+            ('settle', 2),
+            ('type', '/remote'), ('wait_for', 'On your tailnet', 15), ('wait_for', 'macbook', 10), ('settle', 1),
+            ('keys', '\r'), ('wait_for', 'devbox is added', 60), ('settle', 1),
+            ('keys', '\x1b[D'), ('wait_for', '← machines', 20), ('settle', 1),
+            ('keys', '\x1b[D'), ('wait_for', 'Machines', 20), ('settle', 1),
+            ('keys', '\x1b[B'), ('keys', '\x1b[C'), ('wait_for', 'Fix the login page', 20), ('settle', 0.5),
+            ('keys', '\x1b[C'), ('wait_for', 'Update it from /remote', 15), ('snap', 'opened'),
+        ],
+        'watch': [],
+        'snap_contains': {'opened': ['devbox runs another ClikCode build than this one. Update it from /remote.']},
+        'never': ['ENOENT', 'Updating ClikCode on devbox'],
     },
     'single-block': {
         'turns': [{'blocks': ['Hello there, all good.']}],

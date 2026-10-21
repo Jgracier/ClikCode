@@ -10,13 +10,20 @@
  *   { "windows": true }    the login shell is cmd.exe: `sh` is not recognized
  *
  * The remote command (everything after the target, joined by spaces as ssh
- * does) runs under /bin/sh -c with that HOME and PATH, stdio passed through.
+ * does) runs under /bin/sh -c in that HOME, with that HOME, USER, PWD and PATH
+ * and nothing of the client's environment, stdio passed through.
+ *
+ * The two machines share one filesystem here, which a real pair does not: a
+ * path of the client's would "exist" on the remote. So the remote's HOME must
+ * be its own (never inside the client's HOME, nor the client's inside it), and
+ * FAKE_MACHINE names the machine's directory: a path outside it is, for the
+ * fake ClikCode there, not on that machine (fake-remote-clikcode.mjs).
  * `ssh -G host` prints `user <name>` from $FAKE_SSH_ROOT/ssh_config.json
  * ({"<host>": "<user>"}) or $USER, as real ssh reads ~/.ssh/config.
  * Every invocation's argv is appended to $FAKE_SSH_ROOT/ssh.log (JSON lines). */
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 
 const root = process.env.FAKE_SSH_ROOT;
 if (!root) { process.stderr.write('fake ssh: FAKE_SSH_ROOT is not set\n'); process.exit(255); }
@@ -61,10 +68,18 @@ if (config.windows) {
   process.exit(1);
 }
 const home = join(machine, 'home');
+const inside = (path, folder) => Boolean(path && folder) && (path === folder || path.startsWith(`${folder}${sep}`));
+if (inside(home, process.env.HOME) || inside(process.env.HOME, home)) {
+  process.stderr.write(`fake ssh: ${host}'s HOME (${home}) and the client's (${process.env.HOME}) must be apart: two machines do not share a home\n`);
+  process.exit(254);
+}
 const child = spawn('/bin/sh', ['-c', command || 'exit 0'], {
   stdio: 'inherit',
   cwd: home,
-  env: { HOME: home, USER: user, LOGNAME: user, PATH: join(machine, 'bin'), TMPDIR: join(machine, 'tmp'), LANG: 'C', ...(config.env ?? {}) },
+  env: {
+    HOME: home, USER: user, LOGNAME: user, PWD: home, PATH: join(machine, 'bin'), TMPDIR: join(machine, 'tmp'), LANG: 'C',
+    FAKE_MACHINE: machine, FAKE_MACHINE_NAME: host.split('.')[0], ...(config.env ?? {}),
+  },
 });
 child.on('exit', (code, signal) => process.exit(code ?? (signal ? 255 : 0)));
 for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, () => child.kill(signal));

@@ -34,6 +34,12 @@ const homeOf = (name: string) => join(root, 'hosts', name, 'home');
 const stripAnsi = (text: string) => text.replace(/\u001b\[[0-9;]*m/g, '');
 
 beforeAll(() => {
+  // The client (this process) and the fake machines are apart, as two machines are: the
+  // suite's temporary directories are inside its HOME (vitest.setup.ts), so the client gets
+  // a HOME of its own beside them, which fake-ssh.mjs requires.
+  const clientHome = join(savedEnv.HOME!, 'client-home');
+  mkdirSync(clientHome, { recursive: true });
+  process.env.HOME = clientHome;
   root = mkdtempSync(join(tmpdir(), 'cc-remote-'));
   const bin = join(root, 'local-bin');
   mkdirSync(bin);
@@ -52,6 +58,7 @@ beforeAll(() => {
 afterAll(() => {
   for (const key of ['FAKE_SSH_ROOT', 'CLIKCODE_REMOTE_REPO_URL', 'CLIKCODE_REMOTE_NODE_MIRROR', 'FAKE_TAILSCALE_STATUS']) delete process.env[key];
   process.env.PATH = savedEnv.PATH;
+  process.env.HOME = savedEnv.HOME;
 });
 
 describe('Tailscale discovery', () => {
@@ -513,4 +520,81 @@ describe('ide-bridge --stdio (the built CLI)', () => {
     expect(events[0]).toMatchObject({ type: 'host-ready', protocol: 1, installationId: expect.any(String) });
     expect(events.at(-1)).toMatchObject({ type: 'chat', chat: 'b', event: { type: 'result', ok: true, data: [] } });
   }, 30_000);
+});
+
+/** Two machines, as they really are: the one that owns a chat has its own HOME, user and
+ * folders, and a folder of the editor's machine is not there. Driven through the fake ssh
+ * against this build's real bridge on the other side. Before 47aec532 the owner started the
+ * vendor in the editor's folder, which Node reported as `spawn claude-agent-acp ENOENT`. */
+describe('a chat on the machine that owns it', () => {
+  const entry = join(REPO, 'dist', 'index.js');
+  const built = existsSync(entry) && readFileSync(join(REPO, 'dist', 'cli.js'), 'utf8').includes('bridge-stdio');
+  // The editor machine's home: a path of the client's, which the owner does not have.
+  const editorHome = join(mkdtempSync(join(tmpdir(), 'cc-editor-machine-')), 'home', 'editor');
+  let owner: { home: string };
+
+  beforeAll(() => {
+    owner = host(root, 'owner', {});
+    const bin = join(owner.home, '.local', 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'clikcode'), `#!/bin/sh\nexec ${process.execPath} ${entry} "$@"\n`, { mode: 0o755 });
+  });
+
+  it('has its own HOME, user and working folder, and not the editor machine\'s folders', async () => {
+    const seen = await runSsh('someone@owner', 'echo "$HOME|$USER|$PWD|$(pwd)"; test -d ' + shellQuote(editorHome) + ' && echo editor-home-here || echo editor-home-absent');
+    expect(seen.code).toBe(0);
+    const [identity, editor] = seen.stdout.trim().split('\n');
+    expect(identity).toBe(`${owner.home}|someone|${owner.home}|${owner.home}`);
+    expect(editor).toBe('editor-home-absent');
+    expect(owner.home.startsWith(process.env.HOME ?? '\0')).toBe(false);
+  });
+
+  it.skipIf(!built)('opens a new chat in its own home, and resumes one saved in a foreign folder there, saying so', async () => {
+    // A chat saved with the editor's folder, as VS Code once made one.
+    const previous = process.env.CLIKCODE_HOME;
+    process.env.CLIKCODE_HOME = join(owner.home, '.clikcode');
+    try {
+      const { writeState } = await import('../session/state/write.js');
+      await writeState({
+        sessions: [{ id: 'stale', conversationId: 'stale', route: 'local', accountId: null, provider: 'claude', model: 'm', effort: 'high',
+          permissionMode: 'ask', nativeHarness: 'claude', messages: [{ role: 'user', content: 'hi' }], workspace: editorHome,
+          createdAt: '2026-10-21T00:00:00.000Z', updatedAt: '2026-10-21T00:00:00.000Z', status: 'active' }],
+        accounts: [], invocations: [], providerSettings: {}, globalSettings: { effort: 'medium', permissionMode: 'ask' },
+      } as never);
+    } finally {
+      if (previous === undefined) delete process.env.CLIKCODE_HOME; else process.env.CLIKCODE_HOME = previous;
+    }
+    const { spawnSsh } = await import('./ssh.js');
+    const { bridgeScript } = await import('./install.js');
+    const { createInterface } = await import('node:readline');
+    const child = spawnSsh('owner', bridgeScript());
+    const events: Array<{ type: string; message?: string; level?: string; requestId?: string; ok?: boolean; error?: string; session?: { id: string; workspace?: string } }> = [];
+    const send = (request: Record<string, unknown>) => child.stdin.write(`${JSON.stringify({ type: 'chat', chat: 'a', request })}\n`);
+    let stderr = '';
+    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+    createInterface({ input: child.stdout }).on('line', (line) => {
+      let message;
+      try { message = JSON.parse(line); } catch { return; }
+      if (message.type === 'host-ready') { child.stdin.write(`${JSON.stringify({ type: 'chat-attach', chat: 'a' })}\n`); return; }
+      if (message.type !== 'chat' || message.chat !== 'a') return;
+      const event = message.event;
+      events.push(event);
+      if (event.type === 'ready') send({ type: 'open', requestId: 'new', mode: 'new', workspace: editorHome });
+      if (event.type === 'result' && event.requestId === 'new') send({ type: 'open', requestId: 'resume', mode: 'resume', sessionId: 'stale', workspace: '' });
+      if (event.type === 'result' && event.requestId === 'resume') child.stdin.end();
+    });
+    await new Promise((resolve) => child.once('exit', resolve));
+    const results = events.filter((event) => event.type === 'result');
+    expect(results, stderr).toMatchObject([{ requestId: 'new', ok: true }, { requestId: 'resume', ok: true }]);
+    const sessions = events.filter((event) => event.type === 'session').map((event) => event.session!);
+    const fresh = sessions.find((session) => session.id !== 'stale');
+    expect(fresh?.workspace).toBe(owner.home);
+    expect(sessions.filter((session) => session.id === 'stale').map((session) => session.workspace)).toContain(owner.home);
+    const notices = events.filter((event) => event.type === 'notice');
+    expect(notices).toEqual(expect.arrayContaining([
+      expect.objectContaining({ level: 'warning', message: expect.stringMatching(new RegExp(`^The folder ${editorHome} does not exist on .+; this chat opens in ${owner.home}\\.$`)) }),
+      expect.objectContaining({ level: 'warning', message: expect.stringMatching(new RegExp(`^The folder ${editorHome} does not exist on .+; this chat continues in ${owner.home}\\.$`)) }),
+    ]));
+    expect(JSON.stringify(events)).not.toMatch(/ENOENT/);
+  }, 60_000);
 });

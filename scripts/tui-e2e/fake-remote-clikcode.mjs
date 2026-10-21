@@ -13,11 +13,17 @@
  * after the first connection starts watching.
  *
  * Every request it gets is logged to ~/.fake-remote/bridge.log, so a test
- * can check which requests the board and opened chat sent. */
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, unlinkSync, watchFile, writeFileSync } from 'node:fs';
+ * can check which requests the board and opened chat sent.
+ *
+ * It owns its chats' folders as the real one does (session/attach.ts): a
+ * chat is opened in a folder of THIS machine -- $FAKE_MACHINE, set by
+ * fake-ssh.mjs, since the fake machines share the client's filesystem --
+ * and one named elsewhere (a chat's `workspace` in chats.json, or an open's)
+ * is its home instead, said as a warning notice. */
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync, watchFile, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { createInterface } from 'node:readline';
 
 const home = homedir();
@@ -30,6 +36,12 @@ const installationId = (() => {
   if (!existsSync(file)) { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, randomUUID()); }
   return read(file);
 })();
+const machineRoot = process.env.FAKE_MACHINE;
+const machineName = process.env.FAKE_MACHINE_NAME || 'this machine';
+const onThisMachine = (path) => {
+  if (!path || (machineRoot && path !== machineRoot && !path.startsWith(`${machineRoot}${sep}`))) return false;
+  try { return statSync(path).isDirectory(); } catch { return false; }
+};
 const chats = () => { try { return JSON.parse(read(join(fake, 'chats.json')) || '[]'); } catch { return []; } };
 
 const [command, flag] = process.argv.slice(2);
@@ -64,7 +76,13 @@ lines.on('line', (line) => {
     send({ type: 'chat', chat: message.chat, event: { type: 'result', requestId: request.requestId, ok: true, data: chats() } });
   } else if (request.type === 'open' && request.mode === 'resume' && chats().some((chat) => chat.id === request.sessionId)) {
     opened.set(message.chat, request.sessionId);
-    send({ type: 'chat', chat: message.chat, event: { type: 'session', session: sessionFor(request.sessionId) } });
+    const session = sessionFor(request.sessionId);
+    const saved = chats().find((chat) => chat.id === request.sessionId)?.workspace;
+    session.workspace = onThisMachine(saved) ? saved : home;
+    send({ type: 'chat', chat: message.chat, event: { type: 'session', session } });
+    if (saved && session.workspace !== saved) {
+      send({ type: 'chat', chat: message.chat, event: { type: 'notice', level: 'warning', message: `The folder ${saved} does not exist on ${machineName}; this chat continues in ${home}.` } });
+    }
     send({ type: 'chat', chat: message.chat, event: { type: 'result', requestId: request.requestId, ok: true, data: { sessionId: request.sessionId } } });
   } else if (request.type === 'send' && opened.has(message.chat)) {
     const id = opened.get(message.chat);
