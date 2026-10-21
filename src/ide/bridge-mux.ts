@@ -138,7 +138,7 @@ export async function runMultiplexedBridge(config: Conf, send: NonNullable<typeo
   // Never long: an editor waits on host-ready, and a state lock held elsewhere must not hold it.
   const installationId = await Promise.race([
     readState({ transcripts: [] }).then((state) => state.installationId, () => undefined),
-    new Promise<undefined>((resolve) => setTimeout(resolve, 2000).unref()),
+    new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 2000).unref()),
   ]);
   send({
     type: 'host-ready', version: CLIKCODE_VERSION, protocol: IDE_PROTOCOL.version, revision: IDE_PROTOCOL.revision,
