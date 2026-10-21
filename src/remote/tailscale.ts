@@ -11,6 +11,8 @@
  * a machine re-added to the tailnet leaves its old node behind, offline,
  * under the same name. */
 import { spawn } from 'node:child_process';
+import type { RemoteMachine } from './machines.js';
+import { targetHost } from './shell.js';
 
 export const DISCOVERY_RECENT_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -47,6 +49,15 @@ export interface DiscoveredMachine {
   online: boolean;
   /** When it was last seen (absent while online). */
   lastSeen?: string;
+}
+
+/** Tailnet nodes not already in the saved machine list. */
+export function notYetAdded(discovered: readonly DiscoveredMachine[], machines: readonly RemoteMachine[]): DiscoveredMachine[] {
+  const hosts = new Set(machines.map((machine) => targetHost(machine.sshTarget).toLowerCase()));
+  const nodes = new Set(machines.flatMap((machine) => (machine.tailscale ? [machine.tailscale.nodeId] : [])));
+  return discovered.filter((machine) => !nodes.has(machine.nodeId)
+    && !(machine.dnsName && hosts.has(machine.dnsName.toLowerCase()))
+    && !hosts.has(machine.name.toLowerCase()));
 }
 
 const DESKTOP_OS: Readonly<Record<string, DiscoveredMachine['os']>> = { linux: 'linux', macos: 'macOS', windows: 'windows' };

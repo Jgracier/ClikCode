@@ -227,6 +227,19 @@ export class RemoteMachines {
     return this;
   }
 
+  /** Pick up a newly installed machine without disturbing existing links. */
+  async refresh(): Promise<void> {
+    const machines = (await readMachines()).filter((machine) => machine.ready);
+    if (this.closed) return;
+    for (const machine of machines) {
+      if (this.links.some((link) => link.view.machine.id === machine.id)) continue;
+      const link = new RemoteLink(machine, () => this.notify(), this.options);
+      this.links.push(link);
+      link.start();
+    }
+    this.notify();
+  }
+
   private notify(): void {
     this.revision += 1;
     for (const listener of this.listeners) listener();

@@ -14,6 +14,11 @@ import { bridgePool } from './bridge-pool';
 import { remoteDirectory } from './remote-directory';
 import { sshArgv } from '../../../src/remote/ssh';
 import { remoteTerminalScript } from '../../../src/remote/install';
+import { installOnMachine, type InstallReporter } from '../../../src/remote/install';
+import { discoverMachines, readTailscaleStatus } from '../../../src/remote/tailscale';
+import { forgetMachine, newMachineRecord, readMachines, updateMachine, updateMachines } from '../../../src/remote/machines';
+import { validateSshTarget, withUser } from '../../../src/remote/shell';
+import { defaultLoginUser } from '../../../src/remote/ssh';
 import { uploadRemoteImage, removeRemoteImage } from '../../../src/remote/image';
 import type { WebviewSurface } from './chat-view';
 import { diffModel } from './model-patch';
@@ -753,6 +758,61 @@ export class ClikCodeController implements vscode.Disposable {
     await this.start(sessionId, mode);
   }
 
+  private async connectDiscovered(machineId: string): Promise<string> {
+    const { status } = await readTailscaleStatus();
+    const found = status && discoverMachines(status).find((machine) => `tailscale:${machine.nodeId}` === machineId);
+    if (!found || !found.online || found.os === 'windows') throw new Error('That Tailscale machine is unavailable.');
+    const existing = (await readMachines()).find((machine) => machine.tailscale?.nodeId === found.nodeId);
+    if (existing?.ready) return existing.id;
+    let target = existing?.sshTarget ?? validateSshTarget(found.dnsName ?? found.hostName);
+    let outcome;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      outcome = await vscode.window.withProgress({
+        location: vscode.ProgressLocation.Notification, title: `Installing ClikCode on ${found.name}`, cancellable: false,
+      }, async (progress) => {
+        const reporter: InstallReporter = {
+          start: (step, index, total) => progress.report({ message: `${index}/${total} ${step}` }),
+          done: (step, detail) => this.host.log.appendLine(`${found.name}: ${step}${detail ? ` · ${detail}` : ''}`),
+        };
+        return installOnMachine(target, reporter);
+      });
+      if (outcome.ok || !outcome.auth || attempt) break;
+      const refused = await defaultLoginUser(target);
+      const user = await vscode.window.showInputBox({
+        title: `Log in to ${found.name} as which user?`,
+        prompt: `SSH refused ${refused}. Enter an allowed user, such as root.`,
+        placeHolder: 'root', ignoreFocusOut: true,
+      });
+      if (!user?.trim()) throw new Error('Connection cancelled.');
+      target = withUser(target, user.trim());
+    }
+    if (!outcome?.ok) throw new Error(outcome?.message ?? 'The remote install did not complete.');
+    const info = outcome.info;
+    const machine = existing ?? newMachineRecord({
+      name: found.name, sshTarget: target, os: found.os, ready: true,
+      tailscale: { nodeId: found.nodeId, ...(found.dnsName ? { dnsName: found.dnsName } : {}) },
+      installed: { version: info.version, ...(info.commit ? { commit: info.commit } : {}), at: new Date().toISOString() },
+      ...(info.installationId ? { installationId: info.installationId } : {}),
+    });
+    const duplicate = !info.installationId ? undefined : (await readMachines()).find((item) => item.id !== machine.id && item.installationId === info.installationId);
+    if (!duplicate && existing) await updateMachine(machine.id, (record) => {
+      record.sshTarget = target; record.ready = true;
+      record.installed = { version: info.version, ...(info.commit ? { commit: info.commit } : {}), at: new Date().toISOString() };
+      if (info.installationId) record.installationId = info.installationId;
+    });
+    else if (!duplicate) await updateMachines((machines) => [...machines, machine]);
+    else if (existing) await forgetMachine(existing.id);
+    await remoteDirectory.refresh();
+    return duplicate?.id ?? machine.id;
+  }
+
+  async selectMachine(machineId: string): Promise<void> {
+    const id = machineId.startsWith('tailscale:') ? await this.connectDiscovered(machineId) : machineId;
+    const chats = id === 'local' ? await this.localConversations() : await remoteDirectory.conversations(id);
+    const latest = [...chats].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0];
+    await this.openOnMachine(id, latest ? 'resume' : 'new', latest?.id);
+  }
+
   private async localConversations(): Promise<IdeConversation[]> {
     if (!this.remoteMachineId) {
       await this.ensureStarted();
@@ -803,8 +863,11 @@ export class ClikCodeController implements vscode.Disposable {
         return undefined;
       case 'machines': {
         const local = await this.localConversations().catch(() => []);
-        return remoteDirectory.machines(local);
+        return remoteDirectory.machines(local, request.discover);
       }
+      case 'selectMachine':
+        await this.selectMachine(request.machineId);
+        return undefined;
       case 'machineConversations':
         if (request.machineId === 'local') return this.localConversations();
         return remoteDirectory.conversations(request.machineId);

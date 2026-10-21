@@ -15,7 +15,7 @@ import { relativeTime } from '../../harness/protocol/format.js';
 import { chooseOption } from './choose.js';
 import { RemoteMachines, type MachineView } from '../../remote/connection.js';
 import { forgetMachine, newMachineRecord, readMachines, updateMachine, updateMachines, type RemoteMachine } from '../../remote/machines.js';
-import { discoverMachines, readTailscaleStatus, type DiscoveredMachine } from '../../remote/tailscale.js';
+import { discoverMachines, notYetAdded, readTailscaleStatus, type DiscoveredMachine } from '../../remote/tailscale.js';
 import { installOnMachine, uninstallFromMachine, type InstallOutcome, type InstallReporter } from '../../remote/install.js';
 import { defaultLoginUser } from '../../remote/ssh.js';
 import { targetHost, targetUser, validateSshTarget, withUser } from '../../remote/shell.js';
@@ -46,13 +46,7 @@ export function machineStateText(machine: RemoteMachine, view: MachineView | und
 
 /** Discovered machines not already added (by Tailscale node, by name it is
  * reached at, or by installation id once it has one). */
-export function notYetAdded(discovered: readonly DiscoveredMachine[], machines: readonly RemoteMachine[]): DiscoveredMachine[] {
-  const hosts = new Set(machines.map((machine) => targetHost(machine.sshTarget).toLowerCase()));
-  const nodes = new Set(machines.flatMap((machine) => (machine.tailscale ? [machine.tailscale.nodeId] : [])));
-  return discovered.filter((machine) => !nodes.has(machine.nodeId)
-    && !(machine.dnsName && hosts.has(machine.dnsName.toLowerCase()))
-    && !hosts.has(machine.name.toLowerCase()));
-}
+export { notYetAdded } from '../../remote/tailscale.js';
 
 export async function interactiveRemotePicker(host: RemoteHost): Promise<InteractiveSlashOutcome> {
   const rl = host.prompter;

@@ -11,7 +11,7 @@ import type { Mention } from '../webview-protocol';
 import { post, request, save, saved, uid } from './bus';
 import { formatTurnUsage, titleCase } from './format';
 import { AccountMenu, agentName, EffortMenu, effortLabel, knownProviders, ModeMenu, modelWithEffort, providerChoosesModel, ProviderModelPicker } from './picker';
-import { HistoryMenu } from './screens';
+import { MachineMenu } from './screens';
 import { focusHere, Icon, KeyList, type ListRow } from './ui';
 import { composeMessage, promptHistory, sameRange, tokenAtCaret, type Attachment } from './composer-text';
 import { commandRows, fileRows } from './composer-suggestions';
@@ -379,7 +379,7 @@ export function Composer(props: {
       <div class="composer-status">
         {menu === 'account' ? <AccountMenu model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
         {menu === 'mode' ? <ModeMenu model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
-        {menu === 'machines' ? <HistoryMenu model={model} initialScreen="machines" onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
+        {menu === 'machines' ? <MachineMenu model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
         <StatusButtons model={model} menu={menu} setMenu={setMenu} connected={connected} />
         <button type="button" id="machines-button" class={`status-account${menu === 'machines' ? ' open' : ''}`} data-popover-anchor aria-haspopup="dialog" aria-expanded={menu === 'machines'}
           title={`Machine: ${model.machine ?? 'This machine'}`} onClick={() => setMenu(menu === 'machines' ? undefined : 'machines')}>
