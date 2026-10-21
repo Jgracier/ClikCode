@@ -99,3 +99,18 @@ export async function moveChat(
 export function moveConfirmation(target: string, changes: readonly string[]): string {
   return `Moving to ${target}: ${changes.join(' ')}`;
 }
+
+/** The machine a moved chat went to, among the ones a client knows: 'local'
+ * (the client's own), an added machine's id -- by installation id, else by
+ * name -- or undefined for one it has not added. */
+export function movedChatMachine(
+  movedTo: Pick<ChatMovedTo, 'machine' | 'installationId'>, machines: ReadonlyArray<{ id: string; name: string; installationId?: string; ready?: boolean }>,
+  here: { name: string; installationId?: string },
+): string | undefined {
+  if (movedTo.installationId && movedTo.installationId === here.installationId) return 'local';
+  const ready = machines.filter((machine) => machine.ready !== false);
+  const machine = (movedTo.installationId ? ready.find((item) => item.installationId === movedTo.installationId) : undefined)
+    ?? ready.find((item) => item.name === movedTo.machine);
+  if (machine) return machine.id;
+  return movedTo.machine === here.name ? 'local' : undefined;
+}

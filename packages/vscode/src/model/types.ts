@@ -216,6 +216,8 @@ export interface ChatModel {
   permissions?: string;
   route?: string;
   workspace?: string;
+  /** The chat went on on another machine: read-only here (src/session/move.ts). */
+  movedTo?: { machine: string; sessionId: string; installationId?: string };
   accountUsage?: string;
   /** When the window closest to running out resets, while it has not: "5h
    * resets 5:34PM" (with the date when not today). */

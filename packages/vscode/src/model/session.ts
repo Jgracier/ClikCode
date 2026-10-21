@@ -69,6 +69,7 @@ export function applySession(model: ChatModel, session: HarnessSession, account?
     permissions: session.permissionMode ?? 'ask',
     route: session.route,
     workspace: session.workspace,
+    movedTo: session.movedTo ? { machine: session.movedTo.machine, sessionId: session.movedTo.sessionId, ...(session.movedTo.installationId ? { installationId: session.movedTo.installationId } : {}) } : undefined,
     messages: sameMessages(model.messages, session.messages ?? []) ? model.messages : (session.messages ?? []).map(({ role, content, automatic }) => ({ role, content, ...(automatic ? { automatic } : {}) })),
     traces: withSavedTraces(model.traces, session.messages ?? []),
     // What ClikCode owes the model (a finished background shell) is not the user's to see.
