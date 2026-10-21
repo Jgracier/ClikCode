@@ -157,3 +157,48 @@ describe('a window joining a running turn', () => {
     expect(screen).not.toContain('Switched to work');
   });
 });
+
+describe('a compaction ClikCode ran itself', () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] }); });
+  afterEach(() => {
+    vi.useRealTimers();
+    Object.assign(process.stdout, { isTTY: realTty });
+    process.stdout.write = realWrite;
+  });
+
+  it('is drawn as its notice, not as a /compact the user typed; a typed one stays theirs', () => {
+    const why = 'Compacted automatically: the context was 670k tokens, over the 250k setting (/settings global compact)';
+    const screen = reopened([
+      { role: 'user', content: 'fix the parser' }, { role: 'assistant', content: 'Fixed.' },
+      { role: 'user', content: '/compact', automatic: why }, { role: 'assistant', content: 'Compacted.' },
+    ]);
+    expect(screen).toContain(why);
+    expect(screen).not.toContain('› /compact');
+    expect(index(screen, why)).toBeLessThan(index(screen, 'Compacted.'));
+    expect(reopened([{ role: 'user', content: '/compact' }, { role: 'assistant', content: 'Compacted.' }])).toContain('› /compact');
+  });
+
+  it('is drawn as its notice while it runs, from the turn\'s journal', () => {
+    const why = 'Compacted before switching accounts: personal is nearly out of usage';
+    const written: string[] = [];
+    Object.assign(process.stdout, { isTTY: true, columns: 100, rows: 40 });
+    process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
+      written.push(String(chunk));
+      for (const arg of rest) if (typeof arg === 'function') (arg as () => void)();
+      return true;
+    }) as typeof process.stdout.write;
+    const rl = new TerminalHarnessPrompter();
+    try {
+      const base = { id: 's', route: 'local', accountId: null, provider: null, model: null, createdAt: '', updatedAt: '', status: 'active', messages: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'Hello.' }] };
+      rl.render(base as never);
+      // A window following the worker's turn: it was named no prompt (worker-turn.ts).
+      rl.submitted(undefined);
+      rl.startWaiting('compacting before the account switch', () => undefined, async () => ({ kind: 'sent' }) as never);
+      rl.render({ ...base, pendingTurn: { prompt: '/compact', automatic: why, startedAt: '', updatedAt: '', outputStarted: false } } as never, undefined, { running: true });
+      vi.advanceTimersByTime(400);
+      const screen = strip(written.join('')).replace(/\s+/g, ' ');
+      expect(screen).toContain(why);
+      expect(screen).not.toContain('› /compact');
+    } finally { rl.close(); }
+  });
+});

@@ -27,3 +27,20 @@ describe('notes when a chat moves to another provider', () => {
     expect(applySession({ ...onGrok, running: true }, session('opencode')).notes).toEqual([info]);
   });
 });
+
+describe('a compaction ClikCode ran itself', () => {
+  const why = 'Compacted automatically: the context was 670k tokens, over the 250k setting (/settings global compact)';
+
+  it('keeps why with the saved message, so it is drawn as a notice and not as the user\'s /compact', () => {
+    const saved = applySession(emptyModel(), session('claude', [{ role: 'user', content: '/compact', automatic: why }, { role: 'assistant', content: 'Compacted.' }]));
+    expect(saved.messages[0]).toEqual({ role: 'user', content: '/compact', automatic: why });
+    const typed = applySession(emptyModel(), session('claude', [{ role: 'user', content: '/compact' }]));
+    expect(typed.messages[0]).toEqual({ role: 'user', content: '/compact' });
+  });
+
+  it('draws the running one as its notice in place of the prompt', () => {
+    const running = applySession({ ...emptyModel(), running: true }, { ...session('claude'), pendingTurn: { prompt: '/compact', automatic: why, startedAt: '', updatedAt: '', outputStarted: false } } as HarnessSession);
+    expect(running.pendingPrompt).toBeUndefined();
+    expect(running.pendingNotice).toBe(why);
+  });
+});
