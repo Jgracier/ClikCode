@@ -105,10 +105,10 @@ export function ConversationMark({ row, state }: { row: ListedConversation; stat
  * Each row is its title, its one state and, dim under it, the last thing
  * asked -- the terminal's three parts. Rename, open in a tab and
  * delete are on each row; the rest (fork, archive) are slash commands. */
-export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onError: (message: string) => void }): JSX.Element {
+export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onError: (message: string) => void; initialScreen?: 'chats' | 'machines' }): JSX.Element {
   const { rows: localRows, load } = useConversations(props.onError, undefined, 'local');
-  const [machineId, setMachineId] = useState(props.model.machineId ?? lastHistoryMachine);
-  const [showMachines, setShowMachines] = useState(false);
+  const [machineId, setMachineId] = useState(props.model.machineId ?? (props.initialScreen === 'machines' ? 'local' : lastHistoryMachine));
+  const [showMachines, setShowMachines] = useState(props.initialScreen === 'machines');
   const [machines, setMachines] = useState<ListedMachine[]>();
   const [remoteRows, setRemoteRows] = useState<ListedConversation[]>();
   const rows = machineId === 'local' ? localRows : remoteRows;

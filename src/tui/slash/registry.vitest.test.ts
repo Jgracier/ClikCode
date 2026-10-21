@@ -70,6 +70,7 @@ describe('slash registry', () => {
     // filesystem an agent may touch without asking.
     const onGateway = session({ route: 'gateway', nativeHarness: undefined });
     expect(resolveSlashCommand('permissions')!.availability(onGateway, undefined).available).toBe(true);
+    expect(resolveSlashCommand('permission')?.name).toBe('permissions');
     expect(resolveSlashCommand('model')!.availability(onGateway, undefined).available).toBe(true);
     expect(resolveSlashCommand('effort')!.availability(onGateway, undefined).available).toBe(true);
     expect(resolveSlashCommand('fast')!.availability(onGateway, undefined).available).toBe(true);
