@@ -15,6 +15,8 @@ import { listWorkerRecords, readWorkerRecord } from '../worker/registry.js';
 import { newMachineRecord, updateMachines } from './machines.js';
 import { localMoveEnd, movedChatPlace, remoteMoveEnd } from './move-terminal.js';
 import { TerminalBridge } from './terminal-chat.js';
+import { RemoteMachines } from './connection.js';
+import { readMachines } from './machines.js';
 
 const REPO = resolve(__dirname, '..', '..');
 const FAKES = join(REPO, 'scripts', 'tui-e2e');
@@ -57,6 +59,7 @@ const until = async <T>(check: () => Promise<T | undefined | false>, ms = 20_000
 };
 const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const read = async () => (await import('../session/state/read.js')).readState({ transcripts: ['here-1', 'prod-1'] });
+const read2 = async () => (await import('../session/state/read.js')).readState({ transcripts: [] });
 const write = async (state: HarnessState) => (await import('../session/state/write.js')).writeState(state);
 
 beforeAll(async () => {
@@ -169,5 +172,27 @@ describe.skipIf(!built)('moving a chat between two machines, over the real bridg
       // It is read-only there now: a second move of it is refused by that machine.
       await expect(moveChat(remoteMoveEnd(bridge, { name: 'prod' }), localMoveEnd(), 'prod-1')).rejects.toThrow(/moved to/);
     } finally { bridge.close(); }
+  }, 120_000);
+
+  it('moves over the connection the machine list already has: no other SSH connection', async () => {
+    await write(stateOf([chat({ id: 'here-2', conversationId: 'conv-3', name: 'Over the list', workspace: process.env.HOME })]));
+    const sshLog = join(root, 'ssh.log');
+    const connections = (): number => (existsSync(sshLog) ? readFileSync(sshLog, 'utf8').trim().split('\n').filter((line) => line.includes('"prod"')).length : 0);
+    const links = await new RemoteMachines({ autoUpdate: false }).open();
+    try {
+      const machine = (await readMachines()).find((item) => item.name === 'prod')!;
+      await until(async () => links.views().find((view) => view.machine.id === machine.id)?.state === 'connected');
+      const opened = connections();
+      expect(opened).toBeGreaterThan(0);
+      const channel = (await links.channel(machine.id))!;
+      expect(channel.revision).toBeGreaterThanOrEqual(4);
+      sent.length = 0;
+      const moved = await moveChat(recorded(localMoveEnd()), recorded(remoteMoveEnd(channel, machine)), 'here-2');
+      channel.close();
+      expect(moved).toMatchObject({ moved: true, sessionId: 'here-2' });
+      expect(sent.filter((line) => line.includes('import-chat'))).toEqual(['prod import-chat']);
+      expect(connections()).toBe(opened);
+      expect((await onProd(read2)).sessions.find((item) => item.id === 'here-2')).toMatchObject({ name: 'Over the list' });
+    } finally { await links.close(); }
   }, 120_000);
 });
