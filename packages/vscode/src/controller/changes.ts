@@ -4,6 +4,7 @@ import * as vscode from 'vscode';
 import { readFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { userError } from '../../../../src/harness/protocol/errors';
+import type { ChatMachine } from '../chat-machine';
 import type { ChatModel } from '../model';
 import type { FileDiff } from '../protocol';
 import { applyHunks, fileHunks, turnChanges, unwindChanges } from '../text';
@@ -18,12 +19,27 @@ export class ChangeViews {
   constructor(
     private readonly diffs: DiffDocuments,
     private readonly model: () => ChatModel,
-    private readonly workspaceFolder: () => string,
+    /** The chat's machine: only this computer's files are read or undone here. */
+    private readonly machine: () => ChatMachine,
     private readonly report: (text: string) => void,
   ) {}
 
   private workspace(): string {
-    return this.model().workspace ?? this.workspaceFolder();
+    return this.model().workspace ?? this.machine().workspaceForOpen() ?? '';
+  }
+
+  /** A file the chat names, as it is now -- on this computer only: one of the
+   * same path here is another file than the one on the chat's machine. */
+  private read(path: string): Promise<string | undefined> {
+    return this.machine().filesHere ? readFile(path, 'utf8').catch(() => undefined) : Promise.resolve(undefined);
+  }
+
+  /** Undo edits files in this editor: refused for a chat on another machine. */
+  private undoable(what: string): boolean {
+    const machine = this.machine();
+    if (machine.filesHere) return true;
+    this.report(userError(`undo ${what}`, `its files are on ${machine.name ?? 'another machine'}`));
+    return false;
   }
 
   isShown(id: string): boolean {
@@ -61,7 +77,7 @@ export class ChangeViews {
   private async fileVersions(file: FileDiff, state: 'proposed' | 'made'): Promise<Version> {
     const hunks = fileHunks(file);
     const path = file.path ? (isAbsolute(file.path) ? file.path : join(this.workspace(), file.path)) : undefined;
-    const current = path ? await readFile(path, 'utf8').catch(() => undefined) : undefined;
+    const current = path ? await this.read(path) : undefined;
     const name = file.path?.split(/[\\/]/).pop();
     if (state === 'made' && file.change === 'add' && current !== undefined) return { name, path, before: '', after: current, whole: true };
     if (current !== undefined && !file.omitted) {
@@ -100,7 +116,7 @@ export class ChangeViews {
    * only where every file of it still places cleanly. */
   async revertChange(key: string, userIndex: number | undefined): Promise<void> {
     const diff = this.changeOf(key, userIndex);
-    if (!diff?.length) return;
+    if (!diff?.length || !this.undoable('this change')) return;
     const files = await Promise.all(diff.map(async (file) => ({ ...(await this.fileVersions(file, 'made')), created: file.change === 'add' })));
     await undoFiles(files, 'this change', (names) => `Undo ClikCode's change to ${names}?`, 'Undo Change', this.report);
   }
@@ -112,7 +128,7 @@ export class ChangeViews {
     const workspace = this.workspace();
     return Promise.all([...turnChanges(trace?.activities ?? [])].map(async ([file, changes]) => {
       const path = isAbsolute(file) ? file : join(workspace, file);
-      const current = await readFile(path, 'utf8').catch(() => undefined);
+      const current = await this.read(path);
       const unwound = unwindChanges(current, changes);
       return { name: file.split(/[\\/]/).pop() || file, path, before: unwound.before, after: current ?? '', whole: unwound.whole, created: unwound.created };
     }));
@@ -130,7 +146,7 @@ export class ChangeViews {
    * refused when any of its files changed since. */
   async revertTurn(userIndex: number): Promise<void> {
     const files = await this.turnFiles(userIndex);
-    if (!files.length) return;
+    if (!files.length || !this.undoable("this turn's changes")) return;
     await undoFiles(files, "this turn's changes", (names) => `Undo all of ClikCode's changes in this turn (${files.length} file${files.length === 1 ? '' : 's'}: ${names})?`, 'Undo All', this.report);
   }
 }
