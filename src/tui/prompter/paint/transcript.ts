@@ -167,7 +167,7 @@ function writeMessages(
       if (message.role === 'user' && index > 0) emit(['']);
       // A title tag never renders, however it got into the saved reply: a
       // vendor that repeated its first reply's tag, or an older transcript.
-      // A prompt ClikCode sent itself (a /compact after a turn) is its notice, not the user's words.
+      // An older automatic /compact record is its notice, not the user's words.
       emit(message.role === 'assistant'
         ? messageRows(withoutOtherOrgThinkingNotice(stripRepeatedTitles(message.content)), '·')
         : message.automatic ? noticeRows(message.automatic) : userRows(message.content));

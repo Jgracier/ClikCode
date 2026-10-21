@@ -333,7 +333,7 @@ export function activityTextSummary(activities: readonly TurnActivity[]): string
  * ClikCode sent itself. */
 export function textTranscript(messages: readonly TranscriptMessage[]): Array<{ role: 'user' | 'assistant'; content: string }> {
   return messages.flatMap((message) => {
-    // A prompt ClikCode sent itself (a /compact) was not the user's request.
+    // An older automatic /compact record was not the user's request.
     if (message.automatic) return [];
     if (message.role !== 'assistant' || message.content.trim()) return [{ role: message.role, content: message.content }];
     const activities = readTurnActivities(message.activities);

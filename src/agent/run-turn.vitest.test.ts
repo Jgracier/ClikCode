@@ -7,7 +7,6 @@ import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { ConversationStore } from './conversation.js';
 import { runAgentLoop } from './run-turn.js';
 import { retryDelaySeconds, stepRecovery } from './turn-recovery.js';
-import { MAX_REQUEST_ITEMS } from './context.js';
 import { disposeSessionState, formatShellNotifications, sessionState } from './session-state.js';
 import { ScriptedModelClient, type ScriptEntry } from './testing.js';
 import { type AgentTurnInput } from './model-client.js';
@@ -709,114 +708,17 @@ describe('runAgentLoop', () => {
     expect(h.client.requests).toHaveLength(1);
   });
 
-  describe('a long conversation of small items', () => {
-    // Tokens are nowhere near the window; only the entry count is. Eliding old results shortens
-    // items without removing them, so the Gateway's bound on a request's item count is reached by
-    // item count alone unless the loop summarizes on it.
-    const seed = async (h: Harness, count: number) => {
-      const store = path.join(stateDir, 'sessions', h.input.sessionId);
-      await fs.mkdir(store, { recursive: true });
-      const lines = Array.from({ length: count }, (_, i) => JSON.stringify({ kind: 'item', at: '2026-10-10T00:00:00.000Z', item: { type: 'text', role: i % 2 ? 'assistant' : 'user', text: `m${i}` } }));
-      await fs.writeFile(path.join(store, 'harness.jsonl'), `${lines.join('\n')}\n`);
-    };
-
-    it(`is summarized once it passes ${MAX_REQUEST_ITEMS} items, so no request nears the Gateway's bound`, async () => {
-      const phases: string[] = [];
-      const h = harness([], { onPhase: (phase) => phases.push(phase) }, (request) => (request.tools.length === 0 ? { text: 'SUMMARY of the long history' } : { text: 'answered' }));
-      Object.assign(h.client, { contextHints: { contextWindow: 1_000_000 } });
-      await seed(h, MAX_REQUEST_ITEMS + 100);
-      const result = await runAgentLoop(h.input);
-      expect(result.stopReason).toBe('completed');
-      expect(phases).toContain('compacting context');
-      const real = h.client.requests.find((request) => request.tools.length > 0)!;
-      expect(real.items.length).toBeLessThan(50);
-      expect(real.items.some((item) => item.type === 'summary')).toBe(true);
-    });
-
-    it('is left alone below that count', async () => {
-      const phases: string[] = [];
-      const h = harness([{ text: 'answered' }], { onPhase: (phase) => phases.push(phase) });
-      Object.assign(h.client, { contextHints: { contextWindow: 1_000_000 } });
-      await seed(h, MAX_REQUEST_ITEMS - 100);
-      await runAgentLoop(h.input);
-      expect(phases).not.toContain('compacting context');
-      expect(h.client.requests).toHaveLength(1);
-    });
-  });
-
-  it('compacts when the reported context passes 80% of the window', async () => {
-    await fs.writeFile(path.join(cwd, 'big.txt'), `${'line of filler text\n'.repeat(400)}`);
-    const phases: string[] = [];
-    const read = (id: string) => ({ toolCalls: [{ id, name: 'read_file', args: { path: 'big.txt' } }], usage: { input: 900, output: 10 }, contextWindow: 1000 });
-    const h = harness([
-      read('r1'), read('r2'), read('r3'), read('r4'),
-      (request) => {
-        // Either the summarization step or, if eliding sufficed, the next real step.
-        return request.tools.length === 0 ? { text: 'SUMMARY: read big.txt four times' } : { text: 'finished' };
-      },
-    ], {
-      onPhase: (phase) => phases.push(phase),
-      hooks: { preCompact: async ({ trigger }) => { phases.push(`PreCompact ${trigger}`); } },
-    }, { text: 'finished' });
-    const result = await runAgentLoop(h.input);
-    expect(result.stopReason).toBe('completed');
-    expect(phases).toContain('compacting context');
-    expect(phases[phases.indexOf('compacting context') + 1]).toBe('PreCompact auto');
-    const compactedRequest = h.client.requests.find((request, index) => index > 0 && request.items.some((item) => item.type === 'summary' || (item.type === 'tool_result' && /elided to save context/.test(item.output))));
-    expect(compactedRequest).toBeDefined();
-    // The transcript on disk keeps every original item.
-    const raw = await fs.readFile(path.join(stateDir, 'sessions', h.input.sessionId, 'harness.jsonl'), 'utf8');
-    const history = raw.split('\n').filter(Boolean).map((line) => JSON.parse(line) as { kind: string; item?: { type: string; output?: string } })
-      .flatMap((entry) => entry.kind === 'item' && entry.item ? [entry.item] : []);
-    expect(history.filter((item) => item.type === 'tool_result')).toHaveLength(4);
-    expect(history.every((item) => item.type !== 'tool_result' || !/elided/.test(item.output))).toBe(true);
-  });
-
-  it('compacts once, not before every step, when what is kept is itself over the line', async () => {
-    const phases: string[] = [];
-    const call = (id: string) => ({ toolCalls: [{ id, name: 'list_dir', args: { path: '.' } }], usage: { input: 8_000, output: 10 }, contextWindow: 10_000 });
-    let steps = 0;
-    const h = harness([], { onPhase: (phase) => phases.push(phase) },
-      (request) => (request.tools.length === 0 ? { text: 'SUMMARY of the history' } : (steps += 1) <= 4 ? call(`l${steps}`) : { text: 'finished', usage: { input: 8_000, output: 10 } }));
-    Object.assign(h.client, { contextHints: { contextWindow: 10_000 } });
-    const store = path.join(stateDir, 'sessions', h.input.sessionId);
-    await fs.mkdir(store, { recursive: true });
-    const lines: string[] = [];
-    for (let i = 0; i < 6; i += 1) {
-      lines.push(JSON.stringify({ kind: 'item', at: '2026-10-10T00:00:00.000Z', item: { type: 'tool_call', id: `h${i}`, name: 'read_file', args: { path: `f${i}` } } }));
-      lines.push(JSON.stringify({ kind: 'item', at: '2026-10-10T00:00:00.000Z', item: { type: 'tool_result', id: `h${i}`, name: 'read_file', output: 'x'.repeat(60_000) } }));
-    }
-    await fs.writeFile(path.join(store, 'harness.jsonl'), `${lines.join('\n')}\n`);
-    const result = await runAgentLoop(h.input);
-    expect(result.stopReason).toBe('completed');
-    expect(phases.filter((phase) => phase === 'compacting context')).toHaveLength(1);
-    // The recent huge results were shrunk, not carried whole.
-    const after = h.client.requests.find((request) => request.tools.length > 0 && request.items.some((item) => item.type === 'summary'))!;
-    expect(after.items.every((item) => item.type !== 'tool_result' || item.output.length < 10_000)).toBe(true);
-  });
-
-  it('counts the usage of a summarising call that came back empty', async () => {
-    const h = harness([], {}, (request) => (request.tools.length === 0 ? { text: '', usage: { input: 5_000, output: 1 } } : { text: 'answered', usage: { input: 10, output: 1 } }));
+  it('passes a long history through without starting a summary call', async () => {
+    const h = harness([{ text: 'answered' }]);
     Object.assign(h.client, { contextHints: { contextWindow: 1_000_000 } });
     const store = path.join(stateDir, 'sessions', h.input.sessionId);
     await fs.mkdir(store, { recursive: true });
-    const lines = Array.from({ length: MAX_REQUEST_ITEMS + 100 }, (_, i) => JSON.stringify({ kind: 'item', at: '2026-10-10T00:00:00.000Z', item: { type: 'text', role: i % 2 ? 'assistant' : 'user', text: `m${i}` } }));
+    const lines = Array.from({ length: 1600 }, (_, i) => JSON.stringify({ kind: 'item', at: '2026-10-10T00:00:00.000Z', item: { type: 'text', role: i % 2 ? 'assistant' : 'user', text: `m${i}` } }));
     await fs.writeFile(path.join(store, 'harness.jsonl'), `${lines.join('\n')}\n`);
     const result = await runAgentLoop(h.input);
-    expect(result.usage.input).toBeGreaterThanOrEqual(5_010);
-  });
-
-  it('continues the turn when the compaction summary call fails', async () => {
-    const phases: string[] = [];
-    const h = harness([], { onPhase: (phase) => phases.push(phase) }, (request) => (request.tools.length === 0 ? { error: Object.assign(new Error('503 upstream'), { code: 'UPSTREAM', kind: 'other' }) } : { text: 'answered' }));
-    Object.assign(h.client, { contextHints: { contextWindow: 1_000_000 } });
-    const store = path.join(stateDir, 'sessions', h.input.sessionId);
-    await fs.mkdir(store, { recursive: true });
-    const lines = Array.from({ length: MAX_REQUEST_ITEMS + 100 }, (_, i) => JSON.stringify({ kind: 'item', at: '2026-10-10T00:00:00.000Z', item: { type: 'text', role: i % 2 ? 'assistant' : 'user', text: `m${i}` } }));
-    await fs.writeFile(path.join(store, 'harness.jsonl'), `${lines.join('\n')}\n`);
-    const result = await runAgentLoop(h.input);
-    expect(result).toMatchObject({ stopReason: 'completed', text: 'answered' });
-    expect(phases.some((phase) => phase.startsWith('compaction failed'))).toBe(true);
+    expect(result.stopReason).toBe('completed');
+    expect(h.client.requests).toHaveLength(1);
+    expect(h.client.requests[0].items.length).toBeGreaterThan(1600);
   });
 
   it('saves text streamed during a step that then fails', async () => {
@@ -891,10 +793,10 @@ describe('runAgentLoop', () => {
       expect(retryDelaySeconds(2, 0, () => 0.5)).toBe(2);
     });
 
-    it('treats the Gateway\'s item-count refusal as a reason to compact, not as the answer', () => {
+    it('does not compact or retry a rejected oversized request', () => {
       const refusal = Object.assign(new Error('Invalid request at items: items exceeds 2000 entries'), { statusCode: 400 });
-      expect(stepRecovery(refusal)).toBe('compact');
-      expect(stepRecovery(Object.assign(new Error('Invalid request at tools: bad schema'), { statusCode: 400 }))).toBeUndefined();
+      expect(stepRecovery(refusal)).toBeUndefined();
+      expect(stepRecovery(gatewayError('CONTEXT_TOO_LARGE'))).toBeUndefined();
     });
 
     it('is never resent once text has streamed', async () => {
@@ -912,20 +814,11 @@ describe('runAgentLoop', () => {
       }
     });
 
-    it('compacts and resends when the conversation no longer fits the model', async () => {
-      await fs.writeFile(path.join(cwd, 'a.txt'), 'alpha\n');
-      const phases: string[] = [];
-      const read = (id: string) => ({ toolCalls: [{ id, name: 'read_file', args: { path: 'a.txt' } }] });
-      const h = harness([
-        read('r1'), read('r2'), read('r3'), read('r4'), read('r5'), read('r6'), read('r7'), read('r8'),
-        { error: gatewayError('CONTEXT_TOO_LARGE') },
-        (request) => (request.tools.length === 0 ? { text: 'SUMMARY: read a.txt eight times' } : { text: 'done' }),
-      ], { onPhase: (phase) => phases.push(phase) }, { text: 'done' });
+    it('reports a context limit error without creating a summary or resending', async () => {
+      const h = harness([{ error: gatewayError('CONTEXT_TOO_LARGE') }, { text: 'never asked' }]);
       const result = await runAgentLoop(h.input);
-      expect(result).toMatchObject({ text: 'done', stopReason: 'completed' });
-      expect(phases).toContain('compacting context');
-      const resent = h.client.requests.at(-1)!;
-      expect(resent.items.some((item) => item.type === 'summary' || (item.type === 'tool_result' && /elided/.test(item.output)))).toBe(true);
+      expect(result).toMatchObject({ isError: true, stopReason: 'model-error' });
+      expect(h.client.requests).toHaveLength(1);
     });
   });
 

@@ -6,7 +6,7 @@
  * harness names -- availability is decided from catalog fields only. */
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessSession } from '../../session/model.js';
-import { AGENT_COMPACTS_ITSELF, isClikCodeAgent, isGatewayService } from '../../session/route.js';
+import { AGENT_COMPACT_UNAVAILABLE, isClikCodeAgent, isGatewayService } from '../../session/route.js';
 import { harnessSupportsEffort, harnessSupportsModelSelection } from '../../runtime/lazy-bridge.js';
 import { sessionPermissionModes } from '../../session/options.js';
 
@@ -89,14 +89,13 @@ const localOnly = (session: HarnessSession | undefined): SlashAvailability => {
   if (!isClikCodeAgent(session)) return { available: true };
   return { available: false, reason: isGatewayService(session) ? GATEWAY_MANAGED : CLIKCODE_LOCAL_AGENT };
 };
-/** ClikCode's own agent compacts its context by itself; /compact is the
- * vendor's own compaction, where it has one. */
+/** /compact relays only to a vendor's native compaction, where it has one. */
 /** Whether a vendor harness compacts its own conversation: it runs the slash
  * command itself, or its server has a compact operation. */
 const vendorCompacts = (harness: Pick<AiLocalHarnessDefinition, 'nativeSlashPassthrough' | 'nativeOperations'>): boolean =>
   Boolean(harness.nativeSlashPassthrough || harness.nativeOperations?.includes('compact'));
 const vendorCompaction = (session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined): SlashAvailability => {
-  if (isClikCodeAgent(session)) return { available: false, reason: AGENT_COMPACTS_ITSELF };
+  if (isClikCodeAgent(session)) return { available: false, reason: AGENT_COMPACT_UNAVAILABLE };
   if (!harness) return { available: false, reason: 'Choose a provider before compacting.', needs: 'provider' };
   return vendorCompacts(harness) ? { available: true } : { available: false, reason: `/compact is not available for ${harness.displayName}.` };
 };

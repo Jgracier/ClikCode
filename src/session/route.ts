@@ -6,7 +6,7 @@
  * the Gateway (ClikDeploy supplies the model remotely) and ClikCode Local (a
  * model on this machine supplies it). Everything about the agent itself holds
  * for both: no vendor harness or native slash commands, no vendor accounts,
- * ClikCode's own permission modes, tools, MCP, skills and context compaction.
+ * ClikCode's own permission modes, tools, MCP and skills.
  * Only what the ClikDeploy service itself provides -- its login, its credit
  * and usage reporting, its platform-managed model and effort routing --
  * belongs to the Gateway alone.
@@ -39,9 +39,8 @@ export function clikCodeAgentLabel(session: Routed): string {
   return session?.route === 'clikcode-local' ? CLIKCODE_LOCAL_LABEL : GATEWAY_LABEL;
 }
 
-/** Why /compact is not offered on either agent route: the agent already
- * compacts its own context as it nears the window. */
-export const AGENT_COMPACTS_ITSELF = "ClikCode's own agent compacts its context automatically; /compact applies only to vendor harnesses.";
+/** The built-in agent has no native compaction operation to relay. */
+export const AGENT_COMPACT_UNAVAILABLE = '/compact is only available for vendor harnesses that support it.';
 
 const AI_HARNESS_ROUTES: readonly AiHarnessRoute[] = ['local', 'gateway', 'clikcode-local'];
 

@@ -4,18 +4,17 @@ import type { HarnessSession } from '../../session/model.js';
 import { hasConversationContent } from '../../session/options.js';
 import { nativeAvailableCommands, persistentTransports } from '../../turn/vendor-process.js';
 import { sessionHarness } from './context.js';
-import { AGENT_COMPACTS_ITSELF, isClikCodeAgent } from '../../session/route.js';
+import { AGENT_COMPACT_UNAVAILABLE, isClikCodeAgent } from '../../session/route.js';
 
 /** `/compact`. Only a harness that compacts itself does: one that runs slash
  * commands gets `/compact`, and a server with a compact operation (Codex
  * `thread/compact/start`, on the transport's live child) is asked to. Where a
  * vendor has neither, there is no compaction to relay and nothing is sent.
- * ClikCode's own agent (Gateway or ClikCode Local) compacts its context
- * locally as it nears the window. */
+ * The built-in agent has no native compaction operation. */
 export async function compactConversation(
   id: string, session: HarnessSession, focus: string, send: (id: string, prompt: string) => Promise<void>,
 ): Promise<void> {
-  if (isClikCodeAgent(session)) throw new Error(AGENT_COMPACTS_ITSELF);
+  if (isClikCodeAgent(session)) throw new Error(AGENT_COMPACT_UNAVAILABLE);
   if (!hasConversationContent(session)) throw new Error('There is nothing to compact yet.');
   const harness = sessionHarness(session);
   const command = compactCommand(id, session);
