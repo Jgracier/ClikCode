@@ -107,12 +107,38 @@ export function createCommandHandler(ctx: WorkerContext) {
     }).finally(() => { ctx.warming = undefined; });
   };
 
+  /** `computer-tool`: one of the shared computer tools, for a harness that is
+   * not ClikCode's own agent (commands/computer-tool-client.ts). The caller is
+   * not a window: one that attached to ask is left out of the windows a
+   * private prompt can be shown in. */
+  const runComputerTool = (socket: Socket, command: Extract<ClientCommand, { type: 'computer-tool' }>, connection: ConnectionState): void => {
+    sendEvent(socket, { type: 'computer-tool-started', id: command.id });
+    const controller = new AbortController();
+    const cancel = (): void => controller.abort();
+    socket.once('close', cancel);
+    void (async () => {
+      const result = await runSharedComputerTool({ observer, stateDir: stateDirectory(), homeDir: homedir(), tool: command.tool, args: command.args,
+        signal: controller.signal, windows: () => observer.attachedCount - (connection.attached ? 1 : 0) });
+      if (!socket.destroyed) sendEvent(socket, { type: 'computer-tool-result', id: command.id, ...result });
+      socket.off('close', cancel);
+    })();
+  };
+
   return Object.assign(async (socket: Socket, command: ClientCommand, connection: ConnectionState): Promise<void> => {
     if (command.type === 'attach') { await handleAttach(socket, command, connection); return; }
     if (command.type === 'retire' && command.token !== undefined) { await handleRetire(socket, command.token, command.reason === 'moved'); return; }
     if (command.type === 'warm') {
       if (command.token !== token) { sendEvent(socket, { type: 'attach-rejected', reason: 'stale or invalid token' }); socket.end(); return; }
       warm();
+      return;
+    }
+    // A tool call carrying the token needs no attach: the MCP server keeps one
+    // such connection for its whole life instead of attaching per call (each
+    // attach was a snapshot, a window joining and leaving, and on leaving a
+    // release of the MCP servers when no other window was open).
+    if (command.type === 'computer-tool' && command.token !== undefined) {
+      if (command.token !== token) { sendEvent(socket, { type: 'attach-rejected', reason: 'stale or invalid token' }); socket.end(); return; }
+      runComputerTool(socket, command, connection);
       return;
     }
     if (connection.attaching) await connection.attaching.catch(() => undefined);
@@ -174,19 +200,7 @@ export function createCommandHandler(ctx: WorkerContext) {
       })();
       return;
     }
-    if (command.type === 'computer-tool') {
-      sendEvent(socket, { type: 'computer-tool-started', id: command.id });
-      const controller = new AbortController();
-      const cancel = (): void => controller.abort();
-      socket.once('close', cancel);
-      void (async () => {
-        const result = await runSharedComputerTool({ observer, stateDir: stateDirectory(), homeDir: homedir(), tool: command.tool, args: command.args,
-          signal: controller.signal, windows: () => observer.attachedCount });
-        if (!socket.destroyed) sendEvent(socket, { type: 'computer-tool-result', id: command.id, ...result });
-        socket.off('close', cancel);
-      })();
-      return;
-    }
+    if (command.type === 'computer-tool') { runComputerTool(socket, command, connection); return; }
     if (command.type === 'sign-in-response') { observer.resolveSignIn(command.id, command.error); return; }
     if (command.type === 'refresh') {
       // What the window changed may be a turn parked for the reset.

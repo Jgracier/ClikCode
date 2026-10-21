@@ -20,7 +20,7 @@ import type { WorkerEvent } from './protocol.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const distEntry = join(repoRoot, 'dist', 'index.js');
-const ENV_KEYS = ['CLIKCODE_HOME', 'CLIKCODE_WORKER_ENTRY', 'XDG_CONFIG_HOME', 'CLIKCODE_GATEWAY_URL_OVERRIDE', 'PATH'] as const;
+const ENV_KEYS = ['CLIKCODE_HOME', 'CLIKCODE_WORKER_ENTRY', 'XDG_CONFIG_HOME', 'CLIKCODE_GATEWAY_URL_OVERRIDE', 'PATH', 'CLIKCODE_LIFECYCLE_LOG'] as const;
 const savedEnv = Object.fromEntries(ENV_KEYS.map(key => [key, process.env[key]]));
 let root: string | undefined;
 const clients: WorkerClient[] = [];
@@ -97,7 +97,7 @@ it('sends a saved secret without asking anyone, and returns no value', async () 
   await saveNamedSecret(home, 'salad/api-key', VALUE);
   const bin = join(root!, 'bin');
   await mkdir(bin);
-  await writeFile(join(bin, 'clikdeploy'), `#!/bin/sh\ncase "$3" in admin_platform_set_secret) printf '%s\\n' "$@" > "${root}/argv"; echo '{"status":"success","message":"stored"}';; *) echo '{}';; esac\n`);
+  await writeFile(join(bin, 'clikdeploy'), `#!/bin/sh\ncase "$3" in admin_platform_set_secret) { printf '%s\\n' "$@"; cat; } > "${root}/argv"; echo '{"status":"success","message":"stored"}';; *) echo '{}';; esac\n`);
   await chmod(join(bin, 'clikdeploy'), 0o755);
   process.env.PATH = `${bin}:${savedEnv.PATH}`;
   await attach(id); // the worker exists; nobody is asked anything
@@ -131,4 +131,21 @@ it('refuses bad arguments with a plain reason, and honours computer off', async 
   await writeFile(join(process.env.CLIKCODE_HOME!, 'computer', 'settings.json'), '{"enabled":false}\n');
   const off = await server.call('tools/call', { name: 'computer_web', arguments: { action: 'observe' } });
   expect(off.result.content[0].text).toContain('Computer use is off');
+}, 60_000);
+
+it('keeps one connection to the worker for every call, and never joins the chat as a window', async () => {
+  const { id, home } = await session();
+  process.env.CLIKCODE_LIFECYCLE_LOG = '1';
+  await attach(id);
+  const server = await mcpServer(id);
+  for (let call = 0; call < 3; call++) {
+    const bad = await server.call('tools/call', { name: 'computer_web', arguments: { bogus: call } });
+    expect(bad.result.content[0].text).toContain('Invalid arguments');
+  }
+  const events = (await readFile(join(home, 'logs', 'lifecycle.log'), 'utf8')).trim().split('\n')
+    .map(line => JSON.parse(line) as { event: string; role?: string; tools?: boolean });
+  // Before: a connect, an attach, a snapshot and a detach per call.
+  expect(events.filter(event => event.event === 'client.worker.connect' && event.tools)).toHaveLength(1);
+  expect(events.filter(event => event.event === 'worker.client.attach')).toHaveLength(1);
+  expect(events.filter(event => event.event === 'worker.client.detach')).toHaveLength(0);
 }, 60_000);
