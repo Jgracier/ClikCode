@@ -10,7 +10,7 @@ import { join, resolve } from 'node:path';
 // @ts-expect-error -- a plain .mjs fixture module
 import { host, tailscaleFixture, world } from '../../scripts/tui-e2e/fake-remote.mjs';
 import { shellQuote, validateSshTarget, withUser } from './shell.js';
-import { defaultLoginUser, runSsh, sshArgv, sshFailure } from './ssh.js';
+import { defaultLoginUser, runSsh, sshArgv, sshFailure, sshFailureMessage } from './ssh.js';
 import { discoverMachines, readTailscaleStatus, type TailscaleStatus } from './tailscale.js';
 import { installOnMachine, nodeIsNewEnough, sourceScript, uninstallFromMachine, type InstallStep } from './install.js';
 import { needsUpdate, RemoteLink, RemoteMachines, type MachineView } from './connection.js';
@@ -240,6 +240,14 @@ describe('installing on a machine', () => {
     expect(await installOnMachine('gone', steps().reporter)).toMatchObject({ ok: false, unreachable: true, step: 'Checking the machine' });
   });
 
+  it('reads a Tailscale SSH policy refusal as a refused login, and names its reason', () => {
+    // Exactly what ssh printed against a tailnet whose policy allows only root (2026-10-21).
+    const refused = { code: 255, stdout: '', stderr: 'tailscale: tailnet policy does not permit you to SSH as user "justin-gracier"\nConnection closed by 100.93.159.116 port 22\n' };
+    expect(sshFailure(refused)).toBe('auth');
+    expect(sshFailureMessage('box', refused)).toContain('tailnet policy does not permit you to SSH as user "justin-gracier"');
+    expect(sshFailureMessage('box', refused)).not.toContain('Connection closed');
+  });
+
   it('reports a refused login as auth, and defaults the user to ~/.ssh/config’s', async () => {
     host(root, 'locked', { users: ['carol'] });
     const refused = await runSsh('locked', 'true');
@@ -417,7 +425,8 @@ describe('/remote', () => {
       'ClikCode Remote': (options) => options.find((option) => option.label.startsWith('Add by SSH address'))!.value,
     }, ['guarded', 'carol']);
     const outcome = await interactiveRemotePicker(remoteHost);
-    expect(asked).toEqual(['SSH address (user@host, host, or a Host alias)', `Log in to guarded as which user? (Enter for ${fallback})`]);
+    // The user it refused is named, not offered again as the default.
+    expect(asked).toEqual(['SSH address (user@host, host, or a Host alias)', `Log in to guarded as which user? (it refused ${fallback})`]);
     expect(outcome.notice).toMatch(/guarded is added/);
     expect(lines.filter((line) => line.startsWith('✓')).length).toBe(6);
     const [machine] = await readMachines();

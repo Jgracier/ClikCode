@@ -31,7 +31,8 @@ export type SshFailure = 'auth' | 'unreachable' | 'host-key' | 'other';
 export function sshFailure(result: SshResult): SshFailure | undefined {
   if (result.code !== 255) return undefined;
   const text = result.stderr;
-  if (/Permission denied|Authentication failed|Too many authentication failures|no matching host key|publickey/i.test(text) && !/host key verification failed/i.test(text)) return 'auth';
+  // Tailscale SSH refuses by its tailnet policy, then closes: `tailscale: tailnet policy does not permit you to SSH as user "x"`.
+  if (/Permission denied|Authentication failed|Too many authentication failures|no matching host key|publickey|tailnet policy does not permit/i.test(text) && !/host key verification failed/i.test(text)) return 'auth';
   if (/Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED/i.test(text)) return 'host-key';
   if (/Could not resolve|Connection timed out|Connection refused|No route to host|Network is unreachable|Operation timed out|timed out|Name or service not known|nodename nor servname/i.test(text)) return 'unreachable';
   return 'other';
@@ -40,7 +41,9 @@ export function sshFailure(result: SshResult): SshFailure | undefined {
 /** The words for an ssh failure, with what to do about it. */
 export function sshFailureMessage(target: string, result: SshResult): string {
   const failure = sshFailure(result);
-  const said = result.stderr.trim().split('\n').filter(Boolean).pop() ?? '';
+  // The line that says why, not ssh's closing `Connection closed by ...` after it.
+  const lines = result.stderr.trim().split('\n').map((line) => line.trim()).filter(Boolean);
+  const said = lines.filter((line) => !/^Connection (closed|reset) by /i.test(line)).pop() ?? lines.pop() ?? '';
   if (failure === 'auth') return `${target} refused the login (${said || 'permission denied'}). ClikCode never asks for passwords: add your SSH key to that machine (ssh-copy-id ${target}), or turn on Tailscale SSH there.`;
   if (failure === 'unreachable') return `${target} could not be reached (${said || 'no answer'}). Check that it is on and online.`;
   if (failure === 'host-key') return `${target}'s host key is not trusted yet (${said}). Connect once with \`ssh ${target}\` to check and accept it.`;

@@ -18,7 +18,7 @@ import { forgetMachine, newMachineRecord, readMachines, updateMachine, updateMac
 import { discoverMachines, readTailscaleStatus, type DiscoveredMachine } from '../../remote/tailscale.js';
 import { installOnMachine, uninstallFromMachine, type InstallOutcome, type InstallReporter } from '../../remote/install.js';
 import { defaultLoginUser } from '../../remote/ssh.js';
-import { targetHost, validateSshTarget, withUser } from '../../remote/shell.js';
+import { targetHost, targetUser, validateSshTarget, withUser } from '../../remote/shell.js';
 import type { InteractiveSlashOutcome } from '../slash/interactive-keys.js';
 
 /** What /remote needs of the window it runs in. */
@@ -148,10 +148,12 @@ async function runInstall(host: RemoteHost, machine: RemoteMachine, update: bool
     if (outcome.ok || !outcome.auth || asked) return { outcome, machine };
     asked = true;
     host.line(`${chalk.red('✗')} ${outcome.message}`);
-    const fallback = await defaultLoginUser(target);
-    const answer = await host.ask(`Log in to ${targetHost(target)} as which user? (Enter for ${fallback})`);
-    if (answer === undefined) return { outcome, machine };
-    target = withUser(target, answer.trim() || fallback);
+    // The user it refused: the one in the target, else the one ssh used by default.
+    // Offering it again as the default would only fail the same way.
+    const refused = targetUser(target) ?? await defaultLoginUser(target);
+    const answer = (await host.ask(`Log in to ${targetHost(target)} as which user? (it refused ${refused})`))?.trim();
+    if (!answer) return { outcome, machine };
+    target = withUser(target, answer);
     machine.sshTarget = target;
     await updateMachine(machine.id, (record) => { record.sshTarget = target; });
   }
