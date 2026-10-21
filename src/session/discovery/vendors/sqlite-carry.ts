@@ -97,6 +97,25 @@ async function openCarryDatabase(path: string): Promise<CarryDb | undefined> {
   }
 }
 
+/** A vendor's database opened to write a new conversation into, waiting up
+ *  to 3 s for the vendor's own writer. Throws where node:sqlite is missing. */
+export async function openVendorDatabase(path: string): Promise<CarryDb> {
+  const sqlite = await import('node:sqlite') as unknown as { DatabaseSync: new (path: string) => CarryDb };
+  const db = new sqlite.DatabaseSync(path);
+  try {
+    db.exec('PRAGMA busy_timeout = 3000');
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+  return db;
+}
+
+/** A table's column names; none for a table the database does not have. */
+export function tableColumns(db: CarryDb, table: string): Set<string> {
+  return new Set((db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((row) => row.name));
+}
+
 function columns(db: CarryDb, schema: CarrySchema, table: string): string[] {
   return (db.prepare(`PRAGMA ${schema}.table_info("${table}")`).all() as { name: string }[]).map((row) => row.name);
 }

@@ -194,9 +194,21 @@ export interface VendorCall {
 }
 
 /** One model response: its text, then the calls it made. */
-interface AssistantStep {
+export interface AssistantStep {
   text: string;
   calls: VendorCall[];
+}
+
+/** A step as the content of one assistant message: its text block, then a
+ * block per call -- `tool_use` with `input` (Anthropic's shape), or Pi's
+ * `toolCall` with `arguments`. */
+export function stepContent(step: AssistantStep, block: 'tool_use' | 'toolCall'): Record<string, unknown>[] {
+  return [
+    ...(step.text ? [{ type: 'text', text: step.text }] : []),
+    ...step.calls.map((call) => (block === 'tool_use'
+      ? { type: 'tool_use', id: call.id, name: call.name, input: call.args }
+      : { type: 'toolCall', id: call.id, name: call.name, arguments: call.args })),
+  ];
 }
 
 /** A turn's answer as the model responses a vendor stores: text and calls
