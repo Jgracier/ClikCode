@@ -31,6 +31,15 @@ export interface ComposerHandle {
 }
 
 
+/** The composer's own menu for a typed command: /permissions opens the mode
+ * menu, /machine the machine chip's. Undefined: the command is sent. */
+export function commandMenu(text: string): Menu | undefined {
+  const command = text.trim();
+  if (/^\/permissions?$/i.test(command)) return 'mode';
+  if (/^\/machine$/i.test(command)) return 'machines';
+  return undefined;
+}
+
 export function Composer(props: {
   model: ChatModel;
   handle: { current: ComposerHandle | null };
@@ -102,7 +111,8 @@ export function Composer(props: {
     };
     const run = (command: string): void => {
       setText(''); save({ draft: '' }); setSuggestions([]);
-      if (/^\/permissions?$/i.test(command.trim())) setMenu('mode');
+      const menuFor = commandMenu(command);
+      if (menuFor) setMenu(menuFor);
       else post({ type: 'send', text: command, id: uid() });
     };
     const shown = (rows: ListRow[]): void => { if (live) setSuggestions(rows); };
@@ -121,10 +131,14 @@ export function Composer(props: {
     if (!text.trim() && !attachments.length) return;
     const message = composeMessage(text, attachments);
     if (!message) return;
-    if (!attachments.length && /^\/permissions?$/i.test(message.trim())) {
-      setText(''); save({ draft: '' }); setSuggestions([]); setMenu('mode');
+    // A setting the composer chooses with its own menu: /permissions (the mode), /machine (the chip).
+    const menuFor = attachments.length ? undefined : commandMenu(message);
+    if (menuFor) {
+      setText(''); save({ draft: '' }); setSuggestions([]); setMenu(menuFor);
       return;
     }
+    // One live copy: a chat that moved is read-only here (the banner opens the moved one).
+    if (model.movedTo) return;
     // Not connected is the controller's to wait out (send awaits the start):
     // the message is drawn at once and comes back as a draft if it fails.
     post({ type: 'send', text: message, id: uid() });
@@ -297,7 +311,7 @@ export function Composer(props: {
   // The hint goes on that message, and only while Enter would do it.
   const enterAgain = enterAgainReady(model) && !text.trim() && !attachments.length;
   const firstWaiting = model.queued.findIndex((item) => !item.command);
-  const placeholder = !connected ? 'ClikCode is not connected'
+  const placeholder = model.movedTo ? `This chat moved to ${model.movedTo.machine}` : !connected ? 'ClikCode is not connected'
     : model.running ? (model.chatSettings?.send === 'queue' ? 'Queue a message for after this turn…' : 'Steer the running turn…')
       : `Ask ${providerDisplayName(model, knownProviders()) ?? 'ClikCode'} anything`;
 
@@ -347,7 +361,7 @@ export function Composer(props: {
         {attachments.length ? (
           <AttachmentChips attachments={attachments} onExpand={expandPaste} onRemove={(attachment) => setAttachments((items) => items.filter((item) => item !== attachment))} />
         ) : null}
-        <textarea id="composer-input" ref={textarea} rows={1} value={text} placeholder={placeholder} aria-label="Message ClikCode"
+        <textarea id="composer-input" ref={textarea} rows={1} value={text} placeholder={placeholder} aria-label="Message ClikCode" disabled={Boolean(model.movedTo)}
           aria-autocomplete="list" aria-controls={showSuggestions ? 'suggestions' : undefined}
           onInput={(event) => { const element = event.target as HTMLTextAreaElement; recall.current = undefined; setText(element.value); setCaret(element.selectionStart); save({ draft: element.value }); setDismissedToken(undefined); }}
           onKeyUp={(event) => setCaret((event.target as HTMLTextAreaElement).selectionStart)}

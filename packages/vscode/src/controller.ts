@@ -29,6 +29,7 @@ import { AutoReconnect } from './controller/reconnect';
 import { deliver, TIMEOUT } from './controller/requests';
 import { DiffDocuments, openSignInLink } from './ui';
 import type { FromWebview, ListedConversation, ToWebview, WebviewRequest } from './webview-protocol';
+import { chatHasContent, moveChat, movedChatMachine, type MoveEnd, type MoveRequest } from '../../../src/session/move-chat';
 
 /** What this editor handles beyond the base protocol (protocol.ts IdeFeature). */
 const IDE_FEATURES: readonly IdeFeature[] = ['copy', 'search-walk'];
@@ -42,6 +43,32 @@ export interface ControllerHost {
   reveal(controller: ClikCodeController, keepFocus?: boolean): Promise<void>;
   /** Every open chat: the side bar's and each tab's. */
   chats(): readonly ClikCodeController[];
+}
+
+/** The bridge revision that answers a move (export-chat, import-chat, mark-moved). */
+const MOVE_REVISION = 4;
+
+function revisionOf(ready: { revision?: unknown }): number {
+  return typeof ready.revision === 'number' && Number.isInteger(ready.revision) ? ready.revision : 1;
+}
+
+/** A connection's `ready`: its revision. */
+function readyRevision(bridge: BridgeEndpoint): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('ClikCode did not start.')), TIMEOUT.start);
+    bridge.on('event', (event) => { if (event.type === 'ready') { clearTimeout(timer); resolve(revisionOf(event)); } });
+    bridge.once('exit', () => { clearTimeout(timer); reject(new Error('ClikCode stopped.')); });
+  });
+}
+
+/** One machine's side of a move, through a connection to its ClikCode. */
+export function moveEnd(bridge: BridgeEndpoint, name: string, revision: number): MoveEnd {
+  return {
+    name,
+    call: <T>(request: MoveRequest): Promise<T> => (revision < MOVE_REVISION
+      ? Promise.reject(new Error(`ClikCode on ${name} is too old to move chats: update it first.`))
+      : bridge.call<T>(request, TIMEOUT.choose)),
+  };
 }
 
 /** How long a chat stays hidden and idle before its bridge process is let go (see park). */
@@ -66,6 +93,8 @@ export class ClikCodeController implements vscode.Disposable {
   /** The bridge that said it is leaving for a newer build (`retiring`): its
    * exit is a reconnect onto that build, not a failure. */
   private retiring: BridgeEndpoint | undefined;
+  /** The chat's bridge's revision (its `ready`): what it answers (protocol-version.ts). */
+  private revision = 1;
   /** Queued messages being taken back to edit, by id: their text goes back in
    * the composer when the worker answers `removed`. */
   private readonly takingBack = new Map<string, string>();
@@ -399,6 +428,7 @@ export class ClikCodeController implements vscode.Disposable {
       bridge.on('event', (event) => {
         if (event.type === 'ready') {
           clearTimeout(timer);
+          this.revision = revisionOf(event);
           const compatibility = bridgeCompatibility(event);
           if (!compatibility.ok) {
             this.incompatible(bridge, compatibility.message, compatibility.remedy);
@@ -717,8 +747,12 @@ export class ClikCodeController implements vscode.Disposable {
     // Intent only: a chat on another machine opens with no folder of this
     // computer's (openRequest); that machine resolves it.
     this.machine = machine;
-    this.bridge?.dispose();
+    // Let go of first: a shared channel says `exit` as it is disposed, and
+    // while it was still this chat's that read as a crash -- a reconnect that
+    // opened a second connection to the new machine beside this one.
+    const previous = this.bridge;
     this.bridge = undefined;
+    previous?.dispose();
     this.setModel({ ...emptyModel(), connection: 'starting', ...(machine.name ? { machine: machine.name, machineId: machine.id } : {}) });
     await this.refreshMachineUpdate();
     await this.start(sessionId, mode);
@@ -800,11 +834,42 @@ export class ClikCodeController implements vscode.Disposable {
     return duplicate?.id ?? machine.id;
   }
 
-  async selectMachine(machineId: string): Promise<void> {
+  /** The machine chip: the chat's machine is one of its settings, so
+   * choosing another moves this chat there (session/move.ts). A Tailscale
+   * machine not added yet is installed first. */
+  async moveToMachine(machineId: string): Promise<void> {
     const id = machineId.startsWith('tailscale:') ? await this.connectDiscovered(machineId) : machineId;
-    const chats = await this.conversationsOn(id);
-    const latest = [...chats].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0];
-    await this.openOnMachine(id, latest ? 'resume' : 'new', latest?.id);
+    if (this.starting) await this.starting.catch(() => undefined);
+    if (id === this.machine.id) return;
+    const target = await this.machineFor(id);
+    if (!target || !await target.reachable()) throw new Error('That machine is offline.');
+    // Nothing said in it yet: nothing to move. It is a new chat there.
+    if (!chatHasContent({ messages: this.model.messages }) && !this.model.pendingPrompt && !this.model.running) return this.openOnMachine(id, 'new');
+    if (this.model.running || preparing(this.model)) throw new Error('A turn is running in this chat: move it when the turn ends, or stop it first.');
+    await this.ensureStarted();
+    const bridge = this.bridge;
+    const sessionId = this.model.sessionId;
+    if (!bridge?.running || !sessionId) throw new Error('ClikCode is not connected.');
+    const targetName = target.name ?? localMachineName();
+    const channel = await target.connect((line) => this.host.log.appendLine(`[${this.label} move] ${line}`));
+    try {
+      const revision = await readyRevision(channel.bridge);
+      const outcome = await moveChat(moveEnd(bridge, this.machine.name ?? localMachineName(), this.revision), moveEnd(channel.bridge, targetName, revision), sessionId,
+        async (text) => (await vscode.window.showWarningMessage(text, { modal: true }, 'Move')) === 'Move');
+      if (!outcome.moved) return;
+      this.host.log.appendLine(`[${this.label}] moved ${sessionId} to ${targetName} as ${outcome.sessionId}`);
+      await this.openOnMachine(id, 'resume', outcome.sessionId);
+      this.note(`Moved to ${targetName} · ${outcome.folder}`);
+    } finally { channel.bridge.dispose(); }
+  }
+
+  /** A chat that moved, open here read-only: the moved one, on its machine. */
+  async openMoved(): Promise<void> {
+    const movedTo = this.model.movedTo;
+    if (!movedTo) return;
+    const machine = movedChatMachine(movedTo, await readMachines(), { name: localMachineName() });
+    if (!machine) throw new Error(`${movedTo.machine} is not added here: add it from the machine chip to go on there.`);
+    await this.openOnMachine(machine, 'resume', movedTo.sessionId);
   }
 
   /** 'local' or an added machine; undefined for one no longer added. */
@@ -864,8 +929,11 @@ export class ClikCodeController implements vscode.Disposable {
       case 'updateMachine':
         await this.updateMachine(request.machineId);
         return undefined;
-      case 'selectMachine':
-        await this.selectMachine(request.machineId);
+      case 'moveToMachine':
+        await this.moveToMachine(request.machineId);
+        return undefined;
+      case 'openMoved':
+        await this.openMoved().catch((error: unknown) => this.fail(errorText(error)));
         return undefined;
       case 'machineConversations':
         return this.conversationsOn(request.machineId);

@@ -186,7 +186,7 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
                 ) : <div class="conversation-title">{row.title}</div>}
                 {row.preview && renaming !== row.id ? <div class="conversation-preview">{row.preview}</div> : null}
               </div>
-              <span class="conversation-meta">{state.text}</span>
+              <span class="conversation-meta">{row.movedTo ? `moved to ${row.movedTo}` : state.text}</span>
               {machineId === 'local' ? <div class="row-actions" data-row-action>
                 <IconButton icon="link-external" label="Open in new tab" onClick={() => { props.onClose(); void request({ method: 'openInTab', sessionId: row.id }); }} />
                 <IconButton icon="edit" label="Rename" onClick={() => setRenaming(row.id)} />
@@ -229,11 +229,14 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
   );
 }
 
-/** The composer machine chip switches directly to a machine. Chat history
- * stays in the header, where choosing a specific conversation belongs. */
+/** The composer's machine chip: the machine is one of this chat's settings,
+ * like its provider, so choosing another moves THIS chat there (an empty one
+ * is simply a new chat there). Browsing a machine's chats is the history
+ * menu's. A Tailscale machine not added yet is installed first. */
 export function MachineMenu(props: { model: ChatModel; onClose: () => void; onError: (message: string) => void }): JSX.Element {
   const [machines, setMachines] = useState<ListedMachine[]>();
   const [switching, setSwitching] = useState(false);
+  const empty = !props.model.messages.length && !props.model.pendingPrompt;
   useEffect(() => {
     let active = true;
     const load = (): void => {
@@ -251,7 +254,7 @@ export function MachineMenu(props: { model: ChatModel; onClose: () => void; onEr
   const select = (machine: ListedMachine): void => {
     if (switching) return;
     setSwitching(true);
-    void request({ method: 'selectMachine', machineId: machine.id }).then(
+    void request({ method: 'moveToMachine', machineId: machine.id }).then(
       () => props.onClose(),
       (error: Error) => { setSwitching(false); props.onError(error.message); },
     );
@@ -262,7 +265,7 @@ export function MachineMenu(props: { model: ChatModel; onClose: () => void; onEr
   const available = (machines ?? []).filter((machine) => !machine.id.startsWith('tailscale:'));
   const discovered = (machines ?? []).filter((machine) => machine.id.startsWith('tailscale:'));
   const rows: ListRow[] = [
-    { key: 'saved-heading', heading: true, render: () => <>Your machines</> },
+    { key: 'saved-heading', heading: true, render: () => <>{empty ? 'Start this chat on' : 'Move this chat to'}</> },
     ...available.map((machine): ListRow => ({
       key: machine.id, disabled: switching || machine.state === 'offline', onSelect: () => select(machine),
       render: () => <div class="conversation" title={machine.updateError}><div class="conversation-main"><div class="conversation-title">{machine.name}</div></div>
@@ -278,8 +281,8 @@ export function MachineMenu(props: { model: ChatModel; onClose: () => void; onEr
         <span class="conversation-meta">{machine.state === 'available' ? 'Connect · install from GitHub main' : machine.state === 'unsupported' ? 'Windows is not supported yet' : 'offline'}</span></div>,
     })),
   ];
-  return <Popover label="Machines" onClose={props.onClose} class="picker history-menu" id="machines-menu">
-    <Loading waiting={!machines || switching}>{switching ? 'Connecting to machine…' : 'Finding machines…'}</Loading>
+  return <Popover label={empty ? 'Start this chat on' : 'Move this chat to'} onClose={props.onClose} class="picker history-menu" id="machines-menu">
+    <Loading waiting={!machines || switching}>{switching ? (empty ? 'Connecting to machine…' : 'Moving this chat…') : 'Finding machines…'}</Loading>
     <KeyList id="machine-switch-list" rows={rows} label="Machines" initialKey={props.model.machineId ?? 'local'}
       onEscape={props.onClose} rightSelect emptyText={machines ? 'No machines found.' : undefined} />
   </Popover>;

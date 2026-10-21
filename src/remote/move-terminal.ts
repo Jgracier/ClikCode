@@ -8,7 +8,7 @@
 import Conf from 'conf';
 import type { HarnessPrompter, PickerOption } from '../harness/prompter.js';
 import type { ChatMovedTo } from '../session/model.js';
-import { moveChat, type MoveEnd, type MoveRequest } from '../session/move-chat.js';
+import { moveChat, movedChatMachine, type MoveEnd, type MoveRequest } from '../session/move-chat.js';
 import { readState } from '../session/state/read.js';
 import { chooseOption } from '../tui/pickers/choose.js';
 import { localMachineName } from './board-rows.js';
@@ -136,13 +136,9 @@ export async function moveTerminalChat(
  * added machine (by installation id, else by name), or none it can reach. */
 export async function movedChatPlace(movedTo: ChatMovedTo): Promise<Here | undefined> {
   const state = await readState({ transcripts: [] });
-  if (movedTo.installationId && movedTo.installationId === state.installationId) return { local: movedTo.sessionId };
-  const machines = (await readMachines()).filter((machine) => machine.ready);
-  const machine = (movedTo.installationId ? machines.find((item) => item.installationId === movedTo.installationId) : undefined)
-    ?? machines.find((item) => item.name === movedTo.machine);
-  if (machine) return { remote: { machineId: machine.id, chatId: movedTo.sessionId } };
-  if (!movedTo.installationId && movedTo.machine === localMachineName()) return { local: movedTo.sessionId };
-  return undefined;
+  const machine = movedChatMachine(movedTo, await readMachines(), { name: localMachineName(), installationId: state.installationId });
+  if (!machine) return undefined;
+  return machine === 'local' ? { local: movedTo.sessionId } : { remote: { machineId: machine, chatId: movedTo.sessionId } };
 }
 
 /** A chat that moved, opened here: offered where it went. Undefined to stay
