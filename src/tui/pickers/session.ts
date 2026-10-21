@@ -345,7 +345,8 @@ export async function interactiveSessionPicker(
   // five hundred of them per arrow press. And once a second while a turn
   // runs: its `working 3m` counts up, and it can turn `stalled`.
   const buildOptions = (): PickerOption<string>[] => {
-    const second = rows.some((row) => row.pending) ? Math.floor(Date.now() / 1000) : 0;
+    const counting = rows.some((row) => row.pending) || Boolean(remote?.views().some((view) => view.state !== 'offline' && view.chats.some((chat) => chat.activity === 'working')));
+    const second = counting ? Math.floor(Date.now() / 1000) : 0;
     if (built && built.discovering === discovering && built.slow === slowDiscovery && built.discovered === discovered && built.revision === listRevision && built.second === second) {
       return built.options;
     }
