@@ -13,11 +13,13 @@ import { isTurnCancelled, turnCancelledError } from '../agent/cancellation.js';
 import { matchesDirectTurnModel, turnAccounts } from './account-routing.js';
 import { recordInvocation, turnSink } from './turn-output.js';
 import { emitHarnessOutput } from '../harness/output.js';
+import { withMoveNote } from './resource-notes.js';
 
 export async function sendDirectApiTurn(input: AccountTurnInput): Promise<void> {
   const { state, session, model, text, prepared, startedAt, signal, run } = input;
   let { account } = input;
-  const { turnText } = input;
+  // A chat that just moved here: the model is told so (session/move.ts).
+  const turnText = withMoveNote(session, input.turnText);
   const prompter = run.prompter;
   if (prepared.images.length) throw new Error('Image attachments need a vendor harness that accepts images; direct API-key accounts do not. Switch providers with /provider or clear them with /attachments clear.');
   if (!model) throw new Error('local AI session has no model selected');

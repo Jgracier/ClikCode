@@ -30,3 +30,12 @@ export function withResourceNotes(sessionId: string, turnText: string): string {
   rmSync(pathFor(sessionId), { force: true });
   return `${notes.join('\n')}\n\n${turnText}`;
 }
+
+/** The note a chat moved from another machine carries to its first turn here
+ * (session/move.ts), wrapped as a resource note -- so a vendor's copy of the
+ * turn read back is stripped of it like one -- in front of the turn's text.
+ * Kept on the session, not on disk beside it: it goes with the chat, and is
+ * cleared when that turn completes (turn-journal.ts), not when it starts. */
+export function withMoveNote(session: { moveNote?: string }, turnText: string): string {
+  return session.moveNote ? `${wrapResourceNote(session.moveNote)}\n\n${turnText}` : turnText;
+}

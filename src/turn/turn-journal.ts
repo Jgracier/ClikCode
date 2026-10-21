@@ -376,6 +376,8 @@ export async function completeTurnCheckpoint(
 ): Promise<string> {
   session.attachments = [];
   session.shellNotes = [];
+  // The note a moved chat's first turn carried (session/move.ts) was said.
+  delete session.moveNote;
   await nameSession(session, sources);
   await checkpoint.complete(response);
   return response;
