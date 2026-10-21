@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { lockCredentialVault } from './credential-vault.js';
-import { birthdayFor, customFieldFor, describeProfile, listProfiles, normalizePhone, phoneFor, profileKeyFor, readProfileSecret, removeProfile, saveProfile, saveProfileSecret, secretFieldFor } from './profiles.js';
+import { bestProfileFor, birthdayFor, customFieldFor, describeProfile, listProfiles, normalizePhone, phoneFor, profileKeyFor, readProfileSecret, removeProfile, saveProfile, saveProfileSecret, secretFieldFor } from './profiles.js';
 import { namedSecretNames } from './credential-vault.js';
 
 let stateDir = '';
@@ -151,5 +151,24 @@ describe('profile secrets', () => {
     expect(Object.keys((await listProfiles(stateDir))[0]!.secrets ?? {})).toEqual(['password', 'recovery_code']);
     await removeProfile(stateDir, profile.id);
     expect(await namedSecretNames(stateDir)).toEqual([]);
+  });
+});
+
+
+describe('bestProfileFor: several profiles never mean asking', () => {
+  const personal = { id: 'p', label: 'Personal', fields: { given_name: 'J', email: 'a@x.test', phone: '1', address_line1: 'x' }, custom: {} } as never;
+  const admin = { id: 'a', label: 'ClikDeploy admin', fields: { given_name: 'J', email: 'a@x.test' }, custom: {} } as never;
+  const hint = (text: string) => ({ text, type: 'text', autocomplete: '' });
+
+  it('takes the profile that can fill the most of the form, then the one with more details, then Personal', () => {
+    expect(bestProfileFor([admin, personal], [hint('email')])?.label).toBe('Personal');
+    expect(bestProfileFor([admin, personal], [hint('phone'), hint('street address')])?.label).toBe('Personal');
+    expect(bestProfileFor([personal, admin], [])?.label).toBe('Personal');
+  });
+
+  it('an explicit label wins, and a single profile is just that profile', () => {
+    expect(bestProfileFor([admin, personal], [hint('email')], 'clikdeploy admin')?.label).toBe('ClikDeploy admin');
+    expect(bestProfileFor([admin], [hint('email')])?.label).toBe('ClikDeploy admin');
+    expect(bestProfileFor([], [hint('email')])).toBeUndefined();
   });
 });
