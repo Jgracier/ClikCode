@@ -50,10 +50,10 @@ const gb = (bytes: number): string => `${(bytes / GIB).toFixed(1)} GB`;
 export function diskNote(level: 'tight' | 'critical', reading: DiskReading, hasDocker: boolean): string {
   const used = Math.round((1 - reading.free / reading.total) * 100);
   const where = `${gb(reading.free)} free of ${gb(reading.total)} (${used}% used) on the drive holding ${reading.path}`;
-  const docker = hasDocker ? ' and remove containers you started with `docker rm -fv` so their volumes go too' : '';
+  const docker = hasDocker ? ' or remove stopped containers you started and no longer need with `docker rm -fv` so their volumes go too' : '';
   return level === 'critical'
-    ? `Disk is almost full: ${where}. Stop writing large files now and free space first -- build output, caches and temp files you created${docker}. Writes will start failing, for every agent on this machine.`
-    : `Disk is getting tight: ${where}. Before starting more large builds, downloads or image pulls, free space: delete build output, caches and temp files you created${docker}.`;
+    ? `Disk is almost full: ${where}. Keep working on read-only or targeted steps while you free space: remove build output or temp files you created and no longer need${docker}. Then retry the smallest necessary write; a large write may fail until space is freed.`
+    : `Disk is getting tight: ${where}. Continue the task while reducing new writes: reuse existing output, choose a smaller build or download, or remove build output and temp files you created and no longer need${docker}. Pick a concrete step that fits your work.`;
 }
 
 export function readDisk(path: string): DiskReading | undefined {
