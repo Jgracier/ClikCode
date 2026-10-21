@@ -12,7 +12,7 @@ import { interactiveSessionPicker } from '../tui/pickers/session.js';
 import { BOARD_COMMANDS, BOARD_LINE } from '../commands/ai/interactive/board.js';
 import { bridgeScript, remoteTerminalScript } from './install.js';
 import { readMachines, updatePolicy, type RemoteMachine } from './machines.js';
-import { autoUpdates, localBuildCommit } from './updates.js';
+import { autoUpdates, localBuildCommit, pinnedUpdateLine } from './updates.js';
 import { needsUpdate } from './connection.js';
 import { spawnSsh, sshArgv } from './ssh.js';
 import type { LiveTurnInputResult } from '../turn/live-input.js';
@@ -278,7 +278,7 @@ export async function runRemoteChat(
         if (!line) continue;
         const id = randomUUID();
         const complete = new Promise<void>((resolve, reject) => completions.set(id, { resolve, reject }));
-        bridge.post({ type: 'send', text: line, id });
+        bridge.post({ type: 'send', text: pinnedUpdateLine(line, localBuildCommit()), id });
         await complete;
         if (lastError) { terminal.activity(lastError.message); lastError = undefined; }
       }

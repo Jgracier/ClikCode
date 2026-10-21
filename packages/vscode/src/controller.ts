@@ -9,6 +9,7 @@ import * as vscode from 'vscode';
 import type { BridgeEndpoint } from './bridge-client';
 import { LocalChatMachine, openRequest, RemoteChatMachine, type ChatMachine } from './chat-machine';
 import { machineUpdateOf, remoteDirectory } from './remote-directory';
+import { pinnedUpdateLine } from '../../../src/remote/updates';
 import { localMachineName } from '../../../src/remote/board-rows';
 import { installOnMachine, type InstallReporter } from '../../../src/remote/install';
 import { discoverMachines, readTailscaleStatus } from '../../../src/remote/tailscale';
@@ -629,6 +630,8 @@ export class ClikCodeController implements vscode.Disposable {
   // ---- what the user does --------------------------------------------------------
 
   async send(text: string, id = `${Date.now()}`): Promise<void> {
+    // On another machine, a bare /update goes to this editor's build, as automatic updates do.
+    if (this.machine.kind === 'remote' && /^\/update\s*$/i.test(text.trim())) text = pinnedUpdateLine(text, await remoteDirectory.localCommit());
     // The worker may need to prepare a chat and spawn a vendor. Show the
     // user's message before any of that I/O, just as the terminal does.
     const prompt = text.trim();
