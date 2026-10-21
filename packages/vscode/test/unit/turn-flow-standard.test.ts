@@ -173,13 +173,13 @@ describe('steers sort by acknowledgement (V10)', () => {
   });
 
   it('a steer first seen in a snapshot takes the order it arrived in, and keeps it', () => {
-    const live = (steers: Array<{ text: string; responseOffset: number }>) => worker({
+    const live = (steers: Array<{ id: string; text: string; responseOffset: number }>) => worker({
       type: 'snapshot', session: session({ pendingTurn: { prompt: 'hi', startedAt: '', steers } as never }), live: { text: 'abc', waitingLabel: 'thinking' },
     });
-    let model = run([live([{ text: 'one', responseOffset: 1 }])], begin());
+    let model = run([live([{ id: 's1', text: 'one', responseOffset: 1 }])], begin());
     const first = model.live!.steers[0]!.seq;
     expect(first).toEqual(expect.any(Number));
-    model = run([activity({ kind: 'tool-start', id: 'z', label: 'read', category: 'read' }), live([{ text: 'one', responseOffset: 1 }, { text: 'two', responseOffset: 2 }])], model);
+    model = run([activity({ kind: 'tool-start', id: 'z', label: 'read', category: 'read' }), live([{ id: 's1', text: 'one', responseOffset: 1 }, { id: 's2', text: 'two', responseOffset: 2 }])], model);
     expect(model.live!.steers[0]!.seq).toBe(first);
     expect(model.live!.steers[1]!.seq!).toBeGreaterThan(model.live!.activities[0]!.seq!);
   });

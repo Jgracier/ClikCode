@@ -47,12 +47,11 @@ export function applySnapshot(model: ChatModel, event: Extract<WorkerEvent, { ty
   let seen = folded.seen;
   // Merged with what this window already placed, by id: a snapshot read
   // before the steer was persisted does not take it away, and the same steer
-  // is one row whichever copy arrives first. Without an id (an older
-  // worker) the place in the list is all there is to match by.
+  // is one row whichever copy arrives first.
   const held = model.live?.steers ?? [];
   const durable = event.session.pendingTurn?.steers ?? [];
-  const merged = durable.map((steer, index) => {
-    const local = steer.id ? held.find((item) => item.id === steer.id) : held[index]?.id ? undefined : held[index];
+  const merged = durable.map((steer) => {
+    const local = steer.id ? held.find((item) => item.id === steer.id) : undefined;
     const seq = steer.seq ?? local?.seq ?? ++seen;
     seen = Math.max(seen, seq);
     return { ...(steer.id ? { id: steer.id } : {}), text: steer.text, offset: steer.responseOffset ?? local?.offset ?? event.live!.text.length, seq };
