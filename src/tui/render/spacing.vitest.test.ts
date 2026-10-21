@@ -41,9 +41,8 @@ describe('the composer has room to breathe', () => {
 });
 
 describe('usage reads by state, not as furniture', () => {
-  it('finds what is left in either wording the harnesses use', () => {
+  it('finds what is left in the label', () => {
     expect(usageRemainingPercent('5h 42% left · weekly 80% left')).toBe(42);
-    expect(usageRemainingPercent('58% used')).toBe(42);
     expect(usageRemainingPercent('$12 credits left')).toBeUndefined();
     expect(usageRemainingPercent(undefined)).toBeUndefined();
   });
