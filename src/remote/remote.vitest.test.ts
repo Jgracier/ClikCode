@@ -12,7 +12,7 @@ import { host, tailscaleFixture, world } from '../../scripts/tui-e2e/fake-remote
 import { shellQuote, validateSshTarget, withUser } from './shell.js';
 import { defaultLoginUser, runSsh, sshArgv, sshFailure, sshFailureMessage } from './ssh.js';
 import { discoverMachines, readTailscaleStatus, type TailscaleStatus } from './tailscale.js';
-import { installOnMachine, nodeIsNewEnough, sourceScript, uninstallFromMachine, type InstallStep } from './install.js';
+import { buildScript, installOnMachine, nodeIsNewEnough, sourceScript, uninstallFromMachine, type InstallStep } from './install.js';
 import { needsUpdate, RemoteLink, RemoteMachines, type MachineView } from './connection.js';
 import { machinesPath, newMachineRecord, readMachines, updateMachines, type RemoteMachine } from './machines.js';
 import { boardRowsWithMachines, isRemoteRowValue, NEEDS_YOU_GROUP } from './board-rows.js';
@@ -182,14 +182,41 @@ describe('installing on a machine', () => {
     fakeWorld.commit = commit;
   });
 
-  it('refuses to touch the clone when it has local changes', async () => {
+  it('resets the clone it owns to the target, local changes and all', async () => {
     const source = join(homeOf('devbox'), '.local', 'share', 'clikcode', 'src');
     writeFileSync(join(source, 'package.json'), '{"edited": true}\n');
+    writeFileSync(join(source, 'stray.txt'), 'left behind\n');
     const outcome = await installOnMachine('devbox', steps().reporter, { update: true });
-    expect(outcome).toMatchObject({ ok: false, step: 'Getting ClikCode from GitHub' });
-    if (!outcome.ok) expect(outcome.message).toMatch(/local changes \(M package.json\).*will not overwrite/);
-    expect(readFileSync(join(source, 'package.json'), 'utf8')).toBe('{"edited": true}\n');
-    execFileSync('git', ['checkout', '-q', '--', 'package.json'], { cwd: source });
+    expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
+    expect(readFileSync(join(source, 'package.json'), 'utf8')).not.toContain('edited');
+    expect(existsSync(join(source, 'stray.txt'))).toBe(false);
+    if (outcome.ok) expect(outcome.from).toBe(fakeWorld.commit);
+  });
+
+  it('updates to a chosen commit, fetched by sha, and builds it as it is', async () => {
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: fakeWorld.work, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 'f', GIT_AUTHOR_EMAIL: 'f@x.invalid', GIT_COMMITTER_NAME: 'f', GIT_COMMITTER_EMAIL: 'f@x.invalid' } }).trim();
+    const older = git('rev-parse', 'HEAD~1');
+    const { seen, reporter } = steps();
+    const outcome = await installOnMachine('devbox', reporter, { update: true, commit: older });
+    expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
+    expect(seen[1]!.detail).toBe(`updated at ${older.slice(0, 8)}`);
+    if (outcome.ok) expect(outcome.info.commit).toBe(older);
+    const npx = readFileSync(join(homeOf('devbox'), '.fake-remote', 'npx.log'), 'utf8');
+    expect(npx).toContain('run build');
+    expect(npx).toContain('run install-local --force');
+    // A commit the repository does not have: the step says so.
+    const missing = await installOnMachine('devbox', steps().reporter, { update: true, commit: 'e'.repeat(40) });
+    expect(missing).toMatchObject({ ok: false, step: 'Getting ClikCode from GitHub' });
+    if (!missing.ok) expect(missing.message).toMatch(/has no commit e{40}/);
+    // Back to main for the tests after this one.
+    expect((await installOnMachine('devbox', steps().reporter, { update: true })).ok).toBe(true);
+  });
+
+  it('builds the update script once, for a commit or for main', () => {
+    expect(sourceScript('file:///r.git', 'a'.repeat(40))).toContain(`want='${'a'.repeat(40)}'`);
+    expect(sourceScript('file:///r.git')).toContain("want=''");
+    expect(buildScript(true)).toContain('pnpm run install-local --force');
+    expect(buildScript(false)).not.toContain('--force');
   });
 
   it('installs a user-local Node, checksum verified, when there is none', async () => {

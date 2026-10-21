@@ -12,8 +12,12 @@
  *                          or Node "missing"), a fake `npx` standing in for
  *                          pnpm, and how it behaves (users, offline, windows)
  *
- * CLI, for run.py:  node fake-remote.mjs world <root>
- *                   node fake-remote.mjs host <root> <name> '<json opts>' */
+ *   installAt(...)         that machine with ClikCode already installed at
+ *                          a given commit
+ *
+ * CLI, for run.py:  node fake-remote.mjs world <root> ['{"second":true}']
+ *                   node fake-remote.mjs host <root> <name> '<json opts>'
+ *                   node fake-remote.mjs install <root> <name> '{"repoUrl","commit"}' */
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -48,17 +52,29 @@ export function world(root, options = {}) {
   mkdirSync(join(root, 'hosts'), { recursive: true });
   const work = join(root, 'repo-work');
   mkdirSync(join(work, 'scripts'), { recursive: true });
-  writeFileSync(join(work, 'package.json'), `${JSON.stringify({ name: 'clikcode', version: '1.0.0', type: 'module', scripts: { 'install-local': 'node scripts/install-local.mjs' } }, null, 2)}\n`);
+  writeFileSync(join(work, 'package.json'), `${JSON.stringify({ name: 'clikcode', version: '1.0.0', type: 'module', scripts: { build: 'node scripts/build.mjs', 'install-local': 'node scripts/install-local.mjs' } }, null, 2)}\n`);
   writeFileSync(join(work, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n");
-  writeFileSync(join(work, '.gitignore'), 'node_modules\n');
   copyFileSync(join(HERE, 'fake-remote-clikcode.mjs'), join(work, 'scripts', 'clikcode.mjs'));
   writeFileSync(join(work, 'scripts', 'install-local.mjs'), INSTALL_LOCAL);
+  writeFileSync(join(work, 'scripts', 'build.mjs'), "import { writeFileSync } from 'node:fs';\nwriteFileSync('built', 'yes');\nconsole.log('built');\n");
+  writeFileSync(join(work, '.gitignore'), 'node_modules\nbuilt\n');
   git(work, 'init', '-q', '-b', 'main');
   git(work, 'add', '-A');
   git(work, 'commit', '-q', '-m', 'fake ClikCode');
   const bare = join(root, 'repo.git');
   git(root, 'clone', '-q', '--bare', work, bare);
   const commit = git(work, 'rev-parse', 'HEAD');
+  // A newer commit on main, the older one kept as `first`: a machine
+  // installed at `first` is behind (installAt).
+  let first;
+  if (options.second) {
+    first = commit;
+    writeFileSync(join(work, 'NEWS'), 'second\n');
+    git(work, 'add', '-A');
+    git(work, 'commit', '-q', '-m', 'second');
+    git(work, 'push', '-q', bare, 'main');
+  }
+  const head = git(work, 'rev-parse', 'HEAD');
 
   const mirror = join(root, 'mirror');
   const line = join(mirror, 'latest-v24.x');
@@ -74,7 +90,7 @@ export function world(root, options = {}) {
   const digest = createHash('sha256').update(readFileSync(join(line, `${name}.tar.gz`))).digest('hex');
   const listed = options.badChecksum ? digest.replace(/^./, (c) => (c === '0' ? '1' : '0')) : digest;
   writeFileSync(join(line, 'SHASUMS256.txt'), `${'0'.repeat(64)}  node-${FAKE_NODE_VERSION}-aix-ppc64.tar.gz\n${listed}  ${name}.tar.gz\n`);
-  return { repoUrl: `file://${bare}`, mirrorUrl: `file://${mirror}`, commit, bare, work };
+  return { repoUrl: `file://${bare}`, mirrorUrl: `file://${mirror}`, commit: head, ...(first ? { first } : {}), bare, work };
 }
 
 /** One fake machine. `hide`: tools left off its PATH ('git', 'node').
@@ -109,7 +125,10 @@ export function host(root, name, options = {}) {
     'case "$1" in pnpm@*) shift;; *) echo "fake npx: only pnpm" >&2; exit 2;; esac',
     'case "$1" in',
     '  install) mkdir -p node_modules/.fake; exit 0;;',
-    '  run) [ -d node_modules ] || { echo "run pnpm install first" >&2; exit 1; }; [ "$2" = install-local ] && exec node scripts/install-local.mjs; echo "fake npx: no script $2" >&2; exit 1;;',
+    '  run) [ -d node_modules ] || { echo "run pnpm install first" >&2; exit 1; }; shift; name="$1"; shift',
+    '       cmd="$(node -e "process.stdout.write((require(\'./package.json\').scripts||{})[process.argv[1]]||\'\')" "$name")"',
+    '       [ -n "$cmd" ] || { echo "fake npx: no script $name" >&2; exit 1; }',
+    '       exec /bin/sh -c "$cmd \\"\\$@\\"" sh "$@";;',
     'esac',
     'echo "fake npx: unknown pnpm command $1" >&2; exit 2',
   ].join('\n'));
@@ -122,6 +141,24 @@ export function host(root, name, options = {}) {
   if (options.commit) writeFileSync(join(home, '.fake-remote', 'commit'), options.commit);
   if (options.later) writeFileSync(join(home, '.fake-remote', 'later.json'), JSON.stringify(options.later));
   return { machine, home, bin };
+}
+
+/** A machine (made by `host`) that already has ClikCode Remote's install
+ * of `commit`, as an install of it would have left it: the clone at that
+ * commit, built, installed with `install-local --force`. */
+export function installAt(root, name, repoUrl, commit) {
+  const machine = join(root, 'hosts', name);
+  const home = join(machine, 'home');
+  const src = join(home, '.local', 'share', 'clikcode', 'src');
+  mkdirSync(dirname(src), { recursive: true });
+  const env = { HOME: home, PATH: join(machine, 'bin'), GIT_CONFIG_NOSYSTEM: '1', LANG: 'C' };
+  const run = (file, args, cwd = src) => execFileSync(file, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' });
+  run('git', ['clone', '-q', repoUrl, src], home);
+  run('git', ['reset', '-q', '--hard', commit]);
+  mkdirSync(join(src, 'node_modules', '.fake'), { recursive: true });
+  run('node', ['scripts/build.mjs']);
+  run('node', ['scripts/install-local.mjs', '--force']);
+  return { src };
 }
 
 /** `tailscale status --json`, shaped as a real one (2026-10), with machines
@@ -162,8 +199,11 @@ import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, rmSync, syml
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
-git('fetch', '-q', 'origin', 'main');
-if (git('rev-parse', 'HEAD') !== git('rev-parse', 'origin/main')) { console.error('not installing: HEAD is not origin/main'); process.exit(1); }
+const force = process.argv.includes('--force');
+if (!force) {
+  git('fetch', '-q', 'origin', 'main');
+  if (git('rev-parse', 'HEAD') !== git('rev-parse', 'origin/main')) { console.error('not installing: HEAD is not origin/main'); process.exit(1); }
+} else if (!existsSync('built')) { console.error('dist is missing: build first'); process.exit(1); }
 if (!existsSync('node_modules')) { console.error('node_modules is missing'); process.exit(1); }
 const release = join(homedir(), '.local', 'share', 'clikcode', 'release');
 rmSync(release, { recursive: true, force: true });
@@ -180,8 +220,9 @@ console.log('installed');
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const [command, root, name, json] = process.argv.slice(2);
-  if (command === 'world') process.stdout.write(`${JSON.stringify(world(root, json ? JSON.parse(json) : {}))}\n`);
+  if (command === 'world') process.stdout.write(`${JSON.stringify(world(root, name ? JSON.parse(name) : {}))}\n`);
   else if (command === 'tailscale') process.stdout.write(`${JSON.stringify(tailscaleFixture(), null, 2)}\n`);
   else if (command === 'host') process.stdout.write(`${JSON.stringify(host(root, name, json ? JSON.parse(json) : {}))}\n`);
+  else if (command === 'install') { const { repoUrl, commit } = JSON.parse(json); process.stdout.write(`${JSON.stringify(installAt(root, name, repoUrl, commit))}\n`); }
   else { process.stderr.write('usage: fake-remote.mjs world <root> | host <root> <name> [json]\n'); process.exit(2); }
 }
