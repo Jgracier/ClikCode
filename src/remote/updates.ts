@@ -27,6 +27,12 @@ export function localBuildCommit(): string | undefined {
 }
 
 /** What a machine record says of the ClikCode just installed there. */
+/** `/update` typed into a chat on another machine, with no commit: to the editor's build, the
+ * commit automatic updates keep that machine at -- not main, which they would then undo. */
+export function pinnedUpdateLine(line: string, editorCommit: string | undefined): string {
+  return editorCommit && /^\/update\s*$/i.test(line.trim()) ? `/update ${editorCommit}` : line;
+}
+
 export function installedRecord(record: RemoteMachine, info: RemoteInfo): void {
   record.ready = true;
   record.installed = { version: info.version, ...(info.commit ? { commit: info.commit } : {}), at: new Date().toISOString() };

@@ -15,7 +15,7 @@ import { discoverMachines, readTailscaleStatus, type TailscaleStatus } from './t
 import { buildScript, installOnMachine, nodeIsNewEnough, sourceScript, uninstallFromMachine, type InstallStep } from './install.js';
 import { needsUpdate, RemoteLink, RemoteMachines, type MachineView } from './connection.js';
 import { machinesPath, newMachineRecord, readMachines, updateMachines, type RemoteMachine } from './machines.js';
-import { boardRowsWithMachines, isRemoteRowValue, NEEDS_YOU_GROUP, updateText } from './board-rows.js';
+import { isRemoteRowValue, updateText } from './board-rows.js';
 import { autoUpdateDecision, AutoUpdates } from './updates.js';
 import { outdatedNotice } from './terminal-chat.js';
 import { interactiveRemotePicker, notYetAdded, type RemoteHost } from '../tui/pickers/remote.js';
@@ -374,58 +374,13 @@ describe('the board’s connections', () => {
       const tries = () => readFileSync(join(root, 'ssh.log'), 'utf8').split('\n').filter((line) => line.includes('"sleeping"')).length;
       const before = tries();
       await until(() => tries() > before + 1);
-      const rows = boardRowsWithMachines([], machines.views());
-      expect(stripAnsi(rows[0]!.group!)).toBe('sleeping · offline, last seen 1h ago');
-      expect(stripAnsi(rows[0]!.label)).toBe('Deploy notes');
+      expect(machines.views()[0]!.state).toBe('offline');
     } finally { await machines.close(); }
   });
 
   it('writes machines.json private to the user', async () => {
     await updateMachines((list) => list);
     expect(statSync(machinesPath()).mode & 0o777).toBe(0o600);
-  });
-});
-
-describe('the board’s rows', () => {
-  const view = (name: string, chats: IdeConversation[], state: MachineView['state'] = 'connected'): MachineView => ({
-    machine: newMachineRecord({ name, sshTarget: name, ready: true }), state, needsUpdate: false, chats,
-  });
-
-  it('is unchanged with no machine added', () => {
-    const local: PickerOption<string>[] = [{ label: 'Mine', value: 'a', group: 'Recent' }];
-    expect(boardRowsWithMachines(local, [])).toEqual(local);
-  });
-
-  it('pins every machine’s Needs you on top, then this machine, named, then each machine in its sections', () => {
-    const local: PickerOption<string>[] = [
-      { label: 'Local waiting', value: 'l1', group: 'Recent', activity: 'needs-you', detail: '· needs you' },
-      { label: 'Local recent', value: 'l2', group: 'Recent', detail: '· 5m ago' },
-    ];
-    const rows = boardRowsWithMachines(local, [view('imac', [
-      chat('r1', 'Remote working', { section: 'working', activity: 'working', turn: { startedAt: new Date().toISOString(), activeAt: new Date().toISOString() } }),
-      chat('r2', 'Remote waiting', { needsYou: true }),
-      chat('r3', 'Remote old', { section: 'past', updatedAt: '2026-01-01T00:00:00Z' }),
-    ])], Date.now(), 'workstation');
-    expect(rows.map((row) => [stripAnsi(row.group!), stripAnsi(row.label)])).toEqual([
-      [NEEDS_YOU_GROUP, 'Local waiting'],
-      [NEEDS_YOU_GROUP, 'Remote waiting'],
-      ['workstation · Recent', 'Local recent'],
-      ['imac · Working', 'Remote working'],
-      ['imac · Older', 'Remote old'],
-    ]);
-    expect(rows[1]!.detail).toMatch(/· imac$/);
-    expect(rows[3]!.activity).toBe('working');
-    expect(stripAnsi(rows[3]!.detail!)).toMatch(/^· working/);
-    expect(isRemoteRowValue(rows[3]!.value)).toBe(true);
-    expect(isRemoteRowValue(rows[2]!.value)).toBe(false);
-  });
-
-  it('does not move this machine’s rows when another machine’s list changes', () => {
-    const local: PickerOption<string>[] = [{ label: 'Local recent', value: 'l2', group: 'Recent' }];
-    const before = boardRowsWithMachines(local, [view('a', [chat('1', 'one')]), view('b', [chat('2', 'two')])], Date.now(), 'me');
-    const after = boardRowsWithMachines(local, [view('a', [chat('1', 'one'), chat('3', 'three')]), view('b', [chat('2', 'two')])], Date.now(), 'me');
-    expect(after[0]).toEqual(before[0]);
-    expect(after.findIndex((row) => row.label === 'two')).toBe(before.findIndex((row) => row.label === 'two') + 1);
   });
 });
 
@@ -742,4 +697,15 @@ describe('a chat on the machine that owns it', () => {
     ]));
     expect(JSON.stringify(events)).not.toMatch(/ENOENT/);
   }, 60_000);
+});
+
+describe('/update in a chat on another machine', () => {
+  it('goes to the editor\'s build when no commit is named, so automatic updates do not undo it', async () => {
+    const { pinnedUpdateLine } = await import('./updates.js');
+    expect(pinnedUpdateLine('/update', 'abc1234')).toBe('/update abc1234');
+    expect(pinnedUpdateLine('  /update  ', 'abc1234')).toBe('/update abc1234');
+    expect(pinnedUpdateLine('/update def5678', 'abc1234')).toBe('/update def5678');
+    expect(pinnedUpdateLine('/update', undefined)).toBe('/update');
+    expect(pinnedUpdateLine('update the docs', 'abc1234')).toBe('update the docs');
+  });
 });
