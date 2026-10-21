@@ -3,9 +3,10 @@
  * Every connection is `ssh -o BatchMode=yes -o ConnectTimeout=10 -- <target>
  * <script>`. BatchMode means ssh never asks for a password or a passphrase
  * and never asks to trust a new host key interactively: a login that needs
- * one fails, and ClikCode says so. ClikCode handles no passwords and sends
- * no secrets. Keys, an agent, or Tailscale SSH (which needs neither) are how
- * a login succeeds. `--` ends ssh's options, and the target was checked not
+ * one fails, and ClikCode says so. A new machine's host key is accepted and
+ * remembered the first time (accept-new); a changed one is refused. ClikCode
+ * handles no passwords and sends no secrets. Keys, an agent, or Tailscale SSH
+ * (which needs neither) are how a login succeeds. `--` ends ssh's options, and the target was checked not
  * to start with `-` anyway (shell.ts). */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { userInfo } from 'node:os';
@@ -14,6 +15,9 @@ import { remoteShell, targetHost, targetUser, validateSshTarget } from './shell.
 export const SSH_OPTIONS: readonly string[] = [
   '-o', 'BatchMode=yes',
   '-o', 'ConnectTimeout=10',
+  // A machine's first connection trusts its host key and remembers it, as
+  // answering "yes" would; a key that CHANGED is still refused (host-key).
+  '-o', 'StrictHostKeyChecking=accept-new',
   // A dropped network is noticed within a minute, not at TCP's leisure.
   '-o', 'ServerAliveInterval=15',
   '-o', 'ServerAliveCountMax=3',
