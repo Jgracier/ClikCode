@@ -9,9 +9,12 @@
  *                          from ~/.fake-remote/chats.json, and
  *                          `conversations-changed` when that file changes
  *
+ * ~/.fake-remote/later.json ({afterMs, chats}) replaces the list that long
+ * after the first connection starts watching.
+ *
  * Every request it gets is logged to ~/.fake-remote/bridge.log, so a test
  * can check the board only ever asked to read. */
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, watchFile, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, unlinkSync, watchFile, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -50,6 +53,14 @@ lines.on('line', (line) => {
   } else if (request.type === 'watch-conversations' && request.on && !watching) {
     watching = true;
     watchFile(join(fake, 'chats.json'), { interval: 100 }, () => send({ type: 'chat', chat: message.chat, event: { type: 'conversations-changed' } }));
+    // ~/.fake-remote/later.json, {afterMs, chats}: the list changes by itself
+    // that long after the board starts watching (a turn starting there).
+    const later = (() => { try { return JSON.parse(read(join(fake, 'later.json'))); } catch { return undefined; } })();
+    // Once: the first connection that watches.
+    if (later) {
+      unlinkSync(join(fake, 'later.json'));
+      setTimeout(() => writeFileSync(join(fake, 'chats.json'), JSON.stringify(later.chats)), later.afterMs ?? 1000);
+    }
   }
 });
 lines.on('close', () => process.exit(0));

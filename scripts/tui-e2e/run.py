@@ -168,6 +168,44 @@ def signed_in_fake(binary, auth_path, auth_text):
     return setup
 
 
+def remote_fake():
+    """`setup` for ClikCode Remote: a FAKE `ssh` and `tailscale` in fakebin
+    (fake-ssh.mjs, fake-tailscale.mjs), a fake repository and Node mirror
+    standing in for GitHub and nodejs.org, and one fake machine,
+    `devbox.tail-fake.ts.net`, whose ClikCode lists two chats and, a few
+    seconds after the board starts watching, updates one of them in place.
+    No real machine, network or vendor CLI is involved (fake-remote.mjs)."""
+    def setup(context):
+        import subprocess, datetime
+        fakes = os.path.join(REPO, 'scripts', 'tui-e2e')
+        shutil.copy(os.path.join(fakes, 'fake-grok.mjs'), os.path.join(context['fakebin'], 'grok'))
+        os.chmod(os.path.join(context['fakebin'], 'grok'), 0o755)
+        for name, script in (('ssh', 'fake-ssh.mjs'), ('tailscale', 'fake-tailscale.mjs')):
+            os.symlink(os.path.join(fakes, script), os.path.join(context['fakebin'], name))
+        world_root = os.path.join(context['root'], 'remote')
+        os.makedirs(world_root)
+        tool = lambda *args: json.loads(subprocess.check_output(['node', os.path.join(fakes, 'fake-remote.mjs'), *args], env={**os.environ, 'PATH': os.environ['PATH']}))
+        made = tool('world', world_root)
+        # The remote runs this build's commit, so it does not read "needs update".
+        cli = open(os.path.join(os.path.dirname(context['entry']), 'cli.js')).read()
+        found = re.search(r'CLIKCODE_COMMIT = "([0-9a-f]{40})"', cli)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        iso = lambda minutes: (now - datetime.timedelta(minutes=minutes)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+        chat = lambda id, title, minutes, preview: {'id': id, 'title': title, 'updatedAt': iso(minutes), 'messages': 4, 'preview': preview, 'section': 'active', 'current': False}
+        tool('host', world_root, 'devbox.tail-fake.ts.net', json.dumps({
+            'chats': [chat('c1', 'Fix the login page', 5, 'the button does nothing'), chat('c2', 'Write the migration tests', 30, 'cover the rollback')],
+            'later': {'afterMs': 3000, 'chats': [chat('c1', 'Fix the login page', 0, 'now it submits twice'), chat('c2', 'Write the migration tests', 30, 'cover the rollback')]},
+            **({'commit': found.group(1)} if found else {}),
+        }))
+        status = os.path.join(world_root, 'tailscale.json')
+        open(status, 'w').write(subprocess.check_output(['node', os.path.join(fakes, 'fake-remote.mjs'), 'tailscale']).decode())
+        context['env'].update({
+            'FAKE_SSH_ROOT': world_root, 'FAKE_TAILSCALE_STATUS': status,
+            'CLIKCODE_REMOTE_REPO_URL': made['repoUrl'], 'CLIKCODE_REMOTE_NODE_MIRROR': made['mirrorUrl'],
+        })
+    return setup
+
+
 SCENARIOS = {
     'two-blocks-with-tool': {
         'turns': [TWO_BLOCKS],
@@ -522,6 +560,34 @@ SCENARIOS = {
         'watch': [],
         'snap_contains': {'empty': ['No conversations yet'], 'confirm': ['· hello there?', 'esc close'], 'kept': ['› keep me']},
         'snap_lacks': {'confirm': ['type to filter', 'esc exit']},
+    },
+    # ClikCode Remote (/remote): the list opens over a fixed footer, with the
+    # tailnet's machines (fixture Tailscale: same owner, desktop OS, recent,
+    # deduped); choosing one installs ClikCode there a named step at a time;
+    # then the board shows that machine's section and its chats, which update
+    # in place without moving. The composer stays on its row throughout.
+    'remote-add-machine-to-board': {
+        'setup': remote_fake(), 'startup': 4, 'no_dup_check': 'lists and progress lines, no transcript',
+        'turns': [{'blocks': ['unused']}],
+        'steps': [
+            ('settle', 2), ('snap', 'closed'),
+            ('type', '/remote'), ('wait_for', 'On your tailnet', 15), ('wait_for', 'macbook', 10), ('settle', 1), ('snap', 'list'),
+            ('keys', '\r'), ('wait_for', '6/6 Checking the install', 60), ('wait_for', 'devbox is added', 15), ('settle', 1), ('snap', 'installed'),
+            ('keys', '\x1b[D'), ('wait_for', 'Fix the login page', 20), ('settle', 0.5), ('snap', 'board'),
+            ('wait_for', 'now it submits twice', 20), ('settle', 0.5), ('snap', 'board-updated'),
+            ('keys', '\x1b'), ('settle', 1),
+        ],
+        'watch': [],
+        'snap_contains': {
+            'list': ['ClikCode Remote', 'On your tailnet', 'devbox', 'imac', 'macbook', 'winbox  · windows · online · not supported yet', 'Add by SSH address'],
+            'installed': ['Installing ClikCode on devbox', '1/6 Checking the machine', '2/6 Node.js', '3/6 git', '4/6 Getting ClikCode from GitHub', '5/6 Building and installing', '6/6 Checking the install'],
+            'board': ['devbox · Recent', 'Fix the login page', 'the button does nothing', 'Write the migration tests'],
+            'board-updated': ['devbox · Recent', 'now it submits twice'],
+        },
+        'snap_lacks': {'list': ['studios-imac', 'old-server', 'iphone', 'gaming-pc', 'friends-laptop'], 'board': ['needs update'], 'board-updated': ['the button does nothing']},
+        'snap_composer_same': ['list', 'installed'],
+        'snap_pair_same_row': [('board', 'board-updated', 'Fix the login page'), ('board', 'board-updated', 'Write the migration tests'), ('board', 'board-updated', 'devbox · Recent')],
+        'never': ['Opening chats on other machines comes next', 'Windows machines'],
     },
     'single-block': {
         'turns': [{'blocks': ['Hello there, all good.']}],
@@ -2398,7 +2464,7 @@ def run(name, spec, entry, keep):
         'SSH_CONNECTION': '127.0.0.1 1 127.0.0.1 22',
     }
     if spec.get('classic'): env['CLIKCODE_TUI'] = 'classic'
-    if spec.get('setup'): spec['setup']({'root': root, 'home': home, 'state': state, 'fakebin': fakebin, 'workspace': workspace, 'env': env})
+    if spec.get('setup'): spec['setup']({'root': root, 'home': home, 'state': state, 'fakebin': fakebin, 'workspace': workspace, 'env': env, 'entry': entry})
     # The fake sign-in waits on the browser for as long as this file exists.
     sign_in_hold = os.path.join(root, 'login-hold')
     if spec.get('hold_sign_in'):
