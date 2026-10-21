@@ -40,6 +40,7 @@ import { IdePrompter, type IdeChannel } from './prompter.js';
 import { watchConversationList, type ListWatch } from '../session/list-watch.js';
 import { encodeTerminalSpec, type IdeEvent, type IdeFeature, type IdeRequest, type IdeTerminalSpec } from './protocol.js';
 import { IDE_PROTOCOL } from './protocol-version.js';
+import { watchForNewerBuild } from './bridge-retire.js';
 import { sessionEvent } from './session-event.js';
 import { searchScreen } from './bridge-slash-host.js';
 import type { MentionScreen } from '../tui/slash/search-browse.js';
@@ -52,6 +53,14 @@ import type { BridgeHost } from './bridge-host.js';
 import type { InteractiveSlashOutcome } from '../tui/slash/interactive-keys.js';
 
 const USAGE_REFRESH_MS = 15_000;
+
+/** Requests that only read: an editor polls them (the composer's usage line
+ * re-reads the account every refresh), so they never count as something
+ * happening when the bridge waits to be quiet (bridge-retire.ts). One still
+ * being answered holds it all the same. */
+const READ_ONLY_REQUESTS: ReadonlySet<IdeRequest['type']> = new Set(['query', 'visible', 'watch-conversations']);
+/** What the bridge sends by itself, on its own timers and watches: not activity either. */
+const HOUSEKEEPING_EVENTS: ReadonlySet<IdeEvent['type']> = new Set(['usage', 'conversations-changed', 'result']);
 
 /** The other chats a shared bridge process serves (bridge-mux.ts): what they
  * show is theirs. Leaving a conversation one of them still shows would drop
@@ -91,8 +100,21 @@ export class IdeBridge {
   private readonly host: BridgeHost;
   private readonly link: WorkerLink;
   private readonly turns: BridgeTurns;
+  private readonly channel: IdeChannel;
+  /** Requests still being answered, and jobs queued or running (enqueue). */
+  private inFlight = 0;
+  /** When the editor last asked for something, or anything was relayed to it:
+   * a newer build replaces this bridge only once this is old (bridge-retire.ts). */
+  lastActivityAt = Date.now();
 
-  constructor(private readonly config: Conf, private readonly channel: IdeChannel, private readonly siblings?: BridgeSiblings) {
+  constructor(private readonly config: Conf, editor: IdeChannel, private readonly siblings?: BridgeSiblings) {
+    this.channel = {
+      send: (event) => {
+        if (!HOUSEKEEPING_EVENTS.has(event.type)) this.lastActivityAt = Date.now();
+        editor.send(event);
+      },
+    };
+    const channel = this.channel;
     this.prompter = new IdePrompter(channel);
     const bridge = this;
     this.host = {
@@ -134,9 +156,29 @@ export class IdeBridge {
     this.channel.send({ type: 'ready', version: CLIKCODE_VERSION, protocol: IDE_PROTOCOL.version, revision: IDE_PROTOCOL.revision, ...(currentWorkerBuild() ? { build: currentWorkerBuild() } : {}), pid: process.pid });
   }
 
+  /** What keeps a newer build from replacing this bridge now (bridge-retire.ts):
+   * anything it is doing for the editor. Undefined when nothing does. */
+  retireBlocker(): string | undefined {
+    if (this.inFlight > 0) return 'a request is being answered';
+    if (this.link.running) return 'a turn is running';
+    if (this.prompter.openCount > 0 || this.signIns.size > 0) return 'a picker or sign-in is open';
+    if (this.searchKey) return '/search is open';
+    return undefined;
+  }
+
+  /** A request answered later: counted in flight until it settles. */
+  private track(work: Promise<unknown>, activity = true): void {
+    this.inFlight += 1;
+    void work.finally(() => {
+      this.inFlight -= 1;
+      if (activity) this.lastActivityAt = Date.now();
+    }).catch(() => undefined);
+  }
+
   handle(request: IdeRequest): void {
     // What the editor asked for, minus its frequent read-only queries.
     if (request.type !== 'query') lifecycle('bridge.request', { type: request.type, ...(request.type === 'choose' ? { kind: request.choice.kind } : {}) });
+    if (!READ_ONLY_REQUESTS.has(request.type)) this.lastActivityAt = Date.now();
     switch (request.type) {
       case 'open':
         this.features = new Set(request.features ?? []);
@@ -152,20 +194,20 @@ export class IdeBridge {
         });
         return;
       case 'send':
-        void this.turns.send(request.text, request.id);
+        this.track(this.turns.send(request.text, request.id));
         return;
       case 'cancel':
         this.turns.noteCancel();
-        void this.link.cancelTurn(request.restoreDraft, request.trigger);
+        this.track(this.link.cancelTurn(request.restoreDraft, request.trigger));
         return;
       case 'stop-agents':
-        if (this.sessionId) void this.link.workerFor(this.sessionId).then((client) => client.send({ type: 'agents', action: 'stop', ...(request.ids ? { ids: request.ids } : {}), ...(request.all ? { all: true } : {}), ...(request.confirm ? { confirm: true } : {}) }), (error: unknown) => this.report(error));
+        if (this.sessionId) this.track(this.link.workerFor(this.sessionId).then((client) => client.send({ type: 'agents', action: 'stop', ...(request.ids ? { ids: request.ids } : {}), ...(request.all ? { all: true } : {}), ...(request.confirm ? { confirm: true } : {}) }), (error: unknown) => this.report(error)));
         return;
       case 'send-queued':
         this.link.worker?.client.send({ type: 'send-queued' });
         return;
       case 'unqueue':
-        if (this.sessionId) void this.link.workerFor(this.sessionId).then((client) => client.send({ type: 'unqueue', id: request.id }), (error: unknown) => this.report(error));
+        if (this.sessionId) this.track(this.link.workerFor(this.sessionId).then((client) => client.send({ type: 'unqueue', id: request.id }), (error: unknown) => this.report(error)));
         return;
       case 'approval-response':
         this.link.worker?.client.send({ type: 'approval-response', id: request.id, approved: request.approved });
@@ -191,10 +233,10 @@ export class IdeBridge {
         return;
       }
       case 'query':
-        void answerQuery(this.host, request.requestId, request.query ?? 'slash-commands', request);
+        this.track(answerQuery(this.host, request.requestId, request.query ?? 'slash-commands', request), false);
         return;
       case 'choose':
-        void choose(this.host, request.requestId, request.choice);
+        this.track(choose(this.host, request.requestId, request.choice));
         return;
       case 'watch-conversations':
         this.watchConversations(request.on);
@@ -278,8 +320,11 @@ export class IdeBridge {
    * and choice behind it waited too; the job carries on by itself from there,
    * and the queue moves on. */
   private enqueue(job: () => Promise<void>): void {
+    // In flight from now until the job itself ends, past a sign-in that let the queue go.
+    let ended!: () => void;
+    this.track(new Promise<void>((resolve) => { ended = resolve; }));
     this.work = this.work.then(() => new Promise<void>((release) => {
-      void this.prompter.holding(release, job).catch((error: unknown) => this.report(error)).finally(release);
+      void this.prompter.holding(release, job).catch((error: unknown) => this.report(error)).finally(() => { release(); ended(); });
     }));
   }
 
@@ -494,10 +539,12 @@ export async function runIdeBridge(config: Conf): Promise<void> {
     return runMultiplexedBridge(config, send);
   }
   let bridge: IdeBridge | undefined;
+  // The last event before a retirement exit has to have left first (bridge-mux.ts says why).
+  let sent: Promise<void> = Promise.resolve();
   const channel: IdeChannel = {
     send: (event: IdeEvent) => {
       if (event.type === 'output' && bridge?.quietOutput && event.payload.panel !== 'error') return;
-      if (process.connected) send(event, undefined, {}, () => undefined);
+      if (process.connected) sent = new Promise((resolve) => send(event, undefined, {}, () => resolve()));
     },
   };
   captureStdout(channel);
@@ -513,5 +560,14 @@ export async function runIdeBridge(config: Conf): Promise<void> {
   process.on('disconnect', () => { lifecycle('bridge.stop', { reason: 'editor disconnected' }); void running.shutdown().finally(() => process.exit(0)); });
   process.on('SIGTERM', () => { lifecycle('bridge.stop', { reason: 'SIGTERM' }); void running.shutdown().finally(() => process.exit(0)); });
   running.start();
+  // A newer ClikCode installed while the editor stays connected: leave once quiet (bridge-retire.ts).
+  watchForNewerBuild({
+    blocker: () => running.retireBlocker(),
+    lastActivityAt: () => running.lastActivityAt,
+    retire: () => {
+      channel.send({ type: 'retiring', reason: 'newer-build' });
+      void running.shutdown().then(() => sent).finally(() => process.exit(0));
+    },
+  });
   await new Promise<void>(() => { /* lives as long as the channel */ });
 }

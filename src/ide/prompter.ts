@@ -45,6 +45,11 @@ export class IdePrompter implements HarnessPrompter {
 
   constructor(private readonly channel: IdeChannel) {}
 
+  /** Pickers, inputs and sign-ins open in the editor now. */
+  get openCount(): number {
+    return this.pending.size + this.signIns.size;
+  }
+
   /** Runs `work`; a sign-in opening anywhere inside it calls `release`. */
   holding<T>(release: (() => void) | undefined, work: () => Promise<T>): Promise<T> {
     return this.queueHolder.run(release, work);

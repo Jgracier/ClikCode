@@ -21,6 +21,8 @@ class FakeChat implements MuxChat {
   shutdowns = 0;
   quietOutput = 0;
   conversation: string | undefined;
+  lastActivityAt = 0;
+  retireBlocker(): string | undefined { return undefined; }
   constructor(readonly channel: IdeChannel, readonly siblings: BridgeSiblings, private readonly routed: () => IdeChannel) {}
   start(): void { this.channel.send({ type: 'ready', version: 't', pid: 1 }); }
   handle(request: IdeRequest): void {

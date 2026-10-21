@@ -22,6 +22,9 @@
  *   1  the chat, the pickers, `query slash-commands`
  *   2  `query` for providers, models, conversations, accounts, chat settings
  *      and the Gateway; `choose`; unknown queries answered with an error
+ *   3  the bridge leaves for a newer installed build once quiet, saying so
+ *      first (`host-retiring`, or `retiring` from a one-chat bridge): an
+ *      event only, so an older editor just sees the bridge close
  *
  * ClikCode and the extension are published separately (the CLI first, in the
  * same ClikDeploy run), so a bump reaches npm before the extension that
@@ -29,7 +32,7 @@
  */
 export const IDE_PROTOCOL = {
   version: 1,
-  revision: 2,
+  revision: 3,
   oldestSupported: 1,
   oldestRevision: 2,
 } as const;
