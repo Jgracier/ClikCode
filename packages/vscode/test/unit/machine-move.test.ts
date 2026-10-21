@@ -12,7 +12,7 @@ const world = vi.hoisted(() => ({
   answer: undefined as string | undefined,
   notes: [] as string[],
   /** The machine menu's connection to m1, when it has one open. */
-  channel: undefined as undefined | { revision: number; requests: Array<{ type: string; [key: string]: unknown }>; closed: boolean },
+  channel: undefined as undefined | { revision: number; requests: Array<{ type: string; [key: string]: unknown }>; closed: boolean; have?: unknown },
   held: 0,
 }));
 
@@ -51,6 +51,7 @@ vi.mock('../../src/remote-directory', () => ({
         request: async (request: { type: string }) => {
           channel.requests.push(request);
           if (request.type === 'import-chat') return { sessionId: 's1', folder: '/root', changes: [], installationId: 'prod-install' };
+          if (request.type === 'chat-have') return channel.have ?? null;
           return undefined;
         },
         close: () => { channel.closed = true; },
@@ -207,6 +208,26 @@ describe('the machine chip', () => {
     // The chat's own connection there only opens it.
     expect(requestsOf('m1').filter((type) => type !== 'visible')).toEqual(['open']);
     expect(said(controller)).toEqual([]);
+  });
+
+  it('asks a machine that answers chat-have what it holds, and the export sends only the rest', async () => {
+    world.channel = { revision: 5, requests: [], closed: false, have: { messages: 174, hash: 'abc' } };
+    const controller = await startChat({ messages: 2 });
+    await controller.moveToMachine('m1');
+    await until(() => controller.state.connection === 'ready' && controller.state.machine === 'prod');
+    expect(world.channel.requests.map((request) => request.type)).toEqual(['chat-have', 'import-chat']);
+    const exported = world.bridges.find((bridge) => bridge.machine === 'local')!.requests.find((request) => request.type === 'export-chat');
+    expect(exported).toMatchObject({ sessionId: 's1', since: { messages: 174, hash: 'abc' } });
+  });
+
+  it('a machine that holds nothing of the chat: the whole chat is exported', async () => {
+    world.channel = { revision: 5, requests: [], closed: false };
+    const controller = await startChat({ messages: 2 });
+    await controller.moveToMachine('m1');
+    await until(() => controller.state.connection === 'ready' && controller.state.machine === 'prod');
+    expect(world.channel.requests.map((request) => request.type)).toEqual(['chat-have', 'import-chat']);
+    const exported = world.bridges.find((bridge) => bridge.machine === 'local')!.requests.find((request) => request.type === 'export-chat');
+    expect(exported).not.toHaveProperty('since');
   });
 
   it('on an empty chat, nothing moves: it is a new chat on that machine', async () => {
