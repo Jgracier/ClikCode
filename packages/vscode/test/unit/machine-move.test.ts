@@ -1,7 +1,7 @@
 /** The composer's machine chip is one of the chat's settings: choosing another
- * machine moves THIS chat there (export here, import there, mark moved here),
- * asking only when something changes; an empty chat simply becomes a new chat
- * there. Typing /machine opens the chip's menu, as /permission opens the mode
+ * machine moves THIS chat there (export here, import there once, mark moved
+ * here) with nothing asked and nothing said; an empty chat simply becomes a
+ * new chat there. Typing /machine opens the chip's menu, as /permission opens the mode
  * menu. A moved chat is read-only and offers the moved one. */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -10,6 +10,10 @@ const world = vi.hoisted(() => ({
   next: {} as Record<string, () => unknown>,
   warnings: [] as string[],
   answer: undefined as string | undefined,
+  notes: [] as string[],
+  /** The machine menu's connection to m1, when it has one open. */
+  channel: undefined as undefined | { revision: number; requests: Array<{ type: string; [key: string]: unknown }>; closed: boolean },
+  held: 0,
 }));
 
 vi.mock('vscode', () => {
@@ -24,7 +28,8 @@ vi.mock('vscode', () => {
     Disposable: class { constructor(private readonly done: () => void) {} dispose(): void { this.done(); } },
     workspace: { getConfiguration: () => ({ get: (_key: string, fallback?: unknown) => fallback }), workspaceFolders: [] },
     window: {
-      showErrorMessage: async () => undefined, showInformationMessage: async () => undefined,
+      showErrorMessage: async (text: string) => { world.notes.push(text); return undefined; },
+      showInformationMessage: async (text: string) => { world.notes.push(text); return undefined; },
       showWarningMessage: async (text: string) => { world.warnings.push(text); return world.answer; },
     },
     env: { clipboard: { writeText: async () => undefined } },
@@ -37,6 +42,20 @@ vi.mock('../../src/remote-directory', () => ({
     machine: async (id: string) => (id === 'm1' ? { machine: { id: 'm1', name: 'prod', sshTarget: 'root@prod', ready: true }, state: 'connected', needsUpdate: false, chats: [] } : undefined),
     localCommit: async () => undefined,
     watch: () => () => undefined,
+    hold: () => { world.held += 1; return () => { world.held -= 1; }; },
+    channel: async (id: string) => {
+      const channel = id === 'm1' ? world.channel : undefined;
+      if (!channel) return undefined;
+      return {
+        revision: channel.revision,
+        request: async (request: { type: string }) => {
+          channel.requests.push(request);
+          if (request.type === 'import-chat') return { sessionId: 's1', folder: '/root', changes: [], installationId: 'prod-install' };
+          return undefined;
+        },
+        close: () => { channel.closed = true; },
+      };
+    },
   },
   machineUpdateOf: () => undefined,
 }));
@@ -100,7 +119,7 @@ class FakeBridge extends BridgeEndpoint {
       setTimeout(() => this.receive({ type: 'session', session: session(id, this.chat.messages, this.chat.movedTo ? { movedTo: this.chat.movedTo } : {}) as never }), 0);
       answer({ sessionId: id });
     } else if (request.type === 'export-chat') answer({ version: 1, sessionId: 's1', conversationId: 's1', createdAt: '', messages: [], settings: {}, source: {} });
-    else if (request.type === 'import-chat') answer(request.dryRun ? { changes: this.chat.changes ?? [], folder: '/root' } : { sessionId: 's1', folder: '/root', changes: [], installationId: 'prod-install' });
+    else if (request.type === 'import-chat') answer({ sessionId: 's1', folder: '/root', changes: this.chat.changes ?? [], installationId: 'prod-install' });
     else if ('requestId' in request) answer();
     return true;
   }
@@ -117,7 +136,7 @@ const until = async (check: () => boolean, ms = 3_000): Promise<void> => {
 };
 
 const controllers: ClikCodeController[] = [];
-afterEach(() => { for (const controller of controllers.splice(0)) controller.dispose(); world.bridges = []; world.warnings = []; world.answer = undefined; });
+afterEach(() => { for (const controller of controllers.splice(0)) controller.dispose(); world.bridges = []; world.warnings = []; world.answer = undefined; world.notes = []; world.channel = undefined; world.held = 0; });
 
 const startChat = async (local: { messages: number; movedTo?: unknown }, remote: { messages: number; changes?: string[] } = { messages: 2 }) => {
   world.next = { local: () => new FakeBridge('local', local), m1: () => new FakeBridge('m1', remote) };
@@ -128,15 +147,17 @@ const startChat = async (local: { messages: number; movedTo?: unknown }, remote:
   await until(() => controller.state.connection === 'ready' && controller.state.sessionId === 's1');
   return controller;
 };
-const requestsOf = (machine: string) => world.bridges.filter((bridge) => bridge.machine === machine).flatMap((bridge) => bridge.requests.map((request) => request.type === 'import-chat' ? `import-chat${request.dryRun ? ' (dry run)' : ''}` : request.type));
+const requestsOf = (machine: string) => world.bridges.filter((bridge) => bridge.machine === machine).flatMap((bridge) => bridge.requests.map((request) => request.type === 'import-chat' ? `import-chat${'dryRun' in request ? ' (dry run)' : ''}` : request.type));
+/** What the chat shows besides its conversation: a note, a toast, a dialog. */
+const said = (controller: ClikCodeController): string[] => [...world.warnings, ...world.notes, ...((controller.state as { notes?: Array<{ text: string }> }).notes ?? []).map((note) => note.text)];
 
 describe('the machine chip', () => {
-  it('moves this chat to the machine chosen, and shows it there', async () => {
+  it('moves this chat to the machine chosen, and shows it there: one import, nothing asked or said', async () => {
     const controller = await startChat({ messages: 2 });
     await controller.moveToMachine('m1');
     await until(() => controller.state.connection === 'ready' && controller.state.machine === 'prod');
     expect(requestsOf('local')).toEqual(expect.arrayContaining(['open', 'export-chat', 'mark-moved']));
-    expect(requestsOf('m1')).toEqual(expect.arrayContaining(['import-chat (dry run)', 'import-chat', 'open']));
+    expect(requestsOf('m1').filter((type) => type !== 'visible')).toEqual(['import-chat', 'open']);
     const mark = world.bridges.flatMap((bridge) => bridge.requests).find((request) => request.type === 'mark-moved');
     expect(mark).toMatchObject({ sessionId: 's1', movedTo: { machine: 'prod', sessionId: 's1', installationId: 'prod-install' } });
     // The chat there is resumed, with no folder of this computer's.
@@ -144,17 +165,32 @@ describe('the machine chip', () => {
     expect(open).toEqual(expect.objectContaining({ mode: 'resume', sessionId: 's1' }));
     expect(open).not.toHaveProperty('workspace');
     expect(controller.state.sessionId).toBe('s1');
-    // Nothing changed, so nothing was asked.
-    expect(world.warnings).toEqual([]);
+    expect(said(controller)).toEqual([]);
   });
 
-  it('asks first when something changes, and a no leaves the chat where it is', async () => {
+  it('moves even when something changes there, without a dialog or a notice', async () => {
     const controller = await startChat({ messages: 2 }, { messages: 2, changes: ['Bypass → Auto (root).'] });
     await controller.moveToMachine('m1');
-    expect(world.warnings).toEqual(['Moving to prod: Bypass → Auto (root).']);
-    expect(requestsOf('m1')).toEqual(['import-chat (dry run)']);
-    expect(requestsOf('local')).not.toContain('mark-moved');
-    expect(controller.state.machine).toBeUndefined();
+    await until(() => controller.state.connection === 'ready' && controller.state.machine === 'prod');
+    expect(world.warnings).toEqual([]);
+    expect(requestsOf('m1').filter((type) => type === 'import-chat')).toEqual(['import-chat']);
+    expect(requestsOf('local')).toContain('mark-moved');
+    expect(said(controller)).toEqual([]);
+  });
+
+  it('moves over the connection the machine menu already has, and keeps it open meanwhile', async () => {
+    world.channel = { revision: 4, requests: [], closed: false };
+    const controller = await startChat({ messages: 2 });
+    const moving = controller.moveToMachine('m1');
+    expect(world.held).toBe(1);
+    await moving;
+    await until(() => controller.state.connection === 'ready' && controller.state.machine === 'prod');
+    expect(world.channel.requests.map((request) => request.type)).toEqual(['import-chat']);
+    expect(world.channel.closed).toBe(true);
+    expect(world.held).toBe(0);
+    // The chat's own connection there only opens it.
+    expect(requestsOf('m1').filter((type) => type !== 'visible')).toEqual(['open']);
+    expect(said(controller)).toEqual([]);
   });
 
   it('on an empty chat, nothing moves: it is a new chat on that machine', async () => {
