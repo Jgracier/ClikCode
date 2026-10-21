@@ -22,6 +22,8 @@ import { callDecision, markThought, savedTurnRanks, turnMarkLines } from '../../
 import { runningChatLine } from '../../render/waiting.js';
 import type { TerminalHarnessPrompter } from '../../prompter.js';
 import { LIVE_OUTPUT_LINES } from '../state.js';
+import { wrapWords } from '../../render/wrap.js';
+import { sanitizeTerminalText } from '../../render/text.js';
 
 
 /** Message and activity rows at the conversation's width. */
@@ -47,6 +49,8 @@ export function createRowBuilders(p: TerminalHarnessPrompter, conversationInner:
   const messageRows = (content: string, marker: string): readonly string[] => cachedMessageRows(content, marker, conversationInner);
   /** A user-side message: what the user wrote. */
   const userRows = (content: string): readonly string[] => messageRows(content, userMarker);
+  /** What ClikCode says in the user's place (a compaction it ran): a dim line, not their words. */
+  const noticeRows = (text: string): string[] => wrapWords(sanitizeTerminalText(text), Math.max(1, conversationInner - 2)).map((line) => `  ${chalk.dim(line)}`);
   /** Activity that belongs between two messages rather than inside a turn.
    * Retired once, by identity rather than by text -- two rows that say the
    * same thing are still two rows -- and an entry that arrives after its
@@ -67,7 +71,7 @@ export function createRowBuilders(p: TerminalHarnessPrompter, conversationInner:
     }
     return rows;
   };
-  return { conversationInner, userMarker, underCall, activityRows, messageRows, userRows, standaloneActivity };
+  return { conversationInner, userMarker, underCall, activityRows, messageRows, userRows, noticeRows, standaloneActivity };
 }
 export type RowBuilders = ReturnType<typeof createRowBuilders>;
 

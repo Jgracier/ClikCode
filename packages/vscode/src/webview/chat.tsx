@@ -60,7 +60,8 @@ const History = memo(({ sessionId, messages, traces, notes, workspace, reveal }:
     // `display: contents`: an anchor /search finds the message by, with no box of its own.
     parts.push(
       <div key={`m${index}`} class="message-anchor" data-message={index}>
-        {message.role === 'user' ? <UserMessage text={message.content} {...(promptNumbers.has(index) ? { prompt: promptNumbers.get(index)! } : {})} />
+        {message.automatic ? <NoteView note={{ after: index, kind: 'notice', text: message.automatic }} />
+          : message.role === 'user' ? <UserMessage text={message.content} {...(promptNumbers.has(index) ? { prompt: promptNumbers.get(index)! } : {})} />
           : trace ? <FinishedTurn text={message.content} trace={trace} cacheKey={`${sessionId}#${index}`} workspace={workspace} notes={turnNotices(notes, trace)} />
             : <AssistantMessage cacheKey={`${sessionId}#${index}`} text={message.content} />}
       </div>,
@@ -91,6 +92,7 @@ function FinalAnswer({ running, messages }: Pick<ChatModel, 'running' | 'message
 export function Transcript({ model, reveal }: { model: ChatModel; reveal?: number }): JSX.Element {
   const parts: JSX.Element[] = [];
   if (model.pendingPrompt) parts.push(<UserMessage key="pending" text={model.pendingPrompt} />);
+  else if (model.pendingNotice) parts.push(<NoteView key="pending" note={{ after: model.messages.length, kind: 'notice', text: model.pendingNotice }} />);
   // The plan and the turn's notices are rows of the turn, drawn once each
   // where they first appeared (TurnFlow), not cards of their own.
   const inTurn = model.live && model.turnUserIndex !== undefined ? model.turnUserIndex : undefined;

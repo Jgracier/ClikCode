@@ -219,12 +219,15 @@ export interface ChatModel {
   /** "$1.23 this chat", from the bridge's `usage`; absent while no turn
    * reported a cost. */
   chatCost?: string;
-  messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+  /** `automatic`: a prompt ClikCode sent itself, drawn as this notice (TranscriptMessage.automatic). */
+  messages: Array<{ role: 'user' | 'assistant'; content: string; automatic?: string }>;
   notes: Note[];
   queued: Array<{ id: string; text: string; command: boolean; held?: boolean }>;
   running: boolean;
   /** This client's submitted prompt, until a snapshot carries it. */
   pendingPrompt?: string;
+  /** The running turn's prompt is ClikCode's own: this notice is drawn in its place. */
+  pendingNotice?: string;
   live?: LiveTurn;
   /** This client started the running turn (else it follows another's). */
   ownTurn?: boolean;

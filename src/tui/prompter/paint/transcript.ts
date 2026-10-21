@@ -30,7 +30,7 @@ export function frameMessages(p: TerminalHarnessPrompter, session: HarnessSessio
     lastMessage: stableMessages[stableMessages.length - 1],
   });
   const persistedMessages = pendingPrompt
-    ? [...stableMessages, { role: 'user' as const, content: pendingPrompt }]
+    ? [...stableMessages, { role: 'user' as const, content: pendingPrompt, ...(pending?.automatic && pendingPrompt === pending.prompt ? { automatic: pending.automatic } : {}) }]
     : p.transcriptMessages(session);
   // Tool events often arrive before the first prose token. They still belong
   // to the in-flight assistant message. Render an empty temporary assistant
@@ -57,7 +57,7 @@ export type TranscriptInput = {
 
 type Kit = {
   finished: string[]; emit: (rows: readonly string[]) => void;
-  userRows: RowBuilders['userRows']; messageRows: RowBuilders['messageRows']; standaloneActivity: RowBuilders['standaloneActivity'];
+  userRows: RowBuilders['userRows']; noticeRows: RowBuilders['noticeRows']; messageRows: RowBuilders['messageRows']; standaloneActivity: RowBuilders['standaloneActivity'];
   savedTools: ReturnType<typeof createTurnTools>['savedTools']; turnTools: ReturnType<typeof createTurnTools>['turnTools'];
   renderBlocks: (blocks: readonly MessageBlock[], firstOfMessage: boolean) => string[];
   renderLive: (blocks: readonly MessageBlock[], firstOfMessage: boolean) => string[];
@@ -118,7 +118,7 @@ function settleSeam(p: TerminalHarnessPrompter, finished: string[], session: Har
 function writeMessages(
   p: TerminalHarnessPrompter, kit: Kit, persistedMessages: TranscriptInput['persistedMessages'], firstUnwritten: number, startLiveAssistant: number | undefined,
 ): void {
-  const { finished, emit, userRows, messageRows, standaloneActivity, savedTools, turnTools, renderBlocks } = kit;
+  const { finished, emit, userRows, noticeRows, messageRows, standaloneActivity, savedTools, turnTools, renderBlocks } = kit;
   let liveAssistant = startLiveAssistant;
   emit(standaloneActivity(firstUnwritten));
   // The turn this window drew live has all its calls on screen already: a
@@ -167,9 +167,10 @@ function writeMessages(
       if (message.role === 'user' && index > 0) emit(['']);
       // A title tag never renders, however it got into the saved reply: a
       // vendor that repeated its first reply's tag, or an older transcript.
+      // A prompt ClikCode sent itself (a /compact after a turn) is its notice, not the user's words.
       emit(message.role === 'assistant'
         ? messageRows(withoutOtherOrgThinkingNotice(stripRepeatedTitles(message.content)), '·')
-        : userRows(message.content));
+        : message.automatic ? noticeRows(message.automatic) : userRows(message.content));
     }
     if (index === liveAssistant) {
       p.emitted.liveAnswerSettled();
@@ -223,7 +224,7 @@ export function writeTranscript(p: TerminalHarnessPrompter, input: TranscriptInp
     }
   };
   const builders = createRowBuilders(p, conversationInner);
-  const { userRows, messageRows, standaloneActivity } = builders;
+  const { userRows, noticeRows, messageRows, standaloneActivity } = builders;
   const seam: TurnSeam = { materializedPendingTurn: false };
   const { savedTools, turnTools } = createTurnTools(p, builders, createToolRows(p, builders), pending, seam);
   const renderBlocks = (blocks: readonly MessageBlock[], firstOfMessage: boolean): string[] =>
@@ -236,7 +237,7 @@ export function writeTranscript(p: TerminalHarnessPrompter, input: TranscriptInp
     renderMessageBlocks(blocks, '·', conversationInner, firstOfMessage, true);
   const settled = settleSeam(p, finished, session, persistedMessages, conversationInner);
   seam.materializedPendingTurn = settled.materializedPendingTurn;
-  const kit: Kit = { finished, emit, userRows, messageRows, standaloneActivity, savedTools, turnTools, renderBlocks, renderLive };
+  const kit: Kit = { finished, emit, userRows, noticeRows, messageRows, standaloneActivity, savedTools, turnTools, renderBlocks, renderLive };
   writeMessages(p, kit, persistedMessages, settled.firstUnwritten, settled.liveAssistant);
   const liveConversation: string[] = [];
   if (hasTransientAssistant) {

@@ -66,7 +66,7 @@ export function applySession(model: ChatModel, session: HarnessSession, account?
     permissions: session.permissionMode ?? 'ask',
     route: session.route,
     workspace: session.workspace,
-    messages: sameMessages(model.messages, session.messages ?? []) ? model.messages : (session.messages ?? []).map(({ role, content }) => ({ role, content })),
+    messages: sameMessages(model.messages, session.messages ?? []) ? model.messages : (session.messages ?? []).map(({ role, content, automatic }) => ({ role, content, ...(automatic ? { automatic } : {}) })),
     traces: withSavedTraces(model.traces, session.messages ?? []),
     // What ClikCode owes the model (a finished background shell) is not the user's to see.
     // One the turn already took in (its steered acknowledgement, or the live
@@ -86,7 +86,8 @@ export function applySession(model: ChatModel, session: HarnessSession, account?
     // The durable copy wins, and the sticky one goes once the transcript
     // holds it (the TUI's pendingPromptText): drawn on top of it, the
     // prompt showed twice.
-    pendingPrompt: pendingPromptText({
+    pendingNotice: pending?.automatic,
+    pendingPrompt: pending?.automatic ? undefined : pendingPromptText({
       ...(pending?.prompt ? { durable: pending.prompt } : {}),
       ...((model.running || model.ownTurn) && model.pendingPrompt ? { sticky: model.pendingPrompt } : {}),
       // Where this turn's prompt lands: the message there, not the last
@@ -123,5 +124,5 @@ function confirmedSubmissions(model: ChatModel, session: HarnessSession): ChatMo
  * page already has is kept when it says the same, so it is not resent. */
 export function sameMessages(previous: ChatModel['messages'], next: ChatModel['messages']): boolean {
   return previous.length === next.length
-    && previous.every((message, index) => message.role === next[index]!.role && message.content === next[index]!.content);
+    && previous.every((message, index) => message.role === next[index]!.role && message.content === next[index]!.content && message.automatic === next[index]!.automatic);
 }
