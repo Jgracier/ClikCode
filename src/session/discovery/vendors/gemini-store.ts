@@ -23,8 +23,7 @@ import {
   nativeDataRoot, type NativeSessionEnvironment, type NativeSessionFile, type NativeSessionStore, type NativeThreadWriter,
 } from '../stores.js';
 import {
-  absolutePath, assistantSteps, callCommand, callPath, callResultText, inputString, isWriteCall, requestText,
-  sequentialIds, testedVersion, writeFileAtomic,
+  assistantSteps, callResultText, callShape, requestText, sequentialIds, testedVersion, writeFileAtomic,
 } from './thread-writer-files.js';
 
 /** The first line only: these files grow to megabytes and the id is on line 1. */
@@ -51,35 +50,17 @@ function geminiRoot(environment: NativeSessionEnvironment): string {
  *  web_fetch, google_web_search. Anything else is told as text. */
 function geminiCall(workspace: string) {
   return (call: CanonicalToolCall): { name: string; args: Record<string, unknown> } | undefined => {
-    const path = callPath(call);
-    const file = path ? absolutePath(workspace, path) : undefined;
-    const name = call.name.toLowerCase();
-    if (call.category === 'run' || (!call.category && /^(bash|shell|exec|run_shell_command|shell_command)$/.test(name))) {
-      const command = callCommand(call);
-      return command ? { name: 'run_shell_command', args: { command } } : undefined;
+    const shape = callShape(workspace, call);
+    switch (shape?.kind) {
+      case 'run': return { name: 'run_shell_command', args: { command: shape.command } };
+      case 'read': return { name: 'read_file', args: { file_path: shape.file } };
+      case 'write': return { name: 'write_file', args: { file_path: shape.file, content: shape.content } };
+      case 'edit': return { name: 'replace', args: { file_path: shape.file, instruction: call.label, old_string: shape.oldString, new_string: shape.newString } };
+      case 'search': return { name: shape.glob ? 'glob' : 'grep_search', args: { pattern: shape.pattern, ...(shape.where ? { dir_path: shape.where } : {}) } };
+      case 'fetch': return { name: 'web_fetch', args: { prompt: shape.url } };
+      case 'web-search': return { name: 'google_web_search', args: { query: shape.query } };
+      default: return undefined;
     }
-    if (call.category === 'read' && file) return { name: 'read_file', args: { file_path: file } };
-    if (call.category === 'edit' && file) {
-      if (isWriteCall(call)) return { name: 'write_file', args: { file_path: file, content: inputString(call, 'content', 'file_text', 'text') ?? '' } };
-      const oldString = inputString(call, 'old_string', 'oldText', 'old_str');
-      const newString = inputString(call, 'new_string', 'newText', 'new_str');
-      return oldString !== undefined && newString !== undefined
-        ? { name: 'replace', args: { file_path: file, instruction: call.label, old_string: oldString, new_string: newString } } : undefined;
-    }
-    if (call.category === 'search') {
-      const pattern = inputString(call, 'pattern', 'query', 'regex') ?? call.target;
-      if (!pattern) return undefined;
-      const where = inputString(call, 'path', 'dir_path', 'directory');
-      const args = { pattern, ...(where ? { dir_path: absolutePath(workspace, where) } : {}) };
-      return { name: /glob|find|list|ls/.test(name) ? 'glob' : 'grep_search', args };
-    }
-    if (call.category === 'fetch') {
-      const url = inputString(call, 'url', 'uri');
-      if (url) return { name: 'web_fetch', args: { prompt: url } };
-      const query = inputString(call, 'query', 'q') ?? call.target;
-      return query ? { name: 'google_web_search', args: { query } } : undefined;
-    }
-    return undefined;
   };
 }
 
