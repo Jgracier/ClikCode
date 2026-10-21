@@ -106,6 +106,49 @@ export function callCommand(call: CanonicalToolCall): string | undefined {
   return inputString(call, 'command', 'cmd') ?? call.target;
 }
 
+/** What a call did, in the parts a vendor's shell, file, search and fetch
+ * tools take; each vendor's mapper names them in its own words. Undefined
+ * for a call with no such part, or without what its kind needs: that one is
+ * told as text. `file` and `where` are absolute. */
+export type CallShape =
+  | { kind: 'run'; command: string }
+  | { kind: 'read'; file: string }
+  | { kind: 'write'; file: string; content: string }
+  | { kind: 'edit'; file: string; oldString: string; newString: string }
+  | { kind: 'search'; pattern: string; where?: string; glob: boolean }
+  | { kind: 'fetch'; url: string }
+  | { kind: 'web-search'; query: string };
+
+export function callShape(workspace: string, call: CanonicalToolCall): CallShape | undefined {
+  const path = callPath(call);
+  const file = path ? absolutePath(workspace, path) : undefined;
+  const name = call.name.toLowerCase();
+  if (call.category === 'run' || (!call.category && /^(bash|shell|exec|run_shell_command|shell_command)$/.test(name))) {
+    const command = callCommand(call);
+    return command ? { kind: 'run', command } : undefined;
+  }
+  if (call.category === 'read' && file) return { kind: 'read', file };
+  if (call.category === 'edit' && file) {
+    if (isWriteCall(call)) return { kind: 'write', file, content: inputString(call, 'content', 'file_text', 'text') ?? '' };
+    const oldString = inputString(call, 'old_string', 'oldText', 'old_str');
+    const newString = inputString(call, 'new_string', 'newText', 'new_str');
+    return oldString !== undefined && newString !== undefined ? { kind: 'edit', file, oldString, newString } : undefined;
+  }
+  if (call.category === 'search') {
+    const pattern = inputString(call, 'pattern', 'query', 'regex') ?? call.target;
+    if (!pattern) return undefined;
+    const where = inputString(call, 'path', 'dir_path', 'directory');
+    return { kind: 'search', pattern, glob: /glob|find|list|ls/.test(name), ...(where ? { where: absolutePath(workspace, where) } : {}) };
+  }
+  if (call.category === 'fetch') {
+    const url = inputString(call, 'url', 'uri');
+    if (url) return { kind: 'fetch', url };
+    const query = inputString(call, 'query', 'q') ?? call.target;
+    return query ? { kind: 'web-search', query } : undefined;
+  }
+  return undefined;
+}
+
 /** A call's diff as unified-diff-ish text, for a result the model reads. */
 function diffText(call: CanonicalToolCall): string {
   return (call.diff ?? []).map((file) => {
