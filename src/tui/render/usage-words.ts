@@ -3,14 +3,11 @@
  * dependency, so the extension's webview can use the same words. */
 import { dollars } from '../../harness/protocol/format.js';
 
-/** How much of an allowance is left, read out of the label the harness gave.
- * Both forms appear: "42% left" and the legacy "58% used". */
+/** How much of an allowance is left, read out of the label ("42% left"). */
 export function usageRemainingPercent(label?: string): number | undefined {
   if (!label) return undefined;
   const left = [...label.matchAll(/(\d+(?:\.\d+)?)%\s*left/gi)].map((m) => Number(m[1]));
-  if (left.length) return Math.min(...left);
-  const used = [...label.matchAll(/(\d+(?:\.\d+)?)%\s*used/gi)].map((m) => Number(m[1]));
-  return used.length ? 100 - Math.max(...used) : undefined;
+  return left.length ? Math.min(...left) : undefined;
 }
 
 /** What the composer rule says once the allowance is gone.
