@@ -27,6 +27,10 @@
  *      event only, so an older editor just sees the bridge close
  *   4  `export-chat`, `import-chat` and `mark-moved`: a chat moved to
  *      another machine (session/move.ts)
+ *   5  `chat-have`, and `export-chat` with `since`: a move sends only what
+ *      the target lacks (a chat moving back to a machine that holds its old
+ *      copy). Asked only of a target at 5; an older source ignores `since`
+ *      and sends the whole chat, which any target reads
  *
  * ClikCode and the extension are published separately (the CLI first, in the
  * same ClikDeploy run), so a bump reaches npm before the extension that
@@ -34,7 +38,7 @@
  */
 export const IDE_PROTOCOL = {
   version: 1,
-  revision: 4,
+  revision: 5,
   oldestSupported: 1,
   oldestRevision: 2,
 } as const;

@@ -99,7 +99,9 @@ export type IdeRequest =
    * client asks the machine it is on to `export-chat`, the one it goes to to
    * `import-chat` (once: nothing is asked first; a `dryRun` from an older
    * client is still answered with what would change), then the first to
-   * `mark-moved`. Answered by a `result`. */
+   * `mark-moved`. Answered by a `result`. Revision 5: `chat-have` first --
+   * what the target holds of the chat already -- and `export-chat` with
+   * `since`, so only the rest travels (session/move-chat.ts moveChat). */
   | (MoveRequest & { requestId: string })
   | { type: 'close' };
 

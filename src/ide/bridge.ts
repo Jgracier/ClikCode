@@ -243,6 +243,7 @@ export class IdeBridge {
         this.watchConversations(request.on);
         return;
       case 'export-chat':
+      case 'chat-have':
       case 'import-chat':
       case 'mark-moved':
         this.track(this.answerMove(request));
@@ -270,7 +271,7 @@ export class IdeBridge {
 
   /** A move to or from this machine (session/move.ts): the chat this bridge
    * shows is exported when none is named, and shown again once marked moved. */
-  private async answerMove(request: Extract<IdeRequest, { type: 'export-chat' | 'import-chat' | 'mark-moved' }>): Promise<void> {
+  private async answerMove(request: Extract<IdeRequest, { type: 'export-chat' | 'chat-have' | 'import-chat' | 'mark-moved' }>): Promise<void> {
     const { requestId, ...move } = request;
     try {
       const { answerMoveRequest } = await import('../session/move.js');
