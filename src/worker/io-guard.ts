@@ -18,8 +18,9 @@ const MIN_MACHINE_SHARE = 0.5;
 const STOP_AFTER_MS = 20_000;
 const STOP_COOLDOWN_MS = 60_000;
 const SETTLE_MS = 30_000;
-const GLOBAL_WARN_COOLDOWN_MS = 60 * 60_000;
+const GLOBAL_WARN_COOLDOWN_MS = 24 * 60 * 60_000;
 const OWNED_WARN_COOLDOWN_MS = 30 * 60_000;
+const REARM_AFTER_CLEAR_MS = 5 * 60_000;
 
 export type IoCounters = Map<string, { bytes: number; operations: number }>;
 export function parseIoStat(value: string): IoCounters {
@@ -146,13 +147,13 @@ function readReading(scopeDir: string, labels: ReadonlyMap<string, string>, now:
 
 const gbps = (bytesPerSecond: number): string => `${(bytesPerSecond / MIB).toFixed(0)} MiB/s`;
 export function ioNudge(candidate: Candidate, pressure: number): string {
-  return `Disk I/O is stalling the machine (${pressure.toFixed(0)}% full stall time). Your \`${candidate.command.label}\` is issuing about ${gbps(candidate.bytesPerSecond)} on the busy device. Continue the task with less disk I/O: reduce this command's parallel jobs, narrow its targets, or reuse existing build output where appropriate. Suggest the specific change you can make; do not pause solely because of this warning.`;
+  return `Disk I/O is stalling the machine (${pressure.toFixed(0)}% full stall time). Your \`${candidate.command.label}\` is issuing about ${gbps(candidate.bytesPerSecond)} on the busy device. Continue the task with less disk I/O: run only the needed targets, use fewer parallel jobs, or reuse existing build output. Choose a specific change for this command and keep working; this warning does not ask you to pause.`;
 }
 export function ioGlobalNudge(pressure: number): string {
-  return `Disk I/O is stalling the machine (${pressure.toFixed(0)}% full stall time). ClikCode has not identified a command in this conversation as the cause. This is informational: continue the user's task. If your next step would add substantial disk I/O, choose a narrower run or fewer parallel jobs when practical. Suggest a concrete change only if it fits your work; do not pause or stop solely because of this warning.`;
+  return `Disk I/O is stalling the machine (${pressure.toFixed(0)}% full stall time). ClikCode has not identified a command in this conversation as the cause. Continue the task. If you started an external build or container, check that job and reduce its parallel jobs or stop only redundant work you own. For your next disk-heavy step, run narrower targets, reuse existing output, or use a smaller batch. If none applies, keep working and do not claim your work caused the stall. This warning does not ask you to pause.`;
 }
 export function ioStopNote(candidate: Candidate, pressure: number): string {
-  return `ClikCode stopped \`${candidate.command.label}\` and its child processes after sustained disk I/O stalls (${pressure.toFixed(0)}% full stall time). It was issuing about ${gbps(candidate.bytesPerSecond)} and over half of the device's I/O. Use fewer parallel jobs or a smaller run; do not rerun the same command unchanged.`;
+  return `ClikCode stopped \`${candidate.command.label}\` and its child processes after sustained disk I/O stalls (${pressure.toFixed(0)}% full stall time). It was issuing about ${gbps(candidate.bytesPerSecond)} and over half of the device's I/O. Continue the task with fewer parallel jobs, narrower targets, or reused build output; do not rerun the same command unchanged.`;
 }
 
 interface IoGuardOptions {
@@ -189,6 +190,7 @@ export function startIoGuard(options: IoGuardOptions): () => void {
   let highSince: number | undefined;
   let candidateSince: number | undefined;
   let candidatePath: string | undefined;
+  let clearSince: number | undefined;
   let pending: { pressure: number; at: number } | undefined;
   const tick = (): void => {
     const current = read(now());
@@ -200,9 +202,15 @@ export function startIoGuard(options: IoGuardOptions): () => void {
       pending = undefined;
     }
     if (current.pressure < CLEAR_PRESSURE) {
+      clearSince ??= current.at;
+      if (current.at - clearSince >= REARM_AFTER_CLEAR_MS) {
+        for (const kind of ['global', 'owned'] as const) {
+          try { rmSync(warningPath(options.sessionId, kind), { force: true }); } catch { /* fail-open-ok */ }
+        }
+      }
       highSince = undefined;
       try { rmSync(ineffectivePath(), { force: true }); } catch { /* fail-open-ok */ }
-    }
+    } else clearSince = undefined;
     if (current.pressure >= STOP_PRESSURE) highSince ??= current.at;
     else highSince = undefined;
     const hadBaseline = !!previous;

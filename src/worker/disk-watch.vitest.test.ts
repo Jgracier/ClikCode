@@ -29,7 +29,7 @@ describe('disk notes', () => {
     expect(tight).toContain('80.0 GB free of 915.0 GB (91% used) on the drive holding /home/u/.clikcode');
     expect(tight).toContain('docker rm -fv');
     expect(diskNote('tight', reading(80), false)).not.toContain('docker');
-    expect(diskNote('critical', reading(13), false)).toContain('Stop writing large files now');
+    expect(diskNote('critical', reading(13), false)).toContain('Keep working on read-only or targeted steps');
   });
 });
 
