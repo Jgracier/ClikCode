@@ -5,13 +5,12 @@ import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/defi
 import { resolveNativeModel } from '../harness/accounts/model-catalog.js';
 import { ensureNativeHarness } from '../harness/transport/native/inspect.js';
 import { harnessCanRunTurns, harnessSupportsImages, localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
-import type { prepareAttachments } from '../session/attachments.js';
 import { sessionTranscriptMessages } from './checkpoint.js';
 import { turnAccounts, turnBackendForAccount } from './account-routing.js';
 import { leavePersistentTransport } from './vendor-process.js';
 import { startTurnCheckpoint, type DurableTurnCheckpoint } from './turn-journal.js';
 import type { TurnObserver } from './observer.js';
-import type { TurnRunOptions } from './session-turn.js';
+import type { AccountTurnInput, TurnRunOptions } from './session-turn.js';
 import { withResourceNotes } from './resource-notes.js';
 
 /** What this turn has already tried: each recovery runs once per turn (or,
@@ -58,18 +57,7 @@ export interface VendorTurnContext {
   readonly attempt: AttemptState;
 }
 
-export async function createVendorTurnContext(input: {
-  state: HarnessState;
-  session: HarnessSession;
-  account: AiHarnessAccount;
-  model: string | null;
-  text: string;
-  prepared: Awaited<ReturnType<typeof prepareAttachments>>;
-  turnText: string;
-  startedAt: number;
-  signal?: AbortSignal;
-  run: TurnRunOptions;
-}): Promise<VendorTurnContext> {
+export async function createVendorTurnContext(input: AccountTurnInput): Promise<VendorTurnContext> {
   const { state, session, text, prepared, startedAt, signal, run } = input;
   let { model, turnText } = input;
   const prompter = run.prompter;

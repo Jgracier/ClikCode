@@ -6,6 +6,7 @@
 import type Conf from 'conf';
 import { readState } from '../session/state/read.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
+import type { AiHarnessAccount } from '../harness/definition.js';
 import { isClikCodeAgent } from '../session/route.js';
 import { prepareAttachments } from '../session/attachments.js';
 import { shellContextBlock } from '../commands/ai/shell-run.js';
@@ -44,6 +45,21 @@ export interface TurnRunOptions {
   recorder?: TurnRecorder;
   /** Called when the turn's work is over and only its record is left to save. */
   onWorkFinished?: () => void;
+}
+
+/** One turn through an account, as runAccountTurn hands it to the route that
+ * runs it (vendor-turn.ts, direct-turn.ts). */
+export interface AccountTurnInput {
+  state: HarnessState;
+  session: HarnessSession;
+  account: AiHarnessAccount;
+  model: string | null;
+  text: string;
+  prepared: Awaited<ReturnType<typeof prepareAttachments>>;
+  turnText: string;
+  startedAt: number;
+  signal?: AbortSignal;
+  run: TurnRunOptions;
 }
 
 export async function runSessionTurn(

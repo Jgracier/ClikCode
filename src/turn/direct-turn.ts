@@ -1,10 +1,9 @@
 /** One turn through a directly addressable model API. */
 import type { AiHarnessAccount } from '../harness/definition.js';
-import type { HarnessSession, HarnessState } from '../session/model.js';
 import { sessionTranscriptMessages } from './checkpoint.js';
 import { textTranscript } from './turn-activities.js';
 import { startTurnCheckpoint, completeTurnCheckpoint } from './turn-journal.js';
-import type { TurnRunOptions } from './session-turn.js';
+import type { AccountTurnInput } from './session-turn.js';
 import { streamLocalAiTurn } from '../runtime/lazy-bridge.js';
 import { localApiKey } from '../gateway/credentials.js';
 import { switchAccountAfterFailure } from './account-switch.js';
@@ -14,20 +13,8 @@ import { isTurnCancelled, turnCancelledError } from '../agent/cancellation.js';
 import { matchesDirectTurnModel, turnAccounts } from './account-routing.js';
 import { recordInvocation, turnSink } from './turn-output.js';
 import { emitHarnessOutput } from '../harness/output.js';
-import type { prepareAttachments } from '../session/attachments.js';
 
-export async function sendDirectApiTurn(input: {
-  state: HarnessState;
-  session: HarnessSession;
-  account: AiHarnessAccount;
-  model: string | null;
-  text: string;
-  prepared: Awaited<ReturnType<typeof prepareAttachments>>;
-  turnText: string;
-  startedAt: number;
-  signal?: AbortSignal;
-  run: TurnRunOptions;
-}): Promise<void> {
+export async function sendDirectApiTurn(input: AccountTurnInput): Promise<void> {
   const { state, session, model, text, prepared, startedAt, signal, run } = input;
   let { account } = input;
   const { turnText } = input;
