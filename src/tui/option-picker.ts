@@ -19,6 +19,8 @@ export interface PaletteLayout {
   headings?: boolean;
   /** Named above the list. The composer stays the composer's: this is not typed into it. */
   title?: string;
+  /** A board list starts a new chat, even when that list has a heading. */
+  hideChatTitle?: boolean;
 }
 
 /** What the picker needs from the frame that owns the screen. */

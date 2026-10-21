@@ -193,6 +193,9 @@ export interface ChatModel {
   version?: string;
   sessionId?: string;
   title?: string;
+  /** Name of the SSH machine that owns this chat; absent for this machine. */
+  machine?: string;
+  machineId?: string;
   harness?: string;
   /** The provider id `choose provider` takes: a harness command, `gateway`,
    * or `clikcode-local`. */

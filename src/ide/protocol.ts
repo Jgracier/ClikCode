@@ -178,6 +178,8 @@ export interface IdeModels {
 export interface IdeConversation {
   id: string;
   title: string;
+  /** The machine that owns the chat resolves relative paths in this workspace. */
+  workspace?: string;
   /** Not drawn on the row; the history menu's search still matches it. */
   provider?: string;
   updatedAt: string;
@@ -282,6 +284,8 @@ export type IdeEvent =
    * message until the worker's snapshot carries it (absent for synthetic
    * prompts such as /review). */
   | { type: 'turn-start'; sessionId: string; prompt?: string; queuedTurnId?: string }
+  /** The requested line has finished, including any turn or picker it opened. */
+  | { type: 'send-complete'; id: string }
   /** Work outside a turn the user is waiting on (a picker's lookups, a local
    * model loading); undefined label when it is over. */
   | { type: 'busy'; label?: string }

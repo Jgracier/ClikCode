@@ -89,7 +89,7 @@ export function buildFooter(this: TerminalHarnessPrompter, input: FooterInput): 
   // Clearing it while the list is open rewrites the rule under the composer.
   // The board sets headings and no title: its composer starts a new chat, and
   // the chat that was open is not named there.
-  const titleRule = paintTitleRule(rowWidth, (palette?.headings && !palette.title) || session.nameSource === 'message' ? undefined : session.name || undefined);
+  const titleRule = paintTitleRule(rowWidth, palette?.hideChatTitle || (palette?.headings && !palette.title) || session.nameSource === 'message' ? undefined : session.name || undefined);
   footer.push(titleRule);
   // Provider, model, effort and directory are one statement -- what this
   // conversation is running as -- so they read as one line in one colour

@@ -19,7 +19,6 @@ import type { MachineView } from './connection.js';
 
 export const REMOTE_VALUE_PREFIX = 'remote:';
 export const NEEDS_YOU_GROUP = 'Needs you';
-export const REMOTE_OPEN_LATER = 'Opening chats on other machines comes next. For now, this list shows what they are doing.';
 
 /** A remote row's value: which machine, which chat. */
 export function remoteRowValue(machineId: string, chatId: string): string {
@@ -28,6 +27,13 @@ export function remoteRowValue(machineId: string, chatId: string): string {
 
 export function isRemoteRowValue(value: string): boolean {
   return value.startsWith(REMOTE_VALUE_PREFIX);
+}
+
+export function parseRemoteRowValue(value: string): { machineId: string; chatId: string } | undefined {
+  if (!isRemoteRowValue(value)) return undefined;
+  const separator = value.indexOf('\0', REMOTE_VALUE_PREFIX.length);
+  if (separator < 0) return undefined;
+  return { machineId: value.slice(REMOTE_VALUE_PREFIX.length, separator), chatId: value.slice(separator + 1) };
 }
 
 /** This machine's name on the board. */

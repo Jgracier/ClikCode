@@ -33,6 +33,7 @@ export function Composer(props: {
   model: ChatModel;
   handle: { current: ComposerHandle | null };
   onError: (message: string) => void;
+  onOpenHistory?: () => void;
 }): JSX.Element {
   const { model } = props;
   const textarea = useRef<HTMLTextAreaElement>(null);
@@ -127,6 +128,11 @@ export function Composer(props: {
   // Esc during a turn (stop, or deny a pending approval) is the page's
   // (main.tsx): it bubbles there unless the suggestions took it.
   const onKeyDown = (event: KeyboardEvent): void => {
+    if (event.key === 'ArrowLeft' && !text && !attachments.length && !suggestions.length && props.onOpenHistory) {
+      event.preventDefault();
+      props.onOpenHistory();
+      return;
+    }
     if (suggestions.length) {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setDismissedToken(tokenKey); return; }
       if (['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp'].includes(event.key) || (event.key === 'Enter' && !event.shiftKey) || event.key === 'Tab') {

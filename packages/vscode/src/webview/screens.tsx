@@ -3,6 +3,7 @@ import type { JSX } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ChatModel } from '../model';
 import type { ListedConversation } from '../webview-protocol';
+import type { ListedMachine } from '../remote-directory';
 import { listen, request } from './bus';
 import { useNow } from './clock';
 import { conversationState, SECTION_TITLES, type ConversationSection } from '../../../../src/session/conversation-state';
@@ -13,6 +14,8 @@ type Section = ConversationSection;
 /** The terminal board's sections, in its order and words (session/conversation-state.ts). */
 const SECTIONS = (['working', 'active', 'past'] as const).map((section): [Section, string] => [section, SECTION_TITLES[section]]);
 const ACTIVE_WITHIN_MS = 24 * 60 * 60 * 1000;
+let lastHistoryMachine = 'local';
+const lastHistoryChat = new Map<string, string>();
 
 /** The row's section as ClikCode decided it; a bridge from before `section`
  * gets the same rule here (generating, else the last 24 hours, else Past). */
@@ -54,10 +57,11 @@ export function holdConversationWatch(): () => void {
 /** The conversation list, kept current: loaded (again whenever `key`
  * changes), reloaded when ClikCode says a turn started or ended, so a
  * pulse stops when its chat finishes. ClikCode says so; there is no poll. */
-export function useConversations(onError?: (message: string) => void, key?: unknown): { rows: ListedConversation[] | undefined; load: () => void } {
+export function useConversations(onError?: (message: string) => void, key?: unknown, machineId?: string): { rows: ListedConversation[] | undefined; load: () => void } {
   const [rows, setRows] = useState<ListedConversation[]>();
   const load = (): void => {
-    request<ListedConversation[]>({ method: 'query', query: 'conversations' }).then(setRows, (failure: Error) => onError?.(failure.message));
+    request<ListedConversation[]>(machineId ? { method: 'machineConversations', machineId } : { method: 'query', query: 'conversations' })
+      .then(setRows, (failure: Error) => onError?.(failure.message));
   };
   useEffect(load, [key]);
   useEffect(() => {
@@ -102,16 +106,40 @@ export function ConversationMark({ row, state }: { row: ListedConversation; stat
  * asked -- the terminal's three parts. Rename, open in a tab and
  * delete are on each row; the rest (fork, archive) are slash commands. */
 export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onError: (message: string) => void }): JSX.Element {
-  const { rows, load } = useConversations(props.onError);
+  const { rows: localRows, load } = useConversations(props.onError, undefined, 'local');
+  const [machineId, setMachineId] = useState(props.model.machineId ?? lastHistoryMachine);
+  const [showMachines, setShowMachines] = useState(false);
+  const [machines, setMachines] = useState<ListedMachine[]>();
+  const [remoteRows, setRemoteRows] = useState<ListedConversation[]>();
+  const rows = machineId === 'local' ? localRows : remoteRows;
   const [search, setSearch] = useState('');
   const [renaming, setRenaming] = useState<string>();
   const [confirming, setConfirming] = useState<string>();
   const input = useRef<HTMLInputElement>(null);
-  useEffect(() => { input.current?.focus(); }, []);
+  useEffect(() => {
+    if (showMachines) document.getElementById('machines-list')?.focus();
+    else input.current?.focus();
+  }, [showMachines]);
+  useEffect(() => {
+    let active = true;
+    if (machineId !== 'local') setRemoteRows(undefined);
+    const refresh = (): void => {
+      void request<ListedMachine[]>({ method: 'machines' }).then((next) => { if (active) setMachines(next); }, (error: Error) => { if (active) props.onError(error.message); });
+      if (machineId !== 'local') void request<ListedConversation[]>({ method: 'machineConversations', machineId }).then(
+        (next) => { if (active) setRemoteRows(next); }, (error: Error) => { if (active) props.onError(error.message); },
+      );
+    };
+    refresh();
+    const stop = listen((message) => { if (message.type === 'conversations-changed') refresh(); });
+    return () => { active = false; stop(); };
+  }, [machineId]);
 
   const open = (row: ListedConversation): void => {
+    lastHistoryChat.set(machineId, row.id);
     props.onClose();
-    if (!row.current) request({ method: 'open', mode: 'resume', sessionId: row.id }).catch((failure: Error) => props.onError(failure.message));
+    if (machineId !== 'local') {
+      void request({ method: 'openOnMachine', machineId, mode: 'resume', sessionId: row.id }).catch((failure: Error) => props.onError(failure.message));
+    } else if (!row.current || props.model.sessionId !== row.id) void request({ method: 'openOnMachine', machineId, mode: 'resume', sessionId: row.id }).catch((failure: Error) => props.onError(failure.message));
   };
   const act = (row: ListedConversation, action: 'rename' | 'delete', name?: string): void => {
     setConfirming(undefined);
@@ -158,13 +186,13 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
                 {row.preview && renaming !== row.id ? <div class="conversation-preview">{row.preview}</div> : null}
               </div>
               <span class="conversation-meta">{state.text}</span>
-              <div class="row-actions" data-row-action>
+              {machineId === 'local' ? <div class="row-actions" data-row-action>
                 <IconButton icon="link-external" label="Open in new tab" onClick={() => { props.onClose(); void request({ method: 'openInTab', sessionId: row.id }); }} />
                 <IconButton icon="edit" label="Rename" onClick={() => setRenaming(row.id)} />
                 {confirming === row.id
                   ? <button type="button" class="danger small" onClick={() => act(row, 'delete')}>Delete</button>
                   : <IconButton icon="trash" label="Delete" onClick={() => setConfirming(row.id)} />}
-              </div>
+              </div> : null}
             </div>
           ),
         });
@@ -173,16 +201,29 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
     return result;
   }, [rows, query, renaming, confirming, second]);
 
+  const machineRows: ListRow[] = (machines ?? []).map((machine) => ({
+    key: machine.id,
+    onSelect: () => { lastHistoryMachine = machine.id; setMachineId(machine.id); setShowMachines(false); setSearch(''); },
+    render: () => <div class="conversation"><div class="conversation-main"><div class="conversation-title">{machine.name}</div></div>
+      <span class="conversation-meta">{machine.state} · {machine.chats} chats{machine.needsYou ? ` · ${machine.needsYou} need you` : ''}</span></div>,
+  }));
+
   return (
-    <Popover label="Conversations" onClose={props.onClose} class="picker history-menu" id="history-menu">
-      <div class="search">
+    <Popover label={showMachines ? 'Machines' : 'Conversations'} onClose={props.onClose} class="picker history-menu" id="history-menu">
+      <button type="button" class="link small" onClick={() => setShowMachines((value) => !value)}>
+        {showMachines ? '← Chats' : `← Machines · ${machines?.find((item) => item.id === machineId)?.name ?? 'This machine'}`}
+      </button>
+      {!showMachines ? <div class="search">
         <Icon name="search" />
         <input ref={input} type="text" value={search} placeholder="Search conversations…" aria-label="Search conversations"
           aria-controls="history-list" onInput={(event) => setSearch((event.target as HTMLInputElement).value)} />
-      </div>
-      <Loading waiting={!rows}>Loading…</Loading>
-      <KeyList id="history-list" rows={listRows} label="Conversations" inputRef={input} onEscape={props.onClose}
-        emptyText={rows ? (query ? 'No conversation matches.' : 'No conversations yet.') : undefined} />
+      </div> : null}
+      <Loading waiting={showMachines ? !machines : !rows}>Loading…</Loading>
+      {showMachines
+        ? <KeyList id="machines-list" rows={machineRows} label="Machines" initialKey={machineId} onEscape={() => setShowMachines(false)} onBack={() => setShowMachines(false)} rightSelect />
+        : <KeyList id="history-list" rows={listRows} label="Conversations" inputRef={input} onEscape={props.onClose}
+          onBack={() => setShowMachines(true)} initialKey={lastHistoryChat.get(machineId) ?? (machineId === 'local' ? props.model.sessionId : undefined)} rightSelect
+          emptyText={rows ? (query ? 'No conversation matches.' : 'No conversations yet.') : undefined} />}
     </Popover>
   );
 }

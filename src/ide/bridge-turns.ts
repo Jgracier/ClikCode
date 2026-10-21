@@ -39,7 +39,8 @@ export class BridgeTurns {
 
   async send(text: string, id?: string): Promise<void> {
     const line = text.trim();
-    if (!line) return;
+    const complete = (): void => { if (id) this.host.channel.send({ type: 'send-complete', id }); };
+    if (!line) { complete(); return; }
     try {
       if (this.host.link.workerTurnRunning && this.host.link.worker) {
         const sessionId = this.host.link.worker.sessionId;
@@ -51,21 +52,28 @@ export class BridgeTurns {
           const result = await commandDuringTurn(sessionId, line);
           if (id) this.host.channel.send({ type: 'worker', sessionId, event: { type: 'submission', id, disposition: result.disposition === 'queued' ? 'queued' : 'steered' } });
           await this.host.emitSession();
+          complete();
           return;
         }
         this.host.link.worker.client.send({ type: 'steer', text: line, ...(id ? { id } : {}) });
+        complete();
         return;
       }
     } catch (error) {
       this.host.report(error);
+      complete();
       return;
     }
     const typedAt = this.cancelEpoch;
     this.host.link.stopped = false;
     this.host.enqueue(async () => {
-      this.submitEpoch = typedAt;
-      await this.host.execute(line, {});
-      await this.host.drainQueue();
+      try {
+        this.submitEpoch = typedAt;
+        await this.host.execute(line, {});
+        await this.host.drainQueue();
+      } finally {
+        complete();
+      }
     });
   }
 

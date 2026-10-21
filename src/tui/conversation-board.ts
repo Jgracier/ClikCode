@@ -159,7 +159,7 @@ export function boardKey(state: BoardState, key: string, rows: readonly PickerOp
 }
 
 /** Only the keys that act on what is selected, in a few words each. */
-export function boardHint(state: BoardState, rows: readonly PickerOption<string>[]): string {
+export function boardHint(state: BoardState, rows: readonly PickerOption<string>[], hasMachines = false): string {
   if (state.finding && !boardShowsCommands(state)) {
     const query = state.query ?? '';
     return `find${query ? `: ${query}` : ''} · ${rows.length ? keyHintFor('enter', 'open') : 'no match'} · ${keyHintFor('esc', 'clear')}`;
@@ -168,19 +168,23 @@ export function boardHint(state: BoardState, rows: readonly PickerOption<string>
   const row = state.selected >= 0 ? rows[state.selected] : undefined;
   if (!row) {
     return state.draft ? `${keyHintFor('enter', 'start a new chat')} · ${keyHintFor('esc', 'clear')}`
-      : `type to start a new chat · ${keyHintFor('ctrl+f', 'find')} · ${keyHintFor('↑↓', 'chats')}`;
+      : `type to start a new chat · ${keyHintFor('ctrl+f', 'find')} · ${keyHintFor('↑↓', 'chats')}${hasMachines ? ` · ${keyHintFor('←', 'machines')}` : ''}`;
   }
   return [
     keyHintFor('enter', 'open'),
     ...(row.actions?.length ? [keyHintFor('tab', 'options')] : []),
     ...(row.deleteAction ? [keyHintFor('del', row.deleteAction.label.toLowerCase())] : []),
-    keyHintFor('←', 'close'),
+    keyHintFor('←', hasMachines ? 'machines' : 'close'),
   ].join(' · ');
 }
 
 export interface ConversationBoardSettings {
   /** Rebuilt on every draw, so rows that land later (vendor discovery) appear. */
-  conversations: () => readonly PickerOption<string>[];
+  conversations: (machineId?: string) => readonly PickerOption<string>[];
+  /** When present, Left from chats opens this machine list. */
+  machines?: () => readonly PickerOption<string>[];
+  initialMachine?: string;
+  onMachineSelected?: (machineId: string) => void;
   commands: readonly PickerOption<string>[];
   refresh?: Promise<unknown> | readonly Promise<unknown>[];
   /** Registers the board's redraw, for the list to call when its rows
@@ -231,15 +235,21 @@ const spins = (row: PickerOption<string>): boolean => row.activity === 'working'
 
 /** Everything but the list: the rule and hint around it, and the composer
  * block beneath (usage rule, input, title rule, provider line, spacing). */
-const BOARD_CHROME_ROWS = 5;
+const BOARD_CHROME_ROWS = 6;
 
 export function runConversationBoard(host: OptionPickerHost, settings: ConversationBoardSettings): Promise<BoardResult | undefined> {
   return new Promise((resolve) => {
     host.setSelecting(true);
     const state: BoardState = { draft: '', selected: -1 };
+    let level: 'chats' | 'machines' = 'chats';
+    let machine = settings.initialMachine ?? 'local';
+    let machineSelected = 0;
+    const chatSelections = new Map<string, number>();
     let finished = false;
     let stopInput: () => void = () => {};
-    const rows = (): readonly PickerOption<string>[] => boardRows(state, settings.conversations(), settings.commands);
+    const rows = (): readonly PickerOption<string>[] => level === 'machines'
+      ? settings.machines?.() ?? []
+      : boardRows(state, settings.conversations(machine), settings.commands);
     let frame = 0;
     /** A second screen is up (sub-agents, options): the board is not drawn. */
     let aside = false;
@@ -251,7 +261,7 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
     let pendingSettle = false;
     const settled = (anyWorking: boolean): boolean => {
       const ready = boardSessionsSettled({
-        sawWorking: wasWorking, anyWorking, draft: state.draft, finding: Boolean(state.finding), aside,
+        sawWorking: wasWorking, anyWorking, draft: state.draft, finding: Boolean(state.finding), aside: aside || level === 'machines',
         pending: pendingSettle,
       });
       pendingSettle = boardSettlePending({ sawWorking: wasWorking, anyWorking, pending: pendingSettle });
@@ -294,19 +304,24 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
         spin = setInterval(tick, SPIN_MS);
         spin.unref();
       }
-      if (state.selected >= showing.length) state.selected = showing.length - 1;
+      if (level === 'chats' && state.selected >= showing.length) state.selected = showing.length - 1;
+      if (level === 'machines' && machineSelected >= showing.length) machineSelected = Math.max(0, showing.length - 1);
       // The whole page: the list takes every row the composer does not, at
       // whatever height the screen is when it is painted.
-      const capacity = (): number => Math.max(6, (output.rows ?? 24) - BOARD_CHROME_ROWS);
+      // A titled machine list has one extra overlay row. Reserve its space
+      // so the title does not disappear above the top of the screen.
+      const capacity = (): number => Math.max(5, (output.rows ?? 24) - BOARD_CHROME_ROWS - (level === 'machines' ? 1 : 0));
       // Nothing to list yet: said, rather than a bare hint line.
       const empty = !showing.length && !boardShowsCommands(state) && !state.finding;
-      host.paint(state.draft, empty ? [{ label: 'No conversations yet', value: '' }] : showing.map((row) => ({
+      host.paint(level === 'machines' ? '' : state.draft, empty ? [{ label: level === 'machines' ? 'No machines yet' : 'No conversations yet', value: '' }] : showing.map((row) => ({
         // Conversations get the glyph column, the spinner animated; commands do not.
-        label: boardShowsCommands(state) ? row.label : conversationLabel(row, frame), detail: row.detail, value: '', group: row.group,
+        label: level === 'machines' || boardShowsCommands(state) ? row.label : conversationLabel(row, frame), detail: row.detail, value: '', group: row.group,
       })),
-        state.selected, '› ', state.draft.length, { capacity, headings: true, hint: boardHint(state, showing) });
+        level === 'machines' ? machineSelected : state.selected, '› ', level === 'machines' ? 0 : state.draft.length,
+        { capacity, headings: true, title: level === 'machines' ? 'Machines' : undefined, hideChatTitle: true,
+          hint: level === 'machines' ? '↑↓ choose · → chats · ← back' : boardHint(state, showing, Boolean(settings.machines)) });
     };
-    const drawKey = (): string => `${state.draft}\u0000${state.selected}\u0000${state.finding ?? ''}\u0000${state.query ?? ''}\u0000${frame}\u0000${output.rows}`;
+    const drawKey = (): string => `${level}\u0000${machine}\u0000${machineSelected}\u0000${state.draft}\u0000${state.selected}\u0000${state.finding ?? ''}\u0000${state.query ?? ''}\u0000${frame}\u0000${output.rows}`;
     /** A redraw for something outside the board: only if what it shows moved. */
     const redraw = (): void => {
       if (finished || aside) return;
@@ -334,6 +349,32 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
       stopInput: () => stopInput(), listen, finished: () => finished, aside: (open) => { aside = open; },
     });
     const handle = (key: string): void => {
+      if (level === 'machines') {
+        const available = rows();
+        if (key === UP) machineSelected = Math.max(0, machineSelected - 1);
+        else if (key === DOWN) machineSelected = Math.min(available.length - 1, machineSelected + 1);
+        else if (key === RIGHT || key === '\r' || key === '\n') {
+          const chosen = available[machineSelected];
+          if (chosen) {
+            machine = chosen.value;
+            settings.onMachineSelected?.(machine);
+            level = 'chats';
+            state.selected = chatSelections.get(machine) ?? boardStartRow(settings.conversations(machine));
+          }
+        } else if (key === LEFT || key === '\u001b') {
+          level = 'chats';
+          state.selected = chatSelections.get(machine) ?? boardStartRow(settings.conversations(machine));
+        } else if (key === '\u000c') host.repair?.();
+        draw();
+        return;
+      }
+      if (settings.machines && key === LEFT && !state.draft && !state.finding) {
+        chatSelections.set(machine, state.selected);
+        machineSelected = Math.max(0, settings.machines().findIndex((item) => item.value === machine));
+        level = 'machines';
+        draw();
+        return;
+      }
       const effect = boardKey(state, key, rows());
       if (effect.kind === 'draw') draw();
       else if (effect.kind === 'repair') { host.repair?.(); draw(); }

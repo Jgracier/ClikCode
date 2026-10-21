@@ -229,6 +229,11 @@ export function bridgeScript(): string {
   return [withOwnNode, `CLIKCODE_IDE_MULTIPLEX=1 exec ${BIN_LINK} ide-bridge --stdio`].join('\n');
 }
 
+/** Run a vendor's interactive sign-in on the machine that owns the chat. */
+export function remoteTerminalScript(spec: string): string {
+  return [withOwnNode, `exec ${BIN_LINK} ide-terminal ${shellQuote(spec)}`].join('\n');
+}
+
 /** Takes off what ClikCode Remote put there: the source, the release, its
  * Node, and the ~/.local/bin/clikcode link when it points into them. The
  * machine's own ClikCode data (~/.clikcode: its chats, accounts) only when

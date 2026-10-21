@@ -27,6 +27,8 @@ export const NO_TRANSIENT: Pick<ChatModel, 'pendingPrompt' | 'approvals' | 'subm
 export function freshFor(model: ChatModel): ChatModel {
   return {
     ...emptyModel(), connection: model.connection,
+    ...(model.machine ? { machine: model.machine } : {}),
+    ...(model.machineId ? { machineId: model.machineId } : {}),
     ...(model.version ? { version: model.version } : {}), ...(model.revision ? { revision: model.revision } : {}),
   };
 }

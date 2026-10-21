@@ -17,6 +17,8 @@ export type InteractiveSlashHandlerKey = typeof INTERACTIVE_SLASH_HANDLER_KEYS[n
 export interface InteractiveSlashOutcome {
   /** Adopt this session (a new conversation, a fork, a resumed chat). */
   id?: string;
+  /** An SSH machine owns the selected conversation. */
+  remote?: { machineId: string; chatId: string };
   exit?: boolean;
   notice?: string;
   /** Run this as a turn on the (possibly just adopted) session. */

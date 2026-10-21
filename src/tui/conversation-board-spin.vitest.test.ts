@@ -12,6 +12,33 @@ const { runConversationBoard } = await import('./conversation-board.js');
 afterEach(() => { vi.useRealTimers(); });
 
 describe('the board spinner', () => {
+  it('moves from a machine’s chats to machines and into another machine’s chats', async () => {
+    const painted: Array<{ labels: string[]; selected: number; title?: string }> = [];
+    const host = {
+      paint: (_draft: string, options: readonly PickerOption<string>[], selected: number, _prompt: string, _cursor: number, layout?: { title?: string }) => {
+        painted.push({ labels: options.map((row) => row.label), selected, title: layout?.title });
+      },
+      clearFrame: () => undefined,
+      setSelecting: () => undefined,
+      select: async () => undefined,
+    };
+    const chosen: string[] = [];
+    const opened = runConversationBoard(host as never, {
+      conversations: (machine) => [{ label: machine === 'remote' ? 'Remote chat' : 'Local chat', value: `${machine}:chat` }],
+      machines: () => [{ label: 'This machine', value: 'local' }, { label: 'MacBook', value: 'remote' }],
+      commands: [], onMachineSelected: (machine) => chosen.push(machine),
+    });
+    expect(painted.at(-1)?.labels).toEqual(['   Local chat']);
+    keyHandler?.('\u001b[D');
+    expect(painted.at(-1)).toMatchObject({ labels: ['This machine', 'MacBook'], selected: 0, title: 'Machines' });
+    keyHandler?.('\u001b[B');
+    keyHandler?.('\u001b[C');
+    expect(chosen).toEqual(['remote']);
+    expect(painted.at(-1)?.labels).toEqual(['   Remote chat']);
+    keyHandler?.('\u001b[C');
+    expect(await opened).toEqual({ open: 'remote:chat' });
+  });
+
   it('draws once more after the running row finishes, so no spinner is left behind', async () => {
     vi.useFakeTimers();
     let working = true;
