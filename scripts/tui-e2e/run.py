@@ -168,6 +168,48 @@ def signed_in_fake(binary, auth_path, auth_text):
     return setup
 
 
+def remote_installed(updates, pnpm_delay=0):
+    """`setup` for ClikCode Remote keeping a machine current: the fakes of
+    remote_fake, a repository whose main has moved on, and `devbox` already
+    added (its record in this machine's machines.json, policy `updates`) and
+    installed at the OLDER commit. This build stands for main's newer commit
+    (CLIKCODE_REMOTE_LOCAL_COMMIT): the fake repository cannot hold this
+    checkout's own. `/update` in a devbox chat runs this checkout's real
+    ClikCode there (fake-remote-clikcode.mjs). No real machine or network."""
+    def setup(context):
+        import subprocess, datetime, uuid
+        fakes = os.path.join(REPO, 'scripts', 'tui-e2e')
+        shutil.copy(os.path.join(fakes, 'fake-grok.mjs'), os.path.join(context['fakebin'], 'grok'))
+        os.chmod(os.path.join(context['fakebin'], 'grok'), 0o755)
+        for name, script in (('ssh', 'fake-ssh.mjs'), ('tailscale', 'fake-tailscale.mjs')):
+            os.symlink(os.path.join(fakes, script), os.path.join(context['fakebin'], name))
+        world_root = os.path.join(context['root'], 'remote')
+        os.makedirs(world_root)
+        tool = lambda *args: json.loads(subprocess.check_output(['node', os.path.join(fakes, 'fake-remote.mjs'), *args]))
+        made = tool('world', world_root, json.dumps({'second': True}))
+        now = datetime.datetime.now(datetime.timezone.utc)
+        iso = lambda minutes: (now - datetime.timedelta(minutes=minutes)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+        chat = lambda id, title, minutes, preview: {'id': id, 'title': title, 'updatedAt': iso(minutes), 'messages': 4, 'preview': preview, 'section': 'active', 'current': False}
+        target = 'devbox.tail-fake.ts.net'
+        tool('host', world_root, target, json.dumps({
+            'chats': [chat('c1', 'Fix the login page', 5, 'the button does nothing'), chat('c2', 'Write the migration tests', 30, 'cover the rollback')],
+            'env': {'CLIKCODE_REMOTE_REPO_URL': made['repoUrl'], 'FAKE_CLIKCODE_CLI': os.path.abspath(os.path.join(os.path.dirname(context['entry']), 'cli.js')),
+                    **({'FAKE_PNPM_DELAY': str(pnpm_delay)} if pnpm_delay else {})},
+        }))
+        tool('install', world_root, target, json.dumps({'repoUrl': made['repoUrl'], 'commit': made['first']}))
+        os.makedirs(os.path.join(context['state'], 'remote'))
+        record = {'id': str(uuid.uuid4()), 'name': 'devbox', 'sshTarget': target, 'addedAt': iso(60), 'ready': True,
+                  'installed': {'version': '1.0.0', 'commit': made['first'], 'at': iso(60)}, 'updates': updates}
+        with open(os.path.join(context['state'], 'remote', 'machines.json'), 'w') as handle:
+            json.dump({'version': 1, 'machines': [record]}, handle)
+        context['env'].update({
+            'FAKE_SSH_ROOT': world_root, 'CLIKCODE_REMOTE_REPO_URL': made['repoUrl'], 'CLIKCODE_REMOTE_NODE_MIRROR': made['mirrorUrl'],
+            'CLIKCODE_REMOTE_LOCAL_COMMIT': made['commit'],
+        })
+        context['remote'] = {'first': made['first'], 'commit': made['commit']}
+    return setup
+
+
 def remote_fake(commit=None):
     """`setup` for ClikCode Remote: a FAKE `ssh` and `tailscale` in fakebin
     (fake-ssh.mjs, fake-tailscale.mjs), a fake repository and Node mirror
@@ -619,11 +661,53 @@ SCENARIOS = {
             ('keys', '\x1b[D'), ('wait_for', '← machines', 20), ('settle', 1),
             ('keys', '\x1b[D'), ('wait_for', 'Machines', 20), ('settle', 1),
             ('keys', '\x1b[B'), ('keys', '\x1b[C'), ('wait_for', 'Fix the login page', 20), ('settle', 0.5),
-            ('keys', '\x1b[C'), ('wait_for', 'Update it from /remote', 15), ('snap', 'opened'),
+            ('keys', '\x1b[C'), ('wait_for', 'runs another ClikCode build', 15), ('snap', 'opened'),
         ],
         'watch': [],
-        'snap_contains': {'opened': ['devbox runs another ClikCode build than this one. Update it from /remote.']},
+        'snap_contains': {'opened': ['devbox runs another ClikCode build than this one']},
         'never': ['ENOENT', 'Updating ClikCode on devbox'],
+    },
+    # A machine on an older commit than this build is brought to this build's
+    # commit by itself (policy automatic, the default): the board's machine
+    # list says it is updating, then it is current. Nothing asks.
+    'remote-auto-update': {
+        'setup': remote_installed('auto', pnpm_delay=8), 'startup': 4, 'no_dup_check': 'lists and progress lines, no transcript',
+        'turns': [{'blocks': ['unused']}],
+        'steps': [
+            ('settle', 2),
+            ('keys', '\x1b[D'), ('wait_for', '← machines', 20), ('keys', '\x1b[D'), ('wait_for', 'devbox', 20),
+            ('wait_for', 'updating ClikCode', 30), ('snap', 'updating'),
+            ('wait_for_gone', 'updating ClikCode', 90), ('wait_for', '2 chats', 20), ('settle', 1), ('snap', 'current'),
+        ],
+        'watch': [],
+        'snap_contains': {'updating': ['devbox', 'updating ClikCode…'], 'current': ['devbox', 'connected · 2 chats']},
+        'snap_lacks': {'current': ['needs update', 'update failed', 'updating']},
+        'never': ['ENOENT', 'update failed'],
+    },
+    # Set to ask first, the same machine is only said to need an update; in one
+    # of its chats `/update` updates it there (its real ClikCode, on that
+    # machine), step by step, from its commit to main's.
+    'remote-ask-update': {
+        'setup': remote_installed('ask'), 'startup': 4, 'no_dup_check': 'lists and progress lines, no transcript',
+        'turns': [{'blocks': ['unused']}],
+        'steps': [
+            ('settle', 2),
+            ('keys', '\x1b[D'), ('wait_for', '← machines', 20), ('keys', '\x1b[D'), ('wait_for', 'needs update', 30), ('settle', 3), ('snap', 'machines'),
+            ('keys', '\x1b[B'), ('keys', '\x1b[C'), ('wait_for', 'Fix the login page', 20), ('settle', 0.5),
+            ('keys', '\x1b[C'), ('wait_for', 'Type /update', 15), ('snap', 'opened'),
+            ('type', '/update'), ('wait_for', 'chats switch over once they are quiet', 120), ('settle', 1), ('snap', 'updated'),
+            ('keys', '\x1b[D'), ('wait_for', '← machines', 20), ('keys', '\x1b[D'), ('wait_for', '2 chats', 30), ('settle', 3), ('snap', 'after'),
+        ],
+        'watch': [],
+        'snap_contains': {
+            'machines': ['devbox', 'needs update (/remote)'],
+            'opened': ['devbox runs another ClikCode build than this one. Type /update to update it'],
+            # "on <host>": the fake machines share this one's hostname.
+            'updated': ['1/3 Getting ClikCode from GitHub', '2/3 Building and installing', '3/3 Checking the install', '→', '; chats switch over once they are quiet.'],
+            'after': ['devbox', 'connected · 2 chats'],
+        },
+        'snap_lacks': {'machines': ['updating ClikCode'], 'after': ['needs update']},
+        'never': ['ENOENT', 'updating ClikCode…'],
     },
     'single-block': {
         'turns': [{'blocks': ['Hello there, all good.']}],
@@ -2650,6 +2734,10 @@ def run(name, spec, entry, keep):
             os.write(fd, step[1].encode()); pump(0.3)
         elif step[0] == 'wait_for':
             if not pump(step[2], step[1]): problems.append(f'timed out waiting for {step[1]!r}')
+        elif step[0] == 'wait_for_gone':
+            gone_by = time.time() + step[2]
+            while step[1] in '\n'.join(screen.display) and time.time() < gone_by: pump(0.2)
+            if step[1] in '\n'.join(screen.display): problems.append(f'timed out waiting for {step[1]!r} to go')
         elif step[0] == 'settle':
             pump(step[1])
         elif step[0] == 'mark':

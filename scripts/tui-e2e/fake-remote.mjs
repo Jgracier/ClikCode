@@ -124,7 +124,7 @@ export function host(root, name, options = {}) {
     '[ "$1" = --yes ] && shift',
     'case "$1" in pnpm@*) shift;; *) echo "fake npx: only pnpm" >&2; exit 2;; esac',
     'case "$1" in',
-    '  install) mkdir -p node_modules/.fake; exit 0;;',
+    '  install) [ -n "${FAKE_PNPM_DELAY:-}" ] && sleep "$FAKE_PNPM_DELAY"; mkdir -p node_modules/.fake; exit 0;;',
     '  run) [ -d node_modules ] || { echo "run pnpm install first" >&2; exit 1; }; shift; name="$1"; shift',
     '       cmd="$(node -e "process.stdout.write((require(\'./package.json\').scripts||{})[process.argv[1]]||\'\')" "$name")"',
     '       [ -n "$cmd" ] || { echo "fake npx: no script $name" >&2; exit 1; }',

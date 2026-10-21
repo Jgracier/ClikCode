@@ -15,7 +15,7 @@ import { discoverMachines, readTailscaleStatus, type TailscaleStatus } from './t
 import { buildScript, installOnMachine, nodeIsNewEnough, sourceScript, uninstallFromMachine, type InstallStep } from './install.js';
 import { needsUpdate, RemoteLink, RemoteMachines, type MachineView } from './connection.js';
 import { machinesPath, newMachineRecord, readMachines, updateMachines, type RemoteMachine } from './machines.js';
-import { boardRowsWithMachines, isRemoteRowValue, machineHeading, NEEDS_YOU_GROUP } from './board-rows.js';
+import { boardRowsWithMachines, isRemoteRowValue, NEEDS_YOU_GROUP, updateText } from './board-rows.js';
 import { autoUpdateDecision, AutoUpdates } from './updates.js';
 import { outdatedNotice } from './terminal-chat.js';
 import { interactiveRemotePicker, notYetAdded, type RemoteHost } from '../tui/pickers/remote.js';
@@ -588,14 +588,14 @@ describe('keeping machines at this build', () => {
     const machine = newMachineRecord({ name: 'lagging', sshTarget: 'lagging', ready: true });
     await updateMachines(() => [machine]);
     const seen: string[] = [];
-    const link = new RemoteLink(machine, () => { seen.push(stripAnsi(machineHeading(link.view, Date.now()))); }, { localCommit: fakeWorld.commit, autoUpdates: new AutoUpdates() });
+    const link = new RemoteLink(machine, () => { seen.push(stripAnsi(updateText(link.view))); }, { localCommit: fakeWorld.commit, autoUpdates: new AutoUpdates() });
     link.start();
     try {
-      await until(() => seen.includes('lagging · updating ClikCode…'), 30_000);
+      await until(() => seen.includes(' · updating ClikCode…'), 30_000);
       await until(() => link.view.state === 'connected' && !link.view.updating && !link.view.needsUpdate, 60_000);
     } finally { await link.stop(); }
-    expect(seen).toContain('lagging · needs update (/remote)');
-    expect(seen.at(-1)).toBe('lagging');
+    expect(seen).toContain(' · needs update (/remote)');
+    expect(seen.at(-1)).toBe('');
     expect(gitIn(join(home, '.local', 'share', 'clikcode', 'src'), 'rev-parse', 'HEAD')).toBe(fakeWorld.commit);
     const [record] = await readMachines();
     expect(record).toMatchObject({ needsUpdate: false, installed: { commit: fakeWorld.commit } });
@@ -632,7 +632,7 @@ describe('keeping machines at this build', () => {
     try {
       await until(() => Boolean(link.view.updateError), 60_000);
       expect(link.view).toMatchObject({ needsUpdate: true, updating: false });
-      expect(stripAnsi(machineHeading(link.view, Date.now()))).toBe('stuck · update failed (/remote)');
+      expect(stripAnsi(updateText(link.view))).toBe(' · update failed (/remote)');
     } finally { await link.stop(); }
     const [record] = await readMachines();
     expect(record!.updateError).toMatch(/^Getting ClikCode from GitHub: .*has no commit d{40}/);

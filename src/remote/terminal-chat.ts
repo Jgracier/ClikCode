@@ -235,7 +235,8 @@ export async function runRemoteChat(
         case 'panel': terminal.panel(event.title, event.body); return;
         case 'restore-draft': terminal.restoreDraft(event.text); return;
         case 'send-complete': completions.get(event.id)?.resolve(); completions.delete(event.id); return;
-        case 'busy': if (event.label) terminal.startWaiting(event.label); else if (!running) terminal.stopWaiting(); return;
+        // Its last lines (an /update's steps) are drawn before the wait ends.
+        case 'busy': if (event.label) terminal.startWaiting(event.label); else if (!running) { terminal.flushPaint(); terminal.stopWaiting(); } return;
         case 'closed': terminal.activity('This conversation closed on the remote machine.'); return;
       }
     };

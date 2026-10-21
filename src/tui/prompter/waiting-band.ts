@@ -130,6 +130,18 @@ export function schedulePaint(this: TerminalHarnessPrompter, delay = PAINT_COALE
   this.responsePaintTimer.unref();
 }
 
+/** A coalesced paint still pending, drawn now: a wait about to end draws
+ * the lines added to it first, or they are gone with it (a remote chat's
+ * busy line ending right after its last step notice). */
+export function flushPaint(this: TerminalHarnessPrompter): void {
+  if (!this.responsePaintTimer) return;
+  clearTimeout(this.responsePaintTimer);
+  this.responsePaintTimer = undefined;
+  if (this.closed || this.suspended || this.selecting || this.paletteActive || this.resizePaintTimer) return;
+  if (this.turn) this.paintWaiting(this.turn);
+  else this.repaint();
+}
+
 /** The waiting frame, with the slash palette when one is being typed.
  *
  * A hint list, not a picker: during a turn Up/Down scroll the transcript
