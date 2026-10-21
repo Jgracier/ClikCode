@@ -135,7 +135,11 @@ export async function runMultiplexedBridge(config: Conf, send: NonNullable<typeo
   process.on('disconnect', () => { lifecycle('bridge.stop', { reason: 'editor disconnected', chats: host.size }); void host.shutdown().finally(() => process.exit(0)); });
   process.on('SIGTERM', () => { lifecycle('bridge.stop', { reason: 'SIGTERM', chats: host.size }); void host.shutdown().finally(() => process.exit(0)); });
   // Which installation this is (ClikCode Remote tells machines apart by it): the index only.
-  const installationId = await readState({ transcripts: [] }).then((state) => state.installationId, () => undefined);
+  // Never long: an editor waits on host-ready, and a state lock held elsewhere must not hold it.
+  const installationId = await Promise.race([
+    readState({ transcripts: [] }).then((state) => state.installationId, () => undefined),
+    new Promise<undefined>((resolve) => setTimeout(resolve, 2000).unref()),
+  ]);
   send({
     type: 'host-ready', version: CLIKCODE_VERSION, protocol: IDE_PROTOCOL.version, revision: IDE_PROTOCOL.revision,
     ...(currentWorkerBuild() ? { build: currentWorkerBuild() } : {}), pid: process.pid,

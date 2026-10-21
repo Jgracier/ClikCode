@@ -575,7 +575,8 @@ SCENARIOS = {
             ('keys', '\r'), ('wait_for', '6/6 Checking the install', 60), ('wait_for', 'devbox is added', 15), ('settle', 1), ('snap', 'installed'),
             ('keys', '\x1b[D'), ('wait_for', 'Fix the login page', 20), ('settle', 0.5), ('snap', 'board'),
             ('wait_for', 'now it submits twice', 20), ('settle', 0.5), ('snap', 'board-updated'),
-            ('keys', '\x1b'), ('settle', 1),
+            # Opening a chat on another machine is step two: it says so, and opens nothing.
+            ('keys', '\r'), ('wait_for', 'Opening chats on other machines comes next', 10), ('settle', 1), ('snap', 'opened'),
         ],
         'watch': [],
         'snap_contains': {
@@ -585,9 +586,9 @@ SCENARIOS = {
             'board-updated': ['devbox · Recent', 'now it submits twice'],
         },
         'snap_lacks': {'list': ['studios-imac', 'old-server', 'iphone', 'gaming-pc', 'friends-laptop'], 'board': ['needs update'], 'board-updated': ['the button does nothing']},
-        'snap_composer_same': ['list', 'installed'],
+        'snap_composer_same': ['list', 'installed', 'opened'],
         'snap_pair_same_row': [('board', 'board-updated', 'Fix the login page'), ('board', 'board-updated', 'Write the migration tests'), ('board', 'board-updated', 'devbox · Recent')],
-        'never': ['Opening chats on other machines comes next', 'Windows machines'],
+        'never': ['Windows machines'],
     },
     'single-block': {
         'turns': [{'blocks': ['Hello there, all good.']}],
