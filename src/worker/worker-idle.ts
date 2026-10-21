@@ -84,9 +84,6 @@ export function createIdleControl(ctx: WorkerContext) {
   };
   const retireBlocker = (): string | undefined => heldReason('retire');
 
-  /** Idle means no client, no turn, no background shell whose exit the
-   * model is still owed, and no notification on its way to it. A running
-   * shell instead arms the abandoned-shell ceiling (ABANDONED_SHELL_MS). */
   /** Nobody attached, nothing running, and the entry on disk is no longer
    * what this process loaded: leave now so the next open gets a fresh
    * worker. An attached window is left alone -- its own attach asks for
@@ -134,6 +131,9 @@ export function createIdleControl(ctx: WorkerContext) {
     idleState = state;
     lifecycle('worker.idle', { state });
   };
+  /** Idle means no client, no turn, no background shell whose exit the
+   * model is still owed, and no notification on its way to it. A running
+   * shell instead arms the abandoned-shell ceiling (ABANDONED_SHELL_MS). */
   const scheduleIdleExit = (): void => {
     if (ctx.idleTimer) clearTimeout(ctx.idleTimer);
     ctx.idleTimer = undefined;

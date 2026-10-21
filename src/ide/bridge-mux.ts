@@ -184,9 +184,10 @@ export async function runMultiplexedBridge(config: Conf, send: NonNullable<typeo
     readState({ transcripts: [] }).then((state) => state.installationId, () => undefined),
     new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 2000).unref()),
   ]);
+  const build = currentWorkerBuild();
   send({
     type: 'host-ready', version: CLIKCODE_VERSION, protocol: IDE_PROTOCOL.version, revision: IDE_PROTOCOL.revision,
-    ...(currentWorkerBuild() ? { build: currentWorkerBuild() } : {}), pid: process.pid,
+    ...(build ? { build } : {}), pid: process.pid,
     ...(CLIKCODE_COMMIT ? { commit: CLIKCODE_COMMIT } : {}), ...(installationId ? { installationId } : {}),
   } satisfies IdeHostEvent, undefined, {}, () => undefined);
   await new Promise<void>(() => { /* lives as long as the channel */ });
