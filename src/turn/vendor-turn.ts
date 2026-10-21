@@ -1,11 +1,8 @@
 /** Run a turn through a vendor's CLI or structured session protocol. */
-import type { HarnessSession, HarnessState } from '../session/model.js';
-import type { AiHarnessAccount } from '../harness/definition.js';
 import { moveThreadToAccount, reconcileNativeThread } from '../session/carry.js';
-import type { prepareAttachments } from '../session/attachments.js';
 import { closeStandby, leavePersistentTransport } from './vendor-process.js';
 import { settleHeldVendor } from './turn-steps.js';
-import type { TurnRunOptions } from './session-turn.js';
+import type { AccountTurnInput } from './session-turn.js';
 import { runAttempt } from './vendor-attempt.js';
 import { createVendorObserver } from './vendor-observer.js';
 import { completeVendorTurn, settleAttempt } from './vendor-outcome.js';
@@ -63,18 +60,7 @@ async function startVendorTurn(ctx: VendorTurnContext): Promise<void> {
  * Each attempt runs the vendor; a failed one is recovered in place or moved to
  * another account (vendor-recovery.ts) and the loop runs it again.
  */
-export async function sendVendorTurn(input: {
-  state: HarnessState;
-  session: HarnessSession;
-  account: AiHarnessAccount;
-  model: string | null;
-  text: string;
-  prepared: Awaited<ReturnType<typeof prepareAttachments>>;
-  turnText: string;
-  startedAt: number;
-  signal?: AbortSignal;
-  run: TurnRunOptions;
-}): Promise<void> {
+export async function sendVendorTurn(input: AccountTurnInput): Promise<void> {
   const ctx = await createVendorTurnContext(input);
   try {
     await startVendorTurn(ctx);
