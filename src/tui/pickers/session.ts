@@ -32,6 +32,8 @@ import { conversationOption, isBlankConversation } from '../../session/options.j
 import { conversationIdFor } from '../../session/conversation-rows.js';
 import { aiSessionCommand } from '../slash/handlers.js';
 import { chooseOption } from './choose.js';
+import { RemoteMachines } from '../../remote/connection.js';
+import { boardRowsWithMachines, isRemoteRowValue, REMOTE_OPEN_LATER } from '../../remote/board-rows.js';
 
 type AdoptableNativeSession = {
   harness: AiLocalHarnessDefinition;
@@ -175,7 +177,7 @@ export async function interactiveSessionPicker(rl: HarnessPrompter, currentId: s
 export async function interactiveSessionPicker(
   rl: HarnessPrompter, currentId: string, boardCommands: readonly PickerOption<string>[] | undefined,
   hooks?: { onSessionsSettled?: () => boolean },
-): Promise<{ id: string; draft?: string } | { new: true } | { compose: string } | { command: string } | undefined>;
+): Promise<{ id: string; draft?: string } | { new: true } | { compose: string } | { command: string } | { notice: string } | undefined>;
 export async function interactiveSessionPicker(
   rl: HarnessPrompter, currentId: string,
   /** The commands a board's `/` offers. Given, and the terminal can draw it,
@@ -184,7 +186,7 @@ export async function interactiveSessionPicker(
   /** The board calls `onSessionsSettled` when running chats finish and the
    * list is idle. A true return leaves the board up until the process exits. */
   hooks?: { onSessionsSettled?: () => boolean },
-): Promise<{ id: string; draft?: string } | { new: true } | { compose: string } | { command: string } | undefined> {
+): Promise<{ id: string; draft?: string } | { new: true } | { compose: string } | { command: string } | { notice: string } | undefined> {
   const onBoard = Boolean(boardCommands && rl.board);
   // Titles, previews and dates live on the index. The transcript is read
   // when the chat is opened, not to draw this list.
@@ -265,6 +267,9 @@ export async function interactiveSessionPicker(
   let activityRefresh: Promise<void> | undefined;
   /** The board's redraw: it draws a changed list without ticking for it. */
   let listChanged: (() => void) | undefined;
+  /** The other machines' chats, over one SSH connection each -- open for as
+   * long as the board is up, and closed with it (remote/connection.ts). */
+  let remote: RemoteMachines | undefined;
   const refreshActivity = (): void => {
     if (activityRefresh) return;
     activityRefresh = (async () => {
@@ -329,6 +334,9 @@ export async function interactiveSessionPicker(
     if (!onBoard) for (const option of options) option.label = conversationLabel(option, 0);
     // On the board its composer is how a conversation starts.
     if (!onBoard) options.unshift({ label: '+ New conversation', detail: '· same provider and model', value: NEW_CONVERSATION_VALUE });
+    // The other machines ClikCode Remote added, each in its own sections
+    // below this one's (remote/board-rows.ts); none added, nothing changes.
+    if (remote) return boardRowsWithMachines(options, remote.views(), now);
     return options;
   };
   // Asked for on every keypress (the list redraws, and a picker re-reads its
@@ -349,6 +357,13 @@ export async function interactiveSessionPicker(
   // so the spinner stops when the turn is over (session/list-watch.ts; a
   // slow poll where the directories cannot be watched).
   const listWatch = watchConversationList(refreshActivity);
+  if (onBoard) {
+    const machines = await new RemoteMachines().open().catch(() => undefined);
+    if (machines?.views().length) {
+      remote = machines;
+      remote.onChange(() => { listRevision += 1; built = undefined; listChanged?.(); });
+    } else void machines?.close();
+  }
 
   /** What a row action did to the chat that is open, so the loop can move off
    * one that no longer exists (deleted) or is put away (archived). */
@@ -416,6 +431,8 @@ export async function interactiveSessionPicker(
     }
   } finally {
     listWatch.stop();
+    // Not waited for: the chat chosen opens while the connections close.
+    void remote?.close();
   }
   // Delete and archive always return to the list. If the open chat was the
   // one removed, the list's "current" is the fresh draft made above -- and
@@ -429,6 +446,9 @@ export async function interactiveSessionPicker(
   // state rather than show a stale row), so it opens again on what changed.
   if (!selected && actedOn) return interactiveSessionPicker(rl, currentId, boardCommands, hooks);
   if (!selected) return undefined;
+  // Step one of ClikCode Remote shows the other machines' chats; opening
+  // one there is not built yet, and is not pretended.
+  if (isRemoteRowValue(selected)) return { notice: REMOTE_OPEN_LATER };
   if (selected === NEW_CONVERSATION_VALUE) return { new: true };
   if (selected === PENDING_DISCOVERY_VALUE) {
     await discovery;

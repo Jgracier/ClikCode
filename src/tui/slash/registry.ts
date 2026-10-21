@@ -44,7 +44,7 @@ export const SLASH_HANDLER_KEYS = [
   'provider', 'accounts', 'login', 'logout', 'gateway',
   'model', 'effort', 'fast', 'permissions', 'sandbox', 'computer', 'send', 'options', 'capabilities', 'settings',
   'sessions', 'resume', 'search', 'rename', 'fork', 'redo', 'archive', 'delete',
-  'usage', 'doctor', 'agents',
+  'usage', 'doctor', 'agents', 'remote',
 ] as const;
 export type SlashHandlerKey = typeof SLASH_HANDLER_KEYS[number];
 
@@ -162,7 +162,7 @@ function entry(
 
 /** Commands about the terminal itself -- its mouse, its screen, leaving it.
  * An editor client neither lists nor runs them. */
-export const TERMINAL_ONLY_COMMANDS: ReadonlySet<string> = new Set(['select', 'redraw', 'exit']);
+export const TERMINAL_ONLY_COMMANDS: ReadonlySet<string> = new Set(['select', 'redraw', 'exit', 'remote']);
 
 export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('new', 'Conversation', 'start a fresh conversation (the current one stays resumable)', { aliases: ['clear', 'reset'], argHint: '[first message]' }),
@@ -236,6 +236,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('redo', 'Conversation', 'go back to before one of your prompts and send it again, edited or not; its edits and later ones are put back unless "keep"', { argHint: '[@N] [keep]' }),
   entry('archive', 'Sessions', 'archive this conversation'),
   entry('delete', 'Sessions', 'delete this conversation', { argHint: '[confirm]' }),
+  entry('remote', 'Sessions', 'your other machines on the board: add one (ClikCode installs there over SSH), update or remove it'),
 
   entry('status', 'Info', 'current configuration'),
   entry('context', 'Info', 'context window and token usage reported by the harness'),

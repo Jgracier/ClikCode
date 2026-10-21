@@ -49,6 +49,10 @@ export async function openConversationPicker(
       await showSession(terminal, fresh);
       continue;
     }
+    if (picked && 'notice' in picked) {
+      if (fresh) await showSession(terminal, id);
+      return { id, notice: picked.notice };
+    }
     if (picked && 'compose' in picked) return { id: fresh ?? await newConversation(id, { sameModel: true }), prompt: picked.compose, echo: true };
     if (picked && 'new' in picked) return { id: fresh ?? await newConversation(id, { sameModel: true }) };
     if (picked) return { id: picked.id, ...(picked.draft ? { draft: picked.draft } : {}) };
