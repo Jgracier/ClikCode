@@ -19,6 +19,15 @@ import type { SignInScreen } from '../gateway/login/vendor-sign-in.js';
 
 export interface RemoteChatSelection { machineId: string; chatId: string }
 
+type RemoteOpen = Omit<Extract<IdeRequest, { type: 'open' }>, 'requestId'>;
+
+/** Resuming a chat on another machine names no folder: this terminal's cwd
+ * is a folder of this machine, and the chat keeps its own saved workspace
+ * on the machine that owns it (ide/bridge.ts open). */
+export function remoteResume(chatId: string): RemoteOpen {
+  return { type: 'open', mode: 'resume', sessionId: chatId };
+}
+
 class TerminalBridge {
   private readonly child: ChildProcessWithoutNullStreams;
   private readonly chat = randomUUID();
@@ -78,7 +87,7 @@ class TerminalBridge {
     this.child.stdin.write(`${JSON.stringify(message)}\n`);
   }
   post(request: IdeRequest): void { this.send({ type: 'chat', chat: this.chat, request }); }
-  request(request: { type: 'open'; workspace: string; mode: 'new' | 'continue' | 'resume'; sessionId?: string }): Promise<unknown> {
+  request(request: RemoteOpen): Promise<unknown> {
     const requestId = randomUUID();
     const result = new Promise<unknown>((resolve, reject) => this.pending.set(requestId, { resolve, reject }));
     this.post({ ...request, requestId } as IdeRequest);
@@ -227,8 +236,8 @@ export async function runRemoteChat(
     };
     try {
       await bridge.connected();
-      // No folder of this machine's: the chat is in one of the remote's own (session/attach.ts).
-      await bridge.request({ type: 'open', mode: 'resume', sessionId: choice.chatId, workspace: '' });
+      // Intent only: the chat is in one of the remote's own folders (session/attach.ts).
+      await bridge.request(remoteResume(choice.chatId));
       // After the open, whose chat clears the rows before it. Never updated from here: a
       // production machine is updated when the user says so.
       if (bridge.outdated) terminal.activity(`${machine.name} runs another ClikCode build than this one. Update it from /remote.`);
