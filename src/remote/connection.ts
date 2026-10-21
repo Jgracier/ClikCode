@@ -404,9 +404,19 @@ export class RemoteMachines {
     return this.links.map((link) => link.view);
   }
 
-  /** A chat channel on the connection to a machine, while it is connected. */
+  /** A chat channel on the connection to a machine, once it is connected: one
+   * still connecting (a list opened a moment ago) is waited for, not passed by. */
   async channel(machineId: string): Promise<LinkChannel | undefined> {
-    return this.links.find((link) => link.view.machine.id === machineId)?.channel();
+    const link = this.links.find((item) => item.view.machine.id === machineId);
+    if (!link) return undefined;
+    if (link.view.state === 'connecting') {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, READY_TIMEOUT_MS);
+        timer.unref();
+        const stop = this.onChange(() => { if (link.view.state !== 'connecting') { clearTimeout(timer); stop(); resolve(); } });
+      });
+    }
+    return link.channel();
   }
 
   /** Connects to a machine again: its ClikCode was just updated. */
