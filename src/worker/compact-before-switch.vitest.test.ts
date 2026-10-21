@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { shouldCompactBeforeSwitch, noteCompacted, COMPACT_ABOVE_TOKENS } from './compact-before-switch.js';
+import { compactBeforeSwitchNotice, shouldCompactBeforeSwitch, noteCompacted, COMPACT_ABOVE_TOKENS } from './compact-before-switch.js';
 import { canCompact, compactCommand } from '../tui/slash/compact.js';
 import { nativeAvailableCommands } from '../turn/vendor-process.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
@@ -31,6 +31,12 @@ describe('compacting a large conversation before its account runs out', () => {
     const once = session();
     noteCompacted(once.id, now);
     expect(shouldCompactBeforeSwitch(state(account('a', 96), account('b', 10)), once, account('a', 96) as never, now + 60_000)).toBe(false);
+  });
+});
+
+describe('what the conversation says of it', () => {
+  it('names the account that is nearly out', () => {
+    expect(compactBeforeSwitchNotice({ label: 'personal' })).toBe('Compacted before switching accounts: personal is nearly out of usage');
   });
 });
 

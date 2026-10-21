@@ -219,7 +219,8 @@ export function canonicalRecord(session: HarnessSession): CanonicalRecord {
   messages.forEach((message) => {
     const origin = message.origin ? { sessionId: session.id, ...message.origin } : own;
     if (message.role === 'user') {
-      open(message.content, message.attachments ?? [], origin);
+      // ClikCode's own prompt (a /compact it ran) opens the turn its answer is, asking nothing.
+      open(message.automatic ? '' : message.content, message.attachments ?? [], origin);
       return;
     }
     const turn = current ?? open('', [], origin);

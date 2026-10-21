@@ -59,6 +59,10 @@ export type TranscriptMessage = {
   /** The steer this user message was, when it was typed into a running turn.
    *  The live copy and this one are the same message, matched by this id. */
   id?: string;
+  /** On a user message ClikCode sent itself (a `/compact` it ran after a
+   * turn): why, said as ClikCode's notice. `content` is what the vendor was
+   * sent; it is drawn as this notice, not as the user's request. */
+  automatic?: string;
   /** Whose turn a message was: an answer is stamped when its turn is
    * committed (checkpoint.ts sessionTranscriptMessages), every message when
    * the conversation moves to another provider (leaveProvider). The
@@ -203,6 +207,8 @@ export interface HarnessSession {
    * provider retry cannot accidentally submit the same user prompt twice. */
   pendingTurn?: {
     prompt: string;
+    /** ClikCode sent `prompt` itself, and why (TranscriptMessage.automatic). */
+    automatic?: string;
     /** The files attached to this request (`attachments` when it began). */
     attachments?: string[];
     response?: string;

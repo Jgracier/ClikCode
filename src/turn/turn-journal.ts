@@ -124,7 +124,7 @@ export class DurableTurnCheckpoint {
   }
 
   static async start(
-    state: HarnessState, session: HarnessSession, prompt: string, queuedTurnId?: string,
+    state: HarnessState, session: HarnessSession, prompt: string, queuedTurnId?: string, automatic?: string,
   ): Promise<DurableTurnCheckpoint> {
     // Taking a queued turn off the queue is what claims it. One already gone
     // was run by another submit of the same entry (a second window whose
@@ -132,7 +132,7 @@ export class DurableTurnCheckpoint {
     const before = queuedTurnId ? { queuedTurns: session.queuedTurns, pendingTurn: cloneData(session.pendingTurn), messages: session.messages, updatedAt: session.updatedAt } : undefined;
     if (queuedTurnId && !consumeSessionTurn(session, queuedTurnId)) throw queuedTurnAlreadyRunError(queuedTurnId);
     const checkpoint = new DurableTurnCheckpoint(state, session);
-    beginPendingTurn(session, prompt, new Date().toISOString());
+    beginPendingTurn(session, prompt, new Date().toISOString(), automatic);
     if (!before) {
       // The prompt does not wait for this write. A failed one never stopped the turn (it runs in
       // memory and later writes retry), and the vendor answering is what the journal records --
@@ -355,7 +355,7 @@ export class DurableTurnCheckpoint {
 export async function startTurnCheckpoint(
   state: HarnessState, session: HarnessSession, prompt: string, run: TurnRunOptions,
 ): Promise<DurableTurnCheckpoint> {
-  const checkpoint = await DurableTurnCheckpoint.start(state, session, prompt, run.queuedTurnId);
+  const checkpoint = await DurableTurnCheckpoint.start(state, session, prompt, run.queuedTurnId, run.automatic);
   // What the observer sees that no driver reports to the journal (a plan, a
   // notice, a thought, an approval's outcome) is kept with the turn.
   run.prompter?.bindJournal?.(checkpoint);

@@ -329,9 +329,12 @@ export function activityTextSummary(activities: readonly TurnActivity[]): string
 /** The conversation as text, for a reader that takes nothing else: a model's
  * history, a replay into another provider, an export. A message's calls are
  * not sent; a turn that only called tools is told as a short summary of
- * them, and a message with nothing at all is left out. */
+ * them, and a message with nothing at all is left out, as is a prompt
+ * ClikCode sent itself. */
 export function textTranscript(messages: readonly TranscriptMessage[]): Array<{ role: 'user' | 'assistant'; content: string }> {
   return messages.flatMap((message) => {
+    // A prompt ClikCode sent itself (a /compact) was not the user's request.
+    if (message.automatic) return [];
     if (message.role !== 'assistant' || message.content.trim()) return [{ role: message.role, content: message.content }];
     const activities = readTurnActivities(message.activities);
     return activities.length ? [{ role: 'assistant' as const, content: activityTextSummary(activities) }] : [];

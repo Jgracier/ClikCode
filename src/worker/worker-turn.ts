@@ -18,8 +18,8 @@ import { consumeQueuedTurn } from './consume-queued.js';
 import { sendEvent } from './broadcast-observer.js';
 import type { ClientCommand } from './protocol.js';
 import type { WorkerContext } from './worker-context.js';
-import { noteCompacted, shouldCompactBeforeSwitch } from './compact-before-switch.js';
-import { contextTokens, noteCompactedByContext, shouldCompactByContext, workerIsBusy } from './compact-by-context.js';
+import { compactBeforeSwitchNotice, noteCompacted, shouldCompactBeforeSwitch } from './compact-before-switch.js';
+import { compactByContextNotice, contextTokens, noteCompactedByContext, shouldCompactByContext, workerIsBusy } from './compact-by-context.js';
 import { persistentWorkRunning } from '../turn/vendor-process.js';
 import { compactConversation } from '../tui/slash/compact.js';
 
@@ -176,10 +176,12 @@ export function createTurnRunner(ctx: WorkerContext) {
       const account = session?.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
       if (!session) return;
       let label: string;
+      let automatic: string;
       if (shouldCompactBeforeSwitch(state, session, account)) {
         noteCompacted(sessionId);
         lifecycle('worker.compact-before-switch', { context: session.lastUsage?.contextUsed, account: account?.id.slice(0, 8) });
         label = 'compacting before the account switch';
+        automatic = compactBeforeSwitchNotice(account);
       } else if (shouldCompactByContext(state, session)) {
         // Not while anything of the conversation's is still going: queued notifications, the
         // vendor's own background turn or out-of-turn words, work it left running.
@@ -190,9 +192,10 @@ export function createTurnRunner(ctx: WorkerContext) {
         noteCompactedByContext(session);
         lifecycle('worker.compact-by-context', { context: contextTokens(session), window: session.lastUsage?.contextWindow });
         label = 'compacting a large conversation';
+        automatic = compactByContextNotice(state, session);
       } else return;
       await compactConversation(sessionId, session, '', async (_id, prompt) => {
-        ctx.queue.startTurn({ type: 'submit', text: prompt, echo: false, label });
+        ctx.queue.startTurn({ type: 'submit', text: prompt, echo: false, label, automatic });
       });
     } finally {
       compactionStarting = false;
@@ -243,7 +246,9 @@ export function createTurnRunner(ctx: WorkerContext) {
     // What the vendor was saying on its own is saved first: this turn's journal reads the conversation, and its
     // live view takes the windows over from that one.
     if (ctx.outOfTurn.active) await ctx.outOfTurn.settle();
-    observer.startTurn(command.label ?? 'thinking', command.text);
+    // A prompt ClikCode sent itself is not named to the windows: they would echo it as the
+    // user's. Its journal, written next, carries it with the notice drawn in its place.
+    observer.startTurn(command.label ?? 'thinking', command.automatic ? undefined : command.text);
     try {
       // A background turn's record still being saved: this turn's checkpoint
       // would read the conversation without it and then write it back whole.
@@ -256,6 +261,7 @@ export function createTurnRunner(ctx: WorkerContext) {
         liveInput,
         liveSettings: ctx.liveSettings,
         ...(command.queuedTurnId ? { queuedTurnId: command.queuedTurnId } : {}),
+        ...(command.automatic ? { automatic: command.automatic } : {}),
       });
       running.catch(() => undefined);
       await Promise.race([running, forced]);
