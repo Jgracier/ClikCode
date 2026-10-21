@@ -143,7 +143,13 @@ export class BroadcastObserver implements TurnObserver {
     return this.onAwaitingApproval?.({ title, since: this.awaitingSince.get(id) ?? new Date().toISOString() });
   }
 
+  /** When anything last happened here: an event for the windows (sent or not -- the vendor
+   * working with no window open still counts), or a window coming or going. A newer build
+   * replaces this worker only once this is old enough (worker-idle.ts RETIRE_QUIET_MS). */
+  lastActivityAt = Date.now();
+
   attach(socket: Socket): void {
+    this.lastActivityAt = Date.now();
     this.clients.add(socket);
   }
 
@@ -157,6 +163,7 @@ export class BroadcastObserver implements TurnObserver {
   }
 
   detach(socket: Socket): void {
+    this.lastActivityAt = Date.now();
     this.clients.delete(socket);
   }
 
@@ -294,6 +301,7 @@ export class BroadcastObserver implements TurnObserver {
 
   /** To every attached window, or every one but `except` (sent its own). */
   broadcast(event: WorkerEvent, except?: Socket): void {
+    this.lastActivityAt = Date.now();
     for (const client of this.clients) if (client !== except) sendEvent(client, event);
   }
 

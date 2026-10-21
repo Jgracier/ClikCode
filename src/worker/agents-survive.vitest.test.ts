@@ -24,7 +24,7 @@ afterEach(async () => { await fs.rm(dir, { recursive: true, force: true }); });
 
 const idleControlFor = (session: ReturnType<typeof sessionState>) => createIdleControl({
   observer: new BroadcastObserver(), sessionId: session.sessionId, agentSession: session,
-  turnRunning: false, draining: false, vendorBackground: { busy: false }, resumeWaiter: { pending: false },
+  turnRunning: false, draining: false, vendorBackground: { busy: false }, outOfTurn: { active: false }, resumeWaiter: { pending: false },
 } as never);
 
 describe('background agents survive everything but an explicit stop', () => {
