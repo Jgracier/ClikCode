@@ -109,6 +109,10 @@ export interface MoveFacts {
   installed(harness: AiLocalHarnessDefinition): Promise<boolean>;
   /** ClikDeploy Gateway is signed in here. */
   gatewaySignedIn(): boolean;
+  /** The account the vendor's own sign-in on disk is (its label), when it
+   * keeps one and ClikCode has no account for it yet: a new chat's first
+   * turn makes that account (aiHarnessSelect). */
+  vendorSignIn(harness: AiLocalHarnessDefinition): Promise<string | undefined>;
   /** The effort levels the harness offers here, when it says. */
   efforts(harness: AiLocalHarnessDefinition, account: AiHarnessAccount | undefined, model: string | null): Promise<readonly string[] | undefined>;
   home(): string;
@@ -118,6 +122,12 @@ export function machineFacts(config: Conf | undefined): MoveFacts {
   return {
     installed: async (harness) => (await import('../harness/transport/native/inspect.js')).inspectNativeHarnessForPicker(harness).then((found) => found.installed, () => false),
     gatewaySignedIn: () => Boolean(config && getApiKeyForUrl(config, getApiUrl(config))),
+    vendorSignIn: async (harness) => {
+      const { authEvidencePresent, hasAuthEvidence } = await import('../harness/accounts/auth-files.js');
+      if (!hasAuthEvidence(harness) || !await authEvidencePresent(harness, {}).catch(() => false)) return undefined;
+      const { deriveAccountLabel } = await import('../harness/accounts/labels.js');
+      return await deriveAccountLabel(harness, undefined).catch(() => undefined) ?? harness.displayName;
+    },
     efforts: async (harness, account, model) => (harnessSupportsEffort(harness)
       ? (await (await import('../harness/accounts/effort-choices.js')).effortChoicesFor(harness, account, model).catch(() => undefined))?.values
       : undefined),
@@ -173,9 +183,12 @@ export async function planImport(state: HarnessState, chat: ChatExport, facts: M
       const { signedInAccountId } = await import('../commands/ai/preferred-account.js');
       const other = signedInAccountId(state, harness.provider);
       account = other ? state.accounts.find((item) => item.id === other) : undefined;
-      if (wanted.account) {
-        changes.push(account
-          ? `account ${wanted.account} is not signed in there; using ${account.label}.`
+      // Signed in with the vendor there, with no account in ClikCode yet: that one.
+      const onDisk = account || ofProvider.length ? undefined : await facts.vendorSignIn(harness);
+      const using = account?.label ?? onDisk;
+      if (wanted.account && !(using && sameAccount({ label: using }, wanted.account))) {
+        changes.push(using
+          ? `account ${wanted.account} is not signed in there; using ${using}.`
           : `account ${wanted.account} is not signed in there; the first message there signs in.`);
       }
     }

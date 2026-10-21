@@ -46,7 +46,7 @@ const exported = (fields: Partial<ChatExport['settings']> = {}): ChatExport => (
 
 let home: string;
 const facts = (overrides: Partial<MoveFacts> = {}): MoveFacts => ({
-  installed: async () => true, gatewaySignedIn: () => false, efforts: async () => undefined, home: () => home, ...overrides,
+  installed: async () => true, gatewaySignedIn: () => false, vendorSignIn: async () => undefined, efforts: async () => undefined, home: () => home, ...overrides,
 });
 
 /** Each machine its own state. */
@@ -90,6 +90,13 @@ describe('what the machine it goes to keeps', () => {
     const plan = await planImport(state([]), exported(), facts());
     expect(plan.session.accountId).toBeNull();
     expect(plan.changes).toEqual(['account justin@webpro.ai is not signed in there; the first message there signs in.']);
+  });
+
+  it('takes the vendor’s own sign-in there for the account ClikCode has not made yet', async () => {
+    const same = await planImport(state([]), exported(), facts({ vendorSignIn: async () => 'justin@webpro.ai' }));
+    expect(same.changes).toEqual([]);
+    const other = await planImport(state([]), exported(), facts({ vendorSignIn: async () => 'root@prod' }));
+    expect(other.changes).toEqual(['account justin@webpro.ai is not signed in there; using root@prod.']);
   });
 
   it('keeps permissions only within what that machine allows: Bypass as root is Auto', async () => {
