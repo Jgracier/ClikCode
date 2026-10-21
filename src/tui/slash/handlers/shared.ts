@@ -29,6 +29,8 @@ export const sendSessionTurn = (id: string, prompt: string): Promise<void> => (
 /** A setting changed: stamp the session, store the state, and show the
  * settings panel -- in the terminal, the status line it re-renders. */
 export async function saveSettings(state: HarnessState, session: HarnessSession): Promise<void> {
+  // A chat that moved to another machine goes on there: this copy's settings are not its any more.
+  if (session.movedTo) throw new Error(`This chat moved to ${session.movedTo.machine}; change its settings there.`);
   session.updatedAt = new Date().toISOString();
   await writeState(state);
   return emitHarnessOutput({ panel: 'settings', session, account: state.accounts.find((item) => item.id === session.accountId)?.label });

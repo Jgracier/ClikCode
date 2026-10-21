@@ -20,7 +20,7 @@ import { stripResourceNotes } from './resource-note-text.js';
 /** Opening line of every transfer prompt; the marker that identifies one. A
  * statement of fact about the text that follows, not an instruction: the
  * model is told nothing about what to do with the conversation. */
-export const FAILOVER_PREAMBLE = 'Earlier in this chat (carried over from another account or provider):';
+export const FAILOVER_PREAMBLE = 'Earlier in this chat (carried over from another account, provider or machine):';
 
 /** Preambles ClikCode wrote before, still recognized in vendor transcripts
  * recorded with them. */
