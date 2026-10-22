@@ -144,6 +144,16 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
           apply: (value: string) => idle.own.setOwnModelIdleMinutes(Number(value), { config }).then(() => undefined),
         },
       }] : []),
+      ...(idle ? [{
+        label: 'Start private models without asking',
+        detail: idle.own.alwaysStartOwnModels(config) ? 'On · saved on this machine' : 'Off · ask before waking a sleeping model',
+        value: 'own-model-start-confirmation',
+        inline: {
+          choices: [{ label: 'Off', value: 'off' }, { label: 'On', value: 'on' }],
+          current: idle.own.alwaysStartOwnModels(config) ? 'on' : 'off',
+          apply: (value: string) => Promise.resolve(idle.own.setAlwaysStartOwnModels(value === 'on', config)),
+        },
+      }] : []),
       ...(harness && optionCount ? [{ label: `${harness.displayName} options`, detail: setOptions ? `${setOptions} set` : `${optionCount} available`, value: 'options' }] : []),
       ...(harness ? [{ label: 'Tools & integrations', detail: harnessManagers(harness).map(([, manager]) => manager.label).join(', ') || 'MCP servers', value: 'tools' }] : []),
     ];

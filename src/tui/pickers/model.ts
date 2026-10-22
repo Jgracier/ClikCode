@@ -9,6 +9,7 @@ import { isGatewayService } from '../../session/route.js';
 import { gatewayMakerName, gatewayModelsByMaker, gatewayModelDetail, gatewayModelLabel, gatewayModels, savedGatewayModels } from '../../gateway/models.js';
 import { gatewayAgents, type GatewayAgent } from '../../gateway/agents.js';
 import { gatewaySubscriptionsOn, setGatewaySubscriptions } from '../../gateway/subscriptions.js';
+import { alwaysStartOwnModels, setAlwaysStartOwnModels } from '../../gateway/own-models.js';
 import type { GatewayModelList } from '../../gateway/models.js';
 import { modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
 import { sessionOrProviderHarness } from '../slash/context.js';
@@ -251,6 +252,46 @@ async function gatewayModelPicker(rl: HarnessPrompter, id: string, current: stri
       currentAgent = selected.id === currentAgent ? undefined : selected.id;
       await selectGatewayAgent(id, currentAgent, agents.find((agent) => agent.id === currentAgent)?.name);
       continue;
+    }
+    const own = list.models.find((model) => model.id === selected.id)?.own;
+    if (own?.state === 'asleep') {
+      const config = new Conf({ projectName: 'clikcode', configFileMode: 0o600 });
+      if (!alwaysStartOwnModels(config)) {
+        const answer = await chooseOption(rl, `Start ${selected.id} privately?`, [
+          {
+            label: 'Yes, start private model',
+            detail: 'Uses credits by the hour while it runs; it may take a few minutes to start.',
+            value: 'start',
+          },
+          {
+            label: 'No, use a token-billed model',
+            detail: 'Choose a hosted Gateway model instead.',
+            value: 'hosted',
+          },
+          {
+            label: 'Always start private models',
+            detail: 'Remember this choice on this machine.',
+            value: 'always',
+          },
+        ]);
+        if (answer === 'hosted') {
+          const tokenModels = list.models
+            .filter((model) => !model.own && model.price && model.access !== 'subscription' && model.access !== 'free')
+            .map((model) => ({
+              label: gatewayModelLabel(model),
+              detail: gatewayModelDetail(model),
+              value: model.id,
+            }));
+          const hosted = await chooseOption(rl, 'Choose a token-billed Gateway model', tokenModels);
+          if (hosted) {
+            await aiSessionCommand(id, `/model ${hosted}`);
+            return;
+          }
+          continue;
+        }
+        if (answer === 'always') setAlwaysStartOwnModels(true, config);
+        else if (answer !== 'start') continue;
+      }
     }
     await aiSessionCommand(id, `/model ${selected.id}`);
     return;
