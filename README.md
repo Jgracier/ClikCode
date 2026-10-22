@@ -220,11 +220,12 @@ The board (← on an empty prompt) can show the chats on your other machines
 too: each machine is a section below this one's, with every chat's state —
 working, stalled, needs you, back at, or when it last changed — and anything
 that needs you, on any machine, pinned at the top. A machine that is offline
-stays listed, dimmed, with the chats it had when it was last seen. In this
-first step the list is for seeing what each machine is doing; opening a chat
-on another machine from here comes next.
+stays listed, dimmed, with the chats it had when it was last seen. Choosing a chat
+there opens it live on that machine; a chat is listed only on the machine it
+is on.
 
-`/remote` is where machines are added. It lists the ones you have added
+Machines are added from `/remote`, `/machine` or the board's Machines list
+(VS Code: the machine chip, or its history's Machines). Each lists the ones you have added
 (connected, offline, or needs update), then the machines
 [Tailscale](https://tailscale.com) knows that are yours — the same Tailscale
 login as this machine, Linux, macOS or Windows, seen in the last 30 days, one
@@ -236,8 +237,8 @@ It is built on plain SSH. Tailscale only finds the machines and names them,
 and where Tailscale SSH is on, logging in needs no keys; anywhere else your
 SSH keys or agent do. ClikCode never asks for or handles a password
 (`ssh -o BatchMode=yes`), sends no secrets, and opens no port on either
-machine: the board talks to the other machine's own ClikCode over the SSH
-connection, and only while the board or `/remote` is open.
+machine: the window talks to the other machine's own ClikCode over one SSH
+connection per machine, closed with the window.
 
 Choosing a machine installs ClikCode there, fresh from GitHub `main`, a step at
 a time in your chat:
@@ -254,8 +255,10 @@ a time in your chat:
    `~/.local/bin/clikcode`;
 6. the new `~/.local/bin/clikcode` asked for its version and installation id.
 
-If the machine refuses the login, `/remote` asks once which user to log in as
-(the `User` from `~/.ssh/config`, else yours, by default) and remembers it.
+Tailscale gives the address; the one thing it cannot know is the user to log
+in as, so adding a machine asks that first (the `User` from `~/.ssh/config`,
+else yours, offered as the default; `root` and any other name are a choice
+away) and remembers it. A refused login asks once more.
 Nothing is copied from this machine — no accounts, sign-ins or settings: the
 other machine signs in to its providers from scratch, in its own chats.
 Windows machines are listed but not supported yet.
@@ -361,7 +364,7 @@ and `--debug` adds the stack and HTTP detail when something fails.
 Most of the time you will not type any of those. You will be in a session,
 where everything is a slash away.
 
-Pressing `/` opens a searchable list of ClikCode's 47 commands. Ten are pinned
+Pressing `/` opens a searchable list of ClikCode's 48 commands. Ten are pinned
 at the top, in the order people reach for them: resume a conversation, pick a
 tool, an account on it, then its model, start over, change what needs your
 approval, then settings, sessions, status and help. (The terminal leaves
@@ -461,6 +464,7 @@ Command Code and Auggie get it as their own option.
 | `/archive` | archive this conversation |
 | `/delete [confirm]` | delete this conversation |
 | `/remote` | your other machines on the board: add one (ClikCode installs there over SSH), update or remove it ([ClikCode Remote](#your-other-machines-clikcode-remote)) |
+| `/machine` | move this chat to another machine — this one, one added, or one on your tailnet (added first) ([ClikCode Remote](#your-other-machines-clikcode-remote)) |
 
 **Info**
 
