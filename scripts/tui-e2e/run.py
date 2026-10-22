@@ -364,6 +364,27 @@ SCENARIOS = {
         'watch': ['The build passed.', 'Second answer arrives here.'],
         'no_clear_after_type': True,
     },
+    # A turn with a checklist: stepping out to the board mid-turn takes the
+    # checklist with the turn. It used to stay drawn under the board, with no
+    # turn, pushing the board's top rows -- Working, the chat just left -- off
+    # the screen. Back in the chat, the checklist is there again.
+    'board-leaves-turn-plan': {
+        'turns': [{'blocks': ['First chat answered.']},
+                  {'emits': [{'op': 'text', 'text': 'Working through the list.\n\n', 'ms': 5},
+                             {'op': 'plan', 'entries': [{'content': f'PLANSTEP{n} item', 'status': 'completed' if n < 3 else 'in_progress' if n == 3 else 'pending'} for n in range(1, 9)]},
+                             {'op': 'sleep', 'ms': 20000}, {'op': 'text', 'text': 'List finished.', 'ms': 5}]}],
+        'steps': [
+            ('type', 'hello'), ('wait_for', 'First chat answered.', 30), ('settle', 2),
+            ('keys', '\x1b[D'), ('settle', 2), ('type', 'work the list'), ('wait_for', 'PLANSTEP3 item', 30), ('settle', 2),
+            ('keys', '\x1b[D'), ('settle', 3), ('snap', 'board'),
+            ('keys', '\x1b[C'), ('settle', 3), ('snap', 'back'),
+            ('wait_for', 'List finished.', 40), ('settle', 2),
+        ],
+        'watch': ['List finished.'],
+        'snap_contains': {'board': ['Working', 'Recent'], 'back': ['PLANSTEP3 item']},
+        'snap_lacks': {'board': ['PLANSTEP']},
+        'no_clear_after_type': True,
+    },
     'board-back-into-running-turn': {
         # Chat B runs a long turn; the window steps out to chat A through the
         # board and comes back to B while that turn still runs. It must follow
@@ -385,7 +406,7 @@ SCENARIOS = {
         ],
         'watch': ['The build passed.', 'Second answer arrives here.'],
         # The board, on the running chat: its one state, and the footer's keys for it.
-        'snap_contains': {'board1': ['Working', 'working', '2 agents', 'Recent', 'enter open · tab options · del delete · ← close']},
+        'snap_contains': {'board1': ['Working', 'working', '2 agents', 'Recent', 'enter open · tab options · del delete · ← machines']},
         # A running sub-agent's title already says it is one.
         'ever': ['Agent worker 0'], 'never': ['agent Agent'],
         'no_clear_after_type': True,
