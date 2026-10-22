@@ -256,7 +256,7 @@ def remote_fake(commit=None, host_options=None):
     return setup
 
 
-def remote_move(latency_ms=0, count_bytes=False, remote_signed_in=True):
+def remote_move(latency_ms=0, count_bytes=False, remote_signed_in=True, remote_env=None):
     """`setup` for moving a chat to another machine (/machine): the fake `ssh`
     (fake-ssh.mjs) and one fake machine, `devbox`, already added, running THIS
     build's real ClikCode (its bridge, its worker, its turns) in a HOME, user
@@ -284,7 +284,7 @@ def remote_move(latency_ms=0, count_bytes=False, remote_signed_in=True):
         made = json.loads(subprocess.check_output(['node', os.path.join(fakes, 'fake-remote.mjs'), 'host', world_root, target, json.dumps({'env': {
             'FAKE_TURNS': json.dumps([{'blocks': ['Answered on devbox.']}, {'blocks': ['Second answer on devbox.']}, {'blocks': ['Third answer on devbox.']}]),
             'FAKE_STATE': os.path.join(context['root'], 'remote-turn-counter'), 'FAKE_PROMPT_LOG': os.path.join(context['root'], 'remote-prompts.log'),
-            'FAKE_FAMILY': 'claude',
+            'FAKE_FAMILY': 'claude', **(remote_env or {}),
         }, **({'latencyMs': latency_ms} if latency_ms else {}), **({'countBytes': True} if count_bytes else {})})]))
         remote_home, remote_bin = made['home'], made['bin']
         shutil.copy(os.path.join(fakes, 'fake-grok.mjs'), os.path.join(remote_bin, 'grok'))
@@ -895,6 +895,23 @@ SCENARIOS = {
                           'answered': ['where are you now', 'Answered on devbox.']},
         'snap_lacks': {'answered': ['did not finish', 'not signed in']},
         'never': ['ENOENT', 'not a tty', 'Grok Build accounts', 'did not finish'],
+    },
+    # A message that cannot reach its turn on the other machine (its worker will
+    # not start there): it is drawn on Enter, then put back in the message box,
+    # and why is said -- not wiped with the wait it was drawn in.
+    'remote-send-fails-back': {
+        'setup': remote_move(remote_env={'CLIKCODE_WORKER_ENTRY': '/nonexistent/clikcode.js'}), 'startup': 4,
+        'no_dup_check': 'the transcript is drawn again on the other machine',
+        'turns': [{'blocks': ['First answer here.']}],
+        'steps': [
+            ('type', 'hello there'), ('wait_for', 'First answer here.', 30), ('settle', 1),
+            ('type', '/machine'), ('wait_for', 'Move this chat to', 30), ('wait_for', 'devbox', 10), ('settle', 1),
+            ('keys', '\x1b[B'), ('keys', '\r'), ('wait_for', 'devbox  •', 60), ('settle', 3),
+            ('type', 'where are you now'), ('wait_for', 'thinking', 10), ('wait_for_gone', 'thinking', 40), ('settle', 2), ('snap', 'back'),
+        ],
+        'watch': [],
+        'snap_contains': {'back': ['› where are you now', 'worker']},
+        'never': ['ENOENT'],
     },
     # A chat on a machine whose ClikCode is another build: said once on opening it, with where
     # to update it. Nothing is updated without the user.

@@ -258,11 +258,17 @@ export async function runRemoteChat(
     /** It never became a turn (stopped first, refused, a steer, a lost
      * connection): off the screen again; what goes back to the composer
      * came with the bridge's restore-draft. */
+    /** Notices that came while a message drawn early had not begun: shown once
+     * its wait ends (or the turn begins), not drawn into a wait that is then taken
+     * down -- which wiped why the message failed. */
+    let held: string[] = [];
+    const flushHeld = (): void => { const notes = held; held = []; for (const note of notes) terminal.activity(note); };
     const dropEarly = (): void => {
       if (early === undefined) return;
       early = undefined;
       terminal.submitted(undefined);
       if (!running && terminal.turn) terminal.stopWaiting();
+      flushHeld();
     };
     const completions = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
     const promptController = new AbortController();
@@ -305,6 +311,7 @@ export async function runRemoteChat(
           early = undefined;
           running = true;
           beginWaiting(event.prompt);
+          flushHeld();
           return;
         case 'worker': {
           const worker = event.event;
@@ -365,7 +372,10 @@ export async function runRemoteChat(
           return;
         }
         case 'usage': terminal.usage(event.label, event.reset); return;
-        case 'notice': terminal.activity(event.message); return;
+        case 'notice':
+          if (early !== undefined && !running) { held.push(event.message); return; }
+          terminal.activity(event.message);
+          return;
         case 'panel': terminal.panel(event.title, event.body); return;
         case 'restore-draft': terminal.restoreDraft(event.text); return;
         case 'send-complete': if (completions.has(event.id)) dropEarly(); completions.get(event.id)?.resolve(); completions.delete(event.id); return;
