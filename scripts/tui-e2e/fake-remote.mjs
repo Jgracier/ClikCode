@@ -135,7 +135,8 @@ export function host(root, name, options = {}) {
   chmodSync(join(bin, 'npx'), 0o755);
   writeFileSync(join(machine, 'config.json'), JSON.stringify({
     ...(options.users ? { users: options.users } : {}), ...(options.offline ? { offline: true } : {}), ...(options.windows ? { windows: true } : {}),
-    ...(options.env ? { env: options.env } : {}),
+    ...(options.env ? { env: options.env } : {}), ...(options.latencyMs ? { latencyMs: options.latencyMs } : {}),
+    ...(options.countBytes ? { countBytes: true } : {}),
   }));
   writeFileSync(join(home, '.fake-remote', 'chats.json'), JSON.stringify(options.chats ?? []));
   if (options.commit) writeFileSync(join(home, '.fake-remote', 'commit'), options.commit);

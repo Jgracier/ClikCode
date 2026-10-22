@@ -8,6 +8,10 @@
  *   { "users": ["bob"] }   only these users may log in (else Permission denied)
  *   { "offline": true }    the connection times out
  *   { "windows": true }    the login shell is cmd.exe: `sh` is not recognized
+ *   { "latencyMs": n }     what the machine sends back arrives n ms late (a
+ *                          slow link), in order
+ *   { "countBytes": true } each chunk the machine sends back is counted: its
+ *                          length, one line per chunk, in <machine>/bytes.log
  *
  * The remote command (everything after the target, joined by spaces as ssh
  * does) runs under /bin/sh -c in that HOME, with that HOME, USER, PWD and PATH
@@ -73,13 +77,23 @@ if (inside(home, process.env.HOME) || inside(process.env.HOME, home)) {
   process.stderr.write(`fake ssh: ${host}'s HOME (${home}) and the client's (${process.env.HOME}) must be apart: two machines do not share a home\n`);
   process.exit(254);
 }
+const latency = Number(config.latencyMs) || 0;
+const piped = latency > 0 || Boolean(config.countBytes);
 const child = spawn('/bin/sh', ['-c', command || 'exit 0'], {
-  stdio: 'inherit',
+  stdio: piped ? ['inherit', 'pipe', 'inherit'] : 'inherit',
   cwd: home,
   env: {
     HOME: home, USER: user, LOGNAME: user, PWD: home, PATH: join(machine, 'bin'), TMPDIR: join(machine, 'tmp'), LANG: 'C',
     FAKE_MACHINE: machine, FAKE_MACHINE_NAME: host.split('.')[0], ...(config.env ?? {}),
   },
 });
-child.on('exit', (code, signal) => process.exit(code ?? (signal ? 255 : 0)));
+if (piped) {
+  child.stdout.on('data', (chunk) => {
+    if (config.countBytes) appendFileSync(join(machine, 'bytes.log'), `${chunk.length}\n`);
+    if (latency) setTimeout(() => process.stdout.write(chunk), latency);
+    else process.stdout.write(chunk);
+  });
+  // What is still on its way arrives before the connection closes.
+  child.on('close', (code, signal) => setTimeout(() => process.stdout.write('', () => process.exit(code ?? (signal ? 255 : 0))), latency + 5));
+} else child.on('exit', (code, signal) => process.exit(code ?? (signal ? 255 : 0)));
 for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, () => child.kill(signal));
