@@ -13,7 +13,7 @@ import { BOARD_COMMANDS, BOARD_LINE } from '../commands/ai/interactive/board.js'
 import { bridgeScript, remoteTerminalScript } from './install.js';
 import { readMachines, updatePolicy, type RemoteMachine } from './machines.js';
 import { autoUpdates, localBuildCommit, pinnedUpdateLine } from './updates.js';
-import { needsUpdate } from './connection.js';
+import { needsUpdate, reconnectWindowMachine } from './connection.js';
 import { spawnSsh, sshArgv } from './ssh.js';
 import type { LiveTurnInputResult } from '../turn/live-input.js';
 import type { SignInScreen } from '../gateway/login/vendor-sign-in.js';
@@ -288,9 +288,13 @@ export async function runRemoteChat(
       if (bridge.outdated && !rejoining) {
         const started = await autoUpdates.consider(machine).catch(() => undefined);
         terminal.activity(outdatedNotice(machine, Boolean(started)));
-        void started?.done.then((outcome) => terminal.activity(outcome.ok
-          ? `ClikCode on ${machine.name} is updated${outcome.info.commit ? ` to ${outcome.info.commit.slice(0, 8)}` : ''}; its chats switch over once they are quiet.`
-          : `Updating ClikCode on ${machine.name} failed: ${outcome.message} Type /update to update it.`), () => undefined);
+        void started?.done.then((outcome) => {
+          // The window's connection there (the board's) goes to the new build.
+          if (outcome.ok) reconnectWindowMachine(machine.id);
+          terminal.activity(outcome.ok
+            ? `ClikCode on ${machine.name} is updated${outcome.info.commit ? ` to ${outcome.info.commit.slice(0, 8)}` : ''}; its chats switch over once they are quiet.`
+            : `Updating ClikCode on ${machine.name} failed: ${outcome.message} Type /update to update it.`);
+        }, () => undefined);
       }
       // A chat that moved on from there: offered where it went (it is read-only there).
       if (!rejoining && session?.movedTo) {
@@ -330,11 +334,15 @@ export async function runRemoteChat(
         bridge.post({ type: 'send', text: pinnedUpdateLine(line, localBuildCommit()), id });
         await complete;
         sending = undefined;
+        // /update ran there: the window's connection there (the board's) goes to the build it installed.
+        if (parseSlashInput(line)?.head === 'update') reconnectWindowMachine(machine.id);
         if (lastError) { terminal.activity(lastError.message); lastError = undefined; }
       }
     } catch (error) {
       if (!bridge.retiring) throw error;
       rejoining = true;
+      // A newer build there: the window's connection to it goes to that build too.
+      reconnectWindowMachine(machine.id);
       // Sent as it left: a bridge leaving takes nothing more, so the line was
       // never run. Back in the composer, for Enter on the new build.
       if (sending !== undefined) draft = sending;
