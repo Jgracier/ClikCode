@@ -255,6 +255,11 @@ describe('a move between two machines', () => {
     expect(conversationRows(read.sessions).map((row) => row.latest.id)).toEqual(['s6']);
     const { chatNamed, latestChat } = await import('./options.js');
     expect(chatNamed(read.sessions, 'Moved one', 'other')).toBeUndefined();
+    // By its id it is still found: opening it opens the live chat (move-terminal.ts liveChat).
+    expect(chatNamed(read.sessions, 's4', 'other')).toBeUndefined();
+    const copy = read.sessions.find((item) => item.id === 's4')!;
+    expect(copy.movedTo).toBeDefined();
+    expect(chatNamed([{ ...copy, id: 'moved-1234' }], 'moved-12', 'other')).toBe('moved-1234');
     expect(latestChat(read.sessions, '/home/me/project')?.id).toBe('s6');
     const { conversationGroups } = await import('../search/conversations.js');
     expect((await conversationGroups()).map((group) => group.id)).toEqual(['c6']);
