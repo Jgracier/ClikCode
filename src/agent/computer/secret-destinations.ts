@@ -144,13 +144,24 @@ const say = (text: string): string => {
   return text.trim().split('\n').slice(-3).join(' ').slice(0, 300);
 };
 
+/** The first JSON object in a command's output, whatever the command printed around it (a warning before it, a hint after it). */
+export function firstJsonObject<T>(text: string): T | undefined {
+  for (let at = text.indexOf('{'); at >= 0; at = text.indexOf('{', at + 1)) {
+    if (at > 0 && text[at - 1] !== '\n') continue; // a real object starts a line; braces inside a sentence do not
+    try { const value = JSON.parse(text.slice(at)) as unknown; if (value && typeof value === 'object') return value as T; } catch { /* try the next line start */ }
+    // Output followed by more text: take up to the last closing brace.
+    const end = text.lastIndexOf('}');
+    if (end > at) { try { const value = JSON.parse(text.slice(at, end + 1)) as unknown; if (value && typeof value === 'object') return value as T; } catch { /* keep looking */ } }
+  }
+  return undefined;
+}
+
 type Shown = { status?: string; message?: string; data?: { connection?: { status?: string } | null; accounts?: { status?: string }[] } };
 /** Whether ClikDeploy now holds an active connection for the connector: asked of ClikDeploy, not read from the connect command's output. */
 async function connectionState(integration: string, signal?: AbortSignal): Promise<{ connected: boolean; reason?: string }> {
   const shown = await runCli('clikdeploy', ['integrations', 'show', integration], { signal, timeoutMs: 60_000, maxChars: 4_000_000 });
   if (shown.missing) return { connected: false, reason: 'the clikdeploy command is not installed on this computer' };
-  let parsed: Shown | undefined;
-  try { parsed = JSON.parse(shown.text.slice(Math.max(0, shown.text.indexOf('{')))) as Shown; } catch { /* not JSON */ }
+  const parsed = firstJsonObject<Shown>(shown.text);
   if (!parsed) return { connected: false, reason: `could not read the connection back (${say(shown.text) || 'no answer'})` };
   if (parsed.status === 'error') return { connected: false, reason: `could not read the connection back (${(parsed.message ?? 'error').split('\n')[0]})` };
   const statuses = [parsed.data?.connection?.status, ...(parsed.data?.accounts ?? []).map(account => account.status)].filter(Boolean);
@@ -189,7 +200,9 @@ export async function sendToDestinations(stateDir: string, list: readonly Destin
       out.push(state.connected && !failed ? { label, ok: true, message: 'connected' } : { label, ok: false, message: `NOT connected: ${scrubSecrets(reason || 'no active connection found after connecting')}` });
       continue;
     }
-    out.push({ label, ok: result.code === 0, message: scrubSecrets(say(result.text)) });
+    const ok = result.code === 0;
+    // Never an empty tail: a delivery always says something a person can act on.
+    out.push({ label, ok, message: scrubSecrets(say(result.text)).trim() || (ok ? 'delivered (the command succeeded and printed nothing)' : `failed (exit ${result.code ?? 'none'}, the command printed nothing)`) });
   }
-  return out;
+  return out.map(delivery => delivery.message.trim() ? delivery : { ...delivery, message: delivery.ok ? 'delivered' : 'NOT delivered: no reason was given' });
 }

@@ -228,3 +228,25 @@ it('the basic-auth connection destination is verified the same way, with the use
   expect(result).toMatchObject({ ok: true, message: 'connected' });
   expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toEqual({ integrationId: 'cloudmersive-ocr', username: 'ada', password: VALUE });
 });
+
+it('reads the real `integrations show` shape (a long document) even with a warning before it and a hint after it', async () => {
+  const real = pretty({ status: 'success', command: 'integrations show', data: { id: 'ipinfo', auth: { kind: 'api-key', apiKey: { placement: 'header' } }, consumes: [{ event: 'x', schema: { ip: { type: 'string' } }, tests: [{ input: { ip: '8.8.8.8' } }] }], trust: { level: 'reachable' },
+    connection: { id: 'c9', accountKey: '', accountLabel: null, status: 'active', scope: null }, accounts: [{ id: 'c9', status: 'active' }] } });
+  await fakeConnect(pretty({ status: 'success' }), `warning: update available {run npm i}\n${real}\nTip: run clikdeploy --help\n`);
+  expect(await sendKey()).toEqual([{ label: 'clikdeploy-connection (cloudmersive-ocr)', ok: true, message: 'connected' }]);
+});
+
+it('a delivery never ends in an empty tail, whichever way the command ends', async () => {
+  await fake('clikdeploy', 'cat >/dev/null; exit 0');
+  const [quiet] = await sendToDestinations(dir, [{ to: 'clikdeploy-secret', with: { key: 'K' } }], VALUE);
+  expect(quiet).toMatchObject({ ok: true });
+  expect(quiet!.message).not.toBe('');
+  await fake('clikdeploy', 'cat >/dev/null; exit 3');
+  const [failed] = await sendToDestinations(dir, [{ to: 'clikdeploy-secret', with: { key: 'K' } }], VALUE);
+  expect(failed).toMatchObject({ ok: false, message: 'failed (exit 3, the command printed nothing)' });
+  // The connection destinations too: a silent connect and a silent read-back still say why.
+  await fake('clikdeploy', 'cat >/dev/null; exit 0');
+  const [basic] = await sendToDestinations(dir, [{ to: 'clikdeploy-connection-basic', with: { integration: 'mux', username: 'ada' } }], VALUE);
+  expect(basic).toMatchObject({ ok: false });
+  expect(basic!.message).toMatch(/^NOT connected: could not read the connection back/);
+});
