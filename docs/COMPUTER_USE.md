@@ -110,6 +110,7 @@ send_to: { to: "clikdeploy-secret",  with: { key: "SALAD_API_KEY" } }
 send_to: { to: "clikdeploy-compute", with: { provider: "GCP", field: "serviceAccountJson" } }
 send_to: { to: "clikdeploy-connector", with: { integration: "googlesheets", client_id: "1234-abc.apps.googleusercontent.com" } }
 send_to: { to: "clikdeploy-connection", with: { integration: "acme" } }
+send_to: { to: "clikdeploy-connection", with: { integration: "algolia" }, connectionValues: { app_id: "WJUQDEJ3SG" } }  // base URL needs a per-account value
 send_to: [ ...several of those... ]
 ```
 

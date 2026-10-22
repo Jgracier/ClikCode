@@ -15,7 +15,9 @@ import { runCli } from './run-cli.js';
 import { namedSecretNames, readNamedSecret } from './credential-vault.js';
 import { scrubSecrets } from './secret-scrubber.js';
 
-export type Destination = { to: string; with?: Record<string, string> };
+/** `connectionValues`: for the two ClikDeploy connection destinations, the per-account values a connector's base URL needs
+ * ({app_id: "WJUQDEJ3SG"}); sent to ClikDeploy's connect route as `baseUrlVariables`. Not secrets. */
+export type Destination = { to: string; with?: Record<string, string>; connectionValues?: Record<string, string> | string };
 /** `vaultSlots`: slots whose value may be `secret:<saved name>`, read from the vault when it is sent, so the agent
  * never sees it. For a value that is not a secret but looks like one to every filter (an OAuth client id). */
 type Template = { run: string[]; stdin?: string; about?: string; vaultSlots?: string[];
@@ -60,6 +62,25 @@ const NAME = /^[a-z][a-z0-9-]{1,40}$/;
 /** A slot value goes into a command line: no quotes, no leading dash that a program could read as a flag. */
 const SAFE_VALUE = /^[A-Za-z0-9_][\w.@:/ -]{0,119}$/;
 const VAULT_REF = /^secret:([A-Za-z0-9][\w./-]{0,80})$/;
+const VALUE_NAME = /^[A-Za-z_][\w-]{0,40}$/;
+const VALUE_TEXT = /^[A-Za-z0-9][\w.-]{0,119}$/;
+
+/** The connection values as a plain map, or the problem with them. A harness may hand the map over as JSON text. */
+function readConnectionValues(raw: unknown): { values?: Record<string, string>; problem?: string } {
+  if (raw === undefined || raw === null || raw === '') return {};
+  let map: unknown = raw;
+  if (typeof map === 'string') { try { map = JSON.parse(map) as unknown; } catch { return { problem: 'connectionValues must be a map such as {"app_id":"WJUQDEJ3SG"}.' }; } }
+  if (!map || typeof map !== 'object' || Array.isArray(map)) return { problem: 'connectionValues must be a map such as {"app_id":"WJUQDEJ3SG"}.' };
+  const values: Record<string, string> = {};
+  for (const [name, value] of Object.entries(map as Record<string, unknown>)) {
+    if (!VALUE_NAME.test(name)) return { problem: `connectionValues has a name "${name.slice(0, 41)}" that is not a plain identifier.` };
+    if (typeof value !== 'string' || !VALUE_TEXT.test(value)) return { problem: `connectionValues.${name} must be letters, digits, dot, dash or underscore (no spaces or slashes).` };
+    values[name] = value;
+  }
+  return { values };
+}
+const takesConnectionValues = (template: Template): boolean => template.verify === 'connection';
+
 const SLOT = /\{\{([a-z][a-z0-9_]*)(\|json)?\}\}/g;
 
 export const destinationsFile = (stateDir: string): string => path.join(stateDir, 'computer', 'destinations.json');
@@ -109,6 +130,11 @@ export async function destinationProblem(stateDir: string, list: readonly unknow
     if (!d || typeof d !== 'object' || typeof d.to !== 'string') return `${at} needs {to: "<destination>", with: {...}}. ${EXAMPLE}`;
     const template = all[d.to];
     if (!template) return `${at}: no destination named "${d.to}". Known: ${describeKnown(all)}. The user adds more with \`clikcode computer destination add\`. ${EXAMPLE}`;
+    if (d.connectionValues !== undefined) {
+      if (!takesConnectionValues(template)) return `${at}: connectionValues only goes with clikdeploy-connection or clikdeploy-connection-basic, not "${d.to}".`;
+      const read = readConnectionValues(d.connectionValues);
+      if (read.problem) return `${at}: ${read.problem}`;
+    }
     const saved = template.vaultSlots?.length ? await namedSecretNames(stateDir).catch(() => [] as string[]) : [];
     for (const slot of slotsOf(template)) {
       const value = d.with?.[slot];
@@ -188,8 +214,13 @@ export async function sendToDestinations(stateDir: string, list: readonly Destin
     }
     if (unreadable) { out.push({ label, ok: false, message: unreadable }); continue; }
     const [program, ...args] = template.run.map(part => fill(part, params, value));
+    // Base-URL values (Algolia's app_id) ride in the same JSON as the key, under the name ClikDeploy's connect route reads.
+    let stdin = template.stdin !== undefined ? fill(template.stdin, params, value) : undefined;
+    const extra = takesConnectionValues(template) ? readConnectionValues(d.connectionValues) : {};
+    if (extra.problem) { out.push({ label, ok: false, message: `NOT connected: ${extra.problem}` }); continue; }
+    if (stdin !== undefined && extra.values && Object.keys(extra.values).length) stdin = JSON.stringify({ ...(JSON.parse(stdin) as Record<string, unknown>), baseUrlVariables: extra.values });
     // A value goes to the program on stdin when the template says so: then it is in no command line.
-    const result = await runCli(program!, args, { ...(template.stdin !== undefined ? { stdin: fill(template.stdin, params, value) } : {}), signal, timeoutMs: 90_000 });
+    const result = await runCli(program!, args, { ...(stdin !== undefined ? { stdin } : {}), signal, timeoutMs: 90_000 });
     if (result.missing) { out.push({ label, ok: false, message: `The ${program} command is not installed on this computer.` }); continue; }
     if (template.verify === 'connection' && params.integration) {
       // One line, whatever the command printed: `connected` only when ClikDeploy itself lists an active connection.
