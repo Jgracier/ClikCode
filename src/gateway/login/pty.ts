@@ -12,6 +12,11 @@
  * The typescript file is always /dev/null: the live stream is the point, and
  * BSD script does not flush that file until exit anyway.
  */
+import { execFileSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import { closeSync, constants, openSync, rmSync, write } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { spawnPortable as spawn, terminatePortable } from '../../harness/transport/spawn.js';
 
 /** Single-quote for `sh -c`, the only form util-linux script accepts. */
@@ -44,6 +49,37 @@ export function scriptArgv(
   return ['-q', '-e', '-f', '-c', `${SIZED} ${shellQuote([binary, ...args])}`, '/dev/null'];
 }
 
+/** What to spawn for a command down a pty, or undefined where there is no
+ * `script` (Windows). */
+export function ptyCommand(
+  binary: string, args: readonly string[], platform: NodeJS.Platform = process.platform,
+): { file: string; argv: readonly string[] } | undefined {
+  const argv = scriptArgv(binary, args, platform);
+  return argv ? { file: 'script', argv } : undefined;
+}
+
+/** macOS: `script` refuses an input that is a socket -- tcgetattr on it is
+ * EOPNOTSUPP, not the ENOTTY it accepts, and it exits 1 with "script:
+ * tcgetattr/ioctl: Operation not supported on socket" -- and Node's child
+ * stdio pipes are sockets (libuv's socketpair). Seen live: every Claude Code
+ * sign-in a chat on a Mac started failed in 15 ms. So there its input is a
+ * real pipe: a FIFO this process opens read-write (so the open never blocks),
+ * unlinks at once (the open ends keep it), hands to `script` as its stdin,
+ * and writes what ClikCode types into. util-linux script takes a socket, so
+ * elsewhere it is Node's own pipe. */
+function realPipe(): { fd: number; write(text: string): void; close(): void } {
+  const path = join(tmpdir(), `clikcode-pty-${process.pid}-${randomBytes(6).toString('hex')}`);
+  execFileSync('mkfifo', ['-m', '600', path]);
+  let fd: number;
+  try { fd = openSync(path, constants.O_RDWR); } finally { rmSync(path, { force: true }); }
+  let open = true;
+  return {
+    fd,
+    write: (text) => { if (open) write(fd, text, () => { /* fail-open-ok: the vendor already exited */ }); },
+    close: () => { if (open) { open = false; closeSync(fd); } },
+  };
+}
+
 interface PtyResult {
   /** False when this platform has no `script` (Windows); the caller runs the
    * vendor on plain pipes instead. */
@@ -64,11 +100,12 @@ export async function runInPty(input: {
   signal?: AbortSignal;
   platform?: NodeJS.Platform;
 }): Promise<PtyResult> {
-  const argv = scriptArgv(input.binary, input.args, input.platform);
-  if (!argv) return { teed: false, exitCode: null };
+  const command = ptyCommand(input.binary, input.args, input.platform);
+  if (!command) return { teed: false, exitCode: null };
+  const pipe = (input.platform ?? process.platform) === 'darwin' ? realPipe() : undefined;
   return new Promise<PtyResult>((resolve, reject) => {
-    const child = spawn('script', [...argv], {
-      stdio: ['pipe', 'pipe', 'pipe'],
+    const child = spawn(command.file, [...command.argv], {
+      stdio: [pipe?.fd ?? 'pipe', 'pipe', 'pipe'],
       // A terminal of a known kind: under ClikCode's own TERM=dumb (a
       // script, a test) some vendors draw differently, or not at all.
       env: { ...process.env, ...(!process.env.TERM || process.env.TERM === 'dumb' ? { TERM: 'xterm-256color' } : {}), ...input.env },
@@ -76,7 +113,7 @@ export async function runInPty(input: {
     // Writing after the vendor has gone is not an error: it finished (a
     // browser callback, say) before the user answered.
     child.stdin?.on('error', () => { /* fail-open-ok: vendor already exited */ });
-    input.onStdin((text: string) => { child.stdin?.write(text); });
+    input.onStdin((text: string) => { if (pipe) pipe.write(text); else child.stdin?.write(text); });
     child.stdout?.setEncoding('utf8');
     child.stderr?.setEncoding('utf8');
     const read = (chunk: string): void => {
@@ -91,6 +128,7 @@ export async function runInPty(input: {
     process.once('SIGTERM', stop);
     if (process.platform !== 'win32') process.once('SIGHUP', stop);
     const cleanup = (): void => {
+      pipe?.close();
       input.signal?.removeEventListener('abort', stop);
       process.off('SIGTERM', stop);
       if (process.platform !== 'win32') process.off('SIGHUP', stop);

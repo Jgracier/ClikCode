@@ -125,10 +125,11 @@ describe('what the machine it goes to keeps', () => {
     expect(plan.changes).toEqual(['model opus is not available there; using sonnet.', 'Effort high → medium.']);
   });
 
-  it('a provider not installed there is that machine’s own choice instead, said', async () => {
+  it('a provider not installed there stays the chat’s: its first turn installs it and signs in', async () => {
+    // That machine last ran Codex: the chat does not go to it.
     const plan = await planImport(state([chat({ id: 'there', conversationId: 'there', nativeHarness: 'codex', provider: 'openai', model: 'gpt-5' })]), exported(), facts({ installed: async () => false }));
-    expect(plan.session.nativeHarness).toBe('codex');
-    expect(plan.changes).toEqual(['Claude Code is not installed there; using Codex.']);
+    expect(plan.session).toMatchObject({ route: 'local', nativeHarness: 'claude', provider: 'anthropic', model: 'opus' });
+    expect(plan.changes).toEqual(['Claude Code is not installed there; the first message installs it and signs in.']);
   });
 
   it('ClikDeploy Gateway is kept where it is signed in, with its settings', async () => {
