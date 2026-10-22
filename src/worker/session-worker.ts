@@ -15,6 +15,8 @@
  * worker-live-commands (what windows send), worker-server (the socket) and
  * worker-shutdown.
  */
+import { createKeepWarm } from './cache-keepwarm.js';
+import { dropRetiredVendorMcp } from '../harness/retired-mcp.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import { LEGACY_INTERRUPTED_TURN_REQUEST } from '../turn/failover-prompt.js';
 import { statSync } from 'node:fs';
@@ -85,6 +87,9 @@ export async function runSessionWorker(sessionId: string, options: { warm?: bool
   // Deleted (or never stored) before this worker got here: nothing to run,
   // which is not a crash.
   if (!session) { lifecycle('worker.no-session'); return; }
+  // Profiles still naming removed ClikCode commands (conversations-mcp and
+  // the rest) are rewritten once. It does not wait on the turn.
+  void dropRetiredVendorMcp(stateDirectory()).catch((error: unknown) => lifecycle('mcp.retired', { error: error instanceof Error ? error.message.slice(0, 200) : String(error) }));
 
   // Two windows that both found no worker each spawn one: the second to get
   // here exits, and the spawning window finds the first by its record.
@@ -127,7 +132,7 @@ export async function runSessionWorker(sessionId: string, options: { warm?: bool
     idleTimer: undefined, activeController: undefined, activeLiveInput: undefined, activeSubmissions: undefined,
     activeRestoreDraft: undefined, submitsInFlight: 0, pendingCancel: undefined, stopAnnounced: false, resumingTurn: false, retireWhenIdle: false, recordWrite: Promise.resolve(),
     warming: undefined,
-  } as Omit<WorkerContext, 'vendorBackground' | 'outOfTurn' | 'resumeWaiter' | 'io' | 'idle' | 'queue' | 'runTurn' | 'shutdown' | 'server'> as WorkerContext;
+  } as Omit<WorkerContext, 'vendorBackground' | 'outOfTurn' | 'resumeWaiter' | 'keepWarm' | 'io' | 'idle' | 'queue' | 'runTurn' | 'shutdown' | 'server'> as WorkerContext;
   ctx.io = createWorkerIo(ctx);
 
   // --- Vendor background turns (persistent transports) -------------------
@@ -163,6 +168,7 @@ export async function runSessionWorker(sessionId: string, options: { warm?: bool
       if (!ctx.queue.startTurn({ type: 'submit', text, echo: true })) ctx.resumingTurn = false;
     },
   });
+  ctx.keepWarm = createKeepWarm({ sessionId, busy: () => ctx.turnRunning || ctx.draining, changed: () => ctx.idle.scheduleIdleExit() });
   ctx.queue = createWorkerQueue(ctx);
   ctx.runTurn = createTurnRunner(ctx);
   ctx.agentSession.onNotification = () => { void ctx.queue.deliverNotifications(); };

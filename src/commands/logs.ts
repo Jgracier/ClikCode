@@ -1,7 +1,7 @@
 /** `clikcode logs`: the lifecycle log (runtime/lifecycle-log.ts) read back --
  * every window, worker, bridge and command, in order, as lines a person can
  * read, or as the JSON records with --json. */
-import { createReadStream, existsSync, readFileSync, statSync, watch } from 'node:fs';
+import { closeSync, createReadStream, existsSync, openSync, readFileSync, readSync, statSync, watch } from 'node:fs';
 import { lifecycleLogPath } from '../runtime/lifecycle-log.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
 import { formatLatencyTable, medianLatencyByHarness, turnsLatency } from '../runtime/turn-latency.js';
@@ -40,15 +40,33 @@ function parse(line: string): Entry | undefined {
   } catch { return undefined; }
 }
 
+/** The end of a log, so the default hundred lines do not read both rotated
+ * files (about 20 MB) into one string. A cut line at the start is dropped. */
+function readTail(path: string, maxBytes: number): string {
+  if (!existsSync(path)) return '';
+  const size = statSync(path).size;
+  const start = size > maxBytes ? size - maxBytes : 0;
+  const fd = openSync(path, 'r');
+  try {
+    const buf = Buffer.alloc(size - start);
+    readSync(fd, buf, 0, buf.length, start);
+    const text = buf.toString('utf8');
+    return start > 0 ? text.slice(Math.max(0, text.indexOf('\n') + 1)) : text;
+  } finally { closeSync(fd); }
+}
+
 export async function showLogs(options: LogsOptions): Promise<void> {
   const path = lifecycleLogPath();
   const json = isJsonDefaultMode();
   const cutoff = sinceCutoff(options.since);
   const limit = Math.max(1, Number.parseInt(options.lines ?? '100', 10) || 100);
   const print = (entry: Entry): void => { process.stdout.write(`${json ? JSON.stringify(entry) : formatEntry(entry)}\n`); };
-  // The rotated file first: a --since reaching back past a rotation still
-  // finds what it is asking for.
-  const text = [`${path}.1`, path].filter((file) => existsSync(file)).map((file) => readFileSync(file, 'utf8')).join('');
+  // --since and --latency need the window. The default asks for the last
+  // lines, which are at the end of the current file.
+  const wantAll = Boolean(options.since || options.latency);
+  const text = wantAll
+    ? [`${path}.1`, path].filter((file) => existsSync(file)).map((file) => readFileSync(file, 'utf8')).join('')
+    : `${readTail(`${path}.1`, 256 * 1024)}${readTail(path, 512 * 1024)}`;
   const entries = text.split('\n').map(parse).filter((entry): entry is Entry => Boolean(entry) && matches(entry!, options, cutoff));
   if (!entries.length && !options.follow) {
     process.stderr.write(existsSync(path) ? 'No lifecycle records match.\n' : `No lifecycle log yet (${path}).\n`);

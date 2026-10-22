@@ -10,6 +10,7 @@ import { estimateContextTokens, DEFAULT_CONTEXT_WINDOW } from './context.js';
 import { classifyModelError, pause, retryDelaySeconds, STEP_RETRY_BUDGET_SECONDS, stepRecovery } from './turn-recovery.js';
 import { abortable, categoryForTool, withUniqueIds } from './turn-support.js';
 import { recordUsage } from './usage.js';
+import { lifecycle } from '../runtime/lifecycle-log.js';
 import type { TurnRuntime } from './turn-runtime.js';
 
 /** What a model step came to: its result, a retry of the loop, or the turn's end. */
@@ -27,6 +28,7 @@ export function settleUnrun(rt: TurnRuntime, ran: ReadonlySet<string>, why: stri
 }
 
 export async function runModelStep(rt: TurnRuntime, modelClient: ModelClient, system: string, finalOnly: boolean): Promise<ModelStepOutcome> {
+  const started = Date.now();
   const { input, signal, tools, session, turnId } = rt;
   let streamedThisStep = '';
   let reasoning = '';
@@ -99,6 +101,10 @@ export async function runModelStep(rt: TurnRuntime, modelClient: ModelClient, sy
     const classified = classifyModelError(error);
     const message = error instanceof Error ? error.message : String(error);
     const statusCode = (error as { statusCode?: unknown } | undefined)?.statusCode;
+    lifecycle('turn.step', {
+      model: rt.servedModel || undefined, ms: Date.now() - started, outcome: 'error',
+      ...(typeof statusCode === 'number' ? { status: statusCode } : {}),
+    });
     return {
       kind: 'done',
       result: rt.result({
@@ -108,6 +114,11 @@ export async function runModelStep(rt: TurnRuntime, modelClient: ModelClient, sy
       }),
     };
   }
+  lifecycle('turn.step', {
+    model: step.servedModel || rt.servedModel || undefined,
+    ms: Date.now() - started, outcome: step.toolCalls.length ? 'tools' : 'text',
+    tools: step.toolCalls.length, stop: step.stopReason,
+  });
   return { kind: 'step', step, streamedThisStep };
 }
 

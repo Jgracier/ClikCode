@@ -1,7 +1,7 @@
 /** Taking a conversation up on a harness's fresh thread, and the edits a retry
  * makes to the answer written so far. */
-import { conversationSummary } from '../session/conversation-summary.js';
-import { summarySources } from './summary-sources.js';
+import { writeFullRecord } from '../session/full-record.js';
+import { stateDirectory } from '../session/store/paths.js';
 import { startConversationThread } from './thread-start.js';
 import { targetContextWindow } from './transfer.js';
 import { canonicalRecord } from '../session/canonical.js';
@@ -50,11 +50,14 @@ export async function takeUp(
   const argvBound = (transport === 'structured-cli' || transport === 'text-cli') && harness.turn?.promptInput !== 'stdin';
   const contextWindow = await targetContextWindow(state.sessions, harness.command, ctx.model, modelsDevFiles()).catch(() => undefined);
   const writer = nativeSessionStore(harness)?.writer;
-  // A summary any harness already made of this conversation stands for the
-  // turns it covers, as this harness would have kept its own.
-  const summary = await conversationSummary(session, record, summarySources(state.accounts)).catch(() => undefined);
+  // The whole conversation is always kept in a file the receiving provider can
+  // read, so whatever its window cannot hold is still within reach. A summary
+  // any provider made of it is never put in place of turns: a handoff carries
+  // the conversation itself.
+  const recordPath = record.turns.length ? await writeFullRecord(view, stateDirectory()) : undefined;
   const start = await startConversationThread({
-    record, request, interrupted: options.interrupted, harness, model: ctx.model, ...(summary ? { summary } : {}),
+    record, request, interrupted: options.interrupted, harness, model: ctx.model,
+    ...(recordPath ? { recordPath } : {}),
     workspace: session.workspace ?? process.cwd(), environment: turnEnvironment(harness, ctx.account),
     ...(contextWindow ? { contextWindow } : {}), ...(argvBound ? { argvLimit: maxPromptArgvBytes() } : {}),
     ...(writer ? { writer } : {}),
@@ -64,9 +67,18 @@ export async function takeUp(
   });
   lifecycle('thread.take-up', {
     harness: harness.command, how: start.kind, turns: record.turns.length, interrupted: options.interrupted,
-    ...(summary ? { summarized: summary.through, summaryFrom: summary.source } : {}),
+    ...(recordPath ? { record: recordPath } : {}),
     ...(start.kind === 'transfer' ? { budget: start.budget, bytes: Buffer.byteLength(start.prompt, 'utf8'), contextWindow } : { omitted: start.omitted, contextWindow }),
   });
+  // Said when the conversation did not arrive whole, so it is never a surprise.
+  const retold = start.kind === 'transfer' && record.turns.length > 1;
+  const cut = start.kind === 'native' && start.omitted > 0;
+  if (retold || cut) {
+    const how = cut
+      ? `${start.omitted} earlier turn${start.omitted === 1 ? ' does' : 's do'} not fit ${harness.displayName}'s window`
+      : `${harness.displayName} took this conversation as a retelling, not as its own thread`;
+    ctx.prompter?.activity(`${how}. All ${record.turns.length} turns are saved${recordPath ? ` at ${recordPath}` : ''}.`);
+  }
   if (start.kind === 'native') {
     session.nativeSessionId = start.written.nativeId;
     session.nativeThreadAccountId = ctx.account.id;

@@ -22,7 +22,7 @@ import { McpClient, type McpCallResult, type McpToolInfo } from './client.js';
 import { loadMcpServers, type McpServerSpec } from './config.js';
 import { carriesCredentials } from '../../harness/mcp-sign-in.js';
 import { importNotice, importVendorMcpServers } from './import.js';
-import { diagnostic } from '../../runtime/lifecycle-log.js';
+import { diagnostic, lifecycle } from '../../runtime/lifecycle-log.js';
 import { enabledPluginMcpServers } from '../plugins.js';
 import { isMcpSignInRequired, mcpOAuthProvider, mcpSignInNote, type McpAuth } from './oauth.js';
 import { mcpResourceTools, type McpResourceSource } from './resources.js';
@@ -169,9 +169,11 @@ export class McpManager {
 
   private async stop(state: ServerState): Promise<void> {
     const client = state.client;
+    const wasUp = Boolean(client);
     state.client = undefined;
     state.tools = undefined;
     await client?.close().catch(() => undefined);
+    if (wasUp) lifecycle('mcp.stop', { server: state.spec.name, reason: state.retired ? 'removed' : 'stopped' });
   }
 
   private ensureReady(state: ServerState): Promise<void> {
@@ -198,6 +200,7 @@ export class McpManager {
   }
 
   private async connect(state: ServerState): Promise<void> {
+    const started = Date.now();
     try {
       if (!state.client) {
         this.installExitHook();
@@ -219,6 +222,7 @@ export class McpManager {
       state.tools = await state.client.listTools(this.timeouts.connectMs);
       if (state.retired) { await this.stop(state); return; }
       state.failure = undefined;
+      lifecycle('mcp.ready', { server: state.spec.name, tools: state.tools?.length ?? 0, ms: Date.now() - started });
     } catch (error) {
       state.starting = undefined;
       await this.fail(state, error);
@@ -247,9 +251,13 @@ export class McpManager {
    * reconnect before failing: the model already chose this tool, and a
    * restart is cheaper than a wasted step. */
   private async call(state: ServerState, tool: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpCallResult> {
+    const started = Date.now();
     try {
-      return await (await this.clientFor(state)).callTool(tool, args, { timeoutMs: this.timeouts.callMs, ...(signal ? { signal } : {}) });
+      const result = await (await this.clientFor(state)).callTool(tool, args, { timeoutMs: this.timeouts.callMs, ...(signal ? { signal } : {}) });
+      lifecycle('mcp.call', { server: state.spec.name, tool, ms: Date.now() - started, ok: !result.isError });
+      return result;
     } catch (error) {
+      lifecycle('mcp.call', { server: state.spec.name, tool, ms: Date.now() - started, ok: false });
       // Its sign-in ran out mid-conversation: the next turn says so instead
       // of offering tools that will only be refused.
       if (isMcpSignInRequired(error)) await this.fail(state, error);

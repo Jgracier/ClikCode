@@ -131,6 +131,8 @@ export function createSubagentRunner(options: SubagentRunnerOptions): (request: 
         ...(parent.currentPermissionMode ? { currentPermissionMode: parent.currentPermissionMode } : {}),
         ...(parent.permissionRules ? { permissionRules: parent.permissionRules } : {}),
         ...(parent.sandbox ? { sandbox: parent.sandbox } : {}),
+        ...(parent.currentSandbox ? { currentSandbox: parent.currentSandbox } : {}),
+        ...(parent.currentPlanMode ? { currentPlanMode: parent.currentPlanMode } : {}),
         modelClient: parent.modelClient,
         // A model change reaches the sub-agent at its next step, but the
         // conversation leaving this route does not stop it: it runs to its

@@ -31,12 +31,12 @@ export const CLIKDEPLOY_CORE_TOOLS: readonly string[] = [
 /** How long a Gateway turn waits for ClikDeploy's MCP server. */
 export const CLIKDEPLOY_MCP_TURN_WAIT_MS = 3000;
 
-export function clikDeployMcpServer(connection: { baseUrl: string; apiKey: string }): McpServerSpec {
+export function clikDeployMcpServer(connection: { baseUrl: string; apiKey: string }, adminMfaToken?: string): McpServerSpec {
   return {
     name: CLIKDEPLOY_MCP_SERVER,
     transport: 'http',
     url: `${connection.baseUrl.replace(/\/+$/, '')}/mcp?toolmode=search`,
-    headers: { authorization: `Bearer ${connection.apiKey}` },
+    headers: { authorization: `Bearer ${connection.apiKey}`, ...(adminMfaToken ? { 'x-admin-mfa': adminMfaToken } : {}) },
     core: CLIKDEPLOY_CORE_TOOLS,
     // Its tools/list took the whole 30 s connect timeout in a harness
     // benchmark run (bench/harness), and every Gateway turn waited for it
@@ -51,7 +51,8 @@ export function clikDeployMcpServer(connection: { baseUrl: string; apiKey: strin
 export function routeMcpServers(session: HarnessSession, config: Conf): McpServerSpec[] {
   if (!isGatewayService(session)) return [];
   try {
-    return [clikDeployMcpServer(gatewayConnection(config))];
+    const token = typeof config.get === 'function' ? config.get('adminMfaToken') : undefined;
+    return [clikDeployMcpServer(gatewayConnection(config), typeof token === 'string' ? token : undefined)];
   } catch {
     // Not signed in: the turn itself says so; there is no account to control.
     return [];

@@ -1,6 +1,9 @@
 /** Run a turn through a vendor's CLI or structured session protocol. */
 import { moveThreadToAccount, reconcileNativeThread } from '../session/carry.js';
-import { closeStandby, leavePersistentTransport } from './vendor-process.js';
+import { lifecycle } from '../runtime/lifecycle-log.js';
+import { liveCallsForSwitch } from './live-settings.js';
+import { completeTurnCheckpoint, discardInterruptedTurn } from './turn-journal.js';
+import { closePersistentTransport, closeStandby, leavePersistentTransport } from './vendor-process.js';
 import { settleHeldVendor } from './turn-steps.js';
 import type { AccountTurnInput } from './session-turn.js';
 import { runAttempt } from './vendor-attempt.js';
@@ -54,6 +57,51 @@ async function startVendorTurn(ctx: VendorTurnContext): Promise<void> {
   }
 }
 
+/** The user's mid-turn choice, before an attempt starts. The attempt already
+ * running is left alone. Another account of this provider is the next attempt;
+ * another provider or route continues the same request there.
+ * A failover moves the account on its own: only an account id the user changed
+ * since `seenAccount` is adopted, so the retry is not pulled back. Plan mode
+ * the vendor itself left is kept until the user changes it. */
+async function followLiveSettings(
+  ctx: VendorTurnContext, seen: { accountId: string | null | undefined; plan: boolean | undefined },
+): Promise<'switch' | void> {
+  const live = ctx.run.liveSettings;
+  const { session } = ctx;
+  if (liveCallsForSwitch(live, { route: session.route, accountId: ctx.account.id, accountProvider: ctx.account.provider }, ctx.state.accounts)) {
+    await closePersistentTransport(session.id);
+    const progressed = Boolean(session.pendingTurn?.response?.trim() || session.pendingTurn?.outputStarted);
+    if (progressed) await completeTurnCheckpoint(session, ctx.checkpoint, session.pendingTurn?.response ?? '');
+    else await discardInterruptedTurn(session.id, ctx.text);
+    lifecycle('turn.switch', { route: live?.route, ...(live?.accountId ? { account: String(live.accountId).slice(0, 8) } : {}) });
+    return 'switch';
+  }
+  if (!live) return;
+  if (live.accountId !== seen.accountId) {
+    seen.accountId = live.accountId;
+    const next = live.accountId ? ctx.state.accounts.find((item) => item.id === live.accountId) : undefined;
+    if (next && next.provider === ctx.account.provider && next.id !== ctx.account.id) {
+      await closePersistentTransport(session.id);
+      ctx.account = next;
+      session.accountId = next.id;
+      await settleThread(ctx);
+    }
+  }
+  if (live.model !== undefined && live.model !== ctx.model) {
+    ctx.model = live.model ?? null;
+    session.model = ctx.model;
+  }
+  if (live.effort !== undefined && live.effort !== session.effort) session.effort = live.effort;
+  if (live.permissionMode && live.permissionMode !== session.permissionMode) session.permissionMode = live.permissionMode;
+  const wantedPlan = live.planMode === true;
+  if (seen.plan === undefined) seen.plan = session.planMode === true;
+  if (wantedPlan !== seen.plan) {
+    if (wantedPlan) session.planMode = true;
+    else delete session.planMode;
+    seen.plan = wantedPlan;
+  }
+}
+
 /**
  * Runs one durable local session turn. Local sessions resolve an env reference
  * only in this process and record normalized, credential-free usage.
@@ -61,8 +109,11 @@ async function startVendorTurn(ctx: VendorTurnContext): Promise<void> {
  * Each attempt runs the vendor; a failed one is recovered in place or moved to
  * another account (vendor-recovery.ts) and the loop runs it again.
  */
-export async function sendVendorTurn(input: AccountTurnInput): Promise<void> {
+export async function sendVendorTurn(input: AccountTurnInput): Promise<'switch' | void> {
   const ctx = await createVendorTurnContext(input);
+  // The account this turn holds now. A later failover changes the account it runs;
+  // only a different id in the live settings is the user's choice.
+  const seen = { accountId: ctx.account.id as string | null | undefined, plan: undefined as boolean | undefined };
   try {
     await startVendorTurn(ctx);
     // A chat that just moved here: the agent is told so, ahead of everything
@@ -71,6 +122,7 @@ export async function sendVendorTurn(input: AccountTurnInput): Promise<void> {
     const observer = createVendorObserver(ctx);
     ctx.askedText = ctx.turnText;
     for (;;) {
+      if (await followLiveSettings(ctx, seen) === 'switch') return 'switch';
       const attempt = await runAttempt(ctx, observer);
       if (await settleAttempt(ctx, observer, attempt)) {
         await recoverFromFailure(ctx, observer, attempt);

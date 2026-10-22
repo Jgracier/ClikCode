@@ -107,7 +107,7 @@ export function createTurnRunner(ctx: WorkerContext) {
 
   /** After the turn, success or not: the turn's own state cleared, the windows
    * told it ended, and whatever is owed or queued next started. */
-  const finalizeTurn = async (turnId: string, turnStarted: number, turnOutcome: string, liveInput: LiveTurnInputBroker, submissions: Set<Promise<void>>): Promise<void> => {
+  const finalizeTurn = async (turnId: string, turnStarted: number, turnOutcome: string, lastHarness: string | undefined, liveInput: LiveTurnInputBroker, submissions: Set<Promise<void>>): Promise<void> => {
     liveInput.close();
     ctx.activeController = undefined;
     ctx.activeLiveInput = undefined;
@@ -135,6 +135,8 @@ export function createTurnRunner(ctx: WorkerContext) {
     ctx.turnRunning = false;
     observer.endTurn(ended?.session, ended?.account, turnOutcome === 'cancelled');
     lifecycle('worker.turn.end', { outcome: turnOutcome, ms: Date.now() - turnStarted });
+    // Only a completed Claude Code turn refreshes its prompt cache window.
+    void ctx.keepWarm?.turnEnded(turnOutcome === 'completed' ? lastHarness : undefined).catch(() => undefined);
     endTurnClock(turnId);
     ctx.idle.vendorUsed();
     ctx.activeQueuedTurnId = undefined;
@@ -196,6 +198,8 @@ export function createTurnRunner(ctx: WorkerContext) {
     // stopWaiting is the one event every client needs regardless of outcome
     // to know a `submit` it sent has actually finished -- broadcast in
     // `finally`, covering success, a caught failure, and cancellation alike.
+    ctx.keepWarm?.stop();
+    let lastHarness: string | undefined;
     // What the vendor was saying on its own is saved first: this turn's journal reads the conversation, and its
     // live view takes the windows over from that one.
     if (ctx.outOfTurn.active) await ctx.outOfTurn.settle();
@@ -212,6 +216,7 @@ export function createTurnRunner(ctx: WorkerContext) {
       if (controller.signal.aborted) throw turnCancelledError();
       const running = runSessionTurn(config, sessionId, command.text, controller.signal, {
         onWorkFinished: () => { ctx.turnWorkDone = true; },
+        onCompletedHarness: (harness) => { lastHarness = harness; },
         persistentTransports: true,
         prompter: observer,
         liveInput,
@@ -234,7 +239,7 @@ export function createTurnRunner(ctx: WorkerContext) {
     } finally {
       // Saved (answered, failed or cancelled and settled): what a snapshot sent from here on holds is final.
       observer.turnRecordFinal();
-      await finalizeTurn(turnId, turnStarted, turnOutcome, liveInput, submissions);
+      await finalizeTurn(turnId, turnStarted, turnOutcome, lastHarness, liveInput, submissions);
     }
   };
 }

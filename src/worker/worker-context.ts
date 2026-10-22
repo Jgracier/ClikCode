@@ -1,6 +1,7 @@
 /** What one session worker's parts share, held in one object: the conversation's
  * identity, the turn and queue flags, the timers, and the parts themselves. */
 import type { OutOfTurn } from './out-of-turn.js';
+import type { KeepWarm } from './cache-keepwarm.js';
 import type { Server, Socket } from 'node:net';
 import type Conf from 'conf';
 import type { LiveTurnInputBroker } from '../turn/live-input.js';
@@ -98,6 +99,8 @@ export interface WorkerContext {
   /** What the vendor says with no turn open, streamed live and saved once said (out-of-turn.ts). */
   outOfTurn: OutOfTurn;
   resumeWaiter: ReturnType<typeof createResumeWaiter>;
+  /** Keeps a large conversation's prompt cache alive for hours after its last turn (cache-keepwarm.ts). */
+  keepWarm: KeepWarm;
   io: WorkerIo;
   idle: IdleControl;
   queue: WorkerQueue;

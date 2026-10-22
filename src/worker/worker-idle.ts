@@ -47,6 +47,7 @@ const HELD = {
   turn: 'a turn is running', vendorBackground: 'vendor background work is running', vendorWork: 'the vendor is still running work it started',
   agents: 'background agents are running', notification: 'a notification is on its way to the model', wakeup: 'a scheduled wakeup is pending',
   quotaWait: 'waiting for a quota reset', heldVendor: 'a vendor is still finishing its background work', shell: 'a background shell is running',
+  cacheWarm: 'keeping the prompt cache warm',
 } as const;
 
 export function createIdleControl(ctx: WorkerContext) {
@@ -80,6 +81,8 @@ export function createIdleControl(ctx: WorkerContext) {
     if (!retire && ctx.resumeWaiter.pending) return HELD.quotaWait;
     if (hasHeldVendorProcess(sessionId)) return HELD.heldVendor;
     if (runningShellCount(agentSession) > 0) return HELD.shell;
+    // Pings are pending (cache-keepwarm.ts): this worker sends them. Only the idle exit waits for them; a rebuild may replace the worker (its successor takes them up).
+    if (!retire && ctx.keepWarm?.active()) return HELD.cacheWarm;
     return undefined;
   };
   const retireBlocker = (): string | undefined => heldReason('retire');

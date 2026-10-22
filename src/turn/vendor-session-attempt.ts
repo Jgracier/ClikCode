@@ -22,7 +22,6 @@ import { closePersistentTransport, openStandby, persistentTransportFor, vendorCh
 import { isTurnCancelled } from '../agent/cancellation.js';
 import { recordLiveModelCatalog } from '../harness/accounts/model-catalog.js';
 
-/** Per chat, the unapplied options last said (see the app-server branch). */
 const ignoredOptionsSaid = new Map<string, string>();
 
 export async function runVendorSessionAttempt(input: {
@@ -230,6 +229,25 @@ export function prepareAcpStandby(input: {
 }): Promise<boolean> {
   const launch = acpLaunchInput(input);
   return standbyOf(input, 'acp', async (child) => { await (child as AcpSession).runTurn({ ...launch, prompt: '', prepareOnly: true }); });
+}
+
+/** One small request on a copy of this conversation's thread (`copyId`, already beside it in the
+ * account's profile): the provider reads the history from its cache, which keeps that cache alive
+ * (worker/cache-keepwarm.ts). Returns the cache figures the provider reported. */
+export async function pingPromptCache(input: {
+  harness: AiLocalHarnessDefinition; account: AiHarnessAccount; session: HarnessSession; copyId: string;
+  model: string | null; effort?: string; environment: Record<string, string>; signal?: AbortSignal;
+}): Promise<{ cacheRead?: number; cacheWrite?: number }> {
+  const { nativeSessionPreallocated: _fresh, ...rest } = input.session;
+  const session: HarnessSession = { ...rest, nativeSessionId: input.copyId, permissionMode: 'ask' };
+  let usage: { cacheRead?: number; cacheWrite?: number } = {};
+  await runAcpTurn({
+    ...acpLaunchInput({ ...input, session }),
+    prompt: 'ClikCode keeping this conversation\'s cache warm, not a request: reply with only the word ok.',
+    signal: input.signal,
+    onUsage: (reported) => { usage = { ...(reported.cacheRead !== undefined ? { cacheRead: reported.cacheRead } : {}), ...(reported.cacheWrite !== undefined ? { cacheWrite: reported.cacheWrite } : {}) }; },
+  });
+  return usage;
 }
 
 /** What a Codex app-server turn is launched and opened with, for a turn and
