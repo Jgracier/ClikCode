@@ -89,7 +89,14 @@ export const destinationsFile = (stateDir: string): string => path.join(stateDir
 export async function loadDestinations(stateDir: string): Promise<Record<string, Template>> {
   let own: Record<string, Template> = {};
   try { own = JSON.parse(await fs.readFile(destinationsFile(stateDir), 'utf8')) as Record<string, Template>; } catch { /* none added yet */ }
-  return { ...DEFAULT_DESTINATIONS, ...own };
+  // A saved destination that connects a key through connect_connector is read back from ClikDeploy like the built-in ones: an older
+  // saved copy of a built-in (written before `verify` existed) or a hand-made one must not fall through to a bare "delivered".
+  const merged: Record<string, Template> = { ...DEFAULT_DESTINATIONS, ...own };
+  for (const [name, template] of Object.entries(merged)) {
+    if (template.verify || !template.run.includes('connect_connector') || !slotsOf(template).includes('integration')) continue;
+    merged[name] = { ...template, verify: 'connection' };
+  }
+  return merged;
 }
 
 /** The slots a template asks the agent to fill (everything but the key). */
