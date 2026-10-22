@@ -60,13 +60,37 @@ export function spawnSsh(target: string, script: string): ChildProcessWithoutNul
   return spawn('ssh', sshArgv(target, script, ['-T']), { stdio: ['pipe', 'pipe', 'pipe'] });
 }
 
+/** The line a script ends with on stderr: its own exit status. */
+const EXIT_MARK = '__clikcode_exit=';
+
+/** `script`, then its exit status said in-band (on stderr, so what it prints
+ * is left as it is). ssh's own exit status cannot be relied on: Tailscale SSH
+ * to a Mac runs the command under /usr/bin/login, which exits 0 whatever the
+ * command did -- every failed install step there read as done. */
+export function reportingExit(script: string): string {
+  // Under sh too: the login shell may be one without `$?` (fish).
+  return remoteShell(`${remoteShell(script)}; echo "${EXIT_MARK}$?" >&2`);
+}
+
+/** The script's exit status from its stderr (the mark taken out), else ssh's:
+ * 255 stays ssh's own failure; no mark after a 0 is a script that did not get
+ * to its end (the connection dropped), not one that succeeded. */
+export function scriptResult(code: number, stdout: string, stderr: string): SshResult {
+  const at = stderr.lastIndexOf(EXIT_MARK);
+  if (code === 255) return { code, stdout, stderr: at >= 0 ? stderr.slice(0, at) : stderr };
+  if (at < 0) return { code: code || 1, stdout, stderr: code ? stderr : `${stderr}${stderr && !stderr.endsWith('\n') ? '\n' : ''}the command did not finish on the other machine` };
+  const said = Number.parseInt(stderr.slice(at + EXIT_MARK.length), 10);
+  return { code: Number.isFinite(said) ? said : code, stdout, stderr: stderr.slice(0, at) };
+}
+
 /** Runs `script` on `target` and collects what it printed. Never throws for
- * a failed command: the caller reads `code` (255 is ssh's own failure). */
+ * a failed command: the caller reads `code` (255 is ssh's own failure), the
+ * script's own exit status however the other side's ssh reports it. */
 export function runSsh(target: string, script: string, options: { timeoutMs?: number; onLine?: (line: string) => void } = {}): Promise<SshResult> {
   return new Promise((resolve) => {
     let child: ChildProcessWithoutNullStreams;
     try {
-      child = spawn('ssh', sshArgv(target, script, ['-T']), { stdio: ['pipe', 'pipe', 'pipe'] });
+      child = spawn('ssh', [...SSH_OPTIONS, '-T', '--', validateSshTarget(target), reportingExit(script)], { stdio: ['pipe', 'pipe', 'pipe'] });
     } catch (error) {
       resolve({ code: 255, stdout: '', stderr: error instanceof Error ? error.message : String(error) });
       return;
@@ -94,7 +118,7 @@ export function runSsh(target: string, script: string, options: { timeoutMs?: nu
     });
     child.once('close', (code) => {
       clearTimeout(timer);
-      resolve({ code: code ?? 255, stdout, stderr });
+      resolve(scriptResult(code ?? 255, stdout, stderr));
     });
   });
 }
