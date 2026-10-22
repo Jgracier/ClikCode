@@ -212,7 +212,7 @@ def remote_installed(updates, pnpm_delay=0, current=False):
     return setup
 
 
-def remote_fake(commit=None):
+def remote_fake(commit=None, host_options=None):
     """`setup` for ClikCode Remote: a FAKE `ssh` and `tailscale` in fakebin
     (fake-ssh.mjs, fake-tailscale.mjs), a fake repository and Node mirror
     standing in for GitHub and nodejs.org, and one fake machine,
@@ -243,6 +243,7 @@ def remote_fake(commit=None):
             'chats': [stale, chat('c2', 'Write the migration tests', 30, 'cover the rollback')],
             'later': {'afterMs': 6000, 'chats': [{**chat('c1', 'Fix the login page', 0, 'now it submits twice'), 'workspace': context['home']}, chat('c2', 'Write the migration tests', 30, 'cover the rollback')]},
             **({'commit': commit} if commit else {'commit': found.group(1)} if found else {}),
+            **(host_options or {}),
         }))
         status = os.path.join(world_root, 'tailscale.json')
         open(status, 'w').write(subprocess.check_output(['node', os.path.join(fakes, 'fake-remote.mjs'), 'tailscale']).decode())
@@ -829,6 +830,24 @@ SCENARIOS = {
         'snap_lacks': {'early': ['Answered on devbox.'], 'early2': ['Second answer on devbox.'], 'early3': ['Third answer on devbox.']},
         'snap_once': {'end': ['where are you now', 'and again', 'third time', 'Answered on devbox.', 'Second answer on devbox.', 'Third answer on devbox.']},
         'never': ['ENOENT', 'Connection to devbox', 'Moved to devbox'],
+    },
+    # A machine nothing ClikCode can run runs on (macOS 10.12: no Node 22.12 for
+    # it) is refused at the first step, before anything is downloaded, and the
+    # whole reason is on screen: the step and what to do, not cut to one row.
+    'remote-install-refused-old-macos': {
+        'setup': remote_fake(host_options={'uname': {'s': 'Darwin', 'm': 'x86_64'}, 'swVers': '10.12.6', 'hide': ['node']}),
+        'startup': 4, 'no_dup_check': 'lists and progress lines, no transcript',
+        'turns': [{'blocks': ['unused']}],
+        'steps': [
+            ('settle', 2),
+            ('type', '/remote'), ('wait_for', 'On your tailnet', 15), ('wait_for', 'macbook', 10), ('settle', 1),
+            ('keys', '\r'), ('wait_for', 'Log in to devbox as which user?', 15), ('settle', 0.5),
+            ('type', 'dev'), ('wait_for', 'add it again.', 30), ('settle', 1), ('snap', 'refused'),
+        ],
+        'watch': [],
+        'snap_contains': {'refused': ['✗ Checking the machine: macOS 10.12.6 is too old for ClikCode', 'which needs macOS 10.15 or newer', 'Update macOS on dev@devbox.tail-fake.ts.net', 'there yourself and add it again.']},
+        'snap_lacks': {'refused': ['2/6 Node.js', 'devbox is added']},
+        'never': ['ENOENT', 'Getting ClikCode from GitHub'],
     },
     # A chat on a machine whose ClikCode is another build: said once on opening it, with where
     # to update it. Nothing is updated without the user.
