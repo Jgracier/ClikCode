@@ -87,7 +87,10 @@ export type MoveRequest =
    * moved away from here), or null. */
   | { type: 'chat-have'; sessionId: string }
   | { type: 'import-chat'; chat: ChatExport | PackedChat; names: MoveNames }
-  | { type: 'mark-moved'; sessionId: string; movedTo: Omit<ChatMovedTo, 'at'> };
+  | { type: 'mark-moved'; sessionId: string; movedTo: Omit<ChatMovedTo, 'at'> }
+  /** Revision 6: the machine a chat moved to cannot be reached from the
+   * client opening it, so the copy kept on this machine goes on (reclaimMovedChat). */
+  | { type: 'reclaim-moved'; sessionId: string };
 
 /** A chat that moved is read-only here: what to say instead of acting on it. */
 export function movedChatMessage(session: Pick<HarnessSession, 'movedTo'>): string | undefined {

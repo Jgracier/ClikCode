@@ -149,36 +149,64 @@ export async function movedChatPlace(movedTo: ChatMovedTo): Promise<Here | undef
   return machine === 'local' ? { local: movedTo.sessionId } : { remote: { machineId: machine, chatId: movedTo.sessionId } };
 }
 
-/** A chat that moved, opened here: it comes back here, with nothing asked
- * and nothing said -- a move never locks a machine out of its chat. From the
- * machine it went to when that answers (only what is new there travels:
- * moveChat); else the copy kept here goes on as it was (reclaimMovedChat). */
-export async function offerMovedChat(_prompter: HarnessPrompter, movedTo: ChatMovedTo): Promise<Here> {
-  const place = await movedChatPlace(movedTo);
-  if (place && 'remote' in place) {
-    const machine = (await readMachines()).find((item) => item.id === place.remote.machineId);
-    // Over the window's connection to it when it has one; else one of its own.
-    const links = machine?.ready ? await holdWindowMachines().catch(() => undefined) : undefined;
-    let channel: LinkChannel | undefined;
-    let bridge: TerminalBridge | undefined;
-    try {
-      if (machine) {
-        channel = await links?.channel(machine.id).catch(() => undefined);
-        if (!channel && !links?.views().some((view) => view.machine.id === machine.id)) {
-          bridge = new TerminalBridge(machine.sshTarget);
-          await bridge.connected();
-        }
-        const end = channel ?? bridge;
-        if (end) return { local: (await moveChat(remoteMoveEnd(end, machine), localMoveEnd(), movedTo.sessionId)).sessionId };
-      }
-    } catch {
-      // fail-open-ok: the machine cannot hand it back (offline, too old): the copy kept here goes on.
-    } finally {
-      channel?.close();
-      bridge?.close();
-      links?.release();
+/** How the terminal learns whether an added machine answers now. */
+export type MachineReach = (machineId: string) => Promise<boolean>;
+
+/** Over the window's connection to it (the board's): it answers once a chat
+ * channel opens on it -- one still connecting is waited for. */
+const windowReach: MachineReach = async (machineId) => {
+  const links = await holdWindowMachines().catch(() => undefined);
+  try {
+    const channel = await links?.channel(machineId).catch(() => undefined);
+    channel?.close();
+    return Boolean(channel);
+  } finally { links?.release(); }
+};
+
+/** Where a moved chat is live now. */
+export interface LiveChat {
+  here: Here;
+  /** Said only when nothing could be reached and the copy opened goes on (`reclaim`). */
+  notice?: string;
+}
+
+/** A chat is live in exactly one place, and every way of opening it opens
+ * that one: a copy that moved (`movedTo`) is never shown -- the chat where it
+ * went is, and nothing moves. On another machine: that machine's chat (when it
+ * answers). On this one (it moved here under another id): that id, followed
+ * on if it moved again. Only when the machine is not added here or does not
+ * answer does the copy opened go on (`reclaim`, which says where it is then),
+ * with one line saying so. */
+export async function liveChat(movedTo: ChatMovedTo, reclaim: () => Promise<Here>, reach: MachineReach = windowReach): Promise<LiveChat> {
+  const seen = new Set<string>();
+  let next: ChatMovedTo = movedTo;
+  let why = 'is not added here';
+  for (;;) {
+    const place = await movedChatPlace(next);
+    if (!place) break;
+    if ('remote' in place) {
+      if (await reach(place.remote.machineId).catch(() => false)) return { here: place };
+      why = 'does not answer';
+      break;
     }
+    if (seen.has(place.local)) break;
+    seen.add(place.local);
+    const session = (await readState({ transcripts: [] })).sessions.find((item) => item.id === place.local);
+    if (!session) { why = 'no longer has it'; break; }
+    if (!session.movedTo) return { here: place };
+    next = session.movedTo;
   }
-  const { reclaimMovedChat } = await import('../session/move.js');
-  return { local: await reclaimMovedChat(movedTo.sessionId) };
+  return { here: await reclaim(), notice: `This chat moved to ${next.machine}, which ${why}: it goes on here.` };
+}
+
+/** The chat a terminal opens for this machine's chat `id`: undefined when that
+ * is live (it opens), else the live one (liveChat) -- the copy here going on
+ * only when that cannot be reached. */
+export async function openedChat(id: string, reach: MachineReach = windowReach): Promise<LiveChat | undefined> {
+  const opened = (await readState({ transcripts: [] })).sessions.find((item) => item.id === id);
+  if (!opened?.movedTo) return undefined;
+  return liveChat(opened.movedTo, async () => {
+    const { reclaimMovedChat } = await import('../session/move.js');
+    return { local: await reclaimMovedChat(id) };
+  }, reach);
 }

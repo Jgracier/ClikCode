@@ -27,7 +27,7 @@ import { runTimedTurn } from './run-turn.js';
 import { createSlashHost, openConversationPicker, runShellInChat } from './slash-host.js';
 import type { ChatWindow } from './window.js';
 import { runRemoteChat, type RemoteChatSelection } from '../../../remote/terminal-chat.js';
-import { offerMovedChat } from '../../../remote/move-terminal.js';
+import { openedChat } from '../../../remote/move-terminal.js';
 
 /** What one read of the next line came to: another pass, the end of the loop, or a line to run. */
 type NextLine = 'continue' | 'exit' | PickedLine;
@@ -92,6 +92,8 @@ export class ChatLoop {
   async run(): Promise<void> {
     const { terminal, rl, releaseWindow } = this;
     try {
+      // Opened (--resume, --continue) on a copy that moved: the live chat instead.
+      if (terminal) await this.followMoved(terminal);
       while (true) {
         this.sentPrompt = undefined;
         // One live Codex/ACP child per OPEN conversation: leaving it (new chat,
@@ -337,7 +339,7 @@ export class ChatLoop {
   }
 
   /** A chat on another machine, in this window, until it comes back to one here. */
-  private async openRemote(terminal: TerminalHarnessPrompter, selection: RemoteChatSelection, draft?: string): Promise<void> {
+  private async openRemote(terminal: TerminalHarnessPrompter, selection: RemoteChatSelection, draft?: string, hops = 0): Promise<void> {
     await leaveConversation(this.id);
     try {
       const localId = await runRemoteChat(terminal, this.id, selection, draft);
@@ -345,6 +347,24 @@ export class ChatLoop {
     } finally {
       await claimConversation(this.id).catch(() => undefined);
     }
+    // The chat it comes back to may be a copy that moved (picked on the board there).
+    await this.followMoved(terminal, hops + 1);
+  }
+
+  /** This window's chat, when it is a copy that moved to another machine: the
+   * live one is opened in its place, wherever it is (move-terminal.ts liveChat).
+   * True when that was a chat on another machine, shown until it was left. */
+  private async followMoved(terminal: TerminalHarnessPrompter, hops = 0): Promise<boolean> {
+    if (hops > 8) return false;
+    const live = await openedChat(this.id);
+    if (!live) return false;
+    if (live.notice) this.notice = live.notice;
+    if ('remote' in live.here) { await this.openRemote(terminal, live.here.remote, undefined, hops); return true; }
+    if (live.here.local === this.id) return false;
+    await leaveConversation(this.id);
+    this.id = live.here.local;
+    await claimConversation(this.id).catch(() => undefined);
+    return false;
   }
 
   private async handleLine(next: PickedLine): Promise<'exit' | undefined> {
@@ -398,13 +418,8 @@ export class ChatLoop {
         await leaveConversation(this.id);
         this.id = outcome.id;
         await claimConversation(this.id).catch(() => undefined);
-        // A chat that moved to another machine is read-only here: offered where it went.
-        const opened = (await readState({ transcripts: [] })).sessions.find((item) => item.id === this.id);
-        if (opened?.movedTo && terminal) {
-          const next = await offerMovedChat(terminal, opened.movedTo);
-          if (next && 'remote' in next) { await this.openRemote(terminal, next.remote); return; }
-          if (next && next.local !== this.id) { await leaveConversation(this.id); this.id = next.local; await claimConversation(this.id).catch(() => undefined); }
-        }
+        // A copy that moved (/resume <id>, a fork's row): the live chat instead.
+        if (terminal && await this.followMoved(terminal)) return;
       }
       if (outcome.draft !== undefined) terminal?.restoreDraft(outcome.draft);
       if (outcome.prompt) await this.runInteractiveTurn(this.id, outcome.prompt, { echo: outcome.echo !== false });

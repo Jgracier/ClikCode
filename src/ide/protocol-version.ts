@@ -31,6 +31,8 @@
  *      the target lacks (a chat moving back to a machine that holds its old
  *      copy). Asked only of a target at 5; an older source ignores `since`
  *      and sends the whole chat, which any target reads
+ *   6  `reclaim-moved`: a chat that moved on from this machine goes on here
+ *      again, the client opening it reaching no machine it went to
  *
  * ClikCode and the extension are published separately (the CLI first, in the
  * same ClikDeploy run), so a bump reaches npm before the extension that
@@ -38,7 +40,7 @@
  */
 export const IDE_PROTOCOL = {
   version: 1,
-  revision: 5,
+  revision: 6,
   oldestSupported: 1,
   oldestRevision: 2,
 } as const;

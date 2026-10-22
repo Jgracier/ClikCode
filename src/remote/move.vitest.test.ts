@@ -13,7 +13,7 @@ import type { HarnessSession, HarnessState } from '../session/model.js';
 import { moveChat, type MoveEnd, type MoveRequest } from '../session/move-chat.js';
 import { listWorkerRecords, readWorkerRecord } from '../worker/registry.js';
 import { newMachineRecord, updateMachines } from './machines.js';
-import { localMoveEnd, movedChatPlace, moveTerminalChat, remoteMoveEnd } from './move-terminal.js';
+import { localMoveEnd, movedChatPlace, moveTerminalChat, openedChat, remoteMoveEnd } from './move-terminal.js';
 import { TerminalBridge } from './terminal-chat.js';
 import { closeWindowMachines, holdWindowMachines, RemoteMachines } from './connection.js';
 import type { HarnessPrompter } from '../harness/prompter.js';
@@ -204,6 +204,35 @@ describe.skipIf(!built)('moving a chat between two machines, over the real bridg
       expect(connections()).toBe(opened);
       expect((await onProd(read2)).sessions.find((item) => item.id === 'here-2')).toMatchObject({ name: 'Over the list' });
     } finally { await links.close(); }
+  }, 120_000);
+
+  it('a chat moved to prod is listed only on prod, and opening the copy here opens prod\'s: nothing moves', async () => {
+    await write(stateOf([chat({ id: 'here-5', conversationId: 'conv-5', name: 'Live on prod', workspace: process.env.HOME })]));
+    const machine = (await readMachines()).find((item) => item.name === 'prod')!;
+    const bridge = new TerminalBridge('prod');
+    try {
+      await bridge.connected();
+      await moveChat(localMoveEnd(), remoteMoveEnd(bridge, machine), 'here-5');
+      // This machine's list (the board, VS Code's history) does not have it; prod's does.
+      const { conversationList } = await import('../ide/queries.js');
+      expect((await conversationList(await read2(), undefined)).map((row) => row.id)).not.toContain('here-5');
+      const theirs = await bridge.request<Array<{ id: string; movedTo?: string }>>({ type: 'query', query: 'conversations' });
+      expect(theirs.find((row) => row.id === 'here-5')).toMatchObject({ id: 'here-5' });
+      expect(theirs.find((row) => row.id === 'here-5')?.movedTo).toBeUndefined();
+      const prodBefore = (await onProd(read2)).sessions.find((item) => item.id === 'here-5')!;
+
+      // The copy here opened (/resume <id>, the board before this change): prod's chat, over the window's connection.
+      const live = await openedChat('here-5');
+      expect(live).toEqual({ here: { remote: { machineId: machine.id, chatId: 'here-5' } } });
+      // Nothing moved: prod keeps it live, the copy here stays a copy.
+      const prodAfter = (await onProd(read2)).sessions.find((item) => item.id === 'here-5')!;
+      expect(prodAfter.movedTo).toBeUndefined();
+      expect(prodAfter.updatedAt).toBe(prodBefore.updatedAt);
+      expect((await read2()).sessions.find((item) => item.id === 'here-5')!.movedTo).toMatchObject({ machine: 'prod' });
+      // And what opens there is the chat as prod has it.
+      const opened = await bridge.request<{ sessionId?: string }>({ type: 'open', mode: 'resume', sessionId: 'here-5' });
+      expect(opened?.sessionId).toBe('here-5');
+    } finally { bridge.close(); await closeWindowMachines(); }
   }, 120_000);
 
   it('/machine after the board moves over the window\'s connection the board made: one SSH connection for both', async () => {

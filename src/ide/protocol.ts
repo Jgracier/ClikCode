@@ -101,7 +101,9 @@ export type IdeRequest =
    * client is still answered with what would change), then the first to
    * `mark-moved`. Answered by a `result`. Revision 5: `chat-have` first --
    * what the target holds of the chat already -- and `export-chat` with
-   * `since`, so only the rest travels (session/move-chat.ts moveChat). */
+   * `since`, so only the rest travels (session/move-chat.ts moveChat).
+   * Revision 6: `reclaim-moved` -- the copy of a moved chat goes on there,
+   * the machine it went to being out of the client's reach. */
   | (MoveRequest & { requestId: string })
   | { type: 'close' };
 

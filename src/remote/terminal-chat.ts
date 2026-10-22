@@ -19,7 +19,10 @@ import type { LiveTurnInputResult } from '../turn/live-input.js';
 import type { SignInScreen } from '../gateway/login/vendor-sign-in.js';
 import { parseSlashInput } from '../tui/slash/registry.js';
 import { chatHasContent } from '../session/move-chat.js';
-import { moveTerminalChat, offerMovedChat, remoteMoveEnd, type Here } from './move-terminal.js';
+import { liveChat, moveTerminalChat, remoteMoveEnd, type Here } from './move-terminal.js';
+
+/** The bridge revision that answers `reclaim-moved`. */
+const RECLAIM_REVISION = 6;
 
 /** A chat on another machine to show: `chatId`, or a new one there when absent. */
 export interface RemoteChatSelection { machineId: string; chatId?: string }
@@ -296,11 +299,17 @@ export async function runRemoteChat(
             : `Updating ClikCode on ${machine.name} failed: ${outcome.message} Type /update to update it.`);
         }, () => undefined);
       }
-      // A chat that moved on from there: offered where it went (it is read-only there).
+      // A chat that moved on from there: the live one, where it went (move-terminal.ts liveChat).
       if (!rejoining && session?.movedTo) {
-        const next = await offerMovedChat(terminal, session.movedTo);
-        if (next && 'local' in next) return next.local;
-        if (next) { choice = next.remote; continue; }
+        const copy = session;
+        const live = await liveChat(copy.movedTo!, async () => {
+          if (bridge.revision < RECLAIM_REVISION) throw new Error(`This chat moved to ${copy.movedTo!.machine}, which does not answer, and ClikCode on ${machine.name} is too old to go on with it: update it (/remote).`);
+          await bridge.request({ type: 'reclaim-moved', sessionId: copy.id });
+          return { remote: { machineId: machine.id, chatId: copy.id } };
+        });
+        if (live.notice) terminal.activity(live.notice);
+        if ('local' in live.here) return live.here.local;
+        if (live.here.remote.machineId !== machine.id || live.here.remote.chatId !== copy.id) { choice = live.here.remote; continue; }
       }
       if (draft) terminal.restoreDraft(draft);
       draft = undefined;

@@ -282,6 +282,14 @@ describe('a moved chat is never locked out', () => {
     expect(back.messages).toHaveLength(2);
     expect(workers.warmed).toContain('s5');
   });
+
+  it('a client that reaches no machine it went to has the copy go on there (reclaim-moved)', async () => {
+    on('r2');
+    await writeState(state([chat({ id: 's7' })]));
+    await markMoved('s7', { machine: 'imac', sessionId: 'x' });
+    expect(await answerMoveRequest(undefined, { type: 'reclaim-moved', sessionId: 's7' })).toBe('s7');
+    expect((await readState({ transcripts: [] })).sessions[0]!.movedTo).toBeUndefined();
+  });
 });
 
 describe('a move sends only what the target lacks', () => {
