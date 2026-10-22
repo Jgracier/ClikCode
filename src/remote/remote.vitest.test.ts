@@ -15,9 +15,10 @@ import { discoverMachines, readTailscaleStatus, type TailscaleStatus } from './t
 import { buildScript, installOnMachine, nodeIsNewEnough, sourceScript, uninstallFromMachine, type InstallStep } from './install.js';
 import { closeWindowMachines, holdWindowMachines, needsUpdate, RemoteLink, RemoteMachines, type MachineView } from './connection.js';
 import { machinesPath, newMachineRecord, readMachines, updateMachines, type RemoteMachine } from './machines.js';
-import { isRemoteRowValue, updateText } from './board-rows.js';
+import { isRemoteRowValue, localMachineName, updateText } from './board-rows.js';
 import { autoUpdateDecision, AutoUpdates } from './updates.js';
 import { outdatedNotice } from './terminal-chat.js';
+import { localMoveEnd, moveTerminalChat } from './move-terminal.js';
 import { interactiveRemotePicker, notYetAdded, type RemoteHost } from '../tui/pickers/remote.js';
 import type { IdeConversation } from '../ide/protocol.js';
 import type { HarnessPrompter, PickerOption, PickerSettings } from '../harness/prompter.js';
@@ -530,6 +531,33 @@ describe('/remote', () => {
     expect(kept!.ready).toBeFalsy();
   });
 
+  it('asks which user before adding a tailnet machine, ssh’s default first, and installs as the one chosen', async () => {
+    await updateMachines(() => []);
+    host(root, 'imac.tail-fake.ts.net', { users: ['root'] });
+    const fallback = await defaultLoginUser('imac.tail-fake.ts.net');
+    let offered: string[] = [];
+    const { remoteHost, asked, lines } = scripted({
+      'ClikCode Remote': () => 'tailscale:nNewMac',
+      'Log in to imac as': (options) => { offered = options.map((option) => option.label); return 'root'; },
+    }, []);
+    const outcome = await interactiveRemotePicker(remoteHost);
+    expect(offered).toEqual(fallback === 'root' ? ['root', 'Another user…'] : [fallback, 'root', 'Another user…']);
+    // Asked once, up front: no refused login to ask again after.
+    expect(asked).toEqual([]);
+    expect(lines.some((line) => /refused/.test(line))).toBe(false);
+    expect(lines[0]).toMatch(/^Installing ClikCode on imac \(root@imac\.tail-fake\.ts\.net\)/);
+    expect(outcome.notice).toMatch(/imac is added/);
+    expect(await readMachines()).toEqual([expect.objectContaining({ name: 'imac', sshTarget: 'root@imac.tail-fake.ts.net', ready: true, tailscale: { nodeId: 'nNewMac', dnsName: 'imac.tail-fake.ts.net' } })]);
+  }, 120_000);
+
+  it('adds nothing when the user question is dismissed', async () => {
+    await updateMachines(() => []);
+    const { remoteHost, lines } = scripted({ 'ClikCode Remote': () => 'tailscale:nNewMac', 'Log in to imac as': () => undefined }, []);
+    expect(await interactiveRemotePicker(remoteHost)).toEqual({});
+    expect(lines).toEqual([]);
+    expect(await readMachines()).toEqual([]);
+  });
+
   it('lists added machines first, then the tailnet’s, then the address row', async () => {
     await updateMachines(() => [newMachineRecord({ name: 'devbox', sshTarget: 'devbox.tail-fake.ts.net', ready: true, tailscale: { nodeId: 'nBox' } })]);
     let listed: readonly PickerOption<unknown>[] = [];
@@ -576,6 +604,61 @@ describe('/remote', () => {
     expect(await readMachines()).toEqual([]);
     expect(existsSync(join(home, '.local', 'share', 'clikcode', 'src'))).toBe(false);
     expect(existsSync(join(home, '.clikcode'))).toBe(true);
+  });
+});
+
+describe('/machine and the tailnet', () => {
+  afterEach(() => closeWindowMachines());
+  /** /machine's list, as it is once Tailscale has answered: `choose` answers it by title. */
+  const picker = (choose: Record<string, (options: readonly PickerOption<unknown>[]) => unknown>, seen: { rows: readonly PickerOption<unknown>[]; lines: string[] }) => ({
+    question: async () => '',
+    select: async <T>(title: string, options: readonly PickerOption<T>[], _onAction: unknown, settings?: PickerSettings<T>) => {
+      await Promise.all([settings?.refresh ?? []].flat());
+      const rows = (settings?.refreshedOptions?.() ?? options) as readonly PickerOption<unknown>[];
+      if (title === 'Move this chat to') seen.rows = rows;
+      return choose[title]?.(rows) as T | undefined;
+    },
+    activity: (line: string) => { seen.lines.push(stripAnsi(line)); },
+    close: () => undefined,
+  }) as unknown as HarnessPrompter;
+
+  it('lists the machines Tailscale knows and that are not added, under this one and the added ones', async () => {
+    await updateMachines(() => []);
+    const seen = { rows: [] as readonly PickerOption<unknown>[], lines: [] as string[] };
+    expect(await moveTerminalChat(picker({}, seen), { local: 'x' }, 'x', false, localMoveEnd())).toBeUndefined();
+    expect(seen.rows.map((row) => [row.group, row.label, row.detail])).toEqual([
+      [undefined, localMachineName(), '· this chat is here'],
+      ['On your tailnet', 'devbox', '· linux · add: install ClikCode'],
+      ['On your tailnet', 'imac', '· macOS · add: install ClikCode'],
+      ['On your tailnet', 'winbox', '· windows · Windows, not supported yet'],
+      ['On your tailnet', 'macbook', '· macOS · offline'],
+    ]);
+  });
+
+  it('adds one chosen there -- which user, then the install -- and the chat starts on it', async () => {
+    await updateMachines(() => []);
+    host(root, 'devbox.tail-fake.ts.net');
+    const fallback = await defaultLoginUser('devbox.tail-fake.ts.net');
+    const seen = { rows: [] as readonly PickerOption<unknown>[], lines: [] as string[] };
+    const next = await moveTerminalChat(picker({
+      'Move this chat to': () => 'tailscale:nBox',
+      'Log in to devbox as': (options) => options[0]!.value,
+    }, seen), { local: 'x' }, 'x', false, localMoveEnd());
+    const [machine] = await readMachines();
+    expect(machine).toMatchObject({ name: 'devbox', sshTarget: `${fallback}@devbox.tail-fake.ts.net`, ready: true });
+    expect(next).toEqual({ remote: { machineId: machine!.id } });
+    expect(seen.lines.filter((line) => line.startsWith('✓')).length).toBe(6);
+    expect(seen.lines.at(-1)).toMatch(/^devbox is added/);
+  }, 120_000);
+
+  it('moves nothing to an offline or Windows machine', async () => {
+    await updateMachines(() => []);
+    const seen = { rows: [] as readonly PickerOption<unknown>[], lines: [] as string[] };
+    await expect(moveTerminalChat(picker({ 'Move this chat to': () => 'tailscale:nWin' }, seen), { local: 'x' }, 'x', false, localMoveEnd()))
+      .rejects.toThrow(/winbox is Windows, not supported yet/);
+    await expect(moveTerminalChat(picker({ 'Move this chat to': () => 'tailscale:nMac' }, seen), { local: 'x' }, 'x', false, localMoveEnd()))
+      .rejects.toThrow(/macbook is offline/);
+    expect(await readMachines()).toEqual([]);
   });
 });
 
