@@ -869,7 +869,14 @@ export class ClikCodeController implements vscode.Disposable {
       if (outcome.ok || !outcome.auth || attempt) break;
       target = await askLoginUser(found.name, target, outcome.message);
     }
-    if (!outcome?.ok) throw new Error(outcome?.message ?? 'The remote install did not complete.');
+    if (!outcome?.ok) {
+      // Which step stopped it and why, in full: a notification of its own,
+      // and the log, as well as the menu's error line.
+      const said = outcome ? `Installing ClikCode on ${found.name} stopped at "${outcome.step}": ${outcome.message}` : 'The remote install did not complete.';
+      this.host.log.appendLine(said);
+      void vscode.window.showErrorMessage(said);
+      throw new Error(said);
+    }
     const info = outcome.info;
     const machine = existing ?? newMachineRecord({
       name: found.name, sshTarget: target, os: found.os,
