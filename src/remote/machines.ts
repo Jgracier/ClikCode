@@ -42,7 +42,15 @@ export interface RemoteMachine {
   updates?: UpdatePolicy;
   /** Why the last update of it failed; cleared by one that succeeds. */
   updateError?: string;
+  /** 'peer': it added itself, by connecting to this machine (remote/peer.ts).
+   * Its address follows what it says of itself; one the user added keeps the
+   * address the user gave. */
+  addedBy?: 'peer';
 }
+
+/** A machine the user removed: it does not add itself back by connecting
+ * here (remote/peer.ts). Adding it again by hand clears it. */
+export interface ForgottenMachine { installationId?: string; nodeId?: string; at: string }
 
 export type UpdatePolicy = 'auto' | 'ask';
 
@@ -50,19 +58,37 @@ export function updatePolicy(machine: Pick<RemoteMachine, 'updates'>): UpdatePol
   return machine.updates === 'ask' ? 'ask' : 'auto';
 }
 
-interface MachinesFile { version: 1; machines: RemoteMachine[] }
+interface MachinesFile { version: 1; machines: RemoteMachine[]; forgotten?: ForgottenMachine[] }
 
 export function machinesPath(): string {
   return join(stateDirectory(), 'remote', 'machines.json');
 }
 
 export async function readMachines(): Promise<RemoteMachine[]> {
+  return (await readMachinesFile()).machines;
+}
+
+/** The machines the user removed (ForgottenMachine). */
+export async function readForgotten(): Promise<ForgottenMachine[]> {
+  return (await readMachinesFile()).forgotten;
+}
+
+async function readMachinesFile(): Promise<{ machines: RemoteMachine[]; forgotten: ForgottenMachine[] }> {
   try {
     const parsed = JSON.parse(await readFile(machinesPath(), 'utf8')) as Partial<MachinesFile>;
-    return Array.isArray(parsed.machines) ? parsed.machines.filter((machine) => machine && typeof machine.id === 'string' && typeof machine.sshTarget === 'string') : [];
+    return {
+      machines: Array.isArray(parsed.machines) ? parsed.machines.filter((machine) => machine && typeof machine.id === 'string' && typeof machine.sshTarget === 'string') : [],
+      forgotten: Array.isArray(parsed.forgotten) ? parsed.forgotten.filter((item) => item && (typeof item.installationId === 'string' || typeof item.nodeId === 'string')) : [],
+    };
   } catch {
-    return [];
+    return { machines: [], forgotten: [] };
   }
+}
+
+/** Whether `machine` is one the user removed. */
+export function isForgotten(forgotten: readonly ForgottenMachine[], machine: { installationId?: string; nodeId?: string }): boolean {
+  return forgotten.some((item) => (item.installationId !== undefined && item.installationId === machine.installationId)
+    || (item.nodeId !== undefined && item.nodeId === machine.nodeId));
 }
 
 /** Writes are serialized within this process: the board's cache updates and
@@ -70,11 +96,22 @@ export async function readMachines(): Promise<RemoteMachine[]> {
 let writing: Promise<unknown> = Promise.resolve();
 
 /** Read, change, write -- one at a time. `change` returns the new list. */
-export function updateMachines(change: (machines: RemoteMachine[]) => RemoteMachine[] | void, options: { durable?: boolean } = {}): Promise<RemoteMachine[]> {
+export function updateMachines(
+  change: (machines: RemoteMachine[], forgotten: readonly ForgottenMachine[]) => RemoteMachine[] | void,
+  options: { durable?: boolean; forget?: RemoteMachine } = {},
+): Promise<RemoteMachine[]> {
   const next = writing.then(async () => {
-    const machines = await readMachines();
-    const changed = change(machines) ?? machines;
-    await atomicWriteFile(machinesPath(), `${JSON.stringify({ version: 1, machines: changed } satisfies MachinesFile, null, 2)}\n`, options);
+    const file = await readMachinesFile();
+    const changed = change(file.machines, file.forgotten) ?? file.machines;
+    // A machine listed is not a forgotten one: added again (by hand), it may
+    // add itself back too.
+    let forgotten = file.forgotten.filter((item) => !changed.some((machine) => isForgotten([item], { ...(machine.installationId ? { installationId: machine.installationId } : {}), ...(machine.tailscale ? { nodeId: machine.tailscale.nodeId } : {}) })));
+    const gone = options.forget;
+    if (gone && (gone.installationId || gone.tailscale)) {
+      forgotten = [...forgotten, { ...(gone.installationId ? { installationId: gone.installationId } : {}), ...(gone.tailscale ? { nodeId: gone.tailscale.nodeId } : {}), at: new Date().toISOString() }];
+    }
+    const body: MachinesFile = { version: 1, machines: changed, ...(forgotten.length ? { forgotten } : {}) };
+    await atomicWriteFile(machinesPath(), `${JSON.stringify(body, null, 2)}\n`, { ...(options.durable !== undefined ? { durable: options.durable } : {}) });
     return changed;
   });
   writing = next.catch(() => undefined);
@@ -94,6 +131,9 @@ export function newMachineRecord(input: Pick<RemoteMachine, 'name' | 'sshTarget'
   return { id: randomUUID(), addedAt: new Date().toISOString(), updates: 'auto', ...input };
 }
 
-export function forgetMachine(id: string): Promise<RemoteMachine[]> {
-  return updateMachines((machines) => machines.filter((machine) => machine.id !== id));
+/** Removes a machine. `remember` (the user removed it): it does not add
+ * itself back by connecting here (remote/peer.ts) until added again by hand. */
+export async function forgetMachine(id: string, options: { remember?: boolean } = {}): Promise<RemoteMachine[]> {
+  const gone = options.remember ? (await readMachines()).find((machine) => machine.id === id) : undefined;
+  return updateMachines((machines) => machines.filter((machine) => machine.id !== id), gone ? { forget: gone } : {});
 }

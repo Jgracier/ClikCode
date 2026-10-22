@@ -257,6 +257,7 @@ export async function machineAction(host: RemoteHost, machine: RemoteMachine, ac
       return {};
     }
   }
-  await forgetMachine(machine.id);
+  // Removed by the user: it does not add itself back by connecting here (remote/peer.ts).
+  await forgetMachine(machine.id, { remember: true });
   return { notice: how === 'forget' ? `${machine.name} is forgotten here; ClikCode is still installed there.` : `${machine.name} is removed, and ClikCode is uninstalled there${how === 'data' ? ', its data too' : ''}.` };
 }

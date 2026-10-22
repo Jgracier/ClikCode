@@ -1,6 +1,10 @@
-import { describe, expect, it } from 'vitest';
-import { peerFromStatus, validPeer, withPeer, type PeerMachine } from './peer.js';
-import { newMachineRecord, type RemoteMachine } from './machines.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
+import { announceWhenReady, peerFromStatus, recordPeer, validPeer, withPeer, type PeerMachine } from './peer.js';
+import { forgetMachine, newMachineRecord, readMachines, updateMachines, type RemoteMachine } from './machines.js';
 
 const status = { BackendState: 'Running', Self: { ID: 'nLinux', HostName: 'justin-gracier-SER8', DNSName: 'linux.tail54ec51.ts.net.', UserID: 1 } };
 const peer: PeerMachine = {
@@ -21,8 +25,8 @@ describe('a machine connected to lists the one connecting', () => {
   });
 
   it('is added there, ready, updated only when asked', () => {
-    const [added] = withPeer([], peer, 'inst-mac');
-    expect(added).toMatchObject({ name: 'linux', sshTarget: peer.sshTarget, ready: true, updates: 'ask', installationId: 'inst-linux', installed: { version: '1.0.0', commit: 'abc' } });
+    const [added] = withPeer([], peer, 'inst-mac', { add: true });
+    expect(added).toMatchObject({ name: 'linux', sshTarget: peer.sshTarget, ready: true, updates: 'ask', addedBy: 'peer', installationId: 'inst-linux', installed: { version: '1.0.0', commit: 'abc' } });
   });
 
   it('refreshes the record there, keeping the address and policy the user gave', () => {
@@ -38,7 +42,15 @@ describe('a machine connected to lists the one connecting', () => {
   });
 
   it('adds nothing for a connection from this same installation', () => {
-    expect(withPeer([], peer, 'inst-linux')).toEqual([]);
+    expect(withPeer([], peer, 'inst-linux', { add: true })).toEqual([]);
+  });
+
+  it('one it added itself follows its new address; nothing removed comes back', () => {
+    const [record] = withPeer([], peer, 'inst-mac', { add: true });
+    const moved = { ...peer, name: 'workbox', sshTarget: 'jg@workbox.tail54ec51.ts.net', tailscale: { nodeId: 'nLinux', dnsName: 'workbox.tail54ec51.ts.net' } };
+    expect(withPeer([record!], moved, 'inst-mac')).toEqual([expect.objectContaining({ id: record!.id, name: 'workbox', sshTarget: 'jg@workbox.tail54ec51.ts.net' })]);
+    expect(withPeer([], peer, 'inst-mac', { add: true, forgotten: [{ installationId: 'inst-linux', at: '' }] })).toEqual([]);
+    expect(withPeer([], peer, 'inst-mac', { add: true, forgotten: [{ nodeId: 'nLinux', at: '' }] })).toEqual([]);
   });
 
   it('takes only a peer that is one: it came over the wire', () => {
@@ -46,5 +58,51 @@ describe('a machine connected to lists the one connecting', () => {
     expect(validPeer({ ...peer, sshTarget: '-oProxyCommand=x' })).toBe(false);
     expect(validPeer({ ...peer, tailscale: undefined })).toBe(false);
     expect(validPeer(undefined)).toBe(false);
+  });
+});
+
+describe('recording a machine that connected here', () => {
+  let home: string;
+  beforeEach(() => { home = mkdtempSync(join(tmpdir(), 'cc-peer-')); process.env.CLIKCODE_HOME = home; });
+  afterEach(() => { delete process.env.CLIKCODE_HOME; rmSync(home, { recursive: true, force: true }); });
+
+  it('lists it only once it is reachable back from here', async () => {
+    expect(await recordPeer(peer, async () => false)).toBe('unreachable');
+    expect(await readMachines()).toEqual([]);
+    expect(await recordPeer(peer, async () => true)).toBe('added');
+    expect(await readMachines()).toEqual([expect.objectContaining({ name: 'linux', addedBy: 'peer', ready: true })]);
+    // Known now: refreshed without logging in again.
+    expect(await recordPeer({ ...peer, commit: 'def' }, async () => { throw new Error('not asked'); })).toBe('refreshed');
+    expect((await readMachines())[0]!.installed?.commit).toBe('def');
+  });
+
+  it('does not add one the user removed, until it is added again by hand', async () => {
+    await recordPeer(peer, async () => true);
+    const [record] = await readMachines();
+    await forgetMachine(record!.id, { remember: true });
+    expect(await recordPeer(peer, async () => true)).toBe('skipped');
+    expect(await readMachines()).toEqual([]);
+    // Added by hand: listed, and no longer forgotten -- it refreshes, and removing it plainly does not remember it.
+    await updateMachines((machines) => [...machines, { ...newMachineRecord({ name: 'linux', sshTarget: peer.sshTarget }), installationId: 'inst-linux' }]);
+    expect(await recordPeer(peer, async () => true)).toBe('refreshed');
+    const [again] = await readMachines();
+    await forgetMachine(again!.id);
+    expect(await recordPeer(peer, async () => true)).toBe('added');
+  });
+});
+
+describe('every connection tells the machine there who is connecting', () => {
+  it('after its host-ready, once', async () => {
+    const stdout = new PassThrough();
+    const stdin = new PassThrough();
+    const sent: string[] = [];
+    stdin.on('data', (chunk: Buffer) => sent.push(chunk.toString('utf8')));
+    announceWhenReady({ stdout, stdin } as never, async () => peer);
+    stdout.write('{"type":"chat","chat":"x","event":{"type":"ready"}}\n{"type":"host-');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(sent).toEqual([]);
+    stdout.write('ready","version":"1"}\n{"type":"host-ready"}\n');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(sent.map((line) => JSON.parse(line))).toEqual([{ type: 'host-peer', machine: peer }]);
   });
 });

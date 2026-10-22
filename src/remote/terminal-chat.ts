@@ -12,11 +12,12 @@ import type { PaletteEntry } from '../tui/command-palette.js';
 import type { TerminalHarnessPrompter } from '../tui/prompter.js';
 import { interactiveSessionPicker } from '../tui/pickers/session.js';
 import { BOARD_COMMANDS, BOARD_LINE, BOARD_OWNS } from '../commands/ai/interactive/board.js';
-import { bridgeScript, remoteTerminalScript } from './install.js';
+import { remoteTerminalScript } from './install.js';
+import { startBridge } from './peer.js';
 import { readMachines, updatePolicy, type RemoteMachine } from './machines.js';
 import { autoUpdates, localBuildCommit, pinnedUpdateLine } from './updates.js';
 import { needsUpdate, reconnectWindowMachine } from './connection.js';
-import { spawnSsh, sshArgv } from './ssh.js';
+import { sshArgv } from './ssh.js';
 import type { LiveTurnInputResult } from '../turn/live-input.js';
 import type { SignInScreen } from '../gateway/login/vendor-sign-in.js';
 import { parseSlashInput, resolveSlashCommand, TERMINAL_ONLY_COMMANDS } from '../tui/slash/registry.js';
@@ -46,7 +47,7 @@ const REMOTE_FEATURES: readonly IdeFeature[] = ['session-delta'];
 
 /** Starts the machine's bridge (`ide-bridge --stdio` over ssh); a test's own. */
 export type RemoteBridgeStarter = (target: string) => ChildProcessWithoutNullStreams;
-const sshBridge: RemoteBridgeStarter = (target) => spawnSsh(target, bridgeScript());
+const sshBridge: RemoteBridgeStarter = (target) => startBridge(target);
 
 /** One chat channel into a machine's ClikCode (its multiplexed bridge, over ssh). */
 export class TerminalBridge {
