@@ -180,7 +180,7 @@ let lastBoardMachine = 'local';
 export async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string): Promise<{ id: string } | { new: true } | undefined>;
 export async function interactiveSessionPicker(
   rl: HarnessPrompter, currentId: string, boardCommands: readonly PickerOption<string>[] | undefined,
-  hooks?: { onSessionsSettled?: () => boolean },
+  hooks?: { onSessionsSettled?: () => boolean; machine?: string },
 ): Promise<{ id: string; draft?: string } | { new: true } | { compose: string } | { command: string } | { notice: string } | { remote: { machineId: string; chatId: string }; draft?: string } | undefined>;
 export async function interactiveSessionPicker(
   rl: HarnessPrompter, currentId: string,
@@ -188,8 +188,10 @@ export async function interactiveSessionPicker(
    * the list is the full-page board (tui/conversation-board.ts) instead. */
   boardCommands?: readonly PickerOption<string>[],
   /** The board calls `onSessionsSettled` when running chats finish and the
-   * list is idle. A true return leaves the board up until the process exits. */
-  hooks?: { onSessionsSettled?: () => boolean },
+   * list is idle. A true return leaves the board up until the process exits.
+   * `machine`: the machine of the chat it is opened from (a chat on another
+   * machine), whose chats it opens on; else the one last browsed. */
+  hooks?: { onSessionsSettled?: () => boolean; machine?: string },
 ): Promise<{ id: string; draft?: string } | { new: true } | { compose: string } | { command: string } | { notice: string } | { remote: { machineId: string; chatId: string }; draft?: string } | undefined> {
   const onBoard = Boolean(boardCommands && rl.board);
   // Titles, previews and dates live on the index. The transcript is read
@@ -366,7 +368,7 @@ export async function interactiveSessionPicker(
   // slow poll where the directories cannot be watched).
   const listWatch = watchConversationList(refreshActivity);
   // The user's machines Tailscale knows and that are not added: listed under
-  // the added ones, and choosing one adds it (as /remote does). They land
+  // the added ones, and choosing one adds it . They land
   // when Tailscale answers, in milliseconds, or not at all without it.
   let tailnet: DiscoveredMachine[] = [];
   if (onBoard) {
@@ -447,7 +449,7 @@ export async function interactiveSessionPicker(
           })),
         ],
         addable: (machineId) => machineId.startsWith('tailscale:'),
-        initialMachine: remote?.views().some((view) => view.machine.id === lastBoardMachine) ? lastBoardMachine : 'local',
+        initialMachine: ((machine) => (remote?.views().some((view) => view.machine.id === machine) ? machine : 'local'))(hooks?.machine ?? lastBoardMachine),
         onMachineSelected: (machineId) => { lastBoardMachine = machineId; },
         listChanged: (redraw) => { listChanged = redraw; },
         ...(initial ? { initial } : {}),

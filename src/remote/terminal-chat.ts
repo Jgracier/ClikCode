@@ -218,7 +218,7 @@ export function remotePalette(commands: readonly IdeSlashCommand[]): PaletteEntr
 export function outdatedNotice(machine: Pick<RemoteMachine, 'name' | 'updates' | 'updateError'>, updating: boolean, localCommit = localBuildCommit()): string {
   const differs = `${machine.name} runs another ClikCode build than this one`;
   if (updating) return `${differs}: updating it to this one's${localCommit ? ` (${localCommit.slice(0, 8)})` : ''} in the background; its chats switch over once they are quiet.`;
-  const how = 'Type /update to update it, or choose it in /remote.';
+  const how = 'Type /update to update it, or Tab on it in /machine.';
   if (machine.updateError && updatePolicy(machine) === 'auto') return `${differs}, and updating it failed (${machine.updateError}). ${how}`;
   return `${differs}. ${how}`;
 }
@@ -244,7 +244,7 @@ export async function runRemoteChat(
   let rejoining = false;
   while (choice) {
     const machine = (await readMachines()).find((item) => item.id === choice!.machineId && item.ready);
-    if (!machine) throw new Error('That remote machine is no longer added. Open /remote to add it again.');
+    if (!machine) throw new Error('That remote machine is no longer added. Add it again with /machine.');
     terminal.remoteMachineName = machine.name;
     const bridge = new TerminalBridge(machine.sshTarget, startBridge);
     let session: HarnessSession | undefined;
@@ -418,14 +418,15 @@ export async function runRemoteChat(
           if (outcome.ok) reconnectWindowMachine(machine.id);
           terminal.activity(outcome.ok
             ? `ClikCode on ${machine.name} is updated${outcome.info.commit ? ` to ${outcome.info.commit.slice(0, 8)}` : ''}; its chats switch over once they are quiet.`
-            : `Updating ClikCode on ${machine.name} failed: ${outcome.message} Type /update to update it.`);
+            // What to do first: the reason (a path, a command's output) can be longer than the row.
+            : `ClikCode on ${machine.name} could not be updated -- type /update to try again: ${outcome.message}`);
         }, () => undefined);
       }
       // A chat that moved on from there: the live one, where it went (move-terminal.ts liveChat).
       if (!rejoining && session?.movedTo) {
         const copy = session;
         const live = await liveChat(copy.movedTo!, async () => {
-          if (bridge.revision < RECLAIM_REVISION) throw new Error(`This chat moved to ${copy.movedTo!.machine}, which does not answer, and ClikCode on ${machine.name} is too old to go on with it: update it (/remote).`);
+          if (bridge.revision < RECLAIM_REVISION) throw new Error(`This chat moved to ${copy.movedTo!.machine}, which does not answer, and ClikCode on ${machine.name} is too old to go on with it: update it (Tab on it in /machine).`);
           await bridge.request({ type: 'reclaim-moved', sessionId: copy.id });
           return { remote: { machineId: machine.id, chatId: copy.id } };
         });
@@ -444,7 +445,8 @@ export async function runRemoteChat(
         const line = leftTurn ? BOARD_LINE : (await terminal.question('› ', commands, { rightArrowPalette: true, leftArrowCommand: BOARD_LINE, signal: promptController.signal })).trim();
         leftTurn = false;
         if (line === BOARD_LINE) {
-          const picked = await interactiveSessionPicker(terminal, localId, BOARD_COMMANDS);
+          // Left from a chat on another machine: that machine's chats first.
+          const picked = await interactiveSessionPicker(terminal, localId, BOARD_COMMANDS, { machine: machine.id });
           if (!picked) continue;
           if ('remote' in picked) { choice = picked.remote; draft = picked.draft; break; }
           if ('id' in picked) return picked.id;

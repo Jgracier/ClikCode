@@ -7,7 +7,7 @@
  * Read-only: nothing is opened, sent or changed on the other machine. The
  * terminal keeps ONE connection per machine for the life of its window
  * (`holdWindowMachines`): made the first time a list shows the machines (the
- * board, /machine, /remote), reused by every list and move after it, and
+ * board, /machine), reused by every list and move after it, and
  * ended when the window closes (`closeWindowMachines`). A machine that cannot
  * be reached is offline, shown with the chats it had last time (the cache in
  * machines.json), and tried again with a growing pause while a list shows it;
@@ -65,7 +65,7 @@ export interface LinkOptions {
   backoffMs?: readonly number[];
   /** Update an outdated machine by its policy (default on). Off where the
    * connection only shows the machine's state while the user chooses what
-   * to do with it (/remote's list). A function is asked each time: the
+   * to do with it (/machine's list). A function is asked each time: the
    * window's connections update only while the board holds them. */
   autoUpdate?: boolean | (() => boolean);
   /** Whether anything shows the machine now. When not, a lost connection is
@@ -451,7 +451,7 @@ export class RemoteMachines {
       for (const link of this.links) {
         const record = machines.find((machine) => machine.id === link.view.machine.id);
         if (record && record.sshTarget === link.view.machine.sshTarget && record.name === link.view.machine.name) {
-          // Its policy may have changed in /remote; the connection has not.
+          // Its policy may have changed in /machine; the connection has not.
           link.view.machine.updates = record.updates;
           next.push(link);
         } else ended.push(link);
@@ -577,7 +577,7 @@ export class RemoteMachines {
 let windowMachines: RemoteMachines | undefined;
 
 /** Holds the window's connections for a list (the board with `autoUpdate`,
- * /machine and /remote without): connects only to machines it has none to. */
+ * /machine without): connects only to machines it has none to. */
 export function holdWindowMachines(use: { autoUpdate?: boolean } = {}, options: LinkOptions = {}): Promise<MachinesHold> {
   windowMachines ??= new RemoteMachines(options, true);
   return windowMachines.hold(use);

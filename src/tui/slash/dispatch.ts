@@ -36,7 +36,6 @@ import { interactiveHarnessOptionPicker } from '../pickers/options.js';
 import { interactiveToolsPicker } from '../pickers/tools.js';
 import { interactiveSettingsPicker } from '../pickers/settings.js';
 import { doctorSummary } from '../doctor-summary.js';
-import { interactiveRemotePicker } from '../pickers/remote.js';
 import { parseCommitArgument, updateThisMachine } from '../../remote/self-update.js';
 import { localMachineName } from '../../remote/board-rows.js';
 import { emitHarnessOutput } from '../../harness/output.js';
@@ -107,7 +106,7 @@ export interface SlashHost {
   /** /machine: move the chat to another machine (remote/move-terminal.ts).
    * Absent: this client chooses the machine another way (the editor's chip). */
   moveToMachine?(id: string): Promise<InteractiveSlashOutcome>;
-  /** A progress line in the chat (each step of /remote's install, of
+  /** A progress line in the chat (each step of a machine's install, of
    * /update). Absent: the prompter's activity line, else an output record. */
   line?(text: string): void;
   /** The client's own answer to a command, before the shared handlers: a
@@ -419,11 +418,6 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
     machine: async () => {
       if (!host.moveToMachine) throw new Error('Choose the machine with the machine chip under the message box: the chat moves there.');
       return host.moveToMachine(id);
-    },
-    // ClikCode Remote: the other machines on the board (tui/pickers/remote.ts).
-    remote: async () => {
-      if (!host.canPick) throw new Error('/remote opens a list: run it in the interactive ClikCode session.');
-      return interactiveRemotePicker({ prompter: rl, ask: host.ask, withBusy: host.withBusy, line: progressLine('remote') });
     },
     // This machine's ClikCode -- the machine that owns this chat, which is
     // where this runs (remote/self-update.ts). Busy work, not a turn.

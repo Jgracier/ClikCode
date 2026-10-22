@@ -19,7 +19,7 @@ import { isRemoteRowValue, localMachineName, updateText } from './board-rows.js'
 import { autoUpdateDecision, AutoUpdates } from './updates.js';
 import { outdatedNotice } from './terminal-chat.js';
 import { localMoveEnd, moveTerminalChat } from './move-terminal.js';
-import { interactiveRemotePicker, notYetAdded, type RemoteHost } from '../tui/pickers/remote.js';
+import { notYetAdded } from '../tui/pickers/remote.js';
 import type { IdeConversation } from '../ide/protocol.js';
 import type { HarnessPrompter, PickerOption, PickerSettings } from '../harness/prompter.js';
 
@@ -578,70 +578,94 @@ describe('the board’s connections', () => {
   });
 });
 
-describe('/remote', () => {
+describe('/machine keeps the machines (what /remote was)', () => {
   // Its list holds the window's connections; each test is its own window.
   afterEach(() => closeWindowMachines());
-  /** A prompter that answers lists by title and questions in order. */
-  const scripted = (choices: Record<string, (options: readonly PickerOption<unknown>[]) => unknown>, answers: Array<string | undefined>) => {
+  type Answer = unknown | { action: [string, string] };
+  /** /machine's list (and its sub-lists) answered by title; `{ action }` is Tab on a row. Questions are answered in order; undefined is Esc. */
+  const scripted = (choices: Record<string, (options: readonly PickerOption<unknown>[]) => Answer>, answers: Array<string | undefined>) => {
     const asked: string[] = [];
     const lines: string[] = [];
+    const listed: Array<readonly PickerOption<unknown>[]> = [];
     const prompter = {
-      question: async () => '',
-      // As the list would be once what it waits on (Tailscale, each machine's state) has landed.
-      select: async <T>(title: string, options: readonly PickerOption<T>[], _onAction: unknown, settings?: PickerSettings<T>) => {
-        await Promise.race([Promise.all([settings?.refresh ?? []].flat()), new Promise((resolve) => setTimeout(resolve, 8000))]);
-        return choices[title]?.((settings?.refreshedOptions?.() ?? options) as readonly PickerOption<unknown>[]) as T | undefined;
+      question: async (label: string) => {
+        asked.push(label.replace(/ › $/, ''));
+        const answer = answers.shift();
+        if (answer === undefined) throw Object.assign(new Error('cancelled'), { code: 'ERR_PROMPT_CANCELLED' });
+        return answer;
       },
+      // As the list would be once what it waits on (Tailscale, each machine's state) has landed.
+      select: async <T>(title: string, options: readonly PickerOption<T>[], onAction?: (value: T, action: string) => Promise<void>, settings?: PickerSettings<T>) => {
+        await Promise.race([Promise.all([settings?.refresh ?? []].flat()), new Promise((resolve) => setTimeout(resolve, 8000))]);
+        const rows = (settings?.refreshedOptions?.() ?? options) as readonly PickerOption<unknown>[];
+        if (title === 'Move this chat to') listed.push(rows);
+        const answer = choices[title]?.(rows);
+        if (answer && typeof answer === 'object' && 'action' in answer) {
+          const [value, action] = (answer as { action: [string, string] }).action;
+          await onAction?.(value as T, action);
+          return undefined;
+        }
+        return answer as T | undefined;
+      },
+      activity: (text: string) => { lines.push(stripAnsi(text)); },
       close: () => undefined,
     } as unknown as HarnessPrompter;
-    const remoteHost: RemoteHost = {
-      prompter,
-      ask: async (label) => { asked.push(label); return answers.shift(); },
-      withBusy: (_label, work) => work(),
-      line: (text) => lines.push(stripAnsi(text)),
-    };
-    return { remoteHost, asked, lines };
+    return { prompter, asked, lines, listed };
+  };
+  const machineOpen = (prompter: HarnessPrompter) => moveTerminalChat(prompter, { local: 'x' }, 'x', false, localMoveEnd());
+  /** The first list, then Esc: what Tab did is seen in the next one. */
+  const once = (answer: (options: readonly PickerOption<unknown>[]) => Answer) => {
+    let first = true;
+    return (options: readonly PickerOption<unknown>[]) => { if (!first) return undefined; first = false; return answer(options); };
   };
 
-  it('adds a machine by address; a refused login asks once which user, and remembers it', async () => {
+  it('adds a machine by address; a refused login asks once which user, and remembers it; the chat starts there', async () => {
     await updateMachines(() => []);
     host(root, 'guarded', { users: ['carol'] });
     writeFileSync(join(root, 'ssh_config.json'), '{}');
     const fallback = await defaultLoginUser('guarded');
-    const { remoteHost, asked, lines } = scripted({
-      'ClikCode Remote': (options) => options.find((option) => option.label.startsWith('Add by SSH address'))!.value,
+    const { prompter, asked, lines } = scripted({
+      'Move this chat to': (options) => options.find((option) => option.label.startsWith('Add by SSH address'))!.value,
     }, ['guarded', 'carol']);
-    const outcome = await interactiveRemotePicker(remoteHost);
+    const next = await machineOpen(prompter);
     // Asked again, typed: nothing offered. The user it refused is said.
     expect(asked).toEqual(['SSH address (user@host, host, or a Host alias)', 'Log in to guarded as which user?']);
     expect(lines.some((line) => line.startsWith('! ') && /refused the login/.test(line) && line.includes(`(as ${fallback}, ssh's default)`))).toBe(true);
-    expect(outcome.notice).toMatch(/guarded is added/);
     expect(lines.filter((line) => line.startsWith('✓')).length).toBe(6);
+    expect(lines.at(-1)).toMatch(/guarded is added/);
     const [machine] = await readMachines();
     expect(machine).toMatchObject({ name: 'guarded', sshTarget: 'carol@guarded', ready: true, installed: { version: '1.0.0' } });
     expect(machine!.installationId).toMatch(/^[0-9a-f-]{36}$/);
-  });
+    expect(next).toEqual({ remote: { machineId: machine!.id } });
+  }, 120_000);
 
-  it('asks only once: a second refusal stops with what to do', async () => {
+  it('asks only once: a second refusal stops with what to do; the machine is listed as not finished, Tab finishes it', async () => {
     await updateMachines(() => []);
     host(root, 'fortress', { users: ['nobody-you-know'] });
-    const { remoteHost, asked, lines } = scripted({
-      'ClikCode Remote': (options) => options.find((option) => option.label.startsWith('Add by SSH address'))!.value,
+    const { prompter, asked, lines, listed } = scripted({
+      'Move this chat to': (options) => options.find((option) => option.label.startsWith('Add by SSH address'))!.value,
     }, ['fortress', 'mallory']);
-    expect(await interactiveRemotePicker(remoteHost)).toEqual({});
+    expect(await machineOpen(prompter)).toBeUndefined();
     expect(asked.length).toBe(2);
     expect(lines.at(-1)).toMatch(/refused the login.*ssh-copy-id/);
     // The user given is remembered for the machine.
     const [kept] = await readMachines();
     expect(kept).toMatchObject({ sshTarget: 'mallory@fortress' });
     expect(kept!.ready).toBeFalsy();
-  });
+    // Listed next time, as not finished, with Finish installing under Tab.
+    const again = scripted({}, []);
+    await machineOpen(again.prompter);
+    const row = again.listed[0]!.find((option) => option.label === 'fortress')!;
+    expect(stripAnsi(row.detail ?? '')).toContain('install not finished');
+    expect(row.actions?.map((action) => action.label)).toEqual(['Finish installing', 'Updates: automatic · ask first instead', 'Remove…']);
+    expect(listed.length).toBe(1);
+  }, 120_000);
 
   it('asks which user before adding a tailnet machine, typed with nothing suggested, and installs as that user', async () => {
     await updateMachines(() => []);
     host(root, 'imac.tail-fake.ts.net', { users: ['root'] });
-    const { remoteHost, asked, lines } = scripted({ 'ClikCode Remote': () => 'tailscale:nNewMac' }, ['', 'bad user', 'root']);
-    const outcome = await interactiveRemotePicker(remoteHost);
+    const { prompter, asked, lines } = scripted({ 'Move this chat to': () => 'tailscale:nNewMac' }, ['', 'bad user', 'root']);
+    const next = await machineOpen(prompter);
     // A plain question, up front; an empty or invalid name says why and is asked again.
     expect(asked).toEqual(Array(3).fill('Log in to imac as which user?'));
     expect(lines.slice(0, 2)).toEqual([
@@ -650,65 +674,67 @@ describe('/remote', () => {
     ]);
     expect(lines.some((line) => /refused/.test(line))).toBe(false);
     expect(lines[2]).toMatch(/^Installing ClikCode on imac \(root@imac\.tail-fake\.ts\.net\)/);
-    expect(outcome.notice).toMatch(/imac is added/);
-    expect(await readMachines()).toEqual([expect.objectContaining({ name: 'imac', sshTarget: 'root@imac.tail-fake.ts.net', ready: true, tailscale: { nodeId: 'nNewMac', dnsName: 'imac.tail-fake.ts.net' } })]);
+    expect(lines.at(-1)).toMatch(/imac is added/);
+    const [machine] = await readMachines();
+    expect(machine).toMatchObject({ name: 'imac', sshTarget: 'root@imac.tail-fake.ts.net', ready: true, tailscale: { nodeId: 'nNewMac', dnsName: 'imac.tail-fake.ts.net' } });
+    expect(next).toEqual({ remote: { machineId: machine!.id } });
   }, 120_000);
 
   it('adds nothing when the user question is dismissed', async () => {
     await updateMachines(() => []);
-    const { remoteHost, lines } = scripted({ 'ClikCode Remote': () => 'tailscale:nNewMac' }, [undefined]);
-    expect(await interactiveRemotePicker(remoteHost)).toEqual({});
+    const { prompter, lines } = scripted({ 'Move this chat to': () => 'tailscale:nNewMac' }, [undefined]);
+    expect(await machineOpen(prompter)).toBeUndefined();
     expect(lines).toEqual([]);
     expect(await readMachines()).toEqual([]);
   });
 
-  it('lists added machines first, then the tailnet’s, then the address row', async () => {
+  it('lists this machine, the added ones with Tab options, the tailnet’s, then the address row', async () => {
     await updateMachines(() => [newMachineRecord({ name: 'devbox', sshTarget: 'devbox.tail-fake.ts.net', ready: true, tailscale: { nodeId: 'nBox' } })]);
-    let listed: readonly PickerOption<unknown>[] = [];
-    const { remoteHost } = scripted({ 'ClikCode Remote': (options) => { listed = options; return undefined; } }, []);
-    await interactiveRemotePicker(remoteHost);
-    expect(listed.map((option) => [option.group, option.label, stripAnsi(option.detail ?? '').replace(/^· /, '').split(' · ')[0]])).toEqual([
-      ['Added', 'devbox', 'offline'],
-      ['On your tailnet', 'imac', 'macOS'],
-      ['On your tailnet', 'winbox', 'windows'],
-      ['On your tailnet', 'macbook', 'macOS'],
-      ['Somewhere else', 'Add by SSH address…', 'user@host or a Host alias'],
+    const { prompter, listed } = scripted({}, []);
+    await machineOpen(prompter);
+    expect(listed[0]!.map((option) => [option.group, option.label])).toEqual([
+      [undefined, localMachineName()],
+      [undefined, 'devbox'],
+      ['On your tailnet', 'imac'],
+      ['On your tailnet', 'winbox'],
+      ['On your tailnet', 'macbook'],
+      ['Somewhere else', 'Add by SSH address…'],
     ]);
-    expect(stripAnsi(listed[3]!.detail!)).toBe('· macOS · last seen 2d ago · install ClikCode');
+    expect(listed[0]![1]!.actions?.map((action) => action.label)).toEqual(['Update ClikCode', 'Updates: automatic · ask first instead', 'Remove…']);
   });
 
-  it('switches a machine between automatic updates and asking first', async () => {
+  it('switches a machine between automatic updates and asking first (Tab), and opens the list again', async () => {
     const record: RemoteMachine = newMachineRecord({ name: 'prod', sshTarget: 'prod', ready: true });
     await updateMachines(() => [record]);
-    let offered: readonly PickerOption<unknown>[] = [];
-    const { remoteHost } = scripted({
-      'ClikCode Remote': () => `machine:${record.id}`,
-      prod: (options) => { offered = options; return 'policy'; },
-    }, []);
-    expect((await interactiveRemotePicker(remoteHost)).notice).toMatch(/^prod is updated only when you say so/);
-    expect(offered.map((option) => option.label)).toEqual(['Update ClikCode', 'Updates: automatic', 'Remove']);
+    const { prompter, lines, listed } = scripted({ 'Move this chat to': once(() => ({ action: [record.id, 'policy'] })) }, []);
+    expect(await machineOpen(prompter)).toBeUndefined();
+    expect(lines.at(-1)).toMatch(/^prod is updated only when you say so/);
     expect((await readMachines())[0]).toMatchObject({ updates: 'ask' });
-    expect((await interactiveRemotePicker(remoteHost)).notice).toMatch(/^prod is updated to this build by itself/);
-    expect(offered[1]!.label).toBe('Updates: ask first');
+    // The list came back, as it is now.
+    expect(listed.length).toBe(2);
+    expect(listed[1]!.find((option) => option.label === 'prod')!.actions![1]!.label).toBe('Updates: ask first · automatic instead');
+    const back = scripted({ 'Move this chat to': once(() => ({ action: [record.id, 'policy'] })) }, []);
+    await machineOpen(back.prompter);
+    expect(back.lines.at(-1)).toMatch(/^prod is updated to this build by itself/);
     expect((await readMachines())[0]).toMatchObject({ updates: 'auto' });
-  });
+  }, 60_000);
 
-  it('forgets a machine, and uninstalls there only when chosen', async () => {
+  it('removes a machine (Tab), and uninstalls there only when chosen', async () => {
     const { home } = host(root, 'retiring');
     expect((await installOnMachine('retiring', steps().reporter)).ok).toBe(true);
     const record: RemoteMachine = newMachineRecord({ name: 'retiring', sshTarget: 'retiring', ready: true });
     await updateMachines(() => [record]);
-    const { remoteHost } = scripted({
-      'ClikCode Remote': () => `machine:${record.id}`,
-      retiring: () => 'remove',
+    const { prompter, lines, listed } = scripted({
+      'Move this chat to': once(() => ({ action: [record.id, 'remove'] })),
       'Remove retiring': () => 'uninstall',
     }, []);
-    const outcome = await interactiveRemotePicker(remoteHost);
-    expect(outcome.notice).toMatch(/removed, and ClikCode is uninstalled there\.$/);
+    expect(await machineOpen(prompter)).toBeUndefined();
+    expect(lines.at(-1)).toMatch(/removed, and ClikCode is uninstalled there\.$/);
     expect(await readMachines()).toEqual([]);
+    expect(listed[1]!.some((option) => option.label === 'retiring')).toBe(false);
     expect(existsSync(join(home, '.local', 'share', 'clikcode', 'src'))).toBe(false);
     expect(existsSync(join(home, '.clikcode'))).toBe(true);
-  });
+  }, 120_000);
 });
 
 describe('/machine and the tailnet', () => {
@@ -736,6 +762,7 @@ describe('/machine and the tailnet', () => {
       ['On your tailnet', 'imac', '· macOS · add: install ClikCode'],
       ['On your tailnet', 'winbox', '· windows · not supported yet'],
       ['On your tailnet', 'macbook', '· macOS · offline'],
+      ['Somewhere else', 'Add by SSH address…', '· user@host or a Host alias from ~/.ssh/config'],
     ]);
   });
 
@@ -816,7 +843,7 @@ describe('keeping machines at this build', () => {
       await until(() => seen.includes(' · updating ClikCode…'), 30_000);
       await until(() => link.view.state === 'connected' && !link.view.updating && !link.view.needsUpdate, 60_000);
     } finally { await link.stop(); }
-    expect(seen).toContain(' · needs update (/remote)');
+    expect(seen).toContain(' · needs update (/machine)');
     expect(seen.at(-1)).toBe('');
     expect(gitIn(join(home, '.local', 'share', 'clikcode', 'src'), 'rev-parse', 'HEAD')).toBe(fakeWorld.commit);
     const [record] = await readMachines();
@@ -839,7 +866,7 @@ describe('keeping machines at this build', () => {
       expect(link.view.updating).toBeFalsy();
     } finally { await link.stop(); }
     expect(gitIn(join(home, '.local', 'share', 'clikcode', 'src'), 'rev-parse', 'HEAD')).toBe(older);
-    expect(outdatedNotice(machine, false)).toBe('careful runs another ClikCode build than this one. Type /update to update it, or choose it in /remote.');
+    expect(outdatedNotice(machine, false)).toBe('careful runs another ClikCode build than this one. Type /update to update it, or Tab on it in /machine.');
   }, 60_000);
 
   it('records a failed update and does not try that commit again', async () => {
@@ -854,7 +881,7 @@ describe('keeping machines at this build', () => {
     try {
       await until(() => Boolean(link.view.updateError), 60_000);
       expect(link.view).toMatchObject({ needsUpdate: true, updating: false });
-      expect(stripAnsi(updateText(link.view))).toBe(' · update failed (/remote)');
+      expect(stripAnsi(updateText(link.view))).toBe(' · update failed (/machine)');
     } finally { await link.stop(); }
     const [record] = await readMachines();
     expect(record!.updateError).toMatch(/^Getting ClikCode from GitHub: .*has no commit d{40}/);
