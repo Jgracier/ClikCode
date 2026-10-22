@@ -294,7 +294,8 @@ export async function aiSessionsList(): Promise<void> {
   const { isLive: workerIsLive, isOpen } = await liveWorkers();
   // Blank chats are not listed: a launch that was closed without typing is
   // not a conversation anyone can go back to (session/blank.ts).
-  const sessions = state.sessions.filter((session) => !isBlankConversation(session))
+  // Nor is the copy of a chat that moved to another machine: it is listed there.
+  const sessions = state.sessions.filter((session) => !session.movedTo && !isBlankConversation(session))
     .map((session) => ({ ...session, live: sessionIsLive(session, workerIsLive, isOpen) }));
   emitResult({ sessions });
 }

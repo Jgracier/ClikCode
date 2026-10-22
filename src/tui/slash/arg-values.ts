@@ -77,7 +77,7 @@ export function withArgValues(
       : []),
   ];
   const chats: Values = state.sessions
-    .filter((item) => item.id !== session.id && !isBlankConversation(item) && item.name)
+    .filter((item) => item.id !== session.id && !item.movedTo && !isBlankConversation(item) && item.name)
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
     .map((item) => ({ value: item.name!, detail: new Date(item.updatedAt).toLocaleDateString() }));
   const sandbox: Values = sessionSandboxMode(session.sandbox) === 'workspace'

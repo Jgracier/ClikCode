@@ -9,6 +9,7 @@ import { readMachines } from '../../../src/remote/machines';
 import { updateRemoteMachine } from '../../../src/remote/updates';
 import { discoverMachines, notYetAdded, readTailscaleStatus } from '../../../src/remote/tailscale';
 import type { IdeConversation } from './protocol';
+import { listedChats } from '../../../src/ide/protocol';
 import type { MachineUpdate } from './model/types';
 
 export interface ListedMachine {
@@ -142,7 +143,7 @@ class RemoteDirectory {
     if (connected) return connected;
     const machine = (await readMachines()).find((item) => item.id === machineId && item.ready);
     return machine ? {
-      machine, state: 'connecting', needsUpdate: Boolean(machine.needsUpdate), chats: machine.chats ?? [],
+      machine, state: 'connecting', needsUpdate: Boolean(machine.needsUpdate), chats: listedChats(machine.chats ?? []),
       ...(this.updating.has(machine.id) ? { updating: true } : {}), ...(machine.updateError ? { updateError: machine.updateError } : {}),
     } : undefined;
   }

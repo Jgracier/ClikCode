@@ -155,7 +155,6 @@ export async function conversationList(state: HarnessState, currentId: string | 
       ...(row.activity === 'working' && row.pending ? { turn: turnFacts(row.pending) } : {}),
       ...(row.needsYou ? { needsYou: true } : {}),
       ...(latest.resumeAt ? { resumeAt: latest.resumeAt.at } : {}),
-      ...(latest.movedTo ? { movedTo: latest.movedTo.machine } : {}),
       section: row.section,
       current: row.current,
     };

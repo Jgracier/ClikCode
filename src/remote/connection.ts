@@ -21,7 +21,7 @@
 import type { ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
-import type { IdeConversation, IdeEvent, IdeHostEvent, IdeHostRequest, IdeRequest } from '../ide/protocol.js';
+import { listedChats, type IdeConversation, type IdeEvent, type IdeHostEvent, type IdeHostRequest, type IdeRequest } from '../ide/protocol.js';
 import { IDE_PROTOCOL } from '../ide/protocol-version.js';
 import { bridgeScript } from './install.js';
 import { autoUpdates, localBuildCommit, type AutoUpdates } from './updates.js';
@@ -122,7 +122,7 @@ export class RemoteLink {
 
   constructor(machine: RemoteMachine, private readonly changed: () => void, private readonly options: LinkOptions = {}) {
     this.view = {
-      machine, state: 'connecting', needsUpdate: Boolean(machine.needsUpdate), chats: machine.chats ?? [],
+      machine, state: 'connecting', needsUpdate: Boolean(machine.needsUpdate), chats: listedChats(machine.chats ?? []),
       ...(machine.updateError ? { updateError: machine.updateError } : {}),
     };
   }
@@ -256,7 +256,7 @@ export class RemoteLink {
     } else if (inner.type === 'result' && inner.requestId === `list-${this.requestSeq}`) {
       this.querying = false;
       if (inner.ok && Array.isArray(inner.data)) {
-        this.set({ chats: inner.data as IdeConversation[] });
+        this.set({ chats: listedChats(inner.data as IdeConversation[]) });
         this.saveCache();
       }
       if (this.queryAgain) { this.queryAgain = false; this.query(); }
