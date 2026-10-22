@@ -359,7 +359,7 @@ export async function importChat(chat: ChatExport, names: MoveNames, facts: Move
 }
 
 /** One move request, answered by this machine's ClikCode: the bridge's
- * `export-chat` / `import-chat` / `mark-moved`, and the terminal's own chat
+ * `export-chat` / `import-chat` / `mark-moved` / `reclaim-moved`, and the terminal's own chat
  * in-process. */
 export async function answerMoveRequest(config: Conf | undefined, request: MoveRequest, currentId?: string, options: ExportOptions = {}): Promise<unknown> {
   switch (request.type) {
@@ -384,6 +384,8 @@ export async function answerMoveRequest(config: Conf | undefined, request: MoveR
     case 'mark-moved':
       await markMoved(request.sessionId, request.movedTo);
       return undefined;
+    case 'reclaim-moved':
+      return reclaimMovedChat(request.sessionId);
     default:
       throw new Error('unknown move request');
   }

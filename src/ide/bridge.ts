@@ -246,6 +246,7 @@ export class IdeBridge {
       case 'chat-have':
       case 'import-chat':
       case 'mark-moved':
+      case 'reclaim-moved':
         this.track(this.answerMove(request));
         return;
       case 'search-key': {
@@ -271,7 +272,7 @@ export class IdeBridge {
 
   /** A move to or from this machine (session/move.ts): the chat this bridge
    * shows is exported when none is named, and shown again once marked moved. */
-  private async answerMove(request: Extract<IdeRequest, { type: 'export-chat' | 'chat-have' | 'import-chat' | 'mark-moved' }>): Promise<void> {
+  private async answerMove(request: Extract<IdeRequest, { type: 'export-chat' | 'chat-have' | 'import-chat' | 'mark-moved' | 'reclaim-moved' }>): Promise<void> {
     const { requestId, ...move } = request;
     try {
       const { answerMoveRequest } = await import('../session/move.js');
@@ -283,7 +284,7 @@ export class IdeBridge {
       if (move.type === 'mark-moved' && move.sessionId === this.link.worker?.sessionId) this.link.detach();
       const data = await answerMoveRequest(this.config, move, this.sessionId, following ? { turnRunning: async () => this.link.running } : {});
       this.channel.send({ type: 'result', requestId, ok: true, ...(data === undefined ? {} : { data }) });
-      if (move.type === 'mark-moved' && move.sessionId === this.sessionId) await this.emitSession().catch(() => undefined);
+      if ((move.type === 'mark-moved' || move.type === 'reclaim-moved') && move.sessionId === this.sessionId) await this.emitSession().catch(() => undefined);
     } catch (error) {
       this.channel.send({ type: 'result', requestId, ok: false, error: messageOf(error) });
     }
