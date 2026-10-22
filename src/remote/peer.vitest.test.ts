@@ -41,6 +41,18 @@ describe('a machine connected to lists the one connecting', () => {
     expect(withPeer([half], peer, 'inst-mac')).toEqual([expect.objectContaining({ id: half.id, ready: true, installationId: 'inst-linux' })]);
   });
 
+  it('one machine is one record: a half-finished add of it under its other Tailscale name is dropped', () => {
+    // The MacBook as it was here: added and installed as `macbook`, and half-added as
+    // `justins-macbook-pro` -- the node it now says it is.
+    const mac: PeerMachine = { name: 'justins-macbook-pro', sshTarget: 'chronos@justins-macbook-pro.ts.net', tailscale: { nodeId: 'nPro', dnsName: 'justins-macbook-pro.ts.net' }, installationId: 'inst-mac', version: '1' };
+    const added: RemoteMachine = { ...newMachineRecord({ name: 'macbook', sshTarget: 'chronos@macbook.ts.net', tailscale: { nodeId: 'nOld' } }), installationId: 'inst-mac', ready: true, installed: { version: '1', at: '2026-10-01T00:00:00Z' } };
+    const half: RemoteMachine = newMachineRecord({ name: 'justins-macbook-pro', sshTarget: 'chronos@justins-macbook-pro.ts.net', tailscale: { nodeId: 'nPro' } });
+    expect(withPeer([half, added], mac, 'inst-linux')).toEqual([expect.objectContaining({ id: added.id, name: 'macbook', sshTarget: 'chronos@macbook.ts.net', ready: true })]);
+    // Both finished already (the same installation twice): the first install is kept.
+    const twice: RemoteMachine = { ...half, installationId: 'inst-mac', ready: true, installed: { version: '1', at: '2026-10-22T00:00:00Z' } };
+    expect(withPeer([twice, added], mac, 'inst-linux').map((record) => record.id)).toEqual([added.id]);
+  });
+
   it('adds nothing for a connection from this same installation', () => {
     expect(withPeer([], peer, 'inst-linux', { add: true })).toEqual([]);
   });
