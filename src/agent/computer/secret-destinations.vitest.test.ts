@@ -96,7 +96,7 @@ it('reads a key containing {{...}} text as plain text, not as a slot', async () 
 });
 
 it('connects a vendor key through ClikDeploy without putting it in process arguments', async () => {
-  await fake('clikdeploy', `printf '%s\\n' "$@" > "${dir}/argv"; cat > "${dir}/stdin"; echo '{}'`);
+  await fake('clikdeploy', `case "$1" in integrations) echo '{"status":"success","data":{"connection":{"status":"active"}}}';; *) printf '%s\\n' "$@" > "${dir}/argv"; cat > "${dir}/stdin"; echo '{}';; esac`);
   const [result] = await sendToDestinations(dir, [{ to: 'clikdeploy-connection', with: { integration: 'acme' } }], VALUE);
   expect(result).toMatchObject({ ok: true });
   const argv = await readFile(join(dir, 'argv'), 'utf8');
@@ -149,7 +149,7 @@ it('reads a plan a harness handed over as JSON text, because its cached schema d
 });
 
 it('connects a vendor key as a ClikDeploy connection through the product\'s own connect capability, the key JSON-escaped and never in a flag', async () => {
-  await fake('clikdeploy', `printf '%s\\n' "$@" > "${dir}/argv"; cat > "${dir}/stdin"; echo '{"status":"success","data":{"success":true,"data":{"status":"active"}}}'`);
+  await fake('clikdeploy', `case "$1" in integrations) echo '{"status":"success","data":{"connection":{"status":"active"}}}';; *) printf '%s\\n' "$@" > "${dir}/argv"; cat > "${dir}/stdin"; echo '{"status":"success","data":{"success":true,"data":{"status":"active"}}}';; esac`);
   const secret = 'ab"c\\d_0123456789';
   const [result] = await sendToDestinations(dir, [{ to: 'clikdeploy-connection', with: { integration: 'ipinfo' } }], secret);
   expect(result).toMatchObject({ ok: true, label: 'clikdeploy-connection (ipinfo)' });
@@ -162,7 +162,7 @@ it('connects a vendor key as a ClikDeploy connection through the product\'s own 
 
 it('a username the vendor hides from the browser (Mux\'s token id): the basic-auth username may name a saved secret, read from the vault only when sent', async () => {
   await saveNamedSecret(dir, 'mux/token-id', '3f2a9c1e-token-id-uuid');
-  await fake('clikdeploy', `printf '%s\\n' "$@" > "${dir}/argv"; cat > "${dir}/stdin"; echo '{}'`);
+  await fake('clikdeploy', `case "$1" in integrations) echo '{"status":"success","data":{"connection":{"status":"active"}}}';; *) printf '%s\\n' "$@" > "${dir}/argv"; cat > "${dir}/stdin"; echo '{}';; esac`);
   const plan = [{ to: 'clikdeploy-connection-basic', with: { integration: 'mux', username: 'secret:mux/token-id' } }];
   expect(await destinationProblem(dir, plan)).toBeUndefined();
   const [result] = await sendToDestinations(dir, plan, 'the-token-secret-0123456789');
@@ -177,4 +177,54 @@ it('a username the vendor hides from the browser (Mux\'s token id): the basic-au
   expect(plain[plain.indexOf('--args-json') + 1]).toBe('-');
   expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toMatchObject({ username: 'me@example.com' });
   expect(await destinationProblem(dir, [{ to: 'clikdeploy-connection-basic', with: { integration: 'mux', username: 'secret:no/such' } }])).toContain('not in the Secrets Manager');
+});
+
+/** A fake clikdeploy: `tools run connect_connector` prints connect.out and records its stdin; `integrations show <id>` prints show.out. */
+const fakeConnect = async (connectOut: string, showOut: string): Promise<void> => {
+  await writeFile(join(dir, 'connect.out'), connectOut);
+  await writeFile(join(dir, 'show.out'), showOut);
+  await fake('clikdeploy', `case "$1" in tools) cat > "${dir}/stdin"; cat "${dir}/connect.out";; integrations) printf '%s\\n' "$@" > "${dir}/show-argv"; cat "${dir}/show.out";; esac`);
+};
+const pretty = (value: unknown): string => JSON.stringify(value, null, 2);
+const shown = (connection: unknown): string => pretty({ status: 'success', command: 'integrations show', data: { id: 'cloudmersive-ocr', connection, accounts: connection ? [connection] : [] } });
+const sendKey = (): ReturnType<typeof sendToDestinations> => sendToDestinations(dir, [{ to: 'clikdeploy-connection', with: { integration: 'cloudmersive-ocr' } }], VALUE);
+
+it('clikdeploy-connection says `connected` only when ClikDeploy lists an active connection, not from the command\'s output', async () => {
+  // The real command prints a nested object with no message: it used to be reported as its last lines, `} } }`.
+  await fakeConnect(pretty({ status: 'success', command: 'tools run', tool: 'connect_connector', data: { success: true, data: { connected: { a: { b: 1 } } } } }), shown({ id: 'c1', status: 'active' }));
+  const [result] = await sendKey();
+  expect(result).toMatchObject({ ok: true, message: 'connected' });
+  expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toEqual({ integrationId: 'cloudmersive-ocr', apiKey: VALUE });
+  expect((await readFile(join(dir, 'show-argv'), 'utf8')).split('\n').slice(0, 3)).toEqual(['integrations', 'show', 'cloudmersive-ocr']);
+});
+
+it('clikdeploy-connection reports NOT connected when the command printed success but nothing was stored', async () => {
+  await fakeConnect(pretty({ status: 'success', message: 'Connected cloudmersive-ocr', data: { success: true } }), shown(null));
+  const [result] = await sendKey();
+  expect(result!.ok).toBe(false);
+  expect(result!.message).toBe('NOT connected: ClikDeploy shows no connection for cloudmersive-ocr; the command said: Connected cloudmersive-ocr');
+});
+
+it('clikdeploy-connection reports the reason when the connect call fails, and a connection that is not active', async () => {
+  await fakeConnect(pretty({ status: 'error', error: { code: 'BAD_KEY', message: `The key ${VALUE} was rejected by the vendor` } }), shown(null));
+  const [failed] = await sendKey();
+  expect(failed).toMatchObject({ ok: false });
+  expect(failed!.message).toMatch(/^NOT connected: The key \[secret hidden\] was rejected by the vendor$/);
+  expect(failed!.message).not.toContain(VALUE);
+  await fakeConnect(pretty({ status: 'success' }), shown({ id: 'c1', status: 'expired' }));
+  const [stale] = await sendKey();
+  expect(stale!.message).toBe('NOT connected: cloudmersive-ocr shows a connection with status "expired", not active');
+});
+
+it('clikdeploy-connection says NOT connected when the read-back itself fails', async () => {
+  await fakeConnect(pretty({ status: 'success' }), pretty({ status: 'error', message: 'The requested resource was not found.\nVerify the identifier.' }));
+  const [result] = await sendKey();
+  expect(result!.message).toBe('NOT connected: could not read the connection back (The requested resource was not found.)');
+});
+
+it('the basic-auth connection destination is verified the same way, with the username from the agent', async () => {
+  await fakeConnect(pretty({ status: 'success' }), shown({ id: 'c2', status: 'active' }));
+  const [result] = await sendToDestinations(dir, [{ to: 'clikdeploy-connection-basic', with: { integration: 'cloudmersive-ocr', username: 'ada' } }], VALUE);
+  expect(result).toMatchObject({ ok: true, message: 'connected' });
+  expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toEqual({ integrationId: 'cloudmersive-ocr', username: 'ada', password: VALUE });
 });

@@ -50,7 +50,9 @@ export async function settleSignup(stateDir: string, page: Page): Promise<string
     if (await page.locator(`${PASSWORD_FIELD}:visible`).count()) return undefined;
     pending.delete(page);
     if (!waiting.username) return undefined;
-    await saveLoginFields(stateDir, page.url(), { username: waiting.username, password: waiting.password }, waiting.itemId);
+    // A password this replaces is kept as `previous_password`: the account may already have been made with it.
+    const old = await savedPasswordFor(stateDir, page.url(), waiting.username, { rejected: true });
+    await saveLoginFields(stateDir, page.url(), { username: waiting.username, password: waiting.password, ...(old && old !== waiting.password ? { previous_password: old } : {}) }, waiting.itemId);
     return `Saved the new login for ${new URL(page.url()).hostname} (${waiting.username}) in ClikCode Secrets Manager.`;
   } catch { return undefined; } // The page is navigating; the next step looks again.
 }
