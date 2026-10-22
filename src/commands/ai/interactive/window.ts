@@ -187,6 +187,9 @@ function startBuildWatch(
     if (usageInterval) clearInterval(usageInterval);
     await closeAllWorkerClients().catch(() => undefined);
     await closePersistentTransport().catch(() => undefined);
+    // The one SSH connection per other machine the window kept for its
+    // lists and moves: the bridges there exit as their stdin closes.
+    await import('../../../remote/connection.js').then((remote) => remote.closeWindowMachines()).catch(() => undefined);
     // Nothing it showed keeps a local model up, even if this process lives
     // on (the exit hook covers a hard exit).
     await reconcileLocalModelLeases(undefined).catch(() => undefined);

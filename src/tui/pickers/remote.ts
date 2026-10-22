@@ -15,7 +15,7 @@ import chalk from 'chalk';
 import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
 import { relativeTime } from '../../harness/protocol/format.js';
 import { chooseOption } from './choose.js';
-import { RemoteMachines, type MachineView } from '../../remote/connection.js';
+import { holdWindowMachines, reconnectWindowMachine, type MachineView } from '../../remote/connection.js';
 import { forgetMachine, newMachineRecord, readMachines, updateMachine, updateMachines, updatePolicy, type RemoteMachine } from '../../remote/machines.js';
 import { installedRecord, localBuildCommit, updateRemoteMachine } from '../../remote/updates.js';
 import { discoverMachines, notYetAdded, readTailscaleStatus, type DiscoveredMachine } from '../../remote/tailscale.js';
@@ -56,11 +56,11 @@ export { notYetAdded } from '../../remote/tailscale.js';
 export async function interactiveRemotePicker(host: RemoteHost): Promise<InteractiveSlashOutcome> {
   const rl = host.prompter;
   const machines = await readMachines();
-  // The added machines' state comes from connecting to them, for as long as
-  // this list is open.
-  // Only to show their state: nothing is updated by itself while the user
-  // is choosing what to do with a machine.
-  const connections = await new RemoteMachines({ autoUpdate: false }).open();
+  // The added machines' state comes from the window's connections to them
+  // (made now for any it has none to, kept after the list closes). Only to
+  // show their state: nothing is updated by itself while the user is
+  // choosing what to do with a machine.
+  const connections = await holdWindowMachines();
   let discovered: DiscoveredMachine[] = [];
   let tailscaleError: string | undefined;
   const tailscale = readTailscaleStatus().then(({ status, error }) => {
@@ -107,7 +107,8 @@ export async function interactiveRemotePicker(host: RemoteHost): Promise<Interac
       refreshedOptions: options, refresh: [tailscale, ...settled], rows: Math.max(8, Math.min(14, (process.stdout.rows ?? 24) - 16)),
     });
   } finally {
-    void connections.close();
+    // The connections stay: the board and /machine use them next.
+    connections.release();
   }
   if (!chosen) return {};
   if (chosen === ADDRESS_VALUE) {
@@ -196,6 +197,7 @@ async function addMachine(host: RemoteHost, machine: RemoteMachine, recorded = f
   if (existing) {
     await forgetMachine(machine.id);
     await updateMachine(existing.id, (record) => installedRecord(record, info));
+    reconnectWindowMachine(existing.id);
     return { notice: `${machine.name} is ${existing.name}, already added: it is up to date now.` };
   }
   await updateMachine(machine.id, (record) => {
@@ -235,6 +237,8 @@ async function manageMachine(host: RemoteHost, machine: RemoteMachine): Promise<
       return {};
     }
     const { info } = outcome;
+    // The window's connection there goes to the new build.
+    reconnectWindowMachine(machine.id);
     return { notice: `ClikCode on ${machine.name} is updated${info.commit ? ` to ${info.commit.slice(0, 8)}` : ''}; its chats switch over once they are quiet.` };
   }
   if (action !== 'remove') return {};

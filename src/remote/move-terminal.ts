@@ -13,7 +13,7 @@ import { readState } from '../session/state/read.js';
 import { IDE_PROTOCOL } from '../ide/protocol-version.js';
 import { chooseOption } from '../tui/pickers/choose.js';
 import { localMachineName } from './board-rows.js';
-import { RemoteMachines, type LinkChannel } from './connection.js';
+import { holdWindowMachines, type LinkChannel, type MachinesHold } from './connection.js';
 import { readMachines, type RemoteMachine } from './machines.js';
 import { TerminalBridge, type RemoteBridgeStarter, type RemoteChatSelection } from './terminal-chat.js';
 
@@ -55,7 +55,7 @@ export function remoteMoveEnd(bridge: Pick<TerminalBridge, 'revision' | 'request
 /** The machines to choose from. The list opens at once: a machine still
  * connecting says so, and its row is redrawn as it answers (or after
  * STATE_WAIT_MS, as not answering). Picking one still connecting waits for it. */
-function machineList(current: string, machines: readonly RemoteMachine[], links: RemoteMachines | undefined): {
+function machineList(current: string, machines: readonly RemoteMachine[], links: MachinesHold | undefined): {
   rows: () => Array<PickerOption<string> & { offline?: string }>; refresh: Promise<unknown>[];
 } {
   const started = Date.now();
@@ -90,7 +90,7 @@ function machineList(current: string, machines: readonly RemoteMachine[], links:
 }
 
 /** Which machine to move to; undefined when it stays (Esc, its own machine, an offline one). */
-async function pickMachine(prompter: HarnessPrompter, current: string, machines: readonly RemoteMachine[], links: RemoteMachines | undefined): Promise<{ id: string; machine?: RemoteMachine } | undefined> {
+async function pickMachine(prompter: HarnessPrompter, current: string, machines: readonly RemoteMachine[], links: MachinesHold | undefined): Promise<{ id: string; machine?: RemoteMachine } | undefined> {
   const list = machineList(current, machines, links);
   const picked = await chooseOption(prompter, 'Move this chat to', list.rows(), undefined, { startAt: current, refreshedOptions: list.rows, refresh: list.refresh });
   if (!picked || picked === current) return undefined;
@@ -105,15 +105,15 @@ async function pickMachine(prompter: HarnessPrompter, current: string, machines:
 /** /machine. `here` is where the chat is, `source` its machine's end and
  * `hasContent` whether there is anything to move. Choosing a machine moves
  * the chat: nothing is asked and nothing said -- the chat opens there, and its
- * info line names the machine. The move goes over the connection the list
- * already opened to that machine. Resolves where it is next (undefined: it stayed). */
+ * info line names the machine. The move goes over the window's connection to
+ * that machine, the one the list shows it by. Resolves where it is next (undefined: it stayed). */
 export async function moveTerminalChat(
   prompter: HarnessPrompter, here: Here, sessionId: string, hasContent: boolean, source: MoveEnd,
   startBridge?: RemoteBridgeStarter,
 ): Promise<Here | undefined> {
   const current = 'local' in here ? 'local' : here.remote.machineId;
   const machines = (await readMachines()).filter((machine) => machine.ready);
-  const links = machines.length ? await new RemoteMachines({ autoUpdate: false }).open() : undefined;
+  const links = machines.length ? await holdWindowMachines().catch(() => undefined) : undefined;
   let bridge: TerminalBridge | undefined;
   let channel: LinkChannel | undefined;
   try {
@@ -136,7 +136,7 @@ export async function moveTerminalChat(
   } finally {
     channel?.close();
     bridge?.close();
-    void links?.close();
+    links?.release();
   }
 }
 
@@ -157,16 +157,26 @@ export async function offerMovedChat(_prompter: HarnessPrompter, movedTo: ChatMo
   const place = await movedChatPlace(movedTo);
   if (place && 'remote' in place) {
     const machine = (await readMachines()).find((item) => item.id === place.remote.machineId);
-    const bridge = machine ? new TerminalBridge(machine.sshTarget) : undefined;
+    // Over the window's connection to it when it has one; else one of its own.
+    const links = machine?.ready ? await holdWindowMachines().catch(() => undefined) : undefined;
+    let channel: LinkChannel | undefined;
+    let bridge: TerminalBridge | undefined;
     try {
-      if (machine && bridge) {
-        await bridge.connected();
-        return { local: (await moveChat(remoteMoveEnd(bridge, machine), localMoveEnd(), movedTo.sessionId)).sessionId };
+      if (machine) {
+        channel = await links?.channel(machine.id).catch(() => undefined);
+        if (!channel && !links?.views().some((view) => view.machine.id === machine.id)) {
+          bridge = new TerminalBridge(machine.sshTarget);
+          await bridge.connected();
+        }
+        const end = channel ?? bridge;
+        if (end) return { local: (await moveChat(remoteMoveEnd(end, machine), localMoveEnd(), movedTo.sessionId)).sessionId };
       }
     } catch {
       // fail-open-ok: the machine cannot hand it back (offline, too old): the copy kept here goes on.
     } finally {
+      channel?.close();
       bridge?.close();
+      links?.release();
     }
   }
   const { reclaimMovedChat } = await import('../session/move.js');
