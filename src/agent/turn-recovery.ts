@@ -11,9 +11,10 @@ const STEP_RETRY_CAP_SECONDS = 30;
 /** The longest a server's own Retry-After is honoured for one wait. */
 const RETRY_AFTER_CAP_SECONDS = 120;
 /** How long a turn waits for the user's own model to start on its GPU (it was asleep, or is still
- * loading): a GPU found, the weights downloaded, the model loaded -- minutes, not a blip. Its own
- * budget, apart from the retries of a failing step. */
-export const MODEL_START_BUDGET_SECONDS = 900;
+ * loading): a GPU found, the image and weights pulled, the model loaded -- minutes, not a blip. Its own
+ * budget, apart from the retries of a failing step. MEASURED 2026-10-22: a 0.5B vLLM model on ClikDeploy
+ * capacity took 11-16 min cold; the Gateway now races two GPUs on a slow cold start. */
+export const MODEL_START_BUDGET_SECONDS = 1200;
 /** How often a model that is starting is asked again. */
 export function modelStartWaitSeconds(retryAfter?: number): number {
   return Math.min(60, Math.max(10, retryAfter !== undefined && Number.isFinite(retryAfter) ? retryAfter : 30));
