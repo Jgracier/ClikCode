@@ -154,7 +154,7 @@ function stepLines(host: RemoteHost): InstallReporter {
 }
 
 /** Runs the install (or update) and says how it went; on a refused login,
- * asks once which user to log in as, and remembers it for the machine. An
+ * asks once more which user to log in as, and remembers it for the machine. An
  * update goes to this build's commit when it has one (else GitHub main). */
 async function runInstall(host: RemoteHost, machine: RemoteMachine, update: boolean): Promise<{ outcome: InstallOutcome; machine: RemoteMachine }> {
   let target = machine.sshTarget;
@@ -167,48 +167,34 @@ async function runInstall(host: RemoteHost, machine: RemoteMachine, update: bool
       : installOnMachine(target, stepLines(host))));
     if (outcome.ok || !outcome.auth || asked) return { outcome, machine };
     asked = true;
-    // Not a failure yet: why it is asking, then a list to answer with. The
-    // composer's prompt is one line, too short to carry the question.
-    host.line(`${chalk.yellow('!')} ${outcome.message}`);
-    const answer = await chooseLoginUser(host, machine.name, target);
-    if (!answer) return { outcome, machine };
-    target = withUser(target, answer);
+    // Not a failure yet: why it is asking (and which user it refused), then
+    // the question, typed again.
+    const who = targetUser(target) ? '' : ` (as ${await defaultLoginUser(target)}, ssh's default)`;
+    host.line(`${chalk.yellow('!')} ${outcome.message}${who}`);
+    const retried = await askLoginUser(host, machine.name, target);
+    if (!retried) return { outcome, machine };
+    target = retried;
     machine.sshTarget = target;
     await updateMachine(machine.id, (record) => { record.sshTarget = target; });
   }
 }
 
-const OTHER_USER = '__other__';
-
-/** Which user to log in as, after the login was refused: root (what servers
- * and Tailscale SSH policies most often allow) or one typed. The user it
- * refused, the one in the target or else ssh's default, is not offered again. */
-async function chooseLoginUser(host: RemoteHost, name: string, target: string): Promise<string | undefined> {
-  const refused = targetUser(target) ?? await defaultLoginUser(target);
-  const options: PickerOption<string>[] = [
-    ...(refused === 'root' ? [] : [{ label: 'root', detail: '· installs in /root', value: 'root' }]),
-    { label: 'Another user…', detail: '· type its name', value: OTHER_USER },
-  ];
-  const chosen = await chooseOption(host.prompter, `Log in to ${name} as (not ${refused})`, options);
-  if (chosen !== OTHER_USER) return chosen;
-  return (await host.ask('User'))?.trim() || undefined;
-}
-
-/** Which user to log in to a machine Tailscale found as, asked before
- * anything connects: Tailscale gives the machine and the name it is reached
- * at, never the account on it. ssh's own choice for it (~/.ssh/config's
- * `User`, else the user here) is first, then root (what servers and Tailscale
- * SSH policies most often allow), or one typed. Undefined: Esc, add nothing. */
+/** Which user to log in to `name` as: a plain question, typed, nothing
+ * suggested or assumed -- Tailscale gives the machine and the name it is
+ * reached at, never the account on it, and only the user knows which one is
+ * theirs. A name that is not one says why and is asked again. Returns
+ * `user@host` for `target`; undefined: Esc, add nothing. */
 export async function askLoginUser(host: RemoteHost, name: string, target: string): Promise<string | undefined> {
-  const fallback = await defaultLoginUser(target);
-  const options: PickerOption<string>[] = [
-    { label: fallback, detail: `· ssh's default for ${targetHost(target)}`, value: fallback },
-    ...(fallback === 'root' ? [] : [{ label: 'root', detail: '· installs in /root', value: 'root' }]),
-    { label: 'Another user…', detail: '· type its name', value: OTHER_USER },
-  ];
-  const chosen = await chooseOption(host.prompter, `Log in to ${name} as`, options);
-  if (chosen !== OTHER_USER) return chosen;
-  return (await host.ask(`User on ${name}`))?.trim() || undefined;
+  for (;;) {
+    const typed = await host.ask(`Log in to ${name} as which user?`);
+    if (typed === undefined) return undefined;
+    if (!typed.trim()) { host.line(`${chalk.yellow('!')} Type a user name, or Esc to add nothing.`); continue; }
+    try {
+      return withUser(target, typed);
+    } catch (error) {
+      host.line(`${chalk.yellow('!')} ${error instanceof Error ? error.message : String(error)} Type another, or Esc to add nothing.`);
+    }
+  }
 }
 
 /** What adding a machine came to: its id once its chats can be listed
@@ -226,9 +212,9 @@ export async function addDiscoveredMachine(host: RemoteHost, found: DiscoveredMa
   if (existing?.ready) return { id: existing.id };
   let target = existing?.sshTarget ?? validateSshTarget(found.dnsName ?? found.hostName);
   if (!targetUser(target)) {
-    const user = await askLoginUser(host, found.name, target);
-    if (!user) return {};
-    target = withUser(target, user);
+    const typed = await askLoginUser(host, found.name, target);
+    if (!typed) return {};
+    target = typed;
   }
   if (existing) {
     existing.sshTarget = target;
