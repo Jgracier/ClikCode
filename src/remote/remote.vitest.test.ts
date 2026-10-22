@@ -498,15 +498,11 @@ describe('/remote', () => {
     const fallback = await defaultLoginUser('guarded');
     const { remoteHost, asked, lines } = scripted({
       'ClikCode Remote': (options) => options.find((option) => option.label.startsWith('Add by SSH address'))!.value,
-      // The user it refused is named in the list's title, not offered; root is.
-      [`Log in to guarded as (not ${fallback})`]: (options) => {
-        expect(options.map((option) => option.label)).toEqual(['root', 'Another user…']);
-        return options[1]!.value;
-      },
     }, ['guarded', 'carol']);
     const outcome = await interactiveRemotePicker(remoteHost);
-    expect(asked).toEqual(['SSH address (user@host, host, or a Host alias)', 'User']);
-    expect(lines.some((line) => line.startsWith('! ') && /refused the login/.test(line))).toBe(true);
+    // Asked again, typed: nothing offered. The user it refused is said.
+    expect(asked).toEqual(['SSH address (user@host, host, or a Host alias)', 'Log in to guarded as which user?']);
+    expect(lines.some((line) => line.startsWith('! ') && /refused the login/.test(line) && line.includes(`(as ${fallback}, ssh's default)`))).toBe(true);
     expect(outcome.notice).toMatch(/guarded is added/);
     expect(lines.filter((line) => line.startsWith('✓')).length).toBe(6);
     const [machine] = await readMachines();
@@ -517,10 +513,8 @@ describe('/remote', () => {
   it('asks only once: a second refusal stops with what to do', async () => {
     await updateMachines(() => []);
     host(root, 'fortress', { users: ['nobody-you-know'] });
-    const fallbackUser = await defaultLoginUser('fortress');
     const { remoteHost, asked, lines } = scripted({
       'ClikCode Remote': (options) => options.find((option) => option.label.startsWith('Add by SSH address'))!.value,
-      [`Log in to fortress as (not ${fallbackUser})`]: () => '__other__',
     }, ['fortress', 'mallory']);
     expect(await interactiveRemotePicker(remoteHost)).toEqual({});
     expect(asked.length).toBe(2);
@@ -531,28 +525,26 @@ describe('/remote', () => {
     expect(kept!.ready).toBeFalsy();
   });
 
-  it('asks which user before adding a tailnet machine, ssh’s default first, and installs as the one chosen', async () => {
+  it('asks which user before adding a tailnet machine, typed with nothing suggested, and installs as that user', async () => {
     await updateMachines(() => []);
     host(root, 'imac.tail-fake.ts.net', { users: ['root'] });
-    const fallback = await defaultLoginUser('imac.tail-fake.ts.net');
-    let offered: string[] = [];
-    const { remoteHost, asked, lines } = scripted({
-      'ClikCode Remote': () => 'tailscale:nNewMac',
-      'Log in to imac as': (options) => { offered = options.map((option) => option.label); return 'root'; },
-    }, []);
+    const { remoteHost, asked, lines } = scripted({ 'ClikCode Remote': () => 'tailscale:nNewMac' }, ['', 'bad user', 'root']);
     const outcome = await interactiveRemotePicker(remoteHost);
-    expect(offered).toEqual(fallback === 'root' ? ['root', 'Another user…'] : [fallback, 'root', 'Another user…']);
-    // Asked once, up front: no refused login to ask again after.
-    expect(asked).toEqual([]);
+    // A plain question, up front; an empty or invalid name says why and is asked again.
+    expect(asked).toEqual(Array(3).fill('Log in to imac as which user?'));
+    expect(lines.slice(0, 2)).toEqual([
+      '! Type a user name, or Esc to add nothing.',
+      '! "bad user" is not a user name. Type another, or Esc to add nothing.',
+    ]);
     expect(lines.some((line) => /refused/.test(line))).toBe(false);
-    expect(lines[0]).toMatch(/^Installing ClikCode on imac \(root@imac\.tail-fake\.ts\.net\)/);
+    expect(lines[2]).toMatch(/^Installing ClikCode on imac \(root@imac\.tail-fake\.ts\.net\)/);
     expect(outcome.notice).toMatch(/imac is added/);
     expect(await readMachines()).toEqual([expect.objectContaining({ name: 'imac', sshTarget: 'root@imac.tail-fake.ts.net', ready: true, tailscale: { nodeId: 'nNewMac', dnsName: 'imac.tail-fake.ts.net' } })]);
   }, 120_000);
 
   it('adds nothing when the user question is dismissed', async () => {
     await updateMachines(() => []);
-    const { remoteHost, lines } = scripted({ 'ClikCode Remote': () => 'tailscale:nNewMac', 'Log in to imac as': () => undefined }, []);
+    const { remoteHost, lines } = scripted({ 'ClikCode Remote': () => 'tailscale:nNewMac' }, [undefined]);
     expect(await interactiveRemotePicker(remoteHost)).toEqual({});
     expect(lines).toEqual([]);
     expect(await readMachines()).toEqual([]);
@@ -610,8 +602,8 @@ describe('/remote', () => {
 describe('/machine and the tailnet', () => {
   afterEach(() => closeWindowMachines());
   /** /machine's list, as it is once Tailscale has answered: `choose` answers it by title. */
-  const picker = (choose: Record<string, (options: readonly PickerOption<unknown>[]) => unknown>, seen: { rows: readonly PickerOption<unknown>[]; lines: string[] }) => ({
-    question: async () => '',
+  const picker = (choose: Record<string, (options: readonly PickerOption<unknown>[]) => unknown>, seen: { rows: readonly PickerOption<unknown>[]; lines: string[]; asked?: string[] }, answers: string[] = []) => ({
+    question: async (label: string) => { seen.asked?.push(label); return answers.shift() ?? ''; },
     select: async <T>(title: string, options: readonly PickerOption<T>[], _onAction: unknown, settings?: PickerSettings<T>) => {
       await Promise.all([settings?.refresh ?? []].flat());
       const rows = (settings?.refreshedOptions?.() ?? options) as readonly PickerOption<unknown>[];
@@ -637,15 +629,12 @@ describe('/machine and the tailnet', () => {
 
   it('adds one chosen there -- which user, then the install -- and the chat starts on it', async () => {
     await updateMachines(() => []);
-    host(root, 'devbox.tail-fake.ts.net');
-    const fallback = await defaultLoginUser('devbox.tail-fake.ts.net');
-    const seen = { rows: [] as readonly PickerOption<unknown>[], lines: [] as string[] };
-    const next = await moveTerminalChat(picker({
-      'Move this chat to': () => 'tailscale:nBox',
-      'Log in to devbox as': (options) => options[0]!.value,
-    }, seen), { local: 'x' }, 'x', false, localMoveEnd());
+    host(root, 'devbox.tail-fake.ts.net', { users: ['dev'] });
+    const seen = { rows: [] as readonly PickerOption<unknown>[], lines: [] as string[], asked: [] as string[] };
+    const next = await moveTerminalChat(picker({ 'Move this chat to': () => 'tailscale:nBox' }, seen, ['dev']), { local: 'x' }, 'x', false, localMoveEnd());
+    expect(seen.asked).toEqual(['Log in to devbox as which user? › ']);
     const [machine] = await readMachines();
-    expect(machine).toMatchObject({ name: 'devbox', sshTarget: `${fallback}@devbox.tail-fake.ts.net`, ready: true });
+    expect(machine).toMatchObject({ name: 'devbox', sshTarget: 'dev@devbox.tail-fake.ts.net', ready: true });
     expect(next).toEqual({ remote: { machineId: machine!.id } });
     expect(seen.lines.filter((line) => line.startsWith('✓')).length).toBe(6);
     expect(seen.lines.at(-1)).toMatch(/^devbox is added/);

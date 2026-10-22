@@ -256,9 +256,9 @@ a time in your chat:
 6. the new `~/.local/bin/clikcode` asked for its version and installation id.
 
 Tailscale gives the address; the one thing it cannot know is the user to log
-in as, so adding a machine asks that first (the `User` from `~/.ssh/config`,
-else yours, offered as the default; `root` and any other name are a choice
-away) and remembers it. A refused login asks once more.
+in as, so adding a machine asks that first — "Log in to <machine> as which
+user?", typed, with nothing suggested or assumed (Esc adds nothing) — and
+remembers it as `user@host`. A refused login asks once more.
 Nothing is copied from this machine — no accounts, sign-ins or settings: the
 other machine signs in to its providers from scratch, in its own chats.
 Windows machines are listed but not supported yet.

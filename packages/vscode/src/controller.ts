@@ -18,7 +18,6 @@ import { discoverMachines, readTailscaleStatus } from '../../../src/remote/tails
 import { forgetMachine, newMachineRecord, readMachines, updateMachine, updateMachines } from '../../../src/remote/machines';
 import { installedRecord } from '../../../src/remote/updates';
 import { targetUser, validateSshTarget, withUser } from '../../../src/remote/shell';
-import { defaultLoginUser } from '../../../src/remote/ssh';
 import type { WebviewSurface } from './chat-view';
 import { diffModel } from './model-patch';
 import { DraftRestores, LatestRead } from './controller/reads';
@@ -35,6 +34,23 @@ import { chatHasContent, moveChat, movedChatMachine, type MoveEnd, type MoveRequ
 
 /** What this editor handles beyond the base protocol (protocol.ts IdeFeature). */
 const IDE_FEATURES: readonly IdeFeature[] = ['copy', 'search-walk', 'session-delta'];
+
+/** Which user to log in to a machine as (`user@host` for `target`): typed,
+ * nothing suggested or filled in; a name that is not one says why and stays
+ * open. `refused`: the login just refused, said above the box. Esc adds nothing. */
+async function askLoginUser(name: string, target: string, refused?: string): Promise<string> {
+  const user = await vscode.window.showInputBox({
+    title: `Log in to ${name} as which user?`,
+    prompt: refused ?? `The user on ${name} to log in as. Tailscale finds the machine, not the account on it.`,
+    ignoreFocusOut: true,
+    validateInput: (value) => {
+      if (!value.trim()) return 'Type a user name, or Esc to add nothing.';
+      try { withUser(target, value); return undefined; } catch (error) { return error instanceof Error ? error.message : String(error); }
+    },
+  });
+  if (user === undefined || !user.trim()) throw new Error('Adding the machine was cancelled.');
+  return withUser(target, user);
+}
 
 export interface ControllerHost {
   log: vscode.OutputChannel;
@@ -833,21 +849,10 @@ export class ClikCodeController implements vscode.Disposable {
     if (existing?.ready) return existing.id;
     let target = existing?.sshTarget ?? validateSshTarget(found.dnsName ?? found.hostName);
     // Tailscale gives the machine and the name it is reached at, never the
-    // account on it: which user is asked before anything connects, with
-    // ssh's own choice for it (~/.ssh/config's User, else the user here) filled in.
+    // account on it: which user is asked before anything connects, typed,
+    // nothing suggested or filled in.
     if (!targetUser(target)) {
-      const fallback = await defaultLoginUser(target);
-      const user = await vscode.window.showInputBox({
-        title: `Log in to ${found.name} as`,
-        prompt: `The SSH user on ${found.name}: Tailscale finds the machine, not the account. root is what Tailscale SSH policies most often allow.`,
-        value: fallback, placeHolder: 'user', ignoreFocusOut: true,
-        validateInput: (value) => {
-          if (!value.trim()) return undefined;
-          try { withUser(target, value); return undefined; } catch (error) { return error instanceof Error ? error.message : String(error); }
-        },
-      });
-      if (!user?.trim()) throw new Error('Adding the machine was cancelled.');
-      target = withUser(target, user.trim());
+      target = await askLoginUser(found.name, target);
       if (existing) await updateMachine(existing.id, (record) => { record.sshTarget = target; });
     }
     let outcome;
@@ -862,14 +867,7 @@ export class ClikCodeController implements vscode.Disposable {
         return installOnMachine(target, reporter);
       });
       if (outcome.ok || !outcome.auth || attempt) break;
-      const refused = await defaultLoginUser(target);
-      const user = await vscode.window.showInputBox({
-        title: `Log in to ${found.name} as which user?`,
-        prompt: `SSH refused ${refused}. Enter an allowed user, such as root.`,
-        placeHolder: 'root', ignoreFocusOut: true,
-      });
-      if (!user?.trim()) throw new Error('Connection cancelled.');
-      target = withUser(target, user.trim());
+      target = await askLoginUser(found.name, target, outcome.message);
     }
     if (!outcome?.ok) throw new Error(outcome?.message ?? 'The remote install did not complete.');
     const info = outcome.info;
