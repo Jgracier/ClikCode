@@ -665,6 +665,8 @@ SCENARIOS = {
         'steps': [
             ('settle', 2), ('snap', 'closed'),
             ('type', '/remote'), ('wait_for', 'On your tailnet', 15), ('wait_for', 'macbook', 10), ('settle', 1), ('snap', 'list'),
+            # Tailscale gives the machine, not the account on it: which user is asked first.
+            ('keys', '\r'), ('wait_for', 'Log in to devbox as', 15), ('settle', 0.5), ('snap', 'user'),
             ('keys', '\r'), ('wait_for', 'devbox is added', 60), ('settle', 1), ('snap', 'installed'),
             ('keys', '\x1b[D'), ('wait_for', '← machines', 20), ('snap', 'local-chats'),
             ('keys', '\x1b[D'), ('wait_for', 'devbox', 20), ('snap', 'machines'),
@@ -680,6 +682,7 @@ SCENARIOS = {
         'watch': [],
         'snap_contains': {
             'list': ['ClikCode Remote', 'On your tailnet', 'devbox', 'imac', 'macbook', 'winbox  · windows · online · not supported yet', 'Add by SSH address'],
+            'user': ['Log in to devbox as', "ssh's default for devbox.tail-fake.ts.net", 'root', 'Another user…'],
             'installed': ['Installing ClikCode on devbox', '1/6 Checking the machine', '2/6 Node.js', '3/6 git', '4/6 Getting ClikCode from GitHub', '5/6 Building and installing', 'devbox is added'],
             'machines': ['Machines', 'devbox'],
             'board': ['Fix the login page', 'the button does nothing', 'Write the migration tests'],
@@ -693,9 +696,37 @@ SCENARIOS = {
         },
         'snap_lacks': {'list': ['studios-imac', 'old-server', 'iphone', 'gaming-pc', 'friends-laptop'], 'board': ['needs update'], 'board-updated': ['the button does nothing'],
                        'opened': ['another ClikCode build', 'ENOENT']},
-        'snap_composer_same': ['list', 'installed', 'opened'],
+        'snap_composer_same': ['list', 'user', 'installed', 'opened'],
         'snap_pair_same_row': [('board', 'board-updated', 'Fix the login page'), ('board', 'board-updated', 'Write the migration tests')],
         'never': ['Windows machines', 'ENOENT'],
+    },
+    # The machines Tailscale knows and that are not added are in every list of
+    # machines, not only /remote: /machine's, and the board's Machines. Choosing
+    # one on the board adds it -- which user first, then the install -- and the
+    # board opens again on its chats.
+    'board-add-tailnet-machine': {
+        'setup': remote_fake(), 'startup': 4, 'no_dup_check': 'lists and progress lines, no transcript',
+        'turns': [{'blocks': ['unused']}],
+        'steps': [
+            ('settle', 2),
+            ('type', '/machine'), ('wait_for', 'Move this chat to', 15), ('wait_for', 'On your tailnet', 10), ('wait_for', 'macbook', 10), ('settle', 1), ('snap', 'machine'),
+            ('keys', '\x1b'), ('settle', 1),
+            ('keys', '\x1b[D'), ('wait_for', '← machines', 20), ('keys', '\x1b[D'), ('wait_for', 'On your tailnet', 20), ('settle', 1), ('snap', 'machines'),
+            ('keys', '\x1b[B'), ('keys', '\r'), ('wait_for', 'Log in to devbox as', 15), ('settle', 0.5), ('snap', 'user'),
+            ('keys', '\x1b[B'), ('keys', '\r'), ('wait_for', 'Fix the login page', 60), ('settle', 1), ('snap', 'board'),
+            ('keys', '\x1b[D'), ('wait_for', 'Machines', 10), ('wait_for', 'devbox  · connected', 20), ('settle', 0.5), ('snap', 'added'),
+        ],
+        'watch': [],
+        'snap_contains': {
+            'machine': ['Move this chat to', 'On your tailnet', 'devbox', '· linux · add: install ClikCode', 'imac', 'macbook  · macOS · offline', 'winbox'],
+            'machines': ['Machines', 'On your tailnet', 'devbox', 'add: install ClikCode', 'imac', 'macbook'],
+            'user': ['Log in to devbox as', 'root', 'Another user…'],
+            'board': ['Fix the login page', 'Write the migration tests'],
+            'added': ['devbox  · connected'],
+        },
+        'snap_lacks': {'machine': ['studios-imac', 'old-server', 'iphone', 'gaming-pc', 'friends-laptop'], 'machines': ['studios-imac', 'friends-laptop'],
+                       'added': ['devbox  · linux']},
+        'never': ['ENOENT', 'Windows machines'],
     },
     # /machine: the chat's machine is one of its settings, and choosing another
     # moves the chat there -- its conversation, on devbox's own ClikCode -- and
