@@ -458,6 +458,11 @@ export function stopWaiting(this: TerminalHarnessPrompter, refresh = true, why?:
   // A thought still being had when the turn ended stays, settled. Not
   // when stepping out: the turn, and the thought, carry on.
   if (!this.steppedOut) { this.settleThought(); this.settlePlan(); }
+  // Stepping out, the plan goes with the turn, as the thought does below: it
+  // is the turn's band, and left here it drew under the board -- a checklist
+  // with no turn, pushing the board's top rows (Working) off the screen.
+  // Coming back redraws it from the worker (drawJoinedTurn).
+  else { this.planEntries = []; this.planStart = undefined; }
   // Stopped: what was still running did not finish. Its row says so, as
   // the worker's saved copy of the turn does (turn-journal.ts).
   if (turn?.cancelled) this.activityEntries = stopEntries(this.activityEntries, (entry) => this.ofThisTurn(entry));
