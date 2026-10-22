@@ -9,6 +9,8 @@ const world = vi.hoisted(() => ({
   asked: [] as Array<{ title?: string; value?: string; placeHolder?: string; checks: Record<string, string | undefined> }>,
   answers: ['root'] as Array<string | undefined>,
   refusals: 0,
+  failure: undefined as { step: string; message: string } | undefined,
+  errors: [] as string[],
   installs: [] as string[],
   saved: [] as Array<{ sshTarget: string; name: string }>,
 }));
@@ -25,7 +27,7 @@ vi.mock('vscode', () => ({
       return world.answers.shift();
     },
     withProgress: async (_options: unknown, work: (progress: { report(): void }) => Promise<unknown>) => work({ report: () => undefined }),
-    showErrorMessage: async () => undefined, showInformationMessage: async () => undefined, showWarningMessage: async () => undefined,
+    showErrorMessage: async (text: string) => { world.errors.push(text); return undefined; }, showInformationMessage: async () => undefined, showWarningMessage: async () => undefined,
   },
   env: { clipboard: { writeText: async () => undefined } },
   Uri: { file: (fsPath: string) => ({ scheme: 'file', fsPath }) },
@@ -42,6 +44,7 @@ vi.mock('../../../../src/remote/tailscale', () => ({
 vi.mock('../../../../src/remote/install', () => ({
   installOnMachine: async (target: string) => {
     world.installs.push(target);
+    if (world.failure) return { ok: false, ...world.failure };
     if (world.refusals > 0) { world.refusals -= 1; return { ok: false, step: 'Checking the machine', auth: true, message: `${target} refused the login.` }; }
     return { ok: true, info: { version: '1.0.0', installationId: 'install-1' } };
   },
@@ -56,7 +59,7 @@ vi.mock('../../../../src/remote/machines', () => ({
 import { ClikCodeController } from '../../src/controller';
 
 const controllers: ClikCodeController[] = [];
-afterEach(() => { for (const controller of controllers.splice(0)) controller.dispose(); world.asked = []; world.installs = []; world.saved = []; world.answers = ['root']; world.refusals = 0; });
+afterEach(() => { for (const controller of controllers.splice(0)) controller.dispose(); world.asked = []; world.installs = []; world.saved = []; world.answers = ['root']; world.refusals = 0; world.failure = undefined; world.errors = []; });
 
 const addFromTailnet = (): Promise<string> => {
   const host = { log: { appendLine: () => undefined }, diffs: {}, openInTab: async () => undefined, reveal: async () => undefined, chats: () => [] };
@@ -84,6 +87,14 @@ describe('adding a machine from the tailnet', () => {
     expect(world.asked.map((ask) => [ask.title, ask.value])).toEqual([['Log in to devbox as which user?', undefined], ['Log in to devbox as which user?', undefined]]);
     expect(world.installs).toEqual(['carol@devbox.tail-fake.ts.net', 'root@devbox.tail-fake.ts.net']);
     expect(world.saved).toEqual([expect.objectContaining({ sshTarget: 'root@devbox.tail-fake.ts.net' })]);
+  });
+
+  it('shows a failed install in a notification: the step and what it said', async () => {
+    world.failure = { step: 'Node.js', message: 'Node.js from nodejs.org latest-v24.x was installed on root@devbox but does not run: dyld: Symbol not found.' };
+    const said = 'Installing ClikCode on devbox stopped at "Node.js": Node.js from nodejs.org latest-v24.x was installed on root@devbox but does not run: dyld: Symbol not found.';
+    await expect(addFromTailnet()).rejects.toThrow(said);
+    expect(world.errors).toEqual([said]);
+    expect(world.saved).toEqual([]);
   });
 
   it('adds nothing when the question is dismissed', async () => {
