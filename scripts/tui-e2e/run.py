@@ -834,6 +834,7 @@ SCENARIOS = {
         'steps': [
             ('settle', 2),
             ('type', '/remote'), ('wait_for', 'On your tailnet', 15), ('wait_for', 'macbook', 10), ('settle', 1),
+            ('keys', '\r'), ('wait_for', 'Log in to devbox as', 15), ('settle', 0.5),
             ('keys', '\r'), ('wait_for', 'devbox is added', 60), ('settle', 1),
             ('keys', '\x1b[D'), ('wait_for', '← machines', 20), ('settle', 1),
             ('keys', '\x1b[D'), ('wait_for', 'Machines', 20), ('settle', 1),
