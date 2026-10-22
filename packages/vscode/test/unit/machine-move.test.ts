@@ -2,7 +2,7 @@
  * machine moves THIS chat there (export here, import there once, mark moved
  * here) with nothing asked and nothing said; an empty chat simply becomes a
  * new chat there. Typing /machine opens the chip's menu, as /permission opens the mode
- * menu. A moved chat is read-only and offers the moved one. */
+ * menu. Opening a copy of a chat that moved opens the live one. */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const world = vi.hoisted(() => ({
@@ -14,6 +14,10 @@ const world = vi.hoisted(() => ({
   /** The machine menu's connection to m1, when it has one open. */
   channel: undefined as undefined | { revision: number; requests: Array<{ type: string; [key: string]: unknown }>; closed: boolean; have?: unknown },
   held: 0,
+  /** Whether m1 answers. */
+  reach: true,
+  /** The revision every fake bridge says it is. */
+  revision: 4,
 }));
 
 vi.mock('vscode', () => {
@@ -79,7 +83,7 @@ vi.mock('../../src/chat-machine', () => {
     constructor(private readonly record: { id: string; name: string }) {}
     get id(): string { return this.record.id; }
     get name(): string { return this.record.name; }
-    reachable = async () => true;
+    reachable = async () => world.reach;
     workspaceForOpen = () => undefined;
     connect = connect('m1');
     releaseImage = async () => undefined;
@@ -110,7 +114,7 @@ class FakeBridge extends BridgeEndpoint {
   constructor(readonly machine: string, private readonly chat: { messages: number; changes?: string[]; movedTo?: unknown }) {
     super({ node: 'node', entry: '/fake/index.js', env: {}, nodeSource: 'path', entrySource: 'path' }, 'build-1');
     world.bridges.push(this);
-    setTimeout(() => this.receive({ type: 'ready', version: 't', protocol: 1, revision: 4, pid: 1 }), 0);
+    setTimeout(() => this.receive({ type: 'ready', version: 't', protocol: 1, revision: world.revision, pid: 1 }), 0);
   }
   send(request: IdeRequest): boolean {
     this.requests.push(request as never);
@@ -137,7 +141,7 @@ const until = async (check: () => boolean, ms = 3_000): Promise<void> => {
 };
 
 const controllers: ClikCodeController[] = [];
-afterEach(() => { for (const controller of controllers.splice(0)) controller.dispose(); world.bridges = []; world.warnings = []; world.answer = undefined; world.notes = []; world.channel = undefined; world.held = 0; });
+afterEach(() => { for (const controller of controllers.splice(0)) controller.dispose(); world.bridges = []; world.warnings = []; world.answer = undefined; world.notes = []; world.channel = undefined; world.held = 0; world.reach = true; world.revision = 4; });
 
 const startChat = async (local: { messages: number; movedTo?: unknown }, remote: { messages: number; changes?: string[] } = { messages: 2 }) => {
   world.next = { local: () => new FakeBridge('local', local), m1: () => new FakeBridge('m1', remote) };
@@ -243,12 +247,29 @@ describe('the machine chip', () => {
     expect(controller.state.sessionId).toBe('new-there');
   });
 
-  it('a moved chat is read-only and opens the moved one on its machine', async () => {
-    const controller = await startChat({ messages: 2, movedTo: { machine: 'prod', installationId: 'prod-install', sessionId: 'there-1', at: '' } });
-    expect(controller.state.movedTo).toMatchObject({ machine: 'prod', sessionId: 'there-1' });
-    await controller.openMoved();
-    await until(() => controller.state.connection === 'ready' && controller.state.machine === 'prod');
+  it('opening a copy that moved opens the live chat on its machine at once: no banner, nothing moved', async () => {
+    const movedTo = { machine: 'prod', installationId: 'prod-install', sessionId: 'there-1', at: '' };
+    world.next = { local: () => new FakeBridge('local', { messages: 2, movedTo }), m1: () => new FakeBridge('m1', { messages: 2 }) };
+    const host = { log: { appendLine: () => undefined }, diffs: {}, openInTab: async () => undefined, reveal: async () => undefined, chats: () => [] };
+    const controller = new ClikCodeController(host as never, undefined, 'chat');
+    controllers.push(controller);
+    await controller.ensureStarted();
+    await until(() => controller.state.connection === 'ready' && controller.state.machine === 'prod' && controller.state.sessionId === 'there-1');
+    expect(controller.state.movedTo).toBeUndefined();
     expect(world.bridges.find((bridge) => bridge.machine === 'm1')!.requests.find((request) => request.type === 'open')).toMatchObject({ type: 'open', mode: 'resume', sessionId: 'there-1' });
+    // Nothing moved, nothing reclaimed, nothing said.
+    expect([...requestsOf('local'), ...requestsOf('m1')].filter((type) => /chat|moved/.test(type))).toEqual([]);
+    expect(said(controller)).toEqual([]);
+  });
+
+  it('the machine it moved to does not answer: the copy here goes on, and one line says so', async () => {
+    world.reach = false;
+    world.revision = 6;
+    const controller = await startChat({ messages: 2, movedTo: { machine: 'prod', installationId: 'prod-install', sessionId: 'there-1', at: '' } });
+    await until(() => requestsOf('local').includes('reclaim-moved'));
+    await until(() => said(controller).length > 0);
+    expect(said(controller)).toEqual(['This chat moved to prod, which does not answer: it goes on here.']);
+    expect(world.bridges.some((bridge) => bridge.machine === 'm1')).toBe(false);
   });
 });
 

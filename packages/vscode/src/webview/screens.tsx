@@ -78,6 +78,15 @@ export function useConversations(onError?: (message: string) => void, key?: unkn
 
 /** The second a list's rows are read at: the current one while a row
  * works (its time counts up), else fixed -- nothing to redraw. */
+/** The rows the history list shows, matching what is typed. The chat on
+ * screen is listed once it is a conversation, not while empty; a copy of a
+ * chat that moved (an older ClikCode still lists one) is not listed at all --
+ * the chat is listed under the machine where it is live. */
+export function historyRows(rows: readonly ListedConversation[], query: string): ListedConversation[] {
+  return rows.filter((row) => !row.movedTo && !(row.current && !row.messages))
+    .filter((row) => !query || `${row.title} ${row.preview ?? ''} ${row.provider ?? ''}`.toLowerCase().includes(query));
+}
+
 export function listSecond(rows: readonly ListedConversation[] | undefined, now: number): number {
   return rows?.some((row) => row.activity === 'working') ? Math.floor(now / 1000) : 0;
 }
@@ -153,9 +162,7 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
   const now = useNow(Boolean(rows?.some((row) => row.activity === 'working')));
   const second = listSecond(rows, now);
   const listRows = useMemo((): ListRow[] => {
-    // The chat on screen is listed once it is a conversation, not while empty.
-    const matching = (rows ?? []).filter((row) => !(row.current && !row.messages))
-      .filter((row) => !query || `${row.title} ${row.preview ?? ''} ${row.provider ?? ''}`.toLowerCase().includes(query));
+    const matching = historyRows(rows ?? [], query);
     // Within a section one that needs you comes first, as on the terminal's
     // board; ClikCode's order otherwise (the sort is stable).
     const needsYouFirst = (left: ListedConversation, right: ListedConversation): number => Number(rowState(right, now).kind === 'needs-you') - Number(rowState(left, now).kind === 'needs-you');

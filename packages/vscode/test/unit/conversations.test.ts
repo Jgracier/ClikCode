@@ -6,7 +6,7 @@ vi.mock('../../src/webview/bus', () => ({
   request: async (body: unknown) => { bus.requests.push(body); return undefined; },
 }));
 
-import { conversationMark, holdConversationWatch, listSecond, rowState } from '../../src/webview/screens';
+import { conversationMark, historyRows, holdConversationWatch, listSecond, rowState } from '../../src/webview/screens';
 
 const row = (patch: Record<string, unknown> = {}) => ({ id: 'c1', title: 'Fix it', updatedAt: new Date().toISOString(), ...patch }) as never;
 
@@ -33,6 +33,13 @@ describe('the conversation list on the welcome screen and in the history menu', 
     expect(conversationMark(asking, rowState(asking, now))).toBe('needs-you');
     const finished = row();
     expect(conversationMark(finished, rowState(finished, now))).toBe('none');
+  });
+});
+
+describe('the history list\'s rows', () => {
+  it('leaves out a copy of a chat that moved: it is listed where it is live', () => {
+    const rows = [row({ id: 'here', messages: 2 }), row({ id: 'copy', messages: 2, movedTo: 'prod' })];
+    expect(historyRows(rows, '').map((item) => (item as { id: string }).id)).toEqual(['here']);
   });
 });
 

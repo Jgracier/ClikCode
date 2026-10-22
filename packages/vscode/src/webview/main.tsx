@@ -29,19 +29,6 @@ const REMEDY: Record<NonNullable<ChatModel['remedy']>, { command: string; label:
 };
 
 function Banner({ model }: { model: ChatModel }): JSX.Element | null {
-  // One live copy: this one went on on another machine.
-  if (model.movedTo && model.connection === 'ready') {
-    const machine = model.movedTo.machine;
-    return (
-      <div class="banner" role="status" id="moved-banner">
-        <div class="banner-head"><Icon name="remote" /><span>This chat moved to {machine}</span></div>
-        <p>It goes on there; this copy is read-only.</p>
-        <div class="banner-actions">
-          <button type="button" class="primary" onClick={() => { void request({ method: 'openMoved' }).catch(() => undefined); }}>Open it on {machine}</button>
-        </div>
-      </div>
-    );
-  }
   if (model.connection === 'error' || model.connection === 'stopped') {
     return (
       <div class="banner" role="alert">

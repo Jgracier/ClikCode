@@ -48,6 +48,8 @@ export interface ControllerHost {
 
 /** The bridge revision that answers a move (export-chat, import-chat, mark-moved). */
 const MOVE_REVISION = 4;
+/** The bridge revision that answers `reclaim-moved`: the copy of a moved chat goes on. */
+const RECLAIM_REVISION = 6;
 
 function revisionOf(ready: { revision?: unknown }): number {
   return typeof ready.revision === 'number' && Number.isInteger(ready.revision) ? ready.revision : 1;
@@ -525,6 +527,8 @@ export class ClikCodeController implements vscode.Disposable {
     // Said by the bridge itself before it exits for a newer build: see start's exit.
     if (event.type === 'retiring') return;
     this.setModel(applyEvent(this.model, event));
+    // A copy that moved: the live chat opens in its place.
+    if (event.type === 'session' && this.model.movedTo) void this.openLive().catch((error: unknown) => this.fail(errorText(error)));
     // `/send` changed how mid-turn messages go: the composer says so.
     if (event.type === 'output' && typeof event.payload.sendMode === 'string') this.refreshStructured(false);
     switch (event.type) {
@@ -915,13 +919,36 @@ export class ClikCodeController implements vscode.Disposable {
     }
   }
 
-  /** A chat that moved, open here read-only: the moved one, on its machine. */
-  async openMoved(): Promise<void> {
+  /** The copy `openLive` is acting on, so the session events of one open act once. */
+  private followingMoved: string | undefined;
+
+  /** A copy of a chat that moved to another machine, opened here by any route
+   * (history, a restored tab, a resume): the live chat opens in its place,
+   * wherever it is, and nothing moves -- as the terminal does (remote/move-terminal.ts
+   * liveChat). Only when that machine is not added here or does not answer does
+   * this copy go on (`reclaim-moved`), and a line says so. Until then the copy
+   * stays read-only (the composer refuses). */
+  async openLive(): Promise<void> {
     const movedTo = this.model.movedTo;
-    if (!movedTo) return;
-    const machine = movedChatMachine(movedTo, await readMachines(), { name: localMachineName() });
-    if (!machine) throw new Error(`${movedTo.machine} is not added here: add it from the machine chip to go on there.`);
-    await this.openOnMachine(machine, 'resume', movedTo.sessionId);
+    const sessionId = this.model.sessionId;
+    const bridge = this.bridge;
+    if (!movedTo || !sessionId || this.followingMoved === sessionId) return;
+    this.followingMoved = sessionId;
+    try {
+      const machineId = movedChatMachine(movedTo, await readMachines(), { name: localMachineName() });
+      const machine = machineId ? await this.machineFor(machineId) : undefined;
+      if (machineId && machine && await machine.reachable()) {
+        await this.openOnMachine(machineId, 'resume', movedTo.sessionId);
+        return;
+      }
+      if (!bridge?.running || this.revision < RECLAIM_REVISION) {
+        throw new Error(`This chat moved to ${movedTo.machine}, which ${machineId ? 'does not answer' : 'is not added here'}. Update ClikCode on this chat's machine to go on with it here.`);
+      }
+      await bridge.call({ type: 'reclaim-moved', sessionId });
+      this.note(`This chat moved to ${movedTo.machine}, which ${machineId ? 'does not answer' : 'is not added here'}: it goes on here.`);
+    } finally {
+      if (this.followingMoved === sessionId) this.followingMoved = undefined;
+    }
   }
 
   /** 'local' or an added machine; undefined for one no longer added. */
@@ -983,9 +1010,6 @@ export class ClikCodeController implements vscode.Disposable {
         return undefined;
       case 'moveToMachine':
         await this.moveToMachine(request.machineId);
-        return undefined;
-      case 'openMoved':
-        await this.openMoved().catch((error: unknown) => this.fail(errorText(error)));
         return undefined;
       case 'machineConversations':
         return this.conversationsOn(request.machineId);

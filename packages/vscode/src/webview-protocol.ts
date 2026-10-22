@@ -62,7 +62,6 @@ export type WebviewRequest =
   /** The machine chip: this chat moves to that machine (a new chat there when nothing was said in it). */
   | { method: 'moveToMachine'; machineId: string }
   /** A chat that moved: open the moved one, on its machine. */
-  | { method: 'openMoved' }
   /** Update ClikCode on a machine ('local': this computer's, as /update does). */
   | { method: 'updateMachine'; machineId: string }
   | { method: 'openOnMachine'; machineId: string; mode: 'new' | 'resume'; sessionId?: string }
