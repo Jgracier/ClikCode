@@ -28,7 +28,10 @@
  * $FAKE_RETIRE_QUIET_MS (default 1000), it says `host-retiring` and exits.
  * Every chat open is logged to ~/.fake-remote/opens.log with this process's
  * pid, so a test can see a chat come back on another bridge process. A line
- * `say: <text>` is answered `Said: <text>`.
+ * `say: <text>` is answered `Said: <text>`. `sign in` signs in as the real
+ * bridge does for Claude Code (src/ide/prompter.ts signInScreen): a card with
+ * the link and a key row beside it, then Claude's own question as an input
+ * request; what is typed there is said back, and the card is done.
  *
  * It owns its chats' folders as the real one does (session/attach.ts): a
  * chat is opened in a folder of THIS machine -- $FAKE_MACHINE, set by
@@ -149,6 +152,20 @@ lines.on('line', (line) => {
       });
       return;
     }
+    if (request.text === 'sign in') {
+      const chat = message.chat;
+      // As the real one: the turn starts, its vendor says it needs a sign-in, and the sign-in runs in it.
+      send({ type: 'chat', chat, event: { type: 'turn-start', sessionId: id, prompt: request.text } });
+      const card = (extra) => send({ type: 'chat', chat, event: { type: 'sign-in-link', id: 'fake-sign-in', name: 'Claude Code', ...extra } });
+      const ask = { prompt: 'Or paste your Claude Code API key', secret: true };
+      send({ type: 'chat', chat, event: { type: 'busy', label: 'signing in to Claude Code…' } });
+      card({});
+      card({ ask });
+      card({ url: 'https://claude.ai/oauth/authorize?code=true&client_id=fake-client', ask });
+      choices.set(chat, request.id);
+      send({ type: 'chat', chat, event: { type: 'ui-request', id: 'vendor-question', request: { kind: 'input', prompt: 'Paste code here if prompted · or paste your Claude Code API key' } } });
+      return;
+    }
     if (request.text === '/provider') {
       choices.set(message.chat, request.id);
       send({ type: 'chat', chat: message.chat, event: { type: 'ui-request', id: 'provider-choice', request: {
@@ -165,6 +182,21 @@ lines.on('line', (line) => {
     send({ type: 'chat', chat: message.chat, event: { type: 'worker', sessionId: id, event: { type: 'snapshot', session, account: undefined } } });
     send({ type: 'chat', chat: message.chat, event: { type: 'worker', sessionId: id, event: { type: 'waiting-stop' } } });
     send({ type: 'chat', chat: message.chat, event: { type: 'send-complete', id: request.id } });
+  } else if (request.type === 'ui-response' && request.id === 'vendor-question' && choices.has(message.chat)) {
+    const chat = message.chat;
+    const id = opened.get(chat);
+    const session = sessionFor(id);
+    send({ type: 'chat', chat, event: { type: 'sign-in-link', id: 'fake-sign-in', name: 'Claude Code', done: true } });
+    send({ type: 'chat', chat, event: { type: 'busy' } });
+    // The turn then goes on, signed in, and answers.
+    const answer = request.result.cancelled ? 'Sign-in cancelled.' : `Signed in with code ${request.result.text}.`;
+    session.messages.push({ role: 'user', content: 'sign in' }, { role: 'assistant', content: answer });
+    saveSessions();
+    send({ type: 'chat', chat, event: { type: 'worker', sessionId: id, event: { type: 'delta', text: answer, mode: 'append' } } });
+    send({ type: 'chat', chat, event: { type: 'worker', sessionId: id, event: { type: 'snapshot', session, account: undefined } } });
+    send({ type: 'chat', chat, event: { type: 'worker', sessionId: id, event: { type: 'waiting-stop' } } });
+    send({ type: 'chat', chat, event: { type: 'send-complete', id: choices.get(chat) } });
+    choices.delete(chat);
   } else if (request.type === 'ui-response' && request.id === 'provider-choice' && choices.has(message.chat)) {
     const session = sessionFor(opened.get(message.chat));
     session.provider = request.result.index === 1 ? 'Claude Code' : 'Grok Build';

@@ -932,6 +932,30 @@ SCENARIOS = {
         'snap_lacks': {'machines': ['updating ClikCode'], 'after': ['needs update']},
         'never': ['ENOENT', 'updating ClikCode…'],
     },
+    # A sign-in in a chat on another machine, as Claude Code's: its link on a
+    # card, then its own question ("Paste code here if prompted"). The
+    # question is asked under the link, which stays on screen until it is
+    # answered; it used to end the wait the link is drawn in, leaving only a
+    # key prompt.
+    'remote-chat-sign-in-keeps-link': {
+        'setup': remote_installed('ask', current=True), 'startup': 4, 'no_dup_check': 'lists and progress lines, no transcript',
+        'turns': [{'blocks': ['unused']}],
+        'steps': [
+            ('settle', 2),
+            ('keys', '\x1b[D'), ('wait_for', '← machines', 20), ('keys', '\x1b[D'), ('wait_for', '2 chats', 30), ('settle', 1),
+            ('keys', '\x1b[B'), ('keys', '\x1b[C'), ('wait_for', 'Fix the login page', 20), ('settle', 0.5),
+            ('keys', '\x1b[C'), ('settle', 3),
+            ('type', 'sign in'), ('wait_for', 'Paste code here if prompted', 15), ('settle', 2), ('snap', 'asked'),
+            ('type', 'abc123'), ('wait_for', 'Signed in with code abc123', 15), ('settle', 1), ('snap', 'done'),
+        ],
+        'watch': [],
+        'snap_contains': {
+            'asked': ['Sign in to Claude Code', 'https://claude.ai/oauth/authorize', 'Paste code here if prompted'],
+            'done': ['Signed in with code abc123'],
+        },
+        'snap_lacks': {'done': ['https://claude.ai/oauth/authorize']},
+        'never': ['ENOENT', 'Sign-in cancelled'],
+    },
     # The machine's ClikCode is updated while one of its chats is open here and quiet: the
     # bridge there leaves for the new build (src/ide/bridge-retire.ts, emulated by
     # fake-remote-clikcode.mjs), and the chat connects again to a new bridge process and goes on --
