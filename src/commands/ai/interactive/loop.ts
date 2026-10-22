@@ -403,7 +403,7 @@ export class ChatLoop {
         if (opened?.movedTo && terminal) {
           const next = await offerMovedChat(terminal, opened.movedTo);
           if (next && 'remote' in next) { await this.openRemote(terminal, next.remote); return; }
-          if (next) { await leaveConversation(this.id); this.id = next.local; await claimConversation(this.id).catch(() => undefined); }
+          if (next && next.local !== this.id) { await leaveConversation(this.id); this.id = next.local; await claimConversation(this.id).catch(() => undefined); }
         }
       }
       if (outcome.draft !== undefined) terminal?.restoreDraft(outcome.draft);

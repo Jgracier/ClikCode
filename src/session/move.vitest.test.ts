@@ -11,7 +11,7 @@ import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessSession, HarnessState } from './model.js';
 import { readState } from './state/read.js';
 import { writeState } from './state/write.js';
-import { exportChat, importChat, markMoved, planImport, type MoveFacts } from './move.js';
+import { exportChat, importChat, markMoved, planImport, reclaimMovedChat, type MoveFacts } from './move.js';
 import { chatHasContent, moveChat, CHAT_HAVE_REVISION, type ChatExport, type MoveEnd, type MoveRequest } from './move-chat.js';
 import { answerMoveRequest } from './move.js';
 import { withMoveNote } from '../turn/resource-notes.js';
@@ -247,6 +247,20 @@ describe('a move between two machines', () => {
     const { conversationList } = await import('../ide/queries.js');
     const rows = await conversationList(await readState({ transcripts: [] }), undefined);
     expect(rows.find((row) => row.id === 's4')?.movedTo).toBe('imac');
+  });
+});
+
+describe('a moved chat is never locked out', () => {
+  it('reclaiming the copy kept here makes it live again, its vendor thread forgotten', async () => {
+    on('r');
+    await writeState(state([chat({ id: 's5' })]));
+    await markMoved('s5', { machine: 'imac', sessionId: 'x' });
+    expect(await reclaimMovedChat('s5')).toBe('s5');
+    const back = (await readState({ transcripts: ['s5'] })).sessions.find((item) => item.id === 's5')!;
+    expect(back.movedTo).toBeUndefined();
+    expect(back.nativeSessionId).toBeUndefined();
+    expect(back.messages).toHaveLength(2);
+    expect(workers.warmed).toContain('s5');
   });
 });
 

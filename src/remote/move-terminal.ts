@@ -149,16 +149,26 @@ export async function movedChatPlace(movedTo: ChatMovedTo): Promise<Here | undef
   return machine === 'local' ? { local: movedTo.sessionId } : { remote: { machineId: machine, chatId: movedTo.sessionId } };
 }
 
-/** A chat that moved, opened here: offered where it went. Undefined to stay
- * (it is read-only here). */
-export async function offerMovedChat(prompter: HarnessPrompter, movedTo: ChatMovedTo): Promise<Here | undefined> {
+/** A chat that moved, opened here: it comes back here, with nothing asked
+ * and nothing said -- a move never locks a machine out of its chat. From the
+ * machine it went to when that answers (only what is new there travels:
+ * moveChat); else the copy kept here goes on as it was (reclaimMovedChat). */
+export async function offerMovedChat(_prompter: HarnessPrompter, movedTo: ChatMovedTo): Promise<Here> {
   const place = await movedChatPlace(movedTo);
-  if (!place) {
-    prompter.activity?.(`This chat moved to ${movedTo.machine}, which is not added here: add it in /remote to go on there.`);
-    return undefined;
+  if (place && 'remote' in place) {
+    const machine = (await readMachines()).find((item) => item.id === place.remote.machineId);
+    const bridge = machine ? new TerminalBridge(machine.sshTarget) : undefined;
+    try {
+      if (machine && bridge) {
+        await bridge.connected();
+        return { local: (await moveChat(remoteMoveEnd(bridge, machine), localMoveEnd(), movedTo.sessionId)).sessionId };
+      }
+    } catch {
+      // fail-open-ok: the machine cannot hand it back (offline, too old): the copy kept here goes on.
+    } finally {
+      bridge?.close();
+    }
   }
-  const go = await chooseOption(prompter, `This chat moved to ${movedTo.machine}.`, [
-    { label: `Open it on ${movedTo.machine}`, value: true }, { label: 'Stay here (read-only)', value: false },
-  ]);
-  return go ? place : undefined;
+  const { reclaimMovedChat } = await import('../session/move.js');
+  return { local: await reclaimMovedChat(movedTo.sessionId) };
 }
