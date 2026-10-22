@@ -3,8 +3,11 @@
  * this machine (the interactive loop) or on another one (terminal-chat.ts).
  * A chat nothing was said in has nothing to move: it is a new chat there.
  *
- * The machines listed are this one and the ones added in /remote; one that
- * does not answer is listed as offline and moves nothing. */
+ * The machines listed are this one, the ones added in /remote, and the
+ * user's own Tailscale knows of and not added yet (tailscale.ts); one that
+ * does not answer is listed as offline and moves nothing. Choosing one from
+ * the tailnet adds it first, as /remote does: which user to log in as, then
+ * the install. */
 import Conf from 'conf';
 import type { HarnessPrompter, PickerOption } from '../harness/prompter.js';
 import type { ChatMovedTo } from '../session/model.js';
@@ -15,6 +18,7 @@ import { chooseOption } from '../tui/pickers/choose.js';
 import { localMachineName } from './board-rows.js';
 import { holdWindowMachines, type LinkChannel, type MachinesHold } from './connection.js';
 import { readMachines, type RemoteMachine } from './machines.js';
+import { discoverMachines, notYetAdded, readTailscaleStatus, type DiscoveredMachine } from './tailscale.js';
 import { TerminalBridge, type RemoteBridgeStarter, type RemoteChatSelection } from './terminal-chat.js';
 
 /** The bridge revision that answers export-chat, import-chat and mark-moved. */
@@ -55,7 +59,7 @@ export function remoteMoveEnd(bridge: Pick<TerminalBridge, 'revision' | 'request
 /** The machines to choose from. The list opens at once: a machine still
  * connecting says so, and its row is redrawn as it answers (or after
  * STATE_WAIT_MS, as not answering). Picking one still connecting waits for it. */
-function machineList(current: string, machines: readonly RemoteMachine[], links: MachinesHold | undefined): {
+function machineList(current: string, machines: readonly RemoteMachine[], links: MachinesHold | undefined, tailnet: Tailnet): {
   rows: () => Array<PickerOption<string> & { offline?: string }>; refresh: Promise<unknown>[];
 } {
   const started = Date.now();
@@ -76,6 +80,13 @@ function machineList(current: string, machines: readonly RemoteMachine[], links:
         value: machine.id, ...(offline ? { offline } : {}),
       };
     }),
+    ...tailnet.found.map((machine) => {
+      const offline = machine.os === 'windows' ? 'Windows, not supported yet' : machine.online ? undefined : 'offline';
+      return {
+        label: machine.name, detail: `· ${machine.os} · ${offline ?? 'add: install ClikCode'}`,
+        value: discoveredValue(machine), group: TAILNET, ...(offline ? { offline } : {}),
+      };
+    }),
   ];
   // A redraw each time a machine answers, and one when the wait is over.
   const refresh = links ? [
@@ -86,17 +97,48 @@ function machineList(current: string, machines: readonly RemoteMachine[], links:
     })),
     new Promise<void>((resolve) => { setTimeout(resolve, STATE_WAIT_MS).unref?.(); }),
   ] : [];
-  return { rows, refresh };
+  return { rows, refresh: [...refresh, tailnet.landed] };
+}
+
+const TAILNET = 'On your tailnet';
+const discoveredValue = (machine: DiscoveredMachine): string => `tailscale:${machine.nodeId}`;
+
+/** The user's machines Tailscale knows that are not added and ready (`added`):
+ * one whose install did not finish is offered again, and adding it goes on
+ * with it. `found` fills in when Tailscale answers; with no Tailscale here it
+ * stays empty. */
+export interface Tailnet { found: DiscoveredMachine[]; landed: Promise<void> }
+
+export function readTailnet(added: readonly RemoteMachine[]): Tailnet {
+  const tailnet: Tailnet = { found: [], landed: Promise.resolve() };
+  tailnet.landed = readTailscaleStatus().then(({ status }) => {
+    tailnet.found = status ? notYetAdded(discoverMachines(status), added) : [];
+  }, () => undefined);
+  return tailnet;
 }
 
 /** Which machine to move to; undefined when it stays (Esc, its own machine, an offline one). */
-async function pickMachine(prompter: HarnessPrompter, current: string, machines: readonly RemoteMachine[], links: MachinesHold | undefined): Promise<{ id: string; machine?: RemoteMachine } | undefined> {
-  const list = machineList(current, machines, links);
+async function pickMachine(prompter: HarnessPrompter, current: string, machines: readonly RemoteMachine[], links: MachinesHold | undefined, tailnet: Tailnet): Promise<{ id: string; machine?: RemoteMachine } | undefined> {
+  const list = machineList(current, machines, links, tailnet);
+  // Tailscale answers locally in milliseconds: its machines are in the list
+  // as it opens, rather than a row appearing under the cursor.
+  await Promise.race([tailnet.landed, new Promise((resolve) => { setTimeout(resolve, 1500).unref?.(); })]);
   const picked = await chooseOption(prompter, 'Move this chat to', list.rows(), undefined, { startAt: current, refreshedOptions: list.rows, refresh: list.refresh });
   if (!picked || picked === current) return undefined;
   const row = list.rows().find((item) => item.value === picked);
   if (row?.offline) throw new Error(`${row.label} is ${row.offline}: the chat stays here.`);
   if (picked === 'local') return { id: 'local' };
+  const found = tailnet.found.find((item) => discoveredValue(item) === picked);
+  if (found) {
+    const { addDiscoveredMachine, remoteHostOf } = await import('../tui/pickers/remote.js');
+    const host = remoteHostOf(prompter);
+    const added = await addDiscoveredMachine(host, found);
+    if (!added.id) return undefined;
+    const machine = (await readMachines()).find((item) => item.id === added.id && item.ready);
+    if (!machine) return undefined;
+    if (added.notice) host.line(added.notice);
+    return { id: machine.id, machine };
+  }
   const machine = machines.find((item) => item.id === picked);
   if (!machine) throw new Error('That machine is no longer added.');
   return { id: picked, machine };
@@ -113,11 +155,12 @@ export async function moveTerminalChat(
 ): Promise<Here | undefined> {
   const current = 'local' in here ? 'local' : here.remote.machineId;
   const machines = (await readMachines()).filter((machine) => machine.ready);
+  const tailnet = readTailnet(machines);
   const links = machines.length ? await holdWindowMachines().catch(() => undefined) : undefined;
   let bridge: TerminalBridge | undefined;
   let channel: LinkChannel | undefined;
   try {
-    const choice = await pickMachine(prompter, current, machines, links);
+    const choice = await pickMachine(prompter, current, machines, links, tailnet);
     if (!choice) return undefined;
     if (!hasContent) {
       // Nothing to move: a new chat there.

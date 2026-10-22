@@ -2758,6 +2758,10 @@ def run(name, spec, entry, keep):
     }
     if spec.get('classic'): env['CLIKCODE_TUI'] = 'classic'
     if spec.get('setup'): spec['setup']({'root': root, 'home': home, 'state': state, 'fakebin': fakebin, 'workspace': workspace, 'env': env, 'entry': entry})
+    # Never the machine's own Tailscale: the board and /machine ask it which machines the user
+    # has. Unless the scenario set one up (remote_fake), this one is not running.
+    if not os.path.lexists(os.path.join(fakebin, 'tailscale')):
+        os.symlink(os.path.join(REPO, 'scripts', 'tui-e2e', 'fake-tailscale.mjs'), os.path.join(fakebin, 'tailscale'))
     # The fake sign-in waits on the browser for as long as this file exists.
     sign_in_hold = os.path.join(root, 'login-hold')
     if spec.get('hold_sign_in'):

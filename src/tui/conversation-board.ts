@@ -33,7 +33,8 @@ import { SPIN_MS } from '../harness/protocol/timings.js';
 
 /** `draft`: text typed on the board before a row was chosen, for the opened
  * conversation's composer -- never dropped. */
-export type BoardResult = { open: string; draft?: string } | { compose: string } | { command: string };
+/** `addMachine`: a machine row chosen that is not added yet (`addable`). */
+export type BoardResult = { open: string; draft?: string } | { compose: string } | { command: string } | { addMachine: string };
 
 export interface BoardState {
   draft: string;
@@ -185,6 +186,9 @@ export interface ConversationBoardSettings {
   machines?: () => readonly PickerOption<string>[];
   initialMachine?: string;
   onMachineSelected?: (machineId: string) => void;
+  /** A machine row that is one to add (from the tailnet), not chats to list:
+   * choosing it closes the board with `{ addMachine }`. */
+  addable?: (machineId: string) => boolean;
   commands: readonly PickerOption<string>[];
   refresh?: Promise<unknown> | readonly Promise<unknown>[];
   /** Registers the board's redraw, for the list to call when its rows
@@ -336,7 +340,8 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
       stopInput();
       // The next paint is the conversation chosen (or the one left, on Esc), drawn with its
       // composer in one change; clearing the board first drew the conversation being left, bare.
-      if (host.keepFrame) host.keepFrame(); else host.clearFrame();
+      // Adding a machine is not that: its questions and steps are drawn on the chat.
+      if (host.keepFrame && !(result && 'addMachine' in result)) host.keepFrame(); else host.clearFrame();
       resolve(result);
     };
     const listen = (): void => {
@@ -355,6 +360,10 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
         else if (key === DOWN) machineSelected = Math.min(available.length - 1, machineSelected + 1);
         else if (key === RIGHT || key === '\r' || key === '\n') {
           const chosen = available[machineSelected];
+          if (chosen && settings.addable?.(chosen.value)) {
+            finish({ addMachine: chosen.value });
+            return;
+          }
           if (chosen) {
             machine = chosen.value;
             settings.onMachineSelected?.(machine);

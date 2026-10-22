@@ -15,6 +15,7 @@ import chalk from 'chalk';
 import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
 import { relativeTime } from '../../harness/protocol/format.js';
 import { chooseOption } from './choose.js';
+import { withSlowWait, type WaitingBand } from '../slow-wait.js';
 import { holdWindowMachines, reconnectWindowMachine, type MachineView } from '../../remote/connection.js';
 import { forgetMachine, newMachineRecord, readMachines, updateMachine, updateMachines, updatePolicy, type RemoteMachine } from '../../remote/machines.js';
 import { installedRecord, localBuildCommit, updateRemoteMachine } from '../../remote/updates.js';
@@ -32,6 +33,21 @@ export interface RemoteHost {
   withBusy<T>(label: string, work: () => Promise<T>): Promise<T>;
   /** A line in the chat (each install step). */
   line(text: string): void;
+}
+
+/** A RemoteHost over the terminal's prompter alone, for lists that add a
+ * machine outside /remote (/machine, the board's Machines): its questions on
+ * the composer's line, its waits on the band, each step a line in the chat. */
+export function remoteHostOf(prompter: HarnessPrompter & Partial<WaitingBand>): RemoteHost {
+  return {
+    prompter,
+    ask: (label) => prompter.question(`${label} › `, undefined, { cancellable: true }).catch((error: unknown) => {
+      if ((error as { code?: string }).code === 'ERR_PROMPT_CANCELLED') return undefined;
+      throw error;
+    }),
+    withBusy: (label, work) => withSlowWait(prompter.startWaiting && prompter.stopWaiting ? prompter as WaitingBand : undefined, label, work),
+    line: (text) => { if (prompter.activity) prompter.activity(text); else process.stderr.write(`${text}\n`); },
+  };
 }
 
 const ADDRESS_VALUE = '__address__';
@@ -120,10 +136,8 @@ export async function interactiveRemotePicker(host: RemoteHost): Promise<Interac
   if (chosen.startsWith('tailscale:')) {
     const machine = discovered.find((item) => `tailscale:${item.nodeId}` === chosen);
     if (!machine) return {};
-    return addMachine(host, newMachineRecord({
-      name: machine.name, sshTarget: validateSshTarget(machine.dnsName ?? machine.hostName), os: machine.os,
-      tailscale: { nodeId: machine.nodeId, ...(machine.dnsName ? { dnsName: machine.dnsName } : {}) },
-    }));
+    const { notice } = await addDiscoveredMachine(host, machine);
+    return notice ? { notice } : {};
   }
   const machine = machines.find((item) => `machine:${item.id}` === chosen);
   return machine ? manageMachine(host, machine) : {};
@@ -180,7 +194,59 @@ async function chooseLoginUser(host: RemoteHost, name: string, target: string): 
   return (await host.ask('User'))?.trim() || undefined;
 }
 
+/** Which user to log in to a machine Tailscale found as, asked before
+ * anything connects: Tailscale gives the machine and the name it is reached
+ * at, never the account on it. ssh's own choice for it (~/.ssh/config's
+ * `User`, else the user here) is first, then root (what servers and Tailscale
+ * SSH policies most often allow), or one typed. Undefined: Esc, add nothing. */
+export async function askLoginUser(host: RemoteHost, name: string, target: string): Promise<string | undefined> {
+  const fallback = await defaultLoginUser(target);
+  const options: PickerOption<string>[] = [
+    { label: fallback, detail: `· ssh's default for ${targetHost(target)}`, value: fallback },
+    ...(fallback === 'root' ? [] : [{ label: 'root', detail: '· installs in /root', value: 'root' }]),
+    { label: 'Another user…', detail: '· type its name', value: OTHER_USER },
+  ];
+  const chosen = await chooseOption(host.prompter, `Log in to ${name} as`, options);
+  if (chosen !== OTHER_USER) return chosen;
+  return (await host.ask(`User on ${name}`))?.trim() || undefined;
+}
+
+/** What adding a machine came to: its id once its chats can be listed
+ * (it is added, or was already, maybe under another name), and what to say. */
+export interface AddedMachine { id?: string; notice?: string }
+
+/** Adds a machine Tailscale found (tailscale.ts), wherever machines are
+ * listed (/remote, /machine, the board's Machines): asks which user to log in
+ * as, then installs ClikCode there from GitHub main, a step at a time. One
+ * already added is its record; one whose install did not finish goes on
+ * with the user it was given. */
+export async function addDiscoveredMachine(host: RemoteHost, found: DiscoveredMachine): Promise<AddedMachine> {
+  if (found.os === 'windows') throw new Error(`${found.name} runs Windows: ClikCode Remote does not support it yet.`);
+  const existing = (await readMachines()).find((machine) => machine.tailscale?.nodeId === found.nodeId);
+  if (existing?.ready) return { id: existing.id };
+  let target = existing?.sshTarget ?? validateSshTarget(found.dnsName ?? found.hostName);
+  if (!targetUser(target)) {
+    const user = await askLoginUser(host, found.name, target);
+    if (!user) return {};
+    target = withUser(target, user);
+  }
+  if (existing) {
+    existing.sshTarget = target;
+    await updateMachine(existing.id, (record) => { record.sshTarget = target; });
+    return installNew(host, existing, true);
+  }
+  return installNew(host, newMachineRecord({
+    name: found.name, sshTarget: target, os: found.os,
+    tailscale: { nodeId: found.nodeId, ...(found.dnsName ? { dnsName: found.dnsName } : {}) },
+  }));
+}
+
 async function addMachine(host: RemoteHost, machine: RemoteMachine, recorded = false): Promise<InteractiveSlashOutcome> {
+  const { notice } = await installNew(host, machine, recorded);
+  return notice ? { notice } : {};
+}
+
+async function installNew(host: RemoteHost, machine: RemoteMachine, recorded = false): Promise<AddedMachine> {
   // Recorded first, so the user given for a refused login is remembered
   // even when a later step stops (it is listed as not finished).
   if (!recorded) await updateMachines((machines) => [...machines, machine]);
@@ -198,13 +264,13 @@ async function addMachine(host: RemoteHost, machine: RemoteMachine, recorded = f
     await forgetMachine(machine.id);
     await updateMachine(existing.id, (record) => installedRecord(record, info));
     reconnectWindowMachine(existing.id);
-    return { notice: `${machine.name} is ${existing.name}, already added: it is up to date now.` };
+    return { id: existing.id, notice: `${machine.name} is ${existing.name}, already added: it is up to date now.` };
   }
   await updateMachine(machine.id, (record) => {
     installedRecord(record, info);
     record.lastSeen = new Date().toISOString();
   });
-  return { notice: `${machine.name} is added. Its chats are on the board (← on an empty prompt). Sign in to providers there from its own chats.` };
+  return { id: machine.id, notice: `${machine.name} is added. Its chats are on the board (← on an empty prompt). Sign in to providers there from its own chats.` };
 }
 
 async function manageMachine(host: RemoteHost, machine: RemoteMachine): Promise<InteractiveSlashOutcome> {

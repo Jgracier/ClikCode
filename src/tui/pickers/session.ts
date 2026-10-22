@@ -33,6 +33,9 @@ import { conversationIdFor } from '../../session/conversation-rows.js';
 import { aiSessionCommand } from '../slash/handlers.js';
 import { chooseOption } from './choose.js';
 import { holdWindowMachines, type MachinesHold } from '../../remote/connection.js';
+import { readMachines } from '../../remote/machines.js';
+import { discoverMachines, notYetAdded, readTailscaleStatus, type DiscoveredMachine } from '../../remote/tailscale.js';
+import { addDiscoveredMachine, remoteHostOf } from './remote.js';
 import { isRemoteRowValue, localMachineName, remoteConversationOption, parseRemoteRowValue, updateText } from '../../remote/board-rows.js';
 
 type AdoptableNativeSession = {
@@ -362,7 +365,17 @@ export async function interactiveSessionPicker(
   // so the spinner stops when the turn is over (session/list-watch.ts; a
   // slow poll where the directories cannot be watched).
   const listWatch = watchConversationList(refreshActivity);
+  // The user's machines Tailscale knows and that are not added: listed under
+  // the added ones, and choosing one adds it (as /remote does). They land
+  // when Tailscale answers, in milliseconds, or not at all without it.
+  let tailnet: DiscoveredMachine[] = [];
   if (onBoard) {
+    void readTailscaleStatus().then(async ({ status }) => {
+      if (!status) return;
+      const added = (await readMachines()).filter((machine) => machine.ready);
+      tailnet = notYetAdded(discoverMachines(status), added);
+      if (tailnet.length) listChanged?.();
+    }).catch(() => undefined);
     const machines = await holdWindowMachines({ autoUpdate: true }).catch(() => undefined);
     if (machines?.views().length) {
       remote = machines;
@@ -405,6 +418,8 @@ export async function interactiveSessionPicker(
     }
   };
   let selected: string | undefined;
+  /** A machine from the tailnet chosen on the board's Machines, to add. */
+  let addingMachine: DiscoveredMachine | undefined;
   /** Typed on the board before the row was chosen: the chat opens with it. */
   let draft: string | undefined;
   try {
@@ -425,17 +440,32 @@ export async function interactiveSessionPicker(
             detail: `· ${view.state}${view.chats.length ? ` · ${view.chats.length} chats` : ''}${view.state === 'offline' ? '' : updateText(view)}`,
             value: view.machine.id,
           })) ?? []),
+          ...tailnet.map((machine) => ({
+            label: machine.name,
+            detail: `· ${machine.os} · ${machine.os === 'windows' ? 'not supported yet' : machine.online ? 'add: install ClikCode' : 'offline'}`,
+            value: `tailscale:${machine.nodeId}`, group: 'On your tailnet',
+          })),
         ],
+        addable: (machineId) => machineId.startsWith('tailscale:'),
         initialMachine: remote?.views().some((view) => view.machine.id === lastBoardMachine) ? lastBoardMachine : 'local',
         onMachineSelected: (machineId) => { lastBoardMachine = machineId; },
         listChanged: (redraw) => { listChanged = redraw; },
         ...(initial ? { initial } : {}),
         ...(hooks?.onSessionsSettled ? { onSessionsSettled: hooks.onSessionsSettled } : {}),
       });
+      if (result && 'addMachine' in result) {
+        const found = tailnet.find((machine) => `tailscale:${machine.nodeId}` === result.addMachine);
+        if (!found) return undefined;
+        if (found.os === 'windows') return { notice: `${found.name} runs Windows: ClikCode Remote does not support it yet.` };
+        if (!found.online) return { notice: `${found.name} is offline: turn it on, then choose it again.` };
+        addingMachine = found;
+      }
       if (result && 'compose' in result) return { compose: result.compose };
       if (result && 'command' in result) return { command: result.command };
-      selected = result?.open;
-      if (result && 'open' in result && result.draft) draft = result.draft;
+      if (result && 'open' in result) {
+        selected = result.open;
+        if (result.draft) draft = result.draft;
+      }
     } else {
       selected = await chooseOption(rl, 'Conversations', buildOptions(),
         (value, action) => manage(value, action),
@@ -448,6 +478,14 @@ export async function interactiveSessionPicker(
     listWatch.stop();
     // The connections stay, for the next list or a move.
     remote?.release();
+  }
+  // Added, the board opens again on its chats; else back to the chat, with
+  // what went wrong on it.
+  if (addingMachine) {
+    const added = await addDiscoveredMachine(remoteHostOf(rl), addingMachine);
+    if (!added.id) return undefined;
+    lastBoardMachine = added.id;
+    return interactiveSessionPicker(rl, currentId, boardCommands, hooks);
   }
   // Delete and archive always return to the list. If the open chat was the
   // one removed, the list's "current" is the fresh draft made above -- and
