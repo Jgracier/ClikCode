@@ -6,9 +6,15 @@
  * machine needs nothing new; the other one needs only git (and gets a
  * user-local Node if it has none new enough). Nothing runs with sudo.
  *
- *   1. probe     what the machine is: OS, git, Node, $HOME
- *   2. Node      a user-local Node.js from nodejs.org when there is none
- *                >= 22.12, its SHA-256 checked against SHASUMS256.txt
+ *   1. probe     what the machine is: OS (and macOS version), git, Node,
+ *                $HOME; a macOS too old for any Node ClikCode can run on
+ *                is refused here, before anything is downloaded
+ *   2. Node      a user-local Node.js when there is none >= 22.12 that
+ *                runs, from the source that runs on that OS (nodeSource):
+ *                nodejs.org, its SHA-256 checked against SHASUMS256.txt, or
+ *                on macOS 10.15 MacPorts' build, its archives pinned by
+ *                SHA-256 (MACPORTS_NODE); then run, or the step stops with
+ *                what it said
  *   3. git       required; missing, the install stops with how to get it
  *   4. source    a shallow clone of main into ~/.local/share/clikcode/src,
  *                or a fetch and hard reset of the one already there to main
@@ -28,10 +34,38 @@ import { shellQuote } from './shell.js';
 
 export const REMOTE_REPO_URL = 'https://github.com/Jgracier/ClikCode.git';
 export const NODE_MIRROR = 'https://nodejs.org/dist';
-/** The Node line installed when a machine has none new enough. */
-export const NODE_LINE = 'latest-v24.x';
+export const MACPORTS_MIRROR = 'https://packages.macports.org';
 /** package.json `engines.node`. */
 export const MIN_NODE: readonly [number, number] = [22, 12];
+
+/** One MacPorts binary archive, pinned: `<mirror>/<port>/<file>` must have this SHA-256. */
+export interface MacPortsArchive { port: string; file: string; sha256: string }
+export interface MacPortsNode { version: string; node: MacPortsArchive; libs: readonly MacPortsArchive[]; npm: MacPortsArchive }
+
+/** MacPorts' prebuilt Node for the macOS versions nodejs.org's builds no
+ * longer run on, by Darwin major (19 = macOS 10.15). MacPorts builds
+ * nodejs22 for 10.15 and newer only (none for darwin_17/18, checked
+ * 2026-10-21). `node` loads /opt/local/lib's libz.1, libicui18n.78 and
+ * libicuuc.78 (which loads libicudata.78): zlib and icu. nodejs22 has no
+ * npm; npm10 is MacPorts' noarch npm. The SHA-256s are of the archives
+ * fetched from packages.macports.org on 2026-10-21. */
+export const MACPORTS_NODE: Readonly<Record<number, MacPortsNode>> = {
+  19: {
+    version: 'v22.22.2',
+    node: { port: 'nodejs22', file: 'nodejs22-22.22.2_0.darwin_19.x86_64.tbz2', sha256: '7db89a4738f5745c54f68090e9f8272ae37e436943ba33fcbabefd300ab2214c' },
+    libs: [
+      { port: 'zlib', file: 'zlib-1.3.2_0.darwin_19.x86_64.tbz2', sha256: 'cca691a7f4b224c749bb29ca89987211f011df055bda32c59098b7e9d0ec927e' },
+      { port: 'icu', file: 'icu-78.3_1.darwin_19.x86_64.tbz2', sha256: 'aee9d8730bd2e1c5e1476b1d781e40c17311b81038a348e0295f530019bd2538' },
+    ],
+    npm: { port: 'npm10', file: 'npm10-10.9.8_0.any_any.noarch.tbz2', sha256: '17d50e577d7ab0d6e2c34b2847a6befcd83f6e2b59d5064e40e0f7f6266c5ff0' },
+  },
+};
+
+/** Where Node comes from for a machine (nodeSource). */
+export type NodeSource =
+  | { kind: 'nodejs'; line: 'latest-v24.x' | 'latest-v22.x'; os: string; arch: string }
+  | { kind: 'macports'; darwin: number; pinned: MacPortsNode }
+  | { kind: 'refused'; message: string };
 /** pnpm, when package.json names no `packageManager`. */
 export const PNPM_FALLBACK = '10';
 
@@ -44,6 +78,12 @@ const OWN_NODE_BIN = '"$HOME/.local/share/clikcode/node/bin"';
 /** Tests point these at fixtures (a file:// repository, a local mirror). */
 function repoUrl(): string { return process.env.CLIKCODE_REMOTE_REPO_URL?.trim() || REMOTE_REPO_URL; }
 function nodeMirror(): string { return (process.env.CLIKCODE_REMOTE_NODE_MIRROR?.trim() || NODE_MIRROR).replace(/\/+$/, ''); }
+function macportsMirror(): string { return (process.env.CLIKCODE_REMOTE_MACPORTS_MIRROR?.trim() || MACPORTS_MIRROR).replace(/\/+$/, ''); }
+/** The pinned table; tests replace it (with the mirror) by JSON, as their archives are fakes. */
+function macportsPins(): Readonly<Record<number, MacPortsNode>> {
+  const json = process.env.CLIKCODE_REMOTE_MACPORTS_PINS?.trim();
+  return json ? JSON.parse(json) as Record<number, MacPortsNode> : MACPORTS_NODE;
+}
 
 export const INSTALL_STEPS = ['Checking the machine', 'Node.js', 'git', 'Getting ClikCode from GitHub', 'Building and installing', 'Checking the install'] as const;
 export type InstallStep = typeof INSTALL_STEPS[number];
@@ -59,10 +99,17 @@ export interface Probe {
   os: string;
   arch: string;
   home: string;
+  /** `sw_vers -productVersion`, on macOS. */
+  macos?: string;
   git?: string;
   node?: string;
+  /** What `node -v` said; absent when it failed (nodeError). */
   nodeVersion?: string;
+  /** The `node` on PATH is there but does not run: what it said. */
+  nodeError?: string;
   ownNodeVersion?: string;
+  /** ClikCode's own Node (an earlier install's) is there but does not run: what it said. */
+  ownNodeError?: string;
   /** What ~/.local/bin/clikcode is: absent, ClikCode Remote's own link, or something else. */
   clikcode?: 'ours' | 'other';
 }
@@ -91,10 +138,14 @@ export function probeScript(): string {
     `printf 'os=%s\\n' "$(uname -s 2>/dev/null)"`,
     `printf 'arch=%s\\n' "$(uname -m 2>/dev/null)"`,
     `printf 'home=%s\\n' "$HOME"`,
+    `if [ "$(uname -s 2>/dev/null)" = Darwin ]; then printf 'macos=%s\\n' "$(sw_vers -productVersion 2>/dev/null)"; fi`,
     `printf 'git=%s\\n' "$(command -v git 2>/dev/null)"`,
+    // A Node counts only when it runs: `node -v` failing (a build for a newer
+    // macOS, a missing library) is what it said, on one line.
+    `oneline() { printf '%s' "$1" | tr '\\n\\r' '  ' | cut -c1-400; }`,
     `n="$(command -v node 2>/dev/null)"; printf 'node=%s\\n' "$n"`,
-    `if [ -n "$n" ]; then printf 'nodeVersion=%s\\n' "$("$n" -v 2>/dev/null)"; fi`,
-    `own=${SHARE}/node/bin/node; if [ -x "$own" ]; then printf 'ownNodeVersion=%s\\n' "$("$own" -v 2>/dev/null)"; fi`,
+    `if [ -n "$n" ]; then if v="$("$n" -v 2>/dev/null)"; then printf 'nodeVersion=%s\\n' "$v"; else printf 'nodeError=%s\\n' "$(oneline "$("$n" -v 2>&1)")"; fi; fi`,
+    `own=${SHARE}/node/bin/node; if [ -e "$own" ]; then if v="$("$own" -v 2>/dev/null)"; then printf 'ownNodeVersion=%s\\n' "$v"; else printf 'ownNodeError=%s\\n' "$(oneline "$("$own" -v 2>&1)")"; fi; fi`,
     `link=${BIN_LINK}; if [ -L "$link" ]; then case "$(readlink "$link")" in ${SHARE}/*) echo clikcode=ours;; *) echo clikcode=other;; esac; elif [ -e "$link" ]; then echo clikcode=other; fi`,
     `echo probe=ok`,
   ].join('\n');
@@ -117,10 +168,8 @@ export function parseProbe(stdout: string): Probe | undefined {
   const clikcode = value('clikcode');
   return {
     os: value('os') ?? '', arch: value('arch') ?? '', home: value('home') ?? '',
-    ...(value('git') ? { git: value('git') } : {}),
-    ...(value('node') ? { node: value('node') } : {}),
-    ...(value('nodeVersion') ? { nodeVersion: value('nodeVersion') } : {}),
-    ...(value('ownNodeVersion') ? { ownNodeVersion: value('ownNodeVersion') } : {}),
+    ...Object.fromEntries((['macos', 'git', 'node', 'nodeVersion', 'nodeError', 'ownNodeVersion', 'ownNodeError'] as const)
+      .flatMap((key) => (value(key) ? [[key, value(key)]] : []))),
     ...(clikcode === 'ours' || clikcode === 'other' ? { clikcode } : {}),
   };
 }
@@ -138,36 +187,142 @@ export function nodePlatform(probe: Probe): { os: string; arch: string } | undef
   return os && arch ? { os, arch } : undefined;
 }
 
-/** Downloads Node's tarball for this OS and CPU from the mirror's
- * `NODE_LINE`, checks its SHA-256 against the SHASUMS256.txt published
- * beside it, and unpacks it into ~/.local/share/clikcode/node. */
-export function nodeInstallScript(platform: { os: string; arch: string }, mirror = nodeMirror()): string {
-  const base = `${mirror}/${NODE_LINE}`;
+/** `10.15.8` -> [10, 15, 8]; undefined when it is not a version. */
+function macosVersion(text: string | undefined): [number, number, number] | undefined {
+  const match = /^(\d+)\.(\d+)(?:\.(\d+))?/.exec(text?.trim() ?? '');
+  return match ? [Number(match[1]), Number(match[2]), Number(match[3] ?? 0)] : undefined;
+}
+const atLeast = (version: readonly number[], floor: readonly number[]): boolean => {
+  for (let at = 0; at < floor.length; at += 1) if ((version[at] ?? 0) !== floor[at]) return (version[at] ?? 0) > floor[at]!;
+  return true;
+};
+
+/** Where a machine's Node comes from, by its OS: what runs there.
+ *   Linux                 nodejs.org latest-v24.x
+ *   macOS >= 13.5         nodejs.org latest-v24.x (its darwin builds need 13.5)
+ *   macOS 11.0 - 13.4     nodejs.org latest-v22.x (its darwin builds need 11.0)
+ *   macOS 10.15 (x86_64)  MacPorts' nodejs22 (MACPORTS_NODE)
+ *   older                 refused: nothing ClikCode can run, runs there. */
+export function nodeSource(probe: Probe, machine: string, pins: Readonly<Record<number, MacPortsNode>> = macportsPins()): NodeSource {
+  const platform = nodePlatform(probe);
+  if (!platform) return { kind: 'refused', message: `${machine} is ${probe.os || 'an unknown OS'} on ${probe.arch || 'an unknown CPU'}; ClikCode Remote installs on Linux and macOS (x64, arm64).` };
+  if (platform.os === 'linux') return { kind: 'nodejs', line: 'latest-v24.x', ...platform };
+  const version = macosVersion(probe.macos);
+  if (!version) return { kind: 'refused', message: `${machine} did not say which macOS it runs (sw_vers -productVersion), so ClikCode cannot tell which Node.js runs there. Install Node.js ${MIN_NODE.join('.')} or newer there yourself and add it again.` };
+  if (atLeast(version, [13, 5])) return { kind: 'nodejs', line: 'latest-v24.x', ...platform };
+  if (atLeast(version, [11, 0])) return { kind: 'nodejs', line: 'latest-v22.x', ...platform };
+  // macOS 10.x is Darwin 10.x + 4 (10.15 = darwin_19); MacPorts builds for x86_64.
+  const darwin = version[1] + 4;
+  const pinned = version[0] === 10 ? pins[darwin] : undefined;
+  if (pinned && platform.arch === 'x64') return { kind: 'macports', darwin, pinned };
+  const floor = Math.min(...Object.keys(pins).map(Number));
+  return { kind: 'refused', message: `macOS ${probe.macos} is too old for ClikCode: it needs Node.js ${MIN_NODE.join('.')} or newer, which needs macOS 10.${floor - 4} or newer. Update macOS on ${machine}, or install Node.js ${MIN_NODE.join('.')}+ there yourself and add it again.` };
+}
+
+/** What a source is called in the step's line. */
+export function nodeSourceText(source: Exclude<NodeSource, { kind: 'refused' }>): string {
+  return source.kind === 'nodejs' ? `nodejs.org ${source.line}` : `MacPorts ${source.pinned.node.port} ${source.pinned.version}`;
+}
+
+/** The lines every Node install script starts with: a temporary directory,
+ * `fetch URL FILE`, and `sha256 FILE`. */
+const NODE_SCRIPT_START = [
+  'set -eu',
+  `dir=${SHARE}`,
+  'mkdir -p "$dir"',
+  'tmp="$(mktemp -d "${TMPDIR:-/tmp}/clikcode-node.XXXXXX")"',
+  `trap 'rm -rf "$tmp"' EXIT`,
+  'fetch() { if command -v curl >/dev/null 2>&1; then curl -fsSL "$1" -o "$2"; elif command -v wget >/dev/null 2>&1; then wget -q -O "$2" "$1"; else echo "step-error=neither curl nor wget is installed"; exit 3; fi; }',
+  'sha256() { if command -v sha256sum >/dev/null 2>&1; then s="$(sha256sum "$1")"; else s="$(shasum -a 256 "$1")"; fi; printf %s "${s%% *}"; }',
+  `oneline() { printf '%s' "$1" | tr '\\n\\r' '  ' | cut -c1-600; }`,
+  'rm -rf "$dir/node.new"',
+];
+
+/** The lines every Node install script ends with: the Node in node.new is
+ * run -- failing, the step stops with what it said, and nothing replaces
+ * the Node there was -- then it takes the place of ~/.local/share/clikcode/node. */
+const NODE_SCRIPT_END = [
+  'if ! v="$("$dir/node.new/bin/node" -v 2>/dev/null)"; then echo "step-error=node-fails $(oneline "$("$dir/node.new/bin/node" -v 2>&1)")"; rm -rf "$dir/node.new"; exit 6; fi',
+  'rm -rf "$dir/node"',
+  'mv "$dir/node.new" "$dir/node"',
+  'echo "nodeVersion=$v"',
+];
+
+/** Downloads Node's tarball for this OS and CPU from nodejs.org's `line`,
+ * checks its SHA-256 against the SHASUMS256.txt published beside it, and
+ * unpacks it into ~/.local/share/clikcode/node. */
+export function nodeInstallScript(source: Extract<NodeSource, { kind: 'nodejs' }>, mirror = nodeMirror()): string {
   return [
-    'set -eu',
-    `base=${shellQuote(base)}`,
-    `os=${shellQuote(platform.os)}; arch=${shellQuote(platform.arch)}`,
-    `dir=${SHARE}`,
-    'mkdir -p "$dir"',
-    'tmp="$(mktemp -d "${TMPDIR:-/tmp}/clikcode-node.XXXXXX")"',
-    `trap 'rm -rf "$tmp"' EXIT`,
-    'fetch() { if command -v curl >/dev/null 2>&1; then curl -fsSL "$1" -o "$2"; elif command -v wget >/dev/null 2>&1; then wget -q -O "$2" "$1"; else echo "step-error=neither curl nor wget is installed"; exit 3; fi; }',
+    ...NODE_SCRIPT_START,
+    `base=${shellQuote(`${mirror}/${source.line}`)}`,
+    `os=${shellQuote(source.os)}; arch=${shellQuote(source.arch)}`,
     'fetch "$base/SHASUMS256.txt" "$tmp/SHASUMS256.txt" || { echo "step-error=could not download $base/SHASUMS256.txt"; exit 3; }',
     'line="$(grep -E "  node-v[0-9.]+-$os-$arch\\.tar\\.gz\\$" "$tmp/SHASUMS256.txt" | head -n 1)"',
     '[ -n "$line" ] || { echo "step-error=nodejs.org has no Node build for $os-$arch"; exit 3; }',
     'expected="${line%% *}"; name="${line##* }"',
     'fetch "$base/$name" "$tmp/$name" || { echo "step-error=could not download $base/$name"; exit 3; }',
-    'if command -v sha256sum >/dev/null 2>&1; then actual="$(sha256sum "$tmp/$name")"; else actual="$(shasum -a 256 "$tmp/$name")"; fi',
-    'actual="${actual%% *}"',
+    'actual="$(sha256 "$tmp/$name")"',
     '[ "$actual" = "$expected" ] || { echo "step-error=checksum mismatch for $name: expected $expected, got $actual"; exit 4; }',
     'mkdir "$tmp/unpacked"',
     'tar -xzf "$tmp/$name" -C "$tmp/unpacked"',
-    'rm -rf "$dir/node.new"',
     'mv "$tmp/unpacked/${name%.tar.gz}" "$dir/node.new"',
-    'rm -rf "$dir/node"',
-    'mv "$dir/node.new" "$dir/node"',
-    'echo "sha256=$actual"',
-    'echo "nodeVersion=$("$dir/node/bin/node" -v)"',
+    ...NODE_SCRIPT_END,
+  ].join('\n');
+}
+
+/** MacPorts' Node, made to live in ClikCode's own directory: each pinned
+ * archive downloaded and its SHA-256 checked before anything is unpacked;
+ * bin/node and every /opt/local/lib library it loads, followed library by
+ * library with `otool -L`, copied into lib/; each such reference (and each
+ * library's own id) rewritten to @loader_path/../lib/ with install_name_tool;
+ * every file changed ad-hoc signed again (`codesign -f -s -`); npm beside it
+ * as bin/npm and bin/npx. Nothing goes in /opt/local, nothing needs sudo.
+ * The tools are Apple's command line tools, which a Mac with Apple's git has. */
+export function macportsInstallScript(source: Extract<NodeSource, { kind: 'macports' }>, mirror = macportsMirror()): string {
+  const { node, libs, npm } = source.pinned;
+  return [
+    ...NODE_SCRIPT_START,
+    'for tool in otool install_name_tool codesign; do command -v "$tool" >/dev/null 2>&1 || { echo "step-error=$tool is missing: it is one of the Xcode command line tools (xcode-select --install)"; exit 3; }; done',
+    `base=${shellQuote(mirror)}`,
+    'mkdir "$tmp/x"',
+    // Every archive is checked before any is unpacked.
+    'get() { fetch "$base/$1/$2" "$tmp/$2" || { echo "step-error=could not download $base/$1/$2"; exit 3; }; actual="$(sha256 "$tmp/$2")"; [ "$actual" = "$3" ] || { echo "step-error=checksum mismatch for $2: expected $3, got $actual"; exit 4; }; }',
+    ...[node, ...libs, npm].map((archive) => `get ${shellQuote(archive.port)} ${shellQuote(archive.file)} ${shellQuote(archive.sha256)}`),
+    ...[node, ...libs, npm].map((archive) => `tar -xjf "$tmp/"${shellQuote(archive.file)} -C "$tmp/x" || { echo ${shellQuote(`step-error=could not unpack ${archive.file}`)}; exit 6; }`),
+    'from="$tmp/x/opt/local"',
+    'new="$dir/node.new"',
+    'mkdir -p "$new/bin" "$new/lib/node_modules"',
+    'cp "$from/bin/node" "$new/bin/node"',
+    'chmod 755 "$new/bin/node"',
+    // `run FILE COMMAND...`: a failure says which tool, on which file, and what it said.
+    'run() { on="${1##*/}"; shift; out="$("$@" 2>&1)" || { echo "step-error=$1 failed on $on: $(oneline "$out")"; exit 6; }; }',
+    // Until a pass copies nothing: each file's /opt/local/lib references,
+    // the library copied in when it is not yet, the reference rewritten.
+    'more=1',
+    'while [ "$more" = 1 ]; do',
+    '  more=0',
+    '  for f in "$new/bin/node" "$new"/lib/*.dylib; do',
+    '    [ -f "$f" ] || continue',
+    '    listed="$(otool -L "$f")" || { echo "step-error=otool -L ${f##*/} failed: $(oneline "$listed")"; exit 6; }',
+    `    for d in $(printf '%s\\n' "$listed" | tail -n +2 | awk '{print $1}' | grep '^/opt/local/lib/' || true); do`,
+    '      b="${d##*/}"',
+    '      if [ ! -e "$new/lib/$b" ]; then',
+    '        [ -e "$from/lib/$b" ] || { echo "step-error=${f##*/} needs $d, which no MacPorts archive ClikCode fetched has"; exit 6; }',
+    '        cp "$from/lib/$b" "$new/lib/$b"; chmod 755 "$new/lib/$b"; more=1',
+    '      fi',
+    '      [ "${f##*/}" = "$b" ] || run "$f" install_name_tool -change "$d" "@loader_path/../lib/$b" "$f"',
+    '    done',
+    '  done',
+    'done',
+    'for f in "$new"/lib/*.dylib; do [ -f "$f" ] || continue; run "$f" install_name_tool -id "@loader_path/../lib/${f##*/}" "$f"; done',
+    'for f in "$new/bin/node" "$new"/lib/*.dylib; do [ -f "$f" ] || continue; run "$f" codesign -f -s - "$f"; done',
+    // npm, run by this node whatever its scripts' #! lines say (/opt/local/bin/node).
+    'cp -R "$from/lib/node_modules/npm" "$new/lib/node_modules/npm"',
+    `for t in npm npx; do printf '#!/bin/sh\\nd="$(cd "$(dirname "$0")" && pwd)"\\nexec "$d/node" "$d/../lib/node_modules/npm/bin/%s-cli.js" "$@"\\n' "$t" > "$new/bin/$t"; chmod 755 "$new/bin/$t"; done`,
+    // A node that does not run is said by the run below, in its own words.
+    'if "$new/bin/node" -v >/dev/null 2>&1 && ! out="$("$new/bin/npm" -v 2>&1)"; then echo "step-error=npm does not run: $(oneline "$out")"; exit 6; fi',
+    `echo ${shellQuote(`sha256=${node.sha256}`)}`,
+    ...NODE_SCRIPT_END,
   ].join('\n');
 }
 
@@ -320,23 +475,22 @@ export async function installOnMachine(target: string, reporter: InstallReporter
   const probed = await probeMachine(target);
   if (probed.failed) return probed.failed;
   const probe = probed.probe!;
-  const platform = nodePlatform(probe);
-  if (!platform) return fail('Checking the machine', `${target} is ${probe.os || 'an unknown OS'} on ${probe.arch || 'an unknown CPU'}; ClikCode Remote installs on Linux and macOS (x64, arm64).`);
+  if (!nodePlatform(probe)) return fail('Checking the machine', `${target} is ${probe.os || 'an unknown OS'} on ${probe.arch || 'an unknown CPU'}; ClikCode Remote installs on Linux and macOS (x64, arm64).`);
   if (probe.clikcode === 'other') return fail('Checking the machine', `${target} already has a ~/.local/bin/clikcode that ClikCode Remote did not install. Move it away (or remove it) and choose the machine again.`);
-  reporter.done('Checking the machine', `${probe.os === 'Darwin' ? 'macOS' : probe.os} ${probe.arch}`);
+  // A Node counts only when it runs (the probe ran `node -v`) and is new
+  // enough. Without one, where Node would come from is decided here, and a
+  // machine nothing runs on is refused before anything is downloaded.
+  const ownUsable = nodeIsNewEnough(probe.ownNodeVersion);
+  const systemUsable = nodeIsNewEnough(probe.nodeVersion);
+  const source = options.update || ownUsable || systemUsable ? undefined : nodeSource(probe, target);
+  if (source?.kind === 'refused') return fail('Checking the machine', source.message);
+  reporter.done('Checking the machine', probe.os === 'Darwin' ? `macOS${probe.macos ? ` ${probe.macos}` : ''} ${probe.arch}` : `${probe.os} ${probe.arch}`);
 
   if (!options.update) {
     progress.begin('Node.js');
-    if (nodeIsNewEnough(probe.ownNodeVersion)) reporter.done('Node.js', `ClikCode's own ${probe.ownNodeVersion}`);
-    else if (nodeIsNewEnough(probe.nodeVersion)) reporter.done('Node.js', `${probe.nodeVersion} (already installed)`);
-    else {
-      const node = await runSsh(target, nodeInstallScript(platform), { timeoutMs: STEP_TIMEOUT_MS });
-      if (node.code !== 0) {
-        return fail('Node.js', `Installing Node.js on ${target} failed: ${stepError(node)}. Install Node.js ${MIN_NODE.join('.')} or newer there yourself, then choose the machine again.`);
-      }
-      const values = keyValues(node.stdout);
-      reporter.done('Node.js', `${values.get('nodeVersion') ?? 'installed'} into ~/.local/share/clikcode/node (SHA-256 checked)`);
-    }
+    const node = await nodeStep(target, probe, source);
+    if (!node.ok) return fail('Node.js', node.message);
+    reporter.done('Node.js', node.detail);
 
     progress.begin('git');
     if (!probe.git) {
@@ -351,6 +505,40 @@ export async function installOnMachine(target: string, reporter: InstallReporter
   if (!updated.ok) return updated;
   if (updated.upToDate) return fail('Checking the install', `ClikCode on ${target} was not checked.`);
   return { ok: true, info: updated.info, probe, ...(updated.from ? { from: updated.from } : {}) };
+}
+
+/** Step 2: the Node the machine has, or one installed from `source` and
+ * run. ClikCode's own Node from an earlier install that no longer runs (or
+ * is too old) is never reused: it is replaced, or -- with a usable node on
+ * PATH -- removed, as every later step puts it first on PATH. */
+async function nodeStep(target: string, probe: Probe, source: NodeSource | undefined): Promise<{ ok: true; detail: string } | { ok: false; message: string }> {
+  const yourself = `Install Node.js ${MIN_NODE.join('.')} or newer there yourself, then choose the machine again.`;
+  const ownThere = Boolean(probe.ownNodeVersion || probe.ownNodeError);
+  const ownWas = probe.ownNodeError ? 'no longer ran' : 'was too old';
+  if (nodeIsNewEnough(probe.ownNodeVersion)) return { ok: true, detail: `ClikCode's own ${probe.ownNodeVersion}` };
+  if (!source) {
+    if (ownThere) {
+      const removed = await runSsh(target, `rm -rf ${SHARE}/node && echo removed=ok`, { timeoutMs: 60_000 });
+      if (keyValues(removed.stdout).get('removed') !== 'ok') return { ok: false, message: `Removing ClikCode's own Node on ${target}, which ${ownWas}, failed: ${sshFailure(removed) ? sshFailureMessage(target, removed) : stepError(removed)}.` };
+    }
+    return { ok: true, detail: `${probe.nodeVersion} (already installed)${ownThere ? `; ClikCode's own Node, which ${ownWas}, removed` : ''}` };
+  }
+  if (source.kind === 'refused') return { ok: false, message: source.message };
+  const from = nodeSourceText(source);
+  const result = await runSsh(target, source.kind === 'nodejs' ? nodeInstallScript(source) : macportsInstallScript(source), { timeoutMs: STEP_TIMEOUT_MS });
+  if (result.code !== 0) {
+    if (sshFailure(result)) return { ok: false, message: sshFailureMessage(target, result) };
+    const said = stepError(result);
+    if (said.startsWith('node-fails')) return { ok: false, message: `Node.js from ${from} was installed on ${target} but does not run: ${said.slice(10).trim() || `exit ${result.code}`}. ${yourself}` };
+    return { ok: false, message: `Installing Node.js from ${from} on ${target} failed: ${said}. ${yourself}` };
+  }
+  const version = keyValues(result.stdout).get('nodeVersion');
+  if (!nodeIsNewEnough(version)) return { ok: false, message: `Node.js from ${from} on ${target} runs but says it is ${version || 'no version'}; ClikCode needs ${MIN_NODE.join('.')} or newer. ${yourself}` };
+  const notes = [
+    ...(probe.nodeError ? [`the node at ${probe.node} does not run, so it is not used`] : []),
+    ...(ownThere ? [`it replaces ClikCode's own Node, which ${ownWas}`] : []),
+  ];
+  return { ok: true, detail: `${version} from ${from} into ~/.local/share/clikcode/node (${source.kind === 'nodejs' ? 'SHA-256 checked' : 'SHA-256 pinned'}, runs)${notes.length ? `; ${notes.join('; ')}` : ''}` };
 }
 
 // ---- the managed clone's update: one implementation, run over SSH or here --

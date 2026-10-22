@@ -243,10 +243,27 @@ connection per machine, closed with the window.
 Choosing a machine installs ClikCode there, fresh from GitHub `main`, a step at
 a time in your chat:
 
-1. check the machine (`uname`, git, Node, `$HOME`);
-2. Node.js: when it has none at 22.12 or newer, a user-local one from
-   nodejs.org into `~/.local/share/clikcode/node`, its SHA-256 checked
-   against the published `SHASUMS256.txt` (no sudo);
+1. check the machine (`uname`, on macOS `sw_vers`, git, Node, `$HOME`). A
+   Node counts only if `node -v` runs. A Mac older than macOS 10.15 is
+   refused here, before anything is downloaded: ClikCode needs Node.js 22.12
+   or newer, and no build of it runs there (update macOS, or install Node.js
+   22.12+ yourself and add the machine again);
+2. Node.js: when it has none at 22.12 or newer that runs, a user-local one
+   into `~/.local/share/clikcode/node` (no sudo), from the source that runs
+   on that OS:
+   - Linux, and macOS 13.5 or newer: nodejs.org `latest-v24.x`;
+   - macOS 11.0 – 13.4: nodejs.org `latest-v22.x` (Node 24's macOS builds
+     need 13.5);
+   - macOS 10.15 (Intel): MacPorts' prebuilt `nodejs22`, with the zlib and
+     ICU libraries it loads and MacPorts' `npm10`, every archive checked
+     against a SHA-256 pinned in ClikCode; the libraries are relinked to
+     sit beside it (`install_name_tool`, then `codesign -s -`), nothing goes
+     in `/opt/local`.
+
+   nodejs.org's tarballs are checked against the published
+   `SHASUMS256.txt`. The new Node is then run: if it does not, the install
+   stops here with what it said. An earlier install's Node that no longer
+   runs is replaced, never reused;
 3. git: required — without it the install stops and says how to get it
    (`xcode-select --install` on macOS, the package manager on Linux);
 4. a shallow clone into `~/.local/share/clikcode/src` (or a fetch and hard
