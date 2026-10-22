@@ -416,10 +416,10 @@ export async function runRemoteChat(
         const id = randomUUID();
         const complete = new Promise<void>((resolve, reject) => completions.set(id, { resolve, reject }));
         sending = line;
-        bridge.post({ type: 'send', text: pinnedUpdateLine(line, localBuildCommit()), id });
         // A message (not a command) is drawn now, with the turn's wait, as a
         // chat here draws one: the machine's answer is a round trip away.
         if (!/^[/!]/.test(line)) { early = line; terminal.submitted(line); terminal.turnStarting(); }
+        try { bridge.post({ type: 'send', text: pinnedUpdateLine(line, localBuildCommit()), id }); } catch (error) { dropEarly(); throw error; }
         await complete;
         sending = undefined;
         // /update ran there: the window's connection there (the board's) goes to the build it installed.
