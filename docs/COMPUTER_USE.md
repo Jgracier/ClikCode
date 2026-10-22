@@ -255,3 +255,23 @@ A profile can keep secrets next to its details: an optional fallback password fo
 - **Sign-in order** (said to the agent on every sign-in or sign-up page): Google ("Continue with Google", no password, no email check), else GitHub (GitHub has no Google sign-in of its own, so it signs in with the saved GitHub login and a verification code read from the profile's mailbox), else the profile's email with, on a sign-up, a generated per-site password. A site with a free-form username uses the profile's `preferred_username`.
 - **The profile answers sign-ins**: `login` with no saved login for a site fills the profile's sign-in email and, if one is set, its optional `password` secret instead of asking. Anything else it is asked (a one-time code, an account choice) is asked as before.
 - **`clikcode computer unattended on`**: a private prompt about a site is never shown. The need is parked in the queue (`needs-human`, with a reason from what was asked: `captcha`, `two-factor`, `sms`, else `other`) and the agent is told to go on to the next vendor. The profile prompts are always shown, because they are the user's own. Clear the queue in batches: `clikcode computer queue --status needs-human`.
+
+## Profiles: which one a form is filled from
+
+With no `label`, the profile used is the one called `Personal`, else the one with the most standard fields (name, email, phone, address, ...). It is never "the first by name", so a second profile such as `ClikDeploy admin` is only used when a call names it with `label`, or when it can fill more of the form's fields than Personal (`bestProfileFor`). Saving with no label merges into that same profile instead of creating another.
+
+## Choosing a key's scope
+
+When a vendor offers a choice when creating a key (scopes, permissions, "restricted" and "unrestricted" keys):
+
+1. Ask ClikDeploy what the connector needs. Its `connector_scope_check` tool (find it with `clikdeploy tools search connector_scope_check`; it may not exist yet) answers which scopes or permissions the connector's operations require. If it does not exist, read the operations in the connector spec (`connector_spec_get`) and the vendor's reference for which permission each one needs.
+2. Pick the least-privilege key that covers every operation the connector exposes (read-only scopes when the operations are reads; add a write scope only for the operations that write). Name the key for what it is for (`clikdeploy <integration>`), set no expiry the vendor does not require, and restrict by IP or resource only when the vendor allows it without breaking ClikDeploy's calls.
+3. Choose the unrestricted key only when the vendor offers no scopes, when scoped keys cannot call an operation the spec lists (say which in a `notes` entry), or when `connector_scope_check` says the full scope is required. Record the choice and why in the site's notes and the queue task note.
+4. Never widen a key to make a test pass without recording it; a connector that needs more than it declared is a spec problem to report, not a reason to take every permission.
+
+## Worker notes and where progress is kept
+
+Durable notes go under `~/.clikcode`, never `/tmp` (a cleanup or reboot loses `/tmp`, and a restarted agent then repeats the work).
+
+- **Per-site notes** (what worked on a vendor's site: URL, order of screens, gotchas): `computer_web` `action=notes` with `host` and `note` saves one (newest last, 4,000 characters kept; a note shaped like a key or token is refused whole); with only `host` it reads them back. They are kept in `~/.clikcode/computer/notes/<host>.md` and are shown again when a page on that host is opened. The call needs an open tab (`open` a URL first). From a shell: `clikcode computer tool computer_web --args-json '{"action":"notes","host":"app.example.com","note":"API keys: Settings > Developer > New key"}'`.
+- **Run progress** (which vendors are done, what is next): record each outcome in the queue (`computer_web` `action=queue`, `clikcode computer queue`), which is the durable list to resume from. Anything more free-form goes in a file under `~/.clikcode/computer/progress/`, one per run, appended to as work happens. Never put a key, password or code in either.
