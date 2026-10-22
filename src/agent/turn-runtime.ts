@@ -91,6 +91,8 @@ export interface TurnRuntime {
   stalledCall: ModelToolCall | undefined;
   stepRetries: number;
   retryWaitedSeconds: number;
+  /** Seconds this step has waited for the user's own model to start (MODEL_START_BUDGET_SECONDS). */
+  modelStartWaitedSeconds: number;
   /** The plan-mode setting the user had when the turn began, then as last seen: only a change after it is theirs (turn-tools.ts applyLivePlan). */
   livePlanSeen: boolean | undefined;
   lengthContinues: number;
@@ -209,7 +211,7 @@ export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime
     steerQueue: [], steerWaiters: new Set(), steerOpen: true, callsOpen: 0, heldSteers: [], foregroundSteers: new Map(), items, ledger, lastStepUsage: undefined, itemsAtLastUsage: items.length,
     contextWindow: input.contextWindow ?? input.modelClient.contextHints?.contextWindow,
     servedModel: undefined, segments, needsSeparator: false, steps: 0, stall: new StallGuard(), stalledCall: undefined,
-    stepRetries: 0, retryWaitedSeconds: 0, livePlanSeen: readLivePlan(input), lengthContinues: 0, stopContinues: 0,
+    stepRetries: 0, retryWaitedSeconds: 0, modelStartWaitedSeconds: 0, livePlanSeen: readLivePlan(input), lengthContinues: 0, stopContinues: 0,
     shownCalls: new Map(), continuesCutAnswer: false, lastContext: { contextProfile: profile.name },
     stepAcceptsImages: input.modelClient.acceptsImages === true,
   };

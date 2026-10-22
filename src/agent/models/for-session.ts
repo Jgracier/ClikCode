@@ -47,6 +47,8 @@ const GATEWAY_ERROR_CODES: Readonly<Record<string, string>> = {
   no_model_available: 'NO_MODEL_AVAILABLE',
   gateway_disabled: 'CLIKCODE_DISABLED',
   insufficient_credits: 'AI_CREDIT_EXHAUSTED',
+  // The user's own model, waking or loading on its GPU (ClikDeploy compute): waited for, not an error.
+  model_starting: 'MODEL_STARTING',
 };
 
 /** What the Gateway refuses with a 400 (`invalid_request`): a request is

@@ -10,6 +10,14 @@ export const STEP_RETRY_BUDGET_SECONDS = 300;
 const STEP_RETRY_CAP_SECONDS = 30;
 /** The longest a server's own Retry-After is honoured for one wait. */
 const RETRY_AFTER_CAP_SECONDS = 120;
+/** How long a turn waits for the user's own model to start on its GPU (it was asleep, or is still
+ * loading): a GPU found, the weights downloaded, the model loaded -- minutes, not a blip. Its own
+ * budget, apart from the retries of a failing step. */
+export const MODEL_START_BUDGET_SECONDS = 900;
+/** How often a model that is starting is asked again. */
+export function modelStartWaitSeconds(retryAfter?: number): number {
+  return Math.min(60, Math.max(10, retryAfter !== undefined && Number.isFinite(retryAfter) ? retryAfter : 30));
+}
 /** Times one turn goes on with an answer the output limit cut off, as a
  * vendor CLI does, before it stops and says the answer was cut. */
 export const MAX_LENGTH_CONTINUES = 3;
@@ -36,11 +44,13 @@ const RETRYABLE_STEP_CODES = new Set(['MODEL_ERROR', 'INTERNAL_ERROR', 'MODEL_RA
 export const MAX_STOP_HOOK_CONTINUES = 3;
 
 /** What to do about a model step that failed before streaming anything.
- * `retry`: a transient failure -- a retryable code, a 5xx, or no response at all. Everything else -- credit,
- * sign-in, a rejected request, no model, the kill switch -- is the answer. */
-export function stepRecovery(error: unknown): 'retry' | undefined {
+ * `retry`: a transient failure -- a retryable code, a 5xx, or no response at all. `model-starting`: the
+ * user's own model is coming up on its GPU; the step waits for it (MODEL_START_BUDGET_SECONDS).
+ * Everything else -- credit, sign-in, a rejected request, no model, the kill switch -- is the answer. */
+export function stepRecovery(error: unknown): 'retry' | 'model-starting' | undefined {
   const record = (error ?? {}) as { code?: unknown; statusCode?: unknown; kind?: unknown; message?: unknown };
   const code = typeof record.code === 'string' ? record.code : undefined;
+  if (code === 'MODEL_STARTING') return 'model-starting';
   if (code && RETRYABLE_STEP_CODES.has(code)) return 'retry';
   if (code) return undefined;
   const status = typeof record.statusCode === 'number' ? record.statusCode : undefined;

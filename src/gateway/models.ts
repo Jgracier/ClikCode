@@ -35,6 +35,11 @@ export interface GatewayModel {
   /** Which tier the Gateway serves it from right now. Sent to the super admin
    * only: everyone else sees the model alone. */
   access?: GatewayAccess;
+  /** One of the user's own models: one they run on ClikDeploy compute (GPUs they rent, or their own
+   * server), not charged per token. `asleep` and `starting` ones are chosen like any other: the first
+   * message waits for the model to come up (agent/turn-recovery.ts MODEL_START_BUDGET_SECONDS).
+   * `tools` false: the runtime it was started on cannot answer tool calls for it. */
+  own?: { state: 'running' | 'asleep' | 'starting'; tools: boolean };
 }
 
 type GatewayAccess = 'subscription' | 'free' | 'paid';
@@ -52,16 +57,20 @@ const MAKER_NAMES: Readonly<Record<string, string>> = {
   minimax: 'MiniMax', moonshot: 'Moonshot AI', thinkingmachines: 'Thinking Machines', sao10k: 'Sao10K', nvidia: 'NVIDIA',
 };
 
-/** Where a model sits in a list of models: its maker's name, or "Other". */
+/** The group of the user's own models in a list: first, above every maker. */
+export const OWN_MODELS_GROUP = 'Your models';
+
+/** Where a model sits in a list of models: the user's own, its maker's name, or "Other". */
 export function gatewayMakerName(model: GatewayModel): string {
+  if (model.own) return OWN_MODELS_GROUP;
   const maker = model.maker;
   if (!maker) return 'Other';
   return MAKER_NAMES[maker] ?? maker.replace(/(^|[-_ ])(\w)/g, (_m, space: string, letter: string) => `${space ? ' ' : ''}${letter.toUpperCase()}`);
 }
 
-/** The models ordered by maker (A to Z, Other last), each maker's models in the list's own order. */
+/** The models ordered by maker (the user's own first, then A to Z, Other last), each group in the list's own order. */
 export function gatewayModelsByMaker(models: readonly GatewayModel[]): GatewayModel[] {
-  const key = (model: GatewayModel): string => (model.maker ? gatewayMakerName(model).toLowerCase() : '\uffff');
+  const key = (model: GatewayModel): string => (model.own ? '' : model.maker ? gatewayMakerName(model).toLowerCase() : '\uffff');
   return [...models].sort((left, right) => key(left).localeCompare(key(right)));
 }
 
@@ -89,6 +98,13 @@ export interface GatewayModelList {
  * providers serves it, and on what terms, is the Gateway's own decision (the
  * cheapest available) and not the user's concern. */
 export function gatewayModelDetail(model: GatewayModel): string {
+  if (model.own) {
+    return [
+      model.own.state === 'asleep' ? 'asleep: wakes when used (a few minutes)' : model.own.state === 'starting' ? 'starting' : 'running',
+      'on your compute, no per-token charge',
+      model.own.tools ? '' : 'no tool calls',
+    ].filter(Boolean).join(' · ');
+  }
   return [
     model.price ? gatewayPriceLabel(model.price) : '',
     model.vision ? 'images' : '',
@@ -226,7 +242,8 @@ export function fromOpenAIModelList(data: readonly unknown[]): GatewayModelList 
     if (!raw || typeof raw !== 'object') continue;
     const entry = raw as {
       id?: unknown; owned_by?: unknown; root?: unknown; type?: unknown; access?: unknown; context_length?: unknown; max_output_tokens?: unknown; tokens_per_second?: unknown;
-      capabilities?: { vision?: unknown; reasoning?: unknown }; pricing?: Record<string, unknown>;
+      capabilities?: { vision?: unknown; reasoning?: unknown; tools?: unknown }; pricing?: Record<string, unknown>;
+      deployment?: { state?: unknown };
     };
     if (typeof entry.id !== 'string' || !entry.id) continue;
     // Embedding models share the list; a conversation cannot run on one.
@@ -239,6 +256,16 @@ export function fromOpenAIModelList(data: readonly unknown[]): GatewayModelList 
         ...(maxOutput ? { maxOutput } : {}),
         ...(entry.capabilities?.vision === true ? { vision: true } : {}),
       };
+      continue;
+    }
+    // One of the user's own models (owned_by self-hosted, with its deployment's state).
+    if (entry.owned_by === 'self-hosted' && entry.deployment && typeof entry.deployment === 'object') {
+      const state = entry.deployment.state === 'asleep' || entry.deployment.state === 'starting' ? entry.deployment.state : 'running';
+      models.push({
+        id: entry.id,
+        own: { state, tools: entry.capabilities?.tools !== false },
+        ...(typeof entry.context_length === 'number' && entry.context_length > 0 ? { contextWindow: entry.context_length } : {}),
+      });
       continue;
     }
     const pricing = entry.pricing;

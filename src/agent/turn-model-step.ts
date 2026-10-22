@@ -7,7 +7,7 @@ import { visibleTools } from './permissions.js';
 import { completedArguments } from './models/openai-client.js';
 import { thoughtLabel } from '../harness/protocol/activity-events.js';
 import { estimateContextTokens, DEFAULT_CONTEXT_WINDOW } from './context.js';
-import { classifyModelError, pause, retryDelaySeconds, STEP_RETRY_BUDGET_SECONDS, stepRecovery } from './turn-recovery.js';
+import { classifyModelError, MODEL_START_BUDGET_SECONDS, modelStartWaitSeconds, pause, retryDelaySeconds, STEP_RETRY_BUDGET_SECONDS, stepRecovery } from './turn-recovery.js';
 import { abortable, categoryForTool, withUniqueIds } from './turn-support.js';
 import { recordUsage } from './usage.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
@@ -85,6 +85,17 @@ export async function runModelStep(rt: TurnRuntime, modelClient: ModelClient, sy
     // again would say it twice. Before that, a step is safe to resend: the
     // Gateway is stateless and no tool has run.
     const recovery = streamedThisStep ? undefined : stepRecovery(error);
+    if (recovery === 'model-starting') {
+      const after = (error as { retryAfter?: unknown }).retryAfter;
+      const wait = modelStartWaitSeconds(typeof after === 'number' ? after : undefined);
+      if (rt.modelStartWaitedSeconds + wait <= MODEL_START_BUDGET_SECONDS) {
+        rt.modelStartWaitedSeconds += wait;
+        const so = rt.modelStartWaitedSeconds - wait;
+        input.onPhase?.(`your model is starting on its GPU${so ? ` · ${so < 90 ? `${so}s` : `${Math.round(so / 60)} min`} so far` : ''}`);
+        await pause(wait, signal);
+        return { kind: 'continue' };
+      }
+    }
     if (recovery === 'retry') {
       const after = (error as { retryAfter?: unknown }).retryAfter;
       const wait = retryDelaySeconds(rt.stepRetries + 1, typeof after === 'number' ? after : undefined);
@@ -131,6 +142,7 @@ export async function recordStep(
   rt.steps++;
   rt.stepRetries = 0;
   rt.retryWaitedSeconds = 0;
+  rt.modelStartWaitedSeconds = 0;
 
   // A client without a delta channel still has to reach the UI.
   if (step.text && step.text.length > streamedThisStep.length && step.text.startsWith(streamedThisStep)) {
