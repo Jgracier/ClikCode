@@ -132,6 +132,25 @@ export class TerminalBridge {
   }
 }
 
+/** A sign-in's own question or choice, answered on its screen: what is typed
+ * under the link, or the picker. Cancelled when the sign-in is (Esc). */
+async function answerInSignIn(bridge: TerminalBridge, screen: SignInScreen, event: Extract<IdeEvent, { type: 'ui-request' }>): Promise<void> {
+  const request = event.request;
+  const cancelled = new Promise<undefined>((resolve) => {
+    if (screen.signal.aborted) resolve(undefined);
+    else screen.signal.addEventListener('abort', () => resolve(undefined), { once: true });
+  });
+  let result: IdeUiResult;
+  if (request.kind === 'input') {
+    const text = await Promise.race([screen.ask(request.prompt, Boolean(request.secret)), cancelled]);
+    result = text === undefined ? { cancelled: true } : { text };
+  } else {
+    const index = await Promise.race([screen.choose(request.title, request.items.map((item) => item.label)), cancelled]);
+    result = index === undefined ? { cancelled: true } : { index };
+  }
+  bridge.post({ type: 'ui-response', id: event.id, result });
+}
+
 async function answerUi(bridge: TerminalBridge, terminal: TerminalHarnessPrompter, event: Extract<IdeEvent, { type: 'ui-request' }>): Promise<void> {
   const request = event.request;
   let result: IdeUiResult;
@@ -248,6 +267,8 @@ export async function runRemoteChat(
     const completions = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
     const promptController = new AbortController();
     const signIns = new Map<string, SignInScreen>();
+    /** Sign-ins with a question of the vendor's own open on their screen: the card's key row waits for it. */
+    const vendorAsking = new Set<string>();
     /** Its slash menu, filled in place as the machine answers (remotePalette). */
     const commands: PaletteEntry[] = [];
     /** What the menu was last read for: a session that changes it is read again. */
@@ -307,27 +328,40 @@ export async function runRemoteChat(
           else if (worker.type === 'question-request') void terminal.askQuestions(worker.request).then((result) => bridge.post({ type: 'question-response', id: worker.id, result }));
           return;
         }
-        case 'ui-request':
+        case 'ui-request': {
+          // A question or a choice of an open sign-in's (Claude's "Paste code here if
+          // prompted", a login menu): asked on that sign-in's screen, under its link. Asked
+          // as a prompt of its own it ended the wait the link is drawn in, and only the
+          // question was left on screen.
+          const open = [...signIns].at(-1);
+          if (open) {
+            const [id, screen] = open;
+            if (event.request.kind === 'input') vendorAsking.add(id);
+            void answerInSignIn(bridge, screen, event).finally(() => vendorAsking.delete(id));
+            return;
+          }
           if (!running && terminal.turn) terminal.stopWaiting(false);
           void answerUi(bridge, terminal, event).catch((error: unknown) => {
             terminal.activity(error instanceof Error ? error.message : String(error));
             bridge.post({ type: 'ui-response', id: event.id, result: { cancelled: true } });
           });
           return;
+        }
         case 'sign-in': void runSignIn(machine.sshTarget, event.spec, terminal).then(
           () => bridge.post({ type: 'sign-in-result', id: event.id }),
           (error: unknown) => bridge.post({ type: 'sign-in-result', id: event.id, error: error instanceof Error ? error.message : String(error) }),
         ); return;
         case 'sign-in-link': {
           let screen = signIns.get(event.id);
-          if (event.done) { screen?.stop(); signIns.delete(event.id); return; }
+          if (event.done) { screen?.stop(); signIns.delete(event.id); vendorAsking.delete(event.id); return; }
           if (!screen) {
             screen = terminal.signInScreen(event.name);
             signIns.set(event.id, screen);
             screen.signal.addEventListener('abort', () => bridge.post({ type: 'sign-in-cancel', id: event.id }), { once: true });
           }
           if (event.url) screen.show({ url: event.url, ...(event.code ? { code: event.code } : {}) });
-          if (event.ask) void screen.ask(event.ask.prompt, Boolean(event.ask.secret), false, true).then((text) => bridge.post({ type: 'sign-in-answer', id: event.id, text }));
+          // The key row beside the link, unless the vendor's own question has the field now.
+          if (event.ask && !vendorAsking.has(event.id)) void screen.ask(event.ask.prompt, Boolean(event.ask.secret), false, true).then((text) => bridge.post({ type: 'sign-in-answer', id: event.id, text }));
           return;
         }
         case 'usage': terminal.usage(event.label, event.reset); return;
