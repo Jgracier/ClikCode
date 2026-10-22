@@ -792,7 +792,7 @@ describe('runAgentLoop', () => {
       const h = harness([], {}, { error: gatewayError('MODEL_STARTING', { retryAfter: 30 }) });
       const result = await driven(runAgentLoop(h.input));
       expect(result).toMatchObject({ isError: true, stopReason: 'model-error' });
-      expect(h.client.requests).toHaveLength(900 / 30 + 1);
+      expect(h.client.requests).toHaveLength(1200 / 30 + 1);
     });
 
     it('stops waiting the moment the turn is cancelled', async () => {
