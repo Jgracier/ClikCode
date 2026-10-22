@@ -25,6 +25,13 @@ export async function listProfiles(stateDir: string): Promise<SavedProfile[]> {
   return (await readVaultRecords<Profile>(stateDir, FOLDER)).map(({ id, value }) => ({ id, label: value.label, fields: value.fields, ...(value.custom ? { custom: value.custom } : {}), ...(value.secrets ? { secrets: value.secrets } : {}) })).sort((a, b) => a.label.localeCompare(b.label));
 }
 
+/** The profile meant when no label is given: the one called Personal, else the one with the most standard fields (then by label).
+ * Never "the first by name", which let a second profile such as "ClikDeploy admin" be filled in as the user. */
+export function defaultProfile<P extends SavedProfile>(profiles: readonly P[]): P | undefined {
+  const standard = (profile: P): number => PROFILE_KEYS.filter(key => profile.fields[key]).length;
+  return [...profiles].sort((a, b) => Number(b.label.toLowerCase() === 'personal') - Number(a.label.toLowerCase() === 'personal') || standard(b) - standard(a) || a.label.localeCompare(b.label))[0];
+}
+
 /** Creates the profile, or (with an id, or a label that exists) merges these fields into it. */
 export async function saveProfile(stateDir: string, input: { id?: string; label?: string; fields: Partial<Record<string, string>>; custom?: Record<string, { label?: string; value: string; match?: string[] }> }): Promise<SavedProfile> {
   const fields: Partial<Record<ProfileKey, string>> = {};
@@ -33,8 +40,8 @@ export async function saveProfile(stateDir: string, input: { id?: string; label?
     if (typeof value === 'string' && value.trim()) fields[key as ProfileKey] = (key === 'phone' ? normalizePhone(value) : value.trim()).slice(0, 200);
   }
   const all = await listProfiles(stateDir);
-  // With neither an id nor a label, the only profile there is is the one meant: a second "Personal" would only split the user's details in two.
-  const existing = all.find(profile => profile.id === input.id) ?? (input.label ? all.find(profile => profile.label.toLowerCase() === input.label!.toLowerCase()) : !input.id && all.length === 1 ? all[0] : undefined);
+  // With neither an id nor a label, the default profile is the one meant (the only one, else Personal): a second "Personal" would only split the user's details in two.
+  const existing = all.find(profile => profile.id === input.id) ?? (input.label ? all.find(profile => profile.label.toLowerCase() === input.label!.toLowerCase()) : !input.id ? defaultProfile(all) : undefined);
   const custom = mergeCustom(existing?.custom, input.custom);
   const saved: SavedProfile = existing
     ? { ...existing, label: input.id ? input.label?.trim() || existing.label : existing.label, fields: { ...existing.fields, ...fields }, ...(custom ? { custom } : {}) }
@@ -231,6 +238,7 @@ export function bestProfileFor<P extends SavedProfile>(profiles: readonly P[], h
   const named = label ? profiles.find(candidate => candidate.label.toLowerCase() === label.trim().toLowerCase()) : undefined;
   if (named) return named;
   const score = (candidate: P): number => hints.filter(hint => { const key = profileKeyFor(hint); return (key && candidate.fields[key]) || customFieldFor(candidate, hint); }).length;
+  const personal = (candidate: P): number => Number(candidate.label.toLowerCase() === 'personal');
   const size = (candidate: P): number => Object.keys(candidate.fields).length + Object.keys(candidate.custom ?? {}).length;
-  return [...profiles].sort((a, b) => score(b) - score(a) || size(b) - size(a) || Number(b.label === 'Personal') - Number(a.label === 'Personal'))[0];
+  return [...profiles].sort((a, b) => score(b) - score(a) || personal(b) - personal(a) || size(b) - size(a))[0];
 }
