@@ -217,8 +217,10 @@ const withOwnNode = `PATH=${OWN_NODE_BIN}:"$PATH"; export PATH`;
 
 /** pnpm through corepack where package.json pins it, else npx; then the
  * repository's own install-local. `pinned`: the clone is at a chosen commit
- * rather than the tip of main, which install-local refuses to build from --
- * so it is built first and installed as it is (`--force`). */
+ * rather than the tip of main -- the editor's own build, which main may have
+ * moved past -- which install-local refuses to build from: so it is built
+ * first and installed as it is (`--force`, and `--even-if-behind`: here being
+ * behind main is the point, not a stale checkout). */
 export function buildScript(pinned = false): string {
   return [
     'set -eu',
@@ -227,7 +229,7 @@ export function buildScript(pinned = false): string {
     `pm="$(node -e "const p=require('./package.json').packageManager||'';process.stdout.write(p.startsWith('pnpm@')?p.slice(5).split('+')[0]:'')" 2>/dev/null || true)"`,
     `if [ -n "$pm" ] && command -v corepack >/dev/null 2>&1; then pnpm() { COREPACK_ENABLE_DOWNLOAD_PROMPT=0 corepack pnpm "$@"; }; else pnpm() { npx --yes "pnpm@\${pm:-${PNPM_FALLBACK}}" "$@"; }; fi`,
     'pnpm install --frozen-lockfile',
-    ...(pinned ? ['pnpm run build', 'pnpm run install-local --force'] : ['pnpm run install-local']),
+    ...(pinned ? ['pnpm run build', 'pnpm run install-local --force --even-if-behind'] : ['pnpm run install-local']),
     'echo build=ok',
   ].join('\n');
 }
@@ -433,7 +435,7 @@ export async function runManagedUpdate(
   const pinned = Boolean(options.commit);
   const built = await run(buildScript(pinned), { timeoutMs: BUILD_TIMEOUT_MS });
   if (built.code !== 0 || keyValues(built.stdout).get('build') !== 'ok') {
-    const rerun = pinned ? 'pnpm install --frozen-lockfile && pnpm run build && pnpm run install-local --force' : 'pnpm install --frozen-lockfile && pnpm run install-local';
+    const rerun = pinned ? 'pnpm install --frozen-lockfile && pnpm run build && pnpm run install-local --force --even-if-behind' : 'pnpm install --frozen-lockfile && pnpm run install-local';
     return fail(build, `Building ClikCode on ${where} failed: ${stepError(built)}. Run \`cd ~/.local/share/clikcode/src && ${rerun}\` there to see the whole error.`);
   }
   progress.done(build, '~/.local/bin/clikcode');

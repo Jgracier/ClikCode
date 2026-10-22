@@ -217,7 +217,7 @@ describe('installing on a machine', () => {
   it('builds the update script once, for a commit or for main', () => {
     expect(sourceScript('file:///r.git', 'a'.repeat(40))).toContain(`want='${'a'.repeat(40)}'`);
     expect(sourceScript('file:///r.git')).toContain("want=''");
-    expect(buildScript(true)).toContain('pnpm run install-local --force');
+    expect(buildScript(true)).toContain('pnpm run install-local --force --even-if-behind');
     expect(buildScript(false)).not.toContain('--force');
   });
 
