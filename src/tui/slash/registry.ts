@@ -32,7 +32,7 @@ const SLASH_GROUP_ORDER: readonly SlashGroup[] = [
  * otherwise the top of the list flips between four headers and prints
  * "Settings" twice. */
 export const SLASH_PALETTE_PINNED: readonly string[] = [
-  'resume', 'provider', 'account', 'model', 'machine', 'new', 'permissions', 'settings', 'sessions', 'status', 'help',
+  'resume', 'provider', 'account', 'model', 'private', 'machine', 'new', 'permissions', 'settings', 'sessions', 'status', 'help',
 ];
 
 /** Every handler a dispatcher must implement. `as const` so both handler
@@ -42,7 +42,7 @@ export const SLASH_HANDLER_KEYS = [
   'help', 'status', 'new', 'redraw', 'exit', 'compact', 'context', 'export', 'history', 'copy', 'select', 'changes',
   'review', 'init', 'memory', 'diff', 'cwd', 'add-dir', 'mention',
   'provider', 'accounts', 'machine', 'login', 'logout', 'gateway',
-  'model', 'effort', 'fast', 'permissions', 'sandbox', 'computer', 'send', 'options', 'capabilities', 'settings',
+  'model', 'privateModels', 'effort', 'fast', 'permissions', 'sandbox', 'computer', 'send', 'options', 'capabilities', 'settings',
   'sessions', 'resume', 'search', 'rename', 'fork', 'redo', 'archive', 'delete',
   'usage', 'doctor', 'agents', 'update',
 ] as const;
@@ -201,6 +201,12 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
       if (!base.available) return base;
       return harnessSupportsModelSelection(harness!) ? { available: true } : { available: false, reason: `${harness!.displayName} does not publish a model selector.` };
     },
+  }),
+  entry('private', 'Settings', 'choose a deployed ClikDeploy private model', {
+    handlerKey: 'privateModels', argHint: 'models',
+    availability: (session) => isGatewayService(session)
+      ? { available: true }
+      : { available: false, reason: 'Private models are available on ClikDeploy Gateway conversations.' },
   }),
   entry('effort', 'Settings', 'reasoning level', {
     argHint: '[level]', duringTurn: 'apply',
