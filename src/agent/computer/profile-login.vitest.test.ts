@@ -27,6 +27,15 @@ describe('profileLoginAnswers', () => {
     expect(await profileLoginAnswers(stateDir, [field('favourite_colour')])).toBeUndefined();
     expect(await profileLoginAnswers(stateDir, [])).toBeUndefined();
   });
+
+  it('uses Personal before an admin profile that sorts ahead of it by label', async () => {
+    stateDir = await mkdtemp(join(tmpdir(), 'plogin-'));
+    const admin = await saveProfile(stateDir, { label: 'ClikDeploy', fields: { email: 'admin@x.test', given_name: 'A' } });
+    const me = await saveProfile(stateDir, { label: 'Personal', fields: { email: 'me@x.test' } });
+    await saveProfileSecret(stateDir, admin.id, 'password', 'admin-pw');
+    await saveProfileSecret(stateDir, me.id, 'password', 'my-pw');
+    expect(await profileLoginAnswers(stateDir, [field('email'), field('password', 'password')])).toEqual({ email: 'me@x.test', password: 'my-pw' });
+  });
 });
 
 describe('unattended parking', () => {

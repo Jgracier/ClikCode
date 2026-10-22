@@ -3,14 +3,17 @@
  * that asks for anything else (a one-time code, a choice, a field the profile has no answer for) is not answered
  * here and falls through to the usual private prompt, or to the queue when running unattended. */
 import type { LoginField } from './login-fields.js';
-import { listProfiles, PASSWORD_SECRET, readProfileSecret } from './profiles.js';
+import { defaultProfile, listProfiles, PASSWORD_SECRET, readProfileSecret } from './profiles.js';
 import { registerSecret } from './secret-scrubber.js';
 
 const ACCOUNT_KEYS = new Set(['email', 'username', 'accountId']);
 
 export async function profileLoginAnswers(stateDir: string, fields: readonly LoginField[]): Promise<Record<string, string> | undefined> {
   if (!fields.length || fields.some(field => field.transient || field.kind === 'choice')) return undefined;
-  const profiles = await listProfiles(stateDir);
+  // The default profile (Personal) first: listProfiles sorts by label, which would put an admin profile such as "ClikDeploy" ahead of it.
+  const listed = await listProfiles(stateDir);
+  const first = defaultProfile(listed);
+  const profiles = first ? [first, ...listed.filter(profile => profile !== first)] : listed;
   const email = profiles.map(profile => profile.fields.sso_email ?? profile.fields.email).find(Boolean);
   const holder = profiles.find(profile => profile.secrets?.[PASSWORD_SECRET]);
   const answers: Record<string, string> = {};

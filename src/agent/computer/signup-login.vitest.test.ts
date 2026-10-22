@@ -5,7 +5,7 @@ import { afterEach, expect, it } from 'vitest';
 import type { Page } from 'playwright-core';
 import { generatePassword } from './signup-login.js';
 import { lockCredentialVault, saveLoginFields, savedLoginFields, savedLoginsForSite } from './credential-vault.js';
-import { expectSignup, holdSignup, savedPasswordFor, settleSignup } from './signup-login.js';
+import { expectSignup, holdSignup, savedPasswordFor, settleSignup, sitePasswordFor } from './signup-login.js';
 
 let stateDir = '';
 afterEach(async () => { if (stateDir) { lockCredentialVault(stateDir); await rm(stateDir, { recursive: true, force: true }); stateDir = ''; } });
@@ -85,4 +85,21 @@ it('finds a generated login on the www and bare host alike', async () => {
   expect(await savedPasswordFor(stateDir, 'https://example.com/login', 'Ada@Example.com')).toBe('Gen-4-ever-Zq9');
   expect(await savedLoginsForSite(stateDir, 'https://other.example.com/')).toEqual([]);
   expect(await savedPasswordFor(stateDir, 'https://example.com/login', undefined)).toBeUndefined();
+});
+
+it('a password box on a re-entry page gets the site password, never the profile one: typed, then by email, then the only login', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-signup-'));
+  const page = (url: string) => ({ url: () => url } as unknown as Page);
+  expect(await sitePasswordFor(stateDir, page('https://mapbox.example.com/verify'), 'ada@example.com')).toBeUndefined();
+  await saveLoginFields(stateDir, 'https://mapbox.example.com/signup', { username: 'ada@example.com', password: 'Gen-site-Zq9' });
+  expect(await sitePasswordFor(stateDir, page('https://mapbox.example.com/verify'), 'ADA@example.com')).toBe('Gen-site-Zq9');
+  // The email is not known (a form filled box by box): the only login saved for the site is it.
+  expect(await sitePasswordFor(stateDir, page('https://mapbox.example.com/verify'), undefined)).toBe('Gen-site-Zq9');
+  // Two logins and no email to tell them apart: no guess.
+  await saveLoginFields(stateDir, 'https://mapbox.example.com/signup', { username: 'bob@example.com', password: 'Other-Zq9' });
+  expect(await sitePasswordFor(stateDir, page('https://mapbox.example.com/verify'), undefined)).toBeUndefined();
+  // A password typed into this very form wins.
+  const typed = page('https://mapbox.example.com/verify');
+  expectSignup(typed, 'Typed-Zq9');
+  expect(await sitePasswordFor(stateDir, typed, undefined)).toBe('Typed-Zq9');
 });
