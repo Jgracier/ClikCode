@@ -119,7 +119,7 @@ describe('postToClikDeploy', () => {
     try {
       const result = { browserOk: true, googleSignedIn: true, gmailReadable: true, buildId: 'b', depsLinkOk: true, ok: true, reasons: [], checkedAt: 'now' };
       expect(await postToClikDeploy(result)).toBe('not posted: ClikDeploy has no connector_preflight tool yet');
-      await writeFile(join(dir, 'bin', 'clikdeploy'), `#!/bin/sh\ncase "$2" in search) echo '{"status":"success","data":[{"name":"connector_preflight"}]}';; run) cat > "${dir}/body"; echo '{"status":"success"}';; esac\n`);
+      await writeFile(join(dir, 'bin', 'clikdeploy'), `#!/bin/sh\ncase "$2" in search) echo '{"status":"success","data":[{"name":"connector_preflight"}]}';; run) printf "%s" "$5" > "${dir}/body"; echo '{"status":"success"}';; esac\n`);
       expect(await postToClikDeploy(result)).toBe('posted');
       const { readFile } = await import('node:fs/promises');
       expect(JSON.parse(await readFile(join(dir, 'body'), 'utf8'))).toMatchObject({ buildId: 'b', ok: true });
