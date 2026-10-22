@@ -274,7 +274,7 @@ def remote_move():
         # temporary root, and a Unix socket path has to fit in 108 bytes.
         target = 'devbox'
         made = json.loads(subprocess.check_output(['node', os.path.join(fakes, 'fake-remote.mjs'), 'host', world_root, target, json.dumps({'env': {
-            'FAKE_TURNS': json.dumps([{'blocks': ['Answered on devbox.']}, {'blocks': ['Second answer on devbox.']}]),
+            'FAKE_TURNS': json.dumps([{'blocks': ['Answered on devbox.']}, {'blocks': ['Second answer on devbox.']}, {'blocks': ['Third answer on devbox.']}]),
             'FAKE_STATE': os.path.join(context['root'], 'remote-turn-counter'), 'FAKE_PROMPT_LOG': os.path.join(context['root'], 'remote-prompts.log'),
             'FAKE_FAMILY': 'claude',
         }})]))
@@ -698,6 +698,9 @@ SCENARIOS = {
     # moves the chat there -- its conversation, on devbox's own ClikCode -- and
     # the next message is answered there, by devbox's agent, told once (and
     # unseen) that the chat moved. Nothing changes, so nothing is asked.
+    # There, `/` is devbox's slash menu (with /machine), and a command chosen
+    # runs on devbox. The chat is then listed only under devbox: Left, Left,
+    # this machine has no row for it; devbox's row opens it live, nothing moved.
     'machine-move-chat': {
         'setup': remote_move(), 'startup': 4, 'no_dup_check': 'the transcript is drawn again on the other machine',
         'turns': [{'blocks': ['First answer here.']}],
@@ -711,12 +714,29 @@ SCENARIOS = {
             ('keys', '\x1b[B'), ('keys', '\r'), ('wait_for', 'devbox  •', 60), ('settle', 2), ('snap', 'moved'),
             ('type', 'where are you now'), ('wait_for', 'Answered on devbox.', 60), ('settle', 1), ('snap', 'answered'),
             ('type', 'and again'), ('wait_for', 'Second answer on devbox.', 60), ('settle', 1), ('snap', 'again'),
+            # Two bridges there so far: the window's (both boards, the list and the move) and the moved chat's own.
+            ('expect_file_count', 'remote/ssh.log', 'ide-bridge --stdio', 2),
+            # Its slash menu is devbox's: `/` shows it, with /machine; a command chosen runs there.
+            ('keys', '/'), ('wait_for', '/model', 10), ('settle', 1), ('snap', 'menu'),
+            ('keys', 'mach'), ('wait_for', '/machine', 10), ('settle', 0.5), ('snap', 'menu-machine'),
+            ('keys', '\x7f\x7f\x7f\x7f'), ('settle', 0.5),
+            ('keys', 'model grok-4-fast'), ('settle', 1), ('keys', '\r'), ('wait_for', 'grok-4-fast', 30), ('settle', 1), ('snap', 'model'),
+            # Left, Left: the machines. This machine does not list the chat: it is live on devbox only.
+            ('keys', '\x1b[D'), ('wait_for', '← machines', 20), ('settle', 1), ('snap', 'board'),
+            ('keys', '\x1b[D'), ('wait_for', 'devbox  · connected', 20), ('settle', 1),
+            ('keys', '\x1b[C'), ('wait_for', '← machines', 20), ('settle', 1), ('snap', 'here'),
+            # devbox lists it, and it opens there, live: the answer comes from devbox, and nothing moves.
+            ('keys', '\x1b[D'), ('wait_for', 'devbox  · connected', 20), ('settle', 1),
+            ('keys', '\x1b[B'), ('keys', '\x1b[C'), ('wait_for', 'hello there', 20), ('settle', 1), ('snap', 'there'),
+            ('keys', '\x1b[C'), ('wait_for', 'Second answer on devbox.', 30), ('settle', 2),
+            ('type', 'third time'), ('wait_for', 'Third answer on devbox.', 60), ('settle', 1), ('snap', 'live'),
             # Told once, with the first turn there; the second turn is only what was typed.
             ('expect_file_count', 'remote-prompts.log', 'This conversation moved from', 1),
             ('expect_file_count', 'remote-prompts.log', 'Earlier in this chat', 1),
             ('expect_file_count', 'remote-prompts.log', '"and again"', 1),
-            # Two bridges there in all: the window's (both boards, the list and the move) and the moved chat's own.
-            ('expect_file_count', 'remote/ssh.log', 'ide-bridge --stdio', 2),
+            ('expect_file_count', 'remote-prompts.log', '"third time"', 1),
+            # One more: the chat's own again, opened from devbox's list (the board's lists went over the window's).
+            ('expect_file_count', 'remote/ssh.log', 'ide-bridge --stdio', 3),
         ],
         'watch': [],
         'snap_contains': {
@@ -724,8 +744,16 @@ SCENARIOS = {
             'moved': ['devbox  •', 'hello there', 'First answer here.'],
             'answered': ['where are you now', 'Answered on devbox.'],
             'again': ['and again', 'Second answer on devbox.'],
+            'menu': ['/model', '/provider'],
+            'menu-machine': ['/machine', 'move this chat to another machine'],
+            'model': ['devbox  •', 'grok-4-fast'],
+            'board': ['No conversations yet'],
+            'here': ['No conversations yet'],
+            'there': ['hello there'],
+            'live': ['devbox  •', 'grok-4-fast', 'and again', 'third time', 'Third answer on devbox.'],
         },
-        'snap_lacks': {'moved': ['is not signed in', 'Moving to devbox', 'Moved to'], 'answered': ['moved from', 'clikcode_resource_note']},
+        'snap_lacks': {'moved': ['is not signed in', 'Moving to devbox', 'Moved to'], 'answered': ['moved from', 'clikcode_resource_note'],
+                       'board': ['hello there', 'moved to'], 'here': ['hello there', 'moved to'], 'live': ['goes on here', 'read-only']},
         'never': ['ENOENT', 'This conversation moved from', 'clikcode_resource_note', 'Connection to devbox', 'Moved to devbox', 'Moving to devbox'],
     },
     # A chat on a machine whose ClikCode is another build: said once on opening it, with where
