@@ -262,6 +262,39 @@ A profile can keep secrets next to its details: an optional fallback password fo
 The `onboard-connector` skill (`~/.claude/skills/onboard-connector/SKILL.md`) is the whole loop: research the vendor's docs, write the
 spec through ClikDeploy's MCP tools (`search_tools` finds them; nothing is pinned), sign up (Google first, then Google through GitHub,
 then the profile email + hidden password), `capture_secret`, `send_secret` to the built-in `clikdeploy-connection` destination
-(`clikdeploy-connection-basic` for username + password), then test and publish. Those two destinations read the result back from ClikDeploy (`clikdeploy integrations show <id>`) and answer one line: `connected`, or `NOT connected: <reason>`; a command that printed success while nothing was stored is reported as not connected, and the key is never in the line. Captcha, SMS, payment, attestation and phone-approval
+(`clikdeploy-connection-basic` for username + password), then test and publish. Those two destinations read the result back from ClikDeploy (`clikdeploy integrations show <id>`) and answer one line, never empty (also through `clikcode computer store`): `connected`, or `NOT connected: <reason>`; the read-back tolerates warnings printed around the JSON; a command that printed success while nothing was stored is reported as not connected, and the key is never in the line. Captcha, SMS, payment, attestation and phone-approval
 steps go to the queue (`queue`) and the loop moves on. ClikDeploy never browses; ClikCode never touches a spec's internals beyond the
 schema ClikDeploy serves (`connector_spec_guide`).
+
+## Preflight: is this computer ready for onboarding work
+
+`clikcode computer preflight` (or `computer_web` `action=preflight`) is one deterministic check with no agent in it, for an agent to run before a batch and for a scheduled check. It prints JSON and exits 1 when anything is not ready:
+
+- `browserOk`: ClikCode's Chrome starts and opens a tab.
+- `googleSignedIn`: `accounts.google.com`, opened in a throwaway tab, ends on the account page (signed in) and not on the sign-in form or account chooser. Only the page address and whether an email box exists are looked at.
+- `gmailReadable`: Gmail's inbox view renders for the profile's sign-in account (so `read_email_code` and `open_email_link` can work).
+- `buildId`: the commit of the running build (else `<version>-nocommit`).
+- `depsLinkOk`: the installed release's `node_modules` link (`~/.local/share/clikcode/release`, or `CLIKCODE_RELEASE_DIR`) resolves `playwright-core` and `yaml` and is not inside the temp folder. A link into `/tmp` breaks the installed CLI at the next cleanup or reboot; reinstall with `node scripts/install-local.mjs` from a checkout with its own `node_modules`.
+- `ok` is all four checks; `reasons` has one line per failure.
+
+It then looks for a `connector_preflight` tool in ClikDeploy (`clikdeploy tools search connector_preflight`) and posts the result there when it exists. `clikdeploy` in the JSON says `posted` or why not (for example "ClikDeploy has no connector_preflight tool yet"); a missing tool never fails the check. `--no-post` skips it.
+
+## Profiles: which one a form is filled from
+
+With no `label`, the profile used is the one called `Personal`, else the one with the most standard fields (name, email, phone, address, ...). It is never "the first by name", so a second profile such as `ClikDeploy admin` is only used when a call names it with `label`, or when it can fill more of the form's fields than Personal (`bestProfileFor`). Saving with no label merges into that same profile instead of creating another.
+
+## Choosing a key's scope
+
+When a vendor offers a choice when creating a key (scopes, permissions, "restricted" and "unrestricted" keys):
+
+1. Ask ClikDeploy what the connector needs. Its `connector_scope_check` tool (find it with `clikdeploy tools search connector_scope_check`; it may not exist yet) answers which scopes or permissions the connector's operations require. If it does not exist, read the operations in the connector spec (`connector_spec_get`) and the vendor's reference for which permission each one needs.
+2. Pick the least-privilege key that covers every operation the connector exposes (read-only scopes when the operations are reads; add a write scope only for the operations that write). Name the key for what it is for (`clikdeploy <integration>`), set no expiry the vendor does not require, and restrict by IP or resource only when the vendor allows it without breaking ClikDeploy's calls.
+3. Choose the unrestricted key only when the vendor offers no scopes, when scoped keys cannot call an operation the spec lists (say which in a `notes` entry), or when `connector_scope_check` says the full scope is required. Record the choice and why in the site's notes and the queue task note.
+4. Never widen a key to make a test pass without recording it; a connector that needs more than it declared is a spec problem to report, not a reason to take every permission.
+
+## Worker notes and where progress is kept
+
+Durable notes go under `~/.clikcode`, never `/tmp` (a cleanup or reboot loses `/tmp`, and a restarted agent then repeats the work).
+
+- **Per-site notes** (what worked on a vendor's site: URL, order of screens, gotchas): `computer_web` `action=notes` with `host` and `note` saves one (newest last, 4,000 characters kept; a note shaped like a key or token is refused whole); with only `host` it reads them back. They are kept in `~/.clikcode/computer/notes/<host>.md` and are shown again when a page on that host is opened. The call needs an open tab (`open` a URL first). From a shell: `clikcode computer tool computer_web --args-json '{"action":"notes","host":"app.example.com","note":"API keys: Settings > Developer > New key"}'`.
+- **Run progress** (which vendors are done, what is next): record each outcome in the queue (`computer_web` `action=queue`, `clikcode computer queue`), which is the durable list to resume from. Anything more free-form goes in a file under `~/.clikcode/computer/progress/`, one per run, appended to as work happens. Never put a key, password or code in either.
