@@ -83,8 +83,11 @@ export function chatNamed(sessions: readonly HarnessSession[], typed: string, cu
   // `last`: the most recent chat, whatever it is called.
   if (query === 'last' && chats.length) return latest(chats);
   // An id, or the start of one (what /fork and `sessions list` print), finds
-  // an unnamed chat too.
-  const byId = query.length >= 4 ? chats.filter((session) => session.id.toLowerCase().startsWith(query)) : [];
+  // an unnamed chat too -- and the copy of one that moved, which opens the
+  // live chat where it went (remote/move-terminal.ts liveChat).
+  const byId = query.length >= 4
+    ? sessions.filter((session) => session.id !== currentId && !session.foldedInto && !isBlankConversation(session) && session.id.toLowerCase().startsWith(query))
+    : [];
   if (byId.length === 1) return byId[0]!.id;
   const named = chats.filter((session) => session.name);
   const exact = named.filter((session) => session.name!.toLowerCase() === query);
