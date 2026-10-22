@@ -186,7 +186,7 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
                 ) : <div class="conversation-title">{row.title}</div>}
                 {row.preview && renaming !== row.id ? <div class="conversation-preview">{row.preview}</div> : null}
               </div>
-              <span class="conversation-meta">{row.movedTo ? `moved to ${row.movedTo}` : state.text}</span>
+              <span class="conversation-meta">{state.text}</span>
               {machineId === 'local' ? <div class="row-actions" data-row-action>
                 <IconButton icon="link-external" label="Open in new tab" onClick={() => { props.onClose(); void request({ method: 'openInTab', sessionId: row.id }); }} />
                 <IconButton icon="edit" label="Rename" onClick={() => setRenaming(row.id)} />

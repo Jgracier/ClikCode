@@ -240,13 +240,33 @@ describe('a move between two machines', () => {
     expect((await readState({ transcripts: [] })).sessions).toHaveLength(2);
   });
 
-  it('marks moved, and the chat says where', async () => {
+  it('marks moved: the copy kept here is listed nowhere -- the chat is listed where it is live', async () => {
     on('g');
-    await writeState(state([chat({ id: 's4' })]));
+    await writeState(state([chat({ id: 's4', conversationId: 'c4', name: 'Moved one' }), chat({ id: 's6', conversationId: 'c6', name: 'Stays here' })]));
     await markMoved('s4', { machine: 'imac', sessionId: 'x' });
+    const read = await readState({ transcripts: [] });
+    // The bridge's list (VS Code's history, other machines' boards).
     const { conversationList } = await import('../ide/queries.js');
-    const rows = await conversationList(await readState({ transcripts: [] }), undefined);
-    expect(rows.find((row) => row.id === 's4')?.movedTo).toBe('imac');
+    expect((await conversationList(read, undefined)).map((row) => row.id)).toEqual(['s6']);
+    // Even as the chat the bridge has open.
+    expect((await conversationList(read, 's4')).map((row) => row.id)).toEqual(['s6']);
+    // The terminal board's rows, a typed /resume name, --continue, search.
+    const { conversationRows } = await import('./conversation-rows.js');
+    expect(conversationRows(read.sessions).map((row) => row.latest.id)).toEqual(['s6']);
+    const { chatNamed, latestChat } = await import('./options.js');
+    expect(chatNamed(read.sessions, 'Moved one', 'other')).toBeUndefined();
+    expect(latestChat(read.sessions, '/home/me/project')?.id).toBe('s6');
+    const { conversationGroups } = await import('../search/conversations.js');
+    expect((await conversationGroups()).map((group) => group.id)).toEqual(['c6']);
+    // A move back still finds the copy it reuses.
+    const { chatHave } = await import('./move.js');
+    expect(await chatHave('s4')).toMatchObject({ messages: 2 });
+  });
+
+  it('an older bridge\'s moved rows are not listed', async () => {
+    const { listedChats } = await import('../ide/protocol.js');
+    const row = { title: 't', updatedAt: now, messages: 1, current: false };
+    expect(listedChats([{ ...row, id: 'a', movedTo: 'prod' }, { ...row, id: 'b' }]).map((item) => item.id)).toEqual(['b']);
   });
 });
 

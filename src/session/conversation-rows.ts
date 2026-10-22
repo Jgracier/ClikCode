@@ -77,9 +77,11 @@ const timestamp = (value: string): number => {
 };
 
 /** Whether a chat is a conversation of its own. A folded branch's history is
- * all in the branch it was folded into. */
+ * all in the branch it was folded into; a chat that moved to another machine
+ * is live only there, and listed only there -- the copy kept here is what a
+ * move back reuses (session/move.ts), never a row. */
 export function isConversationChat(session: HarnessSession): boolean {
-  return !session.foldedInto;
+  return !session.foldedInto && !session.movedTo;
 }
 
 /** The conversation chats, by the conversation each belongs to. */

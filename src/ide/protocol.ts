@@ -209,7 +209,9 @@ export interface IdeConversation {
   /** Where the terminal board lists it: Working (generating), Recent (last
    * 24 hours), Older. Absent from a bridge before this field. */
   section?: ConversationSection;
-  /** It went on on another machine (named so): read-only here. */
+  /** Sent only by a bridge from before moved chats were left out of the list:
+   * a chat that went on on another machine (named so). Such a row is not
+   * listed (listedChats): the chat is listed where it is live. */
   movedTo?: string;
   current: boolean;
 }
@@ -346,6 +348,13 @@ export type IdeEvent =
  * with a real terminal. Base64 JSON on the command line, so no shell ever
  * re-parses an argv the vendor published. */
 export interface IdeTerminalSpec { command: string; mode: 'run'; argv: readonly string[] }
+
+/** A machine's chats as listed: without any an older bridge still sends of
+ * chats that moved on from it (`movedTo`) -- each chat is listed once, under
+ * the machine where it is live. */
+export function listedChats(chats: readonly IdeConversation[]): IdeConversation[] {
+  return chats.filter((chat) => !chat.movedTo);
+}
 
 export function encodeTerminalSpec(spec: IdeTerminalSpec): string {
   return Buffer.from(JSON.stringify(spec), 'utf8').toString('base64url');

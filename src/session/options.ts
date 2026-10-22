@@ -144,8 +144,7 @@ export function conversationOption(
     ...(latest.resumeAt ? { resumeAt: latest.resumeAt.at } : {}),
   }, now);
   const activity = state.kind === 'working' || state.kind === 'stalled' || state.kind === 'needs-you' ? state.kind : undefined;
-  // A chat that went on on another machine says where, in place of its state here.
-  const stateText = latest.movedTo ? `moved to ${latest.movedTo.machine}` : state.kind === 'stalled' ? chalk.yellow(state.text) : state.text;
+  const stateText = state.kind === 'stalled' ? chalk.yellow(state.text) : state.text;
   return {
     label: title,
     detail: [`· ${stateText}`, preview, summarized && summaryHeadline(summarized)].filter(Boolean).join(' · '),
