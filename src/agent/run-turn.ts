@@ -23,11 +23,13 @@ export async function runAgentLoop(input: AgentTurnInput): Promise<AgentTurnResu
     }
     for (;;) {
       rt.throwIfAborted();
-      await deliverPending(rt);
+      // While the user's own model starts, what they type waits in the queue (Esc takes it back): no request
+      // reaches the model until it is up, so nothing is delivered into one.
+      if (rt.modelStartingSince === undefined) await deliverPending(rt);
       applyLivePlan(rt);
       const system = rt.session.plan.active ? `${rt.baseSystem}\n\n${PLAN_MODE_INSTRUCTIONS}` : rt.baseSystem;
       const finalOnly = rt.stalledCall !== undefined;
-      input.onPhase?.('thinking');
+      if (rt.modelStartingSince === undefined) input.onPhase?.('thinking');
       rt.shownCalls.clear();
       const stepped = await abortable(Promise.resolve(input.modelClientForStep?.()), signal);
       if (stepped === 'switch') {

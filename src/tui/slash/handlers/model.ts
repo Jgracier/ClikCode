@@ -19,6 +19,7 @@ import { effortChoicesFor } from '../../../harness/accounts/effort-choices.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../../../harness/definition.js';
 import { assertRealModel, chooseGatewayModel } from '../../../commands/ai/sessions.js';
 import { gatewayModelDetail, gatewayModelLabel, gatewayModels, isAutomaticModelWord } from '../../../gateway/models.js';
+import { wakeOwnModel } from '../../../gateway/own-models.js';
 import { GATEWAY_DEFAULT_EFFORT, GATEWAY_EFFORTS } from '../../../gateway/options.js';
 import { type HeadlessSlashHandler, saveSettings } from './shared.js';
 
@@ -106,7 +107,17 @@ export const modelHandlers = {
       session.model = trusted && !isAutomaticModelWord(value) ? value : await chooseGatewayModel(value);
       // The model that answered last was answering the previous choice.
       if (session.reported?.model) delete session.reported.model;
-      return saveSettings(state, session);
+      await saveSettings(state, session);
+      // One of the user's own models, asleep: started now, so its GPU is starting while they type rather than
+      // from their first message (which waits for it, "Starting model", and goes as soon as it is up).
+      const chosen = (await gatewayModels().catch(() => ({ models: [] }))).models.find((model) => model.id === session.model);
+      if (chosen?.own && chosen.own.state !== 'running') {
+        const state = await wakeOwnModel(chosen.id).catch(() => undefined);
+        if (state === 'starting') {
+          return emitHarnessOutput({ panel: 'settings-updated', text: `Starting ${chosen.id} on its GPU. Type away: your message waits and goes the moment it is ready.` });
+        }
+      }
+      return;
     }
     const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
     // No value: show what there is to choose from, which is what

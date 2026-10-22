@@ -36,6 +36,7 @@ import { applyToChat, settingLabel } from './setting-scope.js';
 import { aiSessionCommand } from '../slash/handlers.js';
 import { planModeOnChat, setAgentPlanMode } from '../../agent/plan-mode-setting.js';
 import { harnessManagers, interactiveToolsPicker } from './tools.js';
+import { isGatewayService } from '../../session/route.js';
 
 /** A setting with at most this many values is chosen in its row; one with
  * more opens its own list. Four still reads as a choice beside its label. */
@@ -68,6 +69,11 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
     const inline = (choices: readonly { label: string; value: string }[], current: string, apply: (value: string) => Promise<void>) => (
       choices.length >= 2 && choices.length <= INLINE_MAX_CHOICES ? { inline: { choices, current, apply } } : {}
     );
+    // The Gateway's chats: how long the user's own models may sit idle before their GPU is released (the account's
+    // setting, on the Gateway). Unread (offline, an older Gateway): the row is left out.
+    const idle = isGatewayService(session)
+      ? await import('../../gateway/own-models.js').then(async (own) => ({ own, minutes: await own.ownModelIdleMinutes({ config, timeoutMs: 5_000 }) })).catch(() => undefined)
+      : undefined;
     const optionCount = harness ? vendorFacingOptions(localHarnessCapabilityManifest(harness).options, harness).length : 0;
     const setOptions = Object.keys(session.harnessOptions ?? {}).length;
     const values = (of: typeof session): Record<DefaultKey, string | undefined> => ({
@@ -128,6 +134,14 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
           choices: [{ label: 'Off', value: 'off' }, { label: 'On', value: 'on' }],
           current: session.planMode === true ? 'on' : 'off',
           apply: (value: string) => setAgentPlanMode(id, value === 'on'),
+        },
+      }] : []),
+      ...(idle ? [{
+        label: 'Your models turn off after', detail: `${idle.own.idleWords(idle.minutes)} idle · GPU released, wakes on the next message`, value: 'model-idle',
+        inline: {
+          choices: idle.own.OWN_MODEL_IDLE_CHOICES.map((minutes) => ({ label: minutes ? idle.own.idleWords(minutes) : 'Never', value: String(minutes) })),
+          current: String(idle.minutes),
+          apply: (value: string) => idle.own.setOwnModelIdleMinutes(Number(value), { config }).then(() => undefined),
         },
       }] : []),
       ...(harness && optionCount ? [{ label: `${harness.displayName} options`, detail: setOptions ? `${setOptions} set` : `${optionCount} available`, value: 'options' }] : []),
