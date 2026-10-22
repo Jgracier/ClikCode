@@ -303,12 +303,24 @@ describe('the bridge\'s revision-2 requests', () => {
     expect(sent.at(-1)).toEqual({ type: 'search' });
   });
 
-  it('will not move a conversation to another provider under a running turn', async () => {
+  it('records a provider change while a turn is running', async () => {
+    await home({ sessions: [] });
     const { bridge, inner, result } = bridgeFor();
     inner.sessionId = 's1';
     inner.workerTurnRunning = true;
     bridge.handle({ type: 'choose', requestId: 'p', choice: { kind: 'provider', provider: 'codex' } });
-    expect(await result('p')).toMatchObject({ ok: false });
+    const answer = await result('p');
+    expect(answer?.error ?? '').not.toMatch(/turn is running/);
+    expect(answer).toMatchObject({ ok: false, error: expect.stringContaining('was not found') });
+  });
+
+  it('applies an account change while a turn is running', async () => {
+    const { bridge, inner, result } = bridgeFor();
+    inner.sessionId = 's1';
+    inner.workerTurnRunning = true;
+    bridge.handle({ type: 'choose', requestId: 'k', choice: { kind: 'account', accountId: 'acct-2' } });
+    expect(await result('k')).toMatchObject({ ok: true });
+    expect(duringTurn).toHaveBeenCalledWith('s1', '/accounts use acct-2');
   });
 });
 

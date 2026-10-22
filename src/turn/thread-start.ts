@@ -19,7 +19,7 @@
 
 import type { AiLocalHarnessDefinition } from '../harness/definition.js';
 import { type CanonicalRecord, type CanonicalTurn } from '../session/canonical.js';
-import { summarizedRecord, summaryNote, type ConversationSummary } from '../session/conversation-summary.js';
+import { fullRecordNote } from '../session/full-record.js';
 import type { NativeSessionEnvironment, NativeThreadWriter, NativeThreadWritten } from '../session/discovery/stores.js';
 import { modelProvider } from '../runtime/lazy-bridge.js';
 import { BYTES_PER_TOKEN, transferBudget, transferPrompt } from './transfer.js';
@@ -62,9 +62,11 @@ export interface ThreadStartInput {
   argvLimit?: number;
   /** The writer for this harness, if any (registry: nativeSessionStore). */
   writer?: NativeThreadWriter;
-  /** The conversation's summary (conversation-summary.ts): it stands for the
-   * turns it covers, written the way the receiving harness keeps its own. */
-  summary?: ConversationSummary;
+  /** Where the whole conversation is saved as a file (session/full-record.ts):
+   * named in whatever a handoff leaves out, so nothing is out of reach. A
+   * summary a provider made is never put in place of turns: it is the
+   * provider's own, and a handoff carries the conversation itself. */
+  recordPath?: string;
   /** The installed vendor build (first line of `--version`). */
   version?: () => Promise<string | undefined>;
   displayName?: (harness: string) => string | undefined;
@@ -109,33 +111,66 @@ function briefTurn(turn: CanonicalTurn): CanonicalTurn {
   return { ...turn, parts: text ? [{ type: 'text', text }] : [], tools: [] };
 }
 
+/** Share of a fitted thread's budget the outline of left-out requests may take. */
+const OUTLINE_SHARE = 0.1;
+/** What the note's own sentences and the file's path take, apart from the outline. */
+const NOTE_FIXED_BYTES = 600;
+
+/** What was asked in turns that did not fit, one clipped line each, oldest
+ * first: the arc of the conversation when its words cannot all come. Every
+ * request is listed, each clipped harder rather than any dropped, until even
+ * the shortest line cannot fit; then the oldest are counted instead. */
+function requestsOutline(turns: readonly CanonicalTurn[], maxBytes: number): string {
+  const asked = turns.filter((turn) => turn.user.trim());
+  if (!asked.length || maxBytes < 256) return '';
+  const per = Math.max(40, Math.min(240, Math.floor(maxBytes / asked.length) - 12));
+  const lines = asked.map((turn) => {
+    const text = turn.user.replace(/\s+/g, ' ').trim();
+    return `${turn.index + 1}. ${text.length > per ? `${text.slice(0, per - 1)}…` : text}`;
+  });
+  let used = lines.reduce((sum, line) => sum + Buffer.byteLength(line, 'utf8') + 1, 0);
+  let dropped = 0;
+  while (used > maxBytes && dropped < lines.length - 1) { used -= Buffer.byteLength(lines[dropped]!, 'utf8') + 1; dropped += 1; }
+  return `${dropped ? `(${dropped} earlier request${dropped === 1 ? '' : 's'} not listed)\n` : ''}${lines.slice(dropped).join('\n')}`;
+}
+
 /** The most of the conversation that fits `maxBytes`: first as many turns
  * as fit with only their words and what their calls did (newest first, and
  * the newest always), then, with what room is left, the newest of those get
  * their tool output back. Turns are left out only when even their words do
- * not fit, and the first kept turn then says what was left out and where to
- * read it: ClikCode's record keeps every turn, and its conversation tools
- * read this conversation too. */
-export function fitRecord(record: CanonicalRecord, maxBytes: number): { record: CanonicalRecord; omitted: number } {
+ * not fit, and the first kept turn then says what was left out: a line for
+ * each request, and the file that holds the whole conversation. ClikCode's
+ * record keeps every turn; nothing is deleted by being left out here. */
+export function fitRecord(record: CanonicalRecord, maxBytes: number, options: { recordPath?: string } = {}): { record: CanonicalRecord; omitted: number } {
   const turns = record.turns;
   const brief = turns.map(briefTurn);
-  let used = 0;
-  let first = turns.length;
-  while (first > 0 && (first === turns.length || used + writtenBytes(brief[first - 1]!) <= maxBytes)) {
-    used += writtenBytes(brief[first - 1]!);
-    first -= 1;
-  }
-  const kept = brief.slice(first);
-  for (let index = kept.length - 1; index >= 0; index -= 1) {
-    const full = turns[first + index]!;
-    const extra = writtenBytes(full) - writtenBytes(kept[index]!);
-    if (used + extra > maxBytes) break;
-    used += extra;
-    kept[index] = full;
-  }
+  /** The newest turns that fit `room`: how many of the oldest are out, and the rest. */
+  const select = (room: number): { first: number; kept: CanonicalTurn[] } => {
+    let used = 0;
+    let first = turns.length;
+    while (first > 0 && (first === turns.length || used + writtenBytes(brief[first - 1]!) <= room)) {
+      used += writtenBytes(brief[first - 1]!);
+      first -= 1;
+    }
+    const kept = brief.slice(first);
+    for (let index = kept.length - 1; index >= 0; index -= 1) {
+      const full = turns[first + index]!;
+      const extra = writtenBytes(full) - writtenBytes(kept[index]!);
+      if (used + extra > room) break;
+      used += extra;
+      kept[index] = full;
+    }
+    return { first, kept };
+  };
+  let { first, kept } = select(maxBytes);
   if (first === 0 && kept.every((turn, index) => turn === turns[index])) return { record, omitted: 0 };
   if (first === 0) return { record: { ...record, turns: kept }, omitted: 0 };
-  const note = `[ClikCode: the ${first} earlier turn${first === 1 ? ' is' : 's are'} left out to fit this model. search_conversations with in: "${record.conversationId}" and read_conversation("${record.conversationId}") read them.]\n\n`;
+  // Something is left out, so the note that says what comes out of the same
+  // budget as the turns: fitted again with its room held back, never on top.
+  const outlineRoom = Math.floor(maxBytes * OUTLINE_SHARE);
+  ({ first, kept } = select(Math.max(0, maxBytes - outlineRoom - NOTE_FIXED_BYTES)));
+  const outline = requestsOutline(turns.slice(0, first), outlineRoom);
+  const note = `[ClikCode: the ${first} earlier turn${first === 1 ? ' is' : 's are'} left out to fit this model.${options.recordPath ? ` ${fullRecordNote(options.recordPath)}` : ''}${outline ? `\nWhat was asked in them, oldest first:\n${outline}` : ''}]\n\n`;
   return { record: { ...record, turns: [{ ...kept[0]!, user: `${note}${kept[0]!.user}` }, ...kept.slice(1)] }, omitted: first };
 }
 
@@ -155,11 +190,10 @@ async function written(input: ThreadStartInput): Promise<{ written: NativeThread
       input.onFallback?.(`${input.harness.command} ${context.version ?? '(version unknown)'} is not a build its thread writer was verified against (${writer.testedVersions.join(', ') || 'none'})`);
       return undefined;
     }
-    // A summary takes its room first. No note of which provider ran which
-    // turns is written into the vendor's thread: it is the vendor's own.
-    const summary = input.record.summary;
-    const fitted = fitRecord(input.record, nativeThreadBudget(input.contextWindow) - (summary ? Buffer.byteLength(summary.text, 'utf8') : 0));
-    const result = await writer.write(summary && !writer.writesSummary ? withSummaryNote(fitted.record, summary) : fitted.record, context);
+    // No note of which provider ran which turns is written into the vendor's
+    // thread: it is the vendor's own. Only what was left out is said.
+    const fitted = fitRecord(input.record, nativeThreadBudget(input.contextWindow), input.recordPath ? { recordPath: input.recordPath } : {});
+    const result = await writer.write(fitted.record, context);
     if (!result?.nativeId) input.onFallback?.(`${input.harness.command} thread writer declined`);
     return result?.nativeId ? { written: result, omitted: fitted.omitted } : undefined;
   } catch (error) {
@@ -169,17 +203,7 @@ async function written(input: ThreadStartInput): Promise<{ written: NativeThread
   }
 }
 
-/** The summary opening the first kept request, for a writer whose vendor has
- * no compaction of its own to hold it. */
-function withSummaryNote(record: CanonicalRecord, summary: NonNullable<CanonicalRecord['summary']>): CanonicalRecord {
-  const [first, ...rest] = record.turns;
-  if (!first) return record;
-  const note = summaryNote(summary);
-  return { ...record, summary: undefined, turns: [{ ...first, providerNote: first.providerNote ? `${note}\n\n${first.providerNote}` : note }, ...rest] };
-}
-
 export async function startConversationThread(input: ThreadStartInput): Promise<ThreadStart> {
-  input = { ...input, record: summarizedRecord(input.record, input.summary) };
   const native = await written(input);
   if (native) return { kind: 'native', ...native, prompt: input.request };
   const budget = transferBudget({
@@ -190,6 +214,7 @@ export async function startConversationThread(input: ThreadStartInput): Promise<
     kind: 'transfer', budget,
     prompt: transferPrompt(input.record, input.request, {
       maxBytes: budget, interrupted: input.interrupted, ...(input.displayName ? { displayName: input.displayName } : {}),
+      ...(input.recordPath ? { recordPath: input.recordPath } : {}),
     }),
   };
 }

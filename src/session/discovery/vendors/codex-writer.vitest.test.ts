@@ -158,3 +158,14 @@ describe('uuidv7', () => {
     expect(id).toMatch(/^[0-9a-f-]{36}$/);
   });
 });
+
+describe('which Codex builds the writer is trusted on', () => {
+  it('carries a conversation natively on the builds it was proven on, and retells on others', async () => {
+    const { codexThreadWriter } = await import('./codex-writer.js');
+    const ok = (version: string) => codexThreadWriter.versionOk({ version } as never);
+    expect(await ok('codex-cli 0.155.1')).toBe(true);
+    // Proven live (a sandboxed thread resumed and recalled its codeword), 2026-10-21.
+    expect(await ok('codex-cli 0.162.1')).toBe(true);
+    expect(await ok('codex-cli 0.170.0')).toBe(false);
+  });
+});

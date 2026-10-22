@@ -14,7 +14,9 @@ export async function chooseProvider(cx: ChooseContext, choice: IdeChoice): Prom
   const { host, done, queued } = cx;
   switch (choice.kind) {
     case 'provider': {
-      if (host.link.workerTurnRunning) throw new Error('A turn is running: stop it or wait for it to finish before switching provider.');
+      // A running turn keeps the call it has already started. This records
+      // the provider, and the next model call moves (the same handoff an
+      // account failover uses).
       queued(async () => {
         const id = host.requireSession();
         const moved = await selectProviderConversation(host.config, host.prompter, id, providerConversationKey(choice.provider));

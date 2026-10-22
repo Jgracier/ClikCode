@@ -22,16 +22,19 @@
 import { readFile } from 'node:fs/promises';
 import type { CanonicalRecord, CanonicalToolCall, CanonicalTurn } from '../session/canonical.js';
 import type { HarnessSession } from '../session/model.js';
+import { fullRecordNote } from '../session/full-record.js';
 import { escapeFailoverContent, FAILOVER_PREAMBLE } from './failover-prompt.js';
 
 /** Smallest budget: what every handoff had before it was sized to a model. */
 export const TRANSFER_MIN_BYTES = 48 * 1024;
-/** Largest budget. A retelling is not the conversation; past this the
- * newest turns are already whole and older ones add little but cost. */
-export const TRANSFER_MAX_BYTES = 200 * 1024;
-/** Share of the receiving model's context window the transfer may take,
+/** Largest budget. A hard ceiling for a very large window, not a target: the
+ * window decides. It was 200 KB (a fifth of the window), and a 1,000-turn
+ * conversation moved to Codex arrived as 90-200 KB of it. */
+export const TRANSFER_MAX_BYTES = 1024 * 1024;
+/** Share of the receiving model's context window the transfer may take, the
+ * same half a written thread gets (thread-start.ts NATIVE_WINDOW_SHARE),
  * leaving the rest for the vendor's own system prompt, tools and the work. */
-const TRANSFER_WINDOW_SHARE = 0.2;
+const TRANSFER_WINDOW_SHARE = 0.5;
 /** UTF-8 bytes per token, for English prose and code alike (a conservative
  * average: tokenizers run 3.5-4.5). */
 export const BYTES_PER_TOKEN = 4;
@@ -208,6 +211,9 @@ interface TransferOptions {
   interrupted?: boolean;
   /** Harness command -> display name, for the header. */
   displayName?: (harness: string) => string | undefined;
+  /** The file that holds the whole conversation (session/full-record.ts), named
+   * in the prompt so whatever the budget left out is still within reach. */
+  recordPath?: string;
 }
 
 /** The transfer prompt: `record` retold within `maxBytes`, ending in the
@@ -241,6 +247,7 @@ export function transferPrompt(record: CanonicalRecord, request: string, options
     const opening = record.summary ? `, the first ${record.summary.through} summarized` : '';
     add(`This chat has ${total} earlier turn${total === 1 ? '' : 's'}${opening} (${runs.join('; ')}).`);
   }
+  if (options.recordPath && turns.length) add(escapeFailoverContent(fullRecordNote(options.recordPath)));
   // A summary a harness already made of the opening turns stands for them:
   // they are not retold (session/conversation-summary.ts).
   if (record.summary) {

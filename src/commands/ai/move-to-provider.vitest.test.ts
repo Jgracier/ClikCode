@@ -74,10 +74,14 @@ describe('moveToProvider', () => {
     expect(canonicalRecord(back!).turns.map((turn) => turn.origin.harness)).toEqual(['claude', 'codex']);
   });
 
-  it('refuses while the conversation\'s worker is running a turn', async () => {
+  it('records the provider while a turn is running and keeps the journal', async () => {
     await onClaude();
     worker.running = true;
-    await expect(moveToProvider('s1', 'codex')).rejects.toThrow(/turn is still running/);
-    expect((await stored())[0]).toMatchObject({ nativeHarness: 'claude', nativeSessionId: 'claude-thread' });
+    await moveToProvider('s1', 'codex', { model: 'gpt-5' });
+    const moved = (await stored())[0]!;
+    expect(moved).toMatchObject({ nativeHarness: 'codex', provider: 'openai', model: 'gpt-5' });
+    expect(moved.nativeSessionId).toBeUndefined();
+    expect(moved.pendingTurn?.prompt).toBe('and again');
+    expect(moved.messages!.map((message) => message.content)).toEqual(['what is the codeword', 'PLUM']);
   });
 });

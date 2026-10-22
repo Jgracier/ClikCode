@@ -4,6 +4,7 @@ import { adoptListedNativeId } from '../session/discovery/cli-listing.js';
 import { sessionTurnTransport } from '../harness/transport/select.js';
 import type { NativeTurnResult } from '../harness/protocol/turn-result.js';
 import { isTurnCancelled } from '../agent/cancellation.js';
+import { lifecycle } from '../runtime/lifecycle-log.js';
 import { turnEnvironment } from './turn-environment.js';
 import { runVendorCliAttempt } from './vendor-cli-attempt.js';
 import { runVendorSessionAttempt } from './vendor-session-attempt.js';
@@ -47,6 +48,7 @@ async function prepareAttempt(ctx: VendorTurnContext) {
 /** Runs one attempt; a stopped or oversized one throws, any other failure is
  * recorded for the recovery to decide on. */
 export async function runAttempt(ctx: VendorTurnContext, observer: VendorObserver): Promise<AttemptRecord> {
+  const started = Date.now();
   const { harness, session, checkpoint } = ctx;
   const { environment, transport } = await prepareAttempt(ctx);
   observer.beginAttempt(transport);
@@ -84,10 +86,18 @@ export async function runAttempt(ctx: VendorTurnContext, observer: VendorObserve
       });
     }
   } catch (error) {
-    if (isTurnCancelled(error)) { observer.recordUnfinishedAttempt('stopped'); throw error; }
+    if (isTurnCancelled(error)) {
+      lifecycle('vendor.attempt', { harness: harness.command, transport, ms: Date.now() - started, outcome: 'cancelled' });
+      observer.recordUnfinishedAttempt('stopped');
+      throw error;
+    }
     if ((error as NodeJS.ErrnoException).code === 'ERR_PROMPT_TOO_LARGE') { observer.recordUnfinishedAttempt('error'); throw error; }
     caughtTurnFailure = error instanceof Error ? error : new Error(String(error));
   }
+  lifecycle('vendor.attempt', {
+    harness: harness.command, transport, ...(ctx.model ? { model: ctx.model } : {}),
+    ms: Date.now() - started, outcome: caughtTurnFailure || result?.isError ? 'error' : 'ok',
+  });
   return {
     caughtTurnFailure,
     result: caughtTurnFailure ? { isError: true, text: caughtTurnFailure.message } : result!,

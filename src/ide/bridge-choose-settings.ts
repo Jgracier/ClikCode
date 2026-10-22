@@ -27,7 +27,7 @@ export async function chooseSetting(cx: ChooseContext, choice: IdeChoice): Promi
     }
     case 'effort': await setting(`/effort ${choice.value}`); done(); return true;
     case 'permissions': await setting(`/permissions ${choice.value}`); done(); return true;
-    case 'account': await setting(`/settings account ${choice.accountId}`); done(); return true;
+    case 'account': await setting(`/accounts use ${choice.accountId}`); done(); return true;
     case 'send': await setting(`/send ${choice.mode}`); done(); return true;
     case 'fast': await setting(`/fast ${choice.on ? 'on' : 'off'}`); done(); return true;
     case 'plan': {

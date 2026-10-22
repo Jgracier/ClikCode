@@ -20,12 +20,14 @@ createdAt: now, updatedAt: now, status: 'active', workspace: '/w', messages, ...
 }
 
 describe('transferBudget', () => {
-  it('is a fifth of the receiving window, between 48 KB and 200 KB', () => {
+  it('is half the receiving window (as a written thread gets), between 48 KB and 1 MB', () => {
     expect(transferBudget({})).toBe(TRANSFER_MIN_BYTES);
-    expect(transferBudget({ contextWindow: 32_000 })).toBe(48 * KB);
-    expect(transferBudget({ contextWindow: 128_000 })).toBe(102_400);
-    expect(transferBudget({ contextWindow: 200_000 })).toBe(160_000);
+    expect(transferBudget({ contextWindow: 8_000 })).toBe(48 * KB);
+    expect(transferBudget({ contextWindow: 32_000 })).toBe(64_000);
+    expect(transferBudget({ contextWindow: 128_000 })).toBe(256_000);
+    expect(transferBudget({ contextWindow: 258_400 })).toBe(516_800);
     expect(transferBudget({ contextWindow: 1_000_000 })).toBe(TRANSFER_MAX_BYTES);
+    expect(TRANSFER_MAX_BYTES).toBe(1024 * KB);
   });
 
   it('fits argv when the prompt travels as an argument', () => {
@@ -123,5 +125,29 @@ describe('extractiveSummary', () => {
   it('keeps the first and last sentences and leaves code out', () => {
     expect(extractiveSummary('First I read it. Then more. ```ts\nconst x = 1;\n``` Finally it passed.')).toBe('First I read it. … Finally it passed.');
     expect(extractiveSummary('Only one.')).toBe('Only one.');
+  });
+});
+
+describe('a handoff never leaves the rest of the conversation out of reach', () => {
+  const long = (count: number) => canonicalRecord(session(Array.from({ length: count }, (_, index) => [
+    { role: 'user' as const, content: `request number ${index + 1}` },
+    { role: 'assistant' as const, content: `answer ${index + 1} ${'detail '.repeat(200)}` },
+  ]).flat()));
+
+  it('names the file that holds the whole conversation, and no tool a provider does not have', () => {
+    const prompt = transferPrompt(long(60), 'go on', { maxBytes: 20 * KB, recordPath: '/state/records/s1.md' });
+    expect(prompt).toContain('/state/records/s1.md');
+    expect(prompt).not.toMatch(/search_conversations|read_conversation/);
+    // Every request is listed, however many turns the budget could not retell.
+    expect(prompt).toContain('1. request number 1');
+    expect(prompt).toContain('60. request number 60');
+  });
+
+  it('carries a long conversation in the half of the window a written thread gets, not a fifth', () => {
+    const record = long(1_000);
+    const old = transferPrompt(record, 'go on', { maxBytes: 200 * KB });
+    const now = transferPrompt(record, 'go on', { maxBytes: transferBudget({ contextWindow: 258_400 }) });
+    expect(Buffer.byteLength(now, 'utf8')).toBeGreaterThan(Buffer.byteLength(old, 'utf8') * 1.5);
+    expect(Buffer.byteLength(now, 'utf8')).toBeLessThanOrEqual(transferBudget({ contextWindow: 258_400 }));
   });
 });

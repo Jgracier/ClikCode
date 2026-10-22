@@ -44,6 +44,8 @@ interface AgentSessionTurnInput extends HarnessTurnObserver, Pick<AgentTurnInput
   modelClient: ModelClient;
   /** The mode as the user has it now: the worker's live settings. */
   currentPermissionMode?: () => Promise<AiHarnessPermissionMode | undefined>;
+  currentSandbox?: AgentTurnInput['currentSandbox'];
+  currentPlanMode?: AgentTurnInput['currentPlanMode'];
   modelClientForStep?: () => Promise<ModelClient | 'switch' | undefined>;
 }
 
@@ -113,6 +115,8 @@ export async function runAgentSessionTurn(
     // caller's live settings, pushed by the worker (turn/live-settings.ts).
     ...(input.currentPermissionMode ? { currentPermissionMode: input.currentPermissionMode } : {}),
     ...(sessionSandboxMode(session.sandbox) === 'workspace' ? { sandbox: 'workspace' as const } : {}),
+    ...(input.currentSandbox ? { currentSandbox: input.currentSandbox } : {}),
+    ...(input.currentPlanMode ? { currentPlanMode: input.currentPlanMode } : {}),
     modelClient,
     ...(input.modelClientForStep ? { modelClientForStep: input.modelClientForStep } : {}),
     stateDir,

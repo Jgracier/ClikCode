@@ -8,7 +8,7 @@ import { runModelStep, recordStep } from './turn-model-step.js';
 import { deliverPending, finishBackgroundForSwitch } from './turn-notifications.js';
 import { settleStep } from './turn-answer.js';
 import { closeTurn, openTurn } from './turn-runtime.js';
-import { createToolRunner, runToolCalls } from './turn-tools.js';
+import { applyLivePlan, createToolRunner, runToolCalls } from './turn-tools.js';
 
 export async function runAgentLoop(input: AgentTurnInput): Promise<AgentTurnResult> {
   const { rt, promptBlocked } = await openTurn(input);
@@ -24,6 +24,7 @@ export async function runAgentLoop(input: AgentTurnInput): Promise<AgentTurnResu
     for (;;) {
       rt.throwIfAborted();
       await deliverPending(rt);
+      applyLivePlan(rt);
       const system = rt.session.plan.active ? `${rt.baseSystem}\n\n${PLAN_MODE_INSTRUCTIONS}` : rt.baseSystem;
       const finalOnly = rt.stalledCall !== undefined;
       input.onPhase?.('thinking');

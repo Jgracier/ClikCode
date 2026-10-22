@@ -162,7 +162,11 @@ export interface AgentTurnInput {
   /** The bash tool's OS sandbox (sandbox.ts), resolved from the session's
    * setting by the caller (sessionSandboxMode: unset = on). Absent = off. */
   sandbox?: import('./sandbox.js').SandboxMode;
+  /** The sandbox as it stands now, read before every tool call. Absent = `sandbox` throughout. */
+  currentSandbox?: () => import('./sandbox.js').SandboxMode | undefined;
   planMode?: boolean;
+  /** Plan mode as it stands now, read before every model step and tool call. Absent = `planMode` throughout. */
+  currentPlanMode?: () => boolean;
   modelClient: ModelClient;
   /** Before each model step. A returned client is the one that step calls.
    * `'switch'` ends the loop: the user moved the conversation onto an

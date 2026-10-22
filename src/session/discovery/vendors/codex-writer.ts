@@ -47,7 +47,7 @@ import { reconcileCodexThreadRow } from './codex-store.js';
 import { absolutePath, shellQuote, testedVersion } from './thread-writer-files.js';
 
 /** Builds whose rollout layout this writer was checked against, live. */
-const CODEX_WRITER_TESTED_VERSIONS = ['codex-cli 0.155.1'] as const;
+const CODEX_WRITER_TESTED_VERSIONS = ['codex-cli 0.155.1', 'codex-cli 0.162.1'] as const;
 
 /** A UUIDv7 (RFC 9562): Codex's own thread and turn ids are these, and it
  *  orders by them. */

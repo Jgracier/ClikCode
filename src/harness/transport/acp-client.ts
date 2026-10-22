@@ -29,6 +29,7 @@ import { BackgroundWorkTracker } from './background-work.js';
 import { backgroundWork, type BackgroundWork } from '../protocol/background-agents.js';
 import { markTurn } from '../../runtime/turn-latency.js';
 import { OTHER_ORG_THINKING_TITLE } from '../protocol/claude-thinking-notice.js';
+import { classifyAccountFailure } from '../../turn/failover.js';
 
 type Json = Record<string, any>;
 
@@ -148,6 +149,14 @@ export function acpVibeResponseChange(previous: string, incoming: string): { tex
   let sharedPrefix = 0;
   while (sharedPrefix < previous.length && sharedPrefix < incoming.length && previous[sharedPrefix] === incoming[sharedPrefix]) sharedPrefix++;
   if (sharedPrefix > 0) return { text: incoming, mode: 'replace', current: incoming };
+  return { text: incoming, mode: 'append', current: previous + incoming };
+}
+
+/** ACP chunks are deltas unless this agent explicitly declares snapshots.
+ * A shared prefix cannot identify a snapshot: a genuine delta may start
+ * with the same words, and discarding it loses part of the answer. */
+export function acpMessageChange(previous: string, incoming: string, cumulative: boolean): { text: string; mode: 'append' | 'replace'; current: string } {
+  if (cumulative) return acpVibeResponseChange(previous, incoming);
   return { text: incoming, mode: 'append', current: previous + incoming };
 }
 
@@ -557,6 +566,9 @@ interface Stream {
 
 interface ActiveTurn extends Stream {
   input: AcpTurnInput;
+  /** Claude can report a failed /compact as a tool error while ending the
+   * prompt successfully. Preserve an account refusal for the turn boundary. */
+  compactionFailure?: Error;
   promptStarted: boolean;
   done: boolean;
   sessionId?: string;
@@ -983,6 +995,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     if (live.steering) input.onSteerReady?.(undefined);
     this.releaseSteers(turn);
     await turn.flushing;
+    if (turn.compactionFailure) throw turn.compactionFailure;
     if (completed.stopReason === 'cancelled') {
       // Nothing here asked for it and nothing was said or done first: the agent
       // gave up the prompt by itself (Junie does, signed out and in a sandbox
@@ -1141,9 +1154,10 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     const kind = name === 'agent_message_chunk' ? 'message' as const : 'thought' as const;
     const delta = kind === 'message' ? acpResponseDelta(update) : acpThoughtDelta(update);
     if (!delta) return;
-    if (kind === 'message' && this.lastCumulativeChunks && typeof update.messageId === 'string') {
-      const change = acpVibeResponseChange(this.relayedMessage, delta);
+    if (kind === 'message') {
+      const change = acpMessageChange(this.relayedMessage, delta, this.lastCumulativeChunks && typeof update.messageId === 'string');
       this.relayedMessage = change.current;
+      if (!change.text && change.mode === 'append') return;
       this.relay({ kind, text: change.text, mode: change.mode });
       return;
     }
@@ -1320,19 +1334,25 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     if (!thought && update.sessionUpdate !== 'usage_update') target.thought = undefined;
     const delta = acpResponseDelta(update);
     if (delta) {
-      if (target.cumulativeChunks && typeof update.messageId === 'string') {
-        const change = acpVibeResponseChange(target.messageText, delta);
-        target.messageText = change.current;
-        if (change.mode === 'replace') target.text = change.current;
-        else target.text += change.text;
-        input.onResponseDelta?.(change.text, change.mode);
-      } else {
-        const separator = target.needsSeparator && target.text
-          ? (target.text.endsWith('\n\n') ? '' : target.text.endsWith('\n') ? '\n' : '\n\n') : '';
+      // A tool closed the previous paragraph. The next chunk belongs to the
+      // message that follows it, not to the one already on screen.
+      const freshMessage = Boolean(target.needsSeparator && target.text);
+      if (freshMessage) target.messageText = '';
+      const previousMessage = target.messageText;
+      const change = acpMessageChange(previousMessage, delta, target.cumulativeChunks && typeof update.messageId === 'string');
+      target.messageText = change.current;
+      if (change.mode === 'replace') {
         target.needsSeparator = false;
-        target.text += separator + delta;
-        input.onResponseDelta?.(separator + delta);
+        target.text = target.text.slice(0, -previousMessage.length) + change.current;
+        input.onResponseDelta?.(target.text, change.mode);
+        return;
       }
+      if (!change.text) return;
+      const separator = freshMessage
+        ? (target.text.endsWith('\n\n') ? '' : target.text.endsWith('\n') ? '\n' : '\n\n') : '';
+      target.needsSeparator = false;
+      target.text += separator + change.text;
+      input.onResponseDelta?.(separator + change.text);
       return;
     }
     if (thought) {
@@ -1342,6 +1362,18 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     }
     let activity = acpActivityEvent(update);
     if (activity) {
+      // Claude's /compact can emit only a failed tool row and still answer
+      // session/prompt with end_turn. That used to count as successful tool
+      // work, leaving a spent account selected and skipping the standby.
+      const active = this.turn;
+      if (active && target === active && active.input.command === 'claude'
+        && /^\/compact(?:\s|$)/.test(active.input.prompt)
+        && activity.kind === 'tool-error' && /^Compact conversation$/i.test(activity.label)) {
+        const reason = activity.output?.join('\n') ?? '';
+        if (classifyAccountFailure(new Error(reason), { isResultError: true }) === 'quota-exhausted') {
+          active.compactionFailure = new Error(reason);
+        }
+      }
       target.settledTools ??= new Set();
       if (activity.id && activity.kind === 'tool-start' && target.settledTools.has(activity.id)) {
         // Late detail for a finished call: it settles into that row.

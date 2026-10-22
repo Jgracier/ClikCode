@@ -146,37 +146,31 @@ describe('handing a summarized conversation to the next provider', () => {
     expect(back?.prompts).toEqual(['request number 7', 'request number 8']);
   });
 
-  it('opens the first kept request with the summary for a vendor with no compaction of its own, and in a retelling', async () => {
+  it('carries the turns themselves: a summary a provider made is not put in place of them', async () => {
     const full = canonicalRecord(session(turns(8)));
-    const summary = { text: 'Opening summarized.', through: 6, hash: turnsHash(full.turns, 6), source: 'claude', at: 'now' };
     const harness = { command: 'other', displayName: 'Other' } as AiLocalHarnessDefinition;
     const written: string[] = [];
     const writer = { testedVersions: ['1'], versionOk: () => true, write: async (record: typeof full) => { written.push(JSON.stringify(record.turns.map((turn) => [turn.providerNote ?? '', turn.user]))); return { nativeId: 'n' }; } };
-    await startConversationThread({ record: full, request: 'go on', interrupted: false, harness, workspace: '/w', environment: {}, model: null, writer, summary });
-    expect(written[0]).toContain('Opening summarized.');
-    expect(written[0]).not.toContain('request number 3');
-    const retold = await startConversationThread({ record: full, request: 'go on', interrupted: false, harness, workspace: '/w', environment: {}, model: null, summary });
+    await startConversationThread({ record: full, request: 'go on', interrupted: false, harness, workspace: '/w', environment: {}, model: null, writer });
+    expect(written[0]).toContain('request number 3');
+    expect(written[0]).not.toContain('Opening summarized.');
+    const retold = await startConversationThread({ record: full, request: 'go on', interrupted: false, harness, workspace: '/w', environment: {}, model: null });
     expect(retold.kind).toBe('transfer');
-    expect(retold.prompt).toContain('<summary turns="1-6">');
-    expect(retold.prompt).not.toContain('request number 3');
+    expect(retold.prompt).not.toContain('<summary');
+    expect(retold.prompt).toContain('request number 3');
     expect(retold.prompt).toContain('request number 7');
   });
 
-  it("gives ClikCode's agent a vendor's summary as its own compaction", async () => {
+  it("seeds ClikCode's agent with the turns, not with a vendor's summary of them", async () => {
     const stateDir = tmp();
-    const file = join(tmp(), 'thread.jsonl');
-    writeFileSync(file, claudeTranscript(6, 2));
     const moved = session(turns(8), { previousNativeThread: { harness: 'claude', id: 't1', accountId: 'a1', workspace: '/w' } });
-    const held = await seedAgentConversation({ session: moved, stateDir, summaries: { stateDir, threadFile: async () => file } });
-    expect(held).toMatchObject({ total: 8, seeded: 8, summarized: 5, summaryFrom: 'claude' });
+    const held = await seedAgentConversation({ session: moved, stateDir });
+    expect(held).toEqual({ total: 8, seeded: 8 });
     const memory = await new ConversationStore(stateDir, moved.id).load();
-    expect(memory[0]).toEqual({ type: 'summary', text: 'Turns 1-6: built the parser and fixed the tests.' });
+    expect(memory.some((item) => item.type === 'summary')).toBe(false);
     const texts = memory.flatMap((item) => (item.type === 'text' ? [item.text] : []));
+    expect(texts.some((text) => text.includes('request number 2'))).toBe(true);
     expect(texts.some((text) => text.includes('request number 6'))).toBe(true);
-    expect(texts.some((text) => text.includes('request number 2'))).toBe(false);
-    // Kept on the conversation for the next hand-over, without reading the thread again.
-    expect(moved.summary?.source).toBe('claude');
-    expect(await conversationSummary({ ...moved, previousNativeThread: undefined }, canonicalRecord(moved), { stateDir: tmp() })).toEqual(moved.summary);
   });
 });
 
