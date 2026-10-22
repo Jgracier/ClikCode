@@ -206,6 +206,7 @@ def remote_installed(updates, pnpm_delay=0, current=False):
             json.dump({'version': 1, 'machines': [record]}, handle)
         context['env'].update({
             'FAKE_SSH_ROOT': world_root, 'CLIKCODE_REMOTE_REPO_URL': made['repoUrl'], 'CLIKCODE_REMOTE_NODE_MIRROR': made['mirrorUrl'],
+            'CLIKCODE_REMOTE_MACPORTS_MIRROR': made['macportsMirror'], 'CLIKCODE_REMOTE_MACPORTS_PINS': json.dumps(made['macportsPins']),
             'CLIKCODE_REMOTE_LOCAL_COMMIT': made['first'] if current else made['commit'],
         })
         context['remote'] = {'first': made['first'], 'commit': made['commit']}
@@ -250,6 +251,7 @@ def remote_fake(commit=None, host_options=None):
         context['env'].update({
             'FAKE_SSH_ROOT': world_root, 'FAKE_TAILSCALE_STATUS': status,
             'CLIKCODE_REMOTE_REPO_URL': made['repoUrl'], 'CLIKCODE_REMOTE_NODE_MIRROR': made['mirrorUrl'],
+            'CLIKCODE_REMOTE_MACPORTS_MIRROR': made['macportsMirror'], 'CLIKCODE_REMOTE_MACPORTS_PINS': json.dumps(made['macportsPins']),
         })
     return setup
 
@@ -848,6 +850,26 @@ SCENARIOS = {
         'snap_contains': {'refused': ['✗ Checking the machine: macOS 10.12.6 is too old for ClikCode', 'which needs macOS 10.15 or newer', 'Update macOS on dev@devbox.tail-fake.ts.net', 'there yourself and add it again.']},
         'snap_lacks': {'refused': ['2/6 Node.js', 'devbox is added']},
         'never': ['ENOENT', 'Getting ClikCode from GitHub'],
+    },
+    # The iMac seen live (macOS 10.15, Intel): its Homebrew node and an earlier
+    # install's own Node are builds for a newer macOS and do not run. Neither
+    # counts; MacPorts' Node 22 is installed instead (fake packages.macports.org,
+    # fake otool / install_name_tool / codesign), run, and the install goes on.
+    'remote-install-macports-node': {
+        'setup': remote_fake(host_options={'uname': {'s': 'Darwin', 'm': 'x86_64'}, 'swVers': '10.15.8', 'appleTools': True,
+                                           'brokenNode': 'dyld: Symbol not found (built for Mac OS X 13.5)', 'ownBrokenNode': 'dyld: Symbol not found (built for Mac OS X 13.5)'}),
+        'startup': 4, 'no_dup_check': 'lists and progress lines, no transcript',
+        'turns': [{'blocks': ['unused']}],
+        'steps': [
+            ('settle', 2),
+            ('type', '/remote'), ('wait_for', 'On your tailnet', 15), ('wait_for', 'macbook', 10), ('settle', 1),
+            ('keys', '\r'), ('wait_for', 'Log in to devbox as which user?', 15), ('settle', 0.5),
+            ('type', 'dev'), ('wait_for', 'devbox is added', 90), ('settle', 1), ('snap', 'installed'),
+        ],
+        'watch': [],
+        'snap_contains': {'installed': ['1/6 Checking the machine · macOS 10.15.8 x86_64', '2/6 Node.js · v22.22.2 from MacPorts nodejs22 v22.22.2', 'SHA-256 pinned, runs',
+                                        "replaces ClikCode's own Node, which no longer ran", '5/6 Building and installing', 'devbox is added']},
+        'never': ['ENOENT', '✗'],
     },
     # A chat on a machine whose ClikCode is another build: said once on opening it, with where
     # to update it. Nothing is updated without the user.
