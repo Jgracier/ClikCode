@@ -76,6 +76,8 @@ beforeAll(async () => {
   const bin = join(root, 'local-bin');
   mkdirSync(bin);
   symlinkSync(join(FAKES, 'fake-ssh.mjs'), join(bin, 'ssh'));
+  // /machine asks Tailscale too: never the real one (this one is not running).
+  symlinkSync(join(FAKES, 'fake-tailscale.mjs'), join(bin, 'tailscale'));
   // No vendor CLI of the real machine: a fake `claude` that only says its version, on both machines.
   const fakeClaude = '#!/bin/sh\necho "2.1.0 (Claude Code)"\n';
   writeFileSync(join(bin, 'claude'), fakeClaude, { mode: 0o755 });
