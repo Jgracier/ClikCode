@@ -94,6 +94,19 @@ export const settingsHandlers = {
     const setting = words.shift()?.toLowerCase();
     const value = words.join(' ').trim();
     if (!setting) return emitHarnessOutput({ panel: 'settings', session, account: state.accounts.find((item) => item.id === session.accountId)?.label });
+    // How long the user's own models (ClikDeploy compute) may sit idle before their GPU is released: the
+    // account's setting, on the Gateway (the same one the canvas's Preferences change), for all their models.
+    if (setting === 'idle') {
+      const { idleWords, ownModelIdleMinutes, setOwnModelIdleMinutes } = await import('../../../gateway/own-models.js');
+      if (!value) {
+        const minutes = await ownModelIdleMinutes();
+        return emitHarnessOutput({ panel: 'settings-updated', text: `Your models turn off after: ${idleWords(minutes)} idle (/settings idle <minutes|never>)` });
+      }
+      const minutes = /^(never|off|0)$/i.test(value) ? 0 : Number.parseInt(value, 10);
+      if (!Number.isInteger(minutes) || minutes < 0) throw new Error('usage: /settings idle <minutes|never> (5 minutes to 1440)');
+      const stored = await setOwnModelIdleMinutes(minutes);
+      return emitHarnessOutput({ panel: 'settings-updated', text: `Your models turn off after: ${idleWords(stored)} idle` });
+    }
     if (setting === 'global') {
       const [key, ...rest] = words;
       if (!key || !rest.length) throw new Error('usage: /settings global <effort|permissions|send> <value>');

@@ -775,17 +775,37 @@ describe('runAgentLoop', () => {
       expect(phases.filter((phase) => phase.startsWith('retrying'))).toEqual(['retrying in 20s', 'retrying in 2s']);
     });
 
-    it("waits for the user's own model to start on its GPU, saying so, then goes on: minutes, not the retry budget", async () => {
+    it("waits for the user's own model to start on its GPU, saying so, then says it is ready: minutes, not the retry budget", async () => {
       const phases: string[] = [];
       const starting = { error: gatewayError('MODEL_STARTING', { retryAfter: 30 }) };
-      const h = harness([...Array.from({ length: 12 }, () => starting), { text: 'up' }], { onPhase: (phase) => phases.push(phase) });
+      const h = harness([...Array.from({ length: 12 }, () => starting), { servedModel: 'qwen', text: 'up' }], { onPhase: (phase) => phases.push(phase) });
       const result = await driven(runAgentLoop(h.input));
       // 12 waits of 30s: past the 300s a failing step gets, within the model's start budget.
       expect(result).toMatchObject({ text: 'up', stopReason: 'completed' });
-      const said = phases.filter((phase) => phase.startsWith('your model is starting'));
-      expect(said[0]).toBe('your model is starting on its GPU');
-      expect(said.at(-1)).toBe('your model is starting on its GPU · 6 min so far');
+      expect(phases.filter((phase) => phase.startsWith('Starting model')).length).toBeGreaterThanOrEqual(12);
+      // While it starts the status stays "Starting model": no flicker to "thinking" between its retries.
+      expect(phases.slice(phases.indexOf('Starting model'), phases.lastIndexOf('Starting model') + 1).every((phase) => phase.startsWith('Starting model'))).toBe(true);
       expect(phases.some((phase) => phase.startsWith('retrying'))).toBe(false);
+      expect(h.events.filter((event) => event.label.startsWith('Model ready'))).toHaveLength(1);
+    });
+
+    it('a message sent while the model starts waits in the queue and goes once it is ready', async () => {
+      let steer: ((text: string) => Promise<void>) | undefined;
+      const starting = { error: gatewayError('MODEL_STARTING', { retryAfter: 5 }) };
+      const h = harness([
+        { ...starting, before: async () => { await steer!('and also this'); } },
+        starting,
+        { servedModel: 'qwen', text: 'up' },
+        { text: 'and that too' },
+      ]);
+      const result = await driven(runAgentLoop({ ...h.input, onSteerReady: (handler) => { steer = handler; } }));
+      const said = (n: number) => JSON.stringify(h.client.requests[n]!.items);
+      // Not folded into a request the starting model never sees...
+      expect(said(1)).not.toContain('and also this');
+      expect(said(2)).not.toContain('and also this');
+      // ...delivered once it answers, like any queued message.
+      expect(said(3)).toContain('and also this');
+      expect(result).toMatchObject({ stopReason: 'completed' });
     });
 
     it('gives up on a model that never starts, with what the Gateway said', async () => {

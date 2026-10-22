@@ -70,6 +70,11 @@ export async function runModelStep(rt: TurnRuntime, modelClient: ModelClient, sy
       // The model the Gateway serves, on the screen from its first frame
       // rather than after the step.
       onServedModel: (model, window) => {
+        // The user's own model, waited for while its GPU started, is answering: said once, in the conversation.
+        if (rt.modelStartingSince !== undefined) {
+          input.onActivity?.({ kind: 'tool-done', label: `Model ready · started in ${elapsedWords(Date.now() - rt.modelStartingSince)}`, id: `model-ready-${rt.modelStartingSince}` });
+          rt.modelStartingSince = undefined;
+        }
         rt.servedModel = model;
         if (window) rt.contextWindow = window;
         rt.lastContext = { ...rt.lastContext, servedModel: model, ...(window ? { contextWindow: window } : {}) };
@@ -90,8 +95,8 @@ export async function runModelStep(rt: TurnRuntime, modelClient: ModelClient, sy
       const wait = modelStartWaitSeconds(typeof after === 'number' ? after : undefined);
       if (rt.modelStartWaitedSeconds + wait <= MODEL_START_BUDGET_SECONDS) {
         rt.modelStartWaitedSeconds += wait;
-        const so = rt.modelStartWaitedSeconds - wait;
-        input.onPhase?.(`your model is starting on its GPU${so ? ` · ${so < 90 ? `${so}s` : `${Math.round(so / 60)} min`} so far` : ''}`);
+        rt.modelStartingSince ??= started;
+        input.onPhase?.(startingModelPhase(Date.now() - rt.modelStartingSince));
         await pause(wait, signal);
         return { kind: 'continue' };
       }
@@ -143,6 +148,7 @@ export async function recordStep(
   rt.stepRetries = 0;
   rt.retryWaitedSeconds = 0;
   rt.modelStartWaitedSeconds = 0;
+  rt.modelStartingSince = undefined;
 
   // A client without a delta channel still has to reach the UI.
   if (step.text && step.text.length > streamedThisStep.length && step.text.startsWith(streamedThisStep)) {
@@ -191,4 +197,17 @@ function withCutOffNotes(toolCalls: readonly ModelToolCall[], cutOff: boolean) {
     // sends a smaller call rather than the same one again.
     ? { ...call, argumentsError: `the reply reached the output limit while these arguments were being written, so they are incomplete. Make the call again with less in it, for example a large file written in several smaller edits` }
     : call);
+}
+
+/** "4 s", "1 min 20 s", "6 min": how long a wait has taken, as the status line says it. */
+function elapsedWords(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60);
+  return s % 60 && m < 10 ? `${m} min ${s % 60} s` : `${m} min`;
+}
+
+/** The status while the user's own model starts on its GPU: the spinner beside it is the turn's own. */
+export function startingModelPhase(elapsedMs: number): string {
+  return elapsedMs < 1000 ? 'Starting model' : `Starting model · ${elapsedWords(elapsedMs)}`;
 }
