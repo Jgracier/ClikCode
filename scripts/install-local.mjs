@@ -17,7 +17,7 @@
  * in whole by a rename, and ~/.local/bin/clikcode -> release/dist/index.js. */
 import { execFileSync } from 'node:child_process';
 import { realpathSync, cpSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, symlinkSync, lstatSync, readlinkSync, unlinkSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -63,7 +63,18 @@ cpSync(dist, join(next, 'dist'), { recursive: true });
 cpSync(join(repo, 'package.json'), join(next, 'package.json'));
 // The bundle leaves npm packages external: they resolve through the checkout's node_modules.
 // Its real path: run from a worktree whose node_modules is itself a link, the install must not point into the worktree.
-symlinkSync(realpathSync(join(repo, 'node_modules')), join(next, 'node_modules'));
+// A target inside the temp folder disappears on reboot or cleanup and takes the installed CLI with it
+// ("Cannot find package yaml"). Use the shared deps folder then, or refuse rather than install a time bomb.
+let modules = realpathSync(join(repo, 'node_modules'));
+if (modules.startsWith(realpathSync(tmpdir()) + '/')) {
+  const stable = join(share, 'deps', 'node_modules');
+  if (!existsSync(join(stable, 'playwright-core'))) {
+    console.error(`node_modules resolves into ${modules} (temporary). Install from a checkout with its own node_modules.`);
+    process.exit(1);
+  }
+  modules = stable;
+}
+symlinkSync(modules, join(next, 'node_modules'));
 execFileSync(process.execPath, [join(next, 'dist', 'index.js'), '--version'], { stdio: 'ignore' });
 
 const old = join(share, `release.old.${process.pid}`);
