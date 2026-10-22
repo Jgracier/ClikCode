@@ -77,6 +77,8 @@ describe('repeat and sequence rules', () => {
     expect(hasRepeatOrSequence('aXbb9')).toBe(true);
     expect(hasRepeatOrSequence('xabc1')).toBe(true);
     expect(hasRepeatOrSequence('x321y')).toBe(true);
+    expect(hasRepeatOrSequence('xaA9!')).toBe(true);
+    expect(hasRepeatOrSequence('xAbC9!')).toBe(true);
     expect(hasRepeatOrSequence('xA9!k2')).toBe(false);
   });
   it('never generates one', () => {
