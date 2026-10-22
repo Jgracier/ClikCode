@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { addDestination, destinationProblem, loadDestinations, normalizeSendTo, removeDestination, sendToDestinations, slotsOf } from './secret-destinations.js';
 import { forgetSecrets, registerSecret } from './secret-scrubber.js';
+import { forgetCliStdinSupport, versionAtLeast } from './cli-stdin-support.js';
 import { lockCredentialVault, saveNamedSecret } from './credential-vault.js';
 
 const VALUE = 'salad_live_9f8e7d6c5b4a39281706';
@@ -11,7 +12,7 @@ let dir = '';
 let bin = '';
 const oldPath = process.env.PATH;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'clikcode-dest-')); bin = join(dir, 'bin'); await mkdir(bin); process.env.PATH = `${bin}:${oldPath}`; registerSecret(VALUE); });
-afterEach(async () => { process.env.PATH = oldPath; forgetSecrets(); lockCredentialVault(dir); await rm(dir, { recursive: true, force: true }); });
+afterEach(async () => { forgetCliStdinSupport(); process.env.PATH = oldPath; forgetSecrets(); lockCredentialVault(dir); await rm(dir, { recursive: true, force: true }); });
 /** The installed clikdeploy CLI takes the JSON inline in --args-json (it cannot read `-`): the fake records that argument where stdin used to be read. */
 const recordArgsJson = (): string => `p=0; for a in "$@"; do if [ "$p" = 1 ]; then printf '%s' "$a" > "${dir}/stdin"; p=0; fi; [ "$a" = --args-json ] && p=1; done`;
 const fake = async (name: string, script: string): Promise<void> => { await writeFile(join(bin, name), `#!/bin/sh\n${script}\n`); await chmod(join(bin, name), 0o755); };
@@ -278,4 +279,31 @@ it('connectionValues keeps the read-back: NOT connected when nothing is stored, 
   expect(await problem({ 'x y': 'a' })).toContain('not a plain identifier');
   expect(await problem([1])).toContain('must be a map');
   expect(await problem({ a: 'b' }, 'clikdeploy-secret')).toContain('only goes with clikdeploy-connection');
+});
+
+it('versionAtLeast ignores the build hash and compares numerically', () => {
+  expect(versionAtLeast('1.0.34')).toBe(false);
+  expect(versionAtLeast('1.0.34-g0123456789ab')).toBe(false);
+  expect(versionAtLeast('1.0.35')).toBe(true);
+  expect(versionAtLeast('1.0.35-g0123456789ab\n')).toBe(true);
+  expect(versionAtLeast('1.1.0')).toBe(true);
+  expect(versionAtLeast('1.0.100')).toBe(true);
+  expect(versionAtLeast('')).toBe(false);
+});
+
+it('a CLI that reports 1.0.35 or later gets the key on stdin and never on argv', async () => {
+  await fake('clikdeploy', `if [ "$1" = --version ]; then echo 1.0.35-gabcdef012345; exit 0; fi; printf '%s\\n' "$@" > "${dir}/argv"; cat > "${dir}/stdin"; echo '{"status":"success","message":"saved"}'`);
+  const [result] = await sendToDestinations(dir, [{ to: 'clikdeploy-secret', with: { key: 'SALAD_API_KEY' } }], VALUE);
+  expect(result).toMatchObject({ ok: true });
+  const argv = await readFile(join(dir, 'argv'), 'utf8');
+  expect(argv.split('\n')[argv.split('\n').indexOf('--args-json') + 1]).toBe('-');
+  expect(argv).not.toContain(VALUE);
+  expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toEqual({ key: 'SALAD_API_KEY', value: VALUE });
+});
+
+it('an old CLI (1.0.34) still gets the JSON inline, since it cannot read "-"', async () => {
+  await fake('clikdeploy', `if [ "$1" = --version ]; then echo 1.0.34; exit 0; fi; printf '%s\\n' "$@" > "${dir}/argv"; ${recordArgsJson()}; echo '{"status":"success","message":"saved"}'`);
+  const [result] = await sendToDestinations(dir, [{ to: 'clikdeploy-secret', with: { key: 'SALAD_API_KEY' } }], VALUE);
+  expect(result).toMatchObject({ ok: true });
+  expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toEqual({ key: 'SALAD_API_KEY', value: VALUE });
 });
