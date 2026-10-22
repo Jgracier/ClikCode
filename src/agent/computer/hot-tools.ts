@@ -30,6 +30,14 @@ async function latest(): Promise<Map<string, ToolDefinition> | undefined> {
   return loaded.tools;
 }
 
+/** The rebuilt copy of one tool, if the installed build has one: its schema is the one callers must be checked against. */
+export async function latestTool(name: string): Promise<ToolDefinition | undefined> { return (await latest())?.get(name); }
+
+/** When the installed build last changed (undefined without a built copy). A long-running process compares this between calls. */
+export async function installedBuildStamp(): Promise<number | undefined> {
+  try { return (await stat(fileURLToPath(new URL('./computer-tools.js', import.meta.url)))).mtimeMs; } catch { return undefined; }
+}
+
 export function hotTool<T extends ToolDefinition>(tool: T): T {
   return { ...tool, run: async (args: never, context: never) => {
     const rebuilt = (await latest())?.get(tool.name);

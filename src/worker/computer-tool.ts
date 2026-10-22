@@ -7,7 +7,7 @@ import { COMPUTER_OFF } from '../agent/computer/settings.js';
 import { LoginError } from '../agent/computer/login-error.js';
 import { askPrivateLogin, askPrivateSecret } from '../agent/computer/private-login-prompt.js';
 import { scrubSecrets } from '../agent/computer/secret-scrubber.js';
-import { hotTool } from '../agent/computer/hot-tools.js';
+import { hotTool, latestTool } from '../agent/computer/hot-tools.js';
 import { validateAgainstSchema } from '../agent/schema-validate.js';
 import { computerDesktopTool } from '../agent/tools/computer.js';
 import { computerWebTool } from '../agent/tools/computer-web.js';
@@ -29,7 +29,8 @@ export async function runSharedComputerTool(input: {
   if (!tool) return { ok: false, output: `Unknown tool "${input.tool}". Available: ${SHARED_COMPUTER_TOOLS.map(entry => entry.name).join(', ')}.` };
   try {
     if (!await computerEnabled(input.stateDir)) return { ok: false, output: COMPUTER_OFF };
-    const problems = validateAgainstSchema(input.args, tool.parameters);
+    // The schema of the installed build, not the one this long-running worker started with: a newer build may accept more arguments.
+    const problems = validateAgainstSchema(input.args, ((await latestTool(input.tool)) ?? tool).parameters);
     if (problems.length) return { ok: false, output: `Invalid arguments: ${problems.join('; ')}` };
     const needWindow = (): void => { if (input.windows() < 1) throw new LoginError(NO_WINDOW); };
     const context: Partial<ToolContext> = {
