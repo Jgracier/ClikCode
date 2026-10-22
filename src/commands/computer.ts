@@ -111,6 +111,15 @@ export async function computerTool(tool: string, args: Record<string, unknown>, 
   if (!result.ok) process.exitCode = 1;
 }
 
+/** `clikcode computer preflight`: the machine's readiness for onboarding work, as JSON (for an agent or a scheduled check). */
+export async function computerPreflight(options: { post?: boolean } = {}): Promise<void> {
+  const { runPreflightHere } = await import('../agent/computer/preflight.js');
+  const result = await runPreflightHere(stateDirectory(), { post: options.post !== false });
+  if (isJsonDefaultMode()) emitResult({ computer: { preflight: result } });
+  else process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  if (!result.ok) process.exitCode = 1;
+}
+
 /** The vault's saved secrets, by name only: no chat or worker is needed to look at your own files. */
 export async function computerSecrets(remove?: string, backfill?: { owner?: string }, backup?: { export?: string; import?: string; overwrite?: boolean }): Promise<void> {
   if (backup?.export || backup?.import) return computerSecretsBackup(backup);

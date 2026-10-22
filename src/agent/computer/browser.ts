@@ -172,3 +172,9 @@ export async function closeComputerBrowser(stateDir: string): Promise<void> {
     if (Number.isSafeInteger(record.pid) && record.pid! > 1) process.kill(record.pid!, 'SIGTERM');
   } catch { /* no ClikCode-owned browser */ }
 }
+
+/** A tab for one check, not owned by any chat: the caller closes it. Starts the shared Chrome when it is not running. */
+export async function throwawayComputerPage(stateDir: string): Promise<Page> {
+  const { context } = await browserFor(stateDir, true);
+  return context.newPage();
+}

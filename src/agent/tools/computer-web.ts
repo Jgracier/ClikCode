@@ -33,7 +33,7 @@ import type { ToolContext, ToolRunResult } from '../tool-contract.js';
 
 type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload'; target?: string; at?: 'start' | 'end'; text?: string; key?: string; direction?: 'up' | 'down'; accept_dialog?: boolean; gone?: boolean; seconds?: number };
 type WebArgs = {
-  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'profile' | 'open_email_link' | 'read_email_code' | 'notes' | 'recipe' | 'queue' | 'network' | 'help';
+  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'profile' | 'open_email_link' | 'read_email_code' | 'notes' | 'recipe' | 'queue' | 'network' | 'preflight' | 'help';
   tab?: string; at?: 'start' | 'end'; url?: string; host?: string; note?: string; recipe_op?: 'save' | 'get' | 'run' | 'list'; login_route?: string; key_page?: string; capture_hint?: string; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
   new_account?: boolean; secret?: string; to?: string; with?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean; format?: string; options?: string[]; secret?: boolean }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; vendor?: string; owner?: string; env?: string; task?: { vendor: string; kind?: string; status?: string; reason?: string; note?: string; owner?: string; connectors?: string[] }; bodies?: boolean; tasks?: boolean; task_status?: string; task_reason?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
 };
@@ -246,7 +246,7 @@ async function settle(page: Page): Promise<void> {
   })).catch(() => undefined); // a navigation destroys the page being watched: the next look is a new page
 }
 
-const ACTION_LIST = 'open · close · observe · click · fill · choose · press · scroll · wait · upload · steps · login · handoff · capture_secret · send_secret · profile · open_email_link · read_email_code · notes · recipe · queue · network · help';
+const ACTION_LIST = 'open · close · observe · click · fill · choose · press · scroll · wait · upload · steps · login · handoff · capture_secret · send_secret · profile · open_email_link · read_email_code · notes · recipe · queue · network · preflight · help';
 
 const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: ['action'], properties: {
     action: { type: 'string', description: ACTION_LIST },
@@ -341,6 +341,12 @@ export const computerWebTool = defineTool<WebArgs>({
       if (args.action === 'help') return { output: `${WEB_DESCRIPTION}\n\nArguments: ${Object.entries((WEB_PARAMETERS as { properties: Record<string, { description?: string }> }).properties).map(([name, spec]) => `${name}${spec.description ? ` (${spec.description})` : ''}`).join('; ')}` };
       if (!ACTION_LIST.split(' · ').includes(String(args.action))) throw new Error(`Unknown action "${String(args.action)}". Actions: ${ACTION_LIST}.`);
       if (args.action === 'send_secret') return storeSecretTool.run({ secret: args.secret ?? '', ...(args.to ? { to: args.to } : {}), ...(args.with ? { with: args.with } : {}), ...(args.send_to ? { send_to: args.send_to } : {}) }, ctx);
+      if (args.action === 'preflight') {
+        // Deterministic readiness check (browser, Google sign-in, Gmail, build, deps link); a throwaway tab, no chat tab needed.
+        const { runPreflightHere } = await import('../computer/preflight.js');
+        const result = await runPreflightHere(ctx.stateDir, ...(ctx.signal ? [{ signal: ctx.signal }] as const : []));
+        return { output: JSON.stringify(result, null, 2), ...(result.ok ? {} : { isError: true }) };
+      }
       if (args.action === 'queue') {
         const { describeTask, listTasks, saveTask, summarizeTasks } = await import('../computer/work-queue.js');
         if (args.task) return { output: `Recorded. ${describeTask(await saveTask(ctx.stateDir, args.task as Parameters<typeof saveTask>[1]))}` };
