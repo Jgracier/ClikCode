@@ -32,7 +32,7 @@ import { conversationOption, isBlankConversation } from '../../session/options.j
 import { conversationIdFor } from '../../session/conversation-rows.js';
 import { aiSessionCommand } from '../slash/handlers.js';
 import { chooseOption } from './choose.js';
-import { RemoteMachines } from '../../remote/connection.js';
+import { holdWindowMachines, type MachinesHold } from '../../remote/connection.js';
 import { isRemoteRowValue, localMachineName, remoteConversationOption, parseRemoteRowValue, updateText } from '../../remote/board-rows.js';
 
 type AdoptableNativeSession = {
@@ -268,9 +268,10 @@ export async function interactiveSessionPicker(
   let activityRefresh: Promise<void> | undefined;
   /** The board's redraw: it draws a changed list without ticking for it. */
   let listChanged: (() => void) | undefined;
-  /** The other machines' chats, over one SSH connection each -- open for as
-   * long as the board is up, and closed with it (remote/connection.ts). */
-  let remote: RemoteMachines | undefined;
+  /** The other machines' chats, over the window's one SSH connection to each
+   * -- held while the board is up, and kept for the next list after it
+   * (remote/connection.ts holdWindowMachines). */
+  let remote: MachinesHold | undefined;
   const refreshActivity = (): void => {
     if (activityRefresh) return;
     activityRefresh = (async () => {
@@ -362,11 +363,11 @@ export async function interactiveSessionPicker(
   // slow poll where the directories cannot be watched).
   const listWatch = watchConversationList(refreshActivity);
   if (onBoard) {
-    const machines = await new RemoteMachines().open().catch(() => undefined);
+    const machines = await holdWindowMachines({ autoUpdate: true }).catch(() => undefined);
     if (machines?.views().length) {
       remote = machines;
       remote.onChange(() => { listRevision += 1; built = undefined; listChanged?.(); });
-    } else void machines?.close();
+    } else machines?.release();
   }
 
   /** What a row action did to the chat that is open, so the loop can move off
@@ -445,8 +446,8 @@ export async function interactiveSessionPicker(
     }
   } finally {
     listWatch.stop();
-    // Not waited for: the chat chosen opens while the connections close.
-    void remote?.close();
+    // The connections stay, for the next list or a move.
+    remote?.release();
   }
   // Delete and archive always return to the list. If the open chat was the
   // one removed, the list's "current" is the fresh draft made above -- and

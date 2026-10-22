@@ -4,11 +4,14 @@
  * editor does -- `query conversations`, then `watch-conversations` and a
  * fresh query on every `conversations-changed`.
  *
- * Read-only: nothing is opened, sent or changed on the other machine. Open
- * only while something shows it (the board, /remote) -- `close()` ends every
- * connection, and nothing stays connected in the background. A machine
- * that cannot be reached is offline, shown with the chats it had last time
- * (the cache in machines.json), and tried again with a growing pause. No
+ * Read-only: nothing is opened, sent or changed on the other machine. The
+ * terminal keeps ONE connection per machine for the life of its window
+ * (`holdWindowMachines`): made the first time a list shows the machines (the
+ * board, /machine, /remote), reused by every list and move after it, and
+ * ended when the window closes (`closeWindowMachines`). A machine that cannot
+ * be reached is offline, shown with the chats it had last time (the cache in
+ * machines.json), and tried again with a growing pause while a list shows it;
+ * with none showing it, it waits for the next list, which tries at once. No
  * port is opened on either machine: the bridge speaks over ssh's own
  * stdin/stdout.
  *
@@ -62,8 +65,12 @@ export interface LinkOptions {
   backoffMs?: readonly number[];
   /** Update an outdated machine by its policy (default on). Off where the
    * connection only shows the machine's state while the user chooses what
-   * to do with it (/remote's list). */
-  autoUpdate?: boolean;
+   * to do with it (/remote's list). A function is asked each time: the
+   * window's connections update only while the board holds them. */
+  autoUpdate?: boolean | (() => boolean);
+  /** Whether anything shows the machine now. When not, a lost connection is
+   * not tried again until `wake()` (the next list); absent: always. */
+  wanted?: () => boolean;
   /** The automatic updates to go through (tests give their own). */
   autoUpdates?: AutoUpdates;
 }
@@ -104,6 +111,10 @@ export class RemoteLink {
    * its close is followed at once by a new connection, and the machine still
    * reads as connected meanwhile -- nothing about it changed for the user. */
   private retiring = false;
+  /** Offline with nothing showing it: tried again on `wake()`, not on a timer. */
+  private parked = false;
+  /** An automatic update is being considered or run from this link. */
+  private updatingNow = false;
   readonly view: MachineView;
   /** What the bridge there said in its host-ready (1 when it did not say). */
   private revision = 1;
@@ -172,14 +183,48 @@ export class RemoteLink {
     });
   }
 
+  private wanted(): boolean {
+    return this.options.wanted?.() ?? true;
+  }
+
   private lost(error: string): void {
     this.set({ state: 'offline', error });
     if (this.stopped) return;
+    if (!this.wanted()) { this.parked = true; return; }
     const backoff = this.options.backoffMs ?? BACKOFF_MS;
     const wait = backoff[Math.min(this.attempt, backoff.length - 1)]!;
     this.attempt += 1;
-    this.retry = setTimeout(() => { this.retry = undefined; if (!this.stopped) this.connect(); }, wait);
+    this.retry = setTimeout(() => {
+      this.retry = undefined;
+      if (this.stopped) return;
+      if (!this.wanted()) { this.parked = true; return; }
+      this.connect();
+    }, wait);
     this.retry.unref();
+  }
+
+  /** A list shows the machine again: one offline is tried at once, not after
+   * its pause (as a fresh connection would be); one connected is left as is. */
+  wake(): void {
+    if (this.stopped || this.child) return;
+    if (!this.parked && !this.retry) return;
+    this.parked = false;
+    clearTimeout(this.retry);
+    this.retry = undefined;
+    this.set({ state: 'connecting', error: undefined });
+    this.connect();
+  }
+
+  private updatesAllowed(): boolean {
+    const allowed = this.options.autoUpdate;
+    return typeof allowed === 'function' ? allowed() : allowed !== false;
+  }
+
+  /** The board shows a machine already connected and outdated: brought to
+   * this build by its policy, as on connecting (each commit tried once). */
+  considerUpdate(): void {
+    if (this.stopped || this.view.state !== 'connected' || !this.view.needsUpdate || this.view.updating || !this.updatesAllowed()) return;
+    this.autoUpdate(this.options.localCommit ?? localBuildCommit());
   }
 
   private onEvent(event: IdeHostEvent): void {
@@ -196,7 +241,7 @@ export class RemoteLink {
       this.revision = event.revision ?? 1;
       this.set({ state: 'connected', needsUpdate: outdated, error: undefined, ...(outdated ? {} : { updateError: undefined }) });
       this.send({ type: 'chat-attach', chat: CHAT });
-      if (outdated && this.options.autoUpdate !== false) this.autoUpdate(localCommit);
+      if (outdated && this.updatesAllowed()) this.autoUpdate(localCommit);
       return;
     }
     if (event.type === 'host-retiring') { this.retiring = true; return; }
@@ -272,6 +317,8 @@ export class RemoteLink {
   /** Brings the machine to this build when its policy says so; once it is,
    * connects again, to the new build's bridge. */
   private autoUpdate(localCommit: string | undefined): void {
+    if (this.updatingNow) return;
+    this.updatingNow = true;
     const machine = this.view.machine;
     void (async () => {
       const started = await (this.options.autoUpdates ?? autoUpdates).consider(machine, localCommit);
@@ -286,13 +333,14 @@ export class RemoteLink {
         machine.updateError = `${outcome.step}: ${outcome.message}`;
         this.set({ updating: false, updateError: machine.updateError });
       }
-    })().catch(() => this.set({ updating: false }));
+    })().catch(() => this.set({ updating: false })).finally(() => { this.updatingNow = false; });
   }
 
   /** Ends this connection and makes it again at once (a new build there). */
   reconnect(): void {
     if (this.stopped) return;
     this.attempt = 0;
+    this.parked = false;
     const child = this.child;
     if (!child) {
       clearTimeout(this.retry);
@@ -357,15 +405,107 @@ export class RemoteLink {
   }
 }
 
-/** Every added machine's connection, for as long as one screen shows them. */
+/** What a list holds of the window's connections (`holdWindowMachines`):
+ * their views, a channel on one, and its own change listeners -- removed
+ * with `release()`, which leaves the connections open for the next list. */
+export interface MachinesHold {
+  views(): readonly MachineView[];
+  onChange(listener: () => void): () => void;
+  channel(machineId: string): Promise<LinkChannel | undefined>;
+  reconnect(machineId: string): void;
+  release(): void;
+}
+
+/** Every added machine's connection: for as long as one screen shows them
+ * (`open`/`close`), or for the window's life (`hold`, holdWindowMachines). */
 export class RemoteMachines {
   private links: RemoteLink[] = [];
   private listeners = new Set<() => void>();
   private closed = false;
+  /** Lists holding the connections now, and of them those that let an
+   * outdated machine be updated by its policy (the board). */
+  private holders = 0;
+  private updaters = 0;
+  private syncing: Promise<void> = Promise.resolve();
   /** Bumped on every change: the board rebuilds its rows only then. */
   revision = 0;
 
-  constructor(private readonly options: LinkOptions = {}) {}
+  constructor(private readonly options: LinkOptions = {}, private readonly held = false) {}
+
+  private linkFor(machine: RemoteMachine): RemoteLink {
+    const options: LinkOptions = this.held
+      ? { ...this.options, wanted: () => this.holders > 0, autoUpdate: () => this.updaters > 0 }
+      : this.options;
+    return new RemoteLink(machine, () => this.notify(), options);
+  }
+
+  /** The links match machines.json as it is now: a machine added since gets
+   * one, one forgotten (or no longer ready) loses its, and one now reached
+   * at another address or name is connected to anew. The rest stay as they are. */
+  private sync(): Promise<void> {
+    const run = this.syncing.then(async () => {
+      const machines = (await readMachines()).filter((machine) => machine.ready);
+      if (this.closed) return;
+      const next: RemoteLink[] = [];
+      const ended: RemoteLink[] = [];
+      for (const link of this.links) {
+        const record = machines.find((machine) => machine.id === link.view.machine.id);
+        if (record && record.sshTarget === link.view.machine.sshTarget && record.name === link.view.machine.name) {
+          // Its policy may have changed in /remote; the connection has not.
+          link.view.machine.updates = record.updates;
+          next.push(link);
+        } else ended.push(link);
+      }
+      for (const machine of machines) {
+        if (next.some((link) => link.view.machine.id === machine.id)) continue;
+        const link = this.linkFor(machine);
+        next.push(link);
+        link.start();
+      }
+      // In machines.json's order, as `open` lists them.
+      next.sort((a, b) => machines.findIndex((m) => m.id === a.view.machine.id) - machines.findIndex((m) => m.id === b.view.machine.id));
+      this.links = next;
+      for (const link of ended) void link.stop();
+      this.notify();
+    });
+    this.syncing = run.catch(() => undefined);
+    return run;
+  }
+
+  /** Holds the connections for a list: made now for any machine without one,
+   * an offline one tried again at once, and kept after `release()`. With
+   * `autoUpdate` (the board), an outdated machine is updated by its policy. */
+  async hold(use: { autoUpdate?: boolean } = {}): Promise<MachinesHold> {
+    this.holders += 1;
+    if (use.autoUpdate) this.updaters += 1;
+    const stops = new Set<() => void>();
+    let released = false;
+    const release = (): void => {
+      if (released) return;
+      released = true;
+      this.holders -= 1;
+      if (use.autoUpdate) this.updaters -= 1;
+      for (const stop of stops) stop();
+      stops.clear();
+    };
+    // fail-open-ok: machines.json unreadable now -- the list shows the connections it already has.
+    await this.sync().catch(() => undefined);
+    for (const link of this.links) link.wake();
+    if (use.autoUpdate) for (const link of this.links) link.considerUpdate();
+    return {
+      views: () => this.views(),
+      onChange: (listener) => {
+        if (released) return () => undefined;
+        const stop = this.onChange(listener);
+        const remove = (): void => { stop(); stops.delete(remove); };
+        stops.add(remove);
+        return remove;
+      },
+      channel: (machineId) => this.channel(machineId),
+      reconnect: (machineId) => this.reconnect(machineId),
+      release,
+    };
+  }
 
   /** Opens a connection to each ready machine (the list is read now). */
   async open(): Promise<this> {
@@ -430,4 +570,28 @@ export class RemoteMachines {
     await Promise.all(this.links.map((link) => link.stop()));
     this.links = [];
   }
+}
+
+/** The window's own: one connection per added machine, shared by every list
+ * and move in this terminal, from the first list until the window closes. */
+let windowMachines: RemoteMachines | undefined;
+
+/** Holds the window's connections for a list (the board with `autoUpdate`,
+ * /machine and /remote without): connects only to machines it has none to. */
+export function holdWindowMachines(use: { autoUpdate?: boolean } = {}, options: LinkOptions = {}): Promise<MachinesHold> {
+  windowMachines ??= new RemoteMachines(options, true);
+  return windowMachines.hold(use);
+}
+
+/** Connects again to a machine whose ClikCode was just installed or updated
+ * from here: its new build answers. Nothing when the window has no connection. */
+export function reconnectWindowMachine(machineId: string): void {
+  windowMachines?.reconnect(machineId);
+}
+
+/** The window is closing: every connection it kept ends (the bridges there exit). */
+export async function closeWindowMachines(): Promise<void> {
+  const machines = windowMachines;
+  windowMachines = undefined;
+  await machines?.close();
 }
