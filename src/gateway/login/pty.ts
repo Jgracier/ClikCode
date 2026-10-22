@@ -12,12 +12,7 @@
  * The typescript file is always /dev/null: the live stream is the point, and
  * BSD script does not flush that file until exit anyway.
  */
-import { execFileSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
-import { closeSync, constants, openSync, rmSync, write } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { spawnPortable as spawn, terminatePortable } from '../../harness/transport/spawn.js';
+import { killProcessTreePortable, spawnPortable as spawn } from '../../harness/transport/spawn.js';
 
 /** Single-quote for `sh -c`, the only form util-linux script accepts. */
 export function shellQuote(parts: readonly string[]): string {
@@ -49,35 +44,36 @@ export function scriptArgv(
   return ['-q', '-e', '-f', '-c', `${SIZED} ${shellQuote([binary, ...args])}`, '/dev/null'];
 }
 
-/** What to spawn for a command down a pty, or undefined where there is no
- * `script` (Windows). */
+/** macOS: `script` checks its input with tcgetattr and stops ("script:
+ * tcgetattr/ioctl: Operation not supported on socket") unless the answer is
+ * ENOTTY -- a terminal, a file, /dev/null or a pipe(2) pipe. Node's child
+ * stdio pipes are socketpairs, and macOS builds FIFOs on sockets too: both
+ * answer EOPNOTSUPP (that message is its wording for it). Seen live on a
+ * MacBook (macOS 15.7): every vendor sign-in failed in ~15 ms, and a FIFO in
+ * its place failed the same way. So there `script` reads a shell pipeline's
+ * pipe(2), fed by `dd` from Node's socket -- dd with bs= writes each read as
+ * it comes (uutils cat was seen holding a socket's input back). Once
+ * `script` has exited, `dd` (whose pid it wrote first) is stopped with
+ * SIGPIPE, which shells do not announce, so the pipeline -- and the wrapper,
+ * with script's status -- ends. Only sh, dd and script: all ship with macOS. */
+const DARWIN_PIPE = [
+  't="$(mktemp "${TMPDIR:-/tmp}/clikcode-pty.XXXXXX")" || exit 127',
+  '/bin/sh -c \'echo $$ > "$1"; exec dd bs=4096 2>/dev/null\' sh "$t" | {',
+  '  script "$@"; s=$?',
+  '  while [ ! -s "$t" ]; do sleep 0.05; done',
+  '  kill -PIPE "$(cat "$t")" 2>/dev/null; rm -f "$t"; exit "$s"',
+  '}',
+].join('\n');
+
+/** What to spawn for a command down a pty -- `script`, or on macOS `script`
+ * behind the pipe(2) it needs (DARWIN_PIPE) -- or undefined where there is
+ * no `script` (Windows). */
 export function ptyCommand(
   binary: string, args: readonly string[], platform: NodeJS.Platform = process.platform,
 ): { file: string; argv: readonly string[] } | undefined {
   const argv = scriptArgv(binary, args, platform);
-  return argv ? { file: 'script', argv } : undefined;
-}
-
-/** macOS: `script` refuses an input that is a socket -- tcgetattr on it is
- * EOPNOTSUPP, not the ENOTTY it accepts, and it exits 1 with "script:
- * tcgetattr/ioctl: Operation not supported on socket" -- and Node's child
- * stdio pipes are sockets (libuv's socketpair). Seen live: every Claude Code
- * sign-in a chat on a Mac started failed in 15 ms. So there its input is a
- * real pipe: a FIFO this process opens read-write (so the open never blocks),
- * unlinks at once (the open ends keep it), hands to `script` as its stdin,
- * and writes what ClikCode types into. util-linux script takes a socket, so
- * elsewhere it is Node's own pipe. */
-function realPipe(): { fd: number; write(text: string): void; close(): void } {
-  const path = join(tmpdir(), `clikcode-pty-${process.pid}-${randomBytes(6).toString('hex')}`);
-  execFileSync('mkfifo', ['-m', '600', path]);
-  let fd: number;
-  try { fd = openSync(path, constants.O_RDWR); } finally { rmSync(path, { force: true }); }
-  let open = true;
-  return {
-    fd,
-    write: (text) => { if (open) write(fd, text, () => { /* fail-open-ok: the vendor already exited */ }); },
-    close: () => { if (open) { open = false; closeSync(fd); } },
-  };
+  if (!argv) return undefined;
+  return platform === 'darwin' ? { file: '/bin/sh', argv: ['-c', DARWIN_PIPE, 'sh', ...argv] } : { file: 'script', argv };
 }
 
 interface PtyResult {
@@ -102,10 +98,12 @@ export async function runInPty(input: {
 }): Promise<PtyResult> {
   const command = ptyCommand(input.binary, input.args, input.platform);
   if (!command) return { teed: false, exitCode: null };
-  const pipe = (input.platform ?? process.platform) === 'darwin' ? realPipe() : undefined;
+  // macOS's wrapper is several processes (sh, cat, script, the vendor): in a
+  // group of their own, so stopping it stops them all.
+  const group = (input.platform ?? process.platform) === 'darwin';
   return new Promise<PtyResult>((resolve, reject) => {
     const child = spawn(command.file, [...command.argv], {
-      stdio: [pipe?.fd ?? 'pipe', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'], ...(group ? { detached: true } : {}),
       // A terminal of a known kind: under ClikCode's own TERM=dumb (a
       // script, a test) some vendors draw differently, or not at all.
       env: { ...process.env, ...(!process.env.TERM || process.env.TERM === 'dumb' ? { TERM: 'xterm-256color' } : {}), ...input.env },
@@ -113,7 +111,7 @@ export async function runInPty(input: {
     // Writing after the vendor has gone is not an error: it finished (a
     // browser callback, say) before the user answered.
     child.stdin?.on('error', () => { /* fail-open-ok: vendor already exited */ });
-    input.onStdin((text: string) => { if (pipe) pipe.write(text); else child.stdin?.write(text); });
+    input.onStdin((text: string) => { child.stdin?.write(text); });
     child.stdout?.setEncoding('utf8');
     child.stderr?.setEncoding('utf8');
     const read = (chunk: string): void => {
@@ -123,12 +121,11 @@ export async function runInPty(input: {
     child.stderr?.on('data', read);
     // A ClikCode told to stop takes the vendor with it, rather than leaving
     // a login waiting on a browser nobody will open.
-    const stop = (): void => { terminatePortable(child, 'SIGTERM'); };
+    const stop = (): void => { killProcessTreePortable(child, 'SIGTERM', group); };
     input.signal?.addEventListener('abort', stop, { once: true });
     process.once('SIGTERM', stop);
     if (process.platform !== 'win32') process.once('SIGHUP', stop);
     const cleanup = (): void => {
-      pipe?.close();
       input.signal?.removeEventListener('abort', stop);
       process.off('SIGTERM', stop);
       if (process.platform !== 'win32') process.off('SIGHUP', stop);
