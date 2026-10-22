@@ -233,9 +233,16 @@ export async function planImport(state: HarnessState, chat: ChatExport, facts: M
   const folder = remembered ?? facts.home();
 
   const harness = wanted.route === 'local' ? (wanted.nativeHarness ? localHarnessForCommand(wanted.nativeHarness) : wanted.provider ? localHarnessForProvider(wanted.provider) : undefined) : undefined;
+  // A vendor CLI not installed there is still the chat's provider: its first
+  // turn installs it and signs in (vendor-turn-context.ts), as choosing it in
+  // /provider would. Handing the chat to whatever that machine ran last
+  // instead put it on a provider nobody had set up there (seen live: Claude
+  // Code's chat landed on a Hermes with no model configured).
+  const installedThere = harness ? await facts.installed(harness) : false;
   const usable = wanted.route === 'gateway' ? facts.gatewaySignedIn()
     : wanted.route === 'clikcode-local' ? true
-      : harness ? await facts.installed(harness) : false;
+      : Boolean(harness);
+  if (harness && !installedThere) changes.push(`${harness.displayName} is not installed there; the first message installs it and signs in.`);
   const kept = { route: wanted.route, provider: wanted.provider, model: wanted.model, effort: wanted.effort };
   let session: Planned['session'];
   if (!usable) {
@@ -270,7 +277,8 @@ export async function planImport(state: HarnessState, chat: ChatExport, facts: M
       // Signed in with the vendor there, with no account in ClikCode yet: that one.
       const onDisk = account || ofProvider.length ? undefined : await facts.vendorSignIn(harness);
       const using = account?.label ?? onDisk;
-      if (wanted.account && !(using && sameAccount({ label: using }, wanted.account))) {
+      // Not installed there: its line already says the first message signs in.
+      if (installedThere && wanted.account && !(using && sameAccount({ label: using }, wanted.account))) {
         changes.push(using
           ? `account ${wanted.account} is not signed in there; using ${using}.`
           : `account ${wanted.account} is not signed in there; the first message there signs in.`);
