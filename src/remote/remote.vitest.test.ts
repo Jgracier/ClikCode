@@ -12,7 +12,7 @@ import { host, installAt, tailscaleFixture, world } from '../../scripts/tui-e2e/
 import { shellQuote, validateSshTarget, withUser } from './shell.js';
 import { defaultLoginUser, runSsh, sshArgv, sshFailure, sshFailureMessage } from './ssh.js';
 import { discoverMachines, readTailscaleStatus, type TailscaleStatus } from './tailscale.js';
-import { buildScript, installOnMachine, nodeIsNewEnough, sourceScript, uninstallFromMachine, type InstallStep } from './install.js';
+import { buildScript, installOnMachine, MACPORTS_NODE, nodeIsNewEnough, nodeSource, parseProbe, probeScript, sourceScript, uninstallFromMachine, type InstallStep, type Probe } from './install.js';
 import { closeWindowMachines, holdWindowMachines, needsUpdate, RemoteLink, RemoteMachines, type MachineView } from './connection.js';
 import { machinesPath, newMachineRecord, readMachines, updateMachines, type RemoteMachine } from './machines.js';
 import { isRemoteRowValue, localMachineName, updateText } from './board-rows.js';
@@ -26,7 +26,7 @@ import type { HarnessPrompter, PickerOption, PickerSettings } from '../harness/p
 const REPO = resolve(__dirname, '..', '..');
 const FAKES = join(REPO, 'scripts', 'tui-e2e');
 let root: string;
-let fakeWorld: { repoUrl: string; mirrorUrl: string; commit: string; bare: string; work: string };
+let fakeWorld: { repoUrl: string; mirrorUrl: string; macportsMirror: string; macportsPins: Record<number, { node: { sha256: string } }>; commit: string; bare: string; work: string };
 const savedEnv = { ...process.env };
 
 const steps = () => {
@@ -53,13 +53,15 @@ beforeAll(() => {
   process.env.FAKE_SSH_ROOT = root;
   process.env.CLIKCODE_REMOTE_REPO_URL = fakeWorld.repoUrl;
   process.env.CLIKCODE_REMOTE_NODE_MIRROR = fakeWorld.mirrorUrl;
+  process.env.CLIKCODE_REMOTE_MACPORTS_MIRROR = fakeWorld.macportsMirror;
+  process.env.CLIKCODE_REMOTE_MACPORTS_PINS = JSON.stringify(fakeWorld.macportsPins);
   const status = join(root, 'tailscale.json');
   writeFileSync(status, JSON.stringify(tailscaleFixture()));
   process.env.FAKE_TAILSCALE_STATUS = status;
 });
 
 afterAll(() => {
-  for (const key of ['FAKE_SSH_ROOT', 'CLIKCODE_REMOTE_REPO_URL', 'CLIKCODE_REMOTE_NODE_MIRROR', 'FAKE_TAILSCALE_STATUS']) delete process.env[key];
+  for (const key of ['FAKE_SSH_ROOT', 'CLIKCODE_REMOTE_REPO_URL', 'CLIKCODE_REMOTE_NODE_MIRROR', 'CLIKCODE_REMOTE_MACPORTS_MIRROR', 'CLIKCODE_REMOTE_MACPORTS_PINS', 'FAKE_TAILSCALE_STATUS']) delete process.env[key];
   process.env.PATH = savedEnv.PATH;
   process.env.HOME = savedEnv.HOME;
 });
@@ -227,7 +229,7 @@ describe('installing on a machine', () => {
     const { seen, reporter } = steps();
     const outcome = await installOnMachine('nonode', reporter);
     expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
-    expect(seen[1]).toEqual({ step: 'Node.js', detail: expect.stringMatching(/^v\d+\.\d+\.\d+ into ~\/\.local\/share\/clikcode\/node \(SHA-256 checked\)$/) });
+    expect(seen[1]).toEqual({ step: 'Node.js', detail: 'v24.99.0 from nodejs.org latest-v24.x into ~/.local/share/clikcode/node (SHA-256 checked, runs)' });
     expect(existsSync(join(homeOf('nonode'), '.local', 'share', 'clikcode', 'node', 'bin', 'node'))).toBe(true);
     // The next time, its own Node is found.
     const again = steps();
@@ -256,6 +258,116 @@ describe('installing on a machine', () => {
       if (!outcome.ok) expect(outcome.message).toMatch(/checksum mismatch/);
       expect(existsSync(join(homeOf('badsum'), '.local', 'share', 'clikcode', 'node'))).toBe(false);
     } finally { process.env.CLIKCODE_REMOTE_NODE_MIRROR = fakeWorld.mirrorUrl; }
+  });
+
+  it('chooses where Node comes from by the OS: what runs there', () => {
+    const probe = (os: string, arch: string, macos?: string): Probe => ({ os, arch, home: '/h', ...(macos ? { macos } : {}) });
+    expect(nodeSource(probe('Linux', 'x86_64'), 'box')).toMatchObject({ kind: 'nodejs', line: 'latest-v24.x', os: 'linux', arch: 'x64' });
+    expect(nodeSource(probe('Linux', 'aarch64'), 'box')).toMatchObject({ kind: 'nodejs', line: 'latest-v24.x', arch: 'arm64' });
+    expect(nodeSource(probe('Darwin', 'arm64', '15.1'), 'mac')).toMatchObject({ kind: 'nodejs', line: 'latest-v24.x', os: 'darwin' });
+    expect(nodeSource(probe('Darwin', 'x86_64', '13.5'), 'mac')).toMatchObject({ kind: 'nodejs', line: 'latest-v24.x' });
+    expect(nodeSource(probe('Darwin', 'x86_64', '13.4.1'), 'mac')).toMatchObject({ kind: 'nodejs', line: 'latest-v22.x' });
+    expect(nodeSource(probe('Darwin', 'x86_64', '12.7'), 'mac')).toMatchObject({ kind: 'nodejs', line: 'latest-v22.x', os: 'darwin', arch: 'x64' });
+    expect(nodeSource(probe('Darwin', 'x86_64', '11.0'), 'mac')).toMatchObject({ kind: 'nodejs', line: 'latest-v22.x' });
+    // The real table, not the fakes': MacPorts' nodejs22 for 10.15, pinned.
+    const imac = nodeSource(probe('Darwin', 'x86_64', '10.15.8'), 'imac', MACPORTS_NODE);
+    expect(imac).toMatchObject({ kind: 'macports', darwin: 19, pinned: { version: 'v22.22.2', node: { port: 'nodejs22', file: 'nodejs22-22.22.2_0.darwin_19.x86_64.tbz2' } } });
+    if (imac.kind === 'macports') {
+      expect([imac.pinned.node, ...imac.pinned.libs, imac.pinned.npm].map((pin) => pin.file)).toEqual([
+        'nodejs22-22.22.2_0.darwin_19.x86_64.tbz2', 'zlib-1.3.2_0.darwin_19.x86_64.tbz2', 'icu-78.3_1.darwin_19.x86_64.tbz2', 'npm10-10.9.8_0.any_any.noarch.tbz2']);
+      for (const pin of [imac.pinned.node, ...imac.pinned.libs, imac.pinned.npm]) expect(pin.sha256).toMatch(/^[0-9a-f]{64}$/);
+    }
+    const tooOld = 'macOS 10.12.6 is too old for ClikCode: it needs Node.js 22.12 or newer, which needs macOS 10.15 or newer. Update macOS on imac, or install Node.js 22.12+ there yourself and add it again.';
+    expect(nodeSource(probe('Darwin', 'x86_64', '10.12.6'), 'imac', MACPORTS_NODE)).toEqual({ kind: 'refused', message: tooOld });
+    // MacPorts builds no nodejs22 for 10.13 or 10.14.
+    expect(nodeSource(probe('Darwin', 'x86_64', '10.14.6'), 'imac', MACPORTS_NODE)).toMatchObject({ kind: 'refused', message: expect.stringMatching(/^macOS 10\.14\.6 is too old/) });
+    expect(nodeSource(probe('Darwin', 'x86_64'), 'imac')).toMatchObject({ kind: 'refused', message: expect.stringMatching(/did not say which macOS/) });
+    expect(nodeSource(probe('FreeBSD', 'amd64'), 'bsd')).toMatchObject({ kind: 'refused', message: expect.stringMatching(/installs on Linux and macOS/) });
+  });
+
+  it('probes the macOS version, and counts a node only when it runs', () => {
+    const probe = parseProbe('os=Darwin\narch=x86_64\nhome=/Users/j\nmacos=10.15.8\nnode=/usr/local/bin/node\nnodeError=dyld: Symbol not found\nownNodeError=dyld: Symbol not found\nprobe=ok\n');
+    expect(probe).toEqual({ os: 'Darwin', arch: 'x86_64', home: '/Users/j', macos: '10.15.8', node: '/usr/local/bin/node', nodeError: 'dyld: Symbol not found', ownNodeError: 'dyld: Symbol not found' });
+    expect(probeScript()).toContain('sw_vers -productVersion');
+  });
+
+  it('refuses a macOS too old for any Node it can run, before downloading anything', async () => {
+    host(root, 'oldmac', { hide: ['node'], uname: { s: 'Darwin', m: 'x86_64' }, swVers: '10.12.6' });
+    const before = readFileSync(join(root, 'ssh.log'), 'utf8').split('\n').length;
+    const outcome = await installOnMachine('oldmac', steps().reporter);
+    expect(outcome).toEqual({ ok: false, step: 'Checking the machine', message: 'macOS 10.12.6 is too old for ClikCode: it needs Node.js 22.12 or newer, which needs macOS 10.15 or newer. Update macOS on oldmac, or install Node.js 22.12+ there yourself and add it again.' });
+    // The probe only: no download, no clone.
+    expect(readFileSync(join(root, 'ssh.log'), 'utf8').split('\n').length - before).toBe(1);
+    expect(existsSync(join(homeOf('oldmac'), '.local', 'share', 'clikcode'))).toBe(false);
+  });
+
+  it('installs nodejs.org’s Node 22 line on macOS 11 to 13.4', async () => {
+    host(root, 'montereymac', { hide: ['node'], uname: { s: 'Darwin', m: 'x86_64' }, swVers: '12.7.6' });
+    const { seen, reporter } = steps();
+    const outcome = await installOnMachine('montereymac', reporter);
+    expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
+    expect(seen[0]).toEqual({ step: 'Checking the machine', detail: 'macOS 12.7.6 x86_64' });
+    expect(seen[1]!.detail).toBe('v22.99.0 from nodejs.org latest-v22.x into ~/.local/share/clikcode/node (SHA-256 checked, runs)');
+  });
+
+  it('does not count a node that is there but does not run', async () => {
+    host(root, 'brokennode', { brokenNode: 'dyld: Symbol not found: __ZNSt3__122__libcpp_verbose_abortEPKcz' });
+    const { seen, reporter } = steps();
+    expect((await installOnMachine('brokennode', reporter)).ok).toBe(true);
+    expect(seen[1]!.detail).toMatch(/^v24\.99\.0 from nodejs\.org latest-v24\.x .*; the node at \/.*\/bin\/node does not run, so it is not used$/);
+  });
+
+  it('runs the Node it installed, and stops at the Node step with what it said when it does not run', async () => {
+    const other = mkdtempSync(join(tmpdir(), 'cc-remote-broken-'));
+    const broken = world(other, { brokenNode: true });
+    host(root, 'newer-build', { hide: ['node'] });
+    process.env.CLIKCODE_REMOTE_NODE_MIRROR = broken.mirrorUrl;
+    try {
+      const outcome = await installOnMachine('newer-build', steps().reporter);
+      expect(outcome).toMatchObject({ ok: false, step: 'Node.js' });
+      if (!outcome.ok) expect(outcome.message).toBe('Node.js from nodejs.org latest-v24.x was installed on newer-build but does not run: dyld: Symbol not found: __ZNSt3__122__libcpp_verbose_abortEPKcz   Expected in: /usr/lib/libc++.1.dylib (built for Mac OS X 13.5). Install Node.js 22.12 or newer there yourself, then choose the machine again.');
+      expect(existsSync(join(homeOf('newer-build'), '.local', 'share', 'clikcode', 'node'))).toBe(false);
+      expect(existsSync(join(homeOf('newer-build'), '.local', 'share', 'clikcode', 'node.new'))).toBe(false);
+    } finally { process.env.CLIKCODE_REMOTE_NODE_MIRROR = fakeWorld.mirrorUrl; }
+  });
+
+  it('on macOS 10.15 installs MacPorts’ Node into its own directory: pinned, relinked, re-signed, run -- replacing its own Node that no longer ran', async () => {
+    const dyld = 'dyld: Symbol not found: __ZNSt3__122__libcpp_verbose_abortEPKcz (built for Mac OS X 13.5)';
+    host(root, 'catalina', { uname: { s: 'Darwin', m: 'x86_64' }, swVers: '10.15.8', brokenNode: dyld, ownBrokenNode: dyld, appleTools: true });
+    const { seen, reporter } = steps();
+    const outcome = await installOnMachine('catalina', reporter);
+    expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
+    expect(seen[0]!.detail).toBe('macOS 10.15.8 x86_64');
+    expect(seen[1]!.detail).toMatch(/^v22\.22\.2 from MacPorts nodejs22 v22\.22\.2 into ~\/\.local\/share\/clikcode\/node \(SHA-256 pinned, runs\); the node at \/\S+ does not run, so it is not used; it replaces ClikCode's own Node, which no longer ran$/);
+    const own = join(homeOf('catalina'), '.local', 'share', 'clikcode', 'node');
+    // node and exactly the libraries it loads, followed through libicuuc to libicudata; not libicuio.
+    expect(execFileSync('ls', [join(own, 'lib')], { encoding: 'utf8' }).split('\n').filter(Boolean).sort()).toEqual(['libicudata.78.dylib', 'libicui18n.78.dylib', 'libicuuc.78.dylib', 'libz.1.dylib', 'node_modules']);
+    const node = readFileSync(join(own, 'bin', 'node'), 'utf8');
+    expect(node).not.toMatch(/^# LC_\w+ \/opt\/local/m);
+    expect(node).toContain('# LC_LOAD_DYLIB @loader_path/../lib/libz.1.dylib');
+    expect(node).toContain('# CODESIG adhoc');
+    expect(readFileSync(join(own, 'lib', 'libicuuc.78.dylib'), 'utf8')).toMatch(/# LC_ID_DYLIB @loader_path\/\.\.\/lib\/libicuuc\.78\.dylib\n# LC_LOAD_DYLIB @loader_path\/\.\.\/lib\/libicudata\.78\.dylib/);
+    const tools = readFileSync(join(homeOf('catalina'), '.fake-remote', 'tools.log'), 'utf8');
+    expect(tools).toContain(`install_name_tool -change /opt/local/lib/libicuuc.78.dylib @loader_path/../lib/libicuuc.78.dylib ${join(own, '..', 'node.new', 'bin', 'node')}`);
+    for (const file of ['bin/node', 'lib/libz.1.dylib', 'lib/libicui18n.78.dylib', 'lib/libicuuc.78.dylib', 'lib/libicudata.78.dylib']) expect(tools).toContain(`codesign -f -s - ${join(own, '..', 'node.new', file)}`);
+    // npm from MacPorts' npm10 beside it, run by this node, got pnpm for the build.
+    expect(execFileSync(join(own, 'bin', 'npm'), ['-v'], { encoding: 'utf8' }).trim()).toBe('10.9.8');
+    expect(readFileSync(join(homeOf('catalina'), '.fake-remote', 'macports-npx.log'), 'utf8')).toMatch(/--yes pnpm@10 install --frozen-lockfile\n.*--yes pnpm@10 run install-local/);
+  }, 120_000);
+
+  it('refuses MacPorts archives whose SHA-256 is not the pinned one', async () => {
+    host(root, 'catalina-bad', { hide: ['node'], uname: { s: 'Darwin', m: 'x86_64' }, swVers: '10.15.7', appleTools: true });
+    const pins = JSON.parse(JSON.stringify(fakeWorld.macportsPins)) as typeof fakeWorld.macportsPins;
+    pins[19]!.node.sha256 = 'f'.repeat(64);
+    process.env.CLIKCODE_REMOTE_MACPORTS_PINS = JSON.stringify(pins);
+    try {
+      const outcome = await installOnMachine('catalina-bad', steps().reporter);
+      expect(outcome).toMatchObject({ ok: false, step: 'Node.js' });
+      if (!outcome.ok) expect(outcome.message).toMatch(/^Installing Node\.js from MacPorts nodejs22 v22\.22\.2 on catalina-bad failed: checksum mismatch for nodejs22-22\.22\.2_0\.darwin_19\.x86_64\.tbz2: expected f{64}, got [0-9a-f]{64}\./);
+      expect(existsSync(join(homeOf('catalina-bad'), '.local', 'share', 'clikcode', 'node'))).toBe(false);
+      // Nothing was unpacked or relinked.
+      expect(existsSync(join(homeOf('catalina-bad'), '.fake-remote', 'tools.log'))).toBe(false);
+    } finally { process.env.CLIKCODE_REMOTE_MACPORTS_PINS = JSON.stringify(fakeWorld.macportsPins); }
   });
 
   it('stops with the remedy when git is missing, and never uses sudo', async () => {
