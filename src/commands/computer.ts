@@ -111,6 +111,10 @@ export async function computerTool(tool: string, args: Record<string, unknown>, 
   if (!result.ok) process.exitCode = 1;
 }
 
+  else process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  if (!result.ok) process.exitCode = 1;
+}
+
 /** The vault's saved secrets, by name only: no chat or worker is needed to look at your own files. */
 export async function computerSecrets(remove?: string, backfill?: { owner?: string }, backup?: { export?: string; import?: string; overwrite?: boolean }): Promise<void> {
   if (backup?.export || backup?.import) return computerSecretsBackup(backup);
