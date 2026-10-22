@@ -112,7 +112,11 @@ export class MultiplexHost {
     if (message.type === 'chat-attach' || (message.type === 'chat' && message.request.type === 'close')) this.changedAt = Date.now();
     if (message.type === 'chat-attach') { this.attach(message.chat); return; }
     // The machine driving this one: it can be driven from here too.
-    if (message.type === 'host-peer') { void import('../remote/peer.js').then(({ recordPeer }) => recordPeer(message.machine)).catch(() => undefined); return; }
+    if (message.type === 'host-peer') {
+      void import('../remote/peer.js').then(({ recordPeer }) => recordPeer(message.machine))
+        .then((outcome) => lifecycle('bridge.peer', { outcome, machine: message.machine?.name }), () => undefined);
+      return;
+    }
     if (message.type === 'chat') {
       const chat = this.chats.get(message.chat);
       if (!chat) return;

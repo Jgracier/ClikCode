@@ -1,8 +1,8 @@
 /** The existing multiplex bridge carried over SSH for a remote machine. */
 import { createInterface } from 'node:readline';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
-import { spawnSsh } from '../../../src/remote/ssh';
-import { bridgeScript } from '../../../src/remote/install';
+// Whichever way this machine reaches another, that one can reach it back (remote/peer.ts).
+import { startBridge } from '../../../src/remote/peer';
 import type { IdeEvent, IdeHostEvent, IdeHostRequest, IdeRequest } from './protocol';
 import type { Runtime } from './runtime';
 import { MultiplexBridge } from './bridge-client';
@@ -36,7 +36,7 @@ export class SshBridgeClient extends MultiplexBridge {
   }
 
   static start(target: string, runtime: Runtime): SshBridgeClient {
-    return new SshBridgeClient(spawnSsh(target, bridgeScript()), runtime);
+    return new SshBridgeClient(startBridge(target), runtime);
   }
 
   send(request: IdeRequest): boolean { return this.post(request); }

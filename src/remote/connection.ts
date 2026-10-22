@@ -26,8 +26,7 @@ import { IDE_PROTOCOL } from '../ide/protocol-version.js';
 import { bridgeScript } from './install.js';
 import { autoUpdates, localBuildCommit, type AutoUpdates } from './updates.js';
 import { readMachines, updateMachine, type RemoteMachine } from './machines.js';
-import { selfAsPeer, type PeerMachine } from './peer.js';
-import { spawnSsh } from './ssh.js';
+import { startBridge, type PeerMachine } from './peer.js';
 
 export type MachineState = 'connecting' | 'connected' | 'offline';
 
@@ -147,10 +146,9 @@ export class RemoteLink {
 
   private connect(): void {
     const machine = this.view.machine;
-    const spawnBridge = this.options.spawn ?? spawnSsh;
     let child: ChildProcess;
     try {
-      child = spawnBridge(machine.sshTarget, bridgeScript());
+      child = this.options.spawn ? this.options.spawn(machine.sshTarget, bridgeScript()) : startBridge(machine.sshTarget, this.options.self);
     } catch (error) {
       this.lost(error instanceof Error ? error.message : String(error));
       return;
@@ -244,8 +242,6 @@ export class RemoteLink {
       this.revision = event.revision ?? 1;
       this.set({ state: 'connected', needsUpdate: outdated, error: undefined, ...(outdated ? {} : { updateError: undefined }) });
       this.send({ type: 'chat-attach', chat: CHAT });
-      // Both ways: the machine there lists this one, to drive it back from.
-      void (this.options.self ?? selfAsPeer)().then((peer) => { if (peer) this.send({ type: 'host-peer', machine: peer }); }, () => undefined);
       if (outdated && this.updatesAllowed()) this.autoUpdate(localCommit);
       return;
     }

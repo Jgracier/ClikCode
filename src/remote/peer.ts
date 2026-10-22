@@ -12,16 +12,61 @@
  * hostname is a guess. Without Tailscale here, nothing is sent; the other
  * machine can still add this one by its SSH address.
  *
+ * A machine is added this way only once this one has logged in to it with
+ * the address it gave (a tailnet policy may allow one way only): nothing is
+ * listed that cannot be reached. One the user removed here does not add
+ * itself back; adding it again by hand undoes that (machines.ts forgotten).
+ *
  * A record made this way is updated only when the user says so ('ask'): two
  * machines each bringing the other to its own build would undo each other's
- * updates. A record that exists keeps its address and policy -- the user's
- * -- and is only refreshed (installation, version, last seen). */
+ * updates. It follows what the machine says of itself (addedBy 'peer'); one
+ * the user added keeps the address and policy the user gave, and is only
+ * refreshed (installation, version, last seen). */
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { hostname, userInfo } from 'node:os';
+import type { IdeHostRequest } from '../ide/protocol.js';
 import { CLIKCODE_COMMIT, CLIKCODE_VERSION } from '../version.js';
 import { readState } from '../session/state/read.js';
-import { newMachineRecord, updateMachines, type RemoteMachine } from './machines.js';
+import { isForgotten, newMachineRecord, readForgotten, readMachines, updateMachines, type ForgottenMachine, type RemoteMachine } from './machines.js';
 import { readTailscaleStatus, type TailscaleStatus } from './tailscale.js';
 import { targetHost, validateSshTarget, withUser } from './shell.js';
+import { runSsh, spawnSsh } from './ssh.js';
+import { bridgeScript } from './install.js';
+
+/** Starts `target`'s bridge (`ide-bridge --stdio` over ssh) and, once it
+ * is ready, tells it who is connecting. Every connection to another machine
+ * starts here -- the board's and /machine's (connection.ts), a terminal chat
+ * running there (terminal-chat.ts), VS Code's (ssh-bridge-client.ts) -- so
+ * whichever way this machine reaches another, that one can reach it back. */
+export function startBridge(target: string, self: () => Promise<PeerMachine | undefined> = selfAsPeer): ChildProcessWithoutNullStreams {
+  const child = spawnSsh(target, bridgeScript());
+  announceWhenReady(child, self);
+  return child;
+}
+
+/** Sends `host-peer` after the bridge's host-ready: not before it, when the
+ * bridge there may not be listening yet. Once per bridge process (a bridge
+ * that retires is a new process, and a new start). Reads its own copy of the
+ * lines: the caller's reader is left as it is. */
+export function announceWhenReady(child: Pick<ChildProcessWithoutNullStreams, 'stdout' | 'stdin'>, self: () => Promise<PeerMachine | undefined>): void {
+  let pending = '';
+  const onData = (chunk: Buffer): void => {
+    pending += chunk.toString('utf8');
+    for (let at = pending.indexOf('\n'); at >= 0; at = pending.indexOf('\n')) {
+      const line = pending.slice(0, at);
+      pending = pending.slice(at + 1);
+      if (!line.includes('"host-ready"')) continue;
+      try { if ((JSON.parse(line) as { type?: string }).type !== 'host-ready') continue; } catch { continue; }
+      child.stdout.off('data', onData);
+      pending = '';
+      void self().then((peer) => {
+        if (peer && !child.stdin.destroyed) child.stdin.write(`${JSON.stringify({ type: 'host-peer', machine: peer } satisfies IdeHostRequest)}\n`);
+      }, () => undefined);
+      return;
+    }
+  };
+  child.stdout.on('data', onData);
+}
 
 /** What a machine says of itself to one it connects to. */
 export interface PeerMachine {
@@ -78,17 +123,24 @@ function samePeer(record: RemoteMachine, peer: PeerMachine): boolean {
   return targetHost(record.sshTarget).toLowerCase() === peer.tailscale.dnsName.toLowerCase();
 }
 
-/** The machine list after `peer` connected here: it is added, or its record
- * refreshed. Pure. `own` is this machine's installation id: a connection
- * from this same installation adds nothing. */
-export function withPeer(machines: readonly RemoteMachine[], peer: PeerMachine, own: string | undefined, now = new Date()): RemoteMachine[] {
+/** The machine list after `peer` connected here: its record refreshed, or
+ * it added (`add`: once it was found to be reachable back). Pure. `own` is
+ * this machine's installation id: a connection from this same installation
+ * adds nothing; nor does one from a machine the user removed. */
+export function withPeer(
+  machines: readonly RemoteMachine[], peer: PeerMachine, own: string | undefined,
+  options: { forgotten?: readonly ForgottenMachine[]; add?: boolean; now?: Date } = {},
+): RemoteMachine[] {
   if (peer.installationId && peer.installationId === own) return [...machines];
-  const at = now.toISOString();
+  const at = (options.now ?? new Date()).toISOString();
   const installed = { version: peer.version, ...(peer.commit ? { commit: peer.commit } : {}), at };
   const existing = machines.find((record) => samePeer(record, peer));
   if (existing) {
+    // One it added itself follows what it says of itself (a new name, a new
+    // user); one the user added keeps the address and policy the user gave.
+    const own = existing.addedBy === 'peer' ? { name: peer.name, sshTarget: peer.sshTarget, tailscale: peer.tailscale } : {};
     return machines.map((record) => (record !== existing ? record : {
-      ...record,
+      ...record, ...own,
       ...(peer.installationId ? { installationId: peer.installationId } : {}),
       // It answered from there with ClikCode running: its install is done.
       ready: true, installed, lastSeen: at,
@@ -96,18 +148,42 @@ export function withPeer(machines: readonly RemoteMachine[], peer: PeerMachine, 
       ...(record.os || !peer.os ? {} : { os: peer.os }),
     }));
   }
+  if (!options.add || isForgotten(options.forgotten ?? [], { ...(peer.installationId ? { installationId: peer.installationId } : {}), nodeId: peer.tailscale.nodeId })) return [...machines];
   return [...machines, newMachineRecord({
     name: peer.name, sshTarget: peer.sshTarget, tailscale: peer.tailscale,
     ...(peer.os ? { os: peer.os } : {}), ...(peer.installationId ? { installationId: peer.installationId } : {}),
-    ready: true, installed, lastSeen: at, updates: 'ask',
+    ready: true, installed, lastSeen: at, updates: 'ask', addedBy: 'peer',
   })];
 }
 
+/** Whether a peer not listed here yet would be added: not this machine, not
+ * one the user removed. */
+function wouldAdd(machines: readonly RemoteMachine[], forgotten: readonly ForgottenMachine[], peer: PeerMachine, own: string | undefined): boolean {
+  if (peer.installationId && peer.installationId === own) return false;
+  if (machines.some((record) => samePeer(record, peer))) return false;
+  return !isForgotten(forgotten, { ...(peer.installationId ? { installationId: peer.installationId } : {}), nodeId: peer.tailscale.nodeId });
+}
+
+/** Whether this machine can log in to the peer: a machine it could not
+ * reach (a tailnet policy that allows one way only) is not listed at all. */
+export type ReachBack = (target: string) => Promise<boolean>;
+const sshReachBack: ReachBack = async (target) => (await runSsh(target, 'true', { timeoutMs: 20_000 })).code === 0;
+
 /** A `host-peer` arrived (ide/bridge-mux.ts): recorded in machines.json. */
-export async function recordPeer(peer: PeerMachine): Promise<void> {
-  if (!validPeer(peer)) return;
+export async function recordPeer(peer: PeerMachine, reach: ReachBack = sshReachBack): Promise<'refreshed' | 'added' | 'unreachable' | 'skipped'> {
+  if (!validPeer(peer)) return 'skipped';
   const own = await readState({ transcripts: [] }).then((state) => state.installationId, () => undefined);
-  await updateMachines((machines) => withPeer(machines, peer, own));
+  const [machines, forgotten] = await Promise.all([readMachines(), readForgotten()]);
+  const adding = wouldAdd(machines, forgotten, peer, own);
+  if (!adding) {
+    if (!machines.some((record) => samePeer(record, peer))) return 'skipped';
+    await updateMachines((list, gone) => withPeer(list, peer, own, { forgotten: gone }));
+    return 'refreshed';
+  }
+  // Outside the write: an ssh login takes seconds.
+  if (!await reach(peer.sshTarget).catch(() => false)) return 'unreachable';
+  await updateMachines((list, gone) => withPeer(list, peer, own, { forgotten: gone, add: true }));
+  return 'added';
 }
 
 /** Whether what arrived is a peer at all: it came over the wire. */
