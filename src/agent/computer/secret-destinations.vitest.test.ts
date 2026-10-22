@@ -250,3 +250,32 @@ it('a delivery never ends in an empty tail, whichever way the command ends', asy
   expect(basic).toMatchObject({ ok: false });
   expect(basic!.message).toMatch(/^NOT connected: could not read the connection back/);
 });
+
+it('connectionValues rides to connect_connector as baseUrlVariables, for key and basic connections, and is never mixed up with the secret', async () => {
+  await fakeConnect(pretty({ status: 'success', data: { success: true } }), shown({ id: 'c1', status: 'active' }));
+  const plan = [{ to: 'clikdeploy-connection', with: { integration: 'algolia' }, connectionValues: { app_id: 'WJUQDEJ3SG' } }];
+  expect(await destinationProblem(dir, plan)).toBeUndefined();
+  const [result] = await sendToDestinations(dir, plan, VALUE);
+  expect(result).toMatchObject({ ok: true, message: 'connected' });
+  expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toEqual({ integrationId: 'algolia', apiKey: VALUE, baseUrlVariables: { app_id: 'WJUQDEJ3SG' } });
+  expect(JSON.stringify(result)).not.toContain(VALUE);
+  // As JSON text (a harness with a cached schema), and on the basic-auth destination.
+  await sendToDestinations(dir, [{ to: 'clikdeploy-connection-basic', with: { integration: 'weaviate', username: 'me' }, connectionValues: '{"cluster":"abc-123"}' }], VALUE);
+  expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toEqual({ integrationId: 'weaviate', username: 'me', password: VALUE, baseUrlVariables: { cluster: 'abc-123' } });
+  // Without values nothing extra is sent.
+  await sendKey();
+  expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toEqual({ integrationId: 'cloudmersive-ocr', apiKey: VALUE });
+});
+
+it('connectionValues keeps the read-back: NOT connected when nothing is stored, and bad values are refused before anything runs', async () => {
+  await fakeConnect(pretty({ status: 'error', message: 'The base URL needs a value for app_id' }), shown(null));
+  const [result] = await sendToDestinations(dir, [{ to: 'clikdeploy-connection', with: { integration: 'algolia' }, connectionValues: { app_id: 'X' } }], VALUE);
+  expect(result!.ok).toBe(false);
+  expect(result!.message).toMatch(/^NOT connected: /);
+  expect(result!.message).not.toContain(VALUE);
+  const problem = (connectionValues: unknown, to = 'clikdeploy-connection') => destinationProblem(dir, [{ to, with: { integration: 'a' }, connectionValues } as never]);
+  expect(await problem({ app_id: 'a b/c' })).toContain('connectionValues.app_id');
+  expect(await problem({ 'x y': 'a' })).toContain('not a plain identifier');
+  expect(await problem([1])).toContain('must be a map');
+  expect(await problem({ a: 'b' }, 'clikdeploy-secret')).toContain('only goes with clikdeploy-connection');
+});
