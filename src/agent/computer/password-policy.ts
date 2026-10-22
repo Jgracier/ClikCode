@@ -78,6 +78,16 @@ const shuffle = <T,>(items: T[]): T[] => {
   return items;
 };
 
+/** Sites often forbid repeated ("aa") or sequential ("abc", "321") characters; a generated password never has either. */
+export function hasRepeatOrSequence(password: string): boolean {
+  for (let i = 1; i < password.length; i++) {
+    const a = password.charCodeAt(i - 2), b = password.charCodeAt(i - 1), c = password.charCodeAt(i);
+    if (b === c) return true;
+    if (i >= 2 && ((b - a === 1 && c - b === 1) || (a - b === 1 && b - c === 1))) return true;
+  }
+  return false;
+}
+
 function matchesPatterns(password: string, patterns: readonly string[]): boolean {
   return patterns.every(pattern => { try { return new RegExp(`^(?:${pattern})$`, 'u').test(password); } catch { try { return new RegExp(`^(?:${pattern})$`).test(password); } catch { return true; } } });
 }
@@ -92,12 +102,13 @@ export function generatePassword(policy: PasswordPolicy = DEFAULT_POLICY): strin
     while (chars.length < length) chars.push(set[randomInt(set.length)]!);
     return shuffle(chars).join('');
   };
+  const fine = (value: string): boolean => matchesPatterns(value, policy.patterns) && !hasRepeatOrSequence(value);
   let candidate = build(classes, all);
-  for (let tries = 0; tries < 40 && !matchesPatterns(candidate, policy.patterns); tries++) candidate = build(classes, all);
+  for (let tries = 0; tries < 200 && !fine(candidate); tries++) candidate = build(classes, all);
   if (!matchesPatterns(candidate, policy.patterns)) {
     // A pattern this generator cannot satisfy with symbols (letters and digits only, say): drop symbols and try again.
     const plain = [LOWER, UPPER, DIGITS];
-    for (let tries = 0; tries < 40 && !matchesPatterns(candidate, policy.patterns); tries++) candidate = build(plain, plain.join(''));
+    for (let tries = 0; tries < 200 && !fine(candidate); tries++) candidate = build(plain, plain.join(''));
   }
   return candidate;
 }
