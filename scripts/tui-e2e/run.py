@@ -703,6 +703,9 @@ SCENARIOS = {
         'turns': [{'blocks': ['First answer here.']}],
         'steps': [
             ('type', 'hello there'), ('wait_for', 'First answer here.', 30), ('settle', 1),
+            # The board, twice, shows devbox over the window's one connection to it, kept after it closes.
+            ('keys', '\x1b[D'), ('wait_for', '← machines', 20), ('keys', '\x1b[D'), ('wait_for', 'devbox  · connected', 20), ('keys', '\x1b'), ('settle', 1), ('keys', '\x1b'), ('settle', 1),
+            ('keys', '\x1b[D'), ('wait_for', '← machines', 20), ('keys', '\x1b[D'), ('wait_for', 'devbox  · connected', 20), ('keys', '\x1b'), ('settle', 1), ('keys', '\x1b'), ('settle', 1),
             ('type', '/machine'), ('wait_for', 'Move this chat to', 20), ('wait_for', 'devbox', 10), ('settle', 1), ('snap', 'picker'),
             # One pick: nothing asked, nothing said -- the info line names the machine it is on now.
             ('keys', '\x1b[B'), ('keys', '\r'), ('wait_for', 'devbox  •', 60), ('settle', 2), ('snap', 'moved'),
@@ -712,6 +715,8 @@ SCENARIOS = {
             ('expect_file_count', 'remote-prompts.log', 'This conversation moved from', 1),
             ('expect_file_count', 'remote-prompts.log', 'Earlier in this chat', 1),
             ('expect_file_count', 'remote-prompts.log', '"and again"', 1),
+            # Two bridges there in all: the window's (both boards, the list and the move) and the moved chat's own.
+            ('expect_file_count', 'remote/ssh.log', 'ide-bridge --stdio', 2),
         ],
         'watch': [],
         'snap_contains': {
