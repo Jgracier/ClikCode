@@ -15,9 +15,10 @@ const RETRY_AFTER_CAP_SECONDS = 120;
  * budget, apart from the retries of a failing step. MEASURED 2026-10-22: a 0.5B vLLM model on ClikDeploy
  * capacity took 11-16 min cold; the Gateway now races two GPUs on a slow cold start. */
 export const MODEL_START_BUDGET_SECONDS = 1200;
-/** How often a model that is starting is asked again. */
+/** How often a model that is starting is asked again: when the Gateway says (its Retry-After follows what is left of
+ * the GPU's usual start, 5-30 s), at least every 5 s and at most every minute. */
 export function modelStartWaitSeconds(retryAfter?: number): number {
-  return Math.min(60, Math.max(10, retryAfter !== undefined && Number.isFinite(retryAfter) ? retryAfter : 30));
+  return Math.min(60, Math.max(5, retryAfter !== undefined && Number.isFinite(retryAfter) ? retryAfter : 30));
 }
 /** Times one turn goes on with an answer the output limit cut off, as a
  * vendor CLI does, before it stops and says the answer was cut. */
