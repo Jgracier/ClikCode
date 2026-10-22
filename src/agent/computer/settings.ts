@@ -32,11 +32,11 @@ export async function setComputerEnabled(stateDir: string, enabled: boolean): Pr
   await writeSettings(stateDir, { enabled });
 }
 
-/** Off unless the user turned it on: may the browser tool make up a strong password for a signup form it fills,
- * keep it in Secrets Manager with the login, and never show it. */
+/** On unless the user turned it off (`clikcode computer passwords off`): the browser tool makes up a strong, unique
+ * password for each signup form it fills, keeps it in Secrets Manager with the login, and never shows it. */
 export async function generatedPasswordsAllowed(stateDir: string): Promise<boolean> {
-  try { return (JSON.parse(await fs.readFile(computerSettingsPath(stateDir), 'utf8')) as { generatePasswords?: unknown }).generatePasswords === true; }
-  catch { return false; }
+  try { return (JSON.parse(await fs.readFile(computerSettingsPath(stateDir), 'utf8')) as { generatePasswords?: unknown }).generatePasswords !== false; }
+  catch { return true; }
 }
 
 export async function setGeneratedPasswords(stateDir: string, allowed: boolean): Promise<void> {

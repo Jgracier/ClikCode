@@ -111,7 +111,9 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .action(async (id: string) => (await import('../commands/computer.js')).computerConnectorProof(id));
   computer.command('secrets').description('List the names of saved secrets, or delete one (values are never shown)')
     .option('--delete <name>', 'Delete this secret').option('--backfill', 'Record a vendor (and --owner) on secrets saved before records existed').option('--owner <email>', 'With --backfill: the account these belong to')
-    .action(async (options: { delete?: string; backfill?: boolean; owner?: string }) => (await import('../commands/computer.js')).computerSecrets(options.delete, options.backfill ? { ...(options.owner ? { owner: options.owner } : {}) } : undefined));
+    .option('--export <file>', 'Write an encrypted backup of every login, secret and profile (passphrase typed hidden)').option('--import <file>', 'Restore a backup written by --export (passphrase typed hidden)').option('--overwrite', 'With --import: replace items that are already here')
+    .action(async (options: { delete?: string; backfill?: boolean; owner?: string; export?: string; import?: string; overwrite?: boolean }) => (await import('../commands/computer.js')).computerSecrets(options.delete, options.backfill ? { ...(options.owner ? { owner: options.owner } : {}) } : undefined,
+      options.export || options.import ? { ...(options.export ? { export: options.export } : {}), ...(options.import ? { import: options.import } : {}), ...(options.overwrite ? { overwrite: true } : {}) } : undefined));
   const destination = computer.command('destination').description('Where captured keys can be sent: named commands with a {{secret}} slot');
   destination.command('list').description('Show every destination and the values the agent fills in')
     .action(async () => (await import('../commands/computer.js')).computerDestinations());

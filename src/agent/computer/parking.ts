@@ -23,9 +23,9 @@ export function reasonFor(fields: readonly Pick<LoginField, 'label' | 'transient
 export class Parked extends Error {}
 
 /** Record what the user is needed for and stop the step: the message tells the agent to go on to the next vendor and not to ask. */
-export async function park(stateDir: string, site: string, fields: readonly LoginField[]): Promise<never> {
+export async function park(stateDir: string, site: string, fields: readonly LoginField[], why?: string): Promise<never> {
   const vendor = vendorOf(site);
   const asks = fields.map(field => field.label).join(', ').slice(0, 200);
-  await saveTask(stateDir, { vendor, kind: 'other', status: 'needs-human', reason: reasonFor(fields), note: `needs from you: ${asks}` });
-  throw new Parked(`Parked: ${vendor} needs ${asks} from the user. It is recorded in the queue as needs-human. Do not ask the user; go on to the next vendor.`);
+  await saveTask(stateDir, { vendor, kind: 'other', status: 'needs-human', reason: reasonFor(fields), note: `needs from you: ${asks}${why ? ` (${why})` : ''}` });
+  throw new Parked(`Parked: ${vendor} needs ${asks} from the user${why ? ` (${why})` : ''}. It is recorded in the queue as needs-human. Do not ask the user; go on to the next vendor.`);
 }

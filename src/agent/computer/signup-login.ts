@@ -1,9 +1,8 @@
 /** A password the user typed into a signup form (through the private prompt) is the login of the
  * account that form creates. Without this it would be typed once, never seen again, and lost.
  * It is saved to the vault only after the form has gone, with the email the form held. */
-import { randomInt } from 'node:crypto';
 import type { Page } from 'playwright-core';
-import { saveLoginFields } from './credential-vault.js';
+import { savedLoginFields, savedLoginsForSite, saveLoginFields } from './credential-vault.js';
 import { sharedState } from './shared-state.js';
 
 type Pending = { password: string; username?: string; itemId?: string };
@@ -14,6 +13,8 @@ const NAME_FIELD = 'input[type="email"], input[autocomplete="username"], input[a
 /** The password this page's signup form already has (a form filled one box per call needs the same value in both). */
 export function pendingSignupPassword(page: Page): string | undefined { return pending.get(page)?.password; }
 
+export function pendingSignupUsername(page: Page): string | undefined { return pending.get(page)?.username; }
+
 export function expectSignup(page: Page, password: string): void { pending.set(page, { password }); }
 
 /** A password the tool made up: kept in the vault at once, under the account email it is most likely for, so a signup
@@ -22,8 +23,21 @@ export function expectSignup(page: Page, password: string): void { pending.set(p
 export async function holdSignup(stateDir: string, page: Page, password: string, username: string | undefined): Promise<void> {
   if (pending.get(page)?.password === password) return; // the same form, filled box by box: already kept
   const held: Pending = { password, ...(username ? { username } : {}) };
-  if (username) held.itemId = await saveLoginFields(stateDir, page.url(), { username, password });
+  if (username) {
+    // A password this replaces is kept as `previous_password`: the account may already have been made with it.
+    const old = await savedPasswordFor(stateDir, page.url(), username, { rejected: true });
+    held.itemId = await saveLoginFields(stateDir, page.url(), { username, password, ...(old && old !== password ? { previous_password: old } : {}) });
+  }
   pending.set(page, held);
+}
+
+/** The password saved for this site and account (`email`), if any. A login the site refused is only returned when asked for. */
+export async function savedPasswordFor(stateDir: string, url: string, username: string | undefined, options: { rejected?: boolean } = {}): Promise<string | undefined> {
+  if (!username) return undefined;
+  try {
+    const found = (await savedLoginsForSite(stateDir, url)).find(login => login.label.split(' · ').some(value => value.toLowerCase() === username.toLowerCase()));
+    return found && (options.rejected || !found.rejected) ? (await savedLoginFields(stateDir, url, found.id)).password : undefined;
+  } catch { return undefined; }
 }
 
 /** Call after each step: remembers the email the form holds, and saves the login once the password fields are gone. */
@@ -41,12 +55,4 @@ export async function settleSignup(stateDir: string, page: Page): Promise<string
   } catch { return undefined; } // The page is navigating; the next step looks again.
 }
 
-/** A strong password for a signup form: 24 characters with every class, from a set most sites accept. */
-export function generatePassword(): string {
-  const classes = ['abcdefghijkmnopqrstuvwxyz', 'ABCDEFGHJKLMNPQRSTUVWXYZ', '23456789', '!@#$%^*-_'];
-  const all = classes.join('');
-  const chars = classes.map(set => set[randomInt(set.length)]!);
-  while (chars.length < 24) chars.push(all[randomInt(all.length)]!);
-  for (let index = chars.length - 1; index > 0; index--) { const other = randomInt(index + 1); [chars[index], chars[other]] = [chars[other]!, chars[index]!]; }
-  return chars.join('');
-}
+export { generatePassword } from './password-policy.js';
