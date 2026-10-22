@@ -197,6 +197,15 @@ What the browser tool does so a run does not depend on luck or on the user:
   Google consent screen that asks for calendar, mail, files or contacts is flagged for declining.
 - **Notes per site.** `notes` saves what worked (URL, order of screens, gotchas) for a host and shows it
   again when a page on that host is opened. Keys and passwords are refused.
+- **Signup recipes.** `recipe` (`recipe_op` save / get / run / list) keeps the steps that worked for a signup
+  or key capture at a host: `login_route` (`google`, `github`, `email`), the steps (controls named by visible
+  text, never `eN` refs), `key_page`, `capture_hint`, and `verifiedAt`. Nothing secret is stored: text that
+  looks like a key, token or password, or typed into a password/code field, is refused, and a `fill` with no
+  text is filled from the profile autofill at replay. `run` replays through the same steps runner and stops at
+  the first failure, returning the page change so the agent takes over from there. It also stops, and says so,
+  at a captcha, an SMS/authenticator code, a payment page or a review page: those are for the person
+  (`handoff`, `ask_user`, `queue`); nothing tries to solve or get around them. Opening a page on a host with a
+  recipe mentions it. Recipes live in `computer/recipes/<host>.json` in the state dir.
 
 - **Generated passwords (off by default).** `clikcode computer passwords on` lets the browser tool make up a
   24-character password for a signup form (two password boxes, a new-password box, or a sign-up page). It is
