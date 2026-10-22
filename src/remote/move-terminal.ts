@@ -83,7 +83,7 @@ function machineList(current: string, machines: readonly RemoteMachine[], links:
     ...tailnet.found.map((machine) => {
       const offline = machine.os === 'windows' ? 'Windows, not supported yet' : machine.online ? undefined : 'offline';
       return {
-        label: machine.name, detail: `· ${machine.os} · ${offline ?? 'add: install ClikCode'}`,
+        label: machine.name, detail: `· ${machine.os} · ${machine.os === 'windows' ? 'not supported yet' : offline ?? 'add: install ClikCode'}`,
         value: discoveredValue(machine), group: TAILNET, ...(offline ? { offline } : {}),
       };
     }),

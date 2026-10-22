@@ -630,7 +630,7 @@ describe('/machine and the tailnet', () => {
       [undefined, localMachineName(), '· this chat is here'],
       ['On your tailnet', 'devbox', '· linux · add: install ClikCode'],
       ['On your tailnet', 'imac', '· macOS · add: install ClikCode'],
-      ['On your tailnet', 'winbox', '· windows · Windows, not supported yet'],
+      ['On your tailnet', 'winbox', '· windows · not supported yet'],
       ['On your tailnet', 'macbook', '· macOS · offline'],
     ]);
   });
