@@ -111,8 +111,12 @@ export type IdeRequest =
  * bridge uses one only when the editor names it, so an older editor keeps
  * the old behaviour. `copy`: /copy sends the text (a `copy` event) for the
  * editor's own clipboard. `search-walk`: /search walks mention by mention
- * (`search` events, answered by `search-key`) instead of a results panel. */
-export type IdeFeature = 'copy' | 'search-walk';
+ * (`search` events, answered by `search-key`) instead of a results panel.
+ * `session-delta` (revision 7): after the first whole one, `session` events
+ * and relayed worker snapshots carry only what the editor lacks of the
+ * conversation -- `messagesFrom` and the messages from there on
+ * (session-delta.ts). */
+export type IdeFeature = 'copy' | 'search-walk' | 'session-delta';
 
 /** Where /search is: the conversation open in the editor, the message and
  * which occurrence of the first word in it, the words to mark, and the line
@@ -293,11 +297,14 @@ export type IdeEvent =
    * additive requests it understands (absent: 1). */
   | { type: 'ready'; version: string; protocol?: number; revision?: number; build?: string; pid: number }
   /** The conversation shown, from the state file: on open, on a switch, and
-   * after anything that changed it outside a turn. */
-  | { type: 'session'; session: HarnessSession; account?: string; modelLabel?: IdeModelLabel; providerId?: string; providerName?: string }
+   * after anything that changed it outside a turn. `messagesFrom` (the
+   * `session-delta` feature): `session.messages` is only the messages from
+   * that index on; the editor keeps the first `messagesFrom` it holds. */
+  | { type: 'session'; session: HarnessSession; account?: string; modelLabel?: IdeModelLabel; providerId?: string; providerName?: string; messagesFrom?: number }
   /** `level`: how a `note` event reads (red, yellow or plain in the terminal),
-   * so the editor need not parse the colour back out of its text. */
-  | { type: 'worker'; sessionId: string; event: WorkerEvent; level?: 'info' | 'warning' | 'error' }
+   * so the editor need not parse the colour back out of its text.
+   * `messagesFrom`: as on `session`, for a `snapshot`'s session. */
+  | { type: 'worker'; sessionId: string; event: WorkerEvent; level?: 'info' | 'warning' | 'error'; messagesFrom?: number }
   /** This client submitted a turn; `prompt` is what to show as the user's
    * message until the worker's snapshot carries it (absent for synthetic
    * prompts such as /review). */

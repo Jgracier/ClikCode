@@ -42,6 +42,7 @@ import { encodeTerminalSpec, type IdeEvent, type IdeFeature, type IdeRequest, ty
 import { IDE_PROTOCOL } from './protocol-version.js';
 import { watchForNewerBuild } from './bridge-retire.js';
 import { sessionEvent } from './session-event.js';
+import { SessionDeltaSender } from './session-delta.js';
 import { searchScreen } from './bridge-slash-host.js';
 import type { MentionScreen } from '../tui/slash/search-browse.js';
 import { BridgeTurns } from './bridge-turns.js';
@@ -92,6 +93,8 @@ export class IdeBridge {
   quietOutput = 0;
   /** What the editor said it handles, with its last `open`. */
   private features: ReadonlySet<IdeFeature> = new Set();
+  /** What the editor holds of the conversation (the `session-delta` feature). */
+  private readonly delta = new SessionDeltaSender();
   /** The editor shows this chat (its `visible`): only then is usage polled. */
   private shown = true;
   /** /search waiting on the editor's next key. */
@@ -111,7 +114,8 @@ export class IdeBridge {
     this.channel = {
       send: (event) => {
         if (!HOUSEKEEPING_EVENTS.has(event.type)) this.lastActivityAt = Date.now();
-        editor.send(event);
+        // An editor that holds the conversation is sent only what it lacks (session-delta.ts).
+        editor.send(this.features.has('session-delta') ? this.delta.slim(event) : event);
       },
     };
     const channel = this.channel;
@@ -183,6 +187,8 @@ export class IdeBridge {
     switch (request.type) {
       case 'open':
         this.features = new Set(request.features ?? []);
+        // Opened (again): the conversation is sent whole.
+        this.delta.reset();
         this.enqueue(async () => {
           try {
             await this.open(request.workspace ?? '', request.mode, request.sessionId);

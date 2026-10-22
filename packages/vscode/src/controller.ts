@@ -7,6 +7,7 @@ import { PAINT_COALESCE_MS } from '../../../src/harness/protocol/timings';
 import { errorText, userError } from '../../../src/harness/protocol/errors';
 import * as vscode from 'vscode';
 import type { BridgeEndpoint } from './bridge-client';
+import { SessionDeltaReceiver } from '../../../src/ide/session-delta';
 import { LocalChatMachine, openRequest, RemoteChatMachine, type ChatMachine } from './chat-machine';
 import { machineUpdateOf, remoteDirectory } from './remote-directory';
 import type { LinkChannel } from '../../../src/remote/connection';
@@ -33,7 +34,7 @@ import type { FromWebview, ListedConversation, ToWebview, WebviewRequest } from 
 import { chatHasContent, moveChat, movedChatMachine, type MoveEnd, type MoveRequest } from '../../../src/session/move-chat';
 
 /** What this editor handles beyond the base protocol (protocol.ts IdeFeature). */
-const IDE_FEATURES: readonly IdeFeature[] = ['copy', 'search-walk'];
+const IDE_FEATURES: readonly IdeFeature[] = ['copy', 'search-walk', 'session-delta'];
 
 export interface ControllerHost {
   log: vscode.OutputChannel;
@@ -515,6 +516,9 @@ export class ClikCodeController implements vscode.Disposable {
     await starting;
   }
 
+  /** The conversation as the bridge last sent it (the `session-delta` feature). */
+  private readonly delta = new SessionDeltaReceiver();
+
   /** Link sign-ins whose link this chat already opened. */
   private readonly openedSignIns = new Set<string>();
 
@@ -523,9 +527,11 @@ export class ClikCodeController implements vscode.Disposable {
     this.panelQuestions.clear();
   }
 
-  private onBridgeEvent(event: IdeEvent): void {
+  private onBridgeEvent(sent: IdeEvent): void {
     // Said by the bridge itself before it exits for a newer build: see start's exit.
-    if (event.type === 'retiring') return;
+    if (sent.type === 'retiring') return;
+    // Whole again: after the first, the bridge sends only the messages this chat lacks (session-delta.ts).
+    const event = this.delta.expand(sent);
     this.setModel(applyEvent(this.model, event));
     // A copy that moved: the live chat opens in its place.
     if (event.type === 'session' && this.model.movedTo) void this.openLive().catch((error: unknown) => this.fail(errorText(error)));
