@@ -115,12 +115,22 @@ export function selfAsPeer(): Promise<PeerMachine | undefined> {
   return self;
 }
 
-/** Whether a peer is the machine `record` is: the same installation, else
- * the same Tailscale node, else the same host (a record added by hand). */
-function samePeer(record: RemoteMachine, peer: PeerMachine): boolean {
-  if (record.installationId && peer.installationId) return record.installationId === peer.installationId;
-  if (record.tailscale?.nodeId === peer.tailscale.nodeId) return true;
-  return targetHost(record.sshTarget).toLowerCase() === peer.tailscale.dnsName.toLowerCase();
+/** The records of the machine `peer` is: the one to keep, and the others
+ * -- the same machine added twice, or a half-finished add of it -- to drop.
+ * Its installation says which machine it is: records of that installation
+ * (the oldest install kept), and records with none that reach it by node or
+ * host (half-finished adds of it). Only when no record has its installation
+ * is one of those it: the half-finished add, finished now. A record of
+ * another installation on that node is another machine. */
+function recordsOf(machines: readonly RemoteMachine[], peer: PeerMachine): { keep?: RemoteMachine; drop: RemoteMachine[] } {
+  const reaches = (record: RemoteMachine): boolean => record.tailscale?.nodeId === peer.tailscale.nodeId
+    || targetHost(record.sshTarget).toLowerCase() === peer.tailscale.dnsName.toLowerCase();
+  const loose = machines.filter((record) => !record.installationId && reaches(record));
+  const same = peer.installationId ? machines.filter((record) => record.installationId === peer.installationId) : [];
+  if (!same.length) return { ...(loose[0] ? { keep: loose[0] } : {}), drop: loose.slice(1) };
+  const installedAt = (record: RemoteMachine): number => Date.parse(record.installed?.at ?? record.addedAt) || Infinity;
+  const [keep, ...others] = [...same].sort((left, right) => installedAt(left) - installedAt(right));
+  return { keep, drop: [...others, ...loose] };
 }
 
 /** The machine list after `peer` connected here: its record refreshed, or
@@ -134,12 +144,12 @@ export function withPeer(
   if (peer.installationId && peer.installationId === own) return [...machines];
   const at = (options.now ?? new Date()).toISOString();
   const installed = { version: peer.version, ...(peer.commit ? { commit: peer.commit } : {}), at };
-  const existing = machines.find((record) => samePeer(record, peer));
+  const { keep: existing, drop } = recordsOf(machines, peer);
   if (existing) {
     // One it added itself follows what it says of itself (a new name, a new
     // user); one the user added keeps the address and policy the user gave.
     const own = existing.addedBy === 'peer' ? { name: peer.name, sshTarget: peer.sshTarget, tailscale: peer.tailscale } : {};
-    return machines.map((record) => (record !== existing ? record : {
+    return machines.filter((record) => !drop.includes(record)).map((record) => (record !== existing ? record : {
       ...record, ...own,
       ...(peer.installationId ? { installationId: peer.installationId } : {}),
       // It answered from there with ClikCode running: its install is done.
@@ -160,7 +170,7 @@ export function withPeer(
  * one the user removed. */
 function wouldAdd(machines: readonly RemoteMachine[], forgotten: readonly ForgottenMachine[], peer: PeerMachine, own: string | undefined): boolean {
   if (peer.installationId && peer.installationId === own) return false;
-  if (machines.some((record) => samePeer(record, peer))) return false;
+  if (recordsOf(machines, peer).keep) return false;
   return !isForgotten(forgotten, { ...(peer.installationId ? { installationId: peer.installationId } : {}), nodeId: peer.tailscale.nodeId });
 }
 
@@ -176,7 +186,7 @@ export async function recordPeer(peer: PeerMachine, reach: ReachBack = sshReachB
   const [machines, forgotten] = await Promise.all([readMachines(), readForgotten()]);
   const adding = wouldAdd(machines, forgotten, peer, own);
   if (!adding) {
-    if (!machines.some((record) => samePeer(record, peer))) return 'skipped';
+    if (!recordsOf(machines, peer).keep) return 'skipped';
     await updateMachines((list, gone) => withPeer(list, peer, own, { forgotten: gone }));
     return 'refreshed';
   }
