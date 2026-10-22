@@ -39,7 +39,7 @@ export const MACPORTS_NODE_VERSION = 'v22.22.2';
 
 const TOOLS = ['sh', 'bash', 'uname', 'readlink', 'mkdir', 'mktemp', 'rm', 'rmdir', 'mv', 'cp', 'ln', 'grep', 'head', 'tail', 'tar', 'gzip',
   'curl', 'sha256sum', 'shasum', 'sed', 'dirname', 'basename', 'cat', 'ls', 'chmod', 'env', 'printf', 'sleep', 'awk', 'tr', 'cut', 'bzip2',
-  'git', 'node', 'id', 'touch', 'wc', 'sort', 'test', 'true', 'false', 'find', 'xargs', 'stat'];
+  'git', 'node', 'id', 'touch', 'wc', 'sort', 'test', 'true', 'false', 'find', 'xargs', 'stat', 'script', 'stty', 'dd', 'mkfifo'];
 
 const which = (tool) => {
   const found = spawnSync('/bin/sh', ['-c', `command -v ${tool}`], { encoding: 'utf8', env: { PATH: process.env.PATH } }).stdout.trim();

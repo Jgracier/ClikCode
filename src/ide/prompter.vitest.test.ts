@@ -34,18 +34,17 @@ describe('IdePrompter', () => {
     expect(await chosen).toBe(2);
   });
 
-  it('runs a row action and asks again with the refreshed rows', async () => {
-    const { prompter, nextRequest } = harness();
+  it('runs a row action and closes, as the terminal list does: the caller reopens it', async () => {
+    const { prompter, events, nextRequest } = harness();
     const actions: string[] = [];
-    let rows = [{ label: 'x', value: 'x', actions: [{ label: 'Sign in again', value: 'reauth' }] }];
+    const rows = [{ label: 'x', value: 'x', actions: [{ label: 'Sign in again', value: 'reauth' }] }];
     const first = nextRequest();
-    const chosen = prompter.select('Accounts', rows, async (value, action) => { actions.push(`${value}:${action}`); rows = [{ ...rows[0]!, label: 'x (done)' }]; }, { refreshedOptions: () => rows });
+    const chosen = prompter.select('Accounts', rows, async (value, action) => { actions.push(`${value}:${action}`); }, { refreshedOptions: () => rows });
     prompter.answer((await first).id, { index: 0, action: 'reauth' });
-    const second = await nextRequest();
-    expect(second.request.kind === 'pick' && second.request.items[0]?.label).toBe('x (done)');
-    prompter.answer(second.id, { cancelled: true });
     expect(await chosen).toBeUndefined();
     expect(actions).toEqual(['x:reauth']);
+    // Asked once: it did not open itself again (the account list reopened twice, Esc reopened it).
+    expect(events.filter((event) => event.type === 'ui-request')).toHaveLength(1);
   });
 
   it('cycles an inline setting in place', async () => {
