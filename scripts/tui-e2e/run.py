@@ -253,13 +253,16 @@ def remote_fake(commit=None):
     return setup
 
 
-def remote_move():
+def remote_move(latency_ms=0, count_bytes=False):
     """`setup` for moving a chat to another machine (/machine): the fake `ssh`
     (fake-ssh.mjs) and one fake machine, `devbox`, already added, running THIS
     build's real ClikCode (its bridge, its worker, its turns) in a HOME, user
     and state of its own, with the fake Grok there signed in. Grok is signed
     in here too. The fake Grok there logs every prompt to remote-prompts.log,
-    so a step can count what the agent there was told. No real machine or vendor."""
+    so a step can count what the agent there was told. `latency_ms`: what
+    devbox sends back arrives that late (a slow link); `count_bytes`: every
+    byte it sends back is counted (fake-ssh.mjs, for 'bytes_mark'). No real
+    machine or vendor."""
     def setup(context):
         import subprocess, datetime, uuid
         fakes = os.path.join(REPO, 'scripts', 'tui-e2e')
@@ -277,7 +280,7 @@ def remote_move():
             'FAKE_TURNS': json.dumps([{'blocks': ['Answered on devbox.']}, {'blocks': ['Second answer on devbox.']}, {'blocks': ['Third answer on devbox.']}]),
             'FAKE_STATE': os.path.join(context['root'], 'remote-turn-counter'), 'FAKE_PROMPT_LOG': os.path.join(context['root'], 'remote-prompts.log'),
             'FAKE_FAMILY': 'claude',
-        }})]))
+        }, **({'latencyMs': latency_ms} if latency_ms else {}), **({'countBytes': True} if count_bytes else {})})]))
         remote_home, remote_bin = made['home'], made['bin']
         shutil.copy(os.path.join(fakes, 'fake-grok.mjs'), os.path.join(remote_bin, 'grok'))
         os.chmod(os.path.join(remote_bin, 'grok'), 0o755)
@@ -755,6 +758,42 @@ SCENARIOS = {
         'snap_lacks': {'moved': ['is not signed in', 'Moving to devbox', 'Moved to'], 'answered': ['moved from', 'clikcode_resource_note'],
                        'board': ['hello there', 'moved to'], 'here': ['hello there', 'moved to'], 'live': ['goes on here', 'read-only']},
         'never': ['ENOENT', 'This conversation moved from', 'clikcode_resource_note', 'Connection to devbox', 'Moved to devbox', 'Moving to devbox'],
+    },
+    # A chat on another machine over a slow link (devbox's every byte back
+    # 2.5 s late): a message typed there is drawn at once, with the turn's
+    # wait, as a chat here draws one -- not when the machine's turn-start
+    # comes back. After the move only the prompt and its answer travel per
+    # turn, not the conversation (src/ide/session-delta.ts), and the chat is
+    # right after several turns.
+    'remote-chat-small-sends': {
+        'setup': remote_move(latency_ms=2500, count_bytes=True), 'startup': 4, 'no_dup_check': 'the transcript is drawn again on the other machine',
+        'turns': [{'blocks': ['First answer here.']}],
+        'steps': [
+            ('type', 'hello there'), ('wait_for', 'First answer here.', 30), ('settle', 1),
+            ('type', '/machine'), ('wait_for', 'Move this chat to', 30), ('wait_for', 'devbox', 10), ('settle', 1),
+            ('keys', '\x1b[B'), ('keys', '\r'), ('wait_for', 'devbox  •', 90), ('settle', 6),
+            ('bytes_mark', 'devbox'),
+            ('type', 'where are you now'), ('wait_for', 'where are you now', 1), ('snap', 'early'),
+            ('wait_for', 'Answered on devbox.', 60), ('settle', 4), ('expect_bytes_since', 'devbox', 30000),
+            ('bytes_mark', 'devbox'),
+            ('type', 'and again'), ('wait_for', 'and again', 1), ('snap', 'early2'),
+            ('wait_for', 'Second answer on devbox.', 60), ('settle', 4), ('expect_bytes_since', 'devbox', 30000),
+            ('bytes_mark', 'devbox'),
+            ('type', 'third time'), ('wait_for', 'third time', 1), ('snap', 'early3'),
+            ('wait_for', 'Third answer on devbox.', 60), ('settle', 4), ('expect_bytes_since', 'devbox', 30000), ('snap', 'end'),
+            ('expect_file_count', 'remote-prompts.log', '"and again"', 1),
+            ('expect_file_count', 'remote-prompts.log', '"third time"', 1),
+        ],
+        'watch': [],
+        'snap_contains': {
+            'early': ['hello there', 'First answer here.', 'where are you now', 'thinking'],
+            'early2': ['Answered on devbox.', 'and again', 'thinking'],
+            'early3': ['Second answer on devbox.', 'third time', 'thinking'],
+            'end': ['where are you now', 'Answered on devbox.', 'and again', 'Second answer on devbox.', 'third time', 'Third answer on devbox.'],
+        },
+        'snap_lacks': {'early': ['Answered on devbox.'], 'early2': ['Second answer on devbox.'], 'early3': ['Third answer on devbox.']},
+        'snap_once': {'end': ['where are you now', 'and again', 'third time', 'Answered on devbox.', 'Second answer on devbox.', 'Third answer on devbox.']},
+        'never': ['ENOENT', 'Connection to devbox', 'Moved to devbox'],
     },
     # A chat on a machine whose ClikCode is another build: said once on opening it, with where
     # to update it. Nothing is updated without the user.
@@ -2739,6 +2778,7 @@ def run(name, spec, entry, keep):
     screen = Screen(cols, rows)
     stream = ByteStream(screen)
     snaps = {}
+    bytes_marks = {}
     raw, frames = bytearray(), []
     # When each chunk was read from the pty (time.time(), before it is fed to
     # the emulator), parallel to `frames`: the matrix rig's clock.
@@ -2946,6 +2986,16 @@ def run(name, spec, entry, keep):
             deadline = time.time() + (step[4] if len(step) > 4 else 20)
             while len(opened_by()) < step[3] and time.time() < deadline: pump(0.2)
             if len(opened_by()) < step[3]: problems.append(f'chat {step[2]} on {step[1]} was opened by {len(opened_by())} bridge process(es), expected {step[3]}')
+        elif step[0] in ('bytes_mark', 'expect_bytes_since'):
+            # ('bytes_mark', host): from here, what that fake machine sends back is counted (fake-ssh.mjs countBytes).
+            # ('expect_bytes_since', host, most): since the mark it sent at most that many bytes.
+            bytes_log = os.path.join(env['FAKE_SSH_ROOT'], 'hosts', step[1], 'bytes.log')
+            total = sum(int(line) for line in open(bytes_log) if line.strip()) if os.path.exists(bytes_log) else 0
+            if step[0] == 'bytes_mark': bytes_marks[step[1]] = total
+            else:
+                sent = total - bytes_marks.get(step[1], 0)
+                print(f'  {step[1]} sent {sent} bytes since the mark')
+                if sent > step[2]: problems.append(f'{step[1]} sent {sent} bytes since the mark, more than {step[2]}')
         elif step[0] == 'expect_file_count':
             # ('expect_file_count', path under the scenario root, text, n): the file holds text exactly n times.
             path = os.path.join(root, step[1])
