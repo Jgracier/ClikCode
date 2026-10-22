@@ -192,4 +192,19 @@ describe('models by maker', () => {
     expect(gatewayMakerName(models[0]!)).toBe('Other');
     expect(gatewayMakerName({ id: 'm', maker: 'mistral' })).toBe('Mistral');
   });
+
+  it("lists the user's own models first, as theirs, with how they are", async () => {
+    const { fromOpenAIModelList, gatewayMakerName, gatewayModelsByMaker, gatewayModelDetail } = await import('./models.js');
+    const { models } = fromOpenAIModelList([
+      { id: 'gpt-5', owned_by: 'openai' },
+      { id: 'Qwen/Qwen3-8B', owned_by: 'self-hosted', capabilities: { tools: true }, context_length: 32768, deployment: { id: 'd1', state: 'asleep' } },
+      { id: 'odd/model', owned_by: 'self-hosted', capabilities: { tools: false }, deployment: { id: 'd2', state: 'running' } },
+    ]);
+    expect(models[1]).toEqual({ id: 'Qwen/Qwen3-8B', own: { state: 'asleep', tools: true }, contextWindow: 32768 });
+    const ordered = gatewayModelsByMaker(models);
+    expect(ordered.map((model) => model.id)).toEqual(['Qwen/Qwen3-8B', 'odd/model', 'gpt-5']);
+    expect(gatewayMakerName(ordered[0]!)).toBe('Your models');
+    expect(gatewayModelDetail(ordered[0]!)).toBe('asleep: wakes when used (a few minutes) · on your compute, no per-token charge');
+    expect(gatewayModelDetail(ordered[1]!)).toBe('running · on your compute, no per-token charge · no tool calls');
+  });
 });

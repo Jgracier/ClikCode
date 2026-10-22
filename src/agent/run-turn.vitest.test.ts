@@ -775,6 +775,26 @@ describe('runAgentLoop', () => {
       expect(phases.filter((phase) => phase.startsWith('retrying'))).toEqual(['retrying in 20s', 'retrying in 2s']);
     });
 
+    it("waits for the user's own model to start on its GPU, saying so, then goes on: minutes, not the retry budget", async () => {
+      const phases: string[] = [];
+      const starting = { error: gatewayError('MODEL_STARTING', { retryAfter: 30 }) };
+      const h = harness([...Array.from({ length: 12 }, () => starting), { text: 'up' }], { onPhase: (phase) => phases.push(phase) });
+      const result = await driven(runAgentLoop(h.input));
+      // 12 waits of 30s: past the 300s a failing step gets, within the model's start budget.
+      expect(result).toMatchObject({ text: 'up', stopReason: 'completed' });
+      const said = phases.filter((phase) => phase.startsWith('your model is starting'));
+      expect(said[0]).toBe('your model is starting on its GPU');
+      expect(said.at(-1)).toBe('your model is starting on its GPU · 6 min so far');
+      expect(phases.some((phase) => phase.startsWith('retrying'))).toBe(false);
+    });
+
+    it('gives up on a model that never starts, with what the Gateway said', async () => {
+      const h = harness([], {}, { error: gatewayError('MODEL_STARTING', { retryAfter: 30 }) });
+      const result = await driven(runAgentLoop(h.input));
+      expect(result).toMatchObject({ isError: true, stopReason: 'model-error' });
+      expect(h.client.requests).toHaveLength(900 / 30 + 1);
+    });
+
     it('stops waiting the moment the turn is cancelled', async () => {
       const controller = new AbortController();
       const h = harness([], { signal: controller.signal }, { error: gatewayError('MODEL_ERROR') });
