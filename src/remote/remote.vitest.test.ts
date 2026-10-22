@@ -447,7 +447,8 @@ describe('the board’s connections', () => {
     const { home } = host(root, 'watched', { chats: [chat('c1', 'Fix the login page')] });
     expect((await installOnMachine('watched', steps().reporter)).ok).toBe(true);
     const machine = newMachineRecord({ name: 'watched', sshTarget: 'watched', ready: true });
-    const link = new RemoteLink(machine, () => undefined, { localCommit: fakeWorld.commit });
+    const self = { name: 'here', sshTarget: 'me@here.ts.net', tailscale: { nodeId: 'nHere', dnsName: 'here.ts.net' }, version: '1.0.0' };
+    const link = new RemoteLink(machine, () => undefined, { localCommit: fakeWorld.commit, self: async () => self });
     link.start();
     try {
       await until(() => link.view.chats.length === 1 && link.view.state === 'connected');
@@ -456,8 +457,10 @@ describe('the board’s connections', () => {
       await until(() => link.view.chats.length === 2);
       expect(link.view.chats[0]!.needsYou).toBe(true);
     } finally { await link.stop(); }
-    const requests = readFileSync(join(home, '.fake-remote', 'bridge.log'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { type: string; request?: { type: string } });
-    expect(new Set(requests.map((request) => request.request?.type ?? request.type))).toEqual(new Set(['chat-attach', 'watch-conversations', 'query']));
+    const requests = readFileSync(join(home, '.fake-remote', 'bridge.log'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { type: string; request?: { type: string }; machine?: unknown });
+    // Reads, and says who is connecting: the machine there can drive this one back (peer.ts).
+    expect(new Set(requests.map((request) => request.request?.type ?? request.type))).toEqual(new Set(['chat-attach', 'host-peer', 'watch-conversations', 'query']));
+    expect(requests.find((request) => request.type === 'host-peer')?.machine).toEqual(self);
   });
 
   it('marks a machine on another commit as needing an update', async () => {

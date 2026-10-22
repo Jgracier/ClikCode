@@ -16,6 +16,7 @@
  * so a worker that learns a new event needs no change here -- and an editor
  * that does not know one ignores it.
  */
+import type { PeerMachine } from '../remote/peer.js';
 import type { ConversationSection, TurnFacts } from '../session/conversation-state.js';
 import type { HarnessSession } from '../session/model.js';
 import type { WorkerEvent } from '../worker/protocol.js';
@@ -386,7 +387,10 @@ export type IdeHostRequest =
   /** A chat joins: it is answered by its own `ready`, inside the envelope. */
   | { type: 'chat-attach'; chat: string }
   /** `close` inside the envelope ends that chat only. */
-  | { type: 'chat'; chat: string; request: IdeRequest };
+  | { type: 'chat'; chat: string; request: IdeRequest }
+  /** ClikCode Remote's connection, after host-ready: the machine connecting,
+   * and how to reach it back (remote/peer.ts). A bridge before it ignores it. */
+  | { type: 'host-peer'; machine: PeerMachine };
 
 export type IdeHostEvent =
   /** First, instead of `ready`: this process serves chats. */
