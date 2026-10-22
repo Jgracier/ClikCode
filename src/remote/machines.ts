@@ -1,7 +1,7 @@
 /** The machines added to ClikCode Remote: `<state>/remote/machines.json`.
  *
  * A small file of its own, not part of the conversation state: it is read
- * when /remote or the board opens and written when a machine is added,
+ * when /machine or the board opens and written when a machine is added,
  * updated, forgotten, or reports its chats (kept as the offline cache).
  * Written with atomicWriteFile into a 0700 directory, the file 0600. It
  * holds no secrets -- an SSH target, names, versions and chat titles. */
@@ -15,7 +15,7 @@ import type { IdeConversation } from '../ide/protocol.js';
 export interface RemoteMachine {
   /** ClikCode's own id for the record. */
   id: string;
-  /** What it is called in /remote and on the board. */
+  /** What it is called in /machine and on the board. */
   name: string;
   /** What ssh connects to: user@host, host, or an ~/.ssh/config alias. */
   sshTarget: string;
@@ -66,7 +66,7 @@ export async function readMachines(): Promise<RemoteMachine[]> {
 }
 
 /** Writes are serialized within this process: the board's cache updates and
- * /remote's own changes never interleave a read-modify-write. */
+ * /machine's own changes never interleave a read-modify-write. */
 let writing: Promise<unknown> = Promise.resolve();
 
 /** Read, change, write -- one at a time. `change` returns the new list. */

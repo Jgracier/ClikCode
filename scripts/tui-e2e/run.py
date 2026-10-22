@@ -670,16 +670,17 @@ SCENARIOS = {
         'turns': [{'blocks': ['unused']}],
         'steps': [
             ('settle', 2), ('snap', 'closed'),
-            ('type', '/remote'), ('wait_for', 'On your tailnet', 15), ('wait_for', 'macbook', 10), ('settle', 1), ('snap', 'list'),
+            ('type', '/machine'), ('wait_for', 'Move this chat to', 15), ('wait_for', 'macbook', 10), ('settle', 1), ('keys', '\x1b[B'), ('snap', 'list'),
             # Tailscale gives the machine, not the account on it: which user is asked first, typed, nothing suggested.
             ('keys', '\r'), ('wait_for', 'Log in to devbox as which user?', 15), ('settle', 0.5), ('snap', 'user'),
             ('type', 'bad user'), ('wait_for', 'is not a user name', 10), ('settle', 0.5), ('snap', 'user-invalid'),
             ('type', 'dev'), ('wait_for', 'devbox is added', 60), ('settle', 1), ('snap', 'installed'),
-            ('keys', '\x1b[D'), ('wait_for', '← machines', 20), ('snap', 'local-chats'),
-            ('keys', '\x1b[D'), ('wait_for', 'devbox', 20), ('snap', 'machines'),
-            ('keys', '\x1b[B'), ('keys', '\x1b[C'), ('wait_for', 'Fix the login page', 20), ('settle', 0.5), ('snap', 'board'),
+            # Left from the chat on devbox: devbox's chats; Left again: the machines, on devbox.
+            ('keys', '\x1b[D'), ('wait_for', 'Fix the login page', 20), ('settle', 0.5), ('snap', 'board'),
             ('wait_for', 'now it submits twice', 20), ('settle', 0.5), ('snap', 'board-updated'),
-            ('keys', '\x1b[C'), ('wait_for', 'Fix the login page', 10), ('wait_for', 'The folder /', 10), ('snap', 'opened'),
+            ('keys', '\x1b[D'), ('wait_for', 'Machines', 20), ('settle', 0.5), ('snap', 'machines'),
+            ('keys', '\x1b[C'), ('wait_for', 'Fix the login page', 20), ('settle', 0.5),
+            ('keys', '\x1b[B'), ('keys', '\x1b[C'), ('wait_for', 'The folder /', 10), ('snap', 'opened'),
             ('type', 'check the remote'), ('wait_for', 'Remote answer received.', 15), ('snap', 'answered'),
             ('type', '/provider'), ('wait_for', 'Choose a provider', 10), ('keys', '\x1b[B'), ('keys', '\r'),
             ('wait_for', 'Claude Code', 10), ('snap', 'provider-changed'),
@@ -688,11 +689,12 @@ SCENARIOS = {
         ],
         'watch': [],
         'snap_contains': {
-            'list': ['ClikCode Remote', 'On your tailnet', 'devbox', 'imac', 'macbook', 'winbox  · windows · online · not supported yet', 'Add by SSH address'],
+            'list': ['Move this chat to', 'On your tailnet', 'devbox', 'imac', 'macbook', 'winbox  · windows · not supported yet', 'Add by SSH address'],
             'user': ['Log in to devbox as which user?'],
             'user-invalid': ['"bad user" is not a user name.', 'Log in to devbox as which user?'],
-            'installed': ['Installing ClikCode on devbox (dev@devbox.tail-fake.ts.net)', '1/6 Checking the machine', '2/6 Node.js', '3/6 git', '4/6 Getting ClikCode from GitHub', '5/6 Building and installing', 'devbox is added'],
-            'machines': ['Machines', 'devbox'],
+            # Added from /machine, the (empty) chat starts there.
+            'installed': ['devbox  •'],
+            'machines': ['Machines', '❯ devbox'],
             'board': ['Fix the login page', 'the button does nothing', 'Write the migration tests'],
             'board-updated': ['now it submits twice'],
             # Its scenario path is too long for the row; the words after it are cut.
@@ -708,6 +710,8 @@ SCENARIOS = {
         # The user question is asked on the composer's own line, so it is not compared.
         'snap_composer_same': ['list', 'installed', 'opened'],
         'snap_pair_same_row': [('board', 'board-updated', 'Fix the login page'), ('board', 'board-updated', 'Write the migration tests')],
+        # Each step of the install is said in the chat as it happens.
+        'ever': ['Installing ClikCode on devbox (dev@devbox.tail-fake.ts.net)', '1/6 Checking the machine', '2/6 Node.js', '3/6 git', '4/6 Getting ClikCode from GitHub', '5/6 Building and installing'],
         'never': ['Windows machines', 'ENOENT'],
     },
     # The machines Tailscale knows and that are not added are in every list of
@@ -845,7 +849,7 @@ SCENARIOS = {
         'turns': [{'blocks': ['unused']}],
         'steps': [
             ('settle', 2),
-            ('type', '/remote'), ('wait_for', 'On your tailnet', 15), ('wait_for', 'macbook', 10), ('settle', 1),
+            ('type', '/machine'), ('wait_for', 'Move this chat to', 15), ('wait_for', 'macbook', 10), ('settle', 1), ('keys', '\x1b[B'),
             ('keys', '\r'), ('wait_for', 'Log in to devbox as which user?', 15), ('settle', 0.5),
             ('type', 'dev'), ('wait_for', 'add it again.', 30), ('settle', 1), ('snap', 'refused'),
         ],
@@ -865,13 +869,15 @@ SCENARIOS = {
         'turns': [{'blocks': ['unused']}],
         'steps': [
             ('settle', 2),
-            ('type', '/remote'), ('wait_for', 'On your tailnet', 15), ('wait_for', 'macbook', 10), ('settle', 1),
+            ('type', '/machine'), ('wait_for', 'Move this chat to', 15), ('wait_for', 'macbook', 10), ('settle', 1), ('keys', '\x1b[B'),
             ('keys', '\r'), ('wait_for', 'Log in to devbox as which user?', 15), ('settle', 0.5),
-            ('type', 'dev'), ('wait_for', 'devbox is added', 90), ('settle', 1), ('snap', 'installed'),
+            ('type', 'dev'), ('wait_for', 'devbox  •', 90), ('settle', 1), ('snap', 'installed'),
         ],
         'watch': [],
-        'snap_contains': {'installed': ['1/6 Checking the machine · macOS 10.15.8 x86_64', '2/6 Node.js · v22.22.2 from MacPorts nodejs22 v22.22.2', 'SHA-256 pinned, runs',
-                                        "replaces ClikCode's own Node, which no longer ran", '5/6 Building and installing', 'devbox is added']},
+        # Each step is said as it happens; then the chat opens there.
+        'ever': ['1/6 Checking the machine · macOS 10.15.8 x86_64', '2/6 Node.js · v22.22.2 from MacPorts nodejs22 v22.22.2', 'SHA-256 pinned, runs',
+                 "replaces ClikCode's own Node, which no longer ran", '5/6 Building and installing'],
+        'snap_contains': {'installed': ['devbox  •']},
         'never': ['ENOENT', '✗'],
     },
     # A chat moved to a machine where its provider is installed but not signed in:
@@ -920,17 +926,17 @@ SCENARIOS = {
         'turns': [{'blocks': ['unused']}],
         'steps': [
             ('settle', 2),
-            ('type', '/remote'), ('wait_for', 'On your tailnet', 15), ('wait_for', 'macbook', 10), ('settle', 1),
+            ('type', '/machine'), ('wait_for', 'Move this chat to', 15), ('wait_for', 'macbook', 10), ('settle', 1), ('keys', '\x1b[B'),
             ('keys', '\r'), ('wait_for', 'Log in to devbox as which user?', 15), ('settle', 0.5),
-            ('type', 'dev'), ('wait_for', 'devbox is added', 60), ('settle', 1),
-            ('keys', '\x1b[D'), ('wait_for', '← machines', 20), ('settle', 1),
-            ('keys', '\x1b[D'), ('wait_for', 'Machines', 20), ('settle', 1),
-            ('keys', '\x1b[B'), ('keys', '\x1b[C'), ('wait_for', 'Fix the login page', 20), ('settle', 0.5),
-            ('keys', '\x1b[C'), ('wait_for', 'runs another ClikCode build', 15), ('snap', 'opened'),
+            # Added from /machine, its chat opens there at once, and says so.
+            ('type', 'dev'), ('wait_for', 'runs another ClikCode build', 60), ('settle', 1), ('snap', 'opened'),
         ],
         'watch': [],
         'snap_contains': {'opened': ['devbox runs another ClikCode build than this one']},
-        'never': ['ENOENT', 'Updating ClikCode on devbox'],
+        # Added from /machine it is kept up to date by itself: it says so, and (this fake
+        # repository has no commit of this build) that it could not, and what to type.
+        'ever': ['could not be updated -- type /update to try again'],
+        'never': ['ENOENT'],
     },
     # A machine on an older commit than this build is brought to this build's
     # commit by itself (policy automatic, the default): the board's machine

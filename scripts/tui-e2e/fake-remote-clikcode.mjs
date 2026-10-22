@@ -117,6 +117,15 @@ lines.on('line', (line) => {
     ] } });
   } else if (request.type === 'query') {
     send({ type: 'chat', chat: message.chat, event: { type: 'result', requestId: request.requestId, ok: false, error: `unknown query ${request.query}` } });
+  } else if (request.type === 'open' && request.mode === 'new') {
+    // A new chat here, as the real bridge opens one: empty, in this machine's home.
+    const id = `new-${Date.now().toString(36)}`;
+    opened.set(message.chat, id);
+    const session = sessionFor(id);
+    session.name = undefined;
+    session.workspace = home;
+    send({ type: 'chat', chat: message.chat, event: { type: 'session', session } });
+    send({ type: 'chat', chat: message.chat, event: { type: 'result', requestId: request.requestId, ok: true, data: { sessionId: id } } });
   } else if (request.type === 'open' && request.mode === 'resume' && chats().some((chat) => chat.id === request.sessionId)) {
     opened.set(message.chat, request.sessionId);
     appendFileSync(join(fake, 'opens.log'), `${JSON.stringify({ chat: request.sessionId, pid: process.pid })}\n`);

@@ -62,5 +62,5 @@ export function remoteConversationOption(machine: MachineView, chat: IdeConversa
 export function updateText(view: Pick<MachineView, 'needsUpdate' | 'updating' | 'updateError'>): string {
   if (view.updating) return ' · updating ClikCode…';
   if (!view.needsUpdate) return '';
-  return view.updateError ? ` · ${chalk.yellow('update failed')} (/remote)` : ' · needs update (/remote)';
+  return view.updateError ? ` · ${chalk.yellow('update failed')} (/machine)` : ' · needs update (/machine)';
 }

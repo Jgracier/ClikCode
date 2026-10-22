@@ -13,7 +13,7 @@
  * machine (`updateError`) and shown, and not retried in a loop. A build with
  * no commit of its own (a packed npm build) has nothing to match: nothing
  * is updated by itself. Policy 'ask' never updates by itself; the user
- * updates from /remote, the editor's machine list, or /update in one of
+ * updates from /machine, the editor's machine list, or /update in one of
  * that machine's chats. */
 import { CLIKCODE_COMMIT } from '../version.js';
 import { installOnMachine, type InstallOutcome, type InstallReporter, type RemoteInfo } from './install.js';
@@ -84,7 +84,7 @@ export class AutoUpdates {
   /** A connection found `machine` outdated. Resolves once decided: with
    * the update (`done`, its outcome) when one starts or is already running
    * for it, undefined when none is due. The policy is read from the saved
-   * record, which /remote may have changed since. */
+   * record, which /machine may have changed since. */
   async consider(machine: RemoteMachine, localCommit: string | undefined = localBuildCommit()): Promise<{ done: Promise<InstallOutcome> } | undefined> {
     const already = this.running.get(machine.id);
     if (already) return { done: already };

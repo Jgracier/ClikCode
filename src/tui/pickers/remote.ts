@@ -1,32 +1,29 @@
-/** `/remote`: the machines ClikCode Remote shows on the board, and adding
- * one.
+/** Adding, updating and removing the machines /machine lists (and the board's
+ * Machines) -- what /remote used to be:
  *
- *   Added           the machines added, each connected / offline / needs update
- *   On your tailnet the user's own machines Tailscale knows (remote/tailscale.ts)
- *   Add by SSH address...
+ *   added machines     choose one: the chat moves there; Tab: update ClikCode
+ *                      there, how it is kept up to date, or remove it
+ *   On your tailnet    the user's own machines Tailscale knows (remote/tailscale.ts)
+ *   Add by SSH address any machine you can reach
  *
- * Choosing a new machine installs ClikCode there from GitHub main
- * (remote/install.ts), a step at a time, each step's line in the chat; then
- * its chats are on the board. Choosing an added one offers to update it (to
- * this build's commit, the one it is kept at), whether it is updated by
- * itself or only when asked (remote/updates.ts), or to remove it. Nothing
- * from this machine is copied to the other one. */
+ * Adding a machine asks which user to log in as, then installs ClikCode there
+ * from GitHub main (remote/install.ts), a step at a time, each step's line in
+ * the chat. Nothing from this machine is copied to the other one. */
 import chalk from 'chalk';
-import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
+import type { HarnessPrompter } from '../../harness/prompter.js';
 import { relativeTime } from '../../harness/protocol/format.js';
 import { chooseOption } from './choose.js';
 import { withSlowWait, type WaitingBand } from '../slow-wait.js';
-import { holdWindowMachines, reconnectWindowMachine, type MachineView } from '../../remote/connection.js';
+import { reconnectWindowMachine, type MachineView } from '../../remote/connection.js';
 import { forgetMachine, newMachineRecord, readMachines, updateMachine, updateMachines, updatePolicy, type RemoteMachine } from '../../remote/machines.js';
 import { installedRecord, localBuildCommit, updateRemoteMachine } from '../../remote/updates.js';
-import { discoverMachines, notYetAdded, readTailscaleStatus, type DiscoveredMachine } from '../../remote/tailscale.js';
+import type { DiscoveredMachine } from '../../remote/tailscale.js';
 import { installOnMachine, uninstallFromMachine, type InstallOutcome, type InstallReporter } from '../../remote/install.js';
 import { defaultLoginUser } from '../../remote/ssh.js';
 import { targetHost, targetUser, validateSshTarget, withUser } from '../../remote/shell.js';
-import type { InteractiveSlashOutcome } from '../slash/interactive-keys.js';
 import { wrapWords } from '../render/wrap.js';
 
-/** What /remote needs of the window it runs in. */
+/** What adding or managing a machine needs of the window it runs in. */
 export interface RemoteHost {
   readonly prompter: HarnessPrompter;
   /** A one-line question; undefined when Esc cancelled it. */
@@ -37,7 +34,7 @@ export interface RemoteHost {
 }
 
 /** A RemoteHost over the terminal's prompter alone, for lists that add a
- * machine outside /remote (/machine, the board's Machines): its questions on
+ * machine (/machine, the board's Machines): its questions on
  * the composer's line, its waits on the band, each step a line in the chat. */
 export function remoteHostOf(prompter: HarnessPrompter & Partial<WaitingBand>): RemoteHost {
   return {
@@ -68,10 +65,6 @@ function say(host: RemoteHost, mark: string, text: string, tail = ''): void {
   });
 }
 
-const ADDRESS_VALUE = '__address__';
-const ADDED = 'Added';
-const TAILNET = 'On your tailnet';
-const OTHER = 'Somewhere else';
 
 /** How an added machine is, in a word or two. */
 export function machineStateText(machine: RemoteMachine, view: MachineView | undefined, now = Date.now()): string {
@@ -86,80 +79,6 @@ export function machineStateText(machine: RemoteMachine, view: MachineView | und
 /** Discovered machines not already added (by Tailscale node, by name it is
  * reached at, or by installation id once it has one). */
 export { notYetAdded } from '../../remote/tailscale.js';
-
-export async function interactiveRemotePicker(host: RemoteHost): Promise<InteractiveSlashOutcome> {
-  const rl = host.prompter;
-  const machines = await readMachines();
-  // The added machines' state comes from the window's connections to them
-  // (made now for any it has none to, kept after the list closes). Only to
-  // show their state: nothing is updated by itself while the user is
-  // choosing what to do with a machine.
-  const connections = await holdWindowMachines();
-  let discovered: DiscoveredMachine[] = [];
-  let tailscaleError: string | undefined;
-  const tailscale = readTailscaleStatus().then(({ status, error }) => {
-    tailscaleError = error;
-    discovered = status ? discoverMachines(status) : [];
-  });
-  const settled = connections.views().map((view) => new Promise<void>((resolve) => {
-    const check = (): void => { if (view.state !== 'connecting') { stop(); resolve(); } };
-    const stop = connections.onChange(check);
-    setTimeout(() => { stop(); resolve(); }, 20_000).unref();
-    check();
-  }));
-  const options = (): PickerOption<string>[] => {
-    const now = Date.now();
-    const views = new Map(connections.views().map((view) => [view.machine.id, view]));
-    const rows: PickerOption<string>[] = machines.map((machine) => ({
-      label: machine.name,
-      detail: `· ${machineStateText(machine, views.get(machine.id), now)} · ${machine.sshTarget}`,
-      value: `machine:${machine.id}`,
-      group: ADDED,
-    }));
-    for (const machine of notYetAdded(discovered, machines)) {
-      rows.push({
-        label: machine.name,
-        detail: `· ${machine.os} · ${machine.online ? 'online' : `last seen ${machine.lastSeen ? relativeTime(machine.lastSeen, now) : 'a while ago'}`} · ${machine.os === 'windows' ? 'not supported yet' : 'install ClikCode'}`,
-        value: `tailscale:${machine.nodeId}`,
-        group: TAILNET,
-      });
-    }
-    rows.push({
-      label: 'Add by SSH address…',
-      detail: tailscaleError ? `· user@host or a Host alias · (${tailscaleError})` : '· user@host or a Host alias',
-      value: ADDRESS_VALUE,
-      group: OTHER,
-    });
-    return rows;
-  };
-  // Tailscale answers locally in milliseconds: the list opens with its
-  // machines in it, at its full height, rather than growing a row at a time.
-  await Promise.race([tailscale, new Promise((resolve) => setTimeout(resolve, 1500).unref())]);
-  let chosen: string | undefined;
-  try {
-    chosen = await chooseOption(rl, 'ClikCode Remote', options(), undefined, {
-      refreshedOptions: options, refresh: [tailscale, ...settled], rows: Math.max(8, Math.min(14, (process.stdout.rows ?? 24) - 16)),
-    });
-  } finally {
-    // The connections stay: the board and /machine use them next.
-    connections.release();
-  }
-  if (!chosen) return {};
-  if (chosen === ADDRESS_VALUE) {
-    const typed = await host.ask('SSH address (user@host, host, or a Host alias)');
-    if (!typed?.trim()) return {};
-    const target = validateSshTarget(typed);
-    return addMachine(host, newMachineRecord({ name: targetHost(target).split('.')[0] || target, sshTarget: target }));
-  }
-  if (chosen.startsWith('tailscale:')) {
-    const machine = discovered.find((item) => `tailscale:${item.nodeId}` === chosen);
-    if (!machine) return {};
-    const { notice } = await addDiscoveredMachine(host, machine);
-    return notice ? { notice } : {};
-  }
-  const machine = machines.find((item) => `machine:${item.id}` === chosen);
-  return machine ? manageMachine(host, machine) : {};
-}
 
 /** The step lines: each finished step, numbered, with what it found. */
 function stepLines(host: RemoteHost): InstallReporter {
@@ -220,7 +139,7 @@ export async function askLoginUser(host: RemoteHost, name: string, target: strin
 export interface AddedMachine { id?: string; notice?: string }
 
 /** Adds a machine Tailscale found (tailscale.ts), wherever machines are
- * listed (/remote, /machine, the board's Machines): asks which user to log in
+ * listed (/machine, the board's Machines): asks which user to log in
  * as, then installs ClikCode there from GitHub main, a step at a time. One
  * already added is its record; one whose install did not finish goes on
  * with the user it was given. */
@@ -245,9 +164,11 @@ export async function addDiscoveredMachine(host: RemoteHost, found: DiscoveredMa
   }));
 }
 
-async function addMachine(host: RemoteHost, machine: RemoteMachine, recorded = false): Promise<InteractiveSlashOutcome> {
-  const { notice } = await installNew(host, machine, recorded);
-  return notice ? { notice } : {};
+/** Adds a machine by its SSH address (user@host, host, or a Host alias from
+ * ~/.ssh/config): any machine you can reach, Tailscale or not. */
+export async function addByAddress(host: RemoteHost, typed: string): Promise<AddedMachine> {
+  const target = validateSshTarget(typed);
+  return installNew(host, newMachineRecord({ name: targetHost(target).split('.')[0] || target, sshTarget: target }));
 }
 
 async function installNew(host: RemoteHost, machine: RemoteMachine, recorded = false): Promise<AddedMachine> {
@@ -274,30 +195,34 @@ async function installNew(host: RemoteHost, machine: RemoteMachine, recorded = f
     installedRecord(record, info);
     record.lastSeen = new Date().toISOString();
   });
-  return { id: machine.id, notice: `${machine.name} is added. Its chats are on the board (← on an empty prompt). Sign in to providers there from its own chats.` };
+  return { id: machine.id, notice: `${machine.name} is added. Its chats are on the board (← on an empty prompt, ← again for machines); sign in to providers there from its own chats.` };
 }
 
-async function manageMachine(host: RemoteHost, machine: RemoteMachine): Promise<InteractiveSlashOutcome> {
-  const commit = localBuildCommit();
+/** An added machine's options (Tab on its row in /machine). */
+export function machineActions(machine: RemoteMachine): Array<{ label: string; value: string }> {
   const auto = updatePolicy(machine) === 'auto';
-  if (machine.updateError) say(host, chalk.yellow('!'), `The last update of ${machine.name} failed: ${machine.updateError}`);
-  const action = await chooseOption(host.prompter, machine.name, [
-    machine.ready
-      ? { label: 'Update ClikCode', detail: commit ? `· to this build's commit ${commit.slice(0, 8)}` : '· to GitHub main', value: 'update' }
-      : { label: 'Finish installing', detail: '· from GitHub main', value: 'install' },
-    {
-      label: `Updates: ${auto ? 'automatic' : 'ask first'}`,
-      detail: auto ? "· it is brought to this build's commit by itself; choose to ask first" : '· only when you update it; choose to update it by itself',
-      value: 'policy',
-    },
-    { label: 'Remove', detail: '· forget it here; optionally uninstall ClikCode there', value: 'remove' },
-  ]);
-  if (action === 'install') return addMachine(host, machine, true);
+  return [
+    machine.ready ? { label: 'Update ClikCode', value: 'update' } : { label: 'Finish installing', value: 'install' },
+    { label: auto ? 'Updates: automatic · ask first instead' : 'Updates: ask first · automatic instead', value: 'policy' },
+    { label: 'Remove…', value: 'remove' },
+  ];
+}
+
+/** One of machineActions, done: an update to this build's commit (else GitHub
+ * main), finishing an install, switching how it is kept up to date, or removing
+ * it (and optionally ClikCode there). */
+export async function machineAction(host: RemoteHost, machine: RemoteMachine, action: string): Promise<{ notice?: string }> {
+  const auto = updatePolicy(machine) === 'auto';
+  if (machine.updateError && action === 'update') say(host, chalk.yellow('!'), `The last update of ${machine.name} failed: ${machine.updateError}`);
+  if (action === 'install') {
+    const { notice } = await installNew(host, machine, true);
+    return notice ? { notice } : {};
+  }
   if (action === 'policy') {
     const updates = auto ? 'ask' : 'auto';
     await updateMachine(machine.id, (record) => { record.updates = updates; });
     return { notice: updates === 'ask'
-      ? `${machine.name} is updated only when you say so: from here, or /update in one of its chats.`
+      ? `${machine.name} is updated only when you say so: Tab on it in /machine, or /update in one of its chats.`
       : `${machine.name} is updated to this build by itself when it differs; its chats switch over once they are quiet.` };
   }
   if (action === 'update') {

@@ -32,7 +32,7 @@ const SLASH_GROUP_ORDER: readonly SlashGroup[] = [
  * otherwise the top of the list flips between four headers and prints
  * "Settings" twice. */
 export const SLASH_PALETTE_PINNED: readonly string[] = [
-  'resume', 'provider', 'account', 'model', 'new', 'permissions', 'settings', 'sessions', 'status', 'help',
+  'resume', 'provider', 'account', 'model', 'machine', 'new', 'permissions', 'settings', 'sessions', 'status', 'help',
 ];
 
 /** Every handler a dispatcher must implement. `as const` so both handler
@@ -44,7 +44,7 @@ export const SLASH_HANDLER_KEYS = [
   'provider', 'accounts', 'machine', 'login', 'logout', 'gateway',
   'model', 'effort', 'fast', 'permissions', 'sandbox', 'computer', 'send', 'options', 'capabilities', 'settings',
   'sessions', 'resume', 'search', 'rename', 'fork', 'redo', 'archive', 'delete',
-  'usage', 'doctor', 'agents', 'remote', 'update',
+  'usage', 'doctor', 'agents', 'update',
 ] as const;
 export type SlashHandlerKey = typeof SLASH_HANDLER_KEYS[number];
 
@@ -161,7 +161,7 @@ function entry(
 
 /** Commands about the terminal itself -- its mouse, its screen, leaving it.
  * An editor client neither lists nor runs them. */
-export const TERMINAL_ONLY_COMMANDS: ReadonlySet<string> = new Set(['select', 'redraw', 'exit', 'remote']);
+export const TERMINAL_ONLY_COMMANDS: ReadonlySet<string> = new Set(['select', 'redraw', 'exit']);
 
 export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('new', 'Conversation', 'start a fresh conversation (the current one stays resumable)', { aliases: ['clear', 'reset'], argHint: '[first message]' }),
@@ -184,7 +184,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
 
   entry('provider', 'Provider', 'choose a provider', { aliases: ['switch'] }),
   entry('account', 'Provider', 'switch, add or remove accounts', { aliases: ['accounts'], handlerKey: 'accounts', argHint: '[label|login|add|remove …]', duringTurn: 'apply' }),
-  entry('machine', 'Provider', 'move this chat to another machine (this one, or one added in /remote)'),
+  entry('machine', 'Provider', 'the machine this chat runs on: move it, add one (Tailscale or SSH), or Tab to update or remove one'),
   entry('login', 'Provider', 'sign in to the current provider', { availability: needsHarness('signing in') }),
   entry('logout', 'Provider', 'sign the current account out', { availability: needsHarness('signing out') }),
   entry('gateway', 'Provider', 'route this conversation through ClikDeploy Gateway'),
@@ -236,7 +236,6 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('redo', 'Conversation', 'go back to before one of your prompts and send it again, edited or not; its edits and later ones are put back unless "keep"', { argHint: '[@N] [keep]' }),
   entry('archive', 'Sessions', 'archive this conversation'),
   entry('delete', 'Sessions', 'delete this conversation', { argHint: '[confirm]' }),
-  entry('remote', 'Sessions', 'your other machines on the board: add one (ClikCode installs there over SSH), update or remove it'),
 
   entry('status', 'Info', 'current configuration'),
   entry('context', 'Info', 'context window and token usage reported by the harness'),
