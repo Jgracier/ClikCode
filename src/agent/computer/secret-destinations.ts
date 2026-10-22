@@ -219,7 +219,11 @@ export async function sendToDestinations(stateDir: string, list: readonly Destin
     const extra = takesConnectionValues(template) ? readConnectionValues(d.connectionValues) : {};
     if (extra.problem) { out.push({ label, ok: false, message: `NOT connected: ${extra.problem}` }); continue; }
     if (stdin !== undefined && extra.values && Object.keys(extra.values).length) stdin = JSON.stringify({ ...(JSON.parse(stdin) as Record<string, unknown>), baseUrlVariables: extra.values });
-    // A value goes to the program on stdin when the template says so: then it is in no command line.
+    // The installed clikdeploy CLI (1.0.34) cannot read `--args-json -` from stdin: it tries to parse "-" as JSON. Until a CLI
+    // that does is the floor, the JSON goes inline in that flag (the other clikdeploy destinations always did). For any other
+    // program the template's stdin is still used, so the value is in no command line.
+    const dash = args.indexOf('--args-json');
+    if (stdin !== undefined && dash >= 0 && args[dash + 1] === '-') { args[dash + 1] = stdin; stdin = undefined; }
     const result = await runCli(program!, args, { ...(stdin !== undefined ? { stdin } : {}), signal, timeoutMs: 90_000 });
     if (result.missing) { out.push({ label, ok: false, message: `The ${program} command is not installed on this computer.` }); continue; }
     if (template.verify === 'connection' && params.integration) {

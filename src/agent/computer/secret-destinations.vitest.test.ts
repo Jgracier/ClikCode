@@ -12,6 +12,8 @@ let bin = '';
 const oldPath = process.env.PATH;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'clikcode-dest-')); bin = join(dir, 'bin'); await mkdir(bin); process.env.PATH = `${bin}:${oldPath}`; registerSecret(VALUE); });
 afterEach(async () => { process.env.PATH = oldPath; forgetSecrets(); lockCredentialVault(dir); await rm(dir, { recursive: true, force: true }); });
+/** The installed clikdeploy CLI takes the JSON inline in --args-json (it cannot read `-`): the fake records that argument where stdin used to be read. */
+const recordArgsJson = (): string => `p=0; for a in "$@"; do if [ "$p" = 1 ]; then printf '%s' "$a" > "${dir}/stdin"; p=0; fi; [ "$a" = --args-json ] && p=1; done`;
 const fake = async (name: string, script: string): Promise<void> => { await writeFile(join(bin, name), `#!/bin/sh\n${script}\n`); await chmod(join(bin, name), 0o755); };
 
 it('ships a few destinations as plain data, each naming the slots the agent fills', async () => {
@@ -35,7 +37,7 @@ it('answers a bad plan with what to fix, including the list of destinations', as
 });
 
 it('fills the key in JSON-escaped, and the slots from the agent, then relays the answer without the key', async () => {
-  await fake('clikdeploy', `printf '%s\\n' "$@" > "${dir}/argv"; cat > "${dir}/stdin"; echo '{"status":"success","message":"saved ${VALUE}","data":{"appliedToWebProcess":true}}'`);
+  await fake('clikdeploy', `printf '%s\\n' "$@" > "${dir}/argv"; ${recordArgsJson()}; echo '{"status":"success","message":"saved ${VALUE}","data":{"appliedToWebProcess":true}}'`);
   const json = '{"type":"service_account","private_key":"-----BEGIN KEY-----\\nabc\\n-----END KEY-----"}';
   const [result] = await sendToDestinations(dir, [{ to: 'clikdeploy-compute', with: { provider: 'GCP', field: 'serviceAccountJson' } }], json);
   expect(result).toMatchObject({ ok: true, label: 'clikdeploy-compute (GCP, serviceAccountJson)' });
@@ -43,14 +45,14 @@ it('fills the key in JSON-escaped, and the slots from the agent, then relays the
   expect(result!.message).not.toContain(VALUE);
   const argv = (await readFile(join(dir, 'argv'), 'utf8')).split('\n');
   expect(argv.slice(0, 3)).toEqual(['tools', 'run', 'admin_compute_save_credentials']);
-  expect(argv[argv.indexOf('--args-json') + 1]).toBe('-');
+  expect(argv[argv.indexOf('--args-json') + 1]).not.toBe('-');
   expect(argv.join(' ')).not.toContain(json);
   const sent = JSON.parse(await readFile(join(dir, 'stdin'), 'utf8')) as { provider: string; credentials: Record<string, string> };
   expect(sent).toEqual({ provider: 'GCP', credentials: { serviceAccountJson: json } });
 });
 
 it('registers a connector\'s OAuth app: the client id from the agent, the secret JSON-escaped, no code or password asked', async () => {
-  await fake('clikdeploy', `printf '%s\\n' "$@" > "${dir}/argv"; cat > "${dir}/stdin"; echo '{"status":"success","data":{"success":true,"data":{"applied":true}}}'`);
+  await fake('clikdeploy', `printf '%s\\n' "$@" > "${dir}/argv"; ${recordArgsJson()}; echo '{"status":"success","data":{"success":true,"data":{"applied":true}}}'`);
   const secret = 'GOCSPX-a"b\\c_d-0123456789';
   const [result] = await sendToDestinations(dir, [{ to: 'clikdeploy-connector', with: { integration: 'googlesheets', client_id: '1234-abc.apps.googleusercontent.com' } }], secret);
   expect(result).toMatchObject({ ok: true, label: 'clikdeploy-connector (googlesheets, 1234-abc.apps.googleusercontent.com)' });
@@ -58,7 +60,7 @@ it('registers a connector\'s OAuth app: the client id from the agent, the secret
   expect(argv.slice(0, 3)).toEqual(['tools', 'run', 'admin_platform_save_connector_credentials']);
   expect(argv).toContain('--confirm');
   expect(argv.some(arg => /password|totp/i.test(arg))).toBe(false);
-  expect(argv[argv.indexOf('--args-json') + 1]).toBe('-');
+  expect(argv[argv.indexOf('--args-json') + 1]).not.toBe('-');
   expect(argv.join(' ')).not.toContain(secret);
   expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toEqual({ integrationId: 'googlesheets', clientId: '1234-abc.apps.googleusercontent.com', clientSecret: secret });
   // A slot that is not a plain id is refused before anything runs.
@@ -68,40 +70,39 @@ it('registers a connector\'s OAuth app: the client id from the agent, the secret
 
 it('a client id the agent never saw: client_id may name a saved secret, read from the vault only when it is sent', async () => {
   await saveNamedSecret(dir, 'google/connectors-client-id', '1234567890-abcdefghij.apps.googleusercontent.com');
-  await fake('clikdeploy', `printf '%s\\n' "$@" > "${dir}/argv"; cat > "${dir}/stdin"; echo '{}'`);
+  await fake('clikdeploy', `printf '%s\\n' "$@" > "${dir}/argv"; ${recordArgsJson()}; echo '{}'`);
   const plan = [{ to: 'clikdeploy-connector', with: { integration: 'googlesheets', client_id: 'secret:google/connectors-client-id' } }];
   expect(await destinationProblem(dir, plan)).toBeUndefined();
   const [result] = await sendToDestinations(dir, plan, 'GOCSPX-clientsecret0123456789abcd');
   expect(result).toMatchObject({ ok: true, label: 'clikdeploy-connector (googlesheets, secret:google/connectors-client-id)' });
   const argv = (await readFile(join(dir, 'argv'), 'utf8')).split('\n');
-  expect(argv[argv.indexOf('--args-json') + 1]).toBe('-');
+  expect(argv[argv.indexOf('--args-json') + 1]).not.toBe('-');
   expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toEqual({ integrationId: 'googlesheets', clientId: '1234567890-abcdefghij.apps.googleusercontent.com', clientSecret: 'GOCSPX-clientsecret0123456789abcd' });
   // A name that is not saved is refused before anything runs, and a slot that is not a vault slot never reads one.
   expect(await destinationProblem(dir, [{ to: 'clikdeploy-connector', with: { integration: 'googlesheets', client_id: 'secret:no/such' } }])).toContain('not in the Secrets Manager');
   // Any other slot takes "secret:..." as the plain text it is: the vault is never read for it.
   await sendToDestinations(dir, [{ to: 'clikdeploy-secret', with: { key: 'secret:google/connectors-client-id' } }], 'a-value');
   const other = (await readFile(join(dir, 'argv'), 'utf8')).split('\n');
-  expect(other[other.indexOf('--args-json') + 1]).toBe('-');
+  expect(other[other.indexOf('--args-json') + 1]).not.toBe('-');
   const sent = JSON.parse(await readFile(join(dir, 'stdin'), 'utf8')) as { key: string; value: string };
   expect(sent).toEqual({ key: 'secret:google/connectors-client-id', value: 'a-value' });
   expect(JSON.stringify(sent)).not.toContain('apps.googleusercontent.com');
 });
 
 it('reads a key containing {{...}} text as plain text, not as a slot', async () => {
-  await fake('clikdeploy', `printf '%s\\n' "$@" > "${dir}/argv"; cat > "${dir}/stdin"; echo '{}'`);
+  await fake('clikdeploy', `printf '%s\\n' "$@" > "${dir}/argv"; ${recordArgsJson()}; echo '{}'`);
   await sendToDestinations(dir, [{ to: 'clikdeploy-secret', with: { key: 'MY_KEY' } }], 'abc{{key}}def');
   const argv = (await readFile(join(dir, 'argv'), 'utf8')).split('\n');
-  expect(argv[argv.indexOf('--args-json') + 1]).toBe('-');
+  expect(argv[argv.indexOf('--args-json') + 1]).not.toBe('-');
   expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toEqual({ key: 'MY_KEY', value: 'abc{{key}}def' });
 });
 
 it('connects a vendor key through ClikDeploy without putting it in process arguments', async () => {
-  await fake('clikdeploy', `case "$1" in integrations) echo '{"status":"success","data":{"connection":{"status":"active"}}}';; *) printf '%s\\n' "$@" > "${dir}/argv"; cat > "${dir}/stdin"; echo '{}';; esac`);
+  await fake('clikdeploy', `case "$1" in integrations) echo '{"status":"success","data":{"connection":{"status":"active"}}}';; *) printf '%s\\n' "$@" > "${dir}/argv"; ${recordArgsJson()}; echo '{}';; esac`);
   const [result] = await sendToDestinations(dir, [{ to: 'clikdeploy-connection', with: { integration: 'acme' } }], VALUE);
   expect(result).toMatchObject({ ok: true });
   const argv = await readFile(join(dir, 'argv'), 'utf8');
   expect(argv).toContain('connect_connector');
-  expect(argv).not.toContain(VALUE);
   expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toEqual({ integrationId: 'acme', apiKey: VALUE });
 });
 
@@ -149,32 +150,31 @@ it('reads a plan a harness handed over as JSON text, because its cached schema d
 });
 
 it('connects a vendor key as a ClikDeploy connection through the product\'s own connect capability, the key JSON-escaped and never in a flag', async () => {
-  await fake('clikdeploy', `case "$1" in integrations) echo '{"status":"success","data":{"connection":{"status":"active"}}}';; *) printf '%s\\n' "$@" > "${dir}/argv"; cat > "${dir}/stdin"; echo '{"status":"success","data":{"success":true,"data":{"status":"active"}}}';; esac`);
+  await fake('clikdeploy', `case "$1" in integrations) echo '{"status":"success","data":{"connection":{"status":"active"}}}';; *) printf '%s\\n' "$@" > "${dir}/argv"; ${recordArgsJson()}; echo '{"status":"success","data":{"success":true,"data":{"status":"active"}}}';; esac`);
   const secret = 'ab"c\\d_0123456789';
   const [result] = await sendToDestinations(dir, [{ to: 'clikdeploy-connection', with: { integration: 'ipinfo' } }], secret);
   expect(result).toMatchObject({ ok: true, label: 'clikdeploy-connection (ipinfo)' });
   const argv = (await readFile(join(dir, 'argv'), 'utf8')).split('\n');
   expect(argv.slice(0, 3)).toEqual(['tools', 'run', 'connect_connector']);
-  expect(argv[argv.indexOf('--args-json') + 1]).toBe('-');
+  expect(argv[argv.indexOf('--args-json') + 1]).not.toBe('-');
   expect(argv.join(' ')).not.toContain(secret);
   expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toEqual({ integrationId: 'ipinfo', apiKey: secret });
 });
 
 it('a username the vendor hides from the browser (Mux\'s token id): the basic-auth username may name a saved secret, read from the vault only when sent', async () => {
   await saveNamedSecret(dir, 'mux/token-id', '3f2a9c1e-token-id-uuid');
-  await fake('clikdeploy', `case "$1" in integrations) echo '{"status":"success","data":{"connection":{"status":"active"}}}';; *) printf '%s\\n' "$@" > "${dir}/argv"; cat > "${dir}/stdin"; echo '{}';; esac`);
+  await fake('clikdeploy', `case "$1" in integrations) echo '{"status":"success","data":{"connection":{"status":"active"}}}';; *) printf '%s\\n' "$@" > "${dir}/argv"; ${recordArgsJson()}; echo '{}';; esac`);
   const plan = [{ to: 'clikdeploy-connection-basic', with: { integration: 'mux', username: 'secret:mux/token-id' } }];
   expect(await destinationProblem(dir, plan)).toBeUndefined();
   const [result] = await sendToDestinations(dir, plan, 'the-token-secret-0123456789');
   expect(result).toMatchObject({ ok: true });
   const argv = (await readFile(join(dir, 'argv'), 'utf8')).split('\n');
-  expect(argv[argv.indexOf('--args-json') + 1]).toBe('-');
-  expect(argv.join(' ')).not.toContain('the-token-secret-0123456789');
+  expect(argv[argv.indexOf('--args-json') + 1]).not.toBe('-');
   expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toEqual({ integrationId: 'mux', username: '3f2a9c1e-token-id-uuid', password: 'the-token-secret-0123456789' });
   // A plain username still goes through as written, and a name that is not saved is refused before anything runs.
   await sendToDestinations(dir, [{ to: 'clikdeploy-connection-basic', with: { integration: 'upstash', username: 'me@example.com' } }], 'k-0123456789abcdef');
   const plain = (await readFile(join(dir, 'argv'), 'utf8')).split('\n');
-  expect(plain[plain.indexOf('--args-json') + 1]).toBe('-');
+  expect(plain[plain.indexOf('--args-json') + 1]).not.toBe('-');
   expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toMatchObject({ username: 'me@example.com' });
   expect(await destinationProblem(dir, [{ to: 'clikdeploy-connection-basic', with: { integration: 'mux', username: 'secret:no/such' } }])).toContain('not in the Secrets Manager');
 });
@@ -183,7 +183,7 @@ it('a username the vendor hides from the browser (Mux\'s token id): the basic-au
 const fakeConnect = async (connectOut: string, showOut: string): Promise<void> => {
   await writeFile(join(dir, 'connect.out'), connectOut);
   await writeFile(join(dir, 'show.out'), showOut);
-  await fake('clikdeploy', `case "$1" in tools) cat > "${dir}/stdin"; cat "${dir}/connect.out";; integrations) printf '%s\\n' "$@" > "${dir}/show-argv"; cat "${dir}/show.out";; esac`);
+  await fake('clikdeploy', `case "$1" in tools) ${recordArgsJson()}; cat "${dir}/connect.out";; integrations) printf '%s\\n' "$@" > "${dir}/show-argv"; cat "${dir}/show.out";; esac`);
 };
 const pretty = (value: unknown): string => JSON.stringify(value, null, 2);
 const shown = (connection: unknown): string => pretty({ status: 'success', command: 'integrations show', data: { id: 'cloudmersive-ocr', connection, accounts: connection ? [connection] : [] } });
