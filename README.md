@@ -283,6 +283,17 @@ Nothing is copied from this machine — no accounts, sign-ins or settings: the
 other machine signs in to its providers from scratch, in its own chats.
 Windows machines are listed but not supported yet.
 
+It works both ways. Each time this machine connects to one you added, it tells
+the ClikCode there how to reach it back: its Tailscale name and the user it runs
+as. That machine then lists this one in its own `/machine` and board, so you can
+sit at the other machine, drive this one, and move a chat back here. This only
+happens over Tailscale, whose name the other machine is known to reach; without
+Tailscale you add this machine there yourself by SSH address. A machine listed
+this way is updated only when you say so ("ask first"): two machines each keeping
+the other at its own build would undo each other's updates. If that machine
+already listed this one, its record keeps the address and update setting you
+gave it.
+
 A machine is kept at this machine's build: when it runs another commit, the
 board updates it to this build's commit in the background (fetched by sha,
 built, installed), once per machine per commit, and its chats switch to the

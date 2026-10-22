@@ -26,6 +26,7 @@ import { IDE_PROTOCOL } from '../ide/protocol-version.js';
 import { bridgeScript } from './install.js';
 import { autoUpdates, localBuildCommit, type AutoUpdates } from './updates.js';
 import { readMachines, updateMachine, type RemoteMachine } from './machines.js';
+import { selfAsPeer, type PeerMachine } from './peer.js';
 import { spawnSsh } from './ssh.js';
 
 export type MachineState = 'connecting' | 'connected' | 'offline';
@@ -73,6 +74,8 @@ export interface LinkOptions {
   wanted?: () => boolean;
   /** The automatic updates to go through (tests give their own). */
   autoUpdates?: AutoUpdates;
+  /** This machine, told to the one connected to (remote/peer.ts); tests give their own. */
+  self?: () => Promise<PeerMachine | undefined>;
 }
 
 /** A request answered by a `result`, without its id (the channel gives it one). */
@@ -241,6 +244,8 @@ export class RemoteLink {
       this.revision = event.revision ?? 1;
       this.set({ state: 'connected', needsUpdate: outdated, error: undefined, ...(outdated ? {} : { updateError: undefined }) });
       this.send({ type: 'chat-attach', chat: CHAT });
+      // Both ways: the machine there lists this one, to drive it back from.
+      void (this.options.self ?? selfAsPeer)().then((peer) => { if (peer) this.send({ type: 'host-peer', machine: peer }); }, () => undefined);
       if (outdated && this.updatesAllowed()) this.autoUpdate(localCommit);
       return;
     }
