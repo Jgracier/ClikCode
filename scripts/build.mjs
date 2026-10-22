@@ -29,7 +29,24 @@ import { chmod, readFile, mkdir, writeFile } from 'node:fs/promises';
 import { builtinModules } from 'node:module';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { build as esbuild } from 'esbuild';
+
+/** esbuild's native binary where it runs. Where it does not -- it needs a
+ * newer OS than some machines ClikCode runs on: macOS 12, for a Mac on 10.15
+ * -- the same esbuild compiled to WebAssembly: slower, the same output. */
+async function loadEsbuild() {
+  const native = await import('esbuild');
+  try {
+    await native.transform('');
+    return native;
+  } catch (error) {
+    const wasm = await import('esbuild-wasm').catch(() => undefined);
+    if (!wasm) throw error;
+    const said = String(error?.message ?? error).split('\n').find((line) => line.trim()) ?? '';
+    console.log(`esbuild's native binary does not run here (${said.slice(0, 200)}); building with esbuild-wasm ${wasm.version} instead.`);
+    return wasm;
+  }
+}
+const { build: esbuild } = await loadEsbuild();
 
 /** esbuild has already printed the diagnostics (logLevel: 'info'); skip the redundant stack trace. */
 async function build(options) {

@@ -288,7 +288,9 @@ export function macportsInstallScript(source: Extract<NodeSource, { kind: 'macpo
     // Every archive is checked before any is unpacked.
     'get() { fetch "$base/$1/$2" "$tmp/$2" || { echo "step-error=could not download $base/$1/$2"; exit 3; }; actual="$(sha256 "$tmp/$2")"; [ "$actual" = "$3" ] || { echo "step-error=checksum mismatch for $2: expected $3, got $actual"; exit 4; }; }',
     ...[node, ...libs, npm].map((archive) => `get ${shellQuote(archive.port)} ${shellQuote(archive.file)} ${shellQuote(archive.sha256)}`),
-    ...[node, ...libs, npm].map((archive) => `tar -xjf "$tmp/"${shellQuote(archive.file)} -C "$tmp/x" || { echo ${shellQuote(`step-error=could not unpack ${archive.file}`)}; exit 6; }`),
+    // Not share/ (man pages, docs): nothing here uses it, and on macOS 10.15
+    // tar cannot restore the resource fork of nodejs22's man page.
+    ...[node, ...libs, npm].map((archive) => `tar -xjf "$tmp/"${shellQuote(archive.file)} -C "$tmp/x" --exclude './opt/local/share/*' || { echo ${shellQuote(`step-error=could not unpack ${archive.file}`)}; exit 6; }`),
     'from="$tmp/x/opt/local"',
     'new="$dir/node.new"',
     'mkdir -p "$new/bin" "$new/lib/node_modules"',
@@ -383,7 +385,15 @@ export function buildScript(pinned = false): string {
     `cd ${SHARE}/src`,
     `pm="$(node -e "const p=require('./package.json').packageManager||'';process.stdout.write(p.startsWith('pnpm@')?p.slice(5).split('+')[0]:'')" 2>/dev/null || true)"`,
     `if [ -n "$pm" ] && command -v corepack >/dev/null 2>&1; then pnpm() { COREPACK_ENABLE_DOWNLOAD_PROMPT=0 corepack pnpm "$@"; }; else pnpm() { npx --yes "pnpm@\${pm:-${PNPM_FALLBACK}}" "$@"; }; fi`,
-    'pnpm install --frozen-lockfile',
+    // esbuild's install step runs its native binary, which needs a newer OS
+    // than some machines ClikCode runs on (macOS 12; a Mac on 10.15 cannot).
+    // Where that binary is what failed, the install goes without that step and
+    // the build uses esbuild's WebAssembly build (scripts/build.mjs).
+    'if ! pnpm install --frozen-lockfile; then',
+    `  if node -e "require('esbuild').transformSync('')" >/dev/null 2>&1; then exit 1; fi`,
+    '  echo "esbuild\'s native binary does not run on this machine: installing without it, to build with esbuild-wasm" >&2',
+    '  pnpm install --frozen-lockfile --ignore-scripts',
+    'fi',
     ...(pinned ? ['pnpm run build', 'pnpm run install-local --force --even-if-behind'] : ['pnpm run install-local']),
     'echo build=ok',
   ].join('\n');
@@ -432,7 +442,9 @@ export function uninstallScript(data: boolean): string {
 const STEP_TIMEOUT_MS = 5 * 60_000;
 const BUILD_TIMEOUT_MS = 20 * 60_000;
 
-const lastLines = (text: string, count = 3): string => text.trim().split('\n').filter(Boolean).slice(-count).join(' / ');
+/** A package manager's own news (`npm notice` a newer npm is out), never why anything failed. */
+const NOTICE = /^\s*(npm (notice|warn)|WARN\s)/;
+const lastLines = (text: string, count = 3): string => text.trim().split('\n').filter((line) => line.trim() && !NOTICE.test(line)).slice(-count).join(' / ');
 
 /** What a step's script said went wrong, or its last words. */
 function stepError(result: SshResult): string {

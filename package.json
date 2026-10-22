@@ -48,6 +48,7 @@
     "conf": "^15.1.0",
     "cross-spawn": "7.0.6",
     "esbuild": "0.28.1",
+    "esbuild-wasm": "0.28.1",
     "marked": "15.0.12",
     "typescript": "6.0.3",
     "vitest": "4.1.11"
