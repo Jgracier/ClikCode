@@ -769,10 +769,11 @@ SCENARIOS = {
             ('keys', 'mach'), ('wait_for', '/machine', 10), ('settle', 0.5), ('snap', 'menu-machine'),
             ('keys', '\x7f\x7f\x7f\x7f'), ('settle', 0.5),
             ('keys', 'model grok-4-fast'), ('settle', 1), ('keys', '\r'), ('wait_for', 'grok-4-fast', 30), ('settle', 1), ('snap', 'model'),
-            # Left, Left: the machines. This machine does not list the chat: it is live on devbox only.
-            ('keys', '\x1b[D'), ('wait_for', '← machines', 20), ('settle', 1), ('snap', 'board'),
+            # Left: the chats of the machine this chat is on, devbox -- it is listed there.
+            ('keys', '\x1b[D'), ('wait_for', 'hello there', 20), ('settle', 1), ('snap', 'board'),
+            # Left again: the machines; this one's chats do not list it: it is live on devbox only.
             ('keys', '\x1b[D'), ('wait_for', 'devbox  · connected', 20), ('settle', 1),
-            ('keys', '\x1b[C'), ('wait_for', '← machines', 20), ('settle', 1), ('snap', 'here'),
+            ('keys', '\x1b[A'), ('keys', '\x1b[C'), ('wait_for', '← machines', 20), ('settle', 1), ('snap', 'here'),
             # devbox lists it, and it opens there, live: the answer comes from devbox, and nothing moves.
             ('keys', '\x1b[D'), ('wait_for', 'devbox  · connected', 20), ('settle', 1),
             ('keys', '\x1b[B'), ('keys', '\x1b[C'), ('wait_for', 'hello there', 20), ('settle', 1), ('snap', 'there'),
@@ -793,15 +794,15 @@ SCENARIOS = {
             'answered': ['where are you now', 'Answered on devbox.'],
             'again': ['and again', 'Second answer on devbox.'],
             'menu': ['/model', '/provider'],
-            'menu-machine': ['/machine', 'move this chat to another machine'],
+            'menu-machine': ['/machine', 'the machine this chat runs on'],
             'model': ['devbox  •', 'grok-4-fast'],
-            'board': ['No conversations yet'],
+            'board': ['hello there'],
             'here': ['No conversations yet'],
             'there': ['hello there'],
             'live': ['devbox  •', 'grok-4-fast', 'and again', 'third time', 'Third answer on devbox.'],
         },
         'snap_lacks': {'moved': ['is not signed in', 'Moving to devbox', 'Moved to'], 'answered': ['moved from', 'clikcode_resource_note'],
-                       'board': ['hello there', 'moved to'], 'here': ['hello there', 'moved to'], 'live': ['goes on here', 'read-only']},
+                       'board': ['moved to'], 'here': ['hello there', 'moved to'], 'live': ['goes on here', 'read-only']},
         'never': ['ENOENT', 'This conversation moved from', 'clikcode_resource_note', 'Connection to devbox', 'Moved to devbox', 'Moving to devbox'],
     },
     # A chat on another machine over a slow link (devbox's every byte back
@@ -971,7 +972,7 @@ SCENARIOS = {
         ],
         'watch': [],
         'snap_contains': {
-            'machines': ['devbox', 'needs update (/remote)'],
+            'machines': ['devbox', 'needs update (/machine)'],
             'opened': ['devbox runs another ClikCode build than this one. Type /update to update it'],
             # "on <host>": the fake machines share this one's hostname.
             'updated': ['1/3 Getting ClikCode from GitHub', '2/3 Building and installing', '3/3 Checking the install', '→', '; chats switch over once they are quiet.'],
