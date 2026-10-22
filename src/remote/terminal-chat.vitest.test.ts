@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { createInterface } from 'node:readline';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
-import { remoteResume, runRemoteChat } from './terminal-chat.js';
+import { remotePalette, remoteResume, runRemoteChat } from './terminal-chat.js';
 import { newMachineRecord, updateMachines } from './machines.js';
 import type { TerminalHarnessPrompter } from '../tui/prompter.js';
 
@@ -23,7 +23,7 @@ class FakeRemoteBridge extends EventEmitter {
   readonly stdin = new PassThrough();
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
-  readonly requests: Array<{ type: string; mode?: string; sessionId?: string; text?: string }> = [];
+  readonly requests: Array<{ type: string; mode?: string; sessionId?: string; text?: string; query?: string }> = [];
   private chat = '';
   constructor() {
     super();
@@ -37,6 +37,13 @@ class FakeRemoteBridge extends EventEmitter {
         this.say({ type: 'result', requestId: request.requestId, ok: true, data: { sessionId: request.sessionId } });
       }
       if (request.type === 'send') this.say({ type: 'send-complete', id: request.id });
+      if (request.type === 'query' && request.query === 'slash-commands') {
+        this.say({ type: 'result', requestId: request.requestId, ok: true, data: [
+          { command: '/model', description: 'choose the model', argHint: '[model]', group: 'Provider', argValues: [{ value: 'opus' }, { value: 'sonnet' }] },
+          { command: '/resume', description: 'open another conversation', group: 'Conversation' },
+          { command: '/update', description: 'update ClikCode', group: 'ClikCode' },
+        ] });
+      }
     });
     setImmediate(() => this.write({ type: 'host-ready', version: 't', protocol: 1, revision: 3, pid: 1 }));
   }
@@ -51,15 +58,15 @@ class FakeRemoteBridge extends EventEmitter {
 /** A terminal whose prompt is answered by the test; everything else is noted. */
 const fakeTerminal = () => {
   const said: string[] = [];
-  const prompts: Array<{ answer: (line: string) => void }> = [];
+  const prompts: Array<{ answer: (line: string) => void; items: Array<{ value: string; argValues?: () => unknown }>; options: Record<string, unknown> }> = [];
   const terminal = new Proxy({} as Record<string, unknown>, {
     get: (_target, key) => {
       if (key === 'question') {
-        return (_prompt: string, _items: unknown, options: { signal?: AbortSignal }) => new Promise<string>((resolve, reject) => {
+        return (_prompt: string, items: Array<{ value: string }>, options: { signal?: AbortSignal }) => new Promise<string>((resolve, reject) => {
           const interrupted = () => reject(Object.assign(new Error('interrupted'), { code: 'ERR_PROMPT_INTERRUPTED' }));
           if (options.signal?.aborted) { interrupted(); return; }
           options.signal?.addEventListener('abort', interrupted, { once: true });
-          prompts.push({ answer: resolve });
+          prompts.push({ answer: resolve, items, options });
         });
       }
       if (key === 'activity') return (line: string) => said.push(line);
@@ -108,4 +115,38 @@ describe('a chat on another machine whose bridge leaves for a newer build', () =
     expect(await outcome).toBe('interrupted');
     expect(bridges).toHaveLength(2);
   }, 20_000);
+});
+
+describe('a chat on another machine\'s slash menu', () => {
+  it('is that machine\'s commands, with /machine, and a command chosen runs there', async () => {
+    const machine = newMachineRecord({ name: 'devbox', sshTarget: 'devbox', ready: true });
+    await updateMachines(() => [machine]);
+    const bridges: FakeRemoteBridge[] = [];
+    const { terminal, prompts } = fakeTerminal();
+    const running = runRemoteChat(terminal, 'local-1', { machineId: machine.id, chatId: 'c1' }, undefined, () => {
+      const bridge = new FakeRemoteBridge();
+      bridges.push(bridge);
+      return bridge as unknown as ChildProcessWithoutNullStreams;
+    });
+    const outcome = running.then(() => 'returned', (error: Error) => error.message);
+    await until(() => prompts.length === 1);
+    // The menu is the machine's, read before the first prompt, opened by Right as a chat here does.
+    expect(prompts[0]!.items.map((item) => item.value)).toEqual(['/model', '/update', '/machine']);
+    expect(prompts[0]!.options).toMatchObject({ rightArrowPalette: true });
+    expect(prompts[0]!.items[0]!.argValues?.()).toEqual([{ value: 'opus' }, { value: 'sonnet' }]);
+    // Chosen, it is sent to that machine; the menu is read again after it.
+    const queries = (): number => bridges[0]!.requests.filter((request) => request.type === 'query').length;
+    expect(queries()).toBe(1);
+    prompts[0]!.answer('/model sonnet');
+    await until(() => prompts.length === 2);
+    expect(bridges[0]!.requests.find((request) => request.type === 'send')).toMatchObject({ text: '/model sonnet' });
+    expect(queries()).toBe(2);
+    bridges[0]!.drop();
+    expect(await outcome).toBe('interrupted');
+  }, 20_000);
+
+  it('/machine is offered even by a machine that does not list it; /resume is Left\'s', () => {
+    expect(remotePalette([]).map((row) => row.value)).toEqual(['/machine']);
+    expect(remotePalette([{ command: '/machine', description: 'move' }, { command: '/resume', description: 'r' }]).map((row) => row.value)).toEqual(['/machine']);
+  });
 });
