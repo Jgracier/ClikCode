@@ -19,9 +19,11 @@ function siteOrigin(url: string): string {
  * Only that leading region label is ignored when matching a saved login, so the
  * same account works whichever region the redirect picks. Nothing else is loosened. */
 const REGION_LABEL = /^[a-z]{2}(?:-[a-z]+)+-\d+\./;
+/** `www.` is the same site as the bare host: a login saved at example.com is found at www.example.com and back. */
+const WWW_LABEL = /^www\./;
 export function siteKey(url: string): string {
   const { protocol, hostname, port } = new URL(siteOrigin(url));
-  return `${protocol}//${hostname.replace(REGION_LABEL, '')}${port ? `:${port}` : ''}`;
+  return `${protocol}//${hostname.replace(REGION_LABEL, '').replace(WWW_LABEL, '')}${port ? `:${port}` : ''}`;
 }
 export function sameSite(a: string, b: string): boolean {
   try { return siteKey(a) === siteKey(b); } catch { return false; }
@@ -129,7 +131,7 @@ type SavedLogin = { id: string; label: string; rejected: boolean };
  * password. Shown only in the user's own picker, never to the model. */
 export function loginLabel(fields: Readonly<Record<string, string>>): string {
   const order = ['accountId', 'email', 'username'];
-  const keys = [...order.filter(key => fields[key]), ...Object.keys(fields).filter(key => !order.includes(key) && key !== 'password' && fields[key])];
+  const keys = [...order.filter(key => fields[key]), ...Object.keys(fields).filter(key => !order.includes(key) && !/password/i.test(key) && fields[key])];
   const values = [...new Set(keys.map(key => fields[key]!))];
   return values.join(' · ') || 'Saved login';
 }
@@ -283,4 +285,54 @@ export async function backfillSecretMeta(stateDir: string, owner?: string): Prom
     done.push(name);
   }
   return done;
+}
+
+/** Everything in the vault in the clear, for an encrypted backup (see vault-backup.ts). Never leaves this process unencrypted. */
+export type VaultSnapshot = {
+  v: 1;
+  items: { id: string; item: Item }[];
+  secrets: { name: string; value: string; meta?: SecretMeta }[];
+  records: { folder: string; id: string; value: unknown }[];
+};
+
+export async function snapshotVault(stateDir: string): Promise<VaultSnapshot> {
+  const items = await readItems(stateDir);
+  const key = await vaultKey(stateDir, false).catch(() => undefined);
+  const secrets: VaultSnapshot['secrets'] = [];
+  const dir = path.join(vaultDir(stateDir), 'secrets');
+  for (const file of key ? await fs.readdir(dir).catch(() => [] as string[]) : []) {
+    try { secrets.push(JSON.parse(open(key!, `secret:${file.replace(/\.json$/, '')}`, await fs.readFile(path.join(dir, file), 'utf8'))) as VaultSnapshot['secrets'][number]); }
+    catch { /* an unreadable file is left out of the backup, as it is out of every list */ }
+  }
+  const records: VaultSnapshot['records'] = [];
+  for (const entry of await fs.readdir(vaultDir(stateDir), { withFileTypes: true }).catch(() => [])) {
+    if (!entry.isDirectory() || entry.name === 'items' || entry.name === 'secrets' || !RECORD_FOLDER.test(entry.name)) continue;
+    for (const { id, value } of await readVaultRecords<unknown>(stateDir, entry.name)) records.push({ folder: entry.name, id, value });
+  }
+  return { v: 1, items, secrets, records };
+}
+
+/** Puts a snapshot into this vault (making its key if there is none). What is already here is kept unless `overwrite`. */
+export async function restoreVault(stateDir: string, snapshot: VaultSnapshot, options: { overwrite?: boolean } = {}): Promise<{ added: number; skipped: number }> {
+  if (snapshot?.v !== 1 || !Array.isArray(snapshot.items) || !Array.isArray(snapshot.secrets) || !Array.isArray(snapshot.records)) throw new CredentialError('That is not a ClikCode vault backup.');
+  const key = await vaultKey(stateDir, true);
+  let added = 0; let skipped = 0;
+  const put = async (file: string, aad: string, value: unknown): Promise<void> => {
+    await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+    try { await fs.writeFile(file, seal(key, aad, JSON.stringify(value)), { mode: 0o600, flag: options.overwrite ? 'w' : 'wx' }); added++; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') skipped++; else throw error; }
+  };
+  for (const { id, item } of snapshot.items) {
+    if (!/^[0-9a-f-]{36}$/i.test(id)) continue;
+    await put(path.join(vaultDir(stateDir), 'items', `${id}.json`), `item:${id}`, item);
+  }
+  for (const secret of snapshot.secrets) {
+    const { file, aad } = secretFile(stateDir, secret.name);
+    await put(file, aad, secret);
+  }
+  for (const { folder, id, value } of snapshot.records) {
+    if (!RECORD_FOLDER.test(folder) || folder === 'items' || folder === 'secrets' || !/^[0-9a-f-]{36}$/i.test(id)) continue;
+    await put(path.join(vaultDir(stateDir), folder, `${id}.json`), `${folder}:${id}`, value);
+  }
+  return { added, skipped };
 }

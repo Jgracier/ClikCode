@@ -18,7 +18,9 @@ import { scrubSecrets } from './secret-scrubber.js';
 export type Destination = { to: string; with?: Record<string, string> };
 /** `vaultSlots`: slots whose value may be `secret:<saved name>`, read from the vault when it is sent, so the agent
  * never sees it. For a value that is not a secret but looks like one to every filter (an OAuth client id). */
-type Template = { run: string[]; stdin?: string; about?: string; vaultSlots?: string[] };
+type Template = { run: string[]; stdin?: string; about?: string; vaultSlots?: string[];
+  /** `connection`: success is not the command's word for it. After it runs, ClikDeploy is asked whether `integration` now has an active connection. */
+  verify?: 'connection' };
 
 /** `{{secret|json}}` is the key as it must sit inside a JSON string. */
 const JSON_ARGS = (fields: string): string => `{${fields}}`;
@@ -34,10 +36,10 @@ export const DEFAULT_DESTINATIONS: Readonly<Record<string, Template>> = {
   // API key (the CLI's own sign-in): no code and no password, as long as the connector has no client stored.
   'clikdeploy-connector': { about: "a ClikDeploy connector's OAuth app (integration, client_id); the key is its client secret; client_id may be secret:<saved name>", vaultSlots: ['client_id'],
     run: ['clikdeploy', 'tools', 'run', 'admin_platform_save_connector_credentials', '--args-json', '-', '--confirm'], stdin: JSON_ARGS('"integrationId":"{{integration}}","clientId":"{{client_id}}","clientSecret":"{{secret|json}}"') },
-  'clikdeploy-connection': { about: 'connect an API key to a ClikDeploy connector (integration) for the signed-in account',
+  'clikdeploy-connection': { about: 'connect an API key to a ClikDeploy connector (integration) for the signed-in account; the result is `connected` or `NOT connected: <reason>`, read back from ClikDeploy', verify: 'connection',
     run: ['clikdeploy', 'tools', 'run', 'connect_connector', '--args-json', '-', '--confirm'], stdin: JSON_ARGS('"integrationId":"{{integration}}","apiKey":"{{secret|json}}"') },
   // Some vendors expose a token id as the basic-auth username. It can be read from the vault at send time.
-  'clikdeploy-connection-basic': { about: 'connect a username and password to a ClikDeploy connector (integration, username; username may be secret:<saved name>)', vaultSlots: ['username'],
+  'clikdeploy-connection-basic': { about: 'connect a username and password to a ClikDeploy connector (integration, username; username may be secret:<saved name>); the result is `connected` or `NOT connected: <reason>`', vaultSlots: ['username'], verify: 'connection',
     run: ['clikdeploy', 'tools', 'run', 'connect_connector', '--args-json', '-', '--confirm'], stdin: JSON_ARGS('"integrationId":"{{integration}}","username":"{{username}}","password":"{{secret|json}}"') },
   'github-secret': { about: 'a GitHub repository secret (repo, key)', run: ['gh', 'secret', 'set', '{{key}}', '--repo', '{{repo}}'], stdin: '{{secret}}' },
 };
@@ -129,14 +131,32 @@ function fill(text: string, params: Record<string, string>, secret: string): str
 export type Delivery = { label: string; ok: boolean; message: string };
 
 const say = (text: string): string => {
-  try {
-    const parsed = JSON.parse(text.slice(text.indexOf('{'))) as { message?: string; error?: string | { message?: string; code?: string }; data?: { message?: string; appliedToWebProcess?: boolean; reloadReason?: string } };
-    const failure = typeof parsed.error === 'object' ? parsed.error.message ?? parsed.error.code : parsed.error;
-    const line = [parsed.message ?? failure ?? parsed.data?.message, parsed.data?.appliedToWebProcess !== undefined ? `appliedToWebProcess=${parsed.data.appliedToWebProcess}` : '', parsed.data?.reloadReason].filter(Boolean).join(' · ');
-    if (line) return line;
-  } catch { /* not JSON: use the last lines */ }
+  const start = text.indexOf('{');
+  if (start >= 0) {
+    try {
+      const parsed = JSON.parse(text.slice(start)) as { message?: string; error?: string | { message?: string; code?: string }; data?: { message?: string; error?: string | { message?: string }; appliedToWebProcess?: boolean; reloadReason?: string } };
+      const failure = typeof parsed.error === 'object' ? parsed.error.message ?? parsed.error.code : parsed.error;
+      const inner = typeof parsed.data?.error === 'object' ? parsed.data.error.message : parsed.data?.error;
+      const line = [parsed.message ?? failure ?? parsed.data?.message ?? inner, parsed.data?.appliedToWebProcess !== undefined ? `appliedToWebProcess=${parsed.data.appliedToWebProcess}` : '', parsed.data?.reloadReason].filter(Boolean).join(' · ');
+      return line; // valid JSON that says nothing: nothing, not the last lines of the object (`} } }`)
+    } catch { /* not JSON: use the last lines */ }
+  }
   return text.trim().split('\n').slice(-3).join(' ').slice(0, 300);
 };
+
+type Shown = { status?: string; message?: string; data?: { connection?: { status?: string } | null; accounts?: { status?: string }[] } };
+/** Whether ClikDeploy now holds an active connection for the connector: asked of ClikDeploy, not read from the connect command's output. */
+async function connectionState(integration: string, signal?: AbortSignal): Promise<{ connected: boolean; reason?: string }> {
+  const shown = await runCli('clikdeploy', ['integrations', 'show', integration], { signal, timeoutMs: 60_000, maxChars: 4_000_000 });
+  if (shown.missing) return { connected: false, reason: 'the clikdeploy command is not installed on this computer' };
+  let parsed: Shown | undefined;
+  try { parsed = JSON.parse(shown.text.slice(Math.max(0, shown.text.indexOf('{')))) as Shown; } catch { /* not JSON */ }
+  if (!parsed) return { connected: false, reason: `could not read the connection back (${say(shown.text) || 'no answer'})` };
+  if (parsed.status === 'error') return { connected: false, reason: `could not read the connection back (${(parsed.message ?? 'error').split('\n')[0]})` };
+  const statuses = [parsed.data?.connection?.status, ...(parsed.data?.accounts ?? []).map(account => account.status)].filter(Boolean);
+  if (statuses.includes('active')) return { connected: true };
+  return { connected: false, reason: statuses.length ? `${integration} shows a connection with status "${statuses[0]}", not active` : `ClikDeploy shows no connection for ${integration}` };
+}
 
 export async function sendToDestinations(stateDir: string, list: readonly Destination[], value: string, signal?: AbortSignal): Promise<Delivery[]> {
   const all = await loadDestinations(stateDir);
@@ -159,9 +179,17 @@ export async function sendToDestinations(stateDir: string, list: readonly Destin
     const [program, ...args] = template.run.map(part => fill(part, params, value));
     // A value goes to the program on stdin when the template says so: then it is in no command line.
     const result = await runCli(program!, args, { ...(template.stdin !== undefined ? { stdin: fill(template.stdin, params, value) } : {}), signal, timeoutMs: 90_000 });
-    out.push(result.missing
-      ? { label, ok: false, message: `The ${program} command is not installed on this computer.` }
-      : { label, ok: result.code === 0, message: scrubSecrets(say(result.text)) });
+    if (result.missing) { out.push({ label, ok: false, message: `The ${program} command is not installed on this computer.` }); continue; }
+    if (template.verify === 'connection' && params.integration) {
+      // One line, whatever the command printed: `connected` only when ClikDeploy itself lists an active connection.
+      const said = scrubSecrets(say(result.text)).replace(/\s+/g, ' ').slice(0, 160);
+      const state = await connectionState(params.integration, signal);
+      const failed = result.code !== 0 || /"status"\s*:\s*"error"/.test(result.text) || /"success"\s*:\s*false/.test(result.text);
+      const reason = failed ? said || `the connect command failed (exit ${result.code})` : state.reason ? `${state.reason}${said ? `; the command said: ${said}` : ''}` : '';
+      out.push(state.connected && !failed ? { label, ok: true, message: 'connected' } : { label, ok: false, message: `NOT connected: ${scrubSecrets(reason || 'no active connection found after connecting')}` });
+      continue;
+    }
+    out.push({ label, ok: result.code === 0, message: scrubSecrets(say(result.text)) });
   }
   return out;
 }

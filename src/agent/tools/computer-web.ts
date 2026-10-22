@@ -13,7 +13,9 @@ import { loginValueFor } from '../computer/login-fill.js';
 import { describeRecipe, getRecipe, listRecipes, replayRecipe, saveRecipe } from '../computer/signup-recipes.js';
 import { addSiteNote, readSiteNotes } from '../computer/site-notes.js';
 import { assertCustomKey, bestProfileFor, customFieldFor, describeProfile, listProfiles, PASSWORD_SECRET, PROFILE_KEYS, phoneFor, birthdayFor, profileKeyFor, readProfileSecret, saveProfile, saveProfileSecret, secretFieldFor, type FieldHint, type ProfileKey } from '../computer/profiles.js';
-import { expectSignup, generatePassword, holdSignup, pendingSignupPassword, settleSignup } from '../computer/signup-login.js';
+import { expectSignup, holdSignup, pendingSignupPassword, pendingSignupUsername, savedPasswordFor, settleSignup } from '../computer/signup-login.js';
+import { generatePassword } from '../computer/password-policy.js';
+import { generatedFor, readPasswordPolicy, rememberGenerated, retryRejectedPassword } from '../computer/password-retry.js';
 import { loginComputerPage, loginOutcomeMessage } from '../computer/login-page.js';
 import { LoginError } from '../computer/login-error.js';
 import { type LoginField } from '../computer/login-fields.js';
@@ -571,9 +573,23 @@ async function askForFills(page: Page, steps: readonly Step[], ctx: ToolContext,
   const boxesOnPage = passwordFields.length ? await page.locator('input[type="password"]:visible').count().catch(() => 0) : 0;
   const signingUp = passwordFields.length >= 2 || boxesOnPage >= 2 || passwordFields.some(field => /new-password/i.test(field.hint.autocomplete))
     || (passwordFields.length > 0 && /sign[-_ ]?up|register|create[-_ ]?account|join|password\/(?:edit|new|reset)|(?:reset|set|new|change)[-_ ]?password/i.test(page.url()));
-  // The password the user chose for sign-ups, kept in the profile as a secret, comes before one the tool writes.
-  const chosen = signingUp && profile ? await readProfileSecret(ctx.stateDir, profile, PASSWORD_SECRET) : undefined;
-  const generated = chosen ?? (signingUp && await generatedPasswordsAllowed(ctx.stateDir) ? pendingSignupPassword(page) ?? generatePassword() : undefined);
+  // A sign-up gets a password of its own for this site, like a phone's "Strong Password": the one already typed into this
+  // form (filled box by box), else the one saved for this site and email, else a new one that fits what the page asks.
+  // The profile's `password` secret is only a fallback for when generating is switched off.
+  const email = profile?.fields.sso_email ?? profile?.fields.email ?? fields.find(field => !field.password && field.current.includes('@'))?.current;
+  let generated: string | undefined;
+  let policy: Awaited<ReturnType<typeof readPasswordPolicy>> | undefined;
+  let mine = false;
+  if (signingUp) {
+    generated = pendingSignupPassword(page);
+    if (generated) mine = generatedFor(page)?.password === generated;
+    if (!generated && await generatedPasswordsAllowed(ctx.stateDir)) {
+      policy = await readPasswordPolicy(page);
+      generated = await savedPasswordFor(ctx.stateDir, page.url(), email) ?? generatePassword(policy);
+      mine = true;
+    }
+    generated ??= profile ? await readProfileSecret(ctx.stateDir, profile, PASSWORD_SECRET) : undefined;
+  }
   for (const field of fields) {
     if (field.password && generated) { values.set(field.step, generated); continue; }
     const fromLogin = login ? loginValueFor(login, field) : undefined;
@@ -590,11 +606,19 @@ async function askForFills(page: Page, steps: readonly Step[], ctx: ToolContext,
     if (known) { values.set(field.step, key === 'phone' ? phoneFor(known, field.placeholder, field.current) : key === 'birthday' ? birthdayFor(known, `${field.label} ${field.placeholder}`) : known); continue; }
     ask.push({ step: field.step, key, field: { index: ask.length, key: `fill${ask.length}`, label: field.label || String(field.step.target), kind: field.password ? 'password' : 'text', required: true } });
   }
-  if (generated) { registerSecret(generated); await holdSignup(ctx.stateDir, page, generated, profile?.fields.sso_email ?? profile?.fields.email); }
+  if (generated) {
+    registerSecret(generated);
+    await holdSignup(ctx.stateDir, page, generated, email);
+    if (mine) rememberGenerated(page, generated, policy ?? await readPasswordPolicy(page));
+  }
   if (ask.length) {
-    if (!ctx.requestPrivateLogin) throw new Error('Fill needs text: this chat cannot ask the user privately.');
+    // A sign-in password with no saved login for this site and none in the profile cannot be made up: say so and park
+    // it (in the queue, with the reason) rather than failing, so the run goes on to the next site.
+    const needPassword = ask.filter(item => item.field.kind === 'password').map(item => item.field);
+    const noPassword = (): Promise<never> => park(ctx.stateDir, page.url(), needPassword, 'no saved login for this site; sign in once with the login action or add one with `clikcode computer secrets --import`');
+    if (!ctx.requestPrivateLogin) { if (needPassword.length) return noPassword(); throw new Error('Fill needs text: this chat cannot ask the user privately.'); }
     const answers = await ctx.requestPrivateLogin(origin, ask.map(item => item.field), ctx.signal);
-    if (!answers) throw new Error('The user did not provide the values.');
+    if (!answers) { if (needPassword.length) return noPassword(); throw new Error('The user did not answer the private prompt, so these fields were left empty.'); }
     const learned: Partial<Record<ProfileKey, string>> = {};
     for (const item of ask) {
       const answer = answers[item.field.key] ?? '';
@@ -645,7 +669,10 @@ async function runSteps(page: Page, steps: readonly Step[], ctx: ToolContext, ta
   const notes: string[] = [];
   let current = page;
   steps = await askForFills(page, steps, ctx, profileLabel);
-  for (const [index, step] of steps.entries()) {
+  for (const [index, planned] of steps.entries()) {
+    // A later fill of the same batch still carries a generated password the site has since refused: it gets the current one.
+    const held = generatedFor(current);
+    const step = planned.do === 'fill' && held && planned.text && held.past.has(planned.text) ? { ...planned, text: held.password } : planned;
     // Only a tab the chat's own page opens is followed; another chat's tabs are not this chat's business.
     const popups: Page[] = [];
     const onPopup = (popup: Page): void => { popups.push(popup); };
@@ -657,6 +684,15 @@ async function runSteps(page: Page, steps: readonly Step[], ctx: ToolContext, ta
       await settle(current);
       const saved = await settleSignup(ctx.stateDir, current);
       if (saved) notes.push(saved);
+      // The site refused the password just made (an error about length, characters or symbols next to the box): another,
+      // under looser rules, is typed in and the form sent again, up to three tries in all. Nothing of it reaches the model.
+      const made = generatedFor(current);
+      if (made && pendingSignupPassword(current) === made.password) {
+        const stepPage = current;
+        const retried = await retryRejectedPassword({ stateDir: ctx.stateDir, page: stepPage, username: pendingSignupUsername(stepPage),
+          ...(step.do === 'click' || (step.do === 'press' && step.key === 'Enter') ? { resubmit: () => doStep(stepPage, step, ctx) } : {}), settle });
+        if (retried) notes.push(retried);
+      }
     } catch (error) {
       // The page closing itself (a sign-in popup that finished) is read from the page, not from an error message.
       if (current.isClosed()) {

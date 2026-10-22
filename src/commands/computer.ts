@@ -26,8 +26,8 @@ export async function computerGeneratedPasswords(setting: string | undefined): P
   const allowed = await generatedPasswordsAllowed(dir);
   if (isJsonDefaultMode()) return emitResult({ computer: { generatedPasswords: allowed } });
   process.stdout.write(allowed
-    ? 'Generated passwords are on: for a signup form the browser tool makes up a strong password, keeps it in Secrets Manager with the login, and never shows it.\n'
-    : 'Generated passwords are off: a signup form asks you for the password privately. Turn on with `clikcode computer passwords on`.\n');
+    ? 'Generated passwords are on (the default): for a signup form the browser tool makes up a strong, unique password for that site, keeps it in Secrets Manager with the login, and never shows it. Turn off with `clikcode computer passwords off`.\n'
+    : 'Generated passwords are off: a signup form uses the profile password if there is one, else asks you for the password privately. Turn on with `clikcode computer passwords on`.\n');
 }
 
 export async function computerUnattended(setting: string | undefined): Promise<void> {
@@ -112,7 +112,8 @@ export async function computerTool(tool: string, args: Record<string, unknown>, 
 }
 
 /** The vault's saved secrets, by name only: no chat or worker is needed to look at your own files. */
-export async function computerSecrets(remove?: string, backfill?: { owner?: string }): Promise<void> {
+export async function computerSecrets(remove?: string, backfill?: { owner?: string }, backup?: { export?: string; import?: string; overwrite?: boolean }): Promise<void> {
+  if (backup?.export || backup?.import) return computerSecretsBackup(backup);
   const { deleteNamedSecret } = await import('../agent/computer/credential-vault.js');
   const stateDir = stateDirectory();
   if (remove) {
@@ -131,6 +132,31 @@ export async function computerSecrets(remove?: string, backfill?: { owner?: stri
   const info = await namedSecretInfo(stateDir);
   if (isJsonDefaultMode()) return emitResult({ computer: { secrets: info.map(item => item.name), details: info } });
   process.stdout.write(info.length ? `${info.map(({ name, meta }) => `  ${name}${meta ? `  (${[meta.vendor, meta.owner, meta.env, `saved ${meta.createdAt.slice(0, 10)}`, meta.rotatedAt ? `rotated ${meta.rotatedAt.slice(0, 10)}` : ''].filter(Boolean).join(', ')})` : ''}`).join('\n')}\n` : 'No secrets are saved.\n');
+}
+
+/** `--export <file>` / `--import <file>`: an encrypted backup of the whole vault, under a passphrase typed hidden. A terminal is required, so the
+ * passphrase never passes through an agent, a pipe or a log; nothing is printed but counts. */
+async function computerSecretsBackup(backup: { export?: string; import?: string; overwrite?: boolean }): Promise<void> {
+  if (backup.export && backup.import) throw new Error('Say --export or --import, not both.');
+  if (!process.stdin.isTTY) throw new Error('A backup passphrase is typed hidden: run this in a terminal.');
+  const { MIN_PASSPHRASE, readVaultBackup, writeVaultBackup } = await import('../agent/computer/vault-backup.js');
+  const stateDir = stateDirectory();
+  const { default: path } = await import('node:path');
+  if (backup.export) {
+    const file = path.resolve(backup.export);
+    const { existsSync } = await import('node:fs');
+    if (existsSync(file)) throw new Error(`${file} already exists; choose a new file name.`);
+    const first = await readHidden(`Backup passphrase (at least ${MIN_PASSPHRASE} characters, typed hidden): `);
+    if (first !== await readHidden('Again: ')) throw new Error('The two passphrases differ. Nothing was written.');
+    const counts = await writeVaultBackup(stateDir, file, first);
+    if (isJsonDefaultMode()) return emitResult({ computer: { exported: file, ...counts } });
+    process.stdout.write(`Wrote ${file}: ${counts.logins} login${counts.logins === 1 ? '' : 's'}, ${counts.secrets} secret${counts.secrets === 1 ? '' : 's'}, ${counts.records} other record${counts.records === 1 ? '' : 's'}. Keep the passphrase; without it the file cannot be opened.\n`);
+    return;
+  }
+  const passphrase = await readHidden('Backup passphrase (typed hidden): ');
+  const result = await readVaultBackup(stateDir, path.resolve(backup.import!), passphrase, { ...(backup.overwrite ? { overwrite: true } : {}) });
+  if (isJsonDefaultMode()) return emitResult({ computer: { imported: backup.import, ...result } });
+  process.stdout.write(`Restored ${result.added} item${result.added === 1 ? '' : 's'}${result.skipped ? `; ${result.skipped} already here ${backup.overwrite ? '' : 'were kept (use --overwrite to replace them)'}` : ''}.\n`);
 }
 
 /** Autofill profiles: list them, set fields (`--set phone=719-555-0123`), pick one with `--label`, or `--delete` by label. */
