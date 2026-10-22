@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import type { Page } from 'playwright-core';
 import { generatePassword } from './signup-login.js';
-import { lockCredentialVault, savedLoginFields, savedLoginsForSite } from './credential-vault.js';
-import { expectSignup, holdSignup, settleSignup } from './signup-login.js';
+import { lockCredentialVault, saveLoginFields, savedLoginFields, savedLoginsForSite } from './credential-vault.js';
+import { expectSignup, holdSignup, savedPasswordFor, settleSignup } from './signup-login.js';
 
 let stateDir = '';
 afterEach(async () => { if (stateDir) { lockCredentialVault(stateDir); await rm(stateDir, { recursive: true, force: true }); stateDir = ''; } });
@@ -65,4 +65,24 @@ it('keeps one login when the same generated password is held again for the same 
   await holdSignup(stateDir, page, 'Same-Gen-9', 'me@example.com');
   await holdSignup(stateDir, page, 'Same-Gen-9', 'me@example.com');
   expect(await savedLoginsForSite(stateDir, 'https://signup.example.com/')).toHaveLength(1);
+});
+
+it('keeps the password a signup replaces as previous_password, which a sign-in picker never shows', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-signup-'));
+  const page = formPage({ passwords: 0 });
+  await saveLoginFields(stateDir, 'https://signup.example.com/', { username: 'ada@example.com', password: 'Old-one-Zq9' });
+  expectSignup(page, 'New-one-Zq9');
+  expect(await settleSignup(stateDir, page)).toContain('Saved the new login');
+  const [login] = await savedLoginsForSite(stateDir, 'https://signup.example.com/');
+  expect(await savedLoginFields(stateDir, 'https://signup.example.com/', login!.id)).toMatchObject({ password: 'New-one-Zq9', previous_password: 'Old-one-Zq9' });
+  expect(login!.label).toBe('ada@example.com');
+});
+
+it('finds a generated login on the www and bare host alike', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-signup-'));
+  await saveLoginFields(stateDir, 'https://www.example.com/signup', { username: 'ada@example.com', password: 'Gen-4-ever-Zq9' });
+  expect(await savedLoginsForSite(stateDir, 'https://example.com/login')).toHaveLength(1);
+  expect(await savedPasswordFor(stateDir, 'https://example.com/login', 'Ada@Example.com')).toBe('Gen-4-ever-Zq9');
+  expect(await savedLoginsForSite(stateDir, 'https://other.example.com/')).toEqual([]);
+  expect(await savedPasswordFor(stateDir, 'https://example.com/login', undefined)).toBeUndefined();
 });

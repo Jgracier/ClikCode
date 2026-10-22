@@ -155,7 +155,7 @@ The tools run in the chat's worker, so they work the same in any harness:
 - **CLI, for anything else.** `clikcode computer tool <name> --args-json …`,
   `computer capture <name> --click <target> [--to clikdeploy-secret --with key=…]`,
   `computer store <name> --to clikdeploy-secret --with key=SALAD_API_KEY`,
-  `computer secrets [--delete NAME]` (your own vault, no chat needed), `computer login`.
+  `computer secrets [--delete NAME | --export FILE | --import FILE]` (your own vault, no chat needed), `computer login`.
 
 Private prompts need a chat window open; nothing else does.
 
@@ -207,17 +207,42 @@ What the browser tool does so a run does not depend on luck or on the user:
   (`handoff`, `ask_user`, `queue`); nothing tries to solve or get around them. Opening a page on a host with a
   recipe mentions it. Recipes live in `computer/recipes/<host>.json` in the state dir.
 
-- **Generated passwords (off by default).** `clikcode computer passwords on` lets the browser tool make up a
-  24-character password for a signup form (two password boxes, a new-password box, or a sign-up page). It is
-  typed into the form, kept in Secrets Manager with the login once the form is gone, and never shown. Without it
-  a signup form asks the user for the password privately.
+- **Generated site passwords (on by default).** Like a phone's "Strong Password": when `computer_web` fills a sign-up or
+  new-password form (two password boxes, a `new-password` box, or a sign-up page) it makes up a password for that site,
+  types it into every password box, and keeps the login (site, email, password) in Secrets Manager once the form is gone.
+  Nothing is typed by a person and no one password is shared across sites. The password is registered with the scrubber
+  and never enters the model's context; the agent is told only that a login was saved. If the same site and email already
+  have a saved login, its password is reused (a form filled twice never leaves the vault behind the account), and a
+  password that a new one replaces is kept in the login as `previous_password`. It needs an https page, since the vault
+  keeps https logins only.
+  - **Policy.** 24 characters with upper, lower, digit and symbol by default. It reads the page's own requirements first:
+    `minlength` / `maxlength` / `pattern` on the box, `aria-describedby` text, its `title`, and the hint text around the
+    field ("at least 12 characters", "8-16 characters", "no special characters", "letters and numbers only", "special
+    characters: ! @ #"), and fits the length, the symbols and any pattern.
+  - **Retry.** If the page then shows an error next to the password box about length, characters or symbols, a new
+    password is made under looser rules (shorter or longer as the error says; a short symbol set, then none), typed into
+    every box, and the Create button pressed again, up to three retries in all, in a bounded loop. The agent hears that the
+    site refused and how many tries it took, never the passwords. After three refusals it is told to hand off.
+  - **Fallbacks.** `clikcode computer passwords off` turns generation off; a sign-up then uses the profile's `password`
+    secret if one is set, else asks privately. A profile `password` is only this optional fallback now.
+  - **Sign-in.** A `fill` with no text on a sign-in password box uses the site's saved login (generated ones included; a
+    login saved at `example.com` is found at `www.example.com` and the other way round, and across a cloud region label).
+    With none, and no profile password, the need is parked in the vendor queue (`needs-human`) with a clear note and the
+    agent goes on; it no longer fails with "The user did not provide the values". `login` does the same as before.
+- **Backup and restore of the vault.** `clikcode computer secrets --export <file>` writes every login, secret and
+  profile as one encrypted file; `--import <file>` restores it (items already present are kept; `--overwrite` replaces
+  them). The passphrase (at least 12 characters, asked twice on export) is typed hidden at a terminal; both commands refuse
+  to run without one, so it never passes through an agent, a pipe or a log, and nothing but counts is printed. This is the
+  one option chosen over a generated recovery key, because there is then nothing printed that could be copied into a
+  model-visible channel or lost with the terminal scrollback. The file is scrypt (N=2^17) into AES-256-GCM. Losing the
+  passphrase loses the backup; there is no recovery.
 - **Typed-in formats and selectors in private prompts.** A question's `format` (`date`, `phone`, `zip`, `time`, or
   a pattern such as `##/##/####`) makes the box type the pattern itself, in the terminal and in the VS Code panel;
   `options` makes it a selector.
 
 ## Secrets in a profile
 
-A profile can keep secrets next to its details: the password to use for sign-ups (`password`), a recovery code, anything a form asks that is not a detail. The value goes to Secrets Manager; the profile only knows the name, and nothing returns the value to the agent. Set one with `clikcode computer profile --label Personal --secret password` (typed hidden), or the agent asks with `profile` `ask_fields` and `secret: true`. A fill with no text then puts it in the box it is for: the password secret fills password boxes on a sign-up (it is used before a generated password), another secret fills a box whose label matches its words.
+A profile can keep secrets next to its details: an optional fallback password for sign-ups when generated passwords are off (`password`), a recovery code, anything a form asks that is not a detail. The value goes to Secrets Manager; the profile only knows the name, and nothing returns the value to the agent. Set one with `clikcode computer profile --label Personal --secret password` (typed hidden), or the agent asks with `profile` `ask_fields` and `secret: true`. A fill with no text then puts it in the box it is for: the password secret fills password boxes on a sign-up only when generated passwords are off (a generated, per-site password comes first), another secret fills a box whose label matches its words.
 
 ## Vendor set-up at scale
 
@@ -228,8 +253,8 @@ A profile can keep secrets next to its details: the password to use for sign-ups
 
 ## Running unattended over many vendors
 
-- **Sign-in order** (said to the agent on every sign-in or sign-up page): Google ("Continue with Google", no password, no email check), else GitHub (GitHub has no Google sign-in of its own, so it signs in with the saved GitHub login and a verification code read from the profile's mailbox), else the profile's email and `password` secret. A site with a free-form username uses the profile's `preferred_username`.
-- **The profile answers sign-ins**: `login` with no saved login for a site fills the profile's sign-in email and its `password` secret instead of asking. Anything else it is asked (a one-time code, an account choice) is asked as before.
+- **Sign-in order** (said to the agent on every sign-in or sign-up page): Google ("Continue with Google", no password, no email check), else GitHub (GitHub has no Google sign-in of its own, so it signs in with the saved GitHub login and a verification code read from the profile's mailbox), else the profile's email with, on a sign-up, a generated per-site password. A site with a free-form username uses the profile's `preferred_username`.
+- **The profile answers sign-ins**: `login` with no saved login for a site fills the profile's sign-in email and, if one is set, its optional `password` secret instead of asking. Anything else it is asked (a one-time code, an account choice) is asked as before.
 - **`clikcode computer unattended on`**: a private prompt about a site is never shown. The need is parked in the queue (`needs-human`, with a reason from what was asked: `captcha`, `two-factor`, `sms`, else `other`) and the agent is told to go on to the next vendor. The profile prompts are always shown, because they are the user's own. Clear the queue in batches: `clikcode computer queue --status needs-human`.
 
 ## Onboarding a ClikDeploy connector
@@ -237,6 +262,6 @@ A profile can keep secrets next to its details: the password to use for sign-ups
 The `onboard-connector` skill (`~/.claude/skills/onboard-connector/SKILL.md`) is the whole loop: research the vendor's docs, write the
 spec through ClikDeploy's MCP tools (`search_tools` finds them; nothing is pinned), sign up (Google first, then Google through GitHub,
 then the profile email + hidden password), `capture_secret`, `send_secret` to the built-in `clikdeploy-connection` destination
-(`clikdeploy-connection-basic` for username + password), then test and publish. Captcha, SMS, payment, attestation and phone-approval
+(`clikdeploy-connection-basic` for username + password), then test and publish. Those two destinations read the result back from ClikDeploy (`clikdeploy integrations show <id>`) and answer one line: `connected`, or `NOT connected: <reason>`; a command that printed success while nothing was stored is reported as not connected, and the key is never in the line. Captcha, SMS, payment, attestation and phone-approval
 steps go to the queue (`queue`) and the loop moves on. ClikDeploy never browses; ClikCode never touches a spec's internals beyond the
 schema ClikDeploy serves (`connector_spec_guide`).

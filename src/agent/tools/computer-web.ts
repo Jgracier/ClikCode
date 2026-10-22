@@ -300,7 +300,7 @@ const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: [
 const WEB_DESCRIPTION = [
     "Drive ClikCode's own Chrome (its own saved profile; it starts by itself). open and observe return the page, with a [ref=…] on each element: pass a ref as target (or visible text) to click or fill. After an action you get only what changed (and any open dialog); observe shows the whole page again. A new tab or popup the page opens is followed automatically.",
     'Actions: open (a URL) · observe (the page again; full: true adds header and footer; find: "words" shows only the lines that mention them, for a long page) · click · fill · choose (an option of a dropdown: target + text) · press · scroll · wait (for text to appear or go, up to 2 minutes; for jobs that finish on their own) · steps (several of those in order, one call, stops at the first failure) · login · handoff · capture_secret · profile · open_email_link (find the newest email from a sender in the signed-in Gmail and open a link in it, one call: verification and sign-in emails) · upload (a file input or its button + text: the name of a profile file detail ending _file such as logo_file; only files the user saved in the profile can be sent) · notes (read or add what was learned on a site: the URL that worked, the order of screens, what was missing; shown again whenever a page on that host is opened, so write one when a task finally works) · recipe (save the steps of a signup or key capture that worked, by control text, never secrets; run replays them and stops for the user at a captcha, code, payment or review page; list) · read_email_code (the one-time code in the newest email from a sender, read in a tab of its own, so a sign-up that wants an emailed code does not need the user) · close.',
-    'Each chat has its own tab. The user\'s autofill profile (name, email, phone, address, and any custom details you asked for with profile ask_fields) fills forms for you: fill a field with no text and it is filled from the profile, or the user is asked once and the answer is kept. If a site wants another format, fill that field with the exact text, and save the corrected value with action profile and fields. When a site offers Continue/Sign in with Google and the browser is already signed in to Google, prefer it: no new password or email check. If it offers GitHub and not Google, use Continue with GitHub (sign in to GitHub with the saved login; there is no Google sign-in inside GitHub). Only when neither is offered, fill the form with no text: the profile email and password fill it. Every page can be read, including sign-in and signup forms; the values of password, code and card fields are masked. For anything only the user knows (a password, a code, an address, a phone number), fill the field with no text: a saved login for the site or the profile fills it, else the user is asked privately, and you are not shown the answer. That is all a sign-in or signup needs: fill the fields, click Next, repeat. (login does the same in one action for a plain email-then-password sign-in.) Never ask for a password or code in chat. When a sign-in page offers different ways in (root or IAM, another account), ask the user with ask_user, click their choice, then login. handoff returns a phone link for a CAPTCHA or MFA at once; give it to the user, then call handoff again to wait until they finish.',
+    'Each chat has its own tab. The user\'s autofill profile (name, email, phone, address, and any custom details you asked for with profile ask_fields) fills forms for you: fill a field with no text and it is filled from the profile, or the user is asked once and the answer is kept. If a site wants another format, fill that field with the exact text, and save the corrected value with action profile and fields. When a site offers Continue/Sign in with Google and the browser is already signed in to Google, prefer it: no new password or email check. If it offers GitHub and not Google, use Continue with GitHub (sign in to GitHub with the saved login; there is no Google sign-in inside GitHub). Only when neither is offered, fill the form with no text: the profile email fills it, and on a sign-up every password box gets a strong password made up for that site (fitted to what the page asks, retried if the site refuses it, saved with the login, never shown to you); a later sign-in fills the saved login. Every page can be read, including sign-in and signup forms; the values of password, code and card fields are masked. For anything only the user knows (a password, a code, an address, a phone number), fill the field with no text: a saved login for the site or the profile fills it, else the user is asked privately, and you are not shown the answer. That is all a sign-in or signup needs: fill the fields, click Next, repeat. (login does the same in one action for a plain email-then-password sign-in.) Never ask for a password or code in chat. When a sign-in page offers different ways in (root or IAM, another account), ask the user with ask_user, click their choice, then login. handoff returns a phone link for a CAPTCHA or MFA at once; give it to the user, then call handoff again to wait until they finish.',
     'Work through the whole task you were given without checking in at each step. Ask real choices (project, account, role set) once, up front, in one question; after that ask only when genuinely blocked (a sign-in they must type, a payment).',
     'API keys: go to the key page, set the options, then capture_secret with target = the final Create button and a send_to plan. It presses the site\'s Copy button or reads the file it hands over, checks the key against its service, saves it to ClikCode Secrets Manager and sends it where send_to says. You never see the key. With no target it takes a key the page already shows; never click Regenerate just to see one.',
   ].join('\n');
@@ -535,7 +535,7 @@ const profileChoice = sharedState('profile-choice', () => new Map<string, string
 
 /** Fills that name no text: a saved profile covers what it can (name, address, phone), the user is asked
  * once, privately, for the rest, and what they answer is kept in the profile for next time. */
-async function askForFills(page: Page, steps: readonly Step[], ctx: ToolContext, label?: string): Promise<Step[]> {
+export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolContext, label?: string): Promise<Step[]> {
   const blank = steps.filter(step => step.do === 'fill' && step.text === undefined);
   if (!blank.length) return [...steps];
   const origin = new URL(page.url()).origin;
@@ -566,8 +566,8 @@ async function askForFills(page: Page, steps: readonly Step[], ctx: ToolContext,
       if (account) login = await savedLoginFields(ctx.stateDir, page.url(), account.id).catch(() => undefined);
     }
   }
-  // A signup form (two password boxes, a new-password box, or a sign-up page) the user has let the tool write a
-  // password for: one strong password for the whole form, kept in Secrets Manager with the login, never shown.
+  // A signup form (two password boxes, a new-password box, or a sign-up page): one strong password for the whole form
+  // (see below), kept in Secrets Manager with the login, never shown.
   const passwordFields = fields.filter(field => field.password);
   // A form filled one box per call shows only one password box here, so the page itself is asked how many it has.
   const boxesOnPage = passwordFields.length ? await page.locator('input[type="password"]:visible').count().catch(() => 0) : 0;
@@ -576,14 +576,16 @@ async function askForFills(page: Page, steps: readonly Step[], ctx: ToolContext,
   // A sign-up gets a password of its own for this site, like a phone's "Strong Password": the one already typed into this
   // form (filled box by box), else the one saved for this site and email, else a new one that fits what the page asks.
   // The profile's `password` secret is only a fallback for when generating is switched off.
-  const email = profile?.fields.sso_email ?? profile?.fields.email ?? fields.find(field => !field.password && field.current.includes('@'))?.current;
+  const email = profile?.fields.sso_email ?? profile?.fields.email ?? fields.find(field => !field.password && field.current.includes('@'))?.current
+    ?? steps.find(step => step.do === 'fill' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(step.text ?? ''))?.text;
   let generated: string | undefined;
   let policy: Awaited<ReturnType<typeof readPasswordPolicy>> | undefined;
   let mine = false;
   if (signingUp) {
     generated = pendingSignupPassword(page);
     if (generated) mine = generatedFor(page)?.password === generated;
-    if (!generated && await generatedPasswordsAllowed(ctx.stateDir)) {
+    // The vault keeps logins for https sites only, and a password that cannot be kept is not worth making.
+    if (!generated && page.url().startsWith('https:') && await generatedPasswordsAllowed(ctx.stateDir)) {
       policy = await readPasswordPolicy(page);
       generated = await savedPasswordFor(ctx.stateDir, page.url(), email) ?? generatePassword(policy);
       mine = true;
@@ -665,7 +667,7 @@ export async function formProblems(page: Page): Promise<string[]> {
 }
 
 /** Does the steps in order, following a new tab or popup, and returns the page as it ends up. */
-async function runSteps(page: Page, steps: readonly Step[], ctx: ToolContext, tab?: string, profileLabel?: string, guard?: (page: Page) => Promise<string | undefined>): Promise<ToolRunResult> {
+export async function runSteps(page: Page, steps: readonly Step[], ctx: ToolContext, tab?: string, profileLabel?: string, guard?: (page: Page) => Promise<string | undefined>): Promise<ToolRunResult> {
   const notes: string[] = [];
   let current = page;
   steps = await askForFills(page, steps, ctx, profileLabel);
