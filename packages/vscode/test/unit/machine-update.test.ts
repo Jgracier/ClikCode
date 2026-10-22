@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { machineChip, machineMeta, machineUpdateText, offersUpdate } from '../../src/webview/machine-text';
+import { discoveredMeta, machineChip, machineMeta, machineUpdateText, offersUpdate } from '../../src/webview/machine-text';
 import { machineUpdateOf, updateFields, type ListedMachine } from '../../src/remote-directory';
 import { runClikcodeUpdate } from '../../src/chat-machine';
 
@@ -32,6 +32,12 @@ describe('a machine row', () => {
     expect(offersUpdate(listed({ needsUpdate: true, updating: true }))).toBe(false);
     expect(offersUpdate(listed({ needsUpdate: true, state: 'offline' }))).toBe(false);
     expect(offersUpdate(listed({ id: 'tailscale:n1', state: 'available' }))).toBe(false);
+  });
+
+  it('says what choosing a machine from the tailnet does, or why it cannot be chosen', () => {
+    expect(discoveredMeta(listed({ id: 'tailscale:n1', state: 'available' }))).toBe('Connect · install from GitHub main');
+    expect(discoveredMeta(listed({ id: 'tailscale:n1', state: 'unavailable' }))).toBe('offline');
+    expect(discoveredMeta(listed({ id: 'tailscale:n1', state: 'unsupported' }))).toBe('Windows is not supported yet');
   });
 
   it('carries a connection’s update state, and an old failure only while it still needs one', () => {

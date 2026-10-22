@@ -59,6 +59,9 @@ export type ToWebview =
 export type WebviewRequest =
   | { method: 'machines'; discover?: boolean }
   | { method: 'machineConversations'; machineId: string }
+  /** A machine from the tailnet (`tailscale:<node>`): asks which user to log in as, installs
+   * ClikCode there, and resolves the id it is added under. */
+  | { method: 'addMachine'; machineId: string }
   /** The machine chip: this chat moves to that machine (a new chat there when nothing was said in it). */
   | { method: 'moveToMachine'; machineId: string }
   /** A chat that moved: open the moved one, on its machine. */

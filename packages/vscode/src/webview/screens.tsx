@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ChatModel } from '../model';
 import type { ListedConversation } from '../webview-protocol';
 import type { ListedMachine } from '../remote-directory';
-import { machineMeta, offersUpdate } from './machine-text';
+import { discoveredMeta, machineMeta, offersUpdate } from './machine-text';
 import { listen, request } from './bus';
 import { useNow } from './clock';
 import { conversationState, SECTION_TITLES, type ConversationSection } from '../../../../src/session/conversation-state';
@@ -134,7 +134,7 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
     let active = true;
     if (machineId !== 'local') setRemoteRows(undefined);
     const refresh = (): void => {
-      void request<ListedMachine[]>({ method: 'machines' }).then((next) => { if (active) setMachines(next); }, (error: Error) => { if (active) props.onError(error.message); });
+      void request<ListedMachine[]>({ method: 'machines', discover: true }).then((next) => { if (active) setMachines(next); }, (error: Error) => { if (active) props.onError(error.message); });
       if (machineId !== 'local') void request<ListedConversation[]>({ method: 'machineConversations', machineId }).then(
         (next) => { if (active) setRemoteRows(next); }, (error: Error) => { if (active) props.onError(error.message); },
       );
@@ -209,12 +209,29 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
     return result;
   }, [rows, query, renaming, confirming, second]);
 
-  const machineRows: ListRow[] = (machines ?? []).map((machine) => ({
-    key: machine.id,
-    onSelect: () => { lastHistoryMachine = machine.id; setMachineId(machine.id); setShowMachines(false); setSearch(''); },
-    render: () => <div class="conversation" title={machine.updateError}><div class="conversation-main"><div class="conversation-title">{machine.name}</div></div>
-      <span class="conversation-meta">{machineMeta(machine, '')}</span></div>,
-  }));
+  const showChats = (id: string): void => { lastHistoryMachine = id; setMachineId(id); setShowMachines(false); setSearch(''); };
+  // A machine from the tailnet is added first (which user, then the install); its chats are listed then.
+  const [adding, setAdding] = useState<string>();
+  const add = (machine: ListedMachine): void => {
+    setAdding(machine.id);
+    void request<string>({ method: 'addMachine', machineId: machine.id }).then(showChats, (error: Error) => props.onError(error.message)).finally(() => setAdding(undefined));
+  };
+  const added = (machines ?? []).filter((machine) => !machine.id.startsWith('tailscale:'));
+  const discovered = (machines ?? []).filter((machine) => machine.id.startsWith('tailscale:'));
+  const machineRows: ListRow[] = [
+    ...added.map((machine): ListRow => ({
+      key: machine.id,
+      onSelect: () => showChats(machine.id),
+      render: () => <div class="conversation" title={machine.updateError}><div class="conversation-main"><div class="conversation-title">{machine.name}</div></div>
+        <span class="conversation-meta">{machineMeta(machine, '')}</span></div>,
+    })),
+    ...(discovered.length ? [{ key: 'tailnet-heading', heading: true, render: () => <>On your tailnet</> } satisfies ListRow] : []),
+    ...discovered.map((machine): ListRow => ({
+      key: machine.id, disabled: machine.state !== 'available' || Boolean(adding), onSelect: () => add(machine),
+      render: () => <div class="conversation"><div class="conversation-main"><div class="conversation-title">{machine.name}</div></div>
+        <span class="conversation-meta">{adding === machine.id ? 'Adding…' : discoveredMeta(machine)}</span></div>,
+    })),
+  ];
 
   return (
     <Popover label={showMachines ? 'Machines' : 'Conversations'} onClose={props.onClose} class="picker history-menu" id="history-menu">
@@ -282,7 +299,7 @@ export function MachineMenu(props: { model: ChatModel; onClose: () => void; onEr
     ...discovered.map((machine): ListRow => ({
       key: machine.id, disabled: machine.state !== 'available', onSelect: () => select(machine),
       render: () => <div class="conversation"><div class="conversation-main"><div class="conversation-title">{machine.name}</div></div>
-        <span class="conversation-meta">{machine.state === 'available' ? 'Connect · install from GitHub main' : machine.state === 'unsupported' ? 'Windows is not supported yet' : 'offline'}</span></div>,
+        <span class="conversation-meta">{discoveredMeta(machine)}</span></div>,
     })),
   ];
   return <Popover label={empty ? 'Start this chat on' : 'Move this chat to'} onClose={props.onClose} class="picker history-menu" id="machines-menu">
