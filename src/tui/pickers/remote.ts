@@ -24,6 +24,7 @@ import { installOnMachine, uninstallFromMachine, type InstallOutcome, type Insta
 import { defaultLoginUser } from '../../remote/ssh.js';
 import { targetHost, targetUser, validateSshTarget, withUser } from '../../remote/shell.js';
 import type { InteractiveSlashOutcome } from '../slash/interactive-keys.js';
+import { wrapWords } from '../render/wrap.js';
 
 /** What /remote needs of the window it runs in. */
 export interface RemoteHost {
@@ -48,6 +49,23 @@ export function remoteHostOf(prompter: HarnessPrompter & Partial<WaitingBand>): 
     withBusy: (label, work) => withSlowWait(prompter.startWaiting && prompter.stopWaiting ? prompter as WaitingBand : undefined, label, work),
     line: (text) => { if (prompter.activity) prompter.activity(text); else process.stderr.write(`${text}\n`); },
   };
+}
+
+/** A line in the chat that says all of it: a step's detail or a failure's
+ * reason and what to do is never cut to the terminal's width, but wrapped
+ * onto the rows under it. `mark` (✓ ! ✗) leads; `tail` is dimmed. */
+function say(host: RemoteHost, mark: string, text: string, tail = ''): void {
+  const plain = `${text}${tail}`;
+  const width = process.stdout.columns ? Math.max(20, process.stdout.columns - 6) : Infinity;
+  const rows = width === Infinity ? [plain] : wrapWords(plain, width);
+  rows.forEach((row, at) => {
+    // Where in the row the dimmed tail begins: the rows are `plain`, cut at spaces.
+    const start = rows.slice(0, at).reduce((sum, item) => sum + item.length, 0);
+    const offset = plain.indexOf(row, start);
+    const dimFrom = Math.max(0, Math.min(row.length, text.length - offset));
+    const drawn = `${row.slice(0, dimFrom)}${dimFrom < row.length ? chalk.dim(row.slice(dimFrom)) : ''}`;
+    host.line(at === 0 && mark ? `${mark} ${drawn}` : drawn);
+  });
 }
 
 const ADDRESS_VALUE = '__address__';
@@ -149,7 +167,7 @@ function stepLines(host: RemoteHost): InstallReporter {
   let total = 0;
   return {
     start: (_step, index, count) => { current = index; total = count; },
-    done: (step, detail) => host.line(`${chalk.green('✓')} ${current}/${total} ${step}${detail ? chalk.dim(` · ${detail}`) : ''}`),
+    done: (step, detail) => say(host, chalk.green('✓'), `${current}/${total} ${step}`, detail ? ` · ${detail}` : ''),
   };
 }
 
@@ -170,7 +188,7 @@ async function runInstall(host: RemoteHost, machine: RemoteMachine, update: bool
     // Not a failure yet: why it is asking (and which user it refused), then
     // the question, typed again.
     const who = targetUser(target) ? '' : ` (as ${await defaultLoginUser(target)}, ssh's default)`;
-    host.line(`${chalk.yellow('!')} ${outcome.message}${who}`);
+    say(host, chalk.yellow('!'), `${outcome.message}${who}`);
     const retried = await askLoginUser(host, machine.name, target);
     if (!retried) return { outcome, machine };
     target = retried;
@@ -188,11 +206,11 @@ export async function askLoginUser(host: RemoteHost, name: string, target: strin
   for (;;) {
     const typed = await host.ask(`Log in to ${name} as which user?`);
     if (typed === undefined) return undefined;
-    if (!typed.trim()) { host.line(`${chalk.yellow('!')} Type a user name, or Esc to add nothing.`); continue; }
+    if (!typed.trim()) { say(host, chalk.yellow('!'), 'Type a user name, or Esc to add nothing.'); continue; }
     try {
       return withUser(target, typed);
     } catch (error) {
-      host.line(`${chalk.yellow('!')} ${error instanceof Error ? error.message : String(error)} Type another, or Esc to add nothing.`);
+      say(host, chalk.yellow('!'), `${error instanceof Error ? error.message : String(error)} Type another, or Esc to add nothing.`);
     }
   }
 }
@@ -238,7 +256,7 @@ async function installNew(host: RemoteHost, machine: RemoteMachine, recorded = f
   if (!recorded) await updateMachines((machines) => [...machines, machine]);
   const { outcome } = await runInstall(host, machine, false);
   if (!outcome.ok) {
-    host.line(`${chalk.red('✗')} ${outcome.step}: ${outcome.message}`);
+    say(host, chalk.red('✗'), `${outcome.step}: ${outcome.message}`);
     if (outcome.windows) await forgetMachine(machine.id);
     return {};
   }
@@ -262,7 +280,7 @@ async function installNew(host: RemoteHost, machine: RemoteMachine, recorded = f
 async function manageMachine(host: RemoteHost, machine: RemoteMachine): Promise<InteractiveSlashOutcome> {
   const commit = localBuildCommit();
   const auto = updatePolicy(machine) === 'auto';
-  if (machine.updateError) host.line(`${chalk.yellow('!')} The last update of ${machine.name} failed: ${machine.updateError}`);
+  if (machine.updateError) say(host, chalk.yellow('!'), `The last update of ${machine.name} failed: ${machine.updateError}`);
   const action = await chooseOption(host.prompter, machine.name, [
     machine.ready
       ? { label: 'Update ClikCode', detail: commit ? `· to this build's commit ${commit.slice(0, 8)}` : '· to GitHub main', value: 'update' }
@@ -285,7 +303,7 @@ async function manageMachine(host: RemoteHost, machine: RemoteMachine): Promise<
   if (action === 'update') {
     const { outcome } = await runInstall(host, machine, true);
     if (!outcome.ok) {
-      host.line(`${chalk.red('✗')} ${outcome.step}: ${outcome.message}`);
+      say(host, chalk.red('✗'), `${outcome.step}: ${outcome.message}`);
       return {};
     }
     const { info } = outcome;
@@ -310,7 +328,7 @@ async function manageMachine(host: RemoteHost, machine: RemoteMachine): Promise<
   if (how === 'uninstall' || how === 'data') {
     const result = await host.withBusy(`uninstalling ClikCode on ${machine.name}`, () => uninstallFromMachine(machine.sshTarget, how === 'data'));
     if (!result.ok) {
-      host.line(`${chalk.red('✗')} Uninstalling on ${machine.name} failed: ${result.message ?? 'no answer'}. It is still added; try again when it is online, or choose "Forget it here".`);
+      say(host, chalk.red('✗'), `Uninstalling on ${machine.name} failed: ${result.message ?? 'no answer'}. It is still added; try again when it is online, or choose "Forget it here".`);
       return {};
     }
   }
