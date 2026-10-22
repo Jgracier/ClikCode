@@ -1,5 +1,5 @@
-import { expect, it } from 'vitest';
-import { classifyRejection, DEFAULT_POLICY, generatePassword, parsePolicy, relax } from './password-policy.js';
+import { describe, expect, it } from 'vitest';
+import { classifyRejection, DEFAULT_POLICY, generatePassword, generatePassword as gen, hasRepeatOrSequence, parsePolicy, relax } from './password-policy.js';
 
 const many = (policy = DEFAULT_POLICY): string[] => Array.from({ length: 60 }, () => generatePassword(policy));
 
@@ -70,4 +70,16 @@ it('relaxes the rules from what the site said, narrowing symbols each try', () =
   const bounded = relax(parsePolicy({ minlength: 16, maxlength: 18 }), 'Password too short', 1);
   expect(bounded.length).toBeLessThanOrEqual(18);
   expect(bounded.length).toBeGreaterThanOrEqual(16);
+});
+
+describe('repeat and sequence rules', () => {
+  it('detects repeats and sequences', () => {
+    expect(hasRepeatOrSequence('aXbb9')).toBe(true);
+    expect(hasRepeatOrSequence('xabc1')).toBe(true);
+    expect(hasRepeatOrSequence('x321y')).toBe(true);
+    expect(hasRepeatOrSequence('xA9!k2')).toBe(false);
+  });
+  it('never generates one', () => {
+    for (let i = 0; i < 300; i++) expect(hasRepeatOrSequence(gen())).toBe(false);
+  });
 });
