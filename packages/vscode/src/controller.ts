@@ -17,7 +17,7 @@ import { installOnMachine, type InstallReporter } from '../../../src/remote/inst
 import { discoverMachines, readTailscaleStatus } from '../../../src/remote/tailscale';
 import { forgetMachine, newMachineRecord, readMachines, updateMachine, updateMachines } from '../../../src/remote/machines';
 import { installedRecord } from '../../../src/remote/updates';
-import { validateSshTarget, withUser } from '../../../src/remote/shell';
+import { targetUser, validateSshTarget, withUser } from '../../../src/remote/shell';
 import { defaultLoginUser } from '../../../src/remote/ssh';
 import type { WebviewSurface } from './chat-view';
 import { diffModel } from './model-patch';
@@ -832,6 +832,24 @@ export class ClikCodeController implements vscode.Disposable {
     const existing = (await readMachines()).find((machine) => machine.tailscale?.nodeId === found.nodeId);
     if (existing?.ready) return existing.id;
     let target = existing?.sshTarget ?? validateSshTarget(found.dnsName ?? found.hostName);
+    // Tailscale gives the machine and the name it is reached at, never the
+    // account on it: which user is asked before anything connects, with
+    // ssh's own choice for it (~/.ssh/config's User, else the user here) filled in.
+    if (!targetUser(target)) {
+      const fallback = await defaultLoginUser(target);
+      const user = await vscode.window.showInputBox({
+        title: `Log in to ${found.name} as`,
+        prompt: `The SSH user on ${found.name}: Tailscale finds the machine, not the account. root is what Tailscale SSH policies most often allow.`,
+        value: fallback, placeHolder: 'user', ignoreFocusOut: true,
+        validateInput: (value) => {
+          if (!value.trim()) return undefined;
+          try { withUser(target, value); return undefined; } catch (error) { return error instanceof Error ? error.message : String(error); }
+        },
+      });
+      if (!user?.trim()) throw new Error('Adding the machine was cancelled.');
+      target = withUser(target, user.trim());
+      if (existing) await updateMachine(existing.id, (record) => { record.sshTarget = target; });
+    }
     let outcome;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       outcome = await vscode.window.withProgress({
@@ -1017,6 +1035,9 @@ export class ClikCodeController implements vscode.Disposable {
       case 'moveToMachine':
         await this.moveToMachine(request.machineId);
         return undefined;
+      case 'addMachine':
+        if (!request.machineId.startsWith('tailscale:')) return request.machineId;
+        return this.connectDiscovered(request.machineId);
       case 'machineConversations':
         return this.conversationsOn(request.machineId);
       case 'openOnMachine':

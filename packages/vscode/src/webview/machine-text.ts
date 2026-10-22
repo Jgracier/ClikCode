@@ -27,6 +27,12 @@ export function machineMeta(machine: ListedMachine, currentId: string): string {
   ].filter(Boolean).join(' · ');
 }
 
+/** A machine from the tailnet, not added yet: what choosing it does, or why it cannot be chosen. */
+export function discoveredMeta(machine: ListedMachine): string {
+  if (machine.state === 'available') return 'Connect · install from GitHub main';
+  return machine.state === 'unsupported' ? 'Windows is not supported yet' : 'offline';
+}
+
 /** Whether the row offers Update: this computer always (as /update does);
  * another machine when its ClikCode needs one and it can be reached. */
 export function offersUpdate(machine: ListedMachine): boolean {
