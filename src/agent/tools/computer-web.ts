@@ -12,7 +12,7 @@ import { savedLoginFields, savedLoginsForSite } from '../computer/credential-vau
 import { loginValueFor } from '../computer/login-fill.js';
 import { describeRecipe, getRecipe, listRecipes, replayRecipe, saveRecipe } from '../computer/signup-recipes.js';
 import { addSiteNote, readSiteNotes } from '../computer/site-notes.js';
-import { assertCustomKey, bestProfileFor, customFieldFor, describeProfile, listProfiles, PASSWORD_SECRET, PROFILE_KEYS, phoneFor, birthdayFor, profileKeyFor, readProfileSecret, saveProfile, saveProfileSecret, secretFieldFor, type FieldHint, type ProfileKey } from '../computer/profiles.js';
+import { assertCustomKey, bestProfileFor, customFieldFor, defaultProfile, describeProfile, listProfiles, PASSWORD_SECRET, PROFILE_KEYS, phoneFor, birthdayFor, profileKeyFor, readProfileSecret, saveProfile, saveProfileSecret, secretFieldFor, type FieldHint, type ProfileKey } from '../computer/profiles.js';
 import { expectSignup, holdSignup, pendingSignupPassword, pendingSignupUsername, savedPasswordFor, settleSignup } from '../computer/signup-login.js';
 import { generatePassword } from '../computer/password-policy.js';
 import { generatedFor, readPasswordPolicy, rememberGenerated, retryRejectedPassword } from '../computer/password-retry.js';
@@ -283,7 +283,7 @@ const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: [
     link: { type: 'string', description: 'open_email_link: words or domain of the link to open (default: the first real link in the message).' },
     account: { type: 'integer', description: 'open_email_link, read_email_code: Gmail account number /u/N (default 0).' },
     fields: { type: 'object', additionalProperties: { type: 'string' }, description: `profile: fields to save or correct in the user's autofill profile (${PROFILE_KEYS.join(', ')}). Leave out to list the profiles. Use it when a site wants a different format (phone as +1…, state as an abbreviation).` },
-    label: { type: 'string', description: 'profile: which profile (default: the only one, or a new one called Personal).' },
+    label: { type: 'string', description: 'profile: which profile (default: the one called Personal, else the one with the most standard fields, else a new one called Personal).' },
     ask_fields: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { key: { type: 'string' }, label: { type: 'string' }, match: { type: 'array', items: { type: 'string' } }, optional: { type: 'boolean' }, format: { type: 'string', description: 'Types itself as the user enters it: date (##/##/####), phone ((###) ###-####), zip, time, or a pattern where # is a digit, A a letter, * either and anything else a literal the box inserts and jumps over.' }, options: { type: 'array', items: { type: 'string' }, description: 'A fixed set of answers shown as a selector (arrow keys in the terminal, radios in VS Code) instead of a text box.' }, secret: { type: 'boolean', description: 'The answer is a secret (a password to use for sign-ups, key "password"; a recovery code): typed hidden, kept in Secrets Manager with the profile, and never shown to you. A later fill of a password box with no text uses it.' } }, required: ['key', 'label'] }, description: 'profile: ask the user, privately and in one prompt, for details a task needs beyond the standard ones, and keep them in a profile (with label, a new one) so every later fill with no text uses them. key is lower_snake_case (app_name, privacy_policy_url); label is what the user is asked; match lists the words a form may label it with (["app name","application name"]); optional fields may be left empty. Details only; a password or code goes in with secret: true.' },
     custom: { type: 'object', additionalProperties: { type: 'object', additionalProperties: false, properties: { label: { type: 'string' }, value: { type: 'string' }, match: { type: 'array', items: { type: 'string' } } }, required: ['value'] }, description: 'profile: save custom details you already know (a redirect address, the app name you chose) into a profile, same shape as ask_fields answers: {key: {label, value, match}}.' },
     vendor: { type: 'string', description: 'capture_secret: the vendor the key is for, recorded with it.' },
@@ -356,7 +356,7 @@ export const computerWebTool = defineTool<WebArgs>({
         if (args.ask_fields?.length) {
           if (!ctx.requestPrivateLogin) throw new Error('This chat cannot ask the user privately. Save details you know with custom, or the user can run: clikcode computer profile --custom key=value');
           for (const spec of args.ask_fields) { if (spec.secret) assertCustomKey(spec.key, true); else if (!isStandardKey(spec.key)) assertCustomKey(spec.key); if (!spec.label?.trim()) throw new Error(`ask_fields "${spec.key}" needs a label: it is what the user is asked.`); }
-          const target = args.label ? all.find(profile => profile.label.toLowerCase() === args.label!.toLowerCase()) : all[0];
+          const target = args.label ? all.find(profile => profile.label.toLowerCase() === args.label!.toLowerCase()) : defaultProfile(all);
           const prompt = args.ask_fields.map((spec, index): LoginField => ({ index, key: spec.key, label: spec.label.trim(), kind: spec.secret ? 'password' : spec.options?.length ? 'choice' : 'text', required: !spec.optional, ...(spec.options?.length ? { options: spec.options } : {}), ...(spec.format ? { format: spec.format } : {}), ...(isStandardKey(spec.key) ? (target?.fields[spec.key as ProfileKey] ? { current: target.fields[spec.key as ProfileKey]! } : {}) : target?.custom?.[spec.key]?.value ? { current: target.custom[spec.key]!.value } : {}) }));
           const answers = await ctx.requestPrivateLogin('https://profile.clikcode', prompt, ctx.signal);
           if (!answers) throw new Error('The user did not provide the details.');
@@ -373,11 +373,11 @@ export const computerWebTool = defineTool<WebArgs>({
         // replacement) and asks for what is missing; the result is the profile.
         if (args.ask || !all.length) {
           if (!ctx.requestPrivateLogin) throw new Error('This chat cannot ask the user privately. Save a profile with fields, or the user can run: clikcode computer profile --set key=value');
-          const current = (args.label ? all.find(profile => profile.label.toLowerCase() === args.label!.toLowerCase()) : all[0])?.fields ?? {};
+          const current = (args.label ? all.find(profile => profile.label.toLowerCase() === args.label!.toLowerCase()) : defaultProfile(all))?.fields ?? {};
           const asked = PROFILE_PROMPT.map(([key, label, required], index): LoginField => ({ index, key, label, kind: 'text', required, ...(PROFILE_FORMATS[key] ? { format: PROFILE_FORMATS[key] } : {}), ...(current[key as ProfileKey] ? { current: current[key as ProfileKey]! } : {}) }));
           const answers = await ctx.requestPrivateLogin('https://profile.clikcode', asked, ctx.signal);
           if (!answers) throw new Error('The user did not provide the profile.');
-          return { output: `Saved. ${describeProfile(await saveProfile(ctx.stateDir, { ...(args.label ? { label: args.label } : all[0] ? { id: all[0].id } : {}), fields: answers }))}` };
+          return { output: `Saved. ${describeProfile(await saveProfile(ctx.stateDir, { ...(args.label ? { label: args.label } : defaultProfile(all) ? { id: defaultProfile(all)!.id } : {}), fields: answers }))}` };
         }
         return { output: all.map(describeProfile).join('\n') };
       }

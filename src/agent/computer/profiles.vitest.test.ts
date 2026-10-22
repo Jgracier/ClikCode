@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { lockCredentialVault } from './credential-vault.js';
-import { bestProfileFor, birthdayFor, customFieldFor, describeProfile, listProfiles, normalizePhone, phoneFor, profileKeyFor, readProfileSecret, removeProfile, saveProfile, saveProfileSecret, secretFieldFor } from './profiles.js';
+import { bestProfileFor, defaultProfile, birthdayFor, customFieldFor, describeProfile, listProfiles, normalizePhone, phoneFor, profileKeyFor, readProfileSecret, removeProfile, saveProfile, saveProfileSecret, secretFieldFor } from './profiles.js';
 import { namedSecretNames } from './credential-vault.js';
 
 let stateDir = '';
@@ -170,5 +170,26 @@ describe('bestProfileFor: several profiles never mean asking', () => {
     expect(bestProfileFor([admin, personal], [hint('email')], 'clikdeploy admin')?.label).toBe('ClikDeploy admin');
     expect(bestProfileFor([admin], [hint('email')])?.label).toBe('ClikDeploy admin');
     expect(bestProfileFor([], [hint('email')])).toBeUndefined();
+  });
+});
+
+describe('defaultProfile: no label never means a second profile', () => {
+  const mk = (label: string, fields: Record<string, string>) => ({ id: label, label, fields }) as never;
+  it('is Personal, else the profile with the most standard fields', () => {
+    const admin = mk('ClikDeploy admin', { email: 'admin@x.test', given_name: 'A', family_name: 'B', phone: '1' });
+    expect(defaultProfile([admin, mk('Personal', { email: 'me@x.test' })])?.label).toBe('Personal');
+    expect(defaultProfile([admin, mk('Zed', { email: 'z@x.test' })])?.label).toBe('ClikDeploy admin');
+    expect(defaultProfile([])).toBeUndefined();
+  });
+
+  it('saving with no label merges into Personal and never creates a duplicate or touches the other profile', async () => {
+    stateDir = await mkdtemp(join(tmpdir(), 'clikcode-profiles-'));
+    await saveProfile(stateDir, { label: 'ClikDeploy admin', fields: { email: 'admin@clikdeploy.test' } });
+    await saveProfile(stateDir, { label: 'Personal', fields: { email: 'me@example.test' } });
+    await saveProfile(stateDir, { fields: { city: 'Calhan' } });
+    const all = await listProfiles(stateDir);
+    expect(all.map(profile => profile.label)).toEqual(['ClikDeploy admin', 'Personal']);
+    expect(all.find(profile => profile.label === 'Personal')?.fields).toMatchObject({ email: 'me@example.test', city: 'Calhan' });
+    expect(all.find(profile => profile.label === 'ClikDeploy admin')?.fields).toEqual({ email: 'admin@clikdeploy.test' });
   });
 });
