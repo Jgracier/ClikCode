@@ -1,4 +1,5 @@
 /** One persistent Chrome profile shared by ClikCode's terminal and editor workers. */
+import { accessSync, constants as fsConstants } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -59,7 +60,9 @@ async function startHost(stateDir: string): Promise<Connected> {
       if (await externalChromeRunning(stateDir)) throw new Error('ClikCode Chrome is open outside ClikCode. Finish that browser step, close its window, and retry.');
       const entry = process.env.CLIKCODE_BROWSER_HOST_ENTRY || process.argv[1];
       if (!entry) throw new Error('ClikCode could not start its browser host.');
-      const child = spawn(process.execPath, [entry, 'computer-host', stateDir], { detached: true, stdio: 'ignore', windowsHide: true });
+      const hostArgs = [process.execPath, entry, 'computer-host', stateDir];
+      const [command, ...argv] = hiddenDisplayCommand(hostArgs);
+      const child = spawn(command!, argv, { detached: true, stdio: 'ignore', windowsHide: true });
       let startupError: Error | undefined;
       child.once('error', error => { startupError = error; });
       child.unref();
@@ -170,4 +173,15 @@ export async function closeComputerBrowser(stateDir: string): Promise<void> {
     const record = JSON.parse(await fs.readFile(computerHostFile(stateDir), 'utf8')) as { pid?: number };
     if (Number.isSafeInteger(record.pid) && record.pid! > 1) process.kill(record.pid!, 'SIGTERM');
   } catch { /* no ClikCode-owned browser */ }
+}
+
+/** On Linux the browser runs on its own virtual display so its windows never take focus from the user's
+ * screen. Handoff and screenshots go over CDP and are unaffected. CLIKCODE_BROWSER_VISIBLE=1 shows it. */
+export function hiddenDisplayCommand(command: string[], env = process.env, platform = process.platform, hasXvfb = () => whichSync('xvfb-run')): string[] {
+  if (platform !== 'linux' || env.CLIKCODE_BROWSER_VISIBLE === '1' || !hasXvfb()) return command;
+  return ['xvfb-run', '-a', '-s', '-screen 0 1440x900x24', ...command];
+}
+
+function whichSync(name: string): boolean {
+  return (process.env.PATH ?? '').split(path.delimiter).some(dir => { try { accessSync(path.join(dir, name), fsConstants.X_OK); return true; } catch { return false; } });
 }
