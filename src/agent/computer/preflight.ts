@@ -140,7 +140,7 @@ export async function postToClikDeploy(result: PreflightResult, signal?: AbortSi
   if (!Array.isArray(listed)) return 'not posted: could not ask ClikDeploy which tools exist';
   if (!listed.some(tool => tool.name === 'connector_preflight')) return 'not posted: ClikDeploy has no connector_preflight tool yet';
   const { clikdeploy: _skip, ...body } = result;
-  const sent = await runCli('clikdeploy', ['tools', 'run', 'connector_preflight', '--args-json', '-', '--confirm'], { stdin: JSON.stringify(body), signal, timeoutMs: 30_000 });
+  const sent = await runCli('clikdeploy', ['tools', 'run', 'connector_preflight', '--args-json', JSON.stringify(body), '--confirm'], { signal, timeoutMs: 30_000 });
   const reply = firstJsonObject<{ status?: string; message?: string }>(sent.text);
   return sent.code === 0 && reply?.status !== 'error' ? 'posted' : `not posted: ${(reply?.message ?? sent.text.trim() ?? 'no answer').split('\n')[0]!.slice(0, 160)}`;
 }
