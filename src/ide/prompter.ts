@@ -178,10 +178,13 @@ export class IdePrompter implements HarnessPrompter {
       if (!('index' in result)) return undefined;
       const option = current[result.index];
       if (!option) return undefined;
+      // A row's action closes the list, as the terminal's does (option-picker.ts
+      // runAction): whoever opened it rebuilds from state and reopens it if it
+      // should. Reopening here too showed the list twice in a remote chat or the
+      // editor -- once here, once by the caller -- and Esc only reopened it.
       if (result.action !== undefined) {
         await onAction?.(option.value, result.action);
-        current = settings?.refreshedOptions?.() ?? current;
-        continue;
+        return undefined;
       }
       if (option.inline) {
         const { choices, current: selected } = option.inline;

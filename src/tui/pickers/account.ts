@@ -118,17 +118,26 @@ export async function interactiveAccountPicker(
     const usageRefresh = Promise.allSettled(providerAccounts.map((account) => accountUsageLabel(account, state, { network: true })))
       .then(() => { usagePending = false; });
     let actionPerformed = false;
+    let signedIn: string | undefined;
     const selected = await chooseOption(
       rl, `${harness.displayName} accounts`, accountOptions(),
       async (choice, action) => {
         if (choice.kind !== 'account') return;
         actionPerformed = true;
         await manageAccountAction(rl, choice.accountId, action);
+        if (action === 'reauthenticate') signedIn = choice.accountId;
       },
       // ← is back to whatever opened the list (Settings' row), or closes it,
       // as in every other list.
       { refreshedOptions: accountOptions, refresh: usageRefresh, totalItems: providerAccounts.length },
     );
+    // Signed in from the list: that is the account meant, and nothing is left
+    // to do in the list -- it is the chat's account now, and the list closes.
+    // Any other action (sign out, remove) shows the list again, as it is now.
+    if (signedIn) {
+      await aiSessionCommand(id, `/settings account ${signedIn}`);
+      return id;
+    }
     if (actionPerformed) continue;
     if (selected?.kind === 'add-account') {
       // The account just connected is the one the user meant to use.

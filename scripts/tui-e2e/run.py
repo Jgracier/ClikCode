@@ -256,7 +256,7 @@ def remote_fake(commit=None, host_options=None):
     return setup
 
 
-def remote_move(latency_ms=0, count_bytes=False):
+def remote_move(latency_ms=0, count_bytes=False, remote_signed_in=True):
     """`setup` for moving a chat to another machine (/machine): the fake `ssh`
     (fake-ssh.mjs) and one fake machine, `devbox`, already added, running THIS
     build's real ClikCode (its bridge, its worker, its turns) in a HOME, user
@@ -264,8 +264,10 @@ def remote_move(latency_ms=0, count_bytes=False):
     in here too. The fake Grok there logs every prompt to remote-prompts.log,
     so a step can count what the agent there was told. `latency_ms`: what
     devbox sends back arrives that late (a slow link); `count_bytes`: every
-    byte it sends back is counted (fake-ssh.mjs, for 'bytes_mark'). No real
-    machine or vendor."""
+    byte it sends back is counted (fake-ssh.mjs, for 'bytes_mark').
+    `remote_signed_in=False`: Grok is installed on devbox but nobody has signed
+    in to it there (its fake login prints a device link and finishes after 2 s).
+    No real machine or vendor."""
     def setup(context):
         import subprocess, datetime, uuid
         fakes = os.path.join(REPO, 'scripts', 'tui-e2e')
@@ -287,8 +289,9 @@ def remote_move(latency_ms=0, count_bytes=False):
         remote_home, remote_bin = made['home'], made['bin']
         shutil.copy(os.path.join(fakes, 'fake-grok.mjs'), os.path.join(remote_bin, 'grok'))
         os.chmod(os.path.join(remote_bin, 'grok'), 0o755)
-        os.makedirs(os.path.join(remote_home, '.grok'))
-        open(os.path.join(remote_home, '.grok', 'auth.json'), 'w').write('{}')
+        if remote_signed_in:
+            os.makedirs(os.path.join(remote_home, '.grok'))
+            open(os.path.join(remote_home, '.grok', 'auth.json'), 'w').write('{}')
         os.makedirs(os.path.join(remote_home, '.local', 'bin'))
         launcher = os.path.join(remote_home, '.local', 'bin', 'clikcode')
         open(launcher, 'w').write(f"#!/bin/sh\nexec {os.path.realpath(shutil.which('node'))} {os.path.abspath(context['entry'])} \"$@\"\n")
@@ -871,6 +874,28 @@ SCENARIOS = {
                                         "replaces ClikCode's own Node, which no longer ran", '5/6 Building and installing', 'devbox is added']},
         'never': ['ENOENT', '✗'],
     },
+    # A chat moved to a machine where its provider is installed but not signed in:
+    # the first message there opens the sign-in -- its link drawn here, in the
+    # chat -- and once it finishes that same message is answered on devbox. It is
+    # never typed twice, and nothing asks for an account first.
+    'remote-signin-send': {
+        'setup': remote_move(remote_signed_in=False), 'startup': 4, 'no_dup_check': 'the transcript is drawn again on the other machine',
+        'turns': [{'blocks': ['First answer here.']}],
+        'steps': [
+            ('type', 'hello there'), ('wait_for', 'First answer here.', 30), ('settle', 1),
+            ('type', '/machine'), ('wait_for', 'Move this chat to', 30), ('wait_for', 'devbox', 10), ('settle', 1),
+            ('keys', '\x1b[B'), ('keys', '\r'), ('wait_for', 'devbox  •', 60), ('settle', 3),
+            ('type', 'where are you now'), ('wait_for', 'AB12-CD34', 60), ('settle', 0.5), ('snap', 'link'),
+            ('wait_for', 'Answered on devbox.', 60), ('settle', 2), ('snap', 'answered'),
+            # The message went to the agent once, after the sign-in: not sent twice, not lost.
+            ('expect_file_count', 'remote-prompts.log', 'where are you now', 1),
+        ],
+        'watch': [],
+        'snap_contains': {'link': ['where are you now', 'accounts.x.ai/oauth2/device', 'AB12-CD34'],
+                          'answered': ['where are you now', 'Answered on devbox.']},
+        'snap_lacks': {'answered': ['did not finish', 'not signed in']},
+        'never': ['ENOENT', 'not a tty', 'Grok Build accounts', 'did not finish'],
+    },
     # A chat on a machine whose ClikCode is another build: said once on opening it, with where
     # to update it. Nothing is updated without the user.
     'remote-outdated-chat-notice': {
@@ -1290,6 +1315,21 @@ SCENARIOS = {
                   ('keys', '\x1b[3~'), ('wait_for', 'reauth', 15), ('settle', 1)],
         'watch': [], 'ever': ['del disconnect'], 'final_contains': ['reauth'],
         'never': ['Cancel', 'Signed out of Grok Build'],
+    },
+    # Signing in from the account list (Tab → Reauthenticate) closes it: that
+    # account is the chat's now, and nothing is left to do there. Signing out
+    # (Del) shows the list again, with the change.
+    'account-sign-in-closes-list': {
+        'turns': [TWO_BLOCKS],
+        'steps': [('type', 'please check the commit'), ('wait_for', 'The final commit is live.', 40), ('settle', 1),
+                  ('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 2),
+                  ('keys', '\x1b[3~'), ('wait_for', 'reauth', 15), ('settle', 1), ('snap', 'signed-out'),
+                  ('keys', '\t'), ('wait_for', 'Reauthenticate', 10), ('settle', 0.5), ('keys', '\r'),
+                  ('wait_for', 'AB12-CD34', 15), ('wait_for_gone', 'AB12-CD34', 30), ('settle', 2), ('snap', 'after')],
+        'watch': [],
+        'snap_contains': {'signed-out': ['Grok Build accounts', 'reauth']},
+        'snap_lacks': {'after': ['Grok Build accounts', 'reauth']},
+        'never': ['did not finish'],
     },
     # The same from a Mac or iPhone, whose "delete" key sends Backspace.
     'account-backspace-disconnects': {
