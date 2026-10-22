@@ -169,6 +169,30 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
   }
 }
 
+/** A focused picker for private models deployed through ClikDeploy. Starting
+ * and searching deployments belongs in ClikDeploy; this command only selects
+ * a model already published to this Gateway account. */
+export async function interactivePrivateModelsPicker(rl: HarnessPrompter, id: string): Promise<void> {
+  const state = await readState({ transcripts: [id] });
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) throw new Error(`AI session "${id}" was not found`);
+  if (!isGatewayService(session)) throw new Error('Private models are available on ClikDeploy Gateway conversations.');
+
+  const waiting = TERMINAL.active === rl ? TERMINAL.active : undefined;
+  const list = await withSlowWait(waiting, 'finding your private models…', () => gatewayModels({ fresh: true }));
+  const models = list.models.filter((model) => model.own);
+  if (!models.length) {
+    rl.panel?.('Private models', 'No private models are deployed to this ClikDeploy account yet. Open ClikDeploy → AI → Private Models to search Hugging Face and start one. It will appear here when it is ready.');
+    return;
+  }
+  const selected = await chooseOption(rl, 'Choose a private model', models.map((model) => ({
+    label: gatewayModelLabel(model),
+    detail: `${model.id === session.model ? '· current · ' : '· '}${gatewayModelDetail(model)}`,
+    value: model.id,
+  })));
+  if (selected) await aiSessionCommand(id, `/model ${selected}`);
+}
+
 /** A Gateway conversation's picker. Models run ClikCode locally; selected
  * platform agents run on ClikDeploy with their own tools. */
 type GatewayChoice = { kind: 'agent'; id?: string } | { kind: 'model'; id: string } | { kind: 'subscriptions' };
