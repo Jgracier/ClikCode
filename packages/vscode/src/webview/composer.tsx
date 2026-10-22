@@ -139,7 +139,7 @@ export function Composer(props: {
       setText(''); save({ draft: '' }); setSuggestions([]); setMenu(menuFor);
       return;
     }
-    // One live copy: a chat that moved is read-only here (the banner opens the moved one).
+    // One live copy: a chat that moved is read-only here while the live one opens (controller openLive).
     if (model.movedTo) return;
     // Not connected is the controller's to wait out (send awaits the start):
     // the message is drawn at once and comes back as a draft if it fails.
