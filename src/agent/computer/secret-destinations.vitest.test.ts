@@ -28,6 +28,17 @@ it('ships a few destinations as plain data, each naming the slots the agent fill
   expect(slotsOf(all['github-secret']!)).toEqual(['key', 'repo']);
 });
 
+it('a saved destination that connects a key through connect_connector is read back from ClikDeploy, never answered with a bare "delivered"', async () => {
+  const run = ['clikdeploy', 'tools', 'run', 'connect_connector', '--args-json', '-', '--confirm'];
+  await addDestination(dir, 'clikdeploy-connection', { run, stdin: '{"integrationId":"{{integration}}","apiKey":"{{secret|json}}"}' });
+  await addDestination(dir, 'my-connect', { run, stdin: '{"integrationId":"{{integration}}","apiKey":"{{secret|json}}"}' });
+  await addDestination(dir, 'other-tool', { run: ['clikdeploy', 'tools', 'run', 'something_else'], stdin: '{{secret}}' });
+  const all = await loadDestinations(dir);
+  expect(all['clikdeploy-connection']!.verify).toBe('connection');
+  expect(all['my-connect']!.verify).toBe('connection');
+  expect(all['other-tool']!.verify).toBeUndefined();
+});
+
 it('answers a bad plan with what to fix, including the list of destinations', async () => {
   expect(await destinationProblem(dir, [{ to: 'clikdeploy-secret', with: { key: 'SALAD_API_KEY' } }])).toBeUndefined();
   expect(await destinationProblem(dir, [{ to: 'nope' }])).toContain('Known: clikdeploy-secret(key)');
