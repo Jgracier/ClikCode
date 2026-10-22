@@ -13,9 +13,10 @@ import type { HarnessSession, HarnessState } from '../session/model.js';
 import { moveChat, type MoveEnd, type MoveRequest } from '../session/move-chat.js';
 import { listWorkerRecords, readWorkerRecord } from '../worker/registry.js';
 import { newMachineRecord, updateMachines } from './machines.js';
-import { localMoveEnd, movedChatPlace, remoteMoveEnd } from './move-terminal.js';
+import { localMoveEnd, movedChatPlace, moveTerminalChat, remoteMoveEnd } from './move-terminal.js';
 import { TerminalBridge } from './terminal-chat.js';
-import { RemoteMachines } from './connection.js';
+import { closeWindowMachines, holdWindowMachines, RemoteMachines } from './connection.js';
+import type { HarnessPrompter } from '../harness/prompter.js';
 import { readMachines } from './machines.js';
 
 const REPO = resolve(__dirname, '..', '..');
@@ -203,5 +204,25 @@ describe.skipIf(!built)('moving a chat between two machines, over the real bridg
       expect(connections()).toBe(opened);
       expect((await onProd(read2)).sessions.find((item) => item.id === 'here-2')).toMatchObject({ name: 'Over the list' });
     } finally { await links.close(); }
+  }, 120_000);
+
+  it('/machine after the board moves over the window\'s connection the board made: one SSH connection for both', async () => {
+    await write(stateOf([chat({ id: 'here-3', conversationId: 'conv-4', name: 'Board then move', workspace: process.env.HOME })]));
+    const sshLog = join(root, 'ssh.log');
+    const connections = (): number => (existsSync(sshLog) ? readFileSync(sshLog, 'utf8').trim().split('\n').filter((line) => line.includes('"prod"')).length : 0);
+    const before = connections();
+    const machine = (await readMachines()).find((item) => item.name === 'prod')!;
+    try {
+      // The board opens, shows prod, and closes.
+      const board = await holdWindowMachines();
+      await until(async () => board.views().find((view) => view.machine.id === machine.id)?.state === 'connected');
+      board.release();
+      // /machine, picking prod.
+      const picker = { select: async () => machine.id } as unknown as HarnessPrompter;
+      const next = await moveTerminalChat(picker, { local: 'here-3' }, 'here-3', true, localMoveEnd());
+      expect(next).toEqual({ remote: { machineId: machine.id, chatId: 'here-3' } });
+      expect((await onProd(read2)).sessions.find((item) => item.id === 'here-3')).toMatchObject({ name: 'Board then move' });
+      expect(connections() - before).toBe(1);
+    } finally { await closeWindowMachines(); }
   }, 120_000);
 });

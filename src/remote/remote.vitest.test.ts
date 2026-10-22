@@ -2,7 +2,7 @@
  * command locally inside a temporary HOME (scripts/tui-e2e/fake-ssh.mjs), a
  * fake `tailscale` printing a fixture, a file:// repository standing in for
  * GitHub, and a file:// Node mirror. Nothing connects to a real machine. */
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -13,7 +13,7 @@ import { shellQuote, validateSshTarget, withUser } from './shell.js';
 import { defaultLoginUser, runSsh, sshArgv, sshFailure, sshFailureMessage } from './ssh.js';
 import { discoverMachines, readTailscaleStatus, type TailscaleStatus } from './tailscale.js';
 import { buildScript, installOnMachine, nodeIsNewEnough, sourceScript, uninstallFromMachine, type InstallStep } from './install.js';
-import { needsUpdate, RemoteLink, RemoteMachines, type MachineView } from './connection.js';
+import { closeWindowMachines, holdWindowMachines, needsUpdate, RemoteLink, RemoteMachines, type MachineView } from './connection.js';
 import { machinesPath, newMachineRecord, readMachines, updateMachines, type RemoteMachine } from './machines.js';
 import { isRemoteRowValue, updateText } from './board-rows.js';
 import { autoUpdateDecision, AutoUpdates } from './updates.js';
@@ -378,6 +378,87 @@ describe('the board’s connections', () => {
     } finally { await machines.close(); }
   });
 
+  const sshTo = (name: string): number => (existsSync(join(root, 'ssh.log'))
+    ? readFileSync(join(root, 'ssh.log'), 'utf8').split('\n').filter((line) => line.includes(`"${name}"`)).length : 0);
+
+  it('keeps one connection per machine for the window: every list after the first reuses it', async () => {
+    host(root, 'kept', { chats: [chat('k1', 'Kept open')] });
+    expect((await installOnMachine('kept', steps().reporter)).ok).toBe(true);
+    await updateMachines(() => [newMachineRecord({ name: 'kept', sshTarget: 'kept', ready: true })]);
+    const before = sshTo('kept');
+    try {
+      // The board, then /machine, then /remote, then the board again.
+      const board = await holdWindowMachines({ autoUpdate: true });
+      await until(() => board.views()[0]?.state === 'connected' && board.views()[0]!.chats.length === 1);
+      let changes = 0;
+      board.onChange(() => { changes += 1; });
+      board.release();
+      for (const list of [{}, {}, { autoUpdate: true }]) {
+        const held = await holdWindowMachines(list);
+        expect(held.views()[0]).toMatchObject({ state: 'connected', chats: [expect.objectContaining({ title: 'Kept open' })] });
+        held.release();
+      }
+      // A released list hears nothing more.
+      const counted = changes;
+      const again = await holdWindowMachines();
+      again.release();
+      expect(changes).toBe(counted);
+      expect(sshTo('kept') - before).toBe(1);
+    } finally { await closeWindowMachines(); }
+    // Closed with the window: the next window connects anew.
+    const next = await holdWindowMachines();
+    try {
+      await until(() => next.views()[0]?.state === 'connected');
+      expect(sshTo('kept') - before).toBe(2);
+    } finally { next.release(); await closeWindowMachines(); }
+  }, 120_000);
+
+  it('follows machines.json on each list: a machine added is connected to, one forgotten is let go', async () => {
+    host(root, 'first', {});
+    host(root, 'second', {});
+    for (const name of ['first', 'second']) expect((await installOnMachine(name, steps().reporter)).ok).toBe(true);
+    const first = newMachineRecord({ name: 'first', sshTarget: 'first', ready: true });
+    const second = newMachineRecord({ name: 'second', sshTarget: 'second', ready: true });
+    await updateMachines(() => [first]);
+    const installed = sshTo('second');
+    try {
+      const one = await holdWindowMachines();
+      expect(one.views().map((view) => view.machine.name)).toEqual(['first']);
+      one.release();
+      await updateMachines(() => [first, second]);
+      const two = await holdWindowMachines();
+      expect(two.views().map((view) => view.machine.name)).toEqual(['first', 'second']);
+      await until(() => two.views().every((view) => view.state === 'connected'));
+      two.release();
+      await updateMachines(() => [second]);
+      const three = await holdWindowMachines();
+      expect(three.views().map((view) => view.machine.name)).toEqual(['second']);
+      three.release();
+      expect(sshTo('second') - installed).toBe(1);
+    } finally { await closeWindowMachines(); }
+  }, 120_000);
+
+  it('tries an offline machine again only while a list shows it, and at once when the next one opens', async () => {
+    host(root, 'napping', { offline: true });
+    await updateMachines(() => [newMachineRecord({ name: 'napping', sshTarget: 'napping', ready: true })]);
+    try {
+      const list = await holdWindowMachines({}, { backoffMs: [50] });
+      await until(() => list.views()[0]?.state === 'offline');
+      const shown = sshTo('napping');
+      await until(() => sshTo('napping') > shown);
+      list.release();
+      // Nothing shows it: no more tries.
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      const idle = sshTo('napping');
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      expect(sshTo('napping')).toBe(idle);
+      const next = await holdWindowMachines();
+      expect(next.views()[0]!.state).toBe('connecting');
+      await until(() => sshTo('napping') > idle);
+      next.release();
+    } finally { await closeWindowMachines(); }
+  }, 60_000);
+
   it('writes machines.json private to the user', async () => {
     await updateMachines((list) => list);
     expect(statSync(machinesPath()).mode & 0o777).toBe(0o600);
@@ -385,6 +466,8 @@ describe('the board’s connections', () => {
 });
 
 describe('/remote', () => {
+  // Its list holds the window's connections; each test is its own window.
+  afterEach(() => closeWindowMachines());
   /** A prompter that answers lists by title and questions in order. */
   const scripted = (choices: Record<string, (options: readonly PickerOption<unknown>[]) => unknown>, answers: Array<string | undefined>) => {
     const asked: string[] = [];
