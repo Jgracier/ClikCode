@@ -10,6 +10,21 @@ import { CLIKCODE_USER_AGENT } from '../version.js';
 
 type Options = { config?: Conf; fetchImpl?: typeof fetch; timeoutMs?: number };
 
+const ALWAYS_START_OWN_MODELS = 'gateway.alwaysStartOwnModels';
+
+/** Whether choosing an asleep private model should start it without asking again. */
+export function alwaysStartOwnModels(config = new Conf({ projectName: 'clikcode', configFileMode: 0o600 })): boolean {
+  return config.get(ALWAYS_START_OWN_MODELS) === true;
+}
+
+/** Remember the user's explicit "Always start private models" choice locally. */
+export function setAlwaysStartOwnModels(
+  enabled: boolean,
+  config = new Conf({ projectName: 'clikcode', configFileMode: 0o600 }),
+): void {
+  config.set(ALWAYS_START_OWN_MODELS, enabled);
+}
+
 async function gatewayCall(path: string, init: { method: string; body?: unknown }, options: Options = {}): Promise<{ ok: boolean; status: number; body: Record<string, unknown> | undefined }> {
   const config = options.config ?? new Conf({ projectName: 'clikcode', configFileMode: 0o600 });
   const { baseUrl, apiKey } = gatewayConnection(config);
