@@ -149,6 +149,24 @@ export async function markMoved(id: string, movedTo: Omit<ChatMovedTo, 'at'>): P
   await retireMovedWorker(id).catch(() => undefined);
 }
 
+/** The chat is wanted here again and the machine it went to cannot hand it
+ * back (offline, removed, too old): the copy kept here stops being read-only,
+ * its vendor thread forgotten as on any move back (the next turn takes the
+ * conversation up again). Whatever happened on the other machine since is not here. */
+export async function reclaimMovedChat(id: string): Promise<string> {
+  const state = await readState({ transcripts: [id] });
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) throw new Error(`AI session "${id}" was not found`);
+  if (!session.movedTo) return id;
+  delete session.movedTo;
+  session.updatedAt = new Date().toISOString();
+  forgetNativeThread(session);
+  await writeState(state);
+  const { warmSessionWorker } = await import('../worker/client.js');
+  await warmSessionWorker(id).catch(() => undefined);
+  return id;
+}
+
 // ---- the machine it goes to --------------------------------------------------
 
 /** The same person's account, by label or the email in it. */
