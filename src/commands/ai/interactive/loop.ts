@@ -58,6 +58,8 @@ export class ChatLoop {
   private shownLiveSettings: string | undefined;
   /** One line for the transcript after the next frame: the answer to a command the user just ran. */
   private notice: string | undefined;
+  /** /exit was typed in a chat on another machine: this window closes. */
+  private leaving = false;
   /** What this pass's turn actually sent, when a slash command expanded
    * the line (/review): what an interrupted turn recorded is compared to. */
   private sentPrompt: string | undefined;
@@ -94,7 +96,7 @@ export class ChatLoop {
     try {
       // Opened (--resume, --continue) on a copy that moved: the live chat instead.
       if (terminal) await this.followMoved(terminal);
-      while (true) {
+      while (!this.leaving) {
         this.sentPrompt = undefined;
         // One live Codex/ACP child per OPEN conversation: leaving it (new chat,
         // fork, resume) closes the child it had.
@@ -108,7 +110,7 @@ export class ChatLoop {
         const next = await this.readNext();
         if (next === 'exit') break;
         if (next === 'continue') continue;
-        if (await this.handleLine(next) === 'exit') break;
+        if (await this.handleLine(next) === 'exit' || this.leaving) break;
       }
     } finally {
       await releaseWindow();
@@ -342,8 +344,9 @@ export class ChatLoop {
   private async openRemote(terminal: TerminalHarnessPrompter, selection: RemoteChatSelection, draft?: string, hops = 0): Promise<void> {
     await leaveConversation(this.id);
     try {
-      const localId = await runRemoteChat(terminal, this.id, selection, draft);
-      if (localId) this.id = localId;
+      const end = await runRemoteChat(terminal, this.id, selection, draft);
+      if (typeof end === 'object') { this.leaving = true; return; }
+      if (end) this.id = end;
     } finally {
       await claimConversation(this.id).catch(() => undefined);
     }

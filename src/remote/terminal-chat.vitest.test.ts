@@ -135,7 +135,7 @@ describe('a chat on another machine\'s slash menu', () => {
     const outcome = running.then(() => 'returned', (error: Error) => error.message);
     await until(() => prompts.length === 1);
     // The menu is the machine's, read before the first prompt, opened by Right as a chat here does.
-    expect(prompts[0]!.items.map((item) => item.value)).toEqual(['/model', '/update', '/machine']);
+    expect(prompts[0]!.items.map((item) => item.value)).toEqual(['/model', '/update', '/machine', '/select', '/redraw', '/exit']);
     expect(prompts[0]!.options).toMatchObject({ rightArrowPalette: true });
     expect(prompts[0]!.items[0]!.argValues?.()).toEqual([{ value: 'opus' }, { value: 'sonnet' }]);
     // Chosen, it is sent to that machine; the menu is read again after it.
@@ -150,8 +150,8 @@ describe('a chat on another machine\'s slash menu', () => {
   }, 20_000);
 
   it('/machine is offered even by a machine that does not list it; /resume is Left\'s', () => {
-    expect(remotePalette([]).map((row) => row.value)).toEqual(['/machine']);
-    expect(remotePalette([{ command: '/machine', description: 'move' }, { command: '/resume', description: 'r' }]).map((row) => row.value)).toEqual(['/machine']);
+    expect(remotePalette([]).map((row) => row.value)).toEqual(['/machine', '/select', '/redraw', '/exit']);
+    expect(remotePalette([{ command: '/machine', description: 'move' }, { command: '/resume', description: 'r' }]).map((row) => row.value)).toEqual(['/machine', '/select', '/redraw', '/exit']);
   });
 });
 
@@ -236,5 +236,29 @@ describe('a message typed in a chat on another machine', () => {
     expect(renders.at(-1)!.name).toBe('Renamed');
     bridge.drop();
     expect(await outcome).toBe('interrupted');
+  }, 20_000);
+});
+
+describe('the terminal\'s own commands in a chat on another machine', () => {
+  it('/exit closes this window instead of being sent there; /redraw draws the chat again here', async () => {
+    const machine = newMachineRecord({ name: 'devbox', sshTarget: 'devbox', ready: true });
+    await updateMachines(() => [machine]);
+    const bridges: FakeRemoteBridge[] = [];
+    const { terminal, prompts, calls } = fakeTerminal();
+    const ended = runRemoteChat(terminal, 'local-1', { machineId: machine.id, chatId: 'c1' }, undefined, () => {
+      const bridge = new FakeRemoteBridge();
+      bridges.push(bridge);
+      return bridge as unknown as ChildProcessWithoutNullStreams;
+    });
+    await until(() => prompts.length === 1);
+    const renders = (): number => calls.filter((call) => call[0] === 'render').length;
+    const before = renders();
+    prompts[0]!.answer('/redraw');
+    await until(() => prompts.length === 2);
+    expect(renders()).toBe(before + 1);
+    prompts[1]!.answer('/exit');
+    expect(await ended).toEqual({ exit: true });
+    // Neither went to the other machine.
+    expect(bridges[0]!.requests.filter((request) => request.type === 'send')).toEqual([]);
   }, 20_000);
 });
