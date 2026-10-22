@@ -151,6 +151,8 @@ export async function aiGatewayModels(config: Conf): Promise<void> {
       ...(model.vision ? { vision: true } : {}),
       ...(model.reasoning ? { reasoning: true } : {}),
       ...(model.tokensPerSecond ? { tokensPerSecond: model.tokensPerSecond } : {}),
+      // One of your own models, on ClikDeploy compute: how it is (running, starting, asleep), and whether it takes tools.
+      ...(model.own ? { own: model.own } : {}),
     })),
   });
 }
