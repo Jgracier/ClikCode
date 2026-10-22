@@ -33,6 +33,10 @@
  *      and sends the whole chat, which any target reads
  *   6  `reclaim-moved`: a chat that moved on from this machine goes on here
  *      again, the client opening it reaching no machine it went to
+ *   7  the `session-delta` feature (open's `features`): `session` events and
+ *      relayed snapshots after the first whole one carry only the messages
+ *      the editor lacks (`messagesFrom`, session-delta.ts). An older bridge
+ *      ignores the feature and sends every event whole, which any editor reads
  *
  * ClikCode and the extension are published separately (the CLI first, in the
  * same ClikDeploy run), so a bump reaches npm before the extension that
@@ -40,7 +44,7 @@
  */
 export const IDE_PROTOCOL = {
   version: 1,
-  revision: 6,
+  revision: 7,
   oldestSupported: 1,
   oldestRevision: 2,
 } as const;

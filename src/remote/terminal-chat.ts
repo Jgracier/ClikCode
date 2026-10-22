@@ -6,7 +6,8 @@ import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { HarnessSession } from '../session/model.js';
-import type { IdeEvent, IdeHostEvent, IdeHostRequest, IdeRequest, IdeSlashCommand, IdeUiResult } from '../ide/protocol.js';
+import type { IdeEvent, IdeFeature, IdeHostEvent, IdeHostRequest, IdeRequest, IdeSlashCommand, IdeUiResult } from '../ide/protocol.js';
+import { SessionDeltaReceiver } from '../ide/session-delta.js';
 import type { PaletteEntry } from '../tui/command-palette.js';
 import type { TerminalHarnessPrompter } from '../tui/prompter.js';
 import { interactiveSessionPicker } from '../tui/pickers/session.js';
@@ -36,8 +37,12 @@ type Answered<T = IdeRequest> = T extends { requestId: string } ? Omit<T, 'reque
  * is a folder of this machine, and the chat keeps its own saved workspace
  * on the machine that owns it (ide/bridge.ts open). */
 export function remoteResume(chatId: string): RemoteOpen {
-  return { type: 'open', mode: 'resume', sessionId: chatId };
+  return { type: 'open', mode: 'resume', sessionId: chatId, features: REMOTE_FEATURES };
 }
+
+/** What this terminal handles beyond the base protocol: the conversation
+ * whole on opening, and only what changed after (ide/session-delta.ts). */
+const REMOTE_FEATURES: readonly IdeFeature[] = ['session-delta'];
 
 /** Starts the machine's bridge (`ide-bridge --stdio` over ssh); a test's own. */
 export type RemoteBridgeStarter = (target: string) => ChildProcessWithoutNullStreams;
@@ -60,6 +65,8 @@ export class TerminalBridge {
    * the close that follows is a reconnect, not a lost connection. */
   retiring = false;
   onEvent: (event: IdeEvent) => void = () => undefined;
+  /** The conversation as the bridge last sent it: its events made whole again. */
+  private readonly delta = new SessionDeltaReceiver();
   onClose: (error: Error) => void = () => undefined;
 
   constructor(target: string, start: RemoteBridgeStarter = sshBridge) {
@@ -80,7 +87,7 @@ export class TerminalBridge {
         }
         if (message.type === 'host-retiring') { this.retiring = true; return; }
         if (message.type !== 'chat' || message.chat !== this.chat) return;
-        const event = message.event;
+        const event = this.delta.expand(message.event);
         if (event.type === 'ready') { clearTimeout(timer); resolve(); }
         if (event.type === 'result') {
           const waiter = this.pending.get(event.requestId);
@@ -226,6 +233,18 @@ export async function runRemoteChat(
     let lastError: Error | undefined;
     /** A line sent and not yet answered. */
     let sending: string | undefined;
+    /** A message drawn the moment Enter sent it, as a chat here draws one
+     * (turnStarting), whose turn has not started there yet. */
+    let early: string | undefined;
+    /** It never became a turn (stopped first, refused, a steer, a lost
+     * connection): off the screen again; what goes back to the composer
+     * came with the bridge's restore-draft. */
+    const dropEarly = (): void => {
+      if (early === undefined) return;
+      early = undefined;
+      terminal.submitted(undefined);
+      if (!running && terminal.turn) terminal.stopWaiting();
+    };
     const completions = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
     const promptController = new AbortController();
     const signIns = new Map<string, SignInScreen>();
@@ -258,8 +277,11 @@ export async function runRemoteChat(
     };
     bridge.onEvent = (event) => {
       switch (event.type) {
-        case 'session': session = event.session; account = event.account; sessionChanged(session); terminal.render(session, account, { running }); return;
+        // While a message drawn early waits for its turn, the chat is drawn as a turn's (run-turn.ts renders so too).
+        case 'session': session = event.session; account = event.account; sessionChanged(session); terminal.render(session, account, { running: running || early !== undefined }); return;
         case 'turn-start':
+          // The message drawn on Enter: this turn carries it on (startWaiting takes over turnStarting's).
+          early = undefined;
           running = true;
           beginWaiting(event.prompt);
           return;
@@ -269,7 +291,7 @@ export async function runRemoteChat(
             session = worker.session; account = worker.account;
             sessionChanged(session);
             running = Boolean(worker.live);
-            terminal.render(session, account, worker.live ? { running: true, prompt: worker.live.prompt } : { running: false });
+            terminal.render(session, account, worker.live ? { running: true, prompt: worker.live.prompt } : { running: early !== undefined });
             if (worker.live) beginWaiting(worker.live.prompt);
           }
           else if (worker.type === 'delta') terminal.response(worker.text, worker.mode);
@@ -312,13 +334,18 @@ export async function runRemoteChat(
         case 'notice': terminal.activity(event.message); return;
         case 'panel': terminal.panel(event.title, event.body); return;
         case 'restore-draft': terminal.restoreDraft(event.text); return;
-        case 'send-complete': completions.get(event.id)?.resolve(); completions.delete(event.id); return;
+        case 'send-complete': if (completions.has(event.id)) dropEarly(); completions.get(event.id)?.resolve(); completions.delete(event.id); return;
         // Its last lines (an /update's steps) are drawn before the wait ends.
-        case 'busy': if (event.label) terminal.startWaiting(event.label); else if (!running) { terminal.flushPaint(); terminal.stopWaiting(); } return;
+        // Before a message drawn early starts (a local model loading there): the same wait, relabelled.
+        case 'busy':
+          if (early !== undefined) { if (event.label) terminal.updateWaitingLabel(event.label); return; }
+          if (event.label) terminal.startWaiting(event.label); else if (!running) { terminal.flushPaint(); terminal.stopWaiting(); }
+          return;
         case 'closed': terminal.activity('This conversation closed on the remote machine.'); return;
       }
     };
     bridge.onClose = (error) => {
+      dropEarly();
       promptController.abort();
       finishTurn?.();
       for (const completion of completions.values()) completion.reject(error);
@@ -328,7 +355,7 @@ export async function runRemoteChat(
       await bridge.connected();
       const selection: RemoteChatSelection = choice;
       // Intent only: the chat is in one of the remote's own folders (session/attach.ts).
-      const opened = await bridge.request<{ sessionId?: string } | undefined>(selection.chatId ? remoteResume(selection.chatId) : { type: 'open', mode: 'new' });
+      const opened = await bridge.request<{ sessionId?: string } | undefined>(selection.chatId ? remoteResume(selection.chatId) : { type: 'open', mode: 'new', features: REMOTE_FEATURES });
       // A new chat there is that chat from here on: a rejoin resumes it.
       if (!selection.chatId && opened?.sessionId) choice = { ...selection, chatId: opened.sessionId };
       // After the open, whose chat clears the rows before it. Updated from here only by the
@@ -390,6 +417,9 @@ export async function runRemoteChat(
         const complete = new Promise<void>((resolve, reject) => completions.set(id, { resolve, reject }));
         sending = line;
         bridge.post({ type: 'send', text: pinnedUpdateLine(line, localBuildCommit()), id });
+        // A message (not a command) is drawn now, with the turn's wait, as a
+        // chat here draws one: the machine's answer is a round trip away.
+        if (!/^[/!]/.test(line)) { early = line; terminal.submitted(line); terminal.turnStarting(); }
         await complete;
         sending = undefined;
         // /update ran there: the window's connection there (the board's) goes to the build it installed.
