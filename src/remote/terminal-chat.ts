@@ -6,10 +6,11 @@ import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { HarnessSession } from '../session/model.js';
-import type { IdeEvent, IdeHostEvent, IdeHostRequest, IdeRequest, IdeUiResult } from '../ide/protocol.js';
+import type { IdeEvent, IdeHostEvent, IdeHostRequest, IdeRequest, IdeSlashCommand, IdeUiResult } from '../ide/protocol.js';
+import type { PaletteEntry } from '../tui/command-palette.js';
 import type { TerminalHarnessPrompter } from '../tui/prompter.js';
 import { interactiveSessionPicker } from '../tui/pickers/session.js';
-import { BOARD_COMMANDS, BOARD_LINE } from '../commands/ai/interactive/board.js';
+import { BOARD_COMMANDS, BOARD_LINE, BOARD_OWNS } from '../commands/ai/interactive/board.js';
 import { bridgeScript, remoteTerminalScript } from './install.js';
 import { readMachines, updatePolicy, type RemoteMachine } from './machines.js';
 import { autoUpdates, localBuildCommit, pinnedUpdateLine } from './updates.js';
@@ -17,7 +18,7 @@ import { needsUpdate, reconnectWindowMachine } from './connection.js';
 import { spawnSsh, sshArgv } from './ssh.js';
 import type { LiveTurnInputResult } from '../turn/live-input.js';
 import type { SignInScreen } from '../gateway/login/vendor-sign-in.js';
-import { parseSlashInput } from '../tui/slash/registry.js';
+import { parseSlashInput, resolveSlashCommand } from '../tui/slash/registry.js';
 import { chatHasContent } from '../session/move-chat.js';
 import { liveChat, moveTerminalChat, remoteMoveEnd, type Here } from './move-terminal.js';
 
@@ -155,6 +156,36 @@ async function runSignIn(target: string, spec: string, terminal: TerminalHarness
   } finally { terminal.resume(); }
 }
 
+/** How long the first prompt waits for the machine's slash menu. */
+const COMMANDS_WAIT_MS = 3_000;
+
+/** The commands this terminal runs itself in a chat on another machine. */
+const TERMINAL_HANDLED = ['machine'];
+
+/** A chat on another machine's slash menu: that machine's commands for the
+ * chat (its bridge's `slash-commands`, what VS Code lists), as the terminal's
+ * palette shows the local chat's -- and the ones this terminal runs itself
+ * (/machine), should that machine not list them. /resume is Left's (the board),
+ * as in a chat here. */
+export function remotePalette(commands: readonly IdeSlashCommand[]): PaletteEntry[] {
+  const rows: PaletteEntry[] = commands
+    .filter((item) => !BOARD_OWNS.has(item.command.replace(/^\//, '').toLowerCase()))
+    .map((item) => {
+      const values = item.argValues ? [...item.argValues] : undefined;
+      return {
+        label: item.command, value: item.command, detail: item.description,
+        ...(item.argHint ? { argHint: item.argHint } : {}), ...(item.group ? { group: item.group } : {}),
+        ...(item.aliases?.length ? { aliases: item.aliases } : {}), ...(values?.length ? { argValues: () => values } : {}),
+      };
+    });
+  for (const name of TERMINAL_HANDLED) {
+    const entry = resolveSlashCommand(name);
+    if (!entry || rows.some((row) => row.value === `/${name}`)) continue;
+    rows.push({ label: `/${name}`, value: `/${name}`, detail: entry.description, group: entry.group, ...(entry.argHint ? { argHint: entry.argHint } : {}) });
+  }
+  return rows;
+}
+
 /** What a chat on a machine with another ClikCode build says on opening:
  * that it is being brought to this build, or how to update it. */
 export function outdatedNotice(machine: Pick<RemoteMachine, 'name' | 'updates' | 'updateError'>, updating: boolean, localCommit = localBuildCommit()): string {
@@ -198,6 +229,20 @@ export async function runRemoteChat(
     const completions = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
     const promptController = new AbortController();
     const signIns = new Map<string, SignInScreen>();
+    /** Its slash menu, filled in place as the machine answers (remotePalette). */
+    const commands: PaletteEntry[] = [];
+    /** What the menu was last read for: a session that changes it is read again. */
+    let commandsFor: string | undefined;
+    const refreshCommands = (): Promise<void> => bridge.request<IdeSlashCommand[]>({ type: 'query', query: 'slash-commands' }).then(
+      (list) => { commands.splice(0, commands.length, ...remotePalette(Array.isArray(list) ? list : [])); },
+      // fail-open-ok: the machine did not list its commands now; the menu keeps what it had (or /machine alone).
+      () => { if (!commands.length) commands.push(...remotePalette([])); },
+    );
+    const sessionChanged = (next: HarnessSession): void => {
+      const key = [next.id, next.route, next.nativeHarness, next.provider, next.model, next.accountId, next.effort, next.permissionMode, next.gatewayAgentId].join('|');
+      if (commandsFor !== undefined && key !== commandsFor) void refreshCommands();
+      commandsFor = key;
+    };
     const queued = (text: string): Promise<LiveTurnInputResult> => {
       const id = randomUUID();
       bridge.post({ type: 'send', text, id });
@@ -213,7 +258,7 @@ export async function runRemoteChat(
     };
     bridge.onEvent = (event) => {
       switch (event.type) {
-        case 'session': session = event.session; account = event.account; terminal.render(session, account, { running }); return;
+        case 'session': session = event.session; account = event.account; sessionChanged(session); terminal.render(session, account, { running }); return;
         case 'turn-start':
           running = true;
           beginWaiting(event.prompt);
@@ -222,6 +267,7 @@ export async function runRemoteChat(
           const worker = event.event;
           if (worker.type === 'snapshot') {
             session = worker.session; account = worker.account;
+            sessionChanged(session);
             running = Boolean(worker.live);
             terminal.render(session, account, worker.live ? { running: true, prompt: worker.live.prompt } : { running: false });
             if (worker.live) beginWaiting(worker.live.prompt);
@@ -311,12 +357,15 @@ export async function runRemoteChat(
         if ('local' in live.here) return live.here.local;
         if (live.here.remote.machineId !== machine.id || live.here.remote.chatId !== copy.id) { choice = live.here.remote; continue; }
       }
+      // Its slash menu, before the first prompt: typing `/` shows it at once.
+      // A machine slow to list it does not hold the prompt back for long.
+      await Promise.race([refreshCommands(), new Promise<void>((resolve) => { setTimeout(resolve, COMMANDS_WAIT_MS).unref?.(); })]);
       if (draft) terminal.restoreDraft(draft);
       draft = undefined;
       rejoining = false;
       for (;;) {
         if (waitingInput) await turnEnd;
-        const line = leftTurn ? BOARD_LINE : (await terminal.question('› ', [], { leftArrowCommand: BOARD_LINE, signal: promptController.signal })).trim();
+        const line = leftTurn ? BOARD_LINE : (await terminal.question('› ', commands, { rightArrowPalette: true, leftArrowCommand: BOARD_LINE, signal: promptController.signal })).trim();
         leftTurn = false;
         if (line === BOARD_LINE) {
           const picked = await interactiveSessionPicker(terminal, localId, BOARD_COMMANDS);
@@ -346,6 +395,8 @@ export async function runRemoteChat(
         // /update ran there: the window's connection there (the board's) goes to the build it installed.
         if (parseSlashInput(line)?.head === 'update') reconnectWindowMachine(machine.id);
         if (lastError) { terminal.activity(lastError.message); lastError = undefined; }
+        // A command may have changed what is offered (an account, a provider, a custom command, an /update).
+        if (line.startsWith('/')) await refreshCommands();
       }
     } catch (error) {
       if (!bridge.retiring) throw error;

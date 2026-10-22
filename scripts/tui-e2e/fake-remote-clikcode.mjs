@@ -6,6 +6,7 @@
  *   remote-info            {version, commit, installationId}
  *   ide-bridge --stdio     the multiplexed bridge protocol as JSON lines:
  *                          host-ready, a chat's ready, `query conversations`
+ *                          (and `slash-commands`: /model and /update),
  *                          from ~/.fake-remote/chats.json, opening one,
  *                          `conversations-changed` when that file changes
  *
@@ -106,6 +107,13 @@ lines.on('line', (line) => {
   const request = message.request;
   if (request.type === 'query' && request.query === 'conversations') {
     send({ type: 'chat', chat: message.chat, event: { type: 'result', requestId: request.requestId, ok: true, data: chats() } });
+  } else if (request.type === 'query' && request.query === 'slash-commands') {
+    send({ type: 'chat', chat: message.chat, event: { type: 'result', requestId: request.requestId, ok: true, data: [
+      { command: '/model', description: 'choose the model', argHint: '[model]', group: 'Provider' },
+      { command: '/update', description: `update ClikCode on ${machineName}`, argHint: '[commit]', group: 'ClikCode' },
+    ] } });
+  } else if (request.type === 'query') {
+    send({ type: 'chat', chat: message.chat, event: { type: 'result', requestId: request.requestId, ok: false, error: `unknown query ${request.query}` } });
   } else if (request.type === 'open' && request.mode === 'resume' && chats().some((chat) => chat.id === request.sessionId)) {
     opened.set(message.chat, request.sessionId);
     appendFileSync(join(fake, 'opens.log'), `${JSON.stringify({ chat: request.sessionId, pid: process.pid })}\n`);
