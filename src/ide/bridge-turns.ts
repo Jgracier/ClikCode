@@ -32,6 +32,8 @@ export class BridgeTurns {
   private cancelEpoch = 0;
   /** The epoch the queued send job was typed at. */
   private submitEpoch: number | undefined;
+  /** Whether the line being executed reached its turn (turn-start was sent). */
+  private turnStarted = false;
 
   constructor(private readonly host: BridgeHost) {}
 
@@ -102,6 +104,7 @@ export class BridgeTurns {
   async execute(line: string, options: { queuedTurnId?: string; fromQueuedCommand?: boolean }): Promise<void> {
     const id = this.host.requireSession();
     this.sentPrompt = undefined;
+    this.turnStarted = false;
     try {
       if (options.queuedTurnId) {
         await this.host.runTurn(id, line, { echo: true, queuedTurnId: options.queuedTurnId });
@@ -143,7 +146,13 @@ export class BridgeTurns {
         void this.host.refreshUsage().catch(() => undefined);
         return;
       }
-      if (next.back.length) this.host.channel.send({ type: 'restore-draft', text: next.back.join('\n\n') });
+      // A typed message that failed before its turn began (no worker, a route
+      // that could not be prepared) never reached anyone: it goes back to the
+      // message box with the reason. Once the turn began it is the
+      // conversation's, and stays there.
+      const back = !this.turnStarted && !options.queuedTurnId && !next.cancelled && this.sentPrompt !== undefined && !next.back.includes(line)
+        ? [...next.back, line] : next.back;
+      if (back.length) this.host.channel.send({ type: 'restore-draft', text: back.join('\n\n') });
       this.host.report(error);
     } finally {
       await this.host.emitSession().catch(() => undefined);
@@ -166,6 +175,7 @@ export class BridgeTurns {
       if (turn.echo && !turn.queuedTurnId) this.host.channel.send({ type: 'worker', sessionId: targetId, event: { type: 'restore-draft', text: prompt } });
       return;
     }
+    this.turnStarted = true;
     this.host.channel.send({ type: 'turn-start', sessionId: targetId, ...(turn.echo ? { prompt } : {}), ...(turn.queuedTurnId ? { queuedTurnId: turn.queuedTurnId } : {}) });
     try {
       await new Promise<void>((resolve, reject) => {
