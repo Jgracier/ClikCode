@@ -19,7 +19,7 @@ import { needsUpdate, reconnectWindowMachine } from './connection.js';
 import { spawnSsh, sshArgv } from './ssh.js';
 import type { LiveTurnInputResult } from '../turn/live-input.js';
 import type { SignInScreen } from '../gateway/login/vendor-sign-in.js';
-import { parseSlashInput, resolveSlashCommand } from '../tui/slash/registry.js';
+import { parseSlashInput, resolveSlashCommand, TERMINAL_ONLY_COMMANDS } from '../tui/slash/registry.js';
 import { chatHasContent } from '../session/move-chat.js';
 import { liveChat, moveTerminalChat, remoteMoveEnd, type Here } from './move-terminal.js';
 
@@ -186,12 +186,13 @@ async function runSignIn(target: string, spec: string, terminal: TerminalHarness
 const COMMANDS_WAIT_MS = 3_000;
 
 /** The commands this terminal runs itself in a chat on another machine. */
-const TERMINAL_HANDLED = ['machine'];
+const TERMINAL_HANDLED = ['machine', 'select', 'redraw', 'exit'];
 
 /** A chat on another machine's slash menu: that machine's commands for the
  * chat (its bridge's `slash-commands`, what VS Code lists), as the terminal's
  * palette shows the local chat's -- and the ones this terminal runs itself
- * (/machine), should that machine not list them. /resume is Left's (the board),
+ * (/machine, and the terminal's own: /select, /redraw, /exit), should that
+ * machine not list them. /resume is Left's (the board),
  * as in a chat here. */
 export function remotePalette(commands: readonly IdeSlashCommand[]): PaletteEntry[] {
   const rows: PaletteEntry[] = commands
@@ -229,10 +230,14 @@ export function outdatedNotice(machine: Pick<RemoteMachine, 'name' | 'updates' |
  * the same chat resumed, with nothing said: what was being typed stays in the
  * composer (prompt-input.ts keeps an interrupted prompt's draft). Any other
  * close is a lost connection, said as before. */
+/** How a chat on another machine was left: a local chat to show (its id),
+ * nothing (back to the one it was opened from), or the window closing (/exit). */
+export type RemoteChatEnd = string | { exit: true } | undefined;
+
 export async function runRemoteChat(
   terminal: TerminalHarnessPrompter, localId: string, first: RemoteChatSelection, firstDraft?: string,
   startBridge: RemoteBridgeStarter = sshBridge,
-): Promise<string | undefined> {
+): Promise<RemoteChatEnd> {
   let choice: RemoteChatSelection | undefined = first;
   let draft = firstDraft;
   /** Connecting again after the bridge there retired: the opening notices were said already. */
@@ -448,6 +453,18 @@ export async function runRemoteChat(
           continue;
         }
         if (!line) continue;
+        // The terminal's own commands are this terminal's, wherever the chat is:
+        // they are not sent to the other machine (whose answer was "/exit is for
+        // the terminal"). /exit closes this window; /redraw draws the chat again;
+        // /select hands this terminal's mouse back.
+        const own = resolveSlashCommand(parseSlashInput(line)?.head ?? '')?.name;
+        if (own && TERMINAL_ONLY_COMMANDS.has(own)) {
+          if (own === 'exit') return { exit: true };
+          if (own === 'redraw' && session) { terminal.render(session, account); continue; }
+          const { aiSessionCommand } = await import('../tui/slash/handlers.js');
+          await aiSessionCommand(localId, line).catch((error: unknown) => terminal.activity(error instanceof Error ? error.message : String(error)));
+          continue;
+        }
         // /machine: this chat moves to another machine (move-terminal.ts), from the one it is on.
         if (parseSlashInput(line)?.head === 'machine') {
           const next: Here | undefined = await moveTerminalChat(terminal, { remote: choice }, session?.id ?? choice.chatId ?? '', Boolean(session && chatHasContent(session)),
