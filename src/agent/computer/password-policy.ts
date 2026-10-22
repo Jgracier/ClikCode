@@ -80,8 +80,10 @@ const shuffle = <T,>(items: T[]): T[] => {
 
 /** Sites often forbid repeated ("aa") or sequential ("abc", "321") characters; a generated password never has either. */
 export function hasRepeatOrSequence(password: string): boolean {
+  const lowered = password.toLowerCase();
   for (let i = 1; i < password.length; i++) {
-    const a = password.charCodeAt(i - 2), b = password.charCodeAt(i - 1), c = password.charCodeAt(i);
+    // Case-insensitive: "aA" counts as a repeat and "aBc" as a sequence, since sites compare that way too.
+    const a = lowered.charCodeAt(i - 2), b = lowered.charCodeAt(i - 1), c = lowered.charCodeAt(i);
     if (b === c) return true;
     if (i >= 2 && ((b - a === 1 && c - b === 1) || (a - b === 1 && b - c === 1))) return true;
   }
