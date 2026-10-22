@@ -13,7 +13,7 @@ import { loginValueFor } from '../computer/login-fill.js';
 import { describeRecipe, getRecipe, listRecipes, replayRecipe, saveRecipe } from '../computer/signup-recipes.js';
 import { addSiteNote, readSiteNotes } from '../computer/site-notes.js';
 import { assertCustomKey, bestProfileFor, customFieldFor, defaultProfile, describeProfile, listProfiles, PASSWORD_SECRET, PROFILE_KEYS, phoneFor, birthdayFor, profileKeyFor, readProfileSecret, saveProfile, saveProfileSecret, secretFieldFor, type FieldHint, type ProfileKey } from '../computer/profiles.js';
-import { expectSignup, holdSignup, pendingSignupPassword, pendingSignupUsername, savedPasswordFor, settleSignup } from '../computer/signup-login.js';
+import { expectSignup, holdSignup, pendingSignupPassword, pendingSignupUsername, savedPasswordFor, settleSignup, sitePasswordFor } from '../computer/signup-login.js';
 import { generatePassword } from '../computer/password-policy.js';
 import { generatedFor, readPasswordPolicy, rememberGenerated, retryRejectedPassword } from '../computer/password-retry.js';
 import { loginComputerPage, loginOutcomeMessage } from '../computer/login-page.js';
@@ -563,6 +563,9 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
     const accounts = (await savedLoginsForSite(ctx.stateDir, page.url()).catch(() => [])).filter(account => !account.rejected);
     if (accounts.length && fields.some(field => loginValueFor({ username: 'x', password: 'x' }, field))) {
       let account = accounts.length === 1 ? accounts[0] : accounts.find(candidate => candidate.id === profileChoice.get(`${ctx.stateDir}|login|${origin}`));
+      // Several logins and the profile's email names one of them: that is the account, with no question.
+      const own = profile?.fields.sso_email ?? profile?.fields.email;
+      if (!account && own) account = accounts.find(candidate => candidate.label.split(' · ').some(value => value.toLowerCase() === own.toLowerCase()));
       if (!account && ctx.requestPrivateLogin) {
         const labels = accounts.map(candidate => candidate.label);
         const answer = await ctx.requestPrivateLogin(origin, [{ index: -1, key: 'account', label: 'Sign in with which account?', kind: 'choice', required: true, options: [...labels, 'Enter a different one'] }], ctx.signal);
@@ -602,6 +605,13 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
     if (field.password && generated) { values.set(field.step, generated); continue; }
     const fromLogin = login ? loginValueFor(login, field) : undefined;
     if (fromLogin) { values.set(field.step, fromLogin); continue; }
+    // A password box on a page that is not a sign-up (confirm your password to verify an email, re-enter it) is for the password this
+    // site's account was made with: the one typed into this page's form, else the one saved for this site. The profile's own `password`
+    // secret is never what a site with a generated password wants.
+    if (field.password) {
+      const own = await sitePasswordFor(ctx.stateDir, page, email);
+      if (own) { registerSecret(own); values.set(field.step, own); continue; }
+    }
     // A secret kept with the profile (never shown to the agent) fills the box it is for: the password, a recovery code.
     const secretKey = secretFieldFor(profile, field.hint);
     const secret = secretKey && profile ? await readProfileSecret(ctx.stateDir, profile, secretKey) : undefined;

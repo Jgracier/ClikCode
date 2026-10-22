@@ -166,6 +166,19 @@ describe('bestProfileFor: several profiles never mean asking', () => {
     expect(bestProfileFor([personal, admin], [])?.label).toBe('Personal');
   });
 
+  it('Personal fills a sign-up even when another profile has more details saved (Postmark got "ClikDeploy")', () => {
+    const big = { id: 'b', label: 'ClikDeploy', fields: { given_name: 'C', email: 'admin@x.test', phone: '1', address_line1: 'x', city: 'y', organization: 'ClikDeploy' }, custom: {} } as never;
+    const small = { id: 'p', label: 'Personal', fields: { given_name: 'J' }, custom: {} } as never;
+    expect(bestProfileFor([big, small], [hint('first name'), hint('email'), hint('company'), hint('city')])?.label).toBe('Personal');
+    expect(bestProfileFor([big, small], [hint('email')], 'ClikDeploy')?.label).toBe('ClikDeploy');
+  });
+
+  it('a detail the agent asked for by name that only another profile holds still picks that profile', () => {
+    const co = { id: 'c', label: 'Company', fields: {}, custom: { support_email: { label: 'Support email', value: 's@x.test' } } } as never;
+    const me = { id: 'p', label: 'Personal', fields: { email: 'a@x.test' }, custom: {} } as never;
+    expect(bestProfileFor([co, me], [hint('Support email')])?.label).toBe('Company');
+  });
+
   it('an explicit label wins, and a single profile is just that profile', () => {
     expect(bestProfileFor([admin, personal], [hint('email')], 'clikdeploy admin')?.label).toBe('ClikDeploy admin');
     expect(bestProfileFor([admin], [hint('email')])?.label).toBe('ClikDeploy admin');

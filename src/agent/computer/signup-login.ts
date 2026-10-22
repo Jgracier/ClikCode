@@ -40,6 +40,20 @@ export async function savedPasswordFor(stateDir: string, url: string, username: 
   } catch { return undefined; }
 }
 
+/** The password this site's account uses, for a password box that is not a sign-up: the one typed into this page's form, else the
+ * one saved for this site and `email`, else the only usable login saved for the site. Undefined when the vault holds none, and only
+ * then may a caller fall back to the profile's own password. */
+export async function sitePasswordFor(stateDir: string, page: Page, email: string | undefined): Promise<string | undefined> {
+  const typed = pendingSignupPassword(page);
+  if (typed) return typed;
+  const byEmail = await savedPasswordFor(stateDir, page.url(), email);
+  if (byEmail) return byEmail;
+  try {
+    const usable = (await savedLoginsForSite(stateDir, page.url())).filter(login => !login.rejected);
+    return usable.length === 1 ? (await savedLoginFields(stateDir, page.url(), usable[0]!.id)).password : undefined;
+  } catch { return undefined; }
+}
+
 /** Call after each step: remembers the email the form holds, and saves the login once the password fields are gone. */
 export async function settleSignup(stateDir: string, page: Page): Promise<string | undefined> {
   const waiting = pending.get(page);
