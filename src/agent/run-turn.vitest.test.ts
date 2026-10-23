@@ -56,6 +56,37 @@ function harness(script: ScriptEntry[], overrides: Partial<AgentTurnInput> = {},
 }
 
 describe('runAgentLoop', () => {
+  it('starts with discovery for an 8K model and loads coding schemas without losing permissions', async () => {
+    const h = harness([
+      { toolCalls: [{ id: 'load', name: 'load_tools', args: { tools: ['bash'] } }] },
+      { toolCalls: [{ id: 'run', name: 'bash', args: { command: 'printf context-fit-ok' } }] },
+      { text: 'done' },
+    ], { contextWindow: 262144 });
+    Object.assign(h.client, { contextHints: { contextWindow: 8192 } });
+    expect(await runAgentLoop(h.input)).toMatchObject({ stopReason: 'completed', text: 'done' });
+    expect(h.client.requests[0].tools.map((tool) => tool.name)).not.toContain('bash');
+    expect(h.client.requests[1].tools.map((tool) => tool.name)).toContain('bash');
+    expect(h.client.requests[2].items.find((item) => item.type === 'tool_result' && item.id === 'run')).toMatchObject({ output: 'context-fit-ok' });
+  });
+
+  it('adapts discovery when the server reports a smaller window mid-turn', async () => {
+    const h = harness([
+      { toolCalls: [{ id: 'l', name: 'load_tools', args: { tools: ['bash'] } }], contextWindow: 8192 },
+      { toolCalls: [{ id: 'b', name: 'bash', args: { command: 'printf smaller-window' } }] },
+      { text: 'done' },
+    ], { contextWindow: 131072 });
+    expect(await runAgentLoop(h.input)).toMatchObject({ stopReason: 'completed' });
+    expect(h.client.requests[1].tools.map((tool) => tool.name)).toContain('bash');
+    expect(h.client.requests[1].tools.map((tool) => tool.name)).not.toContain('edit_file');
+  });
+
+  it('fails before inference if essential instructions cannot fit and preserves the submitted prompt', async () => {
+    const h = harness([{ text: 'must not be sent' }], { prompt: 'mandatory constraint '.repeat(3000), contextWindow: 4096 });
+    expect(await runAgentLoop(h.input)).toMatchObject({ stopReason: 'model-error', isError: true });
+    expect(h.client.requests).toHaveLength(0);
+    expect((await new ConversationStore(stateDir, h.input.sessionId).load()).at(-1)).toMatchObject({ text: expect.stringContaining('mandatory constraint '.repeat(3000)) });
+  });
+
   it('never lets a held secret reach the model or the screen, whichever tool echoes it', async () => {
     const secret = 'salad_live_9f8e7d6c5b4a39281706';
     registerSecret(secret);
@@ -710,7 +741,7 @@ describe('runAgentLoop', () => {
     expect(h.client.requests).toHaveLength(1);
   });
 
-  it('passes a long history through without starting a summary call', async () => {
+  it('bounds long histories while preserving every user request and the full transcript', async () => {
     const h = harness([{ text: 'answered' }]);
     Object.assign(h.client, { contextHints: { contextWindow: 1_000_000 } });
     const store = path.join(stateDir, 'sessions', h.input.sessionId);
@@ -720,7 +751,9 @@ describe('runAgentLoop', () => {
     const result = await runAgentLoop(h.input);
     expect(result.stopReason).toBe('completed');
     expect(h.client.requests).toHaveLength(1);
-    expect(h.client.requests[0].items.length).toBeGreaterThan(1600);
+    expect(h.client.requests[0].items.length).toBeLessThanOrEqual(1500);
+    expect(h.client.requests[0].items.filter((item) => item.type === 'text' && item.role === 'user')).toHaveLength(801);
+    expect((await new ConversationStore(stateDir, h.input.sessionId).load()).length).toBeGreaterThan(1600);
   });
 
   it('saves text streamed during a step that then fails', async () => {

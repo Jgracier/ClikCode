@@ -201,6 +201,12 @@ async function runSession(options: SessionOptions): Promise<ModelStepRequest[]> 
     expect(first.stopReason).toBe('completed');
     const second = await runAgentLoop({ ...base, prompt: 'Also rename helper1..3 to words.' });
     expect(second.stopReason).toBe('completed');
+    // Verify the requested edits, not just the scripted model's completion text.
+    expect(await fs.readFile(path.join(cwd, 'src', 'pager.ts'), 'utf8')).toContain('items.slice(page * size, page * size + size)');
+    expect(await fs.readFile(path.join(cwd, 'src', 'pager.test.ts'), 'utf8')).toContain("test('last item is included'");
+    const helper = await fs.readFile(path.join(cwd, 'src', 'helper.ts'), 'utf8');
+    for (const name of ['helperOne', 'helperTwo', 'helperThree']) expect(helper).toContain(`function ${name}()`);
+    expect(client.requests.flatMap((request) => request.items).filter((item) => item.type === 'tool_result' && item.isError)).toEqual([]);
     // The profile is recorded on the result, and a session keeps one.
     expect(second.contextProfile).toBe(first.contextProfile);
     if (options.profile && !process.env[CONTEXT_PROFILE_ENV]) expect(first.contextProfile).toBe(options.profile);
@@ -270,7 +276,7 @@ describe('context profiles', () => {
     expect(lean).toEqual(plain);
   });
 
-  it('spends the least in minimal and the most in full, where each is meant to', async () => {
+  it('keeps profile differences in instruction verbosity while deferring large schemas', async () => {
     const minimal = measure(await runSession(heavy('minimal')));
     const lean = measure(await runSession(heavy('lean')));
     const full = measure(await runSession(heavy('full')));
@@ -282,7 +288,7 @@ describe('context profiles', () => {
     expect(lean.firstStep.system - minimal.firstStep.system).toBeGreaterThan(550);
     // ...and schemas without additionalProperties:false, terser rare tools.
     expect(lean.firstStep.tools).toBeGreaterThan(minimal.firstStep.tools);
-    // Full: the 76 MCP schemas (~7,900 tokens) go up front instead of the loader...
+    // Every profile now defers the same large MCP catalog...
     expect(full.firstStep.tools).toBe(lean.firstStep.tools);
     // ...and more of the 30 skills are listed, at more length.
     expect(full.firstStep.system - lean.firstStep.system).toBeGreaterThan(1_000);

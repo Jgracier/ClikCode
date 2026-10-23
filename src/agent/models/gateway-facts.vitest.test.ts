@@ -58,6 +58,15 @@ describe('Gateway turn startup', () => {
     expect(client.contextHints?.contextWindow).toBe(100_000);
   });
 
+  it('refreshes an unknown selected model without requiring image attachments', async () => {
+    catalog.saved.mockResolvedValue({ auto: null, models: [] });
+    catalog.fresh.mockReset();
+    catalog.fresh.mockResolvedValue({ auto: null, models: [{ id: 'vision-model', contextWindow: 32768 }] });
+    const client = await modelClientForSession(session(), { get: () => undefined } as never);
+    expect(catalog.fresh).toHaveBeenCalledOnce();
+    expect(client.contextHints?.contextWindow).toBe(32768);
+  });
+
   it('runs Automatic under the facts the Gateway lists for auto, never a named model\'s', async () => {
     catalog.saved.mockResolvedValue({ auto: { contextWindow: 64_000, vision: true }, models: [{ id: 'other', contextWindow: 999_000 }] });
     const client = await modelClientForSession({ ...session(), model: null } as HarnessSession, { get: () => undefined } as never);

@@ -10,12 +10,12 @@ function text(item: ConversationItem): string {
   return item.type === 'tool_result' ? item.output : item.type === 'tool_call' ? JSON.stringify(item.args) : item.text;
 }
 
-async function readRecord(file: string, offset: number, limit: number, query?: string): Promise<{ body: string; offset: number; more: boolean }> {
+async function readRecord(file: string, offset: number, limit: number, query?: string, signal?: AbortSignal): Promise<{ body: string; offset: number; more: boolean }> {
   let at = 0;
   let found = !query;
   let carry = '';
   let body = '';
-  const stream = createReadStream(file, { encoding: 'utf8', highWaterMark: 8 * 1024 });
+  const stream = createReadStream(file, { encoding: 'utf8', highWaterMark: 8 * 1024, ...(signal ? { signal } : {}) });
   try {
     for await (const raw of stream) {
       const chunk = String(raw);
@@ -53,7 +53,7 @@ export function readContextTool(items: () => readonly ConversationItem[], handof
       if (source === 'handoff') {
         if (!handoff) return { output: 'A sub-agent has its own task history, not the parent conversation\'s handoff record.', isError: true };
         try {
-          const result = await readRecord(fullRecordPath(ctx.stateDir, ctx.sessionId), offset, limit, args.query);
+          const result = await readRecord(fullRecordPath(ctx.stateDir, ctx.sessionId), offset, limit, args.query, ctx.signal);
           return { output: `${result.body || '(No matching handoff text.)'}\n[handoff offset=${result.offset}${result.more ? `; continue offset=${result.offset + result.body.length}` : '; end'}]` };
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { output: 'No provider-handoff record exists for this conversation. Use source=history instead.', isError: true };

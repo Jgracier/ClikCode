@@ -326,6 +326,18 @@ describe('a request fitted to the server', () => {
     expect(received[2]!.body).not.toHaveProperty('max_tokens');
   });
 
+  it('rejects an oversized final request before HTTP instead of sending it with a forced output floor', async () => {
+    const client = new OpenAIModelClient({ baseUrl, model: 'm', contextWindow: 1024, maxOutputTokens: 1024 });
+    await expect(client.step(request([{ type: 'text', role: 'user', text: 'x'.repeat(10000) }]))).rejects.toMatchObject({ code: 'CONTEXT_BUDGET_EXCEEDED' });
+    expect(received).toHaveLength(0);
+  });
+
+  it('honors reserved output headroom when metadata is unavailable and prevents options from overriding it', async () => {
+    reply = { chunks: [delta({}, 'stop')] };
+    await new OpenAIModelClient({ baseUrl, model: 'm', maxOutputTokens: 32000, body: { max_tokens: 32000 } }).step(request(undefined, { maxOutputTokens: 512 }));
+    expect(received[0]!.body.max_tokens).toBe(512);
+  });
+
   it('never discards instructions or tools to meet server limits', () => {
     const tool = (name: string, description = 'd') => ({ name, description, parameters: { type: 'object', properties: { a: { type: 'string', description } } } });
     expect(() => fitToLimits('s'.repeat(400), [tool('a')], { systemBytes: 300 })).toThrow(/No instructions were removed/);

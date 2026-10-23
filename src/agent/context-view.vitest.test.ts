@@ -99,3 +99,17 @@ it('saves full oversized outputs once in private session artifacts and supplies 
   await retainToolOutput(output, 2048, stateDir, 's1', 'call');
   expect(await readdir(dir)).toEqual(files);
 });
+
+
+it('bounds a long run of silent tool steps independently instead of pinning them as one giant step', () => {
+  const items: ConversationItem[] = [user('Preserve customer data.')];
+  for (let i = 0; i < 1000; i++) items.push(
+    { type: 'tool_call', id: `silent-${i}`, name: 'read_file', args: { path: `file-${i}` } },
+    { type: 'tool_result', id: `silent-${i}`, name: 'read_file', output: 'diagnostics '.repeat(100) },
+  );
+  const view = fitContext({ system: 'instructions', items, tools, window: 8192 });
+  expect(view.estimatedTokens + responseReserve(8192) + 410).toBeLessThanOrEqual(8192);
+  expect(view.items.some((item) => item.type === 'tool_result' && item.id === 'silent-999')).toBe(true);
+  const calls = new Set(view.items.flatMap((item) => item.type === 'tool_call' ? [item.id] : []));
+  for (const item of view.items) if (item.type === 'tool_result') expect(calls.has(item.id)).toBe(true);
+});
