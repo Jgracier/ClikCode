@@ -39,7 +39,7 @@ export interface GatewayModel {
    * server), not charged per token. `asleep` and `starting` ones are chosen like any other: the first
    * message waits for the model to come up (agent/turn-recovery.ts MODEL_START_BUDGET_SECONDS).
    * `tools` false: the runtime it was started on cannot answer tool calls for it. */
-  own?: { state: 'running' | 'asleep' | 'starting'; tools: boolean };
+  own?: { state: 'running' | 'asleep' | 'starting'; tools: boolean; /** The model the deployment serves: the list id is an opaque deployment id. */ modelId?: string };
 }
 
 type GatewayAccess = 'subscription' | 'free' | 'paid';
@@ -47,6 +47,7 @@ const ACCESS = new Set<string>(['subscription', 'free', 'paid']);
 
 /** A model as a row names it: `claude-opus-5-5 (subscription)` where the Gateway says which tier serves it. */
 export function gatewayModelLabel(model: GatewayModel): string {
+  if (model.own?.modelId) return `${withoutFreeTag(model.own.modelId)} (Private GPU)`;
   const name = withoutFreeTag(model.id);
   return model.access ? `${name} (${model.access})` : name;
 }
@@ -243,7 +244,7 @@ export function fromOpenAIModelList(data: readonly unknown[]): GatewayModelList 
     const entry = raw as {
       id?: unknown; owned_by?: unknown; root?: unknown; type?: unknown; access?: unknown; context_length?: unknown; max_output_tokens?: unknown; tokens_per_second?: unknown;
       capabilities?: { vision?: unknown; reasoning?: unknown; tools?: unknown }; pricing?: Record<string, unknown>;
-      deployment?: { state?: unknown };
+      deployment?: { state?: unknown; modelId?: unknown };
     };
     if (typeof entry.id !== 'string' || !entry.id) continue;
     // Embedding models share the list; a conversation cannot run on one.
@@ -263,7 +264,7 @@ export function fromOpenAIModelList(data: readonly unknown[]): GatewayModelList 
       const state = entry.deployment.state === 'asleep' || entry.deployment.state === 'starting' ? entry.deployment.state : 'running';
       models.push({
         id: entry.id,
-        own: { state, tools: entry.capabilities?.tools !== false },
+        own: { state, tools: entry.capabilities?.tools !== false, ...(typeof entry.deployment.modelId === 'string' && entry.deployment.modelId ? { modelId: entry.deployment.modelId } : {}) },
         ...(typeof entry.context_length === 'number' && entry.context_length > 0 ? { contextWindow: entry.context_length } : {}),
       });
       continue;
@@ -292,6 +293,14 @@ export function fromOpenAIModelList(data: readonly unknown[]): GatewayModelList 
     });
   }
   return { auto, models };
+}
+
+/** The model a Gateway session shows on screen: a private deployment is stored under an opaque list id, so show the
+ * model it serves (from the list in memory), never the id. */
+export function gatewaySessionModelLabel(modelId: string): string {
+  if (!modelId.startsWith('private-deployment:')) return modelId;
+  const served = cached?.list.models.find((entry) => entry.id === modelId)?.own?.modelId;
+  return served ? `${withoutFreeTag(served)} (Private GPU)` : 'Private GPU model';
 }
 
 /** Test seam. */

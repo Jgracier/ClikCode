@@ -183,6 +183,7 @@ describe('the Gateway credit', () => {
     expect(creditOf({ unlimited: true })).toEqual({ unlimited: true });
     expect(creditOf({ unlimited: false, allowed: true, balanceMicroUsd: '12500000' })).toEqual({ unlimited: false, allowed: true, balanceUsd: 12.5 });
     expect(creditOf({ balanceCents: 250, autoTopUpEnabled: true })).toEqual({ unlimited: false, balanceUsd: 2.5, autoTopUp: true });
+    expect(creditOf({ unlimited: false, balance_micro_usd: '12450000', auto_top_up: { enabled: true } })).toEqual({ unlimited: false, balanceUsd: 12.45, autoTopUp: true });
   });
 });
 
