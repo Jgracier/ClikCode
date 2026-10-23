@@ -1,9 +1,12 @@
 /**
- * ClikCode build. Produces four files in dist/:
+ * ClikCode build. Produces five files in dist/:
  *
  *   index.js               The entry (bin): turns on Node's compile cache, then
- *                          loads cli.js. Rewritten on every build, since its
+ *                          loads cli.js -- or conversations-mcp.js for that one
+ *                          subcommand. Rewritten on every build, since its
  *                          mtime and size are the build a worker records.
+ *   conversations-mcp.js   `clikcode conversations-mcp` alone (src/search/mcp-main.ts).
+ *                          Every vendor chat starts one, so it must stay small.
  *   cli.js                 The program (ESM). Small pure-JS dependencies are inlined
  *                          so startup is one file read instead of a node_modules walk.
  *   harness-catalog.cjs    The pure harness catalog (no AI SDKs); cheap to load.
@@ -22,6 +25,7 @@
  * Always enforced (cheap, and each one is a broken publish if it regresses):
  *   - every package cli.js imports at runtime is in package.json `dependencies`
  *   - harness-catalog.cjs contains no node_modules code at all
+ *   - conversations-mcp.js contains no node_modules code and stays small
  * */
 import { createHash } from 'node:crypto';
 import { chmod, readFile, mkdir, writeFile } from 'node:fs/promises';
@@ -102,13 +106,22 @@ const index = await build({
   outfile: 'dist/cli.js',
 });
 
+// One copy of this runs next to every vendor chat, so it is the server and
+// nothing else: loading cli.js for it cost ~30 MB and ~65 ms per chat.
+const conversationsMcp = await build({
+  ...common,
+  entryPoints: ['src/search/mcp-main.ts'],
+  format: 'esm',
+  outfile: 'dist/conversations-mcp.js',
+});
+
 // Compiling the 2 MB program was ~30 ms of every start, and the catalog's CJS
 // another ~10: the compile cache keeps V8's code per file content, so each is
 // compiled once per build. It has to be on before cli.js is imported, hence a
 // file of its own. The digest is there so this file changes with the program.
 // It is a cache of code, not ClikCode state, so it lives in the user cache
 // directory whatever CLIKCODE_HOME says (NODE_COMPILE_CACHE, if set, wins).
-const programDigest = createHash('sha256').update(await readFile('dist/cli.js')).digest('hex').slice(0, 16);
+const programDigest = createHash('sha256').update(await readFile('dist/cli.js')).update(await readFile('dist/conversations-mcp.js')).digest('hex').slice(0, 16);
 await writeFile('dist/index.js', `#!/usr/bin/env node
 // ClikCode (program ${programDigest}). Written by scripts/build.mjs; the program is cli.js.
 import module from 'node:module';
@@ -117,7 +130,8 @@ import { join } from 'node:path';
 try {
   module.enableCompileCache?.(join(process.env.XDG_CACHE_HOME?.trim() || join(homedir(), '.cache'), 'clikcode', 'node-compile-cache'));
 } catch { /* fail-open-ok: no cache is only a slower start. */ }
-await import('./cli.js');
+// Vendors start this one per chat (src/search/mcp-main.ts): not the whole program.
+await import(process.argv[2] === 'conversations-mcp' ? './conversations-mcp.js' : './cli.js');
 `);
 
 const catalog = await build({
@@ -167,6 +181,13 @@ for (const name of Object.keys(pkg.dependencies ?? {})) {
 const catalogDependencies = Object.keys(catalog.metafile.inputs).filter((path) => /(^|\/)node_modules\//.test(path));
 if (catalogDependencies.length) failures.push(`harness-catalog.cjs must be dependency-free, but bundles: ${catalogDependencies.slice(0, 5).join(', ')}`);
 if (runtimeExternals(catalog.metafile, 'dist/harness-catalog.cjs').length) failures.push('harness-catalog.cjs must not import packages at runtime');
+
+const conversationsMcpDependencies = Object.keys(conversationsMcp.metafile.inputs).filter((path) => /(^|\/)node_modules\//.test(path));
+if (conversationsMcpDependencies.length) failures.push(`conversations-mcp.js must be dependency-free, but bundles: ${conversationsMcpDependencies.slice(0, 5).join(', ')}`);
+if (runtimeExternals(conversationsMcp.metafile, 'dist/conversations-mcp.js').length) failures.push('conversations-mcp.js must not import packages at runtime');
+// ~70 kB when split out; a stray import of the program would make it MBs.
+const conversationsMcpBytes = conversationsMcp.metafile.outputs['dist/conversations-mcp.js'].bytes;
+if (conversationsMcpBytes > 300 * 1024) failures.push(`conversations-mcp.js is ${Math.round(conversationsMcpBytes / 1024)} kB: something pulled the program into it`);
 
 // Load it the way harness-runtime.ts will: it must evaluate standalone and carry the catalog.
 {

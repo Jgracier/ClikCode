@@ -1,5 +1,5 @@
 import { utimes, writeFile, readFile } from 'node:fs/promises';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HarnessSession, TranscriptMessage } from '../session/model.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
@@ -7,7 +7,7 @@ import { resetHarnessStateCaches } from '../session/state/index-file.js';
 import { sessionFilePath } from '../session/store/paths.js';
 import { loadSessionFile } from '../session/store/records.js';
 import { conversationGroups } from './conversations.js';
-import { conversationView, corpusBuilds, resetCorpusCache, sessionDoc } from './corpus.js';
+import { CORPUS_IDLE_RELEASE_MS, conversationView, corpusBuilds, resetCorpusCache, sessionDoc } from './corpus.js';
 import { parseQuery, parseSince, recencyBoost, searchConversations, titleMatch } from './engine.js';
 import { hitSnippets, mentionCount, snippet } from './format.js';
 import { maskSecrets } from './secrets.js';
@@ -240,6 +240,27 @@ describe('the transcript cache', () => {
     await utimes(sessionFilePath('parent'), later, later);
     expect((await sessionDoc('child'))!.messages.map((message) => message.text)).toEqual(['alpha one', 'beta two', 'gamma']);
     expect(corpusBuilds()).toBe(built + 1);
+  });
+
+  describe('idle release', () => {
+    afterEach(() => { vi.useRealTimers(); });
+
+    it('keeps the cache while reads keep coming and drops it once they stop', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      await store(chat('idle', [user('kiwi')]));
+      await sessionDoc('idle');
+      const built = corpusBuilds();
+      // Each read pushes the release back: never dropped mid-use.
+      for (let step = 0; step < 3; step += 1) {
+        vi.advanceTimersByTime(CORPUS_IDLE_RELEASE_MS - 1000);
+        await sessionDoc('idle');
+      }
+      expect(corpusBuilds()).toBe(built);
+      vi.advanceTimersByTime(CORPUS_IDLE_RELEASE_MS);
+      // Released: the next read builds it again, with the same answer.
+      expect((await sessionDoc('idle'))!.messages[0]!.text).toBe('kiwi');
+      expect(corpusBuilds()).toBe(built + 1);
+    });
   });
 });
 

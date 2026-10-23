@@ -9,7 +9,13 @@
  * The cache is keyed on the files a transcript is made of -- its own and
  * each parent a fork reference points into -- by mtime and size. Never a
  * clock: an unchanged file is never read again, and a changed one is never
- * served stale, however soon after it was written. */
+ * served stale, however soon after it was written.
+ *
+ * The clock only RELEASES memory: every transcript's text is held while
+ * searches keep coming, and dropped a few minutes after the last one, since
+ * a vendor's conversation MCP server (one per running chat) otherwise keeps
+ * every transcript it ever searched -- ~100 MB after one search. Dropping it
+ * never changes an answer, only costs the next search a re-read. */
 
 import { stat } from 'node:fs/promises';
 import type { TranscriptMessage } from '../session/model.js';
@@ -77,6 +83,22 @@ export function corpusBuilds(): number {
 export function resetCorpusCache(): void {
   cache.clear();
   views.clear();
+  if (releaseTimer) clearTimeout(releaseTimer);
+  releaseTimer = undefined;
+}
+
+/** How long the cache outlives the last read of it. */
+export const CORPUS_IDLE_RELEASE_MS = 3 * 60_000;
+let releaseTimer: NodeJS.Timeout | undefined;
+
+/** Pushes the release back to CORPUS_IDLE_RELEASE_MS from now. Unref'd: a
+ * pending release never keeps a process alive. */
+function touchCache(): void {
+  if (releaseTimer) releaseTimer.refresh();
+  else {
+    releaseTimer = setTimeout(resetCorpusCache, CORPUS_IDLE_RELEASE_MS);
+    releaseTimer.unref();
+  }
 }
 
 /** The identity of a transcript: each file it is read from. Undefined when
@@ -103,6 +125,7 @@ async function referenceChain(id: string): Promise<string[]> {
 
 /** One session's searchable messages, read only when its files changed. */
 export async function sessionDoc(id: string): Promise<SessionDoc | undefined> {
+  touchCache();
   const path = sessionFilePath(id);
   const cached = cache.get(path);
   if (cached && await identity(cached.chain) === cached.key) return cached.doc;
@@ -192,6 +215,7 @@ export function buildView(branches: ReadonlyArray<{ id: string; doc: SessionDoc 
  * when one of its chats changed. */
 export async function conversationView(group: Pick<ConversationGroup, 'id' | 'branches'>): Promise<ConversationView> {
   const docs = await Promise.all(group.branches.map((branch) => sessionDoc(branch.id)));
+  touchCache();
   const key = sessionFilePath(group.id);
   const ids = group.branches.map((branch) => branch.id).join(',');
   const cached = views.get(key);
