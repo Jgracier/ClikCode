@@ -133,3 +133,13 @@ it('keeps the actual user task pinned after internal continuation messages', () 
   const view = fitContext({ system: 's', items, tools, window: 4096 });
   expect(view.items).toContainEqual(items[0]);
 });
+
+
+it('retains the unfinished reply anchor when older requests compete for a small context', () => {
+  const items: ConversationItem[] = Array.from({ length: 200 }, (_, i) => user(`Archived instruction ${i}: ${'older request '.repeat(50)}`));
+  const task = user('Continue the current implementation.');
+  items.push(task, { type: 'text', role: 'assistant', text: `${'unfinished reply '.repeat(400)}TAIL_TO_CONTINUE` }, { type: 'text', role: 'user', source: 'harness', text: '[harness] Continue exactly where the reply stopped.' });
+  const view = fitContext({ system: 's', items, tools, window: 4096 });
+  expect(view.items).toContainEqual(task);
+  expect(view.items.some((item) => item.type === 'text' && item.role === 'assistant' && item.text.includes('TAIL_TO_CONTINUE'))).toBe(true);
+});

@@ -92,11 +92,17 @@ export function fitContext(input: {
   const selected = new Set(all.filter((group) => group.required));
   const optional = all.filter((group) => !group.required);
   const last = optional.at(-1);
+  const taskStart = all.find((group) => group.required)?.start ?? -1;
+  const recent = [...optional].reverse();
   // The immediate result is the evidence for the next action, even if an
   // older assistant narration would have scored higher on keyword overlap.
-  if (last && last.start > (all.find((group) => group.required)?.start ?? -1)) selected.add(last);
-  const latestEvidence = [...optional].reverse().find((group) => group.start > (all.find((entry) => entry.required)?.start ?? -1) && group.items.some((item) => item.type === 'tool_result'));
+  if (last && last.start > taskStart) selected.add(last);
+  const latestEvidence = recent.find((group) => group.start > taskStart && group.items.some((item) => item.type === 'tool_result'));
   if (latestEvidence) selected.add(latestEvidence);
+  // Continuation instructions must retain the reply they refer to, even
+  // when older user requests would otherwise outrank its unfinished tail.
+  const latestReply = recent.find((group) => group.start > taskStart && group.items.some((item) => item.type === 'text' && item.role === 'assistant'));
+  if (latestReply) selected.add(latestReply);
   const query = textOf(input.items.filter((item) => item.type === 'text' && item.role === 'user' && item.source !== 'harness').slice(-2)).toLowerCase();
   const words = new Set((query.match(/[\p{L}\p{N}_./-]{3,}/gu) ?? []).slice(-128));
   const ranked = optional.filter((group) => !selected.has(group)).map((group, index) => {
