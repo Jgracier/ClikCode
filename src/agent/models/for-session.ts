@@ -119,7 +119,7 @@ export function gatewayModelClient(input: {
 /** What the Gateway lists for the model this session will run (its pick, or
  * the Gateway's automatic one): its window, the most it writes in one answer,
  * and whether it takes images. */
-async function gatewayModelFacts(session: HarnessSession, config: Conf): Promise<{ id?: string; contextWindow?: number; maxOutput?: number; vision?: boolean }> {
+async function gatewayModelFacts(session: HarnessSession, config: Conf): Promise<{ id?: string; contextWindow?: number; maxOutput?: number; vision?: boolean; privateDeploymentId?: string }> {
   try {
     // Imported here: gateway/models.ts imports this module for gatewayConnection.
     const { savedGatewayModels, gatewayModels, sameGatewayModel } = await import('../../gateway/models.js');

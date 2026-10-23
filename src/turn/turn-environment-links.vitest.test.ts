@@ -5,6 +5,18 @@ import { join } from 'node:path';
 import { linkUserDirectories } from './turn-environment.js';
 
 describe('a profile that is the vendor\'s HOME', () => {
+  it('retries linking after the profile directory is created', () => {
+    const root = mkdtempSync(join(tmpdir(), 'clikcode-links-late-'));
+    try {
+      const real = join(root, 'home'); const profile = join(root, 'profile');
+      mkdirSync(join(real, 'projects'), { recursive: true });
+      linkUserDirectories(profile, real);
+      mkdirSync(profile);
+      linkUserDirectories(profile, real);
+      expect(readlinkSync(join(profile, 'projects'))).toBe(join(real, 'projects'));
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it('links the user\'s own folders, not their dot entries or files, and keeps what it has', () => {
     const root = mkdtempSync(join(tmpdir(), 'clikcode-links-'));
     try {

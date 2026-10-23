@@ -19,8 +19,8 @@ export async function askPrivateLogin(
     questions: fields.map(field => field.kind === 'choice'
       ? { id: field.key, prompt: field.label, options: (field.options ?? []).map(label => ({ label })), secret: true }
       : field.current
-        // Known already: it starts in the box, to edit or leave alone.
-        ? { id: field.key, prompt: field.label, options: [], initial: field.current, secret: true, maskInput: false, ...(field.format ? { format: field.format } : {}) }
+        // Known already: it starts in the box, to edit or leave alone. A secret stays masked.
+        ? { id: field.key, prompt: field.label, options: [], initial: field.current, secret: true, maskInput: field.kind === 'password', ...(field.format ? { format: field.format } : {}) }
         : { id: field.key, prompt: askFor(field), options: [], secret: true, maskInput: field.kind === 'password', ...(field.format ? { format: field.format, maskInput: false } : {}), ...(field.required ? {} : { optional: true }) }),
   }, signal);
   if (result.kind !== 'answered') return undefined;
