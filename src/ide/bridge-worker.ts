@@ -6,6 +6,7 @@ import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { WorkerClient } from '../worker/client.js';
 import { cancelOrigin, MOVED_REASON, type WorkerEvent } from '../worker/protocol.js';
+import { CONVERSATION_HANDOFF_REASON } from '../worker/registry.js';
 import { messageOf, TurnFailed } from './bridge-support.js';
 import type { BridgeHost } from './bridge-host.js';
 
@@ -28,10 +29,11 @@ export class WorkerLink {
     this.worker = { sessionId, client };
     this.workerTurnRunning = initial.type === 'snapshot' && Boolean(initial.live);
     this.host.channel.send({ type: 'worker', sessionId, event: initial });
-    /** Its chat moved to another machine: read-only here, so no worker is started for it again. */
+    /** Its chat moved to another machine, or its worker yielded the conversation to one: this panel must not
+     * start a worker for it again and take the conversation back. */
     let movedAway = false;
     client.on('event', (event: WorkerEvent) => {
-      if (event.type === 'shutdown' && event.reason === MOVED_REASON) movedAway = true;
+      if (event.type === 'shutdown' && (event.reason === MOVED_REASON || event.reason === CONVERSATION_HANDOFF_REASON)) movedAway = true;
       this.onWorkerEvent(sessionId, client, event);
     });
     client.on('close', () => {
