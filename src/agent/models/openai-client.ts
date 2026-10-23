@@ -243,7 +243,7 @@ export function completedArguments(raw: string): Record<string, unknown> {
 const STOP_REASONS: Readonly<Record<string, string>> = { stop: 'stop', tool_calls: 'tool-calls', function_call: 'tool-calls', length: 'length', content_filter: 'content-filter' };
 
 /** Servers word "does not fit" differently; each becomes the Gateway's code,
- * which the loop already answers by compacting and retrying once. */
+ * which the loop handles by refitting its working view while retaining history. */
 function isContextOverflow(status: number, code: string | undefined, message: string): boolean {
   if (code === 'context_length_exceeded' || code === 'exceed_context_size_error') return true;
   return status === 400 && /context (?:length|size|window)|maximum context|too many tokens|exceeds? the available context/i.test(message);
