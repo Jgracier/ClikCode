@@ -66,32 +66,14 @@ export type SettlingTool = {
    * `seq`). Rows at one offset keep this order; absent, they keep the order
    * they were passed in, after every row that has one. */
   seq?: number;
-  /** A sub-agent's own row. It begins where it began like any call, so text
-   * the parent writes after it sits below it and is held behind it while it
-   * runs -- but only up to `agentHoldRows` of what is held: a background agent
-   * may run for minutes while the parent goes on working, and that work must
-   * not be kept off the page. Past it the row is released in order (see
-   * `released`). */
+  /** The call is a subagent; running subagents are drawn in the fixed live
+   * section and only their completed row reaches this transcript. */
   agent?: boolean;
-  /** What the row is drawn as when it has to be retired to scrollback still
-   * running: the same text with a static glyph and `· running`. Without it the
-   * row's own lines are used. */
-  released?: readonly string[];
-  /** What settling appends once the row was released while running: one
-   * completion row (`✓ <label> (N tool uses · ...)`), at the point it
-   * settled. Without it the row's own lines are used. */
-  completed?: readonly string[];
-  /** The one line that names a released agent over its live children. */
-  childHeader?: readonly string[];
   /** A live row of a running sub-agent's (one child call). Never retired and
    * never holds anything back: the turn's end drops it with its parent. */
   nested?: boolean;
   /** The agent row a nested row belongs to. */
   parent?: string;
-  /** Still running, and drawn in the pinned band above the status line
-   * instead of in the scrolling answer. A background agent used to hold its
-   * steps in that scroll, so they left the screen while the spinner stayed. */
-  pin?: boolean;
   /** A message the user steered into the turn: not a call the model made.
    * It never proves the prose before it is final (the model has not stopped
    * writing; it was interrupted), and it waits for the block its offset falls
@@ -108,11 +90,6 @@ function startOrder(tools: readonly SettlingTool[]): SettlingTool[] {
     .sort((left, right) => offset(left.tool) - offset(right.tool) || seq(left.tool) - seq(right.tool) || left.index - right.index)
     .map((entry) => entry.tool);
 }
-
-/** Rows of output an open sub-agent may hold behind it before it is released
- * to scrollback as a running line. The prompter passes a share of what the
- * live region can show; this is only the default. */
-const DEFAULT_AGENT_HOLD_ROWS = 12;
 
 type BlockRenderer = (blocks: readonly MessageBlock[], firstOfMessage: boolean) => string[];
 
@@ -163,9 +140,6 @@ function interleave(
 export class TurnTranscript {
   private emittedBlocks = 0;
   private readonly emittedTools = new Set<string>();
-  /** Sub-agent rows retired to scrollback while still running. Each owes one
-   * completion row when it settles, and is not drawn again before that. */
-  private readonly released = new Set<string>();
   /** Source lines of the open code fence already retired. A fence is the one
    * construct whose completed lines are final before the block itself is: each
    * wraps independently of the ones after it. Without this an answer whose code
@@ -205,11 +179,7 @@ export class TurnTranscript {
     renderBlocks: BlockRenderer;
     /** Optional separate renderer for the block still receiving tokens. */
     renderLive?: BlockRenderer;
-    /** The most rows a running sub-agent may keep behind it (prose written
-     * after it began, and the rows of calls after it) before it is retired as
-     * a running line and what it held follows, in order. */
-    agentHoldRows?: number;
-  }): { finished: string[]; live: string[]; pinned: string[] } {
+  }): { finished: string[]; live: string[] } {
     // A last line of only dashes or equals signs is either a list item or
     // the underline that turns the line above into a heading, and the next
     // character decides which. Lexed now it made a heading of a list item's
@@ -219,16 +189,7 @@ export class TurnTranscript {
       const content = input.content.slice(0, undecided.index + (undecided[0].startsWith('\n') ? 1 : 0));
       return this.advance({ ...input, content, blocks: splitIntoBlocks(content) });
     }
-    // Running rows asked to stay by the status line. They are not part of
-    // the answer's scroll, and they do not hold later prose behind them.
-    const pinned: string[] = [];
-    const tools = input.tools.filter((tool) => {
-      if (tool.pin && !tool.done && !input.turnEnded) {
-        pinned.push(...tool.lines);
-        return false;
-      }
-      return true;
-    });
+    const tools = input.tools;
     // A tool that began at or after the end of the prose proves the prose is
     // final: the model stopped writing to call it. A call that is still
     // running closes that prose too, so its row can sit directly under it
@@ -240,20 +201,9 @@ export class TurnTranscript {
     const allBlocks = input.blocks ?? splitIntoBlocks(input.content);
     const isSettled = (tool: SettlingTool): boolean => tool.done || input.turnEnded;
     const exempt = (tool: SettlingTool): boolean => Boolean(tool.steer || tool.nested);
-    // A released agent that still runs was drawn already: nothing owed until
-    // it settles, and then only its completion row.
-    let owing = startOrder(tools.filter((tool) => !this.emittedTools.has(tool.id)
-      && !(this.released.has(tool.id) && !isSettled(tool))))
-      .map((tool) => (this.released.has(tool.id) && tool.completed ? { ...tool, lines: tool.completed } : tool));
-    // Position is start order, never completion order. A call that finished
-    // while an earlier one is still running keeps its row in the live region
-    // until that one settles, and then everything retires in start order. A
-    // steer is not a gate: it only waits for its own block (below). A running
-    // sub-agent is one, like any call, within a bound: what it holds back
-    // stays below it while that fits the live region, and past it the agent
-    // row is retired as a running line and what it held follows -- nothing is
-    // ever drawn above text emitted before it, and nothing is kept off the
-    // page for the minutes an agent may run.
+    const owing = startOrder(tools.filter((tool) => !this.emittedTools.has(tool.id)));
+    // Position is start order, never completion order. An unfinished ordinary
+    // call gates later rows; running subagents are outside this transcript.
     /** Prose after `gate` is held behind it: blocks past the one it began in. */
     const holdAfter = (gate: SettlingTool): number => {
       if (gate.responseOffset === undefined) return Number.POSITIVE_INFINITY;
@@ -261,21 +211,7 @@ export class TurnTranscript {
       const inside = gate.responseOffset <= 0 ? -1 : allBlocks.findIndex((block) => block.sourceEnd >= gate.responseOffset!);
       return gate.responseOffset <= 0 || inside >= 0 ? Math.max(this.emittedBlocks, inside + 1) : Number.POSITIVE_INFINITY;
     };
-    const limit = input.agentHoldRows ?? DEFAULT_AGENT_HOLD_ROWS;
-    const releasedNow = new Set<string>();
-    let firstOpen = -1;
-    for (;;) {
-      firstOpen = owing.findIndex((tool) => !exempt(tool) && !isSettled(tool));
-      const gate = firstOpen >= 0 ? owing[firstOpen]! : undefined;
-      if (!gate?.agent || input.turnEnded) break;
-      const from = holdAfter(gate);
-      const prose = from < allBlocks.length ? input.renderBlocks(allBlocks.slice(from), false).length : 0;
-      const behind = owing.slice(firstOpen + 1).filter((tool) => !tool.nested && !tool.steer)
-        .reduce((sum, tool) => sum + tool.lines.length, 0);
-      if (prose + behind <= limit) break;
-      releasedNow.add(gate.id);
-      owing = owing.map((tool) => (tool === gate ? { ...tool, done: true, lines: tool.released ?? tool.lines } : tool));
-    }
+    const firstOpen = owing.findIndex((tool) => !exempt(tool) && !isSettled(tool));
     let settledTools = owing.filter((tool, index) => isSettled(tool) && (firstOpen < 0 || index < firstOpen));
     let liveTools = owing.filter((tool, index) => !isSettled(tool) || (firstOpen >= 0 && index > firstOpen));
     const gate = firstOpen >= 0 ? owing[firstOpen]! : undefined;
@@ -354,22 +290,7 @@ export class TurnTranscript {
     // streamed the same answer again every block looked new and the whole
     // thing was written a second time under the copy already on screen.
     this.emittedBlocks = Math.max(this.emittedBlocks, answer.emitted);
-    for (const tool of settledTools) {
-      if (releasedNow.has(tool.id)) this.released.add(tool.id);
-      else { this.emittedTools.add(tool.id); this.released.delete(tool.id); }
-    }
-    // The live children of an agent whose row is in scrollback now sit under
-    // a line that names it.
-    const headed = new Set<string>();
-    liveTools = liveTools.flatMap((tool) => {
-      const parent = tool.nested && tool.parent !== undefined && this.released.has(tool.parent) && !headed.has(tool.parent)
-        ? tools.find((candidate) => candidate.id === tool.parent) : undefined;
-      if (!parent?.childHeader) return [tool];
-      headed.add(parent.id);
-      return [{ id: `${parent.id}#children`, done: false, nested: true, parent: parent.id,
-        ...(tool.responseOffset === undefined ? {} : { responseOffset: tool.responseOffset }), ...(tool.seq === undefined ? {} : { seq: tool.seq }),
-        lines: parent.childHeader }, tool];
-    });
+    for (const tool of settledTools) this.emittedTools.add(tool.id);
 
     // Where each live row sits. A call whose offset is already behind the live
     // prose sits at the top of this region, directly under the scrollback it
@@ -449,13 +370,12 @@ export class TurnTranscript {
     }
     for (const tool of ahead) after.push(...tool.lines);
     live = [...before, ...live, ...after];
-    return { finished, live, pinned };
+    return { finished, live };
   }
 
   reset(): void {
     this.emittedBlocks = 0;
     this.emittedTools.clear();
-    this.released.clear();
     this.openCodeLines = 0;
     this.openProseRows = 0;
     this.openProseFirst = false;

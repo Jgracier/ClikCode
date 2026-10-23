@@ -52,7 +52,7 @@ export function frameMessages(p: TerminalHarnessPrompter, session: HarnessSessio
 
 export type TranscriptInput = {
   session: HarnessSession; pending: HarnessSession['pendingTurn']; persistedMessages: ReturnType<typeof frameMessages>['persistedMessages'];
-  hasTransientAssistant: boolean; conversationInner: number; maxComposerRows: number;
+  hasTransientAssistant: boolean; conversationInner: number;
 };
 
 type Kit = {
@@ -201,7 +201,7 @@ function writeMessages(
 /** One frame's transcript: the rows retired this frame (`finished`) and the
  * live conversation (the block still receiving tokens). */
 export function writeTranscript(p: TerminalHarnessPrompter, input: TranscriptInput) {
-  const { session, pending, persistedMessages, hasTransientAssistant, conversationInner, maxComposerRows } = input;
+  const { session, pending, persistedMessages, hasTransientAssistant, conversationInner } = input;
   // -------------------------------------------------------------------
   // The append-only transcript. A finished row is retired into it exactly
   // once and never rewritten in place (only a change of width writes the
@@ -252,10 +252,6 @@ export function writeTranscript(p: TerminalHarnessPrompter, input: TranscriptInp
       turnEnded: !p.turn,
       renderBlocks,
       renderLive,
-      // What a running sub-agent may keep behind it: half of what the
-      // conversation can show. Past it the agent row is retired as a
-      // running line and the held text follows (transcript.ts).
-      agentHoldRows: Math.max(3, Math.floor(maxComposerRows / 2)),
     });
     emit(step.finished);
     liveConversation.push(...step.live);

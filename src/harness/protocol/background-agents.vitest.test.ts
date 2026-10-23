@@ -42,7 +42,7 @@ describe('backgroundWork: the three kinds of background work', () => {
       { task_id: 'b', task_type: 'local_bash', description: 'npm run dev' },
       { task_id: 'c', task_type: 'local_workflow', description: 'spec' },
       { task_id: 'd', task_type: 'local_agent', description: 'tests' },
-    ))).toEqual({ agents: 2, terminals: 1, workflows: 1 });
+    ))).toEqual({ agents: 2, agentTasks: [{ id: 'a', label: 'review' }, { id: 'd', label: 'tests' }], terminals: 1, workflows: 1 });
   });
 
   it('leaves out what Claude Code leaves out: monitors, ambient tasks, teammates, the backgrounded main session, a shell an agent owns', () => {
@@ -80,6 +80,8 @@ describe('backgroundWork: the three kinds of background work', () => {
     expect(backgroundWorkOf({ pendingBackground: 3 })).toEqual({ agents: 3 });
     expect(backgroundWorkOf({ pendingBackground: 3, background: { agents: 3, workflows: 1 } })).toEqual({ agents: 3, workflows: 1 });
     expect(backgroundWorkOf({})).toBeUndefined();
+    expect(mergeBackgroundWork({ agents: 2, agentTasks: [{ id: 'a', label: 'review' }, { id: 'b', label: 'tests' }] }, { terminals: 1 })?.agentTasks).toHaveLength(2);
+    expect(mergeBackgroundWork({ agents: 2, agentTasks: [{ id: 'a', label: 'review' }, { id: 'b', label: 'tests' }] }, { agents: 1 })?.agentTasks).toBeUndefined();
   });
 });
 

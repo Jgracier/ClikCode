@@ -7,7 +7,7 @@ import { callOutcomeParts } from './lean.js';
 import type { FileDiff, DiffLine } from '../../agent/line-diff.js';
 import type { HarnessActivityEvent, ToolCategory } from '../prompter.js';
 import { visibleSlice } from '../../tui/render/width.js';
-import { compactCount, formatDuration, formatElapsed } from './format.js';
+import { compactCount, formatDuration } from './format.js';
 import { TOOL_CATEGORY } from './tool-category.js';
 import { isAgentToolName } from './tools.js';
 import { SPIN_MS, SPIN_PHASES } from './timings.js';
@@ -72,6 +72,7 @@ export function mergeActivity(prior: HarnessActivityEvent, next: HarnessActivity
     // the category was derived from. The row keeps what its start knew.
     ...(next.category ? {} : prior.category ? { category: prior.category } : {}),
     ...(next.agent ? {} : prior.agent ? { agent: prior.agent } : {}),
+    ...(next.agentId ? {} : prior.agentId ? { agentId: prior.agentId } : {}),
     ...(next.diff ? {} : prior.diff ? { diff: prior.diff } : {}),
     ...(next.call ? {} : prior.call ? { call: prior.call } : {}),
     ...(next.childTools !== undefined || prior.childTools === undefined ? {} : { childTools: prior.childTools }),
@@ -215,19 +216,6 @@ export function withWorkspacePaths<T extends Pick<HarnessActivityEvent, 'label' 
   const diff = event.diff?.some((file) => file.path?.startsWith(prefix))
     ? event.diff.map((file) => (file.path?.startsWith(prefix) ? { ...file, path: file.path.slice(prefix.length) } : file)) : event.diff;
   return label === event.label && diff === event.diff ? event : { ...event, label, ...(diff ? { diff } : {}) };
-}
-
-/** What a running sub-agent has done so far, in one line: its latest action,
- * its tool uses, tokens where the harness reports them, and how long it has
- * run. The elapsed time is always there, so a harness that sends no child
- * calls still shows a row that moves. */
-export function agentProgress(state: { latest?: string; tools?: number; tokens?: number; elapsedMs: number }): string {
-  return [
-    ...(state.latest ? [state.latest] : []),
-    ...(state.tools ? [toolUses(state.tools)] : []),
-    ...(state.tokens ? [`${compactCount(state.tokens)} tokens`] : []),
-    formatElapsed(state.elapsedMs),
-  ].join(' · ');
 }
 
 /** A sub-agent's work so far, as Claude Code counts it. */

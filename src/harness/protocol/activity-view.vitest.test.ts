@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { agentProgress, agentSpinnerGlyph } from './activity-view.js';
+import { agentSpinnerGlyph, mergeActivity } from './activity-view.js';
 
-describe('agentProgress', () => {
-  it('always carries the elapsed time, and the rest when known', () => {
-    expect(agentProgress({ elapsedMs: 80_000 })).toBe('1m 20s');
-    expect(agentProgress({ latest: 'reading a.ts', tools: 12, tokens: 12_300, elapsedMs: 5_000 })).toBe('reading a.ts · 12 tool uses · 12k tokens · 5s');
-  });
+it('keeps the vendor agent id when its completion frame omits it', () => {
+  expect(mergeActivity(
+    { kind: 'tool-start', id: 'call-a', label: 'Agent review', agent: true, agentId: 'task-a' },
+    { kind: 'tool-done', id: 'call-a', label: 'Agent review' },
+  ).agentId).toBe('task-a');
 });
 
 describe('agentSpinnerGlyph', () => {

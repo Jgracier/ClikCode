@@ -44,7 +44,7 @@ function refresh(p: TerminalHarnessPrompter): void {
   }).finally(() => { view.reading = false; });
 }
 
-/** Right on an empty composer, with a sub-agent's row open: its view. */
+/** Right on an empty composer opens a running sub-agent's full view. */
 export function openSubView(this: TerminalHarnessPrompter): boolean {
   // The own agent's sub-agents are ClikCode's own (docs/SUBAGENTS.md): not wired to this view yet.
   if (this.subView || !this.turn || !this.currentSession?.nativeHarness) return false;
@@ -52,8 +52,9 @@ export function openSubView(this: TerminalHarnessPrompter): boolean {
   const events = this.activityEntries.flatMap((entry) => (entry.event ? [entry.event] : []));
   const siblings = subAgentRefs(events, command, modes);
   // A harness that publishes nothing of its sub-agents has nothing to open (docs/SUBAGENTS.md).
-  const open = siblings.filter((ref) => ref.read !== 'none' && this.groupExpansion.isOpen(`call:${ref.id}`));
-  const ref = open[open.length - 1];
+  const readable = siblings.filter((ref) => ref.read !== 'none');
+  const expanded = readable.filter((ref) => this.groupExpansion.isOpen(`call:${ref.id}`));
+  const ref = expanded.at(-1) ?? readable.filter((item) => item.status === 'running').at(-1);
   const state = ref ? subAgentViewOpen(siblings, ref.id) : undefined;
   if (!state) return false;
   this.subView = { state, rows: [] };
