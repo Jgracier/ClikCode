@@ -15,8 +15,15 @@ export async function settleStep(
   if (step.finalOnly) return rt.result({ stopReason: 'completed', stalled: true });
   // An answer cut off at the output limit is carried on, not taken as
   // the answer: the next step picks up mid-sentence.
-  if (!calls.length && cutOff && (Boolean(stepText.trim()) || rt.lengthContinues < MAX_LENGTH_CONTINUES)) {
-    rt.lengthContinues = stepText.trim() ? 0 : rt.lengthContinues + 1;
+  if (!calls.length && cutOff) {
+    let previousText: string | undefined;
+    for (let i = rt.items.length - 2; i >= 0; i--) {
+      const item = rt.items[i]!;
+      if (item.type === 'text' && item.role === 'assistant') { previousText = item.text.trim(); break; }
+    }
+    const productive = Boolean(stepText.trim()) && previousText !== stepText.trim();
+    if (!productive && rt.lengthContinues >= MAX_LENGTH_CONTINUES) return rt.result({ stopReason: 'completed', stalled: true });
+    rt.lengthContinues = productive ? 0 : rt.lengthContinues + 1;
     rt.continuesCutAnswer = Boolean(stepText.trim());
     await rt.append({ type: 'text', role: 'user', source: 'harness', text: CONTINUE_AFTER_LENGTH });
     return 'continue';

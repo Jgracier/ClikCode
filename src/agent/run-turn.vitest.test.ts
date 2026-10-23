@@ -992,11 +992,17 @@ describe('runAgentLoop', () => {
 
     it('keeps continuing productive cut-off replies beyond three chunks', async () => {
       const usage: { stopReason?: string }[] = [];
-      const h = harness([...Array.from({ length: 7 }, () => ({ text: 'more', stopReason: 'length' })), { text: 'done', stopReason: 'stop' }], { onUsage: (report) => usage.push(report) });
+      const h = harness([...Array.from({ length: 7 }, (_, i) => ({ text: `part ${i}`, stopReason: 'length' })), { text: 'done', stopReason: 'stop' }], { onUsage: (report) => usage.push(report) });
       const result = await runAgentLoop(h.input);
       expect(h.client.requests).toHaveLength(8);
       expect(result.stopReason).toBe('completed');
       expect(usage.at(-1)?.stopReason).toBe('stop');
+    });
+
+    it('bounds repeated identical output instead of billing an endless continuation loop', async () => {
+      const h = harness([], {}, { text: 'the same chunk', stopReason: 'length' });
+      expect(await runAgentLoop(h.input)).toMatchObject({ stopReason: 'completed', stalled: true });
+      expect(h.client.requests.length).toBeLessThanOrEqual(5);
     });
 
     it('tells the model a call cut off mid-arguments was cut by the output limit', async () => {

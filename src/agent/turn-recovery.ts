@@ -20,7 +20,7 @@ export const MODEL_START_BUDGET_SECONDS = 1200;
 export function modelStartWaitSeconds(retryAfter?: number): number {
   return Math.min(60, Math.max(5, retryAfter !== undefined && Number.isFinite(retryAfter) ? retryAfter : 30));
 }
-/** Empty continuations allowed after an output cutoff. Productive
+/** Empty or repeated continuations allowed after an output cutoff. Productive
  * continuations have no fixed chunk count. */
 export const MAX_LENGTH_CONTINUES = 3;
 export const CONTINUE_AFTER_LENGTH = '[harness] Your last reply reached the output limit and was cut off. Continue exactly where it stopped, without repeating anything already written.';
