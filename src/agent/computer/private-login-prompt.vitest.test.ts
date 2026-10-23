@@ -52,6 +52,22 @@ it('asks which saved account as an option list, keeps the answer secret, and ref
   await expect(askPrivateLogin(observer, 'https://example.com', [field])).rejects.toThrow('listed options');
 });
 
+it('shows a saved password in the prompt but keeps it masked', async () => {
+  let request: HarnessQuestionRequest | undefined;
+  const observer = { askQuestions: async (asked: HarnessQuestionRequest) => {
+    request = asked;
+    return { kind: 'answered' as const, answers: { email: ['other@example.com'], password: ['new-password'] } };
+  } } as TurnObserver;
+  expect(await askPrivateLogin(observer, 'https://discord.com', [
+    { index: 0, key: 'email', label: 'Email or Phone Number', kind: 'text', required: true, current: 'saved@example.com' },
+    { index: 1, key: 'password', label: 'Password', kind: 'password', required: true, current: 'saved-password' },
+  ])).toEqual({ email: 'other@example.com', password: 'new-password' });
+  expect(request?.questions).toEqual([
+    { id: 'email', prompt: 'Email or Phone Number', options: [], initial: 'saved@example.com', secret: true, maskInput: false },
+    { id: 'password', prompt: 'Password', options: [], initial: 'saved-password', secret: true, maskInput: true },
+  ]);
+});
+
 it('starts a known value in the text box to edit or leave alone, and lets an optional field stay empty', async () => {
   let request: HarnessQuestionRequest | undefined;
   const observer = { askQuestions: async (asked: HarnessQuestionRequest) => {
