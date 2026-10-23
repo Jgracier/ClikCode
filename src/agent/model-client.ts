@@ -7,6 +7,7 @@ import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { ToolDefinition, ToolRunResult } from './tool-contract.js';
 import type { ContextHints, ContextProfileName } from './context-profile.js';
 import type { PermissionRules } from './permissions.js';
+import type { OwnModelStart } from '../gateway/own-models.js';
 
 export interface TokenUsage {
   input?: number;
@@ -113,6 +114,9 @@ export interface ModelClient {
    * window, how fast it reads prompts, whether it is hosted). The loop picks
    * the session's context profile from it (context-profile.ts). */
   readonly contextHints?: ContextHints;
+  /** How the start of a model that is coming up is going (looking for a server, loading, what is left). Asked
+   * while a step waits for the user's own model; absent for a client with nothing to say. */
+  startStatus?(): Promise<OwnModelStart | undefined>;
 }
 
 export type HarnessErrorKind = 'quota' | 'auth' | 'other';

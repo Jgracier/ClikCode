@@ -83,7 +83,7 @@ export function gatewayModelClient(input: {
   /** The super admin's subscription switch (gateway/subscriptions.ts); the Gateway ignores it for anyone else. */
   subscriptions?: boolean;
 }): OpenAIModelClient {
-  return new OpenAIModelClient({
+  const client = new OpenAIModelClient({
     baseUrl: input.baseUrl.replace(/\/+$/, ''),
     apiKey: input.apiKey,
     model: input.model ?? 'auto',
@@ -108,6 +108,10 @@ export function gatewayModelClient(input: {
     ...(input.options && Object.keys(input.options).length ? { body: input.options } : {}),
     ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
   });
+  // A step waiting on the user's own model asks the Gateway how its start is going (not for Automatic: it picks the model).
+  const model = input.model;
+  if (model) client.startStatus = async () => (await import('../../gateway/own-models.js')).ownModelStatus(model, { timeoutMs: 4000 }).then((status) => status.start);
+  return client;
 }
 
 /** What the Gateway lists for the model this session will run (its pick, or

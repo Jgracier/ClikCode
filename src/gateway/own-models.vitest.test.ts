@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('../agent/models/for-session.js', () => ({ gatewayConnection: () => ({ baseUrl: 'https://gw.test', apiKey: 'k' }) }));
-const { idleWords, ownModelIdleMinutes, setOwnModelIdleMinutes, wakeOwnModel } = await import('./own-models.js');
+const { idleWords, ownModelIdleMinutes, ownModelStatus, setOwnModelIdleMinutes, wakeOwnModel } = await import('./own-models.js');
 
 const answer = (status: number, body: unknown) => vi.fn(async () => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } }));
 
@@ -13,6 +13,17 @@ describe("the user's own models on the Gateway", () => {
     expect(url).toBe('https://gw.test/v1/models/wake');
     expect(JSON.parse(String(init.body))).toEqual({ model: 'Qwen/Qwen3-8B' });
     await expect(wakeOwnModel('x', { config: {} as never, fetchImpl: answer(404, { error: { message: 'x is not one of your models' } }) })).rejects.toThrow('not one of your models');
+  });
+
+  it('reads how a start is going: still finding a server, or loading with what is left of the usual start', async () => {
+    const finding = answer(200, { data: { model: 'Qwen/Qwen3-8B', state: 'starting', start: { phase: 'finding-server' } } });
+    expect(await ownModelStatus('private-deployment:d1', { config: {} as never, fetchImpl: finding })).toEqual({ state: 'starting', start: { phase: 'finding-server' } });
+    const loading = answer(200, { data: { state: 'starting', start: { phase: 'starting-model', elapsedS: 90, expectedS: 480, remainingS: 390 } } });
+    expect(await ownModelStatus('m', { config: {} as never, fetchImpl: loading })).toEqual({ state: 'starting', start: { phase: 'starting-model', elapsedS: 90, expectedS: 480, remainingS: 390 } });
+    // Nothing is made up: a Gateway that predates this, a running model, or a malformed reading gives no start.
+    expect(await ownModelStatus('m', { config: {} as never, fetchImpl: answer(200, { data: { state: 'starting' } }) })).toEqual({ state: 'starting' });
+    expect(await ownModelStatus('m', { config: {} as never, fetchImpl: answer(200, { data: { state: 'running', start: { phase: 'finding-server' } } }) })).toEqual({ state: 'running' });
+    expect(await ownModelStatus('m', { config: {} as never, fetchImpl: answer(200, { data: { state: 'starting', start: { phase: 'starting-model' } } }) })).toEqual({ state: 'starting' });
   });
 
   it('reads and changes how long they may sit idle (0 = never)', async () => {
