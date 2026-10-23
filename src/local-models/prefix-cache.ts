@@ -74,7 +74,7 @@ export interface PrefixRequest {
   tools?: readonly unknown[];
 }
 
-interface SlotInfo { id: number; is_processing?: boolean; id_task?: number }
+interface SlotInfo { id: number; is_processing?: boolean; state?: number; id_task?: number }
 
 /** A saved state: the shared system+tools prefix (or a layer of it), or a
  * point in one conversation. */
@@ -288,7 +288,7 @@ export class PrefixCache {
   private async unusedSlot(): Promise<number | undefined> {
     const slots = await httpJson(this.port, 'GET', '/slots');
     if (slots.status !== 200 || !Array.isArray(slots.json)) return undefined;
-    return (slots.json as SlotInfo[]).find((slot) => !slot.is_processing && slot.id_task === undefined)?.id;
+    return (slots.json as SlotInfo[]).find((slot) => !slot.is_processing && !slot.state && (slot.id_task === undefined || slot.id_task === -1))?.id;
   }
 
   /** Prefixes: the newest few. Conversation states: the newest that fit
