@@ -179,6 +179,15 @@ describe('plugin agent types', () => {
     expect(results(parent[2]!).at(-1)).toContain('a.txt:1 looks fine.');
     const child = client.clients.get('Review a.txt')!.requests[0]!;
     expect(child.system).toContain('# Agent: reviewer\nYou are the demo reviewer.');
-    expect(child.tools.map((tool) => tool.name).sort()).toEqual(['grep', 'read_file']);
+    expect(child.tools.map((tool) => tool.name).sort()).toEqual(['grep', 'read_context', 'read_file']);
+  });
+});
+
+describe('resolveAgentType', () => {
+  it.each(['general', 'general-purpose', 'General Purpose', 'general_purpose', 'default', ' '])('treats %j as the default sub-agent', (type) => {
+    expect(resolveAgentType({ stateDir: '/nonexistent' } as never, type)).toEqual({});
+  });
+  it('still rejects an unknown type with the way out', () => {
+    expect(resolveAgentType({ stateDir: '/nonexistent' } as never, 'reviewer')).toEqual({ error: expect.stringContaining('leave subagent_type out') });
   });
 });
