@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { ensureNativeHarness } from '../../harness/transport/native/inspect.js';
 import { loginNativeHarness } from '../../harness/transport/native/login.js';
 import type { AiHarnessAccount, AiHarnessPermissionMode, AiLocalHarnessDefinition } from '../../harness/definition.js';
-import type { HarnessSession } from '../../session/model.js';
+import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { hermesTurboFitInstalled, installHermesTurboFit, registerHermesTurboFitProvider, restoreHermesPluginScan } from '../../harness/accounts/hermes-discovery.js';
 import { sessionProviderLabel } from '../../harness/protocol/labels.js';
 import { nativeProfileEnvironment } from '../../harness/transport/profile-environment.js';
@@ -206,12 +206,21 @@ async function ensureHermesTurboFit(harness: AiLocalHarnessDefinition, environme
  * explicit pick does; true when it did. A no-op for anything else. */
 export async function signInBeforeUse(id: string): Promise<boolean> {
   const state = await readState({ transcripts: [] });
-  const session = state.sessions.find((item) => item.id === id);
-  if (!session?.nativeHarness || session.route !== 'local') return false;
-  const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
-  if (account?.status !== 'needs_login') return false;
-  await aiHarnessSelect(session.nativeHarness, id, { emit: false });
+  const harness = signInNeeded(state, id);
+  if (!harness) return false;
+  await aiHarnessSelect(harness, id, { emit: false });
   return true;
+}
+
+/** The harness a send on chat `id` would first have to sign in to, from a
+ * state already in hand: undefined when none (or the chat is not known).
+ * No I/O, so a window decides at the keypress -- before any read -- whether it
+ * may show the turn at once (see runInteractiveTurn). */
+export function signInNeeded(state: Pick<HarnessState, 'sessions' | 'accounts'>, id: string): string | undefined {
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session?.nativeHarness || session.route !== 'local') return undefined;
+  const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
+  return account?.status === 'needs_login' ? session.nativeHarness : undefined;
 }
 
 /** A chat ready for a turn from the command line: bound to a harness and an

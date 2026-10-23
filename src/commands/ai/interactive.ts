@@ -48,7 +48,7 @@ import { activateSession, afterTurnFailure, claimConversation, leaveConversation
 import { slashPalette } from '../../tui/slash/registry.js';
 import { runningActivityLabel, sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { newConversation } from './conversations.js';
-import { signInBeforeUse } from './harness.js';
+import { signInBeforeUse, signInNeeded } from './harness.js';
 import { signInOutcomeSaid } from '../account.js';
 import { withSlowWait } from '../../tui/slow-wait.js';
 import { runShellLine } from '../../tui/slash/handlers.js';
@@ -589,24 +589,55 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         if (terminal && turn.echo && !turn.queuedTurnId && lastSeen.id === targetId && lastSeen.resumeAt) {
           terminal.activity(chalk.dim('Stopped waiting for the reset · a new message was sent'));
         }
-        // Using a provider no account is signed in to is when its sign-in
-        // opens -- here, before the turn, so it shows on its own and its
-        // outcome stays in the transcript. Nothing signed in at launch.
-        // The turn's wait goes up the moment it finishes, taking whatever was
-        // typed under the sign-in, so that is never drawn missing between.
-        // One that does not sign in: the message was never sent, and goes
-        // back to the composer (its line says how the sign-in ended).
-        const signedIn = terminal ? await signInBeforeUse(targetId).catch((error: unknown) => {
-          if (signInOutcomeSaid(error)) {
-            terminal.submitted(undefined);
-            if (turn.echo) terminal.restoreDraft(promptText);
-          }
+        // The message and the waiting band go up at the keypress, before the
+        // state reads and the disk write below (measured: Enter to the
+        // message on screen took a median 55 ms, p90 106 ms, of a user's real
+        // turns, all of it reads a turn does before it is sent). Held back
+        // only when the chat is known to need a sign-in first: that has its
+        // own screen, and the wait goes up after it. Decided from the state
+        // this window already holds; the authoritative check below still
+        // runs, and a disagreement takes the early band down again. Not for a
+        // message taken from the queue: it is on screen already as its queued
+        // row, which the render below takes out -- drawn before that, the
+        // held copy and the row are the same message twice (two sources).
+        // A draft (a new chat, in this process only) is lastSeen and nowhere else.
+        const shown = lastSeen.id === targetId ? lastSeen : paletteState.sessions.find((item) => item.id === targetId);
+        const early = Boolean(terminal) && !turn.queuedTurnId && shown !== undefined
+          && signInNeeded({ sessions: [shown], accounts: paletteState.accounts }, targetId) === undefined;
+        const dropEarly = (): void => {
+          if (!early || !terminal) return;
+          // Not the turn's end: the message stays held, as it was before the
+          // wait went up (a failure keeps what was sent visible).
+          terminal.stopWaiting(false);
+          terminal.submitted(turn.echo && promptText !== INTERRUPTED_TURN_REQUEST ? promptText : undefined);
+        };
+        if (early) terminal!.turnStarting();
+        try {
+          // Using a provider no account is signed in to is when its sign-in
+          // opens -- here, before the turn, so it shows on its own and its
+          // outcome stays in the transcript. Nothing signed in at launch.
+          // The turn's wait goes up the moment it finishes, taking whatever was
+          // typed under the sign-in, so that is never drawn missing between.
+          // One that does not sign in: the message was never sent, and goes
+          // back to the composer (its line says how the sign-in ended).
+          const signedIn = terminal ? await signInBeforeUse(targetId).catch((error: unknown) => {
+            if (signInOutcomeSaid(error)) {
+              dropEarly();
+              terminal.submitted(undefined);
+              if (turn.echo) terminal.restoreDraft(promptText);
+            }
+            throw error;
+          }) : false;
+          if (terminal && signedIn) terminal.turnStarting();
+        } catch (error) {
+          if (!signInOutcomeSaid(error)) dropEarly();
           throw error;
-        }) : false;
-        if (terminal && signedIn) terminal.turnStarting();
+        }
         // A draft is written now, because this message is what makes the chat
         // a conversation; the waiting line says what a local model is doing.
-        const { state: activeState, active } = await prepareTurn(targetId);
+        let prepared: Awaited<ReturnType<typeof prepareTurn>>;
+        try { prepared = await prepareTurn(targetId); } catch (error) { dropEarly(); throw error; }
+        const { state: activeState, active } = prepared;
         const activeAccount = active?.accountId ? activeState.accounts.find((item) => item.id === active.accountId)?.label : undefined;
         if (active && terminal) {
           const pending: HarnessSession = {
@@ -626,6 +657,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           if (outcome.left) openBoard = true;
           return;
         }
+        dropEarly();
         output.write(`${chalk.dim(`${active ? sessionProviderLabel(active) : 'Provider'} · working…`)}\n`);
         await runSessionTurn(config, targetId, promptText, undefined, {
           persistentTransports: true,

@@ -135,6 +135,22 @@ SCENARIOS = {
         'raw_never': ['the turn has finished'],
         'no_clear_after_type': True,
     },
+    # The user's message and the waiting band come the moment Enter is
+    # pressed, whatever the turn does before it reaches the vendor: the
+    # lifecycle log's turn marks (runtime/turn-latency.ts) say when the window
+    # painted the message (`first-paint`), counted from the submit.
+    'echo-before-any-work': {
+        'turns': [{'blocks': ['First answer here.']}, {'blocks': ['Second answer here.']}],
+        'steps': [('type', 'first question'), ('wait_for', 'First answer here.', 30), ('settle', 2),
+                  ('bloat', 30),
+                  ('type', 'second question'), ('wait_for', 'Second answer here.', 30), ('settle', 2)],
+        'watch': [],
+        'mark_limits_ms': {'first-paint': 40},
+        # The second message: no sign-in, a worker and a vendor already up. Its
+        # message and band are on screen in the keypress's own tick; with the
+        # state reads first they came 12-15 ms after it (a 30 MB record here).
+        'mark_limits_ms_warm': {'first-paint': 6},
+    },
     'rebuild-after-turn-keeps-answer': {
         'rebuild_entry': True,
         'turns': [{'blocks': ['Answer stays visible after the tool.', 'The final answer is ready.']}],
@@ -1806,6 +1822,23 @@ def run(name, spec, entry, keep):
             if 'waiting for you to sign in' not in '\n'.join(screen.display):
                 problems.append('the sign-in had finished before it was released')
             os.remove(sign_in_hold)
+        elif step[0] == 'bloat':
+            # A long conversation: the saved record grows by step[1] MB of
+            # earlier messages (the user's real ones run to 10 MB), so what a
+            # turn reads from disk before it is sent costs what it costs there.
+            sessions_dir = os.path.join(state, 'sessions')
+            for record in os.listdir(sessions_dir) if os.path.isdir(sessions_dir) else []:
+                if not record.endswith('.json'): continue
+                path = os.path.join(sessions_dir, record)
+                saved = json.load(open(path))
+                filler = []
+                chunk = 'earlier discussion of the codebase and its tests. ' * 40
+                for n in range(int(step[1] * 1024 * 1024 / (2 * len(chunk)))):
+                    filler.append({'role': 'user', 'content': f'{n}: {chunk}'})
+                    filler.append({'role': 'assistant', 'content': f'{n}: {chunk}'})
+                saved['messages'] = filler + saved.get('messages', [])
+                json.dump(saved, open(path, 'w'))
+            pump(0.3)
         elif step[0] == 'keys':
             os.write(fd, step[1].encode()); pump(0.3)
         elif step[0] == 'wait_for':
@@ -2159,6 +2192,22 @@ def run(name, spec, entry, keep):
         elif copies[-1] != spec['clipboard']: problems.append(f'clipboard got {copies[-1]!r}, expected {spec["clipboard"]!r}')
 
 
+    # Turn marks (runtime/turn-latency.ts): each named moment, of every turn
+    # the window timed, within its limit since the submit.
+    if spec.get('mark_limits_ms'):
+        marks = {}
+        try:
+            for record in open(os.path.join(state, 'logs', 'lifecycle.log')):
+                try: entry = json.loads(record)
+                except ValueError: continue
+                if entry.get('event') == 'turn.mark': marks.setdefault(entry['turnId'], {}).setdefault(entry['mark'], entry['ms'])
+        except OSError: pass
+        if not marks: problems.append('no turn marks were written')
+        for number, (turn_id, got) in enumerate(marks.items()):
+            limits = {**spec['mark_limits_ms'], **(spec.get('mark_limits_ms_warm', {}) if number else {})}
+            for mark, limit in limits.items():
+                if mark not in got: problems.append(f'turn {turn_id[:8]}: no {mark!r} mark')
+                elif got[mark] > limit: problems.append(f'turn {turn_id[:8]}: {mark} came {got[mark]}ms after submit, limit {limit}ms')
     open(os.path.join(root, 'capture.bin'), 'wb').write(bytes(raw))
     open(os.path.join(root, 'final.txt'), 'w').write(final)
     if frames2: open(os.path.join(root, 'final2.txt'), 'w').write(final2)

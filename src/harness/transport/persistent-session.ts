@@ -16,6 +16,10 @@ import { processGroup, processGroupMembers, toolCallWork } from './process-group
 /** How long a cancelled turn gets to unwind before its child is killed. */
 export const CANCEL_SETTLE_MS = 2000;
 
+/** A group read this long before the prompt is read again: a turn that waited
+ * (a sign-in, a cancelled turn settling) may have let the vendor start work. */
+const PREFETCH_FRESH_MS = 10_000;
+
 type PersistentSpawn = (binary: string, argv: readonly string[], options: SpawnOptions) => ChildProcess;
 
 export interface PersistentSessionOptions {
@@ -62,6 +66,8 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
   /** The child's process group when the current turn's prompt went out
    * (promptSent): what was already running -- the vendor, its MCP servers. */
   private atPrompt?: Promise<Set<number>>;
+  /** The group read ahead of the prompt (prefetchGroup), for this turn only. */
+  private prefetched?: { pid: number; at: number; members: Promise<Set<number>> };
   /** Processes a turn started and left running after it. Only some are the
    * vendor's background work (a `run_in_background` shell, a dev server):
    * the rest are helpers it started lazily (MCP servers). toolCallWork
@@ -88,8 +94,25 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
   protected async promptSent(): Promise<void> {
     const pid = this.live?.pid;
     // Read before the prompt goes out: a job the vendor starts for it must
-    // not already be in the snapshot.
-    this.atPrompt = pid ? Promise.resolve(await processGroupMembers(pid).catch(() => new Set<number>())) : undefined;
+    // not already be in the snapshot. One taken when the turn began
+    // (prefetchGroup) is as good -- nothing of this turn has run -- and the
+    // scan, which reads every process on the machine, then overlapped the
+    // turn's own setup instead of standing between it and the prompt.
+    const early = this.prefetched;
+    this.prefetched = undefined;
+    const members = early && early.pid === pid && Date.now() - early.at < PREFETCH_FRESH_MS ? early.members : undefined;
+    this.atPrompt = pid ? Promise.resolve(await (members ?? processGroupMembers(pid)).catch(() => new Set<number>())) : undefined;
+  }
+
+  /** The vendor's process group read now, for the prompt this session is
+   * about to be sent (promptSent uses it). A no-op while a turn runs here, or
+   * with no child yet: a cold start reads it when it is ready. */
+  prefetchGroup(): void {
+    const pid = this.live?.pid;
+    if (!pid || this.isClosed || this.turn || this.live?.peer.closed) return;
+    this.prefetched = { pid, at: Date.now(), members: processGroupMembers(pid) };
+    // Settled or not, never an unhandled rejection: promptSent handles it.
+    this.prefetched.members.catch(() => undefined);
   }
 
   /** Whether the vendor is still doing work between turns: what its

@@ -87,6 +87,13 @@ export function persistentTransportFor(sessionId: string, transport: HarnessTurn
   return created;
 }
 
+/** A turn has just been accepted for `sessionId`: have its vendor's process
+ * group read while the rest of the turn is set up (see PersistentSession.
+ * prefetchGroup). Nothing when there is no live vendor child yet. */
+export function prefetchPromptSnapshot(sessionId: string): void {
+  persistentTransports.get(sessionId)?.session.prefetchGroup();
+}
+
 export function hasPersistentTransport(sessionId: string): boolean {
   return persistentTransports.has(sessionId);
 }
