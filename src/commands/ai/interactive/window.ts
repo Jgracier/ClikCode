@@ -1,7 +1,8 @@
 /** Opening a window: the terminal, the attached and claimed conversation, its first frame, the usage tick and the newer-build watch. */
 import { currentWorkerBuild } from '../../../worker/registry.js';
 import { isClikCodeAgent, isGatewayService } from '../../../session/route.js';
-import { gatewayCreditLabel } from '../../../gateway/credit-label.js';
+import { gatewayConversationUsageLabel, gatewayCreditLabel } from '../../../gateway/credit-label.js';
+import { conversationCost } from '../../../tui/slash/usage-report.js';
 import { reconcileLocalModelLeases } from '../local-model.js';
 import { withArgValues } from '../../../tui/slash/arg-values.js';
 import { resumeWaitLabel } from '../../../turn/usage-exhausted.js';
@@ -157,7 +158,8 @@ function createUsageRefresher(config: Conf, terminal: TerminalHarnessPrompter | 
     // A Gateway conversation's allowance is its credit.
     if (isGatewayService(target)) {
       void gatewayCreditLabel(config, { fresh: afterTurn }).then((label) => {
-        if (TERMINAL.active === terminal) terminal.usage(label);
+        const status = gatewayConversationUsageLabel(conversationCost(targetState, target.id), label);
+        if (TERMINAL.active === terminal) terminal.usage(status);
       }).catch(() => { /* Usage is optional provider metadata. */ });
       return;
     }

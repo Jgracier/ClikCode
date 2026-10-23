@@ -268,6 +268,61 @@ function numberOf(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
+/** Some model-serving stacks return `<think>…</think>` inside ordinary
+ * content deltas instead of separating reasoning. Keep reasoning tags out of
+ * the saved/displayed answer for Gateway models. Incremental parsing means
+ * tags split across SSE frames are never flashed; the normal turn animation
+ * remains active, then the answer streams through the shared Markdown path. */
+class InlineThinkFilter {
+  private buffer = '';
+  private thinking = false;
+
+  push(
+    chunk: string,
+    onText: (text: string) => void,
+  ): void {
+    this.buffer += chunk;
+    for (;;) {
+      if (this.thinking) {
+        const end = this.buffer.indexOf('</think>');
+        if (end >= 0) {
+          this.buffer = this.buffer.slice(end + '</think>'.length);
+          this.thinking = false;
+          continue;
+        }
+        const keep = this.suffixPrefixLength(this.buffer, '</think>');
+        const safe = this.buffer.slice(0, this.buffer.length - keep);
+        this.buffer = this.buffer.slice(safe.length);
+        return;
+      }
+      const start = this.buffer.indexOf('<think>');
+      if (start >= 0) {
+        if (start) onText(this.buffer.slice(0, start));
+        this.buffer = this.buffer.slice(start + '<think>'.length);
+        this.thinking = true;
+        continue;
+      }
+      const keep = this.suffixPrefixLength(this.buffer, '<think>');
+      const safe = this.buffer.slice(0, this.buffer.length - keep);
+      if (safe) onText(safe);
+      this.buffer = this.buffer.slice(safe.length);
+      return;
+    }
+  }
+
+  /** Flush ordinary trailing text; an unterminated reasoning block stays hidden. */
+  finish(onText: (text: string) => void): void {
+    if (!this.thinking && this.buffer) onText(this.buffer);
+    this.buffer = '';
+  }
+
+  private suffixPrefixLength(text: string, token: string): number {
+    const max = Math.min(text.length, token.length - 1);
+    for (let size = max; size > 0; size--) if (text.endsWith(token.slice(0, size))) return size;
+    return 0;
+  }
+}
+
 interface PendingCall { id?: string; name: string; arguments: string; argsObject?: Record<string, unknown>; shownId?: string }
 
 /** Tokens a request's text is taken to hold, for leaving the answer room in
@@ -371,6 +426,14 @@ export class OpenAIModelClient implements ModelClient {
     let servedWindow: number | undefined;
     let timings: LlamaTimings | undefined;
     const blocks: ReasoningBlock[] = [];
+    // `auto` and Gateway aliases do not always identify the selected model in
+    // the request. The stream's `model` field is authoritative when present.
+    let inlineThink = this.label === 'ClikDeploy Gateway'
+      // Gateway aliases may resolve to any served model, and content can
+      // arrive before the stream identifies the selected model.
+      ? new InlineThinkFilter()
+      : undefined;
+    const emitText = (chunk: string): void => { if (chunk) { text += chunk; request.onTextDelta(chunk); } };
 
     const handle = (event: SseEvent): void => {
       if (!event.data) return;
@@ -394,6 +457,8 @@ export class OpenAIModelClient implements ModelClient {
       if (window) { servedWindow = window; this.servedWindow = window; }
       if (typeof frame.model === 'string' && frame.model && frame.model !== servedModel) {
         servedModel = frame.model;
+        // Also handle Gateway model IDs that arrive after initial content.
+        if (!inlineThink && this.label === 'ClikDeploy Gateway') inlineThink = new InlineThinkFilter();
         request.onServedModel?.(servedModel, servedWindow);
       }
       if (frame.usage && typeof frame.usage === 'object') usage = { ...usage, ...usageFrom(frame.usage as Record<string, unknown>) };
@@ -401,10 +466,17 @@ export class OpenAIModelClient implements ModelClient {
       const choice = Array.isArray(frame.choices) ? frame.choices[0] as Record<string, unknown> | undefined : undefined;
       if (!choice) return;
       const delta = (choice.delta && typeof choice.delta === 'object' ? choice.delta : {}) as Record<string, unknown>;
-      if (typeof delta.content === 'string' && delta.content) { text += delta.content; request.onTextDelta(delta.content); }
+      if (typeof delta.content === 'string' && delta.content) {
+        if (inlineThink) inlineThink.push(delta.content, emitText);
+        else emitText(delta.content);
+      }
       // `reasoning_content` is llama.cpp and DeepSeek; `reasoning` is OpenRouter and vLLM.
       const reasoning = typeof delta.reasoning_content === 'string' ? delta.reasoning_content : typeof delta.reasoning === 'string' ? delta.reasoning : '';
-      if (reasoning) request.onReasoningDelta?.(reasoning);
+      // Keep private model reasoning out of the transcript. Final content
+      // still uses the normal streaming Markdown renderer and tool calls remain
+      // structured events. Other OpenAI-compatible providers keep their
+      // existing reasoning activity behavior.
+      if (reasoning && this.label !== 'ClikDeploy Gateway') request.onReasoningDelta?.(reasoning);
       // The Gateway's finished blocks, with the signature that lets them be sent back.
       if (Array.isArray(delta.reasoning_details)) {
         for (const raw of delta.reasoning_details as Record<string, unknown>[]) {
@@ -462,6 +534,7 @@ export class OpenAIModelClient implements ModelClient {
       if (error instanceof ModelClientError) throw error;
       throw new ModelClientError(`${this.label} stream failed: ${error instanceof Error ? error.message : String(error)}`, { kind: 'other' });
     }
+    inlineThink?.finish(emitText);
     // Neither a finish reason nor [DONE]: the connection was cut mid-answer,
     // and taking the partial text as the answer would drop its tool calls.
     if (stopReason === undefined && !done) throw new ModelClientError(`${this.label} stream ended before the answer finished`, { kind: 'other', code: 'incomplete_stream' });

@@ -85,6 +85,36 @@ describe('OpenAIModelClient', () => {
     expect(sent.body.tools).toBeUndefined();
   });
 
+  it('keeps inline Qwen3 thinking out of the answer when the Gateway resolves auto to Qwen3', async () => {
+    reply = { chunks: [
+      { id: 'x', object: 'chat.completion.chunk', model: 'qwen3-4b', choices: [{ index: 0, delta: { content: '<think>private reasoning' }, finish_reason: null }] },
+      { id: 'x', object: 'chat.completion.chunk', model: 'qwen3-4b', choices: [{ index: 0, delta: { content: '</think>**Final answer**' }, finish_reason: null }] },
+      { id: 'x', object: 'chat.completion.chunk', model: 'qwen3-4b', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
+    ] };
+    const req = request();
+    const result = await new OpenAIModelClient({ baseUrl, model: 'auto', label: 'ClikDeploy Gateway' }).step(req);
+    expect(req.deltas.join('')).toBe('**Final answer**');
+    expect(req.reasoning).toEqual([]);
+    expect(result.text).toBe('**Final answer**');
+    expect(result.servedModel).toBe('qwen3-4b');
+  });
+
+  it('keeps inline and structured reasoning private for any Gateway model while streaming Markdown normally', async () => {
+    reply = { chunks: [
+      delta({ content: '<thi' }),
+      delta({ content: 'nk>hidden reasoning' }),
+      delta({ content: '</think>**Visible** ' }),
+      delta({ reasoning: 'structured private reasoning' }),
+      delta({ content: '`answer`' }, 'stop'),
+      'data: [DONE]\n\n',
+    ] };
+    const req = request();
+    const result = await new OpenAIModelClient({ baseUrl, model: 'auto', label: 'ClikDeploy Gateway' }).step(req);
+    expect(req.deltas.join('')).toBe('**Visible** `answer`');
+    expect(req.reasoning).toEqual([]);
+    expect(result.text).toBe('**Visible** `answer`');
+  });
+
   it('accepts a base URL that already ends in /v1 and sends no auth header without a key', async () => {
     reply = { chunks: [delta({ content: 'ok' }, 'stop'), 'data: [DONE]\n\n'] };
     await new OpenAIModelClient({ baseUrl: `${baseUrl}/v1/`, model: 'm' }).step(request());

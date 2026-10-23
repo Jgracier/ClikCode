@@ -226,15 +226,17 @@ export function creditOf(data: Record<string, unknown>): NonNullable<IdeGateway[
     const parsed = typeof value === 'string' ? Number(value) : typeof value === 'number' ? value : Number.NaN;
     return Number.isFinite(parsed) ? parsed : undefined;
   };
-  const micro = number(data.balanceMicroUsd);
-  const cents = number(data.balanceCents);
-  const usd = number(data.balanceUsd);
+  const micro = number(data.balanceMicroUsd) ?? number(data.balance_micro_usd);
+  const cents = number(data.balanceCents) ?? number(data.balance_cents);
+  const usd = number(data.balanceUsd) ?? number(data.balance_usd);
   const balanceUsd = micro !== undefined ? micro / 1_000_000 : cents !== undefined ? cents / 100 : usd;
+  const autoTopUp = data.auto_top_up && typeof data.auto_top_up === 'object' ? data.auto_top_up as Record<string, unknown> : undefined;
   return {
     unlimited: data.unlimited === true,
     ...(balanceUsd !== undefined ? { balanceUsd } : {}),
     ...(typeof data.allowed === 'boolean' ? { allowed: data.allowed } : {}),
-    ...(typeof data.autoTopUpEnabled === 'boolean' ? { autoTopUp: data.autoTopUpEnabled } : {}),
+    ...(typeof data.autoTopUpEnabled === 'boolean' ? { autoTopUp: data.autoTopUpEnabled }
+      : typeof autoTopUp?.enabled === 'boolean' ? { autoTopUp: autoTopUp.enabled } : {}),
   };
 }
 
