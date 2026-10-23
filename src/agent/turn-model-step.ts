@@ -12,6 +12,7 @@ import { abortable, categoryForTool, withUniqueIds } from './turn-support.js';
 import { recordUsage } from './usage.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import type { TurnRuntime } from './turn-runtime.js';
+import type { OwnModelStart } from '../gateway/own-models.js';
 
 /** What a model step came to: its result, a retry of the loop, or the turn's end. */
 type ModelStepOutcome =
@@ -96,8 +97,11 @@ export async function runModelStep(rt: TurnRuntime, modelClient: ModelClient, sy
       if (rt.modelStartWaitedSeconds + wait <= MODEL_START_BUDGET_SECONDS) {
         rt.modelStartWaitedSeconds += wait;
         rt.modelStartingSince ??= started;
-        input.onPhase?.(startingModelPhase(Date.now() - rt.modelStartingSince));
-        await pause(wait, signal);
+        await waitForModelStart({
+          waitS: wait, since: rt.modelStartingSince, signal,
+          onPhase: (phase) => input.onPhase?.(phase),
+          ...(modelClient.startStatus ? { poll: () => modelClient.startStatus!() } : {}),
+        });
         return { kind: 'continue' };
       }
     }
@@ -207,7 +211,42 @@ function elapsedWords(ms: number): string {
   return s % 60 && m < 10 ? `${m} min ${s % 60} s` : `${m} min`;
 }
 
-/** The status while the user's own model starts on its GPU: the spinner beside it is the turn's own. */
-export function startingModelPhase(elapsedMs: number): string {
-  return elapsedMs < 1000 ? 'Starting model' : `Starting model · ${elapsedWords(elapsedMs)}`;
+/**
+ * The status while the user's own model starts on its GPU: the spinner beside it is the turn's own. First it is looking for
+ * a machine ("Finding an available server"), then loading the model onto the one it got ("Starting model", with what is
+ * left of the usual start where it landed, when that is known). `sincePollMs` carries the countdown between two readings.
+ */
+export function startingModelPhase(elapsedMs: number, start?: OwnModelStart, sincePollMs = 0): string {
+  const waited = elapsedMs < 1000 ? '' : ` · ${elapsedWords(elapsedMs)}`;
+  if (start?.phase === 'finding-server') return `Finding an available server${waited}`;
+  if (start?.phase === 'starting-model') {
+    if (start.remainingS === undefined) return `Starting model · ${elapsedWords(start.elapsedS * 1000 + sincePollMs)}`;
+    const left = start.remainingS - Math.round(sincePollMs / 1000);
+    if (start.overdue) return `Starting model · taking longer than usual · ${elapsedWords(start.elapsedS * 1000 + sincePollMs)}`;
+    return left > 0 ? `Starting model · about ${elapsedWords(left * 1000)} left` : 'Starting model · almost ready';
+  }
+  return `Starting model${waited}`;
+}
+
+/**
+ * Wait `waitS` seconds for the model to come up, keeping the status line true meanwhile: asked how the start is going
+ * straight away and every 5 s after, counted down in between. A reading that fails keeps the last one.
+ */
+export async function waitForModelStart(input: {
+  waitS: number; since: number; onPhase: (phase: string) => void; signal?: AbortSignal;
+  poll?: () => Promise<OwnModelStart | undefined>; now?: () => number;
+}): Promise<void> {
+  const now = input.now ?? Date.now;
+  let start: OwnModelStart | undefined;
+  let polledAt = now();
+  // Counted in whole seconds, not against the clock: the wait is exactly what was asked, whatever the clock does.
+  for (let waited = 0, tick = 0; waited < input.waitS; tick += 1) {
+    if (tick % 5 === 0 && input.poll) {
+      try { start = await input.poll(); polledAt = now(); } catch { /* keep the last reading */ }
+    }
+    input.onPhase(startingModelPhase(now() - input.since, start, now() - polledAt));
+    const slice = Math.min(1, input.waitS - waited);
+    await pause(slice, input.signal);
+    waited += slice;
+  }
 }

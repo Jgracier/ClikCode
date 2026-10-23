@@ -330,6 +330,8 @@ interface PendingCall { id?: string; name: string; arguments: string; argsObject
 const roughTokens = (text: string): number => Math.ceil(text.length / 4);
 
 export class OpenAIModelClient implements ModelClient {
+  /** Set by the Gateway client (for-session.ts): how the start of the user's own model is going. */
+  startStatus?: ModelClient['startStatus'];
   readonly acceptsImages: boolean;
   readonly contextHints: ContextHints;
 
