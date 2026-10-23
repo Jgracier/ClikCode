@@ -332,11 +332,15 @@ function findPluginAgent(roots: PluginRoots, type: string): PluginAgent | undefi
   return agents.find((agent) => agent.name === type || `${agent.plugin}:${agent.name}` === type);
 }
 
+const GENERAL_AGENT_NAMES = new Set(['general-purpose', 'general', 'default']);
+
 /** Resolves a `subagent_type` for the task/agent tools: the call to pass on, or the error to return. */
 export function resolveAgentType(roots: PluginRoots, type: string | undefined): { agentType?: { name: string; prompt: string; tools?: string[] } } | { error: string } {
   const wanted = type?.trim();
-  if (!wanted || wanted === 'general-purpose') return {};
+  if (!wanted) return {};
   const agent = findPluginAgent(roots, wanted);
+  // A plugin agent of that name wins; otherwise the usual spellings of "no special type" mean the default sub-agent.
+  if (!agent && GENERAL_AGENT_NAMES.has(wanted.toLowerCase().replace(/[\s_]+/g, '-'))) return {};
   if (agent) return { agentType: { name: agent.name, prompt: agent.prompt, ...(agent.tools ? { tools: agent.tools } : {}) } };
   const names = enabledPluginAgents(roots).map((item) => item.name);
   return { error: `No agent type "${wanted}".${names.length ? ` Available: ${names.join(', ')}.` : ' No plugin agents are installed; leave subagent_type out.'}` };

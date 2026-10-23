@@ -63,13 +63,14 @@ export function readContextTool(items: () => readonly ConversationItem[], handof
       const all = items();
       let body: string;
       if (source === 'tool') {
+        if (!args.id) return { output: 'id is required for source=tool: pass the call ID of the tool result. To find one, search source=history with a query.', isError: true };
         const result = all.find((item) => item.type === 'tool_result' && item.id === args.id);
         if (!result) return { output: `No tool result with ID ${JSON.stringify(args.id)} in this conversation. Search source=history for its call.`, isError: true };
         body = text(result);
       } else if (args.id) {
         const match = /^item:(\d+)$/.exec(args.id);
         const item = match ? all[Number(match[1])] : undefined;
-        if (!item) return { output: 'Unknown history ID. Use item:N from the history index.', isError: true };
+        if (!item) return { output: `No history item ${JSON.stringify(args.id)}. IDs look like item:N with N from 0 to ${all.length - 1}; leave id out and pass a query to search for the text instead.`, isError: true };
         body = text(item);
       } else {
         body = all.flatMap((item, index) => {

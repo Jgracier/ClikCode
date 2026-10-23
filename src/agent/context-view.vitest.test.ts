@@ -246,3 +246,19 @@ describe('shrinkArgs', () => {
     expect(shrinkArgs(args, 300, 'r')).toEqual(args);
   });
 });
+
+describe('read_context tells a small model what to do next', () => {
+  const run = (args: Record<string, unknown>) => readContextTool(() => [user('a'), user('b')]).run(args as never, { outputCap: 4_096 } as ToolContext);
+  it('a tool read without an id asks for one, instead of naming "undefined"', async () => {
+    const out = await run({ source: 'tool' });
+    expect(out.isError).toBe(true);
+    expect(out.output).toContain('id is required');
+    expect(out.output).not.toContain('undefined');
+  });
+  it('an unknown history id names the valid range and the way to search', async () => {
+    const out = await run({ id: 'item:99' });
+    expect(out.isError).toBe(true);
+    expect(out.output).toContain('0 to 1');
+    expect(out.output).toContain('query');
+  });
+});
