@@ -11,7 +11,8 @@ import { createVendorObserver } from './vendor-observer.js';
 import { completeVendorTurn, settleAttempt } from './vendor-outcome.js';
 import { recoverFromFailure } from './vendor-recovery.js';
 import { takeUp } from './vendor-thread-takeup.js';
-import { restoreNativeThread } from '../session/native-thread.js';
+import { forgetNativeThread, restoreNativeThread } from '../session/native-thread.js';
+import { nativeThreadHoldsConversation } from './native-thread-continuity.js';
 import { returnPrompt } from './thread-return.js';
 import { targetContextWindow, transferBudget } from './transfer.js';
 import { modelsDevFiles } from '../harness/accounts/goose-discovery.js';
@@ -29,7 +30,15 @@ async function settleThread(ctx: VendorTurnContext): Promise<void> {
   // A vendor process from the account being left may still have it open.
   if (held && held !== ctx.account.id) await leavePersistentTransport(session.id);
   const outcome = await reconcileNativeThread(session, harness, ctx.state.accounts, ctx.account);
-  if (outcome === 'carried' || outcome === 'forgotten' || session.nativeThreadAccountId !== held) await ctx.checkpoint.persistNow();
+  // A thread whose parent chain is broken cannot take only the current request: the vendor would resume
+  // from a fragment. It is forgotten here and the conversation is told to it whole (a compaction is a valid root).
+  let broken = false;
+  if (session.nativeSessionId && !await nativeThreadHoldsConversation(session, harness, ctx.account)) {
+    await closePersistentTransport(session.id);
+    forgetNativeThread(session);
+    broken = true;
+  }
+  if (outcome === 'carried' || outcome === 'forgotten' || session.nativeThreadAccountId !== held || broken) await ctx.checkpoint.persistNow();
 }
 
 /** Everything before the first attempt: the thread and account the turn starts on. */
