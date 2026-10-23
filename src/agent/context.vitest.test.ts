@@ -61,11 +61,11 @@ describe('environment note', () => {
 });
 
 describe('window-sized limits', () => {
-  it('caps one tool result at a tenth of a small window, never above 30 KB', () => {
-    expect(toolOutputCap(undefined)).toBe(30 * 1024);
-    expect(toolOutputCap(1_000_000)).toBe(30 * 1024);
-    expect(toolOutputCap(32_768)).toBe(Math.floor(32_768 * 0.4));
-    expect(toolOutputCap(4_096)).toBe(8 * 1024);
+  it('caps result pages at 8 KB and scales them down for small windows', () => {
+    expect(toolOutputCap(undefined)).toBe(8 * 1024);
+    expect(toolOutputCap(1_000_000)).toBe(8 * 1024);
+    expect(toolOutputCap(32_768)).toBe(8 * 1024);
+    expect(toolOutputCap(4_096)).toBe(2 * 1024);
   });
 });
 

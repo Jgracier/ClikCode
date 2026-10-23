@@ -7,6 +7,7 @@ import { visibleTools } from './permissions.js';
 import { completedArguments } from './models/openai-client.js';
 import { thoughtLabel } from '../harness/protocol/activity-events.js';
 import { estimateContextTokens, DEFAULT_CONTEXT_WINDOW } from './context.js';
+import { fitContext } from './context-view.js';
 import { classifyModelError, MODEL_START_BUDGET_SECONDS, modelStartWaitSeconds, pause, retryDelaySeconds, STEP_RETRY_BUDGET_SECONDS, stepRecovery } from './turn-recovery.js';
 import { abortable, categoryForTool, withUniqueIds } from './turn-support.js';
 import { recordUsage } from './usage.js';
@@ -35,9 +36,19 @@ export async function runModelStep(rt: TurnRuntime, modelClient: ModelClient, sy
   let reasoning = '';
   let step: ModelStepResult;
   try {
-    step = await abortable(modelClient.step({
-      system, items: rt.items, signal,
+    if (rt.budgetClient !== modelClient) {
+      rt.budgetClient = modelClient;
+      rt.contextWindow = modelClient.contextHints?.contextWindow;
+      rt.contextScale = 1;
+    }
+    const view = fitContext({
+      system, items: rt.items,
       tools: rt.profile.shapeSpecs(toolSpecs(visibleTools(rt.advertised(rt.items), session.plan.active))),
+      window: rt.contextWindow, scale: rt.contextScale,
+    });
+    rt.lastRequestEstimate = view.estimatedTokens;
+    step = await abortable(modelClient.step({
+      system, items: view.items, signal, tools: view.tools,
       ...(finalOnly ? { toolChoice: 'none' as const } : {}),
       onTextDelta: (text) => {
         if (!text || signal?.aborted) return;
@@ -180,6 +191,11 @@ export async function recordStep(
   if (produced.length) await rt.append(...produced);
 
   rt.ledger = recordUsage(rt.ledger, step.usage);
+  // Learn tokenizer/template overhead from real usage, conservatively. The
+  // full transcript remains the source for subsequent views and model switches.
+  if (step.usage?.input && rt.lastRequestEstimate > 0) {
+    rt.contextScale = Math.max(rt.contextScale, rt.contextScale * step.usage.input / rt.lastRequestEstimate);
+  }
   rt.lastStepUsage = step.usage;
   rt.itemsAtLastUsage = rt.items.length;
   rt.contextWindow = step.contextWindow ?? rt.contextWindow;

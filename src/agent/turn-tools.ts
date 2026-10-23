@@ -1,3 +1,4 @@
+import { retainToolOutput } from './tool-output.js';
 /** Running a step's tool calls: validation, hooks, the permission decision and
  * its approval, the tool itself under the turn's abort, and the results' record. */
 import { scrubSecrets } from './computer/secret-scrubber.js';
@@ -5,7 +6,7 @@ import { toolOutputCap } from './context.js';
 import { claudeToolName } from './hooks.js';
 import { addPermissionAllowRule, buildApprovalPrompt, decidePermission, parsePermissionRules, suggestPermissionRule, visibleTools } from './permissions.js';
 import { validateAgainstSchema } from './schema-validate.js';
-import { capHeadTail, eventOutputPreview } from './security.js';
+import { eventOutputPreview } from './security.js';
 import { sessionState } from './session-state.js';
 import { isTurnCancelled, turnCancelledError } from './cancellation.js';
 import type { ConversationItem, AgentTurnInput, AgentTurnResult, ModelToolCall } from './model-client.js';
@@ -68,7 +69,7 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
   const onApproval = input.onApproval;
   const innerSubagent = input.subagent ? undefined : createSubagentRunner({
     // A sub-agent runs under its parent's profile, whatever decided it.
-    parent: { ...input, contextProfile: rt.profile.name, permissionRules: turnRules }, tools, runTurn,
+    parent: { ...input, contextProfile: rt.profile.name, permissionRules: turnRules }, tools: tools.filter((tool) => !['read_context', 'load_tools', 'load_mcp_tools'].includes(tool.name)), runTurn,
     checkpoint: { sessionId: input.sessionId, turnId: rt.turnId }, workSystem: rt.baseSystem,
     ...(onApproval ? { approve: (title: string, detail?: string, rule?: string, preview?: ApprovalPreview) => queueApproval(() => onApproval(title, detail, rule, preview)) } : {}),
     // A sub-agent's spend is this turn's spend: it lands in the same ledger
@@ -167,7 +168,7 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
     if (!wasPlanning && session.plan.active) input.onPlanModeEnter?.();
     result = { ...result, output: scrubSecrets(result.output) };
     const rewritten = await abortable(Promise.resolve(input.hooks?.postToolUse?.(call, result, rt.turnHookInfo)), signal);
-    if (rewritten && typeof rewritten.output === 'string') result = { ...result, output: rewritten.output };
+    if (rewritten && typeof rewritten.output === 'string') result = { ...result, output: scrubSecrets(rewritten.output) };
     return result;
   };
 
@@ -179,7 +180,8 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
     // Already on screen as it was written, under this label: not again.
     if (rt.shownCalls.get(call.id) !== label) input.onActivity?.({ kind: 'tool-start', label, id: call.id, ...category });
     let startedAt: number | undefined;
-    const finish = (result: ToolRunResult): ToolRunResult => {
+    const finish = async (result: ToolRunResult): Promise<ToolRunResult> => {
+      result = { ...result, output: scrubSecrets(result.output) };
       lifecycle('turn.tool', {
         name: call.name, ok: !result.isError,
         ...(startedAt !== undefined ? { ms: Date.now() - startedAt } : {}),
@@ -195,7 +197,7 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
           ...(ended ? eventOutputPreview(ended.output) : {}),
           ...(startedAt !== undefined ? { durationMs: Date.now() - startedAt } : {}),
         }));
-        return { ...result, output: capHeadTail(result.output, toolOutputCap(rt.contextWindow, rt.profile.toolOutputBytes), 'narrow the request to see the middle').text };
+        return { ...result, output: await retainToolOutput(result.output, toolOutputCap(rt.contextWindow, rt.profile.toolOutputBytes), input.stateDir, input.sessionId, call.id) };
       }
       input.onActivity?.({
         kind: result.isError ? 'tool-error' : 'tool-done', label, id: call.id, ...category,
@@ -203,7 +205,7 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
         ...(startedAt !== undefined ? { durationMs: Date.now() - startedAt } : {}),
         ...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
       });
-      return { ...result, output: capHeadTail(result.output, toolOutputCap(rt.contextWindow, rt.profile.toolOutputBytes), 'narrow the request to see the middle').text };
+      return { ...result, output: await retainToolOutput(result.output, toolOutputCap(rt.contextWindow, rt.profile.toolOutputBytes), input.stateDir, input.sessionId, call.id) };
     };
     if (!tool) {
       return finish({ output: `Unknown tool "${call.name}". Available tools: ${visibleTools(rt.advertised(rt.items), session.plan.active).map((entry) => entry.name).join(', ')}.`, isError: true });

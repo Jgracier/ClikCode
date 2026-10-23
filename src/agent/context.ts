@@ -307,5 +307,5 @@ export function estimateContextTokens(system: string, items: readonly Conversati
  * can page (read_file) stop at this size and say how to continue. */
 export function toolOutputCap(contextWindow: number | undefined, ceilingBytes: number = OUTPUT_CAPS.toolOutputBytes): number {
   const window = contextWindow && contextWindow > 0 ? contextWindow : DEFAULT_CONTEXT_WINDOW;
-  return Math.min(ceilingBytes, Math.max(8 * 1024, Math.floor(window * 4 * 0.1)));
+  return Math.min(ceilingBytes, 8 * 1024, Math.max(1024, Math.floor(window * 0.5)));
 }
