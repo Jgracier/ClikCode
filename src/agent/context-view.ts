@@ -38,6 +38,15 @@ function excerpt(text: string, limit: number, reference: string): string {
   return `${text.slice(0, limit - end)}\n[Excerpt; read_context ${reference} for the complete text.]\n${text.slice(-end)}`;
 }
 
+/** Notices the harness writes in the user's voice. Marked `source: 'harness'` from now on; a transcript written before that
+ * (a conversation outlives the build that began it) is recognised by the form every one of them has. */
+const HARNESS_NOTE = /^\[(?:background (?:agent|shell|task)\b|harness\]|Stop hook\]|SubagentStop hook\])/;
+export function isHarnessNote(item: ConversationItem): boolean {
+  return item.type === 'text' && item.role === 'user' && (item.source === 'harness' || HARNESS_NOTE.test(item.text));
+}
+/** What the user actually asked: their own messages, never the harness's. */
+const isUserRequest = (item: ConversationItem): boolean => item.type === 'text' && item.role === 'user' && !isHarnessNote(item);
+
 interface Group { start: number; items: ConversationItem[]; required: boolean }
 
 /** A model step's calls and results travel together, including its signed
@@ -47,7 +56,7 @@ function groups(items: readonly ConversationItem[]): Group[] {
   let latestUser = items.length - 1;
   while (latestUser >= 0) {
     const item = items[latestUser]!;
-    if (item.type === 'text' && item.role === 'user' && item.source !== 'harness') break;
+    if (isUserRequest(item)) break;
     latestUser--;
   }
   for (const [index, item] of items.entries()) {
@@ -62,6 +71,25 @@ function groups(items: readonly ConversationItem[]): Group[] {
     group.items.push(item);
   }
   return result;
+}
+
+/**
+ * `args` with every long string cut to `limit` (the excerpt says how to read the rest), keys and short values kept, so a call
+ * stays a valid call. A model that launched five agents with long prompts left ~4k tokens in ONE kept step, which no amount
+ * of shrinking text and results could remove: the "minimal" view was not minimal.
+ */
+export function shrinkArgs(args: Record<string, unknown>, limit: number, reference: string): Record<string, unknown> {
+  const cut = (value: unknown, depth: number): unknown => {
+    if (typeof value === 'string') return value.length > limit ? excerpt(value, limit, reference) : value;
+    if (depth >= 3) return value;
+    if (Array.isArray(value)) {
+      const kept = value.slice(0, 8).map((entry) => cut(entry, depth + 1));
+      return value.length > 8 ? [...kept, `[... ${value.length - 8} more; read_context ${reference} for all of them.]`] : kept;
+    }
+    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, entry]) => [key, cut(entry, depth + 1)]));
+    return value;
+  };
+  return cut(args, 0) as Record<string, unknown>;
 }
 
 function textOf(items: readonly ConversationItem[]): string {
@@ -103,13 +131,13 @@ export function fitContext(input: {
   // when older user requests would otherwise outrank its unfinished tail.
   const latestReply = recent.find((group) => group.start > taskStart && group.items.some((item) => item.type === 'text' && item.role === 'assistant'));
   if (latestReply) selected.add(latestReply);
-  const query = textOf(input.items.filter((item) => item.type === 'text' && item.role === 'user' && item.source !== 'harness').slice(-2)).toLowerCase();
+  const query = textOf(input.items.filter(isUserRequest).slice(-2)).toLowerCase();
   const words = new Set((query.match(/[\p{L}\p{N}_./-]{3,}/gu) ?? []).slice(-128));
   const ranked = optional.filter((group) => !selected.has(group)).map((group, index) => {
     const text = textOf(group.items).toLowerCase();
     let relevance = 0;
     for (const word of words) if (text.includes(word)) relevance++;
-    return { group, score: (group.items.some((item) => item.type === 'text' && item.role === 'user' && item.source !== 'harness') ? 100 : 0) + relevance * 2 + index / Math.max(1, optional.length) };
+    return { group, score: (group.items.some(isUserRequest) ? 100 : 0) + relevance * 2 + index / Math.max(1, optional.length) };
   }).sort((a, b) => b.score - a.score);
 
   const prepare = (group: Group, limit: number) => group.items.map((item, offset): ConversationItem => {
@@ -117,6 +145,7 @@ export function fitContext(input: {
     const reference = item.type === 'tool_result' ? `source=tool id=${JSON.stringify(item.id)}` : `source=history id="item:${group.start + offset}"`;
     if (item.type === 'tool_result') return { ...item, output: excerpt(item.output, limit, reference) };
     if (item.type === 'text') return { ...item, text: excerpt(item.text, limit, reference) };
+    if (item.type === 'tool_call') return { ...item, args: shrinkArgs(item.args, limit, reference) };
     return item; // Signed reasoning is preserved verbatim or omitted with its whole step.
   });
   const materialize = (limit: number) => {
@@ -144,6 +173,15 @@ export function fitContext(input: {
   let view = materialize(limit);
   while ((cost(view.items, view.tools) > budget || view.items.length > maxItems) && limit > 256) {
     limit = Math.max(256, Math.floor(limit / 2));
+    view = materialize(limit);
+  }
+  // Still over at the smallest excerpts: let go of the kept steps one at a time, least useful first (the assistant's own
+  // narration, then the latest evidence, then the latest step). All of it stays retrievable with read_context. Only when
+  // the request, the instructions and the tools alone do not fit is the turn refused.
+  for (const group of [latestReply, latestEvidence, last]) {
+    if (!(cost(view.items, view.tools) > budget || view.items.length > maxItems)) break;
+    if (!group || group.required || !selected.has(group)) continue;
+    selected.delete(group);
     view = materialize(limit);
   }
   if (cost(view.items, view.tools) > budget || view.items.length > maxItems) throw new ContextFitError(cost(view.items, view.tools) + reserve, window);

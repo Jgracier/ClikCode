@@ -1,10 +1,10 @@
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import type { ConversationItem, ToolSpec } from './model-client.js';
 import type { ToolContext } from './tool-contract.js';
-import { ContextFitError, estimateRequestTokens, fitContext, responseReserve } from './context-view.js';
+import { ContextFitError, estimateRequestTokens, fitContext, isHarnessNote, responseReserve, shrinkArgs } from './context-view.js';
 import { exposeSpecialists } from './on-demand-tools.js';
 import { defaultTools, toolSpecs } from './tools/registry.js';
 import { readContextTool } from './tools/read-context.js';
@@ -142,4 +142,107 @@ it('retains the unfinished reply anchor when older requests compete for a small 
   const view = fitContext({ system: 's', items, tools, window: 4096 });
   expect(view.items).toContainEqual(task);
   expect(view.items.some((item) => item.type === 'text' && item.role === 'assistant' && item.text.includes('TAIL_TO_CONTINUE'))).toBe(true);
+});
+
+// ── the failure seen on a real 32,000-token model (2026-10-23): a ~5k-token request, five agents launched with long prompts, ──
+// ── notices written before they carried `source: 'harness'`. The turn ended: "need about 30,550 input tokens ... beyond 32,000". ──
+
+const call = (id: string, prompt: string): ConversationItem => ({ type: 'tool_call', id, name: 'agent', args: { prompt, description: 'Audit one area', background: true } });
+const result = (id: string, output: string): ConversationItem => ({ type: 'tool_result', id, name: 'agent', output });
+const note = (text: string): ConversationItem => ({ type: 'text', role: 'user', text });
+
+describe('a context view that is truly minimal', () => {
+  const longPrompt = 'Audit the area read-only and write findings. '.repeat(140); // ~6,300 characters, like the real launches
+  const launchStep = (n: number): ConversationItem[] => Array.from({ length: 5 }, (_, i) => call(`s${n}c${i}`, longPrompt));
+  const history = (): ConversationItem[] => [
+    user('earlier request'),
+    ...launchStep(1), ...launchStep(1).map((c) => result((c as { id: string }).id, 'Started in the background.')),
+    note('[background agent agent_1 finished with an error] Audit: the model provider failed to produce a response.'),
+    note('[background agent agent_2 finished with an error] Audit: the model provider failed to produce a response.'),
+    user(`The real request. ${'It is long and must stay verbatim. '.repeat(430)}`), // ~15k characters, ~5k tokens
+    ...launchStep(2),
+  ];
+  // The fixed part of the prompt (instructions and offered tools) on that model: most of a 32k window.
+  const system = 'instructions '.repeat(2_800);
+
+  it('does not refuse a request that fits once the arguments of old calls are shrunk', () => {
+    const view = fitContext({ system, items: history(), tools, window: 32_000 });
+    expect(view.estimatedTokens + responseReserve(32_000) + 1_600).toBeLessThanOrEqual(32_000);
+    expect(view.items).toContainEqual(history().find((i) => i.type === 'text' && i.role === 'user' && i.text.startsWith('The real request.')));
+  });
+
+  it('keeps every call a valid call: same id, same name, same keys, only the long strings cut, with a way to read them whole', () => {
+    const view = fitContext({ system, items: history(), tools, window: 32_000 });
+    const kept = view.items.filter((i): i is Extract<ConversationItem, { type: 'tool_call' }> => i.type === 'tool_call');
+    expect(kept.length).toBeGreaterThan(0);
+    for (const c of kept) {
+      expect(Object.keys(c.args).sort()).toEqual(['background', 'description', 'prompt']);
+      expect(c.args.background).toBe(true);
+      expect(String(c.args.prompt).length).toBeLessThanOrEqual(longPrompt.length);
+    }
+    expect(kept.some((c) => String(c.args.prompt).includes('read_context source=history id="item:'))).toBe(true);
+  });
+
+  it('what was cut can be read whole, by the id the excerpt names', async () => {
+    const items = history();
+    const index = items.findIndex((i) => i.type === 'tool_call');
+    const read = await readContextTool(() => items).run({ id: `item:${index}` }, { outputCap: 8_192 } as ToolContext);
+    expect(read.output).toContain(longPrompt.slice(0, 200));
+  });
+
+  it('lets go of the kept steps rather than refuse, when even their smallest excerpts will not fit', () => {
+    // The request alone takes nearly the whole budget; three kept steps at 256 characters each do not fit beside it.
+    const request = user(`Do it. ${'All of this matters. '.repeat(1_000)}`);
+    const items = [user('earlier'), ...launchStep(1), request, ...launchStep(2)];
+    const bare = estimateRequestTokens('s', [request], tools);
+    const window = Math.ceil((bare + 60) / 0.7) + 1; // budget ~ bare + 60: no room for any kept step
+    const view = fitContext({ system: 's', items, tools, window, outputReserve: Math.floor(window * 0.2) });
+    expect(view.items).toContainEqual(request);
+    expect(view.items.some((i) => i.type === 'tool_call')).toBe(false);
+    expect(view.omittedGroups).toBeGreaterThan(0);
+  });
+
+  it('still refuses when the request and the instructions alone cannot fit: that is the real limit', () => {
+    const huge = user('x'.repeat(200_000));
+    expect(() => fitContext({ system, items: [user('a'), huge], tools, window: 32_000 })).toThrow(ContextFitError);
+  });
+});
+
+describe('harness notices are not the user\'s requests', () => {
+  it('recognises a notice with the flag, and one written before the flag existed', () => {
+    expect(isHarnessNote({ type: 'text', role: 'user', source: 'harness', text: 'anything' })).toBe(true);
+    for (const text of ['[background agent agent_3 finished] done', '[background shell sh_1 finished] exit 0', '[harness] Continue.', '[Stop hook] again', '[SubagentStop hook] again']) {
+      expect(isHarnessNote(note(text)), text).toBe(true);
+    }
+  });
+  it('never takes the user\'s own words, however they begin', () => {
+    for (const text of ['hey', 'Please [harness] this', 'background agents: how do they work?', '[a link](https://x) says hi']) expect(isHarnessNote(note(text)), text).toBe(false);
+    expect(isHarnessNote({ type: 'text', role: 'assistant', text: '[background agent x] y' })).toBe(false);
+  });
+  it('the request kept verbatim is the user\'s, not a later notice', () => {
+    const request = user(`Real request. ${'detail '.repeat(1_500)}`);
+    const items = [user('old'), { type: 'text', role: 'assistant', text: 'ok '.repeat(9_000) } as ConversationItem, request, note('[background agent agent_1 finished] short')];
+    const view = fitContext({ system: 's', items, tools, window: 8_192 });
+    expect(view.items).toContainEqual(request);
+  });
+});
+
+describe('shrinkArgs', () => {
+  it('cuts long strings, keeps keys and short values, and names how to read the rest', () => {
+    const out = shrinkArgs({ prompt: 'p'.repeat(5_000), flag: true, n: 3, short: 'ok' }, 300, 'source=history id="item:4"');
+    expect(Object.keys(out)).toEqual(['prompt', 'flag', 'n', 'short']);
+    expect(String(out.prompt).length).toBeLessThan(500);
+    expect(String(out.prompt)).toContain('read_context source=history id="item:4"');
+    expect(out).toMatchObject({ flag: true, n: 3, short: 'ok' });
+  });
+  it('reaches into nested values and trims long lists, saying how many it left out', () => {
+    const out = shrinkArgs({ edits: Array.from({ length: 12 }, (_, i) => ({ old: 'o'.repeat(600), new: `n${i}` })) }, 100, 'source=history id="item:1"') as { edits: unknown[] };
+    expect(out.edits).toHaveLength(9);
+    expect(String(out.edits[8])).toContain('4 more');
+    expect(String((out.edits[0] as { old: string }).old).length).toBeLessThan(300);
+  });
+  it('returns small arguments as they were', () => {
+    const args = { path: 'src/a.ts', old_string: 'a', new_string: 'b' };
+    expect(shrinkArgs(args, 300, 'r')).toEqual(args);
+  });
 });

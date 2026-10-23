@@ -7,7 +7,7 @@ import { visibleTools } from './permissions.js';
 import { completedArguments } from './models/openai-client.js';
 import { thoughtLabel } from '../harness/protocol/activity-events.js';
 import { estimateContextTokens } from './context.js';
-import { fitContext, responseReserve, UNKNOWN_CONTEXT_WINDOW, type ContextView } from './context-view.js';
+import { ContextFitError, fitContext, responseReserve, UNKNOWN_CONTEXT_WINDOW, type ContextView } from './context-view.js';
 import { classifyModelError, MODEL_START_BUDGET_SECONDS, modelStartWaitSeconds, pause, retryDelaySeconds, STEP_RETRY_BUDGET_SECONDS, stepRecovery } from './turn-recovery.js';
 import { abortable, categoryForTool, withUniqueIds } from './turn-support.js';
 import { recordUsage } from './usage.js';
@@ -61,6 +61,8 @@ export async function runModelStep(rt: TurnRuntime, modelClient: ModelClient, sy
       window: rt.contextWindow, outputReserve, scale: rt.contextScale,
     });
     rt.lastRequestEstimate = view.estimatedTokens;
+    // Said once per step that left something out, with the numbers: a refused or trimmed view is otherwise only knowable from a transcript.
+    if (view.omittedGroups > 0) lifecycle('turn.context', { window: rt.contextWindow, tokens: view.estimatedTokens, omitted: view.omittedGroups, scale: rt.contextScale });
     step = await abortable(modelClient.step({
       system, items: view.items, signal, tools: view.tools, maxOutputTokens: outputReserve,
       ...(finalOnly ? { toolChoice: 'none' as const } : {}),
@@ -108,6 +110,7 @@ export async function runModelStep(rt: TurnRuntime, modelClient: ModelClient, sy
       },
     }), signal);
   } catch (error) {
+    if (error instanceof ContextFitError) lifecycle('turn.context', { window: rt.contextWindow, needed: error.inputTokens, refused: true, scale: rt.contextScale });
     if (isTurnCancelled(error) || signal?.aborted) throw turnCancelledError();
     // A call being written when the step failed never runs: a resent
     // step writes its own.
