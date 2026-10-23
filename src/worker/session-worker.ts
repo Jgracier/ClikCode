@@ -31,7 +31,7 @@ import { randomUUID } from 'node:crypto';
 import { LiveTurnInputBroker } from '../turn/live-input.js';
 import { deliverTyped } from '../turn/send-mode.js';
 import { CLIKCODE_NOTICE_TAG } from '../session/clikcode-notice.js';
-import { closePersistentTransport, hasPersistentTransport, persistentWorkRunning, setVendorBackgroundTurnHandler } from '../turn/vendor-process.js';
+import { closePersistentTransport, hasPersistentTransport, persistentWorkRunning, prefetchPromptSnapshot, setVendorBackgroundTurnHandler } from '../turn/vendor-process.js';
 import { discardInterruptedTurn, markFailedTurn, preserveInterruptedTurn } from '../turn/turn-journal.js';
 import { BroadcastObserver, sendEvent } from './broadcast-observer.js';
 import { createVendorBackgroundRunner } from './vendor-background.js';
@@ -518,6 +518,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     beginTurnClock({ turnId, ...(command.submittedAt !== undefined ? { startedAt: command.submittedAt } : {}) });
     if (command.submittedAt === undefined) markTurn('submit');
     markTurn('accepted', { queued: Boolean(command.queuedTurnId) });
+    prefetchPromptSnapshot(sessionId);
     const resumed = resumingTurn;
     resumingTurn = false;
     if (idleTimer) clearTimeout(idleTimer);
