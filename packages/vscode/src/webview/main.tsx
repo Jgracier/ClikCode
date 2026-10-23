@@ -421,7 +421,8 @@ function App(): JSX.Element {
         {search ? <SearchBar focus={search} /> : null}
         <Composer model={model} handle={composer} onError={setError} onOpenHistory={() => setHistory(true)} />
       </main>
-      {question ? <Sheet key={question.id} question={question} items={question.items} answer={(result) => answer(question.id, result)} /> : null}
+      {question ? <Sheet key={question.id} question={question} items={question.items} answer={(result) => answer(question.id, result)}
+        onSearch={(query) => post({ type: 'ui-search', id: question.id, query })} /> : null}
       {error ? <Toast key={error.id} message={error.message} onClose={() => setError(undefined)} /> : null}
     </div>
   );

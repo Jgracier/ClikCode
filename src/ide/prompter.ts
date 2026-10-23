@@ -32,6 +32,7 @@ export function pickItems<T>(options: readonly PickerOption<T>[]): IdePickItem[]
 
 export class IdePrompter implements HarnessPrompter {
   private readonly pending = new Map<string, (result: IdeUiResult) => void>();
+  private readonly filters = new Map<string, { query: (query: string) => Promise<readonly PickerOption<unknown>[]>; revision: number }>();
 
   /** Sign-ins whose card the panel shows, by id: its Cancel aborts one. */
   private readonly signIns = new Map<string, AbortController>();
@@ -122,6 +123,16 @@ export class IdePrompter implements HarnessPrompter {
     resolve(result);
   }
 
+  search(id: string, query: string): void {
+    const filter = this.filters.get(id);
+    if (!filter) return;
+    const revision = ++filter.revision;
+    void filter.query(query).then((items) => {
+      if (this.filters.get(id) !== filter || filter.revision !== revision) return;
+      this.channel.send({ type: 'ui-update', id, items: pickItems(items) });
+    }, () => undefined);
+  }
+
   /** Everything still open is cancelled -- the editor went away. */
   cancelAll(): void {
     for (const [id, resolve] of [...this.pending]) {
@@ -154,7 +165,11 @@ export class IdePrompter implements HarnessPrompter {
       if (!current.length) return undefined;
       const id = randomUUID();
       const shown = current;
-      const answer = this.ask({ kind: 'pick', title, items: pickItems(shown), canGoBack: Boolean(settings?.onBack) }, id);
+      if (settings?.onFilter) this.filters.set(id, { query: async (query) => {
+        current = await settings.onFilter!(query);
+        return current as readonly PickerOption<unknown>[];
+      }, revision: 0 });
+      const answer = this.ask({ kind: 'pick', title, items: pickItems(shown), canGoBack: Boolean(settings?.onBack), searchable: Boolean(settings?.onFilter) }, id);
       // Rows whose figures are still arriving (account usage) are replaced in
       // the open list, as the terminal repaints them.
       if (refresh && settings?.refreshedOptions) {
@@ -170,6 +185,7 @@ export class IdePrompter implements HarnessPrompter {
         }
       }
       const result = await answer;
+      this.filters.delete(id);
       if ('cancelled' in result) {
         if (result.back && settings?.onBack) settings.onBack();
         else settings?.onEscape?.();

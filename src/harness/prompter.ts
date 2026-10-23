@@ -153,6 +153,8 @@ export interface PickerSettings<T> {
   startAt?: T;
   onEscape?: () => void;
   refreshedOptions?: () => readonly PickerOption<T>[];
+  /** Search a remote catalog as the user types into this list. */
+  onFilter?: (query: string) => Promise<readonly PickerOption<T>[]>;
   refresh?: Promise<unknown> | readonly Promise<unknown>[];
   /** Rows the list may use, when more than the default suits it. */
   rows?: number;

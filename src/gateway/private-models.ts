@@ -7,7 +7,7 @@ export interface DeployableModel {
   sourceId: string;
   modelId: string;
   displayName: string;
-  downloads?: number;
+  parameterCount?: number;
   gated: boolean;
   modality?: string;
 }

@@ -1143,6 +1143,9 @@ export class ClikCodeController implements vscode.Disposable {
         this.panelQuestions.delete(message.id);
         this.bridge?.send({ type: 'ui-response', id: message.id, result: message.result });
         return;
+      case 'ui-search':
+        this.bridge?.send({ type: 'ui-search', id: message.id, query: message.query });
+        return;
       case 'search-key':
         this.bridge?.send({ type: 'search-key', key: message.key });
         return;

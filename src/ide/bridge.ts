@@ -225,6 +225,9 @@ export class IdeBridge {
       case 'ui-response':
         this.prompter.answer(request.id, request.result);
         return;
+      case 'ui-search':
+        this.prompter.search(request.id, request.query);
+        return;
       case 'sign-in-cancel':
         this.prompter.cancelSignIn(request.id);
         return;
