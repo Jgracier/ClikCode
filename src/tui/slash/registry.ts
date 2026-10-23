@@ -202,7 +202,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
       return harnessSupportsModelSelection(harness!) ? { available: true } : { available: false, reason: `${harness!.displayName} does not publish a model selector.` };
     },
   }),
-  entry('private', 'Settings', 'choose a deployed ClikDeploy private model', {
+  entry('private', 'Settings', 'search Hugging Face and deploy a private model through ClikDeploy', {
     handlerKey: 'privateModels', argHint: 'models',
     availability: (session) => isGatewayService(session)
       ? { available: true }

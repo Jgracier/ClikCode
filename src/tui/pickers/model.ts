@@ -24,6 +24,7 @@ import { withSignIn } from '../../commands/account.js';
 import { chooseOption } from './choose.js';
 import { localModelChoices, type LocalModelChoice } from '../../local-models/index.js';
 import { withSlowWait } from '../slow-wait.js';
+import { deployPrivateModel, quotePrivateModel, searchDeployableModels, type PrivateModelQuote } from '../../gateway/private-models.js';
 
 /** Prefix of a row for a model this machine cannot run: listed, so the
  * catalog is honest about what exists and why it is out of reach, but
@@ -169,28 +170,62 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
   }
 }
 
-/** A focused picker for private models deployed through ClikDeploy. Starting
- * and searching deployments belongs in ClikDeploy; this command only selects
- * a model already published to this Gateway account. */
+/** Search Hugging Face models ClikDeploy can deploy, ask its shared planner
+ * for the GPU and price, then start the deployment and select it for this chat. */
 export async function interactivePrivateModelsPicker(rl: HarnessPrompter, id: string): Promise<void> {
   const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
   if (!isGatewayService(session)) throw new Error('Private models are available on ClikDeploy Gateway conversations.');
 
-  const waiting = TERMINAL.active === rl ? TERMINAL.active : undefined;
-  const list = await withSlowWait(waiting, 'finding your private models…', () => gatewayModels({ fresh: true }));
-  const models = list.models.filter((model) => model.own);
-  if (!models.length) {
-    rl.panel?.('Private models', 'No private models are deployed to this ClikDeploy account yet. Open ClikDeploy → AI → Private Models to search Hugging Face and start one. It will appear here when it is ready.');
+  let query: string;
+  try {
+    query = (await rl.question('Search deployable Hugging Face models › ', undefined, { cancellable: true })).trim();
+  } catch (error) {
+    if ((error as { code?: string }).code === 'ERR_PROMPT_CANCELLED') return;
+    throw error;
+  }
+  if (query.length < 2) {
+    if (query) rl.panel?.('Private models', 'Enter at least 2 characters to search Hugging Face.');
     return;
   }
-  const selected = await chooseOption(rl, 'Choose a private model', models.map((model) => ({
-    label: gatewayModelLabel(model),
-    detail: `${model.id === session.model ? '· current · ' : '· '}${gatewayModelDetail(model)}`,
-    value: model.id,
+  const waiting = TERMINAL.active === rl ? TERMINAL.active : undefined;
+  const models = await withSlowWait(waiting, 'searching deployable Hugging Face models…', () => searchDeployableModels(query));
+  if (!models.length) {
+    rl.panel?.('Private models', 'No deployable Hugging Face models matched that search. Try a model name or author.');
+    return;
+  }
+  const selected = await chooseOption(rl, 'Choose a deployable Hugging Face model', models.map((model) => ({
+    label: model.displayName,
+    detail: [model.modelId, model.gated ? 'restricted access' : '', model.downloads ? `${model.downloads.toLocaleString()} downloads` : ''].filter(Boolean).join(' · '),
+    value: model,
   })));
-  if (selected) await aiSessionCommand(id, `/model ${selected}`);
+  if (!selected) return;
+
+  let quote: PrivateModelQuote;
+  try {
+    quote = await withSlowWait(waiting, `checking ${selected.displayName} and matching compute…`, () => quotePrivateModel(selected.modelId));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (selected.gated) throw new Error(`${message} Connect Hugging Face in ClikDeploy, then try again.`);
+    throw error;
+  }
+  const config = new Conf({ projectName: 'clikcode', configFileMode: 0o600 });
+  if (!alwaysStartOwnModels(config)) {
+    const answer = await chooseOption(rl, `Start ${selected.displayName} privately?`, [
+      { label: 'Yes, deploy privately', detail: `ClikDeploy selects ${quote.sku.displayName} · $${quote.pricePerHour.toFixed(2)}/hour while running`, value: 'start' },
+      { label: 'No, use AI billed by the token', detail: 'Choose a hosted Gateway model instead.', value: 'hosted' },
+      { label: 'Always start private models', detail: 'Remember this on this machine.', value: 'always' },
+    ]);
+    if (answer === 'hosted') return interactiveModelPicker(rl, id);
+    if (answer === 'always') setAlwaysStartOwnModels(true, config);
+    else if (answer !== 'start') return;
+  }
+
+  const deployment = await withSlowWait(waiting, `starting ${selected.displayName} on ${quote.sku.displayName}…`, () => deployPrivateModel(selected, quote));
+  // The Gateway publishes planning/downloading/loading deployments as starting
+  // models. Set the route immediately; the first prompt waits for readiness.
+  await aiSessionCommand(id, `/model ${deployment.modelId || selected.modelId}`);
 }
 
 /** A Gateway conversation's picker. Models run ClikCode locally; selected
@@ -241,7 +276,7 @@ async function gatewayModelPicker(rl: HarnessPrompter, id: string, current: stri
   // The saved model list avoids another model-list wait. Agents are never
   // cached locally, so opening waits for the authenticated private roster.
   let list = await savedGatewayModels();
-  const fresh = gatewayModels({ fresh: true }).then((latest) => { list = latest; });
+  const fresh = gatewayModels({ fresh: true }).then((latest) => { list = latest; return latest; });
   // The model request may finish before the roster request; attach rejection
   // handling now so an early failure cannot become an unhandled rejection.
   void fresh.catch(() => undefined);
@@ -253,7 +288,7 @@ async function gatewayModelPicker(rl: HarnessPrompter, id: string, current: stri
   });
   if (!list) {
     const waiting = TERMINAL.active === rl ? TERMINAL.active : undefined;
-    await withSlowWait(waiting, 'finding ClikDeploy Gateway models…', () => fresh);
+    list = await withSlowWait(waiting, 'finding ClikDeploy Gateway models…', () => fresh);
   }
   const options = (): PickerOption<GatewayChoice>[] => gatewayPickerRows(list!, agents, current, currentAgent);
   for (;;) {
