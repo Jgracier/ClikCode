@@ -182,8 +182,8 @@ export async function interactivePrivateModelsPicker(rl: HarnessPrompter, id: st
   const rows = (models: readonly DeployableModel[]): PickerOption<DeployableModel>[] => models
     .filter((model) => !model.modality || model.modality === 'llm')
     .map((model) => ({
-      label: model.displayName,
-      detail: [model.modelId, model.parameterCount ? `${formatParameterCount(model.parameterCount)} params` : '', model.gated ? 'restricted access' : ''].filter(Boolean).join(' · '),
+      label: model.modelId,
+      detail: [model.parameterCount ? `${formatParameterCount(model.parameterCount)} params` : '', model.gated ? 'restricted access' : ''].filter(Boolean).join(' · '),
       value: model,
       group: 'Hugging Face models',
     }));
