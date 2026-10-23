@@ -76,7 +76,8 @@ describe('the chat and the composer stay put while a list is open', () => {
     const kept = rowOf(closed, 'ledger line 38 stays put');
     const composer = composerRow(closed);
     const name = rowOf(closed, 'Ledger chat');
-    const info = rowOf(closed, 'work@example.com');
+    const info = rowOf(closed, 'Grok Build');
+    expect(closed.some((line) => line.includes('work@example.com'))).toBe(false);
     expect(info).toBeGreaterThan(composer);
 
     written.length = 0;
@@ -93,7 +94,7 @@ describe('the chat and the composer stay put while a list is open', () => {
     expect(rowOf(next, 'ledger line 38 stays put')).toBe(kept);
     expect(composerRow(next)).toBe(composer);
     expect(rowOf(next, 'Ledger chat')).toBe(name);
-    expect(rowOf(next, 'work@example.com')).toBe(info);
+    expect(rowOf(next, 'Grok Build')).toBe(info);
     expect(next.some((line) => line.includes('Choose a provider'))).toBe(true);
     expect(next.some((line) => line.includes('Claude Code'))).toBe(true);
     // The list sits above the composer, never in it.
@@ -114,16 +115,16 @@ describe('the chat and the composer stay put while a list is open', () => {
     expect(back.some((line) => line.includes('Choose a provider'))).toBe(false);
   });
 
-  it('keeps the account on the info line until another conversation is shown', () => {
+  it('keeps the account email off the composer footer across renders', () => {
     const prompter = open();
     const first = session(4);
     prompter.render(first, 'work@example.com');
-    expect(screenFrom(written).some((line) => line.includes('work@example.com'))).toBe(true);
+    expect(screenFrom(written).some((line) => line.includes('work@example.com'))).toBe(false);
     written.length = 0;
     prompter.render(first);
-    expect(prompter.shownAccount).toBe('work@example.com');
+    expect(screenFrom(written).some((line) => line.includes('work@example.com'))).toBe(false);
     prompter.render({ ...first, id: 'other', conversationId: 'other' });
-    expect(prompter.shownAccount).toBeUndefined();
+    expect(screenFrom(written).some((line) => line.includes('work@example.com'))).toBe(false);
   });
 
   it('does not shorten a draft when the list opens', () => {
