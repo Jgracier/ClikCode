@@ -11,6 +11,14 @@ import { createVendorObserver } from './vendor-observer.js';
 import { completeVendorTurn, settleAttempt } from './vendor-outcome.js';
 import { recoverFromFailure } from './vendor-recovery.js';
 import { takeUp } from './vendor-thread-takeup.js';
+import { restoreNativeThread } from '../session/native-thread.js';
+import { returnPrompt } from './thread-return.js';
+import { targetContextWindow, transferBudget } from './transfer.js';
+import { modelsDevFiles } from '../harness/accounts/goose-discovery.js';
+import { sessionTurnTransport } from '../harness/transport/select.js';
+import { maxPromptArgvBytes } from '../runtime/lazy-bridge.js';
+import { writeFullRecord } from '../session/full-record.js';
+import { stateDirectory } from '../session/store/paths.js';
 import { createVendorTurnContext, type VendorTurnContext } from './vendor-turn-context.js';
 import { withMoveNote } from './resource-notes.js';
 
@@ -35,6 +43,7 @@ async function startVendorTurn(ctx: VendorTurnContext): Promise<void> {
   // end told to the account the conversation is on by then (handoff-work.ts).
   // The thread goes with the conversation, as on a switch mid-turn; only
   // one that cannot be carried starts afresh.
+  const returningThrough = restoreNativeThread(session, harness.command);
   if (await ctx.accounts.start(async (to) => {
     await leavePersistentTransport(session.id);
     await moveThreadToAccount(session, harness, ctx.account, to);
@@ -45,6 +54,17 @@ async function startVendorTurn(ctx: VendorTurnContext): Promise<void> {
   // profile before anything resumes it. One that cannot be carried is
   // forgotten here, so the line below takes the conversation up afresh.
   await settleThread(ctx);
+  if (returningThrough !== undefined && session.nativeSessionId) {
+    const transport = sessionTurnTransport(harness, session);
+    const argvBound = (transport === 'structured-cli' || transport === 'text-cli') && harness.turn?.promptInput !== 'stdin';
+    const contextWindow = await targetContextWindow(ctx.state.sessions, harness.command, ctx.model, modelsDevFiles()).catch(() => undefined);
+    const budget = transferBudget({ ...(contextWindow ? { contextWindow } : {}), ...(argvBound ? { argvLimit: maxPromptArgvBytes() } : {}) });
+    const missed = ctx.baseMessages.slice(returningThrough);
+    if (missed.length) {
+      const recordPath = await writeFullRecord({ ...session, pendingTurn: undefined }, stateDirectory());
+      ctx.turnText = returnPrompt(session, ctx.baseMessages, returningThrough, ctx.turnText, budget, recordPath);
+    }
+  }
   // A fresh native thread (no nativeSessionId yet) with prior ClikCode
   // messages already on the session means this conversation is continuing
   // under a different native identity than whatever produced those messages

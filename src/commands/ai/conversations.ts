@@ -13,7 +13,7 @@ import { carriedHandoffModel, carriedHandoffSettings, synchronizeNativeTranscrip
 import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
 import { harnessSupportsEffort } from '../../runtime/lazy-bridge.js';
 import { consumeSessionTurn } from '../../turn/checkpoint.js';
-import { forgetNativeThread, leaveProvider } from '../../session/native-thread.js';
+import { leaveProvider, parkNativeThread } from '../../session/native-thread.js';
 import { aiHarnessSelect } from './harness.js';
 import { preferredAccountId } from './preferred-account.js';
 import { isClikCodeAgent, isGatewayService } from '../../session/route.js';
@@ -150,7 +150,7 @@ export async function moveToProvider(
   const model = selection.model ?? (listed(recalled) ? recalled : null) ?? carriedHandoffModel(current, account?.models ?? [],
     lastUsedModel ?? state.providerSettings[harness.provider]?.model ?? null);
   rememberRouteModel(current);
-  if (running) forgetNativeThread(current);
+  if (running) parkNativeThread(current);
   else leaveProvider(current);
   Object.assign(current, {
     route: 'local', provider: harness.provider, nativeHarness: harness.command, accountId, model,

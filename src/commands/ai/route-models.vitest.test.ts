@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HarnessSession } from '../../session/model.js';
 import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
+import { restoreNativeThread } from '../../session/native-thread.js';
 
 vi.mock('./harness.js', () => ({ aiHarnessSelect: async () => undefined }));
 vi.mock('../../worker/turn-bridge.js', () => ({ workerTurn: async () => undefined }));
@@ -56,6 +57,22 @@ describe('the model last used on a route', () => {
     expect((await only()).model).toBe('gpt-5');
     await moveToProvider('s1', 'claude');
     expect((await only()).model).toBe('opus');
+  });
+
+  it('persists a parked native thread through another harness and the Gateway', async () => {
+    await chat({
+      route: 'local', provider: 'openai', nativeHarness: 'codex', nativeSessionId: 'codex-thread',
+      model: 'gpt-5', gatewayConfirmed: undefined,
+      messages: [{ role: 'user', content: 'first' }, { role: 'assistant', content: 'done' }],
+    });
+    await moveToProvider('s1', 'claude', { model: 'opus' });
+    expect((await only()).nativeThreads?.codex).toMatchObject({ id: 'codex-thread', through: 2 });
+    await toGateway();
+    expect((await only()).nativeThreads?.codex?.id).toBe('codex-thread');
+    await moveToProvider('s1', 'codex');
+    const returned = await only();
+    expect(restoreNativeThread(returned, 'codex')).toBe(2);
+    expect(returned.nativeSessionId).toBe('codex-thread');
   });
 
   it('remembers Automatic as a choice', async () => {

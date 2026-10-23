@@ -29,7 +29,7 @@ import { turnBackendForAccount } from '../../turn/account-routing.js';
 import { newConversationSession } from './conversations.js';
 import { isAiHarnessRoute, isClikCodeAgent, ROUTE_CHOICES_TEXT } from '../../session/route.js';
 import { parseSandboxMode } from '../../agent/sandbox.js';
-import { forgetNativeThread } from '../../session/native-thread.js';
+import { leaveProvider, parkNativeThread } from '../../session/native-thread.js';
 import { forceStoreSession } from '../../session/ephemeral.js';
 
 const CLIKCODE_LOCAL_FIXED_FIELDS = 'ClikCode Local runs ClikCode\'s own agent on a model this machine serves; account, provider, effort, and native sessions cannot be set per session (a model can, from ClikCode Local\'s catalog).';
@@ -103,11 +103,20 @@ async function gatewayAgentChoice(value: string): Promise<string | undefined> {
   return found.id;
 }
 
+/** A running turn keeps its journal; an idle one can fold it into the transcript. */
+function leaveVendorForRoute(session: HarnessSession): void {
+  if (session.pendingTurn) parkNativeThread(session);
+  else leaveProvider(session);
+}
+
 /** Gateway routing owns these fields as one policy unit. Keeping the mutation
  * centralized prevents route switches, slash settings, and headless setters
  * from leaving stale local harness/account controls attached to a remote
  * platform-managed session. */
 export function applyGatewaySessionPolicy(session: HarnessSession, state?: HarnessState): void {
+  if (session.nativeHarness && session.route !== 'gateway') {
+    leaveVendorForRoute(session);
+  }
   // A model chosen from the Gateway's own list stays; one carried over from
   // another route names a model the Gateway was never asked about.
   const keepModel = session.route === 'gateway';
@@ -127,11 +136,9 @@ export function applyGatewaySessionPolicy(session: HarnessSession, state?: Harne
   shedVendorHarness(session);
 }
 
-/** What a move off a vendor harness sheds: the harness, its options and its
- * thread -- recorded as still ClikCode's (forgetNativeThread), so discovery
- * never offers it back as a vendor chat. */
+/** Leave the vendor harness and retain its thread for a later return. */
 function shedVendorHarness(session: HarnessSession): void {
-  forgetNativeThread(session);
+  parkNativeThread(session);
   // The model a vendor said it ran is not what the new route will run.
   if (session.reported?.model) delete session.reported.model;
   delete session.nativeHarness;
@@ -148,6 +155,9 @@ function shedVendorHarness(session: HarnessSession): void {
  * engine publishes a control for it. The first turn uses an already
  * downloaded model; a new weight file is fetched only after /model consent. */
 export function applyClikCodeLocalSessionPolicy(session: HarnessSession, state?: HarnessState): void {
+  if (session.nativeHarness && session.route !== 'clikcode-local') {
+    leaveVendorForRoute(session);
+  }
   if (session.route !== 'clikcode-local') rememberRouteModel(session);
   const recalled = session.route === 'clikcode-local' ? undefined : recallRouteModel(session, 'clikcode-local', state);
   session.route = 'clikcode-local';
@@ -466,6 +476,9 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
     throw new Error(`${selectedHarness.displayName} does not support ${options.permissions} permissions.`);
   }
   const base: HarnessSession = { ...current };
+  if (base.nativeHarness && (effectiveRoute !== 'local' || (selectedHarness && selectedHarness.command !== base.nativeHarness))) {
+    leaveVendorForRoute(base);
+  }
   if (options.route === 'local' && isClikCodeAgent(current)) applyFreshLocalSessionPolicy(state, base);
   const next: HarnessSession = {
     ...base,
@@ -497,12 +510,11 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
     if (turnBackendForAccount(account) === 'vendor' && selectedHarness && harnessCanRunTurns(selectedHarness)) {
       // Another account of the same harness keeps the thread: it moves to
       // that account's profile before the next turn (session/carry.ts).
-      if (next.nativeHarness !== selectedHarness.command) forgetNativeThread(next);
+      if (next.nativeHarness !== selectedHarness.command) parkNativeThread(next);
       next.nativeHarness = selectedHarness.command;
     } else {
+      parkNativeThread(next);
       delete next.nativeHarness;
-      delete next.nativeSessionId;
-      delete next.nativeStartedAt;
     }
   }
   // Choosing a harness installs it here too, as it does from /provider: before

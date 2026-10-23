@@ -9,7 +9,7 @@ import { writeState } from '../../session/state/write.js';
 import { synchronizeNativeTranscript } from '../../turn/handoff.js';
 import { TerminalHarnessPrompter } from '../prompter.js';
 import { moveToProvider, turnIsRunning } from '../../commands/ai/conversations.js';
-import { forgetNativeThread, leaveProvider } from '../../session/native-thread.js';
+import { leaveProvider, parkNativeThread } from '../../session/native-thread.js';
 import { applyClikCodeAgentSessionPolicy } from '../../commands/ai/sessions.js';
 import { chooseOption } from './choose.js';
 
@@ -49,7 +49,7 @@ async function moveToAgentRoute(
   if (!running) {
     await synchronizeNativeTranscript(state, current);
     leaveProvider(current);
-  } else forgetNativeThread(current);
+  } else parkNativeThread(current);
   applyClikCodeAgentSessionPolicy(current, route, state);
   await writeState(state);
   return id;

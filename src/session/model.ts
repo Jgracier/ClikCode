@@ -151,6 +151,18 @@ export interface HarnessSession {
    */
   gatewayConfirmed?: true;
   nativeSessionId?: string;
+  /** A resumable thread parked when this conversation leaves a harness.
+   * `through` counts transcript messages that thread already knew. On return,
+   * only later messages are carried into it. A missing or invalid thread is
+   * discarded and rebuilt from the canonical transcript. */
+  nativeThreads?: Record<string, {
+    id: string;
+    accountId?: string;
+    transport?: 'acp' | 'structured-cli' | 'text-cli';
+    workspace?: string;
+    through: number;
+    anchor?: string;
+  }>;
   /** The transport that owns nativeSessionId. A thread stays on its transport
    * so an ACP id is never passed to a one-shot CLI, or vice versa. */
   nativeTransport?: 'acp' | 'structured-cli' | 'text-cli';

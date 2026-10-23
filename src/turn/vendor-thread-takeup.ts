@@ -70,15 +70,6 @@ export async function takeUp(
     ...(recordPath ? { record: recordPath } : {}),
     ...(start.kind === 'transfer' ? { budget: start.budget, bytes: Buffer.byteLength(start.prompt, 'utf8'), contextWindow } : { omitted: start.omitted, contextWindow }),
   });
-  // Said when the conversation did not arrive whole, so it is never a surprise.
-  const retold = start.kind === 'transfer' && record.turns.length > 1;
-  const cut = start.kind === 'native' && start.omitted > 0;
-  if (retold || cut) {
-    const how = cut
-      ? `${start.omitted} earlier turn${start.omitted === 1 ? ' does' : 's do'} not fit ${harness.displayName}'s window`
-      : `${harness.displayName} took this conversation as a retelling, not as its own thread`;
-    ctx.prompter?.activity(`${how}. All ${record.turns.length} turns are saved${recordPath ? ` at ${recordPath}` : ''}.`);
-  }
   if (start.kind === 'native') {
     session.nativeSessionId = start.written.nativeId;
     session.nativeThreadAccountId = ctx.account.id;
