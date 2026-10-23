@@ -871,14 +871,34 @@ describe('runAgentLoop', () => {
     it('does not compact or retry a rejected oversized request', () => {
       const refusal = Object.assign(new Error('Invalid request at items: items exceeds 2000 entries'), { statusCode: 400 });
       expect(stepRecovery(refusal)).toBeUndefined();
-      expect(stepRecovery(gatewayError('CONTEXT_TOO_LARGE'))).toBeUndefined();
+      expect(stepRecovery(gatewayError('CONTEXT_TOO_LARGE'))).toBe('context-pressure');
     });
 
-    it('is never resent once text has streamed', async () => {
-      const h = harness([{ before: (request) => request.onTextDelta('Half an ans'), error: gatewayError('MODEL_ERROR') }, { text: 'never asked' }]);
-      const result = await runAgentLoop(h.input);
-      expect(result.isError).toBe(true);
-      expect(h.client.requests).toHaveLength(1);
+    it('continues a transiently interrupted reply from its saved partial output', async () => {
+      const h = harness([{ before: (request) => request.onTextDelta('Half an ans'), error: gatewayError('MODEL_ERROR') }, { text: 'wer' }]);
+      const result = await driven(runAgentLoop(h.input));
+      expect(result).toMatchObject({ text: 'Half an answer', stopReason: 'completed' });
+      expect(h.client.requests).toHaveLength(2);
+      expect(h.client.requests[1].items).toContainEqual({ type: 'text', role: 'assistant', text: 'Half an ans' });
+    });
+
+    it('waits through repeated capacity contention without switching models or treating it as quota', async () => {
+      const phases: string[] = [];
+      const h = harness([...Array.from({ length: 9 }, () => ({ error: gatewayError('MODEL_BUSY', { retryAfter: 1 }) })), { text: 'capacity available' }], { onPhase: (phase) => phases.push(phase) });
+      expect(await driven(runAgentLoop(h.input))).toMatchObject({ stopReason: 'completed', text: 'capacity available' });
+      expect(h.client.requests).toHaveLength(10);
+      expect(phases.filter((phase) => phase === 'waiting for model capacity')).toHaveLength(9);
+    });
+
+    it('refits a refused history on the same model, retaining the complete stored original', async () => {
+      const h = harness([{ error: gatewayError('CONTEXT_TOO_LARGE') }, { text: 'continued with bounded context' }], { contextWindow: 8192 });
+      Object.assign(h.client, { contextHints: { contextWindow: 8192 } });
+      const store = new ConversationStore(stateDir, h.input.sessionId);
+      await store.append({ type: 'text', role: 'assistant', text: 'older evidence '.repeat(4000) });
+      expect(await driven(runAgentLoop(h.input))).toMatchObject({ stopReason: 'completed' });
+      expect(h.client.requests).toHaveLength(2);
+      expect(JSON.stringify(h.client.requests[1].items).length).toBeLessThan(JSON.stringify(h.client.requests[0].items).length);
+      expect((await store.load())[0]).toMatchObject({ text: 'older evidence '.repeat(4000) });
     });
 
     it('is the answer when the failure is about the account, not the moment', async () => {
@@ -937,13 +957,13 @@ describe('runAgentLoop', () => {
       expect(h.client.requests[1]!.items.at(-1)).toMatchObject({ type: 'text', role: 'user', text: expect.stringMatching(/output limit/) });
     });
 
-    it('stops carrying on after three cut-off replies and says the answer was cut', async () => {
+    it('keeps continuing productive cut-off replies beyond three chunks', async () => {
       const usage: { stopReason?: string }[] = [];
-      const h = harness([], { onUsage: (report) => usage.push(report) }, { text: 'more', stopReason: 'length' });
+      const h = harness([...Array.from({ length: 7 }, () => ({ text: 'more', stopReason: 'length' })), { text: 'done', stopReason: 'stop' }], { onUsage: (report) => usage.push(report) });
       const result = await runAgentLoop(h.input);
-      expect(h.client.requests).toHaveLength(4);
+      expect(h.client.requests).toHaveLength(8);
       expect(result.stopReason).toBe('completed');
-      expect(usage.at(-1)?.stopReason).toBe('length');
+      expect(usage.at(-1)?.stopReason).toBe('stop');
     });
 
     it('tells the model a call cut off mid-arguments was cut by the output limit', async () => {

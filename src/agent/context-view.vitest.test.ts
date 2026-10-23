@@ -113,3 +113,23 @@ it('bounds a long run of silent tool steps independently instead of pinning them
   const calls = new Set(view.items.flatMap((item) => item.type === 'tool_call' ? [item.id] : []));
   for (const item of view.items) if (item.type === 'tool_result') expect(calls.has(item.id)).toBe(true);
 });
+
+
+it('can keep working after years of prior requests without pinning them all in each request', async () => {
+  const items: ConversationItem[] = Array.from({ length: 3000 }, (_, i) => user(`Earlier request ${i}: ${'archived context '.repeat(20)}`));
+  items.push(user('Current task: fix the parser without deleting data.'));
+  const original = JSON.stringify(items);
+  const view = fitContext({ system: 'policy', items, tools, window: 4096 });
+  expect(view.items).toContainEqual(items.at(-1));
+  expect(view.items.length).toBeLessThan(100);
+  expect(view.estimatedTokens + responseReserve(4096) + 205).toBeLessThanOrEqual(4096);
+  expect(JSON.stringify(items)).toBe(original);
+  const read = await readContextTool(() => items).run({ id: 'item:0' }, { outputCap: 1024 } as ToolContext);
+  expect(read.output).toContain('Earlier request 0');
+});
+
+it('keeps the actual user task pinned after internal continuation messages', () => {
+  const items: ConversationItem[] = [user('actual current task'), { type: 'text', role: 'assistant', text: 'a'.repeat(40000) }, { type: 'text', role: 'user', source: 'harness', text: '[harness] Continue.' }];
+  const view = fitContext({ system: 's', items, tools, window: 4096 });
+  expect(view.items).toContainEqual(items[0]);
+});

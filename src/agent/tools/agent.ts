@@ -1,8 +1,7 @@
 /** A coding subagent runs the same local tools with the parent's approvals.
  * Its write class makes the parent run it alone, in call order -- unless it
  * is isolated in its own git worktree, where it touches nothing the parent's
- * other calls can see, so several run at once. A background agent is always
- * isolated, and agent_send / agent_wait reach it while it runs. */
+ * other calls can see, so several run at once. Background execution is independent of isolation, and agent_send / agent_wait reach it while it runs. */
 import { defineTool } from '../tool-contract.js';
 import { formatToolRow } from '../../harness/protocol/tools.js';
 import fs from 'node:fs';
@@ -33,7 +32,7 @@ export const agentTool = defineTool<AgentArgs>({
     'By default it works in this working tree, its file edits belong to this turn\'s undo checkpoint, and it runs serially with other writes.',
     'With isolation "worktree" (git repositories only) it works in a fresh git worktree on a new branch from HEAD, without this tree\'s uncommitted changes; its result names the branch and summarizes the diff (a worktree with no changes is removed). Several isolated agent calls in one step run in parallel.',
     'When this session\'s working directory is not itself a git repository with a commit (a folder of repositories), pass `repo`: a directory inside the repository to work in. It implies isolation "worktree".',
-    'With background true (implies isolation "worktree") the call returns an id at once and the agent works while you continue: agent_send gives it a follow-up instruction, agent_wait gets its result, and a result you did not wait for arrives as a message. This turn does not end while a background agent runs.',
+    'With background true the call returns an id at once and the agent works while you continue: agent_send gives it a follow-up instruction, agent_wait gets its result, and a result you did not wait for arrives as a message. Background execution does not require Git. Shared-directory mutations are serialized; use explicit isolation "worktree" for independent coding branches. This turn does not end while a background agent runs.',
   ].join(' '),
   parameters: {
     type: 'object', additionalProperties: false, required: ['prompt'],
@@ -41,9 +40,9 @@ export const agentTool = defineTool<AgentArgs>({
       prompt: { type: 'string', description: 'Complete coding task for the subagent.' },
       description: { type: 'string', description: 'Short label shown to the user.' },
       subagent_type: { type: 'string', description: 'An agent type listed under Agent types in the system prompt, when one fits. Omit for the general coding subagent.' },
-      repo: { type: 'string', description: 'A directory inside the git repository the isolated or background agent works in, when the session\'s working directory is not one itself. Relative paths start from the working directory; it must be inside the session\'s directories.' },
+      repo: { type: 'string', description: 'A directory inside the git repository the isolated agent works in, when the session\'s working directory is not one itself. Relative paths start from the working directory; it must be inside the session\'s directories.' },
       isolation: { type: 'string', enum: ['worktree'], description: 'Run in its own git worktree and branch, so it can run in parallel with other agents.' },
-      background: { type: 'boolean', description: 'Return an id at once and run in the background, in its own worktree.' },
+      background: { type: 'boolean', description: 'Return an id at once and run in the background. Git isolation is an independent option.' },
     },
   },
   label: (args) => formatToolRow('agent', args.description?.trim() || args.prompt),
@@ -59,17 +58,17 @@ export const agentTool = defineTool<AgentArgs>({
     const request = {
       prompt: args.prompt, kind: 'work' as const, ...type,
       ...(description ? { description } : {}),
-      ...(args.isolation === 'worktree' || args.background || repo.dir ? { isolation: 'worktree' as const } : {}),
+      ...(args.isolation === 'worktree' || repo.dir ? { isolation: 'worktree' as const } : {}),
       ...(repo.dir ? { repo: repo.dir } : {}),
     };
     if (!args.background) return ctx.runSubagent(request);
     if (!ctx.agents) return { output: 'Background agents are not available here.', isError: true };
     // Refused now rather than as the agent's first and only result.
-    if (!await canCreateAgentWorktree(repo.dir ?? ctx.cwd)) return { output: await noWorktreeMessage(repo.dir ?? ctx.cwd, repo.dir !== undefined), isError: true };
+    if (request.isolation === 'worktree' && !await canCreateAgentWorktree(repo.dir ?? ctx.cwd)) return { output: await noWorktreeMessage(repo.dir ?? ctx.cwd, repo.dir !== undefined), isError: true };
     const runSubagent = ctx.runSubagent;
     const id = ctx.agents.start(description || args.prompt.split('\n')[0].slice(0, 80), (onSteerReady, agentSignal, started) => runSubagent({ ...request, background: true, onSteerReady, signal: agentSignal, onWorktree: started }));
     return {
-      output: `Started ${id} in the background, in its own worktree. Carry on; agent_send("${id}", ...) gives it more instructions, agent_wait("${id}") gets its result.`,
+      output: `Started ${id} in the background${request.isolation ? ", in its own worktree" : ", sharing this working directory"}. Carry on; agent_send("${id}", ...) gives it more instructions, agent_wait("${id}") gets its result.`,
       continuesAs: id,
     };
   },

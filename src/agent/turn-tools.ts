@@ -69,7 +69,7 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
   const onApproval = input.onApproval;
   const innerSubagent = input.subagent ? undefined : createSubagentRunner({
     // A sub-agent runs under its parent's profile, whatever decided it.
-    parent: { ...input, contextProfile: rt.profile.name, permissionRules: turnRules }, tools: tools.filter((tool) => !['read_context', 'load_tools', 'load_mcp_tools'].includes(tool.name)), runTurn,
+    parent: { ...input, contextProfile: rt.profile.name, permissionRules: turnRules, runMutation: rt.mutate }, tools: tools.filter((tool) => !['read_context', 'load_tools', 'load_mcp_tools'].includes(tool.name)), runTurn,
     checkpoint: { sessionId: input.sessionId, turnId: rt.turnId }, workSystem: rt.baseSystem,
     ...(onApproval ? { approve: (title: string, detail?: string, rule?: string, preview?: ApprovalPreview) => queueApproval(() => onApproval(title, detail, rule, preview)) } : {}),
     // A sub-agent's spend is this turn's spend: it lands in the same ledger
@@ -155,7 +155,10 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
     const alert = steerAlert(rt);
     ctx.steerSignal = alert.signal;
     try {
-      result = await abortable(tool.run(call.args, ctx), signal);
+      const invoke = async () => { rt.throwIfAborted(); return tool.run(call.args, ctx); };
+      // Delegation itself must not hold the shared lock while its child edits.
+      result = await abortable((tool.class === 'write' || tool.class === 'exec') && tool.name !== 'agent'
+        ? rt.mutate(invoke) : invoke(), signal);
     } catch (error) {
       if (isTurnCancelled(error) || signal?.aborted) throw turnCancelledError();
       result = { output: error instanceof Error ? error.message : String(error), isError: true };

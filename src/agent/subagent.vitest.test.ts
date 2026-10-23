@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
+import { defaultTools } from './tools/registry.js';
+import { defineTool } from './tool-contract.js';
 import { FileCheckpointStore } from './file-checkpoints.js';
 import { runAgentLoop } from './run-turn.js';
 import { sessionAgents } from './background-agents.js';
@@ -495,8 +497,8 @@ describe('coding sub-agents in their own worktree', () => {
     });
     await runAgentLoop(turn(client).input);
     const [output] = toolResults(client.requests(PARENT_PROMPT)[1]);
-    expect(output).toMatch(/works in its own git worktree, and .* is not inside a git repository/);
-    expect(output).toMatch(/Pass the repository to work in as `repo`/);
+    expect(output).toMatch(/Git worktree isolation requires/);
+    expect(output).toContain('Pass that repository as repo');
     expect(output.split('\n')).toHaveLength(1);
     expect(client.requests('never runs')).toHaveLength(0);
   });
@@ -529,16 +531,16 @@ describe('coding sub-agents in their own worktree', () => {
     expect(await fs.readFile(path.join(child, 'a.txt'), 'utf8')).toBe('the answer is 42\n');
   });
 
-  it('names the repositories under the working directory when isolation has no repository to use', async () => {
+  it('does not direct an agent into an unrelated repository when isolation cannot start', async () => {
     const child = await initChildRepo('app');
     const client = new RoutedModelClient({
-      [PARENT_PROMPT]: { script: [{ toolCalls: [{ name: 'agent', args: { prompt: 'never runs', background: true } }] }, { text: 'done' }] },
+      [PARENT_PROMPT]: { script: [{ toolCalls: [{ name: 'agent', args: { prompt: 'never runs', background: true, isolation: 'worktree' } }] }, { text: 'done' }] },
       'never runs': { script: [{ text: 'ran' }] },
     });
     await runAgentLoop(turn(client).input);
     const [output] = toolResults(client.requests(PARENT_PROMPT)[1]);
-    expect(output).toContain(child);
-    expect(output).toMatch(/Pass one of them as `repo`/);
+    expect(output).not.toContain(child);
+    expect(output).toContain("Do not choose an unrelated repository");
     expect(client.requests('never runs')).toHaveLength(0);
   });
 
@@ -564,7 +566,7 @@ describe('coding sub-agents in their own worktree', () => {
     const released = new Promise<void>((resolve) => { release = resolve; });
     const client = new RoutedModelClient({
       [PARENT_PROMPT]: { script: [
-        { toolCalls: [{ id: 'bg', name: 'agent', args: { prompt: 'slow edit', description: 'Slow edit', background: true } }] },
+        { toolCalls: [{ id: 'bg', name: 'agent', args: { prompt: 'slow edit', description: 'Slow edit', background: true, isolation: 'worktree' } }] },
         // The agent is still held: the parent carries on meanwhile.
         { toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }], before: () => release() },
         { text: 'I will wait for it.' },
@@ -599,7 +601,7 @@ describe('coding sub-agents in their own worktree', () => {
     const released = new Promise<void>((resolve) => { release = resolve; });
     const client = new RoutedModelClient({
       [PARENT_PROMPT]: { script: [
-        { toolCalls: [{ id: 'bg', name: 'agent', args: { prompt: 'slow edit', description: 'Slow edit', background: true } }] },
+        { toolCalls: [{ id: 'bg', name: 'agent', args: { prompt: 'slow edit', description: 'Slow edit', background: true, isolation: 'worktree' } }] },
         { text: 'unused: the conversation switched before this step' },
       ] },
       'slow edit': { script: [
@@ -635,7 +637,7 @@ describe('coding sub-agents in their own worktree', () => {
     const released = new Promise<void>((resolve) => { release = resolve; });
     const client = new RoutedModelClient({
       [PARENT_PROMPT]: { script: [
-        { toolCalls: [{ name: 'agent', args: { prompt: 'edit a.txt', background: true } }] },
+        { toolCalls: [{ name: 'agent', args: { prompt: 'edit a.txt', background: true, isolation: 'worktree' } }] },
         { toolCalls: [{ name: 'agent_send', args: { id: 'agent_1', message: 'Make it 46 instead.' } }] },
         { toolCalls: [{ name: 'agent_wait', args: { id: 'agent_1' } }], before: () => release() },
         { text: 'done' },
@@ -660,9 +662,49 @@ describe('coding sub-agents in their own worktree', () => {
     expect(await fs.readdir(path.join(root, 'tmp'))).toEqual([]);
   });
 
+  it('serializes mutations across background agents sharing a directory', async () => {
+    let active = 0;
+    let maximum = 0;
+    const completed: string[] = [];
+    const mutate = defineTool<{ who: string }>({
+      name: 'record_mutation', class: 'write', description: 'record a mutation',
+      parameters: { type: 'object', properties: { who: { type: 'string' } }, required: ['who'] },
+      label: (args) => args.who,
+      async run(args) {
+        maximum = Math.max(maximum, ++active);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        completed.push(args.who);
+        active--;
+        return { output: 'recorded' };
+      },
+    });
+    const client = new RoutedModelClient({
+      [PARENT_PROMPT]: { script: [
+        { toolCalls: ['one', 'two'].map((prompt) => ({ name: 'agent', args: { prompt, background: true } })) },
+        { toolCalls: [{ name: 'record_mutation', args: { who: 'parent' } }] },
+      ], fallback: { text: 'done' } },
+      one: { script: [{ toolCalls: [{ name: 'record_mutation', args: { who: 'one' } }] }, { text: 'done' }] },
+      two: { script: [{ toolCalls: [{ name: 'record_mutation', args: { who: 'two' } }] }, { text: 'done' }] },
+    });
+    expect(await runAgentLoop(turn(client, { tools: [...defaultTools(), mutate] }).input)).toMatchObject({ stopReason: 'completed' });
+    expect(completed.sort()).toEqual(['one', 'parent', 'two']);
+    expect(maximum).toBe(1);
+  });
+
+  it('runs a background task without Git when worktree isolation was not requested', async () => {
+    const client = new RoutedModelClient({
+      [PARENT_PROMPT]: { script: [{ toolCalls: [{ name: 'agent', args: { prompt: 'background research', background: true } }] }, { text: 'waiting' }, { text: 'done' }] },
+      'background research': { script: [{ text: 'research complete' }] },
+    });
+    const h = turn(client);
+    expect(await runAgentLoop(h.input)).toMatchObject({ stopReason: 'completed' });
+    expect(client.requests('background research')).toHaveLength(1);
+    expect(toolResults(client.requests(PARENT_PROMPT)[1])[0]).toContain('sharing this working directory');
+  });
+
   it('refuses a background agent outside a git repository at once', async () => {
     const client = new RoutedModelClient({
-      [PARENT_PROMPT]: { script: [{ toolCalls: [{ name: 'agent', args: { prompt: 'never runs', background: true } }] }, { text: 'done' }] },
+      [PARENT_PROMPT]: { script: [{ toolCalls: [{ name: 'agent', args: { prompt: 'never runs', background: true, isolation: 'worktree' } }] }, { text: 'done' }] },
       'never runs': { script: [{ text: 'ran' }] },
     });
     await runAgentLoop(turn(client).input);
@@ -673,7 +715,7 @@ describe('coding sub-agents in their own worktree', () => {
   /** A background agent gated on `gate`, after it has made an edit. */
   const gatedAgent = (gate: Promise<void>, started: () => void): RoutedModelClient => new RoutedModelClient({
     [PARENT_PROMPT]: { script: [
-      { toolCalls: [{ name: 'agent', args: { prompt: 'edit and hang', background: true } }] },
+      { toolCalls: [{ name: 'agent', args: { prompt: 'edit and hang', background: true, isolation: 'worktree' } }] },
       { text: 'waiting' },
     ] },
     'edit and hang': { script: [

@@ -144,6 +144,7 @@ export function createSubagentRunner(options: SubagentRunnerOptions): (request: 
             return next === 'switch' ? undefined : next;
           },
         } : {}),
+        ...(!worktree && parent.runMutation ? { runMutation: parent.runMutation } : {}),
         stateDir: parent.stateDir,
         tools,
         subagent: {

@@ -15,10 +15,10 @@ export async function settleStep(
   if (step.finalOnly) return rt.result({ stopReason: 'completed', stalled: true });
   // An answer cut off at the output limit is carried on, not taken as
   // the answer: the next step picks up mid-sentence.
-  if (!calls.length && cutOff && rt.lengthContinues < MAX_LENGTH_CONTINUES) {
-    rt.lengthContinues += 1;
+  if (!calls.length && cutOff && (Boolean(stepText.trim()) || rt.lengthContinues < MAX_LENGTH_CONTINUES)) {
+    rt.lengthContinues = stepText.trim() ? 0 : rt.lengthContinues + 1;
     rt.continuesCutAnswer = Boolean(stepText.trim());
-    await rt.append({ type: 'text', role: 'user', text: CONTINUE_AFTER_LENGTH });
+    await rt.append({ type: 'text', role: 'user', source: 'harness', text: CONTINUE_AFTER_LENGTH });
     return 'continue';
   }
   if (calls.length) return undefined;
@@ -49,7 +49,7 @@ export async function settleStep(
     const verdict = await abortable(Promise.resolve(stopHook()), signal);
     if (verdict?.continueWith) {
       rt.stopContinues += 1;
-      await rt.append({ type: 'text', role: 'user', text: `[${sub ? 'SubagentStop' : 'Stop'} hook] ${verdict.continueWith}` });
+      await rt.append({ type: 'text', role: 'user', source: 'harness', text: `[${sub ? 'SubagentStop' : 'Stop'} hook] ${verdict.continueWith}` });
       return 'continue';
     }
     // Steered while the hook ran (a user, or agent_send): answer it, not drop it.
