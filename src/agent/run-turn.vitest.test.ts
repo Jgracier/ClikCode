@@ -882,6 +882,39 @@ describe('runAgentLoop', () => {
       expect(h.client.requests[1].items).toContainEqual({ type: 'text', role: 'assistant', text: 'Half an ans' });
     });
 
+    it('joins multiple interrupted fragments without duplicating the reply', async () => {
+      const h = harness([
+        { before: (request) => request.onTextDelta('par'), error: gatewayError('MODEL_ERROR') },
+        { before: (request) => request.onTextDelta('tial'), error: gatewayError('MODEL_ERROR') },
+        { text: ' answer' },
+      ]);
+      expect(await driven(runAgentLoop(h.input))).toMatchObject({ text: 'partial answer', stopReason: 'completed' });
+      expect(h.deltas.join('')).toBe('partial answer');
+    });
+
+    it('regenerates an interrupted tool call without replaying completed mutations', async () => {
+      const mutations: number[] = [];
+      const write = defineTool<{ n: number }>({
+        name: 'count_write', class: 'write', description: 'record',
+        parameters: { type: 'object', properties: { n: { type: 'number' } }, required: ['n'] },
+        label: () => 'record',
+        async run(args) { mutations.push(args.n); return { output: 'recorded' }; },
+      });
+      const h = harness([
+        { toolCalls: [{ id: 'complete', name: 'count_write', args: { n: 1 } }] },
+        { before: (request) => {
+          request.onTextDelta('Continuing');
+          request.onToolCallDelta?.({ id: 'incomplete', name: 'count_write', arguments: '{"n":' });
+        }, error: gatewayError('MODEL_ERROR') },
+        { toolCalls: [{ id: 'regenerated', name: 'count_write', args: { n: 2 } }] },
+        { text: 'done' },
+      ], { tools: [write] });
+      expect(await driven(runAgentLoop(h.input))).toMatchObject({ stopReason: 'completed' });
+      expect(mutations).toEqual([1, 2]);
+      expect(h.client.requests[2].items.some((item) => item.type === 'tool_result' && item.id === 'complete')).toBe(true);
+      expect(h.client.requests[2].items.some((item) => item.type === 'tool_call' && item.id === 'incomplete')).toBe(false);
+    });
+
     it('waits through repeated capacity contention without switching models or treating it as quota', async () => {
       const phases: string[] = [];
       const h = harness([...Array.from({ length: 9 }, () => ({ error: gatewayError('MODEL_BUSY', { retryAfter: 1 }) })), { text: 'capacity available' }], { onPhase: (phase) => phases.push(phase) });
