@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createServer } from 'node:net';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { hostname, tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import { ensureWorkersDirectory, listWorkerRecords, readWorkerRecord, removeWorkerRecord, socketPathFor, workerIsReachable, writeWorkerRecord } from './registry.js';
+import { conversationHandoffRequested, ensureWorkersDirectory, listWorkerRecords, readWorkerRecord, removeWorkerRecord, requestConversationHandoff, socketPathFor, takeConversation, workerIsReachable, writeWorkerRecord } from './registry.js';
 
 const previousHome = process.env.CLIKCODE_HOME;
 let root: string | undefined;
@@ -56,6 +57,19 @@ describe('worker registry', () => {
 
   it('two different session ids never collide on the same socket path', () => {
     expect(socketPathFor('session-one')).not.toBe(socketPathFor('session-two'));
+  });
+
+  it('signals a foreign worker to release the chat for the selected machine', async () => {
+    const home = await isolatedHome();
+    await ensureWorkersDirectory();
+    const key = createHash('sha256').update('chat').digest('hex').slice(0, 20);
+    await writeFile(join(home, 'workers', `${key}.owner`), JSON.stringify({
+      pid: 42, host: 'remote-machine', kind: 'worker', nonce: 'remote', at: new Date().toISOString(),
+    }));
+    expect('holder' in await takeConversation('chat', 'worker')).toBe(true);
+    expect(await requestConversationHandoff('chat')).toBe(true);
+    expect(await conversationHandoffRequested('chat', 'remote-machine')).toBe(true);
+    expect(await conversationHandoffRequested('chat', hostname())).toBe(false);
   });
 
   it('uses a named pipe on Windows, scoped to the state directory', async () => {

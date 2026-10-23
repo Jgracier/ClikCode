@@ -10,13 +10,15 @@ import { existsSync, readFileSync } from 'node:fs';
 import { userManagerLaunch } from './own-scope.js';
 import { EventEmitter } from 'node:events';
 import { connect, type Socket } from 'node:net';
-import { conversationHolder, currentWorkerBuild, listWorkerRecords, readWorkerRecord, workerIsReachable, type WorkerRuntimeRecord } from './registry.js';
+import { hostname } from 'node:os';
+import { conversationHolder, currentWorkerBuild, listWorkerRecords, readWorkerRecord, requestConversationHandoff, workerIsReachable, type WorkerRuntimeRecord } from './registry.js';
 import { processAlive } from '../harness/transport/process-group.js';
 import { ensureSessionOnDisk } from '../session/blank.js';
 import { encodeFrame, FrameDecoder, type ClientCommand, type WorkerEvent } from './protocol.js';
 import { withSavedConversation } from './saved-conversation.js';
 
 const SPAWN_TIMEOUT_MS = 5_000;
+const HANDOFF_START_TIMEOUT_MS = 30_000;
 /** A new worker is looked for this often: the first message of a
  * conversation waits on it, and a look is one small file read. At 50 ms the
  * wait past the moment the worker was listening averaged 25 ms. */
@@ -80,13 +82,30 @@ function launchWorker(sessionId: string, extra: readonly string[] = []): void {
 async function spawnSessionWorker(sessionId: string): Promise<WorkerRuntimeRecord> {
   lifecycle('client.worker.spawn', { worker: sessionId });
   launchWorker(sessionId);
-  const deadline = Date.now() + SPAWN_TIMEOUT_MS;
+  let deadline = Date.now() + SPAWN_TIMEOUT_MS;
+  let handoffAskedAt = 0;
+  let holder: Awaited<ReturnType<typeof conversationHolder>>;
+  let holderCheckedAt = 0;
   for (;;) {
     const record = await readWorkerRecord(sessionId);
     if (record && await recordIsLive(record)) return record;
+    if (Date.now() - holderCheckedAt >= 250) {
+      holder = await conversationHolder(sessionId);
+      holderCheckedAt = Date.now();
+    }
+    // A different machine's socket cannot be attached here. Ask its worker
+    // to hand over, then keep waiting for the local worker we launched. A
+    // running turn finishes there first; there is no cross-host refusal.
+    if (holder && holder.host !== hostname()) {
+      deadline = Date.now() + HANDOFF_START_TIMEOUT_MS;
+      if (holder.kind === 'worker' && Date.now() - handoffAskedAt >= 5_000) {
+        await requestConversationHandoff(sessionId);
+        handoffAskedAt = Date.now();
+      }
+    }
     // A scripted send is running a turn in-process: the worker starts when it
     // ends, and this waits for it like any turn already running.
-    if (Date.now() > deadline && (await conversationHolder(sessionId))?.kind !== 'turn') {
+    if (Date.now() > deadline && holder?.kind !== 'turn') {
       throw new Error(`session worker for "${sessionId}" did not start in time`);
     }
     await delay(SPAWN_POLL_MS);

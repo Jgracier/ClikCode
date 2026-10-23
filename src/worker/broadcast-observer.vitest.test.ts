@@ -382,7 +382,7 @@ describe('worker-assigned order and a window joining mid-turn (standards 1, 4, 7
     expect(observer.liveSnapshot()!.marks![0]).toMatchObject({ kind: 'outcome', outcome: 'denied', callId: 'call-7' });
   });
 
-  it('says how many background agents are running, live and to a joining window, and forgets it at the next turn', () => {
+  it('keeps background agents for a joining window after the parent turn ends', () => {
     const observer = new BroadcastObserver();
     const client = fakeClient();
     observer.attach(client.socket);
@@ -401,6 +401,8 @@ describe('worker-assigned order and a window joining mid-turn (standards 1, 4, 7
     expect(observer.liveSnapshot()!.background).toBeUndefined();
     observer.setBackgroundWork({ agents: 1 });
     observer.stopWaiting();
+    observer.snapshotFor(client.socket, { id: 's' } as never);
+    expect(frames(client, 'snapshot').at(-1)).toMatchObject({ background: { agents: 1 } });
     observer.startTurn('thinking', 'again');
     expect(observer.liveSnapshot()!.pendingBackground).toBeUndefined();
   });
