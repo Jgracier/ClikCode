@@ -215,9 +215,10 @@ export async function interactivePrivateModelsPicker(rl: HarnessPrompter, id: st
   }
 
   const deployment = await withSlowWait(waiting, `starting ${selected.displayName} on ${quote.sku.displayName}…`, () => deployPrivateModel(selected, quote));
-  // The Gateway publishes planning/downloading/loading deployments as starting
-  // models. Set the route immediately; the first prompt waits for readiness.
-  await aiSessionCommand(id, `/model ${deployment.modelId || selected.modelId}`);
+  // Select the deployment we just created, never its public model name. The
+  // create response establishes ownership; don't wait for a cached model list
+  // to publish it. The first prompt waits for this deployment's readiness.
+  await aiSessionCommand(id, `/model --any ${deployment.gatewayModelId}`);
 }
 
 function formatParameterCount(count: number): string {
