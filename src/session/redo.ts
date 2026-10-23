@@ -44,7 +44,7 @@ export async function redoFrom(
   state.sessions.push({
     ...session, id: randomUUID(), name: session.name ? `${session.name} (before redo)` : undefined,
     conversationId: conversationIdFor(session), parentSessionId: session.id, fork: true, messages,
-    pendingTurn: undefined, nativeSessionId: undefined, nativeStartedAt: undefined,
+    pendingTurn: undefined, nativeSessionId: undefined, nativeStartedAt: undefined, nativeThreads: undefined,
     createdAt: now, updatedAt: now, status: 'archived', closedAt: now,
   });
   let files: string;
@@ -63,6 +63,7 @@ export async function redoFrom(
   session.pendingTurn = undefined;
   delete session.resumeAt;
   forgetNativeThread(session);
+  delete session.nativeThreads;
   // ClikCode's own agent remembers the turns that were cut away too: its
   // memory starts over, and the next turn writes the shortened conversation
   // into it (turn/agent-history.ts).
