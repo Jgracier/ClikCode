@@ -10,7 +10,7 @@ import type { Decision } from '../../../../src/harness/protocol/turn-flow';
  * event fields (cleaned of escapes), merged frame by frame with the CLI's
  * rules (activity-view.ts). */
 export interface Activity extends Pick<HarnessActivityEvent,
-  'id' | 'kind' | 'label' | 'category' | 'agent' | 'output' | 'outputOmitted' | 'outputTail' | 'durationMs' | 'exitCode' | 'childTools' | 'childTokens' | 'outputHead' | 'stopped' | 'call'> {
+  'id' | 'agentId' | 'kind' | 'label' | 'category' | 'agent' | 'output' | 'outputOmitted' | 'outputTail' | 'durationMs' | 'exitCode' | 'childTools' | 'childTokens' | 'outputHead' | 'stopped' | 'call'> {
   /** The call's id, or its position for a harness that sends none. */
   key: string;
   /** Each file the call changed, as hunks (see src/agent/line-diff.ts). */
@@ -237,6 +237,8 @@ export interface ChatModel {
   /** The running turn's prompt is ClikCode's own: this notice is drawn in its place. */
   pendingNotice?: string;
   live?: LiveTurn;
+  /** Vendor background work continues after a parent turn ends. */
+  background?: BackgroundWork;
   /** This client started the running turn (else it follows another's). */
   ownTurn?: boolean;
   /** Where the running turn's prompt lands in `messages`. */

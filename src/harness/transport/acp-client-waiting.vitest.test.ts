@@ -188,8 +188,8 @@ describe('the background level an ACP agent publishes (claude-agent-acp _claude/
     const seen: BackgroundWorkUpdate[] = [];
     try {
       await session.runTurn(input([[level(shell, agentTask), level(agentTask), { update: chunk('ok') }, { answer: true }]], { onBackgroundWork: (work: BackgroundWorkUpdate) => seen.push(work) }));
-      expect(seen[0]).toEqual({ agents: 1, terminals: 1, workflows: 0 });
-      expect(seen[1]).toEqual({ agents: 1, terminals: 0, workflows: 0 });
+      expect(seen[0]).toEqual({ agents: 1, agentTasks: [{ id: 'ag1', label: 'review' }], terminals: 1, workflows: 0 });
+      expect(seen[1]).toEqual({ agents: 1, agentTasks: [{ id: 'ag1', label: 'review' }], terminals: 0, workflows: 0 });
     } finally { await session.close(); }
   });
 

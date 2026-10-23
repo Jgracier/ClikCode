@@ -84,6 +84,24 @@ describe('the background terminals indicator (standard section 10)', () => {
     } finally { rl.close(); }
   });
 
+  it('keeps each named background agent above the idle composer until it finishes', () => {
+    const { rl, since } = window();
+    try {
+      since();
+      rl.setBackgroundWork({ agents: 2, agentTasks: [
+        { id: 'a', label: 'Review auth' }, { id: 'b', label: 'Run tests' },
+      ] });
+      vi.advanceTimersByTime(300);
+      expect(since()).toContain('Review auth');
+      rl.stopWaiting();
+      vi.advanceTimersByTime(300);
+      expect(since()).toContain('Run tests');
+      rl.setBackgroundWork(undefined);
+      vi.advanceTimersByTime(300);
+      expect(rl.backgroundWork).toBeUndefined();
+    } finally { rl.close(); }
+  });
+
   it('is not drawn when nothing runs, and takes no row of its own on a short terminal', () => {
     const idle = window();
     try {
@@ -109,7 +127,7 @@ describe('running steps stay above the status line', () => {
     process.stdout.write = realWrite;
   });
 
-  it('is one animated agent row with its latest call under it, whether or not it is clicked', () => {
+  it('keeps one animated agent row above the composer with its latest call', () => {
     const written: string[] = [];
     Object.assign(process.stdout, { isTTY: true, columns: 100, rows: 30 });
     process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
@@ -118,13 +136,7 @@ describe('running steps stay above the status line', () => {
       return true;
     }) as typeof process.stdout.write;
     const rl = new TerminalHarnessPrompter();
-    const keys = rl as unknown as { handleScrollKey(key: string): boolean };
-    const click = (): void => {
-      keys.handleScrollKey('\u001b[<0;4;2M');
-      keys.handleScrollKey('\u001b[<0;4;2m');
-      vi.advanceTimersByTime(50);
-    };
-    const agentRow = (text: string): string[] => [...text.matchAll(/(\S\S) {2}agent Task\(explore\)/g)].map((match) => match[1]!);
+    const agentRow = (text: string): string[] => [...text.matchAll(/([\u2800-\u28ff]{2}) {2}Task\(explore\)/g)].map((match) => match[1]!);
     try {
       rl.render({ id: 's', route: 'local', accountId: null, provider: null, model: null, createdAt: '', updatedAt: '', status: 'active', messages: [] } as never);
       rl.startWaiting('thinking', () => undefined, async () => ({ kind: 'sent' }) as never);
@@ -133,18 +145,12 @@ describe('running steps stay above the status line', () => {
       rl.activityEvent({ kind: 'tool-start', id: 'c', parentId: 'a', label: 'Grep(charge)' });
       vi.advanceTimersByTime(300);
       const before = strip(written.join(''));
-      // One row for the agent, its call under it with the static tool mark and the count.
-      expect(before).toContain('‣ Grep(charge) · 1 tool use');
+      // The child is in the agent's fixed row, with no second tool row.
+      expect(before).toContain('Task(explore)  ·  Grep(charge)');
+      expect(before).not.toContain('‣ Grep(charge)');
       expect(before).not.toContain('click');
       // The ring spins: the glyph changes from frame to frame.
       expect(new Set(agentRow(before)).size).toBeGreaterThan(1);
-      written.length = 0;
-      click();
-      vi.advanceTimersByTime(300);
-      const after = strip(written.join(''));
-      // Clicking changes nothing: the row stays, and keeps animating.
-      expect(after).toContain('agent Task(explore)');
-      expect(after).not.toContain('click');
     } finally { rl.close(); }
   });
 });

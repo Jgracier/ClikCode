@@ -11,6 +11,7 @@ import type { ToWebview, WebviewMenu } from '../webview-protocol';
 import { command, listen, post, request, save, uid } from './bus';
 import { ApprovalCard, QuestionCard } from './approvals';
 import { Transcript } from './chat';
+import { RunningAgents } from './turn';
 import { Composer, type ComposerHandle } from './composer';
 import { tildePath } from './format';
 import { choose } from './picker';
@@ -419,6 +420,7 @@ function App(): JSX.Element {
           </div>
         ) : null}
         {search ? <SearchBar focus={search} /> : null}
+        {model.live || model.background ? <RunningAgents live={model.live ?? { activities: [], background: model.background }} workspace={model.workspace} /> : null}
         <Composer model={model} handle={composer} onError={setError} onOpenHistory={() => setHistory(true)} />
       </main>
       {question ? <Sheet key={question.id} question={question} items={question.items} answer={(result) => answer(question.id, result)}

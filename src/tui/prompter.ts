@@ -15,6 +15,7 @@ import type { HarnessPrompter, JournalState, PickerOption, PickerSettings } from
 import type { HarnessSession } from '../session/model.js';
 import { ActivityEntry, commonPrefixLength, rebaseActivityOffsets } from './render/activity-log.js';
 import type { OpenTool, Thought } from '../harness/protocol/activity-view.js';
+import type { BackgroundWork } from '../harness/protocol/background-agents.js';
 import { logProcessWarnings } from './warnings.js';
 import { CallGrouping, GroupRegistry } from './render/call-groups.js';
 import { GroupExpansion } from './render/group-rows.js';
@@ -63,6 +64,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   waitingFrame = 0;
   /** Background terminals the vendor says are running (the footer indicator). */
   backgroundTerminals = 0;
+  backgroundWork?: BackgroundWork;
   /** Orders answer text against call starts for answerWriting: a counter, so
    * two events in one millisecond keep their order. */
   statusOrder = 0;
@@ -96,7 +98,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * (render/child-rows.ts). Drawn nested under the agent, never retired. */
   readonly liveChildren = new LiveChildren();
   /** When each running sub-agent's row was first drawn, for its clock. */
-  readonly agentStarts = new Map<string, number>();
   /** Which of this turn's calls and thoughts are one group (call-groups.ts). */
   readonly callGrouping = new CallGrouping();
   /** The groups of this view, kept so one can be opened (call-groups.ts). */
@@ -427,6 +428,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       if (this.mentionFocus?.sessionId !== session.id) this.mentionFocus = undefined;
       this.activityEntries = [];
       this.childEntries = [];
+      this.backgroundWork = undefined;
+      this.backgroundTerminals = 0;
       this.planEntries = [];
       this.planStart = undefined;
       this.panelState = undefined;
