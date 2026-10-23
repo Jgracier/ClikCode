@@ -546,7 +546,7 @@ describe('background work by kind: workflows on the end line, terminals on the w
     expect(model.traces[0]?.pendingWorkflows).toBeUndefined();
   });
 
-  it('the working line carries the terminals indicator while any run, singular and plural, nothing at zero', () => {
+  it('the fixed work section carries the terminals indicator while any run', () => {
     const live = (work: Record<string, number> | undefined) => run([worker({ type: 'background', pending: 0, ...(work ? { work } : {}) })], begin()).live!;
     expect(workingIndicator(live({ terminals: 1 }))).toBe('1 background terminal running');
     expect(workingIndicator(live({ terminals: 3 }))).toBe('3 background terminals running');
@@ -556,10 +556,21 @@ describe('background work by kind: workflows on the end line, terminals on the w
 
   it('a window joining mid-turn takes every kind from the snapshot, and the later event replaces it', () => {
     const joined = applyEvent(begin(), worker({ type: 'snapshot', session: session(), live: { text: 'abc', waitingLabel: 'thinking', pendingBackground: 1, background: { agents: 1, terminals: 2 } } }));
-    expect(workingIndicator(joined.live)).toBe('Waiting for 1 background agent · 2 background terminals running');
+    expect(workingIndicator(joined.live)).toBe('2 background terminals running');
     const after = applyEvent(joined, worker({ type: 'background', pending: 1, work: { agents: 1 } }));
-    expect(workingIndicator(after.live)).toBe('Waiting for 1 background agent');
+    expect(workingIndicator(after.live)).toBeUndefined();
     expect(after.live!.pendingBackground).toBe(1);
+  });
+
+  it('keeps background agent identities by the composer after the parent turn ends', () => {
+    const work = { agents: 1, agentTasks: [{ id: 'a', label: 'Review auth' }] };
+    const during = run([worker({ type: 'background', pending: 1, work })], begin());
+    const ended = applyEvent(during, worker({ type: 'waiting-stop' }));
+    expect(ended.running).toBe(false);
+    expect(ended.live).toBeUndefined();
+    expect(ended.background).toEqual(work);
+    const joined = applyEvent(begin(), worker({ type: 'snapshot', session: session(), background: work }));
+    expect(joined.background).toEqual(work);
   });
 
   it('a saved turn says its workflows on reopen', () => {

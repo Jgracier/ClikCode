@@ -171,7 +171,7 @@ export type WorkerEvent =
   /** `saved`: sent to a window that `readsSaved`. `session` then has no
    * `messages`; `saved.count` is how many the worker saw, so the window reads
    * exactly that many from the transcript and nothing newer. */
-  | { type: 'snapshot'; session: HarnessSession; account?: string; live?: LiveTurn; stopped?: true; saved?: { count: number } }
+  | { type: 'snapshot'; session: HarnessSession; account?: string; live?: LiveTurn; background?: BackgroundWork; stopped?: true; saved?: { count: number } }
   | { type: 'delta'; text: string; mode: 'append' | 'replace' }
   | { type: 'activity'; event: HarnessActivityEvent }
   /** A line of the turn's own transcript that is not a tool call: an account

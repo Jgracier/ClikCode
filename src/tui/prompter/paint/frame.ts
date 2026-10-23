@@ -48,9 +48,9 @@ export function paint(this: TerminalHarnessPrompter, composer: string, options: 
   const conversationInner = rowWidth - 2;
   const { pending, pendingPrompt, persistedMessages, hasTransientAssistant } = frameMessages(this, session);
   const bands = frameBands(this, { composer, options, prompt, cursor, palette, width, inner });
-  const { targetHeight, maxComposerRows, composerRows } = bands;
+  const { targetHeight, composerRows } = bands;
   const written = writeTranscript(this, {
-    session, pending, persistedMessages, hasTransientAssistant, conversationInner, maxComposerRows,
+    session, pending, persistedMessages, hasTransientAssistant, conversationInner,
   });
   const { liveConversation, userRows, materializedPendingTurn } = written;
   // Which rows belong to a group, taken off the text here (render/row-tags.ts):

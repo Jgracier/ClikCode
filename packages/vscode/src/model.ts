@@ -72,7 +72,7 @@ export function chatModelLabel(model: ChatModel, providerName?: string): string 
  * of it). */
 export function connectionLost(model: ChatModel, patch: Partial<ChatModel> = {}): ChatModel {
   return {
-    ...model, ...patch, ...NO_TRANSIENT, running: false, live: undefined, ownTurn: undefined, turnUserIndex: undefined,
+    ...model, ...patch, ...NO_TRANSIENT, running: false, live: undefined, background: undefined, ownTurn: undefined, turnUserIndex: undefined,
     // Only a live bridge ends these: a 'signing in…' or busy label and the queue it was holding.
     busy: undefined, signIn: undefined, queued: [],
   };

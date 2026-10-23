@@ -1,6 +1,6 @@
 /** What one vendor turn's transports report, folded into the checkpoint and the
  * screen: the shared observer, usage and pending work. */
-import { diagnostic } from '../runtime/lifecycle-log.js';
+import { diagnostic, lifecycle } from '../runtime/lifecycle-log.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { HarnessAvailableCommand, HarnessPlanEntry, HarnessTurnObserver } from '../harness/events/turn-observer.js';
@@ -44,6 +44,13 @@ export function createVendorObserver(ctx: VendorTurnContext) {
   const sink = turnSink(checkpoint, prompter);
   const onActivity = (event: HarnessActivityEvent): void => {
     pendingWork.note(event);
+    if (event.kind === 'tool-done' || event.kind === 'tool-error') {
+      lifecycle('turn.tool', {
+        name: (event.call?.name || event.category || 'tool').slice(0, 80),
+        ok: event.kind === 'tool-done',
+        ...(event.durationMs !== undefined ? { ms: event.durationMs } : {}),
+      });
+    }
     sink.activity(withWorkspacePaths(event, session.workspace));
   };
   /** A transport's thought is the whole of it so far: one row per id,

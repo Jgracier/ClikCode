@@ -10,7 +10,7 @@ import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { textTranscript } from '../../turn/turn-activities.js';
 import { shownSummary, summaryHeadline } from '../../session/conversation-summary.js';
 
-function transcriptMarkdown(session: HarnessSession): string {
+export function transcriptMarkdown(session: HarnessSession): string {
   const title = session.name ?? `ClikCode conversation ${session.id.slice(0, 8)}`;
   const header = [
     `# ${title}`, '',

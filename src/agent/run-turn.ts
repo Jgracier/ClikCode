@@ -9,7 +9,7 @@ import { runModelStep, recordStep } from './turn-model-step.js';
 import { deliverPending, finishBackgroundForSwitch } from './turn-notifications.js';
 import { settleStep } from './turn-answer.js';
 import { closeTurn, openTurn, type TurnRuntime } from './turn-runtime.js';
-import { createToolRunner, runToolCalls } from './turn-tools.js';
+import { applyLivePlan, createToolRunner, runToolCalls } from './turn-tools.js';
 
 /** Compacts before a step when the conversation has grown past what the model's window allows. */
 async function compactIfNeeded(rt: TurnRuntime, system: string): Promise<void> {
@@ -38,6 +38,7 @@ export async function runAgentLoop(input: AgentTurnInput): Promise<AgentTurnResu
     for (;;) {
       rt.throwIfAborted();
       await deliverPending(rt);
+      applyLivePlan(rt);
       const system = rt.session.plan.active ? `${rt.baseSystem}\n\n${PLAN_MODE_INSTRUCTIONS}` : rt.baseSystem;
       await compactIfNeeded(rt, system);
 

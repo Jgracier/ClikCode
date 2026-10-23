@@ -3,6 +3,7 @@
  * `POST {baseUrl}/v1/chat/completions` with `stream: true`. */
 import type { ConversationItem, ImageInput, ModelClient, ReasoningBlock, ModelStepRequest, ModelStepResult, ModelToolCall, TokenUsage, ToolSpec } from '../model-client.js';
 import { turnCancelledError } from '../cancellation.js';
+import { lifecycle } from '../../runtime/lifecycle-log.js';
 import type { ContextHints } from '../context-profile.js';
 import { ModelClientError, parseRetryAfter, readWithin, SseParser, STREAM_IDLE_TIMEOUT_MS, type SseEvent } from './gateway-client.js';
 
@@ -324,6 +325,7 @@ export class OpenAIModelClient implements ModelClient {
     const tools = toolsBody(fitted.tools, request.toolChoice);
     const maxTokens = this.maxTokens(JSON.stringify(messages) + JSON.stringify(tools.tools ?? []));
     let response: Response;
+    const requestedAt = Date.now();
     try {
       response = await doFetch(this.endpoint(), {
         method: 'POST',
@@ -347,8 +349,10 @@ export class OpenAIModelClient implements ModelClient {
       });
     } catch (error) {
       if (request.signal?.aborted) throw turnCancelledError();
+      lifecycle('model.request', { label: this.label, model: options.model, ms: Date.now() - requestedAt, outcome: 'unreachable' });
       throw new ModelClientError(`Could not reach ${this.label} at ${options.baseUrl}: ${error instanceof Error ? error.message : String(error)}`, { kind: 'other' });
     }
+    lifecycle('model.request', { label: this.label, model: options.model, status: response.status, ms: Date.now() - requestedAt });
     if (!response.ok) throw await this.httpError(response);
     // A server that names each request (the Gateway, OpenAI) has that name
     // put on every error, so a failure can be looked up where it happened.

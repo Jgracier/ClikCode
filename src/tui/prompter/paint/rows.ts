@@ -6,8 +6,8 @@ import type { SettlingTool } from '../../../turn/transcript.js';
 import type { HarnessActivityEvent, ToolCategory } from '../../../harness/prompter.js';
 import type { TranscriptMessage, HarnessSession } from '../../../session/model.js';
 import { ActivityEntry, collapseToolRuns, settleDecisionEntry, upsertActivityEvent } from '../../render/activity-log.js';
-import { agentProgress, toolUses, liveWaitKind } from '../../../harness/protocol/activity-view.js';
-import { outputPreviewRows, renderActivityLine } from '../../../harness/protocol/activity-line.js';
+import { toolUses, liveWaitKind } from '../../../harness/protocol/activity-view.js';
+import { outputPreviewRows } from '../../../harness/protocol/activity-line.js';
 import { tensedLabel } from '../../../harness/protocol/turn-flow.js';
 import { CallGrouping, LIVE_SHOWN_CALLS, liveItemLine, type CallRun, type GroupRow } from '../../render/call-groups.js';
 import { groupSummary, groupSummaryText, isExpandable, standsAlone } from '../../../harness/protocol/call-groups.js';
@@ -61,6 +61,7 @@ export function createRowBuilders(p: TerminalHarnessPrompter, conversationInner:
     }
     for (const entry of p.collapsedActivity.entries) {
       if (entry.anchor !== anchor || entry.responseOffset !== undefined) continue;
+      if (p.turn && entry.event?.agent && entry.event.kind === 'tool-start') continue;
       const id = entry.sequence;
       if (!p.emitted.claimActivity(id)) continue;
       rows.push(...activityRows(entry.lines, entry.event?.category), '');
@@ -104,36 +105,14 @@ export function createToolRows(p: TerminalHarnessPrompter, builders: RowBuilders
     }
     const kind = liveWaitKind(entry.event!) ?? 'tool';
     const frame = p.reducedMotion ? 0 : p.waitingFrame;
-    const progress = (() => {
-      const event = entry.event;
-      if (!event?.agent || !event.id) return '';
-      const since = p.agentStarts.get(event.id) ?? Date.now();
-      p.agentStarts.set(event.id, since);
-      // Its live child rows already say what it does now and carry the count.
-      const shown = p.liveChildren.latest(event.id) !== undefined;
-      return ` ${chalk.dim(`· ${agentProgress({ ...(!shown && event.childTools ? { tools: event.childTools } : {}), ...(event.childTokens ? { tokens: event.childTokens } : {}), elapsedMs: Date.now() - since })}`)}`;
-    })();
     const row = `${runningChatLine(
       tensedLabel(entry.event?.label ?? '', true), frame, kind,
-    ).trim()}${progress}`;
+    ).trim()}`;
     // What it has printed so far, newest last, under the spinner -- a long
     // build or test run is visibly working instead of a bare timer.
     const live = entry.event ? outputPreviewRows({ ...entry.event, outputTail: true }, LIVE_OUTPUT_LINES).map(underCall) : [];
-    // A sub-agent that has to be retired while it still runs: the same text
-    // with a static glyph and `running`; when it settles one completion row
-    // is appended (`✓ <label> (N tool uses · ...)`), and its live children
-    // are named by a `↳ <label>` line (transcript.ts).
-    const agentRows = entry.event?.agent ? (() => {
-      const label = tensedLabel(entry.event.label, true);
-      const settled = renderActivityLine({ ...entry.event, kind: 'tool-done' })[0]?.trim() ?? label;
-      return {
-        released: open(['', `  ${runningChatLine(label, 0, kind).trim()} ${chalk.dim('· running')}`]),
-        completed: open(['', `  ${look.paint.success('✓')} ${settled}`]),
-        childHeader: [`    ${chalk.dim(`↳ ${entry.event.label}`)}`],
-      };
-    })() : {};
     return {
-      id, done: false, responseOffset: entry.responseOffset, ...order, ...agentRows,
+      id, done: false, responseOffset: entry.responseOffset, ...order,
       lines: open(['', `  ${row}`, ...live]),
     };
   };
@@ -282,11 +261,14 @@ export function createTurnTools(
       materializedPendingTurn: seam.materializedPendingTurn, retiredThisSession: p.emitted.retiredTexts(), render: steerRows,
     });
     for (const row of steers) p.turnSteers.set(row.id, row);
+    const activeAgents = new Set((ended ? [] : turnEntries(p.activityAnchor))
+      .filter((entry) => entry.event?.agent && entry.event.kind === 'tool-start' && entry.event.id)
+      .map((entry) => entry.event!.id!));
     const tools: SettlingTool[] = groupedRows(turnEntries(p.activityAnchor)
       // An anchor is reused: the next turn's assistant occupies the same
       // index when the previous one was never persisted. The turn that
       // produced an entry is what decided whether it belongs to this one.
-      .filter((entry) => (entry.sequence ?? 0) > p.emitted.turnSequenceFloor), ended, p.callGrouping,
+      .filter((entry) => (entry.sequence ?? 0) > p.emitted.turnSequenceFloor && !activeAgents.has(entry.event?.id ?? '')), ended, p.callGrouping,
     // Where each steer of this window was acknowledged: it ends the run before it.
     p.waitingSubmissions.flatMap((item) => (item.state === 'steered' && item.ack ? [item.ack.sequence] : [])));
     // A running agent's live calls, one row each, nested under it. They are
@@ -296,7 +278,8 @@ export function createTurnTools(
       const open = turnEntries(p.activityAnchor).filter((entry) => entry.event?.kind === 'tool-start' && entry.event.id
         && (entry.sequence ?? 0) > p.emitted.turnSequenceFloor);
       // The agent's own row carries the motion; its calls are the tools' static mark.
-      for (const child of p.liveChildren.rows(open.map((entry) => ({ id: entry.event!.id!, offset: entry.responseOffset, seq: entry.sequence })))) {
+      for (const child of p.liveChildren.rows(open.filter((entry) => !activeAgents.has(entry.event!.id!))
+        .map((entry) => ({ id: entry.event!.id!, offset: entry.responseOffset, seq: entry.sequence })))) {
         const uses = child.newest ? open.find((entry) => entry.event!.id === child.parentId)?.event?.childTools : undefined;
         tools.push({
           id: child.id, done: false, nested: true, parent: child.parentId, responseOffset: child.offset, seq: child.seq,

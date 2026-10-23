@@ -26,4 +26,9 @@ describe('ClikDeploy’s own MCP server', () => {
   it('trims a trailing slash from the Gateway address', () => {
     expect(clikDeployMcpServer({ baseUrl: 'https://g.example/', apiKey: 'k' }).url).toBe('https://g.example/mcp?toolmode=search');
   });
+
+  it('sends a previously verified admin unlock with later MCP calls', () => {
+    const [server] = routeMcpServers({ route: 'gateway' } as never, { get: () => 'verified-token' } as never);
+    expect(server?.transport === 'http' && server.headers['x-admin-mfa']).toBe('verified-token');
+  });
 });

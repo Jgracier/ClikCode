@@ -119,7 +119,7 @@ describe('startConversationThread', () => {
   it('sizes the transfer to the receiving model and to argv', async () => {
     const wide = await startConversationThread(input({ contextWindow: 1_000_000 }));
     const argv = await startConversationThread(input({ contextWindow: 1_000_000, argvLimit: 96 * 1024 }));
-    expect(wide.kind === 'transfer' && wide.budget).toBe(200 * 1024);
+    expect(wide.kind === 'transfer' && wide.budget).toBe(1024 * 1024);
     expect(argv.kind === 'transfer' && argv.budget).toBe(92 * 1024);
   });
 });
@@ -140,12 +140,27 @@ createdAt: now, updatedAt: now, status: 'active', workspace: '/w',
     expect(nativeThreadBudget()).toBe(400 * 1024);
   });
 
-  it('keeps the newest turns that fit, and says how to read the rest', () => {
-    const fitted = fitRecord(long, 5_000);
+  it('keeps the newest turns that fit, and names the file that holds the rest and what was asked in it', () => {
+    const fitted = fitRecord(long, 5_000, { recordPath: '/state/records/s2.md' });
     expect(fitted.omitted).toBeGreaterThan(0);
     expect(fitted.omitted + fitted.record.turns.length).toBe(20);
     expect(fitted.record.turns.at(-1)!.user).toBe('request 19');
-    expect(fitted.record.turns[0]!.user).toMatch(new RegExp(`^\\[ClikCode: the ${fitted.omitted} earlier turns are left out.*read_conversation\\("${long.conversationId}"\\)`));
+    const note = fitted.record.turns[0]!.user;
+    expect(note).toMatch(new RegExp(`^\\[ClikCode: the ${fitted.omitted} earlier turns are left out`));
+    expect(note).toContain('/state/records/s2.md');
+    // The tools it used to cite are not given to a provider, so it must not cite them.
+    expect(note).not.toMatch(/search_conversations|read_conversation/);
+    expect(note).toContain('What was asked in them, oldest first:');
+    expect(note).toContain('1. request 0');
+  });
+
+  it('holds the note inside the budget, not on top of it', () => {
+    const bytes = (turns: typeof long.turns) => turns.reduce((sum, turn) => sum + Buffer.byteLength(turn.user, 'utf8') + Buffer.byteLength(JSON.stringify(turn.parts), 'utf8'), 0);
+    for (const budget of [3_000, 5_000, 9_000]) {
+      const fitted = fitRecord(long, budget, { recordPath: '/state/records/s2.md' });
+      // The newest turn is always kept, so a budget below it can be passed by that turn alone.
+      expect(bytes(fitted.record.turns), `budget ${budget}`).toBeLessThanOrEqual(budget + 1_200);
+    }
   });
 
   it('writes the whole record when it fits, and the newest turn even when it alone does not', () => {

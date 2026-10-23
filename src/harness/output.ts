@@ -17,6 +17,7 @@ import type { HarnessSession } from '../session/model.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
 import { emitResult } from '../cli/structured-output.js';
 import { gatewayDefaultEffort, gatewayEffort } from '../gateway/options.js';
+import { gatewaySessionModelLabel } from '../gateway/models.js';
 import { isClikCodeAgent } from '../session/route.js';
 import { sessionSandboxMode } from '../agent/sandbox.js';
 import { summaryHeadline } from '../session/conversation-summary.js';
@@ -36,7 +37,7 @@ export function sessionModelLabel(session: HarnessSession, model: string | null 
     return model ? `${agent} · ${model}` : agent;
   }
   // Automatic is "Automatic" everywhere: which model the Gateway routed to is its business, and it does not say.
-  if (session.route === 'gateway') return session.model ? model ?? session.model : 'Automatic';
+  if (session.route === 'gateway') return session.model ? gatewaySessionModelLabel(model ?? session.model) : 'Automatic';
   return nativeModelLabel(session.nativeHarness, model);
 }
 

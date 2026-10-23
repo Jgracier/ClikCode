@@ -5,6 +5,7 @@ import { forgetNativeThread } from '../session/native-thread.js';
 import { diagnostic, lifecycle } from '../runtime/lifecycle-log.js';
 import { closePersistentTransport, closeStandby, standbyFor } from './vendor-process.js';
 import { moveThreadToAccount } from '../session/carry.js';
+import { nativeThreadHoldsConversation } from './native-thread-continuity.js';
 import { switchAccountAfterFailure } from './account-switch.js';
 import { classifyAccountFailure, type AccountFailureKind } from './failover.js';
 import { nativeTurnFailure } from '../harness/protocol/turn-result.js';
@@ -85,7 +86,7 @@ async function switchAccount(ctx: VendorTurnContext, failed: Failed): Promise<vo
   const { session, harness, attempt } = ctx;
   const { failure, failureKind, responseBefore, wroteBefore, cliOutputStarted } = failed;
   const from = ctx.account;
-  const { value: moved } = await switchAccountAfterFailure({
+  const { value: moved, to } = await switchAccountAfterFailure({
     accounts: ctx.accounts, from, failure, kind: failureKind, signal: ctx.signal, harness: harness.command,
     carry: async (fallback, { switchAt, chooseMs }) => {
       // Claude streams "You've hit your session limit · resets …" as message
@@ -119,7 +120,13 @@ async function switchAccount(ctx: VendorTurnContext, failed: Failed): Promise<vo
       };
     },
   });
-  const { wrote, carriedThread } = moved!;
+  let { wrote, carriedThread } = moved!;
+  // A structurally broken copied thread cannot safely receive only the
+  // current request. A valid compaction is still a resumable thread.
+  if (carriedThread && !await nativeThreadHoldsConversation(session, harness, to)) {
+    forgetNativeThread(session);
+    carriedThread = undefined;
+  }
   attempt.nativeThreadRetried = false;
   const edit = session.pendingTurn?.response?.trim() ? 'new-paragraph' : 'clear';
   // The user's own request goes again; what the attempt wrote is in the

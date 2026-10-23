@@ -101,7 +101,8 @@ export function createIdleControl(ctx: WorkerContext) {
     noteIdle(ctx.turnRunning ? 'held: a turn is running' : ctx.vendorBackground.busy ? 'held: vendor background work'
       : observer.attachedCount > 0 ? `held: ${observer.attachedCount} window(s) attached` : existingSessionAgents(agentSession)?.running() ? `held: ${existingSessionAgents(agentSession)!.running()} background agent(s)` : agentSession.notifications.length ? 'held: a notification to deliver' : agentSession.wakeups.size ? `held: ${agentSession.wakeups.size} scheduled wakeup(s)`
         : ctx.resumeWaiter.pending ? 'held: waiting for a quota reset' : hasHeldVendorProcess(sessionId) ? 'held: a vendor finishing background work'
-          : runningShellCount(agentSession) > 0 ? `held: ${runningShellCount(agentSession)} background shell(s)` : `idle: exits in ${Math.round(IDLE_EXIT_MS / 1000)}s`);
+          : runningShellCount(agentSession) > 0 ? `held: ${runningShellCount(agentSession)} background shell(s)`
+            : ctx.keepWarm?.active() ? 'held: keeping the prompt cache warm' : `idle: exits in ${Math.round(IDLE_EXIT_MS / 1000)}s`);
     // A newer build asked for this worker while it was busy: the moment it is
     // not, it goes, and the next window to need one starts that build.
     if (ctx.retireWhenIdle && !retireBlocker()) retireIfFree();
@@ -111,6 +112,8 @@ export function createIdleControl(ctx: WorkerContext) {
     if (ctx.turnRunning || ctx.vendorBackground.busy || observer.attachedCount > 0 || existingSessionAgents(agentSession)?.running() || agentSession.notifications.length || agentSession.wakeups.size) return;
     // A turn parked for a quota reset: this worker is what sends it.
     if (ctx.resumeWaiter.pending) return;
+    // Its cache is being kept warm: this worker sends the pings (it calls back here when they end).
+    if (ctx.keepWarm?.active()) return;
     // A vendor kept running for its own background work (held-vendor.ts):
     // idling out would close it and stop that work unreported. It is
     // bounded by its own ceiling; once it is gone the idle clock starts.

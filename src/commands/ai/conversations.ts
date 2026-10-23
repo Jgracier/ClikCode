@@ -13,7 +13,7 @@ import { carriedHandoffModel, carriedHandoffSettings, synchronizeNativeTranscrip
 import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
 import { harnessSupportsEffort } from '../../runtime/lazy-bridge.js';
 import { consumeSessionTurn } from '../../turn/checkpoint.js';
-import { leaveProvider } from '../../session/native-thread.js';
+import { forgetNativeThread, leaveProvider } from '../../session/native-thread.js';
 import { aiHarnessSelect } from './harness.js';
 import { preferredAccountId } from './preferred-account.js';
 import { isClikCodeAgent, isGatewayService } from '../../session/route.js';
@@ -96,14 +96,12 @@ export async function newConversation(
   return created.id;
 }
 
-/** A conversation's worker running a turn keeps the provider it started on;
- * moving the conversation under it would answer on one provider into a
- * record that says another. */
-export async function refuseWhileTurnRuns(id: string): Promise<void> {
+/** Whether this conversation's worker is inside a turn. A switch made then is
+ * recorded for the next model call; the call already in flight is left
+ * alone, and so is the journal it is writing. */
+export async function turnIsRunning(id: string): Promise<boolean> {
   const { workerTurn } = await import('../../worker/turn-bridge.js');
-  if (await workerTurn(id).catch(() => undefined)) {
-    throw new Error('A turn is still running in this conversation -- switch when it ends, or stop it first.');
-  }
+  return Boolean(await workerTurn(id).catch(() => undefined));
 }
 
 /** Moves the conversation onto another harness, in place: same session, same
@@ -121,9 +119,11 @@ export async function moveToProvider(
   const current = state.sessions.find((item) => item.id === id);
   if (!current) throw new Error(`AI session "${id}" was not found`);
   if (current.route === 'local' && current.nativeHarness === harness.command) return;
-  await refuseWhileTurnRuns(id);
-  // What was said in the vendor's own CLI is the leaving provider's too.
-  await synchronizeNativeTranscript(state, current);
+  // A turn in flight keeps its journal and finishes the call it already
+  // started. The new provider is what the next model call runs on. Between
+  // turns the move is whole: the old thread is folded into the record.
+  const running = await turnIsRunning(id);
+  if (!running) await synchronizeNativeTranscript(state, current);
   const accountId = selection.accountId ?? preferredAccountId(state, harness.provider);
   const account = accountId ? state.accounts.find((item) => item.id === accountId) : undefined;
   // Effort and permission mode are the conversation's, not the provider's.
@@ -141,7 +141,8 @@ export async function moveToProvider(
   const model = selection.model ?? (listed(recalled) ? recalled : null) ?? carriedHandoffModel(current, account?.models ?? [],
     lastUsedModel ?? state.providerSettings[harness.provider]?.model ?? null);
   rememberRouteModel(current);
-  leaveProvider(current);
+  if (running) forgetNativeThread(current);
+  else leaveProvider(current);
   Object.assign(current, {
     route: 'local', provider: harness.provider, nativeHarness: harness.command, accountId, model,
     effort: defaults.effort, permissionMode: defaults.permissionMode,

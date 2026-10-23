@@ -25,7 +25,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
     case 'waiting-start':
       return {
         ...model, running: true, turnUserIndex: model.messages.length,
-        live: freshLive(stripAnsi(event.message)), plan: [], submissions: [],
+        live: { ...freshLive(stripAnsi(event.message)), ...liveBackground(model.background) }, plan: [], submissions: [],
         turnUsage: undefined, stopPending: undefined,
       };
     case 'waiting-stop':
@@ -73,8 +73,9 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
     case 'background': {
       // A level: the vendor's own count of what still runs, by kind.
       const live = model.live ?? freshLive('thinking');
+      const background = backgroundWorkOf({ background: event.work, pendingBackground: event.pending });
       const { pendingBackground: _held, background: _work, ...rest } = live;
-      return { ...model, live: { ...rest, ...liveBackground(backgroundWorkOf({ background: event.work, pendingBackground: event.pending })) } };
+      return { ...model, background, live: { ...rest, ...liveBackground(background) } };
     }
     case 'phase':
       // The adapters' own "waiting for your approval" is what the approval

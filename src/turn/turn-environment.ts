@@ -37,9 +37,12 @@ const linked = new Set<string>();
  * an entry the profile already has is left as it is. */
 export function linkUserDirectories(profileHome: string, realHome: string): void {
   if (linked.has(profileHome)) return;
-  linked.add(profileHome);
+  // A profile may be selected before its directory is created. Remembering
+  // that failed attempt meant later turns never linked the user's folders.
+  if (!existsSync(profileHome)) return;
   let entries: string[];
   try { entries = readdirSync(realHome); } catch { return; }
+  let failed = false;
   for (const name of entries) {
     if (name.startsWith('.')) continue;
     const real = join(realHome, name);
@@ -47,6 +50,7 @@ export function linkUserDirectories(profileHome: string, realHome: string): void
       if (!lstatSync(real).isDirectory()) continue;
       if (lstatSync(join(profileHome, name), { throwIfNoEntry: false })) continue;
       symlinkSync(real, join(profileHome, name));
-    } catch { /* fail-open-ok: a folder not linked is only the old behaviour. */ }
+    } catch { failed = true; }
   }
+  if (!failed) linked.add(profileHome);
 }

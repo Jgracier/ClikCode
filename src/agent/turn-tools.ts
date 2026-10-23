@@ -14,11 +14,35 @@ import { recordUsage } from './usage.js';
 import { createSubagentRunner } from './subagent.js';
 import { STALL_LIMIT } from './stall.js';
 import type { AiHarnessPermissionMode } from '../harness/definition.js';
+import { lifecycle } from '../runtime/lifecycle-log.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import { abortable, type CallOutcome, SHELL_TOOLS, stableStringify, categoryForTool } from './turn-support.js';
 import { releaseHeldSteers, steerAlert, type TurnRuntime } from './turn-runtime.js';
 
 const STREAM_EVENT_INTERVAL_MS = 150;
+
+/** Plan mode the user set while this turn runs, onto the session the loop reads. */
+export function applyLivePlan(rt: TurnRuntime): void {
+  const read = rt.input.currentPlanMode;
+  if (!read) return;
+  let on: boolean;
+  try { on = read(); } catch { return; }
+  // The setting at the turn's start is the baseline. Only a change after it is
+  // the user's: enforcing the level on every step turned plan mode back on the
+  // moment the agent's approved plan turned it off.
+  if (on === rt.livePlanSeen) return;
+  rt.livePlanSeen = on;
+  if (on !== rt.session.plan.active) rt.session.plan = { ...rt.session.plan, active: on };
+}
+
+function sandboxNow(input: AgentTurnInput): AgentTurnInput['sandbox'] {
+  if (!input.currentSandbox) return input.sandbox;
+  try {
+    return input.currentSandbox() ?? input.sandbox;
+  } catch {
+    return input.sandbox;
+  }
+}
 
 /** Builds what a turn's tool calls run with: its sub-agent runner and approval queue. */
 export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInput) => Promise<AgentTurnResult>) {
@@ -72,7 +96,7 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
     outputCap: toolOutputCap(rt.contextWindow, rt.profile.toolOutputBytes),
     ...(rt.stepAcceptsImages ? { acceptsImages: true } : {}),
     ...(input.onPlan ? { onPlan: input.onPlan } : {}), ...(input.net ? { net: input.net } : {}),
-    ...(input.sandbox === 'workspace' ? { sandbox: input.sandbox } : {}),
+    ...(sandboxNow(input) === 'workspace' ? { sandbox: 'workspace' as const } : {}),
     ...(runSubagent ? { runSubagent: (request: SubagentCall) => runSubagent({
       ...request, callId, ...(request.background ? {} : signal ? { signal } : {}),
       // A foreground sub-agent is steerable while its call is open (turn-runtime.ts).
@@ -84,6 +108,7 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
   /** The permission decision for a call and, when it asks, the user's answer.
    * A refusal comes back as the result the model hears; undefined lets the call run. */
   const authorize = async (call: ModelToolCall, tool: ToolDefinition, ctx: ToolContext): Promise<ToolRunResult | undefined> => {
+    applyLivePlan(rt);
     const verdict = decidePermission({ tool, args: call.args, mode: await permissionModeNow(), rules: turnRules.current, planMode: session.plan.active, scope, hasApprover: !!input.onApproval });
     if (verdict.decision === 'deny') {
       if (verdict.invalidArguments) return { output: `Invalid arguments: ${verdict.reason}. Correct the call and try again.`, isError: true };
@@ -99,6 +124,7 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
         rt.throwIfAborted();
         // Queued behind another approval while the user switched modes: judge it
         // again now, so a switch to bypass stops the prompts that were waiting.
+        applyLivePlan(rt);
         const now = decidePermission({ tool, args: call.args, mode: await permissionModeNow(), rules: turnRules.current, planMode: session.plan.active, scope, hasApprover: true });
         if (now.decision === 'allow') return true;
         const prompt = await buildApprovalPrompt(tool, call.args, ctx, verdict.reason);
@@ -154,6 +180,12 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
     if (rt.shownCalls.get(call.id) !== label) input.onActivity?.({ kind: 'tool-start', label, id: call.id, ...category });
     let startedAt: number | undefined;
     const finish = (result: ToolRunResult): ToolRunResult => {
+      lifecycle('turn.tool', {
+        name: call.name, ok: !result.isError,
+        ...(startedAt !== undefined ? { ms: Date.now() - startedAt } : {}),
+        ...(result.exitCode !== undefined ? { exit: result.exitCode } : {}),
+        ...(result.continuesAs ? { state: 'background' } : {}),
+      });
       const output = eventOutputPreview(result.output);
       // A background agent's call returns at launch; its row is the agent's, and
       // settles when the agent does, not as a one-off command.

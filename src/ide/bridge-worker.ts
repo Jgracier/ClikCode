@@ -5,6 +5,7 @@ import { withSignIn } from '../commands/account.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { WorkerClient } from '../worker/client.js';
+import { CONVERSATION_HANDOFF_REASON } from '../worker/registry.js';
 import { cancelOrigin, type WorkerEvent } from '../worker/protocol.js';
 import { messageOf, TurnFailed } from './bridge-support.js';
 import type { BridgeHost } from './bridge-host.js';
@@ -14,6 +15,7 @@ export class WorkerLink {
   /** Seen waiting-start without its waiting-stop: a turn is running on this
    * conversation's worker, whichever client started it. */
   workerTurnRunning = false;
+  private handedOffWorker: WorkerClient | undefined;
   /** The last turn ended stopped: nothing queued behind it runs until the user acts. */
   stopped = false;
   turnWaiter: { resolve: () => void; reject: (error: Error) => void; error?: Error } | undefined;
@@ -32,6 +34,8 @@ export class WorkerLink {
     client.on('close', () => {
       if (this.worker?.client !== client) return;
       const midTurn = this.workerTurnRunning || Boolean(this.turnWaiter);
+      const handedOff = this.handedOffWorker === client;
+      this.handedOffWorker = undefined;
       this.worker = undefined;
       this.workerTurnRunning = false;
       if (midTurn) this.failTurn(new Error('session worker connection closed unexpectedly'));
@@ -39,7 +43,7 @@ export class WorkerLink {
       // this window for reading too slowly. Attach to it again (or to its
       // replacement): its snapshot says whether a turn still runs, and a
       // panel told nothing else would show one for ever.
-      if (this.host.closed || this.host.sessionId !== sessionId) return;
+      if (handedOff || this.host.closed || this.host.sessionId !== sessionId) return;
       this.host.enqueue(async () => {
         if (this.host.closed || this.host.sessionId !== sessionId || this.worker) return;
         await this.workerFor(sessionId).catch(() => undefined);
@@ -122,7 +126,9 @@ export class WorkerLink {
         return;
       }
       case 'shutdown':
-        // A worker only retires idle; the close that follows reattaches.
+        // A handoff leaves this panel open without reclaiming the worker on
+        // the old machine. Another shutdown reconnects as before.
+        if (event.reason === CONVERSATION_HANDOFF_REASON) this.handedOffWorker = client;
         if (this.workerTurnRunning || this.turnWaiter) this.failTurn(new Error(`session worker exited mid-turn: ${event.reason}`));
         return;
       default:

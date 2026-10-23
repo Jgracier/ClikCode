@@ -1,8 +1,34 @@
 import { changed } from '../../agent/line-diff.test-support.js';
 import { describe, expect, it } from 'vitest';
-import { acpActivityEvent, acpApprovalDetail, acpModelChoice, acpResponseDelta, acpSpawnArgv, acpVibeResponseChange, createAcpSession, runAcpTurn } from './acp-client.js';
+import { acpActivityEvent, acpApprovalDetail, acpMessageChange, acpModelChoice, acpResponseDelta, acpSpawnArgv, acpVibeResponseChange, createAcpSession, runAcpTurn } from './acp-client.js';
+import { classifyAccountFailure } from '../../turn/failover.js';
 
 describe('shared ACP adapter contract', () => {
+  it('fails over when Claude reports a session limit as a failed /compact tool', async () => {
+    const agent = `
+      const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\\n');
+      let buf = '';
+      process.stdin.on('data', (d) => { buf += d; let n; while ((n = buf.indexOf('\\n')) >= 0) {
+        const m = JSON.parse(buf.slice(0, n)); buf = buf.slice(n + 1);
+        if (m.method === 'initialize') send({ id: m.id, result: { protocolVersion: 1, agentCapabilities: {} } });
+        else if (m.method === 'session/new') send({ id: m.id, result: { sessionId: 's1' } });
+        else if (m.method === 'session/prompt') {
+          send({ method: 'session/update', params: { sessionId: 's1', update: {
+            sessionUpdate: 'tool_call_update', toolCallId: 'compact-1', title: 'Compact conversation', status: 'failed',
+            content: [{ type: 'content', content: { type: 'text', text: "Compaction failed: Error during compaction: You've hit your session limit · resets 10:50pm (America/Denver)" } }],
+          } } });
+          send({ id: m.id, result: { stopReason: 'end_turn' } });
+        }
+      } });
+    `;
+    let caught: unknown;
+    try {
+      await runAcpTurn({ binary: process.execPath, command: 'claude', argv: ['-e', agent], cwd: process.cwd(), prompt: '/compact', environment: {}, permissionMode: 'ask' });
+    } catch (error) { caught = error; }
+    expect(caught).toBeInstanceOf(Error);
+    expect(classifyAccountFailure(caught, { isResultError: true })).toBe('quota-exhausted');
+  });
+
   // Devin 2026-10-06: signing in over ACP (`authenticate`) ran its own
   // browser login, with no link on ClikCode's screen, and from a phone waited
   // for ever. The refusal goes to the turn, which signs in on ClikCode's screen.
@@ -184,6 +210,30 @@ describe('shared ACP adapter contract', () => {
       .toEqual({ text: ' 42.', mode: 'append', current: 'The answer is 42.' });
     expect(acpVibeResponseChange('The answer is', 'The answer is 42.'))
       .toEqual({ text: ' 42.', mode: 'append', current: 'The answer is 42.' });
+  });
+
+  it('preserves genuine ACP deltas even when one begins with earlier text', () => {
+    expect(acpMessageChange('ab', 'abc', false))
+      .toEqual({ text: 'abc', mode: 'append', current: 'ababc' });
+    expect(acpMessageChange('hello', 'hello', false))
+      .toEqual({ text: 'hello', mode: 'append', current: 'hellohello' });
+  });
+
+  it('keeps one copy when a declared snapshot stream resends the message', () => {
+    const snapshots = [
+      'Load',
+      'Load is high, so I',
+      "Load is high, so I'll launch three builders, each on its own piece.",
+    ];
+    let message = '';
+    let shown = '';
+    for (const snapshot of snapshots) {
+      const change = acpMessageChange(message, snapshot, true);
+      message = change.current;
+      shown += change.text;
+    }
+    expect(shown).toBe("Load is high, so I'll launch three builders, each on its own piece.");
+    expect(acpMessageChange(shown, 'Load is high', true).mode).toBe('replace');
   });
 
   it('preserves ACP diff content in the provider-neutral activity event', () => {

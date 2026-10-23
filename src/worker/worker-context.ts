@@ -1,5 +1,6 @@
 /** What one session worker's parts share, held in one object: the conversation's
  * identity, the turn and queue flags, the timers, and the parts themselves. */
+import type { KeepWarm } from './cache-keepwarm.js';
 import type { Server, Socket } from 'node:net';
 import type Conf from 'conf';
 import type { LiveTurnInputBroker } from '../turn/live-input.js';
@@ -91,6 +92,8 @@ export interface WorkerContext {
   // The parts, assigned as they are built.
   vendorBackground: ReturnType<typeof createVendorBackgroundRunner>;
   resumeWaiter: ReturnType<typeof createResumeWaiter>;
+  /** Keeps a large conversation's prompt cache alive for hours after its last turn (cache-keepwarm.ts). */
+  keepWarm: KeepWarm;
   io: WorkerIo;
   idle: IdleControl;
   queue: WorkerQueue;
