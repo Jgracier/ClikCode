@@ -251,7 +251,6 @@ export function startWaiting(
   if (!rejoined) {
     this.activeTools = new Map();
     this.liveChildren.reset();
-    this.agentStarts.clear();
     this.callGrouping.reset();
     this.liveActivitiesShown = -1;
     this.turnTranscript.reset();
@@ -346,13 +345,13 @@ export function setTurnUsage(this: TerminalHarnessPrompter, usage: TurnUsage): v
 }
 
 /** What the vendor says runs in the background, by kind (standard section
- * 10). Only the terminals are drawn live, as one dim row under the status
- * (`2 background terminals running`); agents and workflows are the end
- * line's, from the saved turn. */
+ * 10). Terminals have a dim status row; running agents use the fixed rows
+ * above the composer. Workflows remain on the turn's end line. */
 export function setBackgroundWork(this: TerminalHarnessPrompter, work: BackgroundWork | undefined): void {
   const terminals = work?.terminals && work.terminals > 0 ? Math.floor(work.terminals) : 0;
-  if (this.backgroundTerminals === terminals) return;
+  if (this.backgroundTerminals === terminals && JSON.stringify(this.backgroundWork) === JSON.stringify(work)) return;
   this.backgroundTerminals = terminals;
+  this.backgroundWork = work;
   this.schedulePaint();
 }
 

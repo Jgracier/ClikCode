@@ -1,7 +1,7 @@
 /** A choice made in the editor's own widgets, applied with the command the
  * terminal's picker ends in. A setting that can change mid-turn does so
- * (commandDuringTurn); anything that moves the conversation waits for no
- * turn, and says so. One module per kind family. */
+ * (commandDuringTurn). A provider or account change is recorded the same way:
+ * the call already started finishes, and the next model call moves. One module per kind family. */
 import { aiSessionCommand } from '../tui/slash/handlers.js';
 import { commandDuringTurn } from '../tui/slash/queue.js';
 import type { IdeChoice } from './protocol.js';

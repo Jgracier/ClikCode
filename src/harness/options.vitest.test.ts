@@ -84,7 +84,7 @@ describe('a setting a ClikCode command owns is not also a raw vendor row', () =>
     const all = harnesses.flatMap((h) => optionsOf(h));
     const kept = harnesses.flatMap((h) => vendorFacingOptions(optionsOf(h)));
     expect(all.length - kept.length, 'the duplicate count changed; re-check the registry').toBe(88);
-    expect(kept.length).toBe(217);
+    expect(kept.length).toBe(211);
     const emptied = harnesses.filter((h) => optionsOf(h).length > 0 && vendorFacingOptions(optionsOf(h)).length === 0);
     // These ACP-only agents expose no vendor-specific option yet. Their
     // model and effort controls still work through the common picker.
@@ -170,11 +170,10 @@ describe('a harness only ever shows its own options', () => {
   });
 
   it('keeps vendor-specific ids out of every other harness that lacks them', () => {
-    // `--worktree` exists on nine harnesses and must not appear on the other
-    // fifteen just because it is a shared, normalized name.
+    // `--worktree` must not appear on harnesses that cannot apply it.
     const withWorktree = harnesses.filter((h) => optionsOf(h).some((o) => o.id === 'worktree')).map((h) => h.command);
     const withoutWorktree = harnesses.filter((h) => !withWorktree.includes(h.command));
-    expect(withWorktree.length).toBe(9);
+    expect(withWorktree.length).toBe(8);
     for (const harness of withoutWorktree) {
       expect(vendorFacingOptions(optionsOf(harness)).some((o) => o.id === 'worktree')).toBe(false);
     }

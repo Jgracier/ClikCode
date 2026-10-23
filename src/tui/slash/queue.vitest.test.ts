@@ -55,6 +55,14 @@ describe('applying a command while a turn streams', () => {
     // A picker needs the screen the answer is being written on.
     expect(applies('/model')).toBe(false);
     expect(applies('/permissions')).toBe(false);
+    expect(applies('/provider')).toBe(false);
+  });
+
+  it('applies a named provider while a turn streams', () => {
+    const during = routeSlashInput('/codex', { ...context, harnessCommands: ['codex'] });
+    expect(slashRouteAppliesDuringTurn(during)).toBe(true);
+    expect(applies('/sandbox off')).toBe(true);
+    expect(applies('/fast on')).toBe(true);
   });
 
   it('waits for the boundary for anything that shows something', () => {

@@ -8,7 +8,7 @@ import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
 import { maskSensitive, sensitiveValues } from '../computer/sensitive-fields.js';
 import { storeSecretTool } from './store-secret.js';
 import { sharedState } from '../computer/shared-state.js';
-import { savedLoginFields, savedLoginsForSite } from '../computer/credential-vault.js';
+import { savedLoginFields, savedLoginsForSite, saveLoginFields } from '../computer/credential-vault.js';
 import { loginValueFor } from '../computer/login-fill.js';
 import { addSiteNote, readSiteNotes } from '../computer/site-notes.js';
 import { assertCustomKey, customFieldFor, describeProfile, listProfiles, PASSWORD_SECRET, PROFILE_KEYS, phoneFor, birthdayFor, profileKeyFor, readProfileSecret, saveProfile, saveProfileSecret, secretFieldFor, type FieldHint, type ProfileKey } from '../computer/profiles.js';
@@ -551,17 +551,28 @@ async function askForFills(page: Page, steps: readonly Step[], ctx: ToolContext)
   // A saved login for this site fills its sign-in fields. Not on a form that creates a password (two password
   // boxes): that is a signup, and the saved login belongs to the account that already exists.
   let login: Record<string, string> | undefined;
+  // An autofill of a sign-in form asks, with saved values shown. Several accounts are a choice, and the
+  // chosen one fills the page. One account is shown so its email or password can be changed. A different
+  // email is stored as a new account; the same email with a new password replaces that account.
+  let confirmSignIn = false;
   if (fields.filter(field => field.password).length <= 1) {
     const accounts = (await savedLoginsForSite(ctx.stateDir, page.url()).catch(() => [])).filter(account => !account.rejected);
-    if (accounts.length && fields.some(field => loginValueFor({ username: 'x', password: 'x' }, field))) {
-      let account = accounts.length === 1 ? accounts[0] : accounts.find(candidate => candidate.id === profileChoice.get(`${ctx.stateDir}|login|${origin}`));
-      if (!account && ctx.requestPrivateLogin) {
-        const labels = accounts.map(candidate => candidate.label);
-        const answer = await ctx.requestPrivateLogin(origin, [{ index: -1, key: 'account', label: 'Sign in with which account?', kind: 'choice', required: true, options: [...labels, 'Enter a different one'] }], ctx.signal);
-        account = accounts[labels.indexOf(answer?.account ?? '')];
-        if (account) profileChoice.set(`${ctx.stateDir}|login|${origin}`, account.id);
-      }
+    const accountField = fields.some(field => loginValueFor({ username: 'x', password: 'x' }, field));
+    // Google's first page is only the email box. That is still a sign-in, and the email has to be asked.
+    const signIn = accountField && (fields.filter(field => field.password).length === 1 || /signin|identifier|\/login\b/i.test(page.url()));
+    if (signIn && accounts.length > 1 && ctx.requestPrivateLogin) {
+      const labels = accounts.map(candidate => candidate.label);
+      const answer = await ctx.requestPrivateLogin(origin, [{ index: -1, key: 'account', label: 'Sign in with which account?', kind: 'choice', required: true, options: [...labels, 'Enter a different one'] }], ctx.signal);
+      const account = accounts[labels.indexOf(answer?.account ?? '')];
       if (account) login = await savedLoginFields(ctx.stateDir, page.url(), account.id).catch(() => undefined);
+      else confirmSignIn = true;
+    } else if (signIn && accounts.length === 1) {
+      login = await savedLoginFields(ctx.stateDir, page.url(), accounts[0]!.id).catch(() => undefined);
+      confirmSignIn = true;
+    } else if (signIn) {
+      confirmSignIn = true;
+    } else if (accounts.length === 1 && fields.some(field => loginValueFor({ username: 'x', password: 'x' }, field))) {
+      login = await savedLoginFields(ctx.stateDir, page.url(), accounts[0]!.id).catch(() => undefined);
     }
   }
   // A signup form (two password boxes, a new-password box, or a sign-up page) the user has let the tool write a
@@ -569,24 +580,32 @@ async function askForFills(page: Page, steps: readonly Step[], ctx: ToolContext)
   const passwordFields = fields.filter(field => field.password);
   // A form filled one box per call shows only one password box here, so the page itself is asked how many it has.
   const boxesOnPage = passwordFields.length ? await page.locator('input[type="password"]:visible').count().catch(() => 0) : 0;
-  const signingUp = passwordFields.length >= 2 || boxesOnPage >= 2 || passwordFields.some(field => /new-password/i.test(field.hint.autocomplete))
-    || (passwordFields.length > 0 && /sign[-_ ]?up|register|create[-_ ]?account|join|password\/(?:edit|new|reset)|(?:reset|set|new|change)[-_ ]?password/i.test(page.url()));
+  // A /login page is a sign-in even when the page has a second password box. Treating that as a signup
+  // skipped the confirm prompt and filled the profile email with no chance to change it.
+  const loginPage = /\/login\b|signin|identifier/i.test(page.url());
+  const signingUp = !loginPage && (passwordFields.length >= 2 || boxesOnPage >= 2 || passwordFields.some(field => /new-password/i.test(field.hint.autocomplete))
+    || (passwordFields.length > 0 && /sign[-_ ]?up|register|create[-_ ]?account|join|password\/(?:edit|new|reset)|(?:reset|set|new|change)[-_ ]?password/i.test(page.url())));
   // The password the user chose for sign-ups, kept in the profile as a secret, comes before one the tool writes.
   const chosen = signingUp && profile ? await readProfileSecret(ctx.stateDir, profile, PASSWORD_SECRET) : undefined;
   const generated = chosen ?? (signingUp && await generatedPasswordsAllowed(ctx.stateDir) ? pendingSignupPassword(page) ?? generatePassword() : undefined);
   for (const field of fields) {
     if (field.password && generated) { values.set(field.step, generated); continue; }
     const fromLogin = login ? loginValueFor(login, field) : undefined;
-    if (fromLogin) { values.set(field.step, fromLogin); continue; }
+    if (fromLogin && !(confirmSignIn && !signingUp)) { values.set(field.step, fromLogin); continue; }
     // A secret kept with the profile (never shown to the agent) fills the box it is for: the password, a recovery code.
     const secretKey = secretFieldFor(profile, field.hint);
-    const secret = secretKey && profile ? await readProfileSecret(ctx.stateDir, profile, secretKey) : undefined;
+    const secret = secretKey && profile && !(confirmSignIn && !signingUp && field.password) ? await readProfileSecret(ctx.stateDir, profile, secretKey) : undefined;
     if (secret) { registerSecret(secret); values.set(field.step, secret); continue; }
     // A detail the agent asked for by name ("Support email") is more specific than the standard field its words also suggest.
     const asked = field.password ? undefined : customFieldFor(profile, field.hint);
     if (asked) { values.set(field.step, asked.field.value); continue; }
     const key = field.password ? undefined : profileKeyFor(field.hint);
     const known = key ? profile?.fields[key] : undefined;
+    if (confirmSignIn && !signingUp && (field.password || fromLogin || key === 'email')) {
+      const current = field.password ? fromLogin : (fromLogin ?? known);
+      ask.push({ step: field.step, key: undefined, field: { index: ask.length, key: `fill${ask.length}`, label: field.label || String(field.step.target), kind: field.password ? 'password' : 'text', required: true, ...(current ? { current } : {}) } });
+      continue;
+    }
     if (known) { values.set(field.step, key === 'phone' ? phoneFor(known, field.placeholder, field.current) : key === 'birthday' ? birthdayFor(known, `${field.label} ${field.placeholder}`) : known); continue; }
     ask.push({ step: field.step, key, field: { index: ask.length, key: `fill${ask.length}`, label: field.label || String(field.step.target), kind: field.password ? 'password' : 'text', required: true } });
   }
@@ -604,6 +623,17 @@ async function askForFills(page: Page, steps: readonly Step[], ctx: ToolContext)
       else if (item.key && answer) learned[item.key] = answer;
     }
     if (Object.keys(learned).length && (profile || profiles.length === 0)) await saveProfile(ctx.stateDir, { ...(profile ? { id: profile.id } : {}), fields: learned });
+    if (confirmSignIn && !signingUp) {
+      const entered: Record<string, string> = {};
+      for (const item of ask) {
+        const answer = values.get(item.step);
+        if (!answer) continue;
+        if (item.field.kind === 'password') entered.password = answer;
+        else if (!entered.username) entered.username = answer;
+      }
+      // Same email replaces that account's password. A different email is a new account.
+      if (entered.username && entered.password) await saveLoginFields(ctx.stateDir, page.url(), entered).catch(() => undefined);
+    }
   }
   return steps.map(step => values.has(step) ? { ...step, text: values.get(step)! } : step);
 }

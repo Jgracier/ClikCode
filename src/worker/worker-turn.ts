@@ -18,8 +18,6 @@ import { consumeQueuedTurn } from './consume-queued.js';
 import { sendEvent } from './broadcast-observer.js';
 import type { ClientCommand } from './protocol.js';
 import type { WorkerContext } from './worker-context.js';
-import { noteCompacted, shouldCompactBeforeSwitch } from './compact-before-switch.js';
-import { compactConversation } from '../tui/slash/compact.js';
 
 type SubmitCommand = Extract<ClientCommand, { type: 'submit' }>;
 
@@ -109,7 +107,7 @@ export function createTurnRunner(ctx: WorkerContext) {
 
   /** After the turn, success or not: the turn's own state cleared, the windows
    * told it ended, and whatever is owed or queued next started. */
-  const finalizeTurn = async (turnId: string, turnStarted: number, turnOutcome: string, liveInput: LiveTurnInputBroker, submissions: Set<Promise<void>>): Promise<void> => {
+  const finalizeTurn = async (turnId: string, turnStarted: number, turnOutcome: string, lastHarness: string | undefined, liveInput: LiveTurnInputBroker, submissions: Set<Promise<void>>): Promise<void> => {
     liveInput.close();
     ctx.activeController = undefined;
     ctx.activeLiveInput = undefined;
@@ -137,6 +135,8 @@ export function createTurnRunner(ctx: WorkerContext) {
     ctx.turnRunning = false;
     observer.endTurn(ended?.session, ended?.account, turnOutcome === 'cancelled');
     lifecycle('worker.turn.end', { outcome: turnOutcome, ms: Date.now() - turnStarted });
+    // Only a completed Claude Code turn refreshes its prompt cache window.
+    void ctx.keepWarm?.turnEnded(turnOutcome === 'completed' ? lastHarness : undefined).catch(() => undefined);
     endTurnClock(turnId);
     ctx.idle.vendorUsed();
     ctx.activeQueuedTurnId = undefined;
@@ -150,28 +150,11 @@ export function createTurnRunner(ctx: WorkerContext) {
     else {
       void ctx.queue.drainQueue().catch(ctx.queue.reportDrainFailure).finally(() => {
         ctx.idle.scheduleIdleExit();
-        if (turnOutcome === 'completed') void compactBeforeSwitch().catch((error: unknown) => diagnostic('worker.compact-before-switch', error instanceof Error ? error.message : String(error)));
       });
     }
     ctx.idle.scheduleIdleExit();
     // Parked while this turn ran (another window's "Wait for reset").
     void ctx.resumeWaiter.check();
-  };
-
-  /** A large conversation on an account that is nearly out is compacted now, while the account's
-   * cache is warm, so the switch reads a summary (compact-before-switch.ts). As a turn of its own:
-   * every window follows it, and a message sent meanwhile waits behind it. */
-  const compactBeforeSwitch = async (): Promise<void> => {
-    if (ctx.turnRunning) return;
-    const state = await readState({ transcripts: [] });
-    const session = state.sessions.find((item) => item.id === sessionId);
-    const account = session?.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
-    if (!session || !shouldCompactBeforeSwitch(state, session, account)) return;
-    noteCompacted(sessionId);
-    lifecycle('worker.compact-before-switch', { context: session.lastUsage?.contextUsed, account: account?.id.slice(0, 8) });
-    await compactConversation(sessionId, session, '', async (_id, prompt) => {
-      ctx.queue.startTurn({ type: 'submit', text: prompt, echo: false, label: 'compacting before the account switch' });
-    });
   };
 
   return async (command: SubmitCommand): Promise<void> => {
@@ -215,6 +198,8 @@ export function createTurnRunner(ctx: WorkerContext) {
     // stopWaiting is the one event every client needs regardless of outcome
     // to know a `submit` it sent has actually finished -- broadcast in
     // `finally`, covering success, a caught failure, and cancellation alike.
+    ctx.keepWarm?.stop();
+    let lastHarness: string | undefined;
     observer.startTurn(command.label ?? 'thinking', command.text);
     try {
       // A background turn's record still being saved: this turn's checkpoint
@@ -223,6 +208,7 @@ export function createTurnRunner(ctx: WorkerContext) {
       if (controller.signal.aborted) throw turnCancelledError();
       const running = runSessionTurn(config, sessionId, command.text, controller.signal, {
         onWorkFinished: () => { ctx.turnWorkDone = true; },
+        onCompletedHarness: (harness) => { lastHarness = harness; },
         persistentTransports: true,
         prompter: observer,
         liveInput,
@@ -244,7 +230,7 @@ export function createTurnRunner(ctx: WorkerContext) {
     } finally {
       // Saved (answered, failed or cancelled and settled): what a snapshot sent from here on holds is final.
       observer.turnRecordFinal();
-      await finalizeTurn(turnId, turnStarted, turnOutcome, liveInput, submissions);
+      await finalizeTurn(turnId, turnStarted, turnOutcome, lastHarness, liveInput, submissions);
     }
   };
 }

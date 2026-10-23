@@ -11,7 +11,7 @@ vi.mock('../session/state/read.js', () => ({ readState: async () => { mocks.read
 vi.mock('../session/state/index-file.js', () => ({ loadIndex: async () => { mocks.reads += 1; throw new Error('the turn must not read the index'); } }));
 
 import { stepClientRefresher } from './agent-turn';
-import { LiveSettings } from './live-settings';
+import { LiveSettings, liveCallsForSwitch } from './live-settings';
 
 const base = { id: 's1', route: 'gateway', model: null, effort: 'auto', speed: undefined } as unknown as HarnessSession;
 
@@ -53,6 +53,19 @@ describe('stepClientRefresher', () => {
     live.apply({ route: 'local' } as never);
     await expect(refresh()).resolves.toBe('switch');
     expect(mocks.reads).toBe(0);
+  });
+
+  it('a different provider is a switch, and another account of this one is not', () => {
+    const accounts = [{ id: 'a', provider: 'anthropic' }, { id: 'b', provider: 'anthropic' }, { id: 'c', provider: 'openai' }];
+    const here = { route: 'local', accountId: 'a', accountProvider: 'anthropic' };
+    const live = new LiveSettings({ route: 'local', accountId: 'a' } as HarnessSession);
+    expect(liveCallsForSwitch(live, here, accounts)).toBe(false);
+    live.apply({ accountId: 'b' });
+    expect(liveCallsForSwitch(live, here, accounts)).toBe(false);
+    live.apply({ accountId: 'c' });
+    expect(liveCallsForSwitch(live, here, accounts)).toBe(true);
+    live.apply({ route: 'gateway', accountId: null });
+    expect(liveCallsForSwitch(live, here, accounts)).toBe(true);
   });
 
   it('a permission change is seen by the next tool call from the live settings', async () => {

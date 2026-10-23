@@ -111,7 +111,7 @@ export function gatewayModelClient(input: {
 /** What the Gateway lists for the model this session will run (its pick, or
  * the Gateway's automatic one): its window, the most it writes in one answer,
  * and whether it takes images. */
-async function gatewayModelFacts(session: HarnessSession, config: Conf): Promise<{ id?: string; contextWindow?: number; maxOutput?: number; vision?: boolean }> {
+async function gatewayModelFacts(session: HarnessSession, config: Conf): Promise<{ id?: string; contextWindow?: number; maxOutput?: number; vision?: boolean; privateDeploymentId?: string }> {
   try {
     // Imported here: gateway/models.ts imports this module for gatewayConnection.
     const { savedGatewayModels, gatewayModels, sameGatewayModel } = await import('../../gateway/models.js');
@@ -126,13 +126,13 @@ async function gatewayModelFacts(session: HarnessSession, config: Conf): Promise
     let auto = list?.auto ?? null;
     const id = session.model ?? undefined;
     // However the id is spelled (an agent's own pin is `claude-opus-5-5`, the list `claude-opus-5.5`).
-    let model = id ? list?.models.find((entry) => sameGatewayModel(entry.id, id)) : undefined;
+    let model = id ? list?.models.find((entry) => entry.id === id) ?? list?.models.find((entry) => sameGatewayModel(entry.id, id)) : undefined;
     // An image requires a vision-capable model: a list that does not know the
     // selected model is asked again.
     if (!model && !fetchedNow && session.attachments?.some((file) => /\.(?:png|jpe?g|gif|webp|bmp|tiff?|heic|avif)$/i.test(file))) {
       list = await gatewayModels({ config });
       const wanted = session.model ?? undefined;
-      model = wanted ? list.models.find((entry) => sameGatewayModel(entry.id, wanted)) : undefined;
+      model = wanted ? list.models.find((entry) => entry.id === wanted) ?? list.models.find((entry) => sameGatewayModel(entry.id, wanted)) : undefined;
       auto = list.auto;
     }
     // Automatic runs under the facts the Gateway lists for `auto`: never a named model.

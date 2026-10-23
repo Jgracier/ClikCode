@@ -221,7 +221,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
     availability: (session, harness) => notOffered('Permission modes', bothRoutes('setting permissions')(session, harness), harness,
       (found) => sessionPermissionModes(session ?? { route: 'local' }, found).length > 0, session),
   }),
-  entry('sandbox', 'Settings', "whether the agent's shell commands write only the workspace, temp and caches (on by default)", { argHint: '[on|off]', availability: agentOnly }),
+  entry('sandbox', 'Settings', "whether the agent's shell commands write only the workspace, temp and caches (on by default)", { argHint: '[on|off]', availability: agentOnly, duringTurn: 'apply' }),
   entry('computer', 'Settings', 'let the agent use this computer’s browser and desktop', { argHint: '[on|off|inspect|logins|login [url] [--new]]', duringTurn: 'apply' }),
   entry('send', 'Settings', 'messages typed mid-turn: steer into the turn, or queue for after it', { argHint: '[steer|queue]', duringTurn: 'apply' }),
   entry('options', 'Settings', 'provider-specific modes and controls', { availability: needsHarness('setting options') }),
@@ -450,6 +450,10 @@ export function slashRouteAppliesDuringTurn(route: SlashRoute, session?: Harness
   // which needs the waiting line the answer is using, and moving the lease
   // mid-turn could stop the server the running turn is talking to.
   if (route.kind === 'command' && route.entry.name === 'model' && session?.route === 'clikcode-local') return false;
+  // `/codex` (and every other harness name) is the provider switch. It
+  // records the destination now; the next model call moves. `/provider`
+  // with no name is the picker, and a picker needs the screen the answer is on.
+  if (route.kind === 'harness') return true;
   return route.kind === 'command' && route.entry.duringTurn === 'apply' && route.args.trim().length > 0;
 }
 

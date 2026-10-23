@@ -3,6 +3,9 @@ import type { HarnessSession, HarnessState } from '../session/model.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
 import { moveThreadToAccount, reconcileNativeThread } from '../session/carry.js';
 import type { prepareAttachments } from '../session/attachments.js';
+import { lifecycle } from '../runtime/lifecycle-log.js';
+import { liveCallsForSwitch } from './live-settings.js';
+import { completeTurnCheckpoint, discardInterruptedTurn } from './turn-journal.js';
 import { closePersistentTransport, closeStandby, persistentWorkRunning, waitForPersistentWork } from './vendor-process.js';
 import { settleHeldVendor } from './turn-steps.js';
 import type { TurnRunOptions } from './session-turn.js';
@@ -11,6 +14,8 @@ import { createVendorObserver } from './vendor-observer.js';
 import { completeVendorTurn, settleAttempt } from './vendor-outcome.js';
 import { recoverFromFailure } from './vendor-recovery.js';
 import { takeUp } from './vendor-thread-takeup.js';
+import { nativeThreadHoldsConversation } from './native-thread-continuity.js';
+import { forgetNativeThread } from '../session/native-thread.js';
 import { createVendorTurnContext, type VendorTurnContext } from './vendor-turn-context.js';
 
 /** The thread under the account this turn runs on (session/carry.ts). */
@@ -20,7 +25,13 @@ async function settleThread(ctx: VendorTurnContext): Promise<void> {
   // A vendor process from the account being left may still have it open.
   if (held && held !== ctx.account.id) await closePersistentTransport(session.id);
   const outcome = await reconcileNativeThread(session, harness, ctx.state.accounts, ctx.account);
-  if (outcome === 'carried' || outcome === 'forgotten' || session.nativeThreadAccountId !== held) await ctx.checkpoint.persistNow();
+  let broken = false;
+  if (session.nativeSessionId && !await nativeThreadHoldsConversation(session, harness, ctx.account)) {
+    await closePersistentTransport(session.id);
+    forgetNativeThread(session);
+    broken = true;
+  }
+  if (outcome === 'carried' || outcome === 'forgotten' || session.nativeThreadAccountId !== held || broken) await ctx.checkpoint.persistNow();
 }
 
 /** Everything before the first attempt: the thread and account the turn starts on. */
@@ -60,6 +71,51 @@ async function startVendorTurn(ctx: VendorTurnContext): Promise<void> {
   }
 }
 
+/** The user's mid-turn choice, before an attempt starts. The attempt already
+ * running is left alone. Another account of this provider is the next attempt;
+ * another provider or route continues the same request there.
+ * A failover moves the account on its own: only an account id the user changed
+ * since `seenAccount` is adopted, so the retry is not pulled back. Plan mode
+ * the vendor itself left is kept until the user changes it. */
+async function followLiveSettings(
+  ctx: VendorTurnContext, seen: { accountId: string | null | undefined; plan: boolean | undefined },
+): Promise<'switch' | void> {
+  const live = ctx.run.liveSettings;
+  const { session } = ctx;
+  if (liveCallsForSwitch(live, { route: session.route, accountId: ctx.account.id, accountProvider: ctx.account.provider }, ctx.state.accounts)) {
+    await closePersistentTransport(session.id);
+    const progressed = Boolean(session.pendingTurn?.response?.trim() || session.pendingTurn?.outputStarted);
+    if (progressed) await completeTurnCheckpoint(session, ctx.checkpoint, session.pendingTurn?.response ?? '');
+    else await discardInterruptedTurn(session.id, ctx.text);
+    lifecycle('turn.switch', { route: live?.route, ...(live?.accountId ? { account: String(live.accountId).slice(0, 8) } : {}) });
+    return 'switch';
+  }
+  if (!live) return;
+  if (live.accountId !== seen.accountId) {
+    seen.accountId = live.accountId;
+    const next = live.accountId ? ctx.state.accounts.find((item) => item.id === live.accountId) : undefined;
+    if (next && next.provider === ctx.account.provider && next.id !== ctx.account.id) {
+      await closePersistentTransport(session.id);
+      ctx.account = next;
+      session.accountId = next.id;
+      await settleThread(ctx);
+    }
+  }
+  if (live.model !== undefined && live.model !== ctx.model) {
+    ctx.model = live.model ?? null;
+    session.model = ctx.model;
+  }
+  if (live.effort !== undefined && live.effort !== session.effort) session.effort = live.effort;
+  if (live.permissionMode && live.permissionMode !== session.permissionMode) session.permissionMode = live.permissionMode;
+  const wantedPlan = live.planMode === true;
+  if (seen.plan === undefined) seen.plan = session.planMode === true;
+  if (wantedPlan !== seen.plan) {
+    if (wantedPlan) session.planMode = true;
+    else delete session.planMode;
+    seen.plan = wantedPlan;
+  }
+}
+
 /**
  * Runs one durable local session turn. Local sessions resolve an env reference
  * only in this process and record normalized, credential-free usage.
@@ -78,13 +134,17 @@ export async function sendVendorTurn(input: {
   startedAt: number;
   signal?: AbortSignal;
   run: TurnRunOptions;
-}): Promise<void> {
+}): Promise<'switch' | void> {
   const ctx = await createVendorTurnContext(input);
+  // The account this turn holds now. A later failover changes the account it runs;
+  // only a different id in the live settings is the user's choice.
+  const seen = { accountId: ctx.account.id as string | null | undefined, plan: undefined as boolean | undefined };
   try {
     await startVendorTurn(ctx);
     const observer = createVendorObserver(ctx);
     ctx.askedText = ctx.turnText;
     for (;;) {
+      if (await followLiveSettings(ctx, seen) === 'switch') return 'switch';
       const attempt = await runAttempt(ctx, observer);
       if (await settleAttempt(ctx, observer, attempt)) {
         await recoverFromFailure(ctx, observer, attempt);

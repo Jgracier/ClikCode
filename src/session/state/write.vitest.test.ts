@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readState } from './read.js';
@@ -40,7 +40,7 @@ createdAt: now, updatedAt: now, status: 'active', messages: [{ role: 'user', con
     let done = false;
     const first = writeState(state).finally(() => { done = true; });
     let step = 0;
-    while (!done) {
+    while (!done && step < 3) {
       step++;
       session.queuedTurns = [...(session.queuedTurns ?? []), { id: `q${step}`, text: `queued ${step}`, submittedAt: now }];
       session.messages = [...session.messages!, { role: 'assistant', content: `part ${step}` }];
@@ -282,7 +282,13 @@ describe('a streaming turn on a chat read from disk', () => {
     const started = (await stat(transcript)).mtimeMs;
     for (let step = 0; step < 3; step++) {
       checkpoint.response(`part ${step} `);
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      // The debounced streaming write lands in the journal; wait for it, not a fixed time.
+      const journal = join(root, 'sessions', 's.turn');
+      const deadline = Date.now() + 5_000;
+      while (!(await readFile(journal, 'utf8').catch(() => '')).includes(`part ${step} `)) {
+        if (Date.now() > deadline) throw new Error(`the journal never held part ${step}`);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
       expect((await stat(transcript)).mtimeMs, `checkpoint ${step}`).toBe(started);
     }
     resetSessionStoreCache();
@@ -321,5 +327,50 @@ describe('a conversation\'s transcript and the shared state lock', () => {
     resetSessionStoreCache();
     const stored = (await readState({ transcripts: ['own'] })).sessions.find((item) => item.id === 'own')!;
     expect(stored.messages?.at(-1)?.content).toBe('answered while the lock was held');
+  });
+
+  it('stores a streaming answer on the conversation lock while the state lock is held, and what streams after, once it is free', async () => {
+    root = await mkdtemp(join(tmpdir(), 'clikcode-write-'));
+    process.env.CLIKCODE_HOME = root;
+    const state = await readState();
+    const now = new Date().toISOString();
+    state.sessions.push({
+      id: 'own', route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', permissionMode: 'bypass',
+      createdAt: now, updatedAt: now, status: 'active',
+      messages: [{ role: 'user', content: 'first' }],
+      pendingTurn: { prompt: 'go', response: '', startedAt: now, updatedAt: now },
+    } as HarnessSession);
+    await writeState(state);
+    const session = state.sessions.find((item) => item.id === 'own')!;
+    const transcript = join(root, 'sessions', 'own.json');
+    session.pendingTurn!.response = 'streamed while the lock was held';
+    session.model = 'next';
+    let acquired!: () => void;
+    const lockAcquired = new Promise<void>((resolve) => { acquired = resolve; });
+    let released!: () => void;
+    const holding = withStateLock(() => new Promise<void>((resolve) => { released = resolve; acquired(); }));
+    await lockAcquired;
+    const writing = writeState(state);
+    try {
+      // The file itself, not a state read: readState takes the lock this test holds. The conversation's
+      // own lock stores the turn while the state lock is held elsewhere.
+      let mid: { pendingTurn?: { response?: string } } | undefined;
+      const deadline = Date.now() + 3_000;
+      while (mid?.pendingTurn?.response !== 'streamed while the lock was held' && Date.now() < deadline) {
+        mid = await readFile(transcript, 'utf8').then((raw) => JSON.parse(raw) as typeof mid, () => undefined);
+        if (mid?.pendingTurn?.response !== 'streamed while the lock was held') await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(mid?.pendingTurn?.response).toBe('streamed while the lock was held');
+      // The turn keeps streaming while the shared state lock is held.
+      session.pendingTurn!.response = 'streamed while the lock was held, and after';
+    } finally {
+      released();
+      await holding;
+    }
+    await writing;
+    resetSessionStoreCache();
+    const stored = (await readState({ transcripts: ['own'] })).sessions.find((item) => item.id === 'own')!;
+    expect(stored.pendingTurn?.response).toBe('streamed while the lock was held, and after');
+    expect(stored.model).toBe('next');
   });
 });

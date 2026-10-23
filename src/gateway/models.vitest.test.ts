@@ -110,6 +110,17 @@ describe('the Gateway\'s model list', () => {
     expect(fromOpenAIModelList([{ id: 'x', access: 'somewhere' }]).models[0]).toEqual({ id: 'x' });
   });
 
+  it('keeps private deployments as distinct choices and labels them separately from token-priced models', async () => {
+    const { fromOpenAIModelList, gatewayModelLabel, gatewayModelDetail } = await import('./models.js');
+    const privateModel = fromOpenAIModelList([{
+      id: 'private-deployment:dep-7', owned_by: 'self-hosted',
+      deployment: { id: 'dep-7', modelId: 'Qwen/Qwen3.8-27B', state: 'starting' },
+    }]).models[0]!;
+    expect(privateModel.id).toBe('private-deployment:dep-7');
+    expect(gatewayModelLabel(privateModel)).toBe('Qwen/Qwen3.8-27B (Private GPU)');
+    expect(gatewayModelDetail(privateModel)).toBe('private GPU · starting');
+  });
+
   it('keeps the last list on disk, so /model opens at once from it', async () => {
     const { savedGatewayModels } = await import('./models.js');
     expect(await savedGatewayModels()).toBeUndefined();

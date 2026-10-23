@@ -15,10 +15,13 @@
  * worker-live-commands (what windows send), worker-server (the socket) and
  * worker-shutdown.
  */
+import { createKeepWarm } from './cache-keepwarm.js';
+import { dropRetiredVendorMcp } from '../harness/retired-mcp.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import { LEGACY_INTERRUPTED_TURN_REQUEST } from '../turn/failover-prompt.js';
 import { statSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
+import { hostname } from 'node:os';
 import Conf from 'conf';
 import { readState } from '../session/state/read.js';
 import { setOutOfTurnHandler, setVendorBackgroundTurnHandler } from '../turn/vendor-process.js';
@@ -37,7 +40,8 @@ import { startStuckWatchdog } from './stuck-watchdog.js';
 import { LiveSettings } from '../turn/live-settings.js';
 import { sessionState } from '../agent/session-state.js';
 import { stateDirectory } from '../session/store/paths.js';
-import { generateWorkerToken, socketPathFor, takeConversation, workerIsReachable, writeWorkerRecord, currentWorkerBuild, type ConversationHold, type WorkerRuntimeRecord } from './registry.js';
+import { CONVERSATION_HANDOFF_REASON, conversationHandoffRequested, generateWorkerToken, socketPathFor, takeConversation, workerIsReachable, writeWorkerRecord, currentWorkerBuild, type ConversationHold, type WorkerRuntimeRecord } from './registry.js';
+import { persistentWorkRunning } from '../turn/vendor-process.js';
 import type { ConnectionState, WorkerContext } from './worker-context.js';
 import { createWorkerIo } from './worker-io.js';
 import { BUILD_WATCH_MS, createIdleControl } from './worker-idle.js';
@@ -60,8 +64,8 @@ async function ownConversation(sessionId: string): Promise<ConversationHold | un
   for (;;) {
     const taken = await takeConversation(sessionId, 'worker');
     if ('hold' in taken) return taken.hold;
-    if (taken.holder.kind === 'worker') return undefined;
-    await new Promise((resolveWait) => setTimeout(resolveWait, 250));
+    if (taken.holder.kind === 'worker' && taken.holder.host === hostname()) return undefined;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 500));
   }
 }
 
@@ -72,6 +76,9 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   // Deleted (or never stored) before this worker got here: nothing to run,
   // which is not a crash.
   if (!session) { lifecycle('worker.no-session'); return; }
+  // Profiles still naming removed ClikCode commands (conversations-mcp and
+  // the rest) are rewritten once. It does not wait on the turn.
+  void dropRetiredVendorMcp(stateDirectory()).catch((error: unknown) => lifecycle('mcp.retired', { error: error instanceof Error ? error.message.slice(0, 200) : String(error) }));
 
   // Two windows that both found no worker each spawn one: the second to get
   // here exits, and the spawning window finds the first by its record.
@@ -113,7 +120,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     turnRunning: false, activeQueuedTurnId: undefined, draining: false, stalledQueuedTurnId: undefined,
     idleTimer: undefined, activeController: undefined, activeLiveInput: undefined, activeSubmissions: undefined,
     activeRestoreDraft: undefined, submitsInFlight: 0, pendingCancel: undefined, stopAnnounced: false, resumingTurn: false, retireWhenIdle: false, recordWrite: Promise.resolve(),
-  } as Omit<WorkerContext, 'vendorBackground' | 'resumeWaiter' | 'io' | 'idle' | 'queue' | 'runTurn' | 'shutdown' | 'server'> as WorkerContext;
+  } as Omit<WorkerContext, 'vendorBackground' | 'resumeWaiter' | 'keepWarm' | 'io' | 'idle' | 'queue' | 'runTurn' | 'shutdown' | 'server'> as WorkerContext;
   ctx.io = createWorkerIo(ctx);
 
   // --- Vendor background turns (persistent transports) -------------------
@@ -144,11 +151,26 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       if (!ctx.queue.startTurn({ type: 'submit', text, echo: true })) ctx.resumingTurn = false;
     },
   });
+  ctx.keepWarm = createKeepWarm({ sessionId, busy: () => ctx.turnRunning || ctx.draining, changed: () => ctx.idle.scheduleIdleExit() });
   ctx.queue = createWorkerQueue(ctx);
   ctx.runTurn = createTurnRunner(ctx);
   ctx.agentSession.onNotification = () => { void ctx.queue.deliverNotifications(); };
   ctx.server = createWorkerServer(ctx, createCommandHandler(ctx));
   ctx.shutdown = createShutdown(ctx);
+  // A client on another machine cannot attach to this worker's Unix socket.
+  // It requests the shared conversation lease; finish work already running,
+  // then release it so that machine's waiting worker can take over. Attached
+  // windows do not pin the chat to this host.
+  let checkingHandoff = false;
+  setInterval(() => {
+    if (checkingHandoff) return;
+    checkingHandoff = true;
+    void (async () => {
+      if (!await conversationHandoffRequested(sessionId)) return;
+      if (ctx.idle.retireBlocker() || await persistentWorkRunning(sessionId)) return;
+      await ctx.shutdown(CONVERSATION_HANDOFF_REASON);
+    })().catch(() => undefined).finally(() => { checkingHandoff = false; });
+  }, 1_000).unref();
   // A loop of its own that never yields would keep this worker -- and what it
   // holds -- forever: a thread ends it (worker/stuck-watchdog.ts).
   startStuckWatchdog(sessionId);

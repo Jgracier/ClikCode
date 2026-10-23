@@ -14,6 +14,7 @@ import { defaultTools, mergeTools } from './tools/registry.js';
 import { computerEnabled } from './computer/settings.js';
 import { computerTools } from './tools/computer.js';
 import { computerWebTool } from './tools/computer-web.js';
+import { clikDeployStepUpTool } from './tools/clikdeploy-step-up.js';
 import { hotTool } from './computer/hot-tools.js';
 import { exposeTools } from './mcp/deferred.js';
 import { gateNotebookTool, workspaceHasNotebooks } from './tools/notebook-gate.js';
@@ -93,6 +94,8 @@ export interface TurnRuntime {
   compactedForSize: boolean;
   /** The estimated context size right after the last compaction; the next one waits for real growth past it (run-turn.ts). */
   tokensAfterCompaction: number | undefined;
+  /** The plan-mode setting the user had when the turn began, then as last seen: only a change after it is theirs (turn-tools.ts applyLivePlan). */
+  livePlanSeen: boolean | undefined;
   lengthContinues: number;
   /** Stop hooks may keep the agent working; bounded so two hooks cannot loop it forever. */
   stopContinues: number;
@@ -110,6 +113,10 @@ export interface TurnRuntime {
 
 /** Opens a turn: its scope, tools, prompt and conversation, the user's hooks,
  * and the prompt's own item. `promptBlocked` is a UserPromptSubmit hook's refusal. */
+function readLivePlan(input: AgentTurnInput): boolean | undefined {
+  try { return input.currentPlanMode?.(); } catch { return undefined; }
+}
+
 export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime; promptBlocked: string | undefined }> {
   const signal = input.signal;
   const throwIfAborted = (): void => { if (signal?.aborted) throw turnCancelledError(); };
@@ -130,7 +137,7 @@ export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime
     hints: { ...input.modelClient.contextHints, contextWindow: input.modelClient.contextHints?.contextWindow ?? input.contextWindow },
     session: input.contextProfile,
   });
-  const ownTools = input.tools ?? [...defaultTools(), ...(await computerEnabled(input.stateDir) ? [...computerTools, computerWebTool].map(hotTool) : [])];
+  const ownTools = input.tools ?? [...defaultTools(), ...(await computerEnabled(input.stateDir) ? [...computerTools, computerWebTool, clikDeployStepUpTool].map(hotTool) : [])];
   const exposure = exposeTools(mergeTools(ownTools, input.extraTools), profile.mcpEagerSchemaTokens);
   const tools = exposure.all;
 
@@ -205,7 +212,7 @@ export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime
     steerQueue: [], steerWaiters: new Set(), steerOpen: true, callsOpen: 0, heldSteers: [], foregroundSteers: new Map(), items, ledger, lastStepUsage: undefined, itemsAtLastUsage: items.length,
     contextWindow: input.contextWindow ?? input.modelClient.contextHints?.contextWindow,
     servedModel: undefined, segments, needsSeparator: false, steps: 0, stall: new StallGuard(), stalledCall: undefined,
-    stepRetries: 0, retryWaitedSeconds: 0, compactedForSize: false, tokensAfterCompaction: undefined, lengthContinues: 0, stopContinues: 0,
+    stepRetries: 0, retryWaitedSeconds: 0, compactedForSize: false, tokensAfterCompaction: undefined, livePlanSeen: readLivePlan(input), lengthContinues: 0, stopContinues: 0,
     shownCalls: new Map(), continuesCutAnswer: false, lastContext: { contextProfile: profile.name },
     stepAcceptsImages: input.modelClient.acceptsImages === true,
   };

@@ -67,6 +67,9 @@ function build(options: { sessionReadMs?: number; sessionFails?: boolean } = {})
 }
 
 const settle = (ms = 30): Promise<void> => new Promise((resolveWait) => setTimeout(resolveWait, ms));
+const waitForTurnEnd = (types: () => string[]): Promise<void> => vi.waitFor(() => {
+  expect(types().filter((type) => type === 'waiting-stop')).toHaveLength(1);
+}, { timeout: 5_000 });
 
 beforeEach(() => { turn.run = undefined; turn.signals = []; });
 
@@ -80,7 +83,7 @@ describe('a Stop before the turn has started', () => {
     expect(ctx.activeController).toBeUndefined();
     await send({ type: 'cancel', restoreDraft: true });
     await submitted;
-    await settle(150);
+    await waitForTurnEnd(types);
     expect(types()).toContain('stopping');
     expect(alice.events.some((event) => event.type === 'restore-draft' && event.text === 'hello')).toBe(true);
     expect(alice.events.filter((event) => event.type === 'waiting-stop')).toEqual([{ type: 'waiting-stop', stopped: true }]);
@@ -97,7 +100,7 @@ describe('a Stop before the turn has started', () => {
     await send({ type: 'cancel', restoreDraft: true });
     await send({ type: 'cancel', restoreDraft: true });
     await submitted;
-    await settle(150);
+    await waitForTurnEnd(types);
     expect(types().filter((type) => type === 'stopping')).toHaveLength(1);
     expect(alice.events.some((event) => event.type === 'restore-draft')).toBe(false);
     expect(types().filter((type) => type === 'waiting-stop')).toHaveLength(1);
@@ -140,7 +143,7 @@ describe('every accepted submit ends in one waiting-stop', () => {
     const read = ctx.io.currentSessionAndAccount;
     ctx.io.currentSessionAndAccount = async () => { reads++; if (reads > 1) throw new Error('state gone'); return read(); };
     await send({ type: 'submit', text: 'x', echo: true } as never);
-    await settle(150);
+    await waitForTurnEnd(types);
     expect(types().filter((type) => type === 'waiting-stop')).toHaveLength(1);
     expect(ctx.turnRunning).toBe(false);
   });
@@ -151,7 +154,7 @@ describe('every accepted submit ends in one waiting-stop', () => {
     const { ctx, send, types } = build();
     turn.run = async () => { throw new Error('model down'); };
     await send({ type: 'submit', text: 'x', echo: true } as never);
-    await settle(150);
+    await waitForTurnEnd(types);
     expect(types().filter((type) => type === 'waiting-stop')).toHaveLength(1);
     expect(types()).toContain('turn-error');
     expect(ctx.turnRunning).toBe(false);
@@ -163,7 +166,7 @@ describe('every accepted submit ends in one waiting-stop', () => {
     const { ctx, send, types } = build();
     turn.run = async () => { throw turnCancelledError(); };
     await send({ type: 'submit', text: 'x', echo: true } as never);
-    await settle(150);
+    await waitForTurnEnd(types);
     expect(types().filter((type) => type === 'waiting-stop')).toHaveLength(1);
     expect(ctx.turnRunning).toBe(false);
   });
@@ -200,7 +203,7 @@ describe('a Stop the turn does not honour', () => {
     await settle(20);
     expect(ctx.turnRunning).toBe(true);
     await send({ type: 'cancel', restoreDraft: false });
-    await settle(150);
+    await waitForTurnEnd(types);
     expect(ctx.turnRunning).toBe(false);
     expect(types().filter((type) => type === 'waiting-stop')).toHaveLength(1);
     expect(types().filter((type) => type === 'stopping')).toHaveLength(1);

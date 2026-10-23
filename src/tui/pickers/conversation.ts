@@ -8,8 +8,8 @@ import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
 import { synchronizeNativeTranscript } from '../../turn/handoff.js';
 import { TerminalHarnessPrompter } from '../prompter.js';
-import { moveToProvider, refuseWhileTurnRuns } from '../../commands/ai/conversations.js';
-import { leaveProvider } from '../../session/native-thread.js';
+import { moveToProvider, turnIsRunning } from '../../commands/ai/conversations.js';
+import { forgetNativeThread, leaveProvider } from '../../session/native-thread.js';
 import { applyClikCodeAgentSessionPolicy } from '../../commands/ai/sessions.js';
 import { chooseOption } from './choose.js';
 
@@ -43,9 +43,13 @@ async function moveToAgentRoute(
   const current = state.sessions.find((item) => item.id === id);
   if (!current) throw new Error(`AI session "${id}" was not found`);
   if (current.route === route) return id;
-  await refuseWhileTurnRuns(id);
-  await synchronizeNativeTranscript(state, current);
-  leaveProvider(current);
+  // The call already started finishes on the route it started on. The next
+  // model step reads this route (turn/live-settings.ts) and moves.
+  const running = await turnIsRunning(id);
+  if (!running) {
+    await synchronizeNativeTranscript(state, current);
+    leaveProvider(current);
+  } else forgetNativeThread(current);
   applyClikCodeAgentSessionPolicy(current, route, state);
   await writeState(state);
   return id;

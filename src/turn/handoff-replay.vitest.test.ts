@@ -88,7 +88,9 @@ async function sentPrompts(): Promise<string[]> {
 describe("the first vendor turn after a provider switch", () => {
   it('hands the new vendor the earlier conversation along with the request', async () => {
     const id = await handedOff();
-    await runSessionTurn({} as never, id, 'now run the focused test');
+    let completedHarness: string | undefined;
+    await runSessionTurn({} as never, id, 'now run the focused test', undefined, { onCompletedHarness: (harness) => { completedHarness = harness; } });
+    expect(completedHarness).toBe('cn');
     const [wire] = await sentPrompts();
     expect(wire).toContain('rename the parser');
     expect(wire).toContain('renamed it to Reader');

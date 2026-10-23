@@ -209,7 +209,9 @@ describe('what the agent\'s memory is told', () => {
       expect(bytes).toBeLessThanOrEqual(ceilingBytes + 2_000);
       expect(bytes).toBeGreaterThan(ceilingBytes * 0.5);
       expect(text).toContain('Request 1499');
-      expect(text).not.toContain('Request 0\n');
+      // Turn 0's answer is not retold; its request is listed in the outline of what was left out.
+      expect(text).not.toContain('Answer 0 ');
+      expect(text).toContain('1. Request 0');
       expect(text).toMatch(/earlier turns? (is|are) left out/);
     });
 

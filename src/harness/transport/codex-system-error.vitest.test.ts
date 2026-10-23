@@ -64,8 +64,47 @@ describe('a Codex thread that ends in systemError', () => {
     expect(error.errorKind).toBe('auth');
   });
 
+  it('reads the usage limit from the error that follows systemError', async () => {
+    const error = await run([
+      { send: systemError },
+      { send: { method: 'error', params: { error: { message: "You've hit your usage limit. Try again at Oct 22nd, 2026 3:13 PM.", codexErrorInfo: 'usageLimitExceeded' }, willRetry: false } } },
+      { send: { method: 'turn/completed', params: { turn: { id: 'U1', status: 'completed' } } } },
+    ]).catch((caught: Error) => caught) as Error & { errorKind?: string; codexErrorInfo?: unknown };
+    expect(error.message).toMatch(/hit your usage limit/);
+    expect(error.codexErrorInfo).toBe('usageLimitExceeded');
+    expect(error.errorKind).toBe('quota');
+    expect(classifyAccountFailure(error)).toBe('quota-exhausted');
+  });
+
+  it('still reads the usage limit when turn/completed arrives before that error', async () => {
+    const error = await run([
+      { send: systemError },
+      { send: { method: 'turn/completed', params: { turn: { id: 'U1', status: 'completed' } } } },
+      { send: { method: 'error', params: { error: { message: "You've hit your usage limit.", codexErrorInfo: 'usageLimitExceeded' }, willRetry: false } } },
+    ]).catch((caught: Error) => caught) as Error & { errorKind?: string };
+    expect(error.message).toMatch(/hit your usage limit/);
+    expect(error.errorKind).toBe('quota');
+    expect(classifyAccountFailure(error)).toBe('quota-exhausted');
+  });
+
+  it('lets a retried turn finish after systemError', async () => {
+    const result = await run([
+      { send: systemError },
+      { send: { method: 'error', params: { error: { message: 'stream reset' }, willRetry: true } } },
+      { send: { method: 'item/agentMessage/delta', params: { delta: 'done' } } },
+      { send: { method: 'turn/completed', params: { turn: { id: 'U1', status: 'completed' } } } },
+    ]);
+    expect(result.text).toBe('done');
+  });
+
   it('reads no refusal from a snapshot with room left', () => {
     expect(codexUsageLimitRefusal({ primary: { usedPercent: 20 }, secondary: { usedPercent: 99 } })).toBeUndefined();
     expect(codexUsageLimitRefusal({ rateLimitReachedType: 'primary' })?.codexErrorInfo).toBe('usageLimitExceeded');
+    expect(codexUsageLimitRefusal({ primary: null, rateLimitsByLimitId: { codex: { primary: { used_percent: 100, resets_at: 1_700_000_000 } } } })?.codexErrorInfo).toBe('usageLimitExceeded');
+    expect(codexUsageLimitRefusal({ ordinaryUsageAllowed: false })?.codexErrorInfo).toBe('usageLimitExceeded');
+    expect(codexUsageLimitRefusal({ spendControlReached: true })?.message).toMatch(/usage limit/);
+    const rateLimited = codexUsageLimitRefusal({ rateLimitReachedType: 'rate_limit_reached' });
+    expect(rateLimited?.codexErrorInfo).toBe('rateLimitExceeded');
+    expect(classifyAccountFailure(Object.assign(new Error(rateLimited!.message), { errorKind: 'other', codexErrorInfo: rateLimited!.codexErrorInfo }))).toBe('temporarily-throttled');
   });
 });

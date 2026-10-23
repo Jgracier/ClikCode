@@ -44,7 +44,11 @@ export interface TurnRunOptions {
   recorder?: TurnRecorder;
   /** Called when the turn's work is over and only its record is left to save. */
   onWorkFinished?: () => void;
+  /** The vendor that actually finished this turn, after any mid-turn handoffs. */
+  onCompletedHarness?: (harness: string | undefined) => void;
 }
+
+const MAX_TURN_HANDOFFS = 8;
 
 export async function runSessionTurn(
   config: Conf, id: string, prompt: string, signal?: AbortSignal, run: TurnRunOptions = {},
@@ -72,17 +76,29 @@ export async function runSessionTurn(
   liveSettings.seed(session);
   const recorded = { ...run, recorder, liveSettings };
   try {
-    if (agent) {
-      const handed = await runAgentTurn({ config, state, session, prompt, signal, run: recorded });
-      if (!handed) return;
-      // The user moved this conversation onto an account between model
-      // steps. The same request continues there.
+    // A provider or account change between steps continues this same request
+    // there, the way a usage-limit failover does. A change that did not land
+    // stops the handoff. Bound repeated changes, but never report a dropped
+    // continuation as a completed turn.
+    let stateNow = state;
+    let sessionNow = session;
+    for (let hop = 0; hop < MAX_TURN_HANDOFFS; hop += 1) {
+      const placed = where(sessionNow);
+      if (isClikCodeAgent(sessionNow)) {
+        const handed = await runAgentTurn({ config, state: stateNow, session: sessionNow, prompt, signal, run: recorded });
+        if (!handed) { run.onCompletedHarness?.(undefined); return; }
+      } else {
+        const handed = await runAccountTurn(stateNow, sessionNow, prompt, signal, recorded);
+        if (handed !== 'switch') return;
+      }
       const fresh = await readState({ transcripts: [id] });
       const now = fresh.sessions.find((item) => item.id === id);
-      if (!now || isClikCodeAgent(now)) return;
-      return await runAccountTurn(fresh, now, prompt, signal, recorded);
+      if (!now || where(now) === placed) return;
+      setTurnHarness(now.nativeHarness ?? now.route);
+      stateNow = fresh;
+      sessionNow = now;
     }
-    return await runAccountTurn(state, session, prompt, signal, recorded);
+    throw new Error(`This turn changed providers or accounts ${MAX_TURN_HANDOFFS} times before it could finish. Send it again after the selection settles.`);
   } catch (error) {
     // Already run by another submit of the same queued entry: nothing to do,
     // and nothing went wrong.
@@ -98,10 +114,16 @@ export async function runSessionTurn(
   }
 }
 
-/** A turn through the session's account: its harness, or a model API. */
+/** Where this conversation runs, for telling a real move from a handoff that did not land. */
+function where(session: HarnessSession): string {
+  return [session.route, session.nativeHarness ?? '', session.accountId ?? ''].join('|');
+}
+
+/** A turn through the session's account: its harness, or a model API.
+ * `'switch'` means the user moved it before the next attempt, and the caller continues the same request. */
 async function runAccountTurn(
   state: HarnessState, session: HarnessSession, prompt: string, signal: AbortSignal | undefined, run: TurnRunOptions,
-): Promise<void> {
+): Promise<'switch' | void> {
   if (!session.accountId) throw new Error('local AI session has no account selected');
   const account = state.accounts.find((item) => item.id === session.accountId);
   if (!account) throw new Error('local AI session account was removed');
@@ -129,6 +151,8 @@ async function runAccountTurn(
   const startedAt = Date.now();
 
   const input = { state, session, account, model, text, prepared, turnText, startedAt, signal, run };
-  if (turnBackendForAccount(account) === 'vendor') return sendVendorTurn(input);
-  return sendDirectApiTurn(input);
+  const backend = turnBackendForAccount(account);
+  const handed = backend === 'vendor' ? await sendVendorTurn(input) : await sendDirectApiTurn(input);
+  if (handed !== 'switch') run.onCompletedHarness?.(backend === 'vendor' ? session.nativeHarness : undefined);
+  return handed;
 }

@@ -3,7 +3,9 @@ import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import { sessionTranscriptMessages } from './checkpoint.js';
 import { textTranscript } from './turn-activities.js';
-import { startTurnCheckpoint, completeTurnCheckpoint } from './turn-journal.js';
+import { lifecycle } from '../runtime/lifecycle-log.js';
+import { liveCallsForSwitch } from './live-settings.js';
+import { startTurnCheckpoint, completeTurnCheckpoint, discardInterruptedTurn } from './turn-journal.js';
 import type { TurnRunOptions } from './session-turn.js';
 import { streamLocalAiTurn } from '../runtime/lazy-bridge.js';
 import { localApiKey } from '../gateway/credentials.js';
@@ -27,17 +29,20 @@ export async function sendDirectApiTurn(input: {
   startedAt: number;
   signal?: AbortSignal;
   run: TurnRunOptions;
-}): Promise<void> {
-  const { state, session, model, text, prepared, startedAt, signal, run } = input;
-  let { account } = input;
+}): Promise<'switch' | void> {
+  const { state, session, text, prepared, startedAt, signal, run } = input;
+  let { account, model } = input;
   const { turnText } = input;
   const prompter = run.prompter;
   if (prepared.images.length) throw new Error('Image attachments need a vendor harness that accepts images; direct API-key accounts do not. Switch providers with /provider or clear them with /attachments clear.');
   if (!model) throw new Error('local AI session has no model selected');
   const baseMessages = textTranscript(sessionTranscriptMessages(session));
   const checkpoint = await startTurnCheckpoint(state, session, text, run);
+  // The account this turn holds now. A later failover changes the account it runs;
+  // only a different id in the live settings is the user's choice.
+  let seenAccountId: string | null | undefined = account.id;
   const accounts = turnAccounts({
-    state, session, prompter, matchesBackend: (item) => matchesDirectTurnModel(item, model),
+    state, session, prompter, matchesBackend: (item) => Boolean(model && matchesDirectTurnModel(item, model)),
     persist: () => checkpoint.persistNow(), current: () => account, adopt: (to) => { account = to; },
   });
   const sink = turnSink(checkpoint, prompter);
@@ -71,6 +76,22 @@ export async function sendDirectApiTurn(input: {
   };
   let turn: Awaited<ReturnType<typeof streamLocalAiTurn>>;
   for (;;) {
+    const live = run.liveSettings;
+    if (liveCallsForSwitch(live, { route: session.route, accountId: account.id, accountProvider: account.provider }, state.accounts)) {
+      const progressed = Boolean(session.pendingTurn?.response?.trim() || session.pendingTurn?.outputStarted);
+      if (progressed) await completeTurnCheckpoint(session, checkpoint, session.pendingTurn?.response ?? '');
+      else await discardInterruptedTurn(session.id, text);
+      lifecycle('turn.switch', { route: live?.route, ...(live?.accountId ? { account: String(live.accountId).slice(0, 8) } : {}) });
+      return 'switch';
+    }
+    if (live && live.accountId !== seenAccountId) {
+      seenAccountId = live.accountId;
+      const next = live.accountId ? state.accounts.find((item) => item.id === live.accountId && item.provider === account.provider) : undefined;
+      if (next && next.id !== account.id) { account = next; session.accountId = next.id; }
+    }
+    if (live && live.model !== undefined && live.model !== model) { model = live.model; session.model = model; }
+    if (live?.effort !== undefined && live.effort !== session.effort) session.effort = live.effort;
+    if (!model) throw new Error('local AI session has no model selected');
     try {
       turn = await invoke(account);
       break;

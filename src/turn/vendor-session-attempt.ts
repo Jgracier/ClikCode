@@ -22,9 +22,6 @@ import { closePersistentTransport, openStandby, persistentTransportFor, vendorCh
 import { isTurnCancelled } from '../agent/cancellation.js';
 import { recordLiveModelCatalog } from '../harness/accounts/model-catalog.js';
 
-/** Per chat, the unapplied options last said (see the app-server branch). */
-const ignoredOptionsSaid = new Map<string, string>();
-
 export async function runVendorSessionAttempt(input: {
   harness: AiLocalHarnessDefinition;
   account: AiHarnessAccount;
@@ -66,12 +63,13 @@ export async function runVendorSessionAttempt(input: {
   try {
     if (transport === 'codex-app-server') {
       const launch = codexLaunchInput({ harness, session, model, effort, environment, live: run.liveSettings });
-      // The user's own option going unapplied is theirs to know -- once per
-      // chat and set of options, not as a note on every turn.
-      const ignored = launch.unmapped.join(', ');
-      if (ignored && ignoredOptionsSaid.get(session.id) !== ignored) {
-        ignoredOptionsSaid.set(session.id, ignored);
-        diagnostic('vendor.app-server-ignores', `${harness.displayName}: ${ignored}`);
+      // Older chats may still store Codex exec-only options removed from the
+      // catalog. Retire them once, with a notice, instead of carrying choices
+      // that this transport will never apply into every later turn.
+      if (launch.unmapped.length) {
+        for (const id of launch.unmapped) delete session.harnessOptions?.[id];
+        await checkpoint.persistNow();
+        diagnostic('vendor.option-retired', `${harness.displayName}: ${launch.unmapped.join(', ')}`);
       }
       const codexInput: CodexAppServerTurnInput = {
         ...launch.input, prompt: turnText, images, signal, onSessionId,
@@ -230,6 +228,25 @@ export function prepareAcpStandby(input: {
 }): Promise<boolean> {
   const launch = acpLaunchInput(input);
   return standbyOf(input, 'acp', async (child) => { await (child as AcpSession).runTurn({ ...launch, prompt: '', prepareOnly: true }); });
+}
+
+/** One small request on a copy of this conversation's thread (`copyId`, already beside it in the
+ * account's profile): the provider reads the history from its cache, which keeps that cache alive
+ * (worker/cache-keepwarm.ts). Returns the cache figures the provider reported. */
+export async function pingPromptCache(input: {
+  harness: AiLocalHarnessDefinition; account: AiHarnessAccount; session: HarnessSession; copyId: string;
+  model: string | null; effort?: string; environment: Record<string, string>; signal?: AbortSignal;
+}): Promise<{ cacheRead?: number; cacheWrite?: number }> {
+  const { nativeSessionPreallocated: _fresh, ...rest } = input.session;
+  const session: HarnessSession = { ...rest, nativeSessionId: input.copyId, permissionMode: 'ask' };
+  let usage: { cacheRead?: number; cacheWrite?: number } = {};
+  await runAcpTurn({
+    ...acpLaunchInput({ ...input, session }),
+    prompt: 'ClikCode keeping this conversation\'s cache warm, not a request: reply with only the word ok.',
+    signal: input.signal,
+    onUsage: (reported) => { usage = { ...(reported.cacheRead !== undefined ? { cacheRead: reported.cacheRead } : {}), ...(reported.cacheWrite !== undefined ? { cacheWrite: reported.cacheWrite } : {}) }; },
+  });
+  return usage;
 }
 
 /** What a Codex app-server turn is launched and opened with, for a turn and

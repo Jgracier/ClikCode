@@ -125,14 +125,17 @@ function track(sessionId: string, client: WorkerClient): void {
     });
   };
   const initial = client.initialEvent;
-  if (initial?.type === 'snapshot' && initial.live) joinLive(initial.live, initial.session);
+  if (initial?.type === 'snapshot') {
+    if (initial.live) joinLive(initial.live, initial.session);
+    tracker.background = initial.background ?? backgroundWorkOf(initial.live);
+  }
   // Registered before any turn's own listener (driveWorkerTurn), so that one
   // always sees this record already up to date with the event it is handling.
   client.on('event', (event: WorkerEvent) => {
     if (event.type === 'waiting-start') {
       Object.assign(tracker, {
         running: true, prompt: event.prompt, liveText: '', activities: [], plan: [], marks: [], unsequenced: [],
-        thought: undefined, phase: undefined, usage: undefined, background: undefined, vendorWork: event.vendorWork === true,
+        thought: undefined, phase: undefined, usage: undefined, background: tracker.background, vendorWork: event.vendorWork === true,
       });
       tracker.wake?.('turn');
     } else if (event.type === 'waiting-stop') {
@@ -153,6 +156,7 @@ function track(sessionId: string, client: WorkerClient): void {
       // `live` for as long as a turn's record is unfinished). Left running until waiting-stop, this
       // window's prompt would follow the same turn again and draw it a second time.
       else tracker.running = false;
+      tracker.background = event.background ?? backgroundWorkOf(event.live);
     } else if (event.type === 'delta') {
       tracker.liveText = event.mode === 'replace' ? event.text : tracker.liveText + event.text;
     } else if (event.type === 'activity') {
@@ -431,6 +435,7 @@ async function driveWorkerTurn(
             // the live view's and is never drawn as ended; a snapshot without
             // it (the one that closes a turn) holds an interrupted one.
             rl.render(event.session, event.account, event.live ? { running: true, ...(event.live.prompt !== undefined ? { prompt: event.live.prompt } : {}) } : { running: false });
+            rl.setBackgroundWork?.(event.background ?? backgroundWorkOf(event.live));
             // The turn as far as it has got -- one this window did not start
             // (a queued message it is behind) included.
             if (event.live) showLive(rl, tracker);

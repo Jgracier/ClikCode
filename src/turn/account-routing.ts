@@ -262,15 +262,16 @@ export async function accountAfterFailure(input: {
  * its move only while the conversation is still on the account the turn last
  * recorded -- otherwise the user's choice stands, for the next turn -- and
  * saves at once, so the next move compares against what is really stored. */
-export function turnAccountRecorder(session: HarnessSession, persist: () => Promise<void>): (to: AiHarnessAccount) => Promise<void> {
+export function turnAccountRecorder(session: HarnessSession, persist: () => Promise<void>):
+  (to: AiHarnessAccount, save?: boolean) => Promise<void> {
   let recorded = session.accountId;
-  return async (to) => {
+  return async (to, save = true) => {
     if (to.id === recorded) return;
     const stored = (await readState({ transcripts: [] })).sessions.find((item) => item.id === session.id);
     if (stored && stored.accountId !== recorded) return;
     session.accountId = to.id;
     recorded = to.id;
-    await persist();
+    if (save) await persist();
   };
 }
 
@@ -314,7 +315,9 @@ export function turnAccounts(input: {
     const first = session.pendingTurn?.accountSwitch?.from ?? switchedFrom;
     if (session.pendingTurn) session.pendingTurn.accountSwitch = { from: first, to: to.label, reason: why };
     input.adopt(to);
-    await Promise.all([closing, recordAccount(to)]);
+    // Record the account and the pending turn's switch together. A separate
+    // save here used to write the same state twice on every failover.
+    await Promise.all([closing, recordAccount(to, false)]);
     await persist();
   };
   return {

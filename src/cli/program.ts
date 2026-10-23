@@ -4,7 +4,7 @@
  */
 
 import { appendFileSync, mkdirSync } from 'node:fs';
-import { lifecycleProcess, setLifecycleRole } from '../runtime/lifecycle-log.js';
+import { lifecycle, lifecycleProcess, setLifecycleRole } from '../runtime/lifecycle-log.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { join } from 'node:path';
 import { Command } from 'commander';
@@ -21,6 +21,14 @@ import { CLIKCODE_VERSION } from '../version.js';
  * actually dies, so this uses the sync fs API specifically, not fs/promises.
  * Never throws itself: a crash handler that can crash defeats its own point.
  */
+/** A terminal that closed (EIO) or a reader that went away (EPIPE). The same
+ * end as a hangup: nobody is left to read a stack, and crash.log is not
+ * where it belongs. */
+export function isClosedStream(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null | undefined)?.code;
+  return code === 'EIO' || code === 'EPIPE';
+}
+
 function logCrashToDisk(kind: 'uncaughtException' | 'unhandledRejection', error: unknown): void {
   try {
     const dir = stateDirectory();
@@ -73,28 +81,28 @@ export function buildBaseProgram(): Command {
   // cursor hidden, autowrap off and bracketed paste on; an error printed into
   // that state is unreadable and the shell it returns to is unusable. A no-op
   // when no terminal UI was ever started.
-  process.on('unhandledRejection', (err) => {
+  const onCrash = (kind: 'uncaughtException' | 'unhandledRejection', err: unknown): void => {
+    // The stream 'error' listener below covers writes to stdout itself. A
+    // write anywhere else (a socket, a pipe) with the same code still arrives
+    // here, and used to be appended to crash.log: 195 of them were a closed
+    // terminal. The window's worker keeps any turn running.
+    if (isClosedStream(err)) {
+      lifecycle('process.hangup', { code: (err as { code?: string }).code });
+      process.exit(process.exitCode ?? 0);
+    }
     restoreTerminal();
-    logCrashToDisk('unhandledRejection', err);
+    logCrashToDisk(kind, err);
     handleCommandError(err);
     process.exit(process.exitCode || 1);
-  });
-  // A terminal that closed under a window (EIO) or a reader that went away
-  // (EPIPE) leaves nobody to write to: the same end as a hangup, not a crash.
-  // The window's worker keeps any turn running. Logged as uncaught crashes
-  // before, 22 of them in three days.
+  };
+  process.on('unhandledRejection', (err) => onCrash('unhandledRejection', err));
   for (const stream of [process.stdout, process.stderr]) {
     stream.on('error', (error: NodeJS.ErrnoException) => {
-      if (error.code === 'EIO' || error.code === 'EPIPE') process.exit(process.exitCode ?? 0);
+      if (isClosedStream(error)) process.exit(process.exitCode ?? 0);
       throw error;
     });
   }
-  process.on('uncaughtException', (err) => {
-    restoreTerminal();
-    logCrashToDisk('uncaughtException', err);
-    handleCommandError(err);
-    process.exit(process.exitCode || 1);
-  });
+  process.on('uncaughtException', (err) => onCrash('uncaughtException', err));
 
   program
     .name('clikcode')
@@ -136,6 +144,7 @@ export function runProgram(program: Command): void {
       console.log();
       console.log('Run', chalk.cyan(`${name} --help`), 'for available commands');
     }
+    lifecycle('command.unknown', { command: program.args.join(' ').slice(0, 120) });
     process.exit(1);
   });
 

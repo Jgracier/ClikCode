@@ -88,6 +88,8 @@ export class BroadcastObserver implements TurnObserver {
   private livePrompt: string | undefined;
   /** The running turn is the vendor's own background work (waiting-start `vendorWork`). */
   private liveVendorWork = false;
+  /** Vendor background tasks continue after the parent turn ends. */
+  private backgroundLevel?: BackgroundWork;
   /** The running turn's tool rows and plan, so a window joining it mid-way
    * draws those too, not only its text. */
   private liveActivities: LiveActivity[] = [];
@@ -196,7 +198,8 @@ export class BroadcastObserver implements TurnObserver {
    * snapshot holds and what the window is sent after it. */
   snapshotFor(socket: Socket, session: HarnessSession, account?: string): void {
     const live = this.liveSnapshot(session);
-    sendEvent(socket, { type: 'snapshot', session, ...(account ? { account } : {}), ...(live ? { live } : {}) });
+    sendEvent(socket, { type: 'snapshot', session, ...(account ? { account } : {}), ...(live ? { live } : {}),
+      ...(this.backgroundLevel ? { background: this.backgroundLevel } : {}) });
   }
 
   /** `decided`: the user chose (a window's answer), as against the vendor
@@ -400,6 +403,7 @@ export class BroadcastObserver implements TurnObserver {
 
   setBackgroundWork(work: BackgroundWork | undefined): void {
     const level = mergeBackgroundWork(undefined, work ?? {});
+    this.backgroundLevel = level;
     if (this.waitingLabel) this.liveBackground = level;
     void this.onBackgroundWork?.(level);
     this.broadcast({ type: 'background', pending: level?.agents ?? 0, ...(level ? { work: level } : {}) });

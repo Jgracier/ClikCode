@@ -1,10 +1,10 @@
 /** ClikCode's own agent turn, using Gateway or a local model for inference. */
 import { diagnostic } from '../runtime/lifecycle-log.js';
-import { summarySources } from './summary-sources.js';
 import { agentMcpServer, gatewayAgentSession, type GatewayAgentSession } from '../gateway/agent-session.js';
 import type Conf from 'conf';
 import { routeMcpServers } from '../gateway/mcp.js';
 import { modelClientForSession } from '../agent/models/for-session.js';
+import { sessionSandboxMode } from '../agent/sandbox.js';
 import { isClikCodeAgent, isGatewayService } from '../session/route.js';
 import { LiveSettings } from './live-settings.js';
 import { discardInterruptedTurn } from './turn-journal.js';
@@ -40,7 +40,10 @@ export function stepClientRefresher(input: {
 }) {
   const { session, config, live } = input;
   return async () => {
-    if (!isClikCodeAgent({ route: live.route })) return 'switch' as const;
+    if (!isClikCodeAgent({ route: live.route })) {
+      lifecycle('turn.switch', { route: live.route });
+      return 'switch' as const;
+    }
     // Model, effort and speed are the worker's live settings, read before every model step: a change
     // made while the turn runs applies to the next call, not to the next turn.
     const model = live.model ?? null;
@@ -139,10 +142,9 @@ export async function runAgentTurn(input: {
   try {
     held = await seedAgentConversation({
       session, stateDir: stateDirectory(), ...(modelClient.contextHints?.contextWindow ? { contextWindow: modelClient.contextHints.contextWindow } : {}),
-      summaries: summarySources(state.accounts),
       displayName: (command) => localHarnessForCommand(command)?.displayName,
     });
-    if (held.seeded) lifecycle('thread.take-up', { harness: attributedTo, how: 'agent-memory', turns: held.total, seeded: held.seeded, ...(held.summarized ? { summarized: held.summarized, summaryFrom: held.summaryFrom } : {}) });
+    if (held.seeded) lifecycle('thread.take-up', { harness: attributedTo, how: 'agent-memory', turns: held.total, seeded: held.seeded });
     session.agentThreadTurns = held.total;
     memoryBytes = await memory.size();
     seededOk = true;
@@ -152,7 +154,10 @@ export async function runAgentTurn(input: {
     let harnessTurn: Awaited<ReturnType<typeof runAgentSessionTurn>>;
     for (;;) {
       harnessTurn = await runAgentSessionTurn({
-        session, prompt: turnText, modelClient, modelClientForStep, currentPermissionMode: async () => liveSettings.permissionMode,
+        session, prompt: turnText, modelClient, modelClientForStep,
+        currentPermissionMode: async () => liveSettings.permissionMode,
+        currentSandbox: () => sessionSandboxMode(liveSettings.sandbox),
+        currentPlanMode: () => liveSettings.planMode === true,
         // ClikDeploy's own account tools come with the Gateway.
         mcpServers: [...routeMcpServers(session, config), ...(agentServer ? [agentServer] : [])],
         ...(agent?.system ? { agentInstructions: agent.system } : {}),

@@ -17,6 +17,8 @@ import { gatewaySubscriptionsOn, subscriptionsHeader } from './subscriptions.js'
 
 export interface GatewayModel {
   id: string;
+  /** Present for a private compute deployment. The model is selected by deployment identity, not token price. */
+  deployment?: { id: string; modelId: string; state: 'running' | 'asleep' | 'starting' };
   /** The lab that made it (`anthropic`, `meta`), as the Gateway names it; absent when unknown. Never who serves it. */
   maker?: string;
   contextWindow?: number;
@@ -42,6 +44,7 @@ const ACCESS = new Set<string>(['subscription', 'free', 'paid']);
 
 /** A model as a row names it: `claude-opus-5-5 (subscription)` where the Gateway says which tier serves it. */
 export function gatewayModelLabel(model: GatewayModel): string {
+  if (model.deployment) return `${withoutFreeTag(model.deployment.modelId)} (Private GPU)`;
   const name = withoutFreeTag(model.id);
   return model.access ? `${name} (${model.access})` : name;
 }
@@ -89,6 +92,10 @@ export interface GatewayModelList {
  * providers serves it, and on what terms, is the Gateway's own decision (the
  * cheapest available) and not the user's concern. */
 export function gatewayModelDetail(model: GatewayModel): string {
+  if (model.deployment) {
+    const state = model.deployment.state === 'running' ? 'ready' : model.deployment.state === 'asleep' ? 'asleep · starts on use' : 'starting';
+    return `private GPU · ${state}`;
+  }
   return [
     model.price ? gatewayPriceLabel(model.price) : '',
     model.vision ? 'images' : '',
@@ -226,6 +233,7 @@ export function fromOpenAIModelList(data: readonly unknown[]): GatewayModelList 
     if (!raw || typeof raw !== 'object') continue;
     const entry = raw as {
       id?: unknown; owned_by?: unknown; root?: unknown; type?: unknown; access?: unknown; context_length?: unknown; max_output_tokens?: unknown; tokens_per_second?: unknown;
+      deployment?: { id?: unknown; modelId?: unknown; state?: unknown };
       capabilities?: { vision?: unknown; reasoning?: unknown }; pricing?: Record<string, unknown>;
     };
     if (typeof entry.id !== 'string' || !entry.id) continue;
@@ -246,6 +254,9 @@ export function fromOpenAIModelList(data: readonly unknown[]): GatewayModelList 
     const charged = { inMTok: num('input_per_mtok'), outMTok: num('output_per_mtok') };
     models.push({
       id: entry.id,
+      ...(typeof entry.deployment?.id === 'string' && typeof entry.deployment.modelId === 'string'
+        ? { deployment: { id: entry.deployment.id, modelId: entry.deployment.modelId, state: entry.deployment.state === 'asleep' || entry.deployment.state === 'starting' ? entry.deployment.state : 'running' } }
+        : {}),
       ...(typeof entry.owned_by === 'string' && entry.owned_by && entry.owned_by !== 'clikdeploy' ? { maker: entry.owned_by } : {}),
       ...(typeof entry.access === 'string' && ACCESS.has(entry.access) ? { access: entry.access as GatewayAccess } : {}),
       ...(typeof entry.context_length === 'number' && entry.context_length > 0 ? { contextWindow: entry.context_length } : {}),
@@ -265,6 +276,16 @@ export function fromOpenAIModelList(data: readonly unknown[]): GatewayModelList 
     });
   }
   return { auto, models };
+}
+
+/** Human-readable model for the status line; never expose the private route's opaque model-list id. */
+export function gatewaySessionModelLabel(modelId: string | null | undefined): string | undefined {
+  if (!modelId) return undefined;
+  if (cached) {
+    const selected = cached.list.models.find((entry) => entry.id === modelId);
+    if (selected?.deployment) return selected.deployment.modelId;
+  }
+  return modelId.startsWith('private-deployment:') ? 'Private model' : modelId;
 }
 
 /** Test seam. */
