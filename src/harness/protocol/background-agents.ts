@@ -1,6 +1,7 @@
 /** Background work a vendor says is still running (standard section 10),
- * read from the wire shapes the vendor publishes. Nothing is guessed: a
- * record that does not carry a count says nothing, which is not zero.
+ * read from the wire shapes the vendor publishes. Named agents are kept
+ * when the vendor sends its task list; count-only records still carry counts.
+ * A record that does not carry a count says nothing, which is not zero.
  *
  * Three kinds, because Claude Code and Codex treat them as three things:
  *  - `agents`: background agents. On the turn's end line (`Waiting for N
@@ -32,6 +33,8 @@ import { asRecord, type JsonRecord } from './json-lines.js';
 /** The background work a surface shows. A kind that is zero is absent. */
 export interface BackgroundWork {
   agents?: number;
+  /** Named live agents when the vendor publishes its full task list. */
+  agentTasks?: Array<{ id: string; label: string }>;
   terminals?: number;
   workflows?: number;
 }
@@ -53,6 +56,10 @@ export function mergeBackgroundWork(current: BackgroundWork | undefined, update:
     const count = wholeCount(update[kind] !== undefined ? update[kind] : current?.[kind]);
     if (count) merged[kind] = count;
   }
+  if (merged.agents) {
+    const tasks = update.agentTasks ?? (update.agents === undefined || update.agents === current?.agents ? current?.agentTasks : undefined);
+    if (tasks?.length) merged.agentTasks = tasks.slice(0, merged.agents);
+  }
   return Object.keys(merged).length ? merged : undefined;
 }
 
@@ -67,18 +74,24 @@ export function backgroundWorkOf(holder: { background?: BackgroundWork; pendingB
 export function backgroundWork(record: JsonRecord): BackgroundWorkUpdate | undefined {
   if (record.type !== 'system') return undefined;
   if (record.subtype === 'background_tasks_changed' && Array.isArray(record.tasks)) {
-    const work = { agents: 0, terminals: 0, workflows: 0 };
+    const work: BackgroundWorkUpdate = { agents: 0, terminals: 0, workflows: 0 };
+    const agentTasks: NonNullable<BackgroundWork['agentTasks']> = [];
     for (const task of record.tasks) {
       const value = asRecord(task);
       if (!value) continue;
       if (value.task_type === 'local_agent') {
-        if (value.ambient !== true && value.subagent_type !== 'main-session') work.agents += 1;
-      } else if (value.task_type === 'local_workflow') work.workflows += 1;
+        if (value.ambient !== true && value.subagent_type !== 'main-session') {
+          work.agents = (work.agents ?? 0) + 1;
+          const id = value.task_id;
+          if (typeof id === 'string' && id) agentTasks.push({ id, label: typeof value.description === 'string' && value.description.trim() ? value.description.trim() : 'Background agent' });
+        }
+      } else if (value.task_type === 'local_workflow') work.workflows = (work.workflows ?? 0) + 1;
       else if (value.task_type === 'local_bash') {
         const owner = value.parent_task_id;
-        if (typeof owner !== 'string' || !owner) work.terminals += 1;
+        if (typeof owner !== 'string' || !owner) work.terminals = (work.terminals ?? 0) + 1;
       }
     }
+    if (agentTasks.length) work.agentTasks = agentTasks;
     return work;
   }
   if (record.subtype === 'turn_duration') {

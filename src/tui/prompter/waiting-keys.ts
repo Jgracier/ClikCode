@@ -21,7 +21,7 @@ export function onWaitingKey(this: TerminalHarnessPrompter, key: string): void {
   // A sub-agent open in full view takes every key; none of them reaches the
   // main turn (Esc and Ctrl+C go back to the main chat, they do not stop it).
   if (this.subView) { this.subViewKey(key); return; }
-  // Right on an empty composer, on an open sub-agent row: its own screen.
+  // Right on an empty composer opens a running sub-agent's own screen.
   if (key === '\u001b[C' && !turn.draft && !this.pendingApproval && this.openSubView()) return;
   // Otherwise Right on an empty composer opens the command menu, as it does when no turn runs.
   if (key === '\u001b[C' && !turn.draft && !this.pendingApproval && turn.command && !this.signInInput) {

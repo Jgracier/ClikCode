@@ -10,6 +10,7 @@ import { composerUsageLabel, paintTitleRule, paintUsageRule } from '../../render
 import type { TerminalHarnessPrompter } from '../../prompter.js';
 import type { HarnessSession } from '../../../session/model.js';
 import { frameBands } from './bands.js';
+import { liveAgentRows } from '../../render/live-agents.js';
 
 
 export type FooterInput = {
@@ -48,6 +49,16 @@ export function buildFooter(this: TerminalHarnessPrompter, input: FooterInput): 
   const aboveApproval = footer.length;
   const midRows = signInRows.length ? ['', ...signInRows] : [];
   footer.push(...approvalRows, ...midRows);
+  // Running subagents have one fixed home. Their completed rows enter the
+  // transcript; while open they never compete with the streaming answer.
+  if ((this.turn || this.backgroundWork?.agents) && !approvalRows.length) {
+    const reserved = (this.turn && waitingRows >= 2 ? 1 : 0) + (this.turn ? 1 : 0)
+      + 1 + composerRows.rows.length + 2; // blank, status, usage, composer, title, meta
+    footer.push(...liveAgentRows(
+      this.turn ? this.activityEntries : [], (id) => this.liveChildren.latest(id), this.reducedMotion ? 0 : this.waitingFrame,
+      Math.max(1, inner), Math.max(1, targetHeight - footer.length - reserved), this.backgroundWork,
+    ));
+  }
   // The generating band: a blank above the status where the height has the
   // row for it. The status itself is always drawn while a turn runs. The
   // blank row is also where the newest words of the reasoning are drawn, and

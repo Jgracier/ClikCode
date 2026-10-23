@@ -15,7 +15,7 @@ import { renderMarkdown } from './markdown';
 import { Icon, Spinner } from './ui';
 import { foldedGroupCount, liveMeter, runItemKey, type RunItem, shimmerStyle, traceSummaryLine, workingDetail, workingIndicator, workingStatus } from './flow';
 import { CopyAnswer, LiveMarkdown, renderFinished } from './messages';
-import { ChildLine, DecisionRow, FoldedRun, Reasoning, RunGroups, ThoughtRow } from './activity-rows';
+import { ActivityRow, ChildLine, DecisionRow, FoldedRun, Reasoning, RunGroups, ThoughtRow } from './activity-rows';
 
 /** How a turn reads, live or finished, in the order it happened -- as
  * Claude Code and Codex lay a turn out: each paragraph of the answer, and
@@ -270,6 +270,31 @@ export function Working({ live, asking, usage, reconnecting: away = false }: { l
   );
 }
 
+/** One row per running subagent beside the composer. A completion leaves this
+ * section and enters TurnFlow at the call's place in the conversation. */
+const isRunningAgent = (activity: Activity): boolean => Boolean(activity.agent && activity.kind === 'tool-start');
+
+export function RunningAgents({ live, workspace }: { live: Pick<LiveTurn, 'activities' | 'background' | 'pendingBackground'>; workspace?: string }): JSX.Element | null {
+  const active = live.activities.filter(isRunningAgent);
+  const named: Activity[] = (live.background?.agentTasks ?? []).filter((task) => !active.some((agent) =>
+    agent.id === task.id || agent.agentId === task.id))
+    .map((task) => ({ key: `background:${task.id}`, id: task.id, kind: 'tool-start', label: task.label, agent: true }));
+  const unnamed = active.length ? 0 : Math.max(0, (live.background?.agents ?? live.pendingBackground ?? 0) - (live.background?.agentTasks?.length ?? 0));
+  const agents = [...active, ...named, ...Array.from({ length: unnamed }, (_, index): Activity => ({
+    key: `background:unknown:${index}`, id: `background:unknown:${index}`, kind: 'tool-start', label: `Background agent ${index + 1}`, agent: true,
+  }))];
+  const other = workingIndicator(live);
+  if (!agents.length && !other) return null;
+  return (
+    <div class="running-agents" aria-label="Running background work">
+      {agents.length ? <div class="running-agents-heading">Subagents <span class="muted">{agents.length} running</span></div> : null}
+      {agents.length ? <div class="running-agents-list">{agents.map((agent) =>
+        <ActivityRow key={agent.key} activity={agent} workspace={workspace} />)}</div> : null}
+      {other ? <div class="running-agents-other muted"><Icon name="pulse" />{other}</div> : null}
+    </div>
+  );
+}
+
 /** The turn waits on the user -- an approval, or a sign-in in their
  * browser: the working line holds still, its clock stopped. */
 export function waitingOnUser(model: Pick<ChatModel, 'approvals' | 'signIn'>): boolean {
@@ -307,7 +332,7 @@ export const LiveTurnView = memo(({ live, workspace, asking, plan, notes, turn, 
 }): JSX.Element => (
   <div class="message assistant live" aria-busy="true">
     {live ? (
-      <TurnFlow text={live.text} activities={live.activities} thoughts={live.reasoning} steers={live.steers} workspace={workspace} live={{ startedAt: live.startedAt }}
+      <TurnFlow text={live.text} activities={live.activities.filter((activity) => !isRunningAgent(activity))} thoughts={live.reasoning} steers={live.steers} workspace={workspace} live={{ startedAt: live.startedAt }}
         {...(live.planAt ? { plan: { entries: plan, at: live.planAt } } : {})}
         {...(live.decisions?.length ? { decisions: live.decisions } : {})}
         {...(turn !== undefined ? { notes: notes.filter((note) => note.turn === turn) } : {})} />

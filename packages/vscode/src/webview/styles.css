@@ -601,6 +601,11 @@ body.vscode-high-contrast .keylist-row.active { outline: 1px dashed var(--vscode
   .working .working-label { background: none; -webkit-text-fill-color: currentColor; animation: none; }
 }
 .working-wrap { margin-top: 6px; }
+.running-agents { flex: none; border-left: 2px solid var(--vscode-textLink-foreground); background: color-mix(in srgb, var(--vscode-textLink-foreground) 7%, transparent); border-radius: 4px; margin: 4px var(--gap); padding: 7px 10px; max-height: min(35vh, 320px); overflow-y: auto; }
+.running-agents-heading { display: flex; align-items: baseline; gap: 8px; font-size: .82em; font-weight: 600; color: var(--vscode-descriptionForeground); margin-bottom: 3px; }
+.running-agents-heading .muted { font-weight: 400; }
+.running-agents-list .activity { margin: 0; }
+.running-agents-other { display: flex; align-items: center; gap: 6px; font-size: .85em; padding: 3px 0; }
 .working-wrap .working { margin-top: 0; }
 .working-wrap .reasoning { margin-top: 4px; }
 .working-thought { color: var(--muted); }

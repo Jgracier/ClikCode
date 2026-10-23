@@ -1,4 +1,4 @@
-/** The sub-agent full view on the waiting display: open from an expanded row with Right, steer, back with Left,
+/** The sub-agent full view on the waiting display: open with Right, steer, back with Left,
  * and the main turn is never touched by any key typed in it. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TerminalHarnessPrompter } from './prompter.js';
@@ -33,14 +33,16 @@ const open = (rl: TerminalHarnessPrompter, id: string): void => { (rl.groupExpan
 const screen = (): string => written.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '');
 
 describe('sub-agent view in the terminal', () => {
-  it('Right on a collapsed row opens nothing; on an expanded agent row it opens its screen', async () => {
+  it('Right opens the latest running agent; an expanded agent takes precedence', async () => {
     const { rl, key } = follow();
     try {
       key('\u001b[C');
-      expect(rl.subView).toBeUndefined();
+      expect(rl.subView?.state.siblings[rl.subView.state.index]?.id).toBe('a2');
+      rl.closeSubView();
       open(rl, 'a1');
       key('\u001b[C');
       expect(rl.subView?.state.siblings.map((s) => s.id)).toEqual(['a1', 'a2']);
+      expect(rl.subView?.state.siblings[rl.subView.state.index]?.id).toBe('a1');
       await new Promise((resolve) => setTimeout(resolve, 150));
       expect(screen()).toContain('main > ');
       expect(screen()).toContain('main: running');
