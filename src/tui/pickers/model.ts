@@ -190,9 +190,10 @@ export async function interactivePrivateModelsPicker(rl: HarnessPrompter, id: st
     return;
   }
   const waiting = TERMINAL.active === rl ? TERMINAL.active : undefined;
-  const models = await withSlowWait(waiting, 'searching deployable Hugging Face models…', () => searchDeployableModels(query));
+  const matches = await withSlowWait(waiting, 'searching Hugging Face models…', () => searchDeployableModels(query));
+  const models = matches.filter((model) => !model.modality || model.modality === 'llm');
   if (!models.length) {
-    rl.panel?.('Private models', 'No deployable Hugging Face models matched that search. Try a model name or author.');
+    rl.panel?.('Private models', 'No chat models matched that search. Try a model name or author.');
     return;
   }
   const selected = await chooseOption(rl, 'Choose a deployable Hugging Face model', models.map((model) => ({
