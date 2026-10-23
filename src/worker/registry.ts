@@ -232,6 +232,36 @@ function ownerPath(sessionId: string, kind: ConversationOwnerKind = 'worker'): s
   return join(workersDirectory(), `${sessionKey(sessionId)}.${kind === 'client' ? 'open' : 'owner'}`);
 }
 
+function handoffPath(sessionId: string): string {
+  return join(workersDirectory(), `${sessionKey(sessionId)}.handoff`);
+}
+
+interface HandoffRequest { toHost: string; at: number }
+const HANDOFF_FRESH_MS = 60_000;
+export const CONVERSATION_HANDOFF_REASON = 'conversation moved to another machine';
+
+/** A client chose a different machine. Ask the worker holding the shared
+ * conversation to finish its current work and release it. A Unix socket
+ * cannot be contacted across hosts. */
+export async function requestConversationHandoff(sessionId: string): Promise<boolean> {
+  const owner = await conversationHolder(sessionId);
+  if (!owner || owner.kind !== 'worker' || owner.host === hostname()) return false;
+  await atomicWriteFile(handoffPath(sessionId), `${JSON.stringify({ toHost: hostname(), at: Date.now() } satisfies HandoffRequest)}\n`, { durable: false });
+  return true;
+}
+
+/** The worker on the machine being left honors a recent request. The
+ * destination's worker ignores the same file after it takes the lease. */
+export async function conversationHandoffRequested(sessionId: string, workerHost: string = hostname()): Promise<boolean> {
+  const raw = await readFile(handoffPath(sessionId), 'utf8').catch(() => undefined);
+  if (!raw) return false;
+  try {
+    const request = JSON.parse(raw) as Partial<HandoffRequest>;
+    return typeof request.toHost === 'string' && request.toHost !== workerHost
+      && typeof request.at === 'number' && Date.now() - request.at < HANDOFF_FRESH_MS;
+  } catch { return false; }
+}
+
 function parseOwner(raw: string): ConversationOwner | undefined {
   try {
     const parsed = JSON.parse(raw) as Partial<ConversationOwner>;
