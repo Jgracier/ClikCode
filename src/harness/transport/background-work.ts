@@ -60,11 +60,13 @@ export class BackgroundWorkTracker<T extends WorkItem = WorkItem> {
   told(ended: readonly EndedWork[]): void { this.onEnded?.(ended); }
   replaceLevel(update: BackgroundWorkUpdate): void { this.level = mergeBackgroundWork(this.level, update); }
   /** The level with every kind named (a zero is "none", not unknown). */
-  fullLevel(): Required<BackgroundWork> { return { agents: 0, terminals: 0, workflows: 0, ...this.level }; }
+  fullLevel(): BackgroundWork & { agents: number; terminals: number; workflows: number } {
+    return { ...this.level, agents: this.level?.agents ?? 0, terminals: this.level?.terminals ?? 0, workflows: this.level?.workflows ?? 0 };
+  }
   has(id: string): boolean { return this.items.has(id); }
   running(kind?: T['kind']): T[] { return [...this.items.values()].filter((item) => !kind || item.kind === kind); }
   count(kind?: T['kind']): number { return kind ? this.running(kind).length : this.items.size; }
   /** Items and level: everything said to be running. */
-  total(): number { return Object.values(this.fullLevel()).reduce((sum, count) => sum + count, this.items.size); }
+  total(): number { return (({ agents, terminals, workflows }) => agents + terminals + workflows + this.items.size)(this.fullLevel()); }
   clear(): void { this.items.clear(); this.level = undefined; }
 }

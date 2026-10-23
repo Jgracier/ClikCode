@@ -95,16 +95,13 @@ export function foldedSummary(activities: readonly Activity[]): string {
   return runGroupSummary(activities.map((activity) => ({ activity })));
 }
 
-/** The live background work beside the status, in the same words as the CLI's
- * status line. The closing line still owns the turn's final counts. */
+/** Background work other than agents, for the fixed work section. Agent rows
+ * have their own labels and spinners there. */
 export function workingIndicator(live: Pick<LiveTurn, 'background'> | undefined): string | undefined {
   const work = live?.background;
-  const agents = work?.agents ?? 0;
   const workflows = work?.workflows ?? 0;
-  const waiting = agents || workflows
-    ? turnSummary({ ms: 0, ...(agents ? { pendingBackground: agents } : {}), ...(workflows ? { pendingWorkflows: workflows } : {}) })
-    : undefined;
-  return [waiting, backgroundTerminalsLabel(work?.terminals)].filter(Boolean).join(' · ') || undefined;
+  return [workflows ? turnSummary({ ms: 0, pendingWorkflows: workflows }) : undefined,
+    backgroundTerminalsLabel(work?.terminals)].filter(Boolean).join(' · ') || undefined;
 }
 
 /** The line a finished turn ends on, the same live and on reopen, or nothing.

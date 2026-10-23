@@ -11,7 +11,7 @@ import { createRowBuilders, createToolRows } from './rows.js';
 const strip = (text: string): string => text.replace(/\u001b\[[0-9;]*m/g, '');
 
 function kit(overrides: Record<string, unknown> = {}) {
-  const p = { callGroups: new GroupRegistry(), groupExpansion: new GroupExpansion(), agentStarts: new Map(), liveChildren: { latest: () => undefined, rows: () => [] }, viewportRows: () => 30, reducedMotion: true, waitingFrame: 0, liveResponse: '', approvalQueue: [], childEntries: [], ...overrides };
+  const p = { callGroups: new GroupRegistry(), groupExpansion: new GroupExpansion(), liveChildren: { latest: () => undefined, rows: () => [] }, viewportRows: () => 30, reducedMotion: true, waitingFrame: 0, liveResponse: '', approvalQueue: [], childEntries: [], ...overrides };
   return { p, rows: createToolRows(p as never, createRowBuilders(p as never, 80)) };
 }
 
@@ -277,19 +277,6 @@ describe('anchoring the viewport on the tapped row', () => {
 describe('one spinner per running row', () => {
   const BRAILLE = /[⠀-⣿]/;
   const running = (id: string, label: string, extra: Partial<HarnessActivityEvent> = {}) => event(id, 'tool-start', label, extra);
-
-  it('writes a sub-agent retired while it runs with a still mark, never a frozen spinner frame', () => {
-    const { p, rows } = kit({ reducedMotion: false, waitingFrame: 3 });
-    const tools = rows.groupedRows(turn([running('a1', 'Explore the repo', { agent: true })]), false, new CallGrouping());
-    const agent = tools.find((tool) => tool.agent)!;
-    const released = (agent.released ?? []).map(strip).join('\n');
-    expect(released).toContain('○');
-    expect(released).toContain('· running');
-    expect(released).not.toMatch(BRAILLE);
-    // Live, the same row still turns.
-    expect(strip(agent.lines.join('\n'))).toMatch(BRAILLE);
-    expect(p).toBeDefined();
-  });
 
   it('keeps a group head still while a call of its run spins in a row of its own', () => {
     const live = (pending: boolean) => {
