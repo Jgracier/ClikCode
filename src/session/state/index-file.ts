@@ -113,7 +113,7 @@ export function indexStructureChanged(previous: StateIndex | undefined, next: St
  * damaged primary -- written atomically like the primary, and only when
  * asked (a structural change): copying it beside every field edit doubled
  * every index write for a file that is only read after damage. */
-export async function storeIndex(index: StateIndex, options: { backup: boolean }): Promise<void> {
+export async function storeIndex(index: StateIndex, options: { backup: boolean; durable?: boolean }): Promise<void> {
   const path = harnessIndexPath();
   await storeInvocationLog(index.invocations);
   const { invocations: _logged, ...rest } = index;
@@ -123,7 +123,10 @@ export async function storeIndex(index: StateIndex, options: { backup: boolean }
   // What is there already says the same: a rename would only wake every
   // list watching the directory, and the backup is no newer either.
   if (replacing && raw === indexFile.raw()) return;
-  await atomicWriteFile(path, raw);
+  // A recency write (updatedAt, lastUsage) is still atomic, and a crash may
+  // lose that one timestamp. It is not fsynced: fsync of the whole index was
+  // 70-700 ms under the lock every window waits on.
+  await atomicWriteFile(path, raw, { durable: options.durable !== false });
   HARNESS_STATE_STATS.indexWrites += 1;
   if (Date.now() - tempsSweptAt > TEMP_SWEEP_EVERY_MS) {
     tempsSweptAt = Date.now();
