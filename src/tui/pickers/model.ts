@@ -24,7 +24,7 @@ import { withSignIn } from '../../commands/account.js';
 import { chooseOption } from './choose.js';
 import { localModelChoices, type LocalModelChoice } from '../../local-models/index.js';
 import { withSlowWait } from '../slow-wait.js';
-import { deployPrivateModel, quotePrivateModel, searchDeployableModels, type PrivateModelQuote } from '../../gateway/private-models.js';
+import { deployPrivateModel, quotePrivateModel, searchDeployableModels, type DeployableModel, type PrivateModelQuote } from '../../gateway/private-models.js';
 
 /** Prefix of a row for a model this machine cannot run: listed, so the
  * catalog is honest about what exists and why it is out of reach, but
@@ -179,17 +179,19 @@ export async function interactivePrivateModelsPicker(rl: HarnessPrompter, id: st
   if (!isGatewayService(session)) throw new Error('Private models are available on ClikDeploy Gateway conversations.');
 
   const waiting = TERMINAL.active === rl ? TERMINAL.active : undefined;
-  const models = await withSlowWait(waiting, 'loading private models…', () => searchDeployableModels());
-  const chatModels = models.filter((model) => !model.modality || model.modality === 'llm');
-  const options: PickerOption<DeployableModel>[] = chatModels.map((model) => ({
-    label: model.displayName,
-    detail: [model.modelId, model.gated ? 'restricted access' : '', model.downloads ? `${model.downloads.toLocaleString()} downloads` : ''].filter(Boolean).join(' · '),
-    value: model,
-    group: 'Hugging Face models',
-  }));
-  // Use the same picker behavior as /model: type directly to filter names and
-  // IDs in the list, with no separate search action or query prompt.
-  const selected = await chooseOption(rl, 'Private models', options);
+  const rows = (models: readonly DeployableModel[]): PickerOption<DeployableModel>[] => models
+    .filter((model) => !model.modality || model.modality === 'llm')
+    .map((model) => ({
+      label: model.displayName,
+      detail: [model.modelId, model.parameterCount ? `${formatParameterCount(model.parameterCount)} params` : '', model.gated ? 'restricted access' : ''].filter(Boolean).join(' · '),
+      value: model,
+      group: 'Hugging Face models',
+    }));
+  const initial = await withSlowWait(waiting, 'loading private models…', () => searchDeployableModels());
+  const options = rows(initial);
+  const selected = await chooseOption(rl, 'Private models', options, undefined, {
+    onFilter: async (query) => rows(await withSlowWait(waiting, 'searching Hugging Face…', () => searchDeployableModels(query))),
+  });
   if (!selected) return;
 
   let quote: PrivateModelQuote;
@@ -216,6 +218,12 @@ export async function interactivePrivateModelsPicker(rl: HarnessPrompter, id: st
   // The Gateway publishes planning/downloading/loading deployments as starting
   // models. Set the route immediately; the first prompt waits for readiness.
   await aiSessionCommand(id, `/model ${deployment.modelId || selected.modelId}`);
+}
+
+function formatParameterCount(count: number): string {
+  if (count >= 1_000_000_000) return `${(count / 1_000_000_000).toFixed(count >= 10_000_000_000 ? 0 : 2).replace(/\.?0+$/, '')}B`;
+  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(count >= 10_000_000 ? 0 : 1).replace(/\.?0+$/, '')}M`;
+  return count.toLocaleString();
 }
 
 /** A Gateway conversation's picker. Models run ClikCode locally; selected

@@ -108,6 +108,10 @@ export function runOptionPicker<T>(
   return new Promise((resolveSelection, rejectSelection) => {
     host.setSelecting(true);
     let query = '';
+    let filteredOptions: readonly PickerOption<T>[] = options;
+    let filterTimer: ReturnType<typeof setTimeout> | undefined;
+    let filterRevision = 0;
+    let filtering = false;
     const same = (left: T, right: T): boolean => Object.is(left, right)
       || (typeof left === 'object' && typeof right === 'object' && JSON.stringify(left) === JSON.stringify(right));
     // Without a row named, the one marked "· current" -- every picker that
@@ -120,10 +124,31 @@ export function runOptionPicker<T>(
     // Section headings take a row each, so a short list counts them too.
     const headings = options.filter((option, index) => option.group && option.group !== options[index - 1]?.group).length;
     const capacity = Math.min(options.length + headings, settings?.rows ?? 8) + 2;
-    const currentOptions = (): readonly PickerOption<T>[] => settings?.refreshedOptions?.() ?? options;
+    const currentOptions = (): readonly PickerOption<T>[] => settings?.onFilter ? filteredOptions : settings?.refreshedOptions?.() ?? options;
+    const filterOptions = (): void => {
+      if (!settings?.onFilter) return;
+      if (filterTimer) clearTimeout(filterTimer);
+      const revision = ++filterRevision;
+      filtering = true;
+      draw();
+      filterTimer = setTimeout(() => {
+        filterTimer = undefined;
+        void settings.onFilter!(query).then((rows) => {
+          if (finished || revision !== filterRevision) return;
+          filtering = false;
+          filteredOptions = rows;
+          selected = 0;
+          draw();
+        }, () => {
+          if (!finished && revision === filterRevision) { filtering = false; draw(); }
+        });
+      }, 220);
+    };
     const visibleOptions = (): readonly PickerOption<T>[] => {
       const current = currentOptions();
-      if (!query) return current;
+      // Remote catalogs already applied the query; filtering again by the
+      // visible label would discard hits matched in model cards or metadata.
+      if (!query || settings?.onFilter) return current;
       const needle = query.toLowerCase();
       return current.filter((option) =>
         option.label.toLowerCase().includes(needle)
@@ -167,7 +192,7 @@ export function runOptionPicker<T>(
       // Filtering is worth offering only on a list longer than it shows.
       const total = settings?.totalItems ?? currentOptions().length;
       const hint = query
-        ? `"${query}" - ${visible.length} match${visible.length === 1 ? '' : 'es'} · ${keys}`
+        ? `"${query}" - ${filtering ? 'searching…' : `${visible.length} match${visible.length === 1 ? '' : 'es'}`} · ${keys}`
         : `${total} total · ${keys}${total > capacity - 2 ? ' · type to filter' : ''}`;
       host.paint('', renderOptions, selected, '\u203a ', 0, { capacity, hideCursor: true, headings: true, title, hint });
     };
@@ -183,6 +208,7 @@ export function runOptionPicker<T>(
       finished = true;
       host.setSelecting(false);
       stopInput();
+      if (filterTimer) clearTimeout(filterTimer);
       host.clearFrame();
       lastPickerExit = exit;
       // Values chosen on inline rows land before whoever opened the picker
@@ -291,6 +317,7 @@ export function runOptionPicker<T>(
       else if (key === '\u001b[B') selected = visible.length ? (selected + 1) % visible.length : 0;
       else if (key === '\u001b[D') { settings?.onBack?.(); finish(undefined, 'back'); return; }
       else if (pickerConfirmsSelection(key)) {
+        if (filtering) return;
         if (current) finish(current.value);
         return;
       }
@@ -303,8 +330,8 @@ export function runOptionPicker<T>(
       else if (pickerDeletesSelection(key, query)) { const action = visible[selected]?.deleteAction; if (action) void confirmDelete(visible[selected]!, action); return; }
       else if (key === '\u0003') return finish(undefined, 'escape');
       else if (key === '\u001b') { settings?.onEscape?.(); return finish(undefined, 'escape'); }
-      else if (key === '\u007f' || key === '\b') { if (!query) return; query = query.slice(0, -1); selected = 0; }
-      else if (key.length === 1 && key >= ' ') { query += key; selected = 0; }
+      else if (key === '\u007f' || key === '\b') { if (!query) return; query = query.slice(0, -1); selected = 0; filterOptions(); }
+      else if (key.length === 1 && key >= ' ') { query += key; selected = 0; filterOptions(); }
       else return;
       draw();
     };

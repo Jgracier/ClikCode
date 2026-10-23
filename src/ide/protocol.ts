@@ -38,7 +38,7 @@ export interface IdePickItem {
 }
 
 export type IdeUiRequest =
-  | { kind: 'pick'; title: string; items: readonly IdePickItem[]; canGoBack: boolean }
+  | { kind: 'pick'; title: string; items: readonly IdePickItem[]; canGoBack: boolean; searchable?: boolean }
   | { kind: 'input'; prompt: string; secret?: boolean };
 
 /** `index` is into the items last sent for this request (an update replaces
@@ -72,6 +72,7 @@ export type IdeRequest =
   /** The answer to a `question-request` worker event (cancelled: dismissed). */
   | { type: 'question-response'; id: string; result: import('../harness/events/question.js').HarnessQuestionResult }
   | { type: 'ui-response'; id: string; result: IdeUiResult }
+  | { type: 'ui-search'; id: string; query: string }
   | { type: 'sign-in-result'; id: string; error?: string }
   /** Stop the link sign-in a `sign-in-link` event is showing. */
   | { type: 'sign-in-cancel'; id: string }

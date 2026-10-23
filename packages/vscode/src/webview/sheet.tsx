@@ -25,7 +25,7 @@ function actionIcon(value: string): string {
   return 'ellipsis';
 }
 
-export function Sheet(props: { question: OpenQuestion; items?: readonly IdePickItem[]; answer: (result: IdeUiResult) => void }): JSX.Element {
+export function Sheet(props: { question: OpenQuestion; items?: readonly IdePickItem[]; answer: (result: IdeUiResult) => void; onSearch: (query: string) => void }): JSX.Element {
   const { request } = props.question;
   const panelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -41,7 +41,8 @@ export function Sheet(props: { question: OpenQuestion; items?: readonly IdePickI
       <div ref={panelRef} class="sheet" role="dialog" aria-modal="true" aria-label={request.kind === 'pick' ? request.title : request.prompt}>
         {request.kind === 'input'
           ? <InputSheet prompt={request.prompt} secret={request.secret} answer={props.answer} />
-          : <PickSheet title={request.title} items={props.items ?? request.items} canGoBack={request.canGoBack} answer={props.answer} />}
+          : <PickSheet title={request.title} items={props.items ?? request.items} canGoBack={request.canGoBack} searchable={Boolean(request.searchable)}
+            answer={props.answer} onSearch={props.onSearch} />}
       </div>
     </div>
   );
@@ -65,20 +66,22 @@ function InputSheet(props: { prompt: string; secret?: boolean; answer: (result: 
   );
 }
 
-function PickSheet(props: { title: string; items: readonly IdePickItem[]; canGoBack: boolean; answer: (result: IdeUiResult) => void }): JSX.Element {
+function PickSheet(props: { title: string; items: readonly IdePickItem[]; canGoBack: boolean; searchable: boolean; answer: (result: IdeUiResult) => void; onSearch: (query: string) => void }): JSX.Element {
   const [search, setSearch] = useState('');
   const [confirming, setConfirming] = useState<number>();
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => { focusHere(input.current); }, [props.title]);
   const query = search.trim().toLowerCase();
-  const long = props.items.length > 4;
+  const long = props.items.length > 4 || props.searchable;
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => { if (searchTimer.current) clearTimeout(searchTimer.current); }, []);
 
   const rows = useMemo((): ListRow[] => {
     const result: ListRow[] = [];
     let group: string | undefined;
     props.items.forEach((item, index) => {
       const detail = clean(item.detail);
-      if (query && !`${item.label} ${detail}`.toLowerCase().includes(query)) return;
+      if (query && !props.searchable && !`${item.label} ${detail}`.toLowerCase().includes(query)) return;
       if (item.group && item.group !== group) {
         group = item.group;
         const heading = item.group;
@@ -147,8 +150,15 @@ function PickSheet(props: { title: string; items: readonly IdePickItem[]; canGoB
       {long ? (
         <div class="search">
           <Icon name="search" />
-          <input ref={input} type="text" value={search} placeholder="Filter…" aria-label={`Filter ${props.title}`}
-            onInput={(event) => setSearch((event.target as HTMLInputElement).value)} />
+          <input ref={input} type="text" value={search} placeholder="Search…" aria-label={`Search ${props.title}`}
+            onInput={(event) => {
+              const value = (event.target as HTMLInputElement).value;
+              setSearch(value);
+              if (props.searchable) {
+                if (searchTimer.current) clearTimeout(searchTimer.current);
+                searchTimer.current = setTimeout(() => props.onSearch(value), 250);
+              }
+            }} />
         </div>
       ) : <input ref={input} class="visually-hidden" aria-label={props.title} readOnly />}
       <KeyList id="sheet-list" rows={rows} label={props.title} inputRef={input} emptyText="Nothing matches."

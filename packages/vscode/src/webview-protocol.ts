@@ -119,6 +119,7 @@ export type FromWebview =
   | { type: 'openFile'; path: string; line?: number }
   | { type: 'request'; id: string; request: WebviewRequest }
   | { type: 'ui-response'; id: string; result: IdeUiResult }
+  | { type: 'ui-search'; id: string; query: string }
   /** A key while /search walks mentions. */
   | { type: 'search-key'; key: WebviewSearchKey }
   | { type: 'focusChanged'; focused: boolean }
