@@ -29,15 +29,17 @@ export async function writeState(state: HarnessState): Promise<void> {
   // Transcripts of chats this copy read from disk are written first, each under its own
   // conversation's lock only (writeTranscriptCheckpoint): every other window goes on meanwhile.
   // What is left for the state lock is the index, and the transcripts of chats not listed yet.
+  const ownable = new Set<string>();
   if ((state as BaselinedState)[STATE_BASELINE]) {
     for (const session of state.sessions ?? []) {
       if (session.messages === undefined && session.pendingTurn === undefined) continue;
-      await writeTranscriptCheckpoint(state, session.id, { journalOnly: false });
+      if (await writeTranscriptCheckpoint(state, session.id, { journalOnly: false })) ownable.add(session.id);
     }
   }
   const baseline = (state as BaselinedState)[STATE_BASELINE];
   let written: StateBaselineData | undefined;
   const deleted: string[] = [];
+  const deferred: string[] = [];
   await withStateLock(async (held) => {
     // Where a slow write spends its time (state.write.slow): every window waits while it holds the lock.
     const clock = { start: Date.now(), index: 0, snapshot: 0, transcripts: 0, store: 0, wrote: 0, loaded: 0 };
@@ -95,8 +97,25 @@ export async function writeState(state: HarnessState): Promise<void> {
       // written needlessly or lost.
       else changed = !sameData(await readSessionTranscript(session.id), transcript);
       if (!changed) continue;
+      // This conversation's file was just written on its own lock, and the turn
+      // kept changing it. Another copy does not belong under the state lock.
+      // The baseline stays on what is already stored; the rest is written after
+      // this lock, on the conversation's lock again. Remembering `transcript`
+      // here would record that later change as stored, and the write made for
+      // it would find nothing to store.
+      if (ownable.has(session.id) && before) {
+        const entry = taken.sessions.get(session.id);
+        if (entry) {
+          const { messagesFrom: _from, ...rest } = entry;
+          taken.sessions.set(session.id, { ...rest, transcript: before.transcript, ...(before.messagesFrom ? { messagesFrom: before.messagesFrom } : {}) });
+        }
+        deferred.push(session.id);
+        continue;
+      }
       // Merged with what another process stored since this copy agreed with
-      // disk, so neither side's appended messages are lost.
+      // disk, so neither side's appended messages are lost. This is a transcript
+      // the conversation lock cannot store alone (a shared history, a parent
+      // reference, an empty delete, a session not stored yet).
       const base = before && diskIds.has(session.id) ? before.transcript : draft?.transcript;
       await writeSessionTranscript(held, session.id, transcript, base ? { base } : {});
       clock.wrote += 1;
@@ -104,8 +123,12 @@ export async function writeState(state: HarnessState): Promise<void> {
     clock.transcripts = Date.now() - clock.start - clock.index - clock.snapshot;
     clock.loaded = persisted.filter((session) => session.messages !== undefined).length;
 
-    // 2. The index, only when its content really differs.
-    if (!disk || !sameData(next, disk)) await storeIndex(next, { backup: indexStructureChanged(disk, next) });
+    // 2. The index, only when its content really differs. A change that is only
+    // when a chat was touched, or the usage it last reported, is not fsynced:
+    // those two fields were most of state.write.slow, and losing the last one
+    // costs a sort order, not the conversation.
+    const cache = Boolean(disk && indexWriteIsCache(disk, next));
+    if (!disk || !sameData(next, disk)) await storeIndex(next, { backup: indexStructureChanged(disk, next), durable: !cache });
     clock.store = Date.now() - clock.start - clock.index - clock.snapshot - clock.transcripts;
     const total = Date.now() - clock.start;
     if (total >= 300) lifecycle('state.write.slow', { ms: total, indexMs: clock.index, snapshotMs: clock.snapshot, transcriptsMs: clock.transcripts, storeMs: clock.store, wrote: clock.wrote, loaded: clock.loaded, sessions: persisted.length, ...(clock.store > 100 && disk ? { changed: indexChanges(disk, next) } : {}) });
@@ -133,12 +156,39 @@ export async function writeState(state: HarnessState): Promise<void> {
     for (const id of [...taken.sessions.keys()]) if (!kept.has(id)) taken.sessions.delete(id);
     written = taken;
   });
+  // Later writes from this same object diff from what this one stored, not
+  // from the original read -- nor from the object as it looks now. Before the
+  // deferred transcripts: those move the baseline forward only as far as they
+  // actually write.
+  rememberBaseline(state, written);
+  for (const id of deferred) await writeDeferredTranscript(state, id);
   // What else the deleted chats left (agent history, checkpoints):
   // outside the lock, since a checkpoint directory can be large.
   for (const id of deleted) await forgetSessionArtifacts(id);
-  // Later writes from this same object diff from what this one stored, not
-  // from the original read -- nor from the object as it looks now.
-  rememberBaseline(state, written);
+}
+
+/** A transcript the state lock left behind because this conversation can store
+ * it itself. The conversation lock first; the state lock only if that refuses
+ * (shared history, a parent reference, an empty file). The snapshot is taken
+ * before the write, and only that snapshot is remembered as stored. */
+async function writeDeferredTranscript(state: HarnessState, sessionId: string): Promise<void> {
+  if (await writeTranscriptCheckpoint(state, sessionId, { journalOnly: true })) return;
+  const session = state.sessions?.find((item) => item.id === sessionId);
+  const baseline = (state as BaselinedState)[STATE_BASELINE];
+  const before = baseline?.sessions.get(sessionId);
+  if (!session || !baseline || !before) return;
+  const now = baselineSession(session, before);
+  if (now.transcript === before.transcript) return;
+  await withStateLock(async (held) => {
+    await writeSessionTranscript(held, sessionId, now.transcript, { base: before.transcript });
+  });
+  const current = (state as BaselinedState)[STATE_BASELINE];
+  const entry = current?.sessions.get(sessionId);
+  // A full write may have replaced the baseline while this one waited.
+  if (entry && current === baseline) {
+    const { messagesFrom: _from, ...rest } = entry;
+    current.sessions.set(sessionId, { ...rest, transcript: now.transcript, ...(now.messagesFrom ? { messagesFrom: now.messagesFrom } : {}) });
+  }
 }
 
 /** A streaming turn's checkpoint: one session's transcript, and nothing else.
@@ -182,6 +232,37 @@ export async function writeTranscriptCheckpoint(state: HarnessState, sessionId: 
     }
     return true;
   }
+}
+
+const CACHE_SESSION_FIELDS = new Set(['updatedAt', 'lastUsage']);
+
+/** True when the only difference is a session's `updatedAt` or `lastUsage`.
+ * Anything else — a new chat, a model, a title, an account — is durable. */
+export function indexWriteIsCache(disk: StateIndex, next: StateIndex): boolean {
+  const keys = new Set<string>([...Object.keys(disk), ...Object.keys(next)]);
+  for (const key of keys) {
+    if (key === 'sessions') {
+      if (!sessionRowsAreCache(disk.sessions ?? [], next.sessions ?? [])) return false;
+      continue;
+    }
+    if (!sameData((disk as unknown as Record<string, unknown>)[key], (next as unknown as Record<string, unknown>)[key])) return false;
+  }
+  return true;
+}
+
+function sessionRowsAreCache(before: readonly { id: string }[], after: readonly { id: string }[]): boolean {
+  if (before.length !== after.length) return false;
+  for (let index = 0; index < before.length; index += 1) {
+    const left = before[index] as { id: string } & Record<string, unknown>;
+    const right = after[index] as { id: string } & Record<string, unknown>;
+    if (left.id !== right.id) return false;
+    const fields = new Set([...Object.keys(left), ...Object.keys(right)]);
+    for (const field of fields) {
+      if (sameData(left[field], right[field])) continue;
+      if (!CACHE_SESSION_FIELDS.has(field)) return false;
+    }
+  }
+  return true;
 }
 
 /** What a write changed on the index, by record and field ("accounts:a1b2.status"), for a slow
