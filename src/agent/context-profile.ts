@@ -1,43 +1,7 @@
-/** Context profiles: how much the agent spends on context, per session.
- *
- * The same token costs very different amounts on different inference. On a
- * laptop CPU a model reads 50-100 prompt tokens a second in a 16-32K window,
- * so every token of guidance, schema or tool output is seconds of waiting and
- * a slice of a small window. On the Gateway, or a local model on a real GPU,
- * prompts are read at thousands of tokens a second, windows are 128K and up,
- * and (on the Gateway) cached input is billed at a fraction -- the prompt
- * prefix is byte-stable (context.ts), so what is spent once is mostly cached
- * after. There, spending more tokens to save a step is the right trade:
- * MCP schemas sent up front instead of a `load_mcp_tools` round trip, whole
- * files in one read instead of "continue at offset", more skills listed.
- *
- *   full     lean plus: MCP schemas eager up to a much higher budget, larger
- *            tool-output caps, more (and longer) skill descriptions.
- *   lean     the former local defaults, retained as the rollback profile.
- *   minimal  lean minus repeated tool guidance and bulky schemas:
- *            the system prompt's "Editing files" / "Shell" bullets that
- *            restate the tool descriptions, `additionalProperties:false` in
- *            the schemas sent (the loop still validates against the full
- *            schema), terser descriptions for tools small models rarely use,
- *            and fewer, shorter skill lines. On Ornith 1.5 35B at 16K,
- *            this passed 6/7 coding tasks twice versus lean's 5/7 three
- *            times. Shortening the remaining tool descriptions further
- *            caused a valid-tool-call failure, so they stay intact.
- *
- * Deliberately NOT in minimal:
- *   - Eliding old or superseded tool results before compaction. Rewriting an
- *     earlier item changes the prompt prefix, so everything after it is read
- *     again -- on a CPU that costs more than the tokens it saves, every time
- *     it happens. Compaction already does this, but rarely and all at once.
- *   - One `mcp_call` proxy in place of per-tool MCP schemas. MCP tools are
- *     already deferred behind `load_mcp_tools` here; a proxy would have the
- *     model write arguments for a schema it never saw, which is exactly
- *     where small models fail. Not trivially safe.
- *
- * The profile is decided once per turn from facts that do not change within
- * a session (the model's window and prompt speed), so every turn of a session
- * sends the same system prompt and tool list and the prefix cache holds. */
-
+/** Profiles vary instruction verbosity and skill catalogs. Every profile
+ * defers large MCP catalogs and uses small, retrievable result pages.
+ * The full transcript is retained; context-view.ts bounds individual requests
+ * only when necessary, keeping fitting prefixes byte-stable. */
 import type { ToolSpec } from './model-client.js';
 
 export type ContextProfileName = 'minimal' | 'lean' | 'full';
@@ -67,26 +31,8 @@ interface ContextProfile {
 
 // ── thresholds ───────────────────────────────────────────────────────────────
 
-/** Lean's MCP budget, as tuned for local models: below ~1,500 tokens a
- * listing of the servers costs about what their schemas do, so they are sent. */
-const LEAN_MCP_EAGER_TOKENS = 1_500;
-
-/** Full's MCP budget. The two servers measured on a developer machine came
- * to ~7,900 tokens; under this they go up front, which saves the loader round
- * trip AND the one cache break that loading causes (the tool list sits before
- * the conversation, so a newly loaded schema makes everything after it be
- * read again). 10K is still under 8% of a 128K window; beyond it -- a server
- * with a hundred tools -- deferring wins even when tokens are cheap. */
-const FULL_MCP_EAGER_TOKENS = LEAN_MCP_EAGER_TOKENS;
-
-/** Lean's ceiling is the long-standing 30 KB (~7,500 tokens). */
-const LEAN_TOOL_OUTPUT_BYTES = 30 * 1024;
-
-/** Full's ceiling, ~16K tokens: most source files (500-1,500 lines at ~40
- * bytes) come back in one read instead of two or three "continue at offset"
- * reads, each of which is a whole extra step. The window cap (10% of the
- * window) still applies, so a 128K window gets ~51 KB. */
-const FULL_TOOL_OUTPUT_BYTES = 64 * 1024;
+const MCP_EAGER_TOKENS = 1_500;
+const TOOL_OUTPUT_BYTES = 8 * 1024;
 
 /** Skills listed and description length. Lean's 20 x 150 chars is at most
  * ~850 tokens; full's 50 x 250 at most ~3,300, cached after the first step;
@@ -98,9 +44,8 @@ const SKILLS = {
   full: { maxListedSkills: 50, skillDescriptionChars: 250 },
 } as const;
 
-/** Windows at or below this get lean whatever the speed: full's larger tool
- * outputs (~16K tokens) and eager MCP schemas (~10K) would take most of a
- * 32K window by themselves and force early compaction. 32K is also the
+/** Windows at or below this get lean whatever the speed: a smaller catalog leaves room
+ * for the task in a 32K window. 32K is also the
  * largest window ClikCode Local gives a model on a typical laptop. */
 export const LEAN_MAX_CONTEXT_WINDOW = 32_768;
 
@@ -155,15 +100,15 @@ function minimalSpecs(specs: readonly ToolSpec[]): ToolSpec[] {
 
 export const PROFILES: Readonly<Record<ContextProfileName, ContextProfile>> = {
   minimal: {
-    name: 'minimal', mcpEagerSchemaTokens: LEAN_MCP_EAGER_TOKENS, toolOutputBytes: LEAN_TOOL_OUTPUT_BYTES,
+    name: 'minimal', mcpEagerSchemaTokens: MCP_EAGER_TOKENS, toolOutputBytes: TOOL_OUTPUT_BYTES,
     ...SKILLS.minimal, toolUsageGuidance: false, shapeSpecs: minimalSpecs,
   },
   lean: {
-    name: 'lean', mcpEagerSchemaTokens: LEAN_MCP_EAGER_TOKENS, toolOutputBytes: LEAN_TOOL_OUTPUT_BYTES,
+    name: 'lean', mcpEagerSchemaTokens: MCP_EAGER_TOKENS, toolOutputBytes: TOOL_OUTPUT_BYTES,
     ...SKILLS.lean, toolUsageGuidance: true, shapeSpecs: unchanged,
   },
   full: {
-    name: 'full', mcpEagerSchemaTokens: FULL_MCP_EAGER_TOKENS, toolOutputBytes: FULL_TOOL_OUTPUT_BYTES,
+    name: 'full', mcpEagerSchemaTokens: MCP_EAGER_TOKENS, toolOutputBytes: TOOL_OUTPUT_BYTES,
     ...SKILLS.full, toolUsageGuidance: true, shapeSpecs: unchanged,
   },
 };

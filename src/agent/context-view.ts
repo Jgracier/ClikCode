@@ -29,7 +29,7 @@ export function estimateRequestTokens(system: string, items: readonly Conversati
 }
 
 export function responseReserve(window: number, maximum?: number): number {
-  return Math.min(maximum ?? 4_096, Math.max(128, Math.floor(window / 5)));
+  return Math.min(maximum ?? 16_384, Math.max(128, Math.floor(window / 5)));
 }
 
 function excerpt(text: string, limit: number, reference: string): string {
@@ -48,7 +48,7 @@ function groups(items: readonly ConversationItem[]): Group[] {
     const required = item.type === 'summary' || (item.type === 'text' && item.role === 'user');
     let group = result.at(-1);
     const afterResult = group?.items.some((entry) => entry.type === 'tool_result');
-    if (!group || required || group.required || (afterResult && (item.type === 'reasoning' || item.type === 'text'))) {
+    if (!group || required || group.required || (afterResult && item.type !== 'tool_result')) {
       group = { start: index, items: [], required };
       result.push(group);
     }
@@ -70,7 +70,7 @@ export interface ContextView {
 
 export function fitContext(input: {
   system: string; items: readonly ConversationItem[]; tools: readonly ToolSpec[];
-  window?: number; outputReserve?: number; scale?: number; maxItems?: number;
+  window?: number; outputReserve?: number; scale?: number; maxItems?: number; requiredTools?: readonly string[];
 }): ContextView {
   const window = input.window && input.window > 0 ? input.window : UNKNOWN_CONTEXT_WINDOW;
   const reserve = input.outputReserve ?? responseReserve(window);
@@ -89,7 +89,7 @@ export function fitContext(input: {
   // older assistant narration would have scored higher on keyword overlap.
   if (last) selected.add(last);
   const query = textOf(input.items.filter((item) => item.type === 'text' && item.role === 'user').slice(-2)).toLowerCase();
-  const words = new Set(query.match(/[\p{L}\p{N}_./-]{3,}/gu) ?? []);
+  const words = new Set((query.match(/[\p{L}\p{N}_./-]{3,}/gu) ?? []).slice(-128));
   const ranked = optional.filter((group) => group !== last).map((group, index) => {
     const text = textOf(group.items).toLowerCase();
     let relevance = 0;
@@ -97,19 +97,20 @@ export function fitContext(input: {
     return { group, score: relevance * 2 + index / Math.max(1, optional.length) };
   }).sort((a, b) => b.score - a.score);
 
+  const prepare = (group: Group, limit: number) => group.items.map((item, offset): ConversationItem => {
+    if (group.required) return item;
+    const reference = item.type === 'tool_result' ? `source=tool id=${JSON.stringify(item.id)}` : `source=history id="item:${group.start + offset}"`;
+    if (item.type === 'tool_result') return { ...item, output: excerpt(item.output, limit, reference) };
+    if (item.type === 'text') return { ...item, text: excerpt(item.text, limit, reference) };
+    return item; // Signed reasoning is preserved verbatim or omitted with its whole step.
+  });
   const materialize = (limit: number) => {
     const kept = all.filter((group) => selected.has(group));
-    const items = kept.flatMap((group) => group.items.map((item, offset): ConversationItem => {
-      if (group.required) return item;
-      const reference = item.type === 'tool_result' ? `source=tool id=${JSON.stringify(item.id)}` : `source=history id="item:${group.start + offset}"`;
-      if (item.type === 'tool_result') return { ...item, output: excerpt(item.output, limit, reference) };
-      if (item.type === 'text') return { ...item, text: excerpt(item.text, limit, reference) };
-      return item; // A signed reasoning block is preserved verbatim or omitted with its whole group.
-    }));
+    const items = kept.flatMap((group) => prepare(group, limit));
     const referenced = new Set(items.flatMap((item) => item.type === 'tool_call' ? [item.name] : []));
     // Retain every declared tool used by the kept history. Unused, previously
     // loaded specialists can be rediscovered through their loader.
-    const essential = new Set([...CORE_TOOLS, 'load_tools', 'load_mcp_tools']);
+    const essential = new Set([...CORE_TOOLS, 'load_tools', 'load_mcp_tools', ...(input.requiredTools ?? [])]);
     // A just-requested specialist must be offered on the next step even
     // when its loader pushed the request over budget.
     for (const item of last?.items ?? []) {
@@ -117,7 +118,8 @@ export function fitContext(input: {
         for (const name of item.args.tools) if (typeof name === 'string') essential.add(name);
       }
     }
-    const tools = input.tools.filter((tool) => referenced.has(tool.name) || essential.has(tool.name));
+    const canReload = input.tools.some((tool) => tool.name === 'load_tools' || tool.name === 'load_mcp_tools');
+    const tools = input.tools.filter((tool) => !canReload || referenced.has(tool.name) || essential.has(tool.name));
     const omitted = all.length - kept.length;
     const note: ConversationItem = { type: 'text', role: 'assistant', text: `[Working context: ${omitted} older work group(s) are outside this view. User requests remain verbatim. Use read_context to search the complete retained history and tool results before relying on missing details. Excerpts are not complete evidence.]` };
     return { items: omitted ? [note, ...items] : items, tools, omittedGroups: omitted };
@@ -130,11 +132,26 @@ export function fitContext(input: {
     view = materialize(limit);
   }
   if (cost(view.items, view.tools) > budget || view.items.length > maxItems) throw new ContextFitError(cost(view.items, view.tools) + reserve, window);
+  // Incremental costs avoid serializing the whole selected history for
+  // every candidate. The final request is materialized only once.
+  let used = cost(view.items, view.tools);
+  let count = view.items.length;
+  const declared = new Set(view.tools.map((tool) => tool.name));
+  const empty = estimateRequestTokens('', [], []);
   for (const { group } of ranked) {
-    selected.add(group);
-    const candidate = materialize(limit);
-    if (candidate.items.length <= maxItems && cost(candidate.items, candidate.tools) <= budget) view = candidate;
-    else selected.delete(group);
+    const items = prepare(group, limit);
+    const referenced = new Set(items.flatMap((item) => item.type === 'tool_call' ? [item.name] : []));
+    const addedTools = input.tools.filter((tool) => referenced.has(tool.name) && !declared.has(tool.name));
+    // Four tokens cover rounding and the schema-array separators, even at
+    // a different tokenizer calibration scale.
+    const extra = Math.ceil((estimateRequestTokens('', items, addedTools) - empty + 4) * scale);
+    if (count + items.length <= maxItems && used + extra <= budget) {
+      selected.add(group);
+      used += extra;
+      count += items.length;
+      for (const tool of addedTools) declared.add(tool.name);
+    }
   }
+  view = materialize(limit);
   return { ...view, estimatedTokens: cost(view.items, view.tools) };
 }

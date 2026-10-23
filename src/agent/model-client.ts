@@ -65,6 +65,8 @@ export interface ModelStepRequest {
    * them -- Anthropic rejects the request otherwise) but the model may not
    * call one this step. */
   toolChoice?: 'none';
+  /** Output headroom reserved by the request budget, even when the client has no window metadata. */
+  maxOutputTokens?: number;
   signal?: AbortSignal;
   onTextDelta(text: string): void;
   onReasoningDelta?(text: string): void;

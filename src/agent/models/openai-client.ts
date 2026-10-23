@@ -85,11 +85,8 @@ function withoutDescriptions(value: unknown): unknown {
   return Object.fromEntries(Object.entries(value).filter(([key, child]) => !(key === 'description' && typeof child === 'string')).map(([key, child]) => [key, withoutDescriptions(child)]));
 }
 
-/** The system prompt and the tools as the server takes them. Tools are kept
- * in the order given (the built-in ones first), an oversized schema loses its
- * descriptions before its tool is dropped, and a system prompt over the
- * limit loses its end. A conversation with too many messages is not cut
- * here: the loop compacts it (CONTEXT_TOO_LARGE). */
+/** Validate server-specific limits without discarding instructions or tools.
+ * Schema descriptions may be shortened; validation constraints stay intact. */
 export function fitToLimits(system: string, tools: readonly ToolSpec[], limits: RequestLimits): { system: string; tools: ToolSpec[] } {
   const fitted: ToolSpec[] = [];
   const dropped: string[] = [];
@@ -316,9 +313,6 @@ class InlineThinkFilter {
 
 interface PendingCall { id?: string; name: string; arguments: string; argsObject?: Record<string, unknown>; shownId?: string }
 
-/** Tokens a request's text is taken to hold, for leaving the answer room in
- * the window: a deliberately rough four characters each. */
-
 export class OpenAIModelClient implements ModelClient {
   /** Set by the Gateway client (for-session.ts): how the start of the user's own model is going. */
   startStatus?: ModelClient['startStatus'];
@@ -343,7 +337,8 @@ export class OpenAIModelClient implements ModelClient {
    * prompt leaves less than that of the window. */
   private maxTokens(request: ModelStepRequest): number | undefined {
     const window = this.servedWindow ?? this.options.contextWindow;
-    const limit = this.options.maxOutputTokens;
+    const limit = request.maxOutputTokens === undefined ? this.options.maxOutputTokens
+      : Math.min(request.maxOutputTokens, this.options.maxOutputTokens ?? Infinity);
     if (!window) return limit;
     const reserve = responseReserve(window, limit);
     const input = estimateRequestTokens(request.system, request.items, request.tools);
@@ -384,6 +379,7 @@ export class OpenAIModelClient implements ModelClient {
           ...options.headers,
         },
         body: JSON.stringify({
+          ...options.body,
           model: options.model,
           messages,
           ...tools,
@@ -392,7 +388,6 @@ export class OpenAIModelClient implements ModelClient {
           // report usage anyway (llama-server) accept and ignore it.
           stream_options: { include_usage: true },
           ...(maxTokens ? { max_tokens: maxTokens } : {}),
-          ...options.body,
         }),
         ...(request.signal ? { signal: request.signal } : {}),
       });

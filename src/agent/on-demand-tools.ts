@@ -4,7 +4,7 @@ import { defineTool, type ToolDefinition } from './tool-contract.js';
 import type { ConversationItem } from './model-client.js';
 
 export const LOAD_TOOLS = 'load_tools';
-export const CORE_TOOLS = new Set(['read_file', 'grep', 'glob', 'bash', 'apply_patch', 'edit_file', 'write_file', 'ask_user', 'skill', 'read_context', 'list_dir', 'multi_edit', 'todo_write', 'enter_plan_mode', 'exit_plan_mode']);
+export const CORE_TOOLS = new Set(['read_file', 'grep', 'glob', 'bash', 'apply_patch', 'edit_file', 'write_file', 'ask_user', 'skill', 'read_context', 'list_dir', 'multi_edit', 'todo_write', 'enter_plan_mode', 'exit_plan_mode', 'notebook_edit']);
 
 export function exposeSpecialists(tools: readonly ToolDefinition[], smallWindow = false) {
   // Small windows start with retrieval and discovery; actual schemas are
@@ -15,7 +15,7 @@ export function exposeSpecialists(tools: readonly ToolDefinition[], smallWindow 
   const names = new Set(deferred.map((tool) => tool.name));
   const loader = defineTool<{ tools: string[] }>({
     name: LOAD_TOOLS, class: 'meta',
-    description: `Load specialist tool schemas before using them. All loaded tools retain their normal permissions. Available: ${deferred.map((tool) => `${smallWindow ? tool.name : `${tool.name}: ${tool.description.split(/\n|\. /)[0]!.slice(0, 100)}`}`).join('; ')}`,
+    description: `Load specialist tool schemas before using them. All loaded tools retain their normal permissions. Available: ${deferred.map((tool) => smallWindow ? tool.name : `${tool.name}: ${tool.description.split(/\n|\. /)[0]!.slice(0, 100)}`).join('; ')}`,
     parameters: { type: 'object', additionalProperties: false, required: ['tools'], properties: { tools: { type: 'array', minItems: 1, items: { type: 'string', enum: [...names] } } } },
     label: (args) => `Load ${args.tools.join(', ')}`,
     run: async (args) => {

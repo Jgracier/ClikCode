@@ -300,11 +300,8 @@ export function estimateContextTokens(system: string, items: readonly Conversati
   return estimateTextTokens(system) + items.reduce((sum, item) => sum + estimateItemTokens(item), 0);
 }
 
-/** Largest tool result handed to the model, in bytes: the profile's ceiling
- * (30 KB unless the full profile raises it), but at most about a tenth of a
- * small window (~4 bytes a token), so one bash log or file read cannot fill
- * a local model's context by itself. Tools that
- * can page (read_file) stop at this size and say how to continue. */
+/** A small result page in bytes, scaled down for small windows. Full outputs
+ * are retained as session artifacts; paging tools name where to continue. */
 export function toolOutputCap(contextWindow: number | undefined, ceilingBytes: number = OUTPUT_CAPS.toolOutputBytes): number {
   const window = contextWindow && contextWindow > 0 ? contextWindow : DEFAULT_CONTEXT_WINDOW;
   return Math.min(ceilingBytes, 8 * 1024, Math.max(1024, Math.floor(window * 0.5)));

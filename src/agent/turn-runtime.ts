@@ -148,9 +148,11 @@ export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime
   const ownTools = input.tools ?? [...defaultTools(), ...(await computerEnabled(input.stateDir) ? [...computerTools, computerWebTool, clikDeployStepUpTool].map(hotTool) : [])];
   const contextReader = readContextTool(() => rt.items, !input.subagent);
   const exposure = exposeTools(mergeTools([contextReader, ...ownTools], input.extraTools), profile.mcpEagerSchemaTokens);
-  const window = input.modelClient.contextHints?.contextWindow ?? input.contextWindow;
-  const specialists = exposeSpecialists(exposure.all, window !== undefined && window <= 8_192);
-  const tools = specialists.all;
+  const specialists = exposeSpecialists(exposure.all);
+  const smallSpecialists = exposeSpecialists(exposure.all, true);
+  // The smaller catalog accepts every built-in name, including coding tools
+  // which a larger-window model normally gets up front.
+  const tools = smallSpecialists.all;
 
   const [loaded, savedRules, baseSystem, notebooksOnDisk] = await abortable(Promise.all([
     store.load(),
@@ -215,7 +217,8 @@ export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime
     turnRules, turnHookInfo, backgroundAgents,
     advertised: (current) => {
       const mcpVisible = new Set(exposure.advertised(current).map((tool) => tool.name));
-      return gateNotebookTool(specialists.advertised(current).filter((tool) => tool.name === 'load_tools' || mcpVisible.has(tool.name)), current, notebooksOnDisk);
+      const listing = rt.contextWindow !== undefined && rt.contextWindow <= 8_192 ? smallSpecialists : specialists;
+      return gateNotebookTool(listing.advertised(current).filter((tool) => tool.name === 'load_tools' || mcpVisible.has(tool.name)), current, notebooksOnDisk);
     },
     throwIfAborted,
     append: async (...added) => { rt.items.push(...added); await store.append(...added); },
