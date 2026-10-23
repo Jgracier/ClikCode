@@ -60,8 +60,8 @@ export async function quotePrivateModel(modelId: string): Promise<PrivateModelQu
 }
 
 /** Create through the shared planner. Omitting gpuType lets ClikDeploy select compute. */
-export async function deployPrivateModel(model: DeployableModel, quote: PrivateModelQuote): Promise<{ id: string; modelId: string; status: string }> {
-  return request<{ id: string; modelId: string; status: string }>('/api/models/deployments', {
+export async function deployPrivateModel(model: DeployableModel, quote: PrivateModelQuote): Promise<{ id: string; modelId: string; status: string; gatewayModelId: string }> {
+  const deployment = await request<{ id: string; modelId: string; status: string }>('/api/models/deployments', {
     method: 'POST',
     body: {
       sourceId: model.sourceId,
@@ -69,4 +69,8 @@ export async function deployPrivateModel(model: DeployableModel, quote: PrivateM
       ...(quote.quant?.label ? { quantLabel: quote.quant.label } : {}),
     },
   });
+  if (typeof deployment?.id !== 'string' || !deployment.id.trim()) {
+    throw new Error('ClikDeploy returned a deployment without an ID.');
+  }
+  return { ...deployment, gatewayModelId: `private-deployment:${deployment.id}` };
 }
