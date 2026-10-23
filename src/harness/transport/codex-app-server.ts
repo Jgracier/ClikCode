@@ -228,28 +228,70 @@ function codexStructuredFields(turnError: JsonObject | undefined, error: unknown
   return { ...(info !== undefined && info !== null ? { codexErrorInfo: info } : {}), ...(code !== undefined ? { rpcCode: code } : {}) };
 }
 
+function windowPercent(window: JsonObject | undefined): number | undefined {
+  const value = window?.usedPercent ?? window?.used_percent;
+  return typeof value === 'number' ? value : undefined;
+}
+
+function windowReset(window: JsonObject | undefined): number | undefined {
+  const value = window?.resetsAt ?? window?.resets_at ?? window?.reset_at;
+  return typeof value === 'number' && value > 0 ? value : undefined;
+}
+
+/** Every quota bucket the snapshot carries: the historical primary/secondary
+ * pair, and each entry of `rateLimitsByLimitId` (a limit whose legacy pair
+ * is null still reports the spent bucket there). */
+function rateLimitWindows(snapshot: JsonObject): JsonObject[] {
+  const buckets: JsonObject[] = [snapshot];
+  const byId = asRecord(snapshot.rateLimitsByLimitId) ?? asRecord(snapshot.rate_limits_by_limit_id);
+  for (const value of Object.values(byId ?? {})) {
+    const bucket = asRecord(value);
+    if (bucket) buckets.push(bucket);
+  }
+  const windows: JsonObject[] = [];
+  for (const bucket of buckets) {
+    for (const side of [bucket.primary, bucket.secondary]) {
+      const window = asRecord(side);
+      if (window) windows.push(window);
+    }
+  }
+  return windows;
+}
+
 /** A spent plan as the account's rate-limit snapshot tells it (a window at
- * 100%, or the snapshot's own `rateLimitReachedType`). `codex exec` prints
- * "You've hit your usage limit ... try again at <date>"; over app-server the
- * thread only goes to `systemError`, and this snapshot is the one place the
- * reason and the reset time are. */
+ * 100%, `ordinaryUsageAllowed: false`, spend control, or the snapshot's own
+ * `rateLimitReachedType`). `codex exec` prints "You've hit your usage limit
+ * ... try again at <date>"; over app-server the thread goes to `systemError`
+ * and this snapshot, or the error notification after it, is where the reason
+ * and the reset time are. A short `rate_limit_reached` is throttling, not a
+ * spent plan: another account can take the turn, and this one is not marked
+ * exhausted. */
 export function codexUsageLimitRefusal(rateLimits: unknown): { message: string; codexErrorInfo: string } | undefined {
   const snapshot = asRecord(rateLimits);
   if (!snapshot) return undefined;
-  const windows = [snapshot.primary, snapshot.secondary].map(asRecord).filter((item): item is JsonObject => Boolean(item));
-  const spent = windows.filter((item) => typeof item.usedPercent === 'number' && item.usedPercent >= 100);
+  const windows = rateLimitWindows(snapshot);
+  const spent = windows.filter((item) => (windowPercent(item) ?? 0) >= 100);
   const reached = snapshot.rateLimitReachedType ?? snapshot.rate_limit_reached_type;
-  if (!spent.length && (reached === undefined || reached === null || reached === '')) return undefined;
-  const resets = spent.map((item) => item.resetsAt).find((value): value is number => typeof value === 'number' && value > 0);
+  const reachedText = typeof reached === 'string' ? reached : '';
+  const spendControl = snapshot.spendControlReached === true || snapshot.spend_control_reached === true;
+  const usageClosed = snapshot.ordinaryUsageAllowed === false || snapshot.ordinary_usage_allowed === false;
+  const rateLimited = reachedText === 'rate_limit_reached' && !spent.length && !spendControl && !usageClosed;
+  if (!spent.length && !reachedText && !spendControl && !usageClosed) return undefined;
+  const resets = spent.map(windowReset).find((value): value is number => value !== undefined);
   const when = resets !== undefined ? new Date(resets < 1e12 ? resets * 1000 : resets) : undefined;
   const at = when && !Number.isNaN(when.getTime()) ? ` Try again at ${when.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}.` : '';
+  if (rateLimited) return { message: `Codex is rate limited.${at}`, codexErrorInfo: 'rateLimitExceeded' };
   return { message: `You've hit your usage limit.${at}`, codexErrorInfo: 'usageLimitExceeded' };
 }
 
 /** A rate-limit snapshot that tells something of the plan: a window, or a limit reached. */
 function codexSnapshotSaysSomething(snapshot: JsonObject): boolean {
   const reached = snapshot.rateLimitReachedType ?? snapshot.rate_limit_reached_type;
-  return Boolean(asRecord(snapshot.primary) || asRecord(snapshot.secondary) || (reached !== undefined && reached !== null && reached !== ''));
+  return Boolean(asRecord(snapshot.primary) || asRecord(snapshot.secondary)
+    || asRecord(snapshot.rateLimitsByLimitId) || asRecord(snapshot.rate_limits_by_limit_id)
+    || snapshot.ordinaryUsageAllowed === false || snapshot.ordinary_usage_allowed === false
+    || snapshot.spendControlReached === true || snapshot.spend_control_reached === true
+    || (reached !== undefined && reached !== null && reached !== ''));
 }
 
 /** What the user is approving: the command and where it runs, or the files. */
@@ -327,9 +369,20 @@ interface ActiveTurn extends Stream {
   done: boolean;
   threadId?: string;
   turnId?: string;
+  /** `thread/status/changed` already said `systemError`. The error
+   * notification that names a usage limit is sent after that status. */
+  systemError?: boolean;
+  systemErrorTimer?: ReturnType<typeof setTimeout>;
   complete: (error?: Error) => void;
   fail: (error: Error) => void;
 }
+
+/** How long a `systemError` waits for the error notification Codex sends
+ * next. The usage-limit sequence is status, then `error`, then
+ * `turn/completed`, inside the same second (openai/codex#47728). Completing
+ * on the status alone reported "a system error" and the account never
+ * switched. A second covers that burst when the event loop is busy. */
+const SYSTEM_ERROR_WAIT_MS = 1000;
 
 interface BackgroundRun extends Stream {
   channel: BackgroundTurnChannel;
@@ -379,6 +432,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
         if (!keepFailedWork && !(error as { codexTurnFailed?: boolean }).codexTurnFailed) this.dropLive(error);
       },
       ended: (succeeded) => {
+        if (turn.systemErrorTimer) clearTimeout(turn.systemErrorTimer);
         input.onSteerReady?.(undefined);
         // Whatever is still running now has outlived its turn (a failed turn
         // that keeps no work keeps no terminal either).
@@ -443,6 +497,38 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     return true;
   }
 
+  /** The thread's own error, or a rate-limit snapshot that already says why. */
+  private knownFailure(turn: ActiveTurn): boolean {
+    const thread = turn.lastError;
+    if (typeof thread?.message === 'string' && thread.message.trim()) return true;
+    if (thread?.codexErrorInfo !== undefined || thread?.codex_error_info !== undefined) return true;
+    return codexUsageLimitRefusal(turn.rateLimits) !== undefined;
+  }
+
+  /** `systemError` ends the thread. When the reason is already here, fail
+   * now. Otherwise Codex still sends the error notification (a usage limit
+   * is that notification, not the status), and failing on the status reported
+   * a system error instead of switching accounts. */
+  private noteSystemError(turn: ActiveTurn): void {
+    turn.systemError = true;
+    if (turn.done) return;
+    if (this.knownFailure(turn)) {
+      this.finishSystemError(turn);
+      return;
+    }
+    if (turn.systemErrorTimer) return;
+    turn.systemErrorTimer = setTimeout(() => this.finishSystemError(turn), SYSTEM_ERROR_WAIT_MS);
+    turn.systemErrorTimer.unref?.();
+  }
+
+  private finishSystemError(turn: ActiveTurn): void {
+    if (turn.systemErrorTimer) clearTimeout(turn.systemErrorTimer);
+    turn.systemErrorTimer = undefined;
+    if (turn.done) return;
+    if (this.knownFailure(turn)) turn.complete(this.vendorFailure(turn, 'Codex reported a system error on this thread', { codexSystemError: true }));
+    else this.settleSystemError(turn);
+  }
+
   /** The error for a thread Codex gave up on or a turn it failed. The words
    * are the vendor's: the thread's error, else the account's spent-plan
    * snapshot (usage limit), else `fallback`. The structured `codexErrorInfo`
@@ -466,7 +552,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
   private settleSystemError(turn: ActiveTurn): void {
     const peer = this.live?.peer;
     const end = (): void => {
-      if (turn.done || turn !== this.turn) return;
+      if (turn.done || turn !== this.turn || !turn.systemError) return;
       turn.complete(this.vendorFailure(turn, 'Codex reported a system error on this thread', { codexSystemError: true }));
     };
     if (!peer) return end();
@@ -959,9 +1045,18 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
       // (`premium`: credits, no windows), back to back. One with no windows and no limit reached says nothing
       // of the plan, and must not replace the reading that does -- it came between a window at 100% and the
       // refusal, and the spent plan was read as an unexplained system error.
-      const snapshot = asRecord(params.rateLimits);
-      if (snapshot && codexSnapshotSaysSomething(snapshot)) target.rateLimits = snapshot;
-      observer.onRateLimits?.(params.rateLimits);
+      const snapshot = asRecord(params.rateLimits) ?? asRecord(params.rate_limits);
+      if (snapshot) {
+        const merged: JsonObject = {
+          ...snapshot,
+          ...(params.ordinaryUsageAllowed !== undefined ? { ordinaryUsageAllowed: params.ordinaryUsageAllowed } : {}),
+          ...(params.ordinary_usage_allowed !== undefined ? { ordinaryUsageAllowed: params.ordinary_usage_allowed } : {}),
+          ...(params.rateLimitsByLimitId !== undefined ? { rateLimitsByLimitId: params.rateLimitsByLimitId } : {}),
+          ...(params.rate_limits_by_limit_id !== undefined ? { rateLimitsByLimitId: params.rate_limits_by_limit_id } : {}),
+        };
+        if (codexSnapshotSaysSomething(merged)) target.rateLimits = merged;
+      }
+      observer.onRateLimits?.(params.rateLimits ?? params.rate_limits);
     } else if (method === 'turn/completed') {
       const completedTurn = (params.turn as JsonObject) ?? {};
       if (target === this.background) {
@@ -972,9 +1067,18 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
       // Only the turn we started ends it (a late turn/completed of an earlier
       // turn must not end this one).
       if (turn.turnId && completedTurn.id !== undefined && completedTurn.id !== turn.turnId) return;
-      if (completedTurn.status === 'failed') {
+      if (completedTurn.status === 'failed' || turn.systemError) {
         const error = (completedTurn.error as JsonObject | undefined) ?? turn.lastError;
         if (error) turn.lastError = error;
+        // `turn/completed` often follows `systemError` with status
+        // `completed` and no error of its own. The usage-limit notification
+        // is a separate line; ending here before it arrives kept the generic
+        // system error and the account did not switch.
+        if (turn.systemError) {
+          if (this.knownFailure(turn)) return this.finishSystemError(turn);
+          if (!turn.systemErrorTimer) this.noteSystemError(turn);
+          return;
+        }
         return turn.complete(this.vendorFailure(turn, 'Codex turn failed', { codexTurnFailed: true }));
       }
       if (completedTurn.status === 'interrupted') return turn.complete(turnCancelledError());
@@ -988,7 +1092,11 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
       this.openApprovals.get(id)?.();
     } else if (method === 'thread/status/changed') {
       const status = asRecord(params.status);
-      if (status?.type === 'systemError' && target === this.turn) this.settleSystemError(target as ActiveTurn); else if (Array.isArray(status?.activeFlags) && status.activeFlags.includes('waitingOnUserInput')) observer.onPhase?.('waiting for input in Codex');
+      if (status?.type === 'systemError' && target === this.turn) {
+        // Codex gave up on the thread. The notification that says why (a
+        // usage limit) follows this status; completing here used to drop it.
+        this.noteSystemError(target as ActiveTurn);
+      } else if (Array.isArray(status?.activeFlags) && status.activeFlags.includes('waitingOnUserInput')) observer.onPhase?.('waiting for input in Codex');
     } else if (method === 'item/autoApprovalReview/started' || method === 'autoApprovalReview/strictReviewRequired') {
       observer.onPhase?.('reviewing an approval');
     } else if (method === 'mcpServer/startupStatus/updated') {
@@ -1003,8 +1111,20 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     } else if (method === 'error') {
       const error = (params.error as JsonObject) ?? {};
       // Say why it is retrying, not only that it is.
-      if (params.willRetry === true) observer.onPhase?.(typeof error.message === 'string' && error.message ? `retrying: ${error.message.split('\n')[0]!.slice(0, 120)}` : 'retrying');
-      else if (typeof error.message === 'string' || error.codexErrorInfo !== undefined || error.codex_error_info !== undefined) target.lastError = error;
+      if (params.willRetry === true) {
+        observer.onPhase?.(typeof error.message === 'string' && error.message ? `retrying: ${error.message.split('\n')[0]!.slice(0, 120)}` : 'retrying');
+        // A retry is not the thread ending. A systemError that is only the
+        // envelope of that retry must not fail the turn out from under it.
+        if (target === this.turn) {
+          const active = target as ActiveTurn;
+          if (active.systemErrorTimer) clearTimeout(active.systemErrorTimer);
+          active.systemErrorTimer = undefined;
+          active.systemError = false;
+        }
+      } else if (typeof error.message === 'string' || error.codexErrorInfo !== undefined || error.codex_error_info !== undefined) {
+        target.lastError = error;
+        if (target === this.turn && (target as ActiveTurn).systemError) this.finishSystemError(target as ActiveTurn);
+      }
     }
   }
 
