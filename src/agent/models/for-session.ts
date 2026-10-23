@@ -41,6 +41,8 @@ export function gatewayConnection(config: Conf): { baseUrl: string; apiKey: stri
 const GATEWAY_ERROR_CODES: Readonly<Record<string, string>> = {
   rate_limit_exceeded: 'MODEL_RATE_LIMITED',
   upstream_error: 'MODEL_ERROR',
+  model_busy: 'MODEL_BUSY',
+  capacity_busy: 'MODEL_BUSY',
   internal_error: 'INTERNAL_ERROR',
   context_length_exceeded: 'CONTEXT_TOO_LARGE',
   model_not_found: 'MODEL_UNAVAILABLE',

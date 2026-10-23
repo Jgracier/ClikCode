@@ -7,7 +7,7 @@ import { visibleTools } from './permissions.js';
 import { completedArguments } from './models/openai-client.js';
 import { thoughtLabel } from '../harness/protocol/activity-events.js';
 import { estimateContextTokens } from './context.js';
-import { fitContext, responseReserve, UNKNOWN_CONTEXT_WINDOW } from './context-view.js';
+import { fitContext, responseReserve, UNKNOWN_CONTEXT_WINDOW, type ContextView } from './context-view.js';
 import { classifyModelError, MODEL_START_BUDGET_SECONDS, modelStartWaitSeconds, pause, retryDelaySeconds, STEP_RETRY_BUDGET_SECONDS, stepRecovery } from './turn-recovery.js';
 import { abortable, categoryForTool, withUniqueIds } from './turn-support.js';
 import { recordUsage } from './usage.js';
@@ -35,6 +35,8 @@ export async function runModelStep(rt: TurnRuntime, modelClient: ModelClient, sy
   let streamedThisStep = '';
   let reasoning = '';
   let step: ModelStepResult;
+  let view: ContextView | undefined;
+  let requiredTools: string[] = [];
   try {
     if (rt.budgetClient !== modelClient) {
       rt.budgetClient = modelClient;
@@ -48,11 +50,11 @@ export async function runModelStep(rt: TurnRuntime, modelClient: ModelClient, sy
     const beforeLoad = lastCall?.type === 'tool_call' && ['load_tools', 'load_mcp_tools'].includes(lastCall.name)
       ? new Set(rt.advertised(rt.items.slice(0, lastCallIndex)).map((tool) => tool.name)) : undefined;
     const canReloadMcp = advertised.some((tool) => tool.name === 'load_mcp_tools');
-    const requiredTools = advertised.filter((tool) =>
+    requiredTools = advertised.filter((tool) =>
       (tool.mcp && (tool.mcp.core || !canReloadMcp)) || (beforeLoad && !beforeLoad.has(tool.name)),
     ).map((tool) => tool.name);
     const outputReserve = responseReserve(rt.contextWindow ?? UNKNOWN_CONTEXT_WINDOW);
-    const view = fitContext({
+    view = fitContext({
       system, items: rt.items,
       tools: rt.profile.shapeSpecs(toolSpecs(visibleTools(advertised, session.plan.active))),
       requiredTools,
@@ -110,10 +112,43 @@ export async function runModelStep(rt: TurnRuntime, modelClient: ModelClient, sy
     // A call being written when the step failed never runs: a resent
     // step writes its own.
     settleUnrun(rt, new Set(), 'not run: the model\'s reply was cut off before this call was complete');
-    // Once text has streamed the step belongs to what was said; sending it
-    // again would say it twice. Before that, a step is safe to resend: the
-    // Gateway is stateless and no tool has run.
-    const recovery = streamedThisStep ? undefined : stepRecovery(error);
+    // Save partial text before continuing. Calls from an incomplete step
+    // have not run; only complete calls from a successful step may execute.
+    const recovery = stepRecovery(error);
+    const preservePartial = async () => {
+      if (!streamedThisStep.trim()) return;
+      await rt.append({ type: 'text', role: 'assistant', text: streamedThisStep });
+      if (rt.continuesCutAnswer && rt.segments.length) rt.segments[rt.segments.length - 1] += streamedThisStep;
+      else rt.segments.push(streamedThisStep.trim());
+      rt.needsSeparator = true;
+      rt.continuesCutAnswer = true;
+      await rt.append({ type: 'text', role: 'user', source: 'harness', text: '[harness] The inference stream was interrupted. Continue from the saved partial reply. No tool call from the interrupted step was executed: regenerate any needed call completely. Preserve completed work and do not repeat completed actions.' });
+    };
+    if (recovery === 'capacity') {
+      await preservePartial();
+      input.onPhase?.('waiting for model capacity');
+      const after = (error as { retryAfter?: unknown }).retryAfter;
+      const wait = typeof after === 'number' && Number.isFinite(after) ? after : 2;
+      await pause(Math.max(1, Math.min(30, wait)), signal);
+      return { kind: 'continue' };
+    }
+    if (recovery === 'context-pressure' && view && rt.contextRefits < 3) {
+      // Change the working view, not the model or durable transcript. Never
+      // resend a payload the runtime has already refused unchanged.
+      let scale = rt.contextScale;
+      for (let n = 0; n < 6; n++) {
+        scale *= 1.35;
+        let smaller: ContextView;
+        try { smaller = fitContext({ system, items: rt.items, tools: view.tools, requiredTools, window: rt.contextWindow, scale }); }
+        catch { break; }
+        if (JSON.stringify(smaller.items) !== JSON.stringify(view.items) || JSON.stringify(smaller.tools) !== JSON.stringify(view.tools)) {
+          await preservePartial();
+          rt.contextScale = scale;
+          rt.contextRefits++;
+          return { kind: 'continue' };
+        }
+      }
+    }
     if (recovery === 'model-starting') {
       const after = (error as { retryAfter?: unknown }).retryAfter;
       const wait = modelStartWaitSeconds(typeof after === 'number' ? after : undefined);
@@ -132,6 +167,7 @@ export async function runModelStep(rt: TurnRuntime, modelClient: ModelClient, sy
       const after = (error as { retryAfter?: unknown }).retryAfter;
       const wait = retryDelaySeconds(rt.stepRetries + 1, typeof after === 'number' ? after : undefined);
       if (rt.retryWaitedSeconds + wait <= STEP_RETRY_BUDGET_SECONDS) {
+        await preservePartial();
         rt.stepRetries++;
         rt.retryWaitedSeconds += wait;
         input.onPhase?.(`retrying in ${Math.ceil(wait)}s`);
@@ -173,6 +209,7 @@ export async function recordStep(
   const { input } = rt;
   rt.steps++;
   rt.stepRetries = 0;
+  rt.contextRefits = 0;
   rt.retryWaitedSeconds = 0;
   rt.modelStartWaitedSeconds = 0;
   rt.modelStartingSince = undefined;

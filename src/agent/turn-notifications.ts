@@ -15,12 +15,12 @@ export async function deliverPending(rt: TurnRuntime): Promise<void> {
   const finished = input.subagent ? [] : takeShellNotifications(session);
   if (finished.length) {
     for (const note of finished) input.onActivity?.({ kind: 'tool-done', label: `${note.shellId} ${note.kind === 'wakeup' ? 'woke' : note.kind === 'output' ? 'output' : note.reason ? 'stopped' : 'exited'}: ${note.command}`, id: `shell-exit-${note.shellId}-${note.at}`, category: 'run' });
-    await append({ type: 'text', role: 'user', text: formatShellNotifications(finished) });
+    await append({ type: 'text', role: 'user', source: 'harness', text: formatShellNotifications(finished) });
   }
   // Background agents that finished without the model waiting for them.
   const agentResults = backgroundAgents?.takeFinished() ?? [];
   if (agentResults.length) {
-    await append({ type: 'text', role: 'user', text: formatAgentNotifications(agentResults) });
+    await append({ type: 'text', role: 'user', source: 'harness', text: formatAgentNotifications(agentResults) });
   }
 }
 
@@ -36,6 +36,6 @@ export async function finishBackgroundForSwitch(rt: TurnRuntime): Promise<void> 
   }
   const done = backgroundAgents?.takeFinished() ?? [];
   if (done.length) {
-    await rt.append({ type: 'text', role: 'user', text: formatAgentNotifications(done) });
+    await rt.append({ type: 'text', role: 'user', source: 'harness', text: formatAgentNotifications(done) });
   }
 }

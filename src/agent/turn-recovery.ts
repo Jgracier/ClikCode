@@ -49,9 +49,11 @@ export const MAX_STOP_HOOK_CONTINUES = 3;
  * `retry`: a transient failure -- a retryable code, a 5xx, or no response at all. `model-starting`: the
  * user's own model is coming up on its GPU; the step waits for it (MODEL_START_BUDGET_SECONDS).
  * Everything else -- credit, sign-in, a rejected request, no model, the kill switch -- is the answer. */
-export function stepRecovery(error: unknown): 'retry' | 'model-starting' | undefined {
+export function stepRecovery(error: unknown): 'retry' | 'model-starting' | 'capacity' | 'context-pressure' | undefined {
   const record = (error ?? {}) as { code?: unknown; statusCode?: unknown; kind?: unknown; message?: unknown };
   const code = typeof record.code === 'string' ? record.code : undefined;
+  if (code === 'MODEL_BUSY') return 'capacity';
+  if (code === 'CONTEXT_TOO_LARGE') return 'context-pressure';
   if (code === 'MODEL_STARTING') return 'model-starting';
   if (code && RETRYABLE_STEP_CODES.has(code)) return 'retry';
   if (code) return undefined;

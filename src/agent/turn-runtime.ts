@@ -48,6 +48,7 @@ export interface TurnRuntime {
   readonly profile: ReturnType<typeof resolveContextProfile>;
   readonly tools: ToolDefinition[];
   readonly baseSystem: string;
+  readonly mutate: NonNullable<AgentTurnInput['runMutation']>;
   /** One rule set for the whole turn, its sub-agents included: an "always"
    * answered for one call already covers the calls queued behind it. */
   readonly turnRules: NonNullable<AgentTurnInput['permissionRules']>;
@@ -96,6 +97,7 @@ export interface TurnRuntime {
   /** Seconds this step has waited for the user's own model to start (MODEL_START_BUDGET_SECONDS). */
   modelStartWaitedSeconds: number;
   contextScale: number;
+  contextRefits: number;
   budgetClient: ModelClient;
   lastRequestEstimate: number;
   /** When this turn began waiting for the user's own model to start on its GPU (it was asleep, or still loading);
@@ -212,9 +214,15 @@ export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime
   const backgroundAgents = input.subagent ? undefined : sessionAgents(session, input.stateDir);
   backgroundAgents?.attachTurn();
   const segments: string[] = [];
+  let mutationTail: Promise<unknown> = Promise.resolve();
+  const mutate = input.runMutation ?? (<T>(work: () => Promise<T>): Promise<T> => {
+    const next = mutationTail.then(work);
+    mutationTail = next.catch(() => undefined);
+    return next;
+  });
   const rt: TurnRuntime = {
     input, signal, cwd, addDirs, homeDir, scope, turnId, session, checkpoints, store, profile, tools, baseSystem,
-    turnRules, turnHookInfo, backgroundAgents,
+    turnRules, turnHookInfo, backgroundAgents, mutate,
     advertised: (current) => {
       const mcpVisible = new Set(exposure.advertised(current).map((tool) => tool.name));
       const listing = rt.contextWindow !== undefined && rt.contextWindow <= 8_192 ? smallSpecialists : specialists;
@@ -229,7 +237,7 @@ export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime
     steerQueue: [], steerWaiters: new Set(), steerOpen: true, callsOpen: 0, heldSteers: [], foregroundSteers: new Map(), items, ledger, lastStepUsage: undefined, itemsAtLastUsage: items.length,
     contextWindow: input.modelClient.contextHints?.contextWindow ?? input.contextWindow,
     servedModel: undefined, segments, needsSeparator: false, steps: 0, stall: new StallGuard(), stalledCall: undefined,
-    stepRetries: 0, retryWaitedSeconds: 0, contextScale: 1, budgetClient: input.modelClient, lastRequestEstimate: 0, modelStartWaitedSeconds: 0, modelStartingSince: undefined, livePlanSeen: readLivePlan(input), lengthContinues: 0, stopContinues: 0,
+    stepRetries: 0, retryWaitedSeconds: 0, contextScale: 1, contextRefits: 0, budgetClient: input.modelClient, lastRequestEstimate: 0, modelStartWaitedSeconds: 0, modelStartingSince: undefined, livePlanSeen: readLivePlan(input), lengthContinues: 0, stopContinues: 0,
     shownCalls: new Map(), continuesCutAnswer: false, lastContext: { contextProfile: profile.name },
     stepAcceptsImages: input.modelClient.acceptsImages === true,
   };

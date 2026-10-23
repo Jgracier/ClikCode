@@ -32,7 +32,7 @@ export type ConversationItem =
   /** On a text item, `images` only ever rides on a user item, and only when the model client
    * said it accepts them; `text` still names the files, so a client that
    * cannot send pixels loses nothing by ignoring the field. */
-  | { type: 'text'; role: 'user' | 'assistant'; text: string; images?: readonly ImageInput[] }
+  | { type: 'text'; role: 'user' | 'assistant'; text: string; source?: 'harness'; images?: readonly ImageInput[] }
   | { type: 'tool_call'; id: string; name: string; args: Record<string, unknown> }
   /** `images` are what the tool showed the model (read_file on a picture);
    * `output` still describes them in words for a client that cannot see. */
@@ -153,6 +153,8 @@ interface HarnessHooks {
 }
 
 export interface AgentTurnInput {
+  /** Shared only by agents using the same working directory. Isolated worktrees own their queue. */
+  runMutation?<T>(work: () => Promise<T>): Promise<T>;
   sessionId: string;
   cwd: string;
   /** The Gateway agent's instructions (context.ts agentInstructions), when the conversation runs as one. */

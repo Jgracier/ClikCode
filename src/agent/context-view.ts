@@ -9,7 +9,7 @@ export class ContextFitError extends Error {
   readonly code = 'CONTEXT_BUDGET_EXCEEDED';
   readonly kind = 'other';
   constructor(readonly inputTokens: number, readonly contextWindow: number) {
-    super(`The current instructions, user requests and required tools need about ${inputTokens.toLocaleString()} input tokens, beyond this model's ${contextWindow.toLocaleString()}-token context budget. The full conversation is saved. Choose a larger context or start a new task; no user instructions were silently removed.`);
+    super(`The current instructions, user requests and required tools need about ${inputTokens.toLocaleString()} input tokens, beyond this model's ${contextWindow.toLocaleString()}-token context budget. The full conversation is saved. Choose a larger context or start a new task; the current request and system instructions were not silently cut.`);
   }
 }
 
@@ -44,11 +44,18 @@ interface Group { start: number; items: ConversationItem[]; required: boolean }
  * reasoning. A lone old result can never be paired with a different call. */
 function groups(items: readonly ConversationItem[]): Group[] {
   const result: Group[] = [];
+  let latestUser = items.length - 1;
+  while (latestUser >= 0) {
+    const item = items[latestUser]!;
+    if (item.type === 'text' && item.role === 'user' && item.source !== 'harness') break;
+    latestUser--;
+  }
   for (const [index, item] of items.entries()) {
-    const required = item.type === 'summary' || (item.type === 'text' && item.role === 'user');
+    const boundary = item.type === 'summary' || (item.type === 'text' && item.role === 'user');
+    const required = index === latestUser;
     let group = result.at(-1);
     const afterResult = group?.items.some((entry) => entry.type === 'tool_result');
-    if (!group || required || group.required || (afterResult && item.type !== 'tool_result')) {
+    if (!group || boundary || group.required || (group.items[0]?.type === 'text' && group.items[0].role === 'user') || (afterResult && item.type !== 'tool_result')) {
       group = { start: index, items: [], required };
       result.push(group);
     }
@@ -87,14 +94,16 @@ export function fitContext(input: {
   const last = optional.at(-1);
   // The immediate result is the evidence for the next action, even if an
   // older assistant narration would have scored higher on keyword overlap.
-  if (last) selected.add(last);
-  const query = textOf(input.items.filter((item) => item.type === 'text' && item.role === 'user').slice(-2)).toLowerCase();
+  if (last && last.start > (all.find((group) => group.required)?.start ?? -1)) selected.add(last);
+  const latestEvidence = [...optional].reverse().find((group) => group.start > (all.find((entry) => entry.required)?.start ?? -1) && group.items.some((item) => item.type === 'tool_result'));
+  if (latestEvidence) selected.add(latestEvidence);
+  const query = textOf(input.items.filter((item) => item.type === 'text' && item.role === 'user' && item.source !== 'harness').slice(-2)).toLowerCase();
   const words = new Set((query.match(/[\p{L}\p{N}_./-]{3,}/gu) ?? []).slice(-128));
-  const ranked = optional.filter((group) => group !== last).map((group, index) => {
+  const ranked = optional.filter((group) => !selected.has(group)).map((group, index) => {
     const text = textOf(group.items).toLowerCase();
     let relevance = 0;
     for (const word of words) if (text.includes(word)) relevance++;
-    return { group, score: relevance * 2 + index / Math.max(1, optional.length) };
+    return { group, score: (group.items.some((item) => item.type === 'text' && item.role === 'user' && item.source !== 'harness') ? 100 : 0) + relevance * 2 + index / Math.max(1, optional.length) };
   }).sort((a, b) => b.score - a.score);
 
   const prepare = (group: Group, limit: number) => group.items.map((item, offset): ConversationItem => {
@@ -121,11 +130,11 @@ export function fitContext(input: {
     const canReload = input.tools.some((tool) => tool.name === 'load_tools' || tool.name === 'load_mcp_tools');
     const tools = input.tools.filter((tool) => !canReload || referenced.has(tool.name) || essential.has(tool.name));
     const omitted = all.length - kept.length;
-    const note: ConversationItem = { type: 'text', role: 'assistant', text: `[Working context: ${omitted} older work group(s) are outside this view. User requests remain verbatim. Use read_context to search the complete retained history and tool results before relying on missing details. Excerpts are not complete evidence.]` };
+    const note: ConversationItem = { type: 'text', role: 'assistant', text: `[Working context: ${omitted} older work group(s) are outside this view. The current user request remains verbatim. Earlier requests and evidence remain in the retained history. Use read_context to search the complete retained history and tool results before relying on missing details. Excerpts are not complete evidence.]` };
     return { items: omitted ? [note, ...items] : items, tools, omittedGroups: omitted };
   };
 
-  let limit = Math.max(256, Math.min(4_096, Math.floor(window / 4)));
+  let limit = Math.max(256, Math.min(4_096, Math.floor(window / (4 * scale))));
   let view = materialize(limit);
   while ((cost(view.items, view.tools) > budget || view.items.length > maxItems) && limit > 256) {
     limit = Math.max(256, Math.floor(limit / 2));

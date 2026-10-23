@@ -68,11 +68,7 @@ export async function noWorktreeMessage(dir: string, explicit: boolean): Promise
     ? `${dir} is not inside a git repository with a commit`
     : inRepo ? `${dir} is in a git repository (${inRepo}) that has no commits yet`
       : `${dir} is not inside a git repository`;
-  const children = await findChildRepositories(dir);
-  const hint = children.length
-    ? ` Repositories under it: ${children.join(', ')}. Pass one of them as \`repo\`.`
-    : ' Pass the repository to work in as `repo`, or run the agent without isolation.';
-  return `An isolated or background agent works in its own git worktree, and ${why}.${hint}`;
+  return `Git worktree isolation requires the intended repository with a commit, and ${why}. Pass that repository as repo, or omit isolation to use the current directory. Background execution does not require Git. Do not choose an unrelated repository just to create a worktree.`;
 }
 
 /** Undefined when cwd is not inside a git work tree with at least one commit. */
