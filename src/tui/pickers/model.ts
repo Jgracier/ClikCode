@@ -178,29 +178,45 @@ export async function interactivePrivateModelsPicker(rl: HarnessPrompter, id: st
   if (!session) throw new Error(`AI session "${id}" was not found`);
   if (!isGatewayService(session)) throw new Error('Private models are available on ClikDeploy Gateway conversations.');
 
-  let query: string;
-  try {
-    query = (await rl.question('Search deployable Hugging Face models › ', undefined, { cancellable: true })).trim();
-  } catch (error) {
-    if ((error as { code?: string }).code === 'ERR_PROMPT_CANCELLED') return;
-    throw error;
-  }
-  if (query.length < 2) {
-    if (query) rl.panel?.('Private models', 'Enter at least 2 characters to search Hugging Face.');
-    return;
-  }
   const waiting = TERMINAL.active === rl ? TERMINAL.active : undefined;
-  const matches = await withSlowWait(waiting, 'searching Hugging Face models…', () => searchDeployableModels(query));
-  const models = matches.filter((model) => !model.modality || model.modality === 'llm');
-  if (!models.length) {
-    rl.panel?.('Private models', 'No chat models matched that search. Try a model name or author.');
-    return;
+  const searchAction = { kind: 'search' as const };
+  let query = '';
+  let models = await withSlowWait(waiting, 'loading private models…', () => searchDeployableModels());
+  let selected: DeployableModel | undefined;
+  for (;;) {
+    const chatModels = models.filter((model) => !model.modality || model.modality === 'llm');
+    const options: PickerOption<DeployableModel | typeof searchAction>[] = [
+      {
+        label: query ? 'Search Hugging Face again…' : 'Search Hugging Face…',
+        detail: query ? (chatModels.length ? `Current search: ${query}` : `No chat models match “${query}” · Search again`) : 'Find a model by name or author',
+        value: searchAction,
+        group: 'Search',
+      },
+      ...(chatModels.length ? chatModels.map((model) => ({
+        label: model.displayName,
+        detail: [model.modelId, model.gated ? 'restricted access' : '', model.downloads ? `${model.downloads.toLocaleString()} downloads` : ''].filter(Boolean).join(' · '),
+        value: model,
+        group: 'Hugging Face models',
+      })) : []),
+    ];
+    const choice = await chooseOption(rl, 'Private models', options);
+    if (choice === undefined) return;
+    if (choice !== searchAction) { selected = choice; break; }
+
+    let typed: string;
+    try {
+      typed = (await rl.question('Search Hugging Face models › ', undefined, { cancellable: true })).trim();
+    } catch (error) {
+      if ((error as { code?: string }).code === 'ERR_PROMPT_CANCELLED') continue;
+      throw error;
+    }
+    if (typed.length < 2) {
+      rl.panel?.('Private models', 'Enter at least 2 characters to search Hugging Face.');
+      continue;
+    }
+    query = typed;
+    models = await withSlowWait(waiting, 'searching Hugging Face models…', () => searchDeployableModels(query));
   }
-  const selected = await chooseOption(rl, 'Choose a deployable Hugging Face model', models.map((model) => ({
-    label: model.displayName,
-    detail: [model.modelId, model.gated ? 'restricted access' : '', model.downloads ? `${model.downloads.toLocaleString()} downloads` : ''].filter(Boolean).join(' · '),
-    value: model,
-  })));
   if (!selected) return;
 
   let quote: PrivateModelQuote;

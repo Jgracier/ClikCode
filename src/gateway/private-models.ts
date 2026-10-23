@@ -47,8 +47,8 @@ async function request<T>(path: string, init: { method?: 'GET' | 'POST'; body?: 
   return payload.data as T;
 }
 
-/** Search ClikDeploy's deployable Hugging Face catalog, not the raw Hub listing. */
-export async function searchDeployableModels(query: string): Promise<DeployableModel[]> {
+/** List popular models or search ClikDeploy's Hugging Face catalog. */
+export async function searchDeployableModels(query = ''): Promise<DeployableModel[]> {
   const params = new URLSearchParams({ q: query, source: 'huggingface' });
   return request<DeployableModel[]>(`/api/models/search?${params}`);
 }
