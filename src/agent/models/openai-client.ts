@@ -1,3 +1,4 @@
+import { ContextFitError, estimateRequestTokens, responseReserve } from '../context-view.js';
 /** ModelClient for any OpenAI-compatible server (llama.cpp's llama-server,
  * vLLM, OpenAI itself, most hosted providers):
  * `POST {baseUrl}/v1/chat/completions` with `stream: true`. */
@@ -99,21 +100,11 @@ export function fitToLimits(system: string, tools: readonly ToolSpec[], limits: 
     if (bytes(JSON.stringify(parameters)) <= limits.schemaBytes) fitted.push({ ...tool, parameters });
     else dropped.push(tool.name);
   }
-  // A tool the server will not take is not offered -- and the model is told so, rather than left to
-  // wonder why a tool it was promised is not there.
-  const toolNote = dropped.length
-    ? `\n\n[${dropped.length} tool${dropped.length === 1 ? ' was' : 's were'} not offered because the server's limits would refuse the request: ${dropped.slice(0, 8).join(', ')}${dropped.length > 8 ? ', …' : ''}.]`
-    : '';
-  const budget = limits.systemBytes === undefined ? undefined : limits.systemBytes - bytes(toolNote);
-  let fittedSystem = system;
-  if (budget !== undefined && bytes(system) > budget) {
-    const note = '\n\n[The rest of the system prompt was cut to fit the server\'s limit.]';
-    let keep = Buffer.from(system, 'utf8').subarray(0, Math.max(0, budget - bytes(note))).toString('utf8');
-    // A character cut in half decodes to U+FFFD; drop it.
-    keep = keep.replace(/\uFFFD$/, '');
-    fittedSystem = `${keep}${note}`;
+  if (dropped.length) throw new ModelClientError(`The server cannot accept the required tool schemas: ${dropped.join(', ')}. No tool was silently removed.`, { kind: 'other', code: 'REQUEST_LIMIT_EXCEEDED' });
+  if (limits.systemBytes !== undefined && bytes(system) > limits.systemBytes) {
+    throw new ModelClientError(`The instructions exceed the server's ${limits.systemBytes}-byte system limit. No instructions were removed.`, { kind: 'other', code: 'REQUEST_LIMIT_EXCEEDED' });
   }
-  return { system: `${fittedSystem}${toolNote}`, tools: fitted };
+  return { system, tools: fitted };
 }
 
 const FIRST_CHUNK_TIMEOUT_MS = 30 * 60_000;
@@ -327,7 +318,6 @@ interface PendingCall { id?: string; name: string; arguments: string; argsObject
 
 /** Tokens a request's text is taken to hold, for leaving the answer room in
  * the window: a deliberately rough four characters each. */
-const roughTokens = (text: string): number => Math.ceil(text.length / 4);
 
 export class OpenAIModelClient implements ModelClient {
   /** Set by the Gateway client (for-session.ts): how the start of the user's own model is going. */
@@ -351,12 +341,14 @@ export class OpenAIModelClient implements ModelClient {
 
   /** `max_tokens` for this request: the model's own limit, or less when the
    * prompt leaves less than that of the window. */
-  private maxTokens(promptText: string): number | undefined {
-    const limit = this.options.maxOutputTokens;
-    if (!limit) return undefined;
+  private maxTokens(request: ModelStepRequest): number | undefined {
     const window = this.servedWindow ?? this.options.contextWindow;
+    const limit = this.options.maxOutputTokens;
     if (!window) return limit;
-    return Math.max(1_024, Math.min(limit, window - roughTokens(promptText) - 1_024));
+    const reserve = responseReserve(window, limit);
+    const input = estimateRequestTokens(request.system, request.items, request.tools);
+    if (input + reserve + Math.max(128, Math.ceil(window * 0.05)) > window) throw new ContextFitError(input + reserve, window);
+    return reserve;
   }
 
   private describe(message: string, details: { status?: number; code?: string; retryAfter?: number }): string {
@@ -380,7 +372,7 @@ export class OpenAIModelClient implements ModelClient {
       throw new ModelClientError(`${this.label}: the conversation has ${messages.length} messages, more than the ${options.limits.messages} one request may carry`, { kind: 'other', code: 'CONTEXT_TOO_LARGE' });
     }
     const tools = toolsBody(fitted.tools, request.toolChoice);
-    const maxTokens = this.maxTokens(JSON.stringify(messages) + JSON.stringify(tools.tools ?? []));
+    const maxTokens = this.maxTokens({ ...request, system: fitted.system, tools: fitted.tools });
     let response: Response;
     const requestedAt = Date.now();
     try {

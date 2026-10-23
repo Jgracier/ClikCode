@@ -77,7 +77,7 @@ const LEAN_MCP_EAGER_TOKENS = 1_500;
  * the conversation, so a newly loaded schema makes everything after it be
  * read again). 10K is still under 8% of a 128K window; beyond it -- a server
  * with a hundred tools -- deferring wins even when tokens are cheap. */
-const FULL_MCP_EAGER_TOKENS = 10_000;
+const FULL_MCP_EAGER_TOKENS = LEAN_MCP_EAGER_TOKENS;
 
 /** Lean's ceiling is the long-standing 30 KB (~7,500 tokens). */
 const LEAN_TOOL_OUTPUT_BYTES = 30 * 1024;

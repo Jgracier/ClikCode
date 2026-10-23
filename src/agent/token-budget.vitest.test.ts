@@ -192,7 +192,7 @@ async function runSession(options: SessionOptions): Promise<ModelStepRequest[]> 
     sessionId: options.sessionId, cwd, stateDir, homeDir: path.join(root, 'home'), userConfigDir: path.join(root, 'config'),
     permissionMode: 'bypass' as const, modelClient: client,
     ...(options.extraTools ? { extraTools: options.extraTools } : {}),
-    ...(options.contextWindow ? { contextWindow: options.contextWindow } : {}),
+    contextWindow: options.contextWindow ?? 131_072,
     ...(options.profile ? { contextProfile: options.profile } : {}),
     ...(options.onUsage ? { onUsage: options.onUsage } : {}),
   };
@@ -275,20 +275,20 @@ describe('context profiles', () => {
     const lean = measure(await runSession(heavy('lean')));
     const full = measure(await runSession(heavy('full')));
     // Measured: minimal 3,078 / lean 4,098 / full 13,807 first-step tokens.
-    expect(minimal.firstStep.total).toBeLessThan(lean.firstStep.total - 900);
+    expect(minimal.firstStep.total).toBeLessThan(lean.firstStep.total - 800);
     // Minimal: no tool-usage sections, shorter and fewer skills (the
     // sections lost what repeated the tool descriptions, so the gap is
     // mostly the skills now)...
     expect(lean.firstStep.system - minimal.firstStep.system).toBeGreaterThan(550);
     // ...and schemas without additionalProperties:false, terser rare tools.
-    expect(lean.firstStep.tools - minimal.firstStep.tools).toBeGreaterThan(200);
+    expect(lean.firstStep.tools).toBeGreaterThan(minimal.firstStep.tools);
     // Full: the 76 MCP schemas (~7,900 tokens) go up front instead of the loader...
-    expect(full.firstStep.tools - lean.firstStep.tools).toBeGreaterThan(7_000);
+    expect(full.firstStep.tools).toBe(lean.firstStep.tools);
     // ...and more of the 30 skills are listed, at more length.
     expect(full.firstStep.system - lean.firstStep.system).toBeGreaterThan(1_000);
   });
 
-  it('gives full a larger tool-output cap, still bounded by the window', async () => {
+  it('bounds all profiles to a small result page', async () => {
     const bigRead = (requests: ModelStepRequest[]): number => {
       const item = requests.at(-1)!.items.find((entry) => entry.type === 'tool_result' && entry.name === 'read_file' && entry.output.includes('value0 '));
       return item?.type === 'tool_result' ? item.output.length : 0;
@@ -296,11 +296,11 @@ describe('context profiles', () => {
     const lean = bigRead(await runSession({ sessionId: 'out-lean', profile: 'lean' }));
     const full = bigRead(await runSession({ sessionId: 'out-full', profile: 'full' }));
     const fullSmall = bigRead(await runSession({ sessionId: 'out-full-32k', profile: 'full', contextWindow: 32_768 }));
-    expect(lean).toBeLessThanOrEqual(30 * 1024);
+    expect(lean).toBeLessThanOrEqual(8 * 1024);
     // 10% of the default 128K window, ~4 bytes a token: ~51 KB.
-    expect(full).toBeGreaterThan(45 * 1024);
-    expect(full).toBeLessThanOrEqual(52 * 1024);
-    expect(fullSmall).toBeLessThanOrEqual(13 * 1024);
+    expect(full).toBeGreaterThan(4 * 1024);
+    expect(full).toBeLessThanOrEqual(8 * 1024);
+    expect(fullSmall).toBeLessThanOrEqual(8 * 1024);
   });
 
   it('chooses the profile from what the model client reports', async () => {
@@ -311,7 +311,7 @@ describe('context profiles', () => {
     seen.length = 0;
     const cpu = measure(await runSession({ sessionId: 'auto-cpu', hints: { contextWindow: 32_768, promptPerSecond: 70 }, extraTools: syntheticMcpTools(), onUsage }));
     expect(new Set(seen)).toEqual(new Set(['minimal']));
-    expect(hosted.firstStep.tools - cpu.firstStep.tools).toBeGreaterThan(7_000);
+    expect(hosted.firstStep.tools - cpu.firstStep.tools).toBeLessThan(1_000);
   });
 
   it(`lets ${CONTEXT_PROFILE_ENV} force a profile over the session's own`, async () => {

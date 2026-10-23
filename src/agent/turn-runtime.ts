@@ -17,9 +17,11 @@ import { computerWebTool } from './tools/computer-web.js';
 import { clikDeployStepUpTool } from './tools/clikdeploy-step-up.js';
 import { hotTool } from './computer/hot-tools.js';
 import { exposeTools } from './mcp/deferred.js';
+import { exposeSpecialists } from './on-demand-tools.js';
+import { readContextTool } from './tools/read-context.js';
 import { gateNotebookTool, workspaceHasNotebooks } from './tools/notebook-gate.js';
 import { turnCancelledError } from './cancellation.js';
-import type { ConversationItem, AgentTurnInput, AgentTurnResult, ModelToolCall, TokenUsage } from './model-client.js';
+import type { ConversationItem, AgentTurnInput, AgentTurnResult, ModelToolCall, TokenUsage, ModelClient } from './model-client.js';
 import type { ToolDefinition } from './tool-contract.js';
 import { emptyLedger } from './usage.js';
 import { resolveContextProfile } from './context-profile.js';
@@ -93,6 +95,9 @@ export interface TurnRuntime {
   retryWaitedSeconds: number;
   /** Seconds this step has waited for the user's own model to start (MODEL_START_BUDGET_SECONDS). */
   modelStartWaitedSeconds: number;
+  contextScale: number;
+  budgetClient: ModelClient;
+  lastRequestEstimate: number;
   /** When this turn began waiting for the user's own model to start on its GPU (it was asleep, or still loading);
    * unset once it answers. While set, steering waits in the queue (Esc takes it back) rather than being folded into
    * a request the model never sees, and the status stays "Starting model". */
@@ -141,8 +146,11 @@ export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime
     session: input.contextProfile,
   });
   const ownTools = input.tools ?? [...defaultTools(), ...(await computerEnabled(input.stateDir) ? [...computerTools, computerWebTool, clikDeployStepUpTool].map(hotTool) : [])];
-  const exposure = exposeTools(mergeTools(ownTools, input.extraTools), profile.mcpEagerSchemaTokens);
-  const tools = exposure.all;
+  const contextReader = readContextTool(() => rt.items, !input.subagent);
+  const exposure = exposeTools(mergeTools([contextReader, ...ownTools], input.extraTools), profile.mcpEagerSchemaTokens);
+  const window = input.modelClient.contextHints?.contextWindow ?? input.contextWindow;
+  const specialists = exposeSpecialists(exposure.all, window !== undefined && window <= 8_192);
+  const tools = specialists.all;
 
   const [loaded, savedRules, baseSystem, notebooksOnDisk] = await abortable(Promise.all([
     store.load(),
@@ -205,7 +213,10 @@ export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime
   const rt: TurnRuntime = {
     input, signal, cwd, addDirs, homeDir, scope, turnId, session, checkpoints, store, profile, tools, baseSystem,
     turnRules, turnHookInfo, backgroundAgents,
-    advertised: (current) => gateNotebookTool(exposure.advertised(current), current, notebooksOnDisk),
+    advertised: (current) => {
+      const mcpVisible = new Set(exposure.advertised(current).map((tool) => tool.name));
+      return gateNotebookTool(specialists.advertised(current).filter((tool) => tool.name === 'load_tools' || mcpVisible.has(tool.name)), current, notebooksOnDisk);
+    },
     throwIfAborted,
     append: async (...added) => { rt.items.push(...added); await store.append(...added); },
     notifyHook,
@@ -213,9 +224,9 @@ export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime
       text: segments.join('\n\n').trim(), nativeSessionId: input.sessionId, usage: rt.ledger.total, steps: rt.steps, contextProfile: profile.name, ...extra,
     }),
     steerQueue: [], steerWaiters: new Set(), steerOpen: true, callsOpen: 0, heldSteers: [], foregroundSteers: new Map(), items, ledger, lastStepUsage: undefined, itemsAtLastUsage: items.length,
-    contextWindow: input.contextWindow ?? input.modelClient.contextHints?.contextWindow,
+    contextWindow: input.modelClient.contextHints?.contextWindow ?? input.contextWindow,
     servedModel: undefined, segments, needsSeparator: false, steps: 0, stall: new StallGuard(), stalledCall: undefined,
-    stepRetries: 0, retryWaitedSeconds: 0, modelStartWaitedSeconds: 0, modelStartingSince: undefined, livePlanSeen: readLivePlan(input), lengthContinues: 0, stopContinues: 0,
+    stepRetries: 0, retryWaitedSeconds: 0, contextScale: 1, budgetClient: input.modelClient, lastRequestEstimate: 0, modelStartWaitedSeconds: 0, modelStartingSince: undefined, livePlanSeen: readLivePlan(input), lengthContinues: 0, stopContinues: 0,
     shownCalls: new Map(), continuesCutAnswer: false, lastContext: { contextProfile: profile.name },
     stepAcceptsImages: input.modelClient.acceptsImages === true,
   };

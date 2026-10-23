@@ -326,15 +326,12 @@ describe('a request fitted to the server', () => {
     expect(received[2]!.body).not.toHaveProperty('max_tokens');
   });
 
-  it('trims tools and schemas and cuts the system prompt instead of being refused', () => {
+  it('never discards instructions or tools to meet server limits', () => {
     const tool = (name: string, description = 'd') => ({ name, description, parameters: { type: 'object', properties: { a: { type: 'string', description } } } });
-    const fitted = fitToLimits('s'.repeat(400), [tool('a'), tool('big', 'x'.repeat(500)), tool('c'), tool('d')], { tools: 3, schemaBytes: 200, systemBytes: 300 });
-    expect(fitted.tools.map((entry) => entry.name)).toEqual(['a', 'big', 'c']);
-    expect(fitted.tools[1]!.parameters).toEqual({ type: 'object', properties: { a: { type: 'string' } } });
-    expect(Buffer.byteLength(fitted.system)).toBeLessThanOrEqual(300);
-    expect(fitted.system).toMatch(/cut to fit/);
-    // What was left out is said, inside the system limit: a tool the model was promised is not silently gone.
-    expect(fitted.system).toMatch(/1 tool was not offered.*: d\.\]$/s);
+    expect(() => fitToLimits('s'.repeat(400), [tool('a')], { systemBytes: 300 })).toThrow(/No instructions were removed/);
+    expect(() => fitToLimits('system', [tool('a'), tool('b')], { tools: 1 })).toThrow(/No tool was silently removed/);
+    const fitted = fitToLimits('system', [tool('big', 'x'.repeat(500))], { schemaBytes: 200 });
+    expect(fitted.tools[0]!.parameters).toEqual({ type: 'object', properties: { a: { type: 'string' } } });
   });
 
   it('says nothing about tools when every one fits', () => {
