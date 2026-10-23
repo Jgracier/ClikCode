@@ -21,6 +21,7 @@ import { lifecycle } from '../runtime/lifecycle-log.js';
 import { LEGACY_INTERRUPTED_TURN_REQUEST } from '../turn/failover-prompt.js';
 import { statSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
+import { hostname } from 'node:os';
 import Conf from 'conf';
 import { readState } from '../session/state/read.js';
 import { setOutOfTurnHandler, setRetiredWorkListener, setVendorBackgroundTurnHandler, setWorkEndedHandler } from '../turn/vendor-process.js';
@@ -40,7 +41,8 @@ import { startStuckWatchdog } from './stuck-watchdog.js';
 import { LiveSettings } from '../turn/live-settings.js';
 import { sessionState } from '../agent/session-state.js';
 import { stateDirectory } from '../session/store/paths.js';
-import { generateWorkerToken, socketPathFor, takeConversation, workerIsReachable, writeWorkerRecord, currentWorkerBuild, type ConversationHold, type WorkerRuntimeRecord } from './registry.js';
+import { CONVERSATION_HANDOFF_REASON, conversationHandoffRequested, generateWorkerToken, socketPathFor, takeConversation, workerIsReachable, writeWorkerRecord, currentWorkerBuild, type ConversationHold, type WorkerRuntimeRecord } from './registry.js';
+import { persistentWorkRunning } from '../turn/vendor-process.js';
 import type { ConnectionState, WorkerContext } from './worker-context.js';
 import { createWorkerIo } from './worker-io.js';
 import { BUILD_WATCH_MS, createIdleControl } from './worker-idle.js';
@@ -70,7 +72,9 @@ export async function ownConversation(
   for (;;) {
     const taken = await take(sessionId, 'worker');
     if ('hold' in taken) return taken.hold;
-    if (taken.holder.kind === 'worker') return undefined;
+    // A worker on this machine already serves it. One on another machine is asked to hand the lease over
+    // (conversationHandoffRequested below, in its own worker), so this one waits for it.
+    if (taken.holder.kind === 'worker' && taken.holder.host === hostname()) return undefined;
     if (Date.now() >= deadline) {
       throw new Error(`the conversation ${sessionId} is still held by a ${taken.holder.kind} (pid ${taken.holder.pid}) after ${Math.round(maxWaitMs / 1000)}s; the worker did not start`);
     }
@@ -175,6 +179,20 @@ export async function runSessionWorker(sessionId: string, options: { warm?: bool
   const handleCommand = createCommandHandler(ctx);
   ctx.server = createWorkerServer(ctx, handleCommand);
   ctx.shutdown = createShutdown(ctx);
+  // A client on another machine cannot attach to this worker's Unix socket.
+  // It requests the shared conversation lease; finish work already running,
+  // then release it so that machine's waiting worker can take over. Attached
+  // windows do not pin the chat to this host.
+  let checkingHandoff = false;
+  setInterval(() => {
+    if (checkingHandoff) return;
+    checkingHandoff = true;
+    void (async () => {
+      if (!await conversationHandoffRequested(sessionId)) return;
+      if (ctx.idle.retireBlocker() || await persistentWorkRunning(sessionId)) return;
+      await ctx.shutdown(CONVERSATION_HANDOFF_REASON);
+    })().catch(() => undefined).finally(() => { checkingHandoff = false; });
+  }, 1_000).unref();
   // A loop of its own that never yields would keep this worker -- and what it
   // holds -- forever: a thread ends it (worker/stuck-watchdog.ts).
   startStuckWatchdog(sessionId);
