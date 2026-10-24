@@ -53,10 +53,6 @@ const GATEWAY_ERROR_CODES: Readonly<Record<string, string>> = {
   model_starting: 'MODEL_STARTING',
 };
 
-/** What the Gateway refuses with a 400 (`invalid_request`): a request is
- * fitted to these, or compacted, before it is sent. */
-const GATEWAY_REQUEST_LIMITS = { messages: 2_000, items: 2_000, tools: 128, schemaBytes: 16 * 1024, systemBytes: 64 * 1024 } as const;
-
 /** A Gateway refusal with what to do about it added: the Gateway's own
  * message names the model or the limit, and the hint says where to go next. */
 export function gatewayErrorMessage(error: { status?: number; code?: string; message: string; retryAfter?: number }): string | undefined {
@@ -102,7 +98,6 @@ export function gatewayModelClient(input: {
     // and every byte of one restarts the clock (gateway-client.ts readWithin),
     // so a step thinking or writing a long call is never cut and resent.
     firstChunkTimeoutMs: STREAM_IDLE_TIMEOUT_MS,
-    limits: GATEWAY_REQUEST_LIMITS,
     describeError: gatewayErrorMessage,
     ...(input.contextWindow ? { contextWindow: input.contextWindow } : {}),
     ...(input.maxOutput ? { maxOutputTokens: input.maxOutput } : {}),

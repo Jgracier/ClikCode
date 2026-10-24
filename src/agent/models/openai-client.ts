@@ -55,53 +55,9 @@ interface OpenAIModelClientOptions {
   /** The most the model writes in one answer: sent as `max_tokens`, less
    * whatever of the window the prompt already takes. */
   maxOutputTokens?: number;
-  /** What the server refuses outright; a request is fitted to these before
-   * it is sent rather than sent to be rejected. */
-  limits?: RequestLimits;
   /** The server's own error in words that say what to do about it; undefined
    * keeps the server's message. */
   describeError?: (error: { status?: number; code?: string; message: string; retryAfter?: number }) => string | undefined;
-}
-
-/** Hard limits on one request, as a server enforces them with a 400. */
-interface RequestLimits {
-  /** Chat messages, the system prompt included. */
-  messages?: number;
-  /** Conversation items: a server that counts what a message carries (a call, a result, a text) counts more than messages. */
-  items?: number;
-  tools?: number;
-  /** One tool's `parameters`, serialized. */
-  schemaBytes?: number;
-  systemBytes?: number;
-}
-
-const bytes = (text: string): number => Buffer.byteLength(text, 'utf8');
-
-/** A schema with its descriptions taken out: the first thing to go when one
- * is over the size a server takes. */
-function withoutDescriptions(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(withoutDescriptions);
-  if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(Object.entries(value).filter(([key, child]) => !(key === 'description' && typeof child === 'string')).map(([key, child]) => [key, withoutDescriptions(child)]));
-}
-
-/** Validate server-specific limits without discarding instructions or tools.
- * Schema descriptions may be shortened; validation constraints stay intact. */
-export function fitToLimits(system: string, tools: readonly ToolSpec[], limits: RequestLimits): { system: string; tools: ToolSpec[] } {
-  const fitted: ToolSpec[] = [];
-  const dropped: string[] = [];
-  for (const tool of tools) {
-    if (limits.tools !== undefined && fitted.length >= limits.tools) { dropped.push(tool.name); continue; }
-    if (limits.schemaBytes === undefined || bytes(JSON.stringify(tool.parameters)) <= limits.schemaBytes) { fitted.push(tool); continue; }
-    const parameters = withoutDescriptions(tool.parameters) as Record<string, unknown>;
-    if (bytes(JSON.stringify(parameters)) <= limits.schemaBytes) fitted.push({ ...tool, parameters });
-    else dropped.push(tool.name);
-  }
-  if (dropped.length) throw new ModelClientError(`The server cannot accept the required tool schemas: ${dropped.join(', ')}. No tool was silently removed.`, { kind: 'other', code: 'REQUEST_LIMIT_EXCEEDED' });
-  if (limits.systemBytes !== undefined && bytes(system) > limits.systemBytes) {
-    throw new ModelClientError(`The instructions exceed the server's ${limits.systemBytes}-byte system limit. No instructions were removed.`, { kind: 'other', code: 'REQUEST_LIMIT_EXCEEDED' });
-  }
-  return { system, tools: fitted };
 }
 
 const FIRST_CHUNK_TIMEOUT_MS = 30 * 60_000;
@@ -356,16 +312,9 @@ export class OpenAIModelClient implements ModelClient {
   async step(request: ModelStepRequest): Promise<ModelStepResult> {
     const { options } = this;
     const doFetch = options.fetchImpl ?? fetch;
-    const fitted = options.limits ? fitToLimits(request.system, request.tools, options.limits) : { system: request.system, tools: request.tools };
-    const messages = toChatMessages(fitted.system, request.items, this.acceptsImages, options.model);
-    if (options.limits?.items !== undefined && request.items.length > options.limits.items) {
-      throw new ModelClientError(`${this.label}: the conversation has ${request.items.length} items, more than the ${options.limits.items} one request may carry`, { kind: 'other', code: 'CONTEXT_TOO_LARGE' });
-    }
-    if (options.limits?.messages !== undefined && messages.length > options.limits.messages) {
-      throw new ModelClientError(`${this.label}: the conversation has ${messages.length} messages, more than the ${options.limits.messages} one request may carry`, { kind: 'other', code: 'CONTEXT_TOO_LARGE' });
-    }
-    const tools = toolsBody(fitted.tools, request.toolChoice);
-    const maxTokens = this.maxTokens({ ...request, system: fitted.system, tools: fitted.tools });
+    const messages = toChatMessages(request.system, request.items, this.acceptsImages, options.model);
+    const tools = toolsBody(request.tools, request.toolChoice);
+    const maxTokens = this.maxTokens(request);
     let response: Response;
     const requestedAt = Date.now();
     try {
