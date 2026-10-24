@@ -29,8 +29,9 @@
  *     given to it; `stop_hook_active` is true on a turn a Stop hook continued.
  *   - SubagentStop (matcher: the agent type, `research` or `work`): the same,
  *     for a task/agent sub-agent about to hand its answer back.
- *   - PreCompact (matcher: `auto`; the agent compacts only itself, so never
- *     `manual`): runs before the conversation is compacted; cannot stop it.
+ *   - PreCompact is not fired: ClikCode never compacts a conversation (the
+ *     full transcript is kept, and the model's view is fitted per request), so
+ *     there is no compaction to run before. A configured one is ignored.
  *   - Notification (matcher: `permission_prompt` or `idle_prompt`): the
  *     agent asks for approval, or ends its turn on a question to the user.
  *     Informational; it never delays the prompt.
@@ -53,8 +54,8 @@ import type { ToolRunResult } from './tool-contract.js';
 /** `env`: what a plugin's hooks are given (CLAUDE_PLUGIN_ROOT, CLAUDE_PLUGIN_DATA); see plugins.ts. */
 interface HookCommand { type?: string; command?: string; timeout?: number; env?: Record<string, string> }
 interface HookGroup { matcher?: string; hooks?: HookCommand[] }
-type HookEvent = 'PreToolUse' | 'PostToolUse' | 'UserPromptSubmit' | 'SessionStart' | 'Stop' | 'SubagentStop' | 'PreCompact' | 'Notification';
-const HOOK_EVENTS: readonly HookEvent[] = ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'SessionStart', 'Stop', 'SubagentStop', 'PreCompact', 'Notification'];
+type HookEvent = 'PreToolUse' | 'PostToolUse' | 'UserPromptSubmit' | 'SessionStart' | 'Stop' | 'SubagentStop' | 'Notification';
+const HOOK_EVENTS: readonly HookEvent[] = ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'SessionStart', 'Stop', 'SubagentStop', 'Notification'];
 export type HookConfig = Partial<Record<HookEvent, HookGroup[]>>;
 
 /** ClikCode's tool names as Claude Code names them. MCP tools share Claude's `mcp__server__tool` form. */
@@ -264,7 +265,6 @@ export function toolHooksFrom(config: HookConfig, onError?: (message: string) =>
   sessionStart?(info: HookInfo & { source: 'startup' | 'resume' }): Promise<{ context?: string } | void>;
   stop?(info: HookInfo & { stopHookActive: boolean }): Promise<{ continueWith?: string } | void>;
   subagentStop?(info: SubagentStopInfo): Promise<{ continueWith?: string } | void>;
-  preCompact?(info: HookInfo & { trigger: 'auto' | 'manual' }): Promise<void>;
   notification?(info: NotificationInfo): Promise<void>;
 } | undefined {
   const pre = config.PreToolUse ?? [];
@@ -273,9 +273,8 @@ export function toolHooksFrom(config: HookConfig, onError?: (message: string) =>
   const start = config.SessionStart ?? [];
   const stop = config.Stop ?? [];
   const subagentStop = config.SubagentStop ?? [];
-  const preCompact = config.PreCompact ?? [];
   const notify = config.Notification ?? [];
-  if (![pre, post, submit, start, stop, subagentStop, preCompact, notify].some((groups) => groups.length)) return undefined;
+  if (![pre, post, submit, start, stop, subagentStop, notify].some((groups) => groups.length)) return undefined;
   /** Every command hook of groups whose matcher names `subject`; `undefined`
    * ignores matchers (UserPromptSubmit and Stop have none in Claude Code). */
   const hooksOf = (groups: HookGroup[], subject?: string) =>
@@ -364,13 +363,6 @@ export function toolHooksFrom(config: HookConfig, onError?: (message: string) =>
           agent_id: info.agentId, agent_type: info.agentType, agent_transcript_path: info.agentTranscriptPath,
         }, info.cwd, info.signal);
         return reason ? { continueWith: reason } : undefined;
-      },
-    } : {}),
-    ...(preCompact.length ? {
-      async preCompact(info) {
-        await notifyOnly('PreCompact', hooksOf(preCompact, info.trigger), {
-          session_id: info.sessionId, cwd: info.cwd, hook_event_name: 'PreCompact', trigger: info.trigger, custom_instructions: '',
-        }, info);
       },
     } : {}),
     ...(notify.length ? {

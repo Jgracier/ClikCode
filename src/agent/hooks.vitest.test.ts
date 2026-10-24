@@ -99,17 +99,10 @@ describe('the sub-agent, compaction and notification hooks', () => {
     expect(await hooks.subagentStop!({ ...stop, agentType: 'research' })).toBeUndefined();
   });
 
-  it('runs PreCompact hooks for the auto trigger, and never lets them stop compaction', async () => {
-    const errors: string[] = [];
-    const { cwd, home } = await workspaceWith({ hooks: { PreCompact: [
-      { matcher: 'auto', hooks: [{ command: 'cat > seen.json; exit 2' }] },
-      { matcher: 'manual', hooks: [{ command: 'touch manual.txt' }] },
-    ] } });
-    const hooks = toolHooksFrom(await readClaudeHooks(cwd, home, { includeProject: true }), (message) => errors.push(message))!;
-    await expect(hooks.preCompact!({ ...info(cwd), trigger: 'auto' })).resolves.toBeUndefined();
-    expect(JSON.parse(await readFile(path.join(cwd, 'seen.json'), 'utf8'))).toEqual({ session_id: 's1', cwd, hook_event_name: 'PreCompact', trigger: 'auto', custom_instructions: '' });
-    await expect(readFile(path.join(cwd, 'manual.txt'))).rejects.toThrow();
-    expect(errors[0]).toMatch(/PreCompact hook .* failed \(exit 2\)/);
+  it('ignores a configured PreCompact hook: nothing is ever compacted', async () => {
+    const { cwd, home } = await workspaceWith({ hooks: { PreCompact: [{ matcher: 'auto', hooks: [{ command: 'touch ran.txt' }] }] } });
+    expect(toolHooksFrom(await readClaudeHooks(cwd, home, { includeProject: true }))).toBeUndefined();
+    await expect(readFile(path.join(cwd, 'ran.txt'))).rejects.toThrow();
   });
 
   it('hands a Notification hook the message and type, matched by type', async () => {

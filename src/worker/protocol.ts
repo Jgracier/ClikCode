@@ -53,7 +53,8 @@ export type ClientCommand =
    * turn's latency marks across the two processes (runtime/turn-latency.ts);
    * a client without them gets a turn the worker times from its own start. */
   | { type: 'submit'; text: string; echo: boolean; queuedTurnId?: string; turnId?: string; submittedAt?: number; /** What the windows' status line says while it runs (default: thinking). */ label?: string;
-      /** ClikCode sent this itself (a compaction after a turn), and why: drawn as its notice, not the user's message. */ automatic?: string }
+      /** Nothing sends this since ClikCode stopped compacting conversations itself (it was the notice for that compaction turn). The
+       * plumbing behind it -- worker-turn.ts, TurnRunOptions.automatic, turn-journal.ts, checkpoint.ts -- goes with it in one change. */ automatic?: string }
   /** A message typed while a turn runs. `id` is echoed back on the
    * `submission` event that says what actually happened to it. */
   | { type: 'steer'; text: string; id?: string }

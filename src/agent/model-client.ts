@@ -149,8 +149,6 @@ interface HarnessHooks {
   stop?(info: HookInfo & { stopHookActive: boolean }): Promise<{ continueWith?: string } | void>;
   /** The same, for a sub-agent about to hand its answer back to its parent. */
   subagentStop?(info: HookInfo & { stopHookActive: boolean; agentId: string; agentType: string; agentTranscriptPath: string }): Promise<{ continueWith?: string } | void>;
-  /** Before the conversation is compacted. Watches only. */
-  preCompact?(info: HookInfo & { trigger: 'auto' | 'manual' }): Promise<void>;
   /** The agent is waiting on the user: an approval, or a question it ended its turn on. Watches only. */
   notification?(info: HookInfo & { message: string; notificationType: 'permission_prompt' | 'idle_prompt' }): Promise<void>;
 }
