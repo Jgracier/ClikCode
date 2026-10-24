@@ -6,6 +6,7 @@ import { writeState } from '../session/state/write.js';
 import { enqueueSessionTurn } from '../turn/checkpoint.js';
 import { takeShellNotifications } from '../agent/session-state.js';
 import { diagnostic } from '../runtime/lifecycle-log.js';
+import { turnNeedsWindow } from '../session/queue-next.js';
 import { consumeQueuedTurn } from './consume-queued.js';
 import { sendEvent } from './broadcast-observer.js';
 import type { ClientCommand } from './protocol.js';
@@ -40,6 +41,7 @@ export function createWorkerQueue(ctx: WorkerContext) {
   const startTurn = (command: Extract<ClientCommand, { type: 'submit' }>): boolean => {
     if (ctx.turnRunning) return false;
     ctx.turnRunning = true;
+    ctx.lastTurnStopped = false;
     ctx.activeQueuedTurnId = command.queuedTurnId;
     // runTurn settles its own end; this is for a throw it did not foresee,
     // which must still end the turn on every window rather than leave it open.
@@ -57,11 +59,13 @@ export function createWorkerQueue(ctx: WorkerContext) {
     return true;
   };
 
-  /** Runs the queue's head when it is a notification. A message the user
-   * queued is still sent by their window, which prepares what that turn
-   * needs locally (a ClikCode Local model) before sending it; a
-   * slash command only ever runs there. Anything else at the head is left,
-   * and the windows are told the queue changed. */
+  /** Runs the queue's head when the worker can: a notification, or a message
+   * the user queued whose provider needs nothing prepared in a window first
+   * (turnNeedsWindow) -- so a message typed during a turn is sent when it
+   * ends even if the window that typed it was closed meanwhile. One that
+   * needs a window (a ClikCode Local model to load, a sign-in), and a slash
+   * command, are left for it, and the windows are told the queue changed.
+   * A turn that ended stopped runs nothing the user queued behind it. */
   const reportDrainFailure = (error: unknown): void => {
     diagnostic('worker.queue-unreadable', error instanceof Error ? error.message : String(error));
   };
@@ -76,9 +80,16 @@ export function createWorkerQueue(ctx: WorkerContext) {
         current = (await currentSessionAndAccount()).session;
       }
       const head = current.queuedTurns?.[0];
+      ctx.queuedUserTurn = false;
       if (!head || head.id === ctx.stalledQueuedTurnId) return;
-      if (head.kind !== 'notification') { broadcastQueueChanged(); return; }
+      if (head.kind !== 'notification') {
+        const message = head.kind === undefined;
+        const runnable = message && !ctx.lastTurnStopped && !turnNeedsWindow(current, (await readState({ transcripts: [] })).accounts);
+        ctx.queuedUserTurn = runnable;
+        if (!runnable) { broadcastQueueChanged(); return; }
+      }
       startTurn({ type: 'submit', text: head.text, echo: true, queuedTurnId: head.id });
+      ctx.queuedUserTurn = false;
     } finally {
       ctx.draining = false;
     }

@@ -133,6 +133,7 @@ export function createTurnRunner(ctx: WorkerContext) {
     // turn open on every window for ever.
     const ended = await currentSessionAndAccount().catch(() => undefined);
     ctx.turnRunning = false;
+    ctx.lastTurnStopped = turnOutcome === 'cancelled';
     observer.endTurn(ended?.session, ended?.account, turnOutcome === 'cancelled');
     lifecycle('worker.turn.end', { outcome: turnOutcome, ms: Date.now() - turnStarted });
     // Only a completed Claude Code turn refreshes its prompt cache window.

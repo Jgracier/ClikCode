@@ -135,7 +135,7 @@ export async function runSessionWorker(sessionId: string, options: { warm?: bool
     connections: new Map<ConnectionState['socket'], ConnectionState>(),
     homeGone: () => homeIdentity() !== startedHome,
     spawnedBuild: currentWorkerBuild(),
-    turnRunning: false, activeQueuedTurnId: undefined, draining: false, stalledQueuedTurnId: undefined,
+    turnRunning: false, activeQueuedTurnId: undefined, draining: false, lastTurnStopped: false, queuedUserTurn: false, stalledQueuedTurnId: undefined,
     idleTimer: undefined, activeController: undefined, activeLiveInput: undefined, activeSubmissions: undefined,
     activeRestoreDraft: undefined, submitsInFlight: 0, pendingCancel: undefined, stopAnnounced: false, resumingTurn: false, retireWhenIdle: false, recordWrite: Promise.resolve(),
     warming: undefined,
