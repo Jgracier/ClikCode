@@ -23,8 +23,6 @@ import { TerminalBridge, type RemoteBridgeStarter, type RemoteChatSelection } fr
 
 /** The bridge revision that answers export-chat, import-chat and mark-moved. */
 const MOVE_REVISION = 4;
-/** How long the list waits to learn which machines answer. */
-const STATE_WAIT_MS = 4_000;
 
 /** Where the chat is now, as the move sees it. */
 export type Here = { local: string } | { remote: RemoteChatSelection };
@@ -57,27 +55,27 @@ export function remoteMoveEnd(bridge: Pick<TerminalBridge, 'revision' | 'request
 }
 
 /** The machines to choose from. The list opens at once: a machine still
- * connecting says so, and its row is redrawn as it answers (or after
- * STATE_WAIT_MS, as not answering). Picking one still connecting waits for it. */
+ * connecting says so, and its row is redrawn when its connection settles --
+ * connected, or offline with ssh's reason (the connection's own deadline,
+ * connection.ts), never a guess of ours. Picking one still connecting waits for it. */
 function machineList(
   current: string, machines: readonly RemoteMachine[], links: MachinesHold | undefined, tailnet: Tailnet,
   actionsOf: (machine: RemoteMachine) => Array<{ label: string; value: string }>,
 ): {
   rows: () => Array<PickerOption<string> & { offline?: string }>; refresh: Promise<unknown>[];
 } {
-  const started = Date.now();
   const stateOf = (id: string): string | undefined => {
     const view = links?.views().find((item) => item.machine.id === id);
     if (!view || view.state === 'connected') return view?.updating ? 'updating ClikCode…' : view?.needsUpdate ? 'needs update (tab)' : undefined;
     if (view.state === 'offline') return 'offline';
-    return Date.now() - started < STATE_WAIT_MS ? 'connecting' : 'not answering';
+    return 'connecting';
   };
   const rows = (): Array<PickerOption<string> & { offline?: string }> => [
     { label: localMachineName(), detail: current === 'local' ? '· this chat is here' : '· this machine', value: 'local' },
     ...machines.map((machine) => {
       // Not finished installing: choosing it finishes, then the chat goes there.
       const state = machine.ready ? stateOf(machine.id) : 'install not finished';
-      const offline = state === 'offline' || state === 'not answering' ? state : undefined;
+      const offline = state === 'offline' ? state : undefined;
       return {
         label: machine.name,
         detail: `· ${[current === machine.id ? 'this chat is here' : undefined, state].filter(Boolean).join(' · ') || 'connected'}`,
@@ -100,7 +98,6 @@ function machineList(
       links.onChange(check);
       check();
     })),
-    new Promise<void>((resolve) => { setTimeout(resolve, STATE_WAIT_MS).unref?.(); }),
   ] : [];
   return { rows, refresh: [...refresh, tailnet.landed] };
 }
