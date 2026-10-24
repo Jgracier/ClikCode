@@ -154,7 +154,7 @@ export class IdeBridge {
   }
 
   start(): void {
-    const usage = setInterval(() => { if (this.shown) void this.refreshUsage().catch(() => undefined); }, USAGE_REFRESH_MS);
+    const usage = setInterval(() => { if (this.shown) void this.refreshUsage(true).catch(() => undefined); }, USAGE_REFRESH_MS);
     usage.unref();
     this.timers.push(usage);
     const build = currentWorkerBuild();
@@ -452,7 +452,10 @@ export class IdeBridge {
     void this.refreshUsage().catch(() => undefined);
   }
 
-  async refreshUsage(): Promise<void> {
+  /** `poll`: the periodic redraw (a vendor's reset countdown moves with time). Anything else is an
+   * event that can change the Gateway's credit -- a turn ended, the account or conversation
+   * changed, the window appeared -- and reads it fresh; a poll shows the last reading. */
+  async refreshUsage(poll = false): Promise<void> {
     if (!this.sessionId) return;
     const state = await readState({ transcripts: [] });
     const session = state.sessions.find((item) => item.id === this.sessionId);
@@ -462,7 +465,7 @@ export class IdeBridge {
     void recheckRecoveredAccounts(state).catch(() => undefined);
     // A Gateway chat's allowance is its credit, worded as the terminal's composer rule words it.
     const reading = isGatewayService(session)
-      ? await gatewayCreditLabel(this.config, { fresh: true }).then((label) => (label ? { label, windows: undefined } : undefined)).catch(() => undefined)
+      ? await gatewayCreditLabel(this.config, poll ? { cachedOnly: true } : { fresh: true }).then((label) => (label ? { label, windows: undefined } : undefined)).catch(() => undefined)
       : await nativeUsageReading(session, state);
     // A turn parked for the reset says so instead of when it comes back.
     const reset = session.resumeAt ? resumeWaitLabel(session.resumeAt) : usageResetLabel(reading?.windows);
