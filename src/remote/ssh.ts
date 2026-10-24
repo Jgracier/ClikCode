@@ -11,6 +11,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { userInfo } from 'node:os';
 import { remoteShell, targetHost, targetUser, validateSshTarget } from './shell.js';
+import { failureText } from '../harness/protocol/stderr-line.js';
 
 export const SSH_OPTIONS: readonly string[] = [
   '-o', 'BatchMode=yes',
@@ -43,7 +44,7 @@ export function sshFailureMessage(target: string, result: SshResult): string {
   const failure = sshFailure(result);
   // The line that says why, not ssh's closing `Connection closed by ...` after it.
   const lines = result.stderr.trim().split('\n').map((line) => line.trim()).filter(Boolean);
-  const said = lines.filter((line) => !/^Connection (closed|reset) by /i.test(line)).pop() ?? lines.pop() ?? '';
+  const said = failureText(lines.filter((line) => !/^Connection (closed|reset) by /i.test(line)).join('\n')) || lines.pop() || '';
   if (failure === 'auth') return `${target} refused the login (${said || 'permission denied'}). ClikCode never asks for passwords: add your SSH key to that machine (ssh-copy-id ${target}), or turn on Tailscale SSH there.`;
   if (failure === 'unreachable') return `${target} could not be reached (${said || 'no answer'}). Check that it is on and online.`;
   if (failure === 'host-key') return `${target}'s host key is not trusted yet (${said}). Connect once with \`ssh ${target}\` to check and accept it.`;

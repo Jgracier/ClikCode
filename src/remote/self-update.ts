@@ -25,6 +25,7 @@ import { basename, dirname, join, sep } from 'node:path';
 import { CLIKCODE_COMMIT, CLIKCODE_VERSION } from '../version.js';
 import { localMachineName } from './board-rows.js';
 import { localRunner, runManagedUpdate, stepper, UPDATE_STEPS, type InstallReporter, type ScriptRunner } from './install.js';
+import { failureText } from '../harness/protocol/stderr-line.js';
 
 export type InstallKind =
   | { kind: 'managed' }
@@ -117,11 +118,11 @@ export async function updateThisMachine(options: SelfUpdateOptions): Promise<Sel
     if (options.commit) throw new Error('This ClikCode is the npm package, which installs published versions, not commits. Run /update without a commit for the latest version.');
     const view = await run('npm view clikcode version', { timeoutMs: 120_000 });
     const latest = view.stdout.trim().split('\n').pop()?.trim();
-    if (view.code !== 0 || !latest) throw new Error(`Checking npm: \`npm view clikcode version\` failed: ${(view.stderr.trim().split('\n').pop() ?? '') || `exit ${view.code}`}.`);
+    if (view.code !== 0 || !latest) throw new Error(`Checking npm: \`npm view clikcode version\` failed: ${failureText(view.stderr) || `exit ${view.code}`}.`);
     options.line(`✓ 1/2 Checking npm · clikcode ${latest} is the latest`);
     if (latest === running.version) return { kind: 'npm', updated: false, text: `ClikCode ${running.version} on ${where} is already up to date.` };
     const installed = await run('npm install -g clikcode@latest', { timeoutMs: 20 * 60_000 });
-    if (installed.code !== 0) throw new Error(`Installing clikcode@latest: \`npm install -g clikcode@latest\` failed: ${(installed.stderr.trim().split('\n').pop() ?? '') || `exit ${installed.code}`}.`);
+    if (installed.code !== 0) throw new Error(`Installing clikcode@latest: \`npm install -g clikcode@latest\` failed: ${failureText(installed.stderr) || `exit ${installed.code}`}.`);
     options.line(`✓ 2/2 Installing clikcode@latest · ${install.packageRoot}`);
     return { kind: 'npm', updated: true, text: `ClikCode ${running.version} → ${latest} on ${where}; ${SWITCH}.` };
   }

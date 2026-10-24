@@ -23,7 +23,7 @@ import { diffModel } from './model-patch';
 import { DraftRestores, LatestRead } from './controller/reads';
 import { answeredApproval, applyEvent, connectionLost, conversationAttention, emptyModel, preparing, rejectedPrompt, submittingPrompt, takenBackText, withNote, typedDuringTurn, type ChatModel } from './model';
 import type { IdeAccounts, IdeChatSettings, IdeConversation, IdeEvent, IdeFeature, IdeRequest, IdeProvider, IdeSlashCommand, IdeUiRequest, HarnessQuestionResult, WorkerEvent } from './protocol';
-import { bridgeCommandMissing, bridgeCompatibility, tooOldToStartMessage, versionSkew, type Remedy } from './compat';
+import { bridgeCommandMissing, bridgeCompatibility, startLogCause, tooOldToStartMessage, versionSkew, type Remedy } from './compat';
 import { RuntimeError } from './runtime';
 import { ChangeViews } from './controller/changes';
 import { AutoReconnect } from './controller/reconnect';
@@ -343,11 +343,12 @@ export class ClikCodeController implements vscode.Disposable {
     const sessionId = this.model.sessionId;
     const read = this.structuredRead.begin();
     const [settings, providers, accounts] = await Promise.all([
-      onlyAccount ? Promise.resolve(this.model.chatSettings) : bridge.call<IdeChatSettings>({ type: 'query', query: 'chat-settings' }, TIMEOUT.structured).catch(() => undefined),
-      onlyAccount ? Promise.resolve(undefined) : bridge.call<IdeProvider[]>({ type: 'query', query: 'providers' }, TIMEOUT.structured).catch(() => undefined),
-      bridge.call<IdeAccounts>({ type: 'query', query: 'accounts' }, TIMEOUT.structured).catch(() => undefined),
+      onlyAccount ? Promise.resolve(this.model.chatSettings) : bridge.call<IdeChatSettings>({ type: 'query', query: 'chat-settings' }, TIMEOUT.structured).catch((error: unknown) => this.readFailed('chat settings', error)),
+      onlyAccount ? Promise.resolve(undefined) : bridge.call<IdeProvider[]>({ type: 'query', query: 'providers' }, TIMEOUT.structured).catch((error: unknown) => this.readFailed('providers', error)),
+      bridge.call<IdeAccounts>({ type: 'query', query: 'accounts' }, TIMEOUT.structured).catch((error: unknown) => this.readFailed('accounts', error)),
     ]);
     if (this.model.sessionId !== sessionId) return;
+    if (settings && accounts) this.readWarned = false;
     const provider = providers?.find((item) => item.current) ?? (onlyAccount ? this.model.provider : undefined);
     // A failed accounts read says nothing about the account: keep what is
     // shown. An older read landing after a newer one would put an older account
@@ -360,6 +361,16 @@ export class ClikCodeController implements vscode.Disposable {
       ...(accounts && this.structuredRead.current(read) ? { currentAccount } : {}),
     });
   }
+
+  /** A read of what the footer shows failed: kept as it was, and said (once per outage) with why,
+   * not left to go blank. */
+  private readFailed(what: string, error: unknown): undefined {
+    const message = `Could not read the ${what} from ${this.machine.name ?? 'ClikCode'}: ${errorText(error)}`;
+    this.host.log.appendLine(`[${this.label}] ${message}`);
+    if (!this.readWarned) { this.readWarned = true; this.note(message, 'warning'); }
+    return undefined;
+  }
+  private readWarned = false;
 
   /** The one native toast ClikCode shows: something waits on the user and the
    * chat is out of sight. One on screen shows the question already. */
@@ -425,7 +436,7 @@ export class ClikCodeController implements vscode.Disposable {
     if (this.machine !== machine || this.disposed) { bridge.dispose(); return; }
     this.bridge = bridge;
     const startLog: string[] = [];
-    bridge.on('log', (line) => { log.appendLine(`[${this.label}] ${line}`); if (startLog.length < 200) startLog.push(line); });
+    bridge.on('log', (line) => { log.appendLine(`[${this.label}] ${line}`); startLog.push(line); if (startLog.length > 200) startLog.shift(); });
     bridge.on('event', (event) => { if (event.type === 'retiring') this.retiring = bridge; });
     bridge.on('exit', ({ code, signal }) => {
       if (this.bridge !== bridge) return;
@@ -434,32 +445,37 @@ export class ClikCodeController implements vscode.Disposable {
       if (this.disposed) return;
       // It left for a newer ClikCode build (src/ide/bridge-retire.ts), only while
       // nothing was happening: back at once, on that build, onto the same chat,
-      // with nothing said -- and not counted against AutoReconnect's one a minute.
+      // with nothing said -- and not counted against AutoReconnect's pauses.
       const retired = this.retiring === bridge;
       this.retiring = undefined;
-      // Back on its own when it had been ready (see AutoReconnect).
-      if (retired || this.reconnect.take(this.model.connection === 'ready')) {
-        log.appendLine(`[${this.label}] ${retired ? 'ClikCode was updated; reconnecting on the new build' : 'reconnecting'}`);
+      // Back on its own when it had been ready, or was being brought back (see AutoReconnect).
+      const pause = retired ? 0 : this.reconnect.next(this.model.connection === 'ready');
+      if (pause !== undefined) {
+        log.appendLine(`[${this.label}] ${retired ? 'ClikCode was updated; reconnecting on the new build' : `reconnecting${pause ? ` in ${pause / 1000}s` : ''}`}`);
         this.bridge = undefined;
         // The turn keeps its place on screen: the worker is still running it,
         // and the new bridge's snapshot says where it got to (and re-asks any
         // approval it is waiting on).
         this.setModel({ ...this.model, connection: 'starting', approvals: [], busy: undefined, signIn: undefined, connectionError: undefined });
-        // At once: AutoReconnect already limits this to one a minute, and a
-        // fixed pause only made the panel wait on a guess.
-        void this.ensureStarted();
+        if (pause === 0) void this.ensureStarted();
+        else setTimeout(() => { if (!this.disposed && !this.bridge) void this.ensureStarted(); }, pause).unref?.();
         return;
       }
-      this.setModel(connectionLost(this.model, {
-        connection: 'stopped',
-        connectionError: code === 0 ? 'ClikCode stopped.' : `ClikCode stopped unexpectedly (${signal ?? `exit ${code}`}). See the log for details.`,
-      }));
+      // The banner says why, in the bridge's own words: what it wrote as it went.
+      void bridge.logDrained(1_000).then(() => {
+        if (this.bridge !== bridge) return;
+        this.setModel(connectionLost(this.model, {
+          connection: 'stopped',
+          connectionError: code === 0 ? 'ClikCode stopped.' : `ClikCode stopped unexpectedly (${signal ?? `exit ${code}`})${startLogCause(startLog)}`,
+        }));
+      });
     });
     const ready = new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('ClikCode did not start within 60 seconds. See the log for details.')), TIMEOUT.start);
+      const timer = setTimeout(() => reject(new Error(`ClikCode did not start within 60 seconds${startLogCause(startLog, ' and said nothing')}`)), TIMEOUT.start);
       bridge.on('event', (event) => {
         if (event.type === 'ready') {
           clearTimeout(timer);
+          this.reconnect.ready();
           this.revision = revisionOf(event);
           const compatibility = bridgeCompatibility(event);
           if (!compatibility.ok) {
@@ -485,7 +501,7 @@ export class ClikCodeController implements vscode.Disposable {
             reject(new Error(message));
             return;
           }
-          reject(new Error(`ClikCode exited before it was ready (exit ${code}). See the log for details.`));
+          reject(new Error(`ClikCode exited before it was ready (exit ${code})${startLogCause(startLog)}`));
         });
       });
     });

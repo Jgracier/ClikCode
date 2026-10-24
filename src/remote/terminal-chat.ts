@@ -3,6 +3,7 @@
  * only the screen and keyboard stay on this machine. */
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import chalk from 'chalk';
 import { createInterface } from 'node:readline';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { HarnessSession } from '../session/model.js';
@@ -18,6 +19,7 @@ import { readMachines, updatePolicy, type RemoteMachine } from './machines.js';
 import { autoUpdates, localBuildCommit, pinnedUpdateLine } from './updates.js';
 import { needsUpdate, reconnectWindowMachine } from './connection.js';
 import { sshArgv } from './ssh.js';
+import { failureText } from '../harness/protocol/stderr-line.js';
 import type { LiveTurnInputResult } from '../turn/live-input.js';
 import type { SignInScreen } from '../gateway/login/vendor-sign-in.js';
 import { parseSlashInput, resolveSlashCommand, TERMINAL_ONLY_COMMANDS } from '../tui/slash/registry.js';
@@ -49,6 +51,12 @@ const REMOTE_FEATURES: readonly IdeFeature[] = ['session-delta'];
 export type RemoteBridgeStarter = (target: string) => ChildProcessWithoutNullStreams;
 const sshBridge: RemoteBridgeStarter = (target) => startBridge(target);
 
+/** A request the machine never answers is a hang: kept because a link ssh has
+ * not noticed is dead looks exactly like this. */
+const REQUEST_TIMEOUT_MS = 60_000;
+/** How much of the bridge's stderr is held for the reason it closed: the end, where the cause is. */
+const STDERR_KEEP = 16_000;
+
 /** One chat channel into a machine's ClikCode (its multiplexed bridge, over ssh). */
 export class TerminalBridge {
   private readonly child: ChildProcessWithoutNullStreams;
@@ -65,14 +73,18 @@ export class TerminalBridge {
   /** It said it is leaving for a newer build installed there (ide/bridge-retire.ts):
    * the close that follows is a reconnect, not a lost connection. */
   retiring = false;
+  /** The connection closed without this window asking: why, in the bridge's own words. */
+  dropped: Error | undefined;
+  /** The chat there answered `ready` at least once: what closes after is a drop, not a refusal to start. */
+  wasReady = false;
   onEvent: (event: IdeEvent) => void = () => undefined;
   /** The conversation as the bridge last sent it: its events made whole again. */
   private readonly delta = new SessionDeltaReceiver();
   onClose: (error: Error) => void = () => undefined;
 
-  constructor(target: string, start: RemoteBridgeStarter = sshBridge) {
+  constructor(private readonly target: string, start: RemoteBridgeStarter = sshBridge, private readonly requestTimeoutMs = REQUEST_TIMEOUT_MS) {
     this.child = start(target);
-    this.child.stderr.on('data', (chunk: Buffer) => { this.error = `${this.error}${chunk.toString('utf8')}`.slice(-2000); });
+    this.child.stderr.on('data', (chunk: Buffer) => { this.error = `${this.error}${chunk.toString('utf8')}`.slice(-STDERR_KEEP); });
     this.child.stdin.on('error', () => undefined);
     this.ready = new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error(`No answer from ${target}`)), 30_000);
@@ -89,7 +101,7 @@ export class TerminalBridge {
         if (message.type === 'host-retiring') { this.retiring = true; return; }
         if (message.type !== 'chat' || message.chat !== this.chat) return;
         const event = this.delta.expand(message.event);
-        if (event.type === 'ready') { clearTimeout(timer); resolve(); }
+        if (event.type === 'ready') { this.wasReady = true; clearTimeout(timer); resolve(); }
         if (event.type === 'result') {
           const waiter = this.pending.get(event.requestId);
           if (waiter) {
@@ -102,11 +114,11 @@ export class TerminalBridge {
       this.child.once('close', () => {
         this.stopped = true;
         clearTimeout(timer);
-        const failure = new Error(this.error.trim().split('\n').pop() || `Connection to ${target} closed`);
+        const failure = new Error(failureText(this.error) || `Connection to ${target} closed`);
         reject(failure);
         for (const waiter of this.pending.values()) waiter.reject(failure);
         this.pending.clear();
-        if (!this.closing) this.onClose(failure);
+        if (!this.closing) { this.dropped = failure; this.onClose(failure); }
       });
       this.child.once('error', (error) => { this.error = error.message; });
     });
@@ -120,7 +132,14 @@ export class TerminalBridge {
   post(request: IdeRequest): void { this.send({ type: 'chat', chat: this.chat, request }); }
   request<T = unknown>(request: Answered): Promise<T> {
     const requestId = randomUUID();
-    const result = new Promise<unknown>((resolve, reject) => this.pending.set(requestId, { resolve, reject }));
+    const result = new Promise<unknown>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(requestId);
+        reject(new Error(`${this.target} did not answer "${request.type}" within ${this.requestTimeoutMs / 1000}s`));
+      }, this.requestTimeoutMs);
+      timer.unref();
+      this.pending.set(requestId, { resolve: (value) => { clearTimeout(timer); resolve(value); }, reject: (error) => { clearTimeout(timer); reject(error); } });
+    });
     this.post({ ...request, requestId } as IdeRequest);
     return result as Promise<T>;
   }
@@ -230,19 +249,28 @@ export function outdatedNotice(machine: Pick<RemoteMachine, 'name' | 'updates' |
  * the chat is quiet, ide/bridge-retire.ts) is connected to again at once and
  * the same chat resumed, with nothing said: what was being typed stays in the
  * composer (prompt-input.ts keeps an interrupted prompt's draft). Any other
- * close is a lost connection, said as before. */
+ * close of a connection that had been working is a drop, as in VS Code: said
+ * with its cause, then connected to again with a growing pause and the same
+ * chat resumed, the line that was in flight back in the composer. Only a
+ * machine that stays unreachable through REJOIN_PAUSES_MS ends the chat. */
 /** How a chat on another machine was left: a local chat to show (its id),
  * nothing (back to the one it was opened from), or the window closing (/exit). */
 export type RemoteChatEnd = string | { exit: true } | undefined;
 
+/** The pauses before each reconnect after a drop (the board's, connection.ts, is the same shape). */
+export const REJOIN_PAUSES_MS: readonly number[] = [1_000, 2_000, 5_000, 10_000, 30_000];
+
 export async function runRemoteChat(
   terminal: TerminalHarnessPrompter, localId: string, first: RemoteChatSelection, firstDraft?: string,
   startBridge: RemoteBridgeStarter = sshBridge,
+  pauses: readonly number[] = REJOIN_PAUSES_MS,
 ): Promise<RemoteChatEnd> {
   let choice: RemoteChatSelection | undefined = first;
   let draft = firstDraft;
   /** Connecting again after the bridge there retired: the opening notices were said already. */
   let rejoining = false;
+  /** Reconnects since the last time the chat was working. */
+  let drops = 0;
   while (choice) {
     const machine = (await readMachines()).find((item) => item.id === choice!.machineId && item.ready);
     if (!machine) throw new Error('That remote machine is no longer added. Add it again with /machine.');
@@ -444,6 +472,7 @@ export async function runRemoteChat(
       if (draft) terminal.restoreDraft(draft);
       draft = undefined;
       rejoining = false;
+      drops = 0;
       for (;;) {
         if (waitingInput) await turnEnd;
         const line = leftTurn ? BOARD_LINE : (await terminal.question('› ', commands, { rightArrowPalette: true, leftArrowCommand: BOARD_LINE, signal: promptController.signal })).trim();
@@ -496,12 +525,20 @@ export async function runRemoteChat(
         if (line.startsWith('/')) await refreshCommands();
       }
     } catch (error) {
-      if (!bridge.retiring) throw error;
+      const cause = bridge.dropped;
+      const lost = !bridge.retiring && cause !== undefined && (bridge.wasReady || rejoining);
+      if (!bridge.retiring && !lost) throw error;
+      if (lost) {
+        if (drops >= pauses.length) throw cause;
+        terminal.activity(chalk.yellow(`Connection to ${machine.name} lost: ${cause.message}\nReconnecting${drops ? ` (try ${drops + 1} of ${pauses.length + 1})` : ''}.`));
+        await new Promise<void>((resolve) => { setTimeout(resolve, pauses[drops]).unref?.(); });
+        drops += 1;
+      }
       rejoining = true;
       // A newer build there: the window's connection to it goes to that build too.
       reconnectWindowMachine(machine.id);
-      // Sent as it left: a bridge leaving takes nothing more, so the line was
-      // never run. Back in the composer, for Enter on the new build.
+      // Whatever was sent as it left may never have run: back in the composer,
+      // for Enter on the new connection.
       if (sending !== undefined) draft = sending;
       continue;
     } finally { promptController.abort(); for (const screen of signIns.values()) screen.stop(); bridge.close(); terminal.remoteMachineName = undefined; }

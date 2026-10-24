@@ -100,7 +100,7 @@ describe('a chat on another machine whose bridge leaves for a newer build', () =
       const bridge = new FakeRemoteBridge();
       bridges.push(bridge);
       return bridge as unknown as ChildProcessWithoutNullStreams;
-    });
+    }, [0]);
     const outcome = running.then(() => 'returned', (error: Error) => error.message);
     await until(() => prompts.length === 1);
     expect(bridges[0]!.requests[0]).toMatchObject({ type: 'open', mode: 'resume', sessionId: 'c1' });
@@ -114,10 +114,13 @@ describe('a chat on another machine whose bridge leaves for a newer build', () =
     await until(() => bridges[1]!.requests.some((request) => request.type === 'send'));
     expect(bridges[1]!.requests.find((request) => request.type === 'send')).toMatchObject({ text: 'hello again' });
     await until(() => prompts.length === 3);
-    // A connection that is lost, not retired: ends the chat as before, with no reconnect.
+    // A connection that is lost, not retired: said, then connected to again, the same chat resumed.
     bridges[1]!.drop();
-    expect(await outcome).toBe('interrupted');
-    expect(bridges).toHaveLength(2);
+    await until(() => bridges.length === 3 && prompts.length === 4);
+    expect(said.join('\n')).toContain('Connection to devbox lost: Connection to devbox closed');
+    expect(bridges[2]!.requests[0]).toMatchObject({ type: 'open', mode: 'resume', sessionId: 'c1' });
+    prompts[3]!.answer('/exit');
+    expect(await outcome).toBe('returned');
   }, 20_000);
 });
 
@@ -131,7 +134,7 @@ describe('a chat on another machine\'s slash menu', () => {
       const bridge = new FakeRemoteBridge();
       bridges.push(bridge);
       return bridge as unknown as ChildProcessWithoutNullStreams;
-    });
+    }, []);
     const outcome = running.then(() => 'returned', (error: Error) => error.message);
     await until(() => prompts.length === 1);
     // The menu is the machine's, read before the first prompt, opened by Right as a chat here does.
@@ -146,7 +149,7 @@ describe('a chat on another machine\'s slash menu', () => {
     expect(bridges[0]!.requests.find((request) => request.type === 'send')).toMatchObject({ text: '/model sonnet' });
     expect(queries()).toBe(2);
     bridges[0]!.drop();
-    expect(await outcome).toBe('interrupted');
+    expect(await outcome).toBe('Connection to devbox closed');
   }, 20_000);
 
   it('/machine is offered even by a machine that does not list it; /resume is Left\'s', () => {
@@ -165,7 +168,7 @@ describe('a message typed in a chat on another machine', () => {
       const bridge = new FakeRemoteBridge();
       bridges.push(bridge);
       return bridge as unknown as ChildProcessWithoutNullStreams;
-    });
+    }, []);
     const outcome = running.then(() => 'returned', (error: Error) => error.message);
     await until(() => fake.prompts.length === 1);
     return { ...fake, bridge: bridges[0]!, outcome };
@@ -193,7 +196,7 @@ describe('a message typed in a chat on another machine', () => {
     // It became a turn: nothing taken off the screen.
     expect(named(calls, 'submitted').map((call) => call[1])).not.toContain(undefined);
     bridge.drop();
-    expect(await outcome).toBe('interrupted');
+    expect(await outcome).toBe('Connection to devbox closed');
   }, 20_000);
 
   it('stopped or refused before it ran: off the screen again, and back in the composer', async () => {
@@ -210,7 +213,7 @@ describe('a message typed in a chat on another machine', () => {
     expect(order).toEqual(expect.arrayContaining(['submitted never ran', 'turnStarting', 'restoreDraft never ran', 'submitted', 'stopWaiting']));
     expect(order.indexOf('submitted')).toBeGreaterThan(order.indexOf('restoreDraft never ran'));
     bridge.drop();
-    expect(await outcome).toBe('interrupted');
+    expect(await outcome).toBe('Connection to devbox closed');
   }, 20_000);
 
   it('a command is not drawn early: it may never be a message', async () => {
@@ -220,7 +223,7 @@ describe('a message typed in a chat on another machine', () => {
     await until(() => prompts.length === 2);
     expect(named(calls, 'turnStarting')).toEqual([]);
     bridge.drop();
-    expect(await outcome).toBe('interrupted');
+    expect(await outcome).toBe('Connection to devbox closed');
   }, 20_000);
 
   it('joins a turn already running as "thinking", and the vendor\'s own background work as what it is', async () => {
@@ -232,7 +235,7 @@ describe('a message typed in a chat on another machine', () => {
       await until(() => named(calls, 'startWaiting').length === 1);
       const label = named(calls, 'startWaiting')[0]![1];
       bridge.drop();
-      expect(await outcome).toBe('interrupted');
+      expect(await outcome).toBe('Connection to devbox closed');
       return label;
     };
     // An ordinary live turn: the model is working.
@@ -254,8 +257,72 @@ describe('a message typed in a chat on another machine', () => {
     expect(renders.at(-1)!.messages.map((message) => message.content)).toEqual(['a', 'b', 'c', 'd']);
     expect(renders.at(-1)!.name).toBe('Renamed');
     bridge.drop();
-    expect(await outcome).toBe('interrupted');
+    expect(await outcome).toBe('Connection to devbox closed');
   }, 20_000);
+});
+
+describe('a connection that drops without a retire', () => {
+  const open = async (pauses: readonly number[]) => {
+    const machine = newMachineRecord({ name: 'devbox', sshTarget: 'devbox', ready: true });
+    await updateMachines(() => [machine]);
+    const bridges: FakeRemoteBridge[] = [];
+    const fake = fakeTerminal();
+    const running = runRemoteChat(fake.terminal, 'local-1', { machineId: machine.id, chatId: 'c1' }, undefined, () => {
+      const bridge = new FakeRemoteBridge();
+      bridges.push(bridge);
+      return bridge as unknown as ChildProcessWithoutNullStreams;
+    }, pauses);
+    const outcome = running.then(() => 'returned', (error: Error) => error.message);
+    await until(() => fake.prompts.length === 1);
+    return { ...fake, bridges, outcome };
+  };
+
+  it('is joined again, and the line that was in flight comes back as a draft', async () => {
+    const { bridges, prompts, calls, said, outcome } = await open([0]);
+    bridges[0]!.onSend = () => undefined;
+    prompts[0]!.answer('please keep this');
+    await until(() => bridges[0]!.requests.some((request) => request.type === 'send'));
+    bridges[0]!.stderr.write('ssh: connect to host devbox port 22: Connection reset\nkex_exchange_identification: read: Connection reset by peer\n');
+    bridges[0]!.drop();
+    await until(() => bridges.length === 2 && prompts.length === 2);
+    expect(calls.filter((call) => call[0] === 'restoreDraft').map((call) => call[1])).toEqual(['please keep this']);
+    // The whole cause, not its last line.
+    expect(said.join('\n')).toContain('Connection reset\nkex_exchange_identification');
+    prompts[1]!.answer('/exit');
+    expect(await outcome).toBe('returned');
+  }, 20_000);
+
+  it('ends the chat with the cause once every pause has been spent', async () => {
+    const machine = newMachineRecord({ name: 'devbox', sshTarget: 'devbox', ready: true });
+    await updateMachines(() => [machine]);
+    const bridges: FakeRemoteBridge[] = [];
+    let refused = 0;
+    const fake = fakeTerminal();
+    const running = runRemoteChat(fake.terminal, 'local-1', { machineId: machine.id, chatId: 'c1' }, undefined, () => {
+      if (bridges.length) {
+        // Every later connection is refused before it is ready.
+        refused += 1;
+        const gone = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), kill: () => true });
+        setTimeout(() => { gone.stderr.write('Host key verification failed.\n'); gone.emit('close', 255, null); }, 5);
+        return gone as unknown as ChildProcessWithoutNullStreams;
+      }
+      const bridge = new FakeRemoteBridge();
+      bridges.push(bridge);
+      return bridge as unknown as ChildProcessWithoutNullStreams;
+    }, [0, 0]);
+    const outcome = running.then(() => 'returned', (error: Error) => error.message);
+    await until(() => fake.prompts.length === 1);
+    bridges[0]!.drop();
+    expect(await outcome).toContain('Host key verification failed.');
+    expect(refused).toBe(2);
+  }, 20_000);
+
+  it('answers a request that never gets an answer with the machine and the request named', async () => {
+    const { TerminalBridge } = await import('./terminal-chat.js');
+    const bridge = new TerminalBridge('devbox', () => new FakeRemoteBridge() as unknown as ChildProcessWithoutNullStreams, 50);
+    await bridge.connected();
+    await expect(bridge.request({ type: 'query', query: 'never-answered' } as never)).rejects.toThrow('devbox did not answer "query" within 0.05s');
+  });
 });
 
 describe('the terminal\'s own commands in a chat on another machine', () => {
@@ -268,7 +335,7 @@ describe('the terminal\'s own commands in a chat on another machine', () => {
       const bridge = new FakeRemoteBridge();
       bridges.push(bridge);
       return bridge as unknown as ChildProcessWithoutNullStreams;
-    });
+    }, []);
     await until(() => prompts.length === 1);
     const renders = (): number => calls.filter((call) => call[0] === 'render').length;
     const before = renders();

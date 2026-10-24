@@ -538,7 +538,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     const thread = target.lastError;
     const refusal = codexUsageLimitRefusal(target.rateLimits);
     const text = typeof thread?.message === 'string' && thread.message ? thread.message : refusal?.message ?? fallback;
-    const stderrTail = this.live?.peer.failureDetail().slice(-2000);
+    const stderrTail = this.live?.peer.failureDetail();
     const info = thread?.codexErrorInfo ?? thread?.codex_error_info ?? refusal?.codexErrorInfo;
     const error = Object.assign(new Error(text), flags, info !== undefined ? { codexErrorInfo: info } : {}, stderrTail ? { stderrTail } : {});
     return Object.assign(error, codexErrorKind(error));

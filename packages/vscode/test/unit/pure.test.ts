@@ -261,10 +261,11 @@ describe('chat model', () => {
     expect(message.length).toBeGreaterThan(200);
     const model = run([worker({ type: 'turn-error', message })]);
     expect(model.notes.map((note) => note.text)).toEqual([message]);
-    // A runaway message is still bounded (the note wraps, so this caps a flood, not a row).
-    const flood = run([worker({ type: 'turn-error', message: `Error: ${'x'.repeat(5000)}` })]);
-    expect(flood.notes[0]!.text.length).toBeLessThanOrEqual(600);
-    expect(flood.notes[0]!.text.endsWith('…')).toBe(true);
+    // Only a runaway flood is bounded, and it keeps its start and its end.
+    const flood = run([worker({ type: 'turn-error', message: `Error: ${'x'.repeat(20_000)}\nthe cause` })]);
+    expect(flood.notes[0]!.text.length).toBeLessThan(8_100);
+    expect(flood.notes[0]!.text.startsWith('Error: xxx')).toBe(true);
+    expect(flood.notes[0]!.text.endsWith('the cause')).toBe(true);
   });
 
   it('never shows what ClikCode queued for the model: not as a queued row, not as a message', () => {

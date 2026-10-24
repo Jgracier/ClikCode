@@ -27,6 +27,7 @@ import { bridgeScript } from './install.js';
 import { autoUpdates, localBuildCommit, type AutoUpdates } from './updates.js';
 import { readMachines, updateMachine, type RemoteMachine } from './machines.js';
 import { startBridge, type PeerMachine } from './peer.js';
+import { failureText } from '../harness/protocol/stderr-line.js';
 
 export type MachineState = 'connecting' | 'connected' | 'offline';
 
@@ -55,6 +56,11 @@ export function needsUpdate(ready: { commit?: string; protocol?: number }, local
 
 const CHAT = 'clikcode-remote-board';
 const READY_TIMEOUT_MS = 30_000;
+/** A request the other machine never answers is a hang, not a pending request:
+ * kept because a dropped link that ssh has not noticed yet looks exactly like this. */
+const REQUEST_TIMEOUT_MS = 60_000;
+/** How much of a bridge's stderr is held for the reason it ended; the end of it, where the cause is. */
+const STDERR_KEEP = 16_000;
 const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
 const CACHE_WRITE_MS = 5_000;
 
@@ -63,6 +69,8 @@ export interface LinkOptions {
   spawn?: (target: string, script: string) => ChildProcess;
   localCommit?: string;
   backoffMs?: readonly number[];
+  /** How long a request waits for its answer (tests shorten it). */
+  requestTimeoutMs?: number;
   /** Update an outdated machine by its policy (default on). Off where the
    * connection only shows the machine's state while the user chooses what
    * to do with it (/machine's list). A function is asked each time: the
@@ -155,7 +163,7 @@ export class RemoteLink {
     }
     this.child = child;
     let stderr = '';
-    child.stderr?.on('data', (chunk: Buffer) => { stderr = `${stderr}${chunk.toString('utf8')}`.slice(-2000); });
+    child.stderr?.on('data', (chunk: Buffer) => { stderr = `${stderr}${chunk.toString('utf8')}`.slice(-STDERR_KEEP); });
     child.stdin?.on('error', () => undefined);
     child.once('error', (error) => { stderr += `\n${error.message}`; });
     const lines = createInterface({ input: child.stdout!, crlfDelay: Infinity });
@@ -179,8 +187,8 @@ export class RemoteLink {
         this.connect();
         return;
       }
-      const said = stderr.trim().split('\n').filter(Boolean).pop();
-      this.lost(said ?? `the connection ended (exit ${code ?? '?'})`);
+      const said = failureText(stderr);
+      this.lost(said ? `${said} (exit ${code ?? '?'})` : `the connection ended (exit ${code ?? '?'})`);
     });
   }
 
@@ -304,7 +312,14 @@ export class RemoteLink {
       request: <T>(request: Answered): Promise<T> => {
         if (!this.channels.has(chat)) return Promise.reject(new Error(`The connection to ${this.view.machine.name} ended`));
         const requestId = randomUUID();
-        const answered = new Promise<unknown>((resolve, reject) => open.pending.set(requestId, { resolve, reject }));
+        const answered = new Promise<unknown>((resolve, reject) => {
+          const timer = setTimeout(() => {
+            open.pending.delete(requestId);
+            reject(new Error(`${this.view.machine.name} did not answer "${request.type}" within ${REQUEST_TIMEOUT_MS / 1000}s`));
+          }, this.options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS);
+          timer.unref();
+          open.pending.set(requestId, { resolve: (value) => { clearTimeout(timer); resolve(value); }, reject: (error) => { clearTimeout(timer); reject(error); } });
+        });
         this.send({ type: 'chat', chat, request: { ...request, requestId } as IdeRequest });
         return answered as Promise<T>;
       },

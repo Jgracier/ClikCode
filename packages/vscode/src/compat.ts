@@ -2,6 +2,7 @@
  * gets one that can. The protocol numbers live in ClikCode's own source
  * (src/ide/protocol-version.ts), bundled here as the one copy of them. */
 import { IDE_PROTOCOL } from '../../../src/ide/protocol-version.js';
+import { failureText } from '../../../src/harness/protocol/stderr-line';
 
 export { IDE_PROTOCOL };
 
@@ -63,6 +64,13 @@ export function versionSkew(
  * (commander's "unknown command" on stderr) and exits before `ready`. */
 export function bridgeCommandMissing(log: readonly string[]): boolean {
   return log.some((line) => /unknown command ['"]?ide-bridge/i.test(line));
+}
+
+/** What the bridge said as it went, to follow a banner's words: `: <its last output>`, or
+ * `none` when it wrote nothing. The whole region, not a line: the cause may not be the last one. */
+export function startLogCause(log: readonly string[], none = ''): string {
+  const said = failureText(log.slice(-40).join('\n'));
+  return said ? `:\n${said}` : none;
 }
 
 export function tooOldToStartMessage(): string {

@@ -53,8 +53,12 @@ import type { Runtime } from '../../src/runtime';
 /** A bridge that answers an `open` with the chat, and is told to leave or crash. */
 class FakeBridge extends BridgeEndpoint {
   readonly requests: IdeRequest[] = [];
-  constructor() {
+  constructor(crashesBeforeReady?: string) {
     super({ node: 'node', entry: '/fake/index.js', env: {}, nodeSource: 'path', entrySource: 'path' }, 'build-1');
+    if (crashesBeforeReady !== undefined) {
+      setTimeout(() => { this.emit('log', crashesBeforeReady); this.markExited(137, null); }, 0);
+      return;
+    }
     setTimeout(() => this.receive({ type: 'ready', version: 't', protocol: 1, revision: 3, pid: 1 }), 0);
   }
   send(request: IdeRequest): boolean {
@@ -112,18 +116,29 @@ describe('the chat when its bridge leaves for a newer build', () => {
     expect(log.join('\n')).toMatch(/reconnecting on the new build/);
   });
 
-  it('does not spend the once-a-minute reconnect a crash gets', async () => {
+  it('does not spend the reconnects a crash gets, and a second crash soon after is reconnected too', async () => {
     const { controller, bridges } = await startChat();
     bridges[0]!.say({ type: 'retiring', reason: 'newer-build' });
     bridges[0]!.exit(0);
     await until(() => bridges.length === 2 && controller.state.connection === 'ready');
-    // A real crash after it: still reconnected on its own.
+    // A real crash after it: reconnected on its own.
     bridges[1]!.exit(1);
     await until(() => bridges.length === 3 && controller.state.connection === 'ready');
-    // A second crash within the minute is the banner, as before.
+    // A second crash soon after: not the banner, but another reconnect after a short pause.
     bridges[2]!.exit(1);
-    await until(() => controller.state.connection === 'stopped');
-    expect(controller.state.connectionError).toMatch(/stopped unexpectedly/);
+    await until(() => bridges.length === 4 && controller.state.connection === 'ready', 5_000);
+    expect(controller.state.connectionError).toBeUndefined();
+  }, 15_000);
+
+  it('says what the bridge wrote when it dies before it is ready', async () => {
+    machine.next = () => new FakeBridge('Killed: out of memory (exit code 137)');
+    const host = { log: { appendLine: () => undefined }, diffs: {}, openInTab: async () => undefined, reveal: async () => undefined, chats: () => [] };
+    const controller = new ClikCodeController(host as never, undefined, 'chat');
+    controllers.push(controller);
+    await controller.ensureStarted();
+    await until(() => controller.state.connection === 'error');
+    expect(controller.state.connectionError).toContain('exited before it was ready (exit 137)');
+    expect(controller.state.connectionError).toContain('Killed: out of memory (exit code 137)');
   });
 });
 

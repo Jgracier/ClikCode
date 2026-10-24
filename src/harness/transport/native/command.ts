@@ -3,6 +3,7 @@
 import { spawnPortable as spawn, terminatePortable } from '../spawn.js';
 import { NativeHarnessSpec, binaryOnPath } from './binary.js';
 import { ensureNativeHarness } from './inspect.js';
+import { failureText } from '../../protocol/stderr-line.js';
 import { notInstalledMessage, spawnFailure } from '../../../runtime/machine-folder.js';
 
 export function run(command: string, args: readonly string[], envOverrides: Readonly<Record<string, string>> = {}): Promise<void> {
@@ -59,6 +60,8 @@ export async function captureNativeHarness(spec: NativeHarnessSpec, args: readon
  *  prompt reads EOF and takes its default, which for Hermes' "Save config
  *  anyway? [y/N]" is No -- so `mcp add` exited 0 having written nothing. */
 const CAPTURE_LIMIT_BYTES = 2 * 1024 * 1024;
+/** Bound on a helper's stderr held in memory (a runaway guard); the end is kept. */
+const STDERR_KEEP = 256 * 1024;
 
 export async function captureNativeHarnessOutput(spec: NativeHarnessSpec, args: readonly string[], envOverrides: Readonly<Record<string, string>> = {}, timeoutMs?: number, cwd?: string, stdinText?: string, signal?: AbortSignal): Promise<string> {
   // `timeoutMs` undefined or 0 is NO clock: the helper ends when the vendor
@@ -102,14 +105,15 @@ export async function captureNativeHarnessOutput(spec: NativeHarnessSpec, args: 
         terminatePortable(child);
       }
     });
-    child.stderr!.on('data', (chunk: string) => { if (stderr.length < 16 * 1024) stderr += chunk; });
+    // The newest output is kept: the cause is where the process stopped, not where it started.
+    child.stderr!.on('data', (chunk: string) => { stderr = (stderr + chunk).slice(-STDERR_KEEP); });
     child.once('error', (error) => finish(spawnFailure(error, { name: spec.displayName, binary: spec.binary, cwd })));
     // `close`, not `exit`: exit can fire before the stdout pipe has drained,
     // and a child that prints its JSON and exits at once (OpenClaw) was read
     // back as empty.
     child.once('close', (code, killedBy) => {
       if (exceededLimit) return finish(new Error(`${spec.displayName} helper output exceeded ${CAPTURE_LIMIT_BYTES / 1024 / 1024} MiB`));
-      if (code !== 0) return finish(new Error(`${spec.binary} ${killedBy ? `stopped (${killedBy})` : `exited ${code ?? 1}`}${stderr.trim() ? `: ${stderr.trim().slice(-2000)}` : ''}`));
+      if (code !== 0) return finish(new Error(`${spec.binary} ${killedBy ? `stopped (${killedBy})` : `exited ${code ?? 1}`}${failureText(stderr) ? `: ${failureText(stderr)}` : ''}`));
       finish();
     });
     timer = timeoutMs ? setTimeout(() => {

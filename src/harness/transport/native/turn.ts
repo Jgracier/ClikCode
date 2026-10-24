@@ -7,7 +7,7 @@ import { spawnFailure } from '../../../runtime/machine-folder.js';
 import { killProcessTreePortable, spawnPortable as spawn } from '../spawn.js';
 import { NativeHarnessSpec } from './binary.js';
 import { ensureNativeHarness } from './inspect.js';
-import { firstUsefulLine } from '../../protocol/stderr-line.js';
+import { failureText } from '../../protocol/stderr-line.js';
 import { LineBuffer } from '../../protocol/json-lines.js';
 import { interactiveLoginPrompt } from '../../../turn/failover.js';
 
@@ -289,11 +289,9 @@ export async function captureNativeHarnessTurn(
       const flags = truncated ? { truncated: true } : {};
       if (interrupted) return resolve({ stdout, stderr, exitCode: code ?? 130, interrupted: true, ...flags });
       if (code !== 0 && !stdout.trim()) {
-        // The MESSAGE gets one line. The full tail still rides on the error
-        // for classification and logs, but it is not what a person reads: a
-        // crashing harness prints stack traces and absolute paths, and 4KB of
-        // those used to land in the conversation as the explanation.
-        const detail = firstUsefulLine(stderr);
+        // The message is what the harness said, minus stack frames and paths:
+        // an exit code or "out of memory" is its own line, never one to skip.
+        const detail = failureText(stderr);
         return reject(new NativeHarnessTurnError(
           `${spec.binary} ${signal ? `stopped (${signal})` : `exited ${code ?? 1}`}${detail ? `: ${detail}` : ''}`,
           { ...tails(), ...exit, reason: 'exit' },

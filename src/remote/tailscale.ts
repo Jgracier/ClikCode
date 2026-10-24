@@ -13,6 +13,7 @@
 import { spawn } from 'node:child_process';
 import type { RemoteMachine } from './machines.js';
 import { targetHost } from './shell.js';
+import { failureText } from '../harness/protocol/stderr-line.js';
 
 export const DISCOVERY_RECENT_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -134,7 +135,7 @@ export function readTailscaleStatus(timeoutMs = 5000): Promise<{ status?: Tailsc
         if (status.BackendState && status.BackendState !== 'Running') { resolve({ error: `Tailscale is ${status.BackendState.toLowerCase()}` }); return; }
         resolve({ status });
       } catch {
-        resolve({ error: err.trim().split('\n').pop() || `tailscale status exited ${code}` });
+        resolve({ error: failureText(err) || `tailscale status exited ${code}` });
       }
     });
   });
