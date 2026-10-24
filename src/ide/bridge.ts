@@ -31,7 +31,7 @@ import { resumeWaitLabel } from '../turn/usage-exhausted.js';
 import { signInCancelledLine } from '../commands/account.js';
 import { setHarnessInstallReporter, type HarnessInstallReporter } from '../harness/transport/native/install.js';
 import { reconcileLocalModelLeases } from '../commands/ai/local-model.js';
-import { conversationCost } from '../tui/slash/usage-report.js';
+import { conversationCost, conversationCostBreakdown } from '../tui/slash/usage-report.js';
 import { autoSelectSessionHarness } from '../tui/pickers/engine.js';
 import { currentWorkerBuild, readWorkerRecord, workerIsReachable } from '../worker/registry.js';
 import { shownSettingsKey } from '../worker/protocol.js';
@@ -467,11 +467,12 @@ export class IdeBridge {
     // A turn parked for the reset says so instead of when it comes back.
     const reset = session.resumeAt ? resumeWaitLabel(session.resumeAt) : usageResetLabel(reading?.windows);
     const chatCost = conversationCost(state, session.id);
+    const chatSplit = chatCost !== undefined ? conversationCostBreakdown(state, session.id) : undefined;
     const next = usageNextReset(reading?.windows);
     const detail = usageWindowsDetail(reading?.windows);
     this.channel.send({
       type: 'usage', ...(reading?.label ? { label: reading.label } : {}), ...(reset ? { reset } : {}),
-      ...(next ? { next } : {}), ...(detail ? { detail } : {}), ...(chatCost !== undefined ? { chatCost } : {}),
+      ...(next ? { next } : {}), ...(detail ? { detail } : {}), ...(chatCost !== undefined ? { chatCost } : {}), ...(chatSplit ? { chatSplit } : {}),
     });
   }
 

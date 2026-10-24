@@ -336,8 +336,9 @@ export type IdeEvent =
   | { type: 'sign-in-link'; id: string; name: string; url?: string; code?: string; done?: boolean; ask?: { prompt: string; secret?: boolean } }
   | { type: 'open-file'; path: string }
   /** `chatCost`: this conversation's dollars so far (/usage's "This chat"),
-   * absent when no turn reported a cost. */
-  | { type: 'usage'; label?: string; reset?: string; next?: string; detail?: string; chatCost?: number }
+   * absent when no turn reported a cost. `chatSplit`: its API and GPU parts,
+   * over the turns whose server reported them; absent when none did. */
+  | { type: 'usage'; label?: string; reset?: string; next?: string; detail?: string; chatCost?: number; chatSplit?: { meteredUsd: number; gpuUsd: number } }
   /** /copy: put this on the editor's clipboard (`copy` feature). */
   | { type: 'copy'; text: string }
   /** /search walking mentions (`search-walk` feature): show this one;
