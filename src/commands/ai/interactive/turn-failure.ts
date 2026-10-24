@@ -3,7 +3,7 @@ import { lifecycle } from '../../../runtime/lifecycle-log.js';
 import chalk from 'chalk';
 import { isUsageExhaustedMessage, nextQuotaReset } from '../../../turn/usage-exhausted.js';
 import { quotaResetPhrase } from '../../../harness/protocol/format.js';
-import { FAILURE_NOTE_LIMIT, failureLine } from '../../../harness/protocol/stderr-line.js';
+import { failureText } from '../../../harness/protocol/stderr-line.js';
 import type { HarnessSession, HarnessState } from '../../../session/model.js';
 import { readState } from '../../../session/state/read.js';
 import { emitHarnessOutput } from '../../../harness/output.js';
@@ -33,7 +33,7 @@ export async function turnFailureEffect(
   { terminal, id, guard, refreshUsage }: FailureContext, error: unknown, failed: { line?: string; sent?: string; queuedTurnId?: string },
 ): Promise<TurnFailureEffect> {
   const message = error instanceof Error ? error.message : String(error);
-  // The whole vendor text is for `clikcode logs`; the screen gets one line.
+  // The log keeps the whole vendor text as one structured line; the screen shows the cause in full, wrapped.
   lifecycle('window.turn.error', { message: message.slice(0, 8000) });
   // Keep the submitted message visible when there's an error, so the user sees what failed
   // (don't clear it like we would for a turn that never started properly)
@@ -44,7 +44,7 @@ export async function turnFailureEffect(
   const next = await afterTurnFailure(terminal, id, error, { ...failed, guard });
   // A stopped turn ends on its own "Stopped" row; nothing more is said.
   if (next.cancelled && terminal) return {};
-  if (!terminal) { emitHarnessOutput({ panel: 'error', message: failureLine(message, FAILURE_NOTE_LIMIT) }); return {}; }
+  if (!terminal) { emitHarnessOutput({ panel: 'error', message: failureText(message) }); return {}; }
   if ('retry' in next) return { resend: next.retry };
   if ('moved' in next) return { id: next.moved.id, resend: next.moved.prompt };
   if (next.waiting) {
@@ -59,7 +59,7 @@ export async function turnFailureEffect(
   // Running out says when usage is back, as the Resume-in list did.
   if (next.back.length) terminal?.restoreDraft(next.back.join('\n\n'));
   if (said) return {};
-  const notice = isUsageExhaustedMessage(message) ? `${message}${await usageBackPhrase(id)}` : chalk.red(`Error: ${failureLine(message, FAILURE_NOTE_LIMIT)}`);
+  const notice = isUsageExhaustedMessage(message) ? `${message}${await usageBackPhrase(id)}` : chalk.red(`Error: ${failureText(message)}`);
   return { notice };
 }
 

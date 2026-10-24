@@ -31,6 +31,7 @@ import { remoteDirectory } from './remote-directory';
 import { resolveRuntime } from './runtime';
 import { runInTerminal } from './ui';
 import type { Mention } from './webview-protocol';
+import { failureText } from '../../../src/harness/protocol/stderr-line';
 
 export type SignInEvent = Extract<IdeEvent, { type: 'sign-in' }>;
 export type PastedReference = ReturnType<typeof pastedReference>;
@@ -102,11 +103,11 @@ export function runClikcodeUpdate(runtime: { node: string; entry: string; env: R
     const said: string[] = [];
     let stderr = '';
     createInterface({ input: child.stdout }).on('line', (line) => { if (!line.trim()) return; said.push(line); report(line); });
-    child.stderr.on('data', (chunk: Buffer) => { stderr = `${stderr}${chunk.toString('utf8')}`.slice(-4000); });
+    child.stderr.on('data', (chunk: Buffer) => { stderr = `${stderr}${chunk.toString('utf8')}`.slice(-16_000); });
     child.once('error', reject);
     child.once('close', (code) => {
       if (code === 0 && said.length) { resolve(said.at(-1)!); return; }
-      const last = stderr.trim().split('\n').filter(Boolean).pop() ?? said.at(-1) ?? `exit ${code ?? '?'}`;
+      const last = failureText(stderr) || said.at(-1) || `exit ${code ?? '?'}`;
       reject(new Error(/unknown command 'update'/.test(stderr) ? 'This ClikCode is older than `clikcode update`: update it the way it was installed.' : last.replace(/^error:\s*/i, '')));
     });
   });

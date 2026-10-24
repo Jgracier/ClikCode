@@ -1061,11 +1061,14 @@ describe('a chat whose machine is updated under it', () => {
     prompts[1]!('/effort low');
     await until(() => prompts.length === 3, 30_000);
     expect(said.filter((line) => /error|closed|lost|failed/i.test(line))).toEqual([]);
-    // Done: a connection that ends for good still ends the chat.
+    // A connection that ends is said, then made again and the same chat resumed.
     const { spawnSync } = await import('node:child_process');
     // Only this test's processes: the path is in its own temporary directory.
     spawnSync('pkill', ['-f', release]);
-    expect(await outcome).toBe('interrupted');
+    await until(() => prompts.length === 4, 60_000);
+    expect(said.some((line) => /lost/i.test(line))).toBe(true);
+    prompts[3]!('/exit');
+    expect(await outcome).toBe('returned');
   }, 120_000);
 });
 

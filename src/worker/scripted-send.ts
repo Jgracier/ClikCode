@@ -162,13 +162,13 @@ function turnThroughWorker(client: WorkerClient, sessionId: string, text: string
           }
           return;
         case 'shutdown':
-          onGone();
+          onGone(event.reason);
           return;
         default:
       }
     };
-    const onGone = (): void => {
-      if (ours) { finish(() => rejectTurn(new Error('session worker exited mid-turn'))); return; }
+    const onGone = (reason?: string): void => {
+      if (ours) { finish(() => rejectTurn(new Error(`session worker exited mid-turn${reason ? `: ${reason}` : ': its connection closed with no reason given (see "clikcode logs")'}`))); return; }
       // Not started: taken back out of the queue, and sent again wherever it
       // can run now.
       void dequeue().then(() => finish(() => resolveTurn(false)), (error: unknown) => finish(() => rejectTurn(error)));
@@ -179,7 +179,7 @@ function turnThroughWorker(client: WorkerClient, sessionId: string, text: string
       void dequeue().then(() => finish(() => rejectTurn(turnCancelledError())), (error: unknown) => finish(() => rejectTurn(error)));
     };
     client.on('event', onEvent);
-    client.on('close', onGone);
+    client.on('close', () => onGone());
     signal?.addEventListener('abort', onAbort, { once: true });
     client.send({ type: 'submit', text, echo: true });
   });

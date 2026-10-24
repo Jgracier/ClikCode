@@ -5,7 +5,7 @@ import { parseNativeActivityEventsFromValue } from './activity-events.js';
 import { nativeSessionIdsFromValues } from './session-ids.js';
 import { claudeShaped, JsonRecord, asRecord, parseJsonDocument, parseJsonLines } from './json-lines.js';
 import { nativeTurnUsage, type TurnUsage } from './turn-usage.js';
-import { firstUsefulLine } from './stderr-line.js';
+import { failureText } from './stderr-line.js';
 
 export interface NativeTurnResult {
   text: string;
@@ -90,7 +90,7 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
   if (harness.turn.output === 'text') {
     const text = stdout.trim();
     if (exitedBadly) {
-      const reason = firstUsefulLine(process.stderr ?? '') || firstUsefulLine(text);
+      const reason = failureText(process.stderr ?? '') || failureText(text);
       throw processFailure(`${harness.displayName}: ${reason || `exited ${process.exitCode}`}`, process, stdout, true);
     }
     if (!text) throw new Error(`${harness.displayName} returned no assistant text`);
@@ -103,7 +103,7 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
     // mode requires existing settings" (OpenHands), a login prompt, a crash.
     // With no structure there is no answer to protect, so what it printed is
     // the reason and is classified as one.
-    const said = firstUsefulLine([process.stderr ?? '', stdout].join('\n'));
+    const said = failureText([process.stderr ?? '', stdout].join('\n'));
     throw processFailure(said
       ? `${harness.displayName}: ${said}`
       : `${harness.displayName} returned invalid ${harness.turn.output} output: no JSON record found`, process, stdout, true);
@@ -254,7 +254,7 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
     // part anyone can act on, and it is right there in the stream, or else
     // on stderr (Cursor's "Named models unavailable" is only there).
     if (errorMessage) throw new Error(`${harness.displayName}: ${errorMessage}`);
-    const stderrReason = firstUsefulLine(process.stderr ?? '');
+    const stderrReason = failureText(process.stderr ?? '');
     if (exitedBadly || stderrReason) {
       throw processFailure(`${harness.displayName}: ${stderrReason || `exited ${process.exitCode} with no reply`}`, process, stdout);
     }

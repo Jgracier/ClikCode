@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import { describe, expect, it } from 'vitest';
-import { failureLine, FAILURE_NOTE_LIMIT } from '../../harness/protocol/stderr-line.js';
+import { failureText } from '../../harness/protocol/stderr-line.js';
 import { callRow, noteRows } from './tool-rows.js';
 import { terminalCellWidth } from './width.js';
 
@@ -50,18 +50,9 @@ describe('a note keeps all it says', () => {
   });
 });
 
-describe('the error note keeps more of a failure than a status row would', () => {
-  const message = `Error: ${'a refusal that explains itself at length '.repeat(12)}`;
-
-  it('keeps the default cap for one-line uses', () => {
-    expect(failureLine(message).length).toBeLessThanOrEqual(200);
-    expect(failureLine(message).endsWith('…')).toBe(true);
-  });
-
-  it('keeps the whole of a longer message for the wrapped note, up to its own bound', () => {
-    expect(FAILURE_NOTE_LIMIT).toBeGreaterThan(200);
-    expect(failureLine(message, FAILURE_NOTE_LIMIT).length).toBeGreaterThan(200);
-    const runaway = `Error: ${'x '.repeat(2000)}`;
-    expect(failureLine(runaway, FAILURE_NOTE_LIMIT).length).toBeLessThanOrEqual(FAILURE_NOTE_LIMIT);
+describe('the error note keeps the whole of a failure', () => {
+  it('does not cut a long message to a row or a few hundred characters', () => {
+    const message = `Error: ${'a refusal that explains itself at length '.repeat(40)}`;
+    expect(failureText(message)).toBe(message.trim());
   });
 });

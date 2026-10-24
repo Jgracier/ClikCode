@@ -2,6 +2,7 @@
 import { dirname } from 'node:path';
 import { spawnSsh, runSsh } from './ssh.js';
 import { shellQuote } from './shell.js';
+import { failureText } from '../harness/protocol/stderr-line.js';
 
 export async function uploadRemoteImage(target: string, name: string, bytes: Buffer): Promise<string> {
   const suffix = name.toLowerCase().match(/\.(png|jpe?g|gif|webp)$/)?.[1] ?? 'png';
@@ -18,13 +19,13 @@ export async function uploadRemoteImage(target: string, name: string, bytes: Buf
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8'); });
-    child.stderr.on('data', (chunk: Buffer) => { stderr = `${stderr}${chunk.toString('utf8')}`.slice(-2000); });
+    child.stderr.on('data', (chunk: Buffer) => { stderr = `${stderr}${chunk.toString('utf8')}`.slice(-16_000); });
     child.stdin.on('error', () => undefined);
     child.once('error', reject);
     child.once('close', (code) => {
       const path = stdout.trim();
       if (code !== 0 || !/^\/[^\n]*\/clikcode-image\.[^/]+\/image\.(?:png|jpe?g|gif|webp)$/.test(path)) {
-        reject(new Error(stderr.trim() || 'Could not save the image on the remote machine.'));
+        reject(new Error(failureText(stderr) || 'Could not save the image on the remote machine.'));
       } else resolve(path);
     });
     child.stdin.end(bytes);
