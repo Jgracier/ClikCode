@@ -176,6 +176,70 @@ describe('updates an ACP agent sends between prompts', () => {
   });
 });
 
+describe('a tool the vendor never settled', () => {
+  const level = (...tasks: Array<Record<string, unknown>>) => ({
+    notify: { method: '_claude/sdkMessage', params: { message: { type: 'system', subtype: 'background_tasks_changed', tasks } } },
+  });
+  const shell = { task_id: 'sh1', task_type: 'local_bash', description: 'npm run dev' };
+
+  it('does not hold a background run open for ever: the run is let go after a quiet spell, its row settled', async () => {
+    const turns: VendorBackgroundTurn[] = [];
+    const session = createAcpSession({ backgroundTurns: (turn) => turns.push(turn), orphanedToolMs: 300 });
+    try {
+      const started = Date.now();
+      // The prompt answers with a tool still "running" and nothing reports it again.
+      await session.runTurn(input([[{ update: chunk('done') }, { update: tool('orphan', 'pending') }, { answer: true }]]));
+      await vi.waitFor(() => expect(turns).toHaveLength(1), { timeout: 5000, interval: 10 });
+      expect(turns[0]!.reason).toBe('background-work');
+      const seen: HarnessActivityEvent[] = [];
+      turns[0]!.attach({ onActivity: (event) => seen.push(event) });
+      expect(await turns[0]!.finished).toEqual({ text: '', ended: 'completed' });
+      expect(Date.now() - started, 'let go well before the day a retired process is given').toBeLessThan(5000);
+      expect(seen).toMatchObject([{ kind: 'tool-done', id: 'orphan' }]);
+      expect(await session.backgroundWorkRunning()).toBe(false);
+    } finally { await session.close(); }
+  });
+
+  it('is not let go while frames keep arriving for it, and ends as soon as it settles', async () => {
+    const turns: VendorBackgroundTurn[] = [];
+    const session = createAcpSession({ backgroundTurns: (turn) => turns.push(turn), orphanedToolMs: 400 });
+    try {
+      await session.runTurn(input([[
+        { update: chunk('one') }, { update: tool('slow', 'pending') }, { answer: true },
+        // Quieter than the bound would allow if it were not re-armed by each frame.
+        { after: 250, update: { sessionUpdate: 'tool_call_update', toolCallId: 'slow', status: 'in_progress', title: 'Run build', kind: 'execute' } },
+        { after: 250, update: { sessionUpdate: 'tool_call_update', toolCallId: 'slow', status: 'in_progress', title: 'Run build', kind: 'execute' } },
+        { after: 250, update: tool('slow', 'completed') },
+      ]]));
+      await vi.waitFor(() => expect(turns).toHaveLength(1), { timeout: 5000, interval: 10 });
+      const seen: HarnessActivityEvent[] = [];
+      turns[0]!.attach({ onActivity: (event) => seen.push(event) });
+      expect(await turns[0]!.finished).toEqual({ text: '', ended: 'completed' });
+      // Its own completion ended it (about 750 ms in), not the bound: its row says done once, from the vendor.
+      expect(seen.filter((event) => event.kind === 'tool-done')).toHaveLength(1);
+    } finally { await session.close(); }
+  });
+
+  it('never cuts off background work the vendor reports (a level), however long it is quiet', async () => {
+    const turns: VendorBackgroundTurn[] = [];
+    const session = createAcpSession({ backgroundTurns: (turn) => turns.push(turn), orphanedToolMs: 150 });
+    try {
+      await session.runTurn(input([[
+        level(shell), { update: chunk('Started it.') }, { update: tool('t', 'pending') }, { answer: true },
+        // Silent for several times the bound, then the shell ends.
+        { after: 700, ...level() },
+      ]]));
+      await vi.waitFor(() => expect(turns).toHaveLength(1), { timeout: 5000, interval: 10 });
+      let ended = false;
+      void turns[0]!.finished.then(() => { ended = true; });
+      await new Promise((resolve) => setTimeout(resolve, 450));
+      expect(ended, 'a reported shell is real work, not an orphan').toBe(false);
+      expect(await session.backgroundWorkRunning()).toBe(true);
+      await turns[0]!.finished;
+    } finally { await session.close(); }
+  });
+});
+
 describe('the background level an ACP agent publishes (claude-agent-acp _claude/sdkMessage)', () => {
   const level = (...tasks: Array<Record<string, unknown>>) => ({
     notify: { method: '_claude/sdkMessage', params: { message: { type: 'system', subtype: 'background_tasks_changed', tasks } } },
