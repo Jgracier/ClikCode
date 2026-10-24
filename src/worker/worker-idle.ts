@@ -47,7 +47,7 @@ const HELD = {
   turn: 'a turn is running', vendorBackground: 'vendor background work is running', vendorWork: 'the vendor is still running work it started',
   agents: 'background agents are running', notification: 'a notification is on its way to the model', wakeup: 'a scheduled wakeup is pending',
   quotaWait: 'waiting for a quota reset', heldVendor: 'a vendor is still finishing its background work', shell: 'a background shell is running',
-  cacheWarm: 'keeping the prompt cache warm',
+  cacheWarm: 'keeping the prompt cache warm', queuedTurn: 'a queued message is about to be sent',
 } as const;
 
 export function createIdleControl(ctx: WorkerContext) {
@@ -77,6 +77,8 @@ export function createIdleControl(ctx: WorkerContext) {
     if (retire && vendorWorkSince !== undefined) return HELD.vendorWork;
     if (existingSessionAgents(agentSession)?.running()) return HELD.agents;
     if (agentSession.notifications.length) return HELD.notification;
+    // A message queued for this worker to send (worker-queue.ts drainQueue): exiting would strand it until someone reopens the chat. A successor sends it when this worker is replaced.
+    if (!retire && ctx.queuedUserTurn) return HELD.queuedTurn;
     if (agentSession.wakeups.size) return HELD.wakeup;
     if (!retire && ctx.resumeWaiter.pending) return HELD.quotaWait;
     if (hasHeldVendorProcess(sessionId)) return HELD.heldVendor;

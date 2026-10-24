@@ -53,6 +53,10 @@ export interface WorkerContext {
    * client draining the same queue entry -- follows it instead of rerunning it. */
   activeQueuedTurnId: string | undefined;
   draining: boolean;
+  /** The last turn ended stopped: the messages queued behind it wait for the user, as in a window (queue-next.ts). */
+  lastTurnStopped: boolean;
+  /** The queue's head is a message this worker will run itself (it holds the worker until it has). */
+  queuedUserTurn: boolean;
   /** A queued turn that failed and could not be taken out of the queue:
    * never started again, so a failing write cannot become a loop. */
   stalledQueuedTurnId: string | undefined;

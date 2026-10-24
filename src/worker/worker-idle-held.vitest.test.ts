@@ -63,6 +63,12 @@ describe('heldReason: the one list of what holds a worker', () => {
     expect(idle.heldReason('idle')).toBeUndefined();
   });
 
+  it('holds the idle exit while a queued message is about to be sent by this worker, not a retirement (its successor sends it)', () => {
+    const { idle } = build({ queuedUserTurn: true });
+    expect(idle.heldReason('idle')).toBe('a queued message is about to be sent');
+    expect(idle.heldReason('retire')).toBeUndefined();
+  });
+
   it('the idle exit logs the held reason and arms no exit timer while held', () => {
     const { ctx, idle } = build({ turnRunning: true });
     idle.scheduleIdleExit();

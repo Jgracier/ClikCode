@@ -28,7 +28,8 @@ const { createWorkerQueue } = await import('./worker-queue.js');
 const { createTurnRunner } = await import('./worker-turn.js');
 const { createCommandHandler } = await import('./worker-commands.js');
 
-const session = { id: 's1', queuedTurns: [{ id: 'q1', text: 'hello' }] } as unknown as HarnessSession;
+// A command entry: the worker never drains one (a window runs it), so a turn's end here starts no further turn the mocked store would never consume.
+const session = { id: 's1', queuedTurns: [{ id: 'q1', text: 'hello', kind: 'command' }] } as unknown as HarnessSession;
 
 function fakeSocket(): { socket: Socket; events: WorkerEvent[] } {
   const events: WorkerEvent[] = [];
