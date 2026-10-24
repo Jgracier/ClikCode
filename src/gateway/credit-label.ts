@@ -6,14 +6,16 @@ import { gatewayStatus } from '../ide/queries.js';
 import { dollars } from '../harness/protocol/format.js';
 import { chatCostLabel } from '../tui/render/usage-words.js';
 
-/** A reading is reused this long: the rule asks every 15 seconds, and the
- * balance only moves when a turn is billed. */
+/** A reading is reused this long when nothing says the balance moved: it only moves when a turn
+ * is billed or the account changes, and those events ask for a fresh one. */
 const CREDIT_TTL_MS = 60_000;
 let cached: { at: number; label: string | undefined } | undefined;
 
 /** The account's remaining Gateway credit. Conversation spend comes from
  * ClikCode's per-session invocation ledger, never the account's lifetime. */
-export async function gatewayCreditLabel(config: Conf, options: { fresh?: boolean; fetchImpl?: typeof fetch } = {}): Promise<string | undefined> {
+export async function gatewayCreditLabel(config: Conf, options: { fresh?: boolean; cachedOnly?: boolean; fetchImpl?: typeof fetch } = {}): Promise<string | undefined> {
+  // A periodic redraw never asks the Gateway: it shows what the last event read.
+  if (options.cachedOnly) return cached?.label;
   if (!options.fresh && cached && Date.now() - cached.at < CREDIT_TTL_MS) return cached.label;
   const fetchImpl = options.fetchImpl ?? fetch;
   const credit = (await gatewayStatus(config, fetchImpl)).credit;

@@ -31,6 +31,14 @@ describe('the Gateway credit on the composer rule', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  it('a periodic redraw never asks the Gateway: it shows the last reading', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ data: { balanceMicroUsd: '2000000' } }), { status: 200 }));
+    expect(await gatewayCreditLabel({} as never, { cachedOnly: true, fetchImpl: fetchImpl as never })).toBeUndefined();
+    await gatewayCreditLabel({} as never, { fresh: true, fetchImpl: fetchImpl as never });
+    expect(await gatewayCreditLabel({} as never, { cachedOnly: true, fetchImpl: fetchImpl as never })).toBe('$2.00 credit left');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it('shows remaining credits and never substitutes lifetime spend for this chat\'s cost', async () => {
     const credits = (data: Record<string, unknown>) => vi.fn(async () => new Response(JSON.stringify({ data }), { status: 200 }));
     expect(await gatewayCreditLabel({} as never, { fresh: true, fetchImpl: credits({ balanceMicroUsd: '12450000', lifetimeCostMicroUsd: 65_420_000 }) as never })).toBe('$12.45 credit left');
