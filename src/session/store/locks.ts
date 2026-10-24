@@ -70,7 +70,18 @@ export const LOCK_TUNING = {
    * staleMs); it records a 'lock.wait' event this often so the wait is
    * visible. It never proceeds unlocked. */
   waitNoticeMs: 10_000,
+  /** A wait this long is said to the person (lockWaitListeners), not only logged: a send that stands
+   * still for seconds names what it waits for. */
+  waitVisibleMs: 3_000,
 };
+
+/** Who is told when a wait on a lock becomes long enough to notice: a window shows it as a note, a
+ * worker in its turn. Registered by whoever has a screen; returns how to stop listening. */
+const lockWaitListeners = new Set<(message: string) => void>();
+export function onLockWait(listener: (message: string) => void): () => void {
+  lockWaitListeners.add(listener);
+  return () => { lockWaitListeners.delete(listener); };
+}
 
 const lockQueues = new Map<string, Promise<unknown>>();
 
@@ -281,6 +292,7 @@ async function holdFileLock<T>(lockPath: string, run: () => Promise<T>, fair: bo
   const started = Date.now();
   let holder: string | undefined;
   let lastNotice = started;
+  let said = false;
   // A fair lock is taken in arrival order. Waiters used to re-poll at random
   // with no line at all, so under load one could lose every race for many
   // times the fair wait (p99 26 s on the state lock while idle).
@@ -303,6 +315,11 @@ async function holdFileLock<T>(lockPath: string, run: () => Promise<T>, fair: bo
       // non-atomic and silently drop another terminal's work, and giving up on
       // a live holder ends a vendor turn over ClikCode's own bookkeeping. So
       // wait on, loudly: the holder is alive (heartbeat) or gets broken above.
+      if (!said && Date.now() - started >= LOCK_TUNING.waitVisibleMs) {
+        said = true;
+        const message = `Waiting for ${basename(lockPath)}${holder ? `, held by ${holder}` : ''} (${Math.round((Date.now() - started) / 1000)}s so far); it goes on when that is done.`;
+        for (const listener of lockWaitListeners) { try { listener(message); } catch { /* a listener that throws must not break the lock */ } }
+      }
       if (Date.now() - lastNotice >= LOCK_TUNING.waitNoticeMs) {
         lastNotice = Date.now();
         lifecycle('lock.wait', { lock: basename(lockPath), ms: lastNotice - started, waiting: true, ...(holder ? { holder } : {}) });

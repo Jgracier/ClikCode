@@ -30,6 +30,8 @@ import { closeAllWorkerClients } from '../../../worker/turn-bridge.js';
 import { retireStaleWorkers } from '../../../worker/client.js';
 import { replaceCliWithNewBuild } from '../build-replace.js';
 import { BOARD_OWNS } from './board.js';
+import { onLockWait } from '../../../session/store/locks.js';
+import chalk from 'chalk';
 
 /** What the loop reads and writes of the window while it runs, shared with
  * the setup's own timers: the conversation this window is on, and the
@@ -132,8 +134,11 @@ export async function openWindow(config: Conf, startId: string): Promise<ChatWin
   if (terminal) { terminal.render(session, initialAccount); if (selectionNotice) terminal.activity(selectionNotice); }
   else emitHarnessOutput({ status: 'ready', session, account: initialAccount });
   const refreshUsage = createUsageRefresher(config, terminal);
+  // A wait on a lock long enough to notice is told here, with who holds it: this window's send
+  // stands still otherwise, with nothing saying why.
+  const stopLockNotices = terminal ? onLockWait((message) => { if (TERMINAL.active === terminal) terminal.activity(chalk.yellow(message)); }) : undefined;
   refreshUsage(session, state);
-  const { beginBuildReplace, releaseWindow } = startBuildWatch(terminal, ref, refreshUsage);
+  const { beginBuildReplace, releaseWindow } = startBuildWatch(terminal, ref, refreshUsage, stopLockNotices);
   return { config, terminal, rl, ref, session, slashCommandsFor, warmCatalogFor, refreshUsage, beginBuildReplace, releaseWindow };
 }
 
@@ -172,7 +177,7 @@ function createUsageRefresher(config: Conf, terminal: TerminalHarnessPrompter | 
 
 /** Watch for a newer build on disk and keep the usage fresh: the 15 s tick and the two ways out of the window. */
 function startBuildWatch(
-  terminal: TerminalHarnessPrompter | undefined, ref: WindowRef, refreshUsage: ChatWindow['refreshUsage'],
+  terminal: TerminalHarnessPrompter | undefined, ref: WindowRef, refreshUsage: ChatWindow['refreshUsage'], stopLockNotices: (() => void) | undefined,
 ): Pick<ChatWindow, 'beginBuildReplace' | 'releaseWindow'> {
   // This process's own build, fingerprinted once at startup the same way a
   // session worker's is (registry.ts). The terminal cannot hot-swap the code
@@ -187,6 +192,7 @@ function startBuildWatch(
   /** Let go on both ways out: leaving, and handing over to a newer build. */
   const releaseWindow = async (): Promise<void> => {
     if (usageInterval) clearInterval(usageInterval);
+    stopLockNotices?.();
     await closeAllWorkerClients().catch(() => undefined);
     await closePersistentTransport().catch(() => undefined);
     // The one SSH connection per other machine the window kept for its
