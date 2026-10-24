@@ -44,3 +44,9 @@ export function failureLine(message: string, limit = 200): string {
   const text = line || firstUsefulLine(message, Number.POSITIVE_INFINITY);
   return text.length > limit ? `${text.slice(0, limit - 1).trimEnd()}…` : text;
 }
+
+/** How much of a failure the turn's error note keeps. The note wraps over as many
+ * rows as it needs (tool-rows.ts noteRows), so this is a bound on a runaway
+ * message, not the width of a row. The whole message is in the log and the
+ * turn-error event either way. */
+export const FAILURE_NOTE_LIMIT = 600;

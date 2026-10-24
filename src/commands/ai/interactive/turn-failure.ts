@@ -3,7 +3,7 @@ import { lifecycle } from '../../../runtime/lifecycle-log.js';
 import chalk from 'chalk';
 import { isUsageExhaustedMessage, nextQuotaReset } from '../../../turn/usage-exhausted.js';
 import { quotaResetPhrase } from '../../../harness/protocol/format.js';
-import { failureLine } from '../../../harness/protocol/stderr-line.js';
+import { FAILURE_NOTE_LIMIT, failureLine } from '../../../harness/protocol/stderr-line.js';
 import type { HarnessSession, HarnessState } from '../../../session/model.js';
 import { readState } from '../../../session/state/read.js';
 import { emitHarnessOutput } from '../../../harness/output.js';
@@ -59,7 +59,7 @@ export async function turnFailureEffect(
   // Running out says when usage is back, as the Resume-in list did.
   if (next.back.length) terminal?.restoreDraft(next.back.join('\n\n'));
   if (said) return {};
-  const notice = isUsageExhaustedMessage(message) ? `${message}${await usageBackPhrase(id)}` : chalk.red(`Error: ${failureLine(message)}`);
+  const notice = isUsageExhaustedMessage(message) ? `${message}${await usageBackPhrase(id)}` : chalk.red(`Error: ${failureLine(message, FAILURE_NOTE_LIMIT)}`);
   return { notice };
 }
 

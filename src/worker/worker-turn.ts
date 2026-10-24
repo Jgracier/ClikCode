@@ -3,7 +3,7 @@
 import { randomUUID } from 'node:crypto';
 import { isTurnCancelled, turnCancelledError } from '../agent/cancellation.js';
 import chalk from 'chalk';
-import { failureLine } from '../harness/protocol/stderr-line.js';
+import { FAILURE_NOTE_LIMIT, failureLine } from '../harness/protocol/stderr-line.js';
 import { diagnostic, lifecycle } from '../runtime/lifecycle-log.js';
 import { beginTurnClock, endTurnClock, markTurn } from '../runtime/turn-latency.js';
 import { isUsageExhaustedMessage } from '../turn/usage-exhausted.js';
@@ -89,7 +89,7 @@ export function createTurnRunner(ctx: WorkerContext) {
     // One line in the turn, saved with it. Running out of usage is said by
     // whoever carries on from it (the window's own next step).
     const said = !isUsageExhaustedMessage(message);
-    if (said) observer.activity(chalk.red(`Error: ${failureLine(message)}`));
+    if (said) observer.activity(chalk.red(`Error: ${failureLine(message, FAILURE_NOTE_LIMIT)}`));
     observer.broadcast({ type: 'turn-error', message, ...(said ? { said: true as const } : {}) });
     // The one retry after the reset ran out too: it is not parked again.
     if (resumed && isUsageExhaustedMessage(message)) diagnostic('worker.resume-still-exhausted', message);
