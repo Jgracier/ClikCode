@@ -135,7 +135,7 @@ export async function runAgentSessionTurn(
       prompter?.response(text, mode);
     },
     onActivity: publishActivity,
-    onPhase: (phase) => prompter?.phase(phase),
+    onPhase: (phase) => { input.onPhase?.(phase); prompter?.phase(phase); },
     onPlan: (entries) => prompter?.setPlan(entries),
     // Per model step, as it happens: the loop's running total and where the
     // context stands, in the shape every harness reports.

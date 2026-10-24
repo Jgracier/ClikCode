@@ -27,6 +27,8 @@ export interface TurnFacts {
   activeAt: string;
   /** Sub-agents running inside it. */
   agents?: number;
+  /** What it waits on by design, with no output meanwhile: a private model finding a server or loading. */
+  waitingOn?: string;
 }
 
 interface ConversationStateFacts {
@@ -47,6 +49,7 @@ interface ConversationState {
 type PendingTurnShape = {
   startedAt: string; updatedAt: string;
   subagents?: ReadonlyArray<{ startedAt: string; stepAt?: string }>;
+  waitingOn?: string;
 };
 
 const parsed = (iso: string | undefined): number => {
@@ -69,7 +72,7 @@ export function turnActiveAt(pending: PendingTurnShape): string {
 /** A transcript's turn in flight as the facts a row needs. */
 export function turnFacts(pending: PendingTurnShape): TurnFacts {
   const agents = pending.subagents?.length ?? 0;
-  return { startedAt: pending.startedAt, activeAt: turnActiveAt(pending), ...(agents ? { agents } : {}) };
+  return { startedAt: pending.startedAt, activeAt: turnActiveAt(pending), ...(agents ? { agents } : {}), ...(pending.waitingOn ? { waitingOn: pending.waitingOn } : {}) };
 }
 
 /** The one state a row shows: needing the user outranks everything, then a
@@ -83,6 +86,11 @@ export function conversationState(facts: ConversationStateFacts, now: number): C
   if (facts.turn) {
     const active = parsed(facts.turn.activeAt);
     const quiet = Number.isFinite(active) ? now - active : 0;
+    // A model finding a server or loading is the turn's work, minutes long by design: said, never "stalled".
+    if (facts.turn.waitingOn) {
+      const began = parsed(facts.turn.startedAt);
+      return { kind: 'working', text: `${facts.turn.waitingOn}${Number.isFinite(began) ? ` ${formatElapsed(now - began)}` : ''}` };
+    }
     if (turnStalled(quiet)) return { kind: 'stalled', text: `stalled ${formatElapsed(quiet)}` };
     const agents = facts.turn.agents ?? 0;
     const started = parsed(facts.turn.startedAt);

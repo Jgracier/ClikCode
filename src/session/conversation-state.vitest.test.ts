@@ -23,6 +23,19 @@ describe('a conversation row\'s one state', () => {
       .toEqual({ kind: 'stalled', text: 'stalled 4m' });
   });
 
+  it('says what a turn waits on while a private model finds a server or loads, and never calls that stalled', () => {
+    const turn = { startedAt: ago(25 * MINUTE), activeAt: ago(20 * MINUTE) };
+    expect(conversationState({ updatedAt: ago(0), turn: { ...turn, waitingOn: 'finding a server' } }, NOW))
+      .toEqual({ kind: 'working', text: 'finding a server 25m' });
+    expect(conversationState({ updatedAt: ago(0), turn: { ...turn, waitingOn: 'starting model' } }, NOW).text)
+      .toBe('starting model 25m');
+  });
+
+  it('carries what the saved turn waits on into the row\'s facts', () => {
+    expect(turnFacts({ startedAt: ago(MINUTE), updatedAt: ago(0), waitingOn: 'starting model' }).waitingOn).toBe('starting model');
+    expect(turnFacts({ startedAt: ago(MINUTE), updatedAt: ago(0) })).not.toHaveProperty('waitingOn');
+  });
+
   it('shows idle when no turn facts are passed (conversationRows filtered them out)', () => {
     // conversationRows only passes turn facts when activity === 'working', which
     // requires a live worker. So if turn is undefined, show the updatedAt time.

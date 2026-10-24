@@ -8,6 +8,7 @@ import { sessionSandboxMode } from '../agent/sandbox.js';
 import { isClikCodeAgent, isGatewayService } from '../session/route.js';
 import { LiveSettings } from './live-settings.js';
 import { discardInterruptedTurn } from './turn-journal.js';
+import { isModelStartPhase } from '../harness/protocol/turn-pace.js';
 import { agentTurnUsage, runAgentSessionTurn } from '../gateway/harness.js';
 import { turnStopReason, type TurnUsage } from '../harness/protocol/turn-usage.js';
 import { localModelTurnHooks } from '../commands/ai/local-model.js';
@@ -179,6 +180,8 @@ export async function runAgentTurn(input: {
         // worker that dies mid-turn leaves the answer so far, not nothing.
         onResponseDelta: (delta, mode) => checkpoint.response(delta, mode ?? 'append'),
         onActivity: (event) => checkpoint.activity(event),
+        // A private model finding a server or loading is the turn's progress: saved, so no list calls it stalled.
+        onPhase: (phase) => { if (isModelStartPhase(phase)) checkpoint.waitingOnModel(phase); },
         onUsage: (usage) => {
           turnUsage = { ...turnUsage, ...usage };
           session.lastUsage = { ...turnUsage, at: new Date().toISOString() };

@@ -106,6 +106,8 @@ export interface TurnRuntime {
    * unset once it answers. While set, steering waits in the queue (Esc takes it back) rather than being folded into
    * a request the model never sees, and the status stays "Starting model". */
   modelStartingSince: number | undefined;
+  /** The model's start was asked about once, before this turn's first request (see runModelStep). */
+  modelStartChecked: boolean;
   /** The plan-mode setting the user had when the turn began, then as last seen: only a change after it is theirs (turn-tools.ts applyLivePlan). */
   livePlanSeen: boolean | undefined;
   lengthContinues: number;
@@ -239,7 +241,7 @@ export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime
     steerQueue: [], steerWaiters: new Set(), steerOpen: true, callsOpen: 0, heldSteers: [], foregroundSteers: new Map(), items, ledger, lastStepUsage: undefined, itemsAtLastUsage: items.length,
     contextWindow: input.modelClient.contextHints?.contextWindow ?? input.contextWindow,
     servedModel: undefined, segments, needsSeparator: false, steps: 0, stall: new StallGuard(), stalledCall: undefined,
-    stepRetries: 0, retryWaitedSeconds: 0, contextScale: 1, contextRefits: 0, budgetClient: input.modelClient, lastRequestEstimate: 0, modelStartWaitedSeconds: 0, modelStartingSince: undefined, livePlanSeen: readLivePlan(input), lengthContinues: 0, stopContinues: 0,
+    stepRetries: 0, retryWaitedSeconds: 0, contextScale: 1, contextRefits: 0, budgetClient: input.modelClient, lastRequestEstimate: 0, modelStartWaitedSeconds: 0, modelStartingSince: undefined, modelStartChecked: false, livePlanSeen: readLivePlan(input), lengthContinues: 0, stopContinues: 0,
     shownCalls: new Map(), continuesCutAnswer: false, lastContext: { contextProfile: profile.name },
     stepAcceptsImages: input.modelClient.acceptsImages === true,
   };

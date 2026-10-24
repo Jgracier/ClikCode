@@ -12,6 +12,7 @@ import { writeState, writeTranscriptCheckpoint } from '../session/state/write.js
 import { beginPendingTurn, consumeSessionTurn, discardPendingTurn, enqueueSessionTurn, failPendingTurn, finishPendingTurn, recordPendingActivity, recordPendingMark, recordPendingSteer, setPendingThought, stopPendingCalls, updatePendingResponse } from './checkpoint.js';
 import { MarkSequencer, readTurnMarks } from './turn-marks.js';
 import { readTurnActivities } from './turn-activities.js';
+import { modelStartWord } from '../harness/protocol/turn-pace.js';
 
 /** Name a chat: the vendor's own title when it reports one, else the user's
  * first message. A /rename is the user's and is left alone; a name taken from
@@ -158,13 +159,28 @@ export class DurableTurnCheckpoint {
     return checkpoint;
   }
 
+  /** The turn is waiting on a private model finding a server or loading. Saved at most every ten seconds: the
+   *  phase is reported every second and the list only needs to know the turn is alive and what it waits on. */
+  waitingOnModel(phase: string): void {
+    const pending = this.session.pendingTurn;
+    if (!pending) return;
+    const word = modelStartWord(phase);
+    const now = Date.now();
+    if (pending.waitingOn === word && now - Date.parse(pending.updatedAt) < 10_000) return;
+    pending.waitingOn = word;
+    pending.updatedAt = new Date(now).toISOString();
+    this.schedule();
+  }
+
   response(text: string, mode: 'append' | 'replace' = 'append'): void {
+    if (this.session.pendingTurn?.waitingOn) delete this.session.pendingTurn.waitingOn;
     updatePendingResponse(this.session, text, mode, new Date().toISOString());
     this.schedule();
   }
 
   activity(event: HarnessActivityEvent): void {
     // Numbered here, in place: the observer is shown the same object next.
+    if (this.session.pendingTurn?.waitingOn) delete this.session.pendingTurn.waitingOn;
     const stamped = this.sequencer.stamp(event);
     this.recorder?.add(stamped);
     recordPendingActivity(this.session, stamped, new Date().toISOString());

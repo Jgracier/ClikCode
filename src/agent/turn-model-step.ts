@@ -14,6 +14,7 @@ import { recordUsage } from './usage.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import type { TurnRuntime } from './turn-runtime.js';
 import type { OwnModelStart } from '../gateway/own-models.js';
+import { FINDING_SERVER_PHASE, STARTING_MODEL_PHASE } from '../harness/protocol/turn-pace.js';
 import type { StartReading } from './turn-recovery.js';
 
 /** What a model step came to: its result, a retry of the loop, or the turn's end. */
@@ -43,6 +44,18 @@ export async function runModelStep(rt: TurnRuntime, modelClient: ModelClient, sy
       rt.budgetClient = modelClient;
       rt.contextWindow = modelClient.contextHints?.contextWindow;
       rt.contextScale = 1;
+    }
+    // Once per turn, before the first request: if the user's own model is not up, the status says what it is
+    // doing (finding a server, loading) from the start instead of "thinking" until the Gateway answers. The
+    // Gateway's wake is a no-op for a model that is running, and starts one that sleeps.
+    if (!rt.modelStartChecked && modelClient.startStatus) {
+      rt.modelStartChecked = true;
+      const start = await abortable(modelClient.startStatus().catch(() => undefined), signal);
+      if (start) {
+        rt.modelStart = { start, at: Date.now() };
+        rt.modelStartingSince ??= Date.now();
+        input.onPhase?.(startingModelPhase(0, start));
+      }
     }
     const advertised = rt.advertised(rt.items);
     let lastCallIndex = rt.items.length - 1;
@@ -297,14 +310,14 @@ function elapsedWords(ms: number): string {
  */
 export function startingModelPhase(elapsedMs: number, start?: OwnModelStart, sincePollMs = 0): string {
   const waited = elapsedMs < 1000 ? '' : ` · ${elapsedWords(elapsedMs)}`;
-  if (start?.phase === 'finding-server') return `Finding an available server${waited}`;
+  if (start?.phase === 'finding-server') return `${FINDING_SERVER_PHASE}${waited}`;
   if (start?.phase === 'starting-model') {
-    if (start.remainingS === undefined) return `Starting model · ${elapsedWords(start.elapsedS * 1000 + sincePollMs)}`;
+    if (start.remainingS === undefined) return `${STARTING_MODEL_PHASE} · ${elapsedWords(start.elapsedS * 1000 + sincePollMs)}`;
     const left = start.remainingS - Math.round(sincePollMs / 1000);
-    if (start.overdue) return `Starting model · taking longer than usual · ${elapsedWords(start.elapsedS * 1000 + sincePollMs)}`;
-    return left > 0 ? `Starting model · about ${elapsedWords(left * 1000)} left` : 'Starting model · almost ready';
+    if (start.overdue) return `${STARTING_MODEL_PHASE} · taking longer than usual · ${elapsedWords(start.elapsedS * 1000 + sincePollMs)}`;
+    return left > 0 ? `${STARTING_MODEL_PHASE} · about ${elapsedWords(left * 1000)} left` : `${STARTING_MODEL_PHASE} · almost ready`;
   }
-  return `Starting model${waited}`;
+  return `${STARTING_MODEL_PHASE}${waited}`;
 }
 
 /**
