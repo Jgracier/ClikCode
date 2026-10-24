@@ -24,11 +24,11 @@ import {
 import { normalizeActivityEvent } from '../harness/protocol/activity-normalize.js';
 import type { TranscriptMessage, TurnActivity, TurnMark } from '../session/model.js';
 
-/** Characters of a call's label kept. */
-const MAX_LABEL_CHARS = 400;
+/** Characters of a call's label kept (a whole command or path list). */
+const MAX_LABEL_CHARS = 2_000;
 /** Characters of one output or diff line kept. Rows are clipped to the
- * screen long before this. */
-const MAX_LINE_CHARS = 400;
+ * screen long before this; this is against a minified file on one line. */
+const MAX_LINE_CHARS = 2_000;
 /** Lines of output a call keeps: more than any preview shows, and what
  * another provider taking the conversation over is shown of the call
  * (session/canonical.ts). Measured on 1,749 stored calls: half print at most
@@ -40,8 +40,11 @@ export const MAX_OUTPUT_LINES = 60;
 /** Diff lines kept per file, and files kept with their lines. */
 const MAX_DIFF_LINES = 200;
 const MAX_DIFF_FILES = 20;
-/** What one turn's calls may take in the transcript, serialized. */
-export const MAX_TURN_ACTIVITY_BYTES = 128 * 1024;
+/** What one turn's calls may take in the transcript, serialized. At the ~3 KB
+ * a call measured above, 128 KB held 43 calls and cut the oldest of a long
+ * turn from every other machine and client; 1 MiB holds ~350 whole, and past
+ * it the oldest are trimmed first as before. */
+export const MAX_TURN_ACTIVITY_BYTES = 1024 * 1024;
 
 const KINDS = new Set(['tool-start', 'tool-done', 'tool-error']);
 

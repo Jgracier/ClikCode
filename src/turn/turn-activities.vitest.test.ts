@@ -56,11 +56,11 @@ describe('a turn\'s calls, as kept', () => {
 
   it('bounds a whole turn by size, not by count: every call of a long one is kept', () => {
     let calls: TurnActivity[] = [];
-    for (let index = 0; index < 600; index += 1) {
+    for (let index = 0; index < 1500; index += 1) {
       calls = recordTurnActivity(calls, { kind: 'tool-done', label: `$ step ${index}`, id: `s${index}`, category: 'run', output: lines(40, `output of step ${index}`) }, index);
     }
     expect(JSON.stringify(calls).length).toBeLessThanOrEqual(MAX_TURN_ACTIVITY_BYTES);
-    expect(calls).toHaveLength(600);
+    expect(calls).toHaveLength(1500);
     expect(calls[0]!.event.label).toBe('$ step 0');
     // The newest is as it arrived; the oldest kept only what its row needs.
     expect(calls.at(-1)!.event.output).toHaveLength(40);
