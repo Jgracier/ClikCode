@@ -24,7 +24,7 @@ import { BYTES_PER_TOKEN } from './transfer.js';
 /** The most a switch hands the agent, whatever the model's window: enough to
  * carry on, not everything that fits. The conversation itself stays on this
  * machine, whole and searchable (search_conversations, read_conversation,
- * active_conversations); the prompt holds the working set. Without this a 1M-window model
+ * hindsight); the prompt holds the working set. Without this a 1M-window model
  * was seeded ~500k tokens and resent them every step: MEASURED 2026-10-10 on
  * the Gateway, a $2.58 first step with 24 s to the first token, then ~$0.11 a
  * step from the provider's cache -- and the first step after every idle gap
