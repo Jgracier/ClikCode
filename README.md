@@ -404,12 +404,12 @@ and `--debug` adds the stack and HTTP detail when something fails.
 Most of the time you will not type any of those. You will be in a session,
 where everything is a slash away.
 
-Pressing `/` opens a searchable list of ClikCode's 48 commands. Eleven are pinned
+Pressing `/` opens a searchable list of ClikCode's 49 commands. Twelve are pinned
 at the top, in the order people reach for them: resume a conversation, pick a
-tool, an account on it, then its model, the machine it runs on, start over,
-change what needs your approval, then settings, sessions, status and help.
-(The terminal leaves `/resume` out of the list — ← on an empty line is the
-conversation board — so it pins ten; typed, `/resume` still works.)
+tool, an account on it, then its model, a private model, the machine it runs on,
+start over, change what needs your approval, then settings, sessions, status and
+help. (The terminal leaves `/resume` out of the list — ← on an empty line is the
+conversation board — so it pins eleven; typed, `/resume` still works.)
 
 | Command | What it does |
 | --- | --- |
@@ -417,8 +417,10 @@ conversation board — so it pins ten; typed, `/resume` still works.)
 | `/provider` | choose a provider |
 | `/account [label]` | switch accounts |
 | `/model [name]` | choose or set a model |
+| `/private models` | search Hugging Face and deploy a private model through ClikDeploy |
+| `/machine` | the machine this chat runs on: move it, add one, or update or remove one |
 | `/new [first message]` | start a fresh conversation (the current one stays resumable) |
-| `/permissions [ask\|bypass\|auto]` | approval behavior |
+| `/permissions [ask\|bypass\|auto]` (also `/permission`) | approval behavior |
 | `/settings` | configure this workspace (below) |
 | `/sessions` | manage conversations |
 | `/status` | current configuration |
@@ -477,12 +479,12 @@ not reversed.
 | Command | What it does |
 | --- | --- |
 | `/model [name]` | choose or set a model |
+| `/private models` | search Hugging Face and deploy a private model through ClikDeploy: a model of your own on ClikDeploy compute, started when you choose it and waited for (the Gateway reports how the start is going) rather than failing |
 | `/effort [level]` | reasoning level |
 | `/fast [on\|off]` | on ClikDeploy Gateway, serve from the fastest provider of the model instead of the cheapest |
-| `/permissions [ask\|bypass\|auto]` | approval behavior |
+| `/permissions [ask\|bypass\|auto]` (also `/permission`) | approval behavior |
 | `/sandbox [on\|off]` | ClikCode's own agent: its shell commands write only the workspace, temp and caches (on by default) |
 | `/computer [on\|off\|inspect\|logins\|login [url] [--new]]` | let the agent use this computer's browser and desktop. `login` signs in privately: the one saved account is used, several show a picker, new logins are saved only once sign-in completes, and one-time codes are asked for each time and never kept. `logins` reviews and removes saved logins (shown only to you); `inspect` shows the sign-in fields without their values |
-| `/agents [stop <id>\|stop all] [confirm]` | background agents: list them, or stop one. Esc, Ctrl+C, closing a window and a new ClikCode build never stop them; this does, after naming what it ends |
 | `/send [steer\|queue]` | messages typed mid-turn: steer them into the running turn at its next pause (where the agent takes steering; elsewhere they queue, and say so), or queue them for after it. Global; bare `/send` shows the two |
 | `/options` | provider-specific modes and controls |
 | `/capabilities` | what the selected provider supports |
@@ -505,6 +507,12 @@ Command Code and Auggie get it as their own option.
 | `/archive` | archive this conversation |
 | `/delete [confirm]` | delete this conversation |
 | `/machine` | the machine this chat runs on: move it to this one, one added, one on your tailnet or one by SSH address (added first, ClikCode installed there over SSH); Tab on an added one to update or remove it ([ClikCode Remote](#your-other-machines-clikcode-remote)) |
+
+**Tools**
+
+| Command | What it does |
+| --- | --- |
+| `/agents [stop <id>\|stop all] [confirm]` | background agents: list them, or stop one. Esc, Ctrl+C, closing a window and a new ClikCode build never stop them; this does, after naming what it ends |
 
 **Info**
 
