@@ -7,6 +7,7 @@ import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { compactCount, dollars } from '../../harness/protocol/format.js';
 import { invocationRollups } from '../../session/state/invocations.js';
 import { accountBackAt, accountQuotaSpent, accountUsageText, outOfUsageText, usageResetLabel } from '../../harness/accounts/usage-reading.js';
+import { costSplitParts } from '../render/usage-words.js';
 import { accountUsage } from '../../session/picker-rows.js';
 
 type Invocation = HarnessState['invocations'][number];
@@ -20,6 +21,8 @@ interface UsageReportTotals {
   totalTokens: number;
   costUsd: number;
   costKnown: boolean;
+  /** Only the turns that carry a split; absent when none does. */
+  breakdown?: { meteredUsd: number; gpuUsd: number };
 }
 
 function tokenCount(invocation: Invocation): number {
@@ -37,6 +40,10 @@ function sumInvocations(invocations: readonly Invocation[]): UsageReportTotals {
     totalTokens: total.totalTokens + tokenCount(invocation),
     costUsd: total.costUsd + (invocation.costUsd ?? 0),
     costKnown: total.costKnown || invocation.costUsd !== undefined,
+    ...(invocation.costBreakdown || total.breakdown ? { breakdown: {
+      meteredUsd: (total.breakdown?.meteredUsd ?? 0) + (invocation.costBreakdown?.meteredUsd ?? 0),
+      gpuUsd: (total.breakdown?.gpuUsd ?? 0) + (invocation.costBreakdown?.gpuUsd ?? 0),
+    } } : {}),
   }), { accounts: 0, turns: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, totalTokens: 0, costUsd: 0, costKnown: false });
 }
 
@@ -91,6 +98,12 @@ export function conversationCost(state: Pick<HarnessState, 'invocations'>, sessi
   return totals.costKnown ? totals.costUsd : undefined;
 }
 
+/** The API and GPU split of this conversation's cost, over the turns that
+ * report one; undefined when none does. Never inferred for the others. */
+export function conversationCostBreakdown(state: Pick<HarnessState, 'invocations'>, sessionId: string): { meteredUsd: number; gpuUsd: number } | undefined {
+  return sumInvocations(state.invocations.filter((item) => item.sessionId === sessionId)).breakdown;
+}
+
 /** Ids that name this chat's provider. A session stores the catalog id
  * (`xai`) and sometimes only the command (`grok`). Accounts are filed under
  * the catalog id. Both have to match, for every harness, not one of them. */
@@ -116,7 +129,7 @@ export function usageReport(
   const conversation = sumInvocations(state.invocations.filter((item) => item.sessionId === session.id));
   const chatBits = [`${conversation.turns} ${conversation.turns === 1 ? 'turn' : 'turns'}`, ...(conversation.totalTokens ? [tokenFigure(conversation.totalTokens)] : [])];
   const cost = conversationCost(state, session.id);
-  if (cost !== undefined) chatBits.push(dollars(cost));
+  if (cost !== undefined) chatBits.push(dollars(cost), ...costSplitParts(conversation.breakdown));
   const lines = [
     providerName,
     '',

@@ -25,9 +25,16 @@ export function composerUsageLabel(label?: string, resetLabel?: string): string 
 
 /** "$1.23 this chat": what the conversation has cost, beside the account's
  * usage. Nothing when no turn reported a cost -- unknown is not $0. */
-export function chatCostLabel(costUsd: number | undefined): string | undefined {
+export function chatCostLabel(costUsd: number | undefined, breakdown?: { meteredUsd?: number; gpuUsd?: number }): string | undefined {
   if (costUsd === undefined || !Number.isFinite(costUsd)) return undefined;
-  return `${dollars(costUsd)} this chat`;
+  return [`${dollars(costUsd)} this chat`, ...costSplitParts(breakdown)].join(' · ');
+}
+
+/** `API $0.30`, `GPU $0.12`: where the credits went. A side that spent
+ * nothing is left out, and so is the whole split when the server sent none. */
+export function costSplitParts(breakdown?: { meteredUsd?: number; gpuUsd?: number }): string[] {
+  const part = (name: string, usd: number | undefined): string[] => (typeof usd === 'number' && Number.isFinite(usd) && usd > 0 ? [`${name} ${dollars(usd)}`] : []);
+  return [...part('API', breakdown?.meteredUsd), ...part('GPU', breakdown?.gpuUsd)];
 }
 
 /** Whether the reading says the allowance is spent (it is then drawn red). */
