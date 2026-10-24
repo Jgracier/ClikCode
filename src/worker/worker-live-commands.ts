@@ -15,11 +15,13 @@ import { subAgentSteerPlan, type SubAgentRef } from '../harness/protocol/activit
 import { cancelOriginFields, type CancelOrigin, type ClientCommand } from './protocol.js';
 import type { WorkerContext } from './worker-context.js';
 
-/** How long a Stop is given to end the turn before it is ended by force. */
+/** How long a Stop is given to end the turn before it is ended by force. Kept: the user asked
+ * for this stop, and abort is cooperative -- work that never reaches its abort check (a sign-in
+ * prompt, a tool that ignores the signal) would leave every window "stopping" with no way out
+ * but a second press nobody was told about. It only ends the turn's own processes, after a
+ * Stop the user pressed; processes with their own wind-down (a vendor child's 2s cancel settle,
+ * a held process's exit wait) have ended by then. */
 const HARD_STOP_AFTER_MS = 8000;
-
-/** How long after a held Stop a second one counts as the user's confirmation. */
-const STOP_CONFIRM_WINDOW_MS = 30_000;
 
 /** A Stop that is the user's own plain key. A script's abort signal or a programmatic stop is a decision already made. */
 function stopHoldsForAgents(command: { origin?: CancelOrigin }): boolean {
@@ -29,7 +31,7 @@ function stopHoldsForAgents(command: { origin?: CancelOrigin }): boolean {
 
 function subAgentStopNote(labels: readonly string[]): string {
   const named = labels.slice(0, 4).map((label) => `"${label.slice(0, 50)}"`).join(', ') + (labels.length > 4 ? ` and ${labels.length - 4} more` : '');
-  return `Stop held: ${labels.length} sub-agent${labels.length === 1 ? ' is' : 's are'} running (${named}), and stopping the turn would end ${labels.length === 1 ? 'it' : 'them'}. Press Esc or Ctrl+C again within 30s to stop anyway; otherwise nothing was interrupted. Messages you type still steer.`;
+  return `Stop held: ${labels.length} sub-agent${labels.length === 1 ? ' is' : 's are'} running (${named}), and stopping the turn would end ${labels.length === 1 ? 'it' : 'them'}. Press Esc or Ctrl+C again to stop anyway; otherwise nothing was interrupted. Messages you type still steer.`;
 }
 
 export function createLiveCommands(ctx: WorkerContext) {
@@ -145,8 +147,9 @@ export function createLiveCommands(ctx: WorkerContext) {
   };
 
   const originFields = cancelOriginFields;
-  /** The Stop that was held back for running sub-agents; a second one on the same turn confirms it. */
-  let agentStopAsked: { controller: AbortController; at: number } | undefined;
+  /** The turn whose Stop was held back for running sub-agents; a second Stop on it confirms, for as
+   * long as it runs (no clock: the sub-agents are what is being asked about, and they are listed). */
+  let agentStopAsked: AbortController | undefined;
   const handleCancel = async (socket: Socket, command: Extract<ClientCommand, { type: 'cancel' }>): Promise<void> => {
     // The vendor's work is over and only the record is being saved: nothing is
     // left to stop, and the turn must not be labelled stopped.
@@ -160,9 +163,8 @@ export function createLiveCommands(ctx: WorkerContext) {
       // harness cancels them with the turn. The user is told, and a second Stop confirms.
       const agentsOpen = observer.openAgentCalls();
       if (agentsOpen.length && stopHoldsForAgents(command) && !ctx.stopAnnounced) {
-        const asked = agentStopAsked;
-        if (!asked || asked.controller !== ctx.activeController || Date.now() - asked.at > STOP_CONFIRM_WINDOW_MS) {
-          agentStopAsked = { controller: ctx.activeController, at: Date.now() };
+        if (agentStopAsked !== ctx.activeController) {
+          agentStopAsked = ctx.activeController;
           lifecycle('worker.cancel', { ...originFields(command), stopped: 'held: sub-agents running', agents: agentsOpen.map((agent) => agent.label).join(' | ').slice(0, 300) });
           note(subAgentStopNote(agentsOpen.map((agent) => agent.label)));
           return;
