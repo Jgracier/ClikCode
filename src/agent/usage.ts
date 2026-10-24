@@ -8,7 +8,7 @@ interface UsageLedger {
   lastInputTokens?: number;
 }
 
-const FIELDS = ['input', 'output', 'cached', 'cacheWrite', 'reasoning', 'costMicroUsd'] as const;
+const FIELDS = ['input', 'output', 'cached', 'cacheWrite', 'reasoning', 'costMicroUsd', 'meteredMicroUsd', 'gpuMicroUsd'] as const;
 
 /** Sum two usages. A field stays absent when neither side reported it, so
  * "the vendor said nothing" never degrades into a fabricated 0. */

@@ -71,6 +71,20 @@ describe('a Gateway step', () => {
     expect(result.usage.costMicroUsd).toBe(50_573);
   });
 
+  it('reads the cost split when the server sends one, and tolerates a missing or malformed one', async () => {
+    const usageOf = async (usage: unknown) => (await gatewayModelClient({ baseUrl: 'https://g', apiKey: 'k', fetchImpl: vi.fn(async () => sse({ choices: [], usage }, '[DONE]')) as never }).step(step)).usage;
+    expect(await usageOf({ cost: 0.42, cost_breakdown: { metered: 0.3, gpu: 0.12 } })).toMatchObject({ costMicroUsd: 420_000, meteredMicroUsd: 300_000, gpuMicroUsd: 120_000 });
+    expect(await usageOf({ cost: 0.1, cost_breakdown: { gpu: 0.1 } })).toMatchObject({ costMicroUsd: 100_000, gpuMicroUsd: 100_000 });
+    const none = await usageOf({ cost: 0.1 });
+    expect(none).not.toHaveProperty('meteredMicroUsd');
+    expect(none).not.toHaveProperty('gpuMicroUsd');
+    const bad = await usageOf({ cost: 0.1, cost_breakdown: { metered: 'lots', gpu: -1 } });
+    expect(bad).toMatchObject({ costMicroUsd: 100_000 });
+    expect(bad).not.toHaveProperty('meteredMicroUsd');
+    expect(bad).not.toHaveProperty('gpuMicroUsd');
+    expect(await usageOf({ cost: 0.1, cost_breakdown: 'x' })).not.toHaveProperty('gpuMicroUsd');
+  });
+
   it('turns the Gateway\'s codes into the ones the loop acts on', async () => {
     const limited = vi.fn(async () => sse({ error: { message: 'slow down', type: 'rate_limit_error', code: 'rate_limit_exceeded', retry_after: 7 } }));
     await expect(gatewayModelClient({ baseUrl: 'https://g', apiKey: 'k', fetchImpl: limited as never }).step(step))

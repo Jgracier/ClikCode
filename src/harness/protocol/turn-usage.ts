@@ -15,6 +15,11 @@ export type TurnStopReason = 'completed' | 'max-tokens' | 'max-turns' | 'refusal
  * The one type every transport reports through (`onUsage`), the worker sends
  * to its clients and the status line reads. Persisted records (invocations)
  * keep their own older field names. */
+export interface CostBreakdown {
+  meteredUsd?: number;
+  gpuUsd?: number;
+}
+
 export interface TurnUsage {
   /** Input tokens as the vendor counts them: Claude excludes cache reads,
    *  Codex and OpenAI-shaped APIs include them. */
@@ -27,6 +32,8 @@ export interface TurnUsage {
   reasoning?: number;
   totalTokens?: number;
   costUsd?: number;
+  /** Of `costUsd`, what the metered model and the GPU time were, when the server says. */
+  costBreakdown?: CostBreakdown;
   /** The model's context window. */
   contextWindow?: number;
   /** Tokens the conversation occupied at the latest model call. */
@@ -77,6 +84,14 @@ export function addTurnUsage(carried: TurnUsage | undefined, latest: TurnUsage |
   const summed: TurnUsage = { ...carried };
   for (const key of ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning', 'totalTokens', 'costUsd', 'credits'] as const) {
     if (latest[key] !== undefined) summed[key] = (carried[key] ?? 0) + latest[key]!;
+  }
+  if (latest.costBreakdown || carried.costBreakdown) {
+    const a = carried.costBreakdown;
+    const b = latest.costBreakdown;
+    const add = (key: keyof CostBreakdown): number | undefined => (a?.[key] === undefined && b?.[key] === undefined ? undefined : (a?.[key] ?? 0) + (b?.[key] ?? 0));
+    const metered = add('meteredUsd');
+    const gpu = add('gpuUsd');
+    summed.costBreakdown = { ...(metered !== undefined ? { meteredUsd: metered } : {}), ...(gpu !== undefined ? { gpuUsd: gpu } : {}) };
   }
   for (const key of ['contextWindow', 'contextUsed', 'contextPercent', 'stopReason'] as const) {
     if (latest[key] !== undefined) (summed as Record<string, unknown>)[key] = latest[key];

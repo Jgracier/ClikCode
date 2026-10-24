@@ -35,6 +35,7 @@ export function recordInvocation(state: HarnessState, turn: {
     ...(usage?.cacheRead !== undefined ? { cacheReadTokens: usage.cacheRead } : {}),
     ...(usage?.totalTokens !== undefined ? { totalTokens: usage.totalTokens } : {}),
     ...(usage?.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
+    ...(usage?.costBreakdown ? { costBreakdown: usage.costBreakdown } : {}),
     ...(usage?.credits !== undefined ? { credits: usage.credits } : {}),
     ...(turn.contextProfile ? { contextProfile: turn.contextProfile } : {}),
     ...(turn.stopReason ? { stopReason: turn.stopReason } : {}),
