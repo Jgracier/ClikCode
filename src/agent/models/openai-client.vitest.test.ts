@@ -326,11 +326,18 @@ describe('a request fitted to the server', () => {
     expect(received[2]!.body).not.toHaveProperty('max_tokens');
   });
 
-  it('rejects an oversized final request before HTTP instead of sending it with a forced output floor', async () => {
-    const client = new OpenAIModelClient({ baseUrl, model: 'm', contextWindow: 1024, maxOutputTokens: 1024 });
-    await expect(client.step(request([{ type: 'text', role: 'user', text: 'x'.repeat(10000) }]))).rejects.toMatchObject({ code: 'CONTEXT_BUDGET_EXCEEDED' });
-    expect(received).toHaveLength(0);
+  it('does not judge the fit a second time: the agent loop fitted the request, and the server has the last word', async () => {
+    reply = { chunks: [delta({}, 'stop')] };
+    // A request that the client's own estimate would call too big for a 1,024-token window is sent as given.
+    await new OpenAIModelClient({ baseUrl, model: 'm', contextWindow: 1024, maxOutputTokens: 1024 })
+      .step({ ...request([{ type: 'text', role: 'user', text: 'x'.repeat(10000) }]), maxOutputTokens: 300 });
+    expect(received).toHaveLength(1);
+    // max_tokens is the room the caller worked out, within the model's own limit.
+    expect(received[0]!.body.max_tokens).toBe(300);
+    await new OpenAIModelClient({ baseUrl, model: 'm', maxOutputTokens: 200 }).step({ ...request(), maxOutputTokens: 5000 });
+    expect(received[1]!.body.max_tokens).toBe(200);
   });
+
 
   it('honors reserved output headroom when metadata is unavailable and prevents options from overriding it', async () => {
     reply = { chunks: [delta({}, 'stop')] };

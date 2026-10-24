@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ConversationItem, ToolSpec } from './model-client.js';
 import type { ToolContext } from './tool-contract.js';
-import { ContextFitError, estimateRequestTokens, fitContext, isHarnessNote, responseReserve, shrinkArgs } from './context-view.js';
+import { ContextFitError, MIN_CONTEXT_SCALE, estimateRequestTokens, fitContext, isHarnessNote, learnScale, outputRoom, responseReserve, shrinkArgs } from './context-view.js';
 import { exposeSpecialists } from './on-demand-tools.js';
 import { defaultTools, toolSpecs } from './tools/registry.js';
 import { readContextTool } from './tools/read-context.js';
@@ -260,5 +260,51 @@ describe('read_context tells a small model what to do next', () => {
     expect(out.isError).toBe(true);
     expect(out.output).toContain('0 to 1');
     expect(out.output).toContain('query');
+  });
+});
+
+describe('what refuses, and on what evidence', () => {
+  const system = 'instructions';
+  it('says what to do: the window, what the instructions and tools take, and that a larger window fixes it', () => {
+    const error = new ContextFitError(10_884, 8_192);
+    expect(error.message).toContain('8,192');
+    expect(error.message).toContain('10,884');
+    expect(error.message).toMatch(/larger window/);
+    expect(error.message).toMatch(/estimates/);
+  });
+
+  it('never refuses on a window nobody reported: that is a guess, and the server knows its own limit', () => {
+    const huge = user('x'.repeat(200_000));
+    const view = fitContext({ system, items: [huge], tools });
+    expect(view.items).toContainEqual(huge);
+    // The same request against a window the server DID report is the real limit.
+    expect(() => fitContext({ system, items: [huge], tools, window: 32_000 })).toThrow(ContextFitError);
+  });
+
+  it('keeps a request that the cautious estimate refuses but the provider\'s own count says fits', () => {
+    const request = user('y'.repeat(40_000));
+    expect(() => fitContext({ system, items: [request], tools, window: 16_000 })).toThrow(ContextFitError);
+    const learned = learnScale(1, 6_000, estimateRequestTokens(system, [request], tools));
+    expect(learned).toBeLessThan(1);
+    expect(fitContext({ system, items: [request], tools, window: 16_000, scale: learned }).items).toContainEqual(request);
+  });
+
+  it('learns the estimate in both directions, never below half, and ignores a missing count', () => {
+    expect(learnScale(1, 5_000, 10_000)).toBeCloseTo(0.55, 5);
+    expect(learnScale(1, 1_000, 10_000)).toBe(MIN_CONTEXT_SCALE);
+    expect(learnScale(1, 15_000, 10_000)).toBeCloseTo(1.65, 5);
+    expect(learnScale(1.3, undefined, 10_000)).toBe(1.3);
+    expect(learnScale(1.3, 5_000, 0)).toBe(1.3);
+    // `estimate` is the scaled figure: a request estimated at 13,000 with scale 1.3 (10,000 unscaled) that the provider counts at 10,000 is exactly right.
+    expect(learnScale(1.3, 10_000, 13_000)).toBeCloseTo(1.1, 5);
+  });
+
+  it('asks for what is left of the window, within the model\'s own limit, not a fixed share of it', () => {
+    // A 32k window with a 12k request: 16,384 by default, the model's lower limit when it has one.
+    expect(outputRoom(32_768, 12_000)).toBe(16_384);
+    expect(outputRoom(32_768, 12_000, 4_096)).toBe(4_096);
+    // A fuller request leaves less: 32,768 - 28,000 - 5% of the window.
+    expect(outputRoom(32_768, 28_000)).toBe(32_768 - 28_000 - Math.ceil(32_768 * 0.05));
+    expect(outputRoom(8_192, 8_000)).toBe(128);
   });
 });
