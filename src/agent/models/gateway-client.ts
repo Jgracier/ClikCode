@@ -3,13 +3,21 @@
  * API, served by openai-client.ts; see for-session.ts gatewayModelClient.) */
 import type { HarnessErrorKind } from '../model-client.js';
 
-/** A model stream that has said nothing for this long is treated as cut off:
- * the connection is dropped and the step fails as `incomplete_stream`, which
- * the loop resends when nothing had streamed yet. Without it a stalled
- * connection -- a proxy that stopped forwarding, a server that wedged
- * mid-answer -- held the turn open forever with no error to show. Reset by
- * every chunk, so a slow but live answer is never cut. */
-export const STREAM_IDLE_TIMEOUT_MS = 120_000;
+/** The Gateway sends a `: keepalive` comment this often while a step is open (ClikDeploy's stream contract). */
+export const GATEWAY_KEEPALIVE_MS = 15_000;
+/** A stream is cut off after this many keepalives' worth of silence: eight missed in a row is a dead connection
+ * (a proxy that stopped forwarding, a server that wedged), not a slow model -- a slow model still sends them.
+ * Derived from the keepalive, so a Gateway that changes its interval changes this with it. */
+export const STREAM_IDLE_TIMEOUT_MS = GATEWAY_KEEPALIVE_MS * 8;
+/** A stream that keeps no keepalive (a local server) may be quiet longer than the Gateway's: the limit is
+ * never less than this many times the longest gap that stream has shown. */
+const OBSERVED_GAP_MULTIPLE = 4;
+
+/** The silence a stream is allowed before it is cut off: `base`, or a multiple of the longest gap this
+ * stream has already shown, whichever is longer -- a stream seen to pause that long is not dead for pausing. */
+export function streamSilenceLimit(base: number, longestGapMs: number): number {
+  return Math.max(base, OBSERVED_GAP_MULTIPLE * longestGapMs);
+}
 
 /** One read of a model stream, failing as `incomplete_stream` if nothing
  * arrives within `ms`. Zero or undefined waits as long as it takes. */

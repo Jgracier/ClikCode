@@ -6,7 +6,7 @@ import type { ConversationItem, ImageInput, ModelClient, ReasoningBlock, ModelSt
 import { turnCancelledError } from '../cancellation.js';
 import { lifecycle } from '../../runtime/lifecycle-log.js';
 import type { ContextHints } from '../context-profile.js';
-import { ModelClientError, parseRetryAfter, readWithin, SseParser, STREAM_IDLE_TIMEOUT_MS, type SseEvent } from './gateway-client.js';
+import { ModelClientError, parseRetryAfter, readWithin, SseParser, STREAM_IDLE_TIMEOUT_MS, streamSilenceLimit, type SseEvent } from './gateway-client.js';
 
 /** llama-server's per-request timings, passed through for callers that show speed. */
 interface LlamaTimings {
@@ -509,9 +509,13 @@ export class OpenAIModelClient implements ModelClient {
     const reader = response.body.getReader();
     try {
       let started = false;
+      let longestGap = 0;
       for (;;) {
-        const limit = started ? options.idleTimeoutMs ?? STREAM_IDLE_TIMEOUT_MS : options.firstChunkTimeoutMs ?? FIRST_CHUNK_TIMEOUT_MS;
+        const base = started ? options.idleTimeoutMs ?? STREAM_IDLE_TIMEOUT_MS : options.firstChunkTimeoutMs ?? FIRST_CHUNK_TIMEOUT_MS;
+        const limit = started ? streamSilenceLimit(base, longestGap) : base;
+        const readAt = Date.now();
         const { done: ended, value } = await readWithin(reader, limit, this.label);
+        if (started) longestGap = Math.max(longestGap, Date.now() - readAt);
         started = true;
         if (ended) break;
         if (value) for (const event of parser.push(value)) handle(event);

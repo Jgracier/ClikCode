@@ -94,8 +94,10 @@ export interface TurnRuntime {
   stalledCall: ModelToolCall | undefined;
   stepRetries: number;
   retryWaitedSeconds: number;
-  /** Seconds this step has waited for the user's own model to start (MODEL_START_BUDGET_SECONDS). */
+  /** Seconds this step has waited for the user's own model to start, and the Gateway's last reading of the
+   * start (turn-recovery.ts startMayContinue). */
   modelStartWaitedSeconds: number;
+  modelStart?: import('./turn-recovery.js').StartReading;
   contextScale: number;
   contextRefits: number;
   budgetClient: ModelClient;

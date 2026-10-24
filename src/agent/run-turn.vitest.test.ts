@@ -814,8 +814,10 @@ describe('runAgentLoop', () => {
       const phases: string[] = [];
       const starting = { error: gatewayError('MODEL_STARTING', { retryAfter: 30 }) };
       const h = harness([...Array.from({ length: 12 }, () => starting), { servedModel: 'qwen', text: 'up' }], { onPhase: (phase) => phases.push(phase) });
+      // The Gateway reports a start that usually takes 20 minutes.
+      Object.assign(h.client, { startStatus: async () => ({ phase: 'starting-model', elapsedS: 0, expectedS: 1200 }) });
       const result = await driven(runAgentLoop(h.input));
-      // 12 waits of 30s: past the 300s a failing step gets, within the model's start budget.
+      // 12 waits of 30s: past the 300s a failing step gets, within what the Gateway says the start takes.
       expect(result).toMatchObject({ text: 'up', stopReason: 'completed' });
       expect(phases.filter((phase) => phase.startsWith('Starting model')).length).toBeGreaterThanOrEqual(12);
       // While it starts the status stays "Starting model": no flicker to "thinking" between its retries.
@@ -843,11 +845,35 @@ describe('runAgentLoop', () => {
       expect(result).toMatchObject({ stopReason: 'completed' });
     });
 
-    it('gives up on a model that never starts, with what the Gateway said', async () => {
+    it('gives up on a start that has taken twice what the Gateway says it takes, with what the Gateway said', async () => {
+      const h = harness([], {}, { error: gatewayError('MODEL_STARTING', { retryAfter: 30 }) });
+      // The Gateway's elapsed figure grows 30 s per reading, a start that usually takes 60 s: past 120 s at the second.
+      let readings = 0;
+      Object.assign(h.client, { startStatus: async () => ({ phase: 'starting-model', elapsedS: 90 + 30 * readings++, expectedS: 60 }) });
+      const result = await driven(runAgentLoop(h.input));
+      expect(result).toMatchObject({ isError: true, stopReason: 'model-error' });
+      expect(h.client.requests.length).toBeLessThanOrEqual(3);
+    });
+
+    it('a start nothing reports on spends the step retry budget, then shows the Gateway\'s answer', async () => {
       const h = harness([], {}, { error: gatewayError('MODEL_STARTING', { retryAfter: 30 }) });
       const result = await driven(runAgentLoop(h.input));
       expect(result).toMatchObject({ isError: true, stopReason: 'model-error' });
-      expect(h.client.requests).toHaveLength(1200 / 30 + 1);
+      expect(h.client.requests).toHaveLength(300 / 30 + 1);
+    });
+
+    it('capacity contention on a model that is up spends the step retry budget: the loop ends with the Gateway\'s answer', async () => {
+      const h = harness([], {}, { error: gatewayError('MODEL_BUSY', { retryAfter: 30 }) });
+      const result = await driven(runAgentLoop(h.input));
+      expect(result).toMatchObject({ isError: true, stopReason: 'model-error' });
+      expect(h.client.requests).toHaveLength(300 / 30 + 1);
+    });
+
+    it('capacity contention on a model the Gateway reports still starting is waited for as a start', async () => {
+      const h = harness([...Array.from({ length: 15 }, () => ({ error: gatewayError('MODEL_BUSY', { retryAfter: 30 }) })), { text: 'up' }]);
+      Object.assign(h.client, { startStatus: async () => ({ phase: 'starting-model', elapsedS: 0, expectedS: 1200 }) });
+      expect(await driven(runAgentLoop(h.input))).toMatchObject({ stopReason: 'completed', text: 'up' });
+      expect(h.client.requests).toHaveLength(16);
     });
 
     it('stops waiting the moment the turn is cancelled', async () => {
