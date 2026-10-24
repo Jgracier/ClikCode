@@ -120,16 +120,6 @@ export class ConversationStore {
     }));
   }
 
-  appendCompaction(summary: string, keep: readonly ConversationItem[]): Promise<void> {
-    const split = keep.map(splitImages);
-    const keepImages: Record<string, ImageInput[]> = {};
-    split.forEach((entry, index) => { if (entry.images) keepImages[index] = entry.images; });
-    return this.write([{
-      kind: 'compaction', at: new Date().toISOString(), summary, keep: split.map((entry) => entry.item),
-      ...(Object.keys(keepImages).length ? { keepImages } : {}),
-    }]);
-  }
-
   /** The live (post-compaction) conversation. Unparseable lines — normally
    * only a torn final line after a crash — are skipped, never fatal. */
   async load(): Promise<ConversationItem[]> {

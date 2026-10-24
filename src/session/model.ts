@@ -59,8 +59,9 @@ export type TranscriptMessage = {
   /** The steer this user message was, when it was typed into a running turn.
    *  The live copy and this one are the same message, matched by this id. */
   id?: string;
-  /** Legacy automatic compaction notice. Kept so saved conversations still
-   * draw the notice instead of showing `/compact` as the user's request. */
+  /** Read only: the notice an older build saved for the compaction it ran itself (ClikCode no longer
+   * compacts or sends turns of its own). Kept so those saved conversations still draw the notice
+   * instead of showing `/compact` as the user's request. */
   automatic?: string;
   /** Whose turn a message was: an answer is stamped when its turn is
    * committed (checkpoint.ts sessionTranscriptMessages), every message when
@@ -218,7 +219,7 @@ export interface HarnessSession {
    * provider retry cannot accidentally submit the same user prompt twice. */
   pendingTurn?: {
     prompt: string;
-    /** ClikCode sent `prompt` itself, and why (TranscriptMessage.automatic). */
+    /** Read only, from a turn an older build journaled before it was interrupted (TranscriptMessage.automatic). */
     automatic?: string;
     /** The files attached to this request (`attachments` when it began). */
     attachments?: string[];
