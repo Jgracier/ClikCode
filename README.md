@@ -404,7 +404,7 @@ and `--debug` adds the stack and HTTP detail when something fails.
 Most of the time you will not type any of those. You will be in a session,
 where everything is a slash away.
 
-Pressing `/` opens a searchable list of ClikCode's 47 commands. Eleven are pinned
+Pressing `/` opens a searchable list of ClikCode's 48 commands. Eleven are pinned
 at the top, in the order people reach for them: resume a conversation, pick a
 tool, an account on it, then its model, the machine it runs on, start over,
 change what needs your approval, then settings, sessions, status and help.
@@ -434,6 +434,7 @@ reference reads better that way. All of them, grouped as `/help` groups them:
 | `/new [first message]` (also `/clear`, `/reset`) | start a fresh conversation (the current one stays resumable) |
 | `/compact [focus]` | ask the selected vendor harness to compact this conversation, where it supports the command |
 | `/history` | show this conversation; a summary carried for its opening turns comes first |
+| `/hindsight` | this conversation cut into topics, newest first, with the files each one changed, numbered by your prompts — the numbers `/fork @N` and `/redo @N` take |
 | `/copy` | copy the last answer |
 | `/export [path]` | write the transcript as markdown |
 | `/changes [N\|path]` | each turn's file edits, newest first; `N` shows that turn's diff. With a path, every turn in any conversation that edited that file, newest first: pick one and its conversation opens at that turn (↑↓ to the others) |
@@ -444,7 +445,7 @@ reference reads better that way. All of them, grouped as `/help` groups them:
 | `/exit` (also `/quit`) | save and leave |
 
 Every turn's file changes are recorded for the whole conversation, so
-`/changes` and `/redo` reach back to its first turn. The record
+`/changes`, `/hindsight` and `/redo` reach back to its first turn. The record
 of an old turn keeps its files and line counts, but once a conversation's log
 passes 2 MiB the oldest turns' diff text is dropped; such a turn is listed,
 not reversed.
