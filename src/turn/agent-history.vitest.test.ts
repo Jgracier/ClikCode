@@ -14,7 +14,7 @@ import { readState } from '../session/state/read';
 import { writeState } from '../session/state/write';
 import { redoFrom } from '../session/redo';
 import { ConversationStore } from '../agent/conversation';
-import { agentItemsFromTurn, agentSeedBudget, AGENT_SEED_CEILING_TOKENS, seedAgentConversation } from './agent-history';
+import { agentItemsFromTurn, agentSeedBudget, seedAgentConversation } from './agent-history';
 import { canonicalRecord } from '../session/canonical';
 import type { HarnessSession, TranscriptMessage } from '../session/model';
 
@@ -202,30 +202,26 @@ describe('what the agent\'s memory is told', () => {
       const text = items.map((item) => (item.type === 'text' ? item.text : '')).join('\n');
       return { bytes: Buffer.byteLength(text, 'utf8'), text };
     };
-    const ceilingBytes = AGENT_SEED_CEILING_TOKENS * 4;
 
-    it('stops at the ceiling on a very large window, keeps the newest turns and says what it left out', async () => {
-      const { bytes, text } = await seededBytes(1_000_000);
-      expect(bytes).toBeLessThanOrEqual(ceilingBytes + 2_000);
-      expect(bytes).toBeGreaterThan(ceilingBytes * 0.5);
-      expect(text).toContain('Request 1499');
-      // Turn 0's answer is not retold; its request is listed in the outline of what was left out.
-      expect(text).not.toContain('Answer 0 ');
-      expect(text).toContain('1. Request 0');
-      expect(text).toMatch(/earlier turns? (is|are) left out/);
+    it('is derived from the target model\'s window: a very large window is handed what it can carry, newest turns kept', async () => {
+      const window = 1_000_000;
+      expect(agentSeedBudget(window)).toBe(window * 0.5 * 4);
+      const { bytes, text } = await seededBytes(window);
+      // The whole ~1.5 MB conversation fits half of a 1M window: nothing is left out.
+      expect(bytes).toBeGreaterThan(1_300_000);
+      expect(text).toContain('Answer 0 ');
+      expect(text).not.toMatch(/earlier turns? (is|are) left out/);
     });
 
-    it('is still half the window where that is less than the ceiling', async () => {
+    it('is half the window where the conversation is longer than that, keeping the newest and saying what it left out', async () => {
       const window = 100_000;
       expect(agentSeedBudget(window)).toBe(window * 0.5 * 4);
-      const { bytes } = await seededBytes(window);
+      const { bytes, text } = await seededBytes(window);
       expect(bytes).toBeLessThanOrEqual(window * 0.5 * 4 + 2_000);
       expect(bytes).toBeGreaterThan(window * 0.5 * 4 * 0.5);
-    });
-
-    it('takes the ceiling when the window is not known to be smaller than it', () => {
-      expect(agentSeedBudget(undefined)).toBeLessThanOrEqual(ceilingBytes);
-      expect(agentSeedBudget(10_000_000)).toBe(ceilingBytes);
+      expect(text).toContain('Request 1499');
+      expect(text).not.toContain('Answer 0 ');
+      expect(text).toMatch(/earlier turns? (is|are) left out/);
     });
   });
 
