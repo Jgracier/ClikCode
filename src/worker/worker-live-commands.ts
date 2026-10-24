@@ -210,7 +210,7 @@ export function createLiveCommands(ctx: WorkerContext) {
     if (ctx.vendorBackground.busy || await persistentWorkRunning(sessionId)) {
       lifecycle('worker.cancel', { ...originFields(command), stopped: 'vendor background work' });
       announceStopping(undefined);
-      try { await closePersistentTransport(sessionId); } finally { if (!ctx.turnRunning) ctx.stopAnnounced = false; observer.broadcast({ type: 'stop-done' }); }
+      try { await Promise.all([closePersistentTransport(sessionId), stopHeldVendorProcess(sessionId)]); } finally { if (!ctx.turnRunning) ctx.stopAnnounced = false; observer.broadcast({ type: 'stop-done' }); }
       return;
     }
     // Else a turn parked for the reset, if there is one. Said out loud

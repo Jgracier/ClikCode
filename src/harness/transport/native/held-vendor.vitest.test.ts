@@ -9,11 +9,12 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { createBackgroundWait, streamJsonUserMessage } from './background-wait.js';
-import { hasHeldVendorProcess, holdVendorProcess, releaseHeldVendorProcess, stopHeldVendorProcess, waitForHeldVendorSubagents, whenHeldVendorGone, type HeldVendor } from './held-vendor.js';
+import { hasHeldVendorProcess, holdVendorProcess, releaseHeldVendorProcess, stopHeldVendorProcess, retireHeldVendorProcess, retiredHeldAgentCount, waitForHeldVendorSubagents, whenHeldVendorGone, type HeldVendor } from './held-vendor.js';
 import { captureNativeHarnessTurn, createTurnInput, createTurnRelease } from './turn.js';
 import { reportStructuredLine } from '../../events/structured.js';
 import { createStreamState } from '../../events/adapters.js';
 import type { BackgroundTurnOutcome, VendorBackgroundTurn } from '../background-turn.js';
+import type { EndedWork } from '../handoff-work.js';
 import type { AiLocalHarnessDefinition } from '../../definition.js';
 
 type Json = Record<string, unknown>;
@@ -94,13 +95,33 @@ describe('a Claude turn that leaves background tasks running', () => {
     await vi.waitFor(() => expect(hasHeldVendorProcess('held-agent')).toBe(false), { timeout: 5000 });
   });
 
-  it('stops waiting for a subagent at the ceiling, saying it is still running', async () => {
-    await runTurn('held-agent-ceiling', null, false, true, true);
-    expect(hasHeldVendorProcess('held-agent-ceiling')).toBe(true);
-    expect(await waitForHeldVendorSubagents('held-agent-ceiling', undefined, 0)).toBe(false);
-    expect(await waitForHeldVendorSubagents('held-agent-ceiling', undefined, 300)).toBe(false);
-    await stopHeldVendorProcess('held-agent-ceiling');
-    expect(await waitForHeldVendorSubagents('held-agent-ceiling', undefined, 0)).toBe(true);
+  it('a process the conversation leaves keeps its subagent running and tells its end', async () => {
+    await runTurn('held-agent-retire', 400, false, true, true);
+    const ended: EndedWork[][] = [];
+    expect(retireHeldVendorProcess('held-agent-retire', (list) => ended.push(list))).toBe(true);
+    // No longer the session's held process: a turn does not wait on it, and it is not stopped.
+    expect(hasHeldVendorProcess('held-agent-retire')).toBe(false);
+    expect(retiredHeldAgentCount('held-agent-retire')).toBe(1);
+    await vi.waitFor(() => expect(ended).toHaveLength(1), { timeout: 5000 });
+    expect(ended[0]![0]).toMatchObject({ kind: 'agent', outcome: 'finished' });
+    await whenHeldVendorGone('held-agent-retire');
+    expect(retiredHeldAgentCount('held-agent-retire')).toBe(0);
+  });
+
+  it('a retired process that goes before its subagent ends tells it cut off; a Stop tells nothing', async () => {
+    await runTurn('held-agent-gone', null, false, true, true);
+    const ended: EndedWork[][] = [];
+    expect(retireHeldVendorProcess('held-agent-gone', (list) => ended.push(list))).toBe(true);
+    await stopHeldVendorProcess('held-agent-gone');
+    expect(retiredHeldAgentCount('held-agent-gone')).toBe(0);
+    expect(ended).toEqual([]);
+  });
+
+  it('retiring a process that runs no subagent does nothing', async () => {
+    await runTurn('held-no-agent', 400);
+    expect(retireHeldVendorProcess('held-no-agent', () => undefined)).toBe(false);
+    expect(hasHeldVendorProcess('held-no-agent')).toBe(true);
+    await stopHeldVendorProcess('held-no-agent');
   });
 
   it('ends at the first result, and the follow-up arrives as a background turn', async () => {

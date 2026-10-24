@@ -55,9 +55,9 @@ export async function runVendorCliAttempt(input: {
   const { harness, session, turnText, model, environment, images, signal, run, checkpoint, effort, sharedObserver, onOutputStart, onStreamError } = input;
   const prompter = run.prompter;
   let turnOutput: Awaited<ReturnType<typeof captureNativeHarnessTurn>> = { stdout: '', stderr: '', exitCode: 0 };
-  // A previous turn's vendor may still be running background work. Let its
-  // Agent calls and follow-up finish before closing stdin; Claude kills
-  // running Agent calls when that input closes.
+  // A previous turn's vendor may still be running background work. On this account its
+  // Agent calls and follow-up finish before closing stdin (Claude kills running Agent calls
+  // when that input closes); a process the conversation left is retired, not waited on.
   await settleHeldVendor(session.id, prompter, signal);
   const turn = harness.turn;
   if (!turn) throw new Error(`${harness.displayName} cannot execute centralized non-interactive turns`);
@@ -216,6 +216,7 @@ export async function runVendorCliAttempt(input: {
         run.liveInput?.setSteerHandler(undefined);
         held = holdVendorProcess({
           sessionId: session.id, background, release, handler: backgroundHandler,
+          owner: { harness: harness.command, ...(session.nativeThreadAccountId ? { accountId: session.nativeThreadAccountId } : {}) },
           endInput: () => heldInput!.end(),
           // One stream position per background turn, like per attempt.
           report: (text, observer, parsed) => {

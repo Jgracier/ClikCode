@@ -1,7 +1,6 @@
 /** Small steps several turn backends each wrote for themselves. */
-import { releaseHeldVendorProcess, hasHeldVendorProcess, stopHeldVendorProcess, waitForHeldVendorSubagents } from '../harness/transport/native/held-vendor.js';
-import { lifecycle } from '../runtime/lifecycle-log.js';
-import { reportEndedWork } from './vendor-process.js';
+import { releaseHeldVendorProcess, hasHeldVendorProcess, heldVendorOwner, retireHeldVendorProcess, waitForHeldVendorSubagents } from '../harness/transport/native/held-vendor.js';
+import { reportEndedWork, retiredWorkChanged } from './vendor-process.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import type { DurableTurnCheckpoint } from './turn-journal.js';
 import type { TurnObserver } from './observer.js';
@@ -36,32 +35,31 @@ export function setPlanMode(
   prompter?.render(session);
 }
 
-/** How long a turn waits for the agents a held vendor process is running.
- * Unbounded, a turn on a spent account waited on that account's agents for
- * an hour. */
-export const HELD_AGENTS_WAIT_MS = 5 * 60_000;
-
-/** A held vendor process may still be running Agent calls and their
- * follow-up. Wait for them (at most HELD_AGENTS_WAIT_MS; not at all with
- * `wait: false`, an attempt that failed), then close it so the thread is
- * flushed before anything reads or copies it. Agents still running then are
- * stopped with the process, and told to the conversation as cut off
- * (reportEndedWork: a notification turn on the account it is on, as for a
- * process a switch left). */
+/** A held vendor process may still be running Agent calls and their follow-up.
+ *
+ * - On the account and harness the turn runs on, the turn waits for them (one process writes
+ *   the thread), then closes it so the thread is flushed before anything reads or copies it.
+ *   The wait has no clock: it ends on the vendor's own report of the last agent, the process
+ *   exiting, or the user's Stop (`signal`).
+ * - When the conversation is leaving the process (`to` is another harness or account, or the
+ *   reply that started it `failed`), nothing waits on it and nothing is killed: with agents
+ *   running it is retired (held-vendor.ts), they run on, and each one's end is told to the
+ *   conversation as reportEndedWork does for a process a switch left (handoff-work.ts). */
 export async function settleHeldVendor(
   sessionId: string, prompter: TurnObserver | undefined, signal?: AbortSignal,
-  options: { wait?: boolean; from?: { harness?: string; accountId?: string } } = {},
+  options: { failed?: boolean; to?: { harness: string; accountId: string }; from?: { harness?: string; accountId?: string } } = {},
 ): Promise<void> {
   if (!hasHeldVendorProcess(sessionId)) return;
-  const wait = options.wait ?? true;
-  if (wait) prompter?.phase('waiting for running work');
-  if (await waitForHeldVendorSubagents(sessionId, signal, wait ? HELD_AGENTS_WAIT_MS : 0)) {
-    await releaseHeldVendorProcess(sessionId);
-    return;
+  const owner = heldVendorOwner(sessionId);
+  const leaving = Boolean(options.failed || (options.to && owner && (owner.harness !== options.to.harness || owner.accountId !== options.to.accountId)));
+  if (leaving) {
+    const from = options.from ?? owner ?? {};
+    const retired = retireHeldVendorProcess(sessionId, (ended) => { reportEndedWork(sessionId, ended, from); retiredWorkChanged(sessionId); });
+    if (retired) { retiredWorkChanged(sessionId); return; }
   }
-  // Closing its input would leave the process waiting on them; Claude ends running Agent calls when it goes.
-  await stopHeldVendorProcess(sessionId);
-  const why = wait ? `ClikCode stopped it after waiting ${Math.round(HELD_AGENTS_WAIT_MS / 60_000)} minutes for it` : 'the reply that started it failed, and ClikCode stopped it';
-  lifecycle('vendor.held-agents-cut-off', { waited: wait });
-  reportEndedWork(sessionId, [{ id: 'held', kind: 'agent', label: 'the background agents of the last reply', outcome: 'cut-off', tail: why }], options.from);
+  if (!options.failed) {
+    prompter?.phase('waiting for running work');
+    await waitForHeldVendorSubagents(sessionId, signal);
+  }
+  await releaseHeldVendorProcess(sessionId);
 }
