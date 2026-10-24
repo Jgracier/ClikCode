@@ -307,7 +307,8 @@ describe('running cost per chat', () => {
   it("shows the bridge's dollars for this chat beside the usage, and nothing (never $0) when no cost was reported", async () => {
     const costed = applyEvent(emptyModel(), { type: 'usage', label: '5h 40% left', chatCost: 1.234 });
     expect(costed.chatCost).toBe('$1.23 this chat');
-    expect(applyEvent(emptyModel(), { type: 'usage', chatCost: 0.42, chatSplit: { meteredUsd: 0.3, gpuUsd: 0.12 } }).chatCost).toBe('$0.42 this chat · API $0.30 · GPU $0.12');
+    // The editor shows the one total, whatever was used; the split is in /usage.
+    expect(applyEvent(emptyModel(), { type: 'usage', chatCost: 0.42 }).chatCost).toBe('$0.42 this chat');
     // Cheap turns keep their figure rather than rounding to nothing.
     expect(applyEvent(emptyModel(), { type: 'usage', chatCost: 0.0042 }).chatCost).toBe('$0.0042 this chat');
     // A subscription harness reports no cost: not shown, and a later reading without one clears it.
