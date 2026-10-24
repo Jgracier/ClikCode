@@ -23,7 +23,10 @@ import { statSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import Conf from 'conf';
+import { randomUUID } from 'node:crypto';
 import { readState } from '../session/state/read.js';
+import { writeState } from '../session/state/write.js';
+import { enqueueSessionTurn } from '../turn/checkpoint.js';
 import { setOutOfTurnHandler, setRetiredWorkListener, setVendorBackgroundTurnHandler, setWorkEndedHandler } from '../turn/vendor-process.js';
 import { createWorkEndedHandler } from './handed-off-work.js';
 import { BroadcastObserver } from './broadcast-observer.js';
@@ -158,16 +161,30 @@ export async function runSessionWorker(sessionId: string, options: { warm?: bool
   // -------------------------------------------------------------------------
   ctx.idle = createIdleControl(ctx);
 
+  /** A wait an older build parked holds its continuation line, which is
+   * never sent: the turn's own request is. */
+  const parkedText = async (prompt: string): Promise<string> => prompt === LEGACY_INTERRUPTED_TURN_REQUEST
+    ? (await readState({ transcripts: [sessionId] })).sessions.find((item) => item.id === sessionId)?.pendingTurn?.prompt ?? prompt
+    : prompt;
+
   /** A turn parked until the quota resets (worker/resume-wait.ts): sent from
    * here once it has, once. `resumingTurn` marks that turn for the turn runner. */
   ctx.resumeWaiter = createResumeWaiter({
     sessionId, turnRunning: () => ctx.turnRunning || ctx.draining, notice: ctx.io.note, changed: () => ctx.idle.scheduleIdleExit(),
+    restore: async (prompt) => {
+      const text = await parkedText(prompt);
+      if (ctx.observer.attachedCount > 0) { ctx.observer.broadcast({ type: 'restore-draft', text }); return; }
+      // Nobody has it open: it waits in the queue, where the next window finds it.
+      const latest = await readState({ transcripts: [sessionId] });
+      const found = latest.sessions.find((item) => item.id === sessionId);
+      if (!found) return;
+      const submittedAt = new Date().toISOString();
+      enqueueSessionTurn(found, { id: randomUUID(), text: text.trim(), submittedAt }, submittedAt);
+      await writeState(latest);
+      ctx.io.broadcastQueueChanged();
+    },
     send: async (prompt) => {
-      // A wait an older build parked holds its continuation line, which is
-      // never sent: the turn's own request is.
-      const text = prompt === LEGACY_INTERRUPTED_TURN_REQUEST
-        ? (await readState({ transcripts: [sessionId] })).sessions.find((item) => item.id === sessionId)?.pendingTurn?.prompt ?? prompt
-        : prompt;
+      const text = await parkedText(prompt);
       ctx.resumingTurn = true;
       if (!ctx.queue.startTurn({ type: 'submit', text, echo: true })) ctx.resumingTurn = false;
     },
