@@ -126,6 +126,8 @@ export function userManagerOwns(cgroup: string): boolean {
 export function userManagerLaunch(argv: readonly string[], context: {
   cgroup: string; uid: number; env: NodeJS.ProcessEnv; cwd: string; execPath: string; unit: string;
   busExists: (path: string) => boolean;
+  /** Where the service's stderr goes (the worker's startup failure is read from it); none: discarded. */
+  stderrFile?: string;
 }): { command: string; args: string[]; env: NodeJS.ProcessEnv } | undefined {
   if (!context.cgroup || userManagerOwns(context.cgroup) || context.env.CLIKCODE_OWN_SCOPE === '0') return undefined;
   const runtime = context.env.XDG_RUNTIME_DIR || `/run/user/${context.uid}`;
@@ -137,7 +139,7 @@ export function userManagerLaunch(argv: readonly string[], context: {
     command: 'systemd-run',
     args: [
       '--user', '--quiet', '--collect', `--unit=${context.unit}`, `--slice=${AGENT_SLICE}`,
-      '-p', 'OOMPolicy=continue', '-p', 'StandardOutput=null', '-p', 'StandardError=null',
+      '-p', 'OOMPolicy=continue', '-p', 'StandardOutput=null', '-p', `StandardError=${context.stderrFile ? `file:${context.stderrFile}` : 'null'}`,
       `--working-directory=${context.cwd}`, ...setenv, '--', context.execPath, ...argv,
     ],
     env: { ...context.env, XDG_RUNTIME_DIR: runtime },
