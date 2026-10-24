@@ -19,9 +19,9 @@ import { activityOutput, editDiffFromInput, thoughtLabel, toolCall } from '../pr
 import { turnCancelledError } from '../../agent/cancellation.js';
 import { type JsonRpcPeer } from './jsonrpc-peer.js';
 import { panicMessage } from './rust-panic.js';
-import { BackgroundTurnChannel, type BackgroundTurnEnd } from './background-turn.js';
+import { BackgroundTurnChannel } from './background-turn.js';
 import { PersistentSession, runOneTurn, turnFailure, type PersistentSessionOptions, type VendorWorkSession } from './persistent-session.js';
-import { diagnostic, lifecycle } from '../../runtime/lifecycle-log.js';
+import { lifecycle } from '../../runtime/lifecycle-log.js';
 import { globalMcpServersForAcp } from './acp-mcp-servers.js';
 import { BackgroundAgentRows } from '../events/background-agent-rows.js';
 import { agentResult, limitSentence, VendorTasks, type RunningWork } from './handoff-work.js';
@@ -680,7 +680,6 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
           if (run) {
             // What runs now is the background turn's indicator from its first frame.
             if (this.work.level) run.observer.onBackgroundWork?.(this.work.fullLevel());
-            this.watchOrphanedTools();
             return;
           }
         }
@@ -726,35 +725,6 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     live.cancelled = true;
     this.settleCancel(live, (settled) => void prompt.then(() => undefined, () => undefined).then(settled));
     return true;
-  }
-
-  /** A background run that only an unsettled tool call holds open: no level, no task, no held agent says
-   * anything runs. Such a tool has no one left to settle it, so the run is let go after a quiet
-   * orphanedToolMs (re-armed by every frame the run receives) instead of the day ABANDONED_WORK_MS
-   * allows. Its tool rows are settled, and the windows told it ended. Real background work -- a level,
-   * a task, an agent -- never starts or keeps this timer. */
-  private orphanWatch: NodeJS.Timeout | undefined;
-  private watchOrphanedTools(): void {
-    if (this.orphanWatch) { clearTimeout(this.orphanWatch); this.orphanWatch = undefined; }
-    const held = this.background;
-    if (!held || held.channel.done || this.isClosed) return;
-    if (this.work.level || this.vendorTasks.running().length || this.heldAgents.size || !this.work.count()) return;
-    this.orphanWatch = setTimeout(() => {
-      this.orphanWatch = undefined;
-      const run = this.background;
-      if (!run || run.channel.done || this.isClosed) return;
-      if (this.work.level || this.vendorTasks.running().length || this.heldAgents.size) return;
-      const orphans = this.work.endAll('tool');
-      diagnostic('vendor.orphaned-tool', `${orphans.length} tool${orphans.length === 1 ? '' : 's'} never settled; no longer waiting for ${orphans.length === 1 ? 'it' : 'them'}`);
-      for (const item of orphans) run.observer.onActivity?.({ kind: 'tool-done', label: item.label, id: item.id });
-      this.finishBackground('completed');
-    }, this.orphanedToolMs);
-    this.orphanWatch.unref?.();
-  }
-
-  protected override finishBackground(ended: BackgroundTurnEnd): void {
-    if (this.orphanWatch) { clearTimeout(this.orphanWatch); this.orphanWatch = undefined; }
-    super.finishBackground(ended);
   }
 
   /** Open a background turn for the agent's out-of-turn updates. */
@@ -1260,7 +1230,6 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     if (!target && !this.turn) this.relayOutOfTurn(update);
     this.trackTool(target, update);
     if (target) this.deliver(target, update, totals);
-    if (target && target === this.background) this.watchOrphanedTools();
     const run = this.background;
     if (run && target === run && this.work.count() === 0) {
       // The end of a background turn is the vendor's to say: the last tool it
@@ -1527,8 +1496,6 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     }
     // What a freshly opened run is told is the whole level.
     if (target) target.observer.onBackgroundWork?.(opened ? this.work.fullLevel() : update);
-    // The level may just have emptied with a tool still unsettled behind it: that tool alone holds the run now.
-    this.watchOrphanedTools();
     const run = this.background;
     if (!run || run.channel.done) return;
     if (!this.work.level && target === run && this.work.count() === 0 && !this.heldAgents.size) this.finishBackground('completed');

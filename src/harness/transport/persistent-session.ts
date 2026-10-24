@@ -25,12 +25,6 @@ const RETIRED_POLL_MS = 3_000;
  * keeps (worker-idle.ts ABANDONED_SHELL_MS): a vendor that never reports its
  * agent done, or a command that never ends, does not keep a process for ever. */
 export const ABANDONED_WORK_MS = 24 * 60 * 60 * 1000;
-/** How long a background run held open ONLY by a tool call nobody reports running (no vendor-reported
- * level, no task, no held agent) waits for a frame before it is let go. Real background work says so
- * (a level, a task); a tool the vendor never settled has no one left to settle it, and until this the
- * only thing that ended its run was ABANDONED_WORK_MS -- a day -- so every window drew a turn's
- * spinner, clock and "esc stop" long after the answer was in. */
-export const ORPHANED_TOOL_MS = 30 * 1000;
 /** How much of a finished command's output goes to the conversation. */
 const OUTPUT_TAIL_CHARS = 4_000;
 
@@ -70,8 +64,6 @@ export interface PersistentSessionOptions {
   setupIdleMs?: number;
   /** ABANDONED_WORK_MS, shortened by tests. */
   retiredCeilingMs?: number;
-  /** ORPHANED_TOOL_MS, shortened by tests. */
-  orphanedToolMs?: number;
 }
 
 /** What a persistent session's owner reads of the work its vendor left running (vendor-process.ts). */
@@ -127,7 +119,6 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
   /** The request options of a setup step (SETUP_IDLE_MS). */
   protected readonly setupRequest: { timeoutMs: number; idleReset: true };
   private readonly retiredCeilingMs: number;
-  protected readonly orphanedToolMs: number;
   /** Set once the conversation has left this process with work still running in it (retire). */
   private retirement?: Retirement;
   /** The child's process group when the current turn's prompt went out
@@ -146,7 +137,6 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     this.onWorkEnded = options.workEnded;
     this.setupRequest = { timeoutMs: options.setupIdleMs ?? SETUP_IDLE_MS, idleReset: true };
     this.retiredCeilingMs = options.retiredCeilingMs ?? ABANDONED_WORK_MS;
-    this.orphanedToolMs = options.orphanedToolMs ?? ORPHANED_TOOL_MS;
   }
 
   /** Where what the vendor says out of turn goes: nowhere once retired -- the conversation is
