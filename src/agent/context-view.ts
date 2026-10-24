@@ -4,12 +4,16 @@ import type { ConversationItem, ToolSpec } from './model-client.js';
 import { CORE_TOOLS } from './on-demand-tools.js';
 
 export const UNKNOWN_CONTEXT_WINDOW = 32_768;
+/** The estimate is learned from what the provider counts, in both directions; it never drops below half the cautious figure. */
+export const MIN_CONTEXT_SCALE = 0.5;
+/** Output a request may ask for when the model states no limit of its own. */
+const DEFAULT_OUTPUT_CEILING = 16_384;
 
 export class ContextFitError extends Error {
   readonly code = 'CONTEXT_BUDGET_EXCEEDED';
   readonly kind = 'other';
   constructor(readonly inputTokens: number, readonly contextWindow: number) {
-    super(`The current instructions, user requests and required tools need about ${inputTokens.toLocaleString()} input tokens, beyond this model's ${contextWindow.toLocaleString()}-token context budget. The full conversation is saved. Choose a larger context or start a new task; the current request and system instructions were not silently cut.`);
+    super(`ClikCode's instructions, tools and your message need about ${inputTokens.toLocaleString()} tokens (counting room for a reply), but this model's context window is ${contextWindow.toLocaleString()}. A deployment of this model with a larger window (32,000 or more) fixes this, or pick another model. Your conversation is saved and nothing was cut. The counts are estimates.`);
   }
 }
 
@@ -30,6 +34,25 @@ export function estimateRequestTokens(system: string, items: readonly Conversati
 
 export function responseReserve(window: number, maximum?: number): number {
   return Math.min(maximum ?? 16_384, Math.max(128, Math.floor(window / 5)));
+}
+
+/**
+ * The estimate's multiplier after a step: the provider's own count of the prompt against what was estimated for it, in
+ * both directions, with a tenth of margin kept and never below MIN_CONTEXT_SCALE. `estimate` is the SCALED figure the
+ * request was fitted with, so `current * reported / estimate` is reported over the unscaled estimate. Pure.
+ */
+export function learnScale(current: number, reportedPromptTokens: number | undefined, estimate: number): number {
+  if (!reportedPromptTokens || !(estimate > 0)) return current;
+  return Math.max(MIN_CONTEXT_SCALE, (current * reportedPromptTokens / estimate) * 1.1);
+}
+
+/**
+ * `max_tokens` for a request: what is left of the window after the request itself, within the model's own output limit.
+ * Not a fixed share of the window, which cut a long answer short on a request that left far more room than that.
+ */
+export function outputRoom(window: number, requestTokens: number, ceiling?: number): number {
+  const left = window - requestTokens - Math.max(128, Math.ceil(window * 0.05));
+  return Math.max(128, Math.min(ceiling ?? DEFAULT_OUTPUT_CEILING, left));
 }
 
 function excerpt(text: string, limit: number, reference: string): string {
@@ -107,10 +130,12 @@ export function fitContext(input: {
   system: string; items: readonly ConversationItem[]; tools: readonly ToolSpec[];
   window?: number; outputReserve?: number; scale?: number; maxItems?: number; requiredTools?: readonly string[];
 }): ContextView {
-  const window = input.window && input.window > 0 ? input.window : UNKNOWN_CONTEXT_WINDOW;
+  // A window nobody reported is a guess, and the guess is never a reason to refuse: the server knows its own limit.
+  const windowKnown = Boolean(input.window && input.window > 0);
+  const window = windowKnown ? input.window! : UNKNOWN_CONTEXT_WINDOW;
   const reserve = input.outputReserve ?? responseReserve(window);
   const budget = Math.max(0, window - reserve - Math.max(128, Math.ceil(window * 0.05)));
-  const scale = Math.max(1, input.scale ?? 1);
+  const scale = Math.max(MIN_CONTEXT_SCALE, input.scale ?? 1);
   const cost = (items: readonly ConversationItem[], tools: readonly ToolSpec[]) => Math.ceil(estimateRequestTokens(input.system, items, tools) * scale);
   const maxItems = input.maxItems ?? 1_500;
   const initial = cost(input.items, input.tools);
@@ -184,7 +209,7 @@ export function fitContext(input: {
     selected.delete(group);
     view = materialize(limit);
   }
-  if (cost(view.items, view.tools) > budget || view.items.length > maxItems) throw new ContextFitError(cost(view.items, view.tools) + reserve, window);
+  if (windowKnown && (cost(view.items, view.tools) > budget || view.items.length > maxItems)) throw new ContextFitError(cost(view.items, view.tools) + reserve, window);
   // Incremental costs avoid serializing the whole selected history for
   // every candidate. The final request is materialized only once.
   let used = cost(view.items, view.tools);

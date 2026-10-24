@@ -7,7 +7,7 @@ import { visibleTools } from './permissions.js';
 import { completedArguments } from './models/openai-client.js';
 import { thoughtLabel } from '../harness/protocol/activity-events.js';
 import { estimateContextTokens } from './context.js';
-import { ContextFitError, fitContext, responseReserve, UNKNOWN_CONTEXT_WINDOW, type ContextView } from './context-view.js';
+import { ContextFitError, fitContext, learnScale, outputRoom, responseReserve, UNKNOWN_CONTEXT_WINDOW, type ContextView } from './context-view.js';
 import { classifyModelError, modelStartWaitSeconds, pause, retryDelaySeconds, startMayContinue, STEP_RETRY_BUDGET_SECONDS, stepRecovery } from './turn-recovery.js';
 import { abortable, categoryForTool, withUniqueIds } from './turn-support.js';
 import { recordUsage } from './usage.js';
@@ -65,7 +65,8 @@ export async function runModelStep(rt: TurnRuntime, modelClient: ModelClient, sy
     // Said once per step that left something out, with the numbers: a refused or trimmed view is otherwise only knowable from a transcript.
     if (view.omittedGroups > 0) lifecycle('turn.context', { window: rt.contextWindow, tokens: view.estimatedTokens, omitted: view.omittedGroups, scale: rt.contextScale });
     step = await abortable(modelClient.step({
-      system, items: view.items, signal, tools: view.tools, maxOutputTokens: outputReserve,
+      system, items: view.items, signal, tools: view.tools,
+      maxOutputTokens: outputRoom(rt.contextWindow ?? UNKNOWN_CONTEXT_WINDOW, view.estimatedTokens),
       ...(finalOnly ? { toolChoice: 'none' as const } : {}),
       onTextDelta: (text) => {
         if (!text || signal?.aborted) return;
@@ -254,11 +255,10 @@ export async function recordStep(
   if (produced.length) await rt.append(...produced);
 
   rt.ledger = recordUsage(rt.ledger, step.usage);
-  // Learn tokenizer/template overhead from real usage, conservatively. The
-  // full transcript remains the source for subsequent views and model switches.
-  if (step.usage?.input && rt.lastRequestEstimate > 0) {
-    rt.contextScale = Math.max(rt.contextScale, rt.contextScale * step.usage.input / rt.lastRequestEstimate);
-  }
+  // Learn the estimate's error from what the provider counted, in BOTH directions: the cautious estimate over-counted
+  // by a third and, kept one-way, refused turns that fit. A tenth of margin stays on what is learned; a request the
+  // server still refuses is refitted smaller (the context-pressure recovery below), so the server is the authority.
+  rt.contextScale = learnScale(rt.contextScale, step.usage?.input, rt.lastRequestEstimate);
   rt.lastStepUsage = step.usage;
   rt.itemsAtLastUsage = rt.items.length;
   rt.contextWindow = step.contextWindow ?? rt.contextWindow;

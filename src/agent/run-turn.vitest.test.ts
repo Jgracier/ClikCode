@@ -690,7 +690,8 @@ describe('runAgentLoop', () => {
     const bash = results[1].type === 'tool_result' ? results[1].output : '';
     expect(Buffer.byteLength(bash)).toBeLessThanOrEqual(8 * 1024 + 300);
     expect(bash).toMatch(/^1\n2\n/);
-    expect(bash).toMatch(/read_context source=tool id="b"/);
+    // Either the view excerpted it (a read_context pointer) or it fit whole and the tool's own note says where the log went.
+    expect(bash).toMatch(/read_context source=tool id="b"|[Ff]ull output saved/);
     const stored = await new ConversationStore(stateDir, h.input.sessionId).load();
     expect(stored.find((item) => item.type === 'tool_result' && item.id === 'b')).toMatchObject({ output: expect.stringMatching(/[Ff]ull output saved (?:to|at) .*\.(?:log|txt)/) });
     expect(bash).toMatch(/20000$/);

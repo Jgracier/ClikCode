@@ -1,4 +1,4 @@
-import { ContextFitError, estimateRequestTokens, responseReserve } from '../context-view.js';
+import { estimateRequestTokens, outputRoom } from '../context-view.js';
 /** ModelClient for any OpenAI-compatible server (llama.cpp's llama-server,
  * vLLM, OpenAI itself, most hosted providers):
  * `POST {baseUrl}/v1/chat/completions` with `stream: true`. */
@@ -333,17 +333,15 @@ export class OpenAIModelClient implements ModelClient {
 
   private get label(): string { return this.options.label ?? 'The model server'; }
 
-  /** `max_tokens` for this request: the model's own limit, or less when the
-   * prompt leaves less than that of the window. */
+  /** `max_tokens` for this request: the room the caller worked out, within the model's own limit. The caller (the
+   * agent loop) has already fitted the request to the window; this does not judge it again and refuse. A caller that
+   * worked out no room gets what is left of the window. */
   private maxTokens(request: ModelStepRequest): number | undefined {
+    const ceiling = this.options.maxOutputTokens;
+    if (request.maxOutputTokens !== undefined) return Math.min(request.maxOutputTokens, ceiling ?? Infinity);
     const window = this.servedWindow ?? this.options.contextWindow;
-    const limit = request.maxOutputTokens === undefined ? this.options.maxOutputTokens
-      : Math.min(request.maxOutputTokens, this.options.maxOutputTokens ?? Infinity);
-    if (!window) return limit;
-    const reserve = responseReserve(window, limit);
-    const input = estimateRequestTokens(request.system, request.items, request.tools);
-    if (input + reserve + Math.max(128, Math.ceil(window * 0.05)) > window) throw new ContextFitError(input + reserve, window);
-    return reserve;
+    if (!window) return ceiling;
+    return outputRoom(window, estimateRequestTokens(request.system, request.items, request.tools), ceiling);
   }
 
   private describe(message: string, details: { status?: number; code?: string; retryAfter?: number }): string {
