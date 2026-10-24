@@ -29,6 +29,7 @@ import { stateDirectory } from '../session/store/paths.js';
 import { maxPromptArgvBytes, nativeHarnessTurnArgv, promptExceedsArgvLimit } from '../runtime/lazy-bridge.js';
 import { vendorBackgroundTurnHandlerFor } from './vendor-process.js';
 import { turnCancelledError } from '../agent/cancellation.js';
+import { turnPermissionMode } from './turn-permission.js';
 
 function insideGitRepository(folder: string): boolean {
   for (let directory = resolve(folder); ; directory = dirname(directory)) {
@@ -88,7 +89,7 @@ export async function runVendorCliAttempt(input: {
   const argv = nativeHarnessTurnArgv(harness, {
     prompt: turnText, nativeSessionId: session.nativeSessionId, createdHere,
     model, workspace: session.workspace, effort,
-    permissionMode: session.permissionMode ?? 'ask', images, options: session.harnessOptions,
+    permissionMode: turnPermissionMode(harness, session.permissionMode), images, options: session.harnessOptions,
   });
   if (turn.outsideRepoArgv && !insideGitRepository(session.workspace ?? process.cwd())) argv.unshift(...turn.outsideRepoArgv);
   // Persist an allocated native identity before the provider starts so an

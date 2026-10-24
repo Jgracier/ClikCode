@@ -12,6 +12,7 @@ import { signInForTurn } from './vendor-sign-in.js';
 import { openFailoverStandby } from './vendor-standby.js';
 import type { VendorObserver, VendorTransport } from './vendor-observer.js';
 import { turnEffort, type VendorTurnContext } from './vendor-turn-context.js';
+import { turnPermissionMode } from './turn-permission.js';
 
 /** What an attempt did, for the recovery or the completion that follows it. */
 export interface AttemptRecord {
@@ -32,7 +33,7 @@ export interface AttemptRecord {
  * servers, skills and hooks are the vendor's: nothing is written into them. */
 async function prepareAttempt(ctx: VendorTurnContext) {
   const { harness, session } = ctx;
-  const environment = turnEnvironment(harness, ctx.account, session.permissionMode ?? 'ask');
+  const environment = turnEnvironment(harness, ctx.account, turnPermissionMode(harness, session.permissionMode));
   // A provider with no signed-in account is signed in to when it is used
   // -- here, as its turn starts -- never when it is merely chosen (opening
   // ClikCode picks one without asking anything).

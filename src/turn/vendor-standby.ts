@@ -9,6 +9,7 @@ import { turnEnvironment } from './turn-environment.js';
 import { prepareAcpStandby, prepareCodexStandby } from './vendor-session-attempt.js';
 import type { VendorTransport } from './vendor-observer.js';
 import { turnEffort, type VendorTurnContext } from './vendor-turn-context.js';
+import { turnPermissionMode } from './turn-permission.js';
 
 /** How much of a window an account has used before a turn on it opens a
  * standby for the account a failover would move to: a second vendor child
@@ -63,7 +64,7 @@ export async function openFailoverStandby(ctx: VendorTurnContext, transport: Ven
   if (!next || !threadReady) return;
   const standbyFor = next;
   attempt.threadCopiedTo = next.id;
-  const permission = session.permissionMode ?? 'ask';
+  const permission = turnPermissionMode(harness, session.permissionMode);
   void (async () => {
     lifecycle('worker.standby', { harness: harness.command, account: standbyFor.id.slice(0, 8), process: persistentStandby });
     if (!persistentStandby) return;

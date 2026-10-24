@@ -25,8 +25,8 @@ import { stateDirectory } from '../session/store/paths.js';
 import { beginTurnClock, currentTurnId, endTurnClock, markTurn, setTurnHarness } from '../runtime/turn-latency.js';
 import { randomUUID } from 'node:crypto';
 import { homedir, hostname } from 'node:os';
-import { writeState } from '../session/state/write.js';
-import { harnessSupportsPermissionMode, localHarnessForCommand } from '../runtime/lazy-bridge.js';
+import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
+import { turnPermissionMode } from './turn-permission.js';
 import { folderExists, missingFolderMessage } from '../runtime/machine-folder.js';
 import { movedChatMessage } from '../session/move-chat.js';
 
@@ -74,6 +74,9 @@ export interface AccountTurnInput {
 
 const MAX_TURN_HANDOFFS = 8;
 
+/** Chats told this process that Bypass is not available here (runSessionTurn). */
+const toldBypassDowngrade = new Set<string>();
+
 export async function runSessionTurn(
   config: Conf, id: string, prompt: string, signal?: AbortSignal, run: TurnRunOptions = {},
 ): Promise<void> {
@@ -97,13 +100,15 @@ export async function runSessionTurn(
     throw new Error(`${missingFolderMessage(session.workspace)}. Open the chat again to continue it in ${homedir()}.`);
   }
   // A mode the harness refuses on this machine (Claude Code's bypass as root) is not sent to fail
-  // the turn: the chat goes on in auto, and is told so once.
+  // the turn: the turn runs with the nearest mode it takes (turn-permission.ts), the chat keeps what
+  // was chosen, and the user is told once per chat in this process.
   const harness = !isClikCodeAgent(session) && session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
-  if (harness?.bypassRefusedAsRoot && session.permissionMode === 'bypass' && !harnessSupportsPermissionMode(harness, 'bypass')) {
-    session.permissionMode = harnessSupportsPermissionMode(harness, 'auto') ? 'auto' : 'ask';
-    session.updatedAt = new Date().toISOString();
-    await writeState(state);
-    run.prompter?.activity(`Bypass is not available for ${harness.displayName} running as root on ${hostname()}; this chat now uses ${session.permissionMode === 'auto' ? 'Auto' : 'Ask'}.`);
+  if (harness && session.permissionMode === 'bypass') {
+    const used = turnPermissionMode(harness, session.permissionMode);
+    if (used !== 'bypass' && !toldBypassDowngrade.has(session.id)) {
+      toldBypassDowngrade.add(session.id);
+      run.prompter?.activity(`Bypass is not available for ${harness.displayName} running as root on ${hostname()}; this turn uses ${used === 'auto' ? 'Auto' : 'Ask'}. The chat keeps Bypass.`);
+    }
   }
   setTurnHarness(session.nativeHarness ?? session.route);
   // A session that left ClikCode Local lets go of the model this process
