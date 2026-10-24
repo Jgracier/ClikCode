@@ -155,11 +155,34 @@ export async function moveChat(source: MoveEnd, target: MoveEnd, sessionId: stri
     chat = await source.call<ChatExport | PackedChat>({ type: 'export-chat', sessionId, ...(pack ? { pack } : {}) });
     imported = await target.call<ImportResult>({ type: 'import-chat', chat, names });
   }
-  await source.call({ type: 'mark-moved', sessionId: chat.sessionId, movedTo: { machine: target.name, installationId: imported.installationId, sessionId: imported.sessionId } });
+  await markMovedWithRetry(source, chat.sessionId, { machine: target.name, installationId: imported.installationId, sessionId: imported.sessionId }, target.name);
   return {
     moved: true, sessionId: imported.sessionId, folder: imported.folder, changes: imported.changes,
     reused: chat.base?.messages ?? 0, sent: 'packed' in chat ? chat.count : chat.messages.length,
   };
+}
+
+/** How many times, and how long apart, marking the old copy moved is tried. */
+const MARK_MOVED_PAUSES_MS: readonly number[] = [0, 500, 2_000];
+
+/** The third step of a move. The chat is already on the target, so a failure here leaves two
+ * writable copies: marking is idempotent (session/move.ts markMoved, the same answer however
+ * often it is asked), so it is tried again, and when it still cannot be done the error says
+ * exactly that state and which copy to use. (A move is still three calls: making it one atomic
+ * request needs a new bridge revision.) */
+async function markMovedWithRetry(source: MoveEnd, sessionId: string, movedTo: Omit<ChatMovedTo, 'at'>, targetName: string): Promise<void> {
+  let failure: unknown;
+  for (const pause of MARK_MOVED_PAUSES_MS) {
+    if (pause) await new Promise<void>((resolve) => { setTimeout(resolve, pause); });
+    try {
+      await source.call({ type: 'mark-moved', sessionId, movedTo });
+      return;
+    } catch (error) {
+      failure = error;
+    }
+  }
+  const cause = failure instanceof Error ? failure.message : String(failure);
+  throw new Error(`The chat is on ${targetName}, but its copy on ${source.name} could not be marked as moved: ${cause}\nBoth copies are still writable: carry on in the copy on ${targetName} and leave this one alone.`);
 }
 
 function validHave(have: unknown): have is ChatHave {
