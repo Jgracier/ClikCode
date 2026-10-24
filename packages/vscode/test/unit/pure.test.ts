@@ -255,6 +255,18 @@ describe('chat model', () => {
     expect(unsaid.notes.map((note) => note.text)).toEqual(['boom']);
   });
 
+  it('keeps a GPU model\'s whole refusal: the remedy at the end of a long message is the useful part', () => {
+    // The Gateway/planner wording for a model no machine on offer can hold, past the old 200-character cut.
+    const message = "'FINAL-Bench/POCKET-Darwin-180B-GGUF' needs ~154GB VRAM — larger than the biggest machine available now (96GB across 4 GPUs). This model is only published at this size; it needs a machine with at least 154GB of GPU memory.";
+    expect(message.length).toBeGreaterThan(200);
+    const model = run([worker({ type: 'turn-error', message })]);
+    expect(model.notes.map((note) => note.text)).toEqual([message]);
+    // A runaway message is still bounded (the note wraps, so this caps a flood, not a row).
+    const flood = run([worker({ type: 'turn-error', message: `Error: ${'x'.repeat(5000)}` })]);
+    expect(flood.notes[0]!.text.length).toBeLessThanOrEqual(600);
+    expect(flood.notes[0]!.text.endsWith('…')).toBe(true);
+  });
+
   it('never shows what ClikCode queued for the model: not as a queued row, not as a message', () => {
     const model = run([{ type: 'session', session: session({
       queuedTurns: [{ id: 'n', text: '[background shell 2 exited (code 0)] npm test\nok', submittedAt: '', kind: 'notification' }],
