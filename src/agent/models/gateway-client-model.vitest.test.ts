@@ -124,15 +124,15 @@ describe('a Gateway step', () => {
     });
   });
 
-  it('asks for the model\'s output limit and stays inside the Gateway\'s request limits', async () => {
+  it('asks for the model\'s output limit and sends every tool and the whole system prompt', async () => {
     const fetchImpl = vi.fn(async () => finished());
     const tools = Array.from({ length: 130 }, (_, index) => ({ name: `t${index}`, description: 'd', parameters: { type: 'object' } }));
     await gatewayModelClient({ baseUrl: 'https://g', apiKey: 'k', maxOutput: 32_000, contextWindow: 131_072, fetchImpl: fetchImpl as never })
       .step({ ...(step as object), tools, system: 'x'.repeat(70 * 1024) } as never);
     const body = sent(fetchImpl).body as { max_tokens?: number; tools: unknown[]; messages: Array<{ content: string }> };
     expect(body.max_tokens).toBe(32_000);
-    expect(body.tools).toHaveLength(128);
-    expect(Buffer.byteLength(body.messages[0]!.content)).toBeLessThanOrEqual(64 * 1024);
+    expect(body.tools).toHaveLength(130);
+    expect(Buffer.byteLength(body.messages[0]!.content)).toBe(70 * 1024);
   });
 
   it('says what to do about each of the Gateway\'s refusals', async () => {
