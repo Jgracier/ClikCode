@@ -601,6 +601,12 @@ function usageFrom(raw: Record<string, unknown>): TokenUsage {
   const cost = numberOf(raw.cost);
   const upstream = numberOf(costDetails.upstream_inference_cost);
   if (cost !== undefined || upstream !== undefined) out.costMicroUsd = Math.round(((cost ?? 0) + (upstream ?? 0)) * 1_000_000);
+  // The server's split of that cost; an older server sends none, and a malformed one is ignored.
+  const split = raw.cost_breakdown && typeof raw.cost_breakdown === 'object' ? raw.cost_breakdown as Record<string, unknown> : {};
+  const metered = numberOf(split.metered);
+  const gpu = numberOf(split.gpu);
+  if (metered !== undefined && metered >= 0) out.meteredMicroUsd = Math.round(metered * 1_000_000);
+  if (gpu !== undefined && gpu >= 0) out.gpuMicroUsd = Math.round(gpu * 1_000_000);
   if (input !== undefined) out.input = input;
   if (output !== undefined) out.output = output;
   if (cached !== undefined) out.cached = cached;

@@ -60,6 +60,12 @@ export function agentTurnUsage(report: TokenUsage & Partial<UsageReport>): TurnU
   if (report.cacheWrite !== undefined) usage.cacheWrite = report.cacheWrite;
   if (report.reasoning !== undefined) usage.reasoning = report.reasoning;
   if (report.costMicroUsd !== undefined) usage.costUsd = report.costMicroUsd / 1_000_000;
+  if (report.meteredMicroUsd !== undefined || report.gpuMicroUsd !== undefined) {
+    usage.costBreakdown = {
+      ...(report.meteredMicroUsd !== undefined ? { meteredUsd: report.meteredMicroUsd / 1_000_000 } : {}),
+      ...(report.gpuMicroUsd !== undefined ? { gpuUsd: report.gpuMicroUsd / 1_000_000 } : {}),
+    };
+  }
   if (report.contextWindow !== undefined) usage.contextWindow = report.contextWindow;
   if (report.contextTokens !== undefined) usage.contextUsed = report.contextTokens;
   const stopReason = turnStopReason(report.stopReason);

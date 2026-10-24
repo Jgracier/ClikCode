@@ -16,6 +16,9 @@ export interface TokenUsage {
   cacheWrite?: number;
   reasoning?: number;
   costMicroUsd?: number;
+  /** Of the cost, what the metered model and the GPU time were (the Gateway's `cost_breakdown`). */
+  meteredMicroUsd?: number;
+  gpuMicroUsd?: number;
 }
 
 /** An image the user attached, carried inline so a resumed conversation can

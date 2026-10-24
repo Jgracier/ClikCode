@@ -18,7 +18,7 @@ import { claudeToolName } from './hooks.js';
 const SUBAGENT_TOOL_NAMES: ReadonlySet<string> = new Set(['read_file', 'list_dir', 'glob', 'grep', 'lsp', 'web_fetch', 'web_search', 'list_mcp_resources', 'read_mcp_resource']);
 const WORK_BLOCKED_TOOL_NAMES: ReadonlySet<string> = new Set(['task', 'agent', 'agent_send', 'agent_wait', 'ask_user', 'exit_plan_mode', 'enter_plan_mode', 'list_agents', 'monitor', 'schedule_wakeup']);
 
-const USAGE_FIELDS = ['input', 'output', 'cached', 'cacheWrite', 'reasoning', 'costMicroUsd'] as const;
+const USAGE_FIELDS = ['input', 'output', 'cached', 'cacheWrite', 'reasoning', 'costMicroUsd', 'meteredMicroUsd', 'gpuMicroUsd'] as const;
 
 interface SubagentRequest extends SubagentCall {
   /** The parent's task call, which the sub-agent's activity nests under. */
