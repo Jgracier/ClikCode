@@ -219,6 +219,8 @@ export interface HarnessSession {
    * provider retry cannot accidentally submit the same user prompt twice. */
   pendingTurn?: {
     prompt: string;
+    /** What the turn is waiting on while it makes no output by design: a private model finding a server or loading ('finding a server', 'starting model'). Gone with the first output. */
+    waitingOn?: string;
     /** Read only, from a turn an older build journaled before it was interrupted (TranscriptMessage.automatic). */
     automatic?: string;
     /** The files attached to this request (`attachments` when it began). */

@@ -1,5 +1,6 @@
 /** The waiting-turn state machine: starting and stopping a turn or other wait, the tick and clock, queued and steered submissions, and taking a message back. */
 import { lifecycle } from '../../runtime/lifecycle-log.js';
+import { isModelStartPhase } from '../../harness/protocol/turn-pace.js';
 import { editWaitingComposer } from '../composer-edit.js';
 import { completedCommandLine } from '../command-palette.js';
 import { stdin as input, stdout as output } from 'node:process';
@@ -502,7 +503,10 @@ export function vendorAnswered(this: TerminalHarnessPrompter): void {
 
 export function phase(this: TerminalHarnessPrompter, message: string): void {
   const turn = this.turn;
-  if (!turn || turn.cancelled || turn.label === message) return;
+  if (!turn || turn.cancelled) return;
+  // A model finding a server or loading is progress, reported every second: the turn is not quiet.
+  if (isModelStartPhase(message)) turn.activeAt = Date.now();
+  if (turn.label === message) return;
   // The band says "waiting for approval" while one is up; remember the phase
   // for when it is answered instead of replacing that.
   if (this.pendingApproval) { if (!isApprovalWaitPhase(message)) this.approvalRestoreLabel = message; return; }

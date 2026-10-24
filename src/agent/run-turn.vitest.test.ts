@@ -725,6 +725,26 @@ describe('runAgentLoop', () => {
     ]);
   });
 
+  it("says a private model is finding a server from the start of the turn, not 'thinking'", async () => {
+    const phases: string[] = [];
+    const h = harness([{ text: 'answered' }], { onPhase: (phase) => phases.push(phase) });
+    const asked = vi.fn(async () => ({ phase: 'finding-server' as const }));
+    Object.assign(h.client, { startStatus: asked });
+    const result = await runAgentLoop(h.input);
+    expect(result.stopReason).toBe('completed');
+    expect(asked).toHaveBeenCalledTimes(1);
+    // The band shows the last thing said: the start's status lands after the loop's generic 'thinking'.
+    expect(phases.lastIndexOf('Finding an available server')).toBeGreaterThan(phases.lastIndexOf('thinking'));
+  });
+
+  it("asks once per turn and says nothing extra when the model is up", async () => {
+    const phases: string[] = [];
+    const h = harness([{ text: 'answered' }], { onPhase: (phase) => phases.push(phase) });
+    Object.assign(h.client, { startStatus: vi.fn(async () => undefined) });
+    await runAgentLoop(h.input);
+    expect(phases.some((phase) => /Finding an available server|Starting model/.test(phase))).toBe(false);
+  });
+
   it("does not compact a long history that fits the window the model client reports", async () => {
     // ~250k tokens already in the conversation (a switch onto a Gateway model seeds it): past the
     // 128k default's threshold, well inside the 1M window this client reports.
