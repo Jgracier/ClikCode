@@ -44,7 +44,7 @@ export async function turnFailureEffect(
   const next = await afterTurnFailure(terminal, id, error, { ...failed, guard });
   // A stopped turn ends on its own "Stopped" row; nothing more is said.
   if (next.cancelled && terminal) return {};
-  if (!terminal) { emitHarnessOutput({ panel: 'error', message: failureLine(message) }); return {}; }
+  if (!terminal) { emitHarnessOutput({ panel: 'error', message: failureLine(message, FAILURE_NOTE_LIMIT) }); return {}; }
   if ('retry' in next) return { resend: next.retry };
   if ('moved' in next) return { id: next.moved.id, resend: next.moved.prompt };
   if (next.waiting) {

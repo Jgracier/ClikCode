@@ -2,7 +2,7 @@
 import { asFileDiffs } from '../../../../src/agent/line-diff';
 import { backgroundWorkOf } from '../../../../src/harness/protocol/background-agents';
 import { isApprovalWaitPhase } from '../../../../src/harness/protocol/turn-flow';
-import { failureLine } from '../../../../src/harness/protocol/stderr-line';
+import { FAILURE_NOTE_LIMIT, failureLine } from '../../../../src/harness/protocol/stderr-line';
 import { isUsageExhaustedMessage } from '../../../../src/turn/usage-exhausted';
 import { noticeLevel, stripAnsi } from '../text';
 import type { WorkerEvent } from '../protocol';
@@ -136,7 +136,8 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
     case 'turn-error': {
       // The turn's own note already says it.
       if (event.said) return model;
-      const msg = failureLine(stripAnsi(event.message));
+      // The same bound the terminal's note keeps: the notice wraps, so it is a cap on a runaway message, not a row width.
+      const msg = failureLine(stripAnsi(event.message), FAILURE_NOTE_LIMIT);
       // Exhaustion is an outcome, not a fault — show it as informational chat
       // text rather than a red error banner so it reads as part of the flow.
       const exhausted = isUsageExhaustedMessage(msg);
