@@ -12,10 +12,18 @@
  * (harness/transport/background-turn.ts) -- the same surface Codex and ACP
  * use for work they do between turns. The process is let go when:
  *  - its tasks are done and Claude has said what it had to (settled),
- *  - the next turn waits for its subagents and their follow-up, then closes
- *    stdin (`releaseHeldVendorProcess`); an independent background shell may
- *    still be stopped on exit,
+ *  - the next turn on the same account waits for its subagents and their
+ *    follow-up, then closes stdin (`releaseHeldVendorProcess`); an independent
+ *    background shell may still be stopped on exit,
+ *  - the conversation moves on (another account or harness, or the reply that
+ *    started it failed) with subagents still running: the process is RETIRED
+ *    (`retireHeldVendorProcess`). Nothing waits on it and nothing kills it; its
+ *    subagents run on and each one's end is told to the conversation, stdin
+ *    closing once the last has ended,
  *  - the process exits, or the user stops it.
+ *
+ * No timer decides when a subagent has run long enough: its end is the
+ * vendor's `task_notification`, the process exiting, or the user's Stop.
  *
  * One per ClikCode session. */
 import { lifecycle } from '../../../runtime/lifecycle-log.js';
@@ -24,16 +32,21 @@ import type { HarnessTurnObserver } from '../../events/turn-observer.js';
 import type { BackgroundWait } from './background-wait.js';
 import type { ReleasedTurnExit } from './turn.js';
 import { turnCancelledError } from '../../../agent/cancellation.js';
+import { agentResult, limitSentence, type EndedWork, type RunningWork } from '../handoff-work.js';
 
 type Json = Record<string, unknown>;
 
-/** How long a new turn waits for a held process to exit before stopping it. */
+/** How long a process whose stdin was closed (it said it had nothing left) gets to exit before it is ended. */
 const RELEASE_WAIT_MS = 5 * 60 * 1000;
 /** How long a process the user stopped gets to exit on its own. */
 const STOP_WAIT_MS = 2_000;
 
+export interface HeldOwner { harness?: string; accountId?: string }
+
 interface HeldVendorOptions {
   sessionId: string;
+  /** The harness and account the process runs as: a turn on another one leaves it (retireHeldVendorProcess). */
+  owner?: HeldOwner;
   background: BackgroundWait;
   /** Close the vendor's stdin. */
   endInput(): void;
@@ -53,20 +66,35 @@ export interface HeldVendor {
   quiet(): void;
   /** Whether a subagent or its follow-up is still running. */
   readonly agentWork: boolean;
+  readonly owner: HeldOwner | undefined;
+  /** The subagents still running. */
+  agents(): RunningWork[];
+  /** The conversation leaves this process with subagents still running: it takes no more turns and
+   * says nothing more into the conversation, its subagents run on, and each one's end goes to
+   * `onEnded`. False when none is running (the caller waits for the follow-up and releases it). */
+  retire(onEnded: (ended: EndedWork[]) => void): boolean;
+  /** Whether it has been retired. */
+  readonly retired: boolean;
   /** End it: close stdin and wait for the exit (bounded; then stopped).
    * `stop`: the user stopped it -- a moment to exit, then it is ended. */
   close(stop?: boolean): Promise<void>;
 }
 
 const held = new Map<string, HeldVendor>();
+/** Processes a conversation left with subagents still running in them. */
+const retiredHeld = new Map<string, Set<HeldVendor>>();
 /** Who is waiting for a session's held process to be gone (the worker's
  * idle exit). */
 const gone = new Map<string, Array<() => void>>();
 
 function forget(sessionId: string, vendor: HeldVendor): void {
-  if (held.get(sessionId) !== vendor) return;
-  held.delete(sessionId);
-  lifecycle('vendor.released');
+  if (held.get(sessionId) === vendor) {
+    held.delete(sessionId);
+    lifecycle('vendor.released');
+  }
+  const retired = retiredHeld.get(sessionId);
+  if (retired?.delete(vendor) && !retired.size) retiredHeld.delete(sessionId);
+  if (held.has(sessionId) || retiredHeld.has(sessionId)) return;
   for (const resolve of gone.get(sessionId)?.splice(0) ?? []) resolve();
 }
 
@@ -89,9 +117,55 @@ export function holdVendorProcess(options: HeldVendorOptions): HeldVendor | unde
     channel?.finish(ended);
     channel = undefined;
   };
+  /** Once retired: the subagents still running, and who is told of their end. */
+  let retiredAgents: Map<string, RunningWork> | undefined;
+  let inputEnded = false;
+  let told: ((ended: EndedWork[]) => void) | undefined;
+  const tell = (ended: EndedWork[]): void => {
+    if (!ended.length) return;
+    try { told?.(ended); } catch { /* fail-open-ok: the owner's bookkeeping */ }
+  };
+  /** A retired process's record: a subagent's end is told, with its result or the vendor's reason. */
+  const retiredRecord = (record: Json): void => {
+    if (record.type !== 'system' || record.subtype !== 'task_notification' || typeof record.task_id !== 'string') return;
+    const agent = retiredAgents?.get(record.task_id);
+    if (!agent) return;
+    retiredAgents!.delete(record.task_id);
+    const finished = record.status === 'completed' || record.status === undefined;
+    const summary = typeof record.summary === 'string' ? record.summary : '';
+    const limit = finished ? undefined : limitSentence(summary);
+    const file = typeof record.output_file === 'string' ? record.output_file : undefined;
+    void (async () => {
+      const tail = (finished ? await agentResult(file) : '') || summary;
+      tell([{ ...agent, outcome: finished ? 'finished' : 'cut-off', tail, ...(limit ? { limit } : {}) }]);
+    })().catch(() => undefined);
+  };
   const vendor: HeldVendor = {
     get agentWork() { return options.background.agentWork; },
+    owner: options.owner,
+    get retired() { return Boolean(retiredAgents); },
+    agents: () => retiredAgents ? [...retiredAgents.values()] : options.background.agents(),
+    retire(onEnded) {
+      if (closing || exited || retiredAgents) return false;
+      const running = options.background.agents();
+      if (!running.length) return false;
+      retiredAgents = new Map(running.map((agent) => [agent.id, agent]));
+      told = onEnded;
+      end('superseded');
+      if (held.get(options.sessionId) === vendor) held.delete(options.sessionId);
+      const set = retiredHeld.get(options.sessionId) ?? new Set<HeldVendor>();
+      set.add(vendor);
+      retiredHeld.set(options.sessionId, set);
+      lifecycle('vendor.held.retired', { agents: running.length });
+      return true;
+    },
     line(text, record) {
+      if (retiredAgents) {
+        if (record) { retiredRecord(record); options.background.note(record); }
+        // The last subagent has ended and been told: nothing is left that the conversation waits on.
+        if (!retiredAgents.size && !inputEnded && !options.background.settled && options.background.quiet) { inputEnded = true; options.endInput(); }
+        return;
+      }
       if (!channel && !closing && record && opensBackgroundTurn(record) && !options.background.settled) {
         channel = new BackgroundTurnChannel('structured-cli', 'background-work');
         try { options.handler(channel); } catch { /* fail-open-ok: the owner's bookkeeping */ }
@@ -105,6 +179,7 @@ export function holdVendorProcess(options: HeldVendorOptions): HeldVendor | unde
     quiet() { end('completed'); },
     async close(stop = false) {
       closing = true;
+      retiredAgents = undefined;
       forget(options.sessionId, vendor);
       end('superseded');
       options.endInput();
@@ -124,6 +199,10 @@ export function holdVendorProcess(options: HeldVendorOptions): HeldVendor | unde
   const released = options.release.release(() => {
     exited = true;
     end(options.background.settled ? 'completed' : 'closed');
+    // Retired, and the process went: what it still ran went with it.
+    const lost = [...retiredAgents?.values() ?? []];
+    retiredAgents = undefined;
+    tell(lost.map((agent): EndedWork => ({ ...agent, outcome: 'cut-off', tail: 'The process running it ended before it finished.' })));
     forget(options.sessionId, vendor);
     resolveExit();
   });
@@ -148,10 +227,26 @@ export async function releaseHeldVendorProcess(sessionId: string): Promise<boole
 /** The user stopped this session's background work: end the held process
  * now, its tasks with it. */
 export async function stopHeldVendorProcess(sessionId: string): Promise<boolean> {
-  const vendor = held.get(sessionId);
-  if (!vendor) return false;
-  await vendor.close(true);
-  return true;
+  const vendors = [held.get(sessionId), ...retiredHeld.get(sessionId) ?? []].filter((vendor): vendor is HeldVendor => Boolean(vendor));
+  await Promise.all(vendors.map((vendor) => vendor.close(true)));
+  return vendors.length > 0;
+}
+
+/** The held process of this session, if any (not a retired one). */
+export function heldVendorOwner(sessionId: string): HeldOwner | undefined {
+  return held.get(sessionId)?.owner;
+}
+
+/** Retire the held process (HeldVendor.retire): false when it runs no subagent. */
+export function retireHeldVendorProcess(sessionId: string, onEnded: (ended: EndedWork[]) => void): boolean {
+  return held.get(sessionId)?.retire(onEnded) ?? false;
+}
+
+/** How many subagents this session's retired processes still run. */
+export function retiredHeldAgentCount(sessionId: string): number {
+  let count = 0;
+  for (const vendor of retiredHeld.get(sessionId) ?? []) count += vendor.agents().length;
+  return count;
 }
 
 /** Whether a finished turn left a process running for this session. */
@@ -163,7 +258,7 @@ export function hasHeldVendorProcess(sessionId: string): boolean {
  * the worker waits on this rather than idling out under a vendor that is
  * still finishing work it was asked to do. */
 export function whenHeldVendorGone(sessionId: string): Promise<void> {
-  if (!held.has(sessionId)) return Promise.resolve();
+  if (!held.has(sessionId) && !retiredHeld.has(sessionId)) return Promise.resolve();
   return new Promise((resolve) => {
     const waiting = gone.get(sessionId) ?? [];
     waiting.push(resolve);
@@ -171,17 +266,14 @@ export function whenHeldVendorGone(sessionId: string): Promise<void> {
   });
 }
 
-/** Before the next prompt or account copy, let a held Claude subagent finish
- * in the process that owns it. A background shell may be released normally.
- * True once none is running; false when `ceilingMs` passed first (the caller
- * decides what becomes of them: turn-steps.ts settleHeldVendor). */
-export async function waitForHeldVendorSubagents(sessionId: string, signal?: AbortSignal, ceilingMs = Number.POSITIVE_INFINITY): Promise<boolean> {
-  const until = Date.now() + ceilingMs;
+/** Before the next prompt on the same account, let a held Claude subagent finish in the process
+ * that owns it. A background shell may be released normally. Ends when the vendor reports none
+ * running (or the process exits); a stop (`signal`) throws. No clock: a turn that must not wait
+ * retires the process instead (retireHeldVendorProcess). */
+export async function waitForHeldVendorSubagents(sessionId: string, signal?: AbortSignal): Promise<void> {
   while (held.get(sessionId)?.agentWork) {
     if (signal?.aborted) throw turnCancelledError();
-    if (Date.now() >= until) return false;
-    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(200, Math.max(0, until - Date.now()))));
+    await new Promise<void>((resolve) => setTimeout(resolve, 200));
   }
   if (signal?.aborted) throw turnCancelledError();
-  return true;
 }

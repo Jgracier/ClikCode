@@ -39,6 +39,7 @@
  */
 
 import { BackgroundWorkTracker } from '../background-work.js';
+import type { RunningWork } from '../handoff-work.js';
 
 type Json = Record<string, unknown>;
 
@@ -49,6 +50,8 @@ export interface BackgroundWait {
   noteInput(): void;
   /** Main-agent background tasks still running. */
   readonly pending: number;
+  /** The Agent tasks still running. */
+  agents(): RunningWork[];
   /** An Agent task, or the follow-up turn owed after one finished. */
   readonly agentWork: boolean;
   /** Whether stdin is to be held open right now. */
@@ -139,6 +142,7 @@ export function createBackgroundWait(options: BackgroundWaitOptions): Background
       turnOpen = true;
     },
     get pending() { return tasks.count(); },
+    agents: () => tasks.running('agent').map((task): RunningWork => ({ ...task, kind: 'agent' })),
     get agentWork() { return hadAgent && (agents.size > 0 || turnOpen || followUpOwed); },
     get settled() { return settled; },
     get quiet() { return !turnOpen && !followUpOwed; },

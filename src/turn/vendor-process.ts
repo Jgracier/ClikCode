@@ -9,6 +9,7 @@ import type { AcpSession } from '../harness/transport/acp-client.js';
 import type { VendorBackgroundTurn, VendorBackgroundTurnHandler } from '../harness/transport/background-turn.js';
 import { outOfTurnRecorder } from './out-of-turn-record.js';
 import type { OutOfTurnRelay } from '../harness/transport/background-turn.js';
+import { retiredHeldAgentCount } from '../harness/transport/native/held-vendor.js';
 import type { EndedWork } from '../harness/transport/handoff-work.js';
 
 /** ACP `available_commands_update`, per ClikCode session, for the slash registry. */
@@ -140,6 +141,7 @@ async function retiredRunning(sessionId: string): Promise<PersistentTransport[]>
  * uses, or one it left: its worker stays up for it rather than ending it. */
 export async function persistentWorkRunning(sessionId: string): Promise<boolean> {
   if (await persistentTransports.get(sessionId)?.session.backgroundWorkRunning?.().catch(() => false)) return true;
+  if (retiredHeldAgentCount(sessionId) > 0) return true;
   return (await retiredRunning(sessionId)).length > 0;
 }
 
@@ -152,7 +154,7 @@ export function setRetiredWorkListener(sessionId: string, listener: RetiredWorkL
   else retiredWorkListeners.delete(sessionId);
 }
 /** Tell the listener what `sessionId`'s retired processes run now. */
-function retiredWorkChanged(sessionId: string): void {
+export function retiredWorkChanged(sessionId: string): void {
   const listener = retiredWorkListeners.get(sessionId);
   if (!listener) return;
   const work = { agents: 0, terminals: 0 };
@@ -160,6 +162,7 @@ function retiredWorkChanged(sessionId: string): void {
     work.agents += retired.session.retiredWork.agents;
     work.terminals += retired.session.retiredWork.terminals;
   }
+  work.agents += retiredHeldAgentCount(sessionId);
   try { listener(work); } catch { /* fail-open-ok: the owner's bookkeeping */ }
 }
 

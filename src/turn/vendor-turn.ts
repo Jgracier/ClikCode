@@ -44,21 +44,24 @@ async function settleThread(ctx: VendorTurnContext): Promise<void> {
 /** Everything before the first attempt: the thread and account the turn starts on. */
 async function startVendorTurn(ctx: VendorTurnContext): Promise<void> {
   const { session, harness, prompter, signal, checkpoint } = ctx;
-  // The old CLI finishes its Agent calls and their follow-up, and closing it
-  // flushes its thread before a new account reads the copy.
-  await settleHeldVendor(session.id, prompter, signal);
-  // Work a previous reply left running (a background command, a sub-agent) is not waited on: on
-  // this process it runs on beside this turn, and a process the conversation leaves keeps it, its
-  // end told to the account the conversation is on by then (handoff-work.ts).
+  // A background command a previous reply left runs on beside this turn; a process the conversation
+  // leaves keeps its work, the end told to the account the conversation is on by then (handoff-work.ts).
   // The thread goes with the conversation, as on a switch mid-turn; only
   // one that cannot be carried starts afresh.
   const returningThrough = restoreNativeThread(session, harness.command);
-  if (await ctx.accounts.start(async (to) => {
+  // The old CLI's Agent calls and their follow-up end before a turn on the same account reads
+  // its thread (closing it flushes the thread); a process the conversation is leaving (a
+  // spent account, another harness) is not waited on: its agents run on (settleHeldVendor).
+  const here = { harness: harness.command, accountId: ctx.account.id };
+  let settled = false;
+  const moved = await ctx.accounts.start(async (to) => {
+    settled = true;
+    await settleHeldVendor(session.id, prompter, signal, { to: { harness: harness.command, accountId: to.id } });
     await leavePersistentTransport(session.id);
     await moveThreadToAccount(session, harness, ctx.account, to);
-  })) {
-    await checkpoint.persistNow();
-  }
+  });
+  if (!settled) await settleHeldVendor(session.id, prompter, signal, { to: here });
+  if (moved) await checkpoint.persistNow();
   // Whoever chose this account and whenever, the thread has to be in its
   // profile before anything resumes it. One that cannot be carried is
   // forgotten here, so the line below takes the conversation up afresh.
