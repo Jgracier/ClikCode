@@ -25,6 +25,7 @@ import { hostname } from 'node:os';
 import Conf from 'conf';
 import { randomUUID } from 'node:crypto';
 import { readState } from '../session/state/read.js';
+import { onLockWait } from '../session/store/locks.js';
 import { writeState } from '../session/state/write.js';
 import { enqueueSessionTurn } from '../turn/checkpoint.js';
 import { setOutOfTurnHandler, setRetiredWorkListener, setVendorBackgroundTurnHandler, setWorkEndedHandler } from '../turn/vendor-process.js';
@@ -160,6 +161,8 @@ export async function runSessionWorker(sessionId: string, options: { warm?: bool
   setWorkEndedHandler(sessionId, createWorkEndedHandler(ctx));
   // -------------------------------------------------------------------------
   ctx.idle = createIdleControl(ctx);
+  // A wait on a lock long enough to notice is shown in the turn (and every window), naming who holds it.
+  onLockWait((message) => ctx.io.note(message));
 
   /** A wait an older build parked holds its continuation line, which is
    * never sent: the turn's own request is. */
