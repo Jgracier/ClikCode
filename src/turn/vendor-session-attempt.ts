@@ -21,6 +21,7 @@ import { harnessAcpLaunch, localHarnessCapabilityManifest } from '../runtime/laz
 import { closePersistentTransport, openStandby, persistentTransportFor, vendorChildKey } from './vendor-process.js';
 import { isTurnCancelled } from '../agent/cancellation.js';
 import { recordLiveModelCatalog } from '../harness/accounts/model-catalog.js';
+import { turnPermissionMode } from './turn-permission.js';
 
 const ignoredOptionsSaid = new Map<string, string>();
 
@@ -156,7 +157,7 @@ function acpLaunchInput(input: {
 }): Omit<AcpTurnInput, 'prompt'> {
   const { harness, account, session, model, effort, environment, checkpoint, prompter, live } = input;
   const declaredOptions = localHarnessCapabilityManifest(harness).options;
-  const launch = harnessAcpLaunch(harness, { model, effort, permissionMode: session.permissionMode ?? 'ask' });
+  const launch = harnessAcpLaunch(harness, { model, effort, permissionMode: turnPermissionMode(harness, session.permissionMode) });
   if (!launch) throw new Error(`${harness.displayName} does not declare an ACP launch`);
   // A harness whose plan mode is an ACP session mode (acp.planModeId) no longer takes it as a launch
   // option: a chat that stored the old option (Droid `spec-mode`, Cline/Command Code `plan`) keeps its
@@ -186,8 +187,8 @@ function acpLaunchInput(input: {
     argv: launch.modeArgv, optionPlacement: launch.optionPlacement,
     extraArgv: [...launch.optionArgv, ...optionArgv],
     ...(session.nativeSessionId ? { nativeSessionId: session.nativeSessionId } : {}),
-    cwd: session.workspace!, model, effort, permissionMode: session.permissionMode ?? 'ask',
-    ...(live ? { currentPermissionMode: async () => live.permissionMode } : {}),
+    cwd: session.workspace!, model, effort, permissionMode: turnPermissionMode(harness, session.permissionMode),
+    ...(live ? { currentPermissionMode: async () => live.permissionMode && turnPermissionMode(harness, live.permissionMode) } : {}),
     ...(additionalDirectories.length ? { additionalDirectories } : {}),
     acp: harness.acp,
     // Plan mode as an ACP session mode (catalog acp.planModeId); the
@@ -263,8 +264,8 @@ function codexLaunchInput(input: {
     unmapped: overrides.unmapped,
     input: {
       binary: harness.binary, nativeSessionId: session.nativeSessionId,
-      cwd: session.workspace!, model, effort, permissionMode: session.permissionMode ?? 'ask', environment,
-      ...(live ? { currentPermissionMode: async () => live.permissionMode } : {}),
+      cwd: session.workspace!, model, effort, permissionMode: turnPermissionMode(harness, session.permissionMode), environment,
+      ...(live ? { currentPermissionMode: async () => live.permissionMode && turnPermissionMode(harness, live.permissionMode) } : {}),
       ...(Object.keys(configOverrides).length ? { configOverrides } : {}),
       ...(overrides.extraThreadParams ? { extraThreadParams: overrides.extraThreadParams } : {}),
       // The account's own config is what Codex reads: global servers it already has there are not sent again.
