@@ -79,11 +79,12 @@ describe('the worker waiting for the reset', () => {
   const host = (overrides: { running?: () => boolean } = {}) => {
     const sent: string[] = [];
     const notices: string[] = [];
+    const restored: string[] = [];
     const waiter = createResumeWaiter({
       sessionId: 's1', turnRunning: overrides.running ?? (() => false),
-      send: (prompt) => sent.push(prompt), notice: (message) => notices.push(message), changed: () => undefined,
+      send: (prompt) => sent.push(prompt), notice: (message) => notices.push(message), restore: (prompt) => { restored.push(prompt); }, changed: () => undefined,
     });
-    return { waiter, sent, notices };
+    return { waiter, sent, notices, restored };
   };
 
   it('holds the parked turn until the reset, sends it once, and clears it first', async () => {
@@ -142,10 +143,12 @@ describe('the worker waiting for the reset', () => {
   it('stops with a notice when no account can take it an hour past the reset', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'], now: RESET + RESUME_GRACE_MS });
     await chat({ resumeAt: park() }, [{ ...spentUntilReset(), status: 'signed-out' } as unknown as AiHarnessAccount]);
-    const { waiter, sent, notices } = host();
+    const { waiter, sent, notices, restored } = host();
     await waiter.check();
     expect(sent).toEqual([]);
     expect(notices[0]).toMatch(/Stopped waiting for the reset/);
+    // The prompt is handed back, not dropped.
+    expect(restored).toEqual([park().prompt]);
     expect(await parked()).toBeUndefined();
   });
 });

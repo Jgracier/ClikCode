@@ -7,7 +7,8 @@
  * which looks at start. While one is parked the worker does not idle out --
  * nobody may be left to open the conversation again. It is sent once: the
  * record is cleared before the turn starts, so running out again ends with a
- * notice, not a loop. A new message or a cancel clears it. */
+ * notice, not a loop. A new message or a cancel clears it. A wait given up on hands
+ * the prompt back (restore), it is not discarded. */
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import { matchesVendorTurn } from '../turn/account-routing.js';
@@ -21,6 +22,9 @@ interface ResumeWaiterHost {
   /** Start the parked turn, as the worker starts any turn. */
   send: (prompt: string) => void | Promise<void>;
   notice: (message: string) => void;
+  /** Give the parked prompt back to the user when the wait is abandoned: to the composer of an
+   * attached window, else to the conversation's queue. Never dropped. */
+  restore: (prompt: string) => void | Promise<void>;
   /** Whether one is parked changed: the idle clock re-decides. */
   changed: () => void;
   now?: () => number;
@@ -82,7 +86,11 @@ export function createResumeWaiter(host: ResumeWaiterHost): ResumeWaiter {
     const taken = await takeResumeAt(host.sessionId);
     setPending(false);
     if (!taken) return;
-    if (step === 'give-up') { host.notice('Stopped waiting for the reset: no account could take the turn an hour after it'); return; }
+    if (step === 'give-up') {
+      await host.restore(taken.prompt);
+      host.notice('Stopped waiting for the reset: no account could take the turn an hour after it. Your message is back, unsent.');
+      return;
+    }
     await host.send(taken.prompt);
   };
 

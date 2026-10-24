@@ -1,4 +1,5 @@
 /** Durable turn state, completion, and interrupted-turn recovery. */
+import chalk from 'chalk';
 import { cloneData } from '../session/store/data.js';
 import { normalizeSessionTitle, titleFromFirstMessage } from '../session/title.js';
 import type { HarnessSession, HarnessState, OpenThought, TurnMark } from '../session/model.js';
@@ -99,9 +100,6 @@ export class DurableTurnCheckpoint {
   /** Something on the session's index row changed since the last full write
    *  (touch, unqueueSoon): the debounced write must be a full one. */
   private rowDirty = false;
-  /** A debounced write that failed with no caller to reject to. Surfaced by
-   *  complete(), so a turn whose conversation was never saved says so. */
-  private writeError: Error | undefined;
   private saved = false;
   /** complete() has written the turn's final record. */
   get finished(): boolean { return this.saved; }
@@ -262,21 +260,27 @@ export class DurableTurnCheckpoint {
     // save it: a failed save is logged and retried by the next write, never
     // allowed to end the turn or hide the reply.
     await this.flush().catch((error: unknown) => this.persistFailed('complete', error));
-    if (this.writeError) {
-      const error = this.writeError;
-      this.writeError = undefined;
-      this.persistFailed('complete', error);
-    }
     // Straight after the write, in the same turn of the event loop: a snapshot sent from here on that
     // holds the final record knows the turn is over (BroadcastObserver.liveSnapshot).
     this.saved = true;
   }
 
+  /** Where a save that failed is said to the person (the turn's own notes); set by startTurnCheckpoint. */
+  notify: ((message: string) => void) | undefined;
+  /** One notice per failing stretch: saying it at every retry would bury the turn. */
+  private saveFailureSaid = false;
+
   /** The turn's state could not be written. Kept dirty so the next write
-   *  carries everything, and recorded where a person can find it. */
+   *  carries everything, recorded where a person can find it, and SAID: the
+   *  errno text (a full disk is the realistic cause) in the turn itself, since
+   *  a conversation that is not being saved is not something to learn later. */
   private persistFailed(stage: string, error: unknown): void {
     this.dirty = true;
-    lifecycle('turn.persist-failed', { stage, session: this.session.id, error: error instanceof Error ? error.message : String(error) });
+    const reason = error instanceof Error ? error.message : String(error);
+    lifecycle('turn.persist-failed', { stage, session: this.session.id, error: reason });
+    if (this.saveFailureSaid) return;
+    this.saveFailureSaid = true;
+    this.notify?.(`This conversation could not be saved: ${reason}. It is kept in memory and saved again at the next write; free up the space or fix the permission and it goes through.`);
   }
 
   async flush(): Promise<void> {
@@ -295,7 +299,7 @@ export class DurableTurnCheckpoint {
    * `void checkpoint.persistNow().catch(() => undefined)`, which discarded
    * the failure outright; the debounced write here goes through the same
    * path as every other write, and its failure is remembered rather than
-   * dropped (see writeError). */
+   * dropped (see persistFailed). */
   record(recorder: { add(event: HarnessActivityEvent): void }): void {
     this.recorder = recorder;
   }
@@ -323,10 +327,9 @@ export class DurableTurnCheckpoint {
       this.timer = undefined;
       if (!this.dirty) return;
       this.dirty = false;
-      // A debounced write has no caller to reject to. Remember the failure so
-      // complete() -- which does have one -- reports it, instead of it
-      // vanishing into an unhandled rejection.
-      void this.enqueue(!this.rowDirty).catch((error: unknown) => { this.writeError = error as Error; });
+      // A debounced write has no caller to reject to: its failure is said
+      // from here (persistFailed), not left for the end of the turn.
+      void this.enqueue(!this.rowDirty).catch((error: unknown) => this.persistFailed('write', error));
     }, 250);
   }
 
@@ -345,6 +348,7 @@ export class DurableTurnCheckpoint {
     const write = this.writes.catch(() => undefined).then(async () => {
       if (transcriptOnly && await writeTranscriptCheckpoint(this.state, this.session.id)) return;
       await writeState(this.state);
+      this.saveFailureSaid = false;
     });
     this.writes = write.catch(() => undefined);
     return write;
@@ -363,6 +367,7 @@ export async function startTurnCheckpoint(
     run.recorder.start();
     checkpoint.record(run.recorder);
   }
+  checkpoint.notify = (message) => run.prompter?.activity?.(chalk.yellow(message));
   if (run.liveInput) { const live = run.liveInput; checkpoint.settleInput = () => live.settled(); }
   run.liveInput?.bindQueue((submission, options) => checkpoint.queue(submission, options));
   run.liveInput?.setLateSteerHandler((submission) => checkpoint.unqueueSoon(submission));
