@@ -120,10 +120,11 @@ describe('slash registry', () => {
    * what sits in those rows is the whole of the feature for most uses. */
   it('opens with the pinned commands, in their fixed order', () => {
     const palette = slashPalette(session(), harness({ permissionModes: ['ask'], permissionArgv: { ask: { argv: ['--ask'] } } }), VENDOR_EXTRAS);
-    expect(palette.slice(0, SLASH_PALETTE_PINNED.length).map((row) => row.value))
-      .toEqual(SLASH_PALETTE_PINNED.map((name) => `/${name}`));
+    // /private is pinned too, but a session that cannot run it (no Gateway route) is not offered the row.
+    const offered = SLASH_PALETTE_PINNED.filter((name) => name !== 'private');
+    expect(palette.slice(0, offered.length).map((row) => row.value)).toEqual(offered.map((name) => `/${name}`));
     expect(SLASH_PALETTE_PINNED.slice(0, 4)).toEqual(['resume', 'provider', 'account', 'model']);
-    expect(new Set(palette.slice(0, SLASH_PALETTE_PINNED.length).map((row) => row.group))).toEqual(new Set(['Common']));
+    expect(new Set(palette.slice(0, offered.length).map((row) => row.group))).toEqual(new Set(['Common']));
     // The conversation board takes resume and new off this list. What remains
     // at the top of Common is provider, then account, then model.
     const onBoard = slashPalette(session(), harness(), { omit: new Set(['resume', 'new']) });
