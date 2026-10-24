@@ -17,7 +17,7 @@ import { look, toolGlyph } from '../../../harness/protocol/tool-category-style.j
 import { terminalCellWidth } from '../../render/width.js';
 import { STEER_WORDS, steerTranscriptRows } from '../../render/steer-rows.js';
 import { messageRows as cachedMessageRows } from '../../render/message-blocks.js';
-import { callRow, underCallRow } from '../../render/tool-rows.js';
+import { callRow, noteRows, underCallRow } from '../../render/tool-rows.js';
 import { callDecision, markThought, savedTurnRanks, turnMarkLines } from '../../render/turn-mark-rows.js';
 import { runningChatLine } from '../../render/waiting.js';
 import type { TerminalHarnessPrompter } from '../../prompter.js';
@@ -42,9 +42,9 @@ export function createRowBuilders(p: TerminalHarnessPrompter, conversationInner:
   // call, the next paragraph -- opens with its own, so the gap under a
   // call's output is one row, as the gap above it is. Activity between
   // messages (standaloneActivity) closes its own.
-  const activityRows = (lines: readonly string[], category?: ToolCategory): string[] => (lines.length
-    ? ['', ...lines.map((line, index) => (index > 0 ? underCall(line)
-      : callRow(line, conversationInner)))]
+  const activityRows = (lines: readonly string[], category?: ToolCategory, note = false): string[] => (lines.length
+    ? ['', ...(note ? lines.flatMap((line) => noteRows(line, conversationInner))
+      : lines.map((line, index) => (index > 0 ? underCall(line) : callRow(line, conversationInner))))]
     : []);
   const messageRows = (content: string, marker: string): readonly string[] => cachedMessageRows(content, marker, conversationInner);
   /** A user-side message: what the user wrote. */
@@ -68,7 +68,7 @@ export function createRowBuilders(p: TerminalHarnessPrompter, conversationInner:
       if (p.turn && entry.event?.agent && entry.event.kind === 'tool-start') continue;
       const id = entry.sequence;
       if (!p.emitted.claimActivity(id)) continue;
-      rows.push(...activityRows(entry.lines, entry.event?.category), '');
+      rows.push(...activityRows(entry.lines, entry.event?.category, !entry.event), '');
     }
     return rows;
   };
@@ -105,7 +105,7 @@ export function createToolRows(p: TerminalHarnessPrompter, builders: RowBuilders
     if (!running) {
       return {
         id, done: true, responseOffset: entry.responseOffset, ...order,
-        lines: open(activityRows(entry.lines, entry.event?.category)),
+        lines: open(activityRows(entry.lines, entry.event?.category, !entry.event)),
       };
     }
     const kind = liveWaitKind(entry.event!) ?? 'tool';

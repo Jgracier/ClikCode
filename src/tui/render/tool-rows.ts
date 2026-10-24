@@ -7,10 +7,20 @@
 import { thoughtLine } from '../../harness/protocol/tool-category-style.js';
 import { thoughtRow as thoughtText } from '../../harness/protocol/turn-flow.js';
 import { visibleSlice } from './width.js';
+import { wrapWords } from './wrap.js';
 
 /** The call's own row. `width` is the transcript's. */
 export function callRow(line: string, width: number, paint: (text: string) => string = (text) => text): string {
   return `  ${paint(visibleSlice(line, Math.max(1, width - 2)))}`;
+}
+
+/** A note (`activity()`): something ClikCode says in the turn, an error most of
+ * all. It is prose, not a call's label, so it keeps all it says: wrapped at two
+ * columns like the call, never clipped with `…` (a refusal's first clause is
+ * its least useful part). Its colour is carried onto every row. */
+export function noteRows(line: string, width: number): string[] {
+  const open = /^(?:\u001b\[[0-9;]*m)+/.exec(line)?.[0] ?? '';
+  return wrapWords(line, Math.max(1, width - 2)).map((row, index) => `  ${open && index > 0 ? open : ''}${row}${open ? '\u001b[0m' : ''}`);
 }
 
 /** A row under the call: output, a diff line, a count of what is hidden.
