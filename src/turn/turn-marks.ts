@@ -11,20 +11,25 @@
 
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { appendThought, type Thought } from '../harness/protocol/activity-view.js';
+import { FAILURE_TEXT_LIMIT } from '../harness/protocol/stderr-line.js';
 import { reasoningHeading } from '../harness/protocol/turn-flow.js';
 import type { OpenThought, TurnMark } from '../session/model.js';
 
-/** Characters of one thought's text kept. The heading and the duration are
- * kept whatever the text is cut to. */
-export const THOUGHT_MARK_CHARS = 1200;
+/** Bounds on what a turn's saved marks keep. They are guards against a
+ * runaway, not a display width: other machines and clients read the saved
+ * record, and the screen wraps and collapses what it shows. */
+/** Characters of one thought's text kept (a reasoning item is a few KB at most). */
+export const THOUGHT_MARK_CHARS = 20_000;
+/** A heading and a label are one line each by nature: kept because they name a row. */
 const HEADING_CHARS = 120;
-const NOTICE_CHARS = 600;
 const LABEL_CHARS = 200;
-const PLAN_ENTRIES = 40;
-const PLAN_ENTRY_CHARS = 240;
+/** A notice is saved whole: a failure's cause is in it (failureText bounds a flood to this). */
+const NOTICE_CHARS = FAILURE_TEXT_LIMIT + 8;
+const PLAN_ENTRIES = 200;
+const PLAN_ENTRY_CHARS = 2_000;
 /** Marks a turn keeps. A thought per reasoning item and a notice per event
  * are small; this only stops a runaway turn from growing the file. */
-export const MAX_TURN_MARKS = 300;
+export const MAX_TURN_MARKS = 2_000;
 
 const clip = (text: string, limit: number): string => (text.length > limit ? `${text.slice(0, limit - 1)}…` : text);
 // eslint-disable-next-line no-control-regex
