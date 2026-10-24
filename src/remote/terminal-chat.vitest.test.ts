@@ -223,6 +223,25 @@ describe('a message typed in a chat on another machine', () => {
     expect(await outcome).toBe('interrupted');
   }, 20_000);
 
+  it('joins a turn already running as "thinking", and the vendor\'s own background work as what it is', async () => {
+    const base = { id: 'c1', route: 'local', accountId: null, provider: 'claude', model: 'm', effort: 'high', name: 'Remote chat', createdAt: '', updatedAt: '', status: 'active', messages: [] };
+    const joined = async (live: Record<string, unknown>) => {
+      const { bridge, calls, outcome } = await start();
+      calls.length = 0;
+      bridge.say({ type: 'worker', sessionId: 'c1', event: { type: 'snapshot', session: base, live: { text: '', ...live } } });
+      await until(() => named(calls, 'startWaiting').length === 1);
+      const label = named(calls, 'startWaiting')[0]![1];
+      bridge.drop();
+      expect(await outcome).toBe('interrupted');
+      return label;
+    };
+    // An ordinary live turn: the model is working.
+    expect(await joined({ waitingLabel: 'reading files', prompt: 'go' })).toBe('thinking');
+    // The vendor's own background work (a tool it never settled, a shell it runs) is not the model thinking:
+    // it keeps the worker's wording, so the window is not drawn as a turn that "never finishes thinking".
+    expect(await joined({ waitingLabel: 'background work', vendorWork: true })).toBe('background work');
+  }, 30_000);
+
   it('shows the whole conversation from a bridge that sends only what changed', async () => {
     const { bridge, calls, outcome } = await start();
     const base = { id: 'c1', route: 'local', accountId: null, provider: 'claude', model: 'm', effort: 'high', name: 'Remote chat', createdAt: '', updatedAt: '', status: 'active' };

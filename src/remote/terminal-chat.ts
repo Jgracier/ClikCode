@@ -300,12 +300,15 @@ export async function runRemoteChat(
       bridge.post({ type: 'send', text, id });
       return Promise.resolve({ disposition: 'queued', submission: { id, text, submittedAt: new Date().toISOString() } });
     };
-    const beginWaiting = (prompt?: string): void => {
+    /** `label`: what the worker says the turn is doing. A turn that is the vendor's own background work
+     * (live.vendorWork) is not the model thinking, and said so: this window joining it must not draw it as
+     * "thinking" with a clock that runs for as long as the vendor holds the work. */
+    const beginWaiting = (prompt?: string, label = 'thinking'): void => {
       if (waitingInput) return;
       waitingInput = true;
       turnEnd = new Promise<void>((resolve) => { finishTurn = resolve; });
       if (prompt !== undefined) terminal.submitted(prompt);
-      terminal.startWaiting('thinking', (restoreDraft) => bridge.post({ type: 'cancel', restoreDraft }),
+      terminal.startWaiting(label, (restoreDraft) => bridge.post({ type: 'cancel', restoreDraft }),
         queued, queued, () => { leftTurn = true; waitingInput = false; finishTurn?.(); terminal.stopWaiting(); });
     };
     bridge.onEvent = (event) => {
@@ -326,7 +329,7 @@ export async function runRemoteChat(
             sessionChanged(session);
             running = Boolean(worker.live);
             terminal.render(session, account, worker.live ? { running: true, prompt: worker.live.prompt } : { running: early !== undefined });
-            if (worker.live) beginWaiting(worker.live.prompt);
+            if (worker.live) beginWaiting(worker.live.prompt, worker.live.vendorWork ? worker.live.waitingLabel : undefined);
           }
           else if (worker.type === 'delta') terminal.response(worker.text, worker.mode);
           else if (worker.type === 'activity') terminal.activityEvent(worker.event);
