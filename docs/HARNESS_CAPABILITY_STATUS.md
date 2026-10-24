@@ -1,38 +1,38 @@
 # Harness capability status
 
-Checked against the ClikCode catalog on 2026-10-10 (rows changed that day: Codex, Amp, Droid, Qwen Code, Cline, Hermes, Command Code, Deep Agents Code, Devin; the Codex model source corrected 2026-10-20). The catalog has 29 harnesses (counted from `AI_LOCAL_HARNESSES` on 2026-10-20): 22 run over ACP, Codex over its own app-server, and six as one-shot CLIs (Aider, Amp, Antigravity, Pi, OpenClaw, Continue). A listed control is a ClikCode integration, not proof that every vendor account or model accepts it. `ACP` model discovery means ClikCode asks the agent's session for models when it offers them; an empty or refused response cannot become a complete list. Server-sourced model lists refresh after five minutes, with the last list shown while a picker refreshes.
+Checked against the ClikCode catalog on 2026-10-23. The Model source, Effort, Permissions, Free-plan and Account usage columns were last reviewed on 2026-10-10 (rows changed that day: Codex, Amp, Droid, Qwen Code, Cline, Hermes, Command Code, Deep Agents Code, Devin; the Codex model source corrected 2026-10-20). The Steering, Resume, Plan mode and Sub-agents columns were added on 2026-10-23 from the catalog's own flags (`packages/clikrouter/src/ai-local-harness.ts`: `acp.steering`, `acp.sharedSessions`, `acp.planModeId`, `planMode`, `turn`/`session` resume fields, `subagents`, `capabilities`); they say what the code is wired to do, not that it was run live. Steering carries its VERIFIED or CLAIMED status from `docs/STEERING.md`; every other cell in them is not run live by this table. The catalog has 29 harnesses (counted from `AI_LOCAL_HARNESSES` on 2026-10-23): 22 run over ACP, Codex over its own app-server, and six as one-shot CLIs (Aider, Amp, Antigravity, Pi, OpenClaw, Continue). A listed control is a ClikCode integration, not proof that every vendor account or model accepts it. `ACP` model discovery means ClikCode asks the agent's session for models when it offers them; an empty or refused response cannot become a complete list. Server-sourced model lists refresh after five minutes, with the last list shown while a picker refreshes.
 
-| Harness | Model source | Effort | Permissions | Free-plan models | Account usage |
-| --- | --- | --- | --- | --- | --- |
-| Claude Code | Installed vendor model table | Yes | Ask, bypass, auto | - | Direct probe, and its turn stream |
-| Grok Build | Vendor CLI | Yes (minimal to max) | Ask, bypass, auto | Plan's own list | Direct probe (ACP extension call) |
-| Gemini CLI | ACP when available | No declared control | Ask, bypass, auto | - | Learned after refusals |
-| Codex | The running app-server's `model/list`, for this account (`models_cache.json` when no server is live) | Yes, per model | Ask, bypass, auto | Plan's own list | Direct probe |
-| OpenCode | Vendor CLI | Yes | Ask (`OPENCODE_PERMISSION` edit/bash = ask), bypass; plan mode | Zero-price models in its list | Learned after refusals |
-| Copilot | Its own server, for this account (`models.list`); public models.dev catalog only when that fails | Yes, over ACP (levels from `copilot --help`) | Ask, bypass | Plan's own list | Direct probe (`account.getQuota`) |
-| Aider | Configured providers and their caches | No declared control | Bypass only (`--yes-always`); no ask (see below) | `:free` models | Learned after refusals |
-| Goose | Configured providers and ACP | Yes, over ACP (levels from its `thinking_effort` option) | Ask, bypass, auto | `:free` models | Learned after refusals |
-| Amp | No model selector; `--mode low/medium/high/ultra` is an option row (model tier) | No declared control | None: Inert (see below) | - | Credit balance (`amp usage`) |
-| Antigravity | Vendor CLI | No declared control | Ask, bypass | Plan's own list | Direct probe (quota pools) |
-| Pi | Vendor CLI | Yes | No declared modes | `:free` models | Learned after refusals |
-| Droid | ACP when available | Yes, from its session's `reasoning_effort` option (per model); static list is the union | Ask, bypass, auto, over ACP modes; plan mode (`spec`) | - | Learned after refusals |
-| Kiro | ACP when available | Yes | Ask, bypass | Plan's own list | Direct probe (its `/usage` over ACP) |
-| Qwen Code | ACP when available | Yes, from its session's `reasoning_effort` option (per model) | Ask, bypass, auto, over ACP; plan mode | - | Learned after refusals |
-| Cline | ACP when available | Yes (`--thinking`; its ACP session has no effort option) | Ask, bypass (its ACP modes are plan and act); plan mode | `:free` models | Credit balance, advisory (`:free` models still run when it is spent) |
-| Kilo | Vendor CLI | Yes | Ask (`KILO_PERMISSION` edit/bash = ask), auto; plan mode | `:free` models, and the ones its list marks free | Credit balance (`kilo profile`) |
-| Cursor Agent | ACP when available | No declared control | Ask, bypass, auto | Auto (the models it does not count as named) | Direct probe |
-| Hermes | Provider inventory and cache; chosen over ACP | Yes, but only on a one-shot CLI turn: `hermes acp` has no effort control | Ask, bypass (`--yolo`) | `:free` models | Direct probe (Nous Portal credits) |
-| OpenClaw | Vendor configuration and provider inventory | Yes | No declared modes | - | Learned after refusals |
-| Command Code | Vendor CLI list (ACP lists the same 84) | Yes, per model over ACP | Ask, bypass, auto over ACP modes; plan mode | - | Direct probe |
-| Kimi CLI | ACP when available | No declared control | Ask, bypass, auto | - | Direct probe |
-| Auggie | Vendor CLI | Yes (not sent for haiku4.5, which answers HTTP 400) | No declared modes | - | Credit balance (`auggie account status`) |
-| Mistral Vibe | ACP when available | No declared control | Ask, bypass, auto | - | Direct probe (a key whose plan allows no requests reads spent) |
-| OpenHands | ACP when available | No declared control | Bypass, auto | - | Learned after refusals |
-| Continue | Saved account models (no `--model`: `cn --model` adds a hub model) | No declared control | Ask, bypass | - | Learned after refusals |
-| Deep Agents Code | ACP when available | No declared control | Ask, auto (`-y`) | - | Learned after refusals |
-| Devin CLI | ACP when available | No declared control | Ask, auto (Smart), bypass over ACP modes; plan mode | Plan's own list | Direct probe (daily and weekly) |
-| Junie CLI | ACP when available | Yes | No declared modes | - | Learned after refusals |
-| MiniMax Code | ACP when available | No declared control | No declared modes | - | Learned after refusals |
+| Harness | Model source | Effort | Permissions | Free-plan models | Account usage | Steering | Resume | Plan mode | Sub-agents |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Claude Code | Installed vendor model table | Yes | Ask, bypass, auto | - | Direct probe, and its turn stream | ACP `_session/steering` (VERIFIED) | CLI resume id; ACP session, shared store with the CLI | ACP mode `plan`; plan card | reads transcript, steers relay, child activity, background agents |
+| Grok Build | Vendor CLI | Yes (minimal to max) | Ask, bypass, auto | Plan's own list | Direct probe (ACP extension call) | None (queues) | CLI resume id; ACP session, shared store with the CLI | - | - |
+| Gemini CLI | ACP when available | No declared control | Ask, bypass, auto | - | Learned after refusals | None (queues) | CLI resume id; ACP session | - | - |
+| Codex | The running app-server's `model/list`, for this account (`models_cache.json` when no server is live) | Yes, per model | Ask, bypass, auto | Plan's own list | Direct probe | app-server `turn/steer` (CLAIMED) | CLI resume id | plan card | reads thread, child activity |
+| OpenCode | Vendor CLI | Yes | Ask (`OPENCODE_PERMISSION` edit/bash = ask), bypass; plan mode | Zero-price models in its list | Learned after refusals | None (queues) | CLI resume id; ACP session, shared store with the CLI | ACP mode `plan` | - |
+| Copilot | Its own server, for this account (`models.list`); public models.dev catalog only when that fails | Yes, over ACP (levels from `copilot --help`) | Ask, bypass | Plan's own list | Direct probe (`account.getQuota`) | None (queues) | CLI resume id; ACP session, shared store with the CLI | option `plan` | - |
+| Aider | Configured providers and their caches | No declared control | Bypass only (`--yes-always`); no ask (see below) | `:free` models | Learned after refusals | None found (queues) | CLI resume id; history file | - | - |
+| Goose | Configured providers and ACP | Yes, over ACP (levels from its `thinking_effort` option) | Ask, bypass, auto | `:free` models | Learned after refusals | None (queues) | CLI resume id; ACP session, shared store with the CLI | - | - |
+| Amp | No model selector; `--mode low/medium/high/ultra` is an option row (model tier) | No declared control | None: Inert (see below) | - | Credit balance (`amp usage`) | stream-json `steer` line (CLAIMED) | CLI resume id | plan card | reads frames, child activity |
+| Antigravity | Vendor CLI | No declared control | Ask, bypass | Plan's own list | Direct probe (quota pools) | None found (queues) | CLI resume id | option `mode` | - |
+| Pi | Vendor CLI | Yes | No declared modes | `:free` models | Learned after refusals | RPC `steer` (VERIFIED against pi 0.87.0) | CLI resume id | - | - |
+| Droid | ACP when available | Yes, from its session's `reasoning_effort` option (per model); static list is the union | Ask, bypass, auto, over ACP modes; plan mode (`spec`) | - | Learned after refusals | None (queues) | CLI resume id; ACP session | ACP mode `spec`; option `spec-mode` | - |
+| Kiro | ACP when available | Yes | Ask, bypass | Plan's own list | Direct probe (its `/usage` over ACP) | Unknown (needs a sign-in to probe); queues | CLI resume id; ACP session | - | - |
+| Qwen Code | ACP when available | Yes, from its session's `reasoning_effort` option (per model) | Ask, bypass, auto, over ACP; plan mode | - | Learned after refusals | None (queues) | CLI resume id; ACP session | ACP mode `plan`; plan card | reads frames, child activity |
+| Cline | ACP when available | Yes (`--thinking`; its ACP session has no effort option) | Ask, bypass (its ACP modes are plan and act); plan mode | `:free` models | Credit balance, advisory (`:free` models still run when it is spent) | None (queues) | CLI resume id; ACP session | ACP mode `plan`; option `plan` | - |
+| Kilo | Vendor CLI | Yes | Ask (`KILO_PERMISSION` edit/bash = ask), auto; plan mode | `:free` models, and the ones its list marks free | Credit balance (`kilo profile`) | None (queues) | CLI resume id; ACP session, shared store with the CLI | ACP mode `plan` | - |
+| Cursor Agent | ACP when available | No declared control | Ask, bypass, auto | Auto (the models it does not count as named) | Direct probe | None (queues) | CLI resume id; ACP session | ACP mode `plan`; option `mode`; plan card | reads frames, child activity |
+| Hermes | Provider inventory and cache; chosen over ACP | Yes, but only on a one-shot CLI turn: `hermes acp` has no effort control | Ask, bypass (`--yolo`) | `:free` models | Direct probe (Nous Portal credits) | None (queues) | CLI resume id; ACP session | - | - |
+| OpenClaw | Vendor configuration and provider inventory | Yes | No declared modes | - | Learned after refusals | None found (queues) | CLI resume id | - | - |
+| Command Code | Vendor CLI list (ACP lists the same 84) | Yes, per model over ACP | Ask, bypass, auto over ACP modes; plan mode | - | Direct probe | None (queues) | CLI resume id; ACP session | ACP mode `plan`; option `plan` | - |
+| Kimi CLI | ACP when available | No declared control | Ask, bypass, auto | - | Direct probe | None (queues) | ACP session | ACP mode `plan`; option `plan`; plan card | - |
+| Auggie | Vendor CLI | Yes (not sent for haiku4.5, which answers HTTP 400) | No declared modes | - | Credit balance (`auggie account status`) | None (queues) | CLI resume id; ACP session | option `ask`; plan card | - |
+| Mistral Vibe | ACP when available | No declared control | Ask, bypass, auto | - | Direct probe (a key whose plan allows no requests reads spent) | None (queues) | ACP session | - | - |
+| OpenHands | ACP when available | No declared control | Bypass, auto | - | Learned after refusals | None (queues) | ACP session | - | - |
+| Continue | Saved account models (no `--model`: `cn --model` adds a hub model) | No declared control | Ask, bypass | - | Learned after refusals | None found (queues) | None: the transcript is carried | option `readonly` | - |
+| Deep Agents Code | ACP when available | No declared control | Ask, auto (`-y`) | - | Learned after refusals | Unknown (needs a sign-in to probe); queues | ACP session | - | - |
+| Devin CLI | ACP when available | No declared control | Ask, auto (Smart), bypass over ACP modes; plan mode | Plan's own list | Direct probe (daily and weekly) | None (queues) | ACP session | ACP mode `plan` | - |
+| Junie CLI | ACP when available | Yes | No declared modes | - | Learned after refusals | None usable: advertised, not answered (`acp.steering: false`; VERIFIED on 26.9.22) | ACP session | ACP mode `plan` | - |
+| MiniMax Code | ACP when available | No declared control | No declared modes | - | Learned after refusals | ACP `mcode/session/steer` (CLAIMED) | ACP session | - | - |
 
 `Plan's own list` means the vendor lists only what the account's plan runs, so on a plan the vendor itself calls free every listed model is a free one; the plan comes from the account's usage reading. `:free` is OpenRouter's free-model suffix, which those harnesses route through. A credit balance is shown as a label, not a window: it never marks an account spent by itself.
 
