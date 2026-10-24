@@ -600,7 +600,10 @@ function usageFrom(raw: Record<string, unknown>): TokenUsage {
   const costDetails = (raw.cost_details && typeof raw.cost_details === 'object' ? raw.cost_details : {}) as Record<string, unknown>;
   const cost = numberOf(raw.cost);
   const upstream = numberOf(costDetails.upstream_inference_cost);
-  if (cost !== undefined || upstream !== undefined) out.costMicroUsd = Math.round(((cost ?? 0) + (upstream ?? 0)) * 1_000_000);
+  // `billed: false` (the super admin: nothing is charged) means `cost` already carries the wholesale cost the
+  // chat is shown at, and upstream_inference_cost repeats it for older readers: counting both would double it.
+  const unbilled = raw.billed === false && cost !== undefined;
+  if (cost !== undefined || upstream !== undefined) out.costMicroUsd = Math.round((unbilled ? cost : (cost ?? 0) + (upstream ?? 0)) * 1_000_000);
   // The server's split of that cost; an older server sends none, and a malformed one is ignored.
   const split = raw.cost_breakdown && typeof raw.cost_breakdown === 'object' ? raw.cost_breakdown as Record<string, unknown> : {};
   const metered = numberOf(split.metered);

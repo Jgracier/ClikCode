@@ -83,6 +83,13 @@ describe('a Gateway step', () => {
     expect(bad).not.toHaveProperty('meteredMicroUsd');
     expect(bad).not.toHaveProperty('gpuMicroUsd');
     expect(await usageOf({ cost: 0.1, cost_breakdown: 'x' })).not.toHaveProperty('gpuMicroUsd');
+    // Unbilled (super admin): cost carries wholesale and upstream_inference_cost repeats it, so it counts once.
+    expect(await usageOf({ cost: 0.052573, billed: false, cost_details: { upstream_inference_cost: 0.052573 }, cost_breakdown: { metered: 0.050573, gpu: 0.002 } }))
+      .toMatchObject({ costMicroUsd: 52_573, meteredMicroUsd: 50_573, gpuMicroUsd: 2_000 });
+    // An older server: charge 0 plus the operator's cost in upstream_inference_cost is still the sum.
+    expect(await usageOf({ cost: 0, cost_details: { upstream_inference_cost: 0.04 } })).toMatchObject({ costMicroUsd: 40_000 });
+    // billed:true (or absent) keeps adding both, as before.
+    expect(await usageOf({ cost: 0.1, billed: true, cost_details: { upstream_inference_cost: 0.02 } })).toMatchObject({ costMicroUsd: 120_000 });
   });
 
   it('turns the Gateway\'s codes into the ones the loop acts on', async () => {
