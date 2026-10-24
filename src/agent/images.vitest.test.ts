@@ -63,14 +63,14 @@ describe('image input', () => {
     expect(first.images).toBeUndefined();
   });
 
-  it('keeps images through a compaction record', async () => {
+  it('reads the images of an old transcript\'s compaction record (ClikCode no longer writes one)', async () => {
     const store = new ConversationStore(stateDir, 'compacted');
-    const withImage: ConversationItem = { type: 'text', role: 'user', text: 'look', images: [{ mimeType: 'image/png', data: 'AAAA' }] };
+    const image = { mimeType: 'image/png', data: 'AAAA' };
+    const withImage: ConversationItem = { type: 'text', role: 'user', text: 'look', images: [image] };
     await store.append({ type: 'text', role: 'user', text: 'old' });
-    await store.appendCompaction('summary', [{ type: 'text', role: 'assistant', text: 'ok' }, withImage]);
+    const record = { kind: 'compaction', at: new Date().toISOString(), summary: 'summary', keep: [{ type: 'text', role: 'assistant', text: 'ok' }, { type: 'text', role: 'user', text: 'look' }], keepImages: { 1: [image] } };
+    await fs.appendFile(store.file, `${JSON.stringify(record)}\n`);
     expect(await store.load()).toEqual([{ type: 'summary', text: 'summary' }, { type: 'text', role: 'assistant', text: 'ok' }, withImage]);
-    const raw = await fs.readFile(store.file, 'utf8');
-    expect(raw).not.toMatch(/"keep":\[[^\]]*"images"/);
   });
 
   it('never sends images to the Gateway, which takes text only', async () => {
