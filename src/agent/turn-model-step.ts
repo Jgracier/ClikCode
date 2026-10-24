@@ -8,12 +8,13 @@ import { completedArguments } from './models/openai-client.js';
 import { thoughtLabel } from '../harness/protocol/activity-events.js';
 import { estimateContextTokens } from './context.js';
 import { ContextFitError, fitContext, responseReserve, UNKNOWN_CONTEXT_WINDOW, type ContextView } from './context-view.js';
-import { classifyModelError, MODEL_START_BUDGET_SECONDS, modelStartWaitSeconds, pause, retryDelaySeconds, STEP_RETRY_BUDGET_SECONDS, stepRecovery } from './turn-recovery.js';
+import { classifyModelError, modelStartWaitSeconds, pause, retryDelaySeconds, startMayContinue, STEP_RETRY_BUDGET_SECONDS, stepRecovery } from './turn-recovery.js';
 import { abortable, categoryForTool, withUniqueIds } from './turn-support.js';
 import { recordUsage } from './usage.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import type { TurnRuntime } from './turn-runtime.js';
 import type { OwnModelStart } from '../gateway/own-models.js';
+import type { StartReading } from './turn-recovery.js';
 
 /** What a model step came to: its result, a retry of the loop, or the turn's end. */
 type ModelStepOutcome =
@@ -117,7 +118,7 @@ export async function runModelStep(rt: TurnRuntime, modelClient: ModelClient, sy
     settleUnrun(rt, new Set(), 'not run: the model\'s reply was cut off before this call was complete');
     // Save partial text before continuing. Calls from an incomplete step
     // have not run; only complete calls from a successful step may execute.
-    const recovery = stepRecovery(error);
+    let recovery = stepRecovery(error);
     const preservePartial = async () => {
       if (!streamedThisStep.trim()) return;
       await rt.append({ type: 'text', role: 'assistant', text: streamedThisStep });
@@ -131,9 +132,19 @@ export async function runModelStep(rt: TurnRuntime, modelClient: ModelClient, sy
       await preservePartial();
       input.onPhase?.('waiting for model capacity');
       const after = (error as { retryAfter?: unknown }).retryAfter;
-      const wait = typeof after === 'number' && Number.isFinite(after) ? after : 2;
-      await pause(Math.max(1, Math.min(30, wait)), signal);
-      return { kind: 'continue' };
+      const wait = Math.max(1, Math.min(30, typeof after === 'number' && Number.isFinite(after) ? after : 2));
+      // The Gateway's status says whether this is a model still coming up (then it is waited for as one,
+      // below). Otherwise the model is up and busy, and nothing reports when that ends: the wait spends
+      // the step retry budget like any failing step, so the loop ends in minutes with the real answer.
+      const start = await modelClient.startStatus?.().catch(() => undefined);
+      if (start) {
+        rt.modelStart = { start, at: Date.now() };
+        recovery = 'model-starting';
+      } else if (rt.retryWaitedSeconds + wait <= STEP_RETRY_BUDGET_SECONDS) {
+        rt.retryWaitedSeconds += wait;
+        await pause(wait, signal);
+        return { kind: 'continue' };
+      }
     }
     if (recovery === 'context-pressure' && view && rt.contextRefits < 3) {
       // Change the working view, not the model or durable transcript. Never
@@ -155,11 +166,11 @@ export async function runModelStep(rt: TurnRuntime, modelClient: ModelClient, sy
     if (recovery === 'model-starting') {
       const after = (error as { retryAfter?: unknown }).retryAfter;
       const wait = modelStartWaitSeconds(typeof after === 'number' ? after : undefined);
-      if (rt.modelStartWaitedSeconds + wait <= MODEL_START_BUDGET_SECONDS) {
+      if (startMayContinue(rt.modelStart, rt.modelStartWaitedSeconds, wait)) {
         rt.modelStartWaitedSeconds += wait;
         rt.modelStartingSince ??= started;
-        await waitForModelStart({
-          waitS: wait, since: rt.modelStartingSince, signal,
+        rt.modelStart = await waitForModelStart({
+          waitS: wait, since: rt.modelStartingSince, signal, last: rt.modelStart,
           onPhase: (phase) => input.onPhase?.(phase),
           ...(modelClient.startStatus ? { poll: () => modelClient.startStatus!() } : {}),
         });
@@ -303,10 +314,12 @@ export function startingModelPhase(elapsedMs: number, start?: OwnModelStart, sin
 export async function waitForModelStart(input: {
   waitS: number; since: number; onPhase: (phase: string) => void; signal?: AbortSignal;
   poll?: () => Promise<OwnModelStart | undefined>; now?: () => number;
-}): Promise<void> {
+  /** The reading from an earlier wait of this start, kept until a poll replaces it. */
+  last?: StartReading;
+}): Promise<StartReading | undefined> {
   const now = input.now ?? Date.now;
-  let start: OwnModelStart | undefined;
-  let polledAt = now();
+  let start: OwnModelStart | undefined = input.last?.start;
+  let polledAt = input.last?.at ?? now();
   // Counted in whole seconds, not against the clock: the wait is exactly what was asked, whatever the clock does.
   for (let waited = 0, tick = 0; waited < input.waitS; tick += 1) {
     if (tick % 5 === 0 && input.poll) {
@@ -317,4 +330,5 @@ export async function waitForModelStart(input: {
     await pause(slice, input.signal);
     waited += slice;
   }
+  return start ? { start, at: polledAt } : undefined;
 }

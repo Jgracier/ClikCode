@@ -37,7 +37,7 @@ export interface GatewayModel {
   access?: GatewayAccess;
   /** One of the user's own models: one they run on ClikDeploy compute (GPUs they rent, or their own
    * server), not charged per token. `asleep` and `starting` ones are chosen like any other: the first
-   * message waits for the model to come up (agent/turn-recovery.ts MODEL_START_BUDGET_SECONDS).
+   * message waits for the model to come up (agent/turn-recovery.ts startMayContinue).
    * `tools` false: the runtime it was started on cannot answer tool calls for it. */
   own?: { state: 'running' | 'asleep' | 'starting'; tools: boolean; /** The model the deployment serves: the list id is an opaque deployment id. */ modelId?: string };
 }

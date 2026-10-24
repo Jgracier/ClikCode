@@ -1,6 +1,7 @@
 /** What the agent loop does about a model step that failed: classify it, wait or retry. */
 import { turnCancelledError } from './cancellation.js';
 import type { HarnessErrorKind } from './model-client.js';
+import type { OwnModelStart } from '../gateway/own-models.js';
 
 /** A model step that failed before saying anything is retried for as long as this much waiting in
  * total, then the failure is the answer. Time, not a count: a short blip costs one quick retry, a
@@ -10,11 +11,25 @@ export const STEP_RETRY_BUDGET_SECONDS = 300;
 const STEP_RETRY_CAP_SECONDS = 30;
 /** The longest a server's own Retry-After is honoured for one wait. */
 const RETRY_AFTER_CAP_SECONDS = 120;
-/** How long a turn waits for the user's own model to start on its GPU (it was asleep, or is still
- * loading): a GPU found, the image and weights pulled, the model loaded -- minutes, not a blip. Its own
- * budget, apart from the retries of a failing step. MEASURED 2026-10-22: a 0.5B vLLM model on ClikDeploy
- * capacity took 11-16 min cold; the Gateway now races two GPUs on a slow cold start. */
-export const MODEL_START_BUDGET_SECONDS = 1200;
+/** A start that has taken this many times what the Gateway says it usually takes (its `expectedS`) is not
+ * going to finish: the wait ends and the step's own answer is shown. The numbers are all the Gateway's
+ * (its elapsed time, its expected time); a start it reports no expected time for (still finding a server)
+ * has no clock here -- the Gateway ends that on its side, by answering something other than MODEL_STARTING --
+ * and the user's Stop ends any wait. A client with no status at all (nothing reports the start) spends the
+ * step retry budget instead. MEASURED 2026-10-22: a 0.5B vLLM model on ClikDeploy capacity took 11-16 min cold. */
+export const START_OVERRUN_FACTOR = 2;
+
+/** What the Gateway last said of a starting model, and when it was read. */
+export interface StartReading { start: OwnModelStart; at: number }
+
+/** Whether a model that is starting is still worth waiting `waitS` more for, by the Gateway's own
+ * reading of the start (`waitedSeconds`: what this step already waited, for a client with no reading). */
+export function startMayContinue(reading: StartReading | undefined, waitedSeconds: number, waitS: number, now = Date.now()): boolean {
+  if (!reading) return waitedSeconds + waitS <= STEP_RETRY_BUDGET_SECONDS;
+  const { start } = reading;
+  if (start.phase !== 'starting-model' || start.expectedS === undefined) return true;
+  return start.elapsedS + (now - reading.at) / 1000 <= START_OVERRUN_FACTOR * start.expectedS;
+}
 /** How often a model that is starting is asked again: when the Gateway says (its Retry-After follows what is left of
  * the GPU's usual start, 5-30 s), at least every 5 s and at most every minute. */
 export function modelStartWaitSeconds(retryAfter?: number): number {
@@ -47,7 +62,7 @@ export const MAX_STOP_HOOK_CONTINUES = 3;
 
 /** What to do about a model step that failed before streaming anything.
  * `retry`: a transient failure -- a retryable code, a 5xx, or no response at all. `model-starting`: the
- * user's own model is coming up on its GPU; the step waits for it (MODEL_START_BUDGET_SECONDS).
+ * user's own model is coming up on its GPU; the step waits for it (startMayContinue).
  * Everything else -- credit, sign-in, a rejected request, no model, the kill switch -- is the answer. */
 export function stepRecovery(error: unknown): 'retry' | 'model-starting' | 'capacity' | 'context-pressure' | undefined {
   const record = (error ?? {}) as { code?: unknown; statusCode?: unknown; kind?: unknown; message?: unknown };

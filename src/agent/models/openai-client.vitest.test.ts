@@ -449,3 +449,13 @@ describe('parseToolArguments', () => {
     expect(parseToolArguments('{"a":').error).toBeDefined();
   });
 });
+
+describe('how long a stream may be silent', () => {
+  it('is eight Gateway keepalives, and never less than four times the longest pause the stream has shown', async () => {
+    const { GATEWAY_KEEPALIVE_MS, STREAM_IDLE_TIMEOUT_MS, streamSilenceLimit } = await import('./gateway-client.js');
+    expect(STREAM_IDLE_TIMEOUT_MS).toBe(GATEWAY_KEEPALIVE_MS * 8);
+    expect(streamSilenceLimit(STREAM_IDLE_TIMEOUT_MS, 0)).toBe(STREAM_IDLE_TIMEOUT_MS);
+    expect(streamSilenceLimit(STREAM_IDLE_TIMEOUT_MS, 20_000)).toBe(STREAM_IDLE_TIMEOUT_MS);
+    expect(streamSilenceLimit(STREAM_IDLE_TIMEOUT_MS, 60_000)).toBe(240_000);
+  });
+});
