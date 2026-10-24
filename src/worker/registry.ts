@@ -92,6 +92,12 @@ function socketFileName(sessionId: string): string {
   return `${sessionKey(sessionId)}.sock`;
 }
 
+/** What a worker being started writes to stderr, read by the window that started it when the
+ * worker does not come up (client.ts): the reason it died at startup, not just that it did. */
+export function workerStartLogPath(sessionId: string): string {
+  return join(workersDirectory(), `${sessionKey(sessionId)}.start.log`);
+}
+
 function recordPath(sessionId: string): string {
   return join(workersDirectory(), `${sessionKey(sessionId)}.json`);
 }

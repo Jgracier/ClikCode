@@ -6,12 +6,13 @@
  */
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync } from 'node:fs';
 import { userManagerLaunch } from './own-scope.js';
 import { EventEmitter } from 'node:events';
 import { connect, type Socket } from 'node:net';
 import { hostname } from 'node:os';
-import { conversationHolder, currentWorkerBuild, listWorkerRecords, readWorkerRecord, requestConversationHandoff, workerIsReachable, type WorkerRuntimeRecord } from './registry.js';
+import { conversationHolder, currentWorkerBuild, listWorkerRecords, readWorkerRecord, requestConversationHandoff, workerIsReachable, workersDirectory, workerStartLogPath, type WorkerRuntimeRecord } from './registry.js';
+import { failureText } from '../harness/protocol/stderr-line.js';
 import { processAlive } from '../harness/transport/process-group.js';
 import { ensureSessionOnDisk } from '../session/blank.js';
 import { encodeFrame, FrameDecoder, type ClientCommand, type WorkerEvent } from './protocol.js';
@@ -51,22 +52,30 @@ function workerSpawnArgv(sessionId: string, extra: readonly string[] = []): stri
 function launchWorker(sessionId: string, extra: readonly string[] = []): void {
   const argv = workerSpawnArgv(sessionId, extra);
   let started = false;
+  // Its stderr goes to a file of the conversation's, so a worker that dies at startup says why
+  // (spawnSessionWorker reads it); it is removed once the worker is up.
+  const startLog = workerStartLogPath(sessionId);
+  try { mkdirSync(workersDirectory(), { recursive: true, mode: 0o700 }); } catch { /* the spawn says what is wrong */ }
   const direct = (): void => {
     if (started) return;
     started = true;
+    let errorFd: number | 'ignore' = 'ignore';
+    try { errorFd = openSync(startLog, 'w', 0o600); } catch { /* no log: the cause is lost, not the start */ }
     const child = spawn(process.execPath, argv, {
       // windowsHide: a detached child on Windows otherwise opens a console
       // window of its own for as long as the worker lives.
-      stdio: 'ignore', detached: true, windowsHide: true,
+      stdio: ['ignore', 'ignore', errorFd], detached: true, windowsHide: true,
     });
-    child.on('error', () => {});
+    if (typeof errorFd === 'number') closeSync(errorFd);
+    // A process that could not even start has nothing to write: its error is the cause.
+    child.on('error', (error) => { try { appendFileSync(startLog, `${error.message}\n`); } catch { /* the log below says nothing then */ } });
     child.unref();
   };
   const viaManager = process.platform === 'linux' ? userManagerLaunch(argv, {
     cgroup: (() => { try { return readFileSync('/proc/self/cgroup', 'utf8'); } catch { return ''; } })(),
     uid: process.getuid?.() ?? 0, env: process.env, cwd: process.cwd(), execPath: process.execPath,
     unit: `clikcode-start-${sessionId.replace(/[^A-Za-z0-9_.-]/g, '_')}-${process.pid}-${Date.now()}.service`,
-    busExists: existsSync,
+    busExists: existsSync, stderrFile: startLog,
   }) : undefined;
   if (!viaManager) { direct(); return; }
   lifecycle('client.worker.spawn-via-user-manager', { worker: sessionId });
@@ -74,6 +83,13 @@ function launchWorker(sessionId: string, extra: readonly string[] = []): void {
   launcher.on('error', direct);
   launcher.on('exit', (code) => { if (code !== 0) direct(); });
   launcher.unref();
+}
+
+function readStartLog(sessionId: string): string {
+  try { return readFileSync(workerStartLogPath(sessionId), 'utf8'); } catch { return ''; }
+}
+function removeStartLog(sessionId: string): void {
+  try { unlinkSync(workerStartLogPath(sessionId)); } catch { /* already gone */ }
 }
 
 /** Starts a fresh worker for a session and waits until its socket actually
@@ -88,7 +104,7 @@ async function spawnSessionWorker(sessionId: string): Promise<WorkerRuntimeRecor
   let holderCheckedAt = 0;
   for (;;) {
     const record = await readWorkerRecord(sessionId);
-    if (record && await recordIsLive(record)) return record;
+    if (record && await recordIsLive(record)) { removeStartLog(sessionId); return record; }
     if (Date.now() - holderCheckedAt >= 250) {
       holder = await conversationHolder(sessionId);
       holderCheckedAt = Date.now();
@@ -106,7 +122,9 @@ async function spawnSessionWorker(sessionId: string): Promise<WorkerRuntimeRecor
     // A scripted send is running a turn in-process: the worker starts when it
     // ends, and this waits for it like any turn already running.
     if (Date.now() > deadline && holder?.kind !== 'turn') {
-      throw new Error(`session worker for "${sessionId}" did not start in time`);
+      const cause = failureText(readStartLog(sessionId));
+      removeStartLog(sessionId);
+      throw new Error(`session worker for "${sessionId}" did not start in time${cause ? `:\n${cause}` : ' (it wrote nothing to say why; see "clikcode logs")'}`);
     }
     await delay(SPAWN_POLL_MS);
   }
@@ -132,8 +150,8 @@ async function socketReleased(record: WorkerRuntimeRecord): Promise<boolean> {
  * worker answers within milliseconds even mid-turn, and a message sent right
  * after switching waits on it. */
 const RETIRE_ANSWER_MS = 500;
-/** How long a window waits for a worker's first reply (its snapshot). */
-const ATTACH_ANSWER_MS = 30_000;
+/** How long a window waits for a worker's first reply (its snapshot). CLIKCODE_ATTACH_ANSWER_MS shortens it for tests. */
+const ATTACH_ANSWER_MS = Number(process.env.CLIKCODE_ATTACH_ANSWER_MS) > 0 ? Number(process.env.CLIKCODE_ATTACH_ANSWER_MS) : 30_000;
 
 /** Asks a worker on another build to step down. It knows whether it is in
  * the middle of something and the asking window does not -- so it decides:
@@ -196,6 +214,21 @@ async function retireIfStale(record: WorkerRuntimeRecord): Promise<WorkerRuntime
   // No answer: kept. A window never stops a worker it cannot ask -- but one
   // that is no longer there (it went while being asked) is not attached to.
   return (await recordIsLive(record)) ? record : undefined;
+}
+
+/** Ends a worker that accepted two attaches and answered neither, by the pid in its record, and
+ * waits for its socket to be free for the replacement. Only that one process is signalled: never a
+ * process group, which a worker started over a shared session may be in with other things. */
+async function replaceUnresponsiveWorker(record: WorkerRuntimeRecord): Promise<void> {
+  lifecycle('client.worker.unresponsive', { worker: record.sessionId, workerPid: record.pid });
+  const current = await readWorkerRecord(record.sessionId);
+  // Another window already replaced it: the record is no longer the one that was silent.
+  if (current && current.pid !== record.pid) return;
+  for (const signal of ['SIGTERM', 'SIGKILL'] as const) {
+    if (!processAlive(record.pid)) break;
+    try { process.kill(record.pid, signal); } catch { break; }
+    if (await socketReleased(record)) break;
+  }
 }
 
 /** Asks every worker still running a different build to step down. Idle ones
@@ -282,6 +315,14 @@ function tellWorker(record: WorkerRuntimeRecord, command: ClientCommand): Promis
     socket.on('connect', () => { socket.end(encodeFrame(command), done); });
     socket.on('error', done);
   });
+}
+
+/** A worker took the connection and never answered the attach. */
+class WorkerSilent extends Error {
+  constructor() {
+    super('the conversation\'s worker did not answer');
+    this.name = 'WorkerSilent';
+  }
 }
 
 /** The connection ended before the worker said anything. */
@@ -386,7 +427,24 @@ export class WorkerClient extends EventEmitter {
 
   static async attach(sessionId: string): Promise<WorkerClient> {
     const running = await usableWorker(sessionId);
-    if (running) return WorkerClient.connectTo(running);
+    if (running) {
+      try {
+        return await WorkerClient.connectTo(running);
+      } catch (first) {
+        if (!(first instanceof WorkerSilent)) throw first;
+      }
+      // Silent once may be a busy moment; silent twice is a worker that will not answer, and a
+      // window that cannot ask it to step down must not wait on it for ever (a turn it held is
+      // journaled and picked up by the replacement).
+      try {
+        return await WorkerClient.connectTo(running);
+      } catch (second) {
+        if (!(second instanceof WorkerSilent)) throw second;
+      }
+      await replaceUnresponsiveWorker(running);
+      await ensureSessionOnDisk(sessionId);
+      return WorkerClient.connectTo(await spawnSessionWorker(sessionId));
+    }
     // The worker is another process and reads the chat from disk. A new
     // chat is a draft in this one until it is used, and starting its worker
     // is using it: one started first found nothing and crashed.
@@ -426,7 +484,7 @@ export class WorkerClient extends EventEmitter {
     // A worker that took the connection and says nothing is not waited on for ever.
     const initial = await Promise.race([
       client.initialSnapshot,
-      new Promise<never>((_, reject) => { setTimeout(() => reject(new Error('the conversation\'s worker did not answer')), ATTACH_ANSWER_MS).unref(); }),
+      new Promise<never>((_, reject) => { setTimeout(() => reject(new WorkerSilent()), ATTACH_ANSWER_MS).unref(); }),
     ]).catch((error: unknown) => { client.close(); throw error; });
     if (initial.type === 'attach-rejected') { client.close(); throw new Error(`worker rejected this connection: ${initial.reason}`); }
     return client;

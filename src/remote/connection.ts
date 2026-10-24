@@ -315,7 +315,7 @@ export class RemoteLink {
         const answered = new Promise<unknown>((resolve, reject) => {
           const timer = setTimeout(() => {
             open.pending.delete(requestId);
-            reject(new Error(`${this.view.machine.name} did not answer "${request.type}" within ${REQUEST_TIMEOUT_MS / 1000}s`));
+            reject(new Error(`${this.view.machine.name} did not answer "${request.type}" within ${(this.options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS) / 1000}s`));
           }, this.options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS);
           timer.unref();
           open.pending.set(requestId, { resolve: (value) => { clearTimeout(timer); resolve(value); }, reject: (error) => { clearTimeout(timer); reject(error); } });
