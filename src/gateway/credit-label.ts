@@ -29,8 +29,8 @@ export async function gatewayCreditLabel(config: Conf, options: { fresh?: boolea
 
 /** The terminal composer shows this chat's recorded cost beside the account
  * balance. The editor renders the same two facts in separate status slots. */
-export function gatewayConversationUsageLabel(costUsd: number | undefined, creditLabel: string | undefined, breakdown?: { meteredUsd?: number; gpuUsd?: number }): string | undefined {
-  const parts = [chatCostLabel(costUsd, breakdown), creditLabel].filter((part): part is string => Boolean(part));
+export function gatewayConversationUsageLabel(costUsd: number | undefined, creditLabel: string | undefined): string | undefined {
+  const parts = [chatCostLabel(costUsd), creditLabel].filter((part): part is string => Boolean(part));
   return parts.length ? parts.join(' • ') : undefined;
 }
 

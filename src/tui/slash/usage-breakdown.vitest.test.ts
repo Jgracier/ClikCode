@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { HarnessState } from '../../session/model.js';
 import { conversationCost, conversationCostBreakdown, usageReport } from './usage-report.js';
-import { chatCostLabel } from '../render/usage-words.js';
+import { chatCostLabel, costSplitParts } from '../render/usage-words.js';
 import { gatewayConversationUsageLabel } from '../../gateway/credit-label.js';
 import { agentTurnUsage } from '../../gateway/harness.js';
 import { recordInvocation } from '../../turn/turn-output.js';
@@ -29,15 +29,23 @@ describe('the chat cost split', () => {
     expect(conversationCost(state([turn('a')]), 'chat')).toBeUndefined();
   });
 
-  it('words it beside the total, leaving out a zero side or the whole split', () => {
-    expect(chatCostLabel(0.42, { meteredUsd: 0.3, gpuUsd: 0.12 })).toBe('$0.42 this chat · API $0.30 · GPU $0.12');
-    expect(chatCostLabel(0.12, { meteredUsd: 0, gpuUsd: 0.12 })).toBe('$0.12 this chat · GPU $0.12');
-    expect(chatCostLabel(0.3, { meteredUsd: 0.3 })).toBe('$0.30 this chat · API $0.30');
-    expect(chatCostLabel(0.42, undefined)).toBe('$0.42 this chat');
-    expect(chatCostLabel(0.42, { meteredUsd: 0, gpuUsd: 0 })).toBe('$0.42 this chat');
-    expect(chatCostLabel(undefined, { gpuUsd: 1 })).toBeUndefined();
-    expect(gatewayConversationUsageLabel(0.42, '$5.00 credit left', { meteredUsd: 0.3, gpuUsd: 0.12 })).toBe('$0.42 this chat · API $0.30 · GPU $0.12 • $5.00 credit left');
+  it('shows one number in the footer: the total of whatever was used, API, GPU or both', () => {
+    expect(chatCostLabel(0.42)).toBe('$0.42 this chat');
+    expect(chatCostLabel(0.12)).toBe('$0.12 this chat');
+    expect(chatCostLabel(undefined)).toBeUndefined();
+    expect(chatCostLabel(Number.NaN)).toBeUndefined();
+    expect(gatewayConversationUsageLabel(0.42, '$5.00 credit left')).toBe('$0.42 this chat • $5.00 credit left');
+    expect(gatewayConversationUsageLabel(undefined, '$5.00 credit left')).toBe('$5.00 credit left');
   });
+
+  it('words where it went (API / GPU) for /usage, leaving out a zero side or the whole split', () => {
+    expect(costSplitParts({ meteredUsd: 0.3, gpuUsd: 0.12 })).toEqual(['API $0.30', 'GPU $0.12']);
+    expect(costSplitParts({ meteredUsd: 0, gpuUsd: 0.12 })).toEqual(['GPU $0.12']);
+    expect(costSplitParts({ meteredUsd: 0.3 })).toEqual(['API $0.30']);
+    expect(costSplitParts({ meteredUsd: 0, gpuUsd: 0 })).toEqual([]);
+    expect(costSplitParts(undefined)).toEqual([]);
+  });
+
 
   it('shows in the /usage report', () => {
     const s = { ...state([turn('new', { costUsd: 0.42, costBreakdown: { meteredUsd: 0.3, gpuUsd: 0.12 } })]), accounts: [], sessions: [] } as unknown as HarnessState;

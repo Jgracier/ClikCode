@@ -148,7 +148,7 @@ export function applyEvent(model: ChatModel, event: IdeEvent): ChatModel {
       // The terminal's own words: the reset in place of the figure once a
       // window is spent, "Out Of Credits" for a spent balance.
       return {
-        ...model, accountUsage: composerUsageLabel(event.label, event.reset), chatCost: chatCostLabel(event.chatCost, event.chatSplit),
+        ...model, accountUsage: composerUsageLabel(event.label, event.reset), chatCost: chatCostLabel(event.chatCost),
         // Spent, the label already is the reset.
         accountUsageNext: event.reset ? undefined : event.next, accountUsageDetail: event.detail,
       };
