@@ -174,6 +174,27 @@ export async function allSavedLogins(stateDir: string): Promise<{ id: string; si
     .sort((a, b) => a.site.localeCompare(b.site) || byLabel(a, b));
 }
 
+/** A site given as a host ("wordnik.com") or a URL. */
+function siteUrl(site: string): string {
+  const value = site.trim();
+  if (!value) throw new CredentialError('Name the site whose saved login to remove.');
+  return /^https?:\/\//i.test(value) ? value : `https://${value}`;
+}
+
+/** Remove the saved logins for one site, or only the one account whose label (username or email) matches.
+ * Returns how many were removed; the labels stay out of the result. */
+export async function forgetSavedLogins(stateDir: string, site: string, label?: string): Promise<number> {
+  const url = siteUrl(site);
+  siteOrigin(url);
+  const wanted = label?.trim().toLowerCase();
+  let removed = 0;
+  for (const login of await savedLoginsForSite(stateDir, url)) {
+    if (wanted && login.label.toLowerCase() !== wanted && !login.label.toLowerCase().split(' · ').includes(wanted)) continue;
+    if (await removeSavedLogin(stateDir, login.id)) removed++;
+  }
+  return removed;
+}
+
 export async function removeSavedLogin(stateDir: string, id: string): Promise<boolean> {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) throw new CredentialError('Invalid saved login reference.');
   try { await fs.unlink(path.join(vaultDir(stateDir), 'items', `${id}.json`)); return true; }

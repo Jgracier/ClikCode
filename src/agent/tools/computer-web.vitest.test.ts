@@ -176,6 +176,21 @@ describe('profile ask_fields and custom: an agent asks for the details a task ne
     try { await setComputerEnabled(stateDir, true); await body(stateDir); } finally { lockCredentialVault(stateDir); await rm(stateDir, { recursive: true, force: true }); }
   };
 
+  it('forget_login removes a site\'s saved login from the vault and answers with a count, never the account', async () => {
+    await withState(async (stateDir) => {
+      const { saveLoginFields, savedLoginsForSite } = await import('../computer/credential-vault.js');
+      await saveLoginFields(stateDir, 'https://login.wordnik.com/', { username: 'private@example.com', password: 'hunter2-saved' });
+      const none = await computerWebTool.run({ action: 'forget_login', target: 'wordnik.com', label: 'someone-else' } as never, { stateDir } as never);
+      expect(none.output).toContain('No saved login');
+      const done = await computerWebTool.run({ action: 'forget_login', target: 'login.wordnik.com', label: 'private@example.com' } as never, { stateDir } as never);
+      expect(done.output).toContain('Removed 1 saved login');
+      expect(done.output).not.toContain('private@example.com');
+      expect(await savedLoginsForSite(stateDir, 'https://login.wordnik.com/')).toEqual([]);
+      const missing = await computerWebTool.run({ action: 'forget_login' } as never, { stateDir } as never);
+      expect(missing.isError).toBe(true);
+    });
+  });
+
   it('asks once, privately, with what is kept offered back, and saves the answers as a named profile', async () => {
     await withState(async (stateDir) => {
       const asked: Array<{ site: string; fields: Array<{ key: string; label: string; required: boolean; current?: string }> }> = [];
