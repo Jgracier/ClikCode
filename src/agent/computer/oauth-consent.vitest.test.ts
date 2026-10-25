@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { listTasks } from './work-queue.js';
-import { authorizationUrl, classifyStuck, oauthConnect, type ConsentStop, startFailure, callbackState, GENERIC_ACTIONS, nextPress, readConsent, decideSelectors, providerFor, stopReason, type Control } from './oauth-consent.js';
+import { authorizationUrl, classifyStuck, oauthConnect, type ConsentStop, startFailure, callbackState, GENERIC_ACTIONS, nextPress, readConsent, decideSelectors, providerFor, scopeTicks, scopesTicked, type ScopeBox, stopReason, type Control } from './oauth-consent.js';
 
 const press = (...names: string[]): Control[] => names.map(name => ({ name, leaf: false }));
 const pick = (host: string, controls: Control[], text = '', options: { email?: string; skipAccount?: boolean } = {}): string | undefined => {
@@ -212,5 +212,64 @@ describe('consent selectors', () => {
   it('stops and lists the options when there are several and none is chosen', () => {
     const plan = decideSelectors([{ label: 'Organization', options: ['Acme', 'Beta'] }]);
     expect('stop' in plan && plan.stop).toContain('Acme | Beta');
+  });
+});
+
+describe('Google granular consent and the unverified-app chain', () => {
+  const google = 'accounts.google.com';
+  const granular = 'ClikDeploy wants access to your Google Account me@example.com Select all Select what ClikDeploy can access View your Google Fit activity View your sleep data Make sure you trust ClikDeploy Cancel Continue';
+  const box = (index: number, name: string, checked = false): ScopeBox => ({ index, name, checked });
+
+  it('ticks only "Select all" when it is offered and nothing is ticked', () => {
+    const boxes = [box(0, 'Select all'), box(1, 'View your Google Fit activity'), box(2, 'View your sleep data')];
+    expect(scopeTicks(boxes, granular)).toEqual([0]);
+    expect(scopesTicked(boxes)).toBe(false);
+    expect(scopesTicked(boxes.map(b => ({ ...b, checked: true })))).toBe(true);
+  });
+
+  it('ticks every unticked scope box when there is no Select all, and leaves ticked ones', () => {
+    expect(scopeTicks([box(0, 'View activity', true), box(1, 'View sleep'), box(2, 'View location')], granular)).toEqual([1, 2]);
+  });
+
+  it('ticks the rest when Select all is ticked but a scope is not', () => {
+    expect(scopeTicks([box(0, 'Select all', true), box(1, 'View activity', true), box(2, 'View sleep')], granular)).toEqual([2]);
+  });
+
+  it('does nothing when all is ticked, there are no boxes, or the boxes are not scopes', () => {
+    expect(scopeTicks([box(0, 'Select all', true), box(1, 'View activity', true)], granular)).toEqual([]);
+    expect(scopeTicks([], granular)).toEqual([]);
+    expect(scopeTicks([box(0, 'Remember me'), box(1, 'Send me marketing offers')], granular)).toEqual([]);
+  });
+
+  it('never ticks on a page that does not name the app, or on payment, credits or captcha pages', () => {
+    const boxes = [box(0, 'Select all'), box(1, 'View data')];
+    expect(scopeTicks(boxes, 'Some other app wants access to your account Continue')).toEqual([]);
+    expect(scopeTicks(boxes, 'ClikDeploy: add a payment method. Card number Select all')).toEqual([]);
+    expect(scopeTicks(boxes, 'ClikDeploy wants access. You have no credits. Select all')).toEqual([]);
+    expect(scopeTicks(boxes, 'ClikDeploy wants access. Please verify you are human. I\'m not a robot')).toEqual([]);
+  });
+
+  it('recognizes the app by the redirect host too', () => {
+    expect(scopeTicks([box(0, 'Select all')], 'Acme wants access to your account', { appNames: ['Other'], redirectHost: 'acme.example' })).toEqual([]);
+    expect(scopeTicks([box(0, 'Select all')], 'Sending to acme.example now', { appNames: ['Other'], redirectHost: 'acme.example' })).toEqual([0]);
+  });
+
+  it('presses Continue on the granular page', () => {
+    expect(pick(google, press('Cancel', 'Continue'), granular)).toBe('Continue');
+  });
+
+  it('walks the warning chain: Advanced, Go to (unsafe), signing back in Continue, second notice Continue', () => {
+    const warning = 'Google hasn\'t verified this app. ClikDeploy has not completed the Google verification process. Back to safety Advanced';
+    expect(pick(google, [{ name: 'Back to safety', leaf: false }, { name: 'Advanced', leaf: true }], warning)).toBe('Advanced');
+    const opened = warning + ' Go to ClikDeploy (unsafe)';
+    expect(pick(google, press('Back to safety', 'Go to ClikDeploy (unsafe)'), opened)).toBe('Go to ClikDeploy (unsafe)');
+    const signBack = 'You\'re signing back in to ClikDeploy me@example.com. If you continue, ClikDeploy will be able to access the info you already allowed. Cancel Continue';
+    expect(pick(google, press('Cancel', 'Continue'), signBack)).toBe('Continue');
+    const second = 'This app hasn\'t been verified by Google yet. Only proceed if you know and trust the developer. Cancel Continue';
+    expect(pick(google, press('Cancel', 'Continue'), second)).toBe('Continue');
+  });
+
+  it('does not press Continue on a payment page', () => {
+    expect(pick(google, press('Continue'), 'Add a payment method. Card number. Continue')).toBeUndefined();
   });
 });
