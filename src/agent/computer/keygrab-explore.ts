@@ -47,8 +47,8 @@ function added(view: KeyView, before: KeyView): KeyControl[] {
 /** Which controls open a menu: flagged by the page (aria-haspopup / aria-expanded), or named like an avatar, account or switcher, or the signed-in address or initials. */
 export function menuOpeners(view: KeyView, email?: string): KeyControl[] {
   const mail = email?.toLowerCase();
-  return view.controls.filter(c => !c.leaf && !c.footer && c.name.length <= 80 && !DESTRUCTIVE.test(c.name)
-    && (c.menu === true || OPENER_WORDS.test(c.name) || (mail && c.name.toLowerCase().includes(mail)) || /^[A-Z]{1,2}$/.test(c.name.trim()) || /@/.test(c.name)))
+  return view.controls.filter(c => !c.footer && c.name.length <= 80 && !DESTRUCTIVE.test(c.name)
+    && (c.menu === true || (!c.leaf && OPENER_WORDS.test(c.name)) || (mail && c.name.toLowerCase().includes(mail)) || /^[A-Z]{1,2}$/.test(c.name.trim()) || /@/.test(c.name)) && !(c.leaf && c.menu !== true))
     .sort((a, b) => Number(b.menu === true) - Number(a.menu === true));
 }
 

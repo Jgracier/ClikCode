@@ -163,6 +163,21 @@ describe('post-login exploration', () => {
     expect(site.log[0]).not.toBe(`open ${APP}/`);
   });
 
+  it('a press on Log in that lands straight in the app counts as signed in (Probely/Snyk one-click login), then explores', async () => {
+    const site = fakeSite({
+      'https://vendor.example/': { text: 'Scan your web apps Get started for free Log in', controls: ['Get started for free', 'Log in'], on: { 'Log in': `${APP}/wizard`, 'Get started for free': `${APP}/wizard` } },
+      // observed: the signed-in wizard of plus.probely.app
+      [`${APP}/wizard`]: { text: 'Snyk API & Web Dashboard Discovery Targets Findings Scans Settings Help Justin Getting started 1 Welcome Skip Next', controls: [{ name: 'Dashboard', nav: true }, { name: 'Settings', nav: true, href: `${APP}/settings` }, { name: 'Justin', leaf: true, menu: true }, 'Getting started', 'Skip', 'Next'], on: { Skip: `${APP}/targets`, Justin: `${APP}/wizard#menu` } },
+      [`${APP}/wizard#menu`]: { text: 'Justin Profile Account Log out', controls: [{ name: 'Justin', leaf: true, menu: true }, 'Profile', 'Account', 'Log out'], keys: { Escape: `${APP}/wizard` } },
+      [`${APP}/targets`]: { text: 'Targets', controls: [{ name: 'Settings', nav: true, href: `${APP}/settings` }, { name: 'Justin', leaf: true, menu: true }], on: { Justin: `${APP}/wizard#menu` } },
+      [`${APP}/settings`]: { text: 'Settings Users API Keys', controls: [{ name: 'API Keys', nav: true, href: `${APP}/api-keys` }] },
+      [`${APP}/api-keys`]: keyPage, [`${APP}/token/made`]: created,
+    }, 'https://vendor.example/');
+    const done = await run(site, { url: 'https://vendor.example/' });
+    expect(done.ok).toBe(true);
+    expect(site.log.some(l => /Log out/.test(l))).toBe(false);
+  });
+
   it('opener detection: flagged menus, account names, the signed-in address and initials; never sign out', () => {
     const view: KeyView = { url: APP, text: '', fields: [], hasPassword: false, controls: [{ name: 'JG' }, { name: 'Sign out' }, { name: 'Switch workspace' }, { name: 'More', menu: true }, { name: 'Pricing' }, { name: 'user@example.com' }] };
     expect(menuOpeners(view, 'user@example.com').map(c => c.name)).toEqual(['More', 'JG', 'Switch workspace', 'user@example.com']);

@@ -110,3 +110,17 @@ describe('automatic recipes', () => {
     await expect(saveRecipe(dir, { host: 'x.com', loginRoute: 'google', steps: saved.steps })).resolves.toBeTruthy();
   }));
 });
+
+describe('compactSteps', () => {
+  const click = (target: string) => ({ do: 'click' as const, target });
+  it('keeps only the last lap of a journey that went round in circles', async () => {
+    const { compactSteps } = await import('./recipe-recorder.js');
+    const steps = [click('Add API key'), { do: 'fill' as const, target: 'Name' }, click('Generate key'), click('Select a team'), click('Add API key'), { do: 'fill' as const, target: 'Name' }, click('Generate key'), click('Select a team'), click('Global (account)'), click('Add'), click('Generate key')];
+    expect(compactSteps(steps).map(s => s.target)).toEqual(['Add API key', 'Name', 'Generate key', 'Select a team', 'Global (account)', 'Add', 'Generate key']);
+  });
+  it('never cuts a lone repeated press', async () => {
+    const { compactSteps } = await import('./recipe-recorder.js');
+    const steps = [click('Next'), { do: 'fill' as const, target: 'Name' }, click('Next')];
+    expect(compactSteps(steps)).toEqual(steps);
+  });
+});
