@@ -574,3 +574,36 @@ describe('keygrab action count', () => {
     if (!done.ok) expect(done.stop.actions).toBe(done.steps);
   });
 });
+
+describe('keygrab stops at a captcha box before filling anything', () => {
+  it('HERE sign-up: "Type the characters you see" is a captcha wall, nothing is typed', async () => {
+    const site = fakeSite({ 'https://vendor.example/': { text: 'Verify your identity\nPlease submit the requested info. A verification email will follow.', fields: ['First name', 'Last name', 'Email address', 'Company name', 'Type the characters you see'], controls: ['Verify email', 'Sign in instead'] } });
+    const done = await run(site);
+    expect(done).toMatchObject({ ok: false, stop: { kind: 'captcha', human: { kind: 'captcha' } } });
+    expect(site.filled).toEqual([]);
+  });
+});
+
+describe('keygrab API area links and where the tab is left', () => {
+  const api: Page = { text: 'Word Associations API The API provides access to the service. To subscribe and manage your subscriptions please register or sign in to your Word Associations API Account. Start Free', controls: ['Dictionary', 'API', 'Word Associations API Developer\'s Guide', 'Word Associations API Account'], on: { 'Word Associations API Account': 'https://vendor.example/account/signin' } };
+  it('follows "Word Associations API Account" to sign in, then finds the key', async () => {
+    const site = fakeSite({
+      'https://vendor.example/': { text: 'Word Associations Network', controls: ['Dictionary', 'API'], on: { API: 'https://vendor.example/en/api' } },
+      'https://vendor.example/en/api': api,
+      'https://vendor.example/account/signin': { text: 'Sign in', controls: ['Continue with Google'], on: { 'Continue with Google': 'https://accounts.google.com/chooser' } },
+      'https://accounts.google.com/chooser': { text: 'Choose an account', controls: ['user@example.com'], on: { 'user@example.com': 'https://vendor.example/portal' } },
+      'https://vendor.example/portal': { text: 'Your API subscription', controls: ['API Keys'], on: { 'API Keys': 'https://vendor.example/portal/k' } },
+      'https://vendor.example/portal/k': keysPage, 'https://vendor.example/keys/new': newKey, 'https://vendor.example/keys/made': madeKey,
+    });
+    expect(await run(site)).toMatchObject({ ok: true, route: 'google' });
+  });
+  it('leaves the browser on the most informative page, not on the last guessed 404 path', async () => {
+    const site = fakeSite({
+      'https://vendor.example/': { text: 'Welcome', controls: ['API'], on: { API: 'https://vendor.example/en/api' } },
+      'https://vendor.example/en/api': { text: 'The API is free to use, no key needed. Read the docs.', controls: ['Docs'] },
+    });
+    const done = await run(site);
+    expect(done.ok).toBe(false);
+    expect(site.at()).toBe('https://vendor.example/en/api');
+  });
+});
