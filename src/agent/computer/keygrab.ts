@@ -187,7 +187,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     return v;
   };
   const guard = async (view: KeyView): Promise<void> => {
-    const wall = keygrabWall(view.text, view.controls.some(isCreate), !view.hasPassword && view.controls.some(c => pressable(c) && !c.footer && (GOOGLE_BUTTON.test(c.name) || GITHUB_BUTTON.test(c.name) || SIGN_IN_ENTRY.test(c.name) || SIGN_UP_ENTRY.test(c.name))), { ...(view.captchaFrame ? { captchaFrame: true } : {}), fields: view.fields });
+    const wall = keygrabWall(view.text, view.controls.some(isCreate), offersSignIn(view), { ...(view.captchaFrame ? { captchaFrame: true } : {}), fields: view.fields });
     if (wall) throw await wallStop(view, wall);
   };
   const look = async (): Promise<KeyView> => {
@@ -209,7 +209,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
   };
   const revealOf = (v: KeyView): KeyControl | undefined => offersSignIn(v) ? undefined : /\b(api|key|token|secret)/i.test(v.text) ? v.controls.find(c => pressable(c) && REVEAL.test(c.name)) : undefined;
   // A landing page that still offers sign-in shows no key of ours, whatever its text looks like.
-  const offersSignIn = (v: KeyView): boolean => !v.hasPassword ? v.controls.some(c => pressable(c) && !c.footer && (GOOGLE_BUTTON.test(c.name) || GITHUB_BUTTON.test(c.name) || SIGN_IN_ENTRY.test(c.name) || SIGN_UP_ENTRY.test(c.name))) : true;
+  const offersSignIn = (v: KeyView): boolean => !v.hasPassword ? providerButtons(v, GOOGLE_BUTTON).length > 0 || providerButtons(v, GITHUB_BUTTON).length > 0 || v.controls.some(c => pressable(c) && !c.footer && (SIGN_IN_ENTRY.test(c.name) || SIGN_UP_ENTRY.test(c.name))) : true;
   const showsKey = (v: KeyView): boolean => !offersSignIn(v) && /\b(api[- ]?keys?|secret|token|access key)\b/i.test(v.text) && v.text.split(/\s+/).some(word => keyShaped(word.replace(/^[("'`]+|[)"'`,.;]+$/g, '')));
   const isKeyPage = (v: KeyView): boolean => !!createOf(v) || !!revealOf(v) || showsKey(v);
   const hasEntry = (v: KeyView): boolean => !!entryOf(v, SIGN_IN_ENTRY) || !!entryOf(v, SIGN_UP_ENTRY) || !!entryOf(v, SIGN_IN_LOOSE);
@@ -284,7 +284,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
 
   /** Controls that mean sign-in, outside the footer, a provider's own link excluded: "Continue with Google" style first. */
   const providerButtons = (v: KeyView, re: RegExp): KeyControl[] => v.controls
-    .filter(c => pressable(c) && !c.footer && re.test(c.name) && !(c.href && SOCIAL_HOST.test(hostOf(c.href))))
+    .filter(c => c.name.length <= 80 && (!c.leaf || providerRank(c) < 2) && !c.footer && re.test(c.name) && !(c.href && SOCIAL_HOST.test(hostOf(c.href))))
     .sort((a, b) => providerRank(a) - providerRank(b));
   const entryOf = (v: KeyView, re: RegExp): KeyControl | undefined => v.controls.find(c => pressable(c) && !c.footer && re.test(c.name.replace(/\s*last used\s*$/i, '').trim()));
 
