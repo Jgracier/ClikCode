@@ -151,7 +151,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
   let steps = 0;
   let route = 'none';
   const trail: string[] = [];
-  let signedIn = false;
+  let authTries = 0;
   const say = (line: string): void => options.log?.(`keygrab ${options.id}: ${line}`);
 
   const act = async <T>(what: string, run: () => Promise<T>): Promise<T> => {
@@ -303,6 +303,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
 
   /** Sign in to the vendor from whatever sign-in or sign-up screen is showing. */
   const authenticate = async (): Promise<void> => {
+    authTries++;
     for (let attempt = 0; attempt < 4; attempt++) {
       const v = await look();
       if (await choose(v)) continue;
@@ -316,11 +317,10 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
           route = name;
           await providerScreens();
           await verifyEmail();
-          signedIn = true;
           return;
         }
       }
-      if (v.hasPassword || v.fields.some(f => /e-?mail/i.test(f))) { await emailRoute(v); signedIn = true; return; }
+      if (v.hasPassword || v.fields.some(f => /e-?mail/i.test(f))) { await emailRoute(v); return; }
       const entry = entryOf(v, SIGN_UP_ENTRY) ?? entryOf(v, SIGN_IN_ENTRY) ?? entryOf(v, SIGN_IN_LOOSE);
       if (!entry) break;
       await click(entry.name);
@@ -336,28 +336,43 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
   };
 
   /** Walks to the API key page: menu items that read like one, then the common paths. Returns the view of the page that offers a key. */
+  let homeUrl = '';
   const findKeyPage = async (start: KeyView): Promise<KeyView> => {
     let v = start;
     let shown = start; // the last page that was a real page, for the report if nothing is found
     if (isKeyPage(v)) return v;
-    const links = [
-      ...v.controls.filter(c => pressable(c) && !NEVER_KEY.test(c.name) && API_LINK.test(c.name)),
-      ...v.controls.filter(c => pressable(c) && !NEVER_KEY.test(c.name) && !API_LINK.test(c.name) && API_LINK_WEAK.test(c.name)),
+    const linksOf = (page: KeyView): KeyControl[] => [
+      ...page.controls.filter(c => pressable(c) && !NEVER_KEY.test(c.name) && API_LINK.test(c.name)),
+      ...page.controls.filter(c => pressable(c) && !NEVER_KEY.test(c.name) && !API_LINK.test(c.name) && API_LINK_WEAK.test(c.name)),
     ].filter((c, i, all) => all.findIndex(o => o.name === c.name) === i).slice(0, 3);
-    for (const link of links) {
-      if (!(await click(link.name))) continue;
-      await sleep(700);
-      v = await look();
-      if (authWall(v) && !signedIn) { await authenticate(); v = await look(); }
-      if (isKeyPage(v)) return v;
-      shown = v;
+    // The page we are on after signing in (an account area, a sign-in host) may have no API menu: the vendor's own front page does.
+    const sources: Array<{ at?: string; page: KeyView }> = [{ page: v }];
+    if (homeUrl && pathOf(homeUrl) !== pathOf(v.url)) sources.push({ at: homeUrl, page: v });
+    for (const source of sources) {
+      if (source.at) {
+        const home = await openAt(source.at);
+        if (!home) continue;
+        if (isKeyPage(home)) return home;
+        source.page = home;
+        shown = home;
+      }
+      for (const link of linksOf(source.page)) {
+        if (!(await click(link.name))) continue;
+        await sleep(700);
+        v = await look();
+        if (authWall(v) && authTries < 2) { await authenticate(); v = await look(); }
+        if (isKeyPage(v)) return v;
+        shown = v;
+        // The link led somewhere that is no key page: the next link starts from the same front page again.
+        if (source.at && pathOf(v.url) !== pathOf(source.at)) { const back = await openAt(source.at); if (!back) break; }
+      }
     }
     const origins = [...new Set([originOf(options.url), originOf(v.url)].filter(o => o && !HOSTS_OF_SIGN_IN.test(hostOf(o)) && !/^(?:auth|login|accounts|sso|idp|ui\.idp)\b/i.test(hostOf(o))))];
     for (const origin of origins) {
       for (const path of KEY_PATHS) {
         let page = await openAt(`${origin}${path}`);
         if (!page || NOT_FOUND.test(page.text.slice(0, 400))) continue;
-        if (authWall(page) && !signedIn) { await authenticate(); page = await openAt(`${origin}${path}`); if (!page) continue; }
+        if (authWall(page) && authTries < 2) { await authenticate(); page = await openAt(`${origin}${path}`); if (!page) continue; }
         if (isKeyPage(page)) return page;
         shown = page;
       }
@@ -381,6 +396,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     const first = await openAt(startUrl);
     if (!first) throw await stop('unknown', `could not open ${pathOf(startUrl)}`);
     let v = first;
+    homeUrl = first.url;
     // An API host (no controls at all, a bare JSON error) is not the vendor's site: start from its parent domain.
     const labels = hostOf(v.url).split('.');
     if (!v.controls.length && !v.fields.length && labels.length > 2) {

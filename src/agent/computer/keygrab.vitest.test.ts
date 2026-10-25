@@ -388,6 +388,22 @@ describe('keygrab provider screens', () => {
   });
 });
 
+describe('keygrab key page from the front page', () => {
+  it('goes back to the vendor front page for its API link when sign-in ends in an account area', async () => {
+    const site = fakeSite({
+      'https://vendor.example/': { text: 'Lyrics', controls: ['Sign in with Google', 'API', 'Documentation'], on: { 'Sign in with Google': 'https://accounts.google.com/chooser', API: 'https://developer.vendor.example/' } },
+      'https://accounts.google.com/chooser': { text: 'Choose an account', controls: ['user@example.com'], on: { 'user@example.com': 'https://account.vendor.example/' } },
+      'https://account.vendor.example/': { text: 'Account Personal info', controls: ['Personal info'] },
+      'https://developer.vendor.example/': { text: 'Developer portal', controls: ['Sign in with Google'], on: { 'Sign in with Google': 'https://accounts.google.com/chooser2' } },
+      'https://accounts.google.com/chooser2': { text: 'Choose an account', controls: ['user@example.com'], on: { 'user@example.com': 'https://developer.vendor.example/keys' } },
+      'https://developer.vendor.example/keys': keysPage, 'https://vendor.example/keys/new': newKey, 'https://vendor.example/keys/made': madeKey,
+    });
+    const done = await run(site);
+    expect(done.ok).toBe(true);
+    expect(site.log).toContain('click API');
+  });
+});
+
 describe('keygrab walls need strong evidence', () => {
   const aiception = "AIception Artificial Intelligence for Humankind LET'S TALK PROTOTYPE YOURSELF About Lessons learned: 1. KYC Remediation is challenging. 2. OCR is not a silver bullet. Discover how AI can streamline document verification, reduce customs delays, and improve compliance";
   const shipstation = 'ShipStation Talk to an Expert Your business is growing. We keep it moving. Start Shipping Now No credit card required Cancel anytime Pricing Plans Starter Growth Pro';
