@@ -6,7 +6,7 @@
 import { scrubSecrets } from './secret-scrubber.js';
 import { detectBlocker } from './signup-recipes.js';
 
-export type HumanKind = 'captcha' | 'mfa' | 'payment' | 'identity' | 'app-review' | 'app-registration' | 'worker-setup';
+export type HumanKind = 'captcha' | 'mfa' | 'sms' | 'payment' | 'identity' | 'app-review' | 'app-registration' | 'vendor-contact' | 'decision' | 'worker-setup';
 export interface HumanStep { kind: HumanKind | 'retire'; url?: string; instructions?: string; reasonCode?: string; prefill?: string[] }
 export interface AgentCall { tool: string; args: Record<string, unknown> }
 export type Next =
@@ -14,12 +14,17 @@ export type Next =
   | { kind: 'agent'; task: string; then?: string; call?: AgentCall; orElse?: AgentCall }
   | { kind: 'human'; task: string; humanStep: HumanStep; then?: string }
   | { kind: 'none'; task: string };
-export interface OnboardResult { id: string; state: 'running' | 'needs-agent' | 'needs-human' | 'published' | 'blocked'; stage: string; route?: string | null; next: Next; reason: string; lease?: string }
+export interface OnboardResult {
+  id: string; state: 'running' | 'needs-agent' | 'needs-human' | 'published' | 'blocked' | 'complete' | 'attention' | 'in-progress'; stage: string; route?: string | null; next: Next; reason: string; lease?: string;
+  /** The connector's attention record, when ClikDeploy has one. */ attention?: unknown;
+  /** One line per unit ClikDeploy ran, newest last. */ evidence?: string[];
+}
 
 /** Where a browser step stopped, as data. */
 export interface StopInfo {
   kind: 'captcha' | 'mfa' | 'payment' | 'password' | 'unrecognized-client' | 'choice' | 'unknown';
   message: string; url: string; pageText: string; controls: string[]; screenshot?: string;
+  /** Set when the browser work already knows this is a wall only a person clears (keygrab does). */ human?: HumanStep;
 }
 export type DriveOutcome = { ok: true; note?: string } | { ok: false; stop: StopInfo };
 
@@ -39,6 +44,8 @@ export interface BrowserDriver {
   /** Whether a saved recipe could capture a key for this connector (the address is a hint taken from the task). */
   hasRecipe(id: string, url?: string): Promise<boolean>;
   captureKey(id: string, url?: string): Promise<DriveOutcome>;
+  /** The generic key-capture policy (keygrab): sign in, find the key page, create and capture a key, record the recipe. */
+  keygrab(id: string, url: string, budget: { maxMs: number }): Promise<DriveOutcome>;
 }
 
 export interface RunnerOptions {
@@ -53,8 +60,12 @@ export interface RunnerOptions {
 }
 
 export type VendorStatus = 'published' | 'blocked' | 'human' | 'handoff' | 'budget' | 'waiting' | 'error';
-export interface VendorOutcome { id: string; status: VendorStatus; steps: number; stage: string; summary: string; actions: string[]; humanStep?: HumanStep; handoff?: { file?: string; request: HandoffRequest }; recorded?: string }
-export interface HandoffRequest { id: string; why: string; task: string; url?: string; pageText?: string; controls?: string[]; screenshot?: string }
+export interface VendorOutcome { id: string; status: VendorStatus; steps: number; stage: string; summary: string; actions: string[]; humanStep?: HumanStep; handoff?: { file?: string; request: HandoffRequest }; recorded?: string; attention?: { kind: string; owner: string } }
+export interface HandoffRequest {
+  id: string; why: string; /** The whole task text. */ task: string; url?: string; pageText?: string; controls?: string[]; screenshot?: string;
+  call?: AgentCall; orElse?: AgentCall; attention?: unknown; /** The last 3 evidence lines. */ evidence?: string[];
+  /** Deterministic spec work (the auth probe ended path-wrong or placement), not browser work. */ specFix?: boolean;
+}
 
 /** The task kinds the runner knows. */
 export type Plan =
@@ -62,7 +73,9 @@ export type Plan =
   | { do: 'wait'; ms: number }
   | { do: 'oauth' }
   | { do: 'tool'; call: AgentCall }
-  | { do: 'capture'; url?: string }
+  | { do: 'capture'; url?: string; generic?: boolean }
+  | { do: 'report'; call: AgentCall }
+  | { do: 'specfix'; why: string; call?: AgentCall }
   | { do: 'human'; humanStep: HumanStep }
   | { do: 'handoff'; why: string };
 
@@ -71,6 +84,23 @@ export const RUNNABLE_TOOLS: ReadonlySet<string> = new Set(['connector_finish', 
 
 const URL_IN_TEXT = /https:\/\/[^\s"'<>)]+/;
 const WALL_STATES = new Set(['needs-human']);
+/** The auth probe ended with the key in the wrong place or on the wrong path: deterministic spec work for the gate/enrich tools. */
+const SPEC_FIX = /\bpath[- ]wrong\b|auth probe[^.\n]{0,80}(?:wrong|ended|mismatch|placement|path)|(?:key|token|credential|auth)[^.\n]{0,30}placement|placement[^.\n]{0,30}(?:wrong|mismatch)/i;
+export const isSpecFix = (text: string): boolean => SPEC_FIX.test(text);
+
+/** The vendor address in a task: an https address, or a bare domain after "at" or "from". */
+export function siteUrl(task: string): string | undefined {
+  const full = URL_IN_TEXT.exec(task)?.[0];
+  if (full) return full.replace(/[.,;]+$/, '');
+  const bare = /\b(?:at|from|on)\s+((?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s,;]*)?)/i.exec(task)?.[1];
+  return bare ? `https://${bare}` : undefined;
+}
+
+/** For a judgement task (its `call` is a connector_work_report): the report that blocks the item, with its reason ready. Any other task's `orElse` is only a way out, never run. */
+export function blockedCall(next: Next): AgentCall | undefined {
+  if (next.kind !== 'agent' || next.call?.tool !== 'connector_work_report') return undefined;
+  return [next.call, next.orElse].find(c => c?.tool === 'connector_work_report' && c.args.outcome === 'blocked');
+}
 
 export function waitMs(task: string, fallback = 5_000): number {
   const m = /(\d+)\s*(?:s\b|sec)/i.exec(task);
@@ -80,18 +110,29 @@ export function waitMs(task: string, fallback = 5_000): number {
 /** What to do about the task ClikDeploy returned. `recipe` says whether a saved recipe exists for it. */
 export function planFor(result: OnboardResult, recipe: boolean): Plan {
   const next = result.next;
-  if (result.state === 'published') return { do: 'done', status: 'published' };
-  if (next.kind === 'none') return { do: 'done', status: result.state === 'blocked' ? 'blocked' : 'published' };
+  if (result.state === 'published' || result.state === 'complete') return { do: 'done', status: 'published' };
+  if (result.state === 'attention') return { do: 'done', status: 'blocked' };
+  if (!next || next.kind === 'none') return { do: 'done', status: result.state === 'blocked' ? 'blocked' : 'published' };
+  if (next.kind === 'agent' && (isSpecFix(next.task) || isSpecFix(result.reason))) return { do: 'specfix', why: 'the auth probe ended path-wrong or in the wrong place: a spec fix', ...(blockedCall(next) ? { call: blockedCall(next)! } : {}) };
   if (next.kind === 'call') return { do: 'wait', ms: waitMs(next.task) };
   if (next.kind === 'human') return { do: 'human', humanStep: next.humanStep };
   if (WALL_STATES.has(result.state)) return { do: 'handoff', why: 'ClikDeploy says a person is needed but gave no step' };
   const call = next.call;
   if (call?.tool === 'oauth_connect') return { do: 'oauth' };
+  // A judgement task whose answer is a report the task already spells out: the runner makes the blocked report itself.
+  const blocked = blockedCall(next);
+  if (blocked) return { do: 'report', call: blocked };
   if (call && RUNNABLE_TOOLS.has(call.tool)) return { do: 'tool', call };
   if (call) return { do: 'handoff', why: `the task is the ${call.tool} call, which needs judgement` };
   if (/\boauth_connect\b|computer oauth-connect/i.test(next.task)) return { do: 'oauth' };
-  if (/\b(api key|capture_secret|credential|key)\b/i.test(next.task) && recipe) return { do: 'capture', ...(URL_IN_TEXT.exec(next.task)?.[0] ? { url: URL_IN_TEXT.exec(next.task)![0] } : {}) };
-  return { do: 'handoff', why: recipe ? 'the task is not one of the known kinds' : 'the task is not one of the known kinds and no saved recipe fits it' };
+  const url = siteUrl(next.task);
+  const wantsKey = /\b(api key|capture_secret|credential|key|token)\b/i.test(next.task);
+  if (wantsKey && recipe) return { do: 'capture', ...(url ? { url } : {}) };
+  // No saved recipe fits: the generic policy takes a task that asks for a key and names the site.
+  if (wantsKey && /\b(get|capture|create)\b[^\n]{0,40}\b(key|token|secret|credential)|capture_secret/i.test(next.task)) {
+    return url ? { do: 'capture', url, generic: true } : { do: 'handoff', why: 'a key is wanted but the task names no site address' };
+  }
+  return { do: 'handoff', why: 'the task is not one of the known kinds' };
 }
 
 const IDENTITY = /identity verification|verify your identity|business verification|government[- ]issued|id document|passport/i;
@@ -116,7 +157,10 @@ function cleanUrl(url: string | undefined): string | undefined {
   try { const u = new URL(url ?? ''); return u.protocol === 'https:' ? `${u.origin}${u.pathname}` : undefined; } catch { return undefined; }
 }
 
+const fix = (r: OnboardResult): OnboardResult => r.next ? r : { ...r, next: { kind: 'none', task: r.reason } };
 const cap = (text: string, n: number): string => text.length > n ? `${text.slice(0, n - 1)}…` : text;
+const firstLine = (text: string): string => text.split('\n')[0] ?? text;
+const scrubArgs = (call: AgentCall): AgentCall => JSON.parse(scrubSecrets(JSON.stringify(call))) as AgentCall;
 const say = (text: string): string => scrubSecrets(text);
 
 /** Runs one vendor from the result of its latest onboarding step until it is finished, handed on, or out of budget. */
@@ -127,12 +171,18 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
   const began = now();
   const id = first.id;
   const actions: string[] = [];
-  let result = first, steps = 0;
+  let result = fix(first), steps = 0;
   const seen = new Map<string, number>();
   const out = (status: VendorStatus, summary: string, extra: Partial<VendorOutcome> = {}): VendorOutcome => ({ id, status, steps, stage: result.stage, summary: say(summary), actions, ...extra });
   const handoff = async (why: string, stop?: StopInfo): Promise<VendorOutcome> => {
+    const next = result.next;
     const request: HandoffRequest = {
-      id, why: cap(say(why), 300), task: cap(say(result.next.task), 400),
+      id, why: cap(say(why), 300), task: say(next.task),
+      ...(next.kind === 'agent' && next.call ? { call: scrubArgs(next.call) } : {}),
+      ...(next.kind === 'agent' && next.orElse ? { orElse: scrubArgs(next.orElse) } : {}),
+      ...(result.attention ? { attention: JSON.parse(say(JSON.stringify(result.attention))) as unknown } : {}),
+      ...(result.evidence?.length ? { evidence: result.evidence.slice(-3).map(line => cap(say(line), 300)) } : {}),
+      ...(isSpecFix(next.task) || isSpecFix(result.reason) ? { specFix: true } : {}),
       ...(stop ? { url: stop.url, pageText: cap(say(stop.pageText), 300), controls: stop.controls.slice(0, 12).map(c => say(c)), ...(stop.screenshot ? { screenshot: stop.screenshot } : {}) } : {}),
     };
     let file: string | undefined;
@@ -143,7 +193,10 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
     } catch { file = undefined; }
     let recorded = 'the request is in the result only';
     try {
-      await client.note(id, cap(`clikcode connectors run handed this on: ${JSON.stringify(request)}`, 3900));
+      // The note is short; the file holds the whole request. The task text goes in the note whole up to the note's own limit.
+      const full = `clikcode connectors run handed this on: ${JSON.stringify(request)}`;
+      const lean = full.length > 3900 ? `clikcode connectors run handed this on (the file ${file ?? 'in the result'} holds the rest): ${JSON.stringify({ ...request, pageText: undefined, controls: undefined, attention: undefined })}` : full;
+      await client.note(id, cap(lean, 3900));
       recorded = 'written to the work item note';
     } catch (error) { recorded = `could not write the work item note (${cap(say(error instanceof Error ? error.message : String(error)), 120)})`; }
     return out('handoff', why, { handoff: { ...(file ? { file } : {}), request }, recorded });
@@ -157,7 +210,7 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
     return out('human', human.instructions ?? human.kind, { humanStep: human, recorded });
   };
   const stopped = (stop: StopInfo): Promise<VendorOutcome> => {
-    const human = humanStepFor(id, stop);
+    const human = stop.human ?? humanStepFor(id, stop);
     return human ? wall(human, false) : handoff(`${stop.kind === 'unknown' ? 'an unrecognized screen' : stop.kind}: ${stop.message}`, stop);
   };
 
@@ -169,7 +222,7 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
     seen.set(key, times);
     if (times > 3) return out('budget', `no progress: the same task came back ${times - 1} times (${cap(say(result.next.task), 120)})`);
 
-    const recipe = result.next.kind === 'agent' && !result.next.call && !/oauth_connect/i.test(result.next.task) ? await driver.hasRecipe(id, URL_IN_TEXT.exec(result.next.task)?.[0]) : false;
+    const recipe = result.next && result.next.kind === 'agent' && !result.next.call && !/oauth_connect/i.test(result.next.task) ? await driver.hasRecipe(id, siteUrl(result.next.task)) : false;
     const plan = planFor(result, recipe);
     steps++;
     try {
@@ -180,7 +233,7 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
         case 'wait': {
           actions.push(`wait ${plan.ms / 1000}s, call onboard again`);
           await sleep(plan.ms);
-          result = await client.onboard(id);
+          result = fix(await client.onboard(id));
           break;
         }
         case 'oauth': {
@@ -188,16 +241,48 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
           const done = await gate(() => driver.oauthConnect(id));
           if (!done.ok) return await stopped(done.stop);
           actions.push(done.note ?? 'consent finished, ClikDeploy shows an active connection');
-          result = await client.onboard(id);
+          result = fix(await client.onboard(id));
           break;
         }
         case 'capture': {
-          actions.push('capture the key with the saved recipe');
-          const done = await gate(() => driver.captureKey(id, plan.url));
+          const generic = async (url: string): Promise<DriveOutcome> => {
+            actions.push('no saved recipe fits: keygrab signs in, finds the key page, creates and captures a key');
+            return gate(() => driver.keygrab(id, url, { maxMs: Math.max(30_000, maxMs - (now() - began)) }));
+          };
+          let done: DriveOutcome;
+          if (plan.generic && plan.url) done = await generic(plan.url);
+          else {
+            actions.push('capture the key with the saved recipe');
+            done = await gate(() => driver.captureKey(id, plan.url));
+            // A recipe that no longer fits (the site changed) falls back to the generic policy; a wall stays a wall.
+            if (!done.ok && plan.url && !done.stop.human && !humanStepFor(id, done.stop)) done = await generic(plan.url);
+          }
           if (!done.ok) return await stopped(done.stop);
           actions.push(done.note ?? 'key captured unseen and sent to ClikDeploy');
-          result = await client.onboard(id);
+          result = fix(await client.onboard(id));
           break;
+        }
+        case 'report': {
+          // A judgement task: the answer is the blocked report ClikDeploy already wrote. Making it puts the item on the attention list.
+          const args = plan.call.args;
+          const given = typeof args.reason === 'string' ? args.reason.trim() : '';
+          const reason = given.length >= 10 ? given : (result.reason || firstLine(result.next.task)).padEnd(10, '.');
+          const humanStep = args.humanStep && typeof args.humanStep === 'object' ? args.humanStep as HumanStep : undefined;
+          actions.push('report the item blocked with the reason ClikDeploy wrote, so it shows on the attention list');
+          await client.report({ id, outcome: 'blocked', reason: cap(say(reason), 480), ...(humanStep ? { humanStep } : {}) });
+          return out('blocked', `reported blocked: ${cap(say(reason), 160)}`, { recorded: 'the item is attention on the list' });
+        }
+        case 'specfix': {
+          // Deterministic spec work for the gate/enrich tools, not browser work: the file is for an agent that can use connector_spec_patch.
+          actions.push('spec-fix: the auth probe ended path-wrong or in the wrong place');
+          const handed = await handoff(plan.why);
+          const reason = `platform-gap: ${cap(say(result.reason || firstLine(result.next.task)), 250)}`.padEnd(10, '.');
+          let recorded = handed.recorded ?? '';
+          try {
+            await client.report({ id, outcome: 'blocked', reason, humanStep: { kind: 'worker-setup', reasonCode: 'spec-fix', instructions: 'A builder fixes the connector spec (auth probe path or placement); nothing for a vendor portal.' } });
+            recorded = `reported as attention kind platform-gap owner builder; ${recorded}`;
+          } catch (error) { recorded = `could not report it (${cap(say(error instanceof Error ? error.message : String(error)), 120)}); ${recorded}`; }
+          return { ...handed, status: 'blocked', summary: `spec-fix: ${plan.why}`, recorded, attention: { kind: 'platform-gap', owner: 'builder' } };
         }
         case 'tool': {
           actions.push(`call ${plan.call.tool}`);
@@ -211,7 +296,7 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
             if (now() - began > maxMs) break;
           }
           actions.push(`${plan.call.tool} answered ${state || 'with no state'}`);
-          result = await client.onboard(id);
+          result = fix(await client.onboard(id));
           break;
         }
       }
@@ -271,7 +356,7 @@ export async function dryRun(client: DeployClient, driver: BrowserDriver, option
   const lines: PlanLine[] = [];
   for (const w of picked) {
     if (!w.task) { lines.push({ id: w.id, reason: w.reason, plan: 'advance one onboarding step, then act on the task it returns' }); continue; }
-    const url = URL_IN_TEXT.exec(w.task)?.[0];
+    const url = siteUrl(w.task);
     const recipe = await driver.hasRecipe(w.id, url).catch(() => false);
     const plan = planFor({ id: w.id, state: 'needs-agent', stage: 'connect', reason: w.reason, next: { kind: 'agent', task: w.task } }, recipe);
     lines.push({ id: w.id, reason: cap(say(w.reason), 160), plan: describePlan(plan) });
@@ -282,7 +367,11 @@ export async function dryRun(client: DeployClient, driver: BrowserDriver, option
 export function describePlan(plan: Plan): string {
   switch (plan.do) {
     case 'oauth': return 'connect the test account: ClikDeploy authorization URL, then press the consent screens in the ClikCode browser (Google sign-in first); confirm an active connection; call onboard again';
-    case 'capture': return `capture the key with the saved recipe${plan.url ? ` (${hostOf(plan.url)})` : ''}, unseen, send it to ClikDeploy; call onboard again`;
+    case 'capture': return plan.generic
+      ? `keygrab (no recipe fits${plan.url ? `, ${hostOf(plan.url)}` : ''}): sign in (Google, GitHub, then profile email), find the API key page, create a key named ClikDeploy, capture it unseen, send it to ClikDeploy, record the recipe; call onboard again`
+      : `capture the key with the saved recipe${plan.url ? ` (${hostOf(plan.url)})` : ''}, unseen, send it to ClikDeploy; call onboard again`;
+    case 'report': return 'report the item blocked with the reason ClikDeploy wrote (it becomes attention on the list)';
+    case 'specfix': return 'spec-fix: report attention kind platform-gap owner builder, and write a hand-off file for an agent that can patch the spec';
     case 'tool': return `call ${plan.call.tool} until it stops running; call onboard again`;
     case 'wait': return `wait ${plan.ms / 1000}s, call onboard again`;
     case 'human': return `record the human step (${plan.humanStep.kind})`;

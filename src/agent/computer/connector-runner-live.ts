@@ -109,6 +109,10 @@ export function liveDriver(options: LiveDriverOptions): BrowserDriver {
       const { listRecipes } = await import('./signup-recipes.js');
       return !!(await findRecipe(options.stateDir, id, url, listRecipes));
     },
+    async keygrab(id, url, budget): Promise<DriveOutcome> {
+      const { liveKeygrab } = await import('./keygrab-live.js');
+      return liveKeygrab({ stateDir: options.stateDir, ...(options.signal ? { signal: options.signal } : {}), screenshotDir: shotDir }, id, url, budget);
+    },
     async captureKey(id, url): Promise<DriveOutcome> {
       const { listRecipes } = await import('./signup-recipes.js');
       const recipe = await findRecipe(options.stateDir, id, url, listRecipes);

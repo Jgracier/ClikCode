@@ -26,6 +26,7 @@ function fakeDriver(outcomes: DriveOutcome[], recipe = false) {
     oauthConnect: async id => { driven.push(`oauth ${id}`); return outcomes.shift() ?? { ok: true }; },
     hasRecipe: async () => recipe,
     captureKey: async id => { driven.push(`capture ${id}`); return outcomes.shift() ?? { ok: true }; },
+    keygrab: async (id, url) => { driven.push(`keygrab ${id} ${url}`); return outcomes.shift() ?? { ok: true, note: 'key created, captured unseen' }; },
   };
   return { driver, driven };
 }
@@ -187,6 +188,103 @@ describe('dry run', () => {
   it('plans a named vendor that is not waiting as one onboarding step', async () => {
     const lines = await dryRun(fakeClient([]).client, fakeDriver([]).driver, { ids: ['nothing-yet'] });
     expect(lines[0]!.plan).toContain('advance one onboarding step');
+  });
+});
+
+const keyAt = (id: string, extra: Partial<OnboardResult> = {}): OnboardResult => ({ id, state: 'needs-agent', stage: 'connect', reason: `${id} needs a test credential (api-key)`, next: { kind: 'agent', task: `Connector "${id}": ${id} needs a test credential (api-key)\nget a key at https://${id}.example, capture_secret with send_to clikdeploy-connection (${id}), then call onboard again\nThen: call connector_onboard again.` }, ...extra });
+
+describe('keygrab as the policy when no recipe fits', () => {
+  it('takes a get-a-key task with no recipe through keygrab, then asks ClikDeploy again', async () => {
+    const c = fakeClient([keyAt('openapi-space')], { 'openapi-space': [published('openapi-space')] });
+    const d = fakeDriver([]);
+    const { outcomes } = await runConnectors(c.client, d.driver, quick);
+    expect(d.driven).toEqual(['keygrab openapi-space https://openapi-space.example']);
+    expect(outcomes[0]).toMatchObject({ status: 'published', steps: 2 });
+    expect(outcomes[0]!.actions.join(' ')).toContain('keygrab');
+  });
+  it('reads a bare domain after "at" as the site', async () => {
+    const task = (await import('./connector-runner.js')).siteUrl('get a key at appcenter.ms/settings, capture_secret');
+    expect(task).toBe('https://appcenter.ms/settings');
+  });
+  it('records a keygrab wall as a blocked report with its human step', async () => {
+    const c = fakeClient([keyAt('appcenter-ms')]);
+    const d = fakeDriver([{ ok: false, stop: stop({ kind: 'mfa', message: 'a phone (SMS) verification at appcenter.ms', url: 'https://appcenter.ms/verify', human: { kind: 'sms', url: 'https://appcenter.ms/verify', reasonCode: 'phone-verification', instructions: 'appcenter.ms shows a phone (SMS) verification' } }) }]);
+    const { outcomes } = await runConnectors(c.client, d.driver, quick);
+    expect(outcomes[0]).toMatchObject({ status: 'human', humanStep: { kind: 'sms', url: 'https://appcenter.ms/verify' } });
+    expect(c.reports).toHaveLength(1);
+    expect(c.reports[0]).toMatchObject({ id: 'appcenter-ms', outcome: 'blocked', humanStep: { kind: 'sms' } });
+  });
+  it('hands an unknown keygrab page on with its text, buttons and screenshot', async () => {
+    const c = fakeClient([keyAt('newco')]);
+    const d = fakeDriver([{ ok: false, stop: stop({ kind: 'unknown', message: 'no API key page was found', pageText: 'Hello', controls: ['Home'], screenshot: '/tmp/s.png' }) }]);
+    const { outcomes } = await runConnectors(c.client, d.driver, quick);
+    expect(outcomes[0]).toMatchObject({ status: 'handoff' });
+    expect(outcomes[0]!.handoff!.request).toMatchObject({ controls: ['Home'], screenshot: '/tmp/s.png', pageText: 'Hello' });
+  });
+  it('falls back to keygrab when a saved recipe no longer fits, but not when it hit a wall', async () => {
+    const c1 = fakeClient([keyAt('salad')], { salad: [published('salad')] });
+    const d1 = fakeDriver([{ ok: false, stop: stop({ kind: 'unknown', message: 'recipe step failed' }) }], true);
+    expect((await runConnectors(c1.client, d1.driver, quick)).outcomes[0]!.status).toBe('published');
+    expect(d1.driven.map(x => x.split(' ')[0])).toEqual(['capture', 'keygrab']);
+    const c2 = fakeClient([keyAt('walled')]);
+    const d2 = fakeDriver([{ ok: false, stop: stop({ kind: 'captcha', message: 'captcha', pageText: 'Complete the captcha' }) }], true);
+    expect((await runConnectors(c2.client, d2.driver, quick)).outcomes[0]!.status).toBe('human');
+    expect(d2.driven.map(x => x.split(' ')[0])).toEqual(['capture']);
+  });
+  it('hands over a key task that names no site', async () => {
+    const odd = keyAt('nosite', { next: { kind: 'agent', task: 'get a key for it, capture_secret' } });
+    const { outcomes } = await runConnectors(fakeClient([odd]).client, fakeDriver([]).driver, quick);
+    expect(outcomes[0]!.status).toBe('handoff');
+  });
+  it('plans keygrab in a dry run', async () => {
+    const c = fakeClient([keyAt('openapi-space')]);
+    const lines = await dryRun(c.client, fakeDriver([]).driver, { limit: 5 });
+    expect(lines[0]!.plan).toContain('keygrab');
+  });
+});
+
+describe('judgement tasks and spec fixes', () => {
+  const judgement = (id: string): OnboardResult => ({ id, state: 'needs-agent', stage: 'connect', reason: 'proof and checklist gaps need judgement', next: { kind: 'agent', task: `Connector "${id}": gaps\nWhen done, report this work item with outcome "retry"`, call: { tool: 'connector_work_report', args: { id, outcome: 'blocked', reason: 'App Check needs a project-level decision' } }, orElse: { tool: 'connector_work_report', args: { id, outcome: 'retry' } } } });
+  it('makes the blocked report itself instead of handing off to an agent', async () => {
+    const c = fakeClient([judgement('firebaseappcheck')]);
+    const { outcomes } = await runConnectors(c.client, fakeDriver([]).driver, quick);
+    expect(outcomes[0]).toMatchObject({ status: 'blocked' });
+    expect(c.reports).toEqual([{ id: 'firebaseappcheck', outcome: 'blocked', reason: 'App Check needs a project-level decision' }]);
+    expect(c.notes).toEqual([]);
+  });
+  it('takes the blocked call from orElse, and the reason from the task when the call has none', async () => {
+    const r = judgement('x');
+    r.next = { kind: 'agent', task: 't', call: { tool: 'connector_work_report', args: { id: 'x', outcome: 'retry' } }, orElse: { tool: 'connector_work_report', args: { id: 'x', outcome: 'blocked' } } };
+    const c = fakeClient([r]);
+    await runConnectors(c.client, fakeDriver([]).driver, quick);
+    expect(c.reports[0]).toMatchObject({ id: 'x', outcome: 'blocked', reason: 'proof and checklist gaps need judgement' });
+  });
+  it('reports a spec-fix task as platform-gap owned by a builder and writes a flagged hand-off file', async () => {
+    const r: OnboardResult = { id: 'nytimes-movie-reviews', state: 'needs-agent', stage: 'auth', reason: 'the auth probe ended path-wrong', next: { kind: 'agent', task: `Connector "nytimes-movie-reviews": ${'a long task '.repeat(60)} the auth probe ended path-wrong` }, evidence: ['one', 'two', 'three', 'four'], attention: { kind: 'platform-gap' } };
+    const c = fakeClient([r]);
+    const files: Array<{ path: string; text: string }> = [];
+    const { outcomes } = await runConnectors(c.client, fakeDriver([]).driver, { ...quick, writeFile: async (path, text) => { files.push({ path, text }); } });
+    expect(outcomes[0]).toMatchObject({ status: 'blocked', attention: { kind: 'platform-gap', owner: 'builder' } });
+    expect(c.reports[0]).toMatchObject({ outcome: 'blocked', humanStep: { kind: 'worker-setup', reasonCode: 'spec-fix' } });
+    const file = JSON.parse(files[0]!.text) as { specFix: boolean; task: string };
+    expect(file.specFix).toBe(true);
+    expect(file.task.length).toBeGreaterThan(700);
+  });
+});
+
+describe('hand-off files', () => {
+  it('carry the whole task, call, orElse, the attention record and the last 3 evidence lines', async () => {
+    const task = `Connector "odd": ${'x'.repeat(900)} END`;
+    const r: OnboardResult = { id: 'odd', state: 'needs-agent', stage: 'connect', reason: 'r', next: { kind: 'agent', task, call: { tool: 'connector_spec_put', args: { id: 'odd' } }, orElse: { tool: 'connector_work_report', args: { id: 'odd', outcome: 'blocked', reason: 'because of it' } } }, attention: { kind: 'decision', url: 'https://odd.example' }, evidence: ['a', 'b', 'c', 'd', 'e'] };
+    const files: string[] = [];
+    const { outcomes } = await runConnectors(fakeClient([r]).client, fakeDriver([]).driver, { ...quick, writeFile: async (_p, t) => { files.push(t); } });
+    const req = JSON.parse(files[0]!) as Record<string, unknown>;
+    expect(req.task).toBe(task);
+    expect(req.call).toEqual({ tool: 'connector_spec_put', args: { id: 'odd' } });
+    expect(req.orElse).toMatchObject({ tool: 'connector_work_report' });
+    expect(req.attention).toEqual({ kind: 'decision', url: 'https://odd.example' });
+    expect(req.evidence).toEqual(['c', 'd', 'e']);
+    expect(outcomes[0]!.status).toBe('handoff');
   });
 });
 
