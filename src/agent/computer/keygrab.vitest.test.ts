@@ -5,7 +5,7 @@ type Ctl = string | { name: string; leaf?: boolean; href?: string; footer?: bool
 interface Page { text: string; captchaFrame?: boolean; controls?: Ctl[]; fields?: string[]; password?: boolean; on?: Record<string, string>; key?: boolean }
 
 /** A scripted site: pages by address, a click moves to the page its name maps to, anything unlisted is a 404. */
-function fakeSite(pages: Record<string, Page>, start = 'https://vendor.example/', extra: { login?: { ok: boolean; to?: string }; code?: string; email?: string; html?: Record<string, string> } = {}) {
+function fakeSite(pages: Record<string, Page>, start = 'https://vendor.example/', extra: { login?: { ok: boolean; to?: string }; code?: string; email?: string; html?: Record<string, string>; status?: Record<string, number> } = {}) {
   let at = start;
   const log: string[] = [];
   const captures: Array<string | undefined> = [];
@@ -26,7 +26,7 @@ function fakeSite(pages: Record<string, Page>, start = 'https://vendor.example/'
     emailCode: async () => { log.push('emailCode'); return extra.code; },
     emailLink: async () => { log.push('emailLink'); return false; },
     capture: async target => { captures.push(target); log.push(`capture ${target ?? '(page)'}`); return pageOf(at).key ? { ok: true, message: 'SAVED' } : { ok: false, message: 'Not saved: no key was found' }; },
-    ...(extra.html ? { probe: async (url: string) => { log.push(`probe ${url}`); const final = extra.html![url]; return final ? { html: true, status: 200, url: final } : { html: false, status: 404, url }; } } : {}),
+    ...(extra.html ? { probe: async (url: string) => { log.push(`probe ${url}`); const final = extra.html![url]; return final ? { html: true, status: extra.status?.[url] ?? 200, url: final } : { html: false, status: 404, url }; } } : {}),
     screenshot: async () => '/tmp/shots/vendor.png',
     profileEmail: async () => extra.email ?? 'user@example.com',
   };
@@ -490,6 +490,19 @@ describe('keygrab start page', () => {
     }, 'https://shipengine.com/', { html: { 'https://shipengine.com/': 'https://www.shipstation.com/' } });
     await run(site, { url: 'https://shipengine.com/' });
     expect(site.log).toContain('open https://www.shipstation.com/');
+  });
+});
+
+describe('keygrab start page behind a bot shield', () => {
+  it('still starts at the front page when it answers 403 with HTML', async () => {
+    const site = fakeSite({
+      'https://vendor.example/': { text: 'Scanner', controls: ['Log in'], on: { 'Log in': 'https://plus.vendor.example/' } },
+      'https://plus.vendor.example/': { text: 'Sign in', controls: ['Continue with Google'], on: { 'Continue with Google': 'https://accounts.google.com/chooser' } },
+      'https://accounts.google.com/chooser': { text: 'Choose an account', controls: ['user@example.com'], on: { 'user@example.com': 'https://plus.vendor.example/keys' } },
+      'https://plus.vendor.example/keys': keysPage, 'https://vendor.example/keys/new': newKey, 'https://vendor.example/keys/made': madeKey,
+    }, 'https://vendor.example/', { html: { 'https://vendor.example/': 'https://vendor.example/', 'https://developers.vendor.example/': 'https://developers.vendor.example/' }, status: { 'https://vendor.example/': 403 } });
+    await run(site);
+    expect(site.log[1]).toBe('open https://vendor.example/');
   });
 });
 
