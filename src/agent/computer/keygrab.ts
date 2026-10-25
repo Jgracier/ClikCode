@@ -119,7 +119,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
   const look = async (): Promise<KeyView> => {
     let v = await port.look();
     // A page still loading shows nothing yet: give it a few seconds before judging it.
-    for (let wait = 0; wait < 3 && !v.controls.length && v.text.trim().length < 40; wait++) { await sleep(1_200); v = await port.look(); }
+    for (let wait = 0; wait < 4 && ((!v.controls.length && v.text.trim().length < 40) || (/\b(?:loading|just a minute|please wait)\b/i.test(v.text) && v.text.length < 400 && v.controls.length < 6)); wait++) { await sleep(1_500); v = await port.look(); }
     await guard(v);
     return v;
   };

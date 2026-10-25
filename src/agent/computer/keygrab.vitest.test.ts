@@ -107,6 +107,17 @@ describe('keygrab sign-in wording', () => {
   });
 });
 
+describe('keygrab and slow pages', () => {
+  it("looks again at a page that says it is loading", async () => {
+    const site = fakeSite({ 'https://vendor.example/': { text: 'Hi', controls: ['Continue with Google'], on: { 'Continue with Google': 'https://vendor.example/keys' } }, 'https://vendor.example/keys': keysPage, 'https://vendor.example/keys/new': newKey, 'https://vendor.example/keys/made': madeKey });
+    let looks = 0;
+    const real = site.port.look;
+    site.port.look = async () => { const v = await real(); return v.url.endsWith('/keys') && looks++ < 2 ? { url: v.url, text: "Just a minute, we're loading…", controls: [], fields: [], hasPassword: false } : v; };
+    expect((await run(site)).ok).toBe(true);
+    expect(looks).toBeGreaterThan(2);
+  });
+});
+
 describe('keygrab finding the key page', () => {
   it('tries the common paths when no menu item reads like an API page', async () => {
     const site = fakeSite({
