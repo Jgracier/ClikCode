@@ -161,6 +161,7 @@ describe('keygrab walls', () => {
   };
   it.each([
     ['Please verify you are human. Complete the captcha', 'captcha'],
+    ['Performing security verification. This website uses a security service to protect against malicious bots.', 'captcha'],
     ['Verify your phone number. We texted a code to your phone', 'sms'],
     ['Enter your credit card number to start. Card number', 'payment'],
     ['Identity verification required: upload a government-issued ID', 'identity'],

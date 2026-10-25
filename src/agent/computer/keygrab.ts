@@ -62,7 +62,7 @@ export function keygrabWall(text: string, keyPage = false, signInOffered = false
   const blocker = detectBlocker(text);
   if (/make an offer|buy this domain|domain(?: name)? is for sale|this domain (?:is|may be) for sale|domain for sale/i.test(text)) return { kind: 'retire', reasonCode: 'domain-for-sale', what: 'a domain-for-sale page (the vendor looks gone)' };
   if (/error 1016|origin dns error|server ip address could not be found|ERR_NAME_NOT_RESOLVED|DNS_PROBE_FINISHED|site can.t be reached|this domain (?:has )?expired/i.test(text)) return { kind: 'retire', reasonCode: 'host-dead', what: 'a site that no longer resolves (the vendor looks gone)' };
-  if (blocker === 'a captcha' || /verify you are (?:a )?human|are you a robot|checking your browser|just a moment\.\.\./i.test(text)) return { kind: 'captcha', reasonCode: 'captcha', what: 'a captcha' };
+  if (blocker === 'a captcha' || /performing security verification|verifies? (?:that )?you are not a bot|checking if the site connection is secure|verify you are (?:a )?human|are you a robot|checking your browser|just a moment\.\.\./i.test(text)) return { kind: 'captcha', reasonCode: 'captcha', what: 'a captcha' };
   if (/(?:verify|confirm|enter|add)[^.\n]{0,30}(?:phone|mobile)(?: number)?|(?:sms|text message)[^.\n]{0,40}code|code[^.\n]{0,30}(?:sent|texted)[^.\n]{0,20}(?:phone|number|\+\d)|phone verification/i.test(text) && /verif|code|confirm/i.test(text)) return { kind: 'sms', reasonCode: 'phone-verification', what: 'a phone (SMS) verification' };
   if (blocker === 'an SMS or authenticator code') return { kind: 'mfa', reasonCode: 'verification-code', what: 'an authenticator or SMS code' };
   if (/identity verification|verify your identity|business verification|verify your business|\bKYC\b|know your customer|government[- ]issued|id document|passport/i.test(text)) return { kind: 'identity', reasonCode: 'identity-check', what: 'identity or business verification' };
@@ -116,7 +116,13 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     const wall = keygrabWall(view.text, view.controls.some(isCreate), !view.hasPassword && view.controls.some(c => pressable(c) && (GOOGLE_BUTTON.test(c.name) || GITHUB_BUTTON.test(c.name) || SIGN_IN_ENTRY.test(c.name) || SIGN_UP_ENTRY.test(c.name))));
     if (wall) throw await wallStop(view, wall);
   };
-  const look = async (): Promise<KeyView> => { const v = await port.look(); await guard(v); return v; };
+  const look = async (): Promise<KeyView> => {
+    let v = await port.look();
+    // A page still loading shows nothing yet: give it a few seconds before judging it.
+    for (let wait = 0; wait < 3 && !v.controls.length && v.text.trim().length < 40; wait++) { await sleep(1_200); v = await port.look(); }
+    await guard(v);
+    return v;
+  };
   const click = async (name: string): Promise<boolean> => { const err = await act(`click ${name}`, () => port.click(name)); if (err) say(`could not click "${name}"`); return !err; };
 
   const isCreate = (c: KeyControl): boolean => pressable(c) && !NEVER_KEY.test(c.name) && (CREATE.test(c.name) || CREATE_BARE.test(c.name));
