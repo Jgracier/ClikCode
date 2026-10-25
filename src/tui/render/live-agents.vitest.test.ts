@@ -1,10 +1,30 @@
 import { describe, expect, it } from 'vitest';
 import { liveAgentRows } from './live-agents.js';
 import { upsertActivityEvent } from './activity-log.js';
+import { BackgroundAgentRows } from '../../harness/events/background-agent-rows.js';
 
 const plain = (text: string): string => text.replace(/\u001b\[[0-9;]*m/g, '');
 
 describe('composer subagents', () => {
+  it('links Claude launch calls to background tasks before progress, keeping distinct agents with the same label', () => {
+    const lifecycle = new BackgroundAgentRows();
+    let entries: ReturnType<typeof upsertActivityEvent> = [];
+    for (const id of ['a', 'b']) {
+      const launch = lifecycle.filter({ kind: 'tool-start', id: `call-${id}`, label: 'Agent Review auth', agent: true })!;
+      entries = upsertActivityEvent(entries, 0, 0, launch);
+      for (const event of lifecycle.frame({ type: 'system', subtype: 'task_started',
+        tool_use_id: `call-${id}`, task_id: `task-${id}`, is_backgrounded: true,
+        ...(id === 'a' ? { subagent_type: 'general-purpose' } : { task_type: 'local_agent' }) })) {
+        entries = upsertActivityEvent(entries, 0, 0, event);
+      }
+    }
+    expect(entries.map((entry) => entry.event?.agentId)).toEqual(['task-a', 'task-b']);
+    const rows = liveAgentRows(entries, () => undefined, 0, 80, 5, {
+      agents: 2, agentTasks: [{ id: 'task-a', label: 'Review auth' }, { id: 'task-b', label: 'Review auth' }],
+    }).map(plain);
+    expect(rows).toHaveLength(2);
+    expect(rows.every((row) => row.includes('Agent Review auth'))).toBe(true);
+  });
   it('keeps one row per running agent, updates its child, and removes it on completion', () => {
     let entries = upsertActivityEvent([], 0, 0, { kind: 'tool-start', id: 'a', label: 'Review files', agent: true }, 1);
     entries = upsertActivityEvent(entries, 0, 0, { kind: 'tool-start', id: 'b', label: 'Run tests', agent: true }, 2);

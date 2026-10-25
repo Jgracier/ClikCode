@@ -90,10 +90,12 @@ describe('ACP status updates and extension notifications', () => {
     ] }, { onActivity: (event: Record<string, unknown>) => events.push(event) });
     expect(events.map((event) => [event.kind, event.childTools, event.childTokens, event.durationMs])).toEqual([
       ['tool-start', undefined, undefined, undefined],
+      ['tool-start', undefined, undefined, undefined],
       ['tool-start', 3, 900, undefined],
       ['tool-done', 4, 1200, 9000],
     ]);
     expect(events.every((event) => event.agent === true && event.id === 'a1')).toBe(true);
+    expect(events.slice(1).every((event) => event.agentId === 'T')).toBe(true);
   });
 
   it("Cursor: a sub-agent's spawning call row runs until subagent_state_update, though the call returns first", async () => {
