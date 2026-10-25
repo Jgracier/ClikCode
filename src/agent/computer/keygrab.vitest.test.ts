@@ -404,6 +404,29 @@ describe('keygrab key page from the front page', () => {
   });
 });
 
+describe('keygrab first sign-in', () => {
+  it('presses "Complete registration" on the terms page after a first Google sign-in (Snyk)', async () => {
+    const site = fakeSite({
+      'https://vendor.example/': { text: 'Welcome back Log in with your last used login', controls: ['Continue with Google user@example.com Data hosting: US-01', 'Log in with a different account'], on: { 'Continue with Google user@example.com Data hosting: US-01': 'https://accounts.google.com/chooser' } },
+      'https://accounts.google.com/chooser': { text: 'Choose an account', controls: ['user@example.com'], on: { 'user@example.com': 'https://vendor.example/callback' } },
+      'https://vendor.example/callback': { text: "Welcome to Snyk By proceeding, I agree to Snyk's Terms of Service and Privacy Policy Complete registration", controls: ['Terms of Service', 'Privacy Policy', 'Complete registration'], on: { 'Complete registration': 'https://vendor.example/keys' } },
+      ...keyFlow,
+    });
+    expect(await run(site)).toMatchObject({ ok: true, route: 'google' });
+    expect(site.log).toContain('click Complete registration');
+  });
+  it('takes a log-in link before a newsletter email box on a front page', async () => {
+    const site = fakeSite({
+      'https://vendor.example/': { text: 'Scanner Subscribe to our newsletter', fields: ['Email'], controls: ['Log in', 'Subscribe'], on: { 'Log in': 'https://vendor.example/login' } },
+      'https://vendor.example/login': { text: 'Sign in', controls: ['Continue with Google'], on: { 'Continue with Google': 'https://accounts.google.com/chooser' } },
+      'https://accounts.google.com/chooser': { text: 'Choose an account', controls: ['user@example.com'], on: { 'user@example.com': 'https://vendor.example/keys' } },
+      ...keyFlow,
+    });
+    expect(await run(site)).toMatchObject({ ok: true, route: 'google' });
+    expect(site.filled).toEqual([['Name', 'ClikDeploy']]);
+  });
+});
+
 describe('keygrab walls need strong evidence', () => {
   const aiception = "AIception Artificial Intelligence for Humankind LET'S TALK PROTOTYPE YOURSELF About Lessons learned: 1. KYC Remediation is challenging. 2. OCR is not a silver bullet. Discover how AI can streamline document verification, reduce customs delays, and improve compliance";
   const shipstation = 'ShipStation Talk to an Expert Your business is growing. We keep it moving. Start Shipping Now No credit card required Cancel anytime Pricing Plans Starter Growth Pro';
