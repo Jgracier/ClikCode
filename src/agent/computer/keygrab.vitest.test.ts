@@ -367,6 +367,27 @@ describe('keygrab provider buttons that are plain boxes', () => {
   });
 });
 
+describe('keygrab provider screens', () => {
+  it('presses Continue on the consent screen that shows the chosen address again', async () => {
+    const site = fakeSite({
+      'https://vendor.example/': { text: 'Sign in', controls: ['Continue with Google'], on: { 'Continue with Google': 'https://accounts.google.com/chooser' } },
+      'https://accounts.google.com/chooser': { text: 'Choose an account to continue to Vendor user@example.com', controls: ['Justin Gracieruser@example.com'], on: { 'user@example.com': 'https://accounts.google.com/consent' } },
+      'https://accounts.google.com/consent': { text: 'Sign in to Vendor user@example.com selected. Continue', controls: [{ name: 'user@example.com', leaf: true }, 'Cancel', 'Continue'], on: { 'user@example.com': 'https://accounts.google.com/consent', Continue: 'https://vendor.example/keys' } },
+      ...keyFlow,
+    });
+    expect(await run(site)).toMatchObject({ ok: true, route: 'google' });
+    expect(site.log.filter(l => l === 'click user@example.com').length).toBe(1);
+  });
+  it('stops instead of carrying on when it never leaves the provider', async () => {
+    const site = fakeSite({
+      'https://vendor.example/': { text: 'Sign in', controls: ['Continue with Google'], on: { 'Continue with Google': 'https://accounts.google.com/chooser' } },
+      'https://accounts.google.com/chooser': { text: 'Something unusual appears here', controls: ['Whatever'] },
+    });
+    const done = await run(site);
+    expect(done.ok).toBe(false);
+  });
+});
+
 describe('keygrab walls need strong evidence', () => {
   const aiception = "AIception Artificial Intelligence for Humankind LET'S TALK PROTOTYPE YOURSELF About Lessons learned: 1. KYC Remediation is challenging. 2. OCR is not a silver bullet. Discover how AI can streamline document verification, reduce customs delays, and improve compliance";
   const shipstation = 'ShipStation Talk to an Expert Your business is growing. We keep it moving. Start Shipping Now No credit card required Cancel anytime Pricing Plans Starter Growth Pro';
