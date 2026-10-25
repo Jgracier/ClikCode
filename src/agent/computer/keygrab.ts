@@ -167,13 +167,15 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
   const visited: string[] = [...(options.resume?.visited ?? [])];
   const menus: string[] = [...(options.resume?.menus ?? [])];
   const triedNames = new Set<string>();
-  const say = (line: string): void => options.log?.(`keygrab ${options.id}: ${line}`);
+  const sink = options.log ?? (process.env.CLIKCODE_KEYGRAB_LOG ? (line: string): void => void process.stderr.write(`${line}\n`) : undefined);
+  const say = (line: string): void => sink?.(`keygrab ${options.id}: ${line}`);
 
   const act = async <T>(what: string, run: () => Promise<T>): Promise<T> => {
     if (steps >= maxSteps) throw await stop('unknown', `keygrab used its ${maxSteps}-step budget (${what})`);
     if (now() - began > maxMs) throw await stop('unknown', `keygrab used its ${Math.round(maxMs / 1000)}s budget (${what})`);
     steps++;
     trail.push(what.slice(0, 80));
+    say(`${steps}: ${what.slice(0, 80)}`);
     return run();
   };
   const stop = async (kind: StopInfo['kind'], message: string, human?: HumanStep, view?: KeyView): Promise<Halt> => {
@@ -370,9 +372,10 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     throw await stop('unknown', 'no way to sign in was found on the page');
   };
 
+  let lastOpenError = '';
   const openAt = async (url: string): Promise<KeyView | undefined> => {
     const err = await act(`open ${pathOf(url).replace(/^https:\/\//, '')}`, () => port.open(url));
-    if (err) { say(`could not open ${pathOf(url)}`); return undefined; }
+    if (err) { say(`could not open ${pathOf(url)}: ${err.slice(0, 160)}`); lastOpenError = err.slice(0, 200); return undefined; }
     return look();
   };
 
@@ -476,7 +479,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
       }
     }
     const first = options.resume ? await look() : await openAt(startUrl);
-    if (!first) throw await stop('unknown', `could not open ${pathOf(startUrl)}`);
+    if (!first) throw await stop('unknown', `could not open ${pathOf(startUrl)}${lastOpenError ? `: ${lastOpenError}` : ''}`);
     let v = first;
     homeUrl = options.resume ? startUrl : first.url;
     // An API host (no controls at all, a bare JSON error) is not the vendor's site: start from its parent domain.

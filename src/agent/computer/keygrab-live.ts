@@ -111,7 +111,15 @@ export async function liveKeygrabPort(options: LiveKeygrabOptions): Promise<Keyg
   const { computerPage } = await import('./browser.js');
   const { listProfiles } = await import('./profiles.js');
   const ctx = { stateDir: options.stateDir, ...(options.signal ? { signal: options.signal } : {}) } as Parameters<typeof computerWebTool.run>[1];
-  const run = (args: Record<string, unknown>) => computerWebTool.run({ tab: TAB, ...args } as never, ctx);
+  // A call that never comes back (a sign-in waiting for something that will not happen) must not eat the vendor's whole budget: each call has its own limit.
+  const run = async (args: Record<string, unknown>, ms = args.action === 'login' || args.action === 'read_email_code' || args.action === 'open_email_link' ? 120_000 : 60_000): Promise<{ output: string; isError?: boolean }> => {
+    const timeout = AbortSignal.timeout(ms);
+    const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<{ output: string; isError: boolean }>(resolve => { timer = setTimeout(() => resolve({ output: `${String(args.action)} did not finish within ${Math.round(ms / 1000)}s`, isError: true }), ms + 2_000); });
+    try { return await Promise.race([computerWebTool.run({ tab: TAB, ...args } as never, { ...ctx, signal }), late]); }
+    finally { if (timer) clearTimeout(timer); }
+  };
   const page = (): Promise<Page> => computerPage(options.stateDir, TAB);
   const shots = options.screenshotDir ?? (() => mkdtemp(join(tmpdir(), 'clikcode-connector-shots-')));
   const failed = (r: { output: string; isError?: boolean }): string | undefined => r.isError ? clean(r.output) : undefined;
