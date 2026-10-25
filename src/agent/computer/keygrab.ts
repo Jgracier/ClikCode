@@ -218,7 +218,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
   /** Press through a provider's own screens (Google account chooser and consent, GitHub authorize) until back on the vendor. */
   const providerScreens = async (): Promise<void> => {
     const email = await port.profileEmail().catch(() => undefined);
-    let idle = 0, chosenOn = '';
+    let idle = 0, chosen = false;
     for (let round = 0; round < 10; round++) {
       await sleep(600);
       const v = await look();
@@ -233,15 +233,18 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
         throw await stop('password', 'Google asks for a password: the ClikCode browser is signed out of Google', { kind: 'worker-setup', url: 'https://accounts.google.com/', reasonCode: 'sign-in-needed', instructions: 'Sign the ClikCode browser in to Google once, then run the connectors again.' }, v);
       }
       const controls: Control[] = v.controls.map(c => ({ name: c.name, leaf: c.leaf === true }));
-      const next = nextPress(host, controls, v.text, { ...(email ? { email } : {}), skipAccount: chosenOn === pathOf(v.url) });
+      const next = nextPress(host, controls, v.text, { ...(email ? { email } : {}), skipAccount: chosen });
       const target = next && controls[next.index];
       if (!target || !next) { if (++idle >= 3) throw await stop('unknown', `a ${host} screen the runner does not know`, undefined, v); continue; }
       idle = 0;
-      if (next.note === 'Chose the account.') chosenOn = pathOf(v.url);
+      if (next.note === 'Chose the account.') chosen = true;
       // A chooser row is the name run into the address; the address alone is what the page's text matches.
       if (next.note === 'Chose the account.' && email && target.name.toLowerCase().includes(email.toLowerCase())) await click(email);
       else await click(target.name);
     }
+    // Ten screens and still at the provider: say so rather than carrying on as if signed in.
+    const last = await look();
+    if (HOSTS_OF_SIGN_IN.test(hostOf(last.url))) throw await stop('unknown', `still on a ${hostOf(last.url)} screen after pressing through it`, undefined, last);
   };
 
   const verifyEmail = async (): Promise<void> => {
