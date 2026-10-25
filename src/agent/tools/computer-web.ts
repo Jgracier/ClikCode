@@ -533,14 +533,14 @@ async function doStep(page: Page, step: Step, ctx?: ToolContext): Promise<StepOu
 }
 
 /** What a form field is, for matching it to a saved profile and for the private prompt. */
-async function describeField(target: Locator): Promise<{ label: string; password: boolean; hint: FieldHint; placeholder: string; current: string }> {
+async function describeField(target: Locator): Promise<{ label: string; password: boolean; hint: FieldHint; placeholder: string; current: string; maxlength: number }> {
   return target.evaluate(element => {
     const el = element as unknown as { type?: string; value?: string; labels?: ArrayLike<{ textContent: string | null }>; getAttribute(name: string): string | null };
     const label = (el.labels?.[0]?.textContent || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('name') || '').trim();
     const type = el.type ?? 'text';
-    return { label, password: type === 'password', placeholder: el.getAttribute('placeholder') ?? '', current: type === 'password' ? '' : el.value ?? '',
+    return { label, password: type === 'password', placeholder: el.getAttribute('placeholder') ?? '', current: type === 'password' ? '' : el.value ?? '', maxlength: Number(el.getAttribute('maxlength')) || 0,
       hint: { autocomplete: el.getAttribute('autocomplete') ?? '', type, text: `${label} ${el.getAttribute('name') ?? ''} ${el.getAttribute('id') ?? ''}` } };
-  }).catch(() => ({ label: '', password: false, hint: { autocomplete: '', type: 'text', text: '' }, placeholder: '', current: '' }));
+  }).catch(() => ({ label: '', password: false, hint: { autocomplete: '', type: 'text', text: '' }, placeholder: '', current: '', maxlength: 0 }));
 }
 
 /** Fields that type themselves as they are entered (06/18/1998, (719) 744-3850). */
@@ -548,6 +548,14 @@ const PROFILE_FORMATS: Readonly<Record<string, string>> = { phone: 'phone', birt
 const PROFILE_PROMPT: readonly [string, string, boolean][] = [['given_name', 'First name', true], ['family_name', 'Last name', true], ['email', 'Email', true], ['phone', 'Phone (with area code)', true], ['address_line1', 'Street address', true], ['address_line2', 'Apartment / suite (optional)', false], ['city', 'City', true], ['state', 'State', true], ['postal_code', 'Zip / postal code', true], ['country', 'Country', true], ['organization', 'Company (optional)', false], ['birthday', 'Date of birth (month/day/year)', false]];
 
 const profileChoice = sharedState('profile-choice', () => new Map<string, string>());
+
+const CODE_BOX = /one-time-code|\b(?:otp|verification|security|passcode|confirmation|pin|digit|code|character)\b/i;
+/** The boxes of a code typed one character per box: 4 to 8 adjacent text boxes, each with maxlength 1, that call themselves a code. */
+export function splitCodeFields<T extends { password: boolean; maxlength: number; label: string; placeholder: string; hint: { autocomplete: string; text: string } }>(fields: readonly T[]): T[] {
+  const single = fields.filter(field => !field.password && field.maxlength === 1);
+  if (single.length < 4 || single.length > 8) return [];
+  return single.some(field => CODE_BOX.test(`${field.hint.autocomplete} ${field.label} ${field.placeholder} ${field.hint.text}`)) ? [...single] : [];
+}
 
 /** Fills that name no text: a saved profile covers what it can (name, address, phone), the user is asked
  * once, privately, for the rest, and what they answer is kept in the profile for next time. */
@@ -623,7 +631,14 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
     }
     generated ??= profile ? await readProfileSecret(ctx.stateDir, profile, PASSWORD_SECRET) : undefined;
   }
+  // A code split over single-character boxes (6 boxes, maxlength 1 each): one emailed code, one digit per box.
+  const split = splitCodeFields(fields);
+  if (split.length) {
+    const code = await codeFromMailbox(ctx.stateDir, page.url(), Date.now() - 120_000, ctx.signal);
+    if (code && code.length === split.length) { registerSecret(code); split.forEach((field, index) => values.set(field.step, code[index]!)); }
+  }
   for (const field of fields) {
+    if (values.has(field.step)) continue;
     if (field.password && generated) { values.set(field.step, generated); continue; }
     const fromLogin = login ? loginValueFor(login, field) : undefined;
     if (fromLogin && !(confirmSignIn && !signingUp)) { values.set(field.step, fromLogin); continue; }
