@@ -417,7 +417,7 @@ conversation board — so it pins eleven; typed, `/resume` still works.)
 | `/provider` | choose a provider |
 | `/account [label]` | switch accounts |
 | `/model [name]` | choose or set a model |
-| `/private models` | search Hugging Face and deploy a private model through ClikDeploy |
+| `/hosted ai` | search Hugging Face and run a hosted AI model on ClikDeploy compute |
 | `/machine` | the machine this chat runs on: move it, add one, or update or remove one |
 | `/new [first message]` | start a fresh conversation (the current one stays resumable) |
 | `/permissions [ask\|bypass\|auto]` (also `/permission`) | approval behavior |
@@ -479,7 +479,7 @@ not reversed.
 | Command | What it does |
 | --- | --- |
 | `/model [name]` | choose or set a model |
-| `/private models` | search Hugging Face and deploy a private model through ClikDeploy: a model of your own on ClikDeploy compute, started when you choose it and waited for (the Gateway reports how the start is going) rather than failing |
+| `/hosted ai` | search Hugging Face and run a hosted AI model on ClikDeploy compute: a model of your own, started when you choose it and waited for (the Gateway reports how the start is going) rather than failing |
 | `/effort [level]` | reasoning level |
 | `/fast [on\|off]` | on ClikDeploy Gateway, serve from the fastest provider of the model instead of the cheapest |
 | `/permissions [ask\|bypass\|auto]` (also `/permission`) | approval behavior |

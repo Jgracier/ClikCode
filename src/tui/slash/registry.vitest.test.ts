@@ -83,6 +83,13 @@ describe('slash registry', () => {
     expect(sandbox.availability(session(), harness()).available).toBe(false);
   });
 
+  it('names the ClikDeploy-hosted model command /hosted, with no /private left behind', () => {
+    expect(SLASH_COMMANDS.find((entry) => entry.name === 'hosted')).toMatchObject({ handlerKey: 'hostedModels', argHint: 'ai', aliases: [] });
+    expect(SLASH_COMMANDS.some((entry) => entry.name === 'private' || entry.aliases.includes('private'))).toBe(false);
+    expect(resolveSlashCommand('private')).toBeUndefined();
+    expect(resolveSlashCommand('hosted')?.name).toBe('hosted');
+  });
+
   it('offers the private computer login command on every route', () => {
     const computer = resolveSlashCommand('computer')!;
     for (const route of ['gateway', 'clikcode-local', 'local'] as const) {
@@ -120,8 +127,8 @@ describe('slash registry', () => {
    * what sits in those rows is the whole of the feature for most uses. */
   it('opens with the pinned commands, in their fixed order', () => {
     const palette = slashPalette(session(), harness({ permissionModes: ['ask'], permissionArgv: { ask: { argv: ['--ask'] } } }), VENDOR_EXTRAS);
-    // /private is pinned too, but a session that cannot run it (no Gateway route) is not offered the row.
-    const offered = SLASH_PALETTE_PINNED.filter((name) => name !== 'private');
+    // /hosted is pinned too, but a session that cannot run it (no Gateway route) is not offered the row.
+    const offered = SLASH_PALETTE_PINNED.filter((name) => name !== 'hosted');
     expect(palette.slice(0, offered.length).map((row) => row.value)).toEqual(offered.map((name) => `/${name}`));
     expect(SLASH_PALETTE_PINNED.slice(0, 4)).toEqual(['resume', 'provider', 'account', 'model']);
     expect(new Set(palette.slice(0, offered.length).map((row) => row.group))).toEqual(new Set(['Common']));
