@@ -8,6 +8,7 @@ import type { Page } from 'playwright-core';
 import { scrubSecrets } from './secret-scrubber.js';
 import { detectBlocker } from './signup-recipes.js';
 import { connectionState } from './secret-destinations.js';
+import { saveTask, type TaskReason } from './work-queue.js';
 
 /** One press: a control whose visible name matches `name`, only while the page text matches `when` (if given). */
 export interface ConsentAction { note: string; name: RegExp; when?: RegExp; /** `leaf`: also a plain text element (Google's "Advanced"), not only buttons and links. */ leaf?: boolean }
@@ -141,6 +142,7 @@ export function startFailure(text: string): string {
 
 export interface ConnectStart { url: string; stop: () => void }
 export interface OAuthConsentOptions {
+  /** The state directory: where a payment-class stop is recorded in the human work queue (absent: not recorded). */ stateDir?: string;
   email?: string; /** Treat every page as this provider's host (a test stands a fake vendor in for accounts.google.com). */ providerHost?: string; timeoutMs?: number; signal?: AbortSignal; progress?: (line: string) => void;
   /** Starts the connect and returns the authorization URL (default: `clikdeploy integrations connect <id> --no-browser`). */
   start?: (connector: string, signal?: AbortSignal) => Promise<ConnectStart>;
@@ -210,19 +212,69 @@ async function press(page: Page, control: Control): Promise<boolean> {
   return false;
 }
 
-/** Where the browser is when consent stalls: the address (no query) and the names of what can be pressed (never an address or a field value). */
-function stuckOn(page: Page, controls: readonly Control[]): string {
+/** What a stuck page is, from its own words (and a JSON error body's): the plain label and, when a person must act, the work-queue reason. */
+export interface StuckKind { kind: 'unrecognized-client' | 'payment' | 'captcha' | 'mfa'; label: string; reason?: TaskReason }
+
+const UNRECOGNIZED_CLIENT = /unrecogni[sz]ed[\s_-]*client|unknown[\s_-]*client|invalid[_\s-]*client|client[_\s-]*id[^.\n]{0,40}(?:not found|invalid|unknown|unrecogni|does not exist)|no such (?:oauth )?(?:client|app)|(?:oauth )?(?:client|app) (?:not found|does not exist|is not registered)/i;
+const NO_CREDITS = /\bno (?:api )?credits?\b|(?:add|buy|purchase|top up) (?:more )?credits?|out of credits|insufficient (?:credits?|funds|balance)|payment required|credit balance|billing|add (?:a )?payment method|upgrade (?:your )?(?:plan|account)\b|card number|\bsubscribe\b.{0,40}\bto continue/i;
+
+export function classifyStuck(pageText: string): StuckKind | undefined {
+  if (UNRECOGNIZED_CLIENT.test(pageText)) return { kind: 'unrecognized-client', label: 'the vendor does not recognize the OAuth client (its app registration is missing or wrong; register the app by hand)' };
+  if (NO_CREDITS.test(pageText)) return { kind: 'payment', label: 'the vendor wants payment, credits or a plan before it will continue', reason: 'payment' };
+  const blocker = detectBlocker(pageText);
+  if (blocker === 'a captcha') return { kind: 'captcha', label: 'a captcha' };
+  if (blocker === 'an SMS or authenticator code') return { kind: 'mfa', label: 'a verification code (MFA or SMS)' };
+  if (blocker === 'a payment page') return { kind: 'payment', label: 'a payment page', reason: 'payment' };
+  return undefined;
+}
+
+/** The visible page text for a report: whitespace collapsed, long unbroken tokens masked, held secrets scrubbed, cut to `max`. */
+export function pageExcerpt(text: string, max = 300): string {
+  return scrubSecrets(text).replace(/\s+/g, ' ').replace(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, '[email]').replace(/[A-Za-z0-9_\-.~+/=]{32,}/g, '[token]').trim().slice(0, max);
+}
+
+/** A JSON error body the page is showing (an API's `{"message": ...}` or `{"error": ...}`), or undefined. */
+export function jsonErrorBody(text: string): string | undefined {
+  const t = text.trim();
+  if (!t.startsWith('{')) return undefined;
+  try {
+    const v = JSON.parse(t) as Record<string, unknown>;
+    if (!v || typeof v !== 'object' || !('message' in v || 'error' in v || 'error_description' in v || 'errors' in v)) return undefined;
+    return pageExcerpt(t);
+  } catch { return undefined; }
+}
+
+/** Where the browser is when consent stalls: the address (no query), the names of what can be pressed (never an address or a field value),
+ * what the page says (about 300 characters of its text, or its JSON error body) and a classification when the words are plain. */
+function stuckOn(page: Page, controls: readonly Control[], pageText = ''): string {
   try {
     const url = new URL(page.url());
     const names = [...new Set(controls.filter(c => !c.leaf && !c.name.includes('@')).map(c => c.name))].slice(0, 10);
-    return `The browser is on ${url.host}${url.pathname}; it shows: ${scrubSecrets(names.join(' | ')) || 'nothing to press'}.`;
+    const json = jsonErrorBody(pageText);
+    const excerpt = json ?? pageExcerpt(pageText);
+    const kind = classifyStuck(pageText);
+    return `The browser is on ${url.host}${url.pathname}; it shows: ${scrubSecrets(names.join(' | ')) || 'nothing to press'}.${excerpt ? ` Page ${json ? 'JSON error' : 'text'}: "${excerpt}".` : ''}${kind ? ` This looks like ${kind.label}.` : ''}`;
   } catch { return ''; }
 }
 
-export class ConsentStop extends Error {}
+/** A reason consent stopped. `reason` is set when a person must act and the work queue has a name for it. */
+export class ConsentStop extends Error { constructor(message: string, readonly reason?: TaskReason) { super(message); this.name = 'ConsentStop'; } }
 
 /** Connects `connector` for the signed-in ClikDeploy account by driving its OAuth consent in `page`. */
 export async function oauthConnect(connector: string, page: Page, options: OAuthConsentOptions = {}): Promise<{ connector: string; steps: string[] }> {
+  try {
+    return await driveConsent(connector, page, options);
+  } catch (error) {
+    // A vendor that wants payment or credits is a person's act: put it on the human queue with the reason, then report it.
+    if (error instanceof ConsentStop && error.reason === 'payment' && options.stateDir) {
+      const saved = await saveTask(options.stateDir, { vendor: connector, kind: 'oauth-app', status: 'needs-human', reason: 'payment', note: `oauth_connect stopped: ${error.message}`, connectors: [connector] }).then(() => true, () => false);
+      if (saved) throw new ConsentStop(`${error.message} Recorded in the human queue as needs-human [payment].`, 'payment');
+    }
+    throw error;
+  }
+}
+
+async function driveConsent(connector: string, page: Page, options: OAuthConsentOptions): Promise<{ connector: string; steps: string[] }> {
   if (!CONNECTOR_ID.test(connector)) throw new Error('oauth_connect needs target: a connector id such as slack or github.');
   const started = await (options.start ?? startViaCli)(connector, options.signal);
   const status = options.status ?? ((id, signal) => connectionState(id, signal));
@@ -232,12 +284,13 @@ export async function oauthConnect(connector: string, page: Page, options: OAuth
     try { redirectUri = new URL(started.url).searchParams.get('redirect_uri') ?? undefined; } catch { redirectUri = undefined; }
     await page.goto(started.url, { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => undefined);
     const deadline = Date.now() + (options.timeoutMs ?? 120_000);
-    let idle = 0, stopSeen = 0, chosenOn = '', lastPress = { key: '', at: 0 }, controls: Control[] = [];
+    let idle = 0, stopSeen = 0, chosenOn = '', lastPress = { key: '', at: 0 }, controls: Control[] = [], lastText = '';
     while (Date.now() < deadline) {
       if (options.signal?.aborted) throw new Error('Stopped.');
       if (page.isClosed()) throw new ConsentStop('The browser tab was closed before consent finished.');
       const url = page.url();
       const text = await page.evaluate(() => ((globalThis as unknown as { document: { body?: { innerText?: string } } }).document.body?.innerText ?? '').slice(0, 6000)).catch(() => '');
+      lastText = text;
       const at = callbackState(url, redirectUri, text);
       if (at === 'problem') throw new ConsentStop(`The callback page reported a problem instead of a connection (${new URL(url).host}${new URL(url).pathname}). Check the consent was allowed and try again.`);
       if (at === 'connected' || at === 'waiting') {
@@ -257,7 +310,7 @@ export async function oauthConnect(connector: string, page: Page, options: OAuth
       controls = await readControls(page).catch(() => []);
       if (why) {
         // Two looks in a row, so a page still settling does not stop it.
-        if (++stopSeen >= 2) throw new ConsentStop(`Stopped at ${why}. Nothing was typed. ${stuckOn(page, controls)}`);
+        if (++stopSeen >= 2) throw new ConsentStop(`Stopped at ${why}. Nothing was typed. ${stuckOn(page, controls, text)}`, classifyStuck(text)?.reason);
       } else {
         stopSeen = 0;
         const host = (() => { try { return new URL(url).hostname; } catch { return ''; } })();
@@ -270,10 +323,14 @@ export async function oauthConnect(connector: string, page: Page, options: OAuth
             steps.push(next.note); options.progress?.(`${next.note}\n`);
             idle = 0;
           }
-        } else if (++idle >= 15) throw new ConsentStop(`Stopped at a screen it does not recognize. ${stuckOn(page, controls)}`);
+        } else {
+          // A page whose words are plain (unknown client, no credits) offers nothing to press: stop soon, do not wait out the clock.
+          const kind = classifyStuck(text);
+          if (++idle >= (kind ? 3 : 15)) throw new ConsentStop(`Stopped at ${kind ? kind.label : 'a screen it does not recognize'}. ${stuckOn(page, controls, text)}`, kind?.reason);
+        }
       }
       await page.waitForTimeout(700).catch(() => undefined);
     }
-    throw new ConsentStop(`Consent did not finish in time. ${stuckOn(page, controls)}`);
+    { const kind = classifyStuck(lastText); throw new ConsentStop(`Consent did not finish in time. ${stuckOn(page, controls, lastText)}`, kind?.reason); }
   } finally { started.stop(); }
 }

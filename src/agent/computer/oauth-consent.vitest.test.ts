@@ -1,5 +1,9 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { authorizationUrl, startFailure, callbackState, GENERIC_ACTIONS, nextPress, providerFor, stopReason, type Control } from './oauth-consent.js';
+import { listTasks } from './work-queue.js';
+import { authorizationUrl, classifyStuck, oauthConnect, type ConsentStop, startFailure, callbackState, GENERIC_ACTIONS, nextPress, providerFor, stopReason, type Control } from './oauth-consent.js';
 
 const press = (...names: string[]): Control[] => names.map(name => ({ name, leaf: false }));
 const pick = (host: string, controls: Control[], text = '', options: { email?: string; skipAccount?: boolean } = {}): string | undefined => {
@@ -103,5 +107,62 @@ describe('startFailure', () => {
     expect(startFailure('{"type":"https://errors.clikdeploy.com/VALIDATION_ERROR","status":400,"detail":"Supabase declares no OAuth scopes, so the request would be rejected."}')).toBe('Supabase declares no OAuth scopes, so the request would be rejected.');
     expect(startFailure('{"success":false,"error":"OAuth client not configured for x"}')).toBe('OAuth client not configured for x');
     expect(startFailure('boom\nline two')).toBe('boom line two');
+  });
+});
+
+describe('a stuck page is reported with its words', () => {
+  const stuck = async (text: string, options: { stateDir?: string; controls?: Control[] } = {}): Promise<Error> => {
+    const page = {
+      url: () => 'https://api.vendor.example/v1/oauth/authorize?client_id=abc&state=zzz',
+      isClosed: () => false,
+      goto: async () => undefined,
+      waitForTimeout: async () => undefined,
+      // readControls passes an argument; the page-text read does not.
+      evaluate: async (_fn: unknown, arg?: unknown) => (arg === undefined ? text : (options.controls ?? [])),
+      locator: () => ({ count: async () => 0 }),
+    } as unknown as import('playwright-core').Page;
+    const error = await oauthConnect('vendor', page, { start: async () => ({ url: 'https://api.vendor.example/v1/oauth/authorize?redirect_uri=https%3A%2F%2Fcd.example%2Fcallback', stop: () => undefined }), status: async () => ({ connected: false }), timeoutMs: 20_000, ...(options.stateDir ? { stateDir: options.stateDir } : {}) }).then(() => undefined, (e: Error) => e);
+    return error!;
+  };
+
+  it('includes the JSON error body and classifies an unrecognized client', async () => {
+    const error = await stuck('{"message":"Unrecognized client_id"}');
+    expect(error.message).toContain('JSON error: "{"message":"Unrecognized client_id"}"');
+    expect(error.message).toContain('does not recognize the OAuth client');
+    expect((error as ConsentStop).reason).toBeUndefined();
+  });
+
+  it('truncates the page text to about 300 characters, masks tokens and addresses, and says what it is', async () => {
+    const error = await stuck(`You have no API credits. Add credits to continue. me@example.com ${'x'.repeat(40)} ${'filler '.repeat(100)}`);
+    expect(error.message).toContain('Page text: "You have no API credits.');
+    expect(error.message).not.toContain('me@example.com');
+    expect(error.message).not.toContain('x'.repeat(40));
+    expect(error.message.length).toBeLessThan(900);
+    expect(error.message).toContain('wants payment');
+  });
+
+  it('records a payment-class stop in the human queue with reason payment', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'cc-oauth-'));
+    try {
+      const error = await stuck('Out of credits. Add credits or a billing method to continue.', { stateDir: dir });
+      expect((error as ConsentStop).reason).toBe('payment');
+      expect(error.message).toContain('Recorded in the human queue');
+      const [task] = await listTasks(dir);
+      expect(task).toMatchObject({ vendor: 'vendor', kind: 'oauth-app', status: 'needs-human', reason: 'payment', connectors: ['vendor'] });
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
+  it('does not record anything for an unrecognized client', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'cc-oauth-'));
+    try {
+      await stuck('{"message":"Unrecognized client_id"}', { stateDir: dir });
+      expect(await listTasks(dir)).toHaveLength(0);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
+  it('classifies captcha and MFA/SMS words', () => {
+    expect(classifyStuck('Please verify you are human')?.kind).toBe('captcha');
+    expect(classifyStuck('We sent a code to your phone by text message')?.kind).toBe('mfa');
+    expect(classifyStuck('Acme wants to access your account')).toBeUndefined();
   });
 });
