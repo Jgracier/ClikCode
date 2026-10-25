@@ -88,6 +88,15 @@ describe('keygrab sign-in wording', () => {
     expect(done).toMatchObject({ ok: true, route: 'google' });
     expect(site.log[1]).toBe('click Start free with Google');
   });
+  it('finds a sign-up entry by its accessible name when the visible words are different', async () => {
+    const site = fakeSite({
+      'https://vendor.example/': { text: 'Developer center. Show all products', controls: ['go to the sign up page in a new tab', 'View all'], on: { 'go to the sign up page in a new tab': 'https://vendor.example/signup' } },
+      'https://vendor.example/signup': { text: 'Join', controls: ['Continue with Google'], on: { 'Continue with Google': 'https://vendor.example/keys' } },
+      'https://vendor.example/keys': keysPage, 'https://vendor.example/keys/new': newKey, 'https://vendor.example/keys/made': madeKey,
+    });
+    expect((await run(site)).ok).toBe(true);
+    expect(site.log).not.toContain('click View all');
+  });
   it('signs in through a "Sign up for free" entry on a page that has no provider buttons', async () => {
     const site = fakeSite({
       'https://vendor.example/': { text: 'Welcome to the developer center', controls: ['Sign up for free'], on: { 'Sign up for free': 'https://vendor.example/signup' } },
