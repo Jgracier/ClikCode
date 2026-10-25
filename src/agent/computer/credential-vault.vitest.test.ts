@@ -2,7 +2,7 @@ import { afterEach, expect, it } from 'vitest';
 import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { allSavedLogins, loginLabel, lockCredentialVault, removeSavedLogin, sameSite, saveLoginFields, savedLoginFields, savedLoginsForSite, setLoginRejected, siteKey } from './credential-vault.js';
+import { allSavedLogins, forgetSavedLogins, loginLabel, lockCredentialVault, removeSavedLogin, sameSite, saveLoginFields, savedLoginFields, savedLoginsForSite, setLoginRejected, siteKey } from './credential-vault.js';
 
 let dir = '';
 afterEach(async () => { if (dir) { lockCredentialVault(dir); await rm(dir, { recursive: true, force: true }); dir = ''; } });
@@ -91,4 +91,16 @@ it('keeps one entry for an account saved again, with its newest password', async
     const mine = logins.find(login => login.label.toLowerCase() === 'me@example.com')!;
     expect((await savedLoginFields(dir, 'https://app.example.com/', mine.id)).password).toBe('second-pass-2');
   } finally { lockCredentialVault(dir); await rm(dir, { recursive: true, force: true }); }
+});
+
+it('forgets the saved logins of one site, or one account of it, and reports only a count', async () => {
+  dir = await mkdtemp(join(tmpdir(), 'clikcode-vault-forget-'));
+  await saveLoginFields(dir, 'https://www.wordnik.com/', { username: 'one@example.com', password: 'a' });
+  await saveLoginFields(dir, 'https://www.wordnik.com/', { username: 'two@example.com', password: 'b' });
+  const other = await saveLoginFields(dir, 'https://example.com/', { username: 'one@example.com', password: 'c' });
+  expect(await forgetSavedLogins(dir, 'wordnik.com', 'ONE@example.com')).toBe(1);
+  expect(await forgetSavedLogins(dir, 'wordnik.com', 'nobody@example.com')).toBe(0);
+  expect(await forgetSavedLogins(dir, 'https://wordnik.com/login')).toBe(1);
+  expect((await allSavedLogins(dir)).map(login => login.id)).toEqual([other]);
+  await expect(forgetSavedLogins(dir, '')).rejects.toThrow('Name the site');
 });

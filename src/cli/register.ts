@@ -133,7 +133,11 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .action(async (name: string) => (await import('../commands/computer.js')).computerDestinationRemove(name));
   computer.command('logins').description('Review and remove saved logins in the current chat (shown only to you)')
     .option('--chat <chat>', 'Chat id, prefix or name when run outside a chat')
-    .action(async (options: { chat?: string }) => (await import('../commands/computer.js')).computerLogin(options.chat, { manage: true }));
+    .option('--remove <site>', 'Remove the saved logins for a site (a host such as wordnik.com) without a prompt; prints only a count')
+    .option('--account <label>', 'With --remove: only the login with this username or email')
+    .action(async (options: { chat?: string; remove?: string; account?: string }) => options.remove
+      ? (await import('../commands/computer.js')).computerLoginsRemove(options.remove, options.account)
+      : (await import('../commands/computer.js')).computerLogin(options.chat, { manage: true }));
   program.command('logs').description('What every ClikCode window, worker and editor bridge did, in order (the lifecycle log)')
     .option('--session <id>', 'Only this conversation (an id or the start of one)')
     .option('--role <role>', 'Only window, worker, bridge or command')

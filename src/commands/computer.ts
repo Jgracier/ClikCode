@@ -120,6 +120,14 @@ export async function computerPreflight(options: { post?: boolean } = {}): Promi
   if (!result.ok) process.exitCode = 1;
 }
 
+/** Remove saved logins for a site without a prompt or a chat; only the count is printed. */
+export async function computerLoginsRemove(site: string, account?: string): Promise<void> {
+  const { forgetSavedLogins } = await import('../agent/computer/credential-vault.js');
+  const removed = await forgetSavedLogins(stateDirectory(), site, account);
+  if (isJsonDefaultMode()) return emitResult({ computer: { removed, site } });
+  process.stdout.write(removed ? `Removed ${removed} saved login${removed === 1 ? '' : 's'} for ${site}.\n` : `No saved login for ${site}.\n`);
+}
+
 /** The vault's saved secrets, by name only: no chat or worker is needed to look at your own files. */
 export async function computerSecrets(remove?: string, backfill?: { owner?: string }, backup?: { export?: string; import?: string; overwrite?: boolean }): Promise<void> {
   if (backup?.export || backup?.import) return computerSecretsBackup(backup);
