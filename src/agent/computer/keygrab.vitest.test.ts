@@ -137,6 +137,7 @@ describe('keygrab walls', () => {
     ['Identity verification required: upload a government-issued ID', 'identity'],
     ['Thanks for signing up. You are on the waitlist', 'vendor-contact'],
     ['Gmail addresses are not allowed. Use a work email.', 'decision'],
+    ['This domain is for sale. Make an offer. Buy now', 'retire'],
   ])('stops with a human step for %s', async (text, kind) => {
     const done = await wall(text);
     expect(done.ok).toBe(false);
@@ -172,6 +173,23 @@ describe('keygrab walls', () => {
     });
     const done = await run(site);
     expect(done.ok === false && done.stop.human?.kind).toBe('payment');
+  });
+});
+
+describe('keygrab on a retired vendor and a Google chooser', () => {
+  it('asks to retire the connector when the vendor says it was retired and there is no key page', async () => {
+    const site = fakeSite({ 'https://vendor.example/': { text: 'Visual Studio App Center was retired on March 31, 2025. Welcome.', controls: ['Learn more'] } });
+    const done = await run(site);
+    expect(done.ok === false && done.stop.human).toMatchObject({ kind: 'retire', reasonCode: 'vendor-retired' });
+  });
+  it("clicks the address when a Google chooser row's name runs the person and the address together", async () => {
+    const site = fakeSite({
+      'https://vendor.example/': { text: 'Hi', controls: ['Google'], on: { Google: 'https://accounts.google.com/chooser' } },
+      'https://accounts.google.com/chooser': { text: 'Choose an account', controls: ['Justin Gracieruser@example.com', 'user@example.com'], on: { 'user@example.com': 'https://vendor.example/keys' } },
+      'https://vendor.example/keys': keysPage, 'https://vendor.example/keys/new': newKey, 'https://vendor.example/keys/made': madeKey,
+    });
+    expect((await run(site)).ok).toBe(true);
+    expect(site.log).not.toContain('click Justin Gracieruser@example.com');
   });
 });
 

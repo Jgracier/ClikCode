@@ -6,7 +6,7 @@
 import { scrubSecrets } from './secret-scrubber.js';
 import { detectBlocker } from './signup-recipes.js';
 
-export type HumanKind = 'captcha' | 'mfa' | 'sms' | 'payment' | 'identity' | 'app-review' | 'app-registration' | 'vendor-contact' | 'decision' | 'worker-setup';
+export type HumanKind = 'captcha' | 'mfa' | 'sms' | 'payment' | 'identity' | 'app-review' | 'app-registration' | 'vendor-contact' | 'decision' | 'retire' | 'worker-setup';
 export interface HumanStep { kind: HumanKind | 'retire'; url?: string; instructions?: string; reasonCode?: string; prefill?: string[] }
 export interface AgentCall { tool: string; args: Record<string, unknown> }
 export type Next =

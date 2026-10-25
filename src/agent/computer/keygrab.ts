@@ -53,11 +53,13 @@ const CONFIRM = /^(create|generate|save|continue|ok|done|submit|add|confirm)\b/i
 const SUBMIT = /^(sign ?up|create( account)?|register|continue|next|get started|submit)\b/i;
 const NAME_FIELD = /name|label|description|title/i;
 const CODE_PAGE = /(?:enter|type|paste)[^.\n]{0,40}\bcode\b|verification code|check your (?:e-?mail|inbox)|we(?:'ve| have) sent[^.\n]{0,40}(?:e-?mail|code)/i;
+const RETIRED = /[^.\n]{0,60}\b(?:was|has been|is being|were) (?:retired|discontinued|shut down|sunset|deprecated)\b[^.\n]{0,60}/i;
 const NOT_FOUND = /\b404\b|page (?:not found|does(?:n't| not) exist)|not found|no such page|couldn'?t find|can'?t find|\boops\b|doesn'?t exist|does not exist/i;
 
 /** A wall only a person clears, from the page text; undefined for an ordinary page. `keyPage`: the page already offers key controls, so a stray mention of billing is not a wall. */
 export function keygrabWall(text: string, keyPage = false, signInOffered = false): { kind: HumanKind; reasonCode: string; what: string } | undefined {
   const blocker = detectBlocker(text);
+  if (/make an offer|buy this domain|domain(?: name)? is for sale|this domain (?:is|may be) for sale|domain for sale/i.test(text)) return { kind: 'retire', reasonCode: 'domain-for-sale', what: 'a domain-for-sale page (the vendor looks gone)' };
   if (blocker === 'a captcha' || /verify you are (?:a )?human|are you a robot|checking your browser|just a moment\.\.\./i.test(text)) return { kind: 'captcha', reasonCode: 'captcha', what: 'a captcha' };
   if (/(?:verify|confirm|enter|add)[^.\n]{0,30}(?:phone|mobile)(?: number)?|(?:sms|text message)[^.\n]{0,40}code|code[^.\n]{0,30}(?:sent|texted)[^.\n]{0,20}(?:phone|number|\+\d)|phone verification/i.test(text) && /verif|code|confirm/i.test(text)) return { kind: 'sms', reasonCode: 'phone-verification', what: 'a phone (SMS) verification' };
   if (blocker === 'an SMS or authenticator code') return { kind: 'mfa', reasonCode: 'verification-code', what: 'an authenticator or SMS code' };
@@ -150,7 +152,9 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
       if (!target || !next) { if (++idle >= 3) throw await stop('unknown', `a ${host} screen the runner does not know`, undefined, v); continue; }
       idle = 0;
       if (next.note === 'Chose the account.') chosenOn = v.url;
-      await click(target.name);
+      // A chooser row is the name run into the address; the address alone is what the page's text matches.
+      if (next.note === 'Chose the account.' && email && target.name.toLowerCase().includes(email.toLowerCase())) await click(email);
+      else await click(target.name);
     }
   };
 
@@ -236,7 +240,9 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
         shown = page;
       }
     }
-    throw await stop('unknown', 'no API key page was found (menu links and the common paths were tried)', undefined, shown);
+    const gone = RETIRED.exec(start.text)?.[0];
+    const human: HumanStep | undefined = gone ? { kind: 'retire', ...(pathOf(start.url).startsWith('https://') ? { url: pathOf(start.url) } : {}), reasonCode: 'vendor-retired', instructions: `${hostOf(start.url)} says "${gone.slice(0, 120)}" and has no API key page; confirm and retire the connector.` } : undefined;
+    throw await stop('unknown', 'no API key page was found (menu links and the common paths were tried)', human, shown);
   };
 
   const captured = async (target?: string): Promise<{ ok: boolean; message: string }> => act('capture the key', () => port.capture(target));
