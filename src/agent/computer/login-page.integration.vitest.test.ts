@@ -43,12 +43,14 @@ beforeAll(async () => {
         const value = new URLSearchParams(body).values().next().value ?? '';
         received.push(`${url.pathname}=${value}`);
         if (url.pathname === '/signin/identifier') go('/signin/pwd');
+        else if (url.pathname === '/hop/pwd') go(`https://localhost:${(server!.address() as { port: number }).port}/signin/pwd?error=1`);
         else if (url.pathname === '/signin/pwd') go(value.startsWith('correct') ? (mfa ? '/signin/challenge/totp' : '/home') : '/signin/pwd?error=1');
         else go(value === '123456' ? '/home' : '/signin/challenge/totp?error=1');
       });
       return;
     }
     if (url.pathname === '/signin/identifier') send(form('/signin/identifier', 'Email or phone', 'identifier', 'text', 'username', error));
+    else if (url.pathname === '/hop/pwd') send(form('/hop/pwd', 'Enter your password', 'password', 'password', 'current-password', false));
     else if (url.pathname === '/signin/pwd') send(form('/signin/pwd', 'Enter your password', 'password', 'password', 'current-password', error));
     else if (url.pathname === '/signin/challenge/totp') send(form('/signin/challenge/totp', 'Enter the 6-digit code', 'totp', 'text', 'one-time-code', error));
     else if (url.pathname === '/embedded') send(page('Embedded', '<h1>Pay</h1><iframe src="/signin/identifier" width="400" height="200"></iframe>'));
@@ -167,4 +169,20 @@ it.skipIf(!enabled)('waits for a form that is drawn a moment after the page open
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-login-real-'));
   const result = await signIn({ username: 'one@example.com', password: 'correct-one' }, { start: '/signin/late' });
   expect(result).toMatchObject({ outcome: 'signed_in', at: '/home' });
+}, 60_000);
+
+it.skipIf(!enabled)('marks a saved login rejected when the refusal comes on another host than the one it was saved for, and does not send it again', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-login-hop-'));
+  const id = await saveLoginFields(stateDir, `${base}/`, { username: 'one@example.com', password: 'stale' });
+  const refused = await signIn({}, { start: '/hop/pwd' });
+  expect(refused).toMatchObject({ outcome: 'saved_login_rejected' });
+  expect((await savedLoginsForSite(stateDir, `${base}/`))[0]).toMatchObject({ id, rejected: true });
+
+  // Choosing the refused account again asks for a password instead of sending the stale one.
+  received = [];
+  const again = await signIn({ account: 'one@example.com', password: 'correct-new' });
+  expect(again.asked[0]).toEqual(['account']);
+  expect(received.some(line => line.endsWith('=stale'))).toBe(false);
+  expect(again.asked.flat()).toContain('password');
+  expect(again.outcome).toBe('signed_in');
 }, 60_000);
