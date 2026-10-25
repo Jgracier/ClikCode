@@ -29,7 +29,7 @@ import type { MentionFocus } from './render/search-focus.js';
 import type { Selection } from './render/selection.js';
 import { reducedMotion } from './capabilities.js';
 import { KEEP_STDIN_FLOWING, onTerminalFocus } from './input-decoder.js';
-import { sessionModesOn, type Redraw } from './modes.js';
+import { sessionModesOn, setTerminalRawMode, type Redraw } from './modes.js';
 import { PlanEntry } from './render/plan-block.js';
 import { type ComposerFrame, EMPTY_COMPOSER, type WaitingTurn } from './prompter/state.js';
 import { retakeScreen, retakeTerminalSignals, takeTerminalTitle, terminalSignals, notifyIfAway, suspendToShell, onContinue, close, suspend, resume } from './prompter/terminal-lifecycle.js';
@@ -320,6 +320,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const inheritedScreen = process.env[REEXEC_TERMINAL_ENV] === '1';
     delete process.env[REEXEC_TERMINAL_ENV];
     terminalModes.uiStarted = true;
+    // Focus and mouse reports can arrive as soon as their modes are enabled.
+    // Take raw input first so the terminal cannot echo them as composer text.
+    setTerminalRawMode(true);
     // Stdin is kept flowing for the whole session.
     //
     // Every reader attaches its own `data` listener and removes it again --
