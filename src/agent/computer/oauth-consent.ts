@@ -79,6 +79,29 @@ export function readConsent(controls: readonly Control[], pageText: string, opti
   return index >= 0 ? { consent: true, index } : { consent: false };
 }
 
+/** A tick box on a consent page (Google's granular-consent screen offers "Select all" and one per scope). `index` is its place among the page's boxes. */
+export interface ScopeBox { index: number; name: string; checked: boolean }
+
+const SELECT_ALL = /^select all\b/i;
+/** Boxes that are not scopes (marketing, remember-me, terms) and are never ticked here. */
+const NOT_A_SCOPE = /\b(newsletter|marketing|promotion|offers?|subscribe|remember|keep me|stay signed|don'?t ask|do not ask|terms|privacy|robot|human)\b/i;
+
+/** Which boxes to tick before the affirmative press: on a recognized consent page (it names the app or the redirect; never a payment,
+ * credits, unknown-client or captcha page) with unticked scope boxes, "Select all" when it is offered, else every unticked scope box. */
+export function scopeTicks(boxes: readonly ScopeBox[], pageText: string, options: { appNames?: readonly string[]; redirectHost?: string } = {}): number[] {
+  if (!boxes.length || classifyStuck(pageText) || detectBlocker(pageText) === 'a captcha') return [];
+  const lower = pageText.toLowerCase();
+  const names = (options.appNames ?? [PLATFORM_APP]).filter(Boolean);
+  if (!(names.some(n => lower.includes(n.toLowerCase())) || (!!options.redirectHost && lower.includes(options.redirectHost.toLowerCase())))) return [];
+  const scopes = boxes.filter(b => !NOT_A_SCOPE.test(b.name));
+  const all = scopes.find(b => SELECT_ALL.test(b.name.trim()));
+  if (all) return all.checked && scopes.every(b => b.checked) ? [] : all.checked ? scopes.filter(b => !b.checked).map(b => b.index) : [all.index];
+  return scopes.filter(b => !b.checked).map(b => b.index);
+}
+
+/** Whether every scope box is ticked (checked after the ticking, before the press). */
+export const scopesTicked = (boxes: readonly ScopeBox[]): boolean => boxes.filter(b => !NOT_A_SCOPE.test(b.name)).every(b => b.checked);
+
 /** Sign-in providers on a login page, in the order of preference: Google, then GitHub (a "Last used" mark does not change the order, it only
  * confirms the account is known), then the profile's email, which is typed by the login action, never here. */
 const SIGN_IN_PROVIDERS = [/^(?:continue|sign ?(?:in|up)|log ?in)\s+(?:in\s+)?(?:with|using|via)\s+google\b/i, /^(?:continue|sign ?(?:in|up)|log ?in)\s+(?:in\s+)?(?:with|using|via)\s+github\b/i];
@@ -304,6 +327,42 @@ async function settleSelectors(page: Page): Promise<string | undefined> {
   return undefined;
 }
 
+const BOXES = 'input[type=checkbox], [role=checkbox]';
+
+async function readScopeBoxes(page: Page): Promise<ScopeBox[]> {
+  return page.evaluate((selector) => {
+    const doc = (globalThis as unknown as { document: { querySelectorAll(s: string): ArrayLike<Record<string, any>> } }).document;
+    const out: { index: number; name: string; checked: boolean }[] = [];
+    Array.from(doc.querySelectorAll(selector)).forEach((n, index) => {
+      const holder = n.closest?.('label') ?? n.parentElement;
+      if (!n.getClientRects().length && !holder?.getClientRects().length) return;
+      const text = String(n.getAttribute('aria-label') || n.labels?.[0]?.textContent || holder?.textContent || n.parentElement?.parentElement?.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+      out.push({ index, name: text, checked: n.checked === true || n.getAttribute('aria-checked') === 'true' });
+    });
+    return out;
+  }, BOXES);
+}
+
+/** Ticks the scope boxes a consent page shows (if it is a recognized consent page), then reads them again and returns why one is still unticked. */
+async function tickScopes(page: Page, text: string, options: { redirectHost?: string }): Promise<{ ticked: number } | { stop: string }> {
+  const boxes = await readScopeBoxes(page).catch(() => [] as ScopeBox[]);
+  const plan = scopeTicks(boxes, text, options);
+  if (!plan.length) return { ticked: 0 };
+  for (const index of plan) {
+    const box = page.locator(BOXES).nth(index);
+    const done = await box.click({ timeout: 2_000, force: true }).then(() => true, () => false);
+    if (!done) await box.evaluate(n => (n as unknown as { click(): void }).click()).catch(() => undefined);
+  }
+  await page.waitForTimeout(300).catch(() => undefined);
+  const after = await readScopeBoxes(page).catch(() => [] as ScopeBox[]);
+  const left = after.filter(b => !b.checked && !NOT_A_SCOPE.test(b.name));
+  // Google's "Select all" ticks the rest itself; a rest that stayed unticked gets its own press.
+  for (const b of left.filter(b => !SELECT_ALL.test(b.name.trim()))) await page.locator(BOXES).nth(b.index).click({ timeout: 2_000, force: true }).catch(() => undefined);
+  const final = left.length ? await readScopeBoxes(page).catch(() => [] as ScopeBox[]) : after;
+  if (!scopesTicked(final)) return { stop: `The consent page has scope checkboxes that would not tick (${final.filter(b => !b.checked).map(b => b.name).slice(0, 6).join(' | ')}). Nothing was pressed.` };
+  return { ticked: plan.length };
+}
+
 async function press(page: Page, control: Control): Promise<boolean> {
   const exact = control.name;
   const candidates = control.leaf ? [page.getByText(exact, { exact: true })] : [page.getByRole('button', { name: exact, exact: true }), page.getByRole('link', { name: exact, exact: true }), page.locator(PRESSABLE).filter({ hasText: exact }), page.getByText(exact, { exact: true })];
@@ -421,6 +480,12 @@ async function driveConsent(connector: string, page: Page, options: OAuthConsent
         const control = next && controls[next.index];
         if (next && control && !(lastPress.key === `${url}|${control.name}` && Date.now() - lastPress.at < 2_500)) {
           if (next.note === 'Chose the account.') chosenOn = url;
+          if (next.note !== 'Chose the account.' && next.note !== 'Opened Advanced.' && next.note !== 'Continued past the unverified-app notice.') {
+            const redirectHost = (() => { try { return redirectUri ? new URL(redirectUri).host : undefined; } catch { return undefined; } })();
+            const ticks = await tickScopes(page, text, redirectHost ? { redirectHost } : {});
+            if ('stop' in ticks) throw new ConsentStop(`${ticks.stop} ${stuckOn(page, controls, text)}`);
+            if (ticks.ticked) { steps.push('Ticked the scope checkboxes.'); options.progress?.('Ticked the scope checkboxes.\n'); }
+          }
           if (next.consent) {
             const blocked = await settleSelectors(page);
             if (blocked) throw new ConsentStop(`${blocked} ${stuckOn(page, controls, text)}`);

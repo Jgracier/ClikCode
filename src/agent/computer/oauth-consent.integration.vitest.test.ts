@@ -10,7 +10,7 @@ beforeAll(async () => { if (enabled) browser = await chromium.launch({ channel: 
 afterAll(async () => { await browser?.close(); });
 
 /** A vendor with the screens Google shows (chooser, Advanced, Go to (unsafe), Continue) or one that wants a password first. */
-async function fakeWorld(mode: 'consent' | 'login') {
+async function fakeWorld(mode: 'consent' | 'login' | 'granular') {
   let connected = false;
   const typed: string[] = [];
   const server = http.createServer((req, res) => {
@@ -23,6 +23,10 @@ async function fakeWorld(mode: 'consent' | 'login') {
     if (url.pathname !== '/auth') return void res.writeHead(404).end();
     const redirect = url.searchParams.get('redirect_uri')!, state = url.searchParams.get('state')!;
     if (mode === 'login') return html('<h1>Sign in</h1><input type="email" value="me@example.com"><input type="password" id="p"><button>Sign in</button>');
+    if (mode === 'granular') return html(`<p>ClikDeploy wants access to your Google Account</p><label><input type="checkbox" id="all" onclick="for(const c of document.querySelectorAll('.sc'))c.checked=this.checked">Select all</label>
+      <label><input type="checkbox" class="sc">View your activity</label><label><input type="checkbox" class="sc">View your sleep</label>
+      <button onclick="location='/auth?deny=1'">Cancel</button>
+      <button onclick="location='${redirect}?'+(document.querySelectorAll('.sc:checked').length===2?'code=good':'error=access_denied')+'&state=${state}'">Continue</button>`);
     html(`<div id="s1"><div data-identifier="me@example.com" role="link" tabindex="0" onclick="show(2)">me@example.com</div><div data-identifier="other@example.com" role="link" tabindex="0" onclick="document.title='wrong'">other@example.com</div></div>
       <div id="s2" hidden><span onclick="show(3)">Advanced</span></div>
       <div id="s3" hidden><a href="#" onclick="show(4);return false">Go to Vendor (unsafe)</a></div>
@@ -64,3 +68,14 @@ it.skipIf(!enabled)('stops at a login password with a plain reason and types not
     expect(await page.locator('#p').inputValue()).toBe('');
   } finally { world.close(); }
 }, 40_000);
+
+it.skipIf(!enabled)('ticks Select all on a granular-consent page before pressing Continue', async () => {
+  const world = await fakeWorld('granular');
+  try {
+    const page = await browser!.newPage();
+    const lines: string[] = [];
+    const done = await oauthConnect('slack', page, { providerHost: 'accounts.google.com', start: world.start, status: world.status, timeoutMs: 40_000, progress: line => lines.push(line) });
+    expect(done.connector).toBe('slack');
+    expect(lines.join('')).toContain('Ticked the scope checkboxes');
+  } finally { world.close(); }
+}, 60_000);
