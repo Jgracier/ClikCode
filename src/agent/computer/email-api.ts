@@ -29,10 +29,14 @@ export async function emailClient(stateDir: string): Promise<Client> {
   try {
     const client = JSON.parse(await readNamedSecret(stateDir, EMAIL_CLIENT_SECRET)) as Partial<Client>;
     if (client.clientId && client.clientSecret) return { clientId: client.clientId, clientSecret: client.clientSecret };
+  } catch { /* not saved as one JSON secret */ }
+  try { // or as two secrets, the way capture_secret saves what a console shows once
+    const clientId = await readNamedSecret(stateDir, `${EMAIL_CLIENT_SECRET}-id`), clientSecret = await readNamedSecret(stateDir, `${EMAIL_CLIENT_SECRET}-secret`);
+    if (clientId && clientSecret) return { clientId, clientSecret };
   } catch { /* none saved */ }
   const clientId = process.env.CLIKCODE_GOOGLE_CLIENT_ID, clientSecret = process.env.CLIKCODE_GOOGLE_CLIENT_SECRET;
   if (clientId && clientSecret) return { clientId, clientSecret };
-  throw new CredentialError(`No Google OAuth client is set up for email. Save a Desktop-app client as the secret "${EMAIL_CLIENT_SECRET}" (JSON: {"clientId","clientSecret"}) or set CLIKCODE_GOOGLE_CLIENT_ID and CLIKCODE_GOOGLE_CLIENT_SECRET.`);
+  throw new CredentialError(`No Google OAuth client is set up for email. Save a Desktop-app client as the secrets "${EMAIL_CLIENT_SECRET}-id" and "${EMAIL_CLIENT_SECRET}-secret" (or one JSON secret "${EMAIL_CLIENT_SECRET}") or set CLIKCODE_GOOGLE_CLIENT_ID and CLIKCODE_GOOGLE_CLIENT_SECRET.`);
 }
 
 async function stored(stateDir: string): Promise<Stored | undefined> {
