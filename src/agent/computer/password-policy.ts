@@ -14,6 +14,45 @@ export type PasswordPolicy = {
   symbols: string;
   /** HTML `pattern` attributes the password must fully match. */
   patterns: string[];
+  /** Rules learned from the page or from a refusal; absent when the page named none. */
+  rules?: PasswordRules;
+};
+
+/** What a site said about repeats, sequences and required classes ("no repeated or sequential characters"). */
+export type PasswordRules = {
+  /** No two equal characters side by side (case-insensitive: "aA" counts). */
+  noRepeat?: boolean;
+  /** No abc / cba / 123 / 321 runs, and no keyboard runs such as qwe or asd. */
+  noSequence?: boolean;
+  /** No character (case-insensitive) used more than this many times; in a row when `inRow`. */
+  maxIdentical?: number;
+  inRow?: boolean;
+  /** A symbol is required, so it is never dropped when loosening. */
+  requireSymbol?: boolean;
+};
+
+const NEGATION = String.raw`(?:\bno\b|\bnot\b|\bwithout\b|\bavoid\b|\bcannot\b|can'?t|\bmust not\b|don'?t|\bnever\b|\bnone\b)`;
+/** Symbols are forbidden or limited to letters and digits. */
+const FORBIDS_SYMBOLS = /(?:no|without|not (?:allow|support|accept)|don'?t (?:use|include)|avoid|exclud\w*)\s+(?:any\s+)?(?:special|symbols?|punctuation)|(?:letters?|alphanumeric|alpha-numeric)\s*(?:and|&|or|\+)\s*(?:numbers?|digits?)\s*only|only\s+(?:letters?|alphanumeric)|alphanumeric\s+(?:characters\s+)?only|special (?:characters?|symbols?) (?:are )?not allowed/i;
+
+/** Reads repeat, sequence and required-symbol rules out of free text. */
+export function parseRules(text: string): PasswordRules | undefined {
+  const t = text.replace(/\s+/g, ' ');
+  const rules: PasswordRules = {};
+  if (new RegExp(`${NEGATION}[^.;]{0,60}\\b(?:repeat\\w*|duplicat\\w*|identical|same (?:character|letter|digit))`, 'i').test(t)) rules.noRepeat = true;
+  if (new RegExp(`${NEGATION}[^.;]{0,60}\\b(?:sequen\\w*|consecutive (?:letters?|numbers?|digits?|characters?)|ascending|descending|abc\\b|123\\b|keyboard (?:pattern|run|sequence)|qwerty)`, 'i').test(t)) rules.noSequence = true;
+  const most = /(?:no more than|not more than|at most|maximum of|max\.? of|up to|cannot (?:have|contain|use) more than)\s+(\d)\s+(?:\w+\s+){0,2}?(?:identical|same|repeated|repeating|consecutive|duplicate)/i.exec(t);
+  const orMore = /(\d)\s+or more\s+(?:\w+\s+){0,2}?(?:identical|same|repeated|repeating|consecutive)/i.exec(t);
+  const limit = most ? Number(most[1]) : orMore ? Number(orMore[1]) - 1 : 0;
+  if (limit >= 1) { rules.maxIdentical = limit; if (/in a row|consecutive|adjacent|back to back|side by side|repeating/i.test(t)) rules.inRow = true; }
+  if (!FORBIDS_SYMBOLS.test(t) && /(?:at least one|one|1|\ba\b|\ban\b|contain\w*|include\w*|with|must have|requires?|needs?)\s+(?:\w+\s+){0,3}?(?:special|symbol|punctuation)\b/i.test(t) && !new RegExp(`${NEGATION}\\s+(?:\\w+\\s+){0,2}(?:special|symbols?)`, 'i').test(t)) rules.requireSymbol = true;
+  return Object.keys(rules).length ? rules : undefined;
+}
+
+const mergeRules = (a: PasswordRules | undefined, b: PasswordRules | undefined): PasswordRules | undefined => {
+  if (!a || !b) return a ?? b;
+  const maxIdentical = a.maxIdentical && b.maxIdentical ? Math.min(a.maxIdentical, b.maxIdentical) : a.maxIdentical ?? b.maxIdentical;
+  return { ...(a.noRepeat || b.noRepeat ? { noRepeat: true } : {}), ...(a.noSequence || b.noSequence ? { noSequence: true } : {}), ...(maxIdentical ? { maxIdentical } : {}), ...(a.inRow || b.inRow ? { inRow: true } : {}), ...(a.requireSymbol || b.requireSymbol ? { requireSymbol: true } : {}) };
 };
 
 export const DEFAULT_SYMBOLS = '!@#$%^*-_';
@@ -44,6 +83,7 @@ export function parsePolicy(hints: PolicyHints | readonly PolicyHints[] = {}): P
   let max = HARD_MAX;
   let symbols = DEFAULT_SYMBOLS;
   const patterns: string[] = [];
+  let rules: PasswordRules | undefined;
   for (const hint of list) {
     if (hint.minlength && hint.minlength > 0) min = Math.max(min, hint.minlength);
     if (hint.maxlength && hint.maxlength > 0 && hint.maxlength < 10_000) max = Math.min(max, hint.maxlength);
@@ -61,8 +101,8 @@ export function parsePolicy(hints: PolicyHints | readonly PolicyHints[] = {}): P
       const value = Number(found[1]);
       if (value >= 6) max = Math.min(max, /fewer than|shorter than|under/i.test(found[0]) ? value - 1 : value);
     }
-    if (/(?:no|without|not (?:allow|support|accept)|don'?t (?:use|include)|avoid|exclud\w*)\s+(?:any\s+)?(?:special|symbols?|punctuation)/i.test(text)
-      || /(?:letters?|alphanumeric|alpha-numeric)\s*(?:and|&|or|\+)\s*(?:numbers?|digits?)\s*only|only\s+(?:letters?|alphanumeric)|alphanumeric\s+(?:characters\s+)?only|special (?:characters?|symbols?) (?:are )?not allowed/i.test(text)) symbols = '';
+    rules = mergeRules(rules, parseRules(text));
+    if (FORBIDS_SYMBOLS.test(text)) symbols = '';
     else {
       const named = listedSymbols(text);
       if (named) symbols = [...DEFAULT_SYMBOLS].filter(char => named.includes(char)).join('') || named;
@@ -70,7 +110,8 @@ export function parsePolicy(hints: PolicyHints | readonly PolicyHints[] = {}): P
   }
   if (max < min) min = max; // a page that contradicts itself: the ceiling is a hard limit, the floor is not
   min = Math.min(min, HARD_MAX);
-  return { length: clamp(DEFAULT_POLICY.length, min, max), minLength: min, maxLength: max, symbols, patterns };
+  if (rules?.requireSymbol && !symbols) symbols = DEFAULT_SYMBOLS; // a required symbol outranks "letters and digits" read from another sentence
+  return { length: clamp(DEFAULT_POLICY.length, min, max), minLength: min, maxLength: max, symbols, patterns, ...(rules ? { rules } : {}) };
 }
 
 const shuffle = <T,>(items: T[]): T[] => {
@@ -78,8 +119,30 @@ const shuffle = <T,>(items: T[]): T[] => {
   return items;
 };
 
-/** Sites often forbid repeated ("aa") or sequential ("abc", "321") characters; a generated password never has either. */
+const KEYBOARD_ROWS = ['qwertyuiop', 'asdfghjkl', 'zxcvbnm', '1234567890'];
+/** Three keys in a row on a keyboard, either direction ("qwe", "ewq", "asd"), case-insensitive. */
+export function hasKeyboardRun(password: string): boolean {
+  const lowered = password.toLowerCase();
+  for (let i = 2; i < lowered.length; i++) {
+    const three = lowered.slice(i - 2, i + 1);
+    const backwards = [...three].reverse().join('');
+    if (KEYBOARD_ROWS.some(row => row.includes(three) || row.includes(backwards))) return true;
+  }
+  return false;
+}
+
+/** More uses of one character (case-insensitive) than allowed; with `inRow`, more in a row. */
+export function hasTooManyIdentical(password: string, limit: number, inRow = false): boolean {
+  const lowered = password.toLowerCase();
+  if (inRow) { let run = 1; for (let i = 1; i < lowered.length; i++) { run = lowered[i] === lowered[i - 1] ? run + 1 : 1; if (run > limit) return true; } return false; }
+  const counts = new Map<string, number>();
+  for (const char of lowered) { const next = (counts.get(char) ?? 0) + 1; if (next > limit) return true; counts.set(char, next); }
+  return false;
+}
+
+/** Sites often forbid repeated ("aa", "aA") or sequential ("abc", "321", "qwe") characters; a generated password never has any. */
 export function hasRepeatOrSequence(password: string): boolean {
+  if (hasKeyboardRun(password)) return true;
   const lowered = password.toLowerCase();
   for (let i = 1; i < password.length; i++) {
     // Case-insensitive: "aA" counts as a repeat and "aBc" as a sequence, since sites compare that way too.
@@ -96,17 +159,28 @@ function matchesPatterns(password: string, patterns: readonly string[]): boolean
 
 /** A password for the policy: every class the policy allows appears, and a `pattern` the page set is honoured by trying again. */
 export function generatePassword(policy: PasswordPolicy = DEFAULT_POLICY): string {
-  const classes = [LOWER, UPPER, DIGITS, ...(policy.symbols ? [policy.symbols] : [])];
+  const symbols = policy.symbols || (policy.rules?.requireSymbol ? DEFAULT_SYMBOLS : '');
+  const classes = [LOWER, UPPER, DIGITS, ...(symbols ? [symbols] : [])];
   const length = clamp(policy.length, Math.min(policy.minLength, policy.maxLength), policy.maxLength);
   const all = classes.join('');
+  const total = policy.rules?.maxIdentical && !policy.rules.inRow ? policy.rules.maxIdentical : 0;
   const build = (sets: readonly string[], set: string): string => {
-    const chars = sets.slice(0, length).map(source => source[randomInt(source.length)]!);
-    while (chars.length < length) chars.push(set[randomInt(set.length)]!);
+    const used = new Map<string, number>();
+    // With a cap on how often one character may appear, a saturated character is not drawn again.
+    const draw = (source: string): string => {
+      let char = source[randomInt(source.length)]!;
+      for (let tries = 0; total && (used.get(char.toLowerCase()) ?? 0) >= total && tries < 60; tries++) char = source[randomInt(source.length)]!;
+      used.set(char.toLowerCase(), (used.get(char.toLowerCase()) ?? 0) + 1);
+      return char;
+    };
+    const chars = sets.slice(0, length).map(draw);
+    while (chars.length < length) chars.push(draw(set));
     return shuffle(chars).join('');
   };
-  const fine = (value: string): boolean => matchesPatterns(value, policy.patterns) && !hasRepeatOrSequence(value);
+  const limit = policy.rules?.maxIdentical;
+  const fine = (value: string): boolean => matchesPatterns(value, policy.patterns) && !hasRepeatOrSequence(value) && !(limit && hasTooManyIdentical(value, limit, policy.rules?.inRow));
   let candidate = build(classes, all);
-  for (let tries = 0; tries < 200 && !fine(candidate); tries++) candidate = build(classes, all);
+  for (let tries = 0; tries < 2000 && !fine(candidate); tries++) candidate = build(classes, all);
   if (!matchesPatterns(candidate, policy.patterns)) {
     // A pattern this generator cannot satisfy with symbols (letters and digits only, say): drop symbols and try again.
     const plain = [LOWER, UPPER, DIGITS];
@@ -120,10 +194,15 @@ export function classifyRejection(text: string): { tooShort?: number | true; too
   const out: { tooShort?: number | true; tooLong?: number | true; characters?: boolean } = {};
   const lower = text.toLowerCase();
   const learned = parsePolicy({ text });
+  const rules = learned.rules;
   if (/too short|at least|minimum|not long enough|longer|more characters|min(?:imum)? length|\d+\s*\+\s*char/.test(lower)) out.tooShort = learned.minLength > DEFAULT_POLICY.minLength ? learned.minLength : true;
   if (/too long|at most|maximum|no more than|exceed|shorter|fewer|up to \d+|max(?:imum)? length/.test(lower)) out.tooLong = learned.maxLength < HARD_MAX ? learned.maxLength : true;
-  if (/special|symbol|not allowed|illegal|unsupported|alphanumeric|forbidden|disallow|punctuation|spaces?/.test(lower)
-    || (/character|invalid|weak|letters? and/.test(lower) && !out.tooShort && !out.tooLong)) out.characters = true;
+  // "Must include a special character" asks for a symbol; it is not a complaint about the ones used. Likewise a
+  // complaint about repeats or sequences says nothing about which characters are allowed.
+  const asksForSymbol = !!rules?.requireSymbol && !FORBIDS_SYMBOLS.test(text);
+  const aboutRules = !!(rules?.noRepeat || rules?.noSequence || rules?.maxIdentical) && !FORBIDS_SYMBOLS.test(text);
+  if (!asksForSymbol && /special|symbol|not allowed|illegal|unsupported|alphanumeric|forbidden|disallow|punctuation|spaces?/.test(lower)
+    || (!aboutRules && !asksForSymbol && /character|invalid|weak|letters? and/.test(lower) && !out.tooShort && !out.tooLong)) out.characters = true;
   return out;
 }
 
@@ -139,11 +218,13 @@ export function relax(policy: PasswordPolicy, rejection: string, attempt: number
   if (typeof said.tooLong === 'number') length = Math.min(length, said.tooLong);
   else if (said.tooLong) { length = Math.max(Math.min(length - 8, 16), 8); maxLength = Math.min(maxLength, length); }
   // Each try narrows the symbols: a short safe set, then none.
+  const rules = mergeRules(policy.rules, learned.rules);
   let symbols = policy.symbols;
   if (attempt === 1 && said.characters) symbols = policy.symbols.length > 3 ? '!@#' : policy.symbols;
   else if (attempt >= 2 && (said.characters || attempt >= 3)) symbols = '';
   else if (attempt === 1 && !said.tooShort && !said.tooLong) symbols = policy.symbols.length > 3 ? '!@#' : policy.symbols;
+  if (!symbols && rules?.requireSymbol) symbols = '!@#';
   if (attempt >= 3 && !said.tooShort) length = Math.min(length, Math.max(minLength, 16));
   if (maxLength < minLength) minLength = maxLength;
-  return { length: clamp(length, Math.min(minLength, maxLength), maxLength), minLength: Math.min(minLength, maxLength), maxLength, symbols, patterns: policy.patterns };
+  return { length: clamp(length, Math.min(minLength, maxLength), maxLength), minLength: Math.min(minLength, maxLength), maxLength, symbols, patterns: policy.patterns, ...(rules ? { rules } : {}) };
 }
