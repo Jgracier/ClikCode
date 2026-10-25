@@ -176,6 +176,8 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     const human: HumanStep = { kind: wall.kind, ...(url.startsWith('https://') ? { url } : {}), reasonCode: wall.reasonCode, instructions: `${host} shows ${wall.what} before ${options.id} can get a key; the runner does not bypass it and nothing was paid.` };
     return stop(wall.kind === 'captcha' ? 'captcha' : wall.kind === 'payment' ? 'payment' : wall.kind === 'mfa' || wall.kind === 'sms' ? 'mfa' : 'unknown', `${wall.what} at ${host}`, human, view);
   };
+  // A page that shows only its footer (legal links) is a shell still loading, not a page with nothing to offer.
+  const bareShell = (v: KeyView): boolean => v.text.trim().length < 300 && !v.fields.length && !v.controls.some(c => !c.footer && !/terms|privacy|cookie|consent|status|contact|©|policy/i.test(c.name));
   let banners = 0;
   const dismissBanner = async (v: KeyView): Promise<KeyView> => {
     for (let round = 0; round < 2 && banners < 4; round++) {
@@ -196,7 +198,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
   const look = async (): Promise<KeyView> => {
     let v = await port.look();
     // A page still loading shows nothing yet: give it a few seconds before judging it.
-    for (let wait = 0; wait < 4 && ((!v.controls.length && v.text.trim().length < 40) || (/\b(?:loading|just a minute|please wait)\b/i.test(v.text) && v.text.length < 400 && v.controls.length < 6)); wait++) { await sleep(1_500); v = await port.look(); }
+    for (let wait = 0; wait < 4 && ((!v.controls.length && v.text.trim().length < 40) || bareShell(v) || (/\b(?:loading|just a minute|please wait)\b/i.test(v.text) && v.text.length < 400 && v.controls.length < 6)); wait++) { await sleep(1_500); v = await port.look(); }
     v = await dismissBanner(v);
     await guard(v);
     return v;
@@ -216,6 +218,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
   const showsKey = (v: KeyView): boolean => !offersSignIn(v) && /\b(api[- ]?keys?|secret|token|access key)\b/i.test(v.text) && v.text.split(/\s+/).some(word => keyShaped(word.replace(/^[("'`]+|[)"'`,.;]+$/g, '')));
   const isKeyPage = (v: KeyView): boolean => !!createOf(v) || !!revealOf(v) || showsKey(v);
   const hasEntry = (v: KeyView): boolean => !!entryOf(v, SIGN_IN_ENTRY) || !!entryOf(v, SIGN_UP_ENTRY) || !!entryOf(v, SIGN_IN_LOOSE);
+  const signEntry = (v: KeyView): boolean => !!entryOf(v, SIGN_IN_ENTRY) || !!entryOf(v, SIGN_UP_ENTRY);
   const authWall = (v: KeyView): boolean => !isKeyPage(v) && (v.hasPassword || !!chooserOptions(v) || providerButtons(v, GOOGLE_BUTTON).length > 0 || providerButtons(v, GITHUB_BUTTON).length > 0 || (v.fields.some(f => /e-?mail/i.test(f)) && v.controls.some(c => pressable(c) && SUBMIT.test(c.name))));
 
   /** Press through a provider's own screens (Google account chooser and consent, GitHub authorize) until back on the vendor. */
@@ -380,7 +383,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
         if (!(await click(link.name))) continue;
         await sleep(700);
         v = await look();
-        if (authWall(v) && authTries < 2) { await authenticate(); v = await look(); }
+        if ((authWall(v) || (!isKeyPage(v) && signEntry(v))) && authTries < 2) { await authenticate(); v = await look(); }
         if (isKeyPage(v)) return v;
         shown = v;
         // The link led somewhere that is no key page: the next link starts from the same front page again.
