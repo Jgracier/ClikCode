@@ -299,3 +299,11 @@ Durable notes go under `~/.clikcode`, never `/tmp` (a cleanup or reboot loses `/
 
 - **Per-site notes** (what worked on a vendor's site: URL, order of screens, gotchas): `computer_web` `action=notes` with `host` and `note` saves one (newest last, 4,000 characters kept; a note shaped like a key or token is refused whole); with only `host` it reads them back. They are kept in `~/.clikcode/computer/notes/<host>.md` and are shown again when a page on that host is opened. The call needs an open tab (`open` a URL first). From a shell: `clikcode computer tool computer_web --args-json '{"action":"notes","host":"app.example.com","note":"API keys: Settings > Developer > New key"}'`.
 - **Run progress** (which vendors are done, what is next): record each outcome in the queue (`computer_web` `action=queue`, `clikcode computer queue`), which is the durable list to resume from. Anything more free-form goes in a file under `~/.clikcode/computer/progress/`, one per run, appended to as work happens. Never put a key, password or code in either.
+
+## Email: a connected mailbox
+
+`clikcode computer email connect` (or the browser tool action `email_connect`) opens Google's consent for **read-only mail** in the ClikCode browser, which is already signed in, chooses the profile's `sso_email` account, presses through Continue/Allow, and stores the refresh token in Secrets Manager as `email/gmail`. Nothing else to do and nothing printed but "Mailbox connected: <address>". `status` shows which mailbox; `disconnect` forgets it.
+
+From then on `read_email_code` and `open_email_link` read the mail through the Gmail API and **wait for it to arrive** (`seconds`, default 90), instead of looking once in a browser inbox. They return only the code or open the link; the token is read inside the worker and never appears in a result. With no mailbox connected they use the browser inbox as before.
+
+The consent needs a Google OAuth **Desktop** client: save it as the secret `email/google-client` (`{"clientId","clientSecret"}`) or set `CLIKCODE_GOOGLE_CLIENT_ID` / `CLIKCODE_GOOGLE_CLIENT_SECRET`. An app still in Google's *testing* mode has its refresh token expire after 7 days; a later call then says to reconnect.
