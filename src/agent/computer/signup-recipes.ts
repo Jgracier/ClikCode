@@ -47,9 +47,9 @@ export function stepProblem(step: unknown, index: number): string | undefined {
   return undefined;
 }
 
-export function recipeProblem(input: { steps?: unknown; loginRoute?: unknown; keyPage?: unknown; captureHint?: unknown }): string | undefined {
+export function recipeProblem(input: { steps?: unknown; loginRoute?: unknown; keyPage?: unknown; captureHint?: unknown }, options: { allowEmpty?: boolean } = {}): string | undefined {
   if (!LOGIN_ROUTES.includes(input.loginRoute as LoginRoute)) return `login_route must be one of ${LOGIN_ROUTES.join(', ')}.`;
-  if (!Array.isArray(input.steps) || !input.steps.length) return 'A recipe needs a list of steps.';
+  if (!Array.isArray(input.steps) || (!input.steps.length && !options.allowEmpty)) return 'A recipe needs a list of steps.';
   if (input.steps.length > MAX_STEPS) return `A recipe holds at most ${MAX_STEPS} steps.`;
   for (const [i, step] of input.steps.entries()) { const why = stepProblem(step, i); if (why) return why; }
   if (input.keyPage !== undefined) {
@@ -70,9 +70,9 @@ export async function getRecipe(stateDir: string, host: string, route?: string):
   return [...pool].sort((a, b) => b.verifiedAt.localeCompare(a.verifiedAt))[0];
 }
 
-export async function saveRecipe(stateDir: string, input: { host: string; loginRoute: string; steps: unknown; keyPage?: string; captureHint?: string }, now = new Date()): Promise<Recipe> {
+export async function saveRecipe(stateDir: string, input: { host: string; loginRoute: string; steps: unknown; keyPage?: string; captureHint?: string }, now = new Date(), options: { allowEmpty?: boolean } = {}): Promise<Recipe> {
   const host = normalizeHost(input.host);
-  const why = recipeProblem(input);
+  const why = recipeProblem(input, options);
   if (why) throw new Error(`Recipe not saved: ${why}`);
   const recipe: Recipe = { host, loginRoute: input.loginRoute as LoginRoute, steps: (input.steps as RecipeStep[]).map(s => ({ ...s })), ...(input.keyPage ? { keyPage: input.keyPage } : {}), ...(input.captureHint ? { captureHint: input.captureHint } : {}), verifiedAt: now.toISOString() };
   const rest = (await readAll(stateDir, host)).filter(r => r.loginRoute !== recipe.loginRoute);
@@ -80,6 +80,11 @@ export async function saveRecipe(stateDir: string, input: { host: string; loginR
   await fs.writeFile(file(stateDir, host), `${JSON.stringify([...rest, recipe], null, 2)}\n`, { mode: 0o600 });
   return recipe;
 }
+
+/** A profile detail a step names without holding it: replaced with the real value only at replay. */
+export const PROFILE_PLACEHOLDERS = ['sso_email'] as const;
+export const fillPlaceholders = (text: string | undefined, values: Readonly<Record<string, string | undefined>>): string | undefined =>
+  text?.replace(/\{\{(sso_email)\}\}/g, (all, name: string) => values[name] ?? all);
 
 export async function listRecipes(stateDir: string): Promise<Recipe[]> {
   let names: string[] = [];

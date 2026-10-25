@@ -267,6 +267,24 @@ then the profile email + hidden password), `capture_secret`, `send_secret` to th
 steps go to the queue (`queue`) and the loop moves on. ClikDeploy never browses; ClikCode never touches a spec's internals beyond the
 schema ClikDeploy serves (`connector_spec_guide`).
 
+## Connecting a connector's OAuth: `oauth_connect`
+
+`clikcode computer oauth-connect <connector>` (or `computer_web` `action=oauth_connect`, `target` = the ClikDeploy connector id) connects a connector that uses OAuth, with no clicking by the agent:
+
+1. It starts ClikDeploy's connect (`clikdeploy integrations connect <id> --no-browser`, which signs in with the saved admin key) and takes the authorization URL it prints.
+2. It opens that URL in the ClikCode browser and presses through the consent screens from a data table in `src/agent/computer/oauth-consent.ts` (add a row to teach it a screen): the account named by the profile `sso_email`; Google's "Advanced" and "Go to ... (unsafe)", Continue/Allow; Microsoft Accept; GitHub "Authorize ..."; Slack Allow; Atlassian Accept; Notion Allow access; and for any other vendor Allow, Authorize, Accept, Grant access, Approve (and Continue only on a page that asks for access). It never presses Deny, Cancel, Sign out or Sign up.
+3. It returns when ClikDeploy's callback page is reached, and then confirms with `clikdeploy integrations show` that the connection is `active`. The vendor's word is not enough.
+
+It never types or reads a password. It stops, with a plain reason (the address and the names of what can be pressed, no page text or values) at a **login password**, an **MFA code**, a **captcha**, or a screen it does not recognize. If the vendor needs a sign-in, run the `login` action first (saved login or Google), then run `oauth_connect` again. Opt-in smoke test against a fake multi-screen vendor and a fake connect endpoint: `CLIKCODE_COMPUTER_SMOKE=1 xvfb-run -a npx vitest run src/agent/computer/oauth-consent.integration.vitest.test.ts`.
+
+## Recipes record themselves
+
+Agents rarely call `recipe save`, so ClikCode does it. Every successful `computer_web` click, fill, choice and key press after an `open` is journaled in memory for that tab, by the control's visible text (a `[ref=eN]` is turned into the control's name). When the sequence ends in a **verified** `capture_secret` (a key was found and stored, not rejected by its check) or a successful `login`, the journal is saved as that host's recipe (`~/.clikcode/computer/recipes/<host>.json`) with the login route (`google` or `github` if the sequence passed through them, else `email`), the key page (address without query or fragment) and a capture hint. Nothing else is needed from the agent.
+
+- **Never stored:** typed values (a fill is saved with no text, so a replay fills from the profile or saved login), secrets, ids or numbers of six digits or more in a control name, anything key-shaped. An email in a control name (the Google account chooser) is saved as the placeholder `{{sso_email}}` and replaced from the profile at replay. A step that cannot be saved safely (a reference with no readable name, a control named after an id) spoils that journal, so a partial recipe is never saved.
+- **De-duplicated:** one recipe per host and route, the newest verified one wins. A plain login recipe never replaces a capture recipe that has a key page and hint.
+- **Used:** opening a page on that host says "A recipe is saved for this site"; `recipe` with `recipe_op=run` replays it and stops at a captcha, code, payment or review page. Replays are not journaled again.
+
 ## Preflight: is this computer ready for onboarding work
 
 `clikcode computer preflight` (or `computer_web` `action=preflight`) is one deterministic check with no agent in it, for an agent to run before a batch and for a scheduled check. It prints JSON and exits 1 when anything is not ready:

@@ -192,7 +192,7 @@ export function firstJsonObject<T>(text: string): T | undefined {
 
 type Shown = { status?: string; message?: string; data?: { connection?: { status?: string } | null; accounts?: { status?: string }[] } };
 /** Whether ClikDeploy now holds an active connection for the connector: asked of ClikDeploy, not read from the connect command's output. */
-async function connectionState(integration: string, signal?: AbortSignal): Promise<{ connected: boolean; reason?: string }> {
+export async function connectionState(integration: string, signal?: AbortSignal): Promise<{ connected: boolean; reason?: string }> {
   const shown = await runCli('clikdeploy', ['integrations', 'show', integration], { signal, timeoutMs: 60_000, maxChars: 4_000_000 });
   if (shown.missing) return { connected: false, reason: 'the clikdeploy command is not installed on this computer' };
   const parsed = firstJsonObject<Shown>(shown.text);

@@ -10,7 +10,7 @@ import { storeSecretTool } from './store-secret.js';
 import { sharedState } from '../computer/shared-state.js';
 import { forgetSavedLogins, savedLoginFields, savedLoginsForSite, saveLoginFields } from '../computer/credential-vault.js';
 import { loginValueFor } from '../computer/login-fill.js';
-import { describeRecipe, getRecipe, listRecipes, replayRecipe, saveRecipe } from '../computer/signup-recipes.js';
+import { describeRecipe, fillPlaceholders, getRecipe, listRecipes, replayRecipe, saveRecipe } from '../computer/signup-recipes.js';
 import { addSiteNote, readSiteNotes } from '../computer/site-notes.js';
 import { assertCustomKey, bestProfileFor, customFieldFor, defaultProfile, describeProfile, listProfiles, PASSWORD_SECRET, PROFILE_KEYS, phoneFor, birthdayFor, profileKeyFor, readProfileSecret, saveProfile, saveProfileSecret, secretFieldFor, type FieldHint, type ProfileKey } from '../computer/profiles.js';
 import { expectSignup, holdSignup, pendingSignupPassword, pendingSignupUsername, savedPasswordFor, settleSignup, sitePasswordFor } from '../computer/signup-login.js';
@@ -30,13 +30,15 @@ import { captureSecret } from '../computer/secret-capture.js';
 import { emailConnected, waitForEmail } from '../computer/email-api.js';
 import { codeFromMailbox, looksLikeCodeEmail, looksLikeLinkEmail, verificationCode } from '../computer/email-code.js';
 import { connectEmail } from '../computer/email-consent.js';
+import { beginJournal, noteStep, recordVerified } from '../computer/recipe-recorder.js';
+import { oauthConnect } from '../computer/oauth-consent.js';
 import { runTailnetHandoff, tailnetAddress } from '../computer/tailnet-handoff.js';
 import type { Locator, Page } from 'playwright-core';
 import type { ToolContext, ToolRunResult } from '../tool-contract.js';
 
 type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload'; target?: string; at?: 'start' | 'end'; text?: string; key?: string; direction?: 'up' | 'down'; accept_dialog?: boolean; gone?: boolean; seconds?: number };
 type WebArgs = {
-  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'profile' | 'open_email_link' | 'read_email_code' | 'email_connect' | 'notes' | 'recipe' | 'queue' | 'network' | 'preflight' | 'forget_login' | 'help';
+  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'profile' | 'open_email_link' | 'read_email_code' | 'email_connect' | 'oauth_connect' | 'notes' | 'recipe' | 'queue' | 'network' | 'preflight' | 'forget_login' | 'help';
   tab?: string; at?: 'start' | 'end'; url?: string; host?: string; note?: string; recipe_op?: 'save' | 'get' | 'run' | 'list'; login_route?: string; key_page?: string; capture_hint?: string; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
   new_account?: boolean; secret?: string; to?: string; with?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean; format?: string; options?: string[]; secret?: boolean }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; vendor?: string; owner?: string; env?: string; task?: { vendor: string; kind?: string; status?: string; reason?: string; note?: string; owner?: string; connectors?: string[] }; bodies?: boolean; tasks?: boolean; task_status?: string; task_reason?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
 };
@@ -73,6 +75,21 @@ async function locate(page: Page, target: string | undefined): Promise<Locator> 
   }
   throw new Error(`Nothing on the page shows "${wanted}".`);
 }
+
+/** The readable name of the control a [ref=…] points at (what a saved recipe names it by), or undefined. */
+async function controlName(page: Page, target: string | undefined): Promise<string | undefined> {
+  const wanted = target?.trim();
+  if (!wanted || !REF.test(wanted)) return undefined;
+  const element = page.locator(`aria-ref=${wanted}`);
+  return element.first().evaluate(node => {
+    const el = node as unknown as { labels?: ArrayLike<{ textContent: string | null }>; getAttribute(name: string): string | null; innerText?: string; value?: string; tagName: string };
+    const clean = (text: string | null | undefined): string => (text ?? '').replace(/\s+/g, ' ').trim();
+    const input = el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT';
+    return clean(el.getAttribute('aria-label')) || clean(el.labels?.[0]?.textContent) || clean(el.getAttribute('placeholder')) || (input ? '' : clean(el.innerText)) || clean(el.getAttribute('title')) || (el.tagName === 'INPUT' && /^(submit|button)$/.test(el.getAttribute('type') ?? '') ? clean(el.value) : '');
+  }, undefined, { timeout: 2_000 }).then(name => name || undefined, () => undefined);
+}
+
+const journalKey = (stateDir: string, tab?: string): string => tab ? `${stateDir}#${tab}` : stateDir;
 
 /** Radios, checkboxes and switches are often visually hidden behind a styled label, and a
  * click can land on something in front: fall back to clicking the element itself. */
@@ -250,7 +267,7 @@ async function settle(page: Page): Promise<void> {
   })).catch(() => undefined); // a navigation destroys the page being watched: the next look is a new page
 }
 
-const ACTION_LIST = 'open · close · observe · click · fill · choose · press · scroll · wait · upload · steps · login · handoff · capture_secret · send_secret · profile · open_email_link · read_email_code · email_connect · notes · recipe · queue · network · preflight · forget_login · help';
+const ACTION_LIST = 'open · close · observe · click · fill · choose · press · scroll · wait · upload · steps · login · handoff · capture_secret · send_secret · profile · open_email_link · read_email_code · email_connect · oauth_connect · notes · recipe · queue · network · preflight · forget_login · help';
 
 const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: ['action'], properties: {
     action: { type: 'string', description: ACTION_LIST },
@@ -263,7 +280,7 @@ const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: [
     login_route: { type: 'string', enum: ['google', 'github', 'email'], description: 'recipe: how the account was signed in (save), or which recipe to get or run.' },
     key_page: { type: 'string', description: 'recipe save: the address of the page where the key is created or shown.' },
     capture_hint: { type: 'string', description: 'recipe save: how the key was captured (which button reveals or copies it). Never the key itself.' },
-    target: { type: 'string', description: 'click, fill, capture_secret: a [ref=…] from the page view (e5, or f1e2 inside a frame), or the visible text of a sign-in page control. forget_login: the site (a host such as wordnik.com, or a URL).' },
+    target: { type: 'string', description: 'oauth_connect: the ClikDeploy connector id (slack, github). click, fill, capture_secret: a [ref=…] from the page view (e5, or f1e2 inside a frame), or the visible text of a sign-in page control. forget_login: the site (a host such as wordnik.com, or a URL).' },
     text: { type: 'string', description: 'fill: the text. Leave it out for what only the user knows (name, address, phone, a password): the user is asked privately, once for all such fields in the call, and you are not shown the answer. wait: the words to wait for.' },
     gone: { type: 'boolean', description: 'wait: wait for the text to disappear instead of appear.' },
     seconds: { type: 'number', description: 'wait: how long to wait at most (default 30, up to 120). read_email_code, open_email_link: how long to wait for the email to arrive when a mailbox is connected (default 90).' },
@@ -303,7 +320,7 @@ const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: [
 
 const WEB_DESCRIPTION = [
     "Drive ClikCode's own Chrome (its own saved profile; it starts by itself). open and observe return the page, with a [ref=…] on each element: pass a ref as target (or visible text) to click or fill. After an action you get only what changed (and any open dialog); observe shows the whole page again. A new tab or popup the page opens is followed automatically.",
-    'Actions: open (a URL) · observe (the page again; full: true adds header and footer; find: "words" shows only the lines that mention them, for a long page) · click · fill · choose (an option of a dropdown: target + text) · press · scroll · wait (for text to appear or go, up to 2 minutes; for jobs that finish on their own) · steps (several of those in order, one call, stops at the first failure) · login · handoff · capture_secret · profile · open_email_link (find the newest email from a sender in the signed-in Gmail and open a link in it, one call: verification and sign-in emails) · upload (a file input or its button + text: the name of a profile file detail ending _file such as logo_file; only files the user saved in the profile can be sent) · notes (read or add what was learned on a site: the URL that worked, the order of screens, what was missing; shown again whenever a page on that host is opened, so write one when a task finally works) · recipe (save the steps of a signup or key capture that worked, by control text, never secrets; run replays them and stops for the user at a captcha, code, payment or review page; list) · email_connect (one consent in this browser connects the signed-in Gmail; after that read_email_code and open_email_link read mail through the Gmail API, wait for it to arrive, and return only the code or the link) · read_email_code (the one-time code in the newest email from a sender, read in a tab of its own, so a sign-up that wants an emailed code does not need the user) · forget_login (remove the saved login for a site from the vault: target = the site, label = one account; returns only a count; use it for a login the site keeps refusing) · close.',
+    'Actions: open (a URL) · observe (the page again; full: true adds header and footer; find: "words" shows only the lines that mention them, for a long page) · click · fill · choose (an option of a dropdown: target + text) · press · scroll · wait (for text to appear or go, up to 2 minutes; for jobs that finish on their own) · steps (several of those in order, one call, stops at the first failure) · login · handoff · capture_secret · profile · open_email_link (find the newest email from a sender in the signed-in Gmail and open a link in it, one call: verification and sign-in emails) · upload (a file input or its button + text: the name of a profile file detail ending _file such as logo_file; only files the user saved in the profile can be sent) · notes (read or add what was learned on a site: the URL that worked, the order of screens, what was missing; shown again whenever a page on that host is opened, so write one when a task finally works) · recipe (save the steps of a signup or key capture that worked, by control text, never secrets; run replays them and stops for the user at a captcha, code, payment or review page; list) · email_connect (one consent in this browser connects the signed-in Gmail; after that read_email_code and open_email_link read mail through the Gmail API, wait for it to arrive, and return only the code or the link) · oauth_connect (target = a ClikDeploy connector id: starts its OAuth connect, presses through the vendor consent screens in this signed-in browser (account named by the profile sso_email, Advanced / Go to ... (unsafe), Continue / Allow / Authorize), stops with a plain reason at a login password, MFA code, captcha or an unknown screen (sign in first with login), and confirms ClikDeploy shows an active connection) · read_email_code (the one-time code in the newest email from a sender, read in a tab of its own, so a sign-up that wants an emailed code does not need the user) · forget_login (remove the saved login for a site from the vault: target = the site, label = one account; returns only a count; use it for a login the site keeps refusing) · close.',
     'Each chat has its own tab. The user\'s autofill profile (name, email, phone, address, and any custom details you asked for with profile ask_fields) fills forms for you: fill a field with no text and it is filled from the profile, or the user is asked once and the answer is kept. If a site wants another format, fill that field with the exact text, and save the corrected value with action profile and fields. When a site offers Continue/Sign in with Google and the browser is already signed in to Google, prefer it: no new password or email check. If it offers GitHub and not Google, use Continue with GitHub (sign in to GitHub with the saved login; there is no Google sign-in inside GitHub). Only when neither is offered, fill the form with no text: the profile email fills it, and on a sign-up every password box gets a strong password made up for that site (fitted to what the page asks, retried if the site refuses it, saved with the login, never shown to you); a later sign-in fills the saved login. Every page can be read, including sign-in and signup forms; the values of password, code and card fields are masked. For anything only the user knows (a password, a code, an address, a phone number), fill the field with no text: a saved login for the site or the profile fills it, else the user is asked privately, and you are not shown the answer. That is all a sign-in or signup needs: fill the fields, click Next, repeat. (login does the same in one action for a plain email-then-password sign-in.) Never ask for a password or code in chat. When a sign-in page offers different ways in (root or IAM, another account), ask the user with ask_user, click their choice, then login. handoff returns a phone link for a CAPTCHA or MFA at once; give it to the user, then call handoff again to wait until they finish.',
     'Work through the whole task you were given without checking in at each step. Ask real choices (project, account, role set) once, up front, in one question; after that ask only when genuinely blocked (a sign-in they must type, a payment).',
     'API keys: go to the key page, set the options, then capture_secret with target = the final Create button and a send_to plan. It presses the site\'s Copy button or reads the file it hands over, checks the key against its service, saves it to ClikCode Secrets Manager and sends it where send_to says. You never see the key. With no target it takes a key the page already shows; never click Regenerate just to see one.',
@@ -399,7 +416,7 @@ export const computerWebTool = defineTool<WebArgs>({
         return { output: count ? `Removed ${count} saved login${count === 1 ? '' : 's'} for ${site.replace(/^https?:\/\//, '').split('/')[0]}.` : `No saved login for ${site.replace(/^https?:\/\//, '').split('/')[0]}${args.label ? ' with that label' : ''}.` };
       }
       if (args.action === 'open') webAddress(args.url);
-      const page = args.action === 'open' || args.action === 'open_email_link' || args.action === 'email_connect' ? await openComputerPage(ctx.stateDir, args.tab) : await computerPage(ctx.stateDir, args.tab);
+      const page = args.action === 'open' || args.action === 'open_email_link' || args.action === 'email_connect' || args.action === 'oauth_connect' ? await openComputerPage(ctx.stateDir, args.tab) : await computerPage(ctx.stateDir, args.tab);
       // Playwright cannot be interrupted mid-call, so a stop returns at once
       // and the browser carries on harmlessly in the background.
       let onAbort = (): void => undefined;
@@ -755,7 +772,10 @@ export async function runSteps(page: Page, steps: readonly Step[], ctx: ToolCont
     current.on('popup', onPopup);
     let halted = false;
     try {
+      // Steps are journaled for an automatic recipe (see recipe-recorder.ts); a replay is not journaled again.
+      const before = guard ? undefined : { url: current.url(), label: await controlName(current, step.target) };
       const done = await doStep(current, step, ctx);
+      if (before && typeof done === 'string') noteStep(journalKey(ctx.stateDir, tab), before.url, step, before.label);
       if (typeof done === 'string') notes.push(done); else { notes.push(done.note); halted = true; }
       await settle(current);
       const saved = await settleSignup(ctx.stateDir, current);
@@ -889,7 +909,7 @@ async function openLatestEmail(page: Page, args: WebArgs, stateDir: string): Pro
 async function listRecipesFor(stateDir: string, url: string): Promise<string> {
   try {
     const recipes = (await listRecipes(stateDir)).filter(r => { const host = new URL(url).hostname.toLowerCase().replace(/^www\./, ''); return host === r.host || host.endsWith(`.${r.host}`); });
-    return recipes.length ? `A signup recipe is saved for this site (${recipes.map(r => `via ${r.loginRoute}`).join(', ')}, verified ${recipes[0]!.verifiedAt.slice(0, 10)}): computer_web action recipe, recipe_op run replays it and stops at a captcha, code, payment or review page; recipe_op get shows its steps.` : '';
+    return recipes.length ? `A recipe is saved for this site (${recipes.map(r => `via ${r.loginRoute}`).join(', ')}, verified ${recipes[0]!.verifiedAt.slice(0, 10)}): computer_web action recipe, recipe_op run replays it and stops at a captcha, code, payment or review page; recipe_op get shows its steps.` : '';
   } catch { return ''; }
 }
 
@@ -903,6 +923,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       await withNetworkRetry(() => page.goto(webAddress(args.url), { waitUntil: 'domcontentloaded', timeout: 30_000 }));
       await settle(page);
       await settleSignup(ctx.stateDir, page);
+      beginJournal(journalKey(ctx.stateDir, args.tab), page.url());
       const seen = await observeComputerPage(page, ctx.acceptsImages === true);
       const notes = await readSiteNotes(ctx.stateDir, new URL(page.url()).hostname).catch(() => '');
       const recipes = await listRecipesFor(ctx.stateDir, page.url());
@@ -928,7 +949,9 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       if (op === 'get') return { output: describeRecipe(recipe) };
       // run: the existing steps runner, one page-look after every step. Recipes name controls by text, so nothing depends on a stale ref.
       let ended: Page = page;
-      const replay = await replayRecipe(recipe, (steps, guard) => runSteps(page, steps as Step[], ctx, args.tab, args.label, async current => { ended = current; return guard(); }), async () => scrubSecrets(await ended.ariaSnapshot({ mode: 'ai', timeout: 8_000 } as never) as string));
+      const mine = (await listProfiles(ctx.stateDir)).map(profile => profile.fields.sso_email).find(Boolean);
+      const filled = { ...recipe, steps: recipe.steps.map(step => ({ ...step, ...(step.target ? { target: fillPlaceholders(step.target, { sso_email: mine }) } : {}), ...(step.text ? { text: fillPlaceholders(step.text, { sso_email: mine }) } : {}) })) };
+      const replay = await replayRecipe(filled, (steps, guard) => runSteps(page, steps as Step[], ctx, args.tab, args.label, async current => { ended = current; return guard(); }), async () => scrubSecrets(await ended.ariaSnapshot({ mode: 'ai', timeout: 8_000 } as never) as string));
       if (replay.completed) await saveRecipe(ctx.stateDir, { host: recipe.host, loginRoute: recipe.loginRoute, steps: recipe.steps, ...(recipe.keyPage ? { keyPage: recipe.keyPage } : {}), ...(recipe.captureHint ? { captureHint: recipe.captureHint } : {}) }).catch(() => undefined);
       return { output: replay.output, ...(replay.isError ? { isError: true } : {}) };
     }
@@ -973,6 +996,11 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       const done = await connectEmail(ctx.stateDir, page, { email, progress: line => line && ctx.emitOutput?.(line) });
       return { output: `Mailbox connected${done.email ? `: ${done.email}` : ''}. read_email_code and open_email_link now read mail directly and wait for it to arrive.` };
     }
+    case 'oauth_connect': {
+      const email = (await listProfiles(ctx.stateDir)).map(profile => profile.fields.sso_email).find(Boolean);
+      const done = await oauthConnect(args.target?.trim() ?? '', page, { email, signal: ctx.signal, progress: line => line && ctx.emitOutput?.(line) });
+      return { output: `Connected ${done.connector}: ClikDeploy shows an active connection. ${done.steps.filter(Boolean).join(' ')}` };
+    }
     case 'read_email_code': {
       if (await emailConnected(ctx.stateDir)) {
         // The mail arrives when the vendor sends it: wait for it instead of looking once.
@@ -1002,6 +1030,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
           return ctx.requestPrivateLogin(site, fields, signal);
         }, onVerification: () => ctx.emitOutput?.('Approve the sign-in or finish verification in the open browser.\n') });
       const failed = outcome === 'unverified' || outcome === 'saved_login_rejected';
+      if (outcome === 'signed_in' || outcome === 'session_reused') await recordVerified(ctx.stateDir, journalKey(ctx.stateDir, args.tab), { kind: 'login' }).catch(() => undefined);
       // Signed in: the page you landed on comes with it, so there is nothing more to ask for.
       const landed = failed ? undefined : await (async () => {
         try { return await observeComputerPage(page.isClosed() ? await computerPage(ctx.stateDir, args.tab) : page, false); }
@@ -1014,6 +1043,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       const plan = normalizeSendTo(args.send_to);
       const planProblem = plan?.length ? await destinationProblem(ctx.stateDir, plan) : undefined;
       if (planProblem) throw new Error(`${planProblem} Nothing was clicked.`);
+      const triggerLabel = args.target ? (await controlName(page, args.target)) ?? (REF.test(args.target.trim()) ? undefined : args.target.trim()) : undefined;
       const name = args.secret_name?.trim() || `${new URL(page.url()).hostname.replace(/^www\./, '')}/key`;
       // The clipboard is one thing and a Copy button only works in the focused tab: captures take turns, each in front.
       const { length, shape, via, check, sent } = await inOrder('clipboard', async () => { await page.bringToFront().catch(() => undefined); return captureSecret({ ...(args.paste ? { paste: true } : {}), stateDir: ctx.stateDir, page, name, signal: ctx.signal,
@@ -1026,6 +1056,11 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
           return ctx.requestPrivateSecret(secretName, hint, signal);
         } }); });
       const refused = check.verdict === 'rejected';
+      if (!refused) {
+        const key = journalKey(ctx.stateDir, args.tab);
+        if (triggerLabel) noteStep(key, page.url(), { do: 'click', target: triggerLabel });
+        await recordVerified(ctx.stateDir, key, { kind: 'capture', url: page.url(), hint: `${triggerLabel ? `Click "${triggerLabel}" to make the key show, then capture_secret. ` : ''}Verified: ${check.verdict === 'works' ? 'the key works' : 'a key was found and stored'}.` }).catch(() => undefined);
+      }
       const lines = [
         `SAVED "${name}" in ClikCode Secrets Manager (${length} characters, ${shape}, taken from ${via}). You were not shown the key; if that does not match what you expected (an id where a secret should be), delete it and capture again.`,
         refused ? `NOT VERIFIED: ${check.detail}. It was kept because the site shows a new key only once, and it was NOT sent anywhere. Wait a minute, then send it with send_secret and check the result.`

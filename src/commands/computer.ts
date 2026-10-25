@@ -313,3 +313,14 @@ export async function computerEmail(action: 'connect' | 'status' | 'disconnect')
   if (isJsonDefaultMode()) return emitResult({ email: status });
   process.stdout.write(status.connected ? `Mailbox connected: ${status.email} (since ${status.connectedAt?.slice(0, 10)}).\n` : 'No mailbox connected. Run `clikcode computer email connect`.\n');
 }
+
+/** `clikcode computer oauth-connect <connector>`: connects a ClikDeploy connector by pressing through the vendor's consent in the ClikCode browser. */
+export async function computerOauthConnect(connector: string): Promise<void> {
+  const dir = stateDirectory();
+  const { oauthConnect } = await import('../agent/computer/oauth-consent.js');
+  const { openComputerPage } = await import('../agent/computer/browser.js');
+  const { listProfiles } = await import('../agent/computer/profiles.js');
+  const email = (await listProfiles(dir)).map(profile => profile.fields.sso_email).find(Boolean);
+  const done = await oauthConnect(connector, await openComputerPage(dir, 'oauth'), { email, progress: line => line && process.stdout.write(line) }).finally(async () => { await closeComputerPage(dir, 'oauth').catch(() => undefined); await releaseComputerBrowser(dir); });
+  return isJsonDefaultMode() ? emitResult({ computer: { oauthConnect: { connector: done.connector, connected: true } } }) : void process.stdout.write(`Connected ${done.connector}: ClikDeploy shows an active connection.\n`);
+}
