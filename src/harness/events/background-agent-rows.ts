@@ -15,7 +15,7 @@ const count = (value: unknown): number | undefined => (typeof value === 'number'
 
 export class BackgroundAgentRows {
   /** Held rows by the launching call's id, with the label the call had. */
-  private readonly held = new Map<string, { label?: string }>();
+  private readonly held = new Map<string, { label?: string; agentId?: string }>();
 
   get size(): number { return this.held.size; }
 
@@ -28,7 +28,8 @@ export class BackgroundAgentRows {
     if (!row) return [];
     this.held.delete(id);
     const stopped = state === 'cancelled' || state === 'disconnected';
-    return [{ kind: state === 'completed' ? 'tool-done' : 'tool-error', label: row.label ?? 'tool', agent: true, id, ...(stopped ? { stopped: true } : {}) }];
+    return [{ kind: state === 'completed' ? 'tool-done' : 'tool-error', label: row.label ?? 'tool', agent: true, id,
+      ...(row.agentId ? { agentId: row.agentId } : {}), ...(stopped ? { stopped: true } : {}) }];
   }
 
   /** The activity as it should be shown: the launch call's completion is withheld (undefined). */
@@ -36,7 +37,7 @@ export class BackgroundAgentRows {
     const row = event.id ? this.held.get(event.id) : undefined;
     if (!row) return event;
     if (event.agent && event.label !== 'tool') row.label = event.label;
-    return event.kind === 'tool-start' ? event : undefined;
+    return event.kind === 'tool-start' ? { ...event, ...(row.agentId ? { agentId: row.agentId } : {}) } : undefined;
   }
 
   /** What one `system` record changes: the row's progress or end. */
@@ -50,13 +51,20 @@ export class BackgroundAgentRows {
     const id = typeof record.tool_use_id === 'string' ? record.tool_use_id : undefined;
     if (!id) return undefined;
     if (record.subtype === 'task_started') {
-      if (record.is_backgrounded === true && record.owned_by_subagent !== true && typeof record.subagent_type === 'string') this.held.set(id, {});
-      return undefined;
+      const type = record.task_type ?? (typeof record.subagent_type === 'string' ? 'local_agent' : undefined);
+      if (record.is_backgrounded !== true || record.owned_by_subagent === true || type !== 'local_agent') return undefined;
+      const agentId = typeof record.task_id === 'string' && record.task_id ? record.task_id : undefined;
+      const row = { ...this.held.get(id), ...(agentId ? { agentId } : {}) };
+      this.held.set(id, row);
+      // The launch call and the background task are two identities for ONE
+      // agent. Publish their link immediately, before either sends progress.
+      return agentId ? { kind: 'tool-start', label: row.label ?? 'tool', agent: true, id, agentId } : undefined;
     }
     const row = this.held.get(id);
     if (!row || (record.subtype !== 'task_progress' && record.subtype !== 'task_notification')) return undefined;
     const usage = asRecord(record.usage);
     const spent = {
+      ...(row.agentId ? { agentId: row.agentId } : {}),
       ...(count(usage?.tool_uses) !== undefined ? { childTools: count(usage?.tool_uses)! } : {}),
       ...(count(usage?.total_tokens) !== undefined ? { childTokens: count(usage?.total_tokens)! } : {}),
     };
@@ -74,7 +82,8 @@ export class BackgroundAgentRows {
 
   /** Every row still held, closed: nothing can end them now. */
   settle(kind: 'tool-done' | 'tool-error', stopped = false): HarnessActivityEvent[] {
-    const events = [...this.held].map(([id, row]): HarnessActivityEvent => ({ kind, label: row.label ?? 'tool', agent: true, id, ...(stopped ? { stopped: true } : {}) }));
+    const events = [...this.held].map(([id, row]): HarnessActivityEvent => ({ kind, label: row.label ?? 'tool', agent: true, id,
+      ...(row.agentId ? { agentId: row.agentId } : {}), ...(stopped ? { stopped: true } : {}) }));
     this.held.clear();
     return events;
   }
