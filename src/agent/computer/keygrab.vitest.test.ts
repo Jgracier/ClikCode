@@ -78,6 +78,26 @@ describe('keygrab sign-in order', () => {
   });
 });
 
+describe('keygrab sign-in wording', () => {
+  it('takes "Start free with Google" and does not capture a key-shaped word on a marketing page', async () => {
+    const site = fakeSite({
+      'https://vendor.example/': { text: 'Trusted by 3M users. communication_api_v2_platform_1234 Start free', controls: ['Start free with Google', 'Start free with Email'], on: { 'Start free with Google': 'https://vendor.example/keys' }, key: true },
+      'https://vendor.example/keys': keysPage, 'https://vendor.example/keys/new': newKey, 'https://vendor.example/keys/made': madeKey,
+    });
+    const done = await run(site);
+    expect(done).toMatchObject({ ok: true, route: 'google' });
+    expect(site.log[1]).toBe('click Start free with Google');
+  });
+  it('signs in through a "Sign up for free" entry on a page that has no provider buttons', async () => {
+    const site = fakeSite({
+      'https://vendor.example/': { text: 'Welcome to the developer center', controls: ['Sign up for free'], on: { 'Sign up for free': 'https://vendor.example/signup' } },
+      'https://vendor.example/signup': { text: 'Join', controls: ['Continue with GitHub'], on: { 'Continue with GitHub': 'https://vendor.example/keys' } },
+      'https://vendor.example/keys': keysPage, 'https://vendor.example/keys/new': newKey, 'https://vendor.example/keys/made': madeKey,
+    });
+    expect(await run(site)).toMatchObject({ ok: true, route: 'github' });
+  });
+});
+
 describe('keygrab finding the key page', () => {
   it('tries the common paths when no menu item reads like an API page', async () => {
     const site = fakeSite({
