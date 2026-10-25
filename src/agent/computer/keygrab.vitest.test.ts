@@ -439,6 +439,26 @@ describe('keygrab entries that go nowhere', () => {
   });
 });
 
+describe('keygrab shells and API landing pages', () => {
+  it('waits for a page that shows only its footer links (HERE sign-up shell)', async () => {
+    let looks = 0;
+    const site = fakeSite({ 'https://vendor.example/': { text: 'Service Terms Privacy Policy Cookie policy', controls: ['Service Terms', 'Privacy Policy', 'Cookie policy', 'Consent preferences'] } });
+    const port = { ...site.port, look: async () => { looks++; return looks < 3 ? { url: 'https://vendor.example/', text: 'Service Terms Privacy Policy Cookie policy', controls: [{ name: 'Service Terms' }, { name: 'Privacy Policy' }], fields: [], hasPassword: false } : { url: 'https://vendor.example/', text: 'Create your account', controls: [{ name: 'Continue with Google' }], fields: [], hasPassword: false }; }, click: async () => { throw new Error('stop here'); } };
+    await expect(runKeygrab(port, { id: 'acme', url: 'https://vendor.example/', sleep: async () => undefined })).rejects.toThrow('stop here');
+    expect(looks).toBeGreaterThanOrEqual(3);
+  });
+  it('signs in from an API landing page that offers "Start building", after the API link', async () => {
+    const site = fakeSite({
+      'https://vendor.example/': { text: 'Lyrics', controls: ['API'], on: { API: 'https://vendor.example/api' } },
+      'https://vendor.example/api': { text: 'The Music API Platform', controls: ['View documentation', 'Start building'], on: { 'Start building': 'https://vendor.example/signin' } },
+      'https://vendor.example/signin': { text: 'Sign in', controls: ['Continue with Google'], on: { 'Continue with Google': 'https://accounts.google.com/chooser' } },
+      'https://accounts.google.com/chooser': { text: 'Choose an account', controls: ['user@example.com'], on: { 'user@example.com': 'https://vendor.example/keys' } },
+      ...keyFlow,
+    });
+    expect(await run(site)).toMatchObject({ ok: true, route: 'google' });
+  });
+});
+
 describe('keygrab walls need strong evidence', () => {
   const aiception = "AIception Artificial Intelligence for Humankind LET'S TALK PROTOTYPE YOURSELF About Lessons learned: 1. KYC Remediation is challenging. 2. OCR is not a silver bullet. Discover how AI can streamline document verification, reduce customs delays, and improve compliance";
   const shipstation = 'ShipStation Talk to an Expert Your business is growing. We keep it moving. Start Shipping Now No credit card required Cancel anytime Pricing Plans Starter Growth Pro';
