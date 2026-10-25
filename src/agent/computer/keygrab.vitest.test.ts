@@ -418,6 +418,7 @@ describe('keygrab walls need strong evidence', () => {
     expect(keygrabWall('Business verification is required before you can create keys')?.kind).toBe('identity');
     expect(keygrabWall('Please verify you are human to continue')?.kind).toBe('captcha');
     expect(keygrabWall('Sign in', false, false, { captchaFrame: true })?.kind).toBe('captcha');
+    expect(keygrabWall("Let's confirm you are human. Complete the security check before continuing. Begin")?.kind).toBe('captcha');
   });
   it('does not call "protected by reCAPTCHA" a captcha', () => {
     expect(keygrabWall('Sign in. This site is protected by reCAPTCHA and the Google Privacy Policy apply.')).toBeUndefined();
