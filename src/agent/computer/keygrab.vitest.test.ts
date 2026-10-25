@@ -132,6 +132,17 @@ describe('keygrab email route on a log-in page', () => {
   });
 });
 
+describe('keygrab email route when the form is not accepted', () => {
+  it('stops with the form on screen instead of wandering', async () => {
+    const form: Page = { text: 'Choose your plan. Please select a plan.', fields: ['Work email', 'Password'], password: true, controls: ['Create account'], on: { 'Create account': 'https://vendor.example/' } };
+    const site = fakeSite({ 'https://vendor.example/': form });
+    const done = await run(site);
+    expect(done.ok).toBe(false);
+    expect(site.log.some(l => l.startsWith('open ') && l !== 'open https://vendor.example/')).toBe(false);
+    if (!done.ok) expect(done.stop.pageText).toContain('Please select a plan');
+  });
+});
+
 describe('keygrab finding the key page', () => {
   it('tries the common paths when no menu item reads like an API page', async () => {
     const site = fakeSite({
