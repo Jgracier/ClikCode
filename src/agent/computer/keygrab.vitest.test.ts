@@ -118,6 +118,20 @@ describe('keygrab and slow pages', () => {
   });
 });
 
+describe('keygrab email route on a log-in page', () => {
+  it('goes to the sign-up link before filling when it lands on a log-in form it has no login for', async () => {
+    const site = fakeSite({
+      'https://vendor.example/': { text: 'Log in', fields: ['E-mail', 'Password'], password: true, controls: ['Log in', 'Sign up here'], on: { 'Sign up here': 'https://vendor.example/signup' } },
+      'https://vendor.example/signup': { text: 'Create your account', fields: ['E-mail', 'Password'], password: true, controls: ['Create account', 'Login here'], on: { 'Create account': 'https://vendor.example/keys' } },
+      'https://vendor.example/keys': keysPage, 'https://vendor.example/keys/new': newKey, 'https://vendor.example/keys/made': madeKey,
+    });
+    expect(await run(site)).toMatchObject({ ok: true, route: 'email' });
+    const at = (needle: string) => site.log.indexOf(needle);
+    expect(at('click Sign up here')).toBeGreaterThan(-1);
+    expect(at('click Sign up here')).toBeLessThan(at('fill E-mail'));
+  });
+});
+
 describe('keygrab finding the key page', () => {
   it('tries the common paths when no menu item reads like an API page', async () => {
     const site = fakeSite({

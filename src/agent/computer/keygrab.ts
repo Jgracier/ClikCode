@@ -97,13 +97,13 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     if (steps >= maxSteps) throw await stop('unknown', `keygrab used its ${maxSteps}-step budget (${what})`);
     if (now() - began > maxMs) throw await stop('unknown', `keygrab used its ${Math.round(maxMs / 1000)}s budget (${what})`);
     steps++;
-    trail.push(what.slice(0, 60));
+    trail.push(what.slice(0, 80));
     return run();
   };
   const stop = async (kind: StopInfo['kind'], message: string, human?: HumanStep, view?: KeyView): Promise<Halt> => {
     const seen = view ?? await port.look().catch((): KeyView => ({ url: '', text: '', controls: [], fields: [], hasPassword: false }));
     const screenshot = await port.screenshot().catch(() => undefined);
-    return new Halt({ kind, message, url: pathOf(seen.url) || seen.url, pageText: pageExcerpt(seen.text), controls: seen.controls.filter(c => !c.leaf).map(c => c.name).slice(0, 12), ...(screenshot ? { screenshot } : {}), ...(human ? { human } : {}), trail: trail.slice(-14) });
+    return new Halt({ kind, message, url: pathOf(seen.url) || seen.url, pageText: pageExcerpt(seen.text), controls: seen.controls.filter(c => !c.leaf).map(c => c.name).slice(0, 12), ...(screenshot ? { screenshot } : {}), ...(human ? { human } : {}), trail: trail.slice(-30) });
   };
   /** Ends the run on a wall with a human step: kind, the page, and what to do. */
   const wallStop = async (view: KeyView, wall: NonNullable<ReturnType<typeof keygrabWall>>): Promise<Halt> => {
@@ -192,10 +192,13 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     route = 'email';
     const done = await act('sign in with the profile email', () => port.login());
     if (done.ok) return;
-    // No account yet (or no saved login): fill the form from the profile, with a made-up password, and submit it.
-    const here = await look();
+    // No account yet (or no saved login). On a log-in page the way forward is its sign-up link; then the form is filled from the profile, with a made-up password.
+    let here = await look();
+    const onLogin = here.controls.some(c => pressable(c) && /^(log ?in|sign ?in)$/i.test(c.name));
+    const toSignUp = onLogin ? here.controls.find(c => pressable(c) && /sign ?up|create (an )?account|register|get started/i.test(c.name) && !/^(log ?in|sign ?in)$/i.test(c.name)) : undefined;
+    if (toSignUp && await click(toSignUp.name)) { await sleep(800); here = await look(); }
     for (const field of here.fields.length ? here.fields : v.fields) await act(`fill ${field}`, () => port.fill(field));
-    const submit = [...here.controls].reverse().find(c => pressable(c) && SUBMIT.test(c.name));
+    const submit = [...here.controls].reverse().find(c => pressable(c) && /^(sign ?up|create( account)?|register|continue|next|get started|submit)$/i.test(c.name)) ?? [...here.controls].reverse().find(c => pressable(c) && SUBMIT.test(c.name) && c.name.length <= 30);
     if (!submit) throw await stop('unknown', `the sign-in form has no button the runner knows (${done.message})`, undefined, here);
     await click(submit.name);
     await sleep(800);
@@ -220,7 +223,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
   };
 
   const openAt = async (url: string): Promise<KeyView | undefined> => {
-    const err = await act(`open ${pathOf(url)}`, () => port.open(url));
+    const err = await act(`open ${pathOf(url).replace(/^https:\/\//, '')}`, () => port.open(url));
     if (err) { say(`could not open ${pathOf(url)}`); return undefined; }
     return look();
   };
