@@ -20,6 +20,7 @@ const browser = vi.hoisted(() => {
   });
   const last = () => mfa ? 3 : 2;
   const page = {
+    evaluate: async () => "",
     url: () => rejections && step === rejectAt ? `https://accounts.google.com/v3/signin/again/${rejections}`
       : step === 0 ? 'https://accounts.google.com/v3/signin/identifier'
       : step === 1 ? 'https://accounts.google.com/v3/signin/pwd'
@@ -50,7 +51,7 @@ const browser = vi.hoisted(() => {
     requireVerification: () => { finishUrl = 'https://accounts.google.com/v3/signin/challenge/dp'; } };
 });
 vi.mock('../computer/browser.js', () => ({ computerPage: async () => browser.page }));
-vi.mock('../computer/settings.js', () => ({ computerEnabled: async () => true }));
+vi.mock('../computer/settings.js', () => ({ computerEnabled: async () => true, unattendedEnabled: async () => false, generatedPasswordsAllowed: async () => true }));
 
 import { computerWebTool } from './computer-web.js';
 
