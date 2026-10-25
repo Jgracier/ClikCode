@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { authorizationUrl, callbackState, GENERIC_ACTIONS, nextPress, providerFor, stopReason, type Control } from './oauth-consent.js';
+import { authorizationUrl, startFailure, callbackState, GENERIC_ACTIONS, nextPress, providerFor, stopReason, type Control } from './oauth-consent.js';
 
 const press = (...names: string[]): Control[] => names.map(name => ({ name, leaf: false }));
 const pick = (host: string, controls: Control[], text = '', options: { email?: string; skipAccount?: boolean } = {}): string | undefined => {
@@ -83,5 +83,25 @@ describe('authorizationUrl', () => {
     expect(authorizationUrl('{"status":"ok","data":{"authorizationUrl":"https://v.example/auth?a=1&b=2"}}')).toBe('https://v.example/auth?a=1&b=2');
     expect(authorizationUrl('Open this URL to authorize:\nhttps://v.example/auth?x=1.\n')).toBe('https://v.example/auth?x=1');
     expect(authorizationUrl('{"status":"error","message":"nope"}')).toBeUndefined();
+  });
+
+  it('never takes an error document\'s type address (errors.clikdeploy.com) for the authorization URL', () => {
+    const problem = '{"type":"https://errors.clikdeploy.com/VALIDATION_ERROR","title":"Validation failed","status":400,"detail":"Supabase declares no OAuth scopes","instance":"https://clikdeploy.com/api/connectors/supabase/oauth/start"}';
+    expect(authorizationUrl(problem)).toBeUndefined();
+    expect(authorizationUrl(`Error: ${problem}`)).toBeUndefined();
+    expect(authorizationUrl('see https://errors.clikdeploy.com/VALIDATION_ERROR for details')).toBeUndefined();
+    expect(authorizationUrl('{"data":{"state":"s","authorizationUrl":"https://v.example/a"},"type":"https://errors.clikdeploy.com/X"}')).toBeUndefined();
+  });
+
+  it('prefers the authorizationUrl field over other URLs in the document', () => {
+    expect(authorizationUrl('{"data":{"docs":"https://d.example/help","authorizationUrl":"https://v.example/a"}}')).toBe('https://v.example/a');
+  });
+});
+
+describe('startFailure', () => {
+  it('reports the real message of an error document', () => {
+    expect(startFailure('{"type":"https://errors.clikdeploy.com/VALIDATION_ERROR","status":400,"detail":"Supabase declares no OAuth scopes, so the request would be rejected."}')).toBe('Supabase declares no OAuth scopes, so the request would be rejected.');
+    expect(startFailure('{"success":false,"error":"OAuth client not configured for x"}')).toBe('OAuth client not configured for x');
+    expect(startFailure('boom\nline two')).toBe('boom line two');
   });
 });
