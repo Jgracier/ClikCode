@@ -38,3 +38,20 @@ it.skipIf(SKIP)('reads and acts inside same-origin and cross-origin iframes', as
     form.close(); host.close();
   }
 }, 60_000);
+
+it.skipIf(SKIP)('reads controls and fields inside open shadow roots (a web-component sign-up form)', async () => {
+  const host = await serve(() => '<h1>Verify your identity</h1><sign-up></sign-up><script>const r = document.querySelector("sign-up").attachShadow({mode:"open"}); r.innerHTML = "<style>.x{color:red}</style><label>First name <input placeholder=\\"First name\\"></label><label>Email <input placeholder=\\"Email address\\"></label><button>Verify email</button>";</script>');
+  const browser = await chromium.launch({ channel: 'chrome', headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.goto(`http://127.0.0.1:${(host.address() as AddressInfo).port}/`);
+    const view = await lookAt(page);
+    expect(view.fields).toEqual(expect.arrayContaining(['First name', 'Email']));
+    expect(view.controls.map(c => c.name)).toContain('Verify email');
+    expect(view.text).not.toContain('color:red');
+    await (await locate(page, 'Email')).fill('someone@example.com');
+  } finally {
+    await browser.close();
+    host.close();
+  }
+}, 60_000);

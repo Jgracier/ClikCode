@@ -18,9 +18,19 @@ function collectView(): { text: string; controls: KeyControl[]; fields: string[]
   type El = { closest(s: string): unknown; matches(s: string): boolean; getClientRects(): { length: number }; children: { length: number }; textContent: string | null; getAttribute(n: string): string | null; value?: string; href?: string; labels?: ArrayLike<{ textContent: string | null }>; type?: string; tagName: string };
   const norm = (t: string | null | undefined): string => (t ?? '').replace(/\s+/g, ' ').trim();
   const pressable = 'button, [role=button], a, [role=link], [role=menuitem], [role=tab], input[type=submit], input[type=button], summary';
+  // Open shadow roots (web-component forms) are part of the page: every query below reaches into them.
+  const all = (selector: string): El[] => {
+    const found: El[] = [];
+    const walk = (root: { querySelectorAll(s: string): ArrayLike<unknown> }): void => {
+      for (const n of Array.from(root.querySelectorAll(selector))) found.push(n as El);
+      for (const host of Array.from(root.querySelectorAll('*')) as unknown as Array<{ shadowRoot?: { querySelectorAll(s: string): ArrayLike<unknown> } | null }>) if (host.shadowRoot) walk(host.shadowRoot);
+    };
+    walk(doc as unknown as { querySelectorAll(s: string): ArrayLike<unknown> });
+    return found;
+  };
   const controls: KeyControl[] = [];
   const seenNames = new Set<string>();
-  for (const n of Array.from(doc.querySelectorAll(`${pressable}, span, div, p, li, label`)).slice(0, 1500) as unknown as El[]) {
+  for (const n of all(`${pressable}, span, div, p, li, label`).slice(0, 2500)) {
     if (!n.getClientRects().length) continue;
     const isPress = n.matches(pressable);
     if (!isPress && n.children.length) continue;
@@ -40,7 +50,7 @@ function collectView(): { text: string; controls: KeyControl[]; fields: string[]
   }
   const fields: string[] = [];
   let hasPassword = false;
-  for (const n of Array.from(doc.querySelectorAll('input, textarea')) as unknown as El[]) {
+  for (const n of all('input, textarea')) {
     if (!n.getClientRects().length || /^(hidden|checkbox|radio|submit|button|file|image)$/.test(n.type ?? '')) continue;
     if (n.type === 'password') hasPassword = true;
     const name = norm(n.getAttribute('aria-label')) || norm(n.labels?.[0]?.textContent) || norm(n.getAttribute('placeholder'));
@@ -53,7 +63,12 @@ function collectView(): { text: string; controls: KeyControl[]; fields: string[]
     if (/recaptcha\/api2\/bframe|hcaptcha\.com\/captcha|challenges\.cloudflare\.com|turnstile|funcaptcha|arkoselabs/i.test(src) && box.width >= 280 && box.height >= 70) captchaFrame = true;
     else if (/recaptcha\/api2\/anchor/i.test(src) && box.width >= 280 && box.height >= 70) captchaFrame = true;
   }
-  return { text: (doc.body?.innerText ?? '').slice(0, 6000), controls, fields, hasPassword, captchaFrame };
+  // innerText stops at a shadow root: add the text of each one.
+  let text = doc.body?.innerText ?? '';
+  for (const host of Array.from(doc.querySelectorAll('*')).slice(0, 4000) as unknown as Array<{ shadowRoot?: { children: ArrayLike<{ tagName: string; innerText?: string }> } | null }>) {
+    if (host.shadowRoot) for (const child of Array.from(host.shadowRoot.children)) if (!/^(STYLE|SCRIPT|LINK)$/.test(child.tagName) && child.innerText) text += `\n${child.innerText}`;
+  }
+  return { text: text.slice(0, 6000), controls, fields, hasPassword, captchaFrame };
 }
 
 /** Frames that are the page's own forms and widgets (a sign-up form, a sign-in button) are read; captcha challenges, ads and trackers are not. */

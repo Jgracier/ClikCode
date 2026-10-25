@@ -51,6 +51,8 @@ const SOCIAL_HOST = /(^|\.)(github\.com|google\.com|plus\.google\.com)$/i;
 const providerRank = (c: KeyControl): number => /\b(continue|sign ?in|sign ?up|log ?in|login|register|connect|start)\b/i.test(c.name) ? 0 : /\b(with|using|via)\b/i.test(c.name) ? 1 : 2;
 /** The brief's link test first; plain "Developers" and "API" menu items rank below it. */
 export const API_LINK = /api (keys?|tokens?|credentials|developers?)/i;
+/** "Word Associations API Account", "API console": the way into the vendor's API area, ranked between the key links and the bare ones. */
+const API_LINK_AREA = /\bapi\b[^.]{0,30}\b(?:account|portal|console|dashboard|access|sign ?up|register)\b|\b(?:developer|api) (?:portal|console|dashboard|account)\b/i;
 const API_LINK_WEAK = /^(developers?|api|api access|developer portal|for developers|credentials|keys|tokens?|developer settings)$/i;
 const SIGN_IN_ENTRY = /^(log ?in|sign ?in)$/i;
 const SIGN_UP_ENTRY = /^(sign ?up|get started|get (your )?api key|register|create (an )?account|try (it )?(for )?free|start (for )?free|start building)\b[\w ]{0,15}$/i;
@@ -71,6 +73,8 @@ const NOT_FOUND = /\b404\b|page (?:not found|does(?:n't| not) exist)|not found|n
 
 /** Strong evidence only. A pricing page, a tier table, "No credit card required" or an FAQ about billing is marketing, not a wall. */
 const CAPTCHA_TEXT = /(?:let's|let us) confirm you are (?:a )?human|complete the security check before continuing|verify (?:that )?you(?:'re| are) (?:a )?human|i'?m not a robot|are you a robot|complete the (?:captcha|security check)|solve (?:the|this) captcha|select all (?:images|squares)|press (?:and|&) hold|performing security verification|verifies? (?:that )?you are not a bot|checking if the site connection is secure|checking your browser|just a moment\.\.\./i;
+/** A box that asks to retype distorted characters or answer a human check is a captcha, whatever frame it is in: never filled. */
+const CAPTCHA_FIELD = /type the (?:characters|letters|text|code|word)s? (?:you see|shown|in the image|below)|enter the (?:characters|letters|text|code) (?:you see|shown|in the image|below)|captcha|security (?:code|check|question)|are you (?:a )?human|not a robot/i;
 const PAYMENT_TEXT = /enter your (?:credit |debit )?card|(?:credit |debit )?card (?:number|details) (?:is )?required|\bcard number\b|\bcvc\b|\bcvv\b|expir(?:y|ation) date|payment method (?:is )?required|(?:add|enter) (?:a )?(?:valid )?payment method to (?:continue|proceed|get)|(?<!\bno )(?<!\bwithout a )credit card (?:is )?required(?! for)|enter (?:a )?valid card/i;
 const PAYMENT_FIELD = /card number|\bcvc\b|\bcvv\b|expir(?:y|ation)|name on card/i;
 const IDENTITY_STRONG = /verify your (?:identity|id\b|business)|confirm your identity|(?:upload|scan|take|submit)[^.\n]{0,40}(?:passport|driver'?s licen[cs]e|government[- ]issued|id (?:card|document))|please (?:provide|submit)[^.\n]{0,30}(?:business|company) (?:verification|registration)/i;
@@ -83,7 +87,7 @@ export function keygrabWall(text: string, keyPage = false, signInOffered = false
   const blocker = detectBlocker(text);
   if (/make an offer|buy this domain|domain(?: name)? is for sale|this domain (?:is|may be) for sale|domain for sale/i.test(text)) return { kind: 'retire', reasonCode: 'domain-for-sale', what: 'a domain-for-sale page (the vendor looks gone)' };
   if (/error 1016|origin dns error|server ip address could not be found|ERR_NAME_NOT_RESOLVED|DNS_PROBE_FINISHED|site can.t be reached|this domain (?:has )?expired/i.test(text)) return { kind: 'retire', reasonCode: 'host-dead', what: 'a site that no longer resolves (the vendor looks gone)' };
-  if (extra.captchaFrame || CAPTCHA_TEXT.test(text)) return { kind: 'captcha', reasonCode: 'captcha', what: 'a captcha' };
+  if (extra.captchaFrame || CAPTCHA_TEXT.test(text) || (extra.fields ?? []).some(f => CAPTCHA_FIELD.test(f))) return { kind: 'captcha', reasonCode: 'captcha', what: 'a captcha' };
   // "Verify your identity ... a verification email will follow" over name and email boxes is a sign-up form (HERE), not a document check.
   const signUpForm = /verification e-?mail|we(?:'ll| will) e-?mail you/i.test(text) && (extra.fields ?? []).some(f => /e-?mail/i.test(f)) && !/passport|licen[cs]e|upload|government/i.test(text);
   if (!signUpForm && IDENTITY_STRONG.test(text) || (!keyPage && !signInOffered && IDENTITY_WEAK.test(text))) return { kind: 'identity', reasonCode: 'identity-check', what: 'identity or business verification' };
@@ -372,31 +376,41 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     return look();
   };
 
+  let shown: KeyView = { url: '', text: '', controls: [], fields: [], hasPassword: false }; // the last page that was a real page, for the report if nothing is found
+  /** Signed in: read the account and avatar menus, workspace switchers, settings pages, the site's search and the side navigation for a key page. */
+  let exploredRuns = 0;
+  const exploreSignedIn = async (v: KeyView): Promise<{ found?: KeyView; last: KeyView } | undefined> => {
+    if (exploredRuns >= 2 || isKeyPage(v)) return undefined;
+    const email = await port.profileEmail().catch(() => undefined);
+    // Signed in: this run signed in, or the page looks like an app (an account menu or the signed-in address, no sign-in entry).
+    const looksSignedIn = !offersSignIn(v) && menuOpeners(v, email).some(c => c.menu === true || (!!email && c.name.toLowerCase().includes(email.toLowerCase())));
+    if (!((signedIn || looksSignedIn) && !authWall(v))) return undefined;
+    exploredRuns++;
+    const explored = await exploreForKeys({
+      look, click, open: openAt, sleep, say,
+      fill: (name, text) => act(`fill ${name}`, () => port.fill(name, text)),
+      ...(port.press ? { press: (key: string) => act(`press ${key}`, () => port.press!(key)) } : {}),
+      isKeyPage, needsSignIn: authWall,
+    }, v, { maxPages: options.exploreMax ?? 8, ...(email ? { email } : {}), seen: visited, seenMenus: menus });
+    visited.splice(0, visited.length, ...explored.visited);
+    menus.splice(0, menus.length, ...explored.menus);
+    for (const name of explored.tried) triedNames.add(name);
+    shown = explored.last;
+    return { ...(explored.found ? { found: explored.found } : {}), last: explored.last };
+  };
+
   /** Walks to the API key page: menu items that read like one, then the common paths. Returns the view of the page that offers a key. */
   let homeUrl = '';
   const findKeyPage = async (start: KeyView): Promise<KeyView> => {
     let v = start;
-    let shown = start; // the last page that was a real page, for the report if nothing is found
+    shown = start;
     if (isKeyPage(v)) return v;
-    // Signed in: read the account and avatar menus, workspace switchers, settings pages, the site's search and the side navigation for a key page.
-    const email = await port.profileEmail().catch(() => undefined);
-    // Signed in: this run signed in, or the page looks like an app (an account menu or the signed-in address, no sign-in entry).
-    const looksSignedIn = !offersSignIn(v) && menuOpeners(v, email).some(c => c.menu === true || (!!email && c.name.toLowerCase().includes(email.toLowerCase())));
-    if ((signedIn || looksSignedIn) && !authWall(v)) {
-      const explored = await exploreForKeys({
-        look, click, open: openAt, sleep, say,
-        fill: (name, text) => act(`fill ${name}`, () => port.fill(name, text)),
-        ...(port.press ? { press: (key: string) => act(`press ${key}`, () => port.press!(key)) } : {}),
-        isKeyPage, needsSignIn: authWall,
-      }, v, { maxPages: options.exploreMax ?? 8, ...(email ? { email } : {}), seen: visited, seenMenus: menus });
-      visited.splice(0, visited.length, ...explored.visited);
-      menus.splice(0, menus.length, ...explored.menus);
-      for (const name of explored.tried) triedNames.add(name);
-      if (explored.found) return explored.found;
-      v = explored.last; shown = v;
-    }
+    const explored = await exploreSignedIn(v);
+    if (explored?.found) return explored.found;
+    if (explored) { v = explored.last; shown = v; }
     const linksOf = (page: KeyView): KeyControl[] => [
       ...page.controls.filter(c => pressable(c) && !NEVER_KEY.test(c.name) && API_LINK.test(c.name)),
+      ...page.controls.filter(c => pressable(c) && !NEVER_KEY.test(c.name) && !API_LINK.test(c.name) && API_LINK_AREA.test(c.name) && c.name.length <= 60),
       ...page.controls.filter(c => pressable(c) && !NEVER_KEY.test(c.name) && !API_LINK.test(c.name) && API_LINK_WEAK.test(c.name)),
     ].filter(c => !triedNames.has(c.name)).filter((c, i, all) => all.findIndex(o => o.name === c.name) === i).slice(0, 3);
     // The page we are on after signing in (an account area, a sign-in host) may have no API menu: the vendor's own front page does.
@@ -414,9 +428,21 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
         if (!(await click(link.name))) continue;
         await sleep(700);
         v = await look();
-        if ((authWall(v) || (!isKeyPage(v) && signEntry(v))) && authTries < 2) { await authenticate(); v = await look(); }
+        if ((authWall(v) || (!isKeyPage(v) && signEntry(v))) && authTries < 2) { await authenticate(); v = await look(); const got = await exploreSignedIn(v); if (got?.found) return got.found; }
         if (isKeyPage(v)) return v;
         shown = v;
+        // An API landing page names the way in ("Word Associations API Account"): follow the strong links on it, one level deeper.
+        const deeper = v.controls.filter(c => pressable(c) && !c.footer && !NEVER_KEY.test(c.name) && c.name !== link.name && (API_LINK.test(c.name) || API_LINK_AREA.test(c.name)) && c.name.length <= 60).slice(0, 2);
+        for (const next of deeper) {
+          if (!(await click(next.name))) continue;
+          await sleep(700);
+          let w = await look();
+          if ((authWall(w) || (!isKeyPage(w) && signEntry(w))) && authTries < 2) { await authenticate(); w = await look(); const got = await exploreSignedIn(w); if (got?.found) return got.found; }
+          if (isKeyPage(w)) return w;
+          shown = w;
+          if (source.at) break;
+          const back = await openAt(pathOf(v.url)); if (!back) break;
+        }
         // The link led somewhere that is no key page: the next link starts from the same front page again.
         if (source.at && pathOf(v.url) !== pathOf(source.at)) { const back = await openAt(source.at); if (!back) break; }
       }
@@ -426,11 +452,13 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
       for (const path of KEY_PATHS) {
         let page = await openAt(`${origin}${path}`);
         if (!page || NOT_FOUND.test(page.text.slice(0, 400))) continue;
-        if (authWall(page) && authTries < 2) { await authenticate(); page = await openAt(`${origin}${path}`); if (!page) continue; }
+        if (authWall(page) && authTries < 2) { await authenticate(); page = await openAt(`${origin}${path}`); if (!page) continue; const got = await exploreSignedIn(page); if (got?.found) return got.found; }
         if (isKeyPage(page)) return page;
         shown = page;
       }
     }
+    // Leave the browser on the most useful page seen, not on the last guessed path (a 404): the tab is kept for a resumed run.
+    if (pathOf(shown.url) && pathOf(shown.url) !== pathOf(await port.look().then(l => l.url).catch(() => ''))) { trail.push(`go back to ${pathOf(shown.url).replace(/^https:\/\//, '')}`); await port.open(shown.url).catch(() => undefined); }
     const gone = RETIRED.exec(start.text)?.[0];
     const human: HumanStep | undefined = gone ? { kind: 'retire', ...(pathOf(start.url).startsWith('https://') ? { url: pathOf(start.url) } : {}), reasonCode: 'vendor-retired', instructions: `${hostOf(start.url)} says "${gone.slice(0, 120)}" and has no API key page; confirm and retire the connector.` } : undefined;
     throw await stop('unknown', 'no API key page was found (menu links and the common paths were tried)', human, shown);
