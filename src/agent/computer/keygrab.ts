@@ -60,6 +60,7 @@ const NOT_FOUND = /\b404\b|page (?:not found|does(?:n't| not) exist)|not found|n
 export function keygrabWall(text: string, keyPage = false, signInOffered = false): { kind: HumanKind; reasonCode: string; what: string } | undefined {
   const blocker = detectBlocker(text);
   if (/make an offer|buy this domain|domain(?: name)? is for sale|this domain (?:is|may be) for sale|domain for sale/i.test(text)) return { kind: 'retire', reasonCode: 'domain-for-sale', what: 'a domain-for-sale page (the vendor looks gone)' };
+  if (/error 1016|origin dns error|server ip address could not be found|ERR_NAME_NOT_RESOLVED|DNS_PROBE_FINISHED|site can.t be reached|this domain (?:has )?expired/i.test(text)) return { kind: 'retire', reasonCode: 'host-dead', what: 'a site that no longer resolves (the vendor looks gone)' };
   if (blocker === 'a captcha' || /verify you are (?:a )?human|are you a robot|checking your browser|just a moment\.\.\./i.test(text)) return { kind: 'captcha', reasonCode: 'captcha', what: 'a captcha' };
   if (/(?:verify|confirm|enter|add)[^.\n]{0,30}(?:phone|mobile)(?: number)?|(?:sms|text message)[^.\n]{0,40}code|code[^.\n]{0,30}(?:sent|texted)[^.\n]{0,20}(?:phone|number|\+\d)|phone verification/i.test(text) && /verif|code|confirm/i.test(text)) return { kind: 'sms', reasonCode: 'phone-verification', what: 'a phone (SMS) verification' };
   if (blocker === 'an SMS or authenticator code') return { kind: 'mfa', reasonCode: 'verification-code', what: 'an authenticator or SMS code' };
@@ -147,11 +148,11 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
         throw await stop('password', 'Google asks for a password: the ClikCode browser is signed out of Google', { kind: 'worker-setup', url: 'https://accounts.google.com/', reasonCode: 'sign-in-needed', instructions: 'Sign the ClikCode browser in to Google once, then run the connectors again.' }, v);
       }
       const controls: Control[] = v.controls.map(c => ({ name: c.name, leaf: c.leaf === true }));
-      const next = nextPress(host, controls, v.text, { ...(email ? { email } : {}), skipAccount: chosenOn === v.url });
+      const next = nextPress(host, controls, v.text, { ...(email ? { email } : {}), skipAccount: chosenOn === pathOf(v.url) });
       const target = next && controls[next.index];
       if (!target || !next) { if (++idle >= 3) throw await stop('unknown', `a ${host} screen the runner does not know`, undefined, v); continue; }
       idle = 0;
-      if (next.note === 'Chose the account.') chosenOn = v.url;
+      if (next.note === 'Chose the account.') chosenOn = pathOf(v.url);
       // A chooser row is the name run into the address; the address alone is what the page's text matches.
       if (next.note === 'Chose the account.' && email && target.name.toLowerCase().includes(email.toLowerCase())) await click(email);
       else await click(target.name);
@@ -251,6 +252,12 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     const first = await openAt(options.url);
     if (!first) throw await stop('unknown', `could not open ${pathOf(options.url)}`);
     let v = first;
+    // An API host (no controls at all, a bare JSON error) is not the vendor's site: start from its parent domain.
+    const labels = hostOf(v.url).split('.');
+    if (!v.controls.length && !v.fields.length && labels.length > 2) {
+      const apex = await openAt(`https://${labels.slice(1).join('.')}/`);
+      if (apex) v = apex;
+    }
     if (authWall(v)) { await authenticate(); v = await look(); }
     let page = await findKeyPage(v);
     for (let retry = 0; retry < 2; retry++) {

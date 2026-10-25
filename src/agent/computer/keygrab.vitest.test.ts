@@ -137,6 +137,7 @@ describe('keygrab walls', () => {
     ['Identity verification required: upload a government-issued ID', 'identity'],
     ['Thanks for signing up. You are on the waitlist', 'vendor-contact'],
     ['Gmail addresses are not allowed. Use a work email.', 'decision'],
+    ['Error 1016 Origin DNS error: Cloudflare is currently unable to resolve your requested domain', 'retire'],
     ['This domain is for sale. Make an offer. Buy now', 'retire'],
   ])('stops with a human step for %s', async (text, kind) => {
     const done = await wall(text);
@@ -190,6 +191,17 @@ describe('keygrab on a retired vendor and a Google chooser', () => {
     });
     expect((await run(site)).ok).toBe(true);
     expect(site.log).not.toContain('click Justin Gracieruser@example.com');
+  });
+});
+
+describe('keygrab starting on an API host', () => {
+  it('starts from the parent domain when the address is a bare API endpoint', async () => {
+    const site = fakeSite({
+      'https://api.vendor.example/': { text: '{"code":2004,"message":"Not Authorized"}' },
+      'https://vendor.example/': { text: 'API keys', controls: ['Create new secret key'], on: { 'Create new secret key': 'https://vendor.example/keys/new' } },
+      'https://vendor.example/keys/new': newKey, 'https://vendor.example/keys/made': madeKey,
+    }, 'https://api.vendor.example/');
+    expect((await run(site, { url: 'https://api.vendor.example/' })).ok).toBe(true);
   });
 });
 
