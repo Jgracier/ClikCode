@@ -164,6 +164,34 @@ export async function closeComputerPage(stateDir: string, tab?: string): Promise
   for (const page of pages) await page.close().catch(() => undefined);
 }
 
+/** Keep a tab open for a later command (a keygrab that could not finish): mark it, and stop owning it so closing this process's connection or opening the next vendor leaves it alone. */
+export async function parkComputerPage(stateDir: string, tab: string, marker: string): Promise<boolean> {
+  const page = mine(stateDir, tab);
+  if (!page) return false;
+  const marked = await page.evaluate(name => { (globalThis as unknown as { name: string }).name = name; return true; }, marker).catch(() => false);
+  owned.delete(ownerKey(stateDir, tab));
+  return marked;
+}
+
+/** The parked tab with this marker, found among the shared Chrome's tabs and made this process's `tab`; undefined when Chrome or the tab is gone. */
+export async function reattachParkedPage(stateDir: string, tab: string, marker: string): Promise<Page | undefined> {
+  const { context } = await browserFor(stateDir, false).catch(() => ({ context: undefined }));
+  if (!context) return undefined;
+  for (const page of context.pages()) {
+    if (page.isClosed()) continue;
+    const name = await page.evaluate(() => (globalThis as unknown as { name: string }).name).catch(() => undefined);
+    if (name === marker) { adoptPage(stateDir, page, tab); return page; }
+  }
+  return undefined;
+}
+
+/** Close a parked tab (the keygrab finished, or a newer one replaced it). */
+export async function closeParkedPage(stateDir: string, marker: string): Promise<void> {
+  const page = await reattachParkedPage(stateDir, `parked-close-${marker}`, marker);
+  if (page) await page.close().catch(() => undefined);
+  owned.delete(ownerKey(stateDir, `parked-close-${marker}`));
+}
+
 /** Lets go of this process's connection to the shared Chrome (a command line that is finished with the browser can then exit); the browser keeps running. */
 export async function releaseComputerBrowser(stateDir: string): Promise<void> {
   owned.delete(stateDir);
