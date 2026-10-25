@@ -35,7 +35,7 @@ export async function connectorsRun(flags: ConnectorsRunFlags): Promise<void> {
   for (const o of outcomes.filter(o => o.handoff)) process.stdout.write(`handoff ${o.id}: ${o.handoff!.file ?? '(no file)'}\n`);
 }
 
-export interface ConnectorsResumeFlags { click?: string; goto?: string; maxMinutes?: string; maxSteps?: string }
+export interface ConnectorsResumeFlags { click?: string; goto?: string; only?: boolean; maxMinutes?: string; maxSteps?: string }
 
 /** `clikcode connectors resume <id>`: reattach to the hidden tab a keygrab run left parked, optionally press one thing, and carry on with keygrab. */
 export async function connectorsResume(id: string, flags: ConnectorsResumeFlags): Promise<void> {
@@ -44,7 +44,7 @@ export async function connectorsResume(id: string, flags: ConnectorsResumeFlags)
   const maxMinutes = number(flags.maxMinutes, 'max-minutes', 1, 60), maxSteps = number(flags.maxSteps, 'max-steps', 1, 100);
   const { resumeKeygrab } = await import('../agent/computer/keygrab-resume.js');
   const { narrowTask, resumeCommand } = await import('../agent/computer/connector-runner.js');
-  const result = await resumeKeygrab({ stateDir: stateDirectory(), id, ...(flags.click ? { click: flags.click } : {}), ...(flags.goto ? { goto: flags.goto } : {}), ...(maxMinutes ? { maxMs: maxMinutes * 60_000 } : {}), ...(maxSteps ? { maxSteps } : {}) });
+  const result = await resumeKeygrab({ stateDir: stateDirectory(), id, ...(flags.click ? { click: flags.click } : {}), ...(flags.goto ? { goto: flags.goto } : {}), ...(flags.only ? { only: true } : {}), ...(maxMinutes ? { maxMs: maxMinutes * 60_000 } : {}), ...(maxSteps ? { maxSteps } : {}) });
   const { outcome } = result;
   let onboard: string | undefined;
   if (outcome.ok) {
@@ -57,7 +57,7 @@ export async function connectorsResume(id: string, flags: ConnectorsResumeFlags)
   }
   const summary = outcome.ok
     ? { id, captured: true, reattached: result.reattached, ...(result.pressed ? { pressed: result.pressed } : {}), note: outcome.note, recipeRecorded: outcome.recipe === true, ...(onboard ? { onboard } : {}) }
-    : { id, captured: false, reattached: result.reattached, ...(result.pressed ? { pressed: result.pressed } : {}), why: outcome.stop.message, url: outcome.stop.url, controls: outcome.stop.controls.slice(0, 12), visited: outcome.stop.visited, menus: outcome.stop.menus, trail: outcome.stop.trail?.slice(-12), parked: outcome.stop.parked === true, ...(outcome.stop.parked ? { resume: resumeCommand(id), narrowTask: narrowTask(id, outcome.stop) } : {}) };
+    : { id, captured: false, reattached: result.reattached, ...(result.pressed ? { pressed: result.pressed } : {}), why: outcome.stop.message, url: outcome.stop.url, page: outcome.stop.pageText, controls: outcome.stop.controls.slice(0, flags.only ? 60 : 12), visited: outcome.stop.visited, menus: outcome.stop.menus, trail: outcome.stop.trail?.slice(-12), parked: outcome.stop.parked === true, ...(outcome.stop.parked ? { resume: resumeCommand(id), narrowTask: narrowTask(id, outcome.stop) } : {}) };
   if (isJsonDefaultMode()) return emitResult({ connectors: { resume: summary } });
   process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
 }

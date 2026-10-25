@@ -35,7 +35,7 @@ function collectView(): { text: string; controls: KeyControl[]; fields: string[]
       ...(n.tagName === 'A' && n.href ? { href: n.href } : {}),
       ...(n.closest('footer, [role=contentinfo]') ? { footer: true } : {}),
       ...(n.closest('nav, aside, [role=navigation], [role=complementary]') ? { nav: true } : {}),
-      ...(isPress && ((popup && popup !== 'false') || n.getAttribute('aria-expanded') === 'false') ? { menu: true } : {}),
+      ...(name.length <= 40 && ((popup && popup !== 'false') || n.getAttribute('aria-expanded') === 'false' || n.closest('[aria-haspopup]:not([aria-haspopup=false]), [aria-expanded=false], [role=listbox], [role=combobox], .dropdown, [class*=dropdown], [class*=avatar], [class*=user-menu], [class*=UserMenu]')) ? { menu: true } : {}),
     });
   }
   const fields: string[] = [];
@@ -145,8 +145,9 @@ export interface KeygrabBudget { maxMs: number; alternates?: string[]; maxSteps?
 export async function liveKeygrab(options: { stateDir: string; signal?: AbortSignal; screenshotDir?: () => Promise<string> }, id: string, url: string, budget: KeygrabBudget): Promise<DriveOutcome> {
   const [{ runKeygrab }, { listRecipes }, browser, recorder, park] = await Promise.all([import('./keygrab.js'), import('./signup-recipes.js'), import('./browser.js'), import('./recipe-recorder.js'), import('./keygrab-park.js')]);
   const { closeComputerPage, releaseComputerBrowser } = browser;
-  const host = (() => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; } })();
-  const stamp = async (): Promise<string> => (await listRecipes(options.stateDir).catch(() => [])).filter(r => host && (r.host === host || host.endsWith(`.${r.host}`) || r.host.endsWith(`.${host}`))).map(r => `${r.host}:${r.loginRoute}:${r.verifiedAt}`).sort().join('|');
+  const stamp = async (): Promise<string> => (await listRecipes(options.stateDir).catch(() => [])).map(r => `${r.host}:${r.loginRoute}:${r.verifiedAt}`).sort().join('|');
+  /** The hosts whose recipe changed between two stamps (the key page is often on another host than the vendor's front page). */
+  const changed = (a: string, b: string): string[] => b.split('|').filter(x => x && !a.split('|').includes(x)).map(x => x.split(':')[0]!);
   const before = await stamp();
   const journalKey = `${options.stateDir}#${TAB}`;
   let parked = false;
@@ -160,8 +161,8 @@ export async function liveKeygrab(options: { stateDir: string; signal?: AbortSig
     if (done.ok) {
       await park.clearParked(options.stateDir, id);
       await browser.closeParkedPage(options.stateDir, marker).catch(() => undefined);
-      const after = await stamp();
-      return { ok: true, note: `${done.note} (${done.steps} browser actions, signed in via ${done.route}; ${after !== before ? `a signup recipe for ${host} was recorded` : 'no new recipe was recorded'})`, actions: done.steps, recipe: after !== before };
+      const hosts = [...new Set(changed(before, await stamp()))];
+      return { ok: true, note: `${done.note} (${done.steps} browser actions, signed in via ${done.route}; ${hosts.length ? `a recipe for ${hosts.join(', ')} was recorded` : 'no new recipe was recorded'})`, actions: done.steps, recipe: hosts.length > 0 };
     }
     // Not finished: keep the hidden tab where it is. A tab parked earlier for this vendor is replaced (unless it is the one being resumed).
     if (!budget.resume) await browser.closeParkedPage(options.stateDir, marker).catch(() => undefined);

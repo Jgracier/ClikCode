@@ -5,7 +5,7 @@ import type { DriveOutcome } from './connector-runner.js';
 import { liveKeygrab, liveKeygrabPort } from './keygrab-live.js';
 import { loadParked, markerFor, type ParkedRecord } from './keygrab-park.js';
 
-export interface ResumeOptions { stateDir: string; id: string; click?: string; goto?: string; maxMs?: number; maxSteps?: number; signal?: AbortSignal; screenshotDir?: () => Promise<string> }
+export interface ResumeOptions { stateDir: string; id: string; click?: string; goto?: string; /** Press or go, then report the page without running keygrab (a form that needs several plain presses). */ only?: boolean; maxMs?: number; maxSteps?: number; signal?: AbortSignal; screenshotDir?: () => Promise<string> }
 export interface ResumeResult { id: string; reattached: 'tab' | 'reopened'; pressed?: string; outcome: DriveOutcome; record: ParkedRecord }
 
 export async function resumeKeygrab(options: ResumeOptions): Promise<ResumeResult> {
@@ -37,6 +37,21 @@ export async function resumeKeygrab(options: ResumeOptions): Promise<ResumeResul
     }
     // Keep what the press did in the carried-over trail.
     record.trail = [...record.trail, pressed].slice(-40);
+  }
+  if (options.only) {
+    const port = await liveKeygrabPort({ stateDir: options.stateDir, id: options.id, ...(options.signal ? { signal: options.signal } : {}) });
+    const seen = await port.look();
+    const { pageExcerpt } = await import('./oauth-consent.js');
+    const { exportJournal } = await import('./recipe-recorder.js');
+    const { saveParked } = await import('./keygrab-park.js');
+    const trail = [...record.trail, ...(pressed ? [pressed] : [])].slice(-40);
+    let url = seen.url; try { const u = new URL(seen.url); url = `${u.origin}${u.pathname}`; } catch { /* keep as is */ }
+    const journal = exportJournal(`${options.stateDir}#connectors`);
+    const next: ParkedRecord = { ...record, parkedAt: new Date().toISOString(), url, trail, controls: seen.controls.filter(c => !c.leaf).map(c => c.name).slice(0, 40), ...(journal ? { journal } : {}) };
+    await browser.parkComputerPage(options.stateDir, 'connectors', markerFor(options.id));
+    await saveParked(options.stateDir, next);
+    await browser.releaseComputerBrowser(options.stateDir).catch(() => undefined);
+    return { id: options.id, reattached, ...(pressed ? { pressed } : {}), record: next, outcome: { ok: false, stop: { kind: 'unknown', message: `${pressed ?? 'nothing'} pressed; keygrab was not run (--only)`, url, pageText: pageExcerpt(seen.text), controls: seen.controls.map(c => c.name).slice(0, 60), trail, parked: true, vendorUrl: record.vendorUrl, visited: record.visited, menus: record.menus } } };
   }
   const outcome = await liveKeygrab(
     { stateDir: options.stateDir, ...(options.signal ? { signal: options.signal } : {}), ...(options.screenshotDir ? { screenshotDir: options.screenshotDir } : {}) },

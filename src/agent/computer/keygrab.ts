@@ -356,6 +356,8 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
       // A log-in or sign-up entry comes before an email box: a lone email box on a front page is a newsletter, not a sign-in form.
       const entry = fresh(SIGN_UP_ENTRY, v) ?? fresh(SIGN_IN_ENTRY, v) ?? fresh(SIGN_IN_LOOSE, v);
       if (!entry && v.fields.some(f => /e-?mail/i.test(f))) { await emailRoute(v); return; }
+      // Nothing left to press and no sign-in screen showing: an entry already pressed signed us in (the vendor's session, or a provider's one-click login).
+      if (!entry && pressed.size && !authWall(v) && !providerButtons(v, GOOGLE_BUTTON).length && !providerButtons(v, GITHUB_BUTTON).length) { say('signed in by the last press'); return; }
       if (!entry) break;
       pressed.add(entry.name);
       await click(entry.name);

@@ -86,6 +86,7 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   connectors.command('resume <id>').description('Carry on with a connector whose keygrab could not finish: reattach to its parked hidden tab, optionally press one thing or go to one address, and continue getting the API key')
     .option('--click <text>', 'Press the control with this visible text first')
     .option('--goto <url>', 'Go to this https address in the parked tab first')
+    .option('--only', 'Press or go, then show the page and stop (no keygrab): for a form that needs several plain presses')
     .option('--max-steps <n>', 'Most browser actions (default 60)')
     .option('--max-minutes <n>', 'Most minutes (default 4)')
     .action(async (id: string, flags: import('../commands/connectors.js').ConnectorsResumeFlags) => (await import('../commands/connectors.js')).connectorsResume(id, flags));

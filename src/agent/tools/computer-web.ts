@@ -67,7 +67,8 @@ export async function locate(page: Page, target: string | undefined): Promise<Lo
   const scopes: Array<Page | Frame> = [page, ...page.frames().filter(frame => frame !== page.mainFrame() && frame.url() && frame.url() !== 'about:blank')];
   for (const scope of scopes) {
     // A field's label names the field, so the field is found before the label's text.
-    for (const candidate of [scope.getByLabel(wanted, { exact: true }), scope.getByPlaceholder(wanted, { exact: true }), scope.getByText(wanted, { exact: true }), scope.getByTitle(wanted, { exact: true })]) {
+    // An option or menu item of an open list beats the same words shown in the closed control that opened it.
+    for (const candidate of [scope.getByLabel(wanted, { exact: true }), scope.getByPlaceholder(wanted, { exact: true }), scope.getByRole('option', { name: wanted, exact: true }), scope.getByRole('menuitem', { name: wanted, exact: true }), scope.getByText(wanted, { exact: true }), scope.getByTitle(wanted, { exact: true })]) {
       const visible = candidate.locator('visible=true');
       if (await visible.count().catch(() => 0)) return visible.first();
     }
