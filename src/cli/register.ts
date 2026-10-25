@@ -74,6 +74,15 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   email.command('status').description('Show which mailbox is connected').action(async () => (await import('../commands/computer.js')).computerEmail('status'));
   email.command('disconnect').description('Forget the connected mailbox').action(async () => (await import('../commands/computer.js')).computerEmail('disconnect'));
   computer.command('oauth-connect <connector>').description("Connect a ClikDeploy connector: start its OAuth, press through the vendor's consent in the ClikCode browser (stops at a password, code or captcha), confirm it is active").action(async (connector: string) => (await import('../commands/computer.js')).computerOauthConnect(connector));
+  const connectors = program.command('connectors').description('Complete ClikDeploy connector onboarding with minimal agent use');
+  connectors.command('run').description('Advance queued connectors without a model: connect test accounts through the consent driver, capture keys by saved recipes, call pipeline tools; hand unknown screens to an agent and record human-only walls')
+    .option('--limit <n>', 'How many queued vendors to take (default 5, at most 25)')
+    .option('--ids <ids>', 'Comma-separated connector ids instead of the next queued ones')
+    .option('--parallel <n>', 'Vendors worked at once (default 1, at most 4; the browser still takes turns)')
+    .option('--max-steps <n>', 'Most actions per vendor (default 12)')
+    .option('--max-minutes <n>', 'Most minutes per vendor (default 5)')
+    .option('--dry-run', 'Show the plan per vendor and change nothing')
+    .action(async (flags: import('../commands/connectors.js').ConnectorsRunFlags) => (await import('../commands/connectors.js')).connectorsRun(flags));
   computer.command('inspect').description('Show visible login field names without their values').action(async () => (await import('../commands/computer.js')).computerInspect());
   computer.command('login [url]').description('Open a login URL if given, then ask privately in the current chat')
     .option('--chat <chat>', 'Chat id, prefix or name when run outside a chat')
