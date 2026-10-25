@@ -58,6 +58,9 @@ const REVEAL = /^(show|reveal|view|copy|display)\b(?:.{0,24}\b(?:key|token|secre
 const CONFIRM = /^(create|generate|save|continue|ok|done|submit|add|confirm)\b/i;
 const SIGN_IN_LOOSE = /\b(sign ?up|sign ?in|log ?in|register)\b/i;
 const SUBMIT = /^(sign ?up|create( account)?|register|continue|next|get started|submit)\b/i;
+/** The press that finishes a first sign-in with a provider: "By proceeding, I agree to the Terms" + "Complete registration", with nothing to type. */
+const TERMS_NOTICE = /by (?:proceeding|continuing|clicking|signing up|registering)[^.\n]{0,60}\b(?:agree|accept)|\b(?:agree|accept)[^.\n]{0,40}(?:terms|privacy)/i;
+const COMPLETE_SIGNUP = /^(?:complete (?:your )?(?:registration|sign ?up|account(?: setup)?|setup|profile)|finish(?: sign ?up| setup| registration)?|accept(?: and continue)?|agree(?: and continue)?|i agree|create (?:my )?account|continue)$/i;
 const NAME_FIELD = /name|label|description|title/i;
 const CODE_PAGE = /(?:enter|type|paste)[^.\n]{0,40}\bcode\b|verification code|check your (?:e-?mail|inbox)|we(?:'ve| have) sent[^.\n]{0,40}(?:e-?mail|code)/i;
 const RETIRED = /[^.\n]{0,60}\b(?:was|has been|is being|were) (?:retired|discontinued|shut down|sunset|deprecated)\b[^.\n]{0,60}/i;
@@ -285,6 +288,17 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     if (after.hasPassword && after.fields.length) throw await stop('unknown', 'the sign-up form was not accepted (it is still showing)', undefined, after);
   };
 
+  /** A first sign-in often ends on a page that only wants the terms accepted: press it (nothing to type, nothing bought). */
+  const completeRegistration = async (): Promise<void> => {
+    for (let round = 0; round < 2; round++) {
+      const v = await look();
+      if (v.hasPassword || v.fields.length || !TERMS_NOTICE.test(v.text)) return;
+      const go = v.controls.find(c => pressable(c) && !c.footer && COMPLETE_SIGNUP.test(c.name.trim()));
+      if (!go || !(await click(go.name))) return;
+      await sleep(900);
+    }
+  };
+
   /** Controls that mean sign-in, outside the footer, a provider's own link excluded: "Continue with Google" style first. */
   const providerButtons = (v: KeyView, re: RegExp): KeyControl[] => v.controls
     .filter(c => c.name.length <= 80 && (!c.leaf || providerRank(c) < 2) && !c.footer && re.test(c.name) && !(c.href && SOCIAL_HOST.test(hostOf(c.href))))
@@ -317,11 +331,14 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
           route = name;
           await providerScreens();
           await verifyEmail();
+          await completeRegistration();
           return;
         }
       }
-      if (v.hasPassword || v.fields.some(f => /e-?mail/i.test(f))) { await emailRoute(v); return; }
+      if (v.hasPassword) { await emailRoute(v); return; }
+      // A log-in or sign-up entry comes before an email box: a lone email box on a front page is a newsletter, not a sign-in form.
       const entry = entryOf(v, SIGN_UP_ENTRY) ?? entryOf(v, SIGN_IN_ENTRY) ?? entryOf(v, SIGN_IN_LOOSE);
+      if (!entry && v.fields.some(f => /e-?mail/i.test(f))) { await emailRoute(v); return; }
       if (!entry) break;
       await click(entry.name);
       await sleep(600);
