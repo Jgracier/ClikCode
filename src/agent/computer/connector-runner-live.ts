@@ -41,6 +41,13 @@ export function liveClient(signal?: AbortSignal): DeployClient {
     if (run.missing) throw new Error('The clikdeploy command is not installed on this computer.');
     return unwrapTool(run.text);
   };
+  const withLease = async (id: string, run: () => Promise<unknown>): Promise<void> => {
+    try { await run(); } catch (error) {
+      if (!/lease/i.test(error instanceof Error ? error.message : String(error))) throw error;
+      await call('connector_work_claim', { id, worker: WORKER });
+      await run();
+    }
+  };
   return {
     async waiting() {
       const data = await call('connector_pipeline_status', {}) as { status?: { needsAgent?: Array<{ id: string; reason: string; task: string }> } };
@@ -53,8 +60,9 @@ export function liveClient(signal?: AbortSignal): DeployClient {
       if (!result) throw new Error(`connector_onboard gave no result for ${id}`);
       return result;
     },
-    async report(input) { await call('connector_work_report', { ...input, worker: WORKER }); },
-    async note(id, text) { await call('connector_work_note', { id, text, append: true, worker: WORKER }); },
+    // A step that hands the lease back leaves the item unclaimed; a note or report needs a lease, so claim it again once and retry.
+    async report(input) { await withLease(input.id, () => call('connector_work_report', { ...input, worker: WORKER })); },
+    async note(id, text) { await withLease(id, () => call('connector_work_note', { id, text, append: true, worker: WORKER })); },
     tool: (name, args) => call(name, args, 100_000),
   };
 }

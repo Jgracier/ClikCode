@@ -38,13 +38,13 @@ export type KeygrabResult = { ok: true; note: string; steps: number; route: stri
 export const KEY_NAME = 'ClikDeploy';
 export const KEY_PATHS = ['/settings/api-keys', '/account/api', '/dashboard/api', '/developers', '/developer', '/api-keys', '/keys', '/settings/tokens'] as const;
 
-export const GOOGLE_BUTTON = /(?:continue|sign ?(?:in|up)|log ?in)\s+(?:in\s+)?(?:with|using|via)\s+google\b|^google$/i;
-export const GITHUB_BUTTON = /(?:continue|sign ?(?:in|up)|log ?in)\s+(?:in\s+)?(?:with|using|via)\s+github\b|^github$/i;
+export const GOOGLE_BUTTON = /^(?:[\w ]{0,24}?\s)?(?:with|using|via)\s+google\b|^google$/i;
+export const GITHUB_BUTTON = /^(?:[\w ]{0,24}?\s)?(?:with|using|via)\s+github\b|^github$/i;
 /** The brief's link test first; plain "Developers" and "API" menu items rank below it. */
 export const API_LINK = /api (keys?|tokens?|credentials|developers?)/i;
 const API_LINK_WEAK = /^(developers?|api|api access|developer portal|for developers|credentials|keys|tokens?|developer settings)$/i;
 const SIGN_IN_ENTRY = /^(log ?in|sign ?in)$/i;
-const SIGN_UP_ENTRY = /^(sign ?up|get started( for free)?|get (your )?api key|register|create (an )?account|try (it )?free|start (for )?free|start building)$/i;
+const SIGN_UP_ENTRY = /^(sign ?up|get started|get (your )?api key|register|create (an )?account|try (it )?(for )?free|start (for )?free|start building)\b[\w ]{0,15}$/i;
 const CREATE = /^\W*(create|generate|new|add|get|request|issue)\b[^.]{0,30}?\b(key|token|secret|credential)s?\b/i;
 const CREATE_BARE = /^\W*(create|generate|new)\W*$/i;
 const NEVER_KEY = /\b(delete|revoke|remove|rotate|regenerate|roll|cancel|deactivate)\b/i;
@@ -125,9 +125,10 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     return /\b(api|key|token)/i.test(v.text) ? v.controls.find(c => pressable(c) && !NEVER_KEY.test(c.name) && CREATE_BARE.test(c.name)) : undefined;
   };
   const revealOf = (v: KeyView): KeyControl | undefined => /\b(api|key|token|secret)/i.test(v.text) ? v.controls.find(c => pressable(c) && REVEAL.test(c.name)) : undefined;
-  const showsKey = (v: KeyView): boolean => v.text.split(/\s+/).some(word => keyShaped(word.replace(/^[("'`]+|[)"'`,.;]+$/g, '')));
+  const showsKey = (v: KeyView): boolean => /\b(api[- ]?keys?|secret|token|access key)\b/i.test(v.text) && v.text.split(/\s+/).some(word => keyShaped(word.replace(/^[("'`]+|[)"'`,.;]+$/g, '')));
   const isKeyPage = (v: KeyView): boolean => !!createOf(v) || !!revealOf(v) || showsKey(v);
   const findOne = (v: KeyView, re: RegExp): KeyControl | undefined => v.controls.find(c => pressable(c) && re.test(c.name.replace(/\s*last used\s*$/i, '').trim()));
+  const hasEntry = (v: KeyView): boolean => !!findOne(v, SIGN_IN_ENTRY) || !!findOne(v, SIGN_UP_ENTRY);
   const authWall = (v: KeyView): boolean => !isKeyPage(v) && (v.hasPassword || !!findOne(v, GOOGLE_BUTTON) || !!findOne(v, GITHUB_BUTTON) || (v.fields.some(f => /e-?mail/i.test(f)) && v.controls.some(c => pressable(c) && SUBMIT.test(c.name))));
 
   /** Press through a provider's own screens (Google account chooser and consent, GitHub authorize) until back on the vendor. */
@@ -258,7 +259,8 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
       const apex = await openAt(`https://${labels.slice(1).join('.')}/`);
       if (apex) v = apex;
     }
-    if (authWall(v)) { await authenticate(); v = await look(); }
+    // A page that offers sign-in and no key controls: sign in first, then look for the key page.
+    if (authWall(v) || (!isKeyPage(v) && hasEntry(v))) { await authenticate(); v = await look(); }
     let page = await findKeyPage(v);
     for (let retry = 0; retry < 2; retry++) {
       if (showsKey(page) && !createOf(page)) { const got = await captured(); if (got.ok) return { ok: true, note: `key captured from ${pathOf(page.url)} and sent to ClikDeploy; it was not shown`, steps, route }; }
