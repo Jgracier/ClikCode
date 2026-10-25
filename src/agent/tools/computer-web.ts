@@ -998,7 +998,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
     }
     case 'oauth_connect': {
       const email = (await listProfiles(ctx.stateDir)).map(profile => profile.fields.sso_email).find(Boolean);
-      const done = await oauthConnect(args.target?.trim() ?? '', page, { email, signal: ctx.signal, progress: line => line && ctx.emitOutput?.(line) });
+      const done = await oauthConnect(args.target?.trim() ?? '', page, { email, stateDir: ctx.stateDir, signal: ctx.signal, progress: line => line && ctx.emitOutput?.(line) });
       return { output: `Connected ${done.connector}: ClikDeploy shows an active connection. ${done.steps.filter(Boolean).join(' ')}` };
     }
     case 'read_email_code': {
