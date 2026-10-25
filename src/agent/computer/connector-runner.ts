@@ -5,6 +5,7 @@
  * with a full humanStep. It never solves a captcha, spends money, or prints a key, and every vendor has a step and time budget. */
 import { scrubSecrets } from './secret-scrubber.js';
 import { IDENTITY_WALL } from './keygrab.js';
+import { BACKOFF_HOURS } from './keygrab-park.js';
 import { detectBlocker } from './signup-recipes.js';
 
 export type HumanKind = 'captcha' | 'mfa' | 'sms' | 'payment' | 'identity' | 'app-review' | 'app-registration' | 'vendor-contact' | 'decision' | 'retire' | 'worker-setup';
@@ -28,8 +29,13 @@ export interface StopInfo {
   /** Set when the browser work already knows this is a wall only a person clears (keygrab does). */ human?: HumanStep;
   /** What keygrab did, newest last. */ trail?: string[];
   /** How many browser actions keygrab took (the trail keeps only the last 30). */ actions?: number;
+  /** Pages keygrab looked at (addresses, no query). */ visited?: string[];
+  /** Menus and searches it read, each as `opener: item | item`. */ menus?: string[];
+  /** The hidden tab was left open on the last page: `clikcode connectors resume <id>` reattaches to it. */ parked?: boolean;
+  /** The vendor address keygrab started from. */ vendorUrl?: string;
+  /** keygrab signed in to the vendor during the run. */ signedIn?: boolean;
 }
-export type DriveOutcome = { ok: true; note?: string; actions?: number } | { ok: false; stop: StopInfo };
+export type DriveOutcome = { ok: true; note?: string; actions?: number; /** A recipe was recorded for the next run. */ recipe?: boolean } | { ok: false; stop: StopInfo };
 
 /** ClikDeploy as the runner sees it. */
 export interface DeployClient {
@@ -48,6 +54,10 @@ export interface BrowserDriver {
   hasRecipe(id: string, url?: string): Promise<boolean>;
   captureKey(id: string, url?: string): Promise<DriveOutcome>;
   /** The generic key-capture policy (keygrab): sign in, find the key page, create and capture a key, record the recipe. */
+  /** When the vendor may be tried again, if a captcha put it on a back-off. */
+  backoff?(id: string): Promise<Date | undefined>;
+  /** Starts the vendor's 6 hour back-off (after a captcha); returns when it ends. */
+  recordBackoff?(id: string): Promise<Date>;
   keygrab(id: string, url: string, budget: { maxMs: number; /** The task's other addresses (homepage, sign-up, docs): where to start if `url` is no web page. */ alternates?: string[] }): Promise<DriveOutcome>;
 }
 
@@ -63,11 +73,14 @@ export interface RunnerOptions {
 }
 
 export type VendorStatus = 'published' | 'blocked' | 'human' | 'handoff' | 'budget' | 'waiting' | 'error';
-export interface VendorOutcome { id: string; status: VendorStatus; /** Runner steps (one onboard or browser job each). */ steps: number; /** Browser actions taken inside those steps (opens, clicks, fills, captures); the action trail below lists them. */ browserActions: number; stage: string; summary: string; actions: string[]; humanStep?: HumanStep; handoff?: { file?: string; request: HandoffRequest }; recorded?: string; attention?: { kind: string; owner: string } }
+export interface VendorOutcome { id: string; status: VendorStatus; /** Runner steps (one onboard or browser job each). */ steps: number; /** Browser actions taken inside those steps (opens, clicks, fills, captures); the action trail below lists them. */ browserActions: number; stage: string; summary: string; actions: string[]; humanStep?: HumanStep; handoff?: { file?: string; request: HandoffRequest }; recorded?: string; attention?: { kind: string; owner: string };
+  /** The command that reattaches to the parked hidden tab and carries on. */ resume?: string; /** Set when a captcha put this vendor on a back-off. */ backoffUntil?: string; /** A key was captured and a recipe was recorded for the next run. */ recipe?: boolean }
 export interface HandoffRequest {
   id: string; why: string; /** The whole task text. */ task: string; url?: string; pageText?: string; controls?: string[]; screenshot?: string;
   call?: AgentCall; orElse?: AgentCall; attention?: unknown; /** The last 3 evidence lines. */ evidence?: string[];
   /** Deterministic spec work (the auth probe ended path-wrong or placement), not browser work. */ specFix?: boolean;
+  /** Warm hand-off: the hidden tab is still open on `url`. `resume` reattaches to it; the rest is what keygrab knows so far. */
+  vendorUrl?: string; trail?: string[]; visited?: string[]; menus?: string[]; narrowTask?: string; resume?: string;
 }
 
 /** The task kinds the runner knows. */
@@ -91,6 +104,13 @@ const URLS_IN_TEXT = /https:\/\/[^\s"'<>)]+/g;
 export function otherUrls(task: string): string[] {
   const first = siteUrl(task);
   return [...new Set((task.match(URLS_IN_TEXT) ?? []).map(u => u.replace(/[.,;]+$/, '')).filter(u => u !== first))];
+}
+export { BACKOFF_HOURS } from './keygrab-park.js';
+/** The command that reattaches to the parked hidden tab and carries on. */
+export const resumeCommand = (id: string): string => `clikcode connectors resume ${id} [--click '<text>' | --goto <url>]`;
+/** What an agent still has to do from the parked page: one narrow job. */
+export function narrowTask(id: string, stop: StopInfo): string {
+  return `The hidden browser tab for ${id} is still open on ${stop.url || 'its last page'} (signed in where the trail shows it). Reach this vendor's API key page, create a key named ClikDeploy, and capture it unseen with capture_secret (send_to clikdeploy-connection, integration ${id}). Press only what leads to API keys, tokens or developer settings; never delete, cancel, sign out or change billing. Do it with \`${resumeCommand(id)}\` (it reattaches to that tab and continues keygrab).`;
 }
 const WALL_STATES = new Set(['needs-human']);
 /** The auth probe ended with the key in the wrong place or on the wrong path: deterministic spec work for the gate/enrich tools. */
@@ -180,9 +200,9 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
   const began = now();
   const id = first.id;
   const actions: string[] = [];
-  let result = fix(first), steps = 0, browserActions = 0;
+  let result = fix(first), steps = 0, browserActions = 0, recipeSaved = false;
   const seen = new Map<string, number>();
-  const out = (status: VendorStatus, summary: string, extra: Partial<VendorOutcome> = {}): VendorOutcome => ({ id, status, steps, browserActions, stage: result.stage, summary: say(summary), actions, ...extra });
+  const out = (status: VendorStatus, summary: string, extra: Partial<VendorOutcome> = {}): VendorOutcome => ({ id, status, steps, browserActions, stage: result.stage, summary: say(summary), actions, ...(recipeSaved ? { recipe: true } : {}), ...extra });
   const handoff = async (why: string, stop?: StopInfo): Promise<VendorOutcome> => {
     const next = result.next;
     const request: HandoffRequest = {
@@ -193,6 +213,12 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
       ...(result.evidence?.length ? { evidence: result.evidence.slice(-3).map(line => cap(say(line), 300)) } : {}),
       ...(isSpecFix(next.task) || isSpecFix(result.reason) ? { specFix: true } : {}),
       ...(stop ? { url: stop.url, pageText: cap(say(stop.pageText), 300), controls: stop.controls.slice(0, 12).map(c => say(c)), ...(stop.screenshot ? { screenshot: stop.screenshot } : {}) } : {}),
+      ...(stop?.parked ? {
+        resume: resumeCommand(id), vendorUrl: stop.vendorUrl, narrowTask: narrowTask(id, stop),
+        ...(stop.trail?.length ? { trail: stop.trail.slice(-20).map(t => cap(say(t), 100)) } : {}),
+        ...(stop.visited?.length ? { visited: stop.visited.slice(-20) } : {}),
+        ...(stop.menus?.length ? { menus: stop.menus.slice(-8).map(m => cap(say(m), 240)) } : {}),
+      } : {}),
     };
     let file: string | undefined;
     try {
@@ -208,7 +234,7 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
       await client.note(id, cap(lean, 3900));
       recorded = 'written to the work item note';
     } catch (error) { recorded = `could not write the work item note (${cap(say(error instanceof Error ? error.message : String(error)), 120)})`; }
-    return out('handoff', why, { handoff: { ...(file ? { file } : {}), request }, recorded });
+    return out('handoff', why, { handoff: { ...(file ? { file } : {}), request }, recorded, ...(stop?.parked ? { resume: resumeCommand(id) } : {}) });
   };
   const wall = async (human: HumanStep, fromServer: boolean): Promise<VendorOutcome> => {
     if (fromServer) return out('human', result.reason, { humanStep: human, recorded: 'ClikDeploy already holds this human step' });
@@ -218,11 +244,18 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
     } catch (error) { recorded = `could not report it (${cap(say(error instanceof Error ? error.message : String(error)), 120)})`; }
     return out('human', human.instructions ?? human.kind, { humanStep: human, recorded });
   };
-  const stopped = (stop: StopInfo): Promise<VendorOutcome> => {
+  const stopped = async (stop: StopInfo): Promise<VendorOutcome> => {
     browserActions += stop.actions ?? stop.trail?.length ?? 0;
     if (stop.trail?.length) actions.push(`keygrab did: ${stop.trail.join(' > ')}`);
     const human = stop.human ?? humanStepFor(id, stop);
-    return human ? wall(human, false) : handoff(`${stop.kind === 'unknown' ? 'an unrecognized screen' : stop.kind}: ${stop.message}`, stop);
+    const resume = stop.parked ? resumeCommand(id) : undefined;
+    if (!human) return handoff(`${stop.kind === 'unknown' ? 'an unrecognized screen' : stop.kind}: ${stop.message}`, stop);
+    // A captcha ("confirm you are human") means the vendor is watching: do not come back for six hours. The end time goes in the attention item.
+    let until: Date | undefined;
+    if (human.kind === 'captcha' && driver.recordBackoff) until = await driver.recordBackoff(id).catch(() => undefined);
+    const note = until ? ` Backed off ${BACKOFF_HOURS} hours: the runner will not try ${id} again before ${until.toISOString()}.` : '';
+    const out2 = await wall({ ...human, instructions: `${cap(human.instructions ?? '', 220)}${note}`.trim() }, false);
+    return { ...out2, ...(resume ? { resume } : {}), ...(until ? { backoffUntil: until.toISOString() } : {}) };
   };
 
   for (;;) {
@@ -248,6 +281,8 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
           break;
         }
         case 'oauth': {
+          const wait = await driver.backoff?.(id);
+          if (wait) return out('waiting', `backed off after a captcha until ${wait.toISOString()}; not retried before then`, { backoffUntil: wait.toISOString() });
           actions.push('connect the test account through the consent driver');
           const done = await gate(() => driver.oauthConnect(id));
           if (!done.ok) return await stopped(done.stop);
@@ -256,6 +291,8 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
           break;
         }
         case 'capture': {
+          const wait = await driver.backoff?.(id);
+          if (wait) return out('waiting', `backed off after a captcha until ${wait.toISOString()}; not retried before then`, { backoffUntil: wait.toISOString() });
           const generic = async (url: string, alternates = plan.alternates): Promise<DriveOutcome> => {
             actions.push('no saved recipe fits: keygrab signs in, finds the key page, creates and captures a key');
             return gate(() => driver.keygrab(id, url, { maxMs: Math.max(30_000, maxMs - (now() - began)), ...(alternates?.length ? { alternates } : {}) }));
@@ -271,6 +308,7 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
           if (!done.ok) return await stopped(done.stop);
           browserActions += done.actions ?? 0;
           actions.push(done.note ?? 'key captured unseen and sent to ClikDeploy');
+          if (done.recipe) recipeSaved = true;
           result = fix(await client.onboard(id));
           break;
         }

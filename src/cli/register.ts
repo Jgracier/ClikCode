@@ -83,6 +83,12 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .option('--max-minutes <n>', 'Most minutes per vendor (default 5)')
     .option('--dry-run', 'Show the plan per vendor and change nothing')
     .action(async (flags: import('../commands/connectors.js').ConnectorsRunFlags) => (await import('../commands/connectors.js')).connectorsRun(flags));
+  connectors.command('resume <id>').description('Carry on with a connector whose keygrab could not finish: reattach to its parked hidden tab, optionally press one thing or go to one address, and continue getting the API key')
+    .option('--click <text>', 'Press the control with this visible text first')
+    .option('--goto <url>', 'Go to this https address in the parked tab first')
+    .option('--max-steps <n>', 'Most browser actions (default 60)')
+    .option('--max-minutes <n>', 'Most minutes (default 4)')
+    .action(async (id: string, flags: import('../commands/connectors.js').ConnectorsResumeFlags) => (await import('../commands/connectors.js')).connectorsResume(id, flags));
   computer.command('inspect').description('Show visible login field names without their values').action(async () => (await import('../commands/computer.js')).computerInspect());
   computer.command('login [url]').description('Open a login URL if given, then ask privately in the current chat')
     .option('--chat <chat>', 'Chat id, prefix or name when run outside a chat')

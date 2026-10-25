@@ -8,8 +8,9 @@ import type { HumanKind, HumanStep, StopInfo } from './connector-runner.js';
 import { nextPress, pageExcerpt, type Control } from './oauth-consent.js';
 import { keyShaped } from './secret-finder.js';
 import { detectBlocker } from './signup-recipes.js';
+import { exploreForKeys, menuOpeners } from './keygrab-explore.js';
 
-export interface KeyControl { name: string; leaf?: boolean; href?: string; /** Inside the page footer (social and legal links live there, not sign-in). */ footer?: boolean }
+export interface KeyControl { name: string; leaf?: boolean; href?: string; /** Inside the page footer (social and legal links live there, not sign-in). */ footer?: boolean; /** Inside a navigation or side bar. */ nav?: boolean; /** Opens a menu (aria-haspopup or aria-expanded). */ menu?: boolean; /** Found inside an iframe (same-origin or not). */ frame?: boolean }
 /** What the page shows right now. `fields` are the visible text-like boxes (by label or placeholder), passwords included. */
 export interface KeyView { url: string; text: string; controls: KeyControl[]; fields: string[]; hasPassword: boolean; /** A real, visible captcha challenge frame (not an invisible badge). */ captchaFrame?: boolean }
 
@@ -30,11 +31,13 @@ export interface KeygrabPort {
   capture(target?: string): Promise<{ ok: boolean; message: string }>;
   /** A cheap fetch (no browser): whether the address answers with an HTML page, and where it ended up after redirects. */
   probe?(url: string): Promise<{ html: boolean; status: number; url: string } | undefined>;
+  /** Presses a key on the page (Escape closes a menu, Enter submits a search). */
+  press?(key: string): Promise<string | undefined>;
   screenshot(): Promise<string | undefined>;
   profileEmail(): Promise<string | undefined>;
 }
 
-export interface KeygrabOptions { id: string; url: string; /** Other starting points to try when `url` is no web page (the spec's homepage, sign-up and docs addresses). */ alternates?: string[]; maxSteps?: number; maxMs?: number; now?: () => number; sleep?: (ms: number) => Promise<void>; log?: (line: string) => void }
+export interface KeygrabOptions { id: string; url: string; /** Continue from the page the browser is on (a resumed run): no start page is opened. */ resume?: { visited?: string[]; menus?: string[]; signedIn?: boolean }; /** Most pages post-login exploration follows (default 8). */ exploreMax?: number; /** Other starting points to try when `url` is no web page (the spec's homepage, sign-up and docs addresses). */ alternates?: string[]; maxSteps?: number; maxMs?: number; now?: () => number; sleep?: (ms: number) => Promise<void>; log?: (line: string) => void }
 export type KeygrabResult = { ok: true; note: string; steps: number; route: string } | { ok: false; stop: StopInfo; steps: number };
 
 export const KEY_NAME = 'ClikDeploy';
@@ -151,12 +154,15 @@ class Halt extends Error { constructor(readonly stop: StopInfo) { super(stop.mes
 export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Promise<KeygrabResult> {
   const now = options.now ?? Date.now;
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
-  const maxSteps = options.maxSteps ?? 40, maxMs = options.maxMs ?? 240_000;
+  const maxSteps = options.maxSteps ?? 60, maxMs = options.maxMs ?? 240_000;
   const began = now();
   let steps = 0;
   let route = 'none';
   const trail: string[] = [];
   let authTries = 0;
+  const visited: string[] = [...(options.resume?.visited ?? [])];
+  const menus: string[] = [...(options.resume?.menus ?? [])];
+  const triedNames = new Set<string>();
   const say = (line: string): void => options.log?.(`keygrab ${options.id}: ${line}`);
 
   const act = async <T>(what: string, run: () => Promise<T>): Promise<T> => {
@@ -169,7 +175,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
   const stop = async (kind: StopInfo['kind'], message: string, human?: HumanStep, view?: KeyView): Promise<Halt> => {
     const seen = view ?? await port.look().catch((): KeyView => ({ url: '', text: '', controls: [], fields: [], hasPassword: false }));
     const screenshot = await port.screenshot().catch(() => undefined);
-    return new Halt({ kind, message, url: pathOf(seen.url) || seen.url, pageText: pageExcerpt(seen.text), controls: seen.controls.filter(c => !c.leaf).map(c => c.name).slice(0, 12), ...(screenshot ? { screenshot } : {}), ...(human ? { human } : {}), trail: trail.slice(-30), actions: steps });
+    return new Halt({ kind, message, url: pathOf(seen.url) || seen.url, pageText: pageExcerpt(seen.text), controls: seen.controls.filter(c => !c.leaf).map(c => c.name).slice(0, 12), ...(screenshot ? { screenshot } : {}), ...(human ? { human } : {}), trail: trail.slice(-30), actions: steps, ...(signedIn ? { signedIn: true } : {}), ...(visited.length ? { visited: visited.slice(-30) } : {}), ...(menus.length ? { menus: menus.slice(-12) } : {}) });
   };
   /** Ends the run on a wall with a human step: kind, the page, and what to do. */
   const wallStop = async (view: KeyView, wall: NonNullable<ReturnType<typeof keygrabWall>>): Promise<Halt> => {
@@ -203,6 +209,8 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     for (let wait = 0; wait < 6 && ((!v.controls.length && v.text.trim().length < 40) || bareShell(v) || (/\b(?:loading|just a minute|please wait)\b/i.test(v.text) && v.text.length < 400 && v.controls.length < 6)); wait++) { await sleep(1_500); v = await port.look(); }
     v = await dismissBanner(v);
     await guard(v);
+    const here = pathOf(v.url);
+    if (here && !visited.includes(here) && visited.length < 60) visited.push(here);
     return v;
   };
   const click = async (name: string): Promise<boolean> => { const err = await act(`click ${name}`, () => port.click(name)); if (err) say(`could not click "${name}"`); return !err; };
@@ -321,7 +329,9 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
   };
 
   /** Sign in to the vendor from whatever sign-in or sign-up screen is showing. */
-  const authenticate = async (): Promise<void> => {
+  let signedIn = options.resume?.signedIn === true;
+  const authenticate = async (): Promise<void> => { await signIn(); signedIn = true; };
+  const signIn = async (): Promise<void> => {
     authTries++;
     const pressed = new Set<string>(); // each entry once: "Get started" that only validates an email box is followed by "Log in"
     const fresh = (re: RegExp, page: KeyView): KeyControl | undefined => page.controls.find(c => pressable(c) && !c.footer && !pressed.has(c.name) && re.test(c.name.replace(/\s*last used\s*$/i, '').trim()));
@@ -366,10 +376,27 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     let v = start;
     let shown = start; // the last page that was a real page, for the report if nothing is found
     if (isKeyPage(v)) return v;
+    // Signed in: read the account and avatar menus, workspace switchers, settings pages, the site's search and the side navigation for a key page.
+    const email = await port.profileEmail().catch(() => undefined);
+    // Signed in: this run signed in, or the page looks like an app (an account menu or the signed-in address, no sign-in entry).
+    const looksSignedIn = !offersSignIn(v) && menuOpeners(v, email).some(c => c.menu === true || (!!email && c.name.toLowerCase().includes(email.toLowerCase())));
+    if ((signedIn || looksSignedIn) && !authWall(v)) {
+      const explored = await exploreForKeys({
+        look, click, open: openAt, sleep, say,
+        fill: (name, text) => act(`fill ${name}`, () => port.fill(name, text)),
+        ...(port.press ? { press: (key: string) => act(`press ${key}`, () => port.press!(key)) } : {}),
+        isKeyPage, needsSignIn: authWall,
+      }, v, { maxPages: options.exploreMax ?? 8, ...(email ? { email } : {}), seen: visited, seenMenus: menus });
+      visited.splice(0, visited.length, ...explored.visited);
+      menus.splice(0, menus.length, ...explored.menus);
+      for (const name of explored.tried) triedNames.add(name);
+      if (explored.found) return explored.found;
+      v = explored.last; shown = v;
+    }
     const linksOf = (page: KeyView): KeyControl[] => [
       ...page.controls.filter(c => pressable(c) && !NEVER_KEY.test(c.name) && API_LINK.test(c.name)),
       ...page.controls.filter(c => pressable(c) && !NEVER_KEY.test(c.name) && !API_LINK.test(c.name) && API_LINK_WEAK.test(c.name)),
-    ].filter((c, i, all) => all.findIndex(o => o.name === c.name) === i).slice(0, 3);
+    ].filter(c => !triedNames.has(c.name)).filter((c, i, all) => all.findIndex(o => o.name === c.name) === i).slice(0, 3);
     // The page we are on after signing in (an account area, a sign-in host) may have no API menu: the vendor's own front page does.
     const sources: Array<{ at?: string; page: KeyView }> = [{ page: v }];
     if (homeUrl && pathOf(homeUrl) !== pathOf(v.url)) sources.push({ at: homeUrl, page: v });
@@ -412,19 +439,19 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
   try {
     // Start where a web page answers: the address given, else the spec's other addresses and the vendor's usual ones, tested with a cheap fetch first.
     let startUrl = options.url;
-    if (port.probe) {
+    if (port.probe && !options.resume) {
       for (const candidate of startCandidates(options.url, options.alternates).slice(0, 14)) {
         const got = await port.probe(candidate).catch(() => undefined);
         if (got?.html && got.status !== 404 && got.status !== 410 && got.status < 500) { startUrl = got.url || candidate; break; }
       }
     }
-    const first = await openAt(startUrl);
+    const first = options.resume ? await look() : await openAt(startUrl);
     if (!first) throw await stop('unknown', `could not open ${pathOf(startUrl)}`);
     let v = first;
-    homeUrl = first.url;
+    homeUrl = options.resume ? startUrl : first.url;
     // An API host (no controls at all, a bare JSON error) is not the vendor's site: start from its parent domain.
     const labels = hostOf(v.url).split('.');
-    if (!v.controls.length && !v.fields.length && labels.length > 2) {
+    if (!options.resume && !v.controls.length && !v.fields.length && labels.length > 2) {
       const apex = await openAt(`https://${labels.slice(1).join('.')}/`);
       if (apex) v = apex;
     }

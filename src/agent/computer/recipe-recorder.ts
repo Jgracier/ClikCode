@@ -65,6 +65,16 @@ export function noteStep(key: string, url: string, step: RecipeStep, label?: str
   if (journal.steps.length < 40) journal.steps.push(saved); else journal.spoiled = 'too many steps';
 }
 
+/** The journal as plain data, so a parked keygrab can carry it to the process that resumes it; and the way back. */
+export interface JournalData { host: string; steps: RecipeStep[]; visited: string[]; spoiled?: string; signedIn: boolean }
+export function exportJournal(key: string): JournalData | undefined {
+  const j = journals.get(key);
+  return j ? { host: j.host, steps: j.steps.map(s => ({ ...s })), visited: [...j.visited], ...(j.spoiled ? { spoiled: j.spoiled } : {}), signedIn: j.signedIn } : undefined;
+}
+export function importJournal(key: string, data: JournalData): void {
+  journals.set(key, { host: data.host, steps: data.steps.map(s => ({ ...s })), visited: new Set(data.visited), ...(data.spoiled ? { spoiled: data.spoiled } : {}), signedIn: data.signedIn });
+}
+
 export const journalOf = (key: string): Journal | undefined => journals.get(key);
 
 const routeOf = (journal: Journal): LoginRoute => journal.visited.has('accounts.google.com') ? 'google' : journal.visited.has('github.com') ? 'github' : 'email';

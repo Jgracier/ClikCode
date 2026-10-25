@@ -33,7 +33,7 @@ import { connectEmail } from '../computer/email-consent.js';
 import { beginJournal, noteStep, recordVerified } from '../computer/recipe-recorder.js';
 import { oauthConnect } from '../computer/oauth-consent.js';
 import { runTailnetHandoff, tailnetAddress } from '../computer/tailnet-handoff.js';
-import type { Locator, Page } from 'playwright-core';
+import type { Frame, Locator, Page } from 'playwright-core';
 import type { ToolContext, ToolRunResult } from '../tool-contract.js';
 
 type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload'; target?: string; at?: 'start' | 'end'; text?: string; key?: string; direction?: 'up' | 'down'; accept_dialog?: boolean; gone?: boolean; seconds?: number };
@@ -55,7 +55,7 @@ const isStandardKey = (key: string): boolean => (PROFILE_KEYS as readonly string
 
 /** What `target` points at: a [ref=eN] from the last view (any element, named or not, in any frame),
  * or visible text for the controls of a sign-in page, which are listed by name without references. */
-async function locate(page: Page, target: string | undefined): Promise<Locator> {
+export async function locate(page: Page, target: string | undefined): Promise<Locator> {
   const wanted = target?.trim();
   if (!wanted) throw new Error('Say what to act on: a [ref=…] from the page view, or its visible text.');
   if (REF.test(wanted)) {
@@ -63,15 +63,21 @@ async function locate(page: Page, target: string | undefined): Promise<Locator> 
     if (await byRef.count()) return byRef;
     throw new Error(`Nothing on the page has the reference ${wanted}: the page has changed since it was read.`);
   }
-  // A field's label names the field, so the field is found before the label's text.
-  for (const candidate of [page.getByLabel(wanted, { exact: true }), page.getByPlaceholder(wanted, { exact: true }), page.getByText(wanted, { exact: true }), page.getByTitle(wanted, { exact: true })]) {
-    const visible = candidate.locator('visible=true');
-    if (await visible.count()) return visible.first();
+  // The page first, then each frame in it (a sign-up form or sign-in button inside an iframe, same-origin or not).
+  const scopes: Array<Page | Frame> = [page, ...page.frames().filter(frame => frame !== page.mainFrame() && frame.url() && frame.url() !== 'about:blank')];
+  for (const scope of scopes) {
+    // A field's label names the field, so the field is found before the label's text.
+    for (const candidate of [scope.getByLabel(wanted, { exact: true }), scope.getByPlaceholder(wanted, { exact: true }), scope.getByText(wanted, { exact: true }), scope.getByTitle(wanted, { exact: true })]) {
+      const visible = candidate.locator('visible=true');
+      if (await visible.count().catch(() => 0)) return visible.first();
+    }
   }
   // A field's label can include its options ("Plan Free Pro"): a near match on the label is still that field.
-  for (const candidate of [page.getByLabel(wanted), page.getByPlaceholder(wanted)]) {
-    const visible = candidate.locator('visible=true');
-    if (await visible.count() === 1) return visible.first();
+  for (const scope of scopes) {
+    for (const candidate of [scope.getByLabel(wanted), scope.getByPlaceholder(wanted)]) {
+      const visible = candidate.locator('visible=true');
+      if (await visible.count().catch(() => 0) === 1) return visible.first();
+    }
   }
   throw new Error(`Nothing on the page shows "${wanted}".`);
 }

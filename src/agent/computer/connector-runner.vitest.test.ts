@@ -320,3 +320,53 @@ describe('keygrab stops are not re-judged by marketing words', () => {
     expect(otherUrls('get a key at https://tracking.api.here.com (docs https://developer.here.com/docs, sign up https://account.here.com/signup).')).toEqual(['https://developer.here.com/docs', 'https://account.here.com/signup']);
   });
 });
+
+describe('warm hand-off and rate-limit back-off', () => {
+  const mx = (): OnboardResult => keyAt('musixmatch');
+  it('a parked stop hands over the vendor, url, trail, menus, narrow task and the resume command', async () => {
+    const c = fakeClient([keyAt('probely')]);
+    const d = fakeDriver([{ ok: false, stop: stop({ kind: 'unknown', message: 'no API key page was found', url: 'https://app.snyk.io/org/x', pageText: 'Org overview', controls: ['Settings'], parked: true, vendorUrl: 'https://probely.com', trail: ['click Log in', 'click Continue with Google'], visited: ['https://app.snyk.io/'], menus: ['User menu: Account settings | Sign out'] }) }]);
+    const { outcomes } = await runConnectors(c.client, d.driver, quick);
+    const o = outcomes[0]!;
+    expect(o.status).toBe('handoff');
+    expect(o.resume).toContain('clikcode connectors resume probely');
+    expect(o.handoff!.request).toMatchObject({ vendorUrl: 'https://probely.com', trail: ['click Log in', 'click Continue with Google'], visited: ['https://app.snyk.io/'], menus: ['User menu: Account settings | Sign out'], url: 'https://app.snyk.io/org/x' });
+    expect(o.handoff!.request.narrowTask).toContain('capture_secret');
+    expect(o.handoff!.request.resume).toContain('connectors resume probely');
+    expect(c.notes[0]!.text).toContain('connectors resume probely');
+  });
+
+  it('a captcha starts a 6 hour back-off that is written into the attention item, and the vendor is not retried', async () => {
+    const until = new Date('2026-10-25T23:00:00.000Z');
+    const recorded: string[] = [];
+    const c = fakeClient([mx(), mx()]);
+    const d = fakeDriver([{ ok: false, stop: stop({ kind: 'captcha', message: 'a captcha at www.musixmatch.com', url: 'https://www.musixmatch.com/', human: { kind: 'captcha', url: 'https://www.musixmatch.com/', reasonCode: 'captcha', instructions: 'www.musixmatch.com shows a captcha' }, parked: true }) }]);
+    let backed: Date | undefined;
+    const driver: BrowserDriver = { ...d.driver, recordBackoff: async id => { recorded.push(id); backed = until; return until; }, backoff: async () => backed };
+    const first = await runConnectors(c.client, driver, quick);
+    expect(first.outcomes[0]).toMatchObject({ status: 'human', backoffUntil: until.toISOString() });
+    expect(recorded).toEqual(['musixmatch']);
+    expect((c.reports[0] as { humanStep: { instructions: string } }).humanStep.instructions).toContain(`before ${until.toISOString()}`);
+    // A later run in the back-off window does not drive the browser at all.
+    const c2 = fakeClient([mx()]);
+    const second = await runConnectors(c2.client, driver, quick);
+    expect(second.outcomes[0]).toMatchObject({ status: 'waiting', backoffUntil: until.toISOString() });
+    expect(d.driven).toEqual(['keygrab musixmatch https://musixmatch.example']);
+    expect(c2.reports).toEqual([]);
+  });
+
+  it('a wall that is not a captcha starts no back-off', async () => {
+    let started = false;
+    const c = fakeClient([keyAt('appcenter-ms')]);
+    const d = fakeDriver([{ ok: false, stop: stop({ kind: 'mfa', message: 'sms', human: { kind: 'sms', instructions: 'a phone verification' } }) }]);
+    await runConnectors(c.client, { ...d.driver, recordBackoff: async () => { started = true; return new Date(); } }, quick);
+    expect(started).toBe(false);
+  });
+
+  it('reports a recipe saved by a captured key', async () => {
+    const c = fakeClient([keyAt('newco')], { newco: [published('newco')] });
+    const d = fakeDriver([{ ok: true, note: 'captured', recipe: true }]);
+    const { outcomes } = await runConnectors(c.client, d.driver, quick);
+    expect(outcomes[0]).toMatchObject({ status: 'published', recipe: true });
+  });
+});

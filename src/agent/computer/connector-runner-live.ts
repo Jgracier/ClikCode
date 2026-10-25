@@ -113,6 +113,8 @@ export function liveDriver(options: LiveDriverOptions): BrowserDriver {
         await releaseComputerBrowser(options.stateDir).catch(() => undefined);
       }
     },
+    async backoff(id) { return (await import('./keygrab-park.js')).backoffUntil(options.stateDir, id); },
+    async recordBackoff(id) { return (await import('./keygrab-park.js')).recordBackoff(options.stateDir, id); },
     async hasRecipe(id, url) {
       const { listRecipes } = await import('./signup-recipes.js');
       return !!(await findRecipe(options.stateDir, id, url, listRecipes));
