@@ -47,6 +47,7 @@ await rm('dist', { recursive: true, force: true });
 const common = { bundle: true, logLevel: 'warning', sourcemap: !production, minify: production, legalComments: 'none' };
 await Promise.all([
   build({ ...common, entryPoints: ['src/extension.ts'], outfile: 'dist/extension.js', platform: 'node', format: 'cjs', target: 'node20', external: ['vscode'],
+    logOverride: { 'empty-import-meta': 'error' },
     define: { __CLIKCODE_BUILT_AGAINST__: JSON.stringify(builtAgainst) } }),
   build({
     ...common, entryPoints: ['src/webview/main.tsx'], outfile: 'dist/webview.js', platform: 'browser', format: 'iife', target: 'es2022',

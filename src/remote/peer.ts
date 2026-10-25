@@ -24,9 +24,10 @@
  * refreshed (installation, version, last seen). */
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { hostname, userInfo } from 'node:os';
+import { readFile } from 'node:fs/promises';
 import type { IdeHostRequest } from '../ide/protocol.js';
 import { CLIKCODE_COMMIT, CLIKCODE_VERSION } from '../version.js';
-import { readState } from '../session/state/read.js';
+import { harnessIndexPath } from '../session/state/paths.js';
 import { isForgotten, newMachineRecord, readForgotten, readMachines, updateMachines, type ForgottenMachine, type RemoteMachine } from './machines.js';
 import { readTailscaleStatus, type TailscaleStatus } from './tailscale.js';
 import { targetHost, validateSshTarget, withUser } from './shell.js';
@@ -101,12 +102,21 @@ export function peerFromStatus(status: TailscaleStatus | undefined, facts: { use
 
 let self: Promise<PeerMachine | undefined> | undefined;
 
+/** Peer discovery only observes an existing installation. Loading full CLI
+ * state here pulled its ESM runtime into the CommonJS VS Code extension. */
+async function readInstallationId(): Promise<string | undefined> {
+  try {
+    const index = JSON.parse(await readFile(harnessIndexPath(), 'utf8')) as { installationId?: unknown };
+    return typeof index.installationId === 'string' ? index.installationId : undefined;
+  } catch { return undefined; /* Identity is optional when no readable index exists. */ }
+}
+
 /** This machine as a peer: read once per process. */
 export function selfAsPeer(): Promise<PeerMachine | undefined> {
   self ??= (async () => {
     const [{ status }, installationId] = await Promise.all([
       readTailscaleStatus(),
-      readState({ transcripts: [] }).then((state) => state.installationId, () => undefined),
+      readInstallationId(),
     ]);
     const user = (() => { try { return userInfo().username; } catch { return process.env.USER ?? ''; } })();
     if (!user) return undefined;
@@ -182,7 +192,7 @@ const sshReachBack: ReachBack = async (target) => (await runSsh(target, 'true', 
 /** A `host-peer` arrived (ide/bridge-mux.ts): recorded in machines.json. */
 export async function recordPeer(peer: PeerMachine, reach: ReachBack = sshReachBack): Promise<'refreshed' | 'added' | 'unreachable' | 'skipped'> {
   if (!validPeer(peer)) return 'skipped';
-  const own = await readState({ transcripts: [] }).then((state) => state.installationId, () => undefined);
+  const own = await readInstallationId();
   const [machines, forgotten] = await Promise.all([readMachines(), readForgotten()]);
   const adding = wouldAdd(machines, forgotten, peer, own);
   if (!adding) {

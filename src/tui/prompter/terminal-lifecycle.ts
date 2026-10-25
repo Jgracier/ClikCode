@@ -11,6 +11,7 @@ import type { TerminalHarnessPrompter } from '../prompter.js';
  * login): the alternate screen, the transcript rewrapped if they resized
  * it -- a phone's keyboard does -- and the next frame drawn whole. */
 export function retakeScreen(this: TerminalHarnessPrompter): void {
+  setTerminalRawMode(true);
   this.suspended = false;
   enterAlternateScreen();
   this.rewrapIfWidthChanged();
