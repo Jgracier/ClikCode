@@ -203,6 +203,9 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     await click(submit.name);
     await sleep(800);
     await verifyEmail();
+    // Still on a form with a password box: the site did not accept it (a required choice, a rejected address). The page says why.
+    const after = await look();
+    if (after.hasPassword && after.fields.length) throw await stop('unknown', 'the sign-up form was not accepted (it is still showing)', undefined, after);
   };
 
   /** Sign in to the vendor from whatever sign-in or sign-up screen is showing. */
