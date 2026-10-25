@@ -25,6 +25,7 @@ export interface StopInfo {
   kind: 'captcha' | 'mfa' | 'payment' | 'password' | 'unrecognized-client' | 'choice' | 'unknown';
   message: string; url: string; pageText: string; controls: string[]; screenshot?: string;
   /** Set when the browser work already knows this is a wall only a person clears (keygrab does). */ human?: HumanStep;
+  /** What keygrab did, newest last. */ trail?: string[];
 }
 export type DriveOutcome = { ok: true; note?: string } | { ok: false; stop: StopInfo };
 
@@ -210,6 +211,7 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
     return out('human', human.instructions ?? human.kind, { humanStep: human, recorded });
   };
   const stopped = (stop: StopInfo): Promise<VendorOutcome> => {
+    if (stop.trail?.length) actions.push(`keygrab did: ${stop.trail.join(' > ')}`);
     const human = stop.human ?? humanStepFor(id, stop);
     return human ? wall(human, false) : handoff(`${stop.kind === 'unknown' ? 'an unrecognized screen' : stop.kind}: ${stop.message}`, stop);
   };

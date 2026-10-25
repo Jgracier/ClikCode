@@ -149,6 +149,22 @@ describe('keygrab walls', () => {
     expect(keygrabWall('Billing\nCard number on file ends 4242', true)).toBeUndefined();
     expect(keygrabWall('Billing\nCard number', false)?.kind).toBe('payment');
   });
+  it('does not read pricing words on a landing page that offers sign-in as a payment wall', async () => {
+    const site = fakeSite({
+      'https://vendor.example/': { text: 'Plans and pricing. Credit card required for paid plans. Start your free trial', controls: ['Log in', 'Sign up'], on: { 'Sign up': 'https://vendor.example/signup' } },
+      'https://vendor.example/signup': { text: 'Create account', controls: ['Continue with Google'], on: { 'Continue with Google': 'https://vendor.example/keys' } },
+      'https://vendor.example/keys': keysPage, 'https://vendor.example/keys/new': newKey, 'https://vendor.example/keys/made': madeKey,
+    });
+    expect((await run(site)).ok).toBe(true);
+  });
+  it('skips a friendly not-found page when trying the common paths', async () => {
+    const site = fakeSite({
+      'https://vendor.example/': { text: 'Dashboard', controls: ['Home'] },
+      'https://vendor.example/settings/api-keys': { text: "Oops... Sorry we couldn't find what you were looking for.", controls: ['Go to home'] },
+      'https://vendor.example/developers': keysPage, 'https://vendor.example/keys/new': newKey, 'https://vendor.example/keys/made': madeKey,
+    });
+    expect((await run(site)).ok).toBe(true);
+  });
   it('stops on a wall found after signing in, not only on the first page', async () => {
     const site = fakeSite({
       'https://vendor.example/': { text: 'Hi', controls: ['Continue with Google'], on: { 'Continue with Google': 'https://vendor.example/next' } },
@@ -170,6 +186,7 @@ describe('keygrab on a page it does not know', () => {
       expect(done.stop.controls).toEqual(['EU', 'US']);
       expect(done.stop.screenshot).toBe('/tmp/shots/vendor.png');
       expect(done.stop.human).toBeUndefined();
+      expect(done.stop.trail!.length).toBeGreaterThan(0);
     }
   });
   it('stops at its step budget instead of wandering', async () => {

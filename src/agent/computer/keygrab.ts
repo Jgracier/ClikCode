@@ -44,7 +44,7 @@ export const GITHUB_BUTTON = /(?:continue|sign ?(?:in|up)|log ?in)\s+(?:in\s+)?(
 export const API_LINK = /api (keys?|tokens?|credentials|developers?)/i;
 const API_LINK_WEAK = /^(developers?|api|api access|developer portal|for developers|credentials|keys|tokens?|developer settings)$/i;
 const SIGN_IN_ENTRY = /^(log ?in|sign ?in)$/i;
-const SIGN_UP_ENTRY = /^(sign ?up|get started( for free)?|get (your )?api key|register|create (an )?account|try (it )?free|start (for )?free|start building|join)$/i;
+const SIGN_UP_ENTRY = /^(sign ?up|get started( for free)?|get (your )?api key|register|create (an )?account|try (it )?free|start (for )?free|start building)$/i;
 const CREATE = /^\W*(create|generate|new|add|get|request|issue)\b[^.]{0,30}?\b(key|token|secret|credential)s?\b/i;
 const CREATE_BARE = /^\W*(create|generate|new)\W*$/i;
 const NEVER_KEY = /\b(delete|revoke|remove|rotate|regenerate|roll|cancel|deactivate)\b/i;
@@ -53,17 +53,18 @@ const CONFIRM = /^(create|generate|save|continue|ok|done|submit|add|confirm)\b/i
 const SUBMIT = /^(sign ?up|create( account)?|register|continue|next|get started|submit)\b/i;
 const NAME_FIELD = /name|label|description|title/i;
 const CODE_PAGE = /(?:enter|type|paste)[^.\n]{0,40}\bcode\b|verification code|check your (?:e-?mail|inbox)|we(?:'ve| have) sent[^.\n]{0,40}(?:e-?mail|code)/i;
-const NOT_FOUND = /\b404\b|page (?:not found|does(?:n't| not) exist)|not found|no such page/i;
+const NOT_FOUND = /\b404\b|page (?:not found|does(?:n't| not) exist)|not found|no such page|couldn'?t find|can'?t find|\boops\b|doesn'?t exist|does not exist/i;
 
 /** A wall only a person clears, from the page text; undefined for an ordinary page. `keyPage`: the page already offers key controls, so a stray mention of billing is not a wall. */
-export function keygrabWall(text: string, keyPage = false): { kind: HumanKind; reasonCode: string; what: string } | undefined {
+export function keygrabWall(text: string, keyPage = false, signInOffered = false): { kind: HumanKind; reasonCode: string; what: string } | undefined {
   const blocker = detectBlocker(text);
   if (blocker === 'a captcha' || /verify you are (?:a )?human|are you a robot|checking your browser|just a moment\.\.\./i.test(text)) return { kind: 'captcha', reasonCode: 'captcha', what: 'a captcha' };
   if (/(?:verify|confirm|enter|add)[^.\n]{0,30}(?:phone|mobile)(?: number)?|(?:sms|text message)[^.\n]{0,40}code|code[^.\n]{0,30}(?:sent|texted)[^.\n]{0,20}(?:phone|number|\+\d)|phone verification/i.test(text) && /verif|code|confirm/i.test(text)) return { kind: 'sms', reasonCode: 'phone-verification', what: 'a phone (SMS) verification' };
   if (blocker === 'an SMS or authenticator code') return { kind: 'mfa', reasonCode: 'verification-code', what: 'an authenticator or SMS code' };
   if (/identity verification|verify your identity|business verification|verify your business|\bKYC\b|know your customer|government[- ]issued|id document|passport/i.test(text)) return { kind: 'identity', reasonCode: 'identity-check', what: 'identity or business verification' };
   if (/(?:e-?mail|address)[^.\n]{0,50}(?:not allowed|not accepted|not supported|is blocked|invalid domain|not permitted)|(?:personal|free|public|gmail)[^.\n]{0,30}(?:e-?mail|address)[^.\n]{0,30}(?:not|can(?:'|no)t)|(?:work|business|company) e-?mail (?:is )?(?:required|only)|use a (?:work|business|company) e-?mail/i.test(text)) return { kind: 'decision', reasonCode: 'email-not-allowed', what: 'a refusal of the email address' };
-  if (keyPage) return undefined;
+  // Pricing, plans and billing words on a landing page that still offers sign-in are marketing, not a wall.
+  if (keyPage || signInOffered) return undefined;
   if (blocker === 'a payment page' || /credit card required|enter (?:a )?valid card|upgrade to (?:a )?paid|start your (?:free )?trial/i.test(text)) return { kind: 'payment', reasonCode: 'payment', what: 'a payment page' };
   if (blocker === 'a review page' || /waitlist|wait list|pending (?:manual )?approval|manual(?:ly)? (?:review|approv)|request access|invite[- ]only|by invitation|we(?:'ll| will) (?:review|be in touch)/i.test(text)) return { kind: 'vendor-contact', reasonCode: 'approval-needed', what: 'a manual approval or waitlist' };
   return undefined;
@@ -84,6 +85,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
   const began = now();
   let steps = 0;
   let route = 'none';
+  const trail: string[] = [];
   let signedIn = false;
   const say = (line: string): void => options.log?.(`keygrab ${options.id}: ${line}`);
 
@@ -91,12 +93,13 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     if (steps >= maxSteps) throw await stop('unknown', `keygrab used its ${maxSteps}-step budget (${what})`);
     if (now() - began > maxMs) throw await stop('unknown', `keygrab used its ${Math.round(maxMs / 1000)}s budget (${what})`);
     steps++;
+    trail.push(what.slice(0, 60));
     return run();
   };
   const stop = async (kind: StopInfo['kind'], message: string, human?: HumanStep, view?: KeyView): Promise<Halt> => {
     const seen = view ?? await port.look().catch((): KeyView => ({ url: '', text: '', controls: [], fields: [], hasPassword: false }));
     const screenshot = await port.screenshot().catch(() => undefined);
-    return new Halt({ kind, message, url: pathOf(seen.url) || seen.url, pageText: pageExcerpt(seen.text), controls: seen.controls.filter(c => !c.leaf).map(c => c.name).slice(0, 12), ...(screenshot ? { screenshot } : {}), ...(human ? { human } : {}) });
+    return new Halt({ kind, message, url: pathOf(seen.url) || seen.url, pageText: pageExcerpt(seen.text), controls: seen.controls.filter(c => !c.leaf).map(c => c.name).slice(0, 12), ...(screenshot ? { screenshot } : {}), ...(human ? { human } : {}), trail: trail.slice(-14) });
   };
   /** Ends the run on a wall with a human step: kind, the page, and what to do. */
   const wallStop = async (view: KeyView, wall: NonNullable<ReturnType<typeof keygrabWall>>): Promise<Halt> => {
@@ -106,7 +109,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     return stop(wall.kind === 'captcha' ? 'captcha' : wall.kind === 'payment' ? 'payment' : wall.kind === 'mfa' || wall.kind === 'sms' ? 'mfa' : 'unknown', `${wall.what} at ${host}`, human, view);
   };
   const guard = async (view: KeyView): Promise<void> => {
-    const wall = keygrabWall(view.text, view.controls.some(isCreate));
+    const wall = keygrabWall(view.text, view.controls.some(isCreate), !view.hasPassword && view.controls.some(c => pressable(c) && (GOOGLE_BUTTON.test(c.name) || GITHUB_BUTTON.test(c.name) || SIGN_IN_ENTRY.test(c.name) || SIGN_UP_ENTRY.test(c.name))));
     if (wall) throw await wallStop(view, wall);
   };
   const look = async (): Promise<KeyView> => { const v = await port.look(); await guard(v); return v; };
