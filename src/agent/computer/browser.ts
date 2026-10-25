@@ -164,6 +164,14 @@ export async function closeComputerPage(stateDir: string, tab?: string): Promise
   for (const page of pages) await page.close().catch(() => undefined);
 }
 
+/** Lets go of this process's connection to the shared Chrome (a command line that is finished with the browser can then exit); the browser keeps running. */
+export async function releaseComputerBrowser(stateDir: string): Promise<void> {
+  owned.delete(stateDir);
+  const opening = running.get(stateDir);
+  running.delete(stateDir);
+  await (await opening?.catch(() => undefined))?.browser.close().catch(() => undefined);
+}
+
 export async function closeComputerBrowser(stateDir: string): Promise<void> {
   owned.delete(stateDir);
   const opening = running.get(stateDir);

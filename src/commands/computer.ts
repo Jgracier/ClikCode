@@ -2,7 +2,7 @@ import { computerEnabled, generatedPasswordsAllowed, setComputerEnabled, setGene
 import { stateDirectory } from '../session/store/paths.js';
 import { emitResult } from '../cli/structured-output.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
-import { closeComputerBrowser, frontComputerPage } from '../agent/computer/browser.js';
+import { closeComputerBrowser, closeComputerPage, frontComputerPage, releaseComputerBrowser } from '../agent/computer/browser.js';
 import { loginFields, loginFieldSummary, pageControls } from '../agent/computer/login-fields.js';
 import { lockCredentialVault } from '../agent/computer/credential-vault.js';
 import { randomUUID } from 'node:crypto';
@@ -298,7 +298,7 @@ export async function computerEmail(action: 'connect' | 'status' | 'disconnect')
     const { openComputerPage } = await import('../agent/computer/browser.js');
     const { listProfiles } = await import('../agent/computer/profiles.js');
     const email = (await listProfiles(dir)).map(profile => profile.fields.sso_email).find(Boolean);
-    const done = await connectEmail(dir, await openComputerPage(dir, 'email'), { email, progress: line => line && process.stdout.write(line) });
+    const done = await connectEmail(dir, await openComputerPage(dir, 'email'), { email, progress: line => line && process.stdout.write(line) }).finally(async () => { await closeComputerPage(dir, 'email').catch(() => undefined); await releaseComputerBrowser(dir); });
     return isJsonDefaultMode() ? emitResult({ email: { connected: true, address: done.email } }) : void process.stdout.write(`Mailbox connected${done.email ? `: ${done.email}` : ''}.\n`);
   }
   const status = await emailStatus(dir);
