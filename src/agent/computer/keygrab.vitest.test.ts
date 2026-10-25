@@ -475,6 +475,11 @@ describe('keygrab walls need strong evidence', () => {
     expect(keygrabWall('Sign in', false, false, { captchaFrame: true })?.kind).toBe('captcha');
     expect(keygrabWall("Let's confirm you are human. Complete the security check before continuing. Begin")?.kind).toBe('captcha');
   });
+  it('does not read the HERE sign-up form ("Verify your identity ... a verification email will follow") as a document check', () => {
+    const text = 'Verify your identity Please submit the requested info. A verification email will follow. * Required field First name Last name Email';
+    expect(keygrabWall(text, false, false, { fields: ['First name', 'Last name', 'Email address'] })).toBeUndefined();
+    expect(keygrabWall(text)?.kind).toBe('identity');
+  });
   it('does not call "protected by reCAPTCHA" a captcha', () => {
     expect(keygrabWall('Sign in. This site is protected by reCAPTCHA and the Google Privacy Policy apply.')).toBeUndefined();
   });
