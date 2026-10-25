@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { listTasks } from './work-queue.js';
-import { authorizationUrl, classifyStuck, oauthConnect, type ConsentStop, startFailure, callbackState, GENERIC_ACTIONS, nextPress, providerFor, stopReason, type Control } from './oauth-consent.js';
+import { authorizationUrl, classifyStuck, oauthConnect, type ConsentStop, startFailure, callbackState, GENERIC_ACTIONS, nextPress, readConsent, decideSelectors, providerFor, stopReason, type Control } from './oauth-consent.js';
 
 const press = (...names: string[]): Control[] => names.map(name => ({ name, leaf: false }));
 const pick = (host: string, controls: Control[], text = '', options: { email?: string; skipAccount?: boolean } = {}): string | undefined => {
@@ -164,5 +164,53 @@ describe('a stuck page is reported with its words', () => {
     expect(classifyStuck('Please verify you are human')?.kind).toBe('captcha');
     expect(classifyStuck('We sent a code to your phone by text message')?.kind).toBe('mfa');
     expect(classifyStuck('Acme wants to access your account')).toBeUndefined();
+  });
+});
+
+describe('generic consent recognition', () => {
+  const supabaseText = 'Organization to grant API access to\naccess permissions\nShow detailed permissions\nAuthorize ClikDeploy\nCancel';
+  const supabase = press('Show detailed permissions', 'Authorize ClikDeploy', 'Cancel');
+
+  it('recognizes the Supabase authorize page on an unknown host and presses Authorize ClikDeploy', () => {
+    expect(pick('supabase.com', supabase, supabaseText)).toBe('Authorize ClikDeploy');
+    expect(nextPress('supabase.com', supabase, supabaseText)?.consent).toBe(true);
+  });
+
+  it('accepts Allow / Approve / Continue as <account> beside a refusal, when the page names the app or the callback', () => {
+    for (const label of ['Approve', 'Accept', 'Grant access', 'Continue as Jo Doe', 'Authorize']) {
+      expect(pick('app.vendor.io', press(label, 'Deny'), 'ClikDeploy wants access')).toBe(label);
+    }
+    expect(pick('app.vendor.io', press('Approve', 'Cancel'), 'Redirecting to clikdeploy.example after approval')).toBe('Approve');
+    expect(readConsent(press('Approve', 'Cancel'), 'Redirect to app.example', { redirectHost: 'app.example' }).consent).toBe(true);
+  });
+
+  it('does not treat a page that never names the app, or has no refusal, as consent', () => {
+    expect(readConsent(press('Approve', 'Cancel'), 'Approve this purchase order').consent).toBe(false);
+    expect(readConsent(press('Approve'), 'ClikDeploy wants access').consent).toBe(false);
+  });
+
+  it('never presses on a payment, missing-credits or captcha page', () => {
+    expect(pick('supabase.com', supabase, `${supabaseText}\nYou have no credits. Add a payment method.`)).toBeUndefined();
+    expect(pick('supabase.com', supabase, `${supabaseText}\nPlease verify you are human. I'm not a robot`)).toBeUndefined();
+    expect(pick('supabase.com', press('Authorize ClikDeploy', 'Cancel'), 'Upgrade your plan to continue. Card number')).toBeUndefined();
+  });
+
+  it('does not press Continue with Google as consent, but prefers it, then GitHub, on a login page', () => {
+    const login = press('Continue with GitHub Last used', 'Continue with Google', 'Sign in');
+    expect(pick('supabase.com', login, 'Welcome back')).toBe('Continue with Google');
+    expect(pick('supabase.com', press('Continue with GitHub Last used', 'Sign in'), 'Welcome back')).toBe('Continue with GitHub Last used');
+    expect(pick('supabase.com', press('Sign in'), 'Welcome back')).toBeUndefined();
+  });
+});
+
+describe('consent selectors', () => {
+  it('accepts a preselected or single option and chooses the only one', () => {
+    expect(decideSelectors([])).toEqual({ choose: [] });
+    expect(decideSelectors([{ label: 'Organization', options: ['A', 'B'], selected: 'A' }])).toEqual({ choose: [] });
+    expect(decideSelectors([{ label: 'Organization', options: ['Acme'] }])).toEqual({ choose: [{ selector: 0, option: 'Acme' }] });
+  });
+  it('stops and lists the options when there are several and none is chosen', () => {
+    const plan = decideSelectors([{ label: 'Organization', options: ['Acme', 'Beta'] }]);
+    expect('stop' in plan && plan.stop).toContain('Acme | Beta');
   });
 });

@@ -54,21 +54,74 @@ export const providerFor = (host: string): ConsentProvider | undefined => CONSEN
 
 const NOT_CHOOSER = /\b(sign out|log ?out|switch|remove|use another|add (?:an )?account|different account)\b/i;
 
+/** The platform's own name as a vendor's consent page shows it ("Authorize ClikDeploy"). */
+export const PLATFORM_APP = 'ClikDeploy';
+
+/** An affirmative consent control: Authorize [app], Allow [access], Approve, Accept, Grant access, Continue as <account>. Never "Continue with <provider>" (a sign-in). */
+const AFFIRMATIVE = /^(?:authori[sz]e(?: [\w .'&-]{1,60})?|allow(?: access| all)?|approve(?: [\w .'&-]{1,40})?|accept(?: and continue)?|grant(?: access| permission)?|continue as [\w .'@+-]{1,80})$/i;
+/** A refusal that a real consent page sits beside its affirmative control. */
+const NEGATIVE = /^(?:cancel|deny|decline|reject|no,? thanks|not now|do not allow)$/i;
+
+export interface ConsentReading { consent: boolean; /** index into controls of the control to press */ index?: number }
+
+/** Whether a page is a consent screen, and which control grants it: the page names the platform (or its callback), offers an affirmative
+ * control and a negative one. Not vendor-specific. A payment, missing credits, unknown-client or captcha page never qualifies. */
+export function readConsent(controls: readonly Control[], pageText: string, options: { appNames?: readonly string[]; redirectHost?: string } = {}): ConsentReading {
+  if (classifyStuck(pageText) || detectBlocker(pageText) === 'a captcha') return { consent: false };
+  const names = (options.appNames ?? [PLATFORM_APP]).filter(Boolean);
+  const lower = pageText.toLowerCase();
+  const mentions = names.some(n => lower.includes(n.toLowerCase())) || (!!options.redirectHost && lower.includes(options.redirectHost.toLowerCase()))
+    || controls.some(c => !c.leaf && names.some(n => c.name.toLowerCase().includes(n.toLowerCase())) && AFFIRMATIVE.test(c.name));
+  if (!mentions) return { consent: false };
+  const presses = controls.filter(c => !c.leaf);
+  if (!presses.some(c => NEGATIVE.test(c.name))) return { consent: false };
+  const index = controls.findIndex(c => !c.leaf && c.name.length <= 100 && !NEVER.test(c.name) && AFFIRMATIVE.test(c.name));
+  return index >= 0 ? { consent: true, index } : { consent: false };
+}
+
+/** Sign-in providers on a login page, in the order of preference: Google, then GitHub (a "Last used" mark does not change the order, it only
+ * confirms the account is known), then the profile's email, which is typed by the login action, never here. */
+const SIGN_IN_PROVIDERS = [/^(?:continue|sign ?(?:in|up)|log ?in)\s+(?:in\s+)?(?:with|using|via)\s+google\b/i, /^(?:continue|sign ?(?:in|up)|log ?in)\s+(?:in\s+)?(?:with|using|via)\s+github\b/i];
+
+export interface PressOptions { email?: string; skipAccount?: boolean; appNames?: readonly string[]; redirectHost?: string }
+
 /** What to press next on a page, as the index into `controls` and why, or undefined when nothing known is on it.
- * An account naming `email` is chosen first (once per address, which the caller tracks by passing `skipAccount`). */
-export function nextPress(host: string, controls: readonly Control[], pageText: string, options: { email?: string; skipAccount?: boolean } = {}): { index: number; note: string } | undefined {
+ * An account naming `email` is chosen first (once per address, which the caller tracks by passing `skipAccount`).
+ * `consent` is set when the press grants a generically recognized consent screen. */
+export function nextPress(host: string, controls: readonly Control[], pageText: string, options: PressOptions = {}): { index: number; note: string; consent?: boolean } | undefined {
   const email = options.email?.trim().toLowerCase();
   if (email && !options.skipAccount) {
     const i = controls.findIndex(c => c.name.toLowerCase().includes(email) && !NOT_CHOOSER.test(c.name));
     if (i >= 0) return { index: i, note: 'Chose the account.' };
   }
+  if (classifyStuck(pageText)) return undefined;
   const table = [...(providerFor(host)?.actions ?? []), ...GENERIC_ACTIONS];
   for (const action of table) {
     if (action.when && !action.when.test(pageText)) continue;
     const i = controls.findIndex(c => (action.leaf || !c.leaf) && c.name.length <= 80 && !NEVER.test(c.name) && action.name.test(c.name));
-    if (i >= 0) return { index: i, note: action.note };
+    if (i >= 0) return { index: i, note: action.note, ...(AFFIRMATIVE.test(controls[i]!.name) ? { consent: true } : {}) };
+  }
+  const read = readConsent(controls, pageText, { ...(options.appNames ? { appNames: options.appNames } : {}), ...(options.redirectHost ? { redirectHost: options.redirectHost } : {}) });
+  if (read.consent && read.index !== undefined) return { index: read.index, note: 'Granted access on the consent screen.', consent: true };
+  for (const [rank, re] of SIGN_IN_PROVIDERS.entries()) {
+    const i = controls.findIndex(c => !c.leaf && re.test(c.name.replace(/\s*last used\s*$/i, '').trim()));
+    if (i >= 0) return { index: i, note: rank === 0 ? 'Signed in with Google.' : 'Signed in with GitHub.' };
   }
   return undefined;
+}
+
+/** A choice the consent page needs made (organization, account, project): its label and what it offers. */
+export interface Selector { label: string; options: readonly string[]; /** the option already chosen, when one is */ selected?: string }
+
+/** What to do about the selectors on a consent page: nothing to choose, a pick of the only option, or a stop listing the options (never a guess). */
+export function decideSelectors(selectors: readonly Selector[]): { stop: string } | { choose: { selector: number; option: string }[] } {
+  const choose: { selector: number; option: string }[] = [];
+  for (const [i, s] of selectors.entries()) {
+    if (s.selected) continue;
+    if (s.options.length === 1) { choose.push({ selector: i, option: s.options[0]! }); continue; }
+    return { stop: `The consent page needs a choice${s.label ? ` ("${s.label}")` : ''} and offers ${s.options.length ? `${s.options.length} options: ${s.options.slice(0, 12).join(' | ')}` : 'none'}. Nothing was pressed; tell me which one to use.` };
+  }
+  return { choose };
 }
 
 /** The reason to stop at a page that needs the person, or undefined. A password box is the strongest sign: nothing is typed into it. */
@@ -201,6 +254,56 @@ async function readControls(page: Page): Promise<Control[]> {
   }, { pressable: PRESSABLE });
 }
 
+
+const PLACEHOLDER = /^(?:select|choose|pick|-+|—|–)\b|^$/i;
+
+/** Reads the choices a consent page asks for (native selects and listbox comboboxes). A combobox is opened to read its options, then closed. */
+async function readSelectors(page: Page): Promise<Selector[]> {
+  const found: Selector[] = [];
+  const natives = await page.evaluate(() => {
+    const doc = (globalThis as unknown as { document: { querySelectorAll(s: string): ArrayLike<Record<string, any>> } }).document;
+    return Array.from(doc.querySelectorAll('select')).filter(n => n.getClientRects().length).map(n => {
+      const label = (n.getAttribute('aria-label') || n.labels?.[0]?.textContent || '').replace(/\s+/g, ' ').trim();
+      const options = Array.from(n.options as ArrayLike<Record<string, any>>).map(o => ({ text: String(o.textContent ?? '').replace(/\s+/g, ' ').trim(), value: String(o.value ?? ''), selected: !!o.selected, disabled: !!o.disabled }));
+      return { label, options };
+    });
+  }).catch(() => []);
+  for (const n of natives) {
+    const real = n.options.filter(o => o.value !== '' && !o.disabled && !PLACEHOLDER.test(o.text));
+    const chosen = n.options.find(o => o.selected && o.value !== '' && !PLACEHOLDER.test(o.text));
+    found.push({ label: n.label, options: real.map(o => o.text), ...(chosen ? { selected: chosen.text } : {}) });
+  }
+  const boxes = page.locator('[role=combobox]:visible, button[aria-haspopup=listbox]:visible');
+  const count = Math.min(await boxes.count().catch(() => 0), 4);
+  for (let i = 0; i < count; i++) {
+    const box = boxes.nth(i);
+    const shown = ((await box.innerText({ timeout: 1_000 }).catch(() => '')) || '').replace(/\s+/g, ' ').trim();
+    const label = ((await box.getAttribute('aria-label').catch(() => '')) || '').trim();
+    if (shown && !PLACEHOLDER.test(shown)) { found.push({ label, options: [shown], selected: shown }); continue; }
+    await box.click({ timeout: 2_000 }).catch(() => undefined);
+    const options = (await page.locator('[role=option]:visible').allInnerTexts().catch(() => [] as string[])).map(t => t.replace(/\s+/g, ' ').trim()).filter(t => t && !PLACEHOLDER.test(t));
+    await page.keyboard.press('Escape').catch(() => undefined);
+    found.push({ label: label || shown, options });
+  }
+  return found;
+}
+
+/** Makes the only available choice on a consent page, or returns why it cannot (several options: never a guess). */
+async function settleSelectors(page: Page): Promise<string | undefined> {
+  const selectors = await readSelectors(page);
+  const plan = decideSelectors(selectors);
+  if ('stop' in plan) return plan.stop;
+  for (const { selector, option } of plan.choose) {
+    const native = page.locator('select:visible');
+    const n = await native.count().catch(() => 0);
+    if (selector < n) { await native.nth(selector).selectOption({ label: option }).catch(() => undefined); continue; }
+    const boxes = page.locator('[role=combobox]:visible, button[aria-haspopup=listbox]:visible');
+    await boxes.nth(selector - n).click({ timeout: 2_000 }).catch(() => undefined);
+    await page.getByRole('option', { name: option }).first().click({ timeout: 2_000 }).catch(() => undefined);
+  }
+  return undefined;
+}
+
 async function press(page: Page, control: Control): Promise<boolean> {
   const exact = control.name;
   const candidates = control.leaf ? [page.getByText(exact, { exact: true })] : [page.getByRole('button', { name: exact, exact: true }), page.getByRole('link', { name: exact, exact: true }), page.locator(PRESSABLE).filter({ hasText: exact }), page.getByText(exact, { exact: true })];
@@ -314,10 +417,14 @@ async function driveConsent(connector: string, page: Page, options: OAuthConsent
       } else {
         stopSeen = 0;
         const host = (() => { try { return new URL(url).hostname; } catch { return ''; } })();
-        const next = nextPress(options.providerHost ?? host, controls, text, { ...(options.email ? { email: options.email } : {}), skipAccount: chosenOn === url });
+        const next = nextPress(options.providerHost ?? host, controls, text, { ...(options.email ? { email: options.email } : {}), skipAccount: chosenOn === url, ...(redirectUri ? { redirectHost: (() => { try { return new URL(redirectUri).host; } catch { return ''; } })() } : {}) });
         const control = next && controls[next.index];
         if (next && control && !(lastPress.key === `${url}|${control.name}` && Date.now() - lastPress.at < 2_500)) {
           if (next.note === 'Chose the account.') chosenOn = url;
+          if (next.consent) {
+            const blocked = await settleSelectors(page);
+            if (blocked) throw new ConsentStop(`${blocked} ${stuckOn(page, controls, text)}`);
+          }
           if (await press(page, control)) {
             lastPress = { key: `${url}|${control.name}`, at: Date.now() };
             steps.push(next.note); options.progress?.(`${next.note}\n`);

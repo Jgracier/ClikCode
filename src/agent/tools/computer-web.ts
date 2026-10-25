@@ -832,7 +832,7 @@ export async function withSignInHints(result: ToolRunResult, page: Page, stateDi
   if (url.hostname !== 'accounts.google.com') {
     // A sign-in or sign-up page: say which way in to take (Google, else GitHub, else the profile's email and password).
     const text = await page.evaluate(() => (globalThis as unknown as { document: { body: { innerText: string } } }).document.body.innerText.slice(0, 20_000)).catch(() => '');
-    const hint = signInMethodHint(signInProviders(text));
+    const hint = signInMethodHint({ ...signInProviders(text), email: /\b(?:sign ?in|log ?in)\b/i.test(text) && /\be-?mail\b/i.test(text) && /\bpassword\b/i.test(text) });
     return hint ? { ...result, output: `${result.output}\n\n${hint}` } : result;
   }
   const hints: string[] = [];
@@ -857,9 +857,10 @@ export function signInProviders(text: string): { google: boolean; github: boolea
  * The way in to take on a sign-in or sign-up page, in the user's order: Google (no password, no email check), else
  * GitHub, else the profile's email and password. Nothing is said about a page that offers neither.
  */
-export function signInMethodHint(offered: { google: boolean; github: boolean }): string | undefined {
+export function signInMethodHint(offered: { google: boolean; github: boolean; email?: boolean }): string | undefined {
   if (offered.google) return 'This page offers Google: use it ("Continue with Google" / "Sign in with Google") instead of a password or a new account; the account chooser follows.';
-  if (offered.github) return 'This page offers GitHub and not Google: use "Continue with GitHub". GitHub has no Google sign-in of its own: if GitHub asks to sign in, use login with the saved GitHub account, and read any verification code with read_email_code.';
+  if (offered.github) return 'This page offers GitHub and not Google: use "Continue with GitHub" (including when it is the one marked "Last used"). GitHub has no Google sign-in of its own: if GitHub asks to sign in, use login with the saved GitHub account, and read any verification code with read_email_code.';
+  if (offered.email) return 'This page offers neither Google nor GitHub: sign in with the profile email (login action).';
   return undefined;
 }
 
