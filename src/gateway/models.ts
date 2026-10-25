@@ -47,7 +47,7 @@ const ACCESS = new Set<string>(['subscription', 'free', 'paid']);
 
 /** A model as a row names it: `claude-opus-5-5 (subscription)` where the Gateway says which tier serves it. */
 export function gatewayModelLabel(model: GatewayModel): string {
-  if (model.own?.modelId) return `${withoutFreeTag(model.own.modelId)} (Private GPU)`;
+  if (model.own?.modelId) return `${withoutFreeTag(model.own.modelId)} (Hosted AI)`;
   const name = withoutFreeTag(model.id);
   return model.access ? `${name} (${model.access})` : name;
 }
@@ -300,7 +300,7 @@ export function fromOpenAIModelList(data: readonly unknown[]): GatewayModelList 
 export function gatewaySessionModelLabel(modelId: string): string {
   if (!modelId.startsWith('private-deployment:')) return modelId;
   const served = cached?.list.models.find((entry) => entry.id === modelId)?.own?.modelId;
-  return served ? `${withoutFreeTag(served)} (Private GPU)` : 'Private GPU model';
+  return served ? `${withoutFreeTag(served)} (Hosted AI)` : 'Hosted AI model';
 }
 
 /** Test seam. */

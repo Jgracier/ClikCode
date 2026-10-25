@@ -7,7 +7,7 @@ import { type SlashHandlerKey } from './registry.js';
  * the waiting UI). Every other registry command falls through to
  * HEADLESS_SLASH_HANDLERS with its output shown in a panel. */
 const INTERACTIVE_SLASH_HANDLER_KEYS = [
-  'exit', 'new', 'redraw', 'provider', 'accounts', 'machine', 'model', 'privateModels', 'effort', 'permissions', 'sandbox', 'computer', 'send', 'options', 'capabilities',
+  'exit', 'new', 'redraw', 'provider', 'accounts', 'machine', 'model', 'hostedModels', 'effort', 'permissions', 'sandbox', 'computer', 'send', 'options', 'capabilities',
   'settings', 'sessions', 'resume', 'search', 'rename', 'archive', 'delete', 'mention', 'review', 'init', 'compact',
   'export', 'memory', 'doctor', 'login', 'logout', 'fork', 'redo', 'changes', 'copy', 'gateway', 'update',
 ] as const satisfies readonly SlashHandlerKey[];

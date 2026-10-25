@@ -117,7 +117,7 @@ describe('the Gateway\'s model list', () => {
       deployment: { id: 'dep-7', modelId: 'Qwen/Qwen3.8-27B', state: 'starting' },
     }]).models[0]!;
     expect(model.id).toBe('private-deployment:dep-7');
-    expect(gatewayModelLabel(model)).toBe('Qwen/Qwen3.8-27B (Private GPU)');
+    expect(gatewayModelLabel(model)).toBe('Qwen/Qwen3.8-27B (Hosted AI)');
   });
 
   it('keeps the last list on disk, so /model opens at once from it', async () => {

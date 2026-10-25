@@ -268,8 +268,8 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
       if (!args) return interactiveModelPicker(rl, id);
       return viaHeadless(text);
     },
-    privateModels: async () => {
-      if (args && args.toLowerCase() !== 'models') throw new Error('Usage: /private models');
+    hostedModels: async () => {
+      if (args && args.toLowerCase() !== 'ai') throw new Error('Usage: /hosted ai');
       return interactivePrivateModelsPicker(rl, id);
     },
     effort: async () => args ? viaHeadless(text) : interactiveEffortPicker(rl, id),

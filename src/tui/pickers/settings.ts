@@ -145,7 +145,7 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
         },
       }] : []),
       ...(idle ? [{
-        label: 'Start private models without asking',
+        label: 'Start hosted AI models without asking',
         detail: idle.own.alwaysStartOwnModels(config) ? 'On · saved on this machine' : 'Off · ask before waking a sleeping model',
         value: 'own-model-start-confirmation',
         inline: {

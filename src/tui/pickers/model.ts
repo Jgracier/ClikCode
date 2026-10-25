@@ -176,7 +176,7 @@ export async function interactivePrivateModelsPicker(rl: HarnessPrompter, id: st
   const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
-  if (!isGatewayService(session)) throw new Error('Private models are available on ClikDeploy Gateway conversations.');
+  if (!isGatewayService(session)) throw new Error('Hosted AI is available on ClikDeploy Gateway conversations.');
 
   const waiting = TERMINAL.active === rl ? TERMINAL.active : undefined;
   const rows = (models: readonly DeployableModel[]): PickerOption<DeployableModel>[] => models
@@ -187,9 +187,9 @@ export async function interactivePrivateModelsPicker(rl: HarnessPrompter, id: st
       value: model,
       group: 'Hugging Face models',
     }));
-  const initial = await withSlowWait(waiting, 'loading private models…', () => searchDeployableModels());
+  const initial = await withSlowWait(waiting, 'loading hosted AI models…', () => searchDeployableModels());
   const options = rows(initial);
-  const selected = await chooseOption(rl, 'Private models', options, undefined, {
+  const selected = await chooseOption(rl, 'Hosted AI', options, undefined, {
     onFilter: async (query) => rows(await withSlowWait(waiting, 'searching Hugging Face…', () => searchDeployableModels(query))),
   });
   if (!selected) return;
@@ -207,11 +207,11 @@ export async function interactivePrivateModelsPicker(rl: HarnessPrompter, id: st
     // The estimate and the GPU, wrapped in full above the question: a picker row cuts a long detail on a narrow screen.
     const summary = quoteSummary(selected, quote);
     if (rl.panel) rl.panel(summary.title, summary.body); else process.stdout.write(`\n${summary.title}\n${summary.body}\n`);
-    const answer = await chooseOption(rl, `Start ${selected.displayName} privately?`, [
+    const answer = await chooseOption(rl, `Start ${selected.displayName} on ClikDeploy?`, [
       // The price leads the row, so it is the last thing a short screen can lose.
-      { label: `Yes, deploy privately · $${quote.pricePerHour.toFixed(2)}/hour`, detail: quote.sku.displayName, value: 'start' },
-      { label: 'No, use AI billed by the token', detail: 'Choose a hosted Gateway model instead.', value: 'hosted' },
-      { label: 'Always start private models', detail: 'Remember this on this machine.', value: 'always' },
+      { label: `Yes, start it · $${quote.pricePerHour.toFixed(2)}/hour`, detail: quote.sku.displayName, value: 'start' },
+      { label: 'No, use AI billed by the token', detail: 'Choose a pay-per-token Gateway model instead.', value: 'hosted' },
+      { label: 'Always start hosted AI models', detail: 'Remember this on this machine.', value: 'always' },
     ]);
     if (answer === 'hosted') return interactiveModelPicker(rl, id);
     if (answer === 'always') setAlwaysStartOwnModels(true, config);
@@ -319,7 +319,7 @@ async function gatewayModelPicker(rl: HarnessPrompter, id: string, current: stri
     if (own?.state === 'asleep') {
       const config = new Conf({ projectName: 'clikcode', configFileMode: 0o600 });
       if (!alwaysStartOwnModels(config)) {
-        const answer = await chooseOption(rl, `Start ${selected.id} privately?`, [
+        const answer = await chooseOption(rl, `Start ${selected.id} on ClikDeploy?`, [
           {
             label: 'Yes, start private model',
             detail: 'Uses credits by the hour while it runs; it may take a few minutes to start.',
@@ -327,11 +327,11 @@ async function gatewayModelPicker(rl: HarnessPrompter, id: string, current: stri
           },
           {
             label: 'No, use a token-billed model',
-            detail: 'Choose a hosted Gateway model instead.',
+            detail: 'Choose a pay-per-token Gateway model instead.',
             value: 'hosted',
           },
           {
-            label: 'Always start private models',
+            label: 'Always start hosted AI models',
             detail: 'Remember this choice on this machine.',
             value: 'always',
           },

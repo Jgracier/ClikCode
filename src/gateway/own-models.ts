@@ -17,7 +17,7 @@ export function alwaysStartOwnModels(config = new Conf({ projectName: 'clikcode'
   return config.get(ALWAYS_START_OWN_MODELS) === true;
 }
 
-/** Remember the user's explicit "Always start private models" choice locally. */
+/** Remember the user's explicit "Always start hosted AI models" choice locally. */
 export function setAlwaysStartOwnModels(
   enabled: boolean,
   config = new Conf({ projectName: 'clikcode', configFileMode: 0o600 }),
