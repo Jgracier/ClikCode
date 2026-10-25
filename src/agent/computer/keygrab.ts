@@ -390,7 +390,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     if (port.probe) {
       for (const candidate of startCandidates(options.url, options.alternates).slice(0, 14)) {
         const got = await port.probe(candidate).catch(() => undefined);
-        if (got?.html && got.status < 400) { startUrl = got.url || candidate; break; }
+        if (got?.html && got.status !== 404 && got.status !== 410 && got.status < 500) { startUrl = got.url || candidate; break; }
       }
     }
     const first = await openAt(startUrl);
