@@ -19,7 +19,7 @@ async function connect(stateDir: string): Promise<Connected | undefined> {
   if (!Number.isInteger(port) || port < 1 || port > 65535) return undefined;
   try {
     const { chromium } = await import('playwright-core');
-    const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, { timeout: 3_000 });
+    const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, { timeout: 8_000 });
     const context = browser.contexts()[0];
     if (!context) { await browser.close(); return undefined; }
     return { browser, context };
@@ -58,6 +58,12 @@ async function startHost(stateDir: string): Promise<Connected> {
     try {
       const existing = await connect(stateDir);
       if (existing) return existing;
+      // A busy machine can miss the 8 second connect: while Chrome is alive, ask a few more times before calling it foreign.
+      for (let again = 0; again < 4 && await externalChromeRunning(stateDir); again++) {
+        await pause(1_500);
+        const later = await connect(stateDir);
+        if (later) return later;
+      }
       if (await externalChromeRunning(stateDir)) throw new Error('ClikCode Chrome is open outside ClikCode. Finish that browser step, close its window, and retry.');
       const entry = process.env.CLIKCODE_BROWSER_HOST_ENTRY || process.argv[1];
       if (!entry) throw new Error('ClikCode could not start its browser host.');
