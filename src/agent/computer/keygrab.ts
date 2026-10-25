@@ -81,7 +81,9 @@ export function keygrabWall(text: string, keyPage = false, signInOffered = false
   if (/make an offer|buy this domain|domain(?: name)? is for sale|this domain (?:is|may be) for sale|domain for sale/i.test(text)) return { kind: 'retire', reasonCode: 'domain-for-sale', what: 'a domain-for-sale page (the vendor looks gone)' };
   if (/error 1016|origin dns error|server ip address could not be found|ERR_NAME_NOT_RESOLVED|DNS_PROBE_FINISHED|site can.t be reached|this domain (?:has )?expired/i.test(text)) return { kind: 'retire', reasonCode: 'host-dead', what: 'a site that no longer resolves (the vendor looks gone)' };
   if (extra.captchaFrame || CAPTCHA_TEXT.test(text)) return { kind: 'captcha', reasonCode: 'captcha', what: 'a captcha' };
-  if (IDENTITY_STRONG.test(text) || (!keyPage && !signInOffered && IDENTITY_WEAK.test(text))) return { kind: 'identity', reasonCode: 'identity-check', what: 'identity or business verification' };
+  // "Verify your identity ... a verification email will follow" over name and email boxes is a sign-up form (HERE), not a document check.
+  const signUpForm = /verification e-?mail|we(?:'ll| will) e-?mail you/i.test(text) && (extra.fields ?? []).some(f => /e-?mail/i.test(f)) && !/passport|licen[cs]e|upload|government/i.test(text);
+  if (!signUpForm && IDENTITY_STRONG.test(text) || (!keyPage && !signInOffered && IDENTITY_WEAK.test(text))) return { kind: 'identity', reasonCode: 'identity-check', what: 'identity or business verification' };
   if (/(?:e-?mail|address)[^.\n]{0,50}(?:not allowed|not accepted|not supported|is blocked|invalid domain|not permitted)|(?:personal|free|public|gmail)[^.\n]{0,30}(?:e-?mail|address)[^.\n]{0,30}(?:not|can(?:'|no)t)|(?:work|business|company) e-?mail (?:is )?(?:required|only)|use a (?:work|business|company) e-?mail/i.test(text)) return { kind: 'decision', reasonCode: 'email-not-allowed', what: 'a refusal of the email address' };
   // A card form (a card-number box, "enter your card") is a payment wall wherever it shows; pricing words never are.
   if (!keyPage && ((extra.fields ?? []).some(f => PAYMENT_FIELD.test(f)) || PAYMENT_TEXT.test(text))) return { kind: 'payment', reasonCode: 'payment', what: 'a payment page' };
@@ -198,7 +200,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
   const look = async (): Promise<KeyView> => {
     let v = await port.look();
     // A page still loading shows nothing yet: give it a few seconds before judging it.
-    for (let wait = 0; wait < 4 && ((!v.controls.length && v.text.trim().length < 40) || bareShell(v) || (/\b(?:loading|just a minute|please wait)\b/i.test(v.text) && v.text.length < 400 && v.controls.length < 6)); wait++) { await sleep(1_500); v = await port.look(); }
+    for (let wait = 0; wait < 6 && ((!v.controls.length && v.text.trim().length < 40) || bareShell(v) || (/\b(?:loading|just a minute|please wait)\b/i.test(v.text) && v.text.length < 400 && v.controls.length < 6)); wait++) { await sleep(1_500); v = await port.look(); }
     v = await dismissBanner(v);
     await guard(v);
     return v;
