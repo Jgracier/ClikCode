@@ -296,3 +296,20 @@ describe('approvedFile', () => {
     } finally { await rm(dir, { recursive: true, force: true }); await rm(files, { recursive: true, force: true }); }
   });
 });
+
+describe('splitCodeFields', () => {
+  const box = (label: string, over: Record<string, unknown> = {}) => ({ password: false, maxlength: 1, label, placeholder: '', hint: { autocomplete: '', text: label }, ...over });
+  it('finds a code split over single-character boxes that calls itself a code', async () => {
+    const { splitCodeFields } = await import('./computer-web.js');
+    const six = Array.from({ length: 6 }, (_, index) => box(`Digit ${index + 1}`));
+    expect(splitCodeFields(six)).toHaveLength(6);
+    expect(splitCodeFields(six.map((item, index) => index ? item : box('x', { hint: { autocomplete: 'one-time-code', text: 'x' } })))).toHaveLength(6);
+  });
+  it('ignores ordinary single boxes, too few or too many, and boxes that are not codes', async () => {
+    const { splitCodeFields } = await import('./computer-web.js');
+    expect(splitCodeFields(Array.from({ length: 3 }, (_, index) => box(`Digit ${index}`)))).toEqual([]);
+    expect(splitCodeFields(Array.from({ length: 12 }, (_, index) => box(`Digit ${index}`)))).toEqual([]);
+    expect(splitCodeFields(Array.from({ length: 5 }, (_, index) => box(`Initial ${index}`)))).toEqual([]);
+    expect(splitCodeFields(Array.from({ length: 6 }, (_, index) => box(`Digit ${index}`, { maxlength: 6 })))).toEqual([]);
+  });
+});
