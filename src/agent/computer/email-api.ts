@@ -138,8 +138,16 @@ function hrefs(html: string): string[] {
 
 export class EmailAmbiguous extends Error {}
 
+/** Newsletters and promotions: never the wanted message, and not counted as "the email that arrived". */
+export const MARKETING = /newsletter|webinar|new features|what'?s new|promo|% off|sale\b|digest|unsubscribe from (?:these|all)|view (?:this )?in (?:your )?browser/i;
+export const isMarketing = (mail: Pick<FoundEmail, 'subject' | 'text'>): boolean => MARKETING.test(mail.subject) || MARKETING.test(mail.text.slice(0, 200));
+
+/** The start of the body that names the vendor: 400 characters, or 1500 when `widen` (a lone email after the request, sent by an unrelated mail service). */
+const BODY_START = 400;
+const BODY_START_WIDE = 1500;
+
 /** Does this email belong to `site`? Sender domain or display name, else the subject, else the start of the body. Returns the strongest tier (0 = no). */
-export function senderMatch(mail: Pick<FoundEmail, 'from' | 'subject' | 'text'>, site: string): { tier: 0 | 1 | 2 | 3; domain: string } {
+export function senderMatch(mail: Pick<FoundEmail, 'from' | 'subject' | 'text'>, site: string, options: { widen?: boolean } = {}): { tier: 0 | 1 | 2 | 3; domain: string } {
   const name = vendorOf(site);
   const forms = [...new Set([name, name.replace(/-/g, ''), name.replace(/-/g, ' ')])].filter(form => form.length >= 3 && form !== 'unknown');
   const from = mail.from.toLowerCase();
@@ -149,7 +157,7 @@ export function senderMatch(mail: Pick<FoundEmail, 'from' | 'subject' | 'text'>,
   const inDomain = forms.some(form => domain.replace(/[^a-z0-9]/g, '').includes(form.replace(/[^a-z0-9]/g, '')));
   if (inDomain || forms.some(form => flat(display).includes(flat(form)))) return { tier: 1, domain };
   if (forms.some(form => flat(mail.subject).includes(flat(form)))) return { tier: 2, domain };
-  if (forms.some(form => flat(mail.text.slice(0, 400)).includes(flat(form)))) return { tier: 3, domain };
+  if (forms.some(form => flat(mail.text.slice(0, options.widen ? BODY_START_WIDE : BODY_START)).includes(flat(form)))) return { tier: 3, domain };
   return { tier: 0, domain };
 }
 
@@ -185,7 +193,10 @@ export async function waitForEmail(stateDir: string, query: { from?: string; sub
     }
     found = found.filter(mail => mail.receivedAt >= since && (!query.accept || query.accept(mail)));
     if (query.site) {
-      const scored = found.map(mail => ({ mail, ...senderMatch(mail, query.site!) })).filter(item => item.tier > 0);
+      // A vendor that sends through an unrelated mail service names itself only deeper in the body: look further
+      // there when this is the only real (non-marketing) email that arrived since the request.
+      const widen = found.filter(mail => !isMarketing(mail)).length === 1;
+      const scored = found.map(mail => ({ mail, ...senderMatch(mail, query.site!, { widen }) })).filter(item => item.tier > 0);
       const best = Math.min(...scored.map(item => item.tier), 9);
       found = scored.filter(item => item.tier === best).map(item => item.mail);
       // Two different senders both fit this site: that is another agent's mail or a lookalike, and a guess here types a wrong code.

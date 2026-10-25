@@ -3,7 +3,7 @@
  * never an email another agent already took, inbox first and then spam, a few passes. When it does not come, the signup is
  * put on hold in the queue (reason email) so the run goes on and a person or a later retry finishes it.
  */
-import { emailConnected, EmailAmbiguous, waitForEmail, type GoogleEndpoints } from './email-api.js';
+import { emailConnected, EmailAmbiguous, MARKETING, waitForEmail, type GoogleEndpoints } from './email-api.js';
 import { Parked, vendorOf } from './parking.js';
 import { saveTask } from './work-queue.js';
 
@@ -17,7 +17,6 @@ export function verificationCode(text: string): string | undefined {
   return sixes.length === 1 ? sixes[0] : undefined;
 }
 
-const MARKETING = /newsletter|webinar|new features|what'?s new|promo|% off|sale\b|digest|unsubscribe from (?:these|all)|view (?:this )?in (?:your )?browser/i;
 const CODE_WORDS = /\b(?:code|otp|passcode|pin|verify|verification|confirm(?:ation)?|one[- ]time|sign[- ]?in|log[- ]?in|security alert)\b/i;
 const LINK_WORDS = /\b(?:verify|verification|confirm(?:ation)?|activate|activation|sign[- ]?in|log[- ]?in|magic|reset|set (?:your )?password|welcome|complete (?:your )?(?:sign|regist))/i;
 /** An email that is a verification message with a code in it, not a newsletter that happens to hold a six-digit number. */

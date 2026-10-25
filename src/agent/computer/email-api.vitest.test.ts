@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { disconnectEmail, EMAIL_CLIENT_SECRET, emailConnected, emailStatus, startConsent, waitForEmail, type GoogleEndpoints } from './email-api.js';
+import { senderMatch, disconnectEmail, EMAIL_CLIENT_SECRET, emailConnected, emailStatus, startConsent, waitForEmail, type GoogleEndpoints } from './email-api.js';
 import { saveNamedSecret } from './credential-vault.js';
 import { verificationCode } from '../tools/computer-web.js';
 
@@ -35,7 +35,7 @@ beforeEach(async () => {
     if (url.pathname === '/gmail/profile') return json({ emailAddress: 'me@example.com' });
     if (url.pathname === '/gmail/messages') {
       const q = url.searchParams.get('q') ?? '';
-      return json({ messages: messages.filter(m => q.includes(m.from)).map(m => ({ id: m.id })) });
+      return json({ messages: messages.filter(m => !q.includes('from:(') || q.includes(m.from)).map(m => ({ id: m.id })) });
     }
     const match = /^\/gmail\/messages\/(.+)$/.exec(url.pathname);
     if (match) {
@@ -88,6 +88,37 @@ describe('mailbox consent', () => {
   it('says what to set up when there is no OAuth client', async () => {
     await fs.rm(path.join(dir, 'computer'), { recursive: true, force: true });
     await expect(startConsent(dir, { endpoints })).rejects.toThrow(/No Google OAuth client/);
+  });
+});
+
+describe('sender matching for a vendor that mails through an unrelated service', () => {
+  const body = `${'Welcome aboard. '.repeat(40)}Confirm your Who Hosts This account with the code below. 482913`;
+  const mail = { from: 'Accounts <bounce@mail.sendgrid-esp.net>', subject: 'Your code', text: body };
+  it('misses a vendor named only past the first 400 characters, unless widened', () => {
+    expect(body.indexOf('Who Hosts This')).toBeGreaterThan(400);
+    expect(senderMatch(mail, 'https://who-hosts-this.com/account').tier).toBe(0);
+    expect(senderMatch(mail, 'https://who-hosts-this.com/account', { widen: true }).tier).toBe(3);
+    expect(senderMatch({ ...mail, text: 'x'.repeat(1600) + ' Who Hosts This' }, 'https://who-hosts-this.com/', { widen: true }).tier).toBe(0);
+  });
+
+  it('widens only when one real email arrived: a lone one is taken, two are not guessed between', async () => {
+    await connect();
+    const now = Date.now();
+    messages = [{ id: 'only', internalDate: String(now), from: 'bounce@mail.sendgrid-esp.net', subject: 'Your code', html: `<p>${body}</p>` }];
+    const mail = await waitForEmail(dir, { site: 'https://who-hosts-this.com/account', endpoints, timeoutMs: 3_000, pollMs: 50 });
+    expect(mail.id).toBe('only');
+    messages = [...messages, { id: 'other', internalDate: String(now), from: 'noreply@other-esp.org', subject: 'Hello', html: '<p>Another notice about something else.</p>' }];
+    await expect(waitForEmail(dir, { site: 'https://who-hosts-this.com/account', endpoints, timeoutMs: 300, pollMs: 50 })).rejects.toThrow(/No email matched/);
+  });
+
+  it('does not count a newsletter as the second email', async () => {
+    await connect();
+    const now = Date.now();
+    messages = [
+      { id: 'code', internalDate: String(now), from: 'bounce@mail.sendgrid-esp.net', subject: 'Your code', html: `<p>${body}</p>` },
+      { id: 'news', internalDate: String(now), from: 'news@other.org', subject: 'Monthly newsletter', html: '<p>What is new this month</p>' },
+    ];
+    expect((await waitForEmail(dir, { site: 'https://who-hosts-this.com/', endpoints, timeoutMs: 3_000, pollMs: 50 })).id).toBe('code');
   });
 });
 
