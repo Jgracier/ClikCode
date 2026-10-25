@@ -112,6 +112,10 @@ export async function loginComputerPage(input: {
   const supplied: Record<string, string> = {};
   let submitted = false;
   let submittedPassword = false;
+  // The saved password went to the site (and no newly typed one). If the site then shows a sign-in form again, on
+  // whatever host its login page lives on (login.x.com, x.auth0.com), the saved password was refused.
+  let sentSaved = false;
+  const refused = async (): Promise<LoginOutcome> => { if (id) await setLoginRejected(input.stateDir, startUrl, id, true); return 'saved_login_rejected'; };
   let codeAttempts = 0;
   let announcedVerification = false;
   let waited = 0;
@@ -145,7 +149,7 @@ export async function loginComputerPage(input: {
       step--; // Resume the same flow after an MFA or loading page.
       continue;
     }
-    if (!onSite(url, startUrl)) return 'unverified';
+    if (!onSite(url, startUrl)) return sentSaved && fields.some(field => field.kind === 'password') ? refused() : 'unverified';
     // A rejected password often comes back on a new URL or a re-rendered
     // form. Never keep submitting the same secret into an account lockout.
     if (submittedPassword && fields.some(field => field.kind === 'password')) {
@@ -156,8 +160,7 @@ export async function loginComputerPage(input: {
         gone = !(await visible(input.page)).some(field => field.kind === 'password');
       }
       if (gone) { step--; continue; }
-      if (id && !supplied.password && saved.password) { await setLoginRejected(input.stateDir, startUrl, id, true); return 'saved_login_rejected'; }
-      return 'unverified';
+      return sentSaved ? refused() : 'unverified';
     }
     if (codeAttempts >= CODE_ATTEMPTS && fields.some(field => field.transient)) return 'unverified';
     if (!accountChosen) {
@@ -170,6 +173,8 @@ export async function loginComputerPage(input: {
         id = accounts[labels.indexOf(answers.account!)]?.id;
       } else id = accounts[0]?.id;
       saved = id ? await savedLoginFields(input.stateDir, startUrl, id) : {};
+      // A password the site already refused is never sent again: it is asked for anew.
+      if (id && accounts.find(account => account.id === id)?.rejected) delete saved.password;
       step--; // The page may have moved while the picker was open: read it again.
       continue;
     }
@@ -198,16 +203,17 @@ export async function loginComputerPage(input: {
     }
     const before = signature(url, fields);
     for (const field of fields) {
-      if (!onSite(input.page.url(), startUrl)) return 'unverified';
+      if (!onSite(input.page.url(), startUrl)) return sentSaved && fields.some(candidate => candidate.kind === 'password') ? refused() : 'unverified';
       await (await loginScope(input.page)).locator('input:visible').nth(field.index).fill(field.transient ? codes[field.key]! : (saved[field.key] ?? supplied[field.key]!));
     }
     for (const key of Object.keys(codes)) delete codes[key];
     await (await loginScope(input.page)).locator('input:visible').nth(fields.at(-1)!.index).press('Enter');
     submitted = true;
     lastSubmit = Date.now();
-    if (fields.some(field => field.kind === 'password')) submittedPassword = true;
+    if (fields.some(field => field.kind === 'password')) { submittedPassword = true; if (saved.password && !supplied.password) sentSaved = true; }
     if (fields.some(field => field.transient)) codeAttempts++;
-    if (!await progress(input.page, before, input.signal, () => pressSubmit(input.page))) return 'unverified';
+    // Nothing changed after the saved password was sent and the password box is still there: the site said no in place.
+    if (!await progress(input.page, before, input.signal, () => pressSubmit(input.page))) return sentSaved && (await visible(input.page)).some(field => field.kind === 'password') ? refused() : 'unverified';
   }
   return 'unverified';
 }
