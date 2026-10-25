@@ -85,3 +85,73 @@ describe('repeat and sequence rules', () => {
     for (let i = 0; i < 300; i++) expect(hasRepeatOrSequence(gen())).toBe(false);
   });
 });
+
+/** The ShipEngine rule: "Password must be 12-64 characters with an uppercase letter and a special character, and no repeated or sequential characters". */
+const SHIPENGINE = 'Password must be 12–64 characters with an uppercase letter and a special character, and no repeated or sequential characters';
+function shipEngineAccepts(password: string): boolean {
+  if (password.length < 12 || password.length > 64 || !/[A-Z]/.test(password) || !/[^A-Za-z0-9]/.test(password)) return false;
+  const lower = password.toLowerCase();
+  for (let i = 1; i < lower.length; i++) {
+    if (lower[i] === lower[i - 1]) return false;
+    if (i >= 2) {
+      const a = lower.charCodeAt(i - 2), b = lower.charCodeAt(i - 1), c = lower.charCodeAt(i);
+      if ((b - a === 1 && c - b === 1) || (a - b === 1 && b - c === 1)) return false;
+    }
+  }
+  return !/qwe|wer|ert|rty|tyu|yui|uio|iop|asd|sdf|dfg|fgh|ghj|hjk|jkl|zxc|xcv|cvb|vbn|bnm/.test(lower) && !/ewq|rew|tre|ytr|uyt|iuy|oiu|poi|dsa|fds|gfd|hgf|jhg|kjh|lkj|cxz|vcx|bvc|nbv|mnb/.test(lower);
+}
+
+describe('strict policies (ShipEngine)', () => {
+  it('reads the rules out of the refusal text', () => {
+    const policy = parsePolicy({ text: SHIPENGINE });
+    expect(policy).toMatchObject({ minLength: 12, maxLength: 64 });
+    expect(policy.rules).toMatchObject({ noRepeat: true, noSequence: true, requireSymbol: true });
+    expect(policy.symbols).not.toBe('');
+    expect(parsePolicy({ text: 'No more than 2 identical characters in a row' }).rules).toMatchObject({ maxIdentical: 2, inRow: true });
+    expect(parsePolicy({ text: 'Do not use 3 or more of the same character' }).rules?.maxIdentical).toBe(2);
+    expect(parsePolicy({ text: 'Use 8 to 20 characters' }).rules).toBeUndefined();
+  });
+
+  it('generates 1,000 passwords the ShipEngine checker accepts', () => {
+    const policy = parsePolicy({ text: SHIPENGINE });
+    for (let count = 0; count < 1000; count++) {
+      const password = generatePassword(policy);
+      expect(shipEngineAccepts(password), `rejected attempt ${count}`).toBe(true);
+    }
+  });
+
+  it('also holds with the default policy, case-insensitively, and has no keyboard runs', () => {
+    for (let count = 0; count < 1000; count++) {
+      const password = generatePassword();
+      expect(hasRepeatOrSequence(password)).toBe(false);
+      expect(shipEngineAccepts(password)).toBe(true);
+    }
+    expect(hasRepeatOrSequence('xaAy')).toBe(true);
+    expect(hasRepeatOrSequence('xQwEy')).toBe(true);
+    expect(hasRepeatOrSequence('x321y')).toBe(true);
+    expect(hasRepeatOrSequence('xCbAy')).toBe(true);
+    expect(hasRepeatOrSequence('x7k!Pm')).toBe(false);
+  });
+
+  it('keeps the symbol when the refusal asks for one, over four refusals, instead of stripping it', () => {
+    let policy = parsePolicy();
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      policy = relax(policy, SHIPENGINE, attempt);
+      expect(policy.symbols, `attempt ${attempt}`).not.toBe('');
+      expect(policy.rules).toMatchObject({ noRepeat: true, noSequence: true });
+      for (let count = 0; count < 50; count++) expect(shipEngineAccepts(generatePassword(policy))).toBe(true);
+    }
+  });
+
+  it('still drops symbols when a refusal says they are not allowed', () => {
+    expect(relax(parsePolicy(), 'Special characters are not allowed', 2).symbols).toBe('');
+  });
+
+  it('honours a limit on identical characters', () => {
+    const policy = parsePolicy({ text: 'No more than 1 identical character' });
+    for (let count = 0; count < 200; count++) {
+      const lowered = generatePassword(policy).toLowerCase();
+      expect(new Set(lowered).size).toBe(lowered.length);
+    }
+  });
+});
