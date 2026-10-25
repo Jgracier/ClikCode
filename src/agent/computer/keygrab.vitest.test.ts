@@ -427,6 +427,18 @@ describe('keygrab first sign-in', () => {
   });
 });
 
+describe('keygrab entries that go nowhere', () => {
+  it('presses "Log in" when "Get started for free" only validates an email box', async () => {
+    const site = fakeSite({
+      'https://vendor.example/': { text: 'Scanner Get started for free Email Required', fields: ['Email'], controls: ['Log in', 'Get started for free'], on: { 'Log in': 'https://vendor.example/login' } },
+      'https://vendor.example/login': { text: 'Sign in', controls: ['Continue with Google'], on: { 'Continue with Google': 'https://accounts.google.com/chooser' } },
+      'https://accounts.google.com/chooser': { text: 'Choose an account', controls: ['user@example.com'], on: { 'user@example.com': 'https://vendor.example/keys' } },
+      ...keyFlow,
+    });
+    expect(await run(site)).toMatchObject({ ok: true, route: 'google' });
+  });
+});
+
 describe('keygrab walls need strong evidence', () => {
   const aiception = "AIception Artificial Intelligence for Humankind LET'S TALK PROTOTYPE YOURSELF About Lessons learned: 1. KYC Remediation is challenging. 2. OCR is not a silver bullet. Discover how AI can streamline document verification, reduce customs delays, and improve compliance";
   const shipstation = 'ShipStation Talk to an Expert Your business is growing. We keep it moving. Start Shipping Now No credit card required Cancel anytime Pricing Plans Starter Growth Pro';
