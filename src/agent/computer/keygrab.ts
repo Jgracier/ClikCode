@@ -48,8 +48,9 @@ const SIGN_UP_ENTRY = /^(sign ?up|get started|get (your )?api key|register|creat
 const CREATE = /^\W*(create|generate|new|add|get|request|issue)\b[^.]{0,30}?\b(key|token|secret|credential)s?\b/i;
 const CREATE_BARE = /^\W*(create|generate|new)\W*$/i;
 const NEVER_KEY = /\b(delete|revoke|remove|rotate|regenerate|roll|cancel|deactivate)\b/i;
-const REVEAL = /^(show|reveal|view|copy|display)\b/i;
+const REVEAL = /^(show|reveal|view|copy|display)\b(?:.{0,24}\b(?:key|token|secret)\b)?\W*$/i;
 const CONFIRM = /^(create|generate|save|continue|ok|done|submit|add|confirm)\b/i;
+const SIGN_IN_LOOSE = /\b(sign ?up|sign ?in|log ?in|register)\b/i;
 const SUBMIT = /^(sign ?up|create( account)?|register|continue|next|get started|submit)\b/i;
 const NAME_FIELD = /name|label|description|title/i;
 const CODE_PAGE = /(?:enter|type|paste)[^.\n]{0,40}\bcode\b|verification code|check your (?:e-?mail|inbox)|we(?:'ve| have) sent[^.\n]{0,40}(?:e-?mail|code)/i;
@@ -120,15 +121,18 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
 
   const isCreate = (c: KeyControl): boolean => pressable(c) && !NEVER_KEY.test(c.name) && (CREATE.test(c.name) || CREATE_BARE.test(c.name));
   const createOf = (v: KeyView): KeyControl | undefined => {
+    if (offersSignIn(v)) return undefined; // "Get API key" before signing in is a sign-up link
     const exact = v.controls.find(c => pressable(c) && !NEVER_KEY.test(c.name) && CREATE.test(c.name));
     if (exact) return exact;
     return /\b(api|key|token)/i.test(v.text) ? v.controls.find(c => pressable(c) && !NEVER_KEY.test(c.name) && CREATE_BARE.test(c.name)) : undefined;
   };
-  const revealOf = (v: KeyView): KeyControl | undefined => /\b(api|key|token|secret)/i.test(v.text) ? v.controls.find(c => pressable(c) && REVEAL.test(c.name)) : undefined;
-  const showsKey = (v: KeyView): boolean => /\b(api[- ]?keys?|secret|token|access key)\b/i.test(v.text) && v.text.split(/\s+/).some(word => keyShaped(word.replace(/^[("'`]+|[)"'`,.;]+$/g, '')));
+  const revealOf = (v: KeyView): KeyControl | undefined => offersSignIn(v) ? undefined : /\b(api|key|token|secret)/i.test(v.text) ? v.controls.find(c => pressable(c) && REVEAL.test(c.name)) : undefined;
+  // A landing page that still offers sign-in shows no key of ours, whatever its text looks like.
+  const offersSignIn = (v: KeyView): boolean => !v.hasPassword ? v.controls.some(c => pressable(c) && (GOOGLE_BUTTON.test(c.name) || GITHUB_BUTTON.test(c.name) || SIGN_IN_ENTRY.test(c.name) || SIGN_UP_ENTRY.test(c.name))) : true;
+  const showsKey = (v: KeyView): boolean => !offersSignIn(v) && /\b(api[- ]?keys?|secret|token|access key)\b/i.test(v.text) && v.text.split(/\s+/).some(word => keyShaped(word.replace(/^[("'`]+|[)"'`,.;]+$/g, '')));
   const isKeyPage = (v: KeyView): boolean => !!createOf(v) || !!revealOf(v) || showsKey(v);
   const findOne = (v: KeyView, re: RegExp): KeyControl | undefined => v.controls.find(c => pressable(c) && re.test(c.name.replace(/\s*last used\s*$/i, '').trim()));
-  const hasEntry = (v: KeyView): boolean => !!findOne(v, SIGN_IN_ENTRY) || !!findOne(v, SIGN_UP_ENTRY);
+  const hasEntry = (v: KeyView): boolean => !!findOne(v, SIGN_IN_ENTRY) || !!findOne(v, SIGN_UP_ENTRY) || !!findOne(v, SIGN_IN_LOOSE);
   const authWall = (v: KeyView): boolean => !isKeyPage(v) && (v.hasPassword || !!findOne(v, GOOGLE_BUTTON) || !!findOne(v, GITHUB_BUTTON) || (v.fields.some(f => /e-?mail/i.test(f)) && v.controls.some(c => pressable(c) && SUBMIT.test(c.name))));
 
   /** Press through a provider's own screens (Google account chooser and consent, GitHub authorize) until back on the vendor. */
@@ -201,7 +205,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
       const github = findOne(v, GITHUB_BUTTON);
       if (github) { route = 'github'; await click(github.name); await providerScreens(); await verifyEmail(); signedIn = true; return; }
       if (v.hasPassword || v.fields.some(f => /e-?mail/i.test(f))) { await emailRoute(v); signedIn = true; return; }
-      const entry = findOne(v, SIGN_UP_ENTRY) ?? findOne(v, SIGN_IN_ENTRY);
+      const entry = findOne(v, SIGN_UP_ENTRY) ?? findOne(v, SIGN_IN_ENTRY) ?? findOne(v, SIGN_IN_LOOSE);
       if (!entry) break;
       await click(entry.name);
       await sleep(600);
