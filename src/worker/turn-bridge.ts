@@ -427,6 +427,7 @@ async function driveWorkerTurn(
       /** Approvals and questions this window has open, closed by `request-closed`. */
       const openPrompts = new Map<string, AbortController>();
       const onEvent = (event: WorkerEvent): void => {
+        if (settled) return;
         switch (event.type) {
           case 'snapshot':
             account = event.account;
@@ -574,6 +575,7 @@ async function driveWorkerTurn(
         }
       };
       const onClose = (): void => {
+        if (settled) return;
         // The worker is gone mid-turn (killed, crashed): nothing more of
         // this turn comes. It ends here as a stopped one -- its running calls
         // settle as stopped -- drawn from what the worker saved of it, while
@@ -582,7 +584,7 @@ async function driveWorkerTurn(
         rl.turnStopped();
         void readState({ transcripts: [sessionId] }).then((state) => {
           const saved = state.sessions.find((item) => item.id === sessionId);
-          if (saved) rl.render({ ...saved, messages: sessionTranscriptMessages(saved), pendingTurn: undefined }, account, { running: false });
+          if (saved && !settled) rl.render({ ...saved, messages: sessionTranscriptMessages(saved), pendingTurn: undefined }, account, { running: false });
         }).catch(() => undefined).finally(() => finish('closed', () => resolveTurn()));
       };
       client.on('event', onEvent);

@@ -41,6 +41,8 @@ export function signInUrlRows(url: string, room: number): string[] {
  * panel, and what is left for the composer. */
 export function frameBands(p: TerminalHarnessPrompter, input: BandInput) {
   const { composer, options, prompt, cursor, palette, width, inner } = input;
+  const conversation = p.surface === 'conversation';
+  const turn = conversation ? p.turn : undefined;
   // the complete terminal height is safe and important: leaving one row
   // unpainted allowed an obsolete status line to remain visibly duplicated.
   const targetHeight = p.viewportRows();
@@ -61,19 +63,19 @@ export function frameBands(p: TerminalHarnessPrompter, input: BandInput) {
   // maxLiveConversation below. The distinction is the point: a spinner and
   // an elapsed clock in a fixed place are status, while a sentence being
   // rewritten under the eye is the thing that made reading impossible.
-  const notice = p.mentionFocus?.status ?? p.transientNotice;
+  const notice = (conversation ? p.mentionFocus?.status : undefined) ?? p.transientNotice;
   // A notice is drawn over the chat above the footer, like a list: a notice
   // that took footer rows moved the composer when it came and again when it
   // expired.
   const noticeShown = notice ? noticeLines(notice, inner) : [];
-  const indicatorText = p.turn ? backgroundTerminalsLabel(p.backgroundTerminals) : undefined;
-  const budget = frameRowBudget({ targetHeight, waiting: Boolean(p.turn), requestedPaletteCapacity });
+  const indicatorText = turn ? backgroundTerminalsLabel(p.backgroundTerminals) : undefined;
+  const budget = frameRowBudget({ targetHeight, waiting: Boolean(turn), requestedPaletteCapacity });
   const { waitingRows, paletteRows, optionalRows } = budget;
   const composerWidth = Math.max(8, inner - terminalCellWidth(prompt));
   // The software keyboard can make a mobile SSH viewport dramatically
   // shorter between two keystrokes. Bound the composer by what remains in
   // this exact frame so it can never create a physical terminal scroll.
-  const approval = p.pendingApproval;
+  const approval = conversation ? p.pendingApproval : undefined;
   // Never omitted (standard section 8): short of room the block degrades to
   // its question and keys (one row at the least), and the rows around it
   // give way first (fitFooterForApproval, below).
@@ -99,11 +101,11 @@ export function frameBands(p: TerminalHarnessPrompter, input: BandInput) {
   // is a thought: a row of its own appeared with the first thought and went
   // with the first text, once for every reasoning/acting cycle of a turn.
   const thought = p.thought ? reasoningBody(p.thought.text) : '';
-  const thoughtRow = p.turn && thought && !approval && waitingRows >= 2
+  const thoughtRow = turn && thought && !approval && waitingRows >= 2
     ? `  ${thoughtLine(visibleTail(thought, Math.max(1, inner - 2)))}` : undefined;
   // A link sign-in's link is wrapped, never cut: on a phone it is read (and
   // its code typed) from here.
-  const signInWrapped = p.turn ? p.signInLines.flatMap((line) => {
+  const signInWrapped = turn ? p.signInLines.flatMap((line) => {
     // The link arrives as its own plain line (account.ts).
     const room = Math.max(8, inner - 2);
     if (!/^https?:\/\/\S+$/.test(line)) return [`  ${visibleSlice(line, room)}`];
@@ -114,16 +116,16 @@ export function frameBands(p: TerminalHarnessPrompter, input: BandInput) {
   // The step in progress turns only when it is the single one: several would spin in step with each other
   // and with the status line, saying nothing the status does not.
   const activeSteps = p.planEntries.filter((entry) => entry.status === 'in_progress').length;
-  const planGlyph = p.turn && !p.reducedMotion && activeSteps === 1 ? waitingSpinnerGlyph(p.waitingFrame) : undefined;
-  const planShown = planBlockRows(p.planEntries, width, liveBandBudget, planGlyph);
+  const planGlyph = turn && !p.reducedMotion && activeSteps === 1 ? waitingSpinnerGlyph(p.waitingFrame) : undefined;
+  const planShown = conversation ? planBlockRows(p.planEntries, width, liveBandBudget, planGlyph) : [];
   // The plan's height only grows during a turn: a step done or added changes
   // its rows, and a block that shrank and grew with them moved the chat at
   // every update. Rows it no longer needs stay blank until the turn ends.
-  p.planHold = p.turn ? Math.max(p.planHold, Math.min(planShown.length, liveBandBudget)) : 0;
-  const planRows = p.turn ? [...planShown, ...Array.from({ length: Math.max(0, Math.min(p.planHold, liveBandBudget) - planShown.length) }, () => '')] : planShown;
+  if (conversation) p.planHold = turn ? Math.max(p.planHold, Math.min(planShown.length, liveBandBudget)) : 0;
+  const planRows = turn ? [...planShown, ...Array.from({ length: Math.max(0, Math.min(p.planHold, liveBandBudget) - planShown.length) }, () => '')] : planShown;
   liveBandBudget -= planRows.length;
   let panelRows: string[] = [];
-  const panel = p.panelState;
+  const panel = conversation ? p.panelState : undefined;
   if (panel && !approval && liveBandBudget >= 3) {
     const shown = panelBandRows(panel, inner, liveBandBudget, targetHeight);
     Object.assign(panel, { page: shown.page, total: shown.total, offset: shown.offset });

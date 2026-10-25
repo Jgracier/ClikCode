@@ -28,6 +28,7 @@ export function buildFooter(this: TerminalHarnessPrompter, input: FooterInput): 
     thoughtRow, signInRows, planRows, panelRows, composerRows,
   } = bands;
   const meta = this.statusText(inner);
+  const turn = this.surface === 'conversation' ? this.turn : undefined;
   const footer: string[] = [];
   // The resting composer starts with a clear row, or its rule sits directly
   // on the last line of the answer. While a turn runs the generating band
@@ -36,7 +37,7 @@ export function buildFooter(this: TerminalHarnessPrompter, input: FooterInput): 
   // The row count is the same on both sides of a turn's end -- the band's
   // blank and its status line become two blank rows -- so nothing under or
   // above the composer shifts when the status goes.
-  if (!this.turn) footer.push('', ...(hasBandBlank(targetHeight) && !approvalRows.length ? [''] : []));
+  if (!turn) footer.push('', ...(hasBandBlank(targetHeight) && !approvalRows.length ? [''] : []));
   // Rows drawn over the chat, just above the footer: a notice, then an open list.
   const pickerRows: string[] = noticeShown.map((row) => `  ${chalk.yellow(row)}`);
   if (paletteCapacity) {
@@ -51,7 +52,7 @@ export function buildFooter(this: TerminalHarnessPrompter, input: FooterInput): 
   footer.push(...approvalRows, ...midRows);
   // Running subagents have one fixed home. Their completed rows enter the
   // transcript; while open they never compete with the streaming answer.
-  if ((this.turn || this.backgroundWork?.agents) && !approvalRows.length) {
+  if (this.surface === 'conversation' && (turn || this.backgroundWork?.agents) && !approvalRows.length) {
     const reserved = (this.turn && waitingRows >= 2 ? 1 : 0) + (this.turn ? 1 : 0)
       + 1 + composerRows.rows.length + 2; // blank, status, usage, composer, title, meta
     footer.push(...liveAgentRows(
@@ -64,14 +65,14 @@ export function buildFooter(this: TerminalHarnessPrompter, input: FooterInput): 
   // blank row is also where the newest words of the reasoning are drawn, and
   // where the background-terminals count goes when the status line has no room
   // for it: both come and go without the footer changing height.
-  const statusText = this.turn ? this.waitingLine(this.turn, Math.max(1, inner)) : undefined;
+  const statusText = turn ? this.waitingLine(turn, Math.max(1, inner)) : undefined;
   const indicatorLine = indicatorText !== undefined ? chalk.dim(` · ${indicatorText}`) : undefined;
   const indicatorFits = statusText !== undefined && indicatorLine !== undefined
     && terminalCellWidth(statusText) + terminalCellWidth(indicatorLine) <= Math.max(1, inner);
   const statusRow = statusText !== undefined
     ? `  ${indicatorFits ? `${statusText}${indicatorLine}` : visibleSlice(statusText, Math.max(1, inner))}` : undefined;
   const upper = thoughtRow ?? (!indicatorFits && indicatorText !== undefined ? `  ${chalk.dim(visibleSlice(indicatorText, Math.max(1, inner)))}` : '');
-  const statusBlank = waitingRows >= 2 && this.turn ? upper : undefined;
+  const statusBlank = waitingRows >= 2 && turn ? upper : undefined;
   if (statusBlank !== undefined) footer.push(statusBlank);
   if (statusRow !== undefined) footer.push(statusRow);
   // Usage lives on the upper composer border, mirroring the title on the
