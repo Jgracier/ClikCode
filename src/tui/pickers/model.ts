@@ -24,7 +24,7 @@ import { withSignIn } from '../../commands/account.js';
 import { chooseOption } from './choose.js';
 import { localModelChoices, type LocalModelChoice } from '../../local-models/index.js';
 import { withSlowWait } from '../slow-wait.js';
-import { deployPrivateModel, quotePrivateModel, searchDeployableModels, type DeployableModel, type PrivateModelQuote } from '../../gateway/private-models.js';
+import { deployPrivateModel, quoteSummary, quotePrivateModel, searchDeployableModels, type DeployableModel, type PrivateModelQuote } from '../../gateway/private-models.js';
 
 /** Prefix of a row for a model this machine cannot run: listed, so the
  * catalog is honest about what exists and why it is out of reach, but
@@ -204,8 +204,12 @@ export async function interactivePrivateModelsPicker(rl: HarnessPrompter, id: st
   }
   const config = new Conf({ projectName: 'clikcode', configFileMode: 0o600 });
   if (!alwaysStartOwnModels(config)) {
+    // The estimate and the GPU, wrapped in full above the question: a picker row cuts a long detail on a narrow screen.
+    const summary = quoteSummary(selected, quote);
+    if (rl.panel) rl.panel(summary.title, summary.body); else process.stdout.write(`\n${summary.title}\n${summary.body}\n`);
     const answer = await chooseOption(rl, `Start ${selected.displayName} privately?`, [
-      { label: 'Yes, deploy privately', detail: `ClikDeploy selects ${quote.sku.displayName} · $${quote.pricePerHour.toFixed(2)}/hour while running`, value: 'start' },
+      // The price leads the row, so it is the last thing a short screen can lose.
+      { label: `Yes, deploy privately · $${quote.pricePerHour.toFixed(2)}/hour`, detail: quote.sku.displayName, value: 'start' },
       { label: 'No, use AI billed by the token', detail: 'Choose a hosted Gateway model instead.', value: 'hosted' },
       { label: 'Always start private models', detail: 'Remember this on this machine.', value: 'always' },
     ]);

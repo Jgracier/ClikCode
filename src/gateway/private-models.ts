@@ -19,6 +19,27 @@ export interface PrivateModelQuote {
   vram: { totalGb: number };
   sku: { displayName: string };
   pricePerHour: number;
+  /** Estimated decode speed on the chosen GPU. */
+  throughput?: { decodeTokensPerSec?: number; usability?: string };
+  /** The window the model will serve, in tokens. */
+  servingContext?: { tokens?: number };
+  /** What the planner wants said about the choice: a larger version passed over, an estimated size, a gated model. */
+  warnings?: string[];
+}
+
+/** The quote as lines a narrow screen can wrap: what runs, on which GPU, what it costs, and what the planner flagged. */
+export function quoteSummary(model: Pick<DeployableModel, 'modelId' | 'displayName'>, quote: PrivateModelQuote): { title: string; body: string } {
+  const gb = (n: number): string => `${Math.ceil(n)} GB`;
+  const model_ = [quote.quant?.label, quote.runtime?.name, quote.vram?.totalGb ? `needs about ${gb(quote.vram.totalGb)} of GPU memory` : undefined].filter(Boolean).join(' · ');
+  const lines = [
+    `GPU: ${quote.sku.displayName}`,
+    `Price: $${quote.pricePerHour.toFixed(2)} per hour while it runs; nothing once it is stopped`,
+    ...(model_ ? [`Model: ${model_}`] : []),
+    ...(quote.throughput?.decodeTokensPerSec ? [`Speed: about ${Math.round(quote.throughput.decodeTokensPerSec)} tokens per second (estimate)`] : []),
+    ...(quote.servingContext?.tokens ? [`Context: ${quote.servingContext.tokens.toLocaleString('en-US')} tokens`] : []),
+    ...(quote.warnings ?? []).map((warning) => `Note: ${warning}`),
+  ];
+  return { title: `${model.displayName || model.modelId} on ClikDeploy`, body: lines.join('\n') };
 }
 
 async function request<T>(path: string, init: { method?: 'GET' | 'POST'; body?: unknown } = {}): Promise<T> {
