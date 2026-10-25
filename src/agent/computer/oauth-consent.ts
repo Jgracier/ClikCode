@@ -94,16 +94,49 @@ export function callbackState(url: string, redirectUri: string | undefined, page
 
 const CONNECTOR_ID = /^[A-Za-z0-9][\w.-]{0,60}$/;
 
-/** The authorization URL out of whatever `clikdeploy integrations connect --no-browser` prints (JSON or a plain line). */
-export function authorizationUrl(text: string): string | undefined {
-  const walk = (value: unknown): string | undefined => {
-    if (typeof value === 'string') return /^https?:\/\//.test(value) ? value : undefined;
-    if (value && typeof value === 'object') for (const v of Object.values(value)) { const found = walk(v); if (found) return found; }
-    return undefined;
-  };
+/** An error document's own addresses (`type`: https://errors.clikdeploy.com/VALIDATION_ERROR, `instance`) are never an authorization URL. */
+const ERROR_ADDRESS = /^https?:\/\/errors\.clikdeploy\.com(?:\/|$)/i;
+const URL_KEYS = ['authorizationUrl', 'authorization_url', 'authorizeUrl', 'url'];
+
+function jsonOf(text: string): unknown {
   const start = text.indexOf('{');
-  if (start >= 0) { try { const found = walk(JSON.parse(text.slice(start))); if (found) return found; } catch { /* plain text */ } }
-  return /https?:\/\/[^\s"'<>]+/.exec(text)?.[0]?.replace(/[.,;)]+$/, '');
+  if (start < 0) return undefined;
+  try { return JSON.parse(text.slice(start)); } catch { return undefined; }
+}
+
+/** Whether the CLI printed an error document (problem+json, or `success: false` / `status: error`), whose URLs are not an answer. */
+function isErrorDocument(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  return v.success === false || v.status === 'error' || (typeof v.type === 'string' && ERROR_ADDRESS.test(v.type)) || typeof v.error === 'string' || (typeof v.status === 'number' && v.status >= 400);
+}
+
+/** The authorization URL out of whatever `clikdeploy integrations connect --no-browser` prints (JSON or a plain line). An error document has none. */
+export function authorizationUrl(text: string): string | undefined {
+  const json = jsonOf(text);
+  if (json !== undefined) {
+    if (isErrorDocument(json)) return undefined;
+    const walk = (value: unknown): string | undefined => {
+      if (value && typeof value === 'object') {
+        const record = value as Record<string, unknown>;
+        for (const key of URL_KEYS) { const v = record[key]; if (typeof v === 'string' && /^https?:\/\//.test(v) && !ERROR_ADDRESS.test(v)) return v; }
+        for (const v of Object.values(record)) { const found = walk(v); if (found) return found; }
+      }
+      return undefined;
+    };
+    const found = walk(json);
+    if (found) return found;
+  }
+  for (const m of text.matchAll(/https?:\/\/[^\s"'<>]+/g)) { const url = m[0].replace(/[.,;)]+$/, ''); if (!ERROR_ADDRESS.test(url)) return url; }
+  return undefined;
+}
+
+/** Why ClikDeploy would not start the connection, in its own words: the error document's message (or detail), else the last lines printed. */
+export function startFailure(text: string): string {
+  const json = jsonOf(text) as Record<string, unknown> | undefined;
+  const pick = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.split('\n')[0]!.trim() : undefined);
+  const said = json && typeof json === 'object' ? pick(json.message) ?? pick(json.detail) ?? pick(json.error) ?? pick(json.title) : undefined;
+  return said ?? text.trim().split('\n').slice(-3).join(' ').slice(0, 200);
 }
 
 export interface ConnectStart { url: string; stop: () => void }
@@ -129,8 +162,7 @@ export function startViaCli(connector: string, signal?: AbortSignal): Promise<Co
       if (url) { settled = true; clearTimeout(timer); resolve({ url, stop }); return; }
       if (final) {
         settled = true; clearTimeout(timer);
-        let said = text.trim().split('\n').slice(-3).join(' ').slice(0, 200);
-        try { const j = JSON.parse(text.slice(text.indexOf('{'))) as { message?: string }; if (j.message) said = j.message.split('\n')[0]!; } catch { /* keep the tail */ }
+        const said = startFailure(text);
         reject(new Error(`ClikDeploy would not start the connection for ${connector}: ${scrubSecrets(said) || 'no answer'}`));
       }
     };
