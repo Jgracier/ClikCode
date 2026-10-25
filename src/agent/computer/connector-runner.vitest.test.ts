@@ -309,3 +309,14 @@ describe('the consent driver reports where it stopped as data', () => {
     expect((error as InstanceType<typeof ConsentStop>).detail!.pageText).toContain('captcha');
   });
 });
+
+describe('keygrab stops are not re-judged by marketing words', () => {
+  it('does not turn a landing-page excerpt into a payment or identity wall', () => {
+    const stop = { kind: 'unknown' as const, message: 'no way to sign in', url: 'https://www.shipstation.com/', pageText: 'Start Shipping Now. No credit card required. KYC Remediation is challenging. Pricing', controls: [], trail: ['open shipstation.com/'] };
+    expect(humanStepFor('shipengine', stop)).toBeUndefined();
+  });
+  it('lists the task\'s other addresses for a start page that is no web page', async () => {
+    const { otherUrls } = await import('./connector-runner.js');
+    expect(otherUrls('get a key at https://tracking.api.here.com (docs https://developer.here.com/docs, sign up https://account.here.com/signup).')).toEqual(['https://developer.here.com/docs', 'https://account.here.com/signup']);
+  });
+});

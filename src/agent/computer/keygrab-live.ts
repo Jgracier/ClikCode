@@ -15,7 +15,7 @@ const clean = (text: string): string => scrubSecrets(text).replace(/\s+/g, ' ').
 export async function lookAt(page: Page): Promise<KeyView> {
   const seen = await page.evaluate(() => {
     const doc = (globalThis as unknown as { document: { body?: { innerText?: string }; querySelectorAll(s: string): ArrayLike<Record<string, unknown>> } }).document;
-    type El = { matches(s: string): boolean; getClientRects(): { length: number }; children: { length: number }; textContent: string | null; getAttribute(n: string): string | null; value?: string; href?: string; labels?: ArrayLike<{ textContent: string | null }>; type?: string; tagName: string };
+    type El = { closest(s: string): unknown; matches(s: string): boolean; getClientRects(): { length: number }; children: { length: number }; textContent: string | null; getAttribute(n: string): string | null; value?: string; href?: string; labels?: ArrayLike<{ textContent: string | null }>; type?: string; tagName: string };
     const norm = (t: string | null | undefined): string => (t ?? '').replace(/\s+/g, ' ').trim();
     const pressable = 'button, [role=button], a, [role=link], [role=menuitem], input[type=submit], input[type=button], summary';
     const controls: { name: string; leaf: boolean; href?: string }[] = [];
@@ -29,7 +29,7 @@ export async function lookAt(page: Page): Promise<KeyView> {
       const key = `${isPress}|${name}`;
       if (seenNames.has(key)) continue;
       seenNames.add(key);
-      controls.push({ name, leaf: !isPress, ...(n.tagName === 'A' && n.href ? { href: n.href } : {}) });
+      controls.push({ name, leaf: !isPress, ...(n.tagName === 'A' && n.href ? { href: n.href } : {}), ...(n.closest('footer, [role=contentinfo]') ? { footer: true } : {}) });
     }
     const fields: string[] = [];
     let hasPassword = false;
@@ -39,7 +39,14 @@ export async function lookAt(page: Page): Promise<KeyView> {
       const name = norm(n.getAttribute('aria-label')) || norm(n.labels?.[0]?.textContent) || norm(n.getAttribute('placeholder'));
       if (name && !fields.includes(name)) fields.push(name);
     }
-    return { text: (doc.body?.innerText ?? '').slice(0, 6000), controls, fields, hasPassword };
+    // A real captcha shows a challenge frame of a usable size; the invisible badge and tracking frames do not count.
+    let captchaFrame = false;
+    for (const f of Array.from(doc.querySelectorAll('iframe')) as unknown as Array<{ getAttribute(n: string): string | null; getBoundingClientRect(): { width: number; height: number } }>) {
+      const src = f.getAttribute('src') ?? '', box = f.getBoundingClientRect();
+      if (/recaptcha\/api2\/bframe|hcaptcha\.com\/captcha|challenges\.cloudflare\.com|turnstile|funcaptcha|arkoselabs/i.test(src) && box.width >= 280 && box.height >= 70) captchaFrame = true;
+      else if (/recaptcha\/api2\/anchor/i.test(src) && box.width >= 280 && box.height >= 70) captchaFrame = true;
+    }
+    return { text: (doc.body?.innerText ?? '').slice(0, 6000), controls, fields, hasPassword, captchaFrame };
   }).catch(() => ({ text: '', controls: [] as KeyControl[], fields: [] as string[], hasPassword: false }));
   return { url: page.url(), ...seen };
 }
@@ -77,6 +84,14 @@ export async function liveKeygrabPort(options: LiveKeygrabOptions): Promise<Keyg
       const r = await run({ action: 'capture_secret', ...(target ? { target } : {}), secret_name: `${options.id}/key`, vendor: options.id, send_to: [{ to: 'clikdeploy-connection', with: { integration: options.id } }] });
       return { ok: !r.isError, message: clean(r.output) };
     },
+    probe: async url => {
+      try {
+        const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(8_000), headers: { 'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36', accept: 'text/html,application/xhtml+xml' } });
+        const type = res.headers.get('content-type') ?? '';
+        await res.body?.cancel().catch(() => undefined);
+        return { html: /html/i.test(type), status: res.status, url: res.url || url };
+      } catch { return undefined; }
+    },
     screenshot: async () => {
       try { const p = await page(); if (p.isClosed()) return undefined; const path = join(await shots(), `${options.id}.png`); await p.screenshot({ path, timeout: 10_000 }); return path; } catch { return undefined; }
     },
@@ -85,17 +100,17 @@ export async function liveKeygrabPort(options: LiveKeygrabOptions): Promise<Keyg
 }
 
 /** The `keygrab` driver method: runs the policy, then says whether a recipe was recorded for the host. */
-export async function liveKeygrab(options: { stateDir: string; signal?: AbortSignal; screenshotDir?: () => Promise<string> }, id: string, url: string, budget: { maxMs: number }): Promise<DriveOutcome> {
+export async function liveKeygrab(options: { stateDir: string; signal?: AbortSignal; screenshotDir?: () => Promise<string> }, id: string, url: string, budget: { maxMs: number; alternates?: string[] }): Promise<DriveOutcome> {
   const [{ runKeygrab }, { listRecipes }, { closeComputerPage, releaseComputerBrowser }] = await Promise.all([import('./keygrab.js'), import('./signup-recipes.js'), import('./browser.js')]);
   const host = (() => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; } })();
   const stamp = async (): Promise<string> => (await listRecipes(options.stateDir).catch(() => [])).filter(r => host && (r.host === host || host.endsWith(`.${r.host}`) || r.host.endsWith(`.${host}`))).map(r => `${r.host}:${r.loginRoute}:${r.verifiedAt}`).sort().join('|');
   const before = await stamp();
   try {
     const port = await liveKeygrabPort({ ...options, id });
-    const done = await runKeygrab(port, { id, url, maxMs: budget.maxMs });
+    const done = await runKeygrab(port, { id, url, maxMs: budget.maxMs, ...(budget.alternates?.length ? { alternates: budget.alternates } : {}) });
     if (!done.ok) return { ok: false, stop: done.stop };
     const after = await stamp();
-    return { ok: true, note: `${done.note} (${done.steps} browser actions, signed in via ${done.route}; ${after !== before ? `a signup recipe for ${host} was recorded` : 'no new recipe was recorded'})` };
+    return { ok: true, note: `${done.note} (${done.steps} browser actions, signed in via ${done.route}; ${after !== before ? `a signup recipe for ${host} was recorded` : 'no new recipe was recorded'})`, actions: done.steps };
   } finally {
     await closeComputerPage(options.stateDir, TAB).catch(() => undefined);
     await releaseComputerBrowser(options.stateDir).catch(() => undefined);

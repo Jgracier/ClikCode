@@ -4,6 +4,7 @@
  * in the work item's note; a wall only a person clears (captcha, SMS or authenticator code, payment, identity, review) is reported blocked
  * with a full humanStep. It never solves a captcha, spends money, or prints a key, and every vendor has a step and time budget. */
 import { scrubSecrets } from './secret-scrubber.js';
+import { IDENTITY_WALL } from './keygrab.js';
 import { detectBlocker } from './signup-recipes.js';
 
 export type HumanKind = 'captcha' | 'mfa' | 'sms' | 'payment' | 'identity' | 'app-review' | 'app-registration' | 'vendor-contact' | 'decision' | 'retire' | 'worker-setup';
@@ -26,8 +27,9 @@ export interface StopInfo {
   message: string; url: string; pageText: string; controls: string[]; screenshot?: string;
   /** Set when the browser work already knows this is a wall only a person clears (keygrab does). */ human?: HumanStep;
   /** What keygrab did, newest last. */ trail?: string[];
+  /** How many browser actions keygrab took (the trail keeps only the last 30). */ actions?: number;
 }
-export type DriveOutcome = { ok: true; note?: string } | { ok: false; stop: StopInfo };
+export type DriveOutcome = { ok: true; note?: string; actions?: number } | { ok: false; stop: StopInfo };
 
 /** ClikDeploy as the runner sees it. */
 export interface DeployClient {
@@ -46,7 +48,7 @@ export interface BrowserDriver {
   hasRecipe(id: string, url?: string): Promise<boolean>;
   captureKey(id: string, url?: string): Promise<DriveOutcome>;
   /** The generic key-capture policy (keygrab): sign in, find the key page, create and capture a key, record the recipe. */
-  keygrab(id: string, url: string, budget: { maxMs: number }): Promise<DriveOutcome>;
+  keygrab(id: string, url: string, budget: { maxMs: number; /** The task's other addresses (homepage, sign-up, docs): where to start if `url` is no web page. */ alternates?: string[] }): Promise<DriveOutcome>;
 }
 
 export interface RunnerOptions {
@@ -61,7 +63,7 @@ export interface RunnerOptions {
 }
 
 export type VendorStatus = 'published' | 'blocked' | 'human' | 'handoff' | 'budget' | 'waiting' | 'error';
-export interface VendorOutcome { id: string; status: VendorStatus; steps: number; stage: string; summary: string; actions: string[]; humanStep?: HumanStep; handoff?: { file?: string; request: HandoffRequest }; recorded?: string; attention?: { kind: string; owner: string } }
+export interface VendorOutcome { id: string; status: VendorStatus; /** Runner steps (one onboard or browser job each). */ steps: number; /** Browser actions taken inside those steps (opens, clicks, fills, captures); the action trail below lists them. */ browserActions: number; stage: string; summary: string; actions: string[]; humanStep?: HumanStep; handoff?: { file?: string; request: HandoffRequest }; recorded?: string; attention?: { kind: string; owner: string } }
 export interface HandoffRequest {
   id: string; why: string; /** The whole task text. */ task: string; url?: string; pageText?: string; controls?: string[]; screenshot?: string;
   call?: AgentCall; orElse?: AgentCall; attention?: unknown; /** The last 3 evidence lines. */ evidence?: string[];
@@ -74,7 +76,7 @@ export type Plan =
   | { do: 'wait'; ms: number }
   | { do: 'oauth' }
   | { do: 'tool'; call: AgentCall }
-  | { do: 'capture'; url?: string; generic?: boolean }
+  | { do: 'capture'; url?: string; generic?: boolean; alternates?: string[] }
   | { do: 'report'; call: AgentCall }
   | { do: 'specfix'; why: string; call?: AgentCall }
   | { do: 'human'; humanStep: HumanStep }
@@ -84,6 +86,12 @@ export type Plan =
 export const RUNNABLE_TOOLS: ReadonlySet<string> = new Set(['connector_finish', 'connector_test_job_status', 'connector_proof', 'connector_pipeline_status']);
 
 const URL_IN_TEXT = /https:\/\/[^\s"'<>)]+/;
+const URLS_IN_TEXT = /https:\/\/[^\s"'<>)]+/g;
+/** Every other address the task names (homepage, sign-up, docs), for a start page that is no web page. */
+export function otherUrls(task: string): string[] {
+  const first = siteUrl(task);
+  return [...new Set((task.match(URLS_IN_TEXT) ?? []).map(u => u.replace(/[.,;]+$/, '')).filter(u => u !== first))];
+}
 const WALL_STATES = new Set(['needs-human']);
 /** The auth probe ended with the key in the wrong place or on the wrong path: deterministic spec work for the gate/enrich tools. */
 const SPEC_FIX = /\bpath[- ]wrong\b|auth probe[^.\n]{0,80}(?:wrong|ended|mismatch|placement|path)|(?:key|token|credential|auth)[^.\n]{0,30}placement|placement[^.\n]{0,30}(?:wrong|mismatch)/i;
@@ -131,22 +139,22 @@ export function planFor(result: OnboardResult, recipe: boolean): Plan {
   if (wantsKey && recipe) return { do: 'capture', ...(url ? { url } : {}) };
   // No saved recipe fits: the generic policy takes a task that asks for a key and names the site.
   if (wantsKey && /\b(get|capture|create)\b[^\n]{0,40}\b(key|token|secret|credential)|capture_secret/i.test(next.task)) {
-    return url ? { do: 'capture', url, generic: true } : { do: 'handoff', why: 'a key is wanted but the task names no site address' };
+    return url ? { do: 'capture', url, generic: true, alternates: otherUrls(next.task) } : { do: 'handoff', why: 'a key is wanted but the task names no site address' };
   }
   return { do: 'handoff', why: 'the task is not one of the known kinds' };
 }
 
-const IDENTITY = /identity verification|verify your identity|business verification|government[- ]issued|id document|passport/i;
 
 /** A wall only a person clears, from where the browser stopped; undefined when it is just a screen the runner does not know. */
 export function humanStepFor(id: string, stop: StopInfo): HumanStep | undefined {
   const url = cleanUrl(stop.url);
-  const blocker = detectBlocker(stop.pageText);
+  // A keygrab stop already judged its page with the strict wall test; marketing words in the excerpt are not a wall.
+  const blocker = stop.trail ? undefined : detectBlocker(stop.pageText);
   const at = url ? { url } : {};
   if (stop.kind === 'captcha' || blocker === 'a captcha') return { kind: 'captcha', ...at, reasonCode: 'captcha', instructions: `Solve the captcha at ${hostOf(url)} for ${id}, then the runner can carry on.` };
   if (stop.kind === 'mfa' || blocker === 'an SMS or authenticator code') return { kind: 'mfa', ...at, reasonCode: 'verification-code', instructions: `Enter the verification code (SMS or authenticator) at ${hostOf(url)} for ${id}.` };
   if (stop.kind === 'payment' || blocker === 'a payment page') return { kind: 'payment', ...at, reasonCode: 'payment', instructions: `${hostOf(url)} wants a card, credits or a paid plan before ${id} can continue; nothing was paid.` };
-  if (IDENTITY.test(stop.pageText)) return { kind: 'identity', ...at, reasonCode: 'identity-check', instructions: `${hostOf(url)} asks for identity or business verification for ${id}.` };
+  if (IDENTITY_WALL.test(stop.pageText)) return { kind: 'identity', ...at, reasonCode: 'identity-check', instructions: `${hostOf(url)} asks for identity or business verification for ${id}.` };
   if (blocker === 'a review page') return { kind: 'app-review', ...at, reasonCode: 'app-review', instructions: `${hostOf(url)} holds the ${id} app for review; check its status.` };
   if (stop.kind === 'unrecognized-client') return { kind: 'app-registration', ...at, reasonCode: 'oauth-client-unknown', instructions: `${hostOf(url)} does not recognize ClikDeploy's OAuth client for ${id}: register the app there and save its client id and secret.` };
   if (stop.kind === 'password') return { kind: 'worker-setup', ...at, reasonCode: 'sign-in-needed', instructions: `The ClikCode browser is signed out at ${hostOf(url)}: sign in once (Google), then run the connectors again.` };
@@ -172,9 +180,9 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
   const began = now();
   const id = first.id;
   const actions: string[] = [];
-  let result = fix(first), steps = 0;
+  let result = fix(first), steps = 0, browserActions = 0;
   const seen = new Map<string, number>();
-  const out = (status: VendorStatus, summary: string, extra: Partial<VendorOutcome> = {}): VendorOutcome => ({ id, status, steps, stage: result.stage, summary: say(summary), actions, ...extra });
+  const out = (status: VendorStatus, summary: string, extra: Partial<VendorOutcome> = {}): VendorOutcome => ({ id, status, steps, browserActions, stage: result.stage, summary: say(summary), actions, ...extra });
   const handoff = async (why: string, stop?: StopInfo): Promise<VendorOutcome> => {
     const next = result.next;
     const request: HandoffRequest = {
@@ -211,6 +219,7 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
     return out('human', human.instructions ?? human.kind, { humanStep: human, recorded });
   };
   const stopped = (stop: StopInfo): Promise<VendorOutcome> => {
+    browserActions += stop.actions ?? stop.trail?.length ?? 0;
     if (stop.trail?.length) actions.push(`keygrab did: ${stop.trail.join(' > ')}`);
     const human = stop.human ?? humanStepFor(id, stop);
     return human ? wall(human, false) : handoff(`${stop.kind === 'unknown' ? 'an unrecognized screen' : stop.kind}: ${stop.message}`, stop);
@@ -247,9 +256,9 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
           break;
         }
         case 'capture': {
-          const generic = async (url: string): Promise<DriveOutcome> => {
+          const generic = async (url: string, alternates = plan.alternates): Promise<DriveOutcome> => {
             actions.push('no saved recipe fits: keygrab signs in, finds the key page, creates and captures a key');
-            return gate(() => driver.keygrab(id, url, { maxMs: Math.max(30_000, maxMs - (now() - began)) }));
+            return gate(() => driver.keygrab(id, url, { maxMs: Math.max(30_000, maxMs - (now() - began)), ...(alternates?.length ? { alternates } : {}) }));
           };
           let done: DriveOutcome;
           if (plan.generic && plan.url) done = await generic(plan.url);
@@ -260,6 +269,7 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
             if (!done.ok && plan.url && !done.stop.human && !humanStepFor(id, done.stop)) done = await generic(plan.url);
           }
           if (!done.ok) return await stopped(done.stop);
+          browserActions += done.actions ?? 0;
           actions.push(done.note ?? 'key captured unseen and sent to ClikDeploy');
           result = fix(await client.onboard(id));
           break;
@@ -339,7 +349,7 @@ export async function runConnectors(client: DeployClient, driver: BrowserDriver,
   const queue = [...batch.results];
   const worker = async (): Promise<void> => {
     for (let r = queue.shift(); r; r = queue.shift()) {
-      const outcome = await runVendor(r, client, driver, options, gate).catch((error: unknown): VendorOutcome => ({ id: r!.id, status: 'error', steps: 0, stage: r!.stage, summary: cap(say(error instanceof Error ? error.message : String(error)), 200), actions: [] }));
+      const outcome = await runVendor(r, client, driver, options, gate).catch((error: unknown): VendorOutcome => ({ id: r!.id, status: 'error', steps: 0, browserActions: 0, stage: r!.stage, summary: cap(say(error instanceof Error ? error.message : String(error)), 200), actions: [] }));
       options.log?.(`${outcome.id}: ${outcome.status}${outcome.summary ? ` - ${outcome.summary}` : ''}`);
       outcomes.push(outcome);
     }

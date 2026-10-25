@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { keygrabWall, runKeygrab, type KeyView, type KeygrabPort } from './keygrab.js';
+import { bannerButton, chooserOptions, keygrabWall, runKeygrab, startCandidates, type KeyView, type KeygrabPort } from './keygrab.js';
 
-interface Page { text: string; controls?: string[]; fields?: string[]; password?: boolean; on?: Record<string, string>; key?: boolean }
+type Ctl = string | { name: string; leaf?: boolean; href?: string; footer?: boolean };
+interface Page { text: string; captchaFrame?: boolean; controls?: Ctl[]; fields?: string[]; password?: boolean; on?: Record<string, string>; key?: boolean }
 
 /** A scripted site: pages by address, a click moves to the page its name maps to, anything unlisted is a 404. */
-function fakeSite(pages: Record<string, Page>, start = 'https://vendor.example/', extra: { login?: { ok: boolean; to?: string }; code?: string; email?: string } = {}) {
+function fakeSite(pages: Record<string, Page>, start = 'https://vendor.example/', extra: { login?: { ok: boolean; to?: string }; code?: string; email?: string; html?: Record<string, string> } = {}) {
   let at = start;
   const log: string[] = [];
   const captures: Array<string | undefined> = [];
@@ -12,7 +13,7 @@ function fakeSite(pages: Record<string, Page>, start = 'https://vendor.example/'
   const pageOf = (url: string): Page => pages[url] ?? { text: '404 page not found' };
   const port: KeygrabPort = {
     open: async url => { log.push(`open ${url}`); at = url; return undefined; },
-    look: async (): Promise<KeyView> => { const p = pageOf(at); return { url: at, text: p.text, controls: (p.controls ?? []).map(name => ({ name })), fields: p.fields ?? [], hasPassword: p.password === true }; },
+    look: async (): Promise<KeyView> => { const p = pageOf(at); return { url: at, text: p.text, controls: (p.controls ?? []).map(c => typeof c === 'string' ? { name: c } : c), fields: p.fields ?? [], hasPassword: p.password === true, ...(p.captchaFrame ? { captchaFrame: true } : {}) }; },
     click: async name => {
       log.push(`click ${name}`);
       const to = pageOf(at).on?.[name];
@@ -25,6 +26,7 @@ function fakeSite(pages: Record<string, Page>, start = 'https://vendor.example/'
     emailCode: async () => { log.push('emailCode'); return extra.code; },
     emailLink: async () => { log.push('emailLink'); return false; },
     capture: async target => { captures.push(target); log.push(`capture ${target ?? '(page)'}`); return pageOf(at).key ? { ok: true, message: 'SAVED' } : { ok: false, message: 'Not saved: no key was found' }; },
+    ...(extra.html ? { probe: async (url: string) => { log.push(`probe ${url}`); const final = extra.html![url]; return final ? { html: true, status: 200, url: final } : { html: false, status: 404, url }; } } : {}),
     screenshot: async () => '/tmp/shots/vendor.png',
     profileEmail: async () => extra.email ?? 'user@example.com',
   };
@@ -297,5 +299,156 @@ describe('keygrab on a page it does not know', () => {
     });
     const done = await run(site);
     expect(done.ok === false && done.stop.message).toMatch(/may have been created/);
+  });
+});
+
+const keyFlow: Record<string, Page> = { 'https://vendor.example/keys': keysPage, 'https://vendor.example/keys/new': newKey, 'https://vendor.example/keys/made': madeKey };
+
+describe('keygrab cookie banners', () => {
+  it('prefers the least permissive button', () => {
+    expect(bannerButton({ text: 'We use cookies', controls: [{ name: 'Accept all' }, { name: 'Reject all' }, { name: 'Settings' }] })?.name).toBe('Reject all');
+    expect(bannerButton({ text: 'We use cookies', controls: [{ name: 'Accept all' }, { name: 'Necessary only' }] })?.name).toBe('Necessary only');
+    expect(bannerButton({ text: 'Cookie consent', controls: [{ name: 'Allow all' }, { name: 'Got it' }] })?.name).toBe('Allow all');
+    expect(bannerButton({ text: 'Privacy policy updated', controls: [{ name: 'OK' }] })).toBeUndefined();
+    expect(bannerButton({ text: 'Welcome', controls: [{ name: 'Accept all' }] })).toBeUndefined();
+    expect(bannerButton({ text: 'We use cookies', controls: [{ name: 'Accept', leaf: true }] })).toBeUndefined();
+  });
+
+  it('dismisses a consent banner before looking for sign-in', async () => {
+    const site = fakeSite({
+      'https://vendor.example/': { text: 'We value your privacy. We use cookies. Welcome', controls: ['Accept all', 'Settings', 'Continue with Google'], on: { 'Accept all': 'https://vendor.example/home', 'Continue with Google': 'https://accounts.google.com/chooser' } },
+      'https://vendor.example/home': { text: 'Welcome', controls: ['Continue with Google', 'Docs'], on: { 'Continue with Google': 'https://accounts.google.com/chooser' } },
+      'https://accounts.google.com/chooser': { text: 'Choose an account', controls: ['user@example.com'], on: { 'user@example.com': 'https://vendor.example/keys' } },
+      ...keyFlow,
+    });
+    expect(await run(site)).toMatchObject({ ok: true, route: 'google' });
+    expect(site.log.indexOf('click Accept all')).toBeGreaterThan(-1);
+    expect(site.log.indexOf('click Accept all')).toBeLessThan(site.log.indexOf('click Continue with Google'));
+  });
+});
+
+describe('keygrab product chooser (Musixmatch)', () => {
+  const chooser = "Discover Contribute Search Are you an artist? Make the most of your lyrics with Musixmatch Pro! Let's getin Choose the product and sign in. Community Contribute on your favourite songs Pro Distribute the lyrics of your verified artists Platform Musixmatch Pro Catalog Intelligence Royalties Sentinel";
+  const controls: Ctl[] = ['Discover', 'Contribute', 'Search', { name: 'Community Contribute on your favourite songs', leaf: true }, { name: 'Pro Distribute the lyrics of your verified artists', leaf: true }, { name: 'Platform Musixmatch Pro Catalog Intelligence Royalties Sentinel', leaf: true }, 'API', 'Documentation', 'Pricing'];
+  it('finds the options and picks the community one', () => {
+    const found = chooserOptions({ text: chooser, controls: controls.map(c => typeof c === 'string' ? { name: c } : c) });
+    expect(found?.options.length).toBeGreaterThanOrEqual(3);
+    expect(found?.pick?.name).toMatch(/^Community/);
+  });
+  it('signs in from the chooser through the community option, then Google', async () => {
+    const site = fakeSite({
+      'https://vendor.example/': { text: 'Music lyrics. We use cookies.', controls: ['Accept all', 'Login', 'API'], on: { 'Accept all': 'https://vendor.example/', Login: 'https://vendor.example/sign-in' } },
+      'https://vendor.example/sign-in': { text: chooser, controls, on: { 'Community Contribute on your favourite songs': 'https://vendor.example/sign-in/community' } },
+      'https://vendor.example/sign-in/community': { text: 'Sign in', controls: ['Continue with Google'], on: { 'Continue with Google': 'https://accounts.google.com/chooser' } },
+      'https://accounts.google.com/chooser': { text: 'Choose an account', controls: ['user@example.com'], on: { 'user@example.com': 'https://vendor.example/keys' } },
+      ...keyFlow,
+    });
+    expect(await run(site)).toMatchObject({ ok: true, route: 'google' });
+    expect(site.log).toContain('click Community Contribute on your favourite songs');
+  });
+  it('hands off with the options when none is the API one', async () => {
+    const site = fakeSite({
+      'https://vendor.example/': { text: 'Choose the product and sign in. Alpha thing Beta thing', controls: ['Login', { name: 'Alpha thing', leaf: true }, { name: 'Beta thing', leaf: true }], on: { Login: 'https://vendor.example/' } },
+    });
+    const done = await run(site);
+    expect(done.ok).toBe(false);
+    if (!done.ok) { expect(done.stop.kind).toBe('choice'); expect(done.stop.message).toContain('Alpha thing'); }
+  });
+});
+
+describe('keygrab walls need strong evidence', () => {
+  const aiception = "AIception Artificial Intelligence for Humankind LET'S TALK PROTOTYPE YOURSELF About Lessons learned: 1. KYC Remediation is challenging. 2. OCR is not a silver bullet. Discover how AI can streamline document verification, reduce customs delays, and improve compliance";
+  const shipstation = 'ShipStation Talk to an Expert Your business is growing. We keep it moving. Start Shipping Now No credit card required Cancel anytime Pricing Plans Starter Growth Pro';
+  const wordApi = 'Word Associations API Pricing Basic $10 Pro $50 Frequently Asked Questions Is my payment information secure? All payments are processed by PayPal. Our web site has no access to credit cards data. When will I be billed? PayPal will charge your credit card upon subscription to our API plan.';
+  it.each([['aiception', aiception], ['shipengine (shipstation)', shipstation], ['wordassociations', wordApi], ['a tier table', 'Free $0 Starter $19 Business $99 Enterprise Contact us LET\'S TALK']])('%s is not a wall', (_name, text) => {
+    expect(keygrabWall(text)).toBeUndefined();
+  });
+  it('still stops on a card form, identity verification, a real challenge and a captcha frame', () => {
+    expect(keygrabWall('Add a card to continue. Card number Expiry date CVC')?.kind).toBe('payment');
+    expect(keygrabWall('Payment', false, false, { fields: ['Card number'] })?.kind).toBe('payment');
+    expect(keygrabWall('Please verify your identity: upload a photo of your passport')?.kind).toBe('identity');
+    expect(keygrabWall('Business verification is required before you can create keys')?.kind).toBe('identity');
+    expect(keygrabWall('Please verify you are human to continue')?.kind).toBe('captcha');
+    expect(keygrabWall('Sign in', false, false, { captchaFrame: true })?.kind).toBe('captcha');
+  });
+  it('does not call "protected by reCAPTCHA" a captcha', () => {
+    expect(keygrabWall('Sign in. This site is protected by reCAPTCHA and the Google Privacy Policy apply.')).toBeUndefined();
+  });
+  it('continues from a pricing landing page to sign-up and the key', async () => {
+    const site = fakeSite({
+      'https://vendor.example/': { text: wordApi, controls: ['Pricing', 'Sign up'], on: { 'Sign up': 'https://vendor.example/signup' } },
+      'https://vendor.example/signup': { text: 'Create your account', controls: ['Continue with Google'], on: { 'Continue with Google': 'https://accounts.google.com/chooser' } },
+      'https://accounts.google.com/chooser': { text: 'Choose an account', controls: ['user@example.com'], on: { 'user@example.com': 'https://vendor.example/keys' } },
+      ...keyFlow,
+    });
+    expect(await run(site)).toMatchObject({ ok: true });
+  });
+});
+
+describe('keygrab sign-in targets', () => {
+  it('ignores a footer or social GitHub link and uses the header sign-in', async () => {
+    const site = fakeSite({
+      'https://vendor.example/': { text: 'Scanner', controls: [{ name: 'Log in' }, { name: 'github', href: 'https://github.com/vendor', footer: true }, { name: 'Google', href: 'https://google.com/search', footer: true }], on: { 'Log in': 'https://vendor.example/login', github: 'https://github.com/vendor' } },
+      'https://vendor.example/login': { text: 'Sign in', controls: ['Sign in with Google'], on: { 'Sign in with Google': 'https://accounts.google.com/chooser' } },
+      'https://accounts.google.com/chooser': { text: 'Choose an account', controls: ['user@example.com'], on: { 'user@example.com': 'https://vendor.example/keys' } },
+      ...keyFlow,
+    });
+    expect(await run(site)).toMatchObject({ ok: true, route: 'google' });
+    expect(site.log).not.toContain('click github');
+  });
+  it('tries the next candidate when a click goes nowhere', async () => {
+    const site = fakeSite({
+      'https://vendor.example/': { text: 'Sign in', controls: ['Sign in with Google', 'Continue with GitHub'], on: { 'Sign in with Google': 'https://vendor.example/', 'Continue with GitHub': 'https://github.com/login/oauth/authorize' } },
+      'https://github.com/login/oauth/authorize': { text: 'Authorize app', controls: ['Authorize acme-app'], on: { 'Authorize acme-app': 'https://vendor.example/keys' } },
+      ...keyFlow,
+    });
+    expect(await run(site)).toMatchObject({ ok: true, route: 'github' });
+    expect(site.log.indexOf('click Sign in with Google')).toBeLessThan(site.log.indexOf('click Continue with GitHub'));
+  });
+  it('ranks "Continue with Google" above a bare provider name', async () => {
+    const site = fakeSite({
+      'https://vendor.example/': { text: 'Sign in', controls: ['Google', 'Continue with Google'], on: { Google: 'https://vendor.example/', 'Continue with Google': 'https://accounts.google.com/chooser' } },
+      'https://accounts.google.com/chooser': { text: 'Choose an account', controls: ['user@example.com'], on: { 'user@example.com': 'https://vendor.example/keys' } },
+      ...keyFlow,
+    });
+    await run(site);
+    expect(site.log.filter(l => l.startsWith('click'))[0]).toBe('click Continue with Google');
+  });
+});
+
+describe('keygrab start page', () => {
+  it('builds candidates from the vendor domain', () => {
+    const c = startCandidates('https://tracking.api.here.com', ['https://developer.here.com/']);
+    expect(c.slice(0, 2)).toEqual(['https://tracking.api.here.com', 'https://developer.here.com/']);
+    expect(c).toEqual(expect.arrayContaining(['https://api.here.com/', 'https://here.com/', 'https://developers.here.com/', 'https://here.com/signup', 'https://here.com/login', 'https://here.com/account', 'https://here.com/developers']));
+  });
+  it('skips an API host that answers JSON and starts at a real page, following redirects', async () => {
+    const site = fakeSite({
+      'https://developer.here.com/': { text: 'Developer', controls: ['Sign in with Google'], on: { 'Sign in with Google': 'https://accounts.google.com/chooser' } },
+      'https://accounts.google.com/chooser': { text: 'Choose an account', controls: ['user@example.com'], on: { 'user@example.com': 'https://developer.here.com/keys' } },
+      'https://developer.here.com/keys': keysPage, 'https://vendor.example/keys/new': newKey, 'https://vendor.example/keys/made': madeKey,
+    }, 'https://tracking.api.here.com/', { html: { 'https://developer.here.com/': 'https://developer.here.com/' } });
+    const done = await run(site, { url: 'https://tracking.api.here.com/' });
+    expect(done.ok).toBe(true);
+    expect(site.log).toContain('open https://developer.here.com/');
+    expect(site.log).not.toContain('open https://tracking.api.here.com/');
+  });
+  it('opens the final address after a redirect to the real app domain', async () => {
+    const site = fakeSite({
+      'https://www.shipstation.com/': { text: 'ShipStation No credit card required', controls: ['Sign in with Google'], on: { 'Sign in with Google': 'https://accounts.google.com/chooser' } },
+      'https://accounts.google.com/chooser': { text: 'Choose an account', controls: ['user@example.com'], on: { 'user@example.com': 'https://www.shipstation.com/keys' } },
+      'https://www.shipstation.com/keys': keysPage, 'https://vendor.example/keys/new': newKey, 'https://vendor.example/keys/made': madeKey,
+    }, 'https://shipengine.com/', { html: { 'https://shipengine.com/': 'https://www.shipstation.com/' } });
+    await run(site, { url: 'https://shipengine.com/' });
+    expect(site.log).toContain('open https://www.shipstation.com/');
+  });
+});
+
+describe('keygrab action count', () => {
+  it('reports how many browser actions it took when it stops', async () => {
+    const site = fakeSite({ 'https://vendor.example/': { text: 'Hello there, this is a plain page with nothing to press.', controls: ['Home'] } });
+    const done = await run(site);
+    expect(done.ok).toBe(false);
+    if (!done.ok) expect(done.stop.actions).toBe(done.steps);
   });
 });
