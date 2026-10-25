@@ -1,5 +1,5 @@
 /** The real ports of the connector runner: ClikDeploy through its CLI (the saved admin key is its own sign-in), the ClikCode browser
- * through the consent driver and the saved signup recipes. Nothing here prints or logs a key. */
+ * through the consent driver and the saved signup recipes. Nothing here prints or logs a key. The arguments (ids, plain-words reasons and notes) hold no secret, so they go on the command line: clikdeploy 1.0.34 cannot read them from stdin. */
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -37,7 +37,7 @@ function findResults(value: unknown): { results: OnboardResult[]; skipped: Array
 
 export function liveClient(signal?: AbortSignal): DeployClient {
   const call = async (name: string, args: Record<string, unknown>, timeoutMs = 90_000): Promise<unknown> => {
-    const run = await runCli('clikdeploy', ['tools', 'run', name, '--args-json', '-', '--confirm'], { stdin: JSON.stringify(args), ...(signal ? { signal } : {}), timeoutMs });
+    const run = await runCli('clikdeploy', ['tools', 'run', name, '--args-json', JSON.stringify(args), '--confirm'], { ...(signal ? { signal } : {}), timeoutMs });
     if (run.missing) throw new Error('The clikdeploy command is not installed on this computer.');
     return unwrapTool(run.text);
   };
