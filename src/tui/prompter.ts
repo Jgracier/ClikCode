@@ -57,6 +57,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   closed = false;
   history: string[] = [];
   currentSession?: HarnessSession;
+  /** History borrows provider controls, but owns no conversation's live work. */
+  surface: 'conversation' | 'history' = 'conversation';
   /** The composer as the last paint drew it, for repaint() to draw again. */
   composer: ComposerFrame = EMPTY_COMPOSER;
   /** The turn (or other wait) in flight: see WaitingTurn. */
@@ -431,10 +433,19 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       if (this.mentionFocus?.sessionId !== session.id) this.mentionFocus = undefined;
       this.activityEntries = [];
       this.childEntries = [];
+      this.liveChildren.reset();
+      this.activeTools.clear();
+      this.callGrouping.reset();
+      this.liveActivitiesShown = -1;
+      this.drawnMarks.clear();
+      this.turnSteers.clear();
+      this.thought = undefined;
+      this.thoughtStart = undefined;
       this.backgroundWork = undefined;
       this.backgroundTerminals = 0;
       this.planEntries = [];
       this.planStart = undefined;
+      this.planHold = 0;
       this.panelState = undefined;
       this.groupExpansion.clear();
       // The conversation opened is the only one in the transcript.

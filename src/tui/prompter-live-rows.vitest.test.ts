@@ -1,5 +1,6 @@
 /** Rows of the running turn that are not a tool call: a note, a decision. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { stdin } from 'node:process';
 import { TerminalHarnessPrompter } from './prompter.js';
 
 const strip = (text: string): string => text.replace(/\u001b\[[0-9;]*m/g, '');
@@ -99,6 +100,43 @@ describe('the background terminals indicator (standard section 10)', () => {
       rl.setBackgroundWork(undefined);
       vi.advanceTimersByTime(300);
       expect(rl.backgroundWork).toBeUndefined();
+    } finally { rl.close(); }
+  });
+
+  it('history owns its frame even while the previous chat still has background work', async () => {
+    const { rl, since } = window();
+    try {
+      rl.activityEvent({ kind: 'tool-start', label: '$ old-child-command', id: 'child', parentId: 'a' });
+      expect(rl.liveChildren.latest('a')).toBe('$ old-child-command');
+      rl.setBackgroundWork({ agents: 1, agentTasks: [{ id: 'a', label: 'previous-chat-agent' }] });
+      rl.leaveTurn();
+      since();
+      const board = rl.board({ conversations: () => [{ value: 's', label: 'History conversation' }], commands: [] });
+      expect(rl.surface).toBe('history');
+      // Work can change while a list is open. It belongs to the chat, including
+      // on a resize, rather than becoming a band on the history screen.
+      rl.setBackgroundWork({ agents: 1, agentTasks: [{ id: 'a', label: 'updated-chat-agent' }] });
+      rl.setPlan([{ content: 'previous-chat-checklist', status: 'in_progress' }]);
+      rl.requestRedraw('repair');
+      rl.repaint();
+      vi.advanceTimersByTime(300);
+      const history = since();
+      expect(history).toContain('History conversation');
+      expect(history).not.toContain('previous-chat-agent');
+      expect(history).not.toContain('updated-chat-agent');
+      expect(history).not.toContain('previous-chat-checklist');
+      stdin.emit('data', '\u001b[D');
+      await board;
+      expect(rl.surface).toBe('conversation');
+      rl.requestRedraw('repair');
+      rl.repaint();
+      vi.advanceTimersByTime(300);
+      expect(since()).toContain('updated-chat-agent');
+      rl.render({ ...rl.currentSession!, id: 'other-chat' }, undefined, { running: false });
+      expect(rl.backgroundWork).toBeUndefined();
+      expect(rl.planEntries).toEqual([]);
+      expect(rl.planHold).toBe(0);
+      expect(rl.liveChildren.latest('a')).toBeUndefined();
     } finally { rl.close(); }
   });
 

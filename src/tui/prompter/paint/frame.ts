@@ -46,12 +46,16 @@ export function paint(this: TerminalHarnessPrompter, composer: string, options: 
   // touch inner itself, so the notice/composer/meta lines below (which
   // share it) are unaffected.
   const conversationInner = rowWidth - 2;
-  const { pending, pendingPrompt, persistedMessages, hasTransientAssistant } = frameMessages(this, session);
+  const { pending, pendingPrompt, persistedMessages, hasTransientAssistant } = this.surface === 'history'
+    ? { pending: undefined, pendingPrompt: undefined, persistedMessages: [], hasTransientAssistant: false }
+    : frameMessages(this, session);
   const bands = frameBands(this, { composer, options, prompt, cursor, palette, width, inner });
   const { targetHeight, composerRows } = bands;
-  const written = writeTranscript(this, {
-    session, pending, persistedMessages, hasTransientAssistant, conversationInner,
-  });
+  const written = this.surface === 'history'
+    ? { finished: [] as string[], liveConversation: [] as string[], userRows: () => [] as string[], materializedPendingTurn: false }
+    : writeTranscript(this, {
+      session, pending, persistedMessages, hasTransientAssistant, conversationInner,
+    });
   const { liveConversation, userRows, materializedPendingTurn } = written;
   // Which rows belong to a group, taken off the text here (render/row-tags.ts):
   // the transcript, the selection and the clipboard only ever see clean rows.
@@ -77,10 +81,12 @@ export function paint(this: TerminalHarnessPrompter, composer: string, options: 
   if (this.lineTags.size > 4000) for (const line of this.lineTags.keys()) if (line < this.alternateTrimmed) this.lineTags.delete(line);
   // Decided from the rows this frame built: a steer leaves the bottom only
   // once its own row is in the answer.
-  const { queuedMessages, enterAt, escAt } = queuedMessagesOf(this, session, pending, {
-    steers: [...this.turnSteers.values()], ...(pendingPrompt ? { prompt: pendingPrompt } : {}), materialized: materializedPendingTurn,
-  });
-  liveConversation.push(...queuedMessageRows(queuedMessages, enterAt, escAt, inner, userRows));
+  if (this.surface === 'conversation') {
+    const { queuedMessages, enterAt, escAt } = queuedMessagesOf(this, session, pending, {
+      steers: [...this.turnSteers.values()], ...(pendingPrompt ? { prompt: pendingPrompt } : {}), materialized: materializedPendingTurn,
+    });
+    liveConversation.push(...queuedMessageRows(queuedMessages, enterAt, escAt, inner, userRows));
+  }
   const conversationLines = liveConversationLines(liveConversation, true);
   const { footer, composerStart, pickerRows } = buildFooter.call(this, { inner, rowWidth, width, prompt, options, selected, palette, session, targetHeight, bands });
   // The list covers chat rows just above the footer. The footer (usage, composer, title, provider)
