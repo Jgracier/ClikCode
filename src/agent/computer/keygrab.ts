@@ -318,6 +318,8 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
   /** Sign in to the vendor from whatever sign-in or sign-up screen is showing. */
   const authenticate = async (): Promise<void> => {
     authTries++;
+    const pressed = new Set<string>(); // each entry once: "Get started" that only validates an email box is followed by "Log in"
+    const fresh = (re: RegExp, page: KeyView): KeyControl | undefined => page.controls.find(c => pressable(c) && !c.footer && !pressed.has(c.name) && re.test(c.name.replace(/\s*last used\s*$/i, '').trim()));
     for (let attempt = 0; attempt < 4; attempt++) {
       const v = await look();
       if (await choose(v)) continue;
@@ -337,9 +339,10 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
       }
       if (v.hasPassword) { await emailRoute(v); return; }
       // A log-in or sign-up entry comes before an email box: a lone email box on a front page is a newsletter, not a sign-in form.
-      const entry = entryOf(v, SIGN_UP_ENTRY) ?? entryOf(v, SIGN_IN_ENTRY) ?? entryOf(v, SIGN_IN_LOOSE);
+      const entry = fresh(SIGN_UP_ENTRY, v) ?? fresh(SIGN_IN_ENTRY, v) ?? fresh(SIGN_IN_LOOSE, v);
       if (!entry && v.fields.some(f => /e-?mail/i.test(f))) { await emailRoute(v); return; }
       if (!entry) break;
+      pressed.add(entry.name);
       await click(entry.name);
       await sleep(600);
     }
