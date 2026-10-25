@@ -7,6 +7,8 @@
  */
 import { createHash, randomBytes } from 'node:crypto';
 import http from 'node:http';
+import { claimMessage, isClaimed } from './email-consumed.js';
+import { vendorOf } from './parking.js';
 import { readNamedSecret, saveNamedSecret, deleteNamedSecret, CredentialError } from './credential-vault.js';
 
 export const EMAIL_TOKEN_SECRET = 'email/gmail';
@@ -118,7 +120,7 @@ async function accessToken(stateDir: string, endpoints: GoogleEndpoints): Promis
   return body.access_token;
 }
 
-export interface FoundEmail { from: string; subject: string; text: string; links: string[]; receivedAt: number }
+export interface FoundEmail { id: string; from: string; subject: string; text: string; links: string[]; receivedAt: number }
 type Part = { mimeType?: string; body?: { data?: string }; parts?: Part[] };
 const decode = (data?: string): string => (data ? Buffer.from(data, 'base64url').toString('utf8') : '');
 function collect(part: Part | undefined, kind: string, out: string[] = []): string[] {
@@ -134,12 +136,31 @@ function hrefs(html: string): string[] {
   return [...html.matchAll(/href\s*=\s*["']([^"']+)["']/gi)].map(m => m[1]!.replace(/&amp;/g, '&')).filter(href => /^https:/.test(href));
 }
 
+export class EmailAmbiguous extends Error {}
+
+/** Does this email belong to `site`? Sender domain or display name, else the subject, else the start of the body. Returns the strongest tier (0 = no). */
+export function senderMatch(mail: Pick<FoundEmail, 'from' | 'subject' | 'text'>, site: string): { tier: 0 | 1 | 2 | 3; domain: string } {
+  const name = vendorOf(site);
+  const forms = [...new Set([name, name.replace(/-/g, ''), name.replace(/-/g, ' ')])].filter(form => form.length >= 3 && form !== 'unknown');
+  const from = mail.from.toLowerCase();
+  const domain = /@([^>\s]+)/.exec(from)?.[1] ?? '';
+  const display = from.replace(/<.*$/, '');
+  const flat = (text: string): string => text.toLowerCase().replace(/[^a-z0-9]+/g, ' ');
+  const inDomain = forms.some(form => domain.replace(/[^a-z0-9]/g, '').includes(form.replace(/[^a-z0-9]/g, '')));
+  if (inDomain || forms.some(form => flat(display).includes(flat(form)))) return { tier: 1, domain };
+  if (forms.some(form => flat(mail.subject).includes(flat(form)))) return { tier: 2, domain };
+  if (forms.some(form => flat(mail.text.slice(0, 400)).includes(flat(form)))) return { tier: 3, domain };
+  return { tier: 0, domain };
+}
+
 /**
- * Waits for the newest email matching the sender or subject that arrived after `since` (default: the last 15 minutes),
- * and returns its text and links. Polls the API; returns as soon as one is there.
+ * Waits for the newest email that matches, arrived after `since` (default: the last 15 minutes), and returns its text and
+ * links. A match is `from` / `subject`, and for `site` the sender must belong to it (domain or name, then subject, then body).
+ * `accept` says whether a message is the wanted one (it has a code); with `consume` the message is then taken for this waiter
+ * alone, so a second agent never receives it. Two different senders that both fit are not guessed between: EmailAmbiguous.
  */
-export async function waitForEmail(stateDir: string, query: { from?: string; subject?: string; since?: number; timeoutMs?: number; pollMs?: number; endpoints?: GoogleEndpoints; signal?: AbortSignal }): Promise<FoundEmail> {
-  if (!query.from && !query.subject) throw new Error('Name the sender (from) or words from the subject.');
+export async function waitForEmail(stateDir: string, query: { from?: string; subject?: string; site?: string; since?: number; timeoutMs?: number; pollMs?: number; spam?: boolean; consume?: boolean; accept?: (mail: FoundEmail) => boolean; endpoints?: GoogleEndpoints; signal?: AbortSignal }): Promise<FoundEmail> {
+  if (!query.from && !query.subject && !query.site) throw new Error('Name the sender (from), words from the subject, or the site the email is for.');
   const endpoints = query.endpoints ?? GOOGLE;
   const since = query.since ?? Date.now() - 15 * 60_000;
   const q = [query.from ? `from:(${query.from})` : '', query.subject ? `subject:(${query.subject})` : '', `after:${Math.floor(since / 1000) - 1}`].filter(Boolean).join(' ');
@@ -148,22 +169,34 @@ export async function waitForEmail(stateDir: string, query: { from?: string; sub
     query.signal?.throwIfAborted();
     const token = await accessToken(stateDir, endpoints);
     const headers = { authorization: `Bearer ${token}` };
-    const list = await fetch(`${endpoints.gmail}/messages?${new URLSearchParams({ q, maxResults: '5' })}`, { headers, signal: AbortSignal.timeout(20_000) });
+    const list = await fetch(`${endpoints.gmail}/messages?${new URLSearchParams({ q, maxResults: query.site ? '20' : '5', ...(query.spam ? { includeSpamTrash: 'true' } : {}) })}`, { headers, signal: AbortSignal.timeout(20_000) });
     if (!list.ok) throw new Error(`Gmail would not list messages (HTTP ${list.status}).`);
     const ids = ((await list.json()) as { messages?: { id: string }[] }).messages ?? [];
-    const found: FoundEmail[] = [];
+    let found: FoundEmail[] = [];
     for (const { id } of ids) {
+      if (query.consume && await isClaimed(stateDir, id)) continue;
       const res = await fetch(`${endpoints.gmail}/messages/${id}?format=full`, { headers, signal: AbortSignal.timeout(20_000) });
       if (!res.ok) continue;
       const message = await res.json() as { internalDate?: string; payload?: Part & { headers?: { name: string; value: string }[] } };
       const header = (name: string): string => message.payload?.headers?.find(h => h.name.toLowerCase() === name)?.value ?? '';
       const html = collect(message.payload, 'text/html').join('\n');
       const plain = collect(message.payload, 'text/plain').join('\n');
-      found.push({ from: header('from'), subject: header('subject'), text: plain.trim() || htmlToText(html), links: hrefs(html || plain), receivedAt: Number(message.internalDate ?? 0) });
+      found.push({ id, from: header('from'), subject: header('subject'), text: plain.trim() || htmlToText(html), links: hrefs(html || plain), receivedAt: Number(message.internalDate ?? 0) });
     }
-    const newest = found.filter(e => e.receivedAt >= since).sort((a, b) => b.receivedAt - a.receivedAt)[0];
-    if (newest) return newest;
-    if (Date.now() >= deadline) throw new Error(`No email matched ${q} within ${Math.round((query.timeoutMs ?? 90_000) / 1000)} seconds.`);
+    found = found.filter(mail => mail.receivedAt >= since && (!query.accept || query.accept(mail)));
+    if (query.site) {
+      const scored = found.map(mail => ({ mail, ...senderMatch(mail, query.site!) })).filter(item => item.tier > 0);
+      const best = Math.min(...scored.map(item => item.tier), 9);
+      found = scored.filter(item => item.tier === best).map(item => item.mail);
+      // Two different senders both fit this site: that is another agent's mail or a lookalike, and a guess here types a wrong code.
+      const senders = new Set(found.map(mail => /@([^>\s]+)/.exec(mail.from.toLowerCase())?.[1] ?? mail.from));
+      if (senders.size > 1) throw new EmailAmbiguous(`Emails from ${[...senders].slice(0, 3).join(' and ')} both fit ${vendorOf(query.site)}; not choosing between them.`);
+    }
+    // Newest first: a resend from the same sender replaces the older code.
+    for (const mail of found.sort((a, b) => b.receivedAt - a.receivedAt)) {
+      if (!query.consume || await claimMessage(stateDir, mail.id)) return mail;
+    }
+    if (Date.now() >= deadline) throw new Error(`No email matched ${query.site ? `an email for ${vendorOf(query.site)}` : q} within ${Math.round((query.timeoutMs ?? 90_000) / 1000)} seconds.`);
     await new Promise(resolve => setTimeout(resolve, query.pollMs ?? 3_000));
   }
 }

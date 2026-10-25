@@ -307,3 +307,15 @@ Durable notes go under `~/.clikcode`, never `/tmp` (a cleanup or reboot loses `/
 From then on `read_email_code` and `open_email_link` read the mail through the Gmail API and **wait for it to arrive** (`seconds`, default 90), instead of looking once in a browser inbox. They return only the code or open the link; the token is read inside the worker and never appears in a result. With no mailbox connected they use the browser inbox as before.
 
 The consent needs a Google OAuth **Desktop** client: save it as the secrets `email/google-client-id` and `email/google-client-secret` (capture_secret from the console's Copy buttons; or one JSON secret `email/google-client`) or set `CLIKCODE_GOOGLE_CLIENT_ID` / `CLIKCODE_GOOGLE_CLIENT_SECRET`. An app left in Google's *testing* mode has its refresh token expire after 7 days (a later call then says to reconnect); the ClikDeploy project is in production, so it does not, and consent shows Google's "unverified app" notice, which `email connect` presses through (100 consents allowed before verification).
+
+### Emailed codes and links fill themselves
+
+With a mailbox connected, a one-time-code box that `login` or `fill` (no text) meets is filled from the email, with no agent call. The right email is found by checks, not by guessing:
+
+1. The sender must belong to the page's site (sender domain or name, then the subject, then the start of the body).
+2. It must have arrived after the page asked, and read like a verification message (a newsletter holding a number is refused).
+3. Each email is taken once: the ids already handed out are kept in `computer/email-consumed.json`, so two agents never get the same message.
+4. Two different senders that both fit are not chosen between: the step is held.
+5. The inbox is read first, then spam, over three passes of 30 seconds. If nothing comes, the signup is recorded in the queue as `needs-human` with reason `email` and the step stops, so the run goes on to the next vendor; `clikcode computer queue --reason email` lists them.
+
+`read_email_code` and `open_email_link` with no `from` or `subject` use the same rules for the page they are on. With `from` or `subject` they read the newest matching message, as before. With no mailbox connected nothing changes: the code is asked for privately.

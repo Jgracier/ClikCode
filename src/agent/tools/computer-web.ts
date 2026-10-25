@@ -28,6 +28,7 @@ import { SEND_TO_HELP, SEND_TO_SCHEMA } from './store-secret.js';
 import { destinationProblem, normalizeSendTo, type Destination } from '../computer/secret-destinations.js';
 import { captureSecret } from '../computer/secret-capture.js';
 import { emailConnected, waitForEmail } from '../computer/email-api.js';
+import { codeFromMailbox, looksLikeCodeEmail, looksLikeLinkEmail, verificationCode } from '../computer/email-code.js';
 import { connectEmail } from '../computer/email-consent.js';
 import { runTailnetHandoff, tailnetAddress } from '../computer/tailnet-handoff.js';
 import type { Locator, Page } from 'playwright-core';
@@ -174,6 +175,7 @@ export function findInSnapshot(snapshot: string, text: string): string {
 }
 
 /** A page address for the agent to read: a long query value or fragment (an emailed token, an OAuth code) is shortened, so it neither costs a page of text nor puts a one-use secret in the chat. */
+export { verificationCode };
 export function displayUrl(url: string): string {
   try {
     const parsed = new URL(url);
@@ -633,6 +635,11 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
     // A detail the agent asked for by name ("Support email") is more specific than the standard field its words also suggest.
     const asked = field.password ? undefined : customFieldFor(profile, field.hint);
     if (asked) { values.set(field.step, asked.field.value); continue; }
+    // A lone one-time-code box is filled from the emailed code when a mailbox is connected: the right sender, once, no agent call.
+    if (!field.password && fields.length === 1 && /one-time-code|\b(?:otp|verification|security code|passcode|confirmation code)\b|\bcode\b/i.test(`${field.hint.autocomplete} ${field.label} ${field.placeholder}`)) {
+      const code = await codeFromMailbox(ctx.stateDir, page.url(), Date.now() - 120_000, ctx.signal);
+      if (code) { registerSecret(code); values.set(field.step, code); continue; }
+    }
     const key = field.password ? undefined : profileKeyFor(field.hint);
     const known = key ? profile?.fields[key] : undefined;
     if (confirmSignIn && !signingUp && (field.password || fromLogin || key === 'email')) {
@@ -857,16 +864,6 @@ async function openLatestEmail(page: Page, args: WebArgs, stateDir: string): Pro
   return body;
 }
 
-/** The one-time code in an email: a 4-8 character code that the text calls a code, else a lone 6-digit number. */
-export function verificationCode(text: string): string | undefined {
-  const flat = text.replace(/\s+/g, ' ');
-  const named = /\b(?:verification|security|confirmation|login|sign[- ]?in|one[- ]time|access)?\s*code\b[^A-Za-z0-9]{0,20}([A-Z0-9]{4,8})\b/i.exec(flat)
-    ?? /\b([A-Z0-9]{4,8})\b[^.]{0,30}\bis your (?:\w+ )?code\b/i.exec(flat);
-  if (named && /\d/.test(named[1]!)) return named[1];
-  const sixes = [...new Set(flat.match(/(?<![\w.-])\d{6}(?![\w-])/g) ?? [])];
-  return sixes.length === 1 ? sixes[0] : undefined;
-}
-
 /** A line for a page's host when a recipe is saved for it, so an agent does not rediscover the signup. */
 async function listRecipesFor(stateDir: string, url: string): Promise<string> {
   try {
@@ -929,7 +926,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
     }
     case 'open_email_link': {
       if (await emailConnected(ctx.stateDir)) {
-        const mail = await waitForEmail(ctx.stateDir, { from: args.from, subject: args.subject, timeoutMs: (args.seconds ?? 90) * 1000, signal: ctx.signal });
+        const mail = await waitForEmail(ctx.stateDir, { from: args.from, subject: args.subject, ...(args.from || args.subject ? {} : { site: page.url() }), spam: true, consume: true, accept: args.from || args.subject ? (m => m.links.length > 0) : looksLikeLinkEmail, timeoutMs: (args.seconds ?? 90) * 1000, signal: ctx.signal });
         const real = mail.links.filter(href => !/unsubscribe|accounts\.google\.com|mail\.google\.com|privacy|terms/i.test(href));
         const wanted = args.link?.toLowerCase();
         const pick = wanted ? real.find(href => href.toLowerCase().includes(wanted)) : real[0];
@@ -958,7 +955,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
     case 'read_email_code': {
       if (await emailConnected(ctx.stateDir)) {
         // The mail arrives when the vendor sends it: wait for it instead of looking once.
-        const mail = await waitForEmail(ctx.stateDir, { from: args.from, subject: args.subject, timeoutMs: (args.seconds ?? 90) * 1000, signal: ctx.signal });
+        const mail = await waitForEmail(ctx.stateDir, { from: args.from, subject: args.subject, ...(args.from || args.subject ? {} : { site: page.url() }), spam: true, consume: true, accept: args.from || args.subject ? (m => verificationCode(m.text) !== undefined) : looksLikeCodeEmail, timeoutMs: (args.seconds ?? 90) * 1000, signal: ctx.signal });
         const code = verificationCode(mail.text);
         if (!code) throw new Error(`The email from ${args.from ?? args.subject} has no code in it. It says: "${mail.text.replace(/\s+/g, ' ').slice(0, 160)}".`);
         return { output: `Code: ${code}. Type it into the page that asked for it.` };
@@ -975,6 +972,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
     }
     case 'login': {
       const outcome = await loginComputerPage({ stateDir: ctx.stateDir, page, signal: ctx.signal, newAccount: args.new_account === true,
+        mailCode: since => codeFromMailbox(ctx.stateDir, page.url(), since, ctx.signal),
         ask: async (site, fields, signal) => {
           // The profile's email and password secret answer a sign-in with no saved login; anything else is asked.
           const fromProfile = await profileLoginAnswers(ctx.stateDir, fields);

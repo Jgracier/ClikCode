@@ -97,9 +97,12 @@ export async function loginComputerPage(input: {
   onVerification?(): void;
   /** The user wants another account than the saved one: enter it, don't reuse. */
   newAccount?: boolean;
+  /** The emailed one-time code for this site when a mailbox is connected (undefined when none is): asked for with the time the page began asking. */
+  mailCode?(since: number): Promise<string | undefined>;
 }): Promise<LoginOutcome> {
   const startUrl = input.page.url();
   const origin = checkedOrigin(startUrl);
+  let lastSubmit = Date.now() - 120_000;
   const accounts = await savedLoginsForSite(input.stateDir, startUrl);
   // One saved account is simply used. Several (or one the site refused last
   // time) are put to the user as an arrow-key picker, with a way to add another.
@@ -177,6 +180,13 @@ export async function loginComputerPage(input: {
     const early = !fields.some(field => field.kind === 'password') && !saved.password && !supplied.password
       && needed.some(field => ['email', 'username', 'accountId'].includes(field.key));
     if (early) needed.push({ index: -1, key: 'password', label: 'Password', kind: 'password', required: true });
+    // A one-time code that arrives by email is read from the connected mailbox, not asked of anyone.
+    if (input.mailCode) {
+      for (const field of needed.filter(candidate => candidate.transient)) {
+        const code = await input.mailCode(lastSubmit - 5_000);
+        if (code) { codes[field.key] = code; needed.splice(needed.indexOf(field), 1); }
+      }
+    }
     if (needed.length) {
       const answers = await input.ask(origin, needed, input.signal);
       if (!answers || input.signal?.aborted) throw new LoginError('Private login cancelled.');
@@ -194,6 +204,7 @@ export async function loginComputerPage(input: {
     for (const key of Object.keys(codes)) delete codes[key];
     await (await loginScope(input.page)).locator('input:visible').nth(fields.at(-1)!.index).press('Enter');
     submitted = true;
+    lastSubmit = Date.now();
     if (fields.some(field => field.kind === 'password')) submittedPassword = true;
     if (fields.some(field => field.transient)) codeAttempts++;
     if (!await progress(input.page, before, input.signal, () => pressSubmit(input.page))) return 'unverified';
