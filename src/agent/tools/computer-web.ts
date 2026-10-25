@@ -5,7 +5,7 @@ import { defineTool } from '../tool-contract.js';
 import { adoptPage, closeComputerPage, computerPage, openComputerPage } from '../computer/browser.js';
 import { COMPUTER_OFF, computerEnabled, generatedPasswordsAllowed, unattendedEnabled } from '../computer/settings.js';
 import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
-import { maskSensitive, sensitiveValues } from '../computer/sensitive-fields.js';
+import { keyFieldValues, maskSensitive, sensitiveValues } from '../computer/sensitive-fields.js';
 import { storeSecretTool } from './store-secret.js';
 import { sharedState } from '../computer/shared-state.js';
 import { savedLoginFields, savedLoginsForSite, saveLoginFields } from '../computer/credential-vault.js';
@@ -228,7 +228,7 @@ export async function observeComputerPage(page: Page, acceptsImages: boolean, fu
   const snapshot = arrangeSnapshot(shown, full);
   const output = `Page: ${displayUrl(page.url())}\n\n${snapshot}${hidden ? `\n\n[${hidden} key-like value${hidden === 1 ? '' : 's'} hidden. Use capture_secret to save it without reading it.]` : ''}`;
   if (!acceptsImages) return { output };
-  if (hidden || (await sensitiveValues(page)).length || showsSecret(snapshot) || showsSecret(await page.evaluate(visibleText).catch(() => ''))) return { output: `${output}\n\n[Screenshot withheld: the page holds a typed credential or a saved secret.]` };
+  if (hidden || (await sensitiveValues(page)).length || (await keyFieldValues(page)).length || showsSecret(snapshot) || showsSecret(await page.evaluate(visibleText).catch(() => ''))) return { output: `${output}\n\n[Screenshot withheld: the page holds a typed credential or a saved secret.]` };
   let bytes = await page.screenshot({ type: 'jpeg', quality: 65, animations: 'disabled', timeout: 10_000 });
   if (bytes.length > MAX_TOOL_IMAGE_BYTES) bytes = await page.screenshot({ type: 'jpeg', quality: 35, animations: 'disabled', timeout: 10_000 });
   const found = sniffImage(bytes);

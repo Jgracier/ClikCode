@@ -129,3 +129,14 @@ it('hides a long all-digit secret but keeps ordinary numbers', () => {
   expect(text).toContain('7197443850');
   expect(hidden).toBe(1);
 });
+
+it('hides the value of a text box that names a key or is shaped like one, and keeps ordinary boxes', () => {
+  const short = ['k3y', '9x2Qa7', 'LmN4'].join('');
+  const plain = ['wordhosting', 'account', 'value'].join('');
+  const text = [`- textbox "API key" [ref=e1]: ${plain}`, `- textbox "Account" [ref=e2]: ${short}`, '- textbox "Display name" [ref=e3]: Justin Gracier', '- textbox "City" [ref=e4]: Springfield'].join('\n');
+  const { text: shown, hidden } = hideKeyLikeText(text);
+  expect(hidden).toBe(2);
+  expect(shown).not.toContain(plain);
+  expect(shown).not.toContain(short);
+  expect(shown).toContain('Springfield');
+});

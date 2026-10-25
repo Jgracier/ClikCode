@@ -15,10 +15,47 @@ export async function sensitiveValues(page: Page): Promise<string[]> {
   } catch { return []; } // The page is navigating, or has no such field.
 }
 
-/** `text` with every sensitive field value on the page replaced. */
+/** Runs in the page: values of plain text inputs, read-only inputs and textareas that are key-shaped, or that
+ * sit next to a "key", "token" or "secret" label (its accessible name, placeholder, name, id, <label>, or the text
+ * just before it). A site may show its API key in an ordinary text box; the accessibility text carries that value. */
+function keyFieldValuesInPage(): string[] {
+  const doc = (globalThis as unknown as { document: { querySelectorAll(selector: string): ArrayLike<Record<string, unknown>> } }).document;
+  const NAMED = /(?:^|[^a-z])(?:api[ _-]?|access[ _-]?|auth[ _-]?|private[ _-]?|client[ _-]?|app[ _-]?)?(?:key|token|secret|credential)s?(?![a-z])/i;
+  const SHAPED = (value: string): boolean => {
+    if (value.length < 12 || value.length > 600 || !/^[A-Za-z0-9_\-+/=.:~]+$/.test(value) || /^https?:|@/.test(value) || /^\d+$/.test(value)) return false;
+    if (!/[A-Za-z]/.test(value) || !(/\d/.test(value) || (value.length >= 20 && /[a-z]/.test(value) && /[A-Z]/.test(value)))) return false;
+    return new Set(value).size >= 6;
+  };
+  const out = new Set<string>();
+  for (const element of Array.from(doc.querySelectorAll('input, textarea'))) {
+    const type = String(element['type'] ?? 'text').toLowerCase();
+    if (['password', 'hidden', 'checkbox', 'radio', 'submit', 'button', 'file', 'range', 'color', 'image', 'reset'].includes(type)) continue;
+    const value = String(element['value'] ?? '').trim();
+    if (value.length < 8 || /\s/.test(value) && value.length < 20) continue;
+    const labels = Array.from((element['labels'] as ArrayLike<{ textContent: string | null }> | null) ?? []).map(label => label.textContent ?? '').join(' ');
+    const get = (name: string): string => String((element['getAttribute'] as (n: string) => string | null).call(element, name) ?? '');
+    const before = (() => {
+      let text = '';
+      let node = element as { previousSibling?: { textContent?: string | null } | null; parentElement?: Record<string, unknown> | null };
+      for (let step = 0; step < 3 && !text.trim(); step++) { text = node.previousSibling?.textContent ?? ''; if (!text.trim() && node.parentElement) node = node.parentElement as typeof node; }
+      return text.trim().slice(-60);
+    })();
+    const hint = [labels, get('aria-label'), get('placeholder'), get('name'), get('id'), get('title'), before].join(' ');
+    if (SHAPED(value) || NAMED.test(hint)) out.add(value);
+  }
+  return [...out];
+}
+
+/** Values the agent must never read from a page's text inputs. */
+export async function keyFieldValues(page: Page): Promise<string[]> {
+  try { return await page.evaluate(keyFieldValuesInPage); }
+  catch { return []; } // The page is navigating.
+}
+
+/** `text` with every sensitive field value, and every key-like text-box value, on the page replaced. */
 export async function maskSensitive(page: Page, text: string): Promise<string> {
   let out = text;
-  for (const value of await sensitiveValues(page)) out = out.split(value).join('[hidden]');
+  for (const value of [...await sensitiveValues(page), ...await keyFieldValues(page)].sort((a, b) => b.length - a.length)) out = out.split(value).join('[hidden]');
   return out;
 }
 

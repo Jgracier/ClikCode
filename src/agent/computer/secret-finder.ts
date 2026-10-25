@@ -161,5 +161,17 @@ export function hideKeyLikeText(text: string): { text: string; hidden: number } 
       return '[secret hidden]';
     });
   });
-  return { text: guarded.join('\n'), hidden };
+  // A text box whose name says key/token/secret, or whose value is shaped like one, shows it as `textbox "API key" [ref=e5]: value`.
+  const BOX = /^(\s*- (?:textbox|searchbox|text|textarea)\b[^\n]*?\]):\s+(\S{8,})\s*$/;
+  const boxed = guarded.map(line => {
+    const match = BOX.exec(line);
+    if (!match) return line;
+    const value = match[2]!.replace(/^"|"$/g, '');
+    const named = /(?:^|[^a-z])(?:key|token|secret|credential)s?(?![a-z])/i.test(match[1]!);
+    const shaped = value.length >= 12 && /^[A-Za-z0-9_\-+/=.:~]+$/.test(value) && /[A-Za-z]/.test(value) && /\d/.test(value) && !/^https?:|@/.test(value);
+    if (value === '[secret hidden]' || value === '[hidden]' || !(named || shaped)) return line;
+    hidden++;
+    return `${match[1]}: [secret hidden]`;
+  });
+  return { text: boxed.join('\n'), hidden };
 }
