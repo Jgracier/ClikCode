@@ -24,6 +24,9 @@ export function preferencesFile(): string { return join(localModelsHome(), 'pref
 /** Pinned Hugging Face GGUF candidates inspected from remote headers. */
 export function discoveredModelsFile(): string { return join(localModelsHome(), 'discovered-models.json'); }
 
+/** The last verified copy of the public model catalog and when it was last checked. */
+export function catalogCacheFile(): string { return join(localModelsHome(), 'catalog-cache.json'); }
+
 /** A file-name-safe form of an id that may come from a user or a session. */
 export function safeName(value: string): string {
   return value.replace(/[^\w.-]/g, '_');

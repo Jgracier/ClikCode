@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { allLocalModels } from './catalog.js';
-import { MIN_CONTEXT, type Fit } from './choose.js';
+import { MIN_CONTEXT, type Fit } from './shared/index.js';
 import { shrinkNotice, shrinkSteps, stopNotice } from './memory-steps.js';
 
 const model = allLocalModels()[0]!;

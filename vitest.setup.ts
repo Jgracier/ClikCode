@@ -21,6 +21,8 @@ process.env.HOME = root;
 process.env.CLIKCODE_HOME = join(root, '.clikcode');
 process.env.TMPDIR = scratch;
 process.env.CLIKCODE_LIFECYCLE_LOG = '0';
+// No test asks clikdeploy.com for the model catalog; catalog-source tests pass their own fetch.
+process.env.CLIKCODE_LOCAL_CATALOG_REFRESH = '0';
 // Never the machine's own Tailscale: every list of machines asks it which
 // machines the user has. This one is not running (fake-tailscale.mjs, with no
 // fixture) unless a test gives it one (FAKE_TAILSCALE_STATUS).

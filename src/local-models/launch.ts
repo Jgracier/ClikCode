@@ -41,7 +41,7 @@
 
 import { createServer } from 'node:net';
 import { nodeHttp } from '../runtime/lazy-node.js';
-import type { Fit, Placement } from './choose.js';
+import type { Fit, Placement } from './shared/index.js';
 import type { HardwareProfile } from './hardware.js';
 
 interface ThreadPlan { threads: number; threadsBatch: number }

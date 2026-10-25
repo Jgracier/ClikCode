@@ -12,49 +12,9 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { cpus, freemem, totalmem } from 'node:os';
 import { join } from 'node:path';
 
-export type GpuBackend = 'cuda' | 'rocm' | 'metal' | 'vulkan';
+import type { GpuInfo, HardwareProfile } from './shared/index.js';
 
-export interface GpuInfo {
-  name: string;
-  vendor: 'nvidia' | 'amd' | 'intel' | 'apple' | 'other';
-  /** The backend a prebuilt llama.cpp would drive it with. */
-  backend: GpuBackend;
-  vramBytes: number;
-  /** Unknown when the driver does not report it; the budget then assumes
-   * the whole card minus its reserve. */
-  freeVramBytes?: number;
-  /** Shares system RAM (Apple Silicon, APUs). Its "VRAM" is the RAM the
-   * budget already counts, so it is never added on top. */
-  unified: boolean;
-  /** Built into the CPU package. It shares the system RAM's bandwidth, but
-   * reading a prompt is bound by compute, not bandwidth, so it still wins:
-   * a Radeon 780M (b11194 Vulkan) against its own 8-core Zen 4 read prompts
-   * 4x faster on Ornith 35B-A3B (431 vs 104 tokens/s, 368 vs 93 at 4K deep)
-   * and 7-10x on Qwen3.5-4B, and generated 30-40% faster (27.5 vs 20). */
-  integrated: boolean;
-  /** An integrated GPU's reach: what it can address, its carve-out plus the
-   * system RAM it may map, as llama.cpp's Vulkan build reports it (see
-   * gpu-reach.ts). Only a known reach makes one usable -- a unified budget
-   * has no CPU to fall back on. */
-  addressableBytes?: number;
-  driverVersion?: string;
-}
-
-export interface HardwareProfile {
-  platform: NodeJS.Platform;
-  arch: string;
-  cpuModel: string;
-  physicalCores: number;
-  logicalCores: number;
-  totalRamBytes: number;
-  /** Memory that can be allocated without pushing anything to swap:
-   * MemAvailable on Linux, not MemFree, which leaves out reclaimable cache
-   * and is small on any machine that has been up a while. */
-  availableRamBytes: number;
-  gpus: GpuInfo[];
-  /** A Vulkan loader is installed, so a Vulkan build of llama.cpp can run. */
-  vulkanLoader: boolean;
-}
+export type { GpuBackend, GpuInfo, HardwareProfile } from './shared/index.js';
 
 const GIB = 1024 ** 3;
 const MIB = 1024 ** 2;

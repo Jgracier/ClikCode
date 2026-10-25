@@ -17,9 +17,11 @@
 
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { delimiter, dirname, join } from 'node:path';
-import { memoryBudget, type MemoryBudget } from './budget.js';
+import { startCatalogRefresh } from './catalog-source.js';
 import { allLocalModels, catalogModel, type CatalogModel } from './catalog.js';
-import { chooseModel, fitModel, kvCacheBytes, meetsBar, rankModels, type Fit, type Footprint, type Measurement, type RankedModel } from './choose.js';
+import {
+  chooseModel, fitModel, kvCacheBytes, meetsBar, memoryBudget, rankModels, type Fit, type Footprint, type Measurement, type MemoryBudget, type RankedModel,
+} from './shared/index.js';
 import { formatBytes } from './download.js';
 import { discoverHuggingFaceModels } from './discover.js';
 import { probeHardware, type HardwareProfile } from './hardware.js';
@@ -103,6 +105,7 @@ interface MachineView {
 }
 
 async function viewMachine(probed?: HardwareProfile): Promise<MachineView> {
+  startCatalogRefresh();
   const hardware = probed ?? await withKnownReach(await probeHardware());
   const budget = memoryBudget(hardware);
   const build = selectRuntimeBuild(hardware, budget.gpu);
