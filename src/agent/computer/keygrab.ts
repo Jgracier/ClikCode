@@ -242,7 +242,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
       if (isKeyPage(v)) return v;
       shown = v;
     }
-    const origins = [...new Set([originOf(v.url), originOf(options.url)].filter(o => o && !HOSTS_OF_SIGN_IN.test(hostOf(o))))];
+    const origins = [...new Set([originOf(options.url), originOf(v.url)].filter(o => o && !HOSTS_OF_SIGN_IN.test(hostOf(o)) && !/^(?:auth|login|accounts|sso|idp|ui\.idp)\b/i.test(hostOf(o))))];
     for (const origin of origins) {
       for (const path of KEY_PATHS) {
         let page = await openAt(`${origin}${path}`);
