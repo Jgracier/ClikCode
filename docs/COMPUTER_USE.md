@@ -257,6 +257,24 @@ A profile can keep secrets next to its details: an optional fallback password fo
 - **The profile answers sign-ins**: `login` with no saved login for a site fills the profile's sign-in email and, if one is set, its optional `password` secret instead of asking. Anything else it is asked (a one-time code, an account choice) is asked as before.
 - **`clikcode computer unattended on`**: a private prompt about a site is never shown. The need is parked in the queue (`needs-human`, with a reason from what was asked: `captcha`, `two-factor`, `sms`, else `other`) and the agent is told to go on to the next vendor. The profile prompts are always shown, because they are the user's own. Clear the queue in batches: `clikcode computer queue --status needs-human`.
 
+## Connecting a connector's OAuth: `oauth_connect`
+
+`clikcode computer oauth-connect <connector>` (or `computer_web` `action=oauth_connect`, `target` = the ClikDeploy connector id) connects a connector that uses OAuth, with no clicking by the agent:
+
+1. It starts ClikDeploy's connect (`clikdeploy integrations connect <id> --no-browser`, which signs in with the saved admin key) and takes the authorization URL it prints.
+2. It opens that URL in the ClikCode browser and presses through the consent screens from a data table in `src/agent/computer/oauth-consent.ts` (add a row to teach it a screen): the account named by the profile `sso_email`; Google's "Advanced" and "Go to ... (unsafe)", Continue/Allow; Microsoft Accept; GitHub "Authorize ..."; Slack Allow; Atlassian Accept; Notion Allow access; and for any other vendor Allow, Authorize, Accept, Grant access, Approve (and Continue only on a page that asks for access). It never presses Deny, Cancel, Sign out or Sign up.
+3. It returns when ClikDeploy's callback page is reached, and then confirms with `clikdeploy integrations show` that the connection is `active`. The vendor's word is not enough.
+
+It never types or reads a password. It stops, with a plain reason (the address and the names of what can be pressed, no page text or values) at a **login password**, an **MFA code**, a **captcha**, or a screen it does not recognize. If the vendor needs a sign-in, run the `login` action first (saved login or Google), then run `oauth_connect` again. Opt-in smoke test against a fake multi-screen vendor and a fake connect endpoint: `CLIKCODE_COMPUTER_SMOKE=1 xvfb-run -a npx vitest run src/agent/computer/oauth-consent.integration.vitest.test.ts`.
+
+## Recipes record themselves
+
+Agents rarely call `recipe save`, so ClikCode does it. Every successful `computer_web` click, fill, choice and key press after an `open` is journaled in memory for that tab, by the control's visible text (a `[ref=eN]` is turned into the control's name). When the sequence ends in a **verified** `capture_secret` (a key was found and stored, not rejected by its check) or a successful `login`, the journal is saved as that host's recipe (`~/.clikcode/computer/recipes/<host>.json`) with the login route (`google` or `github` if the sequence passed through them, else `email`), the key page (address without query or fragment) and a capture hint. Nothing else is needed from the agent.
+
+- **Never stored:** typed values (a fill is saved with no text, so a replay fills from the profile or saved login), secrets, ids or numbers of six digits or more in a control name, anything key-shaped. An email in a control name (the Google account chooser) is saved as the placeholder `{{sso_email}}` and replaced from the profile at replay. A step that cannot be saved safely (a reference with no readable name, a control named after an id) spoils that journal, so a partial recipe is never saved.
+- **De-duplicated:** one recipe per host and route, the newest verified one wins. A plain login recipe never replaces a capture recipe that has a key page and hint.
+- **Used:** opening a page on that host says "A recipe is saved for this site"; `recipe` with `recipe_op=run` replays it and stops at a captcha, code, payment or review page. Replays are not journaled again.
+
 ## Profiles: which one a form is filled from
 
 With no `label`, the profile used is the one called `Personal`, else the one with the most standard fields (name, email, phone, address, ...). It is never "the first by name", so a second profile such as `ClikDeploy admin` is only used when a call names it with `label`, or when it can fill more of the form's fields than Personal (`bestProfileFor`). Saving with no label merges into that same profile instead of creating another.

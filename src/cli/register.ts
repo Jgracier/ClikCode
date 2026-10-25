@@ -73,6 +73,7 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   email.command('connect').description('Open Google consent in the ClikCode browser and store the mailbox; no further steps').action(async () => (await import('../commands/computer.js')).computerEmail('connect'));
   email.command('status').description('Show which mailbox is connected').action(async () => (await import('../commands/computer.js')).computerEmail('status'));
   email.command('disconnect').description('Forget the connected mailbox').action(async () => (await import('../commands/computer.js')).computerEmail('disconnect'));
+  computer.command('oauth-connect <connector>').description("Connect a ClikDeploy connector: start its OAuth, press through the vendor's consent in the ClikCode browser (stops at a password, code or captcha), confirm it is active").action(async (connector: string) => (await import('../commands/computer.js')).computerOauthConnect(connector));
   computer.command('inspect').description('Show visible login field names without their values').action(async () => (await import('../commands/computer.js')).computerInspect());
   computer.command('login [url]').description('Open a login URL if given, then ask privately in the current chat')
     .option('--chat <chat>', 'Chat id, prefix or name when run outside a chat')
