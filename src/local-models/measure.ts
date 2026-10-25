@@ -9,7 +9,7 @@
 
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import type { Footprint, Measurement } from './choose.js';
+import type { Footprint, Measurement } from './shared/index.js';
 import type { HardwareProfile } from './hardware.js';
 import { httpJson } from './launch.js';
 import { footprintsFile, measurementsFile } from './paths.js';

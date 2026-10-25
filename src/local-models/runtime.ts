@@ -18,7 +18,7 @@ import { join } from 'node:path';
 import type { GpuBackend, HardwareProfile } from './hardware.js';
 import { downloadVerified, formatBytes, type DownloadProgress } from './download.js';
 import { runtimesDir } from './paths.js';
-import type { GpuBudget } from './budget.js';
+import type { GpuBudget } from './shared/index.js';
 
 const LLAMA_CPP_TAG = 'b11194';
 // b11194 was built from llama.cpp commit 9f70b2cecd1a9a3f73ac525c47ca22a6ee9a7b69.

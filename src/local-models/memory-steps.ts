@@ -1,7 +1,7 @@
 /** What a local model's memory handling decides and says, apart from the machinery that acts on it
  * (index.ts): the smaller restarts the supervisor may make, and how a restart or stop is told. */
 import { catalogModel, type CatalogModel } from './catalog.js';
-import { kvCacheBytes, MIN_CONTEXT, type Fit } from './choose.js';
+import { kvCacheBytes, MIN_CONTEXT, type Fit } from './shared/index.js';
 import type { MemoryEvent, ShrinkStep } from './lifecycle.js';
 import { footprintKey } from './measure.js';
 

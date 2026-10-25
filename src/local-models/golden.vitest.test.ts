@@ -1,16 +1,15 @@
 /** Golden recommendations: what the fit/speed/ranking math chooses for a spread of machines.
  * Recorded from the hand-written catalog and the in-tree math before they moved to the shared
- * library and the signed catalog; the switch must leave every line of golden.json unchanged.
+ * library and the signed catalog (now: the bundled snapshot through the vendored library); the
+ * switch left every line of golden.json unchanged.
  * Regenerate deliberately with GOLDEN_UPDATE=1 when the published catalog or the math changes. */
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { memoryBudget } from './budget';
-import { LOCAL_MODEL_CATALOG } from './catalog';
-import { chooseModel, rankModels } from './choose';
-import type { GpuInfo, HardwareProfile } from './hardware';
+import { catalogModels } from './catalog-source';
+import { chooseModel, memoryBudget, rankModels, type GpuInfo, type HardwareProfile } from './shared/index';
 
 const GIB = 1024 ** 3;
 const GOLDEN = join(dirname(fileURLToPath(import.meta.url)), 'golden.json');
@@ -69,7 +68,7 @@ const round = (value: number): number => Math.round(value * 100) / 100;
 
 function recommend(hardware: HardwareProfile): unknown {
   const budget = memoryBudget(hardware);
-  const ranked = rankModels(LOCAL_MODEL_CATALOG, hardware, budget, {}, {});
+  const ranked = rankModels(catalogModels(), hardware, budget, {}, {});
   let chosen: string;
   let notice: string | undefined;
   try {
