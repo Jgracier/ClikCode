@@ -2,9 +2,10 @@
  * calls these; they return plain text (the caller adds the page view where one is wanted). */
 import type { Page } from 'playwright-core';
 import type { ToolContext } from '../tool-contract.js';
+import { denyByDefault, describePermissions, parsePermissions, permissionOrigin, setSitePermissions } from './site-permissions.js';
 import { disableHttpAuth, enableHttpAuth, httpAuthOrigin, httpCredentialsFor } from './http-auth.js';
 
-export type EnvArgs = { label?: string; http_auth?: boolean | string; clear?: boolean };
+export type EnvArgs = { label?: string; http_auth?: boolean | string; clear?: boolean; grant?: string[] | string; deny?: string[] | string; url?: string };
 
 /** Turns on HTTP Basic/Digest sign-in for the origin of `url`, using its saved login. Never returns the credentials. */
 export async function applyHttpAuth(page: Page, url: string, args: EnvArgs, ctx: ToolContext): Promise<string> {
@@ -23,4 +24,18 @@ export async function applyHttpAuth(page: Page, url: string, args: EnvArgs, ctx:
 export async function clearHttpAuth(page: Page): Promise<string> {
   const origin = httpAuthOrigin(page);
   return await disableHttpAuth(page) ? `HTTP sign-in for ${origin} is off for this tab.` : 'HTTP sign-in was not on for this tab.';
+}
+
+/** Grants or denies what a site may use (or lists it), for the origin of `url` (default: the open page). */
+export async function runPermissions(page: Page, args: EnvArgs): Promise<string> {
+  const origin = permissionOrigin(args.url ?? page.url());
+  const grant = parsePermissions(args.grant);
+  const deny = parsePermissions(args.deny);
+  if (grant.length || deny.length) await setSitePermissions(page, origin, { grant, deny });
+  return `${describePermissions(page, origin)}${grant.length ? ' Reload or open the page again for it to take effect.' : ''}`;
+}
+
+/** Everything not allowed yet is denied before the page is opened, so no permission bubble can block it. */
+export async function denyPermissionsFor(page: Page, url: string): Promise<void> {
+  try { await denyByDefault(page, permissionOrigin(url));  } catch { /* not a website address */ }
 }

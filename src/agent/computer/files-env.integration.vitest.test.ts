@@ -195,3 +195,34 @@ it.skipIf(!enabled)('answers HTTP Basic and Digest challenges for its origin onl
     expect(await disableHttpAuth(page)).toBe(false);
   });
 }, 60_000);
+
+it.skipIf(!enabled)('denies permissions by default and grants them per origin when asked', async () => {
+  await withSite((_request, response) => {
+    response.setHeader('Content-Type', 'text/html');
+    response.end('<h1>site</h1>');
+  }, async ({ run, base, stateDir }) => {
+    const { computerPage } = await import('./browser.js');
+    const states = async (): Promise<Record<string, string>> => (await computerPage(stateDir)).evaluate(async () => {
+      const out: Record<string, string> = {};
+      for (const name of ['geolocation', 'camera', 'microphone', 'notifications', 'clipboard-read', 'clipboard-write']) {
+        try { out[name] = (await navigator.permissions.query({ name: name as PermissionName })).state; } catch { out[name] = 'unsupported'; }
+      }
+      return out;
+    });
+    await run({ action: 'open', url: `${base}/` });
+    expect(await states()).toMatchObject({ geolocation: 'denied', camera: 'denied', microphone: 'denied' });
+    const granted = await run({ action: 'permissions', grant: ['geolocation', 'clipboard'] });
+    expect(granted.isError).toBeUndefined();
+    expect(granted.output).toContain('geolocation granted');
+    expect(granted.output).toContain('camera denied');
+    expect(await states()).toMatchObject({ geolocation: 'granted', 'clipboard-read': 'granted', 'clipboard-write': 'granted', camera: 'denied' });
+    await run({ action: 'permissions', deny: 'geolocation' });
+    expect(await states()).toMatchObject({ geolocation: 'denied', 'clipboard-write': 'granted' });
+    // Opening the page again does not undo a decision.
+    await run({ action: 'open', url: `${base}/` });
+    expect(await states()).toMatchObject({ geolocation: 'denied', 'clipboard-write': 'granted' });
+    const bad = await run({ action: 'permissions', grant: ['teleport'] });
+    expect(bad.isError).toBe(true);
+    expect(bad.output).toContain('Use: camera');
+  });
+}, 60_000);
