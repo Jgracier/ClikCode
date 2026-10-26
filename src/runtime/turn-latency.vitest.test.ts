@@ -15,7 +15,7 @@ describe('turnLatency', () => {
   const lines = [
     line('t1', 'submit', 0), line('t1', 'first-paint', 31), line('t1', 'accepted', 40), line('t1', 'account', 52),
     line('t1', 'spawned', 60, { reused: true }), line('t1', 'ready', 88), line('t1', 'prompt-sent', 90),
-    line('t1', 'first-byte', 700), line('t1', 'first-event', 705), line('t1', 'first-text', 900),
+    line('t1', 'first-byte', 700), line('t1', 'first-thought', 702), line('t1', 'first-event', 705), line('t1', 'first-text', 900),
     line('t1', 'first-text-paint', 940), line('t1', 'end', 2000),
     line('t2', 'submit', 0), // another turn's line is not this one's
     JSON.stringify({ event: 'worker.turn.end', ms: 5 }),
@@ -26,10 +26,17 @@ describe('turnLatency', () => {
     expect(turn).toMatchObject({
       turnId: 't1', harness: 'claude', reused: true,
       submitToAccepted: 40, submitToSpawn: 60, spawnToReady: 28, readyToPromptSent: 2,
-      promptToFirstByte: 610, readyToFirstByte: 612, firstByteToFirstEvent: 5, firstEventToFirstText: 195,
+      promptToFirstByte: 610, readyToFirstByte: 612, firstByteToFirstThought: 2, firstByteToFirstEvent: 5, firstEventToFirstText: 195,
       submitToFirstPaint: 31, firstEventToFirstPaint: 235, firstTextToTextPaint: 40, submitToTextPaint: 940, total: 2000,
-      vendorMs: 610, clikcodeMs: 330,
+      // The vendor's: asked at 90 .. the first answer text at 900. ClikCode's: 90 before it asked, and 40 to draw the text.
+      vendorMs: 810, clikcodeMs: 130,
     });
+  });
+
+  it('does not count the model\'s thinking as ClikCode\'s time', () => {
+    const slow = turnLatency([line('s', 'prompt-sent', 100), line('s', 'first-byte', 150), line('s', 'first-thought', 400), line('s', 'first-text', 9_000), line('s', 'first-text-paint', 9_020)])!;
+    expect(slow.vendorMs).toBe(8_900);
+    expect(slow.clikcodeMs).toBe(120);
   });
 
   it('leaves out a span whose marks the turn never reached', () => {
@@ -49,7 +56,7 @@ describe('turnLatency', () => {
     expect(turns.map((turn) => turn.turnId)).toEqual(['t1', 't2', 'a', 'b', 'c']);
     const grok = medianLatencyByHarness(turns).find((group) => group.harness === 'grok')!;
     expect(grok.turns).toBe(3);
-    expect(grok.medians.vendorMs).toBe(200);
+    expect(grok.medians.vendorMs).toBe(240);
     expect(formatLatencyTable(turns)).toContain('grok');
   });
 });
