@@ -607,3 +607,42 @@ describe('keygrab API area links and where the tab is left', () => {
     expect(site.at()).toBe('https://vendor.example/en/api');
   });
 });
+
+describe('keygrab picks the broadest access on a key form', () => {
+  const form = (over: Partial<Page>): Page => ({ text: 'Add API key', fields: ['Name'], ...over });
+  const probely = (): Record<string, Page> => ({
+    'https://vendor.example/': { text: 'API keys', controls: ['Add API key'], on: { 'Add API key': 'https://vendor.example/add' } },
+    'https://vendor.example/add': form({ controls: ['Select a team', 'Generate key'], on: { 'Select a team': 'https://vendor.example/add/team' } }),
+    'https://vendor.example/add/team': form({ controls: ['Select a team', 'Team Alpha', 'Global (account)', 'Delete account', 'Generate key'], on: { 'Global (account)': 'https://vendor.example/add/global', 'Team Alpha': 'https://vendor.example/add/alpha' } }),
+    'https://vendor.example/add/global': form({ controls: ['Global (account)', 'Select a role', 'Generate key'], on: { 'Select a role': 'https://vendor.example/add/role' } }),
+    'https://vendor.example/add/role': form({ controls: ['Global (account)', 'Select a role', 'Developer', 'Admin', 'Generate key'], on: { Admin: 'https://vendor.example/add/admin', Developer: 'https://vendor.example/add/dev' } }),
+    'https://vendor.example/add/admin': form({ controls: ['Global (account)', 'Admin', 'Generate key'], on: { 'Generate key': 'https://vendor.example/made' } }),
+    'https://vendor.example/made': madeKey,
+  });
+  it('chooses Global (account) for the team and Admin for the role, and says so in the note', async () => {
+    const site = fakeSite(probely());
+    const done = await run(site);
+    expect(done).toMatchObject({ ok: true });
+    expect(site.log).toContain('click Global (account)');
+    expect(site.log).toContain('click Admin');
+    expect(site.log.some(l => /Developer|Team Alpha|Delete account/.test(l))).toBe(false);
+    expect(site.log.indexOf('click Admin')).toBeLessThan(site.log.indexOf('click Generate key'));
+    expect(done.ok && done.note).toMatch(/Select a team -> Global \(account\); Select a role -> Admin/);
+  });
+  it('leaves a selector alone when no option reads as broad, and never picks a destructive one', async () => {
+    const pages = probely();
+    pages['https://vendor.example/add/team'] = form({ controls: ['Select a team', 'Team Alpha', 'Delete account', 'Generate key'], on: { 'Generate key': 'https://vendor.example/made' } });
+    const site = fakeSite(pages);
+    expect((await run(site)).ok).toBe(true);
+    expect(site.log.some(l => /Team Alpha|Delete account/.test(l))).toBe(false);
+  });
+  it('presses a grant-everything control', async () => {
+    const site = fakeSite({
+      'https://vendor.example/': { text: 'API keys', controls: ['Create API key'], on: { 'Create API key': 'https://vendor.example/new' } },
+      'https://vendor.example/new': form({ controls: ['All scopes', 'Create'], on: { 'All scopes': 'https://vendor.example/new', Create: 'https://vendor.example/made' } }),
+      'https://vendor.example/made': madeKey,
+    });
+    expect((await run(site)).ok).toBe(true);
+    expect(site.log).toContain('click All scopes');
+  });
+});

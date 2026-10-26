@@ -4,6 +4,7 @@
  * after an id or a key, a page reference with no readable name) spoils the journal, so a partial recipe is never saved. */
 import { sharedState } from './shared-state.js';
 import { keyShaped } from './secret-finder.js';
+import { compactSavedRecipes } from './recipe-tools.js';
 import { getRecipe, normalizeHost, recipeProblem, saveRecipe, type LoginRoute, type Recipe, type RecipeStep } from './signup-recipes.js';
 
 interface Journal { host: string; steps: RecipeStep[]; visited: Set<string>; spoiled?: string; signedIn: boolean }
@@ -45,18 +46,7 @@ export function recordableStep(step: RecipeStep, label?: string): RecipeStep | '
 
 const hostOf = (url: string): string => { try { return new URL(url).hostname.replace(/^www\./, '').toLowerCase(); } catch { return ''; } };
 
-/** A journey that went round in circles (tried the form, it failed, tried again) keeps only its last lap: where two or more steps in a row
- * repeat an earlier run of steps, the steps from the earlier run up to the repeat are dropped. A lone repeated press (Next, Next) is never cut. */
-export function compactSteps(steps: RecipeStep[]): RecipeStep[] {
-  const same = (a: RecipeStep, b: RecipeStep): boolean => a.do === b.do && a.target === b.target && a.text === b.text;
-  const out = steps.map(s => ({ ...s }));
-  for (let i = 1; i + 1 < out.length; i++) {
-    for (let j = 0; j < i; j++) {
-      if (same(out[j]!, out[i]!) && same(out[j + 1]!, out[i + 1]!) && j + 1 < i) { out.splice(j, i - j); i = j; break; }
-    }
-  }
-  return out;
-}
+export { compactSteps } from './recipe-tools.js';
 
 /** A tab opened a site: a new sequence starts. */
 export function beginJournal(key: string, url: string): void {
@@ -109,7 +99,7 @@ export async function recordVerified(stateDir: string, key: string, event: Verif
     try { const u = new URL(event.url); keyPage = `${u.origin}${u.pathname}`; } catch { keyPage = undefined; }
   }
   const hint = event.kind === 'capture' ? `${journal.signedIn ? 'Sign in first with the login action (saved login). ' : ''}${event.hint ?? 'capture_secret reads the key the page shows.'}` : undefined;
-  const input = { host: normalizeHost(journal.host), loginRoute, steps: (event.kind === 'capture' ? compactSteps(journal.steps) : journal.steps).map(s => ({ ...s })), ...(keyPage ? { keyPage } : {}), ...(hint ? { captureHint: hint } : {}) };
+  const input = { host: normalizeHost(journal.host), loginRoute, steps: journal.steps.map(s => ({ ...s })), ...(keyPage ? { keyPage } : {}), ...(hint ? { captureHint: hint } : {}) };
   if (recipeProblem(input, { allowEmpty: true })) {
     // A key page or hint that fails the checks is left out; the steps alone are still worth saving.
     delete (input as { keyPage?: string }).keyPage; delete (input as { captureHint?: string }).captureHint;
@@ -120,6 +110,10 @@ export async function recordVerified(stateDir: string, key: string, event: Verif
     if (existing && (existing.keyPage || existing.captureHint)) return undefined;
   }
   const saved = await saveRecipe(stateDir, input, now, { allowEmpty: true });
-  if (event.kind === 'capture') { journal.steps = []; }
+  if (event.kind !== 'capture') return saved;
+  journal.steps = [];
+  // A key was captured: tidy what the journey left behind (retry laps, toggles, a click back to the start). The recipe as recorded is kept in <host>.json.bak.
+  const tidied = await compactSavedRecipes(stateDir, journal.host, saved.loginRoute).catch(() => []);
+  if (tidied.some(r => r.removed > 0)) return (await getRecipe(stateDir, journal.host, saved.loginRoute)) ?? saved;
   return saved;
 }
