@@ -1,45 +1,85 @@
-/** Vendor profiles still launch ClikCode commands that no longer exist.
+/** Vendor configs still launch ClikCode commands that no longer exist.
  *
  * `conversations-mcp`, `npx-mcp` and `swarm-mcp` were removed when ClikCode
  * stopped writing its own servers into a vendor (commit 6b528c86). The copies
- * already in account profiles kept starting, and each one exited 1: thousands
- * of processes, none of them a chat. This drops those entries. A server the
- * user configured themselves is left alone.
+ * already written kept starting, and each one exited 1: thousands of
+ * processes, none of them a chat.
+ *
+ * What is dropped is decided by ClikCode's own fingerprint, never by a name: a
+ * server whose launcher is the ClikCode binary and whose arguments name a
+ * retired command. A server the user configured themselves has neither, so it
+ * is left alone wherever it lives.
+ *
+ * Where to look comes from the catalog (`managers.mcp.serverFiles`, the table
+ * the first-run import and the per-session dedupe read too) for the user's own
+ * home and every account profile, so a vendor taught there is cleaned without
+ * another list here. Files the catalog does not name are still found by their
+ * usual names under the profiles.
  */
-import { readdir, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { lifecycle } from '../runtime/lifecycle-log.js';
+import { stripJsonc, vendorConfigFiles, vendorSources } from '../agent/mcp/import.js';
+import { lifecycle, quiet } from '../runtime/lifecycle-log.js';
 
 const RETIRED = new Set(['conversations-mcp', 'npx-mcp', 'swarm-mcp']);
-const STAMP = [...RETIRED].sort().join(' ');
+/** Bumped when what is looked at or recognized widens, so a state directory
+ * that already ran the narrower pass runs this one. */
+const PASS = 'v2';
+const STAMP = `${[...RETIRED].sort().join(' ')} ${PASS}`;
 
-function usesRetired(value: unknown): boolean {
-  if (typeof value === 'string') return RETIRED.has(value);
-  if (Array.isArray(value)) return value.some((item) => typeof item === 'string' && RETIRED.has(item));
-  return false;
-}
+/** A path that starts ClikCode: its binary, or a build's entry file. */
+const CLIKCODE_LAUNCHER = /(?:^|[\\/])clikcode(?:\.cmd|\.exe)?$|[\\/]clikcode[^\\/]*[\\/](?:dist[\\/])?index\.js$|[\\/]release[\\/]dist[\\/]index\.js$/;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-/** JSON mcp config: remove servers whose command or args is a retired ClikCode command. */
-export function stripRetiredJson(text: string): { text: string; removed: string[] } | undefined {
-  let root: unknown;
-  try { root = JSON.parse(text); } catch { return undefined; }
+/** Every string in a server's definition, however a vendor nests it (Cline
+ * keeps the command under `transport`, OpenCode keeps one argv array). */
+function stringsOf(value: unknown, depth = 0): string[] {
+  if (typeof value === 'string') return [value];
+  if (depth > 3) return [];
+  if (Array.isArray(value)) return value.flatMap((item) => stringsOf(item, depth + 1));
+  if (isRecord(value)) return Object.values(value).flatMap((item) => stringsOf(item, depth + 1));
+  return [];
+}
+
+/** Whether a server definition launches a retired ClikCode command. */
+export function launchesRetired(spec: unknown): boolean {
+  const all = stringsOf(spec);
+  return all.some((text) => RETIRED.has(text)) && all.some((text) => CLIKCODE_LAUNCHER.test(text));
+}
+
+function readJson(text: string): unknown {
+  try { return JSON.parse(text); } catch { /* maybe a comment or a trailing comma */ }
+  try { return JSON.parse(stripJsonc(text)); } catch { return undefined; }
+}
+
+/** JSON mcp config: remove the servers that launch a retired command. `key`
+ * is where the vendor keeps its server table (catalog `key`); without it the
+ * usual three places are tried. */
+export function stripRetiredJson(text: string, key?: readonly string[]): { text: string; removed: string[] } | undefined {
+  const root = readJson(text);
   if (!isRecord(root)) return undefined;
-  const key = isRecord(root.mcpServers) ? 'mcpServers' : isRecord(root.servers) ? 'servers' : undefined;
-  if (!key) return undefined;
-  const servers = root[key] as Record<string, unknown>;
-  const removed: string[] = [];
-  for (const [name, spec] of Object.entries(servers)) {
-    if (!isRecord(spec)) continue;
-    if (usesRetired(spec.command) || usesRetired(spec.args)) removed.push(name);
+  const tables: Record<string, unknown>[] = [];
+  if (key?.length) {
+    let table: unknown = root;
+    for (const part of key) table = isRecord(table) ? table[part] : undefined;
+    if (isRecord(table)) tables.push(table);
+  } else {
+    for (const name of ['mcpServers', 'servers', 'mcp']) if (isRecord(root[name])) tables.push(root[name] as Record<string, unknown>);
   }
-  if (!removed.length) return undefined;
-  const next = { ...servers };
-  for (const name of removed) delete next[name];
-  return { text: `${JSON.stringify({ ...root, [key]: next }, null, 2)}\n`, removed };
+  const removed: string[] = [];
+  for (const table of tables) {
+    for (const [name, spec] of Object.entries(table)) {
+      if (!launchesRetired(spec)) continue;
+      removed.push(name);
+      delete table[name];
+    }
+  }
+  return removed.length ? { text: `${JSON.stringify(root, null, 2)}\n`, removed } : undefined;
 }
 
 function serverRoot(header: string): string | undefined {
@@ -54,7 +94,7 @@ function serverRoot(header: string): string | undefined {
 }
 
 /** A toml profile: drop the `[mcp_servers.<name>]` table, and its nested
- * tables, when that table's command or args names a retired command. */
+ * tables, when that table launches a retired command through ClikCode. */
 export function stripRetiredToml(text: string): { text: string; removed: string[] } | undefined {
   const lines = text.split('\n');
   const starts: number[] = [];
@@ -66,7 +106,8 @@ export function stripRetiredToml(text: string): { text: string; removed: string[
     const root = serverRoot(lines[starts[section]]);
     if (!root || root.includes('.')) continue;
     const body = lines.slice(starts[section], starts[section + 1]).join('\n');
-    if ([...RETIRED].some((name) => body.includes(`"${name}"`) || body.includes(`'${name}'`))) retiredRoots.add(root);
+    const quoted = [...body.matchAll(/["']([^"'\n]+)["']/g)].map((match) => match[1]);
+    if (quoted.some((text) => RETIRED.has(text)) && quoted.some((text) => CLIKCODE_LAUNCHER.test(text))) retiredRoots.add(root);
   }
   if (!retiredRoots.size) return undefined;
   const drop = new Set<number>();
@@ -81,35 +122,10 @@ export function stripRetiredToml(text: string): { text: string; removed: string[
   return { text: text.endsWith('\n') ? (next.endsWith('\n') ? next : `${next}\n`) : next.replace(/\n$/, ''), removed: [...retiredRoots] };
 }
 
-const CONFIGS = new Set(['mcp.json', '.claude.json', 'claude.json', 'config.toml']);
+/** Names a vendor config usually has, for a vendor the catalog does not name. */
+const CONFIGS = new Set(['mcp.json', '.claude.json', 'claude.json', 'config.toml', 'mcp_config.json', 'cline_mcp_settings.json']);
 
-/** One pass over this state's vendor profiles. A stamp stops the next worker
- * from walking them again for the same set of retired commands. */
-export async function dropRetiredVendorMcp(stateDir: string): Promise<number> {
-  const stampPath = join(stateDir, 'retired-mcp.txt');
-  if (await readFile(stampPath, 'utf8').then((text) => text.trim() === STAMP, () => false)) return 0;
-  const profiles = join(stateDir, 'profiles');
-  const removed: string[] = [];
-  const commands = await readdir(profiles).catch(() => [] as string[]);
-  for (const command of commands) {
-    const accounts = await readdir(join(profiles, command)).catch(() => [] as string[]);
-    for (const account of accounts) {
-      const root = join(profiles, command, account);
-      const files = await walkConfigs(root);
-      for (const file of files) {
-        const text = await readFile(file, 'utf8').catch(() => undefined);
-        if (!text) continue;
-        const stripped = file.endsWith('.toml') ? stripRetiredToml(text) : stripRetiredJson(text);
-        if (!stripped) continue;
-        await writeFile(file, stripped.text, 'utf8');
-        removed.push(...stripped.removed);
-      }
-    }
-  }
-  await writeFile(stampPath, `${STAMP}\n`, 'utf8').catch(() => undefined);
-  if (removed.length) lifecycle('mcp.retired', { removed: removed.length, names: [...new Set(removed)].join(',').slice(0, 200) });
-  return removed.length;
-}
+interface Target { path: string; format: 'json' | 'jsonc' | 'toml'; key?: readonly string[] }
 
 async function walkConfigs(directory: string, depth = 0): Promise<string[]> {
   if (depth > 4) return [];
@@ -122,4 +138,74 @@ async function walkConfigs(directory: string, depth = 0): Promise<string[]> {
     else if (CONFIGS.has(entry.name)) found.push(path);
   }
   return found;
+}
+
+/** Written beside, then renamed over: a vendor reading the file never sees half of it. */
+async function rewrite(path: string, text: string): Promise<void> {
+  const mode = (await stat(path)).mode & 0o777;
+  const temporary = `${path}.${process.pid}.retired.tmp`;
+  await writeFile(temporary, text, { encoding: 'utf8', mode });
+  await rename(temporary, path);
+}
+
+/** What to look at: the catalog's files for every vendor under the user's
+ * home (when `home` is given) and each account profile, then the usual names
+ * under the profiles. */
+async function targets(stateDir: string, home: string | undefined): Promise<Target[]> {
+  const found = new Map<string, Target>();
+  try {
+    for (const source of vendorSources()) {
+      if (source.format === 'yaml') continue; // no ClikCode-written server lives in a YAML file
+      for (const path of await vendorConfigFiles(source, home ?? join(stateDir, '.no-home'), stateDir)) {
+        if (!found.has(path)) found.set(path, { path, format: source.format, key: source.key });
+      }
+    }
+  } catch (error) {
+    lifecycle('mcp.retired', { error: `catalog unavailable: ${error instanceof Error ? error.message.slice(0, 160) : String(error)}` });
+  }
+  const profiles = join(stateDir, 'profiles');
+  for (const command of await readdir(profiles).catch(() => [] as string[])) {
+    for (const account of await readdir(join(profiles, command)).catch(() => [] as string[])) {
+      for (const path of await walkConfigs(join(profiles, command, account))) {
+        if (!found.has(path)) found.set(path, { path, format: path.endsWith('.toml') ? 'toml' : 'json' });
+      }
+    }
+  }
+  return [...found.values()];
+}
+
+/** One pass over this state's vendor configs. A stamp stops the next worker
+ * from walking them again for the same set of retired commands and the same
+ * reach of this pass. `home` is the user's home when this state directory is
+ * the user's own: a test or a sandbox state directory passes none, and no
+ * file outside it is read. */
+export async function dropRetiredVendorMcp(stateDir: string, home?: string): Promise<number> {
+  const stampPath = join(stateDir, 'retired-mcp.txt');
+  if (await readFile(stampPath, 'utf8').then((text) => text.trim() === STAMP, () => false)) return 0;
+  const profiles = join(stateDir, 'profiles');
+  const removed: string[] = [];
+  let changed = 0;
+  for (const target of await targets(stateDir, home)) {
+    try {
+      const text = await readFile(target.path, 'utf8').catch(quiet('harness/retired-mcp'));
+      if (!text || ![...RETIRED].some((name) => text.includes(name))) continue;
+      const stripped = target.format === 'toml' ? stripRetiredToml(text) : stripRetiredJson(text, target.key);
+      if (!stripped) continue;
+      // The user's own file is kept as it was, once, beside it.
+      if (!target.path.startsWith(profiles) && !existsSync(`${target.path}.pre-retired-mcp`)) await copyFile(target.path, `${target.path}.pre-retired-mcp`);
+      await rewrite(target.path, stripped.text);
+      removed.push(...stripped.removed);
+      changed += 1;
+    } catch (error) {
+      lifecycle('mcp.retired', { error: error instanceof Error ? error.message.slice(0, 160) : String(error), file: target.path.split(/[\\/]/).slice(-2).join('/') });
+    }
+  }
+  await writeFile(stampPath, `${STAMP}\n`, 'utf8').catch(quiet('harness/retired-mcp'));
+  if (removed.length) lifecycle('mcp.retired', { removed: removed.length, files: changed, names: [...new Set(removed)].join(',').slice(0, 200) });
+  return removed.length;
+}
+
+/** The user's home, when `stateDir` is the user's own state directory. */
+export function homeForOwnState(stateDir: string): string | undefined {
+  return stateDir === join(homedir(), '.clikcode') ? homedir() : undefined;
 }

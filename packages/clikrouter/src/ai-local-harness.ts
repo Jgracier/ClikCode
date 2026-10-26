@@ -1510,7 +1510,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       flag('disable-skills', 'Disable skills', 'Disable slash-command and skill expansion', 'tools', ['--disable-slash-commands']),
     ],
     managers: {
-      mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'] },
+      mcp: { label: 'MCP servers', serverFiles: [{ homeRelative: ['.gemini', 'config', 'mcp_config.json'], format: 'json', key: ['mcpServers'], dialect: 'mcp-servers' }], listArgv: ['mcp', 'list'], manageArgv: ['mcp'] },
       plugins: { label: 'Plugins', listArgv: ['plugin', 'list'], manageArgv: ['plugin'] },
       agents: { label: 'Agents', listArgv: ['agents'], manageArgv: ['agents'] },
     },

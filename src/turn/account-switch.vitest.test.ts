@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AiHarnessAccount } from '../harness/definition.js';
 
 const lifecycle = vi.hoisted(() => vi.fn());
-vi.mock('../runtime/lifecycle-log.js', () => ({ lifecycle }));
+vi.mock('../runtime/lifecycle-log.js', () => ({ lifecycle, quiet: () => () => undefined, swallowed: () => undefined }));
 
 import { switchAccountAfterFailure } from './account-switch.js';
 

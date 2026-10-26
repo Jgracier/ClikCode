@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const log = vi.hoisted(() => ({ lines: [] as Array<[string, unknown]> }));
-vi.mock('../runtime/lifecycle-log.js', () => ({ lifecycle: (event: string, data: unknown) => { log.lines.push([event, data]); } }));
+vi.mock('../runtime/lifecycle-log.js', () => ({ lifecycle: (event: string, data: unknown) => { log.lines.push([event, data]); }, quiet: () => () => undefined, swallowed: () => undefined }));
 vi.mock('../turn/vendor-process.js', () => ({ closePersistentTransport: () => new Promise<void>(() => undefined) }));
 vi.mock('../agent/session-state.js', () => ({ disposeSessionState: () => undefined, takeShellNotifications: () => [] }));
 vi.mock('../agent/background-agents.js', () => ({ existingSessionAgents: () => undefined }));
