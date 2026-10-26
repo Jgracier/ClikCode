@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { computerDriverAction, computerTools } from './computer.js';
+import { driverEnv, driverVersionNotice } from '../computer/driver.js';
 
 describe('computer_desktop boundary', () => {
   it('is one tool', () => {
@@ -35,5 +36,21 @@ describe('computer_desktop boundary', () => {
     expect(() => computerDriverAction({ pid: 0, window_id: 7, action: 'click', x: 1, y: 2 })).toThrow('exact window');
     expect(() => computerDriverAction({ pid: 42, action: 'click', x: 1, y: 2 })).toThrow('exact window');
     expect(() => computerDriverAction({ pid: 42, window_id: 7, action: 'hotkey', keys: ['ctrl', 'a;rm'] })).toThrow('simple keys');
+  });
+});
+
+describe('computer_desktop on Linux Wayland', () => {
+  it('turns on Cua\'s Wayland backend only in a Linux Wayland session', () => {
+    expect(driverEnv({ XDG_SESSION_TYPE: 'wayland' }, 'linux')).toEqual({ CUA_DRIVER_RS_ENABLE_WAYLAND: '1' });
+    expect(driverEnv({ WAYLAND_DISPLAY: 'wayland-0' }, 'linux')).toEqual({ CUA_DRIVER_RS_ENABLE_WAYLAND: '1' });
+    expect(driverEnv({ XDG_SESSION_TYPE: 'x11', DISPLAY: ':0' }, 'linux')).toEqual({});
+    expect(driverEnv({ WAYLAND_DISPLAY: 'wayland-0' }, 'darwin')).toEqual({});
+  });
+
+  it('names an installed cua-driver too old to see Wayland windows, and nothing else', () => {
+    expect(driverVersionNotice('cua-driver 0.21.0\n', true)).toContain('cua-driver update --apply');
+    expect(driverVersionNotice('cua-driver 0.38.0\n', true)).toBeUndefined();
+    expect(driverVersionNotice('cua-driver 1.0.0\n', true)).toBeUndefined();
+    expect(driverVersionNotice('cua-driver 0.21.0\n', false)).toBeUndefined();
   });
 });

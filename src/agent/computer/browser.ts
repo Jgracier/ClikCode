@@ -157,6 +157,19 @@ export async function frontComputerPage(stateDir: string): Promise<Page> {
   return page;
 }
 
+/** The process ids of the shared Chrome (browser, renderers, GPU), so a desktop window can be told apart from it.
+ * Undefined when Chrome cannot say. */
+export async function computerBrowserPids(stateDir: string): Promise<number[] | undefined> {
+  try {
+    const { browser } = await browserFor(stateDir, false);
+    const session = await browser.newBrowserCDPSession();
+    try {
+      const { processInfo } = await session.send('SystemInfo.getProcessInfo') as { processInfo: Array<{ id: number }> };
+      return processInfo.map(info => info.id).filter(id => Number.isSafeInteger(id) && id > 0);
+    } finally { await session.detach().catch(quiet('agent/computer/browser')); }
+  } catch { return undefined; }
+}
+
 /** Every tab in the shared Chrome, whichever chat holds it (for the rule that keeps a sign-in out of view). */
 export async function allComputerPages(stateDir: string): Promise<Page[]> {
   const { context } = await browserFor(stateDir, false);
