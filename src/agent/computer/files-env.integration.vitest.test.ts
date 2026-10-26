@@ -278,3 +278,66 @@ it.skipIf(!enabled || process.platform !== 'linux')('falls back to headless on L
   // PATH holds no xvfb-run (Chrome and node are found by absolute path), and there is no display.
   expect(await runsHeadless({ DISPLAY: undefined, WAYLAND_DISPLAY: undefined, CLIKCODE_BROWSER_HEADLESS: undefined, PATH: '/nonexistent' })).toBe(true);
 }, 60_000);
+
+it.skipIf(!enabled)('emulates a device, location, time zone and language, and resets', async () => {
+  await withSite((_request, response) => { response.setHeader('Content-Type', 'text/html'); response.end('<meta name="viewport" content="width=device-width"><h1>env</h1>'); }, async ({ run, base, stateDir }) => {
+    const { computerPage } = await import('./browser.js');
+    const look = async () => (await computerPage(stateDir)).evaluate(() => ({ width: innerWidth, dpr: devicePixelRatio, touch: navigator.maxTouchPoints, ua: navigator.userAgent, zone: Intl.DateTimeFormat().resolvedOptions().timeZone, lang: navigator.language }));
+    await run({ action: 'open', url: `${base}/` });
+    const real = await look();
+    const phone = await run({ action: 'viewport', device: 'iPhone 15', timezone: 'Asia/Tokyo', locale: 'ja-JP' });
+    expect(phone.isError).toBeUndefined();
+    expect(phone.output).toContain('device iPhone 15');
+    expect(await look()).toMatchObject({ width: 393, dpr: 3, touch: 5, zone: 'Asia/Tokyo', lang: 'ja-JP' });
+    expect((await look()).ua).toContain('iPhone');
+    const sized = await run({ action: 'viewport', width: 800, height: 600, scale: 2 });
+    expect(sized.output).toContain('800x600 at 2x');
+    expect(await look()).toMatchObject({ width: 800, dpr: 2 });
+    expect((await run({ action: 'viewport', timezone: 'Mars/Olympus' })).isError).toBe(true);
+    expect((await run({ action: 'viewport', device: 'Nokia 3310' })).output).toContain('No device called');
+    // Location: readable once the site may use it.
+    await run({ action: 'permissions', grant: ['geolocation'] });
+    await run({ action: 'viewport', geolocation: { latitude: 48.8566, longitude: 2.3522 } });
+    const position = await (await computerPage(stateDir)).evaluate(() => new Promise<number[]>(resolve => navigator.geolocation.getCurrentPosition(found => resolve([found.coords.latitude, found.coords.longitude]), () => resolve([]))));
+    expect(position).toEqual([48.8566, 2.3522]);
+    expect((await run({ action: 'viewport', reset: true })).output).toContain('Back to the real');
+    const back = await look();
+    expect(back).toMatchObject({ width: real.width, dpr: real.dpr, zone: real.zone, lang: real.lang });
+    expect(back.ua).toBe(real.ua);
+  });
+}, 90_000);
+
+it.skipIf(!enabled)('prints the page to a PDF in the downloads folder', async () => {
+  await withSite((_request, response) => { response.setHeader('Content-Type', 'text/html'); response.end('<title>Quarterly figures</title><h1>Revenue grew</h1>'); }, async ({ run, base, stateDir }) => {
+    await run({ action: 'open', url: `${base}/` });
+    const printed = await run({ action: 'pdf' });
+    expect(printed.isError).toBeUndefined();
+    expect(printed.output).toMatch(/Quarterly figures\.pdf \(/);
+    const file = /at (.*\.pdf)\./.exec(printed.output)![1]!;
+    expect(file.startsWith(join(stateDir, 'computer', 'downloads'))).toBe(true);
+    expect((await readFile(file)).subarray(0, 5).toString()).toBe('%PDF-');
+    const { pdfPages } = await import('./document-text.js');
+    expect((await pdfPages(new Uint8Array(await readFile(file)))).join(' ')).toContain('Revenue grew');
+    expect((await run({ action: 'pdf', file_name: 'my report', landscape: true })).output).toContain('my report.pdf');
+    expect((await run({ action: 'downloads' })).output).toContain('Quarterly figures.pdf');
+  });
+}, 60_000);
+
+it.skipIf(!enabled)('lists the site\'s cookies without their values, and clears them', async () => {
+  await withSite((_request, response) => {
+    response.setHeader('Content-Type', 'text/html');
+    response.setHeader('Set-Cookie', ['session=SUPERSECRETVALUE123; Path=/; HttpOnly', 'theme=dark; Path=/; Max-Age=86400']);
+    response.end('<h1>cookies</h1>');
+  }, async ({ run, base }) => {
+    await run({ action: 'open', url: `${base}/` });
+    const listed = await run({ action: 'cookies' });
+    expect(listed.output).toContain('2 cookies for 127.0.0.1');
+    expect(listed.output).toContain('- session (127.0.0.1/) expires session, httpOnly');
+    expect(listed.output).toMatch(/- theme \(127\.0\.0\.1\/\) expires \d{4}-/);
+    expect(listed.output).not.toContain('SUPERSECRETVALUE123');
+    expect(listed.output).not.toContain('dark');
+    const cleared = await run({ action: 'cookies', clear: true });
+    expect(cleared.output).toContain('Removed 2 cookies');
+    expect((await run({ action: 'cookies' })).output).toContain('has no cookies');
+  });
+}, 60_000);
