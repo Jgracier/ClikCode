@@ -226,6 +226,11 @@
         "category": "ClikCode"
       },
       {
+        "command": "clikcode.evenOutTabs",
+        "title": "Even Out Tabs",
+        "category": "ClikCode"
+      },
+      {
         "command": "clikcode.acceptProposedDiff",
         "title": "Accept Proposed Change",
         "category": "ClikCode",
@@ -321,6 +326,10 @@
           "command": "clikcode.newChatTab",
           "when": "resourceScheme != clikcode-diff && resourceScheme != clikcode-change",
           "group": "navigation@100"
+        },
+        {
+          "command": "clikcode.evenOutTabs",
+          "group": "9_clikcode@1"
         }
       ],
       "editor/context": [
