@@ -236,7 +236,7 @@ function TokenMeter({ live, usage }: { live: LiveTurn; usage?: TurnUsage }): JSX
  * the turn's waiting animation: while a call or sub-agent runs, that row
  * spins for itself (dots for a call, a ring for an agent) and this line keeps
  * only its shimmer, so no two spinners step in lockstep. Background work, which
- * has no row, is named beside it. The thought being had is this line's
+ * has no row, is named in the pinned section above the composer (RunningAgents), not here. The thought being had is this line's
  * tooltip, and opens under it. */
 export function Working({ live, asking, usage, reconnecting: away = false }: { live: LiveTurn | undefined; asking: boolean; usage?: TurnUsage; reconnecting?: boolean }): JSX.Element {
   const now = useNow(!away);
@@ -247,7 +247,6 @@ export function Working({ live, asking, usage, reconnecting: away = false }: { l
   const held = asking || away;
   // A running row spins for itself; this line then keeps a still mark.
   const rowRunning = Boolean(live?.activities.some((activity) => activity.kind === 'tool-start'));
-  const background = workingIndicator(live);
   const thought = asking ? undefined : live?.thought?.text;
   return (
     <div class="working-wrap">
@@ -263,7 +262,6 @@ export function Working({ live, asking, usage, reconnecting: away = false }: { l
         ) : null}
         {/* Not announced: a clock changing every second would be read out. */}
         {live && !held ? <WorkingDetail live={live} usage={usage} /> : null}
-        {background ? <span class="muted working-background">{background}</span> : null}
       </div>
       {open && thought ? <Reasoning text={thought} /> : null}
     </div>
