@@ -349,7 +349,7 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
     vscode.commands.registerCommand('clikcode.evenOutTabs', async () => {
       const editor = vscode.workspace.getConfiguration('workbench.editor');
       const saved = context.globalState.get<{ sizing?: string; maxWidth?: number }>('clikcode.tabSizingBeforeEvenOut');
-      if (saved) {
+      if (saved && editor.get('tabSizing') === 'fixed' && editor.get('tabSizingFixedMaxWidth') === 100_000) {
         await editor.update('tabSizing', saved.sizing, vscode.ConfigurationTarget.Global);
         await editor.update('tabSizingFixedMaxWidth', saved.maxWidth, vscode.ConfigurationTarget.Global);
         await context.globalState.update('clikcode.tabSizingBeforeEvenOut', undefined);
