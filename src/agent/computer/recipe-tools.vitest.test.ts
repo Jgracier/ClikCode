@@ -94,6 +94,7 @@ describe('dryRunRecipe', () => {
   const compacted = compactRecipeSteps(PROBELY).steps;
   it('checks every target on the live page and never presses a submit', async () => {
     const site = fakeProbely();
+    site.port.settleMs = 0;
     const report = await dryRunRecipe({ host: 'plus.probely.app', steps: compacted, keyPage: 'https://plus.probely.app/api-keys/add' }, site.port);
     expect(site.opened).toEqual(['https://plus.probely.app/api-keys/add']);
     expect(report.ok).toBe(true);
@@ -103,6 +104,7 @@ describe('dryRunRecipe', () => {
   });
   it('reports a step whose target is gone', async () => {
     const site = fakeProbely({ missing: ['Developer'] });
+    site.port.settleMs = 0;
     const report = await dryRunRecipe({ host: 'plus.probely.app', steps: compacted }, site.port);
     expect(report.ok).toBe(false);
     expect(report.steps.find(s => s.status === 'missing')?.step).toContain('Developer');
@@ -110,7 +112,7 @@ describe('dryRunRecipe', () => {
   it('signs in when the first target is not there, then opens the page again', async () => {
     const site = fakeProbely();
     let signedIn = false;
-    const port: DryRunPort = { ...site.port, look: async () => signedIn ? site.port.look() : { text: 'Log in', controls: [{ name: 'Log in' }], fields: ['Email'] }, login: async () => { signedIn = true; return true; } };
+    const port: DryRunPort = { ...site.port, settleMs: 0, look: async () => signedIn ? site.port.look() : { text: 'Log in', controls: [{ name: 'Log in' }], fields: ['Email'] }, login: async () => { signedIn = true; return true; } };
     const report = await dryRunRecipe({ host: 'plus.probely.app', steps: compacted }, port);
     expect(report.ok).toBe(true);
     expect(site.opened).toHaveLength(2);

@@ -44,7 +44,7 @@ export async function recipeCompactCommand(host: string | undefined): Promise<vo
   }
 }
 
-const printDry = (r: DryRunReport): string => `${r.host}: ${r.ok ? 'every checked step has its target on the page' : 'a step has no target on the page'} (opened ${r.opened}; nothing was submitted)\n${r.steps.map(s => `${s.index}. [${s.status}] ${s.step}${s.note ? ` - ${s.note}` : ''}`).join('\n')}`;
+const printDry = (r: DryRunReport): string => `${r.host}: ${r.ok ? 'every checked step has its target on the page' : 'a step has no target on the page'} (opened ${r.opened}; nothing was submitted)\n${r.steps.map(s => `${s.index}. [${s.status}] ${s.step}${s.note ? ` - ${s.note}` : ''}`).join('\n')}${r.landed ? `\nThe page now shows: ${r.landed.text || '(nothing)'}\nControls: ${r.landed.controls.join(' | ') || '(none)'}` : ''}`;
 
 /** Replays the recipe's selectors in the hidden browser against the live page, signing in with the saved login when the page asks, and submits nothing. */
 export async function recipeDryRunCommand(host: string | undefined): Promise<void> {

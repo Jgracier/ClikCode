@@ -110,9 +110,11 @@ export interface DryRunPort {
   click(name: string): Promise<string | undefined>;
   /** Sign in with the saved login when the page asks for it. */
   login?(): Promise<boolean>;
+  /** Pause between looks while the page loads (default 1.5 s; tests pass 0). */
+  settleMs?: number;
 }
 export interface DryStep { index: number; step: string; status: 'found' | 'missing' | 'not-checked'; note?: string }
-export interface DryRunReport { host: string; ok: boolean; steps: DryStep[]; opened: string }
+export interface DryRunReport { host: string; ok: boolean; steps: DryStep[]; opened: string; /** When a target was missing: where the page ended up, so the cause is visible (a sign-in page, a moved button). */ landed?: { controls: string[]; text: string } }
 
 const norm = (t: string): string => t.replace(/\s+/g, ' ').trim().toLowerCase();
 const SUBMITS = /^\W*(?:create|generate|save|submit|confirm|finish|register|sign ?up|publish|apply|done|add|continue|next|ok)\b/i;
@@ -137,8 +139,11 @@ export async function dryRunRecipe(recipe: Pick<Recipe, 'host' | 'steps' | 'keyP
   const report: DryRunReport = { host: recipe.host, ok: true, steps: [], opened };
   if (err) return { ...report, ok: false, steps: recipe.steps.map((s, index) => ({ index: index + 1, step: label(s), status: 'not-checked' as const, ...(index === 0 ? { note: `could not open ${opened}: ${err}` } : {}) })) };
   let view = await port.look();
+  // A page still drawing itself shows nothing yet: look again a few times before judging it.
+  const settle = async (): Promise<void> => { for (let n = 0; n < 4 && recipe.steps[0] && !targetOnPage(recipe.steps[0], view); n++) { await new Promise(r => setTimeout(r, port.settleMs ?? 1_500)); view = await port.look(); } };
+  await settle();
   if (recipe.steps[0] && !targetOnPage(recipe.steps[0], view) && port.login) {
-    if (await port.login().catch(() => false)) { await port.open(opened); view = await port.look(); }
+    if (await port.login().catch(() => false)) { await port.open(opened); view = await port.look(); await settle(); }
   }
   let skipped = false; // a submit was not pressed: pages after it never appear, so an absent target is unchecked, not missing
   for (const [i, step] of recipe.steps.entries()) {
@@ -161,5 +166,6 @@ export async function dryRunRecipe(recipe: Pick<Recipe, 'host' | 'steps' | 'keyP
     if (failed) { row.status = 'missing'; row.note = failed.slice(0, 120); report.ok = false; continue; }
     view = await port.look();
   }
+  if (!report.ok) report.landed = { controls: view.controls.map(c => c.name).slice(0, 14), text: view.text.replace(/\s+/g, ' ').trim().slice(0, 200) };
   return report;
 }
