@@ -25,7 +25,7 @@ import { registerSecret, scrubSecrets, showsSecret } from '../computer/secret-sc
 import { profileLoginAnswers } from '../computer/profile-login.js';
 import { Parked, park } from '../computer/parking.js';
 import { hideKeyLikeText } from '../computer/secret-finder.js';
-import { dialogNote, withDialogs } from '../computer/page-dialogs.js';
+import { answerDialog, bindDialogs, dialogNote, hasPendingDialog, pendingDialogNote, settleWaitingDialog, withDialogNotices, withDialogs } from '../computer/page-dialogs.js';
 import { FILES_ENV_ACTIONS, FILES_ENV_HELP, FILES_ENV_PARAMETERS, type FilesEnvAction, type FilesEnvArgs } from '../computer/files-env-schema.js';
 import { approvedUploadPath, isUploadPath } from '../computer/upload-files.js';
 import { bindDownloads, describeDownloads, downloadNotes } from '../computer/downloads.js';
@@ -436,6 +436,11 @@ export const computerWebTool = defineTool<WebArgs>({
       if (args.action === 'open') webAddress(args.url);
       const page = args.action === 'open' || args.action === 'open_email_link' || args.action === 'email_connect' || args.action === 'oauth_connect' ? await openComputerPage(ctx.stateDir, args.tab) : await computerPage(ctx.stateDir, args.tab);
       bindDownloads(page, ctx.stateDir, ctx.sessionId);
+      // A box the page raised and nobody answered holds the whole page: say so before anything touches it.
+      bindDialogs(page, DIALOG_AWARE.has(args.action));
+      const waiting = pendingDialogNote(page);
+      if (waiting && args.action !== 'dialog' && args.action !== 'open') return { output: waiting };
+      const leftBehind = args.action === 'open' ? await settleWaitingDialog(page, true) : undefined;
       // Playwright cannot be interrupted mid-call, so a stop returns at once
       // and the browser carries on harmlessly in the background.
       let onAbort = (): void => undefined;
@@ -446,8 +451,10 @@ export const computerWebTool = defineTool<WebArgs>({
         if (ctx.signal?.aborted) throw new Error('Stopped.');
         const done = await Promise.race([stopped, act(page, args, ctx)]);
         // The page the batch ended on, which is not `page` when a popup took over.
-        return done.isError ? done : withSignInHints(done, await computerPage(ctx.stateDir, args.tab).catch(() => page), ctx.stateDir);
-      } finally { ctx.signal?.removeEventListener('abort', onAbort); }
+        const shown = done.isError ? done : await withSignInHints(done, await computerPage(ctx.stateDir, args.tab).catch(() => page), ctx.stateDir);
+        const noted = withDialogNotices(shown, page);
+        return leftBehind ? { ...noted, output: `${leftBehind}\n\n${noted.output}` } : noted;
+      } finally { ctx.signal?.removeEventListener('abort', onAbort); bindDialogs(page, true); }
     } catch (error) {
       // A sign-in's own errors may echo what was typed, so only its planned messages are shown; a capture's are always the real reason.
       if (error instanceof Parked) return { output: error.message, isError: true };
@@ -482,6 +489,9 @@ export function inOrder<T>(key: string, job: () => Promise<T>): Promise<T> {
 }
 
 const handoffs = sharedState('handoffs', () => new Map<string, { link: Promise<string>; done: Promise<{ ok: true } | { ok: false; message: string }>; stop: AbortController }>());
+
+/** Actions that look at the page or act on it as the agent asked: a box the page raises meanwhile is held for the agent's answer. The others (a sign-in, a key capture) dismiss it. */
+const DIALOG_AWARE: ReadonlySet<string> = new Set(['click', 'fill', 'choose', 'press', 'scroll', 'wait', 'upload', 'steps', 'observe', 'network', 'dialog']);
 
 const INTERACTIONS: ReadonlySet<string> = new Set(['click', 'fill', 'choose', 'press', 'scroll', 'wait', 'upload']);
 
@@ -803,18 +813,24 @@ export async function runSteps(page: Page, steps: readonly Step[], ctx: ToolCont
       const done = await doStep(current, step, ctx);
       if (before && typeof done === 'string') noteStep(journalKey(ctx.stateDir, tab), before.url, step, before.label);
       if (typeof done === 'string') notes.push(done); else { notes.push(done.note); halted = true; }
-      await settle(current);
-      notes.push(...await downloadNotes(current));
-      const saved = await settleSignup(ctx.stateDir, current);
-      if (saved) notes.push(saved);
-      // The site refused the password just made (an error about length, characters or symbols next to the box): another,
-      // under looser rules, is typed in and the form sent again, up to three tries in all. Nothing of it reaches the model.
-      const made = generatedFor(current);
-      if (made && pendingSignupPassword(current) === made.password) {
-        const stepPage = current;
-        const retried = await retryRejectedPassword({ stateDir: ctx.stateDir, page: stepPage, username: pendingSignupUsername(stepPage),
-          ...(step.do === 'click' || (step.do === 'press' && step.key === 'Enter') ? { resubmit: () => doStep(stepPage, step, ctx) } : {}), settle });
-        if (retried) notes.push(retried);
+      // A box the step raised holds the page: nothing can be read from it until the agent answers.
+      if (step.do === 'press' || step.do === 'choose' || step.do === 'upload') await current.waitForTimeout(150);
+      const waiting = pendingDialogNote(current);
+      if (waiting) { notes.push(waiting); halted = true; }
+      else {
+        await settle(current);
+        notes.push(...await downloadNotes(current));
+        const saved = await settleSignup(ctx.stateDir, current);
+        if (saved) notes.push(saved);
+        // The site refused the password just made (an error about length, characters or symbols next to the box): another,
+        // under looser rules, is typed in and the form sent again, up to three tries in all. Nothing of it reaches the model.
+        const made = generatedFor(current);
+        if (made && pendingSignupPassword(current) === made.password) {
+          const stepPage = current;
+          const retried = await retryRejectedPassword({ stateDir: ctx.stateDir, page: stepPage, username: pendingSignupUsername(stepPage),
+            ...(step.do === 'click' || (step.do === 'press' && step.key === 'Enter') ? { resubmit: () => doStep(stepPage, step, ctx) } : {}), settle });
+          if (retried) notes.push(retried);
+        }
       }
     } catch (error) {
       // The page closing itself (a sign-in popup that finished) is read from the page, not from an error message.
@@ -824,7 +840,7 @@ export async function runSteps(page: Page, steps: readonly Step[], ctx: ToolCont
       }
       if (!halted) {
         // What changed, not the whole page again: a failed step in a long batch used to repeat thousands of tokens.
-        const view = await observeComputerPage(current, false, false, undefined, true).catch(quiet('agent/tools/computer-web'));
+        const view = hasPendingDialog(current) ? undefined : await observeComputerPage(current, false, false, undefined, true).catch(quiet('agent/tools/computer-web'));
         return { output: `${[...notes, `Step ${index + 1} (${step.do}${step.target ? ` ${step.target}` : ''}) failed: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`].join('\n')}${view ? `\n\n${view.output}` : ''}`, isError: true };
       }
     }
@@ -844,6 +860,7 @@ export async function runSteps(page: Page, steps: readonly Step[], ctx: ToolCont
       break;
     }
   }
+  if (hasPendingDialog(current)) return { output: notes.join('\n') };
   const view = await observeComputerPage(current, false, false, undefined, true);
   const problems = steps.some(step => step.do === 'fill' || step.do === 'choose') ? await formProblems(current) : [];
   return { output: `${notes.join('\n')}\n\n${view.output}${problems.length ? `\n\nOn the form: ${problems.join('; ')}.` : ''}` };
@@ -949,7 +966,8 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
   switch (args.action) {
     case 'open': {
       // An address that is a file download does not navigate: the file is saved and reported instead.
-      const isDownload = await withNetworkRetry(() => page.goto(webAddress(args.url), { waitUntil: 'domcontentloaded', timeout: 30_000 })).then(() => false, error => { if (error instanceof Error && /Download is starting/i.test(error.message)) return true; throw error; });
+      // Leaving the page was asked for, so a "leave this page?" box is accepted.
+      const { result: isDownload } = await withDialogs(page, true, () => withNetworkRetry(() => page.goto(webAddress(args.url), { waitUntil: 'domcontentloaded', timeout: 30_000 })).then(() => false, error => { if (error instanceof Error && /Download is starting/i.test(error.message)) return true; throw error; }), 0);
       if (isDownload) { const got = await downloadNotes(page, 30_000, true); return { output: got.length ? got.join('\n') : 'The address is a file download, but nothing was saved.' }; }
       await settle(page);
       await settleSignup(ctx.stateDir, page);
@@ -984,6 +1002,13 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       const replay = await replayRecipe(filled, (steps, guard) => runSteps(page, steps as Step[], ctx, args.tab, args.label, async current => { ended = current; return guard(); }), async () => scrubSecrets(await ended.ariaSnapshot({ mode: 'ai', timeout: 8_000 } as never) as string));
       if (replay.completed) await saveRecipe(ctx.stateDir, { host: recipe.host, loginRoute: recipe.loginRoute, steps: recipe.steps, ...(recipe.keyPage ? { keyPage: recipe.keyPage } : {}), ...(recipe.captureHint ? { captureHint: recipe.captureHint } : {}) }).catch(quiet('agent/tools/computer-web'));
       return { output: replay.output, ...(replay.isError ? { isError: true } : {}) };
+    }
+    case 'dialog': {
+      const said = await answerDialog(page, args.accept_dialog === true, args.text);
+      await page.waitForTimeout(300);
+      const next = pendingDialogNote(page);
+      if (next) return { output: `${said}\n\n${next}` };
+      return { output: `${said}\n\n${(await observeComputerPage(page, false, false, undefined, true)).output}` };
     }
     case 'observe': return observeComputerPage(page, ctx.acceptsImages === true, args.full === true, args.find);
     case 'steps':

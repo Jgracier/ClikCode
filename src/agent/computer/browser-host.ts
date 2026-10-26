@@ -2,6 +2,7 @@
 import { quiet } from '../../runtime/lifecycle-log.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { leaveDialogsToWorkers } from './page-dialogs.js';
 
 export function computerProfile(stateDir: string): string { return path.join(stateDir, 'computer', 'chrome'); }
 export function computerHostFile(stateDir: string): string { return path.join(stateDir, 'computer', 'host.json'); }
@@ -34,6 +35,7 @@ export async function runComputerHost(stateDir: string): Promise<void> {
     ignoreDefaultArgs: ['--enable-automation'],
     args: ['--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0', '--disable-blink-features=AutomationControlled'],
   }));
+  leaveDialogsToWorkers(context);
   const hostFile = computerHostFile(stateDir);
   const record = JSON.stringify({ pid: process.pid });
   try {
