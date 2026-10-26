@@ -242,7 +242,7 @@ export function writeTranscript(p: TerminalHarnessPrompter, input: TranscriptInp
   const liveConversation: string[] = [];
   if (hasTransientAssistant) {
     p.emitted.liveAssistantIndex = p.emitted.writtenCount();
-    const content = sanitizeTerminalText(p.liveResponse);
+    const content = sanitizeTerminalText(p.reveal.shown(p.liveResponse));
     const step = p.turnTranscript.advance({
       content,
       // The live answer is lexed from its last blank-line boundary rather

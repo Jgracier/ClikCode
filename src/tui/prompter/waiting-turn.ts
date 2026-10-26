@@ -218,7 +218,7 @@ export function startWaiting(
     && (this.currentSession?.messages?.length ?? 0) === out.anchor);
   // A new turn is the reader rejoining the conversation.
   this.alternateScrollback = 0;
-  if (!rejoined) this.liveResponse = '';
+  if (!rejoined) { this.liveResponse = ''; this.reveal.reset(); }
   // The last turn's plan, finished or left unfinished, is not this one's.
   if (!rejoined) { this.planEntries = []; this.planStart = undefined; }
   // A running turn always renders as stable messages, its submitted user
@@ -474,6 +474,7 @@ export function stopWaiting(this: TerminalHarnessPrompter, refresh = true, why?:
   if (turn?.submit && !this.steppedOut && !turn.cancelled) {
     this.notifyIfAway(`${this.currentSession?.name || 'ClikCode'}: the turn has finished`);
   }
+  this.reveal.flush();
   this.turn = undefined;
   this.backgroundTerminals = 0;
   this.thought = undefined;
