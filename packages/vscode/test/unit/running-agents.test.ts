@@ -15,8 +15,8 @@ describe('composer subagents', () => {
     live = upsertActivity(live, link);
     live = { ...live, background: { agents: 1, agentTasks: [{ id: 'task-a', label: 'Review auth' }] } };
     const section = RunningAgents({ live })!;
-    const children = (section as { props: { children: Array<{ props: { children: unknown[] } }> } }).props.children;
-    expect(children[1]!.props.children).toHaveLength(1);
+    const children = (section as { props: { children: unknown[] } }).props.children;
+    expect(children[0]).toHaveLength(1);
     const [end] = lifecycle.frame({ type: 'system', subtype: 'task_notification', tool_use_id: 'launch', task_id: 'task-a', status: 'completed' });
     live = upsertActivity(live, end!);
     expect(RunningAgents({ live: { ...live, background: undefined } })).toBeNull();
@@ -25,8 +25,8 @@ describe('composer subagents', () => {
     const live = { activities: [agent('a', 'tool-start'), agent('b', 'tool-start')] } as LiveTurn;
     const rows = (turn: LiveTurn): unknown[] => {
       const section = RunningAgents({ live: turn });
-      const children = (section as { props: { children: Array<{ props: { children: unknown[] } }> } }).props.children;
-      return children[1]!.props.children;
+      const children = (section as { props: { children: unknown[] } }).props.children;
+      return children[0] as unknown[];
     };
     expect(rows(live)).toHaveLength(2);
     expect(rows({ ...live, activities: [agent('a', 'tool-done'), agent('b', 'tool-start')] })).toHaveLength(1);

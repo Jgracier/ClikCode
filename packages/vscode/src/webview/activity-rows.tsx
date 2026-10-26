@@ -135,6 +135,32 @@ export function ChildLine({ live }: { live: LiveChild }): JSX.Element {
   );
 }
 
+/** How many of a running agent's own calls show under its line: the ones running now. */
+const AGENT_CHILDREN_SHOWN = 2;
+
+/** A running subagent as one line, the terminal's: its spinner, its name, how long it has run and
+ * how many tools it has used, and under it only the call or two it is running right now. Those
+ * come and go as the agent moves on, so the line stays short and shows it working. What it was
+ * asked and what it printed are one click away (the view button), not in the way. */
+export function AgentLine({ activity, workspace }: { activity: Activity; workspace?: string }): JSX.Element {
+  const children = liveChildren(activity, AGENT_CHILDREN_SHOWN);
+  const uses = activity.childTools;
+  return (
+    <div class="agent-line">
+      <div class="activity-line">
+        <span class="activity-status tone-accent" aria-label="running"><Spinner tone="tone-accent" agent /></span>
+        <ActivityLabel label={tensedLabel(activity.label, true)} workspace={workspace} />
+        {activity.startedAt ? <Clock since={activity.startedAt} /> : null}
+        {uses ? <span class="activity-outcome">{toolUses(uses)}</span> : null}
+        {activity.id ? <SubagentPanel key={activity.id} parentId={activity.id} agentId={activity.agentId} label={activity.label} running /> : null}
+      </div>
+      {children.length
+        ? children.map((entry) => <div key={entry.child.key} class="activity-child agent-child" title={entry.child.label}><ActivityGlyph status="done" /><span>{tensedLabel(entry.child.label, true)}</span></div>)
+        : activity.child ? <div class="activity-child agent-child" title={activity.child}><ActivityGlyph status="done" /><span>{activity.child}</span></div> : null}
+    </div>
+  );
+}
+
 export function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; workspace?: string; userIndex?: number }): JSX.Element {
   const id = rowId(activity);
   const [open, setOpenState] = useState(openRows.has(id));
