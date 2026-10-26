@@ -25,6 +25,8 @@ import { profileLoginAnswers } from '../computer/profile-login.js';
 import { Parked, park } from '../computer/parking.js';
 import { hideKeyLikeText } from '../computer/secret-finder.js';
 import { dialogNote, withDialogs } from '../computer/page-dialogs.js';
+import { FILES_ENV_ACTIONS, FILES_ENV_HELP, FILES_ENV_PARAMETERS, type FilesEnvAction, type FilesEnvArgs } from '../computer/files-env-schema.js';
+import { bindDownloads, describeDownloads, downloadNotes } from '../computer/downloads.js';
 import { SEND_TO_HELP, SEND_TO_SCHEMA } from './store-secret.js';
 import { destinationProblem, normalizeSendTo, type Destination } from '../computer/secret-destinations.js';
 import { captureSecret } from '../computer/secret-capture.js';
@@ -40,10 +42,10 @@ import type { ToolContext, ToolRunResult } from '../tool-contract.js';
 
 type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload'; target?: string; at?: 'start' | 'end'; text?: string; key?: string; direction?: 'up' | 'down'; accept_dialog?: boolean; gone?: boolean; seconds?: number };
 type WebArgs = {
-  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'profile' | 'open_email_link' | 'read_email_code' | 'email_connect' | 'oauth_connect' | 'notes' | 'recipe' | 'queue' | 'network' | 'preflight' | 'forget_login' | 'help';
+  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'profile' | 'open_email_link' | 'read_email_code' | 'email_connect' | 'oauth_connect' | 'notes' | 'recipe' | 'queue' | 'network' | 'preflight' | 'forget_login' | 'help' | FilesEnvAction;
   tab?: string; at?: 'start' | 'end'; url?: string; host?: string; note?: string; recipe_op?: 'save' | 'get' | 'run' | 'list'; login_route?: string; key_page?: string; capture_hint?: string; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
   new_account?: boolean; secret?: string; to?: string; with?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean; format?: string; options?: string[]; secret?: boolean }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; vendor?: string; owner?: string; env?: string; task?: { vendor: string; kind?: string; status?: string; reason?: string; note?: string; owner?: string; connectors?: string[] }; bodies?: boolean; tasks?: boolean; task_status?: string; task_reason?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
-};
+} & FilesEnvArgs;
 
 export function webAddress(value: string | undefined): string {
   if (!value) throw new Error('Open needs a website URL.');
@@ -276,7 +278,7 @@ async function settle(page: Page): Promise<void> {
   })).catch(quiet('agent/tools/computer-web')); // a navigation destroys the page being watched: the next look is a new page
 }
 
-const ACTION_LIST = 'open · close · observe · click · fill · choose · press · scroll · wait · upload · steps · login · handoff · capture_secret · send_secret · profile · open_email_link · read_email_code · email_connect · oauth_connect · notes · recipe · queue · network · preflight · forget_login · help';
+const ACTION_LIST = ['open · close · observe · click · fill · choose · press · scroll · wait · upload · steps · login · handoff · capture_secret · send_secret · profile · open_email_link · read_email_code · email_connect · oauth_connect · notes · recipe · queue · network · preflight · forget_login · help', ...FILES_ENV_ACTIONS].join(' · ');
 
 const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: ['action'], properties: {
     action: { type: 'string', description: ACTION_LIST },
@@ -325,6 +327,7 @@ const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: [
     task_status: { type: 'string' }, task_reason: { type: 'string' },
     secret_name: { type: 'string', description: 'capture_secret: name to save the key under (default: the site\'s name plus "/key").' },
     send_to: { ...SEND_TO_SCHEMA, description: 'capture_secret: ' + SEND_TO_HELP },
+    ...FILES_ENV_PARAMETERS,
   } };
 
 const WEB_DESCRIPTION = [
@@ -332,6 +335,7 @@ const WEB_DESCRIPTION = [
     'Actions: open (a URL) · observe (the page again; full: true adds header and footer; find: "words" shows only the lines that mention them, for a long page) · click · fill · choose (an option of a dropdown: target + text) · press · scroll · wait (for text to appear or go, up to 2 minutes; for jobs that finish on their own) · steps (several of those in order, one call, stops at the first failure) · login · handoff · capture_secret · profile · open_email_link (find the newest email from a sender in the signed-in Gmail and open a link in it, one call: verification and sign-in emails) · upload (a file input or its button + text: the name of a profile file detail ending _file such as logo_file; only files the user saved in the profile can be sent) · notes (read or add what was learned on a site: the URL that worked, the order of screens, what was missing; shown again whenever a page on that host is opened, so write one when a task finally works) · recipe (save the steps of a signup or key capture that worked, by control text, never secrets; run replays them and stops for the user at a captcha, code, payment or review page; list) · email_connect (one consent in this browser connects the signed-in Gmail; after that read_email_code and open_email_link read mail through the Gmail API, wait for it to arrive, and return only the code or the link) · oauth_connect (target = a ClikDeploy connector id: starts its OAuth connect, presses through the vendor consent screens in this signed-in browser (account named by the profile sso_email, Advanced / Go to ... (unsafe), Continue / Allow / Authorize), stops with a plain reason at a login password, MFA code, captcha or an unknown screen (sign in first with login), and confirms ClikDeploy shows an active connection) · read_email_code (the one-time code in the newest email from a sender, read in a tab of its own, so a sign-up that wants an emailed code does not need the user) · forget_login (remove the saved login for a site from the vault: target = the site, label = one account; returns only a count; use it for a login the site keeps refusing) · close.',
     'Each chat has its own tab. The user\'s autofill profile (name, email, phone, address, and any custom details you asked for with profile ask_fields) fills forms for you: fill a field with no text and it is filled from the profile, or the user is asked once and the answer is kept. If a site wants another format, fill that field with the exact text, and save the corrected value with action profile and fields. When a site offers Continue/Sign in with Google and the browser is already signed in to Google, prefer it: no new password or email check. If it offers GitHub and not Google, use Continue with GitHub (sign in to GitHub with the saved login; there is no Google sign-in inside GitHub). Only when neither is offered, fill the form with no text: the profile email fills it, and on a sign-up every password box gets a strong password made up for that site (fitted to what the page asks, retried if the site refuses it, saved with the login, never shown to you); a later sign-in fills the saved login. Every page can be read, including sign-in and signup forms; the values of password, code and card fields are masked. For anything only the user knows (a password, a code, an address, a phone number), fill the field with no text: a saved login for the site or the profile fills it, else the user is asked privately, and you are not shown the answer. That is all a sign-in or signup needs: fill the fields, click Next, repeat. (login does the same in one action for a plain email-then-password sign-in.) Never ask for a password or code in chat. When a sign-in page offers different ways in (root or IAM, another account), ask the user with ask_user, click their choice, then login. handoff returns a phone link for a CAPTCHA or MFA at once; give it to the user, then call handoff again to wait until they finish.',
     'Work through the whole task you were given without checking in at each step. Ask real choices (project, account, role set) once, up front, in one question; after that ask only when genuinely blocked (a sign-in they must type, a payment).',
+    FILES_ENV_HELP,
     'API keys: go to the key page, set the options, then capture_secret with target = the final Create button and a send_to plan. It presses the site\'s Copy button or reads the file it hands over, checks the key against its service, saves it to ClikCode Secrets Manager and sends it where send_to says. You never see the key. With no target it takes a key the page already shows; never click Regenerate just to see one.',
   ].join('\n');
 
@@ -354,6 +358,7 @@ export const computerWebTool = defineTool<WebArgs>({
       case 'handoff': return 'Hand off to phone';
       case 'capture_secret': return `Capture key${args.secret_name ? ` as ${args.secret_name}` : ''}`;
       case 'close': return 'Close browser';
+      case 'downloads': return 'List downloads';
       default: return `Web ${args.action}`;
     }
   },
@@ -424,8 +429,10 @@ export const computerWebTool = defineTool<WebArgs>({
         const count = await forgetSavedLogins(ctx.stateDir, site, args.label);
         return { output: count ? `Removed ${count} saved login${count === 1 ? '' : 's'} for ${site.replace(/^https?:\/\//, '').split('/')[0]}.` : `No saved login for ${site.replace(/^https?:\/\//, '').split('/')[0]}${args.label ? ' with that label' : ''}.` };
       }
+      if (args.action === 'downloads') return { output: await describeDownloads(ctx.stateDir, ctx.sessionId) };
       if (args.action === 'open') webAddress(args.url);
       const page = args.action === 'open' || args.action === 'open_email_link' || args.action === 'email_connect' || args.action === 'oauth_connect' ? await openComputerPage(ctx.stateDir, args.tab) : await computerPage(ctx.stateDir, args.tab);
+      bindDownloads(page, ctx.stateDir, ctx.sessionId);
       // Playwright cannot be interrupted mid-call, so a stop returns at once
       // and the browser carries on harmlessly in the background.
       let onAbort = (): void => undefined;
@@ -787,6 +794,7 @@ export async function runSteps(page: Page, steps: readonly Step[], ctx: ToolCont
       if (before && typeof done === 'string') noteStep(journalKey(ctx.stateDir, tab), before.url, step, before.label);
       if (typeof done === 'string') notes.push(done); else { notes.push(done.note); halted = true; }
       await settle(current);
+      notes.push(...await downloadNotes(current));
       const saved = await settleSignup(ctx.stateDir, current);
       if (saved) notes.push(saved);
       // The site refused the password just made (an error about length, characters or symbols next to the box): another,
@@ -930,7 +938,9 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
   }
   switch (args.action) {
     case 'open': {
-      await withNetworkRetry(() => page.goto(webAddress(args.url), { waitUntil: 'domcontentloaded', timeout: 30_000 }));
+      // An address that is a file download does not navigate: the file is saved and reported instead.
+      const isDownload = await withNetworkRetry(() => page.goto(webAddress(args.url), { waitUntil: 'domcontentloaded', timeout: 30_000 })).then(() => false, error => { if (error instanceof Error && /Download is starting/i.test(error.message)) return true; throw error; });
+      if (isDownload) { const got = await downloadNotes(page, 30_000, true); return { output: got.length ? got.join('\n') : 'The address is a file download, but nothing was saved.' }; }
       await settle(page);
       await settleSignup(ctx.stateDir, page);
       beginJournal(journalKey(ctx.stateDir, args.tab), page.url());

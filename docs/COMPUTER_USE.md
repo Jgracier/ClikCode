@@ -76,6 +76,16 @@ withheld while one holds a value). There is no "sign-in page" mode to get stuck 
   tabs it opened itself, so chats working at once do not collide. `close` closes that chat's
   tab only.
 
+## Files, dialogs and the browser's environment
+
+### Downloads
+Every file the browser downloads (a click on a link, a button, or `open` on a file's address) is saved
+in a folder of the chat's own, `<state dir>/computer/downloads/<chat>/`, and is not deleted by ClikCode.
+The tool result that follows the click or open says `Downloaded name.csv (8 B) at /path/name.csv`;
+`downloads` lists the folder again. Names are made safe on every operating system (no folders, no
+reserved characters, a clash becomes `name (1).ext`). The one exception is a key being captured with
+`capture_secret`: that download is read and deleted, as before.
+
 ## Getting an API key without the agent seeing it
 
 The agent signs in, sets the options, then makes one `capture_secret` call: the final

@@ -6,6 +6,7 @@
 import { quiet } from '../../runtime/lifecycle-log.js';
 import fs from 'node:fs/promises';
 import type { Download, Page } from 'playwright-core';
+import { holdDownloads } from './downloads.js';
 
 const MAX_BYTES = 256 * 1024;
 
@@ -25,10 +26,13 @@ export function watchDownload(page: Page): DownloadWatch {
   };
   const onDownload = (download: Download): void => { reading ??= read(download); };
   page.on('download', onDownload);
+  // While a key is being captured the file is read and deleted here, never kept in the downloads folder.
+  holdDownloads(page, true);
+  let held = true;
   return {
     // Resolves with the file's text once a download has finished; undefined while there is none.
     result: async () => reading ? reading : undefined,
-    stop: () => { page.off('download', onDownload); },
+    stop: () => { page.off('download', onDownload); if (held) { held = false; holdDownloads(page, false); } },
   };
 }
 
