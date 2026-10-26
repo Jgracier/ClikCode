@@ -10,6 +10,7 @@ import { computerHostFile, computerProfile } from './browser-host.js';
 import { sharedState } from './shared-state.js';
 import { watchDownloads } from './downloads.js';
 import { watchDialogs } from './page-dialogs.js';
+import { watchConsole } from './console-log.js';
 
 type Connected = { browser: Browser; context: BrowserContext };
 const running = sharedState('browser-running', () => new Map<string, Promise<Connected>>());
@@ -118,16 +119,60 @@ async function browserFor(stateDir: string, start: boolean): Promise<Connected> 
 const owned = sharedState('browser-owned', () => new Map<string, Page[]>());
 const ownerKey = (stateDir: string, tab?: string): string => (tab ? `${stateDir}\u0000${tab}` : stateDir);
 
-/** The newest tab still open; a popup that closed itself (a sign-in window) hands back to the page that opened it. */
+/** The tab a chat chose with `switch`, until a new popup is followed or it closes. */
+const chosen = sharedState('browser-chosen', () => new Map<string, Page>());
+
+/** The tab in front for this chat: the one it switched to, else the newest still open. A popup that closed itself
+ * (a sign-in window) hands back to the page that opened it. */
 function mine(stateDir: string, tab?: string): Page | undefined {
   const key = ownerKey(stateDir, tab);
   const stack = (owned.get(key) ?? []).filter(page => !page.isClosed());
   owned.set(key, stack);
+  const picked = chosen.get(key);
+  if (picked && stack.includes(picked)) return picked;
+  chosen.delete(key);
   return stack.at(-1);
 }
 
 /** Make `page` this chat's tab (a popup the chat's own page opened). */
-export function adoptPage(stateDir: string, page: Page, tab?: string): void { watchDownloads(page, stateDir); watchDialogs(page); const key = ownerKey(stateDir, tab); owned.set(key, [...(owned.get(key) ?? []).filter(old => old !== page), page]); }
+export function adoptPage(stateDir: string, page: Page, tab?: string): void {
+  watchDownloads(page, stateDir);
+  watchDialogs(page);
+  const key = ownerKey(stateDir, tab);
+  owned.set(key, [...(owned.get(key) ?? []).filter(old => old !== page), page]);
+  chosen.delete(key);
+  watchConsole(page);
+}
+
+/** Every tab this chat holds, in the order they were opened, and the one in front. Never another chat's tab. */
+export function ownedPages(stateDir: string, tab?: string): { pages: Page[]; current: Page | undefined } {
+  const current = mine(stateDir, tab);
+  return { pages: [...(owned.get(ownerKey(stateDir, tab)) ?? [])], current };
+}
+
+/** Bring one of this chat's own tabs to the front: later actions act on it. */
+export async function focusOwnedPage(stateDir: string, page: Page, tab?: string): Promise<void> {
+  const key = ownerKey(stateDir, tab);
+  if (!(owned.get(key) ?? []).includes(page) || page.isClosed()) throw new Error('That tab is not one of this chat\'s open tabs.');
+  chosen.set(key, page);
+  await page.bringToFront().catch(quiet('agent/computer/browser'));
+}
+
+/** Close one of this chat's own tabs; the rest stay. */
+export async function closeOwnedPage(stateDir: string, page: Page, tab?: string): Promise<void> {
+  const key = ownerKey(stateDir, tab);
+  if (!(owned.get(key) ?? []).includes(page)) throw new Error('That tab is not one of this chat\'s open tabs.');
+  owned.set(key, (owned.get(key) ?? []).filter(old => old !== page));
+  await page.close().catch(quiet('agent/computer/browser'));
+}
+
+/** A second tab for this chat (a page to keep while another is read); it becomes the one in front. */
+export async function openNewComputerPage(stateDir: string, tab?: string): Promise<Page> {
+  const { context } = await browserFor(stateDir, true);
+  const page = await context.newPage();
+  adoptPage(stateDir, page, tab);
+  return page;
+}
 
 /** This chat's tab, opened in the shared Chrome the first time it is needed. */
 export async function openComputerPage(stateDir: string, tab?: string): Promise<Page> {
@@ -183,6 +228,7 @@ export async function closeComputerPage(stateDir: string, tab?: string): Promise
   const key = ownerKey(stateDir, tab);
   const pages = owned.get(key) ?? [];
   owned.delete(key);
+  chosen.delete(key);
   for (const page of pages) await page.close().catch(quiet('agent/computer/browser'));
 }
 
