@@ -7,7 +7,7 @@ and closes the browser, `on` brings them back.
 | Tool | What it is for |
 |---|---|
 | `browser_use` | A Chrome with its own saved profile (Edge if Chrome is missing), shared by every terminal and VS Code window, never your personal profile. **Each chat gets its own tab**: a chat only sees, acts on and follows tabs it opened itself, so chats working at once do not collide. `close` closes that chat's tab only (see [Page control](#page-control) for tabs, history, scripts, screenshots and the console). |
-| `computer_use` | Everything outside the page, through [cua-driver](https://github.com/trycua/cua) (a separate install): a popup window, a native dialog, another app. Give it a `pid` and `window_id` from `windows` to act on one window. On Linux Wayland it finds windows through the accessibility bus (cua-driver 0.38 or newer) and acts on their elements; keys, scrolling and window screenshots need GNOME 45–49 with cua's Shell helper. |
+| `computer_use` | Everything outside the page, through [cua-driver](https://github.com/trycua/cua) (a separate install: `clikcode computer driver install`): a popup window, a native dialog, another app. Give it a `pid` and `window_id` from `windows` to act on one window. See [Desktop control](#desktop-control-computer_use) for the actions and what each OS can do. |
 
 They were called `computer_web` and `computer_desktop` before 2026-10-26; permission rules and MCP calls that use
 those names still reach the same tools.
@@ -278,6 +278,89 @@ Private prompts need a chat window open; nothing else does.
 AES-256-GCM file per login or secret. No setup or password. A login belongs to a site
 by host (a leading cloud-region label is ignored). The key sits beside the files, so
 this protects against a copied folder, not against other programs running as you.
+
+## Desktop control (`computer_use`)
+
+### Installing cua-driver
+
+`clikcode computer driver install` downloads the newest cua-driver for this OS and CPU from its GitHub release
+download URLs, so it does not touch the GitHub API (whose unauthenticated limit made Cua's own updater fail). The
+newest version comes from `gh` when it is signed in, else from the version named by Cua's published installer plus a
+probe for newer release assets. The archive must match the release's published checksum, and its Sigstore signature is
+verified when `cosign` is installed. It is unpacked to `~/.cua-driver/packages/releases/<version>-<target>/`, the
+`current` link is switched atomically (a directory junction on Windows), and the previous release stays on disk.
+
+| Command | What it does |
+|---|---|
+| `clikcode computer driver status [--offline]` | The installed version and path, the releases on disk, the newest release, and whether this desktop needs a newer one. |
+| `clikcode computer driver install [--version x.y.z] [--force]` | Install (the newest, or an exact version). Never downgrades without `--version`. |
+| `clikcode computer driver update` | Same as install of the newest; says so when already current. |
+| `clikcode computer driver rollback` | Switch back to the release that was active before the last install. |
+| `clikcode computer driver wayland-helper [--yes]` | Run Cua's bundled GNOME Shell helper installer, on GNOME 45-49 only (refused on 50 and newer, where Cua turned it off because it crashed the Shell). Without `--yes` it only explains. It asks for one log-out. Nothing runs it automatically. |
+
+On macOS, Cua's own installer places the signed app in `/Applications` (the macOS permission identity depends on that
+path), so `install` runs it pinned to the version found here; a pinned install makes no API call either. ClikCode finds
+`cua-driver` on `PATH`, else in `~/.cua-driver/packages/current/`, else in the macOS app, so `PATH` need not be set.
+When `cua-driver` is missing, `computer_use` says to run `clikcode computer driver install`; when the installed one is too
+old for a Wayland desktop it says `clikcode computer driver update`.
+
+### Actions
+
+| Action | Needs | Notes |
+|---|---|---|
+| `windows`, `apps` | | `apps` lists graphical apps (running ones with a visible window); `query` also searches installed apps. |
+| `observe` | | Desktop screenshot, or a window's accessibility tree (a 10 second walk budget and 1500 elements when cua-driver supports `timeout_ms`, so big Electron apps such as VS Code are not cut off at Cua's 1 second default). |
+| `click`, `double_click`, `right_click` | `element_token` or `x`,`y` | A window uses Cua's tools of the same name; the desktop uses `click` with a count or button. |
+| `drag` | `x`,`y` to `to_x`,`to_y` | |
+| `type`, `key`, `hotkey`, `scroll` | | |
+| `zoom` | window, `x`,`y` to `to_x`,`to_y` | A closer picture of part of a window; needs a model that can see images. |
+| `launch_app` | `app` and/or `urls` | By name (macOS: bundle id; Windows: name or package id with `!`). No paths, no flags; urls are http(s) only. |
+| `bring_to_front` | window | Leaves the window in front, which takes focus. |
+| `invoke_menu` | window, `path` | An exact menu path through accessibility, no pixels. |
+| `set_window_frame` | window, `x`,`y`,`width`,`height` | |
+| `screen_size` | | |
+| `clipboard_read`, `clipboard_write` | | Reading is private: only when the user asked to use what they copied; text passes secret scrubbing (key- and token-shaped text is hidden). |
+
+Not offered on purpose: `kill_app` (too destructive; closing is done through the app's own UI) and `mouse_button_down/up`
+(X11 only; `drag` covers it).
+
+**Foreground delivery.** Every input action runs in the background and leaves the user's focus alone. When Cua refuses
+because the window must be in front, the tool says so and the model may retry that one action with `delivery: "foreground"`,
+which briefly takes focus and puts it back. It is a per-call argument only, never a default, and the description
+tells the model to use it only when the user can spare the focus.
+
+### What each OS can do
+
+"Verified" means exercised on a real machine in this repository's development; "docs" means taken from Cua's published
+guides (`libs/cua-driver/rust/Skills/cua-driver/*.md`) and tool schemas (`cua-driver describe <tool>`), not run.
+
+| | Linux (GNOME Wayland) | Linux (X11) | macOS | Windows |
+|---|---|---|---|---|
+| Install command | verified (real downloads, checksum, flip, rollback) | same code path, not run | Cua's installer, pinned: not run (no cua-driver on the Macs available; both reachable, one macOS 15.7 and one 10.15) | layout and junction code from install.ps1: unit tests only, no Windows machine |
+| `windows`, `apps`, `screen_size` | verified (AT-SPI; cua-driver 0.38) | docs | docs | docs |
+| `observe` (tree, `timeout_ms`) | verified; window screenshots may be missing on Wayland | docs | docs | docs |
+| click / type by `element_token` | verified | docs | docs | docs |
+| double_click, right_click, drag by element or pixels | refused in the background on GNOME 50 Wayland (verified); needs foreground, which GNOME 50 also refuses | docs: background works (XI2 virtual pointer) | docs: background works (SkyLight per pid); macOS drag-and-drop sessions need foreground | docs: UIA invoke, else synthetic events; occluded targets need foreground |
+| key, hotkey, scroll | needs foreground on Wayland (verified refused); GNOME 45-49 with Cua's helper may allow it (docs) | docs: background | docs: background | docs: background for plain Win32; Chromium, GTK, VCL need foreground |
+| `delivery: "foreground"` | refused on GNOME 50 (verified: `foreground_unavailable`) | docs | docs | docs; needs UIAccess to reliably take focus |
+| `launch_app` | verified (`gnome-calculator`) | docs | docs (`bundle_id`, `urls`) | docs (`aumid`, `path`, `name`) |
+| `bring_to_front`, `invoke_menu` | refused on GNOME 50 (verified, needs activation) | docs | docs | docs |
+| `set_window_frame` | refused on Wayland by design (verified); EWMH on X11 (docs) | docs | docs | docs |
+| `zoom` | needs a window screenshot | docs | docs | docs |
+| `clipboard_read` / `clipboard_write` | verified | docs | docs | docs |
+| Permissions | none beyond the accessibility bus (`org.a11y.Bus`) | none | **Accessibility** and **Screen Recording** for `com.trycua.driver`; missing ones are reported with the fix | none for normal use; **elevated (administrator) windows cannot be driven** from a non-elevated process; session 0 has no desktop |
+
+On macOS a missing grant is detected from `cua-driver permissions status --json` (shown on `windows`) and from Cua's
+error text, and the model is told to ask the user to grant it (`cua-driver permissions grant`, then System Settings >
+Privacy & Security). Without Screen Recording the accessibility tree still works, so element actions continue. On
+Windows an access-denied or elevated-window refusal is explained as the administrator-window limit, and a session 0
+daemon is reported with `schtasks /Run /TN cua-driver-serve`.
+
+The password guard is unchanged in scope and works the same on every OS: a screenshot (`observe`, `zoom`) is refused only
+when a typed password, code or card number is on screen in the ClikCode browser, and a window screenshot of any other
+process is allowed. The browser's own process ids come from Chrome (`SystemInfo.getProcessInfo`) and are compared with
+the window owner's process id from `list_windows`, which is the OS process id on Linux, macOS and Windows alike; a
+window with no pid is guarded as if it were the browser.
 
 ## Limits
 
