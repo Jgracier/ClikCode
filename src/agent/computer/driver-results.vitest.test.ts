@@ -7,6 +7,19 @@ import {
 const app = (name: string, extra: Record<string, unknown> = {}) => ({ name, pid: 0, running: false, bundle_id: null, kind: null, windows: [], ...extra });
 const window = (id: number, title: string, width = 800, height = 600) => ({ window_id: id, title, width, height });
 
+describe('apps listing on macOS, where cua gives no window list per app', () => {
+  it('still lists the running desktop apps', () => {
+    const result = { structuredContent: { apps: [
+      { name: 'Calculator', pid: 36804, running: true, bundle_id: 'com.apple.calculator', kind: 'desktop' },
+      { name: 'Pages', running: false, bundle_id: 'com.apple.iWork.Pages', kind: 'desktop' },
+    ] } } as never;
+    const text = summarizeApps(result) ?? '';
+    expect(text).toContain('1 running app(s)');
+    expect(text).toContain('Calculator (pid 36804) [com.apple.calculator]: use the windows action');
+    expect(summarizeApps(result, 'Calc')).toContain('Calculator');
+  });
+});
+
 describe('apps listing', () => {
   const kernelThreads = Array.from({ length: 300 }, (_, i) => app(`kworker/${i}`, { pid: i + 2, running: true }));
   const result = { structuredContent: { apps: [

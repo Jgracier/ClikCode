@@ -30,11 +30,18 @@ export function findDriverBinary(env: NodeJS.ProcessEnv = process.env, platform:
 
 const driverCommand = (): string => findDriverBinary() ?? 'cua-driver';
 
+/** On macOS a permission belongs to the app that asked, so `--direct` (cua running inside ClikCode's own process) would
+ * need the grant for the terminal or editor that started ClikCode and finds no windows with the grant made to CuaDriver.app.
+ * Bare `mcp` proxies to CuaDriver.app, the identity `permissions grant` approves. Linux and Windows run it directly. */
+export function driverMcpArgs(platform: NodeJS.Platform = process.platform): string[] {
+  return platform === 'darwin' ? ['mcp'] : ['mcp', '--direct'];
+}
+
 function start(): Promise<McpClient> {
   if (connected && !connected.closed) return Promise.resolve(connected);
   if (pending) return pending;
   pending = McpClient.connect(
-    { name: 'clikcode-computer', transport: 'stdio', command: driverCommand(), args: ['mcp', '--direct'], env: driverEnv() },
+    { name: 'clikcode-computer', transport: 'stdio', command: driverCommand(), args: driverMcpArgs(), env: driverEnv() },
     { timeoutMs: 15_000 },
   ).then((client) => {
     connected = client;

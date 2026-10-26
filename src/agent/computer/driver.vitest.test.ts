@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DRIVER_MISSING, driverHome, findDriverBinary } from './driver.js';
+import { DRIVER_MISSING, driverHome, driverMcpArgs, findDriverBinary } from './driver.js';
 
 describe('finding cua-driver', () => {
   it('prefers the one on PATH, then our own active release, then the macOS app', () => {
@@ -17,5 +17,13 @@ describe('finding cua-driver', () => {
 
   it('names the one command that installs it', () => {
     expect(DRIVER_MISSING).toContain('clikcode computer driver install');
+  });
+});
+
+describe('how cua-driver is started', () => {
+  it('lets CuaDriver.app own the permissions on macOS and runs in-process elsewhere', () => {
+    expect(driverMcpArgs('darwin')).toEqual(['mcp']);
+    expect(driverMcpArgs('linux')).toEqual(['mcp', '--direct']);
+    expect(driverMcpArgs('win32')).toEqual(['mcp', '--direct']);
   });
 });
