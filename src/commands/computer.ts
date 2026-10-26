@@ -43,6 +43,19 @@ export async function computerUnattended(setting: string | undefined): Promise<v
     : 'Unattended is off: the browser tool asks you privately. Turn on with `clikcode computer unattended on`.\n');
 }
 
+/** `clikcode computer headless on|off`: run ClikCode's browser with no window. A Linux computer with no display does this by itself. */
+export async function computerHeadless(setting: string | undefined): Promise<void> {
+  const { headlessSetting, setHeadless } = await import('../agent/computer/settings.js');
+  const dir = stateDirectory();
+  if (setting === 'on' || setting === 'off') { await setHeadless(dir, setting === 'on'); await closeComputerBrowser(dir); }
+  else if (setting) throw new Error('Say on or off: clikcode computer headless on');
+  const on = await headlessSetting(dir);
+  if (isJsonDefaultMode()) return emitResult({ computer: { headless: on } });
+  process.stdout.write(on
+    ? 'Headless is on: ClikCode\'s browser runs with no window. Turn off with `clikcode computer headless off`.\n'
+    : 'Headless is off: ClikCode\'s browser opens a window (Linux with no display, or CLIKCODE_BROWSER_HEADLESS=1, still runs without one). Turn on with `clikcode computer headless on`.\n');
+}
+
 export async function computerSetEnabled(enabled: boolean): Promise<void> {
   await setComputerEnabled(stateDirectory(), enabled);
   if (!enabled) { await closeComputerBrowser(stateDirectory()); lockCredentialVault(stateDirectory()); }

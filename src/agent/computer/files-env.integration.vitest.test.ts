@@ -252,3 +252,29 @@ it.skipIf(!enabled)('reads a PDF and other documents as text', async () => {
     expect((await run({ action: 'open', url: `${base}/` })).output).toContain('web page');
   });
 }, 60_000);
+
+async function runsHeadless(env: Record<string, string | undefined>): Promise<boolean> {
+  const before = Object.fromEntries(Object.keys(env).map(key => [key, process.env[key]]));
+  for (const [key, value] of Object.entries(env)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  try {
+    return await withSite((_request, response) => { response.setHeader('Content-Type', 'text/html'); response.end('<h1>ok</h1>'); }, async ({ run, base, stateDir }) => {
+      const opened = await run({ action: 'open', url: `${base}/` });
+      expect(opened.isError).toBeUndefined();
+      expect(opened.output).toContain('ok');
+      const { computerPage } = await import('./browser.js');
+      return /HeadlessChrome/.test(await (await computerPage(stateDir)).evaluate(() => navigator.userAgent));
+    });
+  } finally {
+    for (const [key, value] of Object.entries(before)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+}
+
+it.skipIf(!enabled)('runs with no window when CLIKCODE_BROWSER_HEADLESS=1, and in a window otherwise', async () => {
+  expect(await runsHeadless({ CLIKCODE_BROWSER_HEADLESS: '1' })).toBe(true);
+  expect(await runsHeadless({ CLIKCODE_BROWSER_HEADLESS: undefined })).toBe(false);
+}, 90_000);
+
+it.skipIf(!enabled || process.platform !== 'linux')('falls back to headless on Linux with no display and no xvfb-run', async () => {
+  // PATH holds no xvfb-run (Chrome and node are found by absolute path), and there is no display.
+  expect(await runsHeadless({ DISPLAY: undefined, WAYLAND_DISPLAY: undefined, CLIKCODE_BROWSER_HEADLESS: undefined, PATH: '/nonexistent' })).toBe(true);
+}, 60_000);

@@ -19,6 +19,7 @@ export const FILES_ENV_HELP = [
   'HTTP sign-in: when a site shows the browser\'s own username/password box (HTTP Basic or Digest), open with http_auth true, or call auth (url = the site, default the open page; label = which saved login) and the saved login for that origin answers it, for that origin only. With no saved login the user is asked once, privately, and it is kept. You never see it. auth with clear true turns it off for the tab.',
   'Permissions: a site that asks for the camera, microphone, location, notifications or clipboard is denied by default (so no prompt blocks the page). To allow one, call permissions with grant (url = the site, default the open page), then reload or open the page again; deny takes it back; with neither it lists the state. A grant lasts while this session runs.',
   'Documents: when a tab shows a PDF, observe and open return its text with page markers (--- page 3 of 40 ---), capped; ask for other pages with pages. Plain text, JSON, XML and CSV tabs return their text; an image or other document says what it is. PDFs behind a sign-in work (the tab\'s cookies are used). A scan with no text layer says so: take a screenshot.',
+  'No Chrome: if open answers that ClikCode is downloading Chromium, wait a minute or two and open the page again; if it says the download failed, tell the user what it says to install.',
 ].join(' ');
 
 /** Plan-text label of one of these actions, or undefined for any other. */

@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 import { setTimeout as pause } from 'node:timers/promises';
 import type { Browser, BrowserContext, Page } from 'playwright-core';
 import { computerHostFile, computerProfile } from './browser-host.js';
+import { hostStatusFile, installingMessage, liveHostStatus, readHostStatus } from './browser-launch.js';
 import { sharedState } from './shared-state.js';
 import { watchDownloads } from './downloads.js';
 import { watchDialogs } from './page-dialogs.js';
@@ -62,6 +63,9 @@ async function startHost(stateDir: string): Promise<Connected> {
     try {
       const existing = await connect(stateDir);
       if (existing) return existing;
+      // A host from an earlier call is still fetching Chromium: say how far it is instead of starting a second one.
+      const working = await liveHostStatus(stateDir);
+      if (working?.state === 'installing') throw new Error(installingMessage(working));
       // A busy machine can miss the 8 second connect: while Chrome is alive, ask a few more times before calling it foreign.
       for (let again = 0; again < 4 && await externalChromeRunning(stateDir); again++) {
         await pause(1_500);
@@ -73,6 +77,7 @@ async function startHost(stateDir: string): Promise<Connected> {
       if (!entry) throw new Error('ClikCode could not start its browser host.');
       const hostArgs = [process.execPath, entry, 'computer-host', stateDir];
       const [command, ...argv] = hiddenDisplayCommand(hostArgs);
+      await fs.unlink(hostStatusFile(stateDir)).catch(quiet('agent/computer/browser'));
       const child = spawn(command!, argv, { detached: true, stdio: 'ignore', windowsHide: true });
       let startupError: Error | undefined;
       child.once('error', error => { startupError = error; });
@@ -80,15 +85,24 @@ async function startHost(stateDir: string): Promise<Connected> {
       for (let attempt = 0; attempt < 100; attempt++) {
         const result = await connect(stateDir);
         if (result) return result;
+        // The host says why it could not start (no browser installed and none could be fetched), or that it is fetching one.
+        const status = await readHostStatus(stateDir);
+        if (status?.state === 'installing') throw new Error(installingMessage(status));
+        if (status?.state === 'failed' && status.text) throw new Error(status.text);
         if (startupError || child.exitCode !== null) break;
         await pause(200);
       }
+      const last = await readHostStatus(stateDir);
+      if (last?.state === 'failed' && last.text) throw new Error(last.text);
       throw new Error('ClikCode could not start its browser. Check that Chrome or Edge is installed and the desktop is available.');
     } finally { await fs.unlink(lock).catch(quiet('agent/computer/browser')); }
   }
   for (let attempt = 0; attempt < 110; attempt++) {
     const result = await connect(stateDir);
     if (result) return result;
+    const status = await readHostStatus(stateDir);
+    if (status?.state === 'installing') throw new Error(installingMessage(status));
+    if (status?.state === 'failed' && status.text) throw new Error(status.text);
     await pause(200);
   }
   throw new Error('ClikCode Chrome could not start.');
@@ -289,7 +303,8 @@ export async function throwawayComputerPage(stateDir: string): Promise<Page> {
 /** On Linux the browser runs on its own virtual display so its windows never take focus from the user's
  * screen. Handoff and screenshots go over CDP and are unaffected. CLIKCODE_BROWSER_VISIBLE=1 shows it. */
 export function hiddenDisplayCommand(command: string[], env = process.env, platform = process.platform, hasXvfb = () => whichSync('xvfb-run')): string[] {
-  if (platform !== 'linux' || env.CLIKCODE_BROWSER_VISIBLE === '1' || !hasXvfb()) return command;
+  // Headless needs no display, virtual or real.
+  if (platform !== 'linux' || env.CLIKCODE_BROWSER_VISIBLE === '1' || /^(?:1|true|yes|on)$/i.test(env.CLIKCODE_BROWSER_HEADLESS ?? '') || !hasXvfb()) return command;
   return ['xvfb-run', '-a', '-s', '-screen 0 1440x900x24', ...command];
 }
 

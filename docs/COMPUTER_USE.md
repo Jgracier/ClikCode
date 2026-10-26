@@ -172,6 +172,19 @@ through the tab's own request context, so a PDF behind a sign-in works, then rea
 A scan with no text layer says so. A plain-text, JSON, XML or CSV tab returns its text; an image or any
 other document says what it is. Text that looks like a key is hidden, as on any page.
 
+### Headless, no display, and no Chrome
+- **Window or not.** `CLIKCODE_BROWSER_HEADLESS=1` (or `clikcode computer headless on`) runs the browser with
+  no window on any system (`=0` forces a window). On Linux with no `DISPLAY` or `WAYLAND_DISPLAY` and no
+  `xvfb-run` (a server, a container, ssh) it falls back to headless by itself instead of failing; with
+  `xvfb-run` it still uses a virtual display. macOS and Windows behave as before unless you ask.
+- **No browser installed.** ClikCode uses Chrome, then Edge. If neither exists it uses Playwright's own
+  Chromium if that is already downloaded, and otherwise downloads it once (`playwright-core install
+  chromium`, a few hundred MB, the same on Linux, macOS and Windows). While it downloads, `open` answers with
+  the progress ("Downloading Chromium ... 40% of 120 MiB, wait, then open the page again") instead of
+  waiting; the download continues in the background. If it cannot (offline, no disk), the error says so in plain
+  words with what to install, and a failed download is not retried for an hour. The detached browser process
+  reports why it could not start through `computer/host-status.json`, so these messages reach the agent.
+
 ## Getting an API key without the agent seeing it
 
 The agent signs in, sets the options, then makes one `capture_secret` call: the final
