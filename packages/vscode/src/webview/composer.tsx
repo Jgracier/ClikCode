@@ -314,7 +314,7 @@ export function Composer(props: {
   const enterAgain = enterAgainReady(model) && !text.trim() && !attachments.length;
   const firstWaiting = model.queued.findIndex((item) => !item.command);
   const placeholder = model.movedTo ? `This chat moved to ${model.movedTo.machine}` : !connected ? 'ClikCode is not connected'
-    : model.running ? (model.chatSettings?.send === 'queue' ? 'Queue a message for after this turn…' : 'Steer the running turn…')
+    : model.running ? (model.chatSettings?.send === 'queue' || !model.steerable ? 'Queue a message for after this turn…' : 'Steer the running turn…')
       : `Ask ${providerDisplayName(model, knownProviders()) ?? 'ClikCode'} anything`;
 
   const footerButton = useMemo(() => (name: Menu, content: JSX.Element, label: string, id: string) => (

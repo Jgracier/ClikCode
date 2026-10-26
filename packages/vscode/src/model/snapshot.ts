@@ -14,7 +14,8 @@ import type { ChatModel, LiveTurn } from './types';
 export function applySnapshot(model: ChatModel, event: Extract<WorkerEvent, { type: 'snapshot' }>): ChatModel {
 
   const next = { ...applySession(model, event.session, event.account),
-    background: event.background ?? backgroundWorkOf(event.live) };
+    background: event.background ?? backgroundWorkOf(event.live),
+    steerable: event.live?.steerable === true };
   // The worker attaches `live` to every snapshot while a turn runs, so
   // one without it says nothing is running there.
   // `stopped`: another window or the CLI stopped it -- ended as stopped.

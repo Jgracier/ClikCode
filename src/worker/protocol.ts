@@ -145,6 +145,8 @@ export type LiveTurn = {
   text: string; waitingLabel: string; prompt?: string;
   /** The live turn is the vendor's own background work (see waiting-start). */
   vendorWork?: true;
+  /** The turn can take a message into itself (it has a steering port): Enter again on a waiting message can put it in. */
+  steerable?: true;
   activities?: LiveActivity[]; plan?: PlanEntry[];
   /** The rest of what an attached window has drawn (additive): the thought
    * being had, the turn's settled thoughts / plan / notices / approval
@@ -234,6 +236,8 @@ export type WorkerEvent =
    * every window, as it said it. */
   | { type: 'out-of-turn'; kind: 'message' | 'thought'; text: string; mode: 'append' | 'replace' }
   | { type: 'stopping'; restoreDraft?: true }
+  /** The running turn gained or lost a way to take a message into itself. */
+  | { type: 'steerable'; value: boolean }
   /** A Stop that has nothing left to end: `nothing` when there was no turn
    * and no submit in flight to stop, else the vendor's background work it
    * stopped. Clients clear "stopping" on it. */
@@ -259,9 +263,7 @@ export type WorkerEvent =
    * not the client's guess. The client used to assume "queued" for every one
    * and never learn otherwise, so a message steered straight into the answer
    * said "queued for next turn" for the rest of the turn. */
-  /** `unsteered`: queued though steering was asked for -- nothing running
-   *  could take a steer (LiveTurnInputResult.unsteered). */
-  | { type: 'submission'; id: string; disposition: 'steered' | 'queued' | 'error'; message?: string; unsteered?: boolean;
+  | { type: 'submission'; id: string; disposition: 'steered' | 'queued' | 'error'; message?: string;
     /** Where a steered message was placed (its acknowledgement's order). */
     seq?: number; responseOffset?: number }
   /** The worker is exiting (idle timeout, explicit stop, an unrecoverable

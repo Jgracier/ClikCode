@@ -1,4 +1,5 @@
 /** The waiting-turn state machine: starting and stopping a turn or other wait, the tick and clock, queued and steered submissions, and taking a message back. */
+import { randomUUID } from 'node:crypto';
 import { lifecycle } from '../../runtime/lifecycle-log.js';
 import { isModelStartPhase } from '../../harness/protocol/turn-pace.js';
 import { editWaitingComposer } from '../composer-edit.js';
@@ -34,12 +35,10 @@ export function editTurnDraft(this: TerminalHarnessPrompter, turn: WaitingTurn, 
  *  not send them. One still being submitted (`sending`) is not waiting. */
 export function waitingUserMessages(this: TerminalHarnessPrompter): Array<{ id: string; text: string } & WaitingMessage> {
   const stored = (this.currentSession?.queuedTurns ?? []).filter((item) => item.kind !== 'command' && item.kind !== 'notification' && !this.takingBack.has(item.id));
-  const startedAt = this.currentSession?.pendingTurn?.startedAt;
-  const unsteered = (id: string): WaitingMessage => (this.waitingSubmissions.some((item) => item.id === id && item.unsteered) ? { unsteered: true } : {});
   return [
-    ...stored.map((item) => ({ id: item.id, text: item.text, ...(item.steer === true && startedAt !== undefined ? { held: true } : {}), ...unsteered(item.id) })),
+    ...stored.map((item) => ({ id: item.id, text: item.text, ...(item.steer === true ? { held: true } : {}) })),
     ...this.waitingSubmissions.filter((item) => item.state === 'queued' && item.id && !this.takingBack.has(item.id) && !stored.some((entry) => entry.id === item.id))
-      .map((item) => ({ id: item.id!, text: item.text, ...unsteered(item.id!) })),
+      .map((item) => ({ id: item.id!, text: item.text })),
   ];
 }
 
@@ -48,7 +47,7 @@ export function waitingUserMessages(this: TerminalHarnessPrompter): Array<{ id: 
  * still being submitted has not been answered yet: a quick double Enter
  * must not send it twice. */
 export function enterAgainReady(this: TerminalHarnessPrompter): boolean {
-  return enterAgainSends(this.waitingUserMessages());
+  return enterAgainSends(this.waitingUserMessages(), this.steerable);
 }
 
 /** The turn has an answer: text, or a tool. A thought is not one. */
@@ -105,25 +104,25 @@ export function submitWaiting(this: TerminalHarnessPrompter, text: string, allow
   // typed value means the best match: `/model op` applies opus.
   const line = asCommand ? completedCommandLine(text, this.paletteCommands) : text;
   const localId = ++this.waitingSubmissionId;
+  // The window names the message, so its row and its saved copy are one thing by identity from the first moment.
+  const id = randomUUID();
   // A message gets a row, because the user needs to know where their words
   // went. A command does not: it applies (the footer shows the model) or runs
   // when the turn ends, and says nothing of either.
   if (!asCommand) {
     this.waitingSubmissions.push({
-      localId, text, responseOffset: this.liveResponse.length, sequence: ++this.timelineSequence, state: 'sending',
+      localId, id, text, responseOffset: this.liveResponse.length, sequence: ++this.timelineSequence, state: 'sending',
     });
   }
   this.updateWaiting();
-  const write = submit(line).then((result) => {
+  const write = (asCommand ? submit(line) : submit(line, id)).then((result) => {
     const item = this.waitingSubmissions.find((entry) => entry.localId === localId);
     if (item) {
       item.state = result.disposition;
-      item.id = result.submission.id;
       // Its place in the turn is the moment it was acknowledged: rows that
       // began before sort above it, rows that began after sort below
       // (standard 1.5), not where it was typed.
       if (result.disposition === 'steered') item.ack = { sequence: ++this.timelineSequence, responseOffset: this.liveResponse.length };
-      if (result.unsteered) item.unsteered = true;
     } else if (asCommand && result.disposition === 'command') {
       this.updateWaiting();
     } else if (asCommand) {
@@ -131,7 +130,7 @@ export function submitWaiting(this: TerminalHarnessPrompter, text: string, allow
       // message, with its row, as if it had never looked like a command.
       this.waitingSubmissions.push({
         localId, text, responseOffset: this.liveResponse.length, sequence: ++this.timelineSequence,
-        state: result.disposition, id: result.submission.id, ...(result.unsteered ? { unsteered: true } : {}),
+        state: result.disposition, id: result.submission.id,
       });
     }
     this.updateWaiting();
@@ -181,7 +180,7 @@ export function startWaiting(
   this: TerminalHarnessPrompter,
   message: string,
   onCancel?: (restoreDraft: boolean, trigger?: CancelTrigger) => void,
-  onSubmit?: (text: string) => Promise<LiveTurnInputResult>,
+  onSubmit?: (text: string, id?: string) => Promise<LiveTurnInputResult>,
   onCommand?: (text: string) => Promise<LiveTurnInputResult>,
   onLeave?: () => void,
   onTakeBack?: (id: string) => Promise<TakeBackOutcome>,
@@ -475,6 +474,7 @@ export function stopWaiting(this: TerminalHarnessPrompter, refresh = true, why?:
     this.notifyIfAway(`${this.currentSession?.name || 'ClikCode'}: the turn has finished`);
   }
   this.reveal.flush();
+  this.steerable = false;
   this.turn = undefined;
   this.backgroundTerminals = 0;
   this.thought = undefined;

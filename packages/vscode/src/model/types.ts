@@ -230,6 +230,7 @@ export interface ChatModel {
   /** `automatic`: a prompt ClikCode sent itself, drawn as this notice (TranscriptMessage.automatic). */
   messages: Array<{ role: 'user' | 'assistant'; content: string; automatic?: string }>;
   notes: Note[];
+  /** `held`: marked to go into the running turn, so it is already going in. */
   queued: Array<{ id: string; text: string; command: boolean; held?: boolean }>;
   running: boolean;
   /** This client's submitted prompt, until a snapshot carries it. */
@@ -237,6 +238,8 @@ export interface ChatModel {
   /** The running turn's prompt is ClikCode's own: this notice is drawn in its place. */
   pendingNotice?: string;
   live?: LiveTurn;
+  /** The running turn can take a message into itself (the worker says so): Enter again on a waiting message can put it in. */
+  steerable?: boolean;
   /** Vendor background work continues after a parent turn ends. */
   background?: BackgroundWork;
   /** This client started the running turn (else it follows another's). */
@@ -254,7 +257,7 @@ export interface ChatModel {
   /** A sign-in the bridge is running: its card shows the link and code. */
   signIn?: { id: string; name: string; url?: string; code?: string; ask?: { prompt: string; secret?: boolean } };
   /** A message typed during the turn and what became of it. */
-  submissions: Array<{ id: string; text: string; disposition?: string; unsteered?: boolean }>;
+  submissions: Array<{ id: string; text: string; disposition?: string }>;
   /** Read by the extension after each change of conversation. */
   chatSettings?: IdeChatSettings;
   provider?: IdeProvider;

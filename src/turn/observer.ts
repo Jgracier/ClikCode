@@ -38,7 +38,7 @@ export interface TurnObserver {
   startWaiting(
     message: string,
     onCancel?: (restoreDraft: boolean) => void,
-    onSubmit?: (text: string) => Promise<LiveTurnInputResult>,
+    onSubmit?: (text: string, id?: string) => Promise<LiveTurnInputResult>,
     /** A ClikCode slash command typed during the turn: queued, then run when
      * the turn ends. See tui/slash/queue.ts. */
     onCommand?: (text: string) => Promise<LiveTurnInputResult>,

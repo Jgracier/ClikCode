@@ -32,7 +32,9 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       // Submissions stay: the messages the turn saved are not here yet, and a
       // steered one would leave the screen for the frames in between. The
       // snapshot that carries them settles them (applySession).
-      return { ...endTurn(model, event.stopped === true), pendingPrompt: undefined, approvals: [], stopPending: undefined };
+      return { ...endTurn(model, event.stopped === true), pendingPrompt: undefined, approvals: [], stopPending: undefined, steerable: false };
+    case 'steerable':
+      return { ...model, steerable: event.value };
     // The worker accepted a Stop: the one source of "stopping".
     case 'stopping':
       if (model.live?.stopping || model.stopPending) return model;
@@ -147,7 +149,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       return withNote(failed, { kind: 'notice', level: exhausted ? 'info' : 'error', text: msg });
     }
     case 'submission': {
-      const submissions = model.submissions.map((item) => (item.id === event.id ? { ...item, disposition: event.disposition, ...(event.unsteered ? { unsteered: true } : {}) } : item));
+      const submissions = model.submissions.map((item) => (item.id === event.id ? { ...item, disposition: event.disposition } : item));
       if (event.disposition !== 'steered') return { ...model, submissions };
       // Taken into the turn: out of the queue now, and in the turn where it
       // was acknowledged -- not a row at the bottom until a snapshot says so.

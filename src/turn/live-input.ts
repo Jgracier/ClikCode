@@ -29,9 +29,6 @@ export interface LiveTurnInputResult {
   /** For a `command`: it took effect at once (`applied`) or waits for the
    * turn boundary (`later`). The composer acknowledges it either way. */
   commandOutcome?: 'applied' | 'later';
-  /** Steering was asked for and nothing running can take a message (an agent
-   * that has no steering). It waits for the turn to end, and the row says so. */
-  unsteered?: true;
 }
 
 /** What a running turn offers for taking a message into itself. ClikCode only passes the message on
@@ -78,6 +75,7 @@ export class LiveTurnInputBroker {
   private delivering: string | undefined;
   private readonly delivered = new Set<string>();
   private afterDelivery?: () => void;
+  private steerableChanged?: (steerable: boolean) => void;
 
   constructor() {
     this.ledgerReady = new Promise((resolve) => { this.resolveLedgerReady = resolve; });
@@ -94,10 +92,16 @@ export class LiveTurnInputBroker {
     this.afterDelivery = handler;
   }
 
+  /** Told when the turn gains or loses a way to take a message in, so every window knows whether Enter again can. */
+  onSteerableChange(handler?: (steerable: boolean) => void): void {
+    this.steerableChanged = handler;
+  }
+
   /** The turn's way of taking a message in, or none (the turn ended, or its agent has none). */
   setSteerPort(port?: SteerPort): void {
     this.resolvePortGone?.();
     this.port = port;
+    try { this.steerableChanged?.(port !== undefined); } catch { /* fail-open-ok: presentation only */ }
     if (!port) return;
     this.portGone = new Promise<'gone'>((resolve) => { this.resolvePortGone = () => resolve('gone'); });
     port.onWindow = () => { void this.run(() => this.deliver(true)); };
@@ -180,7 +184,7 @@ export class LiveTurnInputBroker {
       await ledger.queue(submission, options.steer);
       if (options.steer) await this.deliver(false);
       if (this.delivered.has(id)) return { disposition: 'steered' as const, submission };
-      return { disposition: 'queued' as const, submission, ...(options.steer && !this.port ? { unsteered: true as const } : {}) };
+      return { disposition: 'queued' as const, submission };
     });
   }
 

@@ -19,7 +19,7 @@ export function QueueRows({ model, enterAgain, firstWaiting }: { model: ChatMode
       {model.queued.map((item, index) => (
         <div key={item.id} class="queued-item">
           <Icon name={item.command ? 'terminal-cmd' : 'clock'} /><span class="queued-text" title={item.text}>{item.text}</span>
-          <span class="muted">{queuedRowLabel(model, item, index === firstWaiting && enterAgain)}</span>
+          <span class="muted">{queuedRowLabel(item, index === firstWaiting && enterAgain)}</span>
           <button type="button" class="icon-button tiny" title="Edit: take it back into the message box" aria-label="Edit queued message"
             onClick={() => post({ type: 'unqueue', id: item.id, edit: true })}><Icon name="edit" /></button>
           <button type="button" class="icon-button tiny" title="Remove from the queue" aria-label="Remove queued message"
