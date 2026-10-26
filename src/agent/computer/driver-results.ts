@@ -23,7 +23,9 @@ export function summarizeApps(result: McpCallResult, query?: string): string | u
   const apps = (structured.apps as AppRecord[]).filter((app) => app && typeof app === 'object' && typeof app.name === 'string');
   const needle = query?.trim().toLowerCase();
   const matches = (app: AppRecord): boolean => !needle || [app.name, app.bundle_id, ...(app.windows ?? []).map((window) => window.title)].some((part) => typeof part === 'string' && part.toLowerCase().includes(needle));
-  const running = apps.filter((app) => app.running === true && visibleWindows(app).length > 0 && matches(app));
+  // One process can match several launcher entries (VS Code's .desktop and snap ids): list it once.
+  const seen = new Set<unknown>();
+  const running = apps.filter((app) => app.running === true && visibleWindows(app).length > 0 && matches(app) && (app.pid === undefined || !seen.has(app.pid) && seen.add(app.pid)));
   const installed = apps.filter((app) => app.running !== true && Boolean(app.kind) && Boolean(needle) && matches(app));
   const hiddenInstalled = apps.filter((app) => app.running !== true && Boolean(app.kind)).length;
   const lines: string[] = [];
