@@ -20,6 +20,7 @@ import { firstErrorLine } from '../turn/tool-log.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import { abortable, type CallOutcome, SHELL_TOOLS, stableStringify, categoryForTool } from './turn-support.js';
 import { releaseHeldSteers, steerAlert, type TurnRuntime } from './turn-runtime.js';
+import { currentToolName } from './computer/tool-names.js';
 
 const STREAM_EVENT_INTERVAL_MS = 150;
 
@@ -177,7 +178,7 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
   };
 
   const executeCall = async (call: ModelToolCall): Promise<ToolRunResult> => {
-    const tool: ToolDefinition | undefined = tools.find((candidate) => candidate.name === call.name);
+    const tool: ToolDefinition | undefined = tools.find((candidate) => candidate.name === currentToolName(call.name));
     let label = call.name;
     if (tool) { try { label = tool.label(call.args); } catch { /* invalid args: fall back to the name */ } }
     const category = categoryForTool(tool, call.args && typeof call.args === 'object' ? call.args as Record<string, unknown> : undefined);
@@ -247,7 +248,7 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
    * order the model asked, so a read after a write sees the write. */
   const executeCalls = async (calls: readonly ModelToolCall[], collected: CallOutcome[]): Promise<void> => {
     const isRead = (call: ModelToolCall): boolean => {
-      const tool = tools.find((candidate) => candidate.name === call.name);
+      const tool = tools.find((candidate) => candidate.name === currentToolName(call.name));
       if (!tool) return false;
       if (tool.class === 'read') return true;
       try { return tool.concurrent?.(call.args) === true; } catch { return false; }
@@ -313,7 +314,7 @@ export async function runToolCalls(rt: TurnRuntime, runner: ToolRunner, calls: r
   }
 
   for (const { call, result: outcome } of outcomes) {
-    const toolClass = tools.find((candidate) => candidate.name === call.name)?.class;
+    const toolClass = tools.find((candidate) => candidate.name === currentToolName(call.name))?.class;
     const stalled = rt.stall.record(`${call.name}\0${stableStringify(call.args)}`, {
       failed: Boolean(outcome.isError),
       mayChangeState: toolClass === 'write' || toolClass === 'exec',
