@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computerDriverAction, computerTools } from './computer.js';
+import { backgroundOnly, backgroundOnlyNotice, computerDriverAction, computerTools } from './computer.js';
 import { driverEnv, driverVersionNotice } from '../computer/driver.js';
 
 describe('computer_desktop boundary', () => {
@@ -52,5 +52,11 @@ describe('computer_desktop on Linux Wayland', () => {
     expect(driverVersionNotice('cua-driver 0.38.0\n', true)).toBeUndefined();
     expect(driverVersionNotice('cua-driver 1.0.0\n', true)).toBeUndefined();
     expect(driverVersionNotice('cua-driver 0.21.0\n', false)).toBeUndefined();
+  });
+
+  it('answers Cua\'s foreground-only refusal with what this tool can do instead', () => {
+    const refused = { output: 'Background delivery is not available: ... Retry this action with delivery_mode:"foreground"', isError: true };
+    expect(backgroundOnly(refused).output).toBe(backgroundOnlyNotice);
+    expect(backgroundOnly({ output: 'Clicked element [30].' }).output).toBe('Clicked element [30].');
   });
 });

@@ -56,6 +56,13 @@ export function computerDriverAction(args: DesktopArgs): { name: string; args: R
   }
 }
 
+/** Cua's refusal names a foreground mode this tool does not offer; say what does work instead. */
+const BACKGROUND_UNAVAILABLE = /Background delivery is not available/;
+export const backgroundOnlyNotice = 'This desktop (Linux Wayland) cannot send keys, hotkeys or scrolling to a window without bringing it to the front, which this tool does not do. Act on elements instead: observe, then click the button the key would press, or type into the field by its element_token.';
+export function backgroundOnly<T extends { output: string; isError?: boolean }>(result: T): T {
+  return result.isError && BACKGROUND_UNAVAILABLE.test(result.output) ? { ...result, output: backgroundOnlyNotice } : result;
+}
+
 export const computerDesktopTool = defineTool<DesktopArgs>({
   name: 'computer_desktop', class: 'exec',
   description: 'Control the local desktop through cua-driver. Use it for what page tools cannot reach: a browser popup window, a native permission or file dialog, or any other app. `windows` lists windows; `observe`, then click, type, key, hotkey or scroll. With no pid and window_id it acts on the primary desktop by screenshot coordinates; with both (from `windows`) it acts on that one window and prefers a fresh element_token. Always observe first; coordinates and tokens expire. On Linux Wayland a window observe may come back without a screenshot: act on its element_token, which works without one. Observing the desktop or the ClikCode browser window is refused while a typed password, code or card number is in a tab on screen. Never type credentials.',
@@ -84,7 +91,7 @@ export const computerDesktopTool = defineTool<DesktopArgs>({
       const request = computerDriverAction(args);
       const withImage = ctx.acceptsImages === true && args.action === 'observe';
       const driverArgs = request.name === 'get_window_state' ? { ...request.args, include_screenshot: withImage } : request.args;
-      const result = formatMcpResult(await callComputerDriver(request.name, driverArgs, ctx.signal), withImage);
+      const result = backgroundOnly(formatMcpResult(await callComputerDriver(request.name, driverArgs, ctx.signal), withImage));
       const stale = args.action === 'windows' ? await driverNotice() : undefined;
       return stale ? { ...result, output: `${stale}\n\n${result.output}` } : result;
     } catch (error) { return { output: error instanceof Error ? error.message : String(error), isError: true }; }
