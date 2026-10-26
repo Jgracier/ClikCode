@@ -24,7 +24,10 @@ import { withSignIn } from '../../commands/account.js';
 import { chooseOption } from './choose.js';
 import { localModelChoices, type LocalModelChoice } from '../../local-models/index.js';
 import { withSlowWait } from '../slow-wait.js';
-import { deployPrivateModel, quoteSummary, quotePrivateModel, searchDeployableModels, type DeployableModel, type PrivateModelQuote } from '../../gateway/private-models.js';
+import { hostedAdapter, hostedList, hostedSelectionCommand, HOSTED_TAGS, type HostedRow } from '../../hosted-models/index.js';
+import { GATEWAY_ID, LOCAL_ID } from '../../session/picker-rows.js';
+import { providerConversationKey } from './engine.js';
+import { selectProviderConversation } from './conversation.js';
 
 /** Prefix of a row for a model this machine cannot run: listed, so the
  * catalog is honest about what exists and why it is out of reach, but
@@ -51,6 +54,10 @@ export function localModelSelection(choices: readonly LocalModelChoice[], select
   throw new Error(`${choice?.label ?? selected.slice(UNFIT.length)} cannot run on this machine: ${choice?.detail ?? 'it does not fit'}.`);
 }
 
+/** The row that opens the one list of hosted models, in a local or a Gateway chat's /model. */
+const HOSTED_VALUE = '__hosted__';
+const HOSTED_ROW: PickerOption<string> = { label: 'Hosted AI…', detail: '· run a model on this computer (free, works offline) or on a ClikDeploy GPU', value: HOSTED_VALUE };
+
 async function localModelPicker(rl: HarnessPrompter, id: string, current: string | null | undefined): Promise<void> {
   const waiting = TERMINAL.active === rl ? TERMINAL.active : undefined;
   const choices = await withSlowWait(waiting, 'checking which models fit this machine…', () => localModelChoices());
@@ -58,8 +65,9 @@ async function localModelPicker(rl: HarnessPrompter, id: string, current: string
     rl.panel?.('ClikCode Local', 'No supported GGUF model fits the memory currently available. Close other programs or free memory, then open /model again.');
     return;
   }
-  const selected = await chooseOption(rl, 'Choose a ClikCode Local model', localModelRows(choices, current));
+  const selected = await chooseOption(rl, 'Choose a ClikCode Local model', [...localModelRows(choices, current), HOSTED_ROW]);
   if (!selected) return;
+  if (selected === HOSTED_VALUE) return interactiveHostedPicker(rl, id);
   // The handler asks before a download, then loads it (progress on the
   // waiting line) before the session switches: the path `/model <id>` takes.
   await aiSessionCommand(id, `/model ${localModelSelection(choices, selected)}`);
@@ -170,70 +178,64 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
   }
 }
 
-/** Search Hugging Face models ClikDeploy can deploy, ask its shared planner
- * for the GPU and price, then start the deployment and select it for this chat. */
-export async function interactivePrivateModelsPicker(rl: HarnessPrompter, id: string): Promise<void> {
-  const state = await readState({ transcripts: [id] });
-  const session = state.sessions.find((item) => item.id === id);
-  if (!session) throw new Error(`AI session "${id}" was not found`);
-  if (!isGatewayService(session)) throw new Error('Hosted AI is available on ClikDeploy Gateway conversations.');
-
+/** Hosted AI: models that run on this computer (tagged Local) or on a ClikDeploy GPU, in one list. A search names
+ * the model, and `local` or `cloud` in it names where. Choosing one shows what starting it takes -- the download, or
+ * the GPU and price -- and only then starts it and moves the chat onto it (hosted-models/). */
+export async function interactiveHostedPicker(rl: HarnessPrompter, id: string): Promise<void> {
   const waiting = TERMINAL.active === rl ? TERMINAL.active : undefined;
-  const rows = (models: readonly DeployableModel[]): PickerOption<DeployableModel>[] => models
-    .filter((model) => !model.modality || model.modality === 'llm')
-    .map((model) => ({
-      label: model.modelId,
-      detail: [model.parameterCount ? `${formatParameterCount(model.parameterCount)} params` : '', model.gated ? 'restricted access' : ''].filter(Boolean).join(' · '),
-      value: model,
-      group: 'Hugging Face models',
-    }));
-  const initial = await withSlowWait(waiting, 'loading hosted AI models…', () => searchDeployableModels());
-  const options = rows(initial);
-  const selected = await chooseOption(rl, 'Hosted AI', options, undefined, {
-    onFilter: async (query) => rows(await withSlowWait(waiting, 'searching Hugging Face…', () => searchDeployableModels(query))),
+  const rows = (rowsOf: readonly HostedRow[]): PickerOption<HostedRow>[] => rowsOf.map((row) => ({
+    label: row.label,
+    detail: `· ${[HOSTED_TAGS[row.target], row.recommended ? 'recommended' : '', row.detail].filter(Boolean).join(' · ')}`,
+    value: row,
+    group: row.target === 'this-computer' ? 'Fits this computer' : 'ClikDeploy GPU',
+  }));
+  const initial = await withSlowWait(waiting, 'finding hosted AI models…', () => hostedList(''));
+  for (const note of initial.unavailable) {
+    if (note.target === 'clikdeploy') rl.panel?.('Hosted AI', 'ClikDeploy GPUs need an internet connection and a Gateway sign-in; models for this computer are listed.');
+  }
+  const selected = await chooseOption(rl, 'Hosted AI', rows(initial.rows), undefined, {
+    onFilter: async (query) => rows((await withSlowWait(waiting, 'searching…', () => hostedList(query))).rows),
   });
   if (!selected) return;
 
-  let quote: PrivateModelQuote;
-  try {
-    quote = await withSlowWait(waiting, `checking ${selected.displayName} and matching compute…`, () => quotePrivateModel(selected.modelId));
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (selected.gated) throw new Error(`${message} Connect Hugging Face in ClikDeploy, then try again.`);
-    throw error;
-  }
+  const adapter = hostedAdapter(selected.target);
+  const plan = await withSlowWait(waiting, selected.target === 'clikdeploy' ? `checking ${selected.label} and matching compute…` : `checking ${selected.label}…`, () => adapter.plan(selected));
   const config = new Conf({ projectName: 'clikcode', configFileMode: 0o600 });
-  if (!alwaysStartOwnModels(config)) {
-    // The estimate and the GPU, wrapped in full above the question: a picker row cuts a long detail on a narrow screen.
-    const summary = quoteSummary(selected, quote);
-    if (rl.panel) rl.panel(summary.title, summary.body); else process.stdout.write(`\n${summary.title}\n${summary.body}\n`);
-    const answer = await chooseOption(rl, `Start ${selected.displayName} on ClikDeploy?`, [
-      // The price leads the row, so it is the last thing a short screen can lose.
-      { label: `Yes, start it · $${quote.pricePerHour.toFixed(2)}/hour`, detail: quote.sku.displayName, value: 'start' },
-      { label: 'No, use AI billed by the token', detail: 'Choose a pay-per-token Gateway model instead.', value: 'hosted' },
+  // Only what bills asks to be sure; "always start" is the user's own standing answer.
+  if (plan.costly && !alwaysStartOwnModels(config)) {
+    if (rl.panel) rl.panel(plan.title, plan.lines.join('\n')); else process.stdout.write(`\n${plan.title}\n${plan.lines.join('\n')}\n`);
+    const answer = await chooseOption(rl, `Start ${selected.label}?`, [
+      { label: `Yes, ${plan.confirm.charAt(0).toLowerCase()}${plan.confirm.slice(1)}`, value: 'start' },
+      { label: 'No, choose another model', detail: 'Back to the list.', value: 'back' },
       { label: 'Always start hosted AI models', detail: 'Remember this on this machine.', value: 'always' },
     ]);
-    if (answer === 'hosted') return interactiveModelPicker(rl, id);
+    if (answer === 'back') return interactiveHostedPicker(rl, id);
     if (answer === 'always') setAlwaysStartOwnModels(true, config);
     else if (answer !== 'start') return;
+  } else if (!plan.costly) {
+    // A download is told in full before it begins: its size, and that it works offline after.
+    if (rl.panel) rl.panel(plan.title, plan.lines.join('\n'));
+    const answer = await chooseOption(rl, plan.confirm, [
+      { label: plan.confirm, value: 'start' },
+      { label: 'Choose another model', value: 'back' },
+    ]);
+    if (answer === 'back') return interactiveHostedPicker(rl, id);
+    if (answer !== 'start') return;
   }
 
-  const deployment = await withSlowWait(waiting, `starting ${selected.displayName} on ${quote.sku.displayName}…`, () => deployPrivateModel(selected, quote));
-  // Select the deployment we just created, never its public model name. The
-  // create response establishes ownership; don't wait for a cached model list
-  // to publish it. The first prompt waits for this deployment's readiness.
-  await aiSessionCommand(id, `/model --any ${deployment.gatewayModelId}`);
-}
-
-function formatParameterCount(count: number): string {
-  if (count >= 1_000_000_000) return `${(count / 1_000_000_000).toFixed(count >= 10_000_000_000 ? 0 : 2).replace(/\.?0+$/, '')}B`;
-  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(count >= 10_000_000 ? 0 : 1).replace(/\.?0+$/, '')}M`;
-  return count.toLocaleString();
+  const selection = await withSlowWait(waiting, selected.target === 'clikdeploy' ? `starting ${selected.label} on ClikDeploy…` : `preparing ${selected.label}…`, () => adapter.start(selected));
+  // The route may differ from the chat's (a Gateway chat choosing a model for this computer): the chat moves
+  // onto it, history and all, as a provider change does.
+  const state = await readState({ transcripts: [id] });
+  const session = state.sessions.find((item) => item.id === id);
+  let target = id;
+  if (session?.route !== selection.route) target = await selectProviderConversation(config, rl, id, providerConversationKey(selection.route === 'gateway' ? GATEWAY_ID : LOCAL_ID));
+  await aiSessionCommand(target, hostedSelectionCommand(selection));
 }
 
 /** A Gateway conversation's picker. Models run ClikCode locally; selected
  * platform agents run on ClikDeploy with their own tools. */
-type GatewayChoice = { kind: 'agent'; id?: string } | { kind: 'model'; id: string } | { kind: 'subscriptions' };
+type GatewayChoice = { kind: 'agent'; id?: string } | { kind: 'model'; id: string } | { kind: 'subscriptions' } | { kind: 'hosted' };
 
 /** Top to bottom: the super admin's subscription switch (only when the Gateway reports it, which it
  * does for the super admin alone), the account's own agents, then the models. Choosing a model
@@ -258,6 +260,7 @@ export function gatewayPickerRows(list: GatewayModelList, agents: readonly Gatew
   ];
   return [
     ...subscriptions,
+    { label: 'Hosted AI…', detail: '· run a model on this computer (free, works offline) or on a ClikDeploy GPU', value: { kind: 'hosted' as const }, group: 'Hosted AI' },
     ...agentRows,
     { label: currentAgent ? 'Agent default' : 'Automatic', detail: currentAgent
       ? `${current ? '' : '· current '}· use this agent's configured pin or router`
@@ -310,6 +313,7 @@ async function gatewayModelPicker(rl: HarnessPrompter, id: string, current: stri
       }
       continue;
     }
+    if (selected.kind === 'hosted') return interactiveHostedPicker(rl, id);
     if (selected.kind === 'agent') {
       currentAgent = selected.id === currentAgent ? undefined : selected.id;
       await selectGatewayAgent(id, currentAgent, agents.find((agent) => agent.id === currentAgent)?.name);

@@ -1104,7 +1104,7 @@ export class ClikCodeController implements vscode.Disposable {
       return bridge.call({ type: 'subagent', ...body }, TIMEOUT.structured);
     }
     if (request.method === 'query') {
-      const data = await bridge.call({ type: 'query', query: request.query, ...(request.provider ? { provider: request.provider } : {}), ...(request.network ? { network: true } : {}) }, TIMEOUT.query);
+      const data = await bridge.call({ type: 'query', query: request.query, ...(request.provider ? { provider: request.provider } : {}), ...(request.network ? { network: true } : {}), ...(request.search !== undefined ? { search: request.search } : {}), ...(request.row ? { row: request.row } : {}) }, TIMEOUT.query);
       if (request.query !== 'conversations') return data;
       const others = this.host.chats().filter((chat) => chat !== this).map((chat) => ({ sessionId: chat.state.sessionId, approvals: chat.state.approvals.length, unread: chat.unread }));
       return (data as IdeConversation[]).map((row): ListedConversation => {

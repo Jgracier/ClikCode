@@ -203,7 +203,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
       return harnessSupportsModelSelection(harness!) ? { available: true } : { available: false, reason: `${harness!.displayName} does not publish a model selector.` };
     },
   }),
-  entry('hosted', 'Settings', 'search Hugging Face and run a hosted AI model on ClikDeploy compute', {
+  entry('hosted', 'Settings', 'hosted AI: run a model on this computer or on a ClikDeploy GPU', {
     handlerKey: 'hostedModels', argHint: 'ai',
     availability: (session) => isGatewayService(session)
       ? { available: true }

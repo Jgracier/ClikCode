@@ -11,6 +11,7 @@ import { dollars } from '../../../../src/harness/protocol/format';
 import { SEND_MODE_DETAIL, SEND_MODES } from '../../../../src/turn/send-mode';
 import { accountUsageText, outOfUsageText } from '../../../../src/harness/accounts/usage-reading';
 import { Icon, KeyList, Loading, Popover, Spinner, Switch, useSlowWait, type ListRow } from './ui';
+import { HostedPicker } from './hosted-picker';
 
 /** Model lists, kept for the panel's life: a second look is instant. */
 const modelCache = new Map<string, IdeModels>();
@@ -85,6 +86,7 @@ export function ProviderModelPicker(props: { mode: 'provider' | 'model'; model: 
   /** Shown only once the lookup is slow (useSlowWait). */
   const modelsLoading = useSlowWait(Boolean(drill && loading));
   const [search, setSearch] = useState('');
+  const [hosted, setHosted] = useState(false);
   const input = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -141,6 +143,19 @@ export function ProviderModelPicker(props: { mode: 'provider' | 'model'; model: 
       const matching = list.filter((item) => !query || item.label.toLowerCase().includes(query) || item.id.toLowerCase().includes(query) || item.detail?.toLowerCase().includes(query));
       const agents = (models?.agents ?? []).filter((agent) => !query || agent.name.toLowerCase().includes(query) || agent.detail?.toLowerCase().includes(query));
       const result: ListRow[] = [];
+      // Models that run on this computer or on a ClikDeploy GPU: one list, behind one row.
+      if ((drill === 'gateway' || drill === 'clikcode-local') && (props.model.revision ?? 1) >= 9) {
+        result.push({
+          key: 'hosted', onSelect: () => setHosted(true),
+          render: () => (
+            <div class="row">
+              <span class="row-check"><Icon name="server-process" /></span>
+              <span class="row-main"><span class="row-label">Hosted AI</span><span class="row-detail">Run a model on this computer (free, works offline) or on a ClikDeploy GPU</span></span>
+              <Icon name="chevron-right" />
+            </div>
+          ),
+        });
+      }
       if (agents.length && matching.length) result.push({ key: 'h:models', heading: true, render: () => <>Models<span class="count">{matching.length}</span></> });
       let heading: string | undefined;
       result.push(...matching.flatMap((item) => {
@@ -216,6 +231,7 @@ export function ProviderModelPicker(props: { mode: 'provider' | 'model'; model: 
     return result;
   }, [drill, models, providers, query, current, effort]);
 
+  if (hosted) return <HostedPicker onBack={() => setHosted(false)} onClose={props.onClose} onError={props.onError} />;
   return (
     <Popover label={drill ? 'Choose model' : 'Choose provider'} onClose={props.onClose} class="picker" id={drill ? 'model-picker' : 'provider-picker'}>
       <div class="picker-head">

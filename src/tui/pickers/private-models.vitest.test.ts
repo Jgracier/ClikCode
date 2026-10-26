@@ -1,18 +1,33 @@
 import { expect, it, vi } from 'vitest';
-import { interactivePrivateModelsPicker } from './model.js';
+import { interactiveHostedPicker } from './model.js';
 import { aiSessionCommand } from '../slash/handlers.js';
 
 vi.mock('../../session/state/read.js', () => ({ readState: async () => ({ sessions: [{ id: 'gw', route: 'gateway' }] }) }));
 vi.mock('../slash/handlers.js', () => ({ aiSessionCommand: vi.fn() }));
-vi.mock('../../gateway/own-models.js', () => ({ alwaysStartOwnModels: () => true }));
+vi.mock('../../gateway/own-models.js', () => ({ alwaysStartOwnModels: () => true, setAlwaysStartOwnModels: () => undefined }));
+const local = vi.hoisted(() => ({ choices: [] as Array<{ id: string; label: string; detail: string; fits: boolean; recommended: boolean; downloadBytes: number }> }));
+vi.mock('../../local-models/index.js', () => ({ localModelChoices: async () => local.choices }));
+vi.mock('./conversation.js', () => ({ selectProviderConversation: vi.fn(async () => 'moved') }));
 vi.mock('../../gateway/private-models.js', () => ({
   searchDeployableModels: async () => [{ sourceId: 'huggingface', modelId: 'owner/model', displayName: 'model', gated: false }],
-  quotePrivateModel: async () => ({ sku: { displayName: 'GPU' } }),
+  quotePrivateModel: async () => ({ sku: { displayName: 'GPU' }, pricePerHour: 1 }),
+  quoteSummary: () => ({ title: 'model on ClikDeploy', body: 'GPU: GPU' }),
   deployPrivateModel: async () => ({ id: 'dep-1', modelId: 'owner/model', status: 'LOADING', gatewayModelId: 'private-deployment:dep-1' }),
 }));
 
 it('selects the newly created private deployment without a model-list publication race', async () => {
   const select = vi.fn(async (_title, rows) => rows[0].value);
-  await interactivePrivateModelsPicker({ select } as never, 'gw');
+  await interactiveHostedPicker({ select } as never, 'gw');
   expect(aiSessionCommand).toHaveBeenCalledWith('gw', '/model --any private-deployment:dep-1');
+});
+
+it('moves a Gateway chat onto a model that runs on this computer, after telling the download, with no price asked', async () => {
+  local.choices = [{ id: 'qwen', label: 'Qwen', detail: 'GPU · 30 tok/s', fits: true, recommended: true, downloadBytes: 12e9 }];
+  const asked: string[] = [];
+  const select = vi.fn(async (title: string, rows: Array<{ value: unknown }>) => { asked.push(title); return rows[0]!.value; });
+  await interactiveHostedPicker({ select, panel: () => undefined } as never, 'gw');
+  // The list, then one confirmation of the download; this computer's models never ask about a price.
+  expect(asked[0]).toBe('Hosted AI');
+  expect(asked.some((title) => /Start /.test(title))).toBe(false);
+  expect(aiSessionCommand).toHaveBeenCalledWith('moved', '/model --download qwen');
 });

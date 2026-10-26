@@ -38,6 +38,8 @@
  *      the editor lacks (`messagesFrom`, session-delta.ts). An older bridge
  *      ignores the feature and sends every event whole, which any editor reads
  *   8  `subagent`: read recorded child messages/tools and send supported steering
+ *   9  Hosted AI: `query hosted` / `hosted-plan` and `choose hosted` (hosted-models/): models that run on
+ *      this computer or on ClikDeploy, in one list
  *
  * ClikCode and the extension are published separately (the CLI first, in the
  * same ClikDeploy run), so a bump reaches npm before the extension that
@@ -45,7 +47,7 @@
  */
 export const IDE_PROTOCOL = {
   version: 1,
-  revision: 8,
+  revision: 9,
   oldestSupported: 1,
   oldestRevision: 2,
 } as const;
