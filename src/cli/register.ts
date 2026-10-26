@@ -90,6 +90,12 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .option('--max-steps <n>', 'Most browser actions (default 60)')
     .option('--max-minutes <n>', 'Most minutes (default 4)')
     .action(async (id: string, flags: import('../commands/connectors.js').ConnectorsResumeFlags) => (await import('../commands/connectors.js')).connectorsResume(id, flags));
+  const recipe = computer.command('recipe').description('Saved signup and key-capture recipes: list, show, lint, compact, dry-run');
+  recipe.command('list').description('List the saved recipes with their step counts and lint findings').action(async () => (await import('../commands/computer-recipes.js')).recipeList());
+  recipe.command('show <host>').description("Show a host's recipe steps").action(async (host: string) => (await import('../commands/computer-recipes.js')).recipeShow(host));
+  recipe.command('lint <host>').description('Flag repeated laps, consecutive duplicate clicks (toggles), a trailing click back to the start, and a missing capture step').action(async (host: string) => (await import('../commands/computer-recipes.js')).recipeLintCommand(host));
+  recipe.command('compact <host>').description('Remove retry laps and toggle pairs, keeping the last successful sequence (the earlier file is kept as <host>.json.bak)').action(async (host: string) => (await import('../commands/computer-recipes.js')).recipeCompactCommand(host));
+  recipe.command('dry-run <host>').description("Replay the recipe's selectors against the live page in the hidden browser and check every step's target exists, without submitting").action(async (host: string) => (await import('../commands/computer-recipes.js')).recipeDryRunCommand(host));
   computer.command('inspect').description('Show visible login field names without their values').action(async () => (await import('../commands/computer.js')).computerInspect());
   computer.command('login [url]').description('Open a login URL if given, then ask privately in the current chat')
     .option('--chat <chat>', 'Chat id, prefix or name when run outside a chat')

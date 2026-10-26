@@ -31,6 +31,7 @@ import { emailConnected, waitForEmail } from '../computer/email-api.js';
 import { codeFromMailbox, looksLikeCodeEmail, looksLikeLinkEmail, verificationCode } from '../computer/email-code.js';
 import { connectEmail } from '../computer/email-consent.js';
 import { beginJournal, noteStep, recordVerified } from '../computer/recipe-recorder.js';
+import { lintRecipe } from '../computer/recipe-tools.js';
 import { oauthConnect } from '../computer/oauth-consent.js';
 import { runTailnetHandoff, tailnetAddress } from '../computer/tailnet-handoff.js';
 import type { Frame, Locator, Page } from 'playwright-core';
@@ -1064,15 +1065,18 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
           return ctx.requestPrivateSecret(secretName, hint, signal);
         } }); });
       const refused = check.verdict === 'rejected';
+      let recipeLint: string[] = [];
       if (!refused) {
         const key = journalKey(ctx.stateDir, args.tab);
         if (triggerLabel) noteStep(key, page.url(), { do: 'click', target: triggerLabel });
-        await recordVerified(ctx.stateDir, key, { kind: 'capture', url: page.url(), hint: `${triggerLabel ? `Click "${triggerLabel}" to make the key show, then capture_secret. ` : ''}Verified: ${check.verdict === 'works' ? 'the key works' : 'a key was found and stored'}.` }).catch(() => undefined);
+        const saved = await recordVerified(ctx.stateDir, key, { kind: 'capture', url: page.url(), hint: `${triggerLabel ? `Click "${triggerLabel}" to make the key show, then capture_secret. ` : ''}Verified: ${check.verdict === 'works' ? 'the key works' : 'a key was found and stored'}.` }).catch(() => undefined);
+        if (saved) recipeLint = lintRecipe(saved).map(finding => finding.message);
       }
       const lines = [
         `SAVED "${name}" in ClikCode Secrets Manager (${length} characters, ${shape}, taken from ${via}). You were not shown the key; if that does not match what you expected (an id where a secret should be), delete it and capture again.`,
         refused ? `NOT VERIFIED: ${check.detail}. It was kept because the site shows a new key only once, and it was NOT sent anywhere. Wait a minute, then send it with send_secret and check the result.`
           : check.verdict === 'works' ? `Checked: ${check.detail}.` : `Not checked: ${check.detail}.`,
+        ...(recipeLint.length ? [`Recipe saved (tidied; the recorded steps are kept in the .bak file). Still to fix: ${recipeLint.join('; ')}.`] : []),
         ...sent.map(delivery => `${delivery.ok ? 'SENT' : 'NOT SENT'} - ${delivery.label}: ${delivery.message}`),
         ...(refused ? [] : sent.some(delivery => !delivery.ok) ? ['The key is still saved. Fix the cause, then send it again with send_secret.'] : sent.length ? [] : ['Nothing was sent anywhere: use send_to to send it on, or send_secret later.']),
       ];

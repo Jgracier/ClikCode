@@ -8,6 +8,7 @@ import type { HumanKind, HumanStep, StopInfo } from './connector-runner.js';
 import { nextPress, pageExcerpt, type Control } from './oauth-consent.js';
 import { keyShaped } from './secret-finder.js';
 import { detectBlocker } from './signup-recipes.js';
+import { allAtOnce, broadestOption, revealedOptions, selectorsOf } from './keygrab-scope.js';
 import { exploreForKeys, menuOpeners } from './keygrab-explore.js';
 
 export interface KeyControl { name: string; leaf?: boolean; href?: string; /** Inside the page footer (social and legal links live there, not sign-in). */ footer?: boolean; /** Inside a navigation or side bar. */ nav?: boolean; /** Opens a menu (aria-haspopup or aria-expanded). */ menu?: boolean; /** Found inside an iframe (same-origin or not). */ frame?: boolean }
@@ -467,6 +468,31 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     throw await stop('unknown', 'no API key page was found (menu links and the common paths were tried)', human, shown);
   };
 
+  /** A key form that offers a role, scope, team or permission selector: choose the broadest on offer (the user's own test account), record each choice in the trail. */
+  const chosen: string[] = [];
+  const chooseBroadest = async (form: KeyView): Promise<KeyView> => {
+    const done = new Set<string>();
+    for (let round = 0; round < 6; round++) {
+      const all = allAtOnce(form.controls, done);
+      if (all && pressable(all)) {
+        done.add(all.name);
+        if (await click(all.name)) { chosen.push(all.name); say(`chose "${all.name}"`); await sleep(300); form = await look(); continue; }
+      }
+      const selector = selectorsOf(form.controls, done)[0];
+      if (!selector) break;
+      done.add(selector.name);
+      const before = form.controls;
+      if (!(await click(selector.name))) continue;
+      await sleep(300);
+      const opened = await look();
+      const options = revealedOptions(before, opened.controls);
+      const pick = broadestOption(options);
+      if (!pick) { trail.push(`${selector.name}: no broad option among ${options.slice(0, 6).join(', ') || 'none'}; left as it is`.slice(0, 120)); form = opened; continue; }
+      if (await click(pick)) { chosen.push(`${selector.name} -> ${pick}`); trail.push(`broadest for "${selector.name}": ${pick} (of ${options.slice(0, 6).join(', ')})`.slice(0, 120)); await sleep(300); }
+      form = await look();
+    }
+    return form;
+  };
   const captured = async (target?: string): Promise<{ ok: boolean; message: string }> => act('capture the key', () => port.capture(target));
 
   try {
@@ -501,6 +527,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
         const nameBox = dialog.fields.find(f => NAME_FIELD.test(f)) ?? (dialog.fields.length === 1 && !dialog.hasPassword ? dialog.fields[0] : undefined);
         if (nameBox && !showsKey(dialog)) {
           await act(`name the key ${KEY_NAME}`, () => port.fill(nameBox, KEY_NAME));
+          dialog = await chooseBroadest(dialog);
           const confirm = [...dialog.controls].reverse().find(c => pressable(c) && CONFIRM.test(c.name) && !NEVER_KEY.test(c.name));
           if (confirm) { await click(confirm.name); await sleep(900); dialog = await look(); }
         }
@@ -509,7 +536,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
           const reveal = revealOf(dialog);
           if (reveal) got = await captured(reveal.name);
         }
-        if (got.ok) return { ok: true, note: 'key created (named ClikDeploy), captured unseen and sent to ClikDeploy', steps, route };
+        if (got.ok) return { ok: true, note: `key created (named ClikDeploy${chosen.length ? `; broadest access chosen: ${chosen.join('; ')}` : ''}), captured unseen and sent to ClikDeploy`, steps, route };
         throw await stop('unknown', `a key may have been created but could not be captured: ${got.message.slice(0, 200)}`, undefined, dialog);
       }
       const reveal = revealOf(page);
