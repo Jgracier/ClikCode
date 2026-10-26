@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  backgroundOnly, backgroundOnlyNotice, foregroundUnavailableNotice, friendlyDriverError, macosAccessibilityNotice, macosScreenRecordingNotice,
+  backgroundOnly, backgroundOnlyNotice, foregroundUnavailableNotice, friendlyDriverError, macosAccessibilityNotice, macosPermissionsPendingNotice, macosScreenRecordingNotice,
   clipboardReply, permissionsNotice, scrubClipboard, summarizeApps, windowsElevatedNotice,
 } from './driver-results.js';
 
@@ -100,6 +100,10 @@ describe('driver errors', () => {
     expect(permissionsNotice('{"accessibility":true,"screen_recording":false}', 'darwin')).toBe(macosScreenRecordingNotice);
     expect(permissionsNotice('{"accessibility":true,"screen_recording":true}', 'darwin')).toBeUndefined();
     expect(permissionsNotice('not json', 'darwin')).toBeUndefined();
+    // What cua-driver 0.38 really prints on a Mac before the grant is approved, with and without its daemon.
+    expect(permissionsNotice('{"daemon_running":false,"status":"unknown"}', 'darwin')).toBe(macosPermissionsPendingNotice);
+    expect(permissionsNotice('{"daemon_running":true,"status":"unknown"}', 'darwin')).toBe(macosPermissionsPendingNotice);
+    expect(friendlyDriverError({ output: 'permissions_pending: macOS Accessibility or Screen Recording permission is still pending; no action started', isError: true }, 'darwin').output).toContain(macosPermissionsPendingNotice);
     expect(permissionsNotice('{"accessibility":false}', 'linux')).toBeUndefined();
   });
 });

@@ -79,6 +79,7 @@ export function backgroundOnly<T extends Reply>(result: T, askedForeground = fal
 
 export const macosAccessibilityNotice = 'cua-driver does not have the macOS Accessibility permission, so it can neither read nor control any window. Open System Settings > Privacy & Security > Accessibility and turn on CuaDriver (run `cua-driver permissions grant` to be prompted), then try again.';
 export const macosScreenRecordingNotice = 'cua-driver does not have the macOS Screen Recording permission, so screenshots and pixel clicks are unavailable (the accessibility tree still works: use element_token actions). Open System Settings > Privacy & Security > Screen & System Audio Recording and turn on CuaDriver (run `cua-driver permissions grant`), then try again.';
+export const macosPermissionsPendingNotice = 'cua-driver has not been given its macOS permissions yet (Accessibility and Screen Recording), so it sees no windows. Run `cua-driver permissions grant` and turn on CuaDriver in the System Settings pages it opens, then try again.';
 export const windowsElevatedNotice = 'Windows refused the input: the target window most likely runs as administrator (elevated), and a program that is not elevated, as ClikCode is, cannot drive it. Ask the user to close it and open it again without "Run as administrator", or to start ClikCode elevated.';
 export const windowsSessionNotice = 'cua-driver is running in Windows session 0 (a service or SSH session) where there is no desktop to read. Start it from the user\'s signed-in desktop session (`schtasks /Run /TN cua-driver-serve`), then try again.';
 
@@ -91,6 +92,7 @@ export function friendlyDriverError<T extends Reply>(result: T, platform: NodeJS
   if (platform === 'darwin') {
     if (/Accessibility permission (is )?not granted|accessibility[^.\n]*not (been )?(granted|trusted|enabled)/i.test(said)) return withCause(macosAccessibilityNotice);
     if (/Screen Recording permission (is )?not granted|screen recording[^.\n]*not (been )?(granted|enabled)/i.test(said)) return withCause(macosScreenRecordingNotice);
+    if (/permissions_pending|permission[^.\n]*still pending/i.test(said)) return withCause(macosPermissionsPendingNotice);
   }
   if (platform === 'win32') {
     if (/session ?0|SessionId[: ]+0/i.test(said)) return withCause(windowsSessionNotice);
@@ -102,8 +104,10 @@ export function friendlyDriverError<T extends Reply>(result: T, platform: NodeJS
 /** The two macOS grants, from `cua-driver permissions status --json`; a line to show when one is missing. */
 export function permissionsNotice(statusJson: string, platform: NodeJS.Platform = process.platform): string | undefined {
   if (platform !== 'darwin') return undefined;
-  let status: { accessibility?: unknown; screen_recording?: unknown };
+  let status: { accessibility?: unknown; screen_recording?: unknown; status?: unknown };
   try { status = JSON.parse(statusJson) as typeof status; } catch { return undefined; }
+  // cua-driver 0.38 reports no grants at all, only "unknown", until `permissions grant` has been approved and verified once.
+  if (status.status === 'unknown' && status.accessibility === undefined) return macosPermissionsPendingNotice;
   if (status.accessibility === false) return macosAccessibilityNotice;
   if (status.screen_recording === false) return macosScreenRecordingNotice;
   return undefined;
