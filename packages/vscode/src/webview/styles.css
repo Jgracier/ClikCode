@@ -622,8 +622,10 @@ body.vscode-high-contrast .keylist-row.active { outline: 1px dashed var(--vscode
 .subagent-view { flex-basis: 100%; min-width: 0; border: 1px solid var(--vscode-widget-border); border-radius: 6px; padding: 8px; }
 .subagent-view-rows { max-height: 40vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .subagent-view-rows pre { white-space: pre-wrap; font: inherit; }
-.subagent-view form { display: flex; gap: 6px; }
-.subagent-view input { flex: 1; min-width: 0; }
+.subagent-compose { display: flex; align-items: center; gap: 4px; margin-top: 8px; padding: 4px 4px 4px 12px; border: 1px solid var(--vscode-input-border, var(--border)); border-radius: 10px; background: var(--input); transition: border-color 0.12s; }
+.subagent-compose:focus-within { border-color: var(--focus); box-shadow: 0 0 0 1px var(--focus); }
+.subagent-compose input { flex: 1; min-width: 0; font: inherit; color: var(--vscode-input-foreground); background: transparent; border: none; outline: none; padding: 4px 0; }
+.subagent-compose input::placeholder { color: var(--vscode-input-placeholderForeground); }
 .activity-line:has(.subagent-view) { flex-wrap: wrap; }
 
 .subagent-prompt:not(.full) .markdown { max-height: 3em; overflow: hidden; }
