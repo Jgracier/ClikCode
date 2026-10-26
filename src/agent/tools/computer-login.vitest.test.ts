@@ -20,6 +20,7 @@ const browser = vi.hoisted(() => {
   });
   const last = () => mfa ? 3 : 2;
   const page = {
+    on: () => undefined, off: () => undefined,
     evaluate: async () => "",
     url: () => rejections && step === rejectAt ? `https://accounts.google.com/v3/signin/again/${rejections}`
       : step === 0 ? 'https://accounts.google.com/v3/signin/identifier'
