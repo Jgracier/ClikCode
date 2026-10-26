@@ -8,6 +8,7 @@ import { setTimeout as pause } from 'node:timers/promises';
 import type { Browser, BrowserContext, Page } from 'playwright-core';
 import { computerHostFile, computerProfile } from './browser-host.js';
 import { sharedState } from './shared-state.js';
+import { watchDownloads } from './downloads.js';
 
 type Connected = { browser: Browser; context: BrowserContext };
 const running = sharedState('browser-running', () => new Map<string, Promise<Connected>>());
@@ -125,7 +126,7 @@ function mine(stateDir: string, tab?: string): Page | undefined {
 }
 
 /** Make `page` this chat's tab (a popup the chat's own page opened). */
-export function adoptPage(stateDir: string, page: Page, tab?: string): void { const key = ownerKey(stateDir, tab); owned.set(key, [...(owned.get(key) ?? []).filter(old => old !== page), page]); }
+export function adoptPage(stateDir: string, page: Page, tab?: string): void { watchDownloads(page, stateDir); const key = ownerKey(stateDir, tab); owned.set(key, [...(owned.get(key) ?? []).filter(old => old !== page), page]); }
 
 /** This chat's tab, opened in the shared Chrome the first time it is needed. */
 export async function openComputerPage(stateDir: string, tab?: string): Promise<Page> {
