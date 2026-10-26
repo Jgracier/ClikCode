@@ -9,7 +9,7 @@ import { formatElapsed } from '../../../../src/harness/protocol/format';
 import { liveChildren, type Activity, type DecisionEntry, type LiveChild, type ThoughtEntry } from '../model';
 import type { FileDiff } from '../protocol';
 import { post } from './bus';
-import { SubagentPanel } from './subagent-panel';
+import { SubagentBody, SubagentPanel } from './subagent-panel';
 import { pathIn, relative } from './format';
 import { Icon, Spinner } from './ui';
 import { activityMore, decisionBadge, foldedSummary, runGroupSummary, runGroupView, runItemKey, runItemStandsAlone, type RunItem } from './flow';
@@ -135,15 +135,13 @@ export function ChildLine({ live }: { live: LiveChild }): JSX.Element {
   );
 }
 
-/** How many of a running agent's own calls show under its line: the ones running now. */
-const AGENT_CHILDREN_SHOWN = 2;
-
 /** A running subagent as one line, the terminal's: its spinner, its name, how long it has run and
- * how many tools it has used, and under it only the call or two it is running right now. Those
- * come and go as the agent moves on, so the line stays short and shows it working. What it was
- * asked and what it printed are one click away (the view button), not in the way. */
+ * how many tools it has used, and under it the call it is running right now. That slot is always
+ * one line tall and its text swaps in place, so the line never hops as the agent moves between
+ * calls. The chevron opens what it did and a field to message it. */
 export function AgentLine({ activity, workspace }: { activity: Activity; workspace?: string }): JSX.Element {
-  const children = liveChildren(activity, AGENT_CHILDREN_SHOWN);
+  const [open, setOpen] = useState(false);
+  const now = liveChildren(activity, 1)[0]?.child.label ?? activity.child;
   const uses = activity.childTools;
   return (
     <div class="agent-line">
@@ -152,11 +150,10 @@ export function AgentLine({ activity, workspace }: { activity: Activity; workspa
         <ActivityLabel label={tensedLabel(activity.label, true)} workspace={workspace} />
         {activity.startedAt ? <Clock since={activity.startedAt} /> : null}
         {uses ? <span class="activity-outcome">{toolUses(uses)}</span> : null}
-        {activity.id ? <SubagentPanel key={activity.id} parentId={activity.id} agentId={activity.agentId} label={activity.label} running /> : null}
+        {activity.id ? <button type="button" class="icon-button tiny agent-toggle" aria-expanded={open} aria-label={open ? 'Hide subagent' : `View ${activity.label}`} onClick={() => setOpen(!open)}><Icon name={open ? 'chevron-up' : 'chevron-down'} /></button> : null}
       </div>
-      {children.length
-        ? children.map((entry) => <div key={entry.child.key} class="activity-child agent-child" title={entry.child.label}><ActivityGlyph status="done" /><span>{tensedLabel(entry.child.label, true)}</span></div>)
-        : activity.child ? <div class="activity-child agent-child" title={activity.child}><ActivityGlyph status="done" /><span>{activity.child}</span></div> : null}
+      <div class="activity-child agent-child" title={now}>{now ? <><ActivityGlyph status="done" /><span>{tensedLabel(now, true)}</span></> : null}</div>
+      {open && activity.id ? <SubagentBody parentId={activity.id} agentId={activity.agentId} label={activity.label} running onClose={() => setOpen(false)} /> : null}
     </div>
   );
 }
