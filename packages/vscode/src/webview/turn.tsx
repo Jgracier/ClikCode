@@ -14,7 +14,7 @@ import { renderMarkdown } from './markdown';
 import { Icon, Spinner } from './ui';
 import { foldedGroupCount, liveMeter, runItemKey, type RunItem, shimmerStyle, traceSummaryLine, workingDetail, workingIndicator, workingStatus } from './flow';
 import { CopyAnswer, LiveMarkdown, renderFinished } from './messages';
-import { ActivityRow, ChildLine, DecisionRow, FoldedRun, Reasoning, RunGroups, ThoughtRow } from './activity-rows';
+import { AgentLine, ChildLine, DecisionRow, FoldedRun, Reasoning, RunGroups, ThoughtRow } from './activity-rows';
 
 /** How a turn reads, live or finished, in the order it happened -- as
  * Claude Code and Codex lay a turn out: each paragraph of the answer, and
@@ -286,9 +286,7 @@ export function RunningAgents({ live, workspace }: { live: Pick<LiveTurn, 'activ
   if (!agents.length && !other) return null;
   return (
     <div class="running-agents" aria-label="Running background work">
-      {agents.length ? <div class="running-agents-heading">Subagents <span class="muted">{agents.length} running</span></div> : null}
-      {agents.length ? <div class="running-agents-list">{agents.map((agent) =>
-        <ActivityRow key={agent.key} activity={agent} workspace={workspace} />)}</div> : null}
+      {agents.map((agent) => <AgentLine key={agent.key} activity={agent} workspace={workspace} />)}
       {other ? <div class="running-agents-other muted"><Icon name="pulse" />{other}</div> : null}
     </div>
   );
