@@ -226,3 +226,29 @@ it.skipIf(!enabled)('denies permissions by default and grants them per origin wh
     expect(bad.output).toContain('Use: camera');
   });
 }, 60_000);
+
+it.skipIf(!enabled)('reads a PDF and other documents as text', async () => {
+  const { makePdf } = await import('./test-pdf.js');
+  const pdf = makePdf(Array.from({ length: 30 }, (_value, index) => `Chapter ${index + 1}\n${Array.from({ length: 40 }, () => 'lorem ipsum dolor sit amet consectetur adipiscing elit').join('\n')}`));
+  await withSite((request, response) => {
+    if (request.url === '/doc.pdf') { response.setHeader('Content-Type', 'application/pdf'); response.end(pdf); return; }
+    if (request.url === '/data.json') { response.setHeader('Content-Type', 'application/json'); response.end('{"answer": 42}'); return; }
+    response.setHeader('Content-Type', 'text/html'); response.end('<h1>web page</h1>');
+  }, async ({ run, base }) => {
+    const opened = await run({ action: 'open', url: `${base}/doc.pdf` });
+    expect(opened.isError).toBeUndefined();
+    expect(opened.output).toContain('Document (PDF, 30 pages)');
+    expect(opened.output).toContain('--- page 1 of 30 ---');
+    expect(opened.output).toContain('Chapter 1\nlorem ipsum');
+    expect(opened.output).not.toContain('--- page 30 of 30 ---');
+    expect(opened.output.length).toBeLessThan(32_000);
+    expect(opened.output).toContain('observe with pages:');
+    const last = await run({ action: 'observe', pages: '29-30' });
+    expect(last.output).toContain('--- page 30 of 30 ---');
+    expect(last.output).not.toContain('--- page 1 of 30 ---');
+    const json = await run({ action: 'open', url: `${base}/data.json` });
+    expect(json.output).toContain('"answer": 42');
+    expect(json.output).toContain('application/json');
+    expect((await run({ action: 'open', url: `${base}/` })).output).toContain('web page');
+  });
+}, 60_000);

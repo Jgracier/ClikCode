@@ -163,6 +163,15 @@ the DevTools `Browser.setPermission` per origin (Playwright's `grantPermissions`
 permission of the context, which would undo the rest). Chrome forgets a decision when the connection that
 made it closes, so it lasts while the session runs; the next `open` denies again whatever is undecided.
 
+### PDFs and other documents
+When a tab lands on a PDF, `open` and `observe` return its **text with page markers**
+(`--- page 3 of 40 ---`), capped at about 30,000 characters; `observe` with `pages: "11-15"` (or
+`"2"`, `"1,4-6"`) reads other pages, and the result says how many are left. The file is fetched again
+through the tab's own request context, so a PDF behind a sign-in works, then read with pdf.js (the
+`unpdf` package, loaded only when a PDF is opened; this is the one runtime dependency this feature adds).
+A scan with no text layer says so. A plain-text, JSON, XML or CSV tab returns its text; an image or any
+other document says what it is. Text that looks like a key is hidden, as on any page.
+
 ## Getting an API key without the agent seeing it
 
 The agent signs in, sets the options, then makes one `capture_secret` call: the final
