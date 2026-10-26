@@ -4,7 +4,7 @@
 import type { Page } from 'playwright-core';
 import { allComputerPages, computerBrowserPids } from './browser.js';
 
-const SENSITIVE = 'input[type="password"], input[autocomplete="one-time-code"], input[autocomplete="current-password"], input[autocomplete="new-password"], input[autocomplete^="cc-"]';
+export const SENSITIVE = 'input[type="password"], input[autocomplete="one-time-code"], input[autocomplete="current-password"], input[autocomplete="new-password"], input[autocomplete^="cc-"]';
 const MIN_LENGTH = 3;
 
 /** What the sensitive fields on the page hold right now (including a password shown by a "show" toggle). */

@@ -6,7 +6,7 @@ and closes the browser, `on` brings them back.
 
 | Tool | What it is for |
 |---|---|
-| `browser_use` | A Chrome with its own saved profile (Edge if Chrome is missing), shared by every terminal and VS Code window, never your personal profile. **Each chat gets its own tab**: a chat only sees, acts on and follows tabs it opened itself, so chats working at once do not collide. `close` closes that chat's tab only. |
+| `browser_use` | A Chrome with its own saved profile (Edge if Chrome is missing), shared by every terminal and VS Code window, never your personal profile. **Each chat gets its own tab**: a chat only sees, acts on and follows tabs it opened itself, so chats working at once do not collide. `close` closes that chat's tab only (see [Page control](#page-control) for tabs, history, scripts, screenshots and the console). |
 | `computer_use` | Everything outside the page, through [cua-driver](https://github.com/trycua/cua) (a separate install): a popup window, a native dialog, another app. Give it a `pid` and `window_id` from `windows` to act on one window. On Linux Wayland it finds windows through the accessibility bus (cua-driver 0.38 or newer) and acts on their elements; keys, scrolling and window screenshots need GNOME 45–49 with cua's Shell helper. |
 
 They were called `computer_web` and `computer_desktop` before 2026-10-26; permission rules and MCP calls that use
@@ -32,6 +32,37 @@ mention them. A stale reference answers "the page has changed" with the current 
 **Every page can be read**, sign-in and signup forms included. What is never shown is the
 *value* of a password, one-time-code or card field (masked in every view, and a screenshot is
 withheld while one holds a value). There is no "sign-in page" mode to get stuck in.
+
+## Page control
+
+Beyond `open`, `observe`, `click`, `fill` and `wait`, `browser_use` drives the page like a person at the keyboard.
+Everything below uses only Playwright and the DevTools protocol, so it behaves the same on Linux, macOS and Windows.
+
+| Action or option | What it does |
+|---|---|
+| `back`, `forward`, `reload` | Move through the tab's history, or reload. Answers plainly when there is no earlier or later page. |
+| `tabs`, `switch`, `close` with `index` | `tabs` lists the tabs **this chat opened** (number, title, address, `*` for the one in front). `switch` takes `index` (or words of the title or address in `text`) and later actions act on that tab. `close` with `index` closes that one tab; without it, all of the chat's tabs. `open` with `new_tab: true` adds a tab. Another chat's tabs are never listed, switched to or closed. |
+| `evaluate` | Run `expression` (a JavaScript expression, or a function that gets the element named by `target`) and return its JSON result, cut at 8,000 characters. |
+| `click` with `button`, `count`, `modifiers`, `x`/`y` | Right or middle click, double (`count: 2`) or triple click, held Shift/Control/Alt/Meta (`ControlOrMeta` is Command on macOS). `x`/`y` alone click that point of the visible page (a canvas or map); with a `target`, they are an offset inside it. |
+| `hover` | Move the pointer onto a `target` or `x`/`y`, for menus that open on hover. |
+| `drag` | `target` onto `to_target` (the browser's own drag and drop), or `x`/`y` to `to_x`/`to_y`. |
+| `screenshot` | The visible page, `full: true` for the whole page, or a `target` element. Only hosts that take images get one. |
+| `with_screenshot: true` | On any action: the result also carries a picture of the page afterwards. |
+| `press` | Any single character (`/`, `.`, a space, `é`), a Playwright key name (`Enter`, `ArrowDown`, `F5`) or a combination (`Control+a`, `Meta+k`, `Shift+Tab`). Nothing else is sent: no free text, no control characters. |
+| `scroll` | `direction` up, down, left, right, top or bottom, `amount` in pixels (default 600). A `target` alone is scrolled into view; with a `direction` it scrolls inside that element (its nearest scrollable parent). The answer says where it ended up and whether that is the end. |
+| `wait` | As before for `text` (and `gone`), and now `until`: `network_idle`, `visible`, `hidden`, `enabled`, `disabled` (of a `target` or CSS `selector`), `url` (the address contains `url`, or `/regex/`; with no `url`, any change). On a timeout it is not an error: the page as it is comes back. |
+| `fill` | A rich-text editor (contenteditable) is written by insertion, with Shift+Enter between lines so a chat box does not send; a date, time, month or datetime-local box takes `2026-10-26`, `10/26/2026` or `3:45 PM` and says what format it wants if it refuses; range and colour inputs are set and announced; a dropdown is chosen by label or value; text up to 100,000 characters goes in at once. |
+| `console` | The tab's recent console messages and uncaught page errors (200 kept), oldest first; `level` keeps that level and worse, `find` filters, `limit` caps, `clear` forgets them. Recording starts when the chat's tab is opened. |
+
+**What stays hidden.** `evaluate`, `console`, `tabs` and screenshots go through the same hiding as the page view.
+During an `evaluate`, every password, one-time-code and card field reports an empty `value`, a script that goes looking for one
+(`type=password`, `autocomplete=cc-*`, `FormData`, `getOwnPropertyDescriptor`, form `.elements`) is refused, and the result is
+scrubbed of those fields' values (also as base64 or URL-encoded), of key-shaped text-box values, of anything registered as a secret,
+and of key-like text. This is defence in depth for an agent that should not read credentials, not a sandbox against a page that
+fights back. A screenshot is withheld while a credential field holds a value or the page shows a key, as for `observe`.
+
+Right-clicks, coordinate clicks, hovers and drags are not saved into an automatic signup recipe; a journey that used one is
+simply not recorded, rather than recorded wrong.
 
 ## Signing in and filling forms
 

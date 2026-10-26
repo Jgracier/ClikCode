@@ -4,7 +4,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { defineTool } from '../tool-contract.js';
-import { adoptPage, closeComputerPage, computerPage, openComputerPage } from '../computer/browser.js';
+import { adoptPage, closeComputerPage, computerPage, openComputerPage, openNewComputerPage } from '../computer/browser.js';
+import { checkKey, clickExtras, clickWith, closeTab, dragStep, fillTarget, hoverStep, PAGE_ACTIONS, PAGE_DESCRIPTION, PAGE_PARAMETERS, pageAction, scrollStep, waitForState, withScreenshot, type PageAction, type PageArgs, type ScrollDirection, type StepExtras } from '../computer/page-control.js';
 import { COMPUTER_OFF, computerEnabled, generatedPasswordsAllowed, unattendedEnabled } from '../computer/settings.js';
 import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
 import { keyFieldValues, maskSensitive, sensitiveValues } from '../computer/sensitive-fields.js';
@@ -42,12 +43,12 @@ import { runTailnetHandoff, tailnetAddress } from '../computer/tailnet-handoff.j
 import type { Frame, Locator, Page } from 'playwright-core';
 import type { ToolContext, ToolRunResult } from '../tool-contract.js';
 
-type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload'; target?: string; at?: 'start' | 'end'; text?: string; key?: string; direction?: 'up' | 'down'; accept_dialog?: boolean; gone?: boolean; seconds?: number };
+type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'hover' | 'drag'; target?: string; at?: 'start' | 'end'; text?: string; key?: string; direction?: ScrollDirection; accept_dialog?: boolean; gone?: boolean; seconds?: number } & StepExtras;
 type WebArgs = {
-  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'profile' | 'open_email_link' | 'read_email_code' | 'email_connect' | 'oauth_connect' | 'notes' | 'recipe' | 'queue' | 'network' | 'preflight' | 'forget_login' | 'help' | FilesEnvAction;
-  tab?: string; at?: 'start' | 'end'; url?: string; host?: string; note?: string; recipe_op?: 'save' | 'get' | 'run' | 'list'; login_route?: string; key_page?: string; capture_hint?: string; target?: string; text?: string; key?: string; direction?: 'up' | 'down'; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
+  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'profile' | 'open_email_link' | 'read_email_code' | 'email_connect' | 'oauth_connect' | 'notes' | 'recipe' | 'queue' | 'network' | 'preflight' | 'forget_login' | 'help' | 'hover' | 'drag' | PageAction | FilesEnvAction;
+  tab?: string; at?: 'start' | 'end'; url?: string; host?: string; note?: string; recipe_op?: 'save' | 'get' | 'run' | 'list'; login_route?: string; key_page?: string; capture_hint?: string; target?: string; text?: string; key?: string; direction?: ScrollDirection; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
   new_account?: boolean; secret?: string; to?: string; with?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean; format?: string; options?: string[]; secret?: boolean }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; vendor?: string; owner?: string; env?: string; task?: { vendor: string; kind?: string; status?: string; reason?: string; note?: string; owner?: string; connectors?: string[] }; bodies?: boolean; tasks?: boolean; task_status?: string; task_reason?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
-} & FilesEnvArgs;
+} & PageArgs & FilesEnvArgs;
 
 export function webAddress(value: string | undefined): string {
   if (!value) throw new Error('Open needs a website URL.');
@@ -280,13 +281,13 @@ async function settle(page: Page): Promise<void> {
   })).catch(quiet('agent/tools/computer-web')); // a navigation destroys the page being watched: the next look is a new page
 }
 
-const ACTION_LIST = ['open · close · observe · click · fill · choose · press · scroll · wait · upload · steps · login · handoff · capture_secret · send_secret · profile · open_email_link · read_email_code · email_connect · oauth_connect · notes · recipe · queue · network · preflight · forget_login · help', ...FILES_ENV_ACTIONS].join(' · ');
+const ACTION_LIST = ['open · close · observe · click · fill · choose · press · scroll · wait · upload · steps · login · handoff · capture_secret · send_secret · profile · open_email_link · read_email_code · email_connect · oauth_connect · notes · recipe · queue · network · preflight · forget_login · help · hover · drag · back · forward · reload · tabs · switch · evaluate · screenshot · console', ...FILES_ENV_ACTIONS].join(' · ');
 
 const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: ['action'], properties: {
     action: { type: 'string', description: ACTION_LIST },
     tab: { type: 'string', description: 'Name of your own tab. Agents working in parallel each pass a different name on every call, so they never share, read or navigate each other\'s page. Leave out when you are the only one using the browser.' },
     at: { type: 'string', enum: ['start', 'end'], description: 'click: click the left (start) or right (end) edge of the element instead of its middle, for a checkbox whose label has a link in the middle.' },
-    url: { type: 'string', description: 'open: the website address.' },
+    url: { type: 'string', description: 'open: the website address. wait with until url: text the address must contain (or /regex/).' },
     host: { type: 'string', description: 'notes: the site (default: the open page\'s).' },
     note: { type: 'string', description: 'notes: a step, address or gotcha worth knowing the next time this task is done on the site. Leave out to read the saved notes. Never a key or password.' },
     recipe_op: { type: 'string', enum: ['save', 'get', 'run', 'list'], description: 'recipe: save (after a signup or key capture worked: host, login_route, steps, key_page, capture_hint), get, run (replay the saved steps; stops at the first failure or at a captcha, SMS/MFA code, payment or review page, and shows the page so you can take over), list.' },
@@ -298,11 +299,13 @@ const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: [
     gone: { type: 'boolean', description: 'wait: wait for the text to disappear instead of appear.' },
     seconds: { type: 'number', description: 'wait: how long to wait at most (default 30, up to 120). read_email_code, open_email_link: how long to wait for the email to arrive when a mailbox is connected (default 90).' },
     find: { type: 'string', description: 'observe: show only the lines that mention these words.' },
-    key: { type: 'string', description: 'press: a key such as Enter or Escape.' },
-    direction: { type: 'string', enum: ['up', 'down'], description: 'scroll.' },
+    key: { type: 'string', description: 'press: one key or combination: Enter, Escape, Tab, ArrowDown, a single character (/ . a or a space), or modifiers joined with + (Control+a, Meta+k, Shift+Tab).' },
+    direction: { type: 'string', enum: ['up', 'down', 'left', 'right', 'top', 'bottom'], description: 'scroll: which way (default down); top and bottom go to the edge. With a target, scrolls inside that element; a target alone is scrolled into view.' },
+    ...PAGE_PARAMETERS,
     steps: { type: ['array', 'string'], description: 'steps: what to do, in order, e.g. [{do:"fill", target:"e4", text:"My key"}, {do:"click", target:"e9"}].',
       items: { type: 'object', additionalProperties: false, required: ['do'], properties: {
-        do: { type: 'string', enum: ['click', 'fill', 'choose', 'press', 'scroll', 'wait', 'upload'] }, target: { type: 'string' }, text: { type: 'string' }, key: { type: 'string' }, direction: { type: 'string', enum: ['up', 'down'] }, accept_dialog: { type: 'boolean' }, at: { type: 'string', enum: ['start', 'end'], description: 'click: click the left (start) or right (end) edge of the element instead of its middle, for a checkbox whose label has a link in the middle.' }, gone: { type: 'boolean' }, seconds: { type: 'number' },
+        do: { type: 'string', enum: ['click', 'fill', 'choose', 'press', 'scroll', 'wait', 'upload', 'hover', 'drag'] }, target: { type: 'string' }, text: { type: 'string' }, key: { type: 'string' }, direction: { type: 'string', enum: ['up', 'down', 'left', 'right', 'top', 'bottom'] },
+        button: { type: 'string', enum: ['left', 'right', 'middle'] }, count: { type: 'integer' }, modifiers: { type: ['array', 'string'], items: { type: 'string' } }, x: { type: 'number' }, y: { type: 'number' }, to_x: { type: 'number' }, to_y: { type: 'number' }, to_target: { type: 'string' }, amount: { type: 'number' }, until: { type: 'string', enum: ['text', 'network_idle', 'visible', 'hidden', 'enabled', 'disabled', 'url'] }, selector: { type: 'string' }, url: { type: 'string' }, accept_dialog: { type: 'boolean' }, at: { type: 'string', enum: ['start', 'end'], description: 'click: click the left (start) or right (end) edge of the element instead of its middle, for a checkbox whose label has a link in the middle.' }, gone: { type: 'boolean' }, seconds: { type: 'number' },
       } } },
     full: { type: 'boolean', description: 'observe: include the header and footer and a longer view.' },
     accept_dialog: { type: 'boolean', description: 'click: answer yes to a browser confirm dialog the click raises ("delete this token?"). Default: declined and reported.' },
@@ -335,6 +338,7 @@ const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: [
 const WEB_DESCRIPTION = [
     "Drive ClikCode's own Chrome (its own saved profile; it starts by itself). open and observe return the page, with a [ref=…] on each element: pass a ref as target (or visible text) to click or fill. After an action you get only what changed (and any open dialog); observe shows the whole page again. A new tab or popup the page opens is followed automatically.",
     'Actions: open (a URL) · observe (the page again; full: true adds header and footer; find: "words" shows only the lines that mention them, for a long page) · click · fill · choose (an option of a dropdown: target + text) · press · scroll · wait (for text to appear or go, up to 2 minutes; for jobs that finish on their own) · steps (several of those in order, one call, stops at the first failure) · login · handoff · capture_secret · profile · open_email_link (find the newest email from a sender in the signed-in Gmail and open a link in it, one call: verification and sign-in emails) · upload (a file input or its button + text: the name of a profile file detail ending _file such as logo_file, or the absolute path of a file in the workspace or the chat\'s downloads folder; nothing else can be sent) · notes (read or add what was learned on a site: the URL that worked, the order of screens, what was missing; shown again whenever a page on that host is opened, so write one when a task finally works) · recipe (save the steps of a signup or key capture that worked, by control text, never secrets; run replays them and stops for the user at a captcha, code, payment or review page; list) · email_connect (one consent in this browser connects the signed-in Gmail; after that read_email_code and open_email_link read mail through the Gmail API, wait for it to arrive, and return only the code or the link) · oauth_connect (target = a ClikDeploy connector id: starts its OAuth connect, presses through the vendor consent screens in this signed-in browser (account named by the profile sso_email, Advanced / Go to ... (unsafe), Continue / Allow / Authorize), stops with a plain reason at a login password, MFA code, captcha or an unknown screen (sign in first with login), and confirms ClikDeploy shows an active connection) · read_email_code (the one-time code in the newest email from a sender, read in a tab of its own, so a sign-up that wants an emailed code does not need the user) · forget_login (remove the saved login for a site from the vault: target = the site, label = one account; returns only a count; use it for a login the site keeps refusing) · close.',
+    PAGE_DESCRIPTION,
     'Each chat has its own tab. The user\'s autofill profile (name, email, phone, address, and any custom details you asked for with profile ask_fields) fills forms for you: fill a field with no text and it is filled from the profile, or the user is asked once and the answer is kept. If a site wants another format, fill that field with the exact text, and save the corrected value with action profile and fields. When a site offers Continue/Sign in with Google and the browser is already signed in to Google, prefer it: no new password or email check. If it offers GitHub and not Google, use Continue with GitHub (sign in to GitHub with the saved login; there is no Google sign-in inside GitHub). Only when neither is offered, fill the form with no text: the profile email fills it, and on a sign-up every password box gets a strong password made up for that site (fitted to what the page asks, retried if the site refuses it, saved with the login, never shown to you); a later sign-in fills the saved login. Every page can be read, including sign-in and signup forms; the values of password, code and card fields are masked. For anything only the user knows (a password, a code, an address, a phone number), fill the field with no text: a saved login for the site or the profile fills it, else the user is asked privately, and you are not shown the answer. That is all a sign-in or signup needs: fill the fields, click Next, repeat. (login does the same in one action for a plain email-then-password sign-in.) Never ask for a password or code in chat. When a sign-in page offers different ways in (root or IAM, another account), ask the user with ask_user, click their choice, then login. handoff returns a phone link for a CAPTCHA or MFA at once; give it to the user, then call handoff again to wait until they finish.',
     'Work through the whole task you were given without checking in at each step. Ask real choices (project, account, role set) once, up front, in one question; after that ask only when genuinely blocked (a sign-in they must type, a payment).',
     FILES_ENV_HELP,
@@ -354,6 +358,17 @@ export const computerWebTool = defineTool<WebArgs>({
       case 'click': return `Click ${args.target ?? ''}`.trim();
       case 'fill': return `Fill ${args.target ?? ''}`.trim();
       case 'press': return `Press ${args.key ?? ''}`.trim();
+      case 'hover': return `Hover ${args.target ?? ''}`.trim();
+      case 'drag': return `Drag ${args.target ?? 'from the page'}`.trim();
+      case 'back': return 'Go back';
+      case 'forward': return 'Go forward';
+      case 'reload': return 'Reload the page';
+      case 'tabs': return 'List tabs';
+      case 'switch': return `Switch to tab ${args.index ?? args.text ?? ''}`.trim();
+      case 'evaluate': return 'Run a script on the page';
+      case 'screenshot': return 'Take a screenshot';
+      case 'console': return 'Read the console';
+      case 'scroll': return `Scroll ${args.direction ?? 'down'}`;
       case 'wait': return `Wait for ${args.text ? `"${args.text}"` : `${args.seconds ?? 30}s`}`;
       case 'steps': return `${args.steps?.length ?? 0} steps on the page`;
       case 'login': return 'Sign in';
@@ -365,7 +380,7 @@ export const computerWebTool = defineTool<WebArgs>({
     }
   },
   paths: (args) => uploadPaths(args),
-  describe: async (args) => `ClikCode browser: ${args.action}${args.url ? ` ${args.url}` : ''}${args.target ? ` ${args.target}` : ''}${uploadPaths(args).length ? ` (sends ${uploadPaths(args).join(', ')})` : ''}${args.action === 'fill' ? ` (${args.text?.length ?? 0} characters)` : ''}`,
+  describe: async (args) => `ClikCode browser: ${args.action}${args.url ? ` ${args.url}` : ''}${args.target ? ` ${args.target}` : ''}${uploadPaths(args).length ? ` (sends ${uploadPaths(args).join(', ')})` : ''}${args.action === 'fill' ? ` (${args.text?.length ?? 0} characters)` : ''}${args.action === 'evaluate' ? ` ${JSON.stringify((args.expression ?? '').replace(/\s+/g, ' ').slice(0, 200))}` : ''}`,
   // One chat's browser calls run in the order they were made. The model can send two at once (a capture and
   // the click that closes the dialog it reads), and a one-time key does not survive that race.
   run: (args, hostCtx) => inOrder(args.tab ? `${hostCtx.stateDir}#${args.tab}` : hostCtx.stateDir, async (): Promise<ToolRunResult> => {
@@ -425,6 +440,7 @@ export const computerWebTool = defineTool<WebArgs>({
         }
         return { output: all.map(describeProfile).join('\n') };
       }
+      if (args.action === 'close' && (args.index !== undefined)) { await computerPage(ctx.stateDir, args.tab); return { output: await closeTab(args, { stateDir: ctx.stateDir, ...(args.tab ? { tab: args.tab } : {}) }) }; }
       if (args.action === 'close') { await closeComputerPage(ctx.stateDir, args.tab); return { output: 'This chat\'s tab is closed.' }; }
       if (args.action === 'forget_login') {
         const site = args.target?.trim() || args.host?.trim() || args.url?.trim();
@@ -434,7 +450,7 @@ export const computerWebTool = defineTool<WebArgs>({
       }
       if (args.action === 'downloads') return { output: await describeDownloads(ctx.stateDir, ctx.sessionId) };
       if (args.action === 'open') webAddress(args.url);
-      const page = args.action === 'open' || args.action === 'open_email_link' || args.action === 'email_connect' || args.action === 'oauth_connect' ? await openComputerPage(ctx.stateDir, args.tab) : await computerPage(ctx.stateDir, args.tab);
+      const page = args.action === 'open' && args.new_tab ? await openNewComputerPage(ctx.stateDir, args.tab) : args.action === 'open' || args.action === 'open_email_link' || args.action === 'email_connect' || args.action === 'oauth_connect' ? await openComputerPage(ctx.stateDir, args.tab) : await computerPage(ctx.stateDir, args.tab);
       bindDownloads(page, ctx.stateDir, ctx.sessionId);
       // A box the page raised and nobody answered holds the whole page: say so before anything touches it.
       bindDialogs(page, DIALOG_AWARE.has(args.action));
@@ -451,7 +467,9 @@ export const computerWebTool = defineTool<WebArgs>({
         if (ctx.signal?.aborted) throw new Error('Stopped.');
         const done = await Promise.race([stopped, act(page, args, ctx)]);
         // The page the batch ended on, which is not `page` when a popup took over.
-        const shown = done.isError ? done : await withSignInHints(done, await computerPage(ctx.stateDir, args.tab).catch(() => page), ctx.stateDir);
+        const ended = await computerPage(ctx.stateDir, args.tab).catch(() => page);
+        const withPicture = !done.isError && args.with_screenshot && ctx.acceptsImages === true && args.action !== 'screenshot' && !ended.isClosed() ? await withScreenshot(done, ended) : done;
+        const shown = withPicture.isError ? withPicture : await withSignInHints(withPicture, ended, ctx.stateDir);
         const noted = withDialogNotices(shown, page);
         return leftBehind ? { ...noted, output: `${leftBehind}\n\n${noted.output}` } : noted;
       } finally { ctx.signal?.removeEventListener('abort', onAbort); bindDialogs(page, true); }
@@ -491,9 +509,11 @@ export function inOrder<T>(key: string, job: () => Promise<T>): Promise<T> {
 const handoffs = sharedState('handoffs', () => new Map<string, { link: Promise<string>; done: Promise<{ ok: true } | { ok: false; message: string }>; stop: AbortController }>());
 
 /** Actions that look at the page or act on it as the agent asked: a box the page raises meanwhile is held for the agent's answer. The others (a sign-in, a key capture) dismiss it. */
-const DIALOG_AWARE: ReadonlySet<string> = new Set(['click', 'fill', 'choose', 'press', 'scroll', 'wait', 'upload', 'steps', 'observe', 'network', 'dialog']);
+const DIALOG_AWARE: ReadonlySet<string> = new Set(['click', 'fill', 'choose', 'press', 'scroll', 'wait', 'upload', 'steps', 'observe', 'network', 'dialog', 'hover', 'drag', 'back', 'forward', 'reload', 'evaluate', 'screenshot']);
 
-const INTERACTIONS: ReadonlySet<string> = new Set(['click', 'fill', 'choose', 'press', 'scroll', 'wait', 'upload']);
+const INTERACTIONS: ReadonlySet<string> = new Set(['click', 'fill', 'choose', 'press', 'scroll', 'wait', 'upload', 'hover', 'drag']);
+/** The steps a saved recipe can replay (by control text). Anything else spoils the journal instead of being recorded wrongly. */
+const PLAIN_STEPS: ReadonlySet<string> = new Set(['click', 'fill', 'choose', 'press', 'scroll', 'wait', 'upload']);
 
 /** The profile file an upload step names (`text` is the detail's name, e.g. logo_file): saved by the user, ending _file, and present on disk. */
 export async function approvedFile(ctx: ToolContext | undefined, name: string | undefined): Promise<string> {
@@ -514,6 +534,10 @@ type StepOutcome = string | { note: string; halt: true };
 /** Long jobs (an API being enabled, a resource being created) finish on their own: wait for words to
  * appear (or go) instead of looking again and again. Gives up with the page as it is, and says so. */
 async function waitOn(page: Page, step: Step): Promise<StepOutcome> {
+  if (step.until && step.until !== 'text' || (!step.text?.trim() && (step.selector || step.url !== undefined))) {
+    const done = await waitForState(page, step, { locate, displayUrl });
+    return done.halt ? { note: done.note, halt: true } : done.note;
+  }
   const seconds = Math.min(Math.max(Math.floor(step.seconds ?? 30), 1), 120);
   const text = step.text?.trim();
   if (!text) { await page.waitForTimeout(seconds * 1000); return `Waited ${seconds}s.`; }
@@ -543,28 +567,33 @@ async function doStep(page: Page, step: Step, ctx?: ToolContext): Promise<StepOu
       return `Uploaded ${path.basename(file)}${isUploadPath(step.text) ? '' : ` (${step.text})`} to ${step.target}.`;
     }
     case 'click': {
-      const target = await locate(page, step.target);
-      const { dialogs } = await withDialogs(page, step.accept_dialog === true, () => clickOrHint(target, step.at));
-      return `Clicked ${step.target}.${dialogNote(dialogs, step.accept_dialog === true)}`;
+      const extras = clickExtras(step);
+      const coordinates = !step.target?.trim() && step.x !== undefined;
+      const target = coordinates ? undefined : await locate(page, step.target);
+      const { dialogs } = await withDialogs(page, step.accept_dialog === true, () => extras || coordinates || (target && step.x !== undefined) ? clickWith(page, target, step) : clickOrHint(target!, step.at));
+      const how = extras ? ` (${[extras.modifiers.join('+'), extras.clickCount === 2 ? 'double' : extras.clickCount === 3 ? 'triple' : '', extras.button !== 'left' ? extras.button : ''].filter(Boolean).join(' ')})` : '';
+      return `Clicked ${coordinates ? `at ${step.x},${step.y}` : step.target}${how}.${dialogNote(dialogs, step.accept_dialog === true)}`;
+    }
+    case 'hover': {
+      const target = step.target?.trim() ? await locate(page, step.target) : undefined;
+      await hoverStep(page, target, step);
+      return `Hovered ${target ? step.target : `at ${step.x},${step.y}`}.`;
+    }
+    case 'drag': {
+      const from = step.target?.trim() ? await locate(page, step.target) : undefined;
+      const to = step.to_target?.trim() ? await locate(page, step.to_target) : undefined;
+      await dragStep(page, from, to, step);
+      return `Dragged ${from ? step.target : `from ${step.x},${step.y}`} to ${to ? step.to_target : `${step.to_x},${step.to_y}`}.`;
     }
     case 'fill': {
-      if (typeof step.text !== 'string' || step.text.length > 20_000) throw new Error('Fill needs text of at most 20,000 characters.');
-      const target = await locate(page, step.target);
-      // Typing, not setting a value: forms that check each key press (a phone box, an enabled Continue) only see real input.
-      const tag = await target.evaluate(element => (element as unknown as { tagName: string }).tagName).catch(() => '');
-      if (tag === 'SELECT') { await target.selectOption({ label: step.text }, { timeout: 10_000 }).catch(() => target.selectOption(step.text!, { timeout: 10_000 })); return `Chose "${step.text}" in ${step.target}.`; }
-      if (step.text.length <= 200 && tag !== 'TEXTAREA') {
-        await target.fill('', { timeout: 10_000 });
-        await target.pressSequentially(step.text, { timeout: 10_000 });
-        await target.blur().catch(quiet('agent/tools/computer-web'));
-      } else await target.fill(step.text, { timeout: 10_000 });
-      return `Filled ${step.target}.`;
+      if (typeof step.text !== 'string') throw new Error('Fill needs text.');
+      return fillTarget(page, await locate(page, step.target), step.text, step.target);
     }
     case 'choose': {
       // A dropdown that is not a <select>: open it, type to narrow the list, take the option that says this.
       if (!step.text) throw new Error('Choose needs the option text.');
       const target = await locate(page, step.target);
-      if (await target.evaluate(element => (element as unknown as { tagName: string }).tagName).catch(() => '') === 'SELECT') { await target.selectOption({ label: step.text }, { timeout: 10_000 }); return `Chose "${step.text}".`; }
+      if (await target.evaluate(element => (element as unknown as { tagName: string }).tagName).catch(() => '') === 'SELECT') { await target.selectOption({ label: step.text }, { timeout: 10_000 }).catch(() => target.selectOption(step.text!, { timeout: 10_000 })); return `Chose "${step.text}".`; }
       await clickOrHint(target);
       await page.keyboard.insertText(step.text).catch(quiet('agent/tools/computer-web'));
       await page.waitForTimeout(250);
@@ -574,12 +603,9 @@ async function doStep(page: Page, step: Step, ctx?: ToolContext): Promise<StepOu
       return `Chose "${step.text}".`;
     }
     case 'press':
-      if (!step.key || !/^[A-Za-z0-9+_-]{1,30}$/.test(step.key)) throw new Error('Press needs a simple key.');
-      await page.keyboard.press(step.key);
+      await page.keyboard.press(checkKey(step.key));
       return `Pressed ${step.key}.`;
-    case 'scroll':
-      await page.mouse.wheel(0, step.direction === 'up' ? -600 : 600);
-      return 'Scrolled.';
+    case 'scroll': return scrollStep(page, step.target?.trim() ? await locate(page, step.target) : undefined, step);
     case 'wait': return waitOn(page, step);
     default: throw new Error(`Unknown step "${String((step as { do?: unknown }).do)}".`);
   }
@@ -811,7 +837,11 @@ export async function runSteps(page: Page, steps: readonly Step[], ctx: ToolCont
       // Steps are journaled for an automatic recipe (see recipe-recorder.ts); a replay is not journaled again.
       const before = guard ? undefined : { url: current.url(), label: await controlName(current, step.target) };
       const done = await doStep(current, step, ctx);
-      if (before && typeof done === 'string') noteStep(journalKey(ctx.stateDir, tab), before.url, step, before.label);
+      // A step a recipe cannot replay by control text (right-click, a canvas position, a drag) leaves the journal unsaved rather than wrong.
+      if (before && typeof done === 'string') {
+        const replayable = PLAIN_STEPS.has(step.do) && !(step.do === 'click' && (clickExtras(step) || step.x !== undefined));
+        noteStep(journalKey(ctx.stateDir, tab), before.url, replayable ? step as Parameters<typeof noteStep>[2] : { do: 'click' }, replayable ? before.label : undefined);
+      }
       if (typeof done === 'string') notes.push(done); else { notes.push(done.note); halted = true; }
       // A box the step raised holds the page: nothing can be read from it until the agent answers.
       if (step.do === 'press' || step.do === 'choose' || step.do === 'upload') await current.waitForTimeout(150);
@@ -958,9 +988,17 @@ async function listRecipesFor(stateDir: string, url: string): Promise<string> {
   } catch { return ''; }
 }
 
+/** The pointer, scroll and wait options of a call, as a step carries them. */
+function stepExtras(args: WebArgs): StepExtras {
+  const out: StepExtras = {};
+  for (const name of ['button', 'count', 'modifiers', 'x', 'y', 'to_x', 'to_y', 'to_target', 'amount', 'until', 'selector', 'url'] as const) if (args[name] !== undefined) Object.assign(out, { [name]: args[name] });
+  return out;
+}
+
 async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRunResult> {
+  if ((PAGE_ACTIONS as readonly string[]).includes(args.action)) return pageAction(page, args, { stateDir: ctx.stateDir, ...(args.tab ? { tab: args.tab } : {}), acceptsImages: ctx.acceptsImages === true, locate, settle, displayUrl, view: (shown, compact) => observeComputerPage(shown, ctx.acceptsImages === true, false, undefined, compact === true) });
   if (INTERACTIONS.has(args.action)) {
-    const one: Step = { do: args.action as Step['do'], ...(args.at ? { at: args.at } : {}), ...(args.target ? { target: args.target } : {}), ...(args.text !== undefined ? { text: args.text } : {}), ...(args.key ? { key: args.key } : {}), ...(args.direction ? { direction: args.direction } : {}), ...(args.accept_dialog ? { accept_dialog: true } : {}), ...(args.gone ? { gone: true } : {}), ...(args.seconds ? { seconds: args.seconds } : {}) };
+    const one: Step = { do: args.action as Step['do'], ...stepExtras(args), ...(args.at ? { at: args.at } : {}), ...(args.target ? { target: args.target } : {}), ...(args.text !== undefined ? { text: args.text } : {}), ...(args.key ? { key: args.key } : {}), ...(args.direction ? { direction: args.direction } : {}), ...(args.accept_dialog ? { accept_dialog: true } : {}), ...(args.gone ? { gone: true } : {}), ...(args.seconds ? { seconds: args.seconds } : {}) };
     return runSteps(page, [one], ctx, args.tab, args.label);
   }
   switch (args.action) {
