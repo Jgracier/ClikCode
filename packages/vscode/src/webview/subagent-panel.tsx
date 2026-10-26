@@ -5,6 +5,40 @@ import type { SubAgentRow } from '../../../../src/harness/subagent-read';
 import { request } from './bus';
 import { Icon } from './ui';
 import { renderMarkdown } from './markdown';
+import { withoutOtherOrgThinkingNotice } from '../../../../src/harness/protocol/claude-thinking-notice';
+import { freshLive, upsertActivity } from '../model/activity';
+import type { Activity } from '../model';
+import { ActivityRow } from './activity-rows';
+
+type Group = { kind: 'prompt' | 'text'; text: string } | { kind: 'activities'; items: Activity[] };
+
+/** The rows as the main chat draws a turn: prose as markdown, and a run of calls as ordinary activity
+ * rows (their verb, result and output preview), not a raw dump of each call's text. */
+function groups(rows: SubAgentRow[]): Group[] {
+  const out: Group[] = [];
+  let live = freshLive('');
+  const flush = (): void => {
+    if (live.activities.length) out.push({ kind: 'activities', items: live.activities });
+    live = freshLive('');
+  };
+  for (const row of rows) {
+    if (row.kind === 'activity') { live = upsertActivity(live, row.event); continue; }
+    flush();
+    out.push({ kind: row.kind, text: row.text });
+  }
+  flush();
+  return out;
+}
+
+/** What the agent was asked: two lines, the rest a click away -- it is context, not the answer. */
+function Prompt({ text }: { text: string }): JSX.Element {
+  const [full, setFull] = useState(false);
+  const long = text.length > 240 || text.split('\n').length > 2;
+  return <div class={`subagent-prompt muted${full ? ' full' : ''}`}>
+    <div class="markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(withoutOtherOrgThinkingNotice(text)) }} />
+    {long ? <button type="button" class="link-button" onClick={() => setFull(!full)}>{full ? 'Show less' : 'Show the full prompt'}</button> : null}
+  </div>;
+}
 
 interface View { rows: SubAgentRow[]; steer: 'direct' | 'relay' | 'none' }
 
@@ -36,9 +70,13 @@ export function SubagentBody({ parentId, agentId, label, running, onClose }: { p
   }, [parentId, running]);
   return (
     <section class="subagent-view" aria-label={label} onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); onClose(); } }}>
-      <div class="subagent-view-rows" ref={scroller} onScroll={(event) => { const box = event.currentTarget; following.current = box.scrollHeight - box.scrollTop - box.clientHeight < 24; }}>{view.rows.length ? view.rows.map((row, index) => row.kind === 'activity'
-        ? <pre key={index}>{row.event.label}{row.event.output?.length ? `\n${row.event.output.join('\n')}` : ''}</pre>
-        : <div key={index} class={row.kind === 'prompt' ? 'markdown muted' : 'markdown'} dangerouslySetInnerHTML={{ __html: renderMarkdown(row.text) }} />) : <p class="muted">No recorded child messages or tool calls.</p>}</div>
+      <div class="subagent-view-rows" ref={scroller} onScroll={(event) => { const box = event.currentTarget; following.current = box.scrollHeight - box.scrollTop - box.clientHeight < 24; }}>
+        {view.rows.length ? groups(view.rows).map((group, index) => group.kind === 'activities'
+          ? <div key={index} class="activities">{group.items.map((item) => <ActivityRow key={item.key} activity={item} />)}</div>
+          : group.kind === 'prompt' ? <Prompt key={index} text={group.text} />
+          : <div key={index} class="markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(withoutOtherOrgThinkingNotice(group.text)) }} />)
+          : <p class="muted">No recorded child messages or tool calls.</p>}
+      </div>
       {running && view.steer !== 'none' ? <form onSubmit={(event) => {
         event.preventDefault();
         if (!draft.trim() || sending) return;
