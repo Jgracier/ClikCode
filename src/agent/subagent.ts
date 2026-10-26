@@ -160,7 +160,8 @@ export function createSubagentRunner(options: SubagentRunnerOptions): (request: 
         ...(parent.contextWindow ? { contextWindow: parent.contextWindow } : {}),
         ...(parent.contextProfile ? { contextProfile: parent.contextProfile } : {}),
         ...(request.signal ? { signal: request.signal } : {}),
-        ...(request.onSteerReady ? { onSteerReady: request.onSteerReady } : {}),
+        // The sub-agent's own steering, handed over as a plain send (agent_send, a steer typed during its call).
+        ...(request.onSteerReady ? { onSteerReady: (port?: import('../turn/live-input.js').SteerPort) => request.onSteerReady!(port ? (text: string) => port.offer(text, { id: `${request.callId}-steer`, text, submittedAt: new Date().toISOString() }).then(() => undefined) : undefined) } : {}),
         ...(options.approve ? { onApproval: options.approve } : {}),
         // Hooks can veto; a sub-agent must not be a way around them.
         ...(parent.hooks ? { hooks: parent.hooks } : {}),

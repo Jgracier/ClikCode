@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import { createAcpSession } from './acp-client.js';
 import { LiveTurnInputBroker } from '../../turn/live-input.js';
+import { fakeLedger } from '../../turn/test-support/live-ledger.js';
 
 const agent = (refuse: boolean) => `
   const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\\n');
@@ -24,20 +25,20 @@ const agent = (refuse: boolean) => `
 `;
 
 async function run(refuse: boolean) {
-  const broker = new LiveTurnInputBroker({ steerTimeoutMs: 100 });
-  const queue: string[] = [];
-  broker.bindQueue(async (submission) => { queue.push(submission.id); });
+  const broker = new LiveTurnInputBroker();
+  const fake = fakeLedger();
+  broker.bindLedger(fake.ledger);
   let typed: ReturnType<LiveTurnInputBroker['submit']> | undefined;
   let answer = '';
   const session = createAcpSession();
   try {
     await session.runTurn({
       binary: process.execPath, command: 'mcode', argv: ['-e', agent(refuse)], cwd: process.cwd(), prompt: 'go', environment: {}, permissionMode: 'ask',
-      onSteerReady: (handler) => { broker.setSteerHandler(handler ? (text, _s, hold) => handler(text, hold) : undefined); },
-      onResponseDelta: (delta) => { answer += delta; typed ??= broker.submit('and also this', 'm1'); },
+      onSteerReady: (port) => { broker.setSteerPort(port); },
+      onResponseDelta: (delta) => { answer += delta; typed ??= broker.submit('and also this', 'm1', { steer: true }); },
     });
   } finally { await broker.settled(); await session.close(); }
-  return { result: await typed, queue, answer };
+  return { result: await typed, queue: fake.queue.map((item) => item.id), answer };
 }
 
 describe('a message typed during a MiniMax Code turn', () => {

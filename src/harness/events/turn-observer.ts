@@ -19,6 +19,7 @@
  * overrides -- is not part of this and stays with each transport, because it
  * genuinely differs.
  */
+import type { SteerPort } from '../../turn/live-input.js';
 import type { HarnessActivityEvent } from '../prompter.js';
 import type { TurnUsage } from '../protocol/turn-usage.js';
 import type { UsageReading } from '../accounts/usage-reading.js';
@@ -98,14 +99,9 @@ export interface HarnessTurnObserver {
   onPhase?: (phase: string) => void;
   /** Quota and limit numbers the harness volunteers mid-turn. */
   onRateLimits?: (rateLimits: unknown) => void;
-  /** Published with a handler while a turn can be steered, and with nothing
-   * when it can no longer be. The handler resolves once the text is in the
-   * turn. `hold` (live-input.ts SteerHold) is for a transport that cannot
-   * steer yet without breaking something -- ACP, while a tool call is open --
-   * but will at the turn's next safe moment: it calls `hold(withdraw)`, which
-   * queues the message as the fallback, and settles its promise later.
-   * `withdraw` answers false once the message is already on its way. */
-  onSteerReady?: (handler?: (text: string, hold?: (withdraw: () => boolean, force?: () => void) => Promise<void>) => Promise<void>) => void;
+  /** Published with a port while a turn can be steered, and with nothing when it can no longer be
+   * (live-input.ts SteerPort): `offer` takes a message in now, or says it is not a moment it can. */
+  onSteerReady?: (port?: SteerPort) => void;
   /** Slash commands the agent offers for this session. */
   onAvailableCommands?: (commands: readonly HarnessAvailableCommand[]) => void;
   /** The session/new or session/load answer, with the models the agent

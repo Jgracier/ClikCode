@@ -1,6 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import { createAmpStreamTurn, ampUserMessage } from './amp-stream.js';
-import { LiveTurnInputBroker } from '../../../turn/live-input.js';
+import { LiveTurnInputBroker, type SteerPort } from '../../../turn/live-input.js';
+import { fakeLedger } from '../../../turn/test-support/live-ledger.js';
 
 const user = (text: string) => JSON.parse(ampUserMessage(text));
 const assistant = (content: object[], stop_reason = 'end_turn') => ({ type: 'assistant', message: { content, stop_reason } });
@@ -20,58 +21,68 @@ it('keeps stdin open for the main reply, then closes without waiting for the res
   expect(close).toHaveBeenCalledOnce();
 });
 
-it('holds a steer through a tool call and acknowledges it only when Amp echoes the message', async () => {
+it('waits out a tool call, then takes a steer and acknowledges it only when Amp echoes the message', async () => {
   const write = vi.fn((_text: string) => true);
-  const queued = vi.fn(async () => undefined);
-  const landed = vi.fn();
   const turn = createAmpStreamTurn({ prompt: 'go', write, close: () => undefined });
+  const { ledger, queue, steered } = fakeLedger();
   const broker = new LiveTurnInputBroker();
-  broker.bindQueue(queued); broker.setLateSteerHandler(landed);
-  broker.setSteerHandler((text, _submission, hold) => turn.steer(text, hold));
+  broker.bindLedger(ledger);
+  const port: SteerPort = { offer: (text) => turn.steer(text) };
+  turn.onWindow = () => port.onWindow?.();
+  broker.setSteerPort(port);
   turn.note(user('go'));
   turn.note(assistant([tool('call')], 'tool_use'));
-  const outcome = await broker.submit('also this', 'one');
+  const outcome = await broker.submit('also this', 'one', { steer: true });
   expect(outcome.disposition).toBe('queued');
+  expect(queue.map((item) => item.id)).toEqual(['one']);
   expect(write).not.toHaveBeenCalled();
   turn.note(result('call')); await tick();
   expect(JSON.parse(write.mock.calls[0]![0] as string)).toMatchObject({ steer: true, message: { content: [{ type: 'text', text: 'also this' }] } });
-  expect(landed).not.toHaveBeenCalled();
-  turn.note(user('also this'));
-  expect(await outcome.landed).toBe(true);
-  expect(landed).toHaveBeenCalledOnce();
+  // Written, not yet acknowledged: still waiting.
+  expect(steered).toEqual([]);
+  turn.note(user('also this')); await tick(); await broker.settled();
+  expect(steered.map((item) => item.id)).toEqual(['one']);
+  expect(queue).toEqual([]);
   turn.note(assistant([]));
 });
 
-it('does not send a held message after the user takes it back', async () => {
+it('does not send a waiting message after the user takes it back', async () => {
   const write = vi.fn(() => true);
   const turn = createAmpStreamTurn({ prompt: 'go', write, close: () => undefined });
+  const { ledger } = fakeLedger();
   const broker = new LiveTurnInputBroker();
-  broker.bindQueue(async () => undefined);
-  broker.setSteerHandler((text, _submission, hold) => turn.steer(text, hold));
+  broker.bindLedger(ledger);
+  const port: SteerPort = { offer: (text) => turn.steer(text) };
+  turn.onWindow = () => port.onWindow?.();
+  broker.setSteerPort(port);
   turn.note(user('go')); turn.note(assistant([tool('call')], 'tool_use'));
-  const outcome = await broker.submit('taken back', 'one');
-  expect(broker.withdraw('one')).toBe(true);
-  turn.note(result('call')); await tick();
-  expect(await outcome.landed).toBe(false);
+  await broker.submit('taken back', 'one', { steer: true });
+  expect(await broker.takeBack('one')).toBe('removed');
+  turn.note(result('call')); await tick(); await broker.settled();
   expect(write).not.toHaveBeenCalled();
   turn.ended();
 });
 
-it('keeps identical submissions distinct while acknowledgements remove earlier entries', async () => {
+it('says no, and writes nothing, while a tool is running', async () => {
+  const write = vi.fn(() => true);
+  const turn = createAmpStreamTurn({ prompt: 'go', write, close: () => undefined });
+  turn.note(user('go')); turn.note(assistant([tool('call')], 'tool_use'));
+  expect(await turn.steer('not now')).toBe(false);
+  expect(write).not.toHaveBeenCalled();
+});
+
+it('keeps identical messages distinct: each echo acknowledges one', async () => {
   const write = vi.fn((_text: string) => true);
   const turn = createAmpStreamTurn({ prompt: 'same', write, close: () => undefined });
   turn.note(user('same'));
   const first = turn.steer('same');
+  const second = turn.steer('same');
   await tick();
-  let ready!: () => void;
-  const second = turn.steer('same', () => new Promise<void>((resolve) => { ready = resolve; }));
-  const third = turn.steer('third', () => Promise.resolve());
+  expect(write).toHaveBeenCalledTimes(2);
   turn.note(user('same'));
-  await first;
-  ready(); await tick();
-  expect(write).toHaveBeenCalledTimes(3);
-  turn.note(user('same')); turn.note(user('third'));
-  await expect(Promise.all([second, third])).resolves.toEqual([undefined, undefined]);
+  await expect(first).resolves.toBe(true);
+  turn.note(user('same'));
+  await expect(second).resolves.toBe(true);
   turn.note(assistant([]));
 });
 
@@ -110,17 +121,17 @@ it('waits for each completed agent follow-up, ignoring duplicate or unrelated co
   expect(close).toHaveBeenCalledOnce();
 });
 
-it('does not let a child result close the parent, and returns a failed stdin write to the queue', async () => {
+it('does not let a child result close the parent, and leaves a message whose write failed in the queue', async () => {
   const close = vi.fn();
   const turn = createAmpStreamTurn({ prompt: 'go', write: () => { throw new Error('pipe closed'); }, close });
   turn.note(user('go'));
   turn.note({ type: 'result', parent_tool_use_id: 'child', result: 'child done' });
   expect(close).not.toHaveBeenCalled();
+  const { ledger, queue } = fakeLedger();
   const broker = new LiveTurnInputBroker();
-  const queued = vi.fn(async () => undefined);
-  broker.bindQueue(queued);
-  broker.setSteerHandler((text, _submission, hold) => turn.steer(text, hold));
-  expect((await broker.submit('keep this message', 'retained')).disposition).toBe('queued');
-  expect(queued).toHaveBeenCalledWith(expect.objectContaining({ id: 'retained', text: 'keep this message' }));
+  broker.bindLedger(ledger);
+  broker.setSteerPort({ offer: (text) => turn.steer(text) });
+  expect((await broker.submit('keep this message', 'retained', { steer: true })).disposition).toBe('queued');
+  expect(queue).toEqual([expect.objectContaining({ id: 'retained', text: 'keep this message' })]);
   expect(close).toHaveBeenCalledOnce();
 });

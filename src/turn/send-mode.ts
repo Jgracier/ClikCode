@@ -1,9 +1,11 @@
 /** What a message typed while a turn runs does: `/send steer|queue`.
  *
- * steer -- delivered into the running turn at its next safe point (Codex and
- * the Gateway at once, an ACP agent that takes steering once no tool call is
- * open). An agent that cannot take one queues it instead, and its row says so.
- * queue -- always waits for the turn to end and runs as the next turn.
+ * steer -- into the running turn when the vendor can take it without interrupting
+ * anything (Codex at once, an ACP agent once no tool call is open, the Gateway before its
+ * next model step); until then it waits in the saved queue. An agent that has no
+ * steering leaves it queued for the turn to end, and its row says so.
+ * queue -- waits in the saved queue for the turn to end and runs as the next turn;
+ * Enter again (nothing typed) offers it to the running turn.
  *
  * A global user setting (globalSettings.sendMode, absent = steer). The worker
  * reads it when a message arrives (session-worker.ts), so every client -- the
@@ -32,9 +34,9 @@ export function parseSendMode(word: string): SendMode {
 }
 
 /** The worker's delivery of a message typed mid-turn: the turn's broker,
- * told by the user's setting whether it may steer at all. */
+ * told by the user's setting whether it is to be steered in. */
 export function deliverTyped(
   broker: Pick<LiveTurnInputBroker, 'submit'>, text: string, id: string | undefined, settings: { sendMode?: unknown } | undefined,
 ): Promise<LiveTurnInputResult> {
-  return broker.submit(text, id, { queue: sendModeOf(settings) === 'queue' });
+  return broker.submit(text, id, { steer: sendModeOf(settings) === 'steer' });
 }

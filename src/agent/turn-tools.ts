@@ -19,7 +19,7 @@ import { lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { firstErrorLine } from '../turn/tool-log.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import { abortable, type CallOutcome, SHELL_TOOLS, stableStringify, categoryForTool } from './turn-support.js';
-import { releaseHeldSteers, steerAlert, type TurnRuntime } from './turn-runtime.js';
+import { steerAlert, type TurnRuntime } from './turn-runtime.js';
 import { currentToolName } from './computer/tool-names.js';
 
 const STREAM_EVENT_INTERVAL_MS = 150;
@@ -168,7 +168,6 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
       alert.dispose();
       rt.callsOpen--;
     }
-    if (rt.callsOpen === 0) await releaseHeldSteers(rt);
     if (wasPlanning && !session.plan.active) input.onPlanModeExit?.(session.plan.approvedPlan ?? '');
     if (!wasPlanning && session.plan.active) input.onPlanModeEnter?.();
     result = { ...result, output: scrubSecrets(result.output) };

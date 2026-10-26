@@ -1,4 +1,5 @@
 /** One structured CLI attempt, including its native session and background process. */
+import type { SteerPort } from './live-input.js';
 import { lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile } from 'node:fs/promises';
@@ -136,7 +137,7 @@ export async function runVendorCliAttempt(input: {
   const heldStreams = new WeakMap<object, ReturnType<typeof createStreamState>>();
   const background = streamJsonInput && heldInput ? createBackgroundWait({
     onSettled: () => {
-      run.liveInput?.setSteerHandler(undefined);
+      run.liveInput?.setSteerPort(undefined);
       heldInput.end();
     },
     onQuiet: () => held?.quiet(),
@@ -151,32 +152,39 @@ export async function runVendorCliAttempt(input: {
     },
   }) : undefined;
   const piTurn = piRpc && heldInput ? createPiRpcTurn({
-    close: () => { run.liveInput?.setSteerHandler(undefined); heldInput.end(); },
+    close: () => { run.liveInput?.setSteerPort(undefined); heldInput.end(); },
   }) : undefined;
   const ampTurn = ampStream && heldInput ? createAmpStreamTurn({
     prompt: turnText, write: (text) => heldInput.write(text),
-    close: () => { run.liveInput?.setSteerHandler(undefined); heldInput.end(); },
+    close: () => { run.liveInput?.setSteerPort(undefined); heldInput.end(); },
   }) : undefined;
-  if (ampTurn) run.liveInput?.setSteerHandler(async (text, submission, hold) => {
-    await ampTurn.steer(text, hold);
-    if (submission.kind !== 'note') await checkpoint.steer(submission);
-  });
+  // The vendor's own steering, offered to the broker as it is: Amp once no tool or sub-agent is running
+  // (it echoes the message when it takes it), Pi and Claude-shaped streams at any moment.
+  if (ampTurn) {
+    const port: SteerPort = { offer: (text) => ampTurn.steer(text) };
+    ampTurn.onWindow = () => port.onWindow?.();
+    run.liveInput?.setSteerPort(port);
+  }
   if (heldInput && piTurn) {
-    run.liveInput?.setSteerHandler(async (steerText, submission) => {
-      if (piTurn.settled) throw new Error('turn is finishing');
-      const id = randomUUID();
-      const taken = piTurn.await(id);
-      taken.catch(quiet('turn/vendor-cli-attempt'));
-      if (!heldInput.write(piRpcSteer(id, steerText))) throw new Error('turn is finishing');
-      await taken;
-      if (submission.kind !== 'note') await checkpoint.steer(submission);
+    run.liveInput?.setSteerPort({
+      offer: async (steerText) => {
+        if (piTurn.settled) throw new Error('turn is finishing');
+        const id = randomUUID();
+        const taken = piTurn.await(id);
+        taken.catch(quiet('turn/vendor-cli-attempt'));
+        if (!heldInput.write(piRpcSteer(id, steerText))) throw new Error('turn is finishing');
+        await taken;
+        return true;
+      },
     });
   }
   if (heldInput && background) {
-    run.liveInput?.setSteerHandler(async (steerText, submission) => {
-      if (background.settled || !heldInput.write(streamJsonUserMessage(steerText))) throw new Error('turn is finishing');
-      background.noteInput();
-      if (submission.kind !== 'note') await checkpoint.steer(submission);
+    run.liveInput?.setSteerPort({
+      offer: async (steerText) => {
+        if (background.settled || !heldInput.write(streamJsonUserMessage(steerText))) throw new Error('turn is finishing');
+        background.noteInput();
+        return true;
+      },
     });
   }
   const stdinText = turn.promptInput !== 'stdin' ? undefined
@@ -225,7 +233,7 @@ export async function runVendorCliAttempt(input: {
       // Answered, and only background tasks left: the turn is over.
       if (outcome.result && release && background && backgroundHandler
         && background.pending > 0 && background.quiet && !background.settled) {
-        run.liveInput?.setSteerHandler(undefined);
+        run.liveInput?.setSteerPort(undefined);
         const owner = { harness: harness.command, accountId: session.nativeThreadAccountId ?? session.accountId ?? undefined };
         held = holdVendorProcess({
           sessionId: session.id, background, release, handler: backgroundHandler,
@@ -264,15 +272,15 @@ export async function runVendorCliAttempt(input: {
     // Whatever ended the process, input to it has nowhere to go now --
     // unless it was handed on still running.
     if (background && !held) {
-      run.liveInput?.setSteerHandler(undefined);
+      run.liveInput?.setSteerPort(undefined);
     }
     // The process is gone: an agent it ran in the background went with it.
     if (!held) for (const event of stream.agentRows.settle('tool-error', true)) sharedObserver.onActivity?.(event);
     if (piTurn) {
       piTurn.ended();
-      run.liveInput?.setSteerHandler(undefined);
+      run.liveInput?.setSteerPort(undefined);
     }
-    if (ampTurn) { ampTurn.ended(); run.liveInput?.setSteerHandler(undefined); }
+    if (ampTurn) { ampTurn.ended(); run.liveInput?.setSteerPort(undefined); }
   }
   if (turnOutput.interrupted) throw turnCancelledError();
   let cliResult = nativeTurnResult(harness, turnOutput.stdout, { exitCode: turnOutput.exitCode, stderr: turnOutput.stderr });

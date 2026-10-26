@@ -262,11 +262,10 @@ export interface HarnessSession {
     id: string; text: string; submittedAt: string; kind?: 'command' | 'notification';
     /** Recovery for an interrupted vendor agent remains actionable after a worker restart. */
     durable?: boolean;
-    /** The running turn (its pendingTurn.startedAt) is holding this message
-     * to steer in at its next safe moment -- no tool call open, so nothing
-     * running is interrupted. Queued only as the fallback: it runs as the next
-     * turn if that turn ends first. Meaningless once that turn is over. */
-    heldForTurn?: string;
+    /** To go into the running turn, not wait for the next: when the vendor can take it without
+     * interrupting anything, or at its next opening. Cleared by nothing -- a turn that ends first
+     * simply runs it as the next turn. */
+    steer?: boolean;
   }>;
   /** A turn that ran out of usage everywhere, parked until the provider's
    * quota resets ("Wait for reset"); the worker sends it then. */

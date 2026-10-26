@@ -1,5 +1,5 @@
 /** ClikCode's own agent turn, using Gateway or a local model for inference. */
-import { diagnostic, quiet } from '../runtime/lifecycle-log.js';
+import { diagnostic } from '../runtime/lifecycle-log.js';
 import { agentMcpServer, gatewayAgentSession, type GatewayAgentSession } from '../gateway/agent-session.js';
 import type Conf from 'conf';
 import { routeMcpServers } from '../gateway/mcp.js';
@@ -134,9 +134,8 @@ export async function runAgentTurn(input: {
   let held: Awaited<ReturnType<typeof seedAgentConversation>> = { total: 0, seeded: 0 };
   let memoryBytes = 0;
   let seededOk = false;
-  // Steers handed to the agent's queue, and their durable writes: any the model never saw go back to the queue (onSteersUndelivered).
+  // Steers handed to the agent's queue: any the model never saw go back to the queue (onSteersUndelivered).
   const accepted: Array<import('./live-input.js').LiveTurnSubmission> = [];
-  const steerWrites: Array<Promise<void>> = [];
   // The coding agent runs here, on this machine; the model server supplies
   // the model step and nothing else. A server that cannot serve one fails the
   // turn with its own reason (for-session.ts gatewayErrorMessage).
@@ -200,18 +199,18 @@ export async function runAgentTurn(input: {
           checkpoint.touch();
           prompter?.render(session);
         },
-        // The loop takes steering before each model step (run-turn.ts).
-        onSteerReady: (handler) => run.liveInput?.setSteerHandler(handler ? async (steerText, submission, hold) => {
-          // A note from ClikCode is not the user's: it never waits in the queue.
-          await handler(steerText, submission.kind === 'note' ? undefined : hold);
-          if (submission.kind === 'note') return;
-          const write = checkpoint.steer(submission);
-          steerWrites.push(write.catch(quiet('turn/agent-turn')));
-          accepted.push(submission);
-          await write;
+        // The loop takes steering before each model step (run-turn.ts). What it took in is kept to hand back
+        // if the turn ends before the model hears it (onSteersUndelivered).
+        onSteerReady: (port) => run.liveInput?.setSteerPort(port ? {
+          offer: async (steerText, submission) => {
+            const taken = await port.offer(steerText, submission);
+            if (taken && submission.kind !== 'note') accepted.push(submission);
+            return taken;
+          },
         } : undefined),
         onSteersUndelivered: async (texts) => {
-          await Promise.all(steerWrites);
+          // What the broker was recording as the turn closed lands first, so the steer is taken off the turn after it is on it.
+          await run.liveInput?.settled();
           for (const text of texts) {
             const at = accepted.findIndex((item) => item.text === text.trim());
             if (at < 0) continue;

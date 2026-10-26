@@ -52,15 +52,10 @@ export async function runVendorSessionAttempt(input: {
     session.nativeSessionId = undefined;
     delete session.nativeSessionPreallocated;
   }
-  // Codex steers at once; ACP may hold a message until no tool call is open
-  // (acp-client.ts). Recorded under the id the composer shows it by, so the
-  // durable steer matches its row by identity.
-  const onSteerReady: HarnessTurnObserver['onSteerReady'] = (handler) => run.liveInput?.setSteerHandler(handler ? async (steerText, submission, hold) => {
-    await handler(steerText, hold);
-    // A held message's queued fallback copy is taken out by the same write that records the steer.
-    if (submission.kind === 'note') return;
-    await checkpoint.steer(submission);
-  } : undefined);
+  // The vendor's way of taking a message into its running turn, handed to the broker as it is: Codex takes one
+  // at any moment, ACP when no tool call is open (acp-client.ts). The broker records it under the id the
+  // composer shows it by, so the saved steer matches its row by identity.
+  const onSteerReady: HarnessTurnObserver['onSteerReady'] = (port) => run.liveInput?.setSteerPort(port);
   const persistent = run.persistentTransports
     ? persistentTransportFor(session.id, transport, vendorChildKey(harness, account, environment, session.workspace))
     : undefined;
@@ -97,9 +92,8 @@ export async function runVendorSessionAttempt(input: {
         try {
           result = persistent ? await (persistent.session as AcpSession).runTurn(acpInput) : await runAcpTurn(acpInput);
         } finally {
-          // A message held for the next pause has been steered in or released
-          // to the queue by now; let what follows either land before the
-          // journal is completed, so it is one or the other, never both.
+          // A message offered to the turn as it ended is in it or still queued by now:
+          // settled before the journal is completed, so it is one or the other, never both.
           await run.liveInput?.settled();
         }
         const usageAfter = usageFile && result.nativeSessionId ? await readAcpUsageFile(usageFile, result.nativeSessionId, environment) : undefined;

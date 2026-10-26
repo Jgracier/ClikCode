@@ -7,6 +7,7 @@ import { extname } from 'node:path';
 import type { AiHarnessAcpDefinition, AiHarnessPermissionMode } from '../definition.js';
 import type { HarnessActivityEvent, ToolCategory } from '../prompter.js';
 import type { LiveSettings, LiveSettingsFields } from '../../turn/live-settings.js';
+import type { SteerPort } from '../../turn/live-input.js';
 import type { HarnessAvailableCommand, HarnessPlanEntry, HarnessTurnObserver } from '../events/turn-observer.js';
 import { askHarnessQuestion, type HarnessQuestionRequest, type HarnessQuestionResult } from '../events/question.js';
 import { formToQuestions } from '../events/form-questions.js';
@@ -524,16 +525,6 @@ interface LiveAgent {
   unclaimed?: string;
 }
 
-/** A message typed during the turn, waiting for a moment it can be steered
- * in without interrupting anything (see AcpSessionImpl.steerSafe). */
-interface HeldSteer {
-  text: string;
-  /** Settles when the broker has its fallback copy queued; never sent first. */
-  ready: Promise<void>;
-  resolve: () => void;
-  reject: (error: Error) => void;
-}
-
 /** Whatever is receiving the agent's session/update right now: the user's
  * turn, or a background turn when there is none. */
 interface Stream {
@@ -582,10 +573,8 @@ interface ActiveTurn extends Stream {
   /** Cancelled mid-setup: the setup finishes in the background (interrupt). */
   setupContinues?: boolean;
   fail: (error: Error) => void;
-  /** Messages waiting to be steered in, oldest first. */
-  held: HeldSteer[];
-  /** The `_session/steering` requests being sent now, one at a time. */
-  flushing?: Promise<void>;
+  /** How this turn takes a message in (see steer); the broker sets `onWindow`. */
+  steerPort?: SteerPort;
   /** Approvals the user is being asked for now. */
   approvals: number;
 }
@@ -646,7 +635,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     const { failure, fail } = turnFailure();
     const turn: ActiveTurn = {
       input, observer: input, cumulativeChunks: this.lastCumulativeChunks, text: '', messageText: '', sawActivity: false, thoughts: 0, base: {}, promptStarted: false, done: false, fail,
-      held: [], approvals: 0,
+      approvals: 0,
     };
     this.relayedMessage = '';
     // What already runs (a terminal an earlier turn started) is the new
@@ -672,7 +661,6 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       },
       ended: () => {
         input.onSteerReady?.(undefined);
-        this.releaseSteers(turn);
         // A setup left to finish (interrupt) keeps its requests.
         if (!turn.setupContinues) this.live?.peer.rejectPending(new Error(`${input.command} ACP turn ended`), (method) => method !== 'session/prompt');
         // An unsettled tool call belongs to the still-live vendor, even
@@ -1070,16 +1058,13 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     const stopChanges = input.liveSettings?.subscribe(apply);
     if (input.liveSettings) apply({ model: input.liveSettings.model, effort: input.liveSettings.effort });
     markTurn('prompt-sent');
-    if (live.steering) input.onSteerReady?.((text, hold) => this.steer(turn, text, hold));
+    if (live.steering) { turn.steerPort = { offer: (text) => this.steer(turn, text) }; input.onSteerReady?.(turn.steerPort); }
     let completed: Json;
     try { completed = await turn.prompt as Json; }
     finally { stopChanges?.(); await changing; }
-    // The answer ends the turn: nothing held can be steered into it any more
-    // (each goes to the queue as the next turn), and one already sent is
-    // answered before the turn is reported over.
+    // The answer ends the turn: nothing can be steered into it any more
+    // (what waits in the queue runs as the next turn).
     if (live.steering) input.onSteerReady?.(undefined);
-    this.releaseSteers(turn);
-    await turn.flushing;
     if (turn.compactionFailure) throw turn.compactionFailure;
     if (completed.stopReason === 'cancelled') {
       // Nothing here asked for it and nothing was said or done first: the agent
@@ -1133,88 +1118,32 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     return !turn.done && this.turn === turn && this.work.count() === 0 && turn.approvals === 0;
   }
 
-  /** The turn's steer handler. Sent now when nothing would be interrupted;
-   * otherwise held (and queued by the caller as the fallback) until the next
-   * moment that is true. A caller that cannot hold gets a rejection: queue. */
-  private steer(turn: ActiveTurn, text: string, hold?: (withdraw: () => boolean, force?: () => void) => Promise<void>): Promise<void> {
-    if (turn.done || this.turn !== turn) return Promise.reject(new Error(`${turn.input.command} ACP turn ended`));
-    // Anything already held goes first: messages arrive in the order typed.
-    const now = this.steerSafe(turn) && turn.held.length === 0 && !turn.flushing;
-    if (!now && !hold) return Promise.reject(new Error(`${turn.input.command} is running a tool`));
-    return new Promise<void>((resolve, reject) => {
-      // Never sent once it is no longer the user's: its queued copy failed to
-      // be written (the message went back to the composer), or was taken back.
-      // False once it is on its way: it can no longer be taken back.
-      const drop = (error: Error): boolean => {
-        const index = turn.held.indexOf(item);
-        if (index < 0) return false; // already sent, or released
-        turn.held.splice(index, 1);
-        reject(error);
-        return true;
-      };
-      const ready = now ? Promise.resolve() : hold!(() => drop(new Error('taken back from the queue')), () => this.flushSteers(turn, item));
-      const item: HeldSteer = { text, ready, resolve, reject };
-      turn.held.push(item);
-      ready.catch((error: unknown) => drop(error instanceof Error ? error : new Error(String(error))));
-      this.flushSteers(turn);
-    });
-  }
-
-  /** Send what is held, oldest first, while it stays safe to. */
-  private flushSteers(turn: ActiveTurn, forced?: HeldSteer): void {
+  /** Takes a message into the running turn through the agent's own steering request, when nothing would
+   * be interrupted (steerSafe). Otherwise false: the message stays queued, and `steerPause` tells the broker
+   * when a moment comes. Rejects when the turn is over. */
+  private async steer(turn: ActiveTurn, text: string): Promise<boolean> {
     const live = this.live;
-    if (turn.done || this.turn !== turn) return;
-    // `forced`: the user pressed Enter on it, so it goes now, and the vendor
-    // cancels the call in flight. What was typed before it goes first.
-    const open = (): boolean => (forced ? turn.held.includes(forced) : this.steerSafe(turn));
-    if (turn.flushing || !turn.held.length || !live || !open()) {
-      // A flush already running re-checks when it ends; make that one see the force.
-      if (forced && turn.flushing && live) void turn.flushing.then(() => this.flushSteers(turn, forced));
-      return;
-    }
-    turn.flushing = (async () => {
-      while (turn.held.length && open()) {
-        const item = turn.held[0]!;
-        try { await item.ready; } catch { continue; } // already taken out and rejected
-        // Taken back while its fallback copy was being written.
-        if (turn.held[0] !== item) continue;
-        if (!open()) break;
-        turn.held.shift();
-        try {
-          // `promptRequired`: the agent has no turn running (it ended between
-          // here and there); ClikCode owns the next turn, so the queued copy
-          // runs. Never let the agent start a detached one (`startedNewTurn`).
-          // mcode refuses (an error) when no prompt turn of this session is
-          // running, and never starts one: either way the queued copy runs.
-          const answer = live.steering === 'mcode'
-            ? await live.peer.request('mcode/session/steer', { sessionId: turn.sessionId, text: item.text }, {})
-            : await live.peer.request('_session/steering', {
-              sessionId: turn.sessionId, prompt: [{ type: 'text', text: item.text }],
-              _meta: { steering: { idleBehavior: 'promptRequired' } },
-            }, {});
-          if (answer?.outcome === 'injected' || (live.steering === 'mcode' && answer?.mode === 'steered')) item.resolve();
-          else item.reject(new Error(`${turn.input.command} did not take the message into its turn (${String(answer?.outcome ?? answer?.mode)})`));
-        } catch (error) {
-          item.reject(error instanceof Error ? error : new Error(String(error)));
-        }
-      }
-    })().finally(() => {
-      turn.flushing = undefined;
-      // Typed while the last one was being sent.
-      this.flushSteers(turn, forced);
-    });
+    if (turn.done || this.turn !== turn || !live) throw new Error(`${turn.input.command} ACP turn ended`);
+    if (!this.steerSafe(turn)) return false;
+    // `promptRequired`: the agent has no turn running (it ended between
+    // here and there); ClikCode owns the next turn, so the queued copy
+    // runs. Never let the agent start a detached one (`startedNewTurn`).
+    // mcode refuses (an error) when no prompt turn of this session is
+    // running, and never starts one: either way the queued copy runs.
+    const answer = live.steering === 'mcode'
+      ? await live.peer.request('mcode/session/steer', { sessionId: turn.sessionId, text }, {})
+      : await live.peer.request('_session/steering', {
+        sessionId: turn.sessionId, prompt: [{ type: 'text', text }],
+        _meta: { steering: { idleBehavior: 'promptRequired' } },
+      }, {});
+    return answer?.outcome === 'injected' || (live.steering === 'mcode' && answer?.mode === 'steered');
   }
 
-  /** A moment that may be safe: look again once this burst of updates is in
-   * (an agent announces parallel calls back to back). */
+  /** A moment that may be safe: tell the broker once this burst of updates is in (an agent announces
+   * parallel calls back to back); it offers what waits, and the offer re-checks. */
   private steerPause(turn: ActiveTurn): void {
-    if (!turn.held.length) return;
-    setImmediate(() => this.flushSteers(turn));
-  }
-
-  /** The turn is over: whatever is still held runs as the next turn. */
-  private releaseSteers(turn: ActiveTurn): void {
-    for (const item of turn.held.splice(0)) item.reject(new Error(`${turn.input.command} ACP turn ended`));
+    const port = turn.steerPort;
+    if (port?.onWindow) setImmediate(() => port.onWindow?.());
   }
 
   /** Where an update goes: the user's turn while one runs, otherwise a

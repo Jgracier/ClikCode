@@ -54,17 +54,16 @@ describe('resource notes', () => {
     ]);
   });
 
-  it('steer into a running turn through its handler, which is told it is a note', async () => {
+  it('steer into a running turn through its port, as a note and never queued', async () => {
     const broker = new LiveTurnInputBroker();
     expect(await broker.steerNote('nothing running')).toBe(false);
     const seen: { text: string; kind?: string }[] = [];
-    broker.setSteerHandler(async (text, submission, hold) => {
-      await hold(() => false);
-      seen.push({ text, kind: submission.kind });
-    });
+    broker.setSteerPort({ offer: async (text, submission) => { seen.push({ text, kind: submission.kind }); return true; } });
     expect(await broker.steerNote('memory is tight')).toBe(true);
     expect(seen).toEqual([{ text: 'memory is tight', kind: 'note' }]);
-    broker.setSteerHandler(async () => { throw new Error('turn ended'); });
+    broker.setSteerPort({ offer: async () => { throw new Error('turn ended'); } });
     expect(await broker.steerNote('too late')).toBe(false);
+    broker.setSteerPort({ offer: async () => false });
+    expect(await broker.steerNote('not a moment')).toBe(false);
   });
 });

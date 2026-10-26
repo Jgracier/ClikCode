@@ -50,7 +50,7 @@ export function queuedMessagesOf(
       // (acp-client.ts): it is on its way into this turn, not the next.
       .map((item) => ({
         role: 'user' as const, content: item.text, user: true, ...(unsteeredIds.has(item.id) ? { unsteered: true } : {}),
-        queueState: p.turn && item.heldForTurn && item.heldForTurn === pending?.startedAt ? 'pause' as const : 'queued' as const,
+        queueState: p.turn && item.steer === true && pending?.startedAt !== undefined ? 'pause' as const : 'queued' as const,
       })),
     // The bottom row stays until the steer's own row exists in what this
     // frame built (`drawn`), so it never leaves one place before it is in
