@@ -22,7 +22,8 @@ import { userMessageIndexes } from '../tui/slash/fork-at.js';
 export interface Redo {
   /** The prompt, for the composer. */
   prompt: string;
-  /** What was done, for the panel. */
+  /** What the user must hear about: a file that was left alone, or edits that could not be put back. Empty when it all
+   * went to plan -- the conversation having gone back is on the screen already, and the prompt is in the message box. */
   text: string;
 }
 
@@ -47,7 +48,7 @@ export async function redoFrom(
     pendingTurn: undefined, nativeSessionId: undefined, nativeStartedAt: undefined, nativeThreads: undefined,
     createdAt: now, updatedAt: now, status: 'archived', closedAt: now,
   });
-  let files: string;
+  let files = '';
   if (options.keepFiles) {
     // The edits stay, so their records go: a later /undo must not reverse a
     // turn that is no longer in the conversation.
@@ -55,9 +56,9 @@ export async function redoFrom(
       const records = await readTurnChanges(options.stateDir, session.id);
       await writeTurnChanges(options.stateDir, session.id, records.slice(0, Math.max(0, records.length - turns)));
     });
-    files = 'Files kept as they are.';
   } else {
-    files = (await undoTurnsBack(session, turns, { stateDir: options.stateDir, who: options.who, turnIsRunning: async () => false })).text;
+    const undone = await undoTurnsBack(session, turns, { stateDir: options.stateDir, who: options.who, turnIsRunning: async () => false });
+    if (undone.conflicts.length || undone.text.startsWith('Not undone:')) files = undone.text;
   }
   session.messages = messages.slice(0, at);
   session.pendingTurn = undefined;
@@ -72,8 +73,5 @@ export async function redoFrom(
     delete session.agentThreadTurns;
   }
   session.updatedAt = now;
-  return {
-    prompt,
-    text: `Back to before prompt ${n}; it is in the message box to send again. The conversation as it was is archived beside this one.\n\n${files}`,
-  };
+  return { prompt, text: files };
 }

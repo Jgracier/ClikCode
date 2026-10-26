@@ -337,6 +337,9 @@ describe('output formatting', () => {
     expect(formatOutput({ panel: 'models', models: [{ model: 'a', provider: 'x' }, { model: 'b' }], selected: 'a' }))
       .toEqual({ kind: 'panel', title: 'Models', body: '● a  (x)\n  b' });
     expect(formatOutput({ panel: 'session-renamed', text: 'Renamed' })).toEqual({ kind: 'notice', text: 'Renamed', level: 'info' });
+    // A /redo that went to plan says nothing; one that left a file alone says so.
+    expect(formatOutput({ panel: 'redo-done', prompt: 'again' })).toEqual({ kind: 'none' });
+    expect(formatOutput({ panel: 'redo', text: 'a.txt changed since' })).toMatchObject({ kind: 'panel', body: 'a.txt changed since' });
     expect(formatOutput({ panel: 'shell', text: '$ ls' })).toEqual({ kind: 'panel', title: 'Shell', body: '$ ls' });
   });
 });

@@ -67,7 +67,7 @@ export function renderSessionCard(session: HarnessSession, account?: string): st
  * attachments, /cwd with nothing to change -- are not here, and are shown. */
 const CONFIRMATION_PANELS: ReadonlySet<string> = new Set([
   'session-renamed', 'session-archived', 'session-deleted', 'session-closed', 'session-forked',
-  'settings-updated', 'conversation-reset', 'account-removed', 'add-dir', 'copied',
+  'settings-updated', 'conversation-reset', 'account-removed', 'add-dir', 'copied', 'redo-done',
 ]);
 
 /** A panel's text as the terminal draws it (colours included), or undefined
