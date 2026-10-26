@@ -154,6 +154,15 @@ already running. The credentials are used for that origin only, never for a prox
 (a wrong password is not retried in a loop), and never appear in a result. https sites only, like the
 vault. `auth` with `clear: true` turns it off for the tab.
 
+### Site permissions (camera, microphone, location, notifications, clipboard)
+By default every one is **denied** for every origin, set before a page is opened, so no permission bubble
+appears and blocks the page. `permissions` with `grant: ["geolocation", "clipboard"]` (names: `camera`,
+`microphone`, `geolocation`, `notifications`, `clipboard`) allows them for one origin (`url`, default the
+open page; https or localhost only), `deny` takes them back, and with neither it lists the state. It uses
+the DevTools `Browser.setPermission` per origin (Playwright's `grantPermissions` resets every other
+permission of the context, which would undo the rest). Chrome forgets a decision when the connection that
+made it closes, so it lasts while the session runs; the next `open` denies again whatever is undecided.
+
 ## Getting an API key without the agent seeing it
 
 The agent signs in, sets the options, then makes one `capture_secret` call: the final

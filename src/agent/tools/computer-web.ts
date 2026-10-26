@@ -28,7 +28,7 @@ import { Parked, park } from '../computer/parking.js';
 import { hideKeyLikeText } from '../computer/secret-finder.js';
 import { answerDialog, bindDialogs, dialogNote, hasPendingDialog, pendingDialogNote, settleWaitingDialog, withDialogNotices, withDialogs } from '../computer/page-dialogs.js';
 import { FILES_ENV_ACTIONS, FILES_ENV_HELP, FILES_ENV_PARAMETERS, filesEnvLabel, type FilesEnvAction, type FilesEnvArgs } from '../computer/files-env-schema.js';
-import { applyHttpAuth, clearHttpAuth } from '../computer/files-env-actions.js';
+import { applyHttpAuth, clearHttpAuth, denyPermissionsFor, runPermissions } from '../computer/files-env-actions.js';
 import { approvedUploadPath, isUploadPath } from '../computer/upload-files.js';
 import { bindDownloads, describeDownloads, downloadNotes } from '../computer/downloads.js';
 import { SEND_TO_HELP, SEND_TO_SCHEMA } from './store-secret.js';
@@ -1003,6 +1003,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
   }
   switch (args.action) {
     case 'open': {
+      await denyPermissionsFor(page, webAddress(args.url));
       const authNote = args.http_auth ? await applyHttpAuth(page, webAddress(args.url), args, ctx) : undefined;
       // An address that is a file download does not navigate: the file is saved and reported instead.
       // Leaving the page was asked for, so a "leave this page?" box is accepted.
@@ -1018,6 +1019,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       const withAuth = authNote ? { ...withNotes, output: `${authNote}\n\n${withNotes.output}` } : withNotes;
       return recipes ? { ...withAuth, output: `${recipes}\n\n${withAuth.output}` } : withAuth;
     }
+    case 'permissions': return { output: await runPermissions(page, args) };
     case 'auth': {
       if (args.clear) return { output: await clearHttpAuth(page) };
       // Sign-in for the named site (or the open page's), then the page is loaded again with it.
