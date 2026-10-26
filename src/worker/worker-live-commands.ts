@@ -1,6 +1,8 @@
 /** The commands that act on the running turn or the queue behind it: stop it,
  * steer a message into it, send a queued one now, take one out of the queue. */
 import { randomUUID } from 'node:crypto';
+import { existingSessionAgents } from '../agent/background-agents.js';
+import { isClikCodeAgent } from '../session/route.js';
 import type { Socket } from 'node:net';
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import { readState } from '../session/state/read.js';
@@ -277,6 +279,15 @@ export function createLiveCommands(ctx: WorkerContext) {
     };
     const { session } = await currentSessionAndAccount();
     const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+    if (isClikCodeAgent(session)) {
+      const agents = existingSessionAgents(ctx.agentSession);
+      const id = command.agentId;
+      if (!agents || !id) { refuse('This sub-agent has no running background session.'); return; }
+      const result = await agents.send(id, command.text);
+      if (result.isError) refuse(result.output);
+      else if (command.id) sendEvent(socket, { type: 'submission', id: command.id, disposition: 'steered' });
+      return;
+    }
     const ref: SubAgentRef = {
       id: command.parentId, label: command.label ?? command.parentId, status: 'running', harness: harness?.command ?? 'unknown',
       ...(command.agentId ? { agentId: command.agentId } : {}),

@@ -36,7 +36,7 @@ describe('the composer has room to breathe', () => {
     // The generating band is a blank and the status (two rows); the resting
     // footer says two blank rows there instead, so ending a turn moves nothing.
     const source = await readFile(new URL('../prompter/paint/footer.ts', import.meta.url), 'utf8');
-    expect(source).toContain("if (!this.turn) footer.push('', ...(hasBandBlank(targetHeight) && !approvalRows.length ? [''] : []))");
+    expect(source).toContain("if (!turn) footer.push('', ...(hasBandBlank(targetHeight) && !approvalRows.length ? [''] : []))");
   });
 });
 

@@ -325,6 +325,11 @@ async function carryKiroPair(input: NativeSessionCarry): Promise<boolean> {
 }
 
 export const kiroSessionStore: NativeSessionStore = {
+  async remove(id, _cwd, environment) {
+    if (!/^[\w-]+$/.test(id)) throw new Error('Invalid Kiro probe id');
+    const files = kiroSessionFiles(kiroRoot(environment), id);
+    await Promise.all([rm(files.conversation, { force: true }), rm(files.session, { force: true })]);
+  },
   root: kiroRoot,
   carry: carryKiroSession,
   writer: kiroThreadWriter,

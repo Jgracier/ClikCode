@@ -34,6 +34,23 @@ const settle = (events: readonly HarnessActivityEvent[]): TurnActivity[] => {
   return activities;
 };
 
+it('keeps an Amp async Task running through its launch result, then settles it on the native end event', () => {
+  const harness = { command: 'amp', parser: 'claude-stream-json', turn: { stdinFormat: 'amp-json' } } as AiLocalHarnessDefinition;
+  const stream = createStreamState();
+  const events: HarnessActivityEvent[] = [];
+  const counts: number[] = [];
+  const note = (record: object) => reportStructuredLine(harness, JSON.stringify(record), {
+    onActivity: (event) => events.push(event), onBackgroundWork: (work) => counts.push(work.agents ?? 0),
+  }, stream);
+  note({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'task', name: 'Task', input: { description: 'review', mode: 'async' } }] } });
+  note({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'task', content: 'launched' }] } });
+  expect(events.filter((event) => event.id === 'task').map((event) => event.kind)).toEqual(['tool-start']);
+  expect(counts.at(-1)).toBe(1);
+  note({ type: 'system', subtype: 'subagent_finished', tool_use_id: 'task', status: 'completed' });
+  expect(events.filter((event) => event.id === 'task').map((event) => event.kind)).toEqual(['tool-start', 'tool-done']);
+  expect(counts.at(-1)).toBe(0);
+});
+
 /** The frames of one agent row, in order, from the claude 2.1.281 recording. */
 function claudeStreamJson(): HarnessActivityEvent[] {
   const lines = readFileSync(join(__dirname, '..', 'transport', 'native', 'fixtures', 'claude-background-agent.jsonl'), 'utf8').split('\n').filter((line) => line.trim());

@@ -4,7 +4,6 @@ import { isClikCodeAgent, isGatewayService } from '../../../session/route.js';
 import { gatewayConversationUsageLabel, gatewayCreditLabel } from '../../../gateway/credit-label.js';
 import { conversationCost } from '../../../tui/slash/usage-report.js';
 import { reconcileLocalModelLeases } from '../local-model.js';
-import { withArgValues } from '../../../tui/slash/arg-values.js';
 import { resumeWaitLabel } from '../../../turn/usage-exhausted.js';
 import Conf from 'conf';
 import { createInterface } from 'node:readline/promises';
@@ -23,13 +22,12 @@ import { emitHarnessOutput } from '../../../harness/output.js';
 import { TerminalHarnessPrompter } from '../../../tui/prompter.js';
 import { terminalUiSupported } from '../../../tui/capabilities.js';
 import { activateSession, claimConversation, releaseConversationClaim, resolveSessionModel } from '../../../session/attach.js';
-import { slashPalette } from '../../../tui/slash/registry.js';
-import { sessionHarness, sessionOrProviderHarness, slashExtrasFor } from '../../../tui/slash/context.js';
+import { sessionOrProviderHarness } from '../../../tui/slash/context.js';
 import { autoSelectSessionHarness, interactiveEnginePicker } from '../../../tui/pickers/engine.js';
 import { closeAllWorkerClients } from '../../../worker/turn-bridge.js';
 import { retireStaleWorkers } from '../../../worker/client.js';
 import { replaceCliWithNewBuild } from '../build-replace.js';
-import { BOARD_OWNS } from './board.js';
+import { conversationCommands } from './board.js';
 import { onLockWait } from '../../../session/store/locks.js';
 import chalk from 'chalk';
 
@@ -73,8 +71,7 @@ export async function openWindow(config: Conf, startId: string): Promise<ChatWin
   // the user's custom templates, never the terminal CLI's list mixed in.
   const ref: WindowRef = { id, paletteState: state };
   const slashCommandsFor = (target: HarnessSession): PickerOption<string>[] => {
-    const harness = sessionHarness(target);
-    return withArgValues(slashPalette(target, harness, { ...slashExtrasFor(target, harness), omit: BOARD_OWNS }), target, harness, ref.paletteState);
+    return conversationCommands(target, ref.paletteState);
   };
   // Created before auto-select so a first-ever install/sign-in — the most
   // common time either is actually needed — has somewhere to show its

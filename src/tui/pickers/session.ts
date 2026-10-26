@@ -6,7 +6,7 @@ import { newConversation } from '../../commands/ai/conversations.js';
 import { randomUUID } from 'node:crypto';
 import { inspectNativeHarness } from '../../harness/transport/native/inspect.js';
 import { discoverNativeSessions, lastSeenNativeSessions } from '../../session/discovery/cli-listing.js';
-import { ADOPTED_TRANSCRIPT_READERS, FS_SESSION_DISCOVERY } from '../../session/discovery/registry.js';
+import { nativeTranscriptReader, FS_SESSION_DISCOVERY } from '../../session/discovery/registry.js';
 import { saveDiscoveryCache } from '../../session/discovery/cache.js';
 import { acpDiscoveryDirectory } from '../../harness/accounts/acp-query.js';
 import { type DiscoveredNativeSession } from '../../session/discovery/discovered-session.js';
@@ -232,12 +232,12 @@ export async function interactiveSessionPicker(
   let workerIsLive = workers.isLive;
   // The turn each live-worker chat is generating, from its transcript -- the
   // one record of a turn in flight. Its `updatedAt` is the spinner's pace.
-  let pendingById = await livePendingTurns(sessions, workerIsLive, workers.background);
+  let pendingById = await livePendingTurns(sessions, workerIsLive, workers.background, workers.runningTurn);
   // One row per conversation, in its section (session/conversation-rows.ts,
   // the same rows the editor's history menu draws).
   let rows: ConversationRow[] = [];
   const fillActivity = (): void => {
-    rows = conversationRows(sessions, { workerIsLive, isOpen: workers.isOpen, awaitingYou: workers.awaitingYou, pending: pendingById, currentId });
+    rows = conversationRows(sessions, { workerIsLive, isOpen: workers.isOpen, runningTurn: workers.runningTurn, background: workers.background, awaitingYou: workers.awaitingYou, pending: pendingById, currentId });
   };
   fillActivity();
 
@@ -282,7 +282,7 @@ export async function interactiveSessionPicker(
     activityRefresh = (async () => {
       workers = await liveWorkers();
       workerIsLive = workers.isLive;
-      pendingById = await livePendingTurns(sessions, workerIsLive, workers.background);
+      pendingById = await livePendingTurns(sessions, workerIsLive, workers.background, workers.runningTurn);
       fillActivity();
       listRevision += 1;
       built = undefined;
@@ -526,7 +526,7 @@ export async function interactiveSessionPicker(
   // way to read a whole conversation back out (see ADOPTED_TRANSCRIPT_READERS
   // above), and never something continuation itself depends on.
   const chatWorkspace = match.item.workspace ?? workspace;
-  const transcriptReader = ADOPTED_TRANSCRIPT_READERS[match.harness.command];
+  const transcriptReader = nativeTranscriptReader(match.harness);
   const messages = transcriptReader
     ? await transcriptReader(match.harness, nativeId, chatWorkspace, nativeProfileEnvironment(account?.nativeProfile)).catch(() => [])
     : [];

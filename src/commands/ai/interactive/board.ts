@@ -1,6 +1,9 @@
 /** The conversation board the window opens on Left, and where a turn joined mid-way already is. */
 import type { PickerOption } from '../../../harness/prompter.js';
-import type { HarnessSession } from '../../../session/model.js';
+import type { HarnessSession, HarnessState } from '../../../session/model.js';
+import { withArgValues } from '../../../tui/slash/arg-values.js';
+import { slashPalette } from '../../../tui/slash/registry.js';
+import { sessionHarness, slashExtrasFor } from '../../../tui/slash/context.js';
 import { runningActivityLabel } from '../../../turn/checkpoint.js';
 
 /** Kept out of the terminal's list: ← on an empty prompt is the
@@ -23,10 +26,8 @@ export function joinedTurn(session: HarnessSession, runningPrompt: string | unde
   return { ...(Number.isNaN(startedAt) ? {} : { startedAt }), ...(activity ? { activity } : {}) };
 }
 
-/** What a `/` offers on the conversation board: the settings a new
- * conversation starts with. */
-export const BOARD_COMMANDS: readonly PickerOption<string>[] = [
-  { label: '/provider', detail: '· the harness the new conversation runs in', value: '/provider' },
-  { label: '/model', detail: '· its model', value: '/model' },
-  { label: '/effort', detail: '· its reasoning effort', value: '/effort' },
-];
+/** The same commands and argument completions in a chat and before its first message. */
+export function conversationCommands(session: HarnessSession, state: Pick<HarnessState, 'accounts' | 'sessions'>): PickerOption<string>[] {
+  const harness = sessionHarness(session);
+  return withArgValues(slashPalette(session, harness, { ...slashExtrasFor(session, harness), omit: BOARD_OWNS }), session, harness, state);
+}

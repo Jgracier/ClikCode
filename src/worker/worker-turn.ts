@@ -133,6 +133,11 @@ export function createTurnRunner(ctx: WorkerContext) {
     // turn open on every window for ever.
     const ended = await currentSessionAndAccount().catch(() => undefined);
     ctx.turnRunning = false;
+    ctx.turnStartedAt = undefined;
+    // Not awaited: nothing may sit between the turn being over and its end being told (a message
+    // typed in that gap is queued and announced by the order of these two lines). The record's
+    // writes are chained, so this one still lands after the start's.
+    void ctx.onTurnRunningChange?.(undefined);
     ctx.lastTurnStopped = turnOutcome === 'cancelled';
     observer.endTurn(ended?.session, ended?.account, turnOutcome === 'cancelled');
     lifecycle('worker.turn.end', { outcome: turnOutcome, ms: Date.now() - turnStarted });
@@ -160,6 +165,7 @@ export function createTurnRunner(ctx: WorkerContext) {
 
   return async (command: SubmitCommand): Promise<void> => {
     ctx.turnRunning = true;
+    if (!ctx.turnStartedAt) { ctx.turnStartedAt = new Date().toISOString(); void ctx.onTurnRunningChange?.(ctx.turnStartedAt); }
     const turnStarted = Date.now();
     let turnOutcome = 'completed';
     lifecycle('worker.turn.start', { queued: Boolean(command.queuedTurnId), clients: observer.attachedCount });

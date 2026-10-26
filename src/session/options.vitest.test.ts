@@ -397,11 +397,11 @@ describe('conversationOption', () => {
     expect(option.activity).toBe('working');
   });
 
-  it('paints a stalled turn yellow', () => {
+  it('keeps quiet live turns working', () => {
     const pending = { prompt: 'go', startedAt: ago(20 * 60_000), updatedAt: ago(4 * 60_000), outputStarted: true };
     const option = conversationOption(row(session({ updatedAt: ago(0) }), { activity: 'working', pending, section: 'working' }), undefined, NOW);
-    expect(strip(option.detail)).toBe('· stalled 4m');
-    expect(option.activity).toBe('stalled');
+    expect(strip(option.detail)).toBe('· working 20m');
+    expect(option.activity).toBe('working');
   });
 
   it('needs you while an approval waits', () => {

@@ -21,8 +21,8 @@ describe('tool colours in the panel', () => {
     expect(lookCssVariables()['--look-tool-text']).toBe('#87afd7');
   });
 
-  it('colour a stalled conversation yellow, as the terminal does', () => {
-    expect(css).toContain('.conversation-dot.working.stalled');
+  it('does not infer failure styling from silence', () => {
+    expect(css).not.toContain('.conversation-dot.working.stalled');
   });
 });
 

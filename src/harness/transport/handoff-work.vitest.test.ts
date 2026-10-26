@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAcpSession } from './acp-client.js';
-import { agentResult, endsWithLimitRefusal, limitSentence, VendorTasks, type EndedWork } from './handoff-work.js';
+import { agentResult, endedAgentWork, endsWithLimitRefusal, limitSentence, VendorTasks, type EndedWork } from './handoff-work.js';
 import { formatEndedWork } from '../../worker/handed-off-work.js';
 
 const LIMIT = "You've hit your session limit · resets 7:50am (America/Denver)";
@@ -55,6 +55,26 @@ describe('Claude\'s background tasks', () => {
   });
 });
 
+it('recovers a task marked completed when its transcript ends with a quota error, preserving progress', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'clikcode-agent-quota-'));
+  try {
+    const file = join(dir, 'agent.jsonl');
+    await writeFile(file, [
+      { type: 'assistant', message: { model: 'sonnet', content: [{ type: 'text', text: 'Migration applied; next verify the result.' }] } },
+      { type: 'assistant', error: 'rate_limit', isApiErrorMessage: true, message: { model: '<synthetic>', content: [{ type: 'text', text: LIMIT }] } },
+    ].map((row) => JSON.stringify(row)).join('\n'));
+    const work = await endedAgentWork({ id: 'a1', kind: 'agent', label: 'Migration', prompt: 'Apply and verify' }, 'completed', 'Agent completed', file);
+    expect(work).toMatchObject({ outcome: 'cut-off', limit: LIMIT, outputFile: file, tail: 'Migration applied; next verify the result.' });
+    const prompt = formatEndedWork([work], { harness: 'claude' });
+    expect(prompt).toContain('Resume the existing native agent "a1"');
+    expect(prompt).toContain('SendMessage');
+    expect(prompt).toContain('Migration applied; next verify the result.');
+    expect(prompt).toContain(JSON.stringify(file));
+    await writeFile(file, '\n' + JSON.stringify({ type: 'assistant', message: { model: 'sonnet', content: [{ type: 'text', text: 'Verification passed.' }] } }), { flag: 'a' });
+    expect(await endedAgentWork({ id: 'a1', kind: 'agent', label: 'Migration' }, 'completed', 'Agent completed', file)).toMatchObject({ outcome: 'finished', tail: 'Verification passed.' });
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 describe('what the conversation\'s account is told', () => {
   it('a result to use, or an agent\'s task to start again', () => {
     const text = formatEndedWork([
@@ -63,7 +83,8 @@ describe('what the conversation\'s account is told', () => {
     ]);
     expect(text).toContain('[background command 41 finished] npm test\nTests 12 passed');
     expect(text).toContain(`[background agent a1 was cut off: ${LIMIT}] Open B5`);
-    expect(text).toContain('Start it again here, with the same task:\nCheck the games endpoints');
+    expect(text).toContain('Original task:\nCheck the games endpoints');
+    expect(text).toContain('do not repeat completed work');
   });
 });
 

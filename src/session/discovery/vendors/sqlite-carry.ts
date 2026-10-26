@@ -116,6 +116,27 @@ export function tableColumns(db: CarryDb, table: string): Set<string> {
   return new Set((db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((row) => row.name));
 }
 
+/** Delete one owned probe session using the same schema as carry. Shared
+ * project/account rows are deliberately untouched. */
+export async function removeSqliteSession(spec: SqliteCarrySpec, nativeId: string, environment: NativeSessionEnvironment): Promise<void> {
+  const path = spec.database(environment);
+  if (!await stat(path).then((info) => info.isFile(), () => false)) return;
+  const db = await openVendorDatabase(path);
+  try {
+    db.exec('PRAGMA foreign_keys = ON; BEGIN IMMEDIATE');
+    for (const table of [...spec.rows].reverse().concat(spec.session)) {
+      const columns = tableColumns(db, table.table);
+      if (!columns.size) continue;
+      if (!columns.has(table.key)) throw new Error(`Unknown ${table.table} session schema`);
+      db.prepare(`DELETE FROM "${table.table}" WHERE "${table.key}" = ?`).run(nativeId);
+    }
+    db.exec('COMMIT');
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch { /* transaction never opened */ }
+    throw error;
+  } finally { db.close(); }
+}
+
 function columns(db: CarryDb, schema: CarrySchema, table: string): string[] {
   return (db.prepare(`PRAGMA ${schema}.table_info("${table}")`).all() as { name: string }[]).map((row) => row.name);
 }

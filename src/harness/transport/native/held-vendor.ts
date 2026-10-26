@@ -32,7 +32,7 @@ import type { HarnessTurnObserver } from '../../events/turn-observer.js';
 import type { BackgroundWait } from './background-wait.js';
 import type { ReleasedTurnExit } from './turn.js';
 import { turnCancelledError } from '../../../agent/cancellation.js';
-import { agentResult, limitSentence, type EndedWork, type RunningWork } from '../handoff-work.js';
+import { endedAgentWork, type EndedWork, type RunningWork } from '../handoff-work.js';
 
 type Json = Record<string, unknown>;
 
@@ -53,6 +53,7 @@ interface HeldVendorOptions {
   /** The turn's release handle: ends the turn now, keeps the process. */
   release: { release(onExit: (exit: ReleasedTurnExit) => void): boolean; terminate(): void };
   handler: VendorBackgroundTurnHandler;
+  workEnded?(ended: readonly EndedWork[]): void;
   /** Report one stdout line (and its record, when it is one) to a
    * background turn's observer. */
   report(line: string, observer: HarnessTurnObserver, record: Json | undefined): void;
@@ -131,14 +132,10 @@ export function holdVendorProcess(options: HeldVendorOptions): HeldVendor | unde
     const agent = retiredAgents?.get(record.task_id);
     if (!agent) return;
     retiredAgents!.delete(record.task_id);
-    const finished = record.status === 'completed' || record.status === undefined;
     const summary = typeof record.summary === 'string' ? record.summary : '';
-    const limit = finished ? undefined : limitSentence(summary);
     const file = typeof record.output_file === 'string' ? record.output_file : undefined;
-    void (async () => {
-      const tail = (finished ? await agentResult(file) : '') || summary;
-      tell([{ ...agent, outcome: finished ? 'finished' : 'cut-off', tail, ...(limit ? { limit } : {}) }]);
-    })().catch(() => undefined);
+    void endedAgentWork(agent, String(record.status ?? 'completed'), summary, file)
+      .then((work) => tell([work])).catch(() => undefined);
   };
   const vendor: HeldVendor = {
     get agentWork() { return options.background.agentWork; },
@@ -165,6 +162,12 @@ export function holdVendorProcess(options: HeldVendorOptions): HeldVendor | unde
         // The last subagent has ended and been told: nothing is left that the conversation waits on.
         if (!retiredAgents.size && !inputEnded && !options.background.settled && options.background.quiet) { inputEnded = true; options.endInput(); }
         return;
+      }
+      if (record?.type === 'system' && record.subtype === 'task_notification' && typeof record.task_id === 'string') {
+        const agent = options.background.agents().find((work) => work.id === record.task_id);
+        if (agent) void endedAgentWork(agent, String(record.status ?? 'completed'),
+          typeof record.summary === 'string' ? record.summary : '', typeof record.output_file === 'string' ? record.output_file : undefined)
+          .then((work) => { if (work.outcome === 'cut-off' && work.limit) options.workEnded?.([work]); }).catch(() => undefined);
       }
       if (!channel && !closing && record && opensBackgroundTurn(record) && !options.background.settled) {
         channel = new BackgroundTurnChannel('structured-cli', 'background-work');

@@ -87,15 +87,25 @@ export function accountUsageText(usage: { label?: string; windows: readonly Usag
   return usageReadingLabel(usage.windows) ?? usage.label;
 }
 
+/** Display a final 1% until the vendor actually refuses the account. The
+ * reported windows stay untouched in storage and in routing diagnostics. */
+export function accountDisplayUsage(account: AiHarnessAccount | undefined, reading: UsageReading | undefined, now = Date.now()): UsageReading | undefined {
+  if (!reading || !account || account.status !== 'ready' || quotaRefusalHolds(account, now)) return reading;
+  const windows = reading.windows.map((window) => !window.advisory && Math.round(100 - window.usedPct) <= 0
+    ? { ...window, usedPct: 99 } : window);
+  if (windows.every((window, index) => window === reading.windows[index])) return reading;
+  return { ...reading, windows, label: usageReadingLabel(windows) ?? reading.label };
+}
+
 /** "resets at 8:00PM", derived from the same vendor-reported `resetsAt` the
  * usage windows already carry -- not computed independently. Only speaks for
  * a window that is actually exhausted right now (matches accountQuotaSpent's
  * `usedPct >= 100` threshold) and whose reset is still ahead of us; picks the
- * soonest one when more than one window is spent. */
+ * latest one when more than one window is spent: all must have room. */
 export function usageResetLabel(windows: readonly UsageWindow[] | undefined, now: number = Date.now()): string | undefined {
   const exhausted = (windows ?? [])
     .filter((window): window is UsageWindow & { resetsAt: string } => windowSpent(window) && window.resetsAt !== undefined && Date.parse(window.resetsAt) > now)
-    .sort((a, b) => Date.parse(a.resetsAt) - Date.parse(b.resetsAt));
+    .sort((a, b) => Date.parse(b.resetsAt) - Date.parse(a.resetsAt));
   const next = exhausted[0];
   if (!next) return undefined;
   // Same phrasing as the message shown when every account is spent, so the
@@ -112,7 +122,8 @@ export function usageResetLabel(windows: readonly UsageWindow[] | undefined, now
 export function usageNextReset(windows: readonly UsageWindow[] | undefined, now: number = Date.now()): string | undefined {
   const next = (windows ?? [])
     .filter((window) => !window.advisory && window.resetsAt !== undefined && Date.parse(window.resetsAt) > now)
-    .sort((a, b) => b.usedPct - a.usedPct)[0];
+    .sort((a, b) => windowSpent(a) && windowSpent(b)
+      ? Date.parse(b.resetsAt!) - Date.parse(a.resetsAt!) : b.usedPct - a.usedPct)[0];
   return next ? `${usageWindowTitle(next.name)} resets ${quotaResetPhrase(new Date(next.resetsAt!), now)}` : undefined;
 }
 

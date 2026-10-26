@@ -15,6 +15,8 @@ function chat(id: string, overrides: Partial<HarnessSession> = {}): HarnessSessi
 
 describe('conversationRows: the one list both surfaces draw', () => {
   const turn = { prompt: 'go', startedAt: ago(5_000), updatedAt: ago(1_000), outputStarted: true };
+  // The worker's own mark that a turn is executing now (its record's runningTurn).
+  const running = (...ids: string[]) => (id: string) => (ids.includes(id) ? turn.startedAt : undefined);
 
   it('is Working, then Recent (24h), then Older, newest first in each', () => {
     const rows = conversationRows([
@@ -22,7 +24,7 @@ describe('conversationRows: the one list both surfaces draw', () => {
       chat('past-old', { updatedAt: ago(90 * HOUR) }),
       chat('active', { updatedAt: ago(2 * HOUR) }),
       chat('busy', { updatedAt: ago(80 * HOUR) }),
-    ], { workerIsLive: (id) => id === 'busy', pending: new Map([['busy', turn]]), now: NOW });
+    ], { workerIsLive: (id) => id === 'busy', runningTurn: running('busy'), pending: new Map([['busy', turn]]), now: NOW });
     expect(rows.map((row) => [row.latest.id, row.section])).toEqual([
       ['busy', 'working'], ['active', 'active'], ['past-new', 'past'], ['past-old', 'past'],
     ]);
@@ -35,7 +37,7 @@ describe('conversationRows: the one list both surfaces draw', () => {
       chat('busy-asking', { updatedAt: ago(10 * HOUR) }),
       chat('recent'),
     ], {
-      workerIsLive: (id) => id.startsWith('busy'), awaitingYou: (id) => id === 'busy-asking',
+      workerIsLive: (id) => id.startsWith('busy'), runningTurn: running('busy-new', 'busy-asking'), awaitingYou: (id) => id === 'busy-asking',
       pending: new Map([['busy-new', turn], ['busy-asking', turn]]), now: NOW,
     });
     expect(rows.map((row) => [row.latest.id, row.needsYou])).toEqual([['busy-asking', true], ['busy-new', false], ['recent', false]]);
@@ -46,7 +48,7 @@ describe('conversationRows: the one list both surfaces draw', () => {
       chat('first', { conversationId: 'root', updatedAt: ago(3 * HOUR) }),
       chat('handoff', { conversationId: 'root', parentSessionId: 'first', updatedAt: ago(HOUR) }),
       chat('closed-newer', { conversationId: 'root', status: 'closed', updatedAt: ago(1_000) }),
-    ], { workerIsLive: (id) => id === 'first', pending: new Map([['first', turn]]), now: NOW, currentId: 'first' });
+    ], { workerIsLive: (id) => id === 'first', runningTurn: running('first'), pending: new Map([['first', turn]]), now: NOW, currentId: 'first' });
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ root: 'root', section: 'working', activity: 'working', current: true });
     expect(rows[0]?.latest.id).toBe('handoff');
@@ -57,6 +59,11 @@ describe('conversationRows: the one list both surfaces draw', () => {
     const rows = conversationRows([chat('crashed')], { pending: new Map([['crashed', turn]]), now: NOW });
     expect(rows[0]).toMatchObject({ section: 'active' });
     expect(rows[0]?.activity).toBeUndefined();
+  });
+
+  it('is not working when the worker lives but marks no turn running, even with an old journal', () => {
+    const rows = conversationRows([chat('idle-worker')], { workerIsLive: () => true, runningTurn: () => undefined, pending: new Map([['idle-worker', turn]]), now: NOW });
+    expect(rows[0]).toMatchObject({ section: 'active', activity: 'idle' });
   });
 
   it('marks the chat open here idle and ignores a stored listTurn', () => {

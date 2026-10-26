@@ -49,6 +49,9 @@ async function startVendorTurn(ctx: VendorTurnContext): Promise<void> {
   // The thread goes with the conversation, as on a switch mid-turn; only
   // one that cannot be carried starts afresh.
   const returningThrough = restoreNativeThread(session, harness.command);
+  // Heal identities guessed from plain assistant output by older versions.
+  // A stateless adapter always takes up the canonical conversation anew.
+  if (harness.turn?.stateless) forgetNativeThread(session);
   // The old CLI's Agent calls and their follow-up end before a turn on the same account reads
   // its thread (closing it flushes the thread); a process the conversation is leaving (a
   // spent account, another harness) is not waited on: its agents run on (settleHeldVendor).
@@ -100,7 +103,7 @@ async function followLiveSettings(
 ): Promise<'switch' | void> {
   const live = ctx.run.liveSettings;
   const { session } = ctx;
-  if (liveCallsForSwitch(live, { route: session.route, accountId: ctx.account.id, accountProvider: ctx.account.provider }, ctx.state.accounts)) {
+  if (liveCallsForSwitch(live, { route: session.route, nativeHarness: ctx.harness.command, accountId: ctx.account.id, accountProvider: ctx.account.provider }, ctx.state.accounts)) {
     await closePersistentTransport(session.id);
     const progressed = Boolean(session.pendingTurn?.response?.trim() || session.pendingTurn?.outputStarted);
     if (progressed) await completeTurnCheckpoint(session, ctx.checkpoint, session.pendingTurn?.response ?? '');
@@ -152,7 +155,6 @@ export async function sendVendorTurn(input: AccountTurnInput): Promise<'switch' 
     // the turn sends -- the taken-up conversation included (session/move.ts).
     ctx.turnText = withMoveNote(ctx.session, ctx.turnText);
     const observer = createVendorObserver(ctx);
-    ctx.askedText = ctx.turnText;
     for (;;) {
       if (await followLiveSettings(ctx, seen) === 'switch') return 'switch';
       const attempt = await runAttempt(ctx, observer);

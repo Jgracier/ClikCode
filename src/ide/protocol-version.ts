@@ -37,6 +37,7 @@
  *      relayed snapshots after the first whole one carry only the messages
  *      the editor lacks (`messagesFrom`, session-delta.ts). An older bridge
  *      ignores the feature and sends every event whole, which any editor reads
+ *   8  `subagent`: read recorded child messages/tools and send supported steering
  *
  * ClikCode and the extension are published separately (the CLI first, in the
  * same ClikDeploy run), so a bump reaches npm before the extension that
@@ -44,7 +45,7 @@
  */
 export const IDE_PROTOCOL = {
   version: 1,
-  revision: 7,
+  revision: 8,
   oldestSupported: 1,
   oldestRevision: 2,
 } as const;

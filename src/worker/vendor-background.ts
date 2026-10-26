@@ -53,8 +53,9 @@ interface VendorBackgroundRunner {
 export function backgroundTurnRecord(outcome: BackgroundTurnOutcome, finished: readonly string[]): string | undefined {
   const text = outcome.text.trim();
   if (text) return text;
-  if (!finished.length) return undefined;
-  const unique = [...new Set(finished)];
+  if (outcome.ended !== 'completed') return undefined;
+  const unique = [...new Set(finished.filter((label) => !/^(?:failed )?tool$/i.test(label.trim())))];
+  if (!unique.length) return undefined;
   return `Background work finished: ${unique.slice(0, 8).join('; ')}${unique.length > 8 ? `; and ${unique.length - 8} more` : ''}.`;
 }
 

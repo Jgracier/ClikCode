@@ -64,6 +64,7 @@ export type ClientCommand =
    * (docs/SUBAGENTS.md): a `relay` is a visible steer to the main agent; where
    * the harness gives no way the `submission` answer says exactly why. */
   | { type: 'steer-subagent'; parentId: string; text: string; label?: string; agentId?: string; id?: string }
+  | { type: 'read-subagent'; parentId: string; id: string }
   /** `origin` says who asked and by which key, so the lifecycle log can answer
    *  "what stopped my agents". Optional: older clients send none. */
   | { type: 'cancel'; restoreDraft: boolean; origin?: CancelOrigin }
@@ -173,6 +174,7 @@ export type LiveThought = { id?: string; text: string; heading?: string; seq: nu
  * never in the position of reconstructing "what's already on screen" from
  * persisted history the way reseedTranscript used to; it is simply told. */
 export type WorkerEvent =
+  | { type: 'subagent'; id: string; rows: import('../harness/subagent-read.js').SubAgentRow[]; steer: 'relay' | 'direct' | 'none' }
   | { type: 'attach-rejected'; reason: string }
   | { type: 'computer-login-result'; id: string; ok: boolean; message: string }
   | { type: 'computer-login-started'; id: string }

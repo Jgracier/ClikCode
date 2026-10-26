@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { AiHarnessAccount } from '../../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { conversationCost, usageDays, usageReport, usageReportAll } from './usage-report.js';
-import { STATE_ROLLUPS } from '../../session/state/invocations.js';
+import { capInvocations, STATE_ROLLUPS } from '../../session/state/invocations.js';
 
 const NOW = Date.parse('2026-09-21T12:00:00');
 const LATER = new Date(NOW + 3_600_000).toISOString();
@@ -43,8 +43,7 @@ describe('/usage report', () => {
     expect(report.text).toContain('Claude Code');
     expect(report.text).toContain('full · current');
     expect(report.text).toContain('5h 80% left');
-    expect(report.text).toContain('5h 0% left');
-    expect(report.text).toContain('Resets ');
+    expect(report.text).toContain('5h 1% left');
     expect(report.text).not.toContain('other');
     expect(report.totals.accounts).toBe(2);
     expect(report.totals.inputTokens).toBe(150);
@@ -63,6 +62,53 @@ describe('/usage report', () => {
     expect(report.text).toContain('grok-login · current');
     expect(report.text).not.toContain('claude-login');
     expect(report.totals.accounts).toBe(1);
+  });
+});
+
+describe('/usage maintenance accounting', () => {
+  it('includes cache refresh tokens and cost without calling them user turns', () => {
+    const invocations: HarnessState['invocations'] = [
+      { id: 'turn', accountId: 'full', provider: 'anthropic', sessionId: 'chat', at: new Date(NOW).toISOString(), inputTokens: 5, outputTokens: 5, totalTokens: 10, latencyMs: 1 },
+      { id: 'ping', kind: 'maintenance', accountId: 'full', provider: 'anthropic', sessionId: 'chat', at: new Date(NOW).toISOString(), inputTokens: 2, outputTokens: 1, cacheReadTokens: 100, cacheWriteTokens: 200, totalTokens: 303, costUsd: 0.25, latencyMs: 1 },
+    ];
+    const current = state([account('full')], invocations);
+    const report = usageReport(current, session('full'), { now: NOW });
+    expect(report.text).toContain('This chat · 1 turn · 1 cache refresh · 313 tokens · $0.25');
+    expect(report.text).toContain('200 cache written');
+    expect(usageDays(current, NOW)[0]).toMatchObject({ turns: 1, maintenance: 1, tokens: 313 });
+  });
+
+  it('marks Codex cached tokens as part of its input count', () => {
+    const invocation: HarnessState['invocations'][number] = {
+      id: 'codex', accountId: 'codex', provider: 'openai', sessionId: 'chat', at: new Date(NOW).toISOString(),
+      inputTokens: 100, cacheReadTokens: 80, outputTokens: 10, totalTokens: 110, latencyMs: 1,
+    };
+    const report = usageReport(state([account('codex', { provider: 'openai' })], [invocation]), { ...session('codex'), provider: 'openai', nativeHarness: 'codex' }, { now: NOW });
+    expect(report.text).toContain('100 in (includes cached)');
+    expect(report.text).toContain('80 cached within input');
+    expect(report.totals.totalTokens).toBe(110);
+  });
+
+  it('counts Claude cache separately when its total is absent', () => {
+    const invocation: HarnessState['invocations'][number] = {
+      id: 'claude', accountId: 'full', provider: 'anthropic', sessionId: 'chat', at: new Date(NOW).toISOString(),
+      inputTokens: 5, outputTokens: 3, cacheReadTokens: 100, cacheWriteTokens: 20, latencyMs: 1,
+    };
+    const report = usageReport(state([account('full')], [invocation]), session('full'), { now: NOW });
+    expect(report.totals.totalTokens).toBe(128);
+    expect(report.text).toContain('20 cache written');
+  });
+
+  it('retains maintenance usage and its separate count when old records roll up', () => {
+    const old = new Date(NOW - 35 * 86_400_000).toISOString();
+    const index = {
+      invocations: [{ id: 'old-ping', kind: 'maintenance', accountId: 'full', provider: 'anthropic', sessionId: 'chat', at: old,
+        inputTokens: 2, outputTokens: 1, cacheReadTokens: 100, cacheWriteTokens: 200, latencyMs: 1 }],
+      invocationRollups: {},
+    } as never as Parameters<typeof capInvocations>[0];
+    capInvocations(index, NOW);
+    expect(index.invocations).toHaveLength(0);
+    expect(Object.values(index.invocationRollups)[0]).toMatchObject({ calls: 1, maintenanceCalls: 1, totalTokens: 303, cacheReadTokens: 100, cacheWriteTokens: 200 });
   });
 });
 

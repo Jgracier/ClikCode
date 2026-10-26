@@ -21,19 +21,17 @@ function blend(from: Rgb, to: Rgb, amount: number): Rgb {
 /** The spinner glyph and the label, painted. One colour for every tone, every
  * tool and every harness: the look's running accent (look.ts), a highlight
  * swept across the label. `shimmer` is false whenever the band should hold
- * still: reduced motion, an approval up. `stalled`: the turn has gone quiet
- * (turn-pace.ts), and the spinner alone takes the stopped colour -- the words
- * keep the accent. `tone` still decides the words (turnStatus), not the colour. */
+ * still: reduced motion or an approval up. `tone` decides the words
+ * (turnStatus); silence does not change a running spinner to failure colours. */
 export function paintStatus(input: {
   glyph: string; label: string; tone: StatusTone;
-  frame: number; shimmer: boolean; stalled?: boolean;
+  frame: number; shimmer: boolean;
 }, paint: ChalkInstance = chalk): { spinner: string; label: string } {
   const accent = LOOK.roles.accent.ansi;
-  const stalled = LOOK.roles.stopped.ansi;
   if (paint.level === 0) return { spinner: input.glyph, label: input.label };
   const characters = [...input.label];
   const levels = input.shimmer ? shimmerLevels(characters.length, input.frame * LOOK.shimmer.stride) : undefined;
-  const spinnerIndex = input.stalled ? stalled : accent;
+  const spinnerIndex = accent;
   if (paint.level >= 3) {
     const tone = xtermRgb(accent);
     const label = levels

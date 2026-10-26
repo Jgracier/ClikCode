@@ -142,10 +142,11 @@ describe('cursor thread writer', () => {
     expect(mapped.step.body.includes(pb([[1, 'npm test'], [3, 1]]))).toBe(true);
   });
 
-  it('is disabled: no version is tested until a model turn proves a written store', () => {
-    expect(CURSOR_WRITER_TESTED_VERSIONS).toEqual([]);
-    expect(cursorThreadWriter.versionOk(context({ XDG_CONFIG_HOME: '/p/.config' }))).toBe(false);
-    expect(cursorThreadWriter.versionOk(context({ XDG_CONFIG_HOME: '/p/.config' }, undefined))).toBe(false);
+  it('uses the writer only for the exact build that passed a live model recall', () => {
+    expect(CURSOR_WRITER_TESTED_VERSIONS).toEqual([VERSION]);
+    expect(cursorThreadWriter.versionOk(context({ XDG_CONFIG_HOME: '/p/.config' }))).toBe(true);
+    expect(cursorThreadWriter.versionOk({ ...context({}), version: '2026.09.26-other' })).toBe(false);
+    expect(cursorThreadWriter.versionOk({ ...context({ XDG_CONFIG_HOME: '/p/.config' }), version: undefined })).toBe(false);
     expect(nativeSessionStore({ command: 'cursor' } as NativeThreadWriteContext['harness'])?.writer).toBe(cursorThreadWriter);
   });
 

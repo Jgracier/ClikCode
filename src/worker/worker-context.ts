@@ -49,6 +49,9 @@ export interface WorkerContext {
    * cleared when the turn ends: the one guard that keeps two turns from
    * ever running at once, whoever asked for them. */
   turnRunning: boolean;
+  /** Mirrors the live turn boundary into the worker record for history views. */
+  onTurnRunningChange?: (since?: string) => Promise<void>;
+  turnStartedAt?: string;
   /** The queued turn the running turn is, so a second request for it -- the
    * client draining the same queue entry -- follows it instead of rerunning it. */
   activeQueuedTurnId: string | undefined;

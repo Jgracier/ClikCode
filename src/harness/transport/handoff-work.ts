@@ -9,7 +9,7 @@
  * off. Each one's end is told to the conversation as a notification its
  * current account reads (a queued turn the model alone sees): a result to use,
  * or an agent's task to start again. */
-import { readFile } from 'node:fs/promises';
+import { open } from 'node:fs/promises';
 import { asRecord, type JsonRecord } from '../protocol/json-lines.js';
 import { redactSecrets } from '../../agent/security.js';
 import { BackgroundWorkTracker, type WorkItem } from './background-work.js';
@@ -20,20 +20,46 @@ const RESULT_CHARS = 4_000;
 /** A Claude background agent's answer: the last assistant text in its transcript (its task's
  * output file), not a synthetic API error. Empty when there is none. */
 export async function agentResult(file: string | undefined): Promise<string> {
-  if (!file) return '';
-  const text = await readFile(file, 'utf8').catch(() => '');
+  return (await agentTranscriptResult(file)).tail;
+}
+
+async function agentTranscriptResult(file: string | undefined): Promise<{ tail: string; limit?: string }> {
+  if (!file) return { tail: '' };
+  const handle = await open(file, 'r').catch(() => undefined);
+  if (!handle) return { tail: '' };
+  let text: string;
+  try {
+    const size = (await handle.stat()).size;
+    const buffer = Buffer.alloc(Math.min(size, 400_000));
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, Math.max(0, size - buffer.length));
+    text = buffer.toString('utf8', 0, bytesRead);
+  } finally { await handle.close(); }
   const lines = text.slice(-400_000).split('\n');
+  let lastAssistant = true;
+  let limit: string | undefined;
   for (let index = lines.length - 1; index >= 0; index--) {
     let record: JsonRecord | undefined;
     try { record = asRecord(JSON.parse(lines[index]!)); } catch { continue; }
     const message = asRecord(record?.message);
-    if (record?.type !== 'assistant' || record.isApiErrorMessage === true || !message || message.model === '<synthetic>') continue;
+    if (record?.type !== 'assistant' || !message) continue;
     const said = Array.isArray(message.content)
       ? message.content.map((part) => { const item = asRecord(part); return item?.type === 'text' && typeof item.text === 'string' ? item.text : ''; }).join('').trim()
       : '';
-    if (said) return redactSecrets(said.length > RESULT_CHARS ? `${said.slice(0, RESULT_CHARS)}...` : said);
+    if (lastAssistant && (record.isApiErrorMessage === true || record.error === 'rate_limit' || message.model === '<synthetic>')) limit = limitSentence(said);
+    lastAssistant = false;
+    if (record.isApiErrorMessage === true || record.error === 'rate_limit' || message.model === '<synthetic>') continue;
+    if (said) return { tail: redactSecrets(said.length > RESULT_CHARS ? `${said.slice(0, RESULT_CHARS)}...` : said), ...(limit ? { limit } : {}) };
   }
-  return '';
+  return { tail: '', ...(limit ? { limit } : {}) };
+}
+
+/** Task completion and request success are different facts: Claude may mark
+ * a task completed whose last API response was a quota refusal. */
+export async function endedAgentWork(work: RunningWork, status: string, summary: string, outputFile?: string): Promise<EndedWork> {
+  const result = await agentTranscriptResult(outputFile).catch(() => ({ tail: '' } as { tail: string; limit?: string }));
+  const limit = result.limit ?? (status !== 'completed' ? limitSentence(summary) : undefined);
+  return { ...work, outcome: status === 'completed' && !limit ? 'finished' : 'cut-off',
+    tail: result.tail || summary, ...(outputFile ? { outputFile } : {}), ...(limit ? { limit } : {}) };
 }
 
 /** Work the conversation answers for: a command or an agent (background-work.ts). */
@@ -109,6 +135,7 @@ export class VendorTasks {
       this.tasks.end(id);
       this.tasks.start({
         id, kind: agent ? 'agent' : 'command', label: String(record.description ?? '') || (agent ? 'background agent' : 'background command'),
+        ...(typeof record.session_id === 'string' ? { nativeSessionId: record.session_id } : {}),
         ...(prompt ? { prompt } : {}), background: record.is_backgrounded !== false,
       });
       return undefined;

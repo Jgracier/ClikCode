@@ -74,7 +74,7 @@ export async function runAttempt(ctx: VendorTurnContext, observer: VendorObserve
       onStreamError: (error) => { streamError = error; },
     });
   };
-  await openFailoverStandby(ctx, transport);
+  openFailoverStandby(ctx, transport);
   try {
     if (transport === 'structured-cli' || transport === 'text-cli') {
       result = await runStructuredCliTurn();

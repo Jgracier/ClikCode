@@ -6,6 +6,7 @@ import { readFile } from 'node:fs/promises';
 import { extname } from 'node:path';
 import type { AiHarnessAcpDefinition, AiHarnessPermissionMode } from '../definition.js';
 import type { HarnessActivityEvent, ToolCategory } from '../prompter.js';
+import type { LiveSettings, LiveSettingsFields } from '../../turn/live-settings.js';
 import type { HarnessAvailableCommand, HarnessPlanEntry, HarnessTurnObserver } from '../events/turn-observer.js';
 import { askHarnessQuestion, type HarnessQuestionRequest, type HarnessQuestionResult } from '../events/question.js';
 import { formToQuestions } from '../events/form-questions.js';
@@ -24,7 +25,7 @@ import { PersistentSession, runOneTurn, turnFailure, type PersistentSessionOptio
 import { diagnostic, lifecycle } from '../../runtime/lifecycle-log.js';
 import { globalMcpServersForAcp } from './acp-mcp-servers.js';
 import { BackgroundAgentRows } from '../events/background-agent-rows.js';
-import { agentResult, limitSentence, VendorTasks, type RunningWork } from './handoff-work.js';
+import { endedAgentWork, VendorTasks, type RunningWork } from './handoff-work.js';
 import { BackgroundWorkTracker } from './background-work.js';
 import { backgroundWork, type BackgroundWork } from '../protocol/background-agents.js';
 import { markTurn } from '../../runtime/turn-latency.js';
@@ -76,6 +77,7 @@ const ACP_CLIENT_CAPABILITIES = {
 };
 
 export interface AcpTurnInput extends HarnessTurnObserver {
+  liveSettings?: LiveSettings;
   binary: string;
   command: string;
   /** The harness as a person names it (Claude Code); `command` when absent. */
@@ -123,6 +125,8 @@ export interface AcpTurnInput extends HarnessTurnObserver {
    *  mode and effort -- and stop before the prompt: the next turn on this
    *  session then starts at the prompt (a failover's standby account). */
   prepareOnly?: boolean;
+  /** Warm the process and handshake without creating/loading a thread. */
+  initializeOnly?: boolean;
   signal?: AbortSignal;
 }
 
@@ -836,6 +840,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
           : Array.isArray(extensions) && extensions.includes('mcode/session/steer') ? 'mcode' : undefined;
       stillRunning();
     }
+    if (input.initializeOnly) return { text: '', nativeSessionId: input.nativeSessionId ?? '' };
     // A vendor that says it is signed out is not signed in over ACP
     // (`authenticate`): its own browser login showed no link on ClikCode's
     // screen and, from a phone, waited for ever (Devin, 2026-10-06). The error
@@ -847,7 +852,13 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     if (directories.length && !capabilities.sessionCapabilities?.additionalDirectories) {
       throw new Error(`${input.command} ACP does not accept additional directories (/add-dir); remove them or start from a common parent directory`);
     }
-    const sessionParams = { cwd: input.cwd, mcpServers: await globalMcpServersForAcp(input.command, capabilities, input.mcpProfile), _meta: ACP_SESSION_META, ...(directories.length ? { additionalDirectories: [...directories] } : {}) };
+    // MCP servers are fixed when an ACP session is opened. A reused session
+    // cannot consume a new list, so skip config discovery and OAuth refresh
+    // on its ordinary prompts.
+    let sessionParamsPending: Promise<Json> | undefined;
+    const sessionParams = (): Promise<Json> => sessionParamsPending ??= globalMcpServersForAcp(input.command, capabilities, input.mcpProfile, undefined, input.cwd)
+      .then((mcpServers) => ({ cwd: input.cwd, mcpServers, _meta: ACP_SESSION_META,
+        ...(directories.length ? { additionalDirectories: [...directories] } : {}) }));
     const images = input.images ?? [];
     if (images.length && capabilities.promptCapabilities?.image !== true) {
       throw Object.assign(new Error(`${input.command} ACP does not accept image prompts`), { acpUnsupportedImages: true });
@@ -876,7 +887,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
         const method = capabilities.sessionCapabilities?.resume ? 'session/resume' : 'session/load';
         try {
           const loadAt = Date.now();
-          loaded = await waitOnStart(call(method, { sessionId: wanted, ...sessionParams }, setup));
+          loaded = await waitOnStart(call(method, { sessionId: wanted, ...await sessionParams() }, setup));
           threadLoadMs = Date.now() - loadAt;
         } catch (error) {
           throw markMissingThread(error, wanted);
@@ -896,7 +907,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     } else {
       this.sessionTotals = {};
       this.costStartUnknown = false;
-      const started = await waitOnStart(call('session/new', sessionParams, setup));
+      const started = await waitOnStart(call('session/new', await sessionParams(), setup));
       const sessionId = String(started.sessionId ?? '');
       if (!sessionId) throw new Error(`${input.command} ACP did not return a session id`);
       // Recorded before the turn's own check, as a load is.
@@ -1016,9 +1027,53 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     // The turn ends with the agent's answer to session/prompt, or the user
     // stopping it: no silence ceiling. No wall-clock timeout: a prompt legitimately runs for hours.
     turn.prompt = call('session/prompt', { sessionId: turn.sessionId, prompt: blocks }, {});
+    let changing = Promise.resolve();
+    const apply = (changes: LiveSettingsFields): void => {
+      changing = changing.then(async () => {
+        if (turn.done || !turn.sessionId || peer.closed) return;
+        const set = async (id: string, value: string): Promise<void> => {
+          const option = live.configOptions?.find((entry) => (entry.id ?? entry.configId) === id);
+          if (!option) throw new Error(`The agent does not offer ${id}`);
+          if (option.currentValue === value) return;
+          if (!acpConfigValues(option).includes(value)) throw new Error(`The running model does not offer ${id} ${value}`);
+          const updated = await peer.request('session/set_config_option', { sessionId: turn.sessionId, configId: id, value }, { timeoutMs: 5_000 });
+          live.configOptions = Array.isArray(updated.configOptions) ? updated.configOptions
+            : live.configOptions?.map((entry) => entry === option ? { ...entry, currentValue: value } : entry);
+        };
+        if (typeof changes.model === 'string' && changes.model !== input.model) {
+          const choice = acpModelChoice({ ...live.models, configOptions: live.configOptions }, changes.model);
+          if (!choice) throw new Error('The agent did not offer that model on this session');
+          const option = live.configOptions?.find((entry) => (entry.id ?? entry.configId) === 'model');
+          if (option) await set('model', choice);
+          else await peer.request('session/set_model', { sessionId: turn.sessionId, modelId: choice }, { timeoutMs: 5_000 });
+          live.models = { ...live.models, currentModelId: choice };
+          input.model = changes.model;
+          input.onServedModel?.(changes.model);
+          lifecycle('vendor.model-changed', { harness: input.command, model: changes.model });
+        }
+        if (changes.effort && changes.effort !== input.effort && effortConfigId) {
+          await set(effortConfigId, changes.effort);
+          input.effort = changes.effort;
+        }
+        if (Object.hasOwn(changes, 'planMode') || changes.permissionMode) {
+          const planning = Object.hasOwn(changes, 'planMode') ? changes.planMode : input.liveSettings ? input.liveSettings.planMode : input.planMode;
+          const mode = planning === true ? planModeId
+            : permissionModeIds?.[changes.permissionMode ?? input.permissionMode];
+          if (mode) {
+            const option = acpModeConfigOption(live.configOptions);
+            if (option) await set(option.id ?? option.configId, mode);
+            else await peer.request('session/set_mode', { sessionId: turn.sessionId, modeId: mode }, { timeoutMs: 5_000 });
+          }
+        }
+      }).catch(() => { input.onNotice?.('Settings saved for the next turn; this agent could not apply them while running.'); });
+    };
+    const stopChanges = input.liveSettings?.subscribe(apply);
+    if (input.liveSettings) apply({ model: input.liveSettings.model, effort: input.liveSettings.effort });
     markTurn('prompt-sent');
     if (live.steering) input.onSteerReady?.((text, hold) => this.steer(turn, text, hold));
-    const completed = await turn.prompt as Json;
+    let completed: Json;
+    try { completed = await turn.prompt as Json; }
+    finally { stopChanges?.(); await changing; }
     // The answer ends the turn: nothing held can be steered into it any more
     // (each goes to the queue as the next turn), and one already sent is
     // answered before the turn is reported over.
@@ -1391,7 +1446,9 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       target.thought.text += thought;
       return input.onThought?.(target.thought.text, target.thought.id);
     }
-    let activity = acpActivityEvent(update);
+    const parsedActivity = acpActivityEvent(update);
+    let activity = parsedActivity ? this.heldAgents.filter(parsedActivity, update.status === 'completed' ? update.rawOutput : undefined) : undefined;
+    if (parsedActivity && !activity) return;
     if (activity) {
       // Claude's /compact can emit only a failed tool row and still answer
       // session/prompt with end_turn. That used to count as successful tool
@@ -1411,10 +1468,6 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
         activity = { ...activity, kind: 'tool-done' };
       } else if (activity.id && activity.kind !== 'tool-start') target.settledTools.add(activity.id);
       target.sawActivity = true;
-      // The launch's result is not the agent's end: its row keeps running.
-      const shown = this.heldAgents.filter(activity);
-      if (!shown) return;
-      activity = shown;
       // A sub-agent's call ends what it was saying before it.
       if (activity.parentId) target.subagentText?.delete(activity.parentId);
       if (target.text && !activity.parentId) target.needsSeparator = true;
@@ -1539,12 +1592,8 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
   private taskFrame(message: Json): void {
     const ended = this.vendorTasks.frame(message);
     if (!ended || ended.work.kind !== 'agent') return;
-    const finished = ended.status === 'completed';
-    const limit = finished ? undefined : limitSentence(ended.summary);
-    void (async () => {
-      const tail = (finished ? await agentResult(ended.outputFile) : '') || ended.summary;
-      this.agentEnded({ ...ended.work, outcome: finished ? 'finished' : 'cut-off', tail, ...(limit ? { limit } : {}) });
-    })().catch(() => undefined);
+    void endedAgentWork(ended.work, ended.status, ended.summary, ended.outputFile)
+      .then((work) => this.agentEnded(work)).catch(() => undefined);
   }
 
   /** A background Agent's lifecycle, from the raw `task_*` frames

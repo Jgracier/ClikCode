@@ -533,8 +533,6 @@ textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
 .conversation { display: flex; gap: 10px; padding: 8px; align-items: flex-start; }
 .conversation-dot { width: 7px; height: 7px; border-radius: 50%; margin-top: 7px; flex: none; background: transparent; }
 .conversation-dot.working { background: var(--vscode-terminal-ansiGreen, var(--vscode-charts-green, #89d185)); border-color: transparent; animation: pulse var(--spin-cycle, 1.2s) ease-in-out infinite; }
-/* A stalled turn (src/harness/protocol/turn-pace.ts), yellow as the terminal board's spinner. */
-.conversation-dot.working.stalled { background: var(--vscode-terminal-ansiYellow, var(--vscode-charts-yellow, #cca700)); }
 .conversation-dot.idle { background: var(--ok); border-color: transparent; }
 .conversation-dot.unread { background: var(--vscode-textLink-foreground); }
 .conversation-main { flex: 1; min-width: 0; }
@@ -612,3 +610,11 @@ body.vscode-high-contrast .keylist-row.active { outline: 1px dashed var(--vscode
 .steer { display: flex; gap: 6px; align-items: baseline; margin: 4px 0; font-size: 0.93em; }
 .steer > span:first-of-type { white-space: pre-wrap; }
 .steer .muted { font-size: 0.9em; }
+
+.subagent-view { flex-basis: 100%; min-width: 0; border: 1px solid var(--vscode-widget-border); border-radius: 6px; padding: 8px; }
+.subagent-view-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.subagent-view-rows { max-height: 40vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.subagent-view-rows pre { white-space: pre-wrap; font: inherit; }
+.subagent-view form { display: flex; gap: 6px; }
+.subagent-view input { flex: 1; min-width: 0; }
+.activity-line:has(.subagent-view) { flex-wrap: wrap; }

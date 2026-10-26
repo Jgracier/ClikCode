@@ -26,6 +26,7 @@ import { turnBackendForAccount } from './account-routing.js';
 import { turnEnvironment } from './turn-environment.js';
 import { takeUp } from './vendor-thread-takeup.js';
 import { prepareVendorAhead } from './vendor-session-attempt.js';
+import { reconcileNativeThread } from '../session/carry.js';
 import type { VendorTurnContext } from './vendor-turn-context.js';
 
 /** What the take-up records of the vendor's thread, written back as it is. */
@@ -41,26 +42,30 @@ export async function warmVendor(sessionId: string): Promise<boolean> {
   const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
   if (!harness || !harnessCanRunTurns(harness) || !account || account.provider !== harness.provider) return false;
   if (account.status !== 'ready' || turnBackendForAccount(account) !== 'vendor') return false;
+  const transport = sessionTurnTransport(harness, session);
+  if (transport !== 'acp' && transport !== 'codex-app-server') return false;
   if (!(await inspectNativeHarness(harness).catch(() => undefined))?.installed) return false;
   session.workspace ??= homedir();
+  const persistNow = async (): Promise<void> => {
+    const latest = await readState({ transcripts: [] });
+    const target = latest.sessions.find((item) => item.id === sessionId);
+    if (!target) return;
+    for (const field of THREAD_FIELDS) {
+      if (session[field] === undefined) delete target[field];
+      else (target as unknown as Record<string, unknown>)[field] = session[field];
+    }
+    await writeState(latest);
+  };
+  if (session.nativeSessionId && !session.nativeSessionPreallocated && session.nativeThreadAccountId !== account.id) {
+    const outcome = await reconcileNativeThread(session, harness, state.accounts, account);
+    if (outcome !== 'none') await persistNow();
+  }
   // The conversation, written as the vendor's own thread now rather than by
   // the first turn. A harness with no writer is retold by that turn instead.
   if ((!session.nativeSessionId || session.nativeSessionPreallocated) && sessionTranscriptMessages(session).length && nativeSessionStore(harness)?.writer) {
-    const persistNow = async (): Promise<void> => {
-      const latest = await readState({ transcripts: [] });
-      const target = latest.sessions.find((item) => item.id === sessionId);
-      if (!target) return;
-      for (const field of THREAD_FIELDS) {
-        if (session[field] === undefined) delete target[field];
-        else (target as unknown as Record<string, unknown>)[field] = session[field];
-      }
-      await writeState(latest);
-    };
     const ctx = { state, session, harness, account, model: session.model, checkpoint: { persistNow } } as unknown as VendorTurnContext;
     await takeUp(ctx, '', { interrupted: false, withJournal: false });
   }
-  const transport = sessionTurnTransport(harness, session);
-  if (transport !== 'acp' && transport !== 'codex-app-server') return false;
   const environment = turnEnvironment(harness, account, session.permissionMode ?? 'ask');
   await prepareVendorAhead({ harness, account, session: session as HarnessSession, transport, model: session.model, ...(session.effort ? { effort: session.effort } : {}), environment });
   lifecycle('worker.warm', { harness: harness.command, transport, thread: Boolean(session.nativeSessionId), ms: Date.now() - startedAt });

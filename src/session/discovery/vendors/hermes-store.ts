@@ -41,6 +41,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { removeSqliteSession } from './sqlite-carry.js';
 import { stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -374,6 +375,11 @@ const hermesThreadWriter: NativeThreadWriter = {
 };
 
 export const hermesSessionStore: NativeSessionStore = {
+  remove: (id, _cwd, environment) => removeSqliteSession({
+    database: (env) => join(nativeDataRoot(env, 'HERMES_HOME', join(homedir(), '.hermes')), 'state.db'),
+    session: { table: 'sessions', key: 'id', identity: [] },
+    rows: [{ table: 'messages', key: 'session_id' }], progress: () => [],
+  }, id, environment),
   root(environment: NativeSessionEnvironment): string {
     return nativeDataRoot(environment, 'HERMES_HOME', join(homedir(), '.hermes'));
   },

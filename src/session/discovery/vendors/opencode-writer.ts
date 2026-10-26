@@ -42,7 +42,7 @@
  * `carry`, below). */
 
 import { jsonPartText, sqliteOpenings } from './sqlite-openings.js';
-import { carrySqliteSession, progressQuery, type SqliteCarrySpec } from './sqlite-carry.js';
+import { removeSqliteSession, carrySqliteSession, progressQuery, type SqliteCarrySpec } from './sqlite-carry.js';
 import { absolutePath, shellQuote, testedVersion } from './thread-writer-files.js';
 import { randomBytes } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -456,6 +456,7 @@ function openCodeFamilyStore(name: string, writer: NativeThreadWriter): NativeSe
   return {
     root: (environment) => openCodeDataRoot(environment, name),
     carry: (input) => carrySqliteSession(carry, input),
+    remove: (id, _cwd, environment) => removeSqliteSession(carry, id, environment),
     writer,
     // A message's text is its parts; the user's first text part (observed
     // on opencode 1.18.32).

@@ -89,7 +89,7 @@ describe('signed in', () => {
 describe('account rows', () => {
   // The same rule in both copies: one problem per row, verify > reauth > out of usage.
   it('shows the one problem that matters, and the actions that can fix it', () => {
-    const spent = { quotaState: 'exhausted' as const, usage: { at: new Date(NOW).toISOString(), windows: [{ name: '5h', usedPct: 100, resetsAt: LATER }] } as AiHarnessAccount['usage'] };
+    const spent = { quotaState: 'exhausted' as const, quotaExhaustedAt: new Date(NOW).toISOString(), quotaRetryAt: LATER, usage: { at: new Date(NOW).toISOString(), windows: [{ name: '5h', usedPct: 100, resetsAt: LATER }] } as AiHarnessAccount['usage'] };
     expect(accountRow(account({ ...spent, status: 'needs_login', verification: { at: '' } as never }), codex, session(), NOW))
       .toMatchObject({ problem: 'verify', actions: ['reauthenticate', 'verified', 'remove'], current: true });
     expect(accountRow(account({ ...spent, status: 'needs_login' }), codex, session(), NOW)).toMatchObject({ problem: 'reauth', actions: ['reauthenticate', 'remove'] });
@@ -102,6 +102,14 @@ describe('account rows', () => {
 });
 
 describe('usage', () => {
+  it('keeps the final 1% visible after a successful request disproves exhaustion', () => {
+    const live = account({ disprovenWindows: [`weekly@${LATER}`], usage: {
+      at: new Date(NOW).toISOString(), label: 'Weekly 0% left', windows: [{ name: 'weekly', usedPct: 100, resetsAt: LATER }],
+    } as AiHarnessAccount['usage'] });
+    expect(accountUsage(live, state([live]), NOW)).toMatchObject({ label: 'Weekly 1% left', windows: [{ usedPct: 99 }] });
+    expect(accountRow(live, codex, undefined, NOW).problem).toBeUndefined();
+    expect(live.usage?.windows?.[0]?.usedPct).toBe(100);
+  });
   it('reads current windows first', () => {
     const live = account({ usage: { at: new Date(NOW).toISOString(), label: '5h 40% left', windows: [{ name: '5h', usedPct: 60, resetsAt: LATER }] } as AiHarnessAccount['usage'] });
     expect(accountUsage(live, state([live]), NOW)).toEqual({ label: '5h 40% left', windows: [{ name: '5h', usedPct: 60, resetsAt: LATER }] });

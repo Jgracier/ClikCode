@@ -268,6 +268,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   subView?: SubView;
   /** Sends a message typed into a sub-agent's view to the worker; resolves to the refusal, if any. Set by the window that follows the turn. */
   subAgentSteer?: (ref: import('../harness/protocol/activity-normalize.js').SubAgentRef, text: string) => Promise<string | undefined>;
+  subAgentRead?: (parentId: string) => Promise<import('../harness/subagent-read.js').SubAgentRow[]>;
   readonly onWaitingKey = (...args: Parameters<typeof onWaitingKey>): ReturnType<typeof onWaitingKey> => onWaitingKey.apply(this, args);
 
   readonly onResize = (...args: Parameters<typeof onResize>): ReturnType<typeof onResize> => onResize.apply(this, args);

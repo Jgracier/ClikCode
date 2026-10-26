@@ -3,7 +3,7 @@
  * not answered, and a slim snapshot whose messages are read from disk. The
  * real worker is exercised in session-worker.vitest.test.ts. */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import type { HarnessSession } from '../session/model.js';
-import { WorkerClient } from './client.js';
+import { WorkerClient, warmSessionWorker } from './client.js';
 import { currentWorkerBuild, ensureWorkersDirectory, socketPathFor, writeWorkerRecord } from './registry.js';
 import { encodeFrame, FrameDecoder, type ClientCommand, type WorkerEvent } from './protocol.js';
 
@@ -107,6 +107,15 @@ describe('an attach whose connection ends before the worker answers', () => {
     clients.push(client);
     expect((await client.initialSnapshot).type).toBe('snapshot');
     expect(worker.connections()).toBe(2);
+  });
+});
+
+describe('warming an open conversation', () => {
+  it('coalesces simultaneous warm requests into one worker command', async () => {
+    const id = randomUUID();
+    const worker = await standInWorker(id, () => undefined);
+    await Promise.all([warmSessionWorker(id), warmSessionWorker(id)]);
+    await vi.waitFor(() => expect(worker.seen.filter((entry) => entry.command.type === 'warm')).toHaveLength(1));
   });
 });
 

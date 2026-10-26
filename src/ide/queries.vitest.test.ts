@@ -111,8 +111,9 @@ describe('the conversation list', () => {
       ],
     });
     await ensureWorkersDirectory();
+    // Only the worker's own mark says a turn executes now: `stale` has a live worker and none.
     for (const id of ['running', 'stale']) {
-      await writeWorkerRecord({ sessionId: id, pid: process.pid, socketPath: join(process.env.CLIKCODE_HOME!, `${id}.sock`), token: 't', installationId: 'install', build: 'test', startedAt: now });
+      await writeWorkerRecord({ sessionId: id, pid: process.pid, socketPath: join(process.env.CLIKCODE_HOME!, `${id}.sock`), token: 't', installationId: 'install', build: 'test', startedAt: now, ...(id === 'running' ? { runningTurn: { since: now } } : {}) });
     }
     const rows = await conversationList(await readState({ transcripts: [] }), undefined);
     const by = new Map(rows.map((row) => [row.id, row.activity]));

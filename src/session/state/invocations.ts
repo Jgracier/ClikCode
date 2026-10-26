@@ -30,9 +30,21 @@ const RAW_HARD_CAP = 50_000;
 
 export type Invocation = HarnessState['invocations'][number];
 
+/** The vendor's total wins. Claude reports cached input separately; Codex's
+ * input already includes it, so only Claude adds cache fields when no total
+ * was published. */
+export function invocationTokenCount(invocation: Invocation): number {
+  if (invocation.totalTokens !== undefined) return invocation.totalTokens;
+  const base = (invocation.inputTokens ?? 0) + (invocation.outputTokens ?? 0);
+  return invocation.provider === 'anthropic'
+    ? base + (invocation.cacheReadTokens ?? 0) + (invocation.cacheWriteTokens ?? 0)
+    : base;
+}
+
 export interface InvocationRollup {
   day: string; accountId: string; provider: string; model?: string;
   calls: number; inputTokens: number; outputTokens: number; latencyMs: number;
+  maintenanceCalls?: number; cacheReadTokens?: number; cacheWriteTokens?: number; totalTokens?: number;
 }
 
 function rollupKey(invocation: Invocation): string {
@@ -64,8 +76,12 @@ export function capInvocations(index: StateIndex, now: number = Date.now()): voi
     rollups[key] = {
       ...previous,
       calls: previous.calls + 1,
+      maintenanceCalls: (previous.maintenanceCalls ?? 0) + (invocation.kind === 'maintenance' ? 1 : 0),
       inputTokens: previous.inputTokens + (invocation.inputTokens ?? 0),
       outputTokens: previous.outputTokens + (invocation.outputTokens ?? 0),
+      cacheReadTokens: (previous.cacheReadTokens ?? 0) + (invocation.cacheReadTokens ?? 0),
+      cacheWriteTokens: (previous.cacheWriteTokens ?? 0) + (invocation.cacheWriteTokens ?? 0),
+      totalTokens: (previous.totalTokens ?? 0) + invocationTokenCount(invocation),
       latencyMs: previous.latencyMs + (invocation.latencyMs ?? 0),
     };
     if (!index.rolledThrough || String(invocation.at) > index.rolledThrough) index.rolledThrough = String(invocation.at);

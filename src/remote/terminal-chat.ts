@@ -12,7 +12,7 @@ import { SessionDeltaReceiver } from '../ide/session-delta.js';
 import type { PaletteEntry } from '../tui/command-palette.js';
 import type { TerminalHarnessPrompter } from '../tui/prompter.js';
 import { interactiveSessionPicker } from '../tui/pickers/session.js';
-import { BOARD_COMMANDS, BOARD_LINE, BOARD_OWNS } from '../commands/ai/interactive/board.js';
+import { BOARD_LINE, BOARD_OWNS } from '../commands/ai/interactive/board.js';
 import { remoteTerminalScript } from './install.js';
 import { startBridge } from './peer.js';
 import { readMachines, updatePolicy, type RemoteMachine } from './machines.js';
@@ -473,19 +473,27 @@ export async function runRemoteChat(
       draft = undefined;
       rejoining = false;
       drops = 0;
+      let setupSession: string | undefined;
+      const prepareBoardDraft = async (): Promise<void> => {
+        if (setupSession && setupSession === session?.id && !chatHasContent(session)) return;
+        const opened = await bridge.request<{ sessionId?: string } | undefined>({ type: 'open', mode: 'new', ...(session?.workspace ? { workspace: session.workspace } : {}), features: REMOTE_FEATURES });
+        setupSession = opened?.sessionId ?? session?.id;
+        if (setupSession) choice = { machineId: machine.id, chatId: setupSession };
+        await refreshCommands();
+      };
       for (;;) {
         if (waitingInput) await turnEnd;
-        const line = leftTurn ? BOARD_LINE : (await terminal.question('› ', commands, { rightArrowPalette: true, leftArrowCommand: BOARD_LINE, signal: promptController.signal })).trim();
+        let line = leftTurn ? BOARD_LINE : (await terminal.question('› ', commands, { rightArrowPalette: true, leftArrowCommand: BOARD_LINE, signal: promptController.signal })).trim();
         leftTurn = false;
         if (line === BOARD_LINE) {
           // Left from a chat on another machine: that machine's chats first.
-          const picked = await interactiveSessionPicker(terminal, localId, BOARD_COMMANDS, { machine: machine.id });
+          const picked = await interactiveSessionPicker(terminal, localId, commands, { machine: machine.id });
           if (!picked) continue;
           if ('remote' in picked) { choice = picked.remote; draft = picked.draft; break; }
           if ('id' in picked) return picked.id;
-          if ('compose' in picked) { terminal.restoreDraft(picked.compose); continue; }
-          if ('command' in picked) { terminal.restoreDraft(picked.command); continue; }
-          continue;
+          if ('compose' in picked) { await prepareBoardDraft(); terminal.restoreDraft(picked.compose); continue; }
+          if ('command' in picked) { await prepareBoardDraft(); line = picked.command; }
+          else { if ('new' in picked) await prepareBoardDraft(); continue; }
         }
         if (!line) continue;
         // The terminal's own commands are this terminal's, wherever the chat is:
@@ -510,6 +518,7 @@ export async function runRemoteChat(
           break;
         }
         const id = randomUUID();
+        if (!/^[/!]/.test(line)) setupSession = undefined;
         const complete = new Promise<void>((resolve, reject) => completions.set(id, { resolve, reject }));
         sending = line;
         // A message (not a command) is drawn now, with the turn's wait, as a

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { createInterface } from 'node:readline';
@@ -6,6 +6,10 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { remotePalette, remoteResume, runRemoteChat } from './terminal-chat.js';
 import { newMachineRecord, updateMachines } from './machines.js';
 import type { TerminalHarnessPrompter } from '../tui/prompter.js';
+import { BOARD_LINE } from '../commands/ai/interactive/board.js';
+
+const boardPicker = vi.hoisted(() => vi.fn());
+vi.mock('../tui/pickers/session.js', () => ({ interactiveSessionPicker: boardPicker }));
 
 describe('remote chat open request', () => {
   it('resumes by id and names no folder of this machine', () => {
@@ -35,8 +39,9 @@ class FakeRemoteBridge extends EventEmitter {
       const request = message.request;
       this.requests.push(request);
       if (request.type === 'open') {
-        this.say({ type: 'session', session: { id: request.sessionId, route: 'local', accountId: null, provider: 'claude', model: 'm', effort: 'high', name: 'Remote chat', createdAt: '', updatedAt: '', status: 'active', messages: [] } });
-        this.say({ type: 'result', requestId: request.requestId, ok: true, data: { sessionId: request.sessionId } });
+        const sessionId = request.sessionId ?? 'new-1';
+        this.say({ type: 'session', session: { id: sessionId, route: 'local', accountId: null, provider: 'claude', model: 'm', effort: 'high', name: 'Remote chat', createdAt: '', updatedAt: '', status: 'active', messages: [] } });
+        this.say({ type: 'result', requestId: request.requestId, ok: true, data: { sessionId } });
       }
       if (request.type === 'send') this.onSend(request);
       if (request.type === 'query' && request.query === 'slash-commands') {
@@ -125,6 +130,27 @@ describe('a chat on another machine whose bridge leaves for a newer build', () =
 });
 
 describe('a chat on another machine\'s slash menu', () => {
+  it('offers the full remote menu in history and applies setup commands to one new remote chat', async () => {
+    const machine = newMachineRecord({ name: 'devbox', sshTarget: 'devbox', ready: true });
+    await updateMachines(() => [machine]);
+    const { terminal, prompts } = fakeTerminal();
+    const bridge = new FakeRemoteBridge();
+    boardPicker.mockReset().mockResolvedValueOnce({ command: '/model sonnet' }).mockResolvedValueOnce({ command: '/model opus' });
+    const running = runRemoteChat(terminal, 'local-1', { machineId: machine.id, chatId: 'c1' }, undefined, () => bridge as unknown as ChildProcessWithoutNullStreams, []);
+    await until(() => prompts.length === 1);
+    prompts[0]!.answer(BOARD_LINE);
+    await until(() => prompts.length === 2);
+    expect(boardPicker.mock.calls[0]![2].map((item: { value: string }) => item.value)).toEqual(prompts[0]!.items.map((item) => item.value));
+    expect(bridge.requests.filter((request) => request.type === 'open')).toEqual([
+      expect.objectContaining({ mode: 'resume', sessionId: 'c1' }), expect.objectContaining({ mode: 'new' }),
+    ]);
+    expect(bridge.requests.find((request) => request.type === 'send')).toMatchObject({ text: '/model sonnet' });
+    prompts[1]!.answer(BOARD_LINE);
+    await until(() => prompts.length === 3);
+    expect(bridge.requests.filter((request) => request.type === 'open')).toHaveLength(2);
+    prompts[2]!.answer('/exit');
+    expect(await running).toEqual({ exit: true });
+  });
   it('is that machine\'s commands, with /machine, and a command chosen runs there', async () => {
     const machine = newMachineRecord({ name: 'devbox', sshTarget: 'devbox', ready: true });
     await updateMachines(() => [machine]);

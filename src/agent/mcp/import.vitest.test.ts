@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { IMPORT_MARKER_FILE, importNotice, importVendorMcpServers, normalize, parseToml, stripJsonc } from './import';
+import { IMPORT_MARKER_FILE, importNotice, importVendorMcpServers, normalize, parseToml, stripJsonc, vendorMcpServerNames } from './import';
 import { mcpToolsForTurn } from './manager';
 
 let home: string;
@@ -31,6 +31,27 @@ const servers = async (): Promise<Record<string, Record<string, unknown>>> =>
   (JSON.parse(await readFile(join(state, 'mcp.json'), 'utf8')) as { mcpServers: Record<string, Record<string, unknown>> }).mcpServers;
 
 describe('reading each vendor', () => {
+  it('recognizes Vibe array entries and Deep Agents and Junie user servers', async () => {
+    await put(join(home, '.vibe', 'config.toml'), '[[mcp_servers]]\nname = "vibe-docs"\ntransport = "stdio"\ncommand = "docs"\n');
+    await put(join(home, '.deepagents', '.mcp.json'), { mcpServers: { deepDocs: { command: 'docs' } } });
+    await put(join(home, '.junie', 'mcp', 'mcp.json'), { mcpServers: { junieDocs: { command: 'docs' } } });
+    expect(parseToml('[[mcp_servers]]\nname = "vibe-docs"\ntransport = "stdio"\ncommand = "docs"\n')).toMatchObject({ mcp_servers: [{ name: 'vibe-docs' }] });
+    expect([...(await vendorMcpServerNames('vibe', home)).names]).toEqual(['vibe-docs']);
+    expect([...(await vendorMcpServerNames('dcode', home)).names]).toEqual(['deepDocs']);
+    expect([...(await vendorMcpServerNames('junie', home)).names]).toEqual(['junieDocs']);
+  });
+  it('deduplicates project scoped ACP configs for Deep Agents, Devin, Junie and MiniMax Code', async () => {
+    const workspace = join(home, 'repo');
+    await put(join(workspace, '.deepagents', '.mcp.json'), { mcpServers: { deepProject: { command: 'deep' } } });
+    await put(join(workspace, '.devin', 'mcp_config.json'), { mcpServers: { devinProject: { command: 'devin' } } });
+    await put(join(workspace, '.devin', 'mcp_config.local.json'), { mcpServers: { devinLocal: { command: 'devin-local' } } });
+    await put(join(workspace, '.junie', 'mcp', 'mcp.json'), { mcpServers: { junieProject: { command: 'junie' } } });
+    await put(join(workspace, '.mcp.json'), { mcpServers: { minimaxProject: { command: 'minimax' } } });
+    expect([...(await vendorMcpServerNames('dcode', home, undefined, workspace)).names]).toEqual(['deepProject']);
+    expect([...(await vendorMcpServerNames('devin', home, undefined, workspace)).names]).toEqual(['devinProject', 'devinLocal']);
+    expect([...(await vendorMcpServerNames('junie', home, undefined, workspace)).names]).toEqual(['junieProject']);
+    expect([...(await vendorMcpServerNames('mcode', home, undefined, workspace)).names]).toEqual(['minimaxProject']);
+  });
   it('imports from Claude, Codex, Gemini, Goose and opencode in mcp.json shape', async () => {
     await put(join(home, '.claude.json'), {
       numStartups: 4,

@@ -29,6 +29,7 @@ import { BYTES_PER_TOKEN, transferBudget, transferPrompt } from './transfer.js';
  * thread is forgotten after every turn, and no thread is written for it:
  * only the transfer reaches the model. */
 export function keepsNoHistory(harness: AiLocalHarnessDefinition, model: string | null): boolean {
+  if (harness.turn?.stateless) return true;
   if (!model) return false;
   // Both catalog declarations name providers that forget the thread: Goose's
   // `statelessProviders`, OpenClaw's `statelessRoute.values` (the route its

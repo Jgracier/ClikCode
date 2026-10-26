@@ -80,6 +80,11 @@ export function createVendorObserver(ctx: VendorTurnContext) {
    * deliberate default, not a forgotten one. */
   const sharedObserver = {
     onActivity, onThought, onUsage: noteUsage,
+    onServedModel: (model: string): void => {
+      ctx.model = model;
+      session.reported = { ...session.reported, at: new Date().toISOString(), model };
+      checkpoint.touch();
+    },
     // The vendor's own count of what still runs in the background, by kind:
     // agents and workflows are carried to the turn's end line (checkpoint
     // turnEnd), terminals only live; shown to the windows following it.
@@ -98,7 +103,10 @@ export function createVendorObserver(ctx: VendorTurnContext) {
     },
     onResponseDelta: sink.response,
     onPhase: (phase: string) => prompter?.phase(phase),
-    onNotice: (message: string) => diagnostic('vendor.notice', message),
+    onNotice: (message: string) => {
+      diagnostic('vendor.notice', message);
+      prompter?.activity(message);
+    },
     onPlan: (entries: readonly HarnessPlanEntry[]) => {
       // Kept on the session too: a provider taking the conversation over is
       // told the todos still open (session/canonical.ts).

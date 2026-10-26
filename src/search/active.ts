@@ -86,14 +86,15 @@ export async function activeConversations(options: ActiveOptions = {}): Promise<
     && !group.branches.some((branch) => branch.id === options.excludeSessionId));
   const sessions = candidates.flatMap((group) => group.branches);
   const byId = new Map(sessions.map((session) => [session.id, session]));
-  const pending = await livePendingTurns(sessions, workerIsLive, (id) => background.get(id));
+  const runningTurn = (id: string): string | undefined => records.find((record) => record.sessionId === id)?.runningTurn?.since;
+  const pending = await livePendingTurns(sessions, workerIsLive, (id) => background.get(id), runningTurn);
   const out: ActiveConversation[] = [];
   for (const group of candidates) {
     let chosen: HarnessSession | undefined;
     let state: ActiveConversation['state'] | undefined;
     for (const branch of group.branches) {
       const session = byId.get(branch.id)!;
-      const doing = sessionActivity(session, workerIsLive, pending.get(session.id), isOpen);
+      const doing = sessionActivity(session, workerIsLive, pending.get(session.id), isOpen, runningTurn, (id) => background.get(id));
       if (doing === 'working') { chosen = session; state = 'working'; break; }
       if (doing && !state) { chosen = session; state = 'open'; }
     }

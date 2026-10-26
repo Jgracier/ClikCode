@@ -145,7 +145,8 @@ export function sessionTranscriptMessages(session: HarnessSession): Message[] {
   // Each call goes with the part of the answer it happened in: a steer
   // splits the answer into messages, and a call's offset is re-anchored to
   // the message it lands in.
-  const activities = readTurnActivities(pending.activities, response.length);
+  const recordedActivities = readTurnActivities(pending.activities, response.length);
+  const activities = pending.failedAt ? stopOpenActivities(recordedActivities) : recordedActivities;
   const marks = readTurnMarks(pending.marks);
   let first = true;
   // `offset`/`seq` are the steer's own place among the rows (standard 1.5);
@@ -204,6 +205,7 @@ export function settledTranscriptMessages(session: HarnessSession, runningPrompt
  * mid-way sees only what happens after it joined, so a twenty-minute command
  * already running showed as a bare "thinking" -- which reads as stuck. */
 export function runningActivityLabel(pending: HarnessSession['pendingTurn']): string | undefined {
+  if (pending?.failedAt) return undefined;
   const open = runningTurnActivity(readTurnActivities(pending?.activities, pending?.response?.length ?? 0));
   return open ? `running ${open.label}` : undefined;
 }
@@ -433,6 +435,7 @@ export function discardPendingTurn(session: HarnessSession, prompt?: string): bo
  * worker is no longer generating this turn. */
 export function failPendingTurn(session: HarnessSession, prompt: string, now: string): boolean {
   if (!session.pendingTurn || session.pendingTurn.prompt.trim() !== prompt.trim()) return false;
+  stopPendingCalls(session, Date.parse(now));
   session.pendingTurn.failedAt = now;
   session.updatedAt = now;
   return true;

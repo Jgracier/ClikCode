@@ -2,6 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { failureText, FAILURE_TEXT_LIMIT } from './stderr-line';
 
 describe('a failed process or turn put to a person', () => {
+  it("leaves out Codex's startup banners and keeps the error under them", () => {
+    const stderr = [
+      'Codex: Project-local config, hooks, and exec policies are disabled in the following folders until the project is trusted, but skills still load.',
+      '    1. /home/me/projects/.codex',
+      '       To load project-local config, hooks, and exec policies, add /home/me/projects as a trusted project in /home/me/.clikcode/profiles/codex/abc/config.toml.',
+      'Codex: Model metadata for `gpt-6.1-sol` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.',
+      "Error: Error running remote compact task: The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.",
+    ].join('\n');
+    expect(failureText(stderr)).toBe("Error: Error running remote compact task: The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.");
+  });
+
   it('shows the whole cause, not the line that happens to say "error"', () => {
     const stderr = 'Error: upstream failed\nworker killed with exit code 137 (out of memory)\n';
     const text = failureText(`node exited 1: ${stderr}`);

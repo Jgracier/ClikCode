@@ -255,6 +255,14 @@ describe('chat model', () => {
     expect(unsaid.notes.map((note) => note.text)).toEqual(['boom']);
   });
 
+  it('closes an open shell when a turn errors before its final snapshot', () => {
+    const running = turn(activity({ kind: 'tool-start', id: 'shell', label: '$ git push', category: 'run' }));
+    const failed = applyEvent(running, worker({ type: 'turn-error', message: 'stream ended', said: true }));
+    expect(failed.live?.activities[0]).toMatchObject({ kind: 'tool-error', stopped: true });
+    const ended = applyEvent(failed, worker({ type: 'waiting-stop' }));
+    expect(ended.traces.at(-1)?.activities[0]).toMatchObject({ kind: 'tool-error', stopped: true });
+  });
+
   it('keeps a GPU model\'s whole refusal: the remedy at the end of a long message is the useful part', () => {
     // The Gateway/planner wording for a model no machine on offer can hold, past the old 200-character cut.
     const message = "'FINAL-Bench/POCKET-Darwin-180B-GGUF' needs ~154GB VRAM — larger than the biggest machine available now (96GB across 4 GPUs). This model is only published at this size; it needs a machine with at least 154GB of GPU memory.";

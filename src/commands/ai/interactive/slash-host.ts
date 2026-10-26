@@ -9,16 +9,14 @@ import { readState } from '../../../session/state/read.js';
 import { emitHarnessOutput } from '../../../harness/output.js';
 import { TerminalHarnessPrompter } from '../../../tui/prompter.js';
 import { newConversation } from '../conversations.js';
+import { leaveConversation } from '../../../session/attach.js';
 import { withSlowWait } from '../../../tui/slow-wait.js';
 import { runShellLine } from '../../../tui/slash/handlers.js';
 import type { SlashHost } from '../../../tui/slash/dispatch.js';
 import { browseSearch, walkTurns } from '../../../tui/slash/search-browse.js';
-import { interactiveEnginePicker } from '../../../tui/pickers/engine.js';
-import { interactiveEffortPicker } from '../../../tui/pickers/effort.js';
-import { interactiveModelPicker } from '../../../tui/pickers/model.js';
 import { interactiveSessionPicker } from '../../../tui/pickers/session.js';
 import type { InteractiveSlashOutcome } from '../../../tui/slash/interactive-keys.js';
-import { BOARD_COMMANDS } from './board.js';
+import { conversationCommands } from './board.js';
 
 async function showSession(terminal: TerminalHarnessPrompter | undefined, target: string): Promise<void> {
   const shown = await readState({ transcripts: [target] });
@@ -27,7 +25,11 @@ async function showSession(terminal: TerminalHarnessPrompter | undefined, target
 }
 
 export async function openConversationPicker(
-  { config, rl, terminal, beginBuildReplace }: { config: Conf; rl: HarnessPrompter; terminal: TerminalHarnessPrompter | undefined; beginBuildReplace: () => Promise<void> | undefined },
+  { rl, terminal, beginBuildReplace, dispatch }: {
+    rl: HarnessPrompter; terminal: TerminalHarnessPrompter | undefined;
+    beginBuildReplace: () => Promise<void> | undefined;
+    dispatch: (id: string, line: string) => Promise<InteractiveSlashOutcome>;
+  },
   id: string,
 ): Promise<InteractiveSlashOutcome> {
   // The board's `/` sets up the NEXT conversation. A fresh one is
@@ -36,30 +38,43 @@ export async function openConversationPicker(
   // blank, and blank chats are not listed or kept.
   let fresh: string | undefined;
   for (;;) {
-    const picked = await interactiveSessionPicker(rl, fresh ?? id, BOARD_COMMANDS, {
+    const state = await readState({ transcripts: [] });
+    const target = state.sessions.find((item) => item.id === (fresh ?? id));
+    if (!target) return { id };
+    const picked = await interactiveSessionPicker(rl, fresh ?? id, conversationCommands(target, state), {
       // Running rows were on screen and have finished, and the
       // composer is empty. Leave only when a newer build is waiting.
       onSessionsSettled: () => Boolean(beginBuildReplace()),
     });
     if (picked && 'command' in picked) {
       fresh ??= await newConversation(id, { sameModel: true });
-      if (picked.command === '/provider') fresh = await interactiveEnginePicker(config, rl, fresh) ?? fresh;
-      else if (picked.command === '/model') await interactiveModelPicker(rl, fresh);
-      else if (picked.command === '/effort') await interactiveEffortPicker(rl, fresh);
+      const outcome = await dispatch(fresh, picked.command);
+      if (outcome.exit || outcome.remote || outcome.prompt !== undefined || outcome.draft !== undefined || (outcome.id && outcome.id !== fresh)) {
+        if (outcome.exit || outcome.remote || (outcome.id && outcome.id !== fresh)) await leaveConversation(fresh);
+        return { ...outcome, id: outcome.id ?? fresh };
+      }
+      if (outcome.notice) terminal?.activity(outcome.notice);
       await showSession(terminal, fresh);
       continue;
     }
     if (picked && 'notice' in picked) {
+      if (fresh) await leaveConversation(fresh);
       if (fresh) await showSession(terminal, id);
       return { id, notice: picked.notice };
     }
     if (picked && 'compose' in picked) return { id: fresh ?? await newConversation(id, { sameModel: true }), prompt: picked.compose, echo: true };
     if (picked && 'new' in picked) return { id: fresh ?? await newConversation(id, { sameModel: true }) };
-    if (picked && 'remote' in picked) return { remote: picked.remote, ...(picked.draft ? { draft: picked.draft } : {}) };
-    if (picked) return { id: picked.id, ...(picked.draft ? { draft: picked.draft } : {}) };
+    if (picked && 'remote' in picked) {
+      if (fresh) await leaveConversation(fresh);
+      return { remote: picked.remote, ...(picked.draft ? { draft: picked.draft } : {}) };
+    }
+    if (picked) {
+      if (fresh && picked.id !== fresh) await leaveConversation(fresh);
+      return { id: picked.id, ...(picked.draft ? { draft: picked.draft } : {}) };
+    }
     // Closed: back where it was, including the line that names the
     // provider, which showed the fresh chat's while it was set up.
-    if (fresh) await showSession(terminal, id);
+    if (fresh) { await leaveConversation(fresh); await showSession(terminal, id); }
     return { id };
   }
 }

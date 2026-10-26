@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
-import { keepsWarm, createKeepWarm, KEEP_WARM_ABOVE_TOKENS, KEEP_WARM_FOR_MS, PING_EVERY_MS, MAX_KEEP_WARM_PINGS } from './cache-keepwarm.js';
+import { keepsWarm, createKeepWarm, cachePingEffective, KEEP_WARM_ABOVE_TOKENS, KEEP_WARM_FOR_MS, PING_EVERY_MS, MAX_KEEP_WARM_PINGS } from './cache-keepwarm.js';
 import type { HarnessSession } from '../session/model.js';
 
 const session = (over: Partial<HarnessSession> = {}): HarnessSession => ({
@@ -16,6 +16,11 @@ const session = (over: Partial<HarnessSession> = {}): HarnessSession => ({
 afterEach(() => { vi.useRealTimers(); });
 
 describe('which conversations keep their cache warm', () => {
+  it('stops a completed ping that rewrote the chat instead of reading its cache', () => {
+    expect(cachePingEffective({ cacheRead: 13_932, cacheWrite: 147_212 }, 200_000)).toBe(false);
+    expect(cachePingEffective({ cacheRead: 180_000, cacheWrite: 2_000 }, 200_000)).toBe(true);
+    expect(cachePingEffective({}, 200_000)).toBe(false);
+  });
   it('a large Claude conversation does; a small one, another harness, or one with no thread does not', () => {
     expect(keepsWarm(session())).toBe(true);
     expect(keepsWarm(session({ lastUsage: { contextUsed: KEEP_WARM_ABOVE_TOKENS - 1, at: '' } as never }))).toBe(false);

@@ -130,7 +130,7 @@ describe('a failover standby', () => {
     expect(stored.accounts.find((item) => item.id === 'acct-a')?.quotaState).toBe('exhausted');
   });
 
-  it('copies a CLI harness\'s thread before its attempt, so a refusal hands over without copying again', async () => {
+  it('does no speculative disk copy for a CLI harness and moves its thread only on failover', async () => {
     attempt.transport.kind = 'structured-cli';
     const order: string[] = [];
     attempt.carry.mockImplementation(async () => { order.push('copy'); return 'carried'; });
@@ -151,9 +151,9 @@ describe('a failover standby', () => {
       state, session, account: state.accounts.find((item) => item.id === 'acct-a')!, model: 'm1', text: 'Reply SWITCHED',
       prepared: { images: [], textContext: '' } as never, turnText: 'Reply SWITCHED', startedAt: Date.now(), run: {},
     });
-    // Copied once, before the first attempt, and not again at the switch.
-    expect(order).toEqual(['copy', 'attempt Reply SWITCHED', 'attempt Reply SWITCHED']);
-    expect(attempt.move).not.toHaveBeenCalled();
+    expect(order).toEqual(['attempt Reply SWITCHED', 'attempt Reply SWITCHED']);
+    expect(attempt.carry).not.toHaveBeenCalled();
+    expect(attempt.move).toHaveBeenCalledTimes(1);
     expect(attempt.prepare).not.toHaveBeenCalled();
     const saved = (await readState({ transcripts: ['s1'] })).sessions.find((item) => item.id === 's1')!;
     expect(saved.accountId).toBe('acct-b');

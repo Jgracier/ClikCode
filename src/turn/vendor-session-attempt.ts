@@ -16,6 +16,7 @@ import { appServerThreadOverrides, declaredOptionArgv } from '../harness/transpo
 import { recordDerivedUsage } from '../harness/accounts/stream-usage.js';
 import { readAcpUsageFile } from '../harness/transport/acp-usage-file.js';
 import { turnShareOf } from '../harness/protocol/turn-usage.js';
+import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import { codexRateLimitsReading } from '../harness/accounts/usage-probes.js';
 import { harnessAcpLaunch, localHarnessCapabilityManifest } from '../runtime/lazy-bridge.js';
 import { closePersistentTransport, openStandby, persistentTransportFor, vendorChildKey } from './vendor-process.js';
@@ -188,6 +189,7 @@ function acpLaunchInput(input: {
     extraArgv: [...launch.optionArgv, ...optionArgv],
     ...(session.nativeSessionId ? { nativeSessionId: session.nativeSessionId } : {}),
     cwd: session.workspace!, model, effort, permissionMode: turnPermissionMode(harness, session.permissionMode),
+    ...(live ? { liveSettings: live } : {}),
     ...(live ? { currentPermissionMode: async () => live.permissionMode && turnPermissionMode(harness, live.permissionMode) } : {}),
     ...(additionalDirectories.length ? { additionalDirectories } : {}),
     acp: harness.acp,
@@ -229,7 +231,7 @@ export function prepareAcpStandby(input: {
   environment: Record<string, string>;
 }): Promise<boolean> {
   const launch = acpLaunchInput(input);
-  return standbyOf(input, 'acp', async (child) => { await (child as AcpSession).runTurn({ ...launch, prompt: '', prepareOnly: true }); });
+  return standbyOf(input, 'acp', async (child) => { await (child as AcpSession).runTurn({ ...launch, prompt: '', initializeOnly: true }); });
 }
 
 /** One small request on a copy of this conversation's thread (`copyId`, already beside it in the
@@ -238,15 +240,16 @@ export function prepareAcpStandby(input: {
 export async function pingPromptCache(input: {
   harness: AiLocalHarnessDefinition; account: AiHarnessAccount; session: HarnessSession; copyId: string;
   model: string | null; effort?: string; environment: Record<string, string>; signal?: AbortSignal;
-}): Promise<{ cacheRead?: number; cacheWrite?: number }> {
+  onUsage?: (usage: TurnUsage) => void;
+}): Promise<TurnUsage> {
   const { nativeSessionPreallocated: _fresh, ...rest } = input.session;
   const session: HarnessSession = { ...rest, nativeSessionId: input.copyId, permissionMode: 'ask' };
-  let usage: { cacheRead?: number; cacheWrite?: number } = {};
+  let usage: TurnUsage = {};
   await runAcpTurn({
     ...acpLaunchInput({ ...input, session }),
     prompt: 'ClikCode keeping this conversation\'s cache warm, not a request: reply with only the word ok.',
     signal: input.signal,
-    onUsage: (reported) => { usage = { ...(reported.cacheRead !== undefined ? { cacheRead: reported.cacheRead } : {}), ...(reported.cacheWrite !== undefined ? { cacheWrite: reported.cacheWrite } : {}) }; },
+    onUsage: (reported) => { usage = { ...usage, ...reported }; input.onUsage?.(usage); },
   });
   return usage;
 }
@@ -289,7 +292,7 @@ export function prepareCodexStandby(input: {
   environment: Record<string, string>;
 }): Promise<boolean> {
   const launch = codexLaunchInput(input).input;
-  return standbyOf(input, 'codex-app-server', async (child) => { await (child as CodexSession).runTurn({ ...launch, prompt: '', prepareOnly: true }); });
+  return standbyOf(input, 'codex-app-server', async (child) => { await (child as CodexSession).runTurn({ ...launch, prompt: '', initializeOnly: true }); });
 }
 
 /** This conversation's own vendor child, opened up to the prompt before its

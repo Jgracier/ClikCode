@@ -10,21 +10,26 @@ import { formatElapsed } from '../../harness/protocol/format.js';
 import { liveSubAgentRows, readClaudeSubagent, type SubAgentRow } from '../../harness/subagent-read.js';
 import { subAgentRefs, subAgentViewKey, subAgentViewLines, subAgentViewOpen, type SubAgentViewState } from '../subagent-view.js';
 import { terminalCellWidth } from '../render/width.js';
+import type { SubAgentModes } from '../../harness/protocol/activity-normalize.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
+import { isClikCodeAgent } from '../../session/route.js';
 
 export interface SubView { state: SubAgentViewState; rows: SubAgentRow[]; notice?: string; timer?: NodeJS.Timeout; reading?: boolean }
 
-function harnessOf(p: TerminalHarnessPrompter): { command: string; vendor: string; modes: ReturnType<typeof modesOf> } {
+function harnessOf(p: TerminalHarnessPrompter): { command: string; vendor: string; modes: SubAgentModes } {
   const command = p.currentSession?.nativeHarness;
   const harness = command ? localHarnessForCommand(command) : undefined;
-  return { command: command ?? 'unknown', vendor: harness?.displayName ?? 'This harness', modes: modesOf(harness) };
+  const own = Boolean(p.currentSession && isClikCodeAgent(p.currentSession));
+  return { command: command ?? 'clikcode', vendor: harness?.displayName ?? 'ClikCode',
+    modes: harness?.subagents ?? (own ? { read: 'frames', steer: 'session' } : { read: 'none', steer: 'none' }) };
 }
-const modesOf = (harness: ReturnType<typeof localHarnessForCommand>) => harness?.subagents;
 
 /** The rows of the open sub-agent: its live frames, and where the harness keeps a
  * transcript, that (the richer: it has the prompt and the prose). */
 async function readRows(p: TerminalHarnessPrompter, view: SubView): Promise<SubAgentRow[]> {
   const ref = view.state.siblings[view.state.index]!;
+  const recorded = await p.subAgentRead?.(ref.id);
+  if (recorded?.length) return recorded;
   const frames = liveSubAgentRows(p.childEntries.flatMap((entry) => (entry.event ? [entry.event] : [])), ref.id);
   const session = p.currentSession;
   if (ref.read !== 'transcript' || ref.harness !== 'claude' || !session?.nativeSessionId) return frames;
@@ -46,8 +51,7 @@ function refresh(p: TerminalHarnessPrompter): void {
 
 /** Right on an empty composer opens a running sub-agent's full view. */
 export function openSubView(this: TerminalHarnessPrompter): boolean {
-  // The own agent's sub-agents are ClikCode's own (docs/SUBAGENTS.md): not wired to this view yet.
-  if (this.subView || !this.turn || !this.currentSession?.nativeHarness) return false;
+  if (this.subView || !this.turn || !this.currentSession) return false;
   const { command, modes } = harnessOf(this);
   const events = this.activityEntries.flatMap((entry) => (entry.event ? [entry.event] : []));
   const siblings = subAgentRefs(events, command, modes);
@@ -91,9 +95,9 @@ export function subViewKey(this: TerminalHarnessPrompter, key: string): void {
     const steer = this.subAgentSteer;
     if (!steer) view.notice = 'This window cannot send to a sub-agent.';
     else {
-      view.notice = 'Sending to the main agent, asking it to pass this on…';
+      view.notice = effect.ref.steer === 'relay' ? 'Sending to the main agent, asking it to pass this on…' : 'Sending to the sub-agent…';
       void steer(effect.ref, effect.text).then((message) => {
-        if (this.subView === view) { view.notice = message ?? `Sent, as a message to the main agent: Send this to your sub-agent ${effect.ref.label}: ${effect.text}`; this.paintWaiting(this.turn!); }
+        if (this.subView === view) { view.notice = message ?? (effect.ref.steer === 'relay' ? `Sent through the main agent to ${effect.ref.label}.` : `Sent to ${effect.ref.label}.`); this.paintWaiting(this.turn!); }
       });
     }
   } else return;

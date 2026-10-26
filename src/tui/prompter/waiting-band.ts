@@ -11,7 +11,6 @@ import { nativeModelLabel } from '../../harness/accounts/model-catalog.js';
 import { localModelLabel } from '../../local-models/catalog.js';
 import { turnElapsedMs, waitingSpinnerGlyph } from '../../harness/protocol/activity-view.js';
 import { answerWriting, turnStatus } from '../../harness/protocol/turn-flow.js';
-import { waitStalled } from '../../harness/protocol/turn-pace.js';
 import { paintStatus } from '../render/status-line.js';
 import { PAINT_COALESCE_MS } from '../../harness/protocol/timings.js';
 import { formatElapsed } from '../../harness/protocol/format.js';
@@ -88,7 +87,6 @@ export function waitingLine(this: TerminalHarnessPrompter, turn: WaitingTurn, wi
   const painted = paintStatus({
     glyph, label, tone: status.tone,
     frame: this.waitingFrame, shimmer: !this.reducedMotion && !turn.cancelled && this.waitingTickFast && status.tone !== 'asking',
-    stalled: waitStalled({ conversationTurn: Boolean(turn.submit || turn.early), onUser: asking, cancelled: turn.cancelled, quietMs: now - turn.activeAt }),
   });
   const line = `${painted.spinner}${asking ? ' ' : '  '}${painted.label}${chalk.dim(rest)}`;
   // A sign-in's wait: Esc cancels it. Otherwise Esc stops the turn, while it would.

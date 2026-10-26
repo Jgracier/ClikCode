@@ -165,6 +165,14 @@ function identity(entry: Record<string, unknown>): string {
   return typeof entry.url === 'string' ? `url:${entry.url}` : `cmd:${JSON.stringify([entry.command, entry.args ?? []])}`;
 }
 
+/** Vibe stores named servers as [[mcp_servers]] rather than a keyed table. */
+function namedServerTable(value: unknown): Record<string, unknown> | undefined {
+  if (isRecord(value)) return value;
+  if (!Array.isArray(value)) return undefined;
+  const entries = value.filter((item): item is Record<string, unknown> => isRecord(item) && typeof item.name === 'string' && !!item.name);
+  return Object.fromEntries(entries.map((item) => [item.name, item]));
+}
+
 async function readServerTable(path: string, source: VendorSource): Promise<Record<string, unknown> | undefined> {
   let text: string;
   try { text = await readFile(path, 'utf8'); } catch { return undefined; }
@@ -181,7 +189,7 @@ async function readServerTable(path: string, source: VendorSource): Promise<Reco
   }
   let table: unknown = root;
   for (const key of source.key) table = isRecord(table) ? table[key] : undefined;
-  return isRecord(table) ? table : undefined;
+  return namedServerTable(table);
 }
 
 /** Where this account's copy of one vendor file might be.
@@ -190,11 +198,13 @@ async function readServerTable(path: string, source: VendorSource): Promise<Reco
  * (`CODEX_HOME`, `QWEN_HOME`). Both shapes are checked: a missing path adds
  * nothing, and a name found in either one counts as already there. */
 function vendorConfigCandidates(
-  source: VendorSource, home: string, profile?: { env: string; path: string },
+  source: VendorSource, home: string, profile?: { env: string; path: string }, workspace?: string,
 ): string[] {
   // An isolated profile is all the harness reads: the user's own file is not
   // seen there, so a name in it is not a name this profile has.
-  if (!profile) return [join(home, ...source.homeRelative)];
+  const project = source.projectRelative && workspace ? [join(workspace, ...source.projectRelative)] : [];
+  if (!source.homeRelative) return project;
+  if (!profile) return [join(home, ...source.homeRelative), ...project];
   const files: string[] = [];
   if (profile.env === 'HOME') files.push(join(profile.path, ...source.homeRelative));
   else {
@@ -202,7 +212,7 @@ function vendorConfigCandidates(
     if (source.homeRelative.length > 1) files.push(join(profile.path, ...source.homeRelative.slice(1)));
     if (source.rootRelative) files.push(join(profile.path, ...source.rootRelative));
   }
-  return [...new Set(files)];
+  return [...new Set([...files, ...project])];
 }
 
 /** Names already configured for this harness, when ClikCode knows the file.
@@ -226,17 +236,18 @@ async function namesInVendorFile(path: string, source: VendorSource): Promise<Se
     if (!isRecord(table) || !(key in table)) return new Set();
     table = table[key];
   }
-  return isRecord(table) ? new Set(Object.keys(table)) : 'unreadable';
+  const servers = namedServerTable(table);
+  return servers ? new Set(Object.keys(servers)) : 'unreadable';
 }
 
 export async function vendorMcpServerNames(
-  command: string, home: string, profile?: { env: string; path: string },
+  command: string, home: string, profile?: { env: string; path: string }, workspace?: string,
 ): Promise<{ known: boolean; names: Set<string>; unreadable?: string }> {
   const sources = vendorSources().filter((source) => source.command === command);
   const names = new Set<string>();
   if (!sources.length) return { known: false, names };
   for (const source of sources) {
-    for (const path of vendorConfigCandidates(source, home, profile)) {
+    for (const path of vendorConfigCandidates(source, home, profile, workspace)) {
       const found = await namesInVendorFile(path, source);
       if (found === 'missing') continue;
       if (found === 'unreadable') return { known: true, names, unreadable: path };
@@ -250,6 +261,7 @@ export async function vendorMcpServerNames(
  * ClikCode account profile for that vendor, whose directory is either a
  * whole fake HOME or the vendor's own config root. */
 async function candidatePaths(source: VendorSource, home: string, stateDir: string): Promise<string[]> {
+  if (!source.homeRelative) return [];
   const paths = [join(home, ...source.homeRelative)];
   const profiles = join(stateDir, 'profiles', source.command);
   const ids = await readdir(profiles).catch(() => [] as string[]);

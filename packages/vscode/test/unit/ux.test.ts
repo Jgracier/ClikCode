@@ -227,7 +227,7 @@ describe('a history row\'s state', () => {
   it('is the terminal\'s: when, working, stalled, needs you', () => {
     expect(rowState(row, now)).toEqual({ kind: 'idle', text: '5m ago' });
     expect(rowState({ ...row, activity: 'working', turn: { startedAt: '2026-10-03T11:57:00.000Z', activeAt: '2026-10-03T11:59:50.000Z', agents: 2 } }, now).text).toBe('working 3m · 2 agents');
-    expect(rowState({ ...row, activity: 'working', turn: { startedAt: '2026-10-03T11:40:00.000Z', activeAt: '2026-10-03T11:56:00.000Z' } }, now).text).toBe('stalled 4m');
+    expect(rowState({ ...row, activity: 'working', turn: { startedAt: '2026-10-03T11:40:00.000Z', activeAt: '2026-10-03T11:56:00.000Z' } }, now).text).toBe('working 20m');
     expect(rowState({ ...row, needsYou: true }, now).kind).toBe('needs-you');
   });
 

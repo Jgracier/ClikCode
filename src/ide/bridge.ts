@@ -50,6 +50,8 @@ import { choose } from './bridge-choose.js';
 import { answerQuery } from './bridge-query.js';
 import { messageOf, TurnFailed } from './bridge-support.js';
 import { WorkerLink } from './bridge-worker.js';
+import { warmSessionWorker } from '../worker/client.js';
+import { shouldWarmVendorChat } from '../worker/warm-policy.js';
 import type { BridgeHost } from './bridge-host.js';
 import type { InteractiveSlashOutcome } from '../tui/slash/interactive-keys.js';
 
@@ -185,6 +187,34 @@ export class IdeBridge {
     if (request.type !== 'query') lifecycle('bridge.request', { type: request.type, ...(request.type === 'choose' ? { kind: request.choice.kind } : {}) });
     if (!READ_ONLY_REQUESTS.has(request.type)) this.lastActivityAt = Date.now();
     switch (request.type) {
+      case 'subagent':
+        this.track((async () => {
+          try {
+            if (!this.sessionId) throw new Error('No conversation is open.');
+            const client = await this.link.workerFor(this.sessionId);
+            const id = randomUUID();
+            const data = await new Promise<unknown>((resolve, reject) => {
+              const cleanup = (): void => { clearTimeout(timer); client.off('event', onEvent); client.off('close', onClose); };
+              const onClose = (): void => { cleanup(); reject(new Error('The conversation worker disconnected.')); };
+              const onEvent = (event: import('../worker/protocol.js').WorkerEvent): void => {
+                if (request.action === 'read' && event.type === 'subagent' && event.id === id) { cleanup(); resolve({ rows: event.rows, steer: event.steer }); }
+                if (request.action === 'steer' && event.type === 'submission' && event.id === id) {
+                  cleanup();
+                  if (event.disposition === 'error') reject(new Error(event.message ?? 'Not sent.'));
+                  else resolve(event.message);
+                }
+              };
+              const timer = setTimeout(() => { cleanup(); reject(new Error('The sub-agent did not answer.')); }, 10_000);
+              client.on('event', onEvent); client.once('close', onClose);
+              try {
+                client.send(request.action === 'read' ? { type: 'read-subagent', id, parentId: request.parentId }
+                  : { type: 'steer-subagent', id, parentId: request.parentId, text: request.text ?? '', ...(request.agentId ? { agentId: request.agentId } : {}) });
+              } catch (error) { cleanup(); reject(error); }
+            });
+            this.channel.send({ type: 'result', requestId: request.requestId, ok: true, data });
+          } catch (error) { this.channel.send({ type: 'result', requestId: request.requestId, ok: false, error: messageOf(error) }); }
+        })(), false);
+        return;
       case 'open':
         this.features = new Set(request.features ?? []);
         // Opened (again): the conversation is sent whole.
@@ -484,9 +514,12 @@ export class IdeBridge {
   private async prepareRoute(): Promise<void> {
     const { session } = await this.current();
     await reconcileLocalModelLeases(session, this.elsewhere()).catch(() => undefined);
-    const key = `${session.id} ${session.route}`;
+    const key = `${session.id} ${session.route} ${session.nativeHarness ?? ''} ${session.accountId ?? ''}`;
     if (key === this.preparedRoute) return;
     this.preparedRoute = key;
+    if (shouldWarmVendorChat(session)) {
+      void warmSessionWorker(session.id).catch(() => undefined);
+    }
     if (!isClikCodeAgent(session) && this.link.worker?.sessionId !== session.id) return;
     const client = await this.link.workerFor(session.id).catch(() => undefined);
     client?.send({ type: 'prepare' });

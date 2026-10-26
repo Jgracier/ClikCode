@@ -135,5 +135,8 @@ describe('a worker running vendor background turns', () => {
 
   it('keeps nothing for a background turn that showed nothing', () => {
     expect(backgroundTurnRecord({ text: '  ', ended: 'completed' }, [])).toBeUndefined();
+    expect(backgroundTurnRecord({ text: '', ended: 'completed' }, ['tool', 'tool'])).toBeUndefined();
+    expect(backgroundTurnRecord({ text: '', ended: 'completed' }, ['failed tool'])).toBeUndefined();
+    expect(backgroundTurnRecord({ text: '', ended: 'closed' }, ['sleep 30'])).toBeUndefined();
   });
 });

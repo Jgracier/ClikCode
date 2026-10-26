@@ -57,6 +57,7 @@ export type ToWebview =
   | { type: 'probe'; id: string; action: 'query' | 'click' | 'type' | 'key' | 'paste'; selector: string; text?: string };
 
 export type WebviewRequest =
+  | { method: 'subagent'; parentId: string; action: 'read' | 'steer'; text?: string; agentId?: string }
   | { method: 'machines'; discover?: boolean }
   | { method: 'machineConversations'; machineId: string }
   /** A machine from the tailnet (`tailscale:<node>`): asks which user to log in as, installs

@@ -11,16 +11,16 @@ export type NativeTranscriptMessage = { role: 'user' | 'assistant'; content: str
  * bounded windows, so replacement is unsafe: find the longest suffix of the
  * cache that occurs in the source window and append only source messages that
  * follow it. With no overlap, retain the cache; with no cache, adopt source. */
-export function mergeNativeTranscript(
+export function reconcileNativeTranscript(
   cached: readonly NativeTranscriptMessage[], source: readonly NativeTranscriptMessage[],
-): NativeTranscriptMessage[] {
+): { messages: NativeTranscriptMessage[]; appendedFrom: number; overlapLength: number } {
   // Both sides go through the same normalization so the overlap search below
   // still compares like with like, and so a rehydration prompt the vendor
   // recorded never re-enters ClikCode's transcript.
   cached = normalizeImportedTranscript(cached);
   source = normalizeImportedTranscript(source);
-  if (!cached.length) return [...source];
-  if (!source.length) return [...cached];
+  if (!cached.length) return { messages: [...source], appendedFrom: 0, overlapLength: 0 };
+  if (!source.length) return { messages: [...cached], appendedFrom: cached.length, overlapLength: 0 };
   // Whitespace-insensitive on purpose: ClikCode's own cached copy of a
   // message and the vendor's freshly re-read copy of the SAME message are not
   // always byte-identical (a live-streamed reply can carry a paragraph break
@@ -29,20 +29,36 @@ export function mergeNativeTranscript(
   // message at the very end poisoned every window length, not just the
   // longest -- the whole merge fell back to `[...cached]`, silently dropping
   // every genuinely new turn the vendor had recorded after it.
-  const equal = (left: NativeTranscriptMessage, right: NativeTranscriptMessage): boolean =>
-    left.role === right.role && left.content.replace(/\s+/g, ' ').trim() === right.content.replace(/\s+/g, ' ').trim();
-  const maxOverlap = Math.min(cached.length, source.length);
-  for (let length = maxOverlap; length > 0; length -= 1) {
-    const cachedStart = cached.length - length;
-    for (let sourceStart = source.length - length; sourceStart >= 0; sourceStart -= 1) {
-      let matches = true;
-      for (let offset = 0; offset < length; offset += 1) {
-        if (!equal(cached[cachedStart + offset]!, source[sourceStart + offset]!)) { matches = false; break; }
-      }
-      if (matches) return [...cached, ...source.slice(sourceStart + length)];
-    }
+  const key = (message: NativeTranscriptMessage): string => `${message.role}\0${message.content.replace(/\s+/g, ' ').trim()}`;
+  // Searching reversed messages makes a cache suffix a pattern prefix. KMP
+  // finds the longest match in linear time, even in years of repeated turns.
+  // Scanning from the source's end preserves the most recent equal overlap.
+  const pattern = cached.map(key).reverse();
+  const fallback = new Array<number>(pattern.length).fill(0);
+  for (let index = 1, matched = 0; index < pattern.length; index += 1) {
+    while (matched && pattern[index] !== pattern[matched]) matched = fallback[matched - 1]!;
+    if (pattern[index] === pattern[matched]) matched += 1;
+    fallback[index] = matched;
   }
-  return [...cached];
+  let length = 0;
+  let sourceStart = 0;
+  for (let index = source.length - 1, matched = 0; index >= 0; index -= 1) {
+    const value = key(source[index]!);
+    while (matched && value !== pattern[matched]) matched = fallback[matched - 1]!;
+    if (value === pattern[matched]) matched += 1;
+    if (matched > length) { length = matched; sourceStart = index; }
+    if (matched === pattern.length) break;
+  }
+  if (length) {
+    // Only a source containing the entire cache proves its missing prefix.
+    const prefix = length === cached.length ? source.slice(0, sourceStart) : [];
+    return { messages: [...prefix, ...cached, ...source.slice(sourceStart + length)], appendedFrom: prefix.length + cached.length, overlapLength: length };
+  }
+  return { messages: [...cached], appendedFrom: cached.length, overlapLength: 0 };
+}
+
+export function mergeNativeTranscript(cached: readonly NativeTranscriptMessage[], source: readonly NativeTranscriptMessage[]): NativeTranscriptMessage[] {
+  return reconcileNativeTranscript(cached, source).messages;
 }
 
 /** Both Claude Code and Codex represent a message's content as either a plain
@@ -63,8 +79,13 @@ export function extractMessageText(content: unknown): string {
  * item; importing that wrapper verbatim makes the ClikCode transcript look as
  * if the same request was pasted several times. Unknown content is preserved. */
 export function visibleNativeUserText(text: string): string {
-  const trimmed = text.trim();
-  if (!trimmed || trimmed.startsWith('<')) return '';
+  let trimmed = text.trim();
+  // Native startup envelopes are metadata; an ordinary request beginning
+  // with HTML/XML is still the user's message. Keep any words after a known
+  // envelope rather than discarding the entire user turn with it.
+  const envelope = /^<(recommended_plugins|environment_context|user_instructions|developer_instructions|system-reminder|local-command-caveat|local-command-stdout|ide_opened_file|ide_selection|task-notification)\b[^>]*>[\s\S]*?<\/\1>\s*/i;
+  while (envelope.test(trimmed)) trimmed = trimmed.replace(envelope, '');
+  if (!trimmed) return '';
   if (trimmed.startsWith('# Context from my IDE setup:')) {
     const marker = '\n## My request:\n';
     const requestStart = trimmed.indexOf(marker);
@@ -82,9 +103,3 @@ export function leadingText(line: string): string | undefined {
   const escaped = match[1]!.replace(/\\u?[0-9a-fA-F]{0,3}$|\\$/, '');
   try { return JSON.parse(`"${escaped}"`) as string; } catch { return escaped; }
 }
-
-// Large enough that an externally continued thread still overlaps ClikCode's
-// cached suffix; bounded so opening a years-long vendor history cannot bloat
-// the local state file without limit.
-
-export const ADOPTED_TRANSCRIPT_LIMIT = 200;

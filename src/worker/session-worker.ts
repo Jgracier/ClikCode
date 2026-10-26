@@ -260,11 +260,16 @@ export async function runSessionWorker(sessionId: string, options: { warm?: bool
   // and background work still running. Each change rewrites the whole of it.
   let awaiting: { title: string; since: string } | undefined;
   let background: WorkerRuntimeRecord['background'];
+  let runningTurn: WorkerRuntimeRecord['runningTurn'];
   const rewriteRecord = (): Promise<void> => {
     ctx.recordWrite = ctx.recordWrite
-      .then(() => writeWorkerRecord({ ...record, ...(awaiting ? { awaitingApproval: awaiting } : {}), ...(background ? { background } : {}) }, { existing: true }))
+      .then(() => writeWorkerRecord({ ...record, ...(awaiting ? { awaitingApproval: awaiting } : {}), ...(background ? { background } : {}), ...(runningTurn ? { runningTurn } : {}) }, { existing: true }))
       .catch(() => undefined);
     return ctx.recordWrite;
+  };
+  ctx.onTurnRunningChange = async (since) => {
+    runningTurn = since ? { since } : undefined;
+    await rewriteRecord();
   };
   observer.onAwaitingApproval = (awaitingApproval) => { awaiting = awaitingApproval; return rewriteRecord(); };
   // What the vendor process in use says runs, and what processes the conversation left still run

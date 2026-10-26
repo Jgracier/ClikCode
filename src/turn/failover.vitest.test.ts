@@ -8,6 +8,11 @@ const failoverPrompt = (messages: HarnessSession['messages'], request: string, m
   transferPrompt(canonicalRecord({ id: 's', messages } as HarnessSession), request, maxBytes ? { maxBytes } : {});
 
 describe('ClikCode account failover', () => {
+  it("treats Codex's 'model is not supported with a ChatGPT account' as this account's refusal, so another account is tried", () => {
+    const refusal = new Error("Error running remote compact task: The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.");
+    expect(classifyAccountFailure(refusal)).toBe('account-ineligible');
+  });
+
   it('does not confuse temporary throttling with exhausted quota', () => {
     expect(classifyAccountFailure(Object.assign(new Error('too many requests'), { statusCode: 429 }))).toBe('temporarily-throttled');
     expect(classifyAccountFailure(new Error('weekly usage limit reached'))).toBe('quota-exhausted');

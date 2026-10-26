@@ -25,9 +25,7 @@ export function Spinner({ tone = '', still = false, agent = false }: { tone?: st
 }
 
 /** Whether a wait is shown, by the terminal's rule (slow-wait-gate.ts):
- * only once it has taken SLOW_WAIT_MS, and once shown for MIN_VISIBLE_MS
- * at least. Most lookups answer at once, and a loading line that came and
- * went in a frame read as a flash. */
+ * only once it has taken SLOW_WAIT_MS, ending as soon as the work ends. */
 export function useSlowWait(waiting: boolean): boolean {
   const [shown, setShown] = useState(false);
   useEffect(() => {

@@ -195,6 +195,7 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
       // A background agent's call returns at launch; its row is the agent's, and
       // settles when the agent does, not as a one-off command.
       if (result.continuesAs && rt.backgroundAgents) {
+        input.onActivity?.({ kind: 'tool-start', label, id: call.id, ...category, agentId: result.continuesAs });
         rt.backgroundAgents.whenEnded(result.continuesAs, (ended) => input.onActivity?.({
           kind: ended?.isError ? 'tool-error' : 'tool-done', label, id: call.id, ...category,
           ...(ended ? eventOutputPreview(ended.output) : {}),

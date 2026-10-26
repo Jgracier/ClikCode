@@ -17,11 +17,14 @@ import { readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { diagnostic, lifecycle } from '../runtime/lifecycle-log.js';
 import { readState } from '../session/state/read.js';
+import { writeState } from '../session/state/write.js';
 import { locateNativeSessionFile } from '../session/discovery/registry.js';
 import { sessionHarness } from '../tui/slash/context.js';
 import { sessionTurnTransport } from '../harness/transport/select.js';
 import { turnEnvironment } from '../turn/turn-environment.js';
 import { pingPromptCache } from '../turn/vendor-session-attempt.js';
+import { recordInvocation } from '../turn/turn-output.js';
+import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import type { HarnessSession } from '../session/model.js';
 
 export const KEEP_WARM_FOR_MS = 4 * 60 * 60 * 1000;
@@ -29,6 +32,15 @@ export const PING_EVERY_MS = 55 * 60 * 1000;
 export const KEEP_WARM_ABOVE_TOKENS = 100_000;
 export const MAX_KEEP_WARM_PINGS = 4;
 const PING_TIMEOUT_MS = 2 * 60 * 1000;
+
+/** A refresh is useful only when the vendor says it read most of this chat
+ * from cache and wrote less than it read. A successful reply alone does not
+ * establish that: a copied Claude thread can answer while rewriting its
+ * history on every ping. */
+export function cachePingEffective(usage: TurnUsage, contextUsed: number): boolean {
+  const read = usage.cacheRead ?? 0;
+  return read >= Math.floor(contextUsed / 2) && read > (usage.cacheWrite ?? 0);
+}
 
 /** Whether a conversation's cache is worth keeping, by what its harness is and how big it is. */
 export function keepsWarm(session: HarnessSession | undefined): boolean {
@@ -139,15 +151,28 @@ async function ping(sessionId: string, signal: AbortSignal): Promise<boolean> {
   const copyId = randomUUID();
   const copy = join(source.path, '..', basename(source.path).replace(nativeId, copyId));
   const started = Date.now();
+  let usage: TurnUsage = {};
   try {
     await writeFile(copy, (await readFile(source.path, 'utf8')).replaceAll(nativeId, copyId), { mode: 0o600 });
     if (signal.aborted) return false;
-    const usage = await pingPromptCache({ harness, account, session, copyId, model: session.model ?? null, effort: session.effort, environment, signal });
-    lifecycle('worker.cache-ping', { ms: Date.now() - started, ...usage });
-    return true;
+    usage = await pingPromptCache({ harness, account, session, copyId, model: session.model ?? null, effort: session.effort, environment, signal, onUsage: (reported) => { usage = reported; } });
+    const effective = cachePingEffective(usage, session.lastUsage?.contextUsed ?? KEEP_WARM_ABOVE_TOKENS);
+    lifecycle('worker.cache-ping', { ms: Date.now() - started, effective, ...usage });
+    return effective;
   } finally {
-    await rm(copy, { force: true });
-    if (account.nativeProfile?.path) await removeNamed(account.nativeProfile.path, copyId, 3);
+    try {
+      if ([usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.totalTokens, usage.costUsd].some((value) => (value ?? 0) > 0)) {
+        recordInvocation(state, {
+          kind: 'maintenance', sessionId, accountId: account.id, provider: harness.provider,
+          model: session.model, startedAt: started,
+          usage: { ...usage, totalTokens: usage.totalTokens ?? (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0) },
+        });
+        await writeState(state);
+      }
+    } finally {
+      await rm(copy, { force: true });
+      if (account.nativeProfile?.path) await removeNamed(account.nativeProfile.path, copyId, 3);
+    }
   }
 }
 

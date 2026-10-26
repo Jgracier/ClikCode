@@ -42,6 +42,8 @@ export interface CodexAppServerTurnInput extends HarnessTurnObserver {
    *  before the turn: the next turn on this session starts at turn/start
    *  (a failover's standby account). */
   prepareOnly?: boolean;
+  /** Warm the process and handshake without creating/loading a thread. */
+  initializeOnly?: boolean;
   /** Per-harness Codex config overrides (`config` of thread/start|resume),
    * e.g. `{ 'tools.web_search': true, profile: 'work' }`. */
   configOverrides?: Record<string, unknown>;
@@ -52,6 +54,7 @@ export interface CodexAppServerTurnInput extends HarnessTurnObserver {
 type CodexErrorKind = 'quota' | 'auth' | 'other';
 
 export interface CodexSession extends VendorWorkSession {
+  readSubagentThread(threadId: string): Promise<import('../subagent-read.js').SubAgentRow[]>;
   runTurn(input: CodexAppServerTurnInput): Promise<CodexAppServerTurnResult>;
   /** Steer the active turn. Rejects when no turn is running. */
   steer(text: string): Promise<void>;
@@ -460,6 +463,23 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     await live.peer.request('turn/steer', codexSteerParams(turn.threadId, turn.turnId, text));
   }
 
+  async readSubagentThread(threadId: string): Promise<import('../subagent-read.js').SubAgentRow[]> {
+    if (!this.live || this.live.peer.closed) return [];
+    const result = await this.live.peer.request('thread/read', { threadId, includeTurns: true }, { timeoutMs: 5_000 });
+    const rows: import('../subagent-read.js').SubAgentRow[] = [];
+    for (const turn of result.thread?.turns ?? []) for (const item of turn.items ?? []) {
+      if (item.type === 'userMessage') {
+        const text = (item.content ?? []).filter((part: JsonObject) => part.type === 'text').map((part: JsonObject) => part.text ?? '').join('');
+        if (text) rows.push({ kind: 'prompt', text });
+      } else if (item.type === 'agentMessage' && typeof item.text === 'string') rows.push({ kind: 'text', text: item.text });
+      else {
+        const event = codexActivityForItem(item, item.status !== 'inProgress' && item.status !== 'running');
+        if (event) rows.push({ kind: 'activity', event });
+      }
+    }
+    return rows;
+  }
+
   async compactThread(threadId: string): Promise<boolean> {
     const live = this.live;
     if (!live || live.peer.closed || live.threadId !== threadId) return false;
@@ -661,6 +681,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
         if (models.length) input.onSessionModels?.({ models: { availableModels: models.map((m) => ({ modelId: m.model, name: m.displayName })) } }, true);
       }).catch(() => undefined);
     }
+    if (input.initializeOnly) return { text: '', nativeSessionId: input.nativeSessionId ?? '' };
     const wanted = input.nativeSessionId ?? this.threadId;
     if (!wanted || live.threadId !== wanted) {
       const params = { cwd: input.cwd, model: input.model ?? null, ...settings, ...overrides };

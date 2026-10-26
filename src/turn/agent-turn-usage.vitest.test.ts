@@ -25,9 +25,17 @@ const config = { get: () => undefined } as never;
 /** A model server that answers every request with `frames`, then either ends
  * the stream properly or drops the connection mid-answer. */
 async function fakeModel(frames: readonly object[], ending: 'done' | 'drop'): Promise<{ server: Server; url: string }> {
+  let requests = 0;
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     req.resume();
     req.on('end', () => {
+      // An interrupted stream is retried. Make that retry fail permanently
+      // so this fixture exercises durable failure, not the outage wait budget.
+      if (ending === 'drop' && ++requests > 1) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'cannot continue' } }));
+        return;
+      }
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       for (const frame of frames) res.write(`data: ${JSON.stringify(frame)}\n\n`);
       if (ending === 'drop') setTimeout(() => res.destroy(), 50);
@@ -109,12 +117,11 @@ describe('a ClikCode agent turn', () => {
     await runSessionTurn(config, 's1', 'go', undefined, {});
     const state = await readState();
     const session = state.sessions.find((item) => item.id === 's1')!;
-    // Every reply here is cut off: the loop carries it on three times, as a
-    // vendor CLI does, and then stops and says why. Before, a ClikCode agent
-    // turn recorded no tokens at all.
-    expect(state.invocations.at(-1)).toMatchObject({ inputTokens: 4 * 1200, outputTokens: 4 * 30, cacheReadTokens: 4 * 1000 });
-    expect(session.lastUsage).toMatchObject({ input: 4 * 1200, output: 4 * 30, cacheRead: 4 * 1000, contextWindow: 32768, stopReason: 'max-tokens' });
-    expect(session.messages?.at(-1)?.content).toBe('A long answer that stops'.repeat(4));
+    // Productive continuations are allowed; repeated identical replies stop
+    // after five chunks. Every billed chunk remains in the usage record.
+    expect(state.invocations.at(-1)).toMatchObject({ inputTokens: 5 * 1200, outputTokens: 5 * 30, cacheReadTokens: 5 * 1000 });
+    expect(session.lastUsage).toMatchObject({ input: 5 * 1200, output: 5 * 30, cacheRead: 5 * 1000, contextWindow: 32768, stopReason: 'max-tokens' });
+    expect(session.messages?.at(-1)?.content).toBe('A long answer that stops'.repeat(5));
     expect(session.lastUsage?.contextUsed).toBeGreaterThan(0);
   }, 30_000);
 

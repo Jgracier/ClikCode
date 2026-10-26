@@ -13,7 +13,7 @@
  */
 
 import type { HarnessSession } from './model.js';
-import { sessionActivity, type WorkerLiveness } from './liveness.js';
+import { sessionActivity, type BackgroundOf, type RunningTurnLookup, type WorkerLiveness } from './liveness.js';
 import type { ConversationSection } from './conversation-state.js';
 
 
@@ -63,6 +63,10 @@ interface ConversationRowFacts {
   workerIsLive?: WorkerLiveness;
   /** Which sessions another client has open without a worker (liveWorkers). */
   isOpen?: WorkerLiveness;
+  /** Which workers are executing a turn now, independent of an old journal. */
+  runningTurn?: RunningTurnLookup;
+  /** Background work the worker has not yet settled. */
+  background?: BackgroundOf;
   /** Which live workers have an approval waiting (liveWorkers). */
   awaitingYou?: WorkerLiveness;
   /** Transcript turns of live-worker sessions (livePendingTurns). */
@@ -116,7 +120,7 @@ export function conversationRows(sessions: readonly HarnessSession[], facts: Con
     let pending: PendingTurn | undefined;
     for (const session of chats) {
       const turn = facts.pending?.get(session.id);
-      const doing = sessionActivity(session, workerIsLive, turn, facts.isOpen);
+      const doing = sessionActivity(session, workerIsLive, turn, facts.isOpen, facts.runningTurn, facts.background);
       if (doing === 'working' && turn) { activity = 'working'; pending = turn; break; }
       if (doing) activity = doing;
     }

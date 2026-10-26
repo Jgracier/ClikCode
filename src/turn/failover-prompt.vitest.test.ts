@@ -25,6 +25,11 @@ const history = [
 ];
 
 describe('failoverPromptRequest', () => {
+  it('unwraps nested transfers written by older retries', () => {
+    const once = failoverPrompt(history, 'the actual request');
+    const twice = failoverPrompt(history, once);
+    expect(failoverPromptRequest(twice)).toBe('the actual request');
+  });
   it('recovers the real request from a rehydration prompt', () => {
     const prompt = failoverPrompt(history, 'what servers are connected?');
     expect(failoverPromptRequest(prompt)).toBe('what servers are connected?');

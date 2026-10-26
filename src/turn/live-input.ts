@@ -50,7 +50,7 @@ type QueueHandler = (submission: LiveTurnSubmission, options?: { held?: boolean 
  * Enter again; see LiveTurnInputBroker.force). The handler's own
  * promise then resolves if the message was steered in after all -- the
  * queued copy is dropped -- or rejects, leaving the queued copy to run. */
-type SteerHold = (withdraw: () => boolean, force?: () => void) => Promise<void>;
+export type SteerHold = (withdraw: () => boolean, force?: () => void) => Promise<void>;
 type SteerHandler = (text: string, submission: LiveTurnSubmission, hold: SteerHold) => Promise<void>;
 type LateSteerHandler = (submission: LiveTurnSubmission) => void;
 

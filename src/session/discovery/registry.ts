@@ -3,6 +3,8 @@
  * is one entry and not a search. */
 
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
+import { readAcpTranscript } from './acp-transcript.js';
+import { readAiderTranscript, readAmpTranscript, readAntigravityTranscript, readOpenClawTranscript, readPiTranscript } from './vendors/stored-transcripts.js';
 import { discoverClaudeFsSessions, readClaudeFsTranscript } from './vendors/claude.js';
 import { discoverCodexFsSessions, readCodexFsTranscript } from './vendors/codex.js';
 import { discoverCursorFsSessions } from './vendors/cursor.js';
@@ -50,18 +52,24 @@ export const FS_SESSION_DISCOVERY: Readonly<Record<string, (workspace: string, e
   pi: discoverPiFsSessions,
 };
 
-/** Only wired for the harnesses with a confirmed, complete way to read a
- * whole past conversation back out (not just enough to title it): Claude
- * Code and Codex's own jsonl files, and opencode's real `export` command.
- * Adopting a chat from any other harness still works — its native identity
- * is real either way, and the underlying vendor thread has its own full
- * memory regardless — it just starts blank in ClikCode's own transcript view
- * until the next turn, the same as it did for every harness before this. */
+/** Observed stores and vendor exports. Other ACP adapters use the agent's
+ * own existing-session replay through nativeTranscriptReader below. */
 export const ADOPTED_TRANSCRIPT_READERS: Readonly<Record<string, (harness: AiLocalHarnessDefinition, nativeId: string, workspace: string, environment?: NativeSessionEnvironment) => Promise<Array<{ role: 'user' | 'assistant'; content: string }>>>> = {
   claude: (_harness, nativeId, workspace, environment) => readClaudeFsTranscript(nativeId, workspace, environment),
   codex: (_harness, nativeId, workspace, environment) => readCodexFsTranscript(nativeId, workspace, environment),
   opencode: readOpencodeTranscript,
+  aider: readAiderTranscript,
+  amp: readAmpTranscript,
+  pi: readPiTranscript,
+  antigravity: readAntigravityTranscript,
+  openclaw: readOpenClawTranscript,
 };
+
+/** A confirmed store/export first, otherwise the standard ACP replay. This
+ * also covers custom ACP harnesses registered after this module loaded. */
+export function nativeTranscriptReader(harness: AiLocalHarnessDefinition): typeof readAcpTranscript | undefined {
+  return ADOPTED_TRANSCRIPT_READERS[harness.command] ?? (harness.acp ? readAcpTranscript : undefined);
+}
 
 /** Where each vendor keeps a conversation on disk. One entry per vendor, so
  * teaching ClikCode to carry a thread across an account failover is a line

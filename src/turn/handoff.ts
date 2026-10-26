@@ -5,8 +5,9 @@ import type { HarnessDefaultSettings, HarnessSession, HarnessState, TranscriptMe
 import { sessionTranscriptMessages } from './checkpoint.js';
 import { boundTurnActivities, readTurnActivities } from './turn-activities.js';
 import { readTurnMarks } from './turn-marks.js';
-import { ADOPTED_TRANSCRIPT_READERS } from '../session/discovery/registry.js';
-import { mergeNativeTranscript } from '../session/discovery/transcript.js';
+import { nativeTranscriptReader } from '../session/discovery/registry.js';
+import { readClaudeFsTranscriptForSync } from '../session/discovery/vendors/claude.js';
+import { reconcileNativeTranscript } from '../session/discovery/transcript.js';
 import { nativeProfileEnvironment } from '../harness/transport/profile-environment.js';
 import { allLocalHarnesses, harnessSupportsEffort, harnessSupportsPermissionMode, localHarnessForCommand } from '../runtime/lazy-bridge.js';
 
@@ -107,21 +108,23 @@ export function carriedHandoffModel(
 export async function synchronizeNativeTranscript(state: HarnessState, session: HarnessSession): Promise<boolean> {
   if (!session.nativeHarness || !session.nativeSessionId) return false;
   const harness = localHarnessForCommand(session.nativeHarness);
-  const reader = harness ? ADOPTED_TRANSCRIPT_READERS[harness.command] : undefined;
+  const reader = harness ? nativeTranscriptReader(harness) : undefined;
   if (!harness || !reader) return false;
   const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
-  const source = await reader(
-    harness, session.nativeSessionId, session.workspace ?? process.cwd(), nativeProfileEnvironment(account?.nativeProfile),
-  ).catch(() => []);
-  const previousLength = (session.messages ?? []).length;
-  const merged = mergeNativeTranscript(session.messages ?? [], source);
-  if (merged.length === (session.messages ?? []).length) return false;
+  const workspace = session.workspace ?? process.cwd();
+  const environment = nativeProfileEnvironment(account?.nativeProfile);
+  const source = await (harness.command === 'claude'
+    ? readClaudeFsTranscriptForSync(session.nativeSessionId, workspace, session.messages ?? [], environment)
+    : reader(harness, session.nativeSessionId, workspace, environment)).catch(() => []);
+  const { messages: merged, appendedFrom } = reconcileNativeTranscript(session.messages ?? [], source);
+  const cached = session.messages ?? [];
+  if (merged.length === cached.length && merged.every((message, index) => message.role === cached[index]?.role && message.content === cached[index]?.content)) return false;
   session.messages = merged;
   // If the vendor transcript now contains the prompt that was journaled by a
   // previously interrupted ClikCode process, the vendor copy is authoritative
   // and the separate checkpoint must not render or hand off a duplicate.
   if (session.pendingTurn) {
-    const appended = merged.slice(previousLength);
+    const appended = merged.slice(appendedFrom);
     const promptIndex = appended.findIndex((message) =>
       message.role === 'user' && message.content.trim() === session.pendingTurn!.prompt.trim());
     if (promptIndex >= 0) {
@@ -130,7 +133,7 @@ export async function synchronizeNativeTranscript(state: HarnessState, session: 
         // Native transcript readers import prose, not streamed tool frames.
         // Keep the checkpoint's child work on the imported answer before
         // retiring that checkpoint, including when the vendor quit on quota.
-        const answer = session.messages[previousLength + answerIndex] as TranscriptMessage;
+        const answer = session.messages[appendedFrom + answerIndex] as TranscriptMessage;
         const activities = readTurnActivities(session.pendingTurn.activities, session.pendingTurn.response?.length ?? 0);
         // Likewise its thoughts, plan, notices and approval outcomes.
         const marks = readTurnMarks(session.pendingTurn.marks);

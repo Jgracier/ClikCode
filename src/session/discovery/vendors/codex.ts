@@ -7,7 +7,7 @@ import { CachedSessionFacts, cachedDirectory, codexPathById, discoveryCacheChang
 import { readFilePrefix, sortedSubdirectories } from '../files.js';
 import { type NativeSessionEnvironment, nativeDataRoot } from '../stores.js';
 import { conversationTitle } from '../conversation-title.js';
-import { ADOPTED_TRANSCRIPT_LIMIT, extractMessageText, leadingText, visibleNativeUserText } from '../transcript.js';
+import { extractMessageText, leadingText, visibleNativeUserText } from '../transcript.js';
 import { isClikCodeOpening } from '../../../turn/failover-prompt.js';
 import { DiscoveredNativeSession } from '../discovered-session.js';
 
@@ -172,5 +172,5 @@ export async function readCodexFsTranscript(nativeId: string, workspace: string,
     messages.push({ role, content: text });
   }
   void workspace; // Codex sessions aren't project-scoped by path; discovery already filtered by cwd.
-  return messages.slice(-ADOPTED_TRANSCRIPT_LIMIT);
+  return messages;
 }

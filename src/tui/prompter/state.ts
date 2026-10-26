@@ -48,12 +48,9 @@ export type WaitingTurn = {
   /** What a Stop in flight says instead of `label`, which keeps the phase
    * the turn was in so that a Stop that ends nothing gives it back. */
   stopLabel?: string;
-  /** Elapsed less approvals, and the last delta or event, which is what
-   * "stalled" means (see activity-view.ts). */
+  /** Elapsed work time, excluding approvals. */
   clock: TurnClock;
-  /** When the turn last did anything -- a word, a thought, a call -- or an
-   * approval was answered: quiet past turn-pace's threshold and the spinner
-   * turns yellow, by the same rule as a stalled row in the conversation list. */
+  /** When the turn last did anything, for activity ordering and records. */
   activeAt: number;
   /** When answer text last arrived (a statusOrder tick): the status line says
    * "writing" until a call starts after it (answerWriting). */

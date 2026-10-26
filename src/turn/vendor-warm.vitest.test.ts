@@ -16,6 +16,10 @@ import { vendorChildKey } from './vendor-process.js';
 import { turnEnvironment } from './turn-environment.js';
 
 const seen = vi.hoisted(() => ({ takeUps: 0, prepared: [] as Array<{ transport: string; key: string; nativeSessionId?: string; model: string | null; effort?: string }> }));
+vi.mock('../session/carry.js', () => ({ reconcileNativeThread: async (session: HarnessSession, _harness: unknown, _accounts: unknown, account: AiHarnessAccount) => {
+  session.nativeThreadAccountId = account.id;
+  return 'carried';
+} }));
 vi.mock('./vendor-thread-takeup.js', () => ({
   takeUp: async (ctx: { session: HarnessSession; account: AiHarnessAccount; checkpoint: { persistNow(): Promise<void> } }) => {
     seen.takeUps += 1;
@@ -62,6 +66,16 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllEnvs(); });
 
 describe('warming a chat that moved here', () => {
+  it('carries an existing native thread to the selected account before loading it', async () => {
+    const first = account({ id: 'acc-1' });
+    const next = account({ id: 'acc-2' });
+    await writeState(stateOf([chat({ accountId: next.id, nativeSessionId: 'old-thread', nativeThreadAccountId: first.id })], [first, next]));
+    const { warmVendor } = await import('./vendor-warm.js');
+    expect(await warmVendor('s1')).toBe(true);
+    expect(seen.takeUps).toBe(0);
+    expect(seen.prepared[0]?.nativeSessionId).toBe('old-thread');
+    expect((await readState({ transcripts: ['s1'] })).sessions[0]?.nativeThreadAccountId).toBe(next.id);
+  });
   it('takes the conversation up now and opens its vendor child on the key its first turn uses', async () => {
     const mine = account();
     await writeState(stateOf([chat()], [mine]));

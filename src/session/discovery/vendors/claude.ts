@@ -1,14 +1,14 @@
 /** Claude Code's own session history: project directories, and the JSONL
  * transcripts inside them. */
 
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { cachedDirectory, discoveryCacheChanged, saveDiscoveryCache } from '../cache.js';
 import { newestFiles, readFilePrefix, readFileSuffix } from '../files.js';
 import { type NativeSessionEnvironment, nativeDataRoot } from '../stores.js';
 import { conversationTitle } from '../conversation-title.js';
-import { ADOPTED_TRANSCRIPT_LIMIT, extractMessageText, leadingText, visibleNativeUserText } from '../transcript.js';
+import { extractMessageText, leadingText, reconcileNativeTranscript, visibleNativeUserText, type NativeTranscriptMessage } from '../transcript.js';
 import { isClikCodeOpening } from '../../../turn/failover-prompt.js';
 import { DiscoveredNativeSession } from '../discovered-session.js';
 
@@ -143,17 +143,49 @@ export async function readClaudeFsTranscript(nativeId: string, workspace: string
     if (raw !== undefined) break;
   }
   if (raw === undefined) return [];
-  const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+  return parseClaudeTranscript(raw);
+}
+
+function parseClaudeTranscript(raw: string): NativeTranscriptMessage[] {
+  const messages: NativeTranscriptMessage[] = [];
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
     let record: Record<string, unknown>;
     try { record = JSON.parse(line); } catch { continue; }
     if (record.type !== 'user' && record.type !== 'assistant') continue;
+    if (record.type === 'user' && (record.origin as { kind?: unknown } | undefined)?.kind === 'task-notification') continue;
     const message = record.message as { content?: unknown } | undefined;
     const extracted = extractMessageText(message?.content);
     const text = record.type === 'user' ? visibleNativeUserText(extracted) : extracted;
     if (!text) continue;
     messages.push({ role: record.type, content: text });
   }
-  return messages.slice(-ADOPTED_TRANSCRIPT_LIMIT);
+  return messages;
+}
+
+/** Read only enough of a linked Claude transcript to overlap the cached chat.
+ * A full read is still required on first adoption and when the file cannot be
+ * aligned (including when its older prefix may need restoring). */
+export async function readClaudeFsTranscriptForSync(
+  nativeId: string, workspace: string, cached: readonly NativeTranscriptMessage[],
+  environment: NativeSessionEnvironment = {},
+): Promise<NativeTranscriptMessage[]> {
+  if (!cached.length) return readClaudeFsTranscript(nativeId, workspace, environment);
+  for (const dir of claudeProjectDirectories(workspace, environment)) {
+    const path = join(dir, `${nativeId}.jsonl`);
+    const info = await stat(path).catch(() => undefined);
+    if (!info?.isFile()) continue;
+    let bytes = 256 * 1024;
+    while (bytes < info.size) {
+      const source = parseClaudeTranscript(await readFileSuffix(path, bytes));
+      const { overlapLength } = reconcileNativeTranscript(cached, source);
+      // An overlap shorter than the cache proves the earlier history is
+      // already present in ClikCode. An entire-cache match may hide an older
+      // native prefix beyond this window, so read it before reconciling.
+      if (overlapLength > 0 && overlapLength < cached.length) return source;
+      bytes *= 2;
+    }
+    return readClaudeFsTranscript(nativeId, workspace, environment);
+  }
+  return [];
 }

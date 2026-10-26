@@ -40,7 +40,3 @@ export const COPIED_MS = 1200;
  * for…" row appears. Most lookups answer in milliseconds, and a spinner that
  * starts and stops at once reads as a flash. */
 export const SLOW_WAIT_MS = 400;
-
-/** A slow wait's spinner or row, once shown, stays at least this long: one
- * that appeared and went in a frame or two read as a flash. */
-export const MIN_VISIBLE_MS = 300;

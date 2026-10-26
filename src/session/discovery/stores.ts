@@ -57,6 +57,9 @@ export type NativeSessionCarry = {
  *  `root` is required either way: it is what tells two accounts apart, and a
  *  shared root already means the conversation never moved. */
 export interface NativeSessionStore {
+  /** Remove only a metadata-probe session ClikCode just created. Never used
+   * for an adopted thread or a user's conversation. */
+  remove?(nativeId: string, workspace: string, environment: NativeSessionEnvironment): Promise<void>;
   /** The directory this vendor keeps conversations under, for a given
    *  environment, or undefined when that environment cannot place it. */
   root(environment: NativeSessionEnvironment): string | undefined;

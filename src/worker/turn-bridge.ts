@@ -54,6 +54,7 @@ const clients = new Map<string, WorkerClient>();
 /** Messages typed during a turn, waiting for the worker to say what happened
  * to them. The worker always answers; losing its connection is the only other end. */
 const pendingSubmissions = new Map<string, (event: Extract<WorkerEvent, { type: 'submission' }>) => void>();
+const pendingSubagentReads = new Map<string, (rows: import('../harness/subagent-read.js').SubAgentRow[]) => void>();
 
 /** The worker's answer, or `onClosed` if its connection ends first. */
 async function answeredOrClosed<T>(client: WorkerClient, answered: Promise<T>, onClosed: T): Promise<T> {
@@ -181,6 +182,8 @@ function track(sessionId: string, client: WorkerClient): void {
     } else if (event.type === 'queue-changed') {
       tracker.queueVersion++;
       tracker.wake?.('queue');
+    } else if (event.type === 'subagent') {
+      pendingSubagentReads.get(event.id)?.(event.rows);
     } else if (event.type === 'submission') {
       // Here, not on the turn's own listener: that one goes at waiting-stop,
       // and an answer for a message typed as the turn ended can come after
@@ -655,6 +658,19 @@ async function driveWorkerTurn(
         pendingSubmissions.delete(id);
         if (!outcome) return 'The connection to the worker was lost; nothing was sent.';
         return outcome.disposition === 'error' ? outcome.message ?? 'Not sent.' : undefined;
+      };
+      rl.subAgentRead = async (parentId) => {
+        const id = randomUUID();
+        let timer: ReturnType<typeof setTimeout>;
+        const answered = new Promise<import('../harness/subagent-read.js').SubAgentRow[]>((resolve) => {
+          pendingSubagentReads.set(id, resolve);
+          timer = setTimeout(() => resolve([]), 10_000);
+          timer.unref?.();
+        });
+        try {
+          client.send({ type: 'read-subagent', parentId, id });
+          return await answeredOrClosed(client, answered, []);
+        } finally { clearTimeout(timer!); pendingSubagentReads.delete(id); }
       };
       // This follow lasts exactly as long as the display it drives: ended
       // by anything else, the loop asks the worker again -- it follows the

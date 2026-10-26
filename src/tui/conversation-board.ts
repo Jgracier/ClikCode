@@ -235,7 +235,7 @@ export function boardStartRow(rows: readonly PickerOption<string>[], initial?: s
 }
 
 /** A row whose turn is running: its spinner is what the board ticks for. */
-const spins = (row: PickerOption<string>): boolean => row.activity === 'working' || row.activity === 'stalled';
+const spins = (row: PickerOption<string>): boolean => row.activity === 'working';
 
 /** Everything but the list: the rule and hint around it, and the composer
  * block beneath (usage rule, input, title rule, provider line, spacing). */

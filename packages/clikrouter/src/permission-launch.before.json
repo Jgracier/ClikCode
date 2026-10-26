@@ -48,25 +48,28 @@
   "ask": {
    "acp": null,
    "turn": [
+    "--execute",
     "--stream-json",
-    "-x",
-    "hi"
+    "--stream-json-input",
+    "--no-archive-after-execute"
    ]
   },
   "auto": {
    "acp": null,
    "turn": [
+    "--execute",
     "--stream-json",
-    "-x",
-    "hi"
+    "--stream-json-input",
+    "--no-archive-after-execute"
    ]
   },
   "bypass": {
    "acp": null,
    "turn": [
+    "--execute",
     "--stream-json",
-    "-x",
-    "hi"
+    "--stream-json-input",
+    "--no-archive-after-execute"
    ]
   }
  },

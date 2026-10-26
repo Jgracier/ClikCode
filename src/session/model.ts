@@ -260,6 +260,8 @@ export interface HarnessSession {
    * running. Persisted independently so process exit cannot discard them. */
   queuedTurns?: Array<{
     id: string; text: string; submittedAt: string; kind?: 'command' | 'notification';
+    /** Recovery for an interrupted vendor agent remains actionable after a worker restart. */
+    durable?: boolean;
     /** The running turn (its pendingTurn.startedAt) is holding this message
      * to steer in at its next safe moment -- no tool call open, so nothing
      * running is interrupted. Queued only as the fallback: it runs as the next
@@ -322,7 +324,7 @@ export interface HarnessState {
    *  'provider-default', 'platform' -- and those fake ids then flowed into
    *  usage rollups as if a model by that name had served the request. An
    *  absent model is a fact; a fabricated one corrupts the accounting. */
-  invocations: Array<{ id: string; accountId: string; provider: string; model?: string; at: string; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; totalTokens?: number; costUsd?: number; costBreakdown?: { meteredUsd?: number; gpuUsd?: number }; credits?: number; sessionId?: string; latencyMs: number; contextProfile?: string; stopReason?: 'stopped' | 'error' }>;
+  invocations: Array<{ id: string; accountId: string; provider: string; model?: string; at: string; kind?: 'maintenance'; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number; totalTokens?: number; costUsd?: number; costBreakdown?: { meteredUsd?: number; gpuUsd?: number }; credits?: number; sessionId?: string; latencyMs: number; contextProfile?: string; stopReason?: 'stopped' | 'error' }>;
   /** Applies to every provider unless a providerSettings entry overrides it. */
   globalSettings: HarnessDefaultSettings;
   /** Keyed by AiLocalHarnessDefinition.provider; only the fields a user has set. */
