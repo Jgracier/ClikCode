@@ -629,7 +629,7 @@ Three packages, one lockfile:
 `dist/cli.js` inlines the small pure-JS dependencies (chalk, commander, conf,
 cross-spawn, marked) so startup is a single file read, which is why the
 published package declares only the runtime dependencies it loads
-(`@huggingface/gguf`, `playwright-core`, `yaml`) — a property the build asserts rather than
+(`@huggingface/gguf`, `playwright-core`, `unpdf`, `yaml`) — a property the build asserts rather than
 assumes. The version reported by `--version` is
 injected at build time from `package.json`.
 
