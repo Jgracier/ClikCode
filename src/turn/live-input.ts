@@ -22,219 +22,201 @@ export interface LiveTurnSubmission {
 export type TakeBackOutcome = 'removed' | 'running' | 'gone' | 'error';
 
 export interface LiveTurnInputResult {
+  /** `steered`: the running turn took it. `queued`: it waits in the saved queue -- for the turn's
+   * next opening if it is to be steered in, else for the turn to end. */
   disposition: 'steered' | 'queued' | 'command';
   submission: LiveTurnSubmission;
   /** For a `command`: it took effect at once (`applied`) or waits for the
    * turn boundary (`later`). The composer acknowledges it either way. */
   commandOutcome?: 'applied' | 'later';
-  /** Queued while its steer is still running (held for a safe moment, or
-   * slow): true once it was steered in after all and its queued copy is gone,
-   * false if the queued copy stands. */
-  landed?: Promise<boolean>;
-  /** Queued though steering was asked for: nothing running could take a
-   * steer (an agent that takes none, or a turn not yet able to). The row
-   * says so rather than leaving it to look like the user's choice. */
+  /** Steering was asked for and nothing running can take a message (an agent
+   * that has no steering). It waits for the turn to end, and the row says so. */
   unsteered?: true;
 }
 
-/** `held`: the message is queued only as a fallback -- the running turn's
- * transport is holding it to steer in at its next safe moment (see
- * SteerHold), and it runs as the next turn only if that moment never comes. */
-type QueueHandler = (submission: LiveTurnSubmission, options?: { held?: boolean }) => Promise<void>;
-/** Called by a steer handler that cannot steer yet but will at the turn's
- * next safe moment (ACP: no tool call open). The message is queued durably at
- * once, as the fallback; `withdraw` drops the hold if the user takes that
- * queued copy back (edit, remove) before it was sent; the returned promise settles when that copy is
- * written (or rejects if it could not be, in which case the hold must be
- * dropped: the message has gone back to the composer). `force` sends the
- * message into the turn now, cutting the call that makes it wait (the user's
- * Enter again; see LiveTurnInputBroker.force). The handler's own
- * promise then resolves if the message was steered in after all -- the
- * queued copy is dropped -- or rejects, leaving the queued copy to run. */
-export type SteerHold = (withdraw: () => boolean, force?: () => void) => Promise<void>;
-type SteerHandler = (text: string, submission: LiveTurnSubmission, hold: SteerHold) => Promise<void>;
-type LateSteerHandler = (submission: LiveTurnSubmission) => void;
-
-/** How long a native steer may take before the message is queued instead. */
-const DEFAULT_STEER_TIMEOUT_MS = 5_000;
-
-interface LiveTurnInputBrokerOptions {
-  /** Zero or negative waits for the steer handler indefinitely. */
-  steerTimeoutMs?: number;
+/** What a running turn offers for taking a message into itself. ClikCode only passes the message on
+ * through the way the vendor gives; it never decides for the vendor, and never interrupts to do it. */
+export interface SteerPort {
+  /** Take `text` into the running turn now. True once it is in; false when this is not a moment
+   * it can be taken without interrupting something (a tool call is open, a question is being asked):
+   * the message stays queued and the port calls `onWindow` when a moment comes. Rejects when the turn is over. */
+  offer(text: string, submission: LiveTurnSubmission): Promise<boolean>;
+  /** Set by the broker. The port calls it whenever a moment that may take a message begins. */
+  onWindow?: () => void;
 }
 
-const STEER_TIMED_OUT = Symbol('steer-timed-out');
-const STEER_HELD = Symbol('steer-held');
-const STEERED = Symbol('steered');
+/** The turn's saved record of its queue and its steers. The saved queue is the only place a waiting message lives. */
+export interface LiveTurnLedger {
+  /** Writes the message to the queue behind this turn, marked to go into it (`steer`) or not. Rejects if it could not be written. */
+  queue(submission: LiveTurnSubmission, steer: boolean): Promise<void>;
+  /** The oldest waiting message marked to go into the running turn. */
+  nextSteer(): LiveTurnSubmission | undefined;
+  /** The oldest message the user queued (not a command or notice), marked or not. */
+  oldestMessage(): LiveTurnSubmission | undefined;
+  /** It is in the turn: recorded on the turn and gone from the queue, in one write. Rejects when the turn is finishing. */
+  delivered(submission: LiveTurnSubmission): Promise<void>;
+  /** Marks a waiting message to go into the running turn. False if it is not waiting. */
+  mark(id: string): Promise<boolean>;
+  /** Takes a waiting message out of the queue. False if it is not waiting. */
+  remove(id: string): Promise<boolean>;
+}
 
-/** Coordinates composer input with an already-running provider turn. The
- * broker itself knows nothing about sessions or vendors: the turn checkpoint
- * supplies durable queue storage, while a richer transport may temporarily
- * publish a native steering handler. */
+/** Coordinates composer input with an already-running provider turn. It knows nothing of sessions or vendors:
+ * the turn's ledger is the saved queue, the turn's port is the vendor's way of taking a message in. A message
+ * is in exactly one place at a time -- the queue, or the turn. */
 export class LiveTurnInputBroker {
-  private queueHandler?: QueueHandler;
-  private steerHandler?: SteerHandler;
-  private lateSteerHandler?: LateSteerHandler;
-  private readonly steerTimeoutMs: number;
-  private readonly queueReady: Promise<void>;
-  private resolveQueueReady!: () => void;
-  /** Steers still running after their message was queued (a timed-out or a
-   * held one), each with what follows it landing. */
-  private readonly late = new Set<Promise<void>>();
-  /** How to drop each held message, by id, until it is sent or released. */
-  private readonly holds = new Map<string, () => boolean>();
-  /** How to send each held message now, by id, cutting the call it waits for. */
-  private readonly forces = new Map<string, () => void>();
-  /** Every steer whose attempt is still unsettled after its message was
-   * queued (held or timed out), by id: in flight, so neither takeable nor re-sendable. */
-  private readonly inflight = new Set<string>();
+  private ledger?: LiveTurnLedger;
+  private readonly ledgerReady: Promise<void>;
+  private resolveLedgerReady!: () => void;
+  private port?: SteerPort;
+  /** Settles when the port goes away, so an offer nobody answers cannot hold the broker. */
+  private portGone = new Promise<'gone'>(() => undefined);
+  private resolvePortGone?: () => void;
+  /** One thing at a time: a submit, a delivery pass, a take-back's check. */
+  private tail: Promise<unknown> = Promise.resolve();
+  /** The message being offered to the turn now: too late to take back. */
+  private delivering: string | undefined;
+  private readonly delivered = new Set<string>();
+  private afterDelivery?: () => void;
 
-  constructor(options: LiveTurnInputBrokerOptions = {}) {
-    this.steerTimeoutMs = options.steerTimeoutMs ?? DEFAULT_STEER_TIMEOUT_MS;
-    this.queueReady = new Promise((resolve) => { this.resolveQueueReady = resolve; });
+  constructor() {
+    this.ledgerReady = new Promise((resolve) => { this.resolveLedgerReady = resolve; });
   }
 
-  bindQueue(handler: QueueHandler): void {
-    this.queueHandler = handler;
-    this.resolveQueueReady();
+  bindLedger(ledger: LiveTurnLedger): void {
+    this.ledger = ledger;
+    this.resolveLedgerReady();
   }
 
-  setSteerHandler(handler?: SteerHandler): void {
-    this.steerHandler = handler;
+  /** Told when a waiting message later goes into the turn (not on the submit that queued it), so every
+   * window can redraw the queue and the turn. */
+  onLaterDelivery(handler?: () => void): void {
+    this.afterDelivery = handler;
   }
 
-  /** A note from ClikCode itself for the model only (turn/resource-notes.ts):
-   * into the running turn at its next safe moment, like a held message, but
-   * never journaled, queued or shown -- the steer handler skips `note`s.
-   * True once it is in the turn; false when nothing running could take it or
-   * the turn ended first, and the caller keeps it for the next turn. */
+  /** The turn's way of taking a message in, or none (the turn ended, or its agent has none). */
+  setSteerPort(port?: SteerPort): void {
+    this.resolvePortGone?.();
+    this.port = port;
+    if (!port) return;
+    this.portGone = new Promise<'gone'>((resolve) => { this.resolvePortGone = () => resolve('gone'); });
+    port.onWindow = () => { void this.run(() => this.deliver(true)); };
+    void this.run(() => this.deliver(true));
+  }
+
+  /** Whether the running turn has a way to take a message in. */
+  get steerable(): boolean {
+    return this.port !== undefined;
+  }
+
+  /** A note from ClikCode itself for the model only (turn/resource-notes.ts): offered like a message, never
+   * journaled, queued or shown. True once it is in the turn; false when it is not a moment it can be or
+   * nothing running could take it, and the caller keeps it for the next turn. */
   async steerNote(text: string): Promise<boolean> {
-    const steer = this.steerHandler;
-    if (!steer) return false;
     const submission: LiveTurnSubmission = { id: randomUUID(), text, submittedAt: new Date().toISOString(), kind: 'note' };
+    return this.run(async () => (this.port ? this.offer(this.port, submission) : false));
+  }
+
+  /** Every pass that was running has finished. Awaited before the turn's journal is completed, so a message
+   * is either in this turn or still queued for the next. */
+  async settled(): Promise<void> {
+    await this.tail.catch(quiet('turn/live-input'));
+  }
+
+  /** Release submissions if setup failed before the ledger could bind. The UI restores their text instead of waiting forever. */
+  close(): void {
+    this.setSteerPort(undefined);
+    if (!this.ledger) {
+      this.ledger = {
+        queue: () => Promise.reject(new Error('turn ended before live input was ready')),
+        nextSteer: () => undefined, oldestMessage: () => undefined,
+        delivered: () => Promise.reject(new Error('turn ended before live input was ready')),
+        mark: () => Promise.resolve(false), remove: () => Promise.resolve(false),
+      };
+      this.resolveLedgerReady();
+    }
+  }
+
+  /** The user is taking a waiting message back. `running`: it is being put into the turn this moment, so it stays. */
+  async takeBack(id: string): Promise<TakeBackOutcome> {
+    if (this.delivering === id) return 'running';
+    await this.ledgerReady;
+    return (await this.ledger!.remove(id)) ? 'removed' : 'gone';
+  }
+
+  /** Enter again, nothing typed: the oldest message waiting goes into the turn now if the turn can take it now.
+   * It is never forced: a call in the way is waited for, not cut. */
+  async sendNow(): Promise<{ submission: LiveTurnSubmission; steered: boolean } | undefined> {
+    await this.ledgerReady;
+    return this.run(async () => {
+      const next = this.ledger!.oldestMessage();
+      if (!next) return undefined;
+      if (!this.port) return { submission: next, steered: false };
+      if (!(await this.ledger!.mark(next.id))) return { submission: next, steered: false };
+      await this.deliver(false);
+      return { submission: next, steered: this.delivered.has(next.id) };
+    });
+  }
+
+  /** `id` is the one the composer already shows the message under, so the saved copy -- a queued turn, or a
+   * steer recorded on the turn -- is matched to that row by identity instead of by its words.
+   * `steer`: into the running turn when it can take it, else at its next opening; false waits for the turn to end. */
+  async submit(raw: string, id: string = randomUUID(), options: { steer: boolean }): Promise<LiveTurnInputResult> {
+    const text = raw.trim();
+    if (!text) throw new Error('message is empty');
+    const submission = { id, text, submittedAt: new Date().toISOString() };
+    await this.ledgerReady;
+    return this.run(async () => {
+      const ledger = this.ledger!;
+      // Nothing waiting ahead of it and the turn can take it now: in, without ever being queued.
+      if (options.steer && this.port && !ledger.nextSteer()) {
+        this.delivering = id;
+        let taken = false;
+        try { taken = await this.offer(this.port, submission); } finally { this.delivering = undefined; }
+        if (taken) {
+          try { await ledger.delivered(submission); this.delivered.add(id); return { disposition: 'steered' as const, submission }; } catch { /* the turn is finishing: queued below */ }
+        }
+      }
+      await ledger.queue(submission, options.steer);
+      if (options.steer) await this.deliver(false);
+      if (this.delivered.has(id)) return { disposition: 'steered' as const, submission };
+      return { disposition: 'queued' as const, submission, ...(options.steer && !this.port ? { unsteered: true as const } : {}) };
+    });
+  }
+
+  private run<T>(job: () => Promise<T>): Promise<T> {
+    const next = this.tail.then(job, job);
+    this.tail = next.catch(quiet('turn/live-input'));
+    return next;
+  }
+
+  /** Offers one message; a refusal, an error or the port going away all leave it where it is. */
+  private async offer(port: SteerPort, submission: LiveTurnSubmission): Promise<boolean> {
     try {
-      await steer(text, submission, () => Promise.resolve());
-      return true;
+      const taken = await Promise.race([port.offer(submission.text, submission), this.portGone]);
+      return taken === true;
     } catch {
       return false;
     }
   }
 
-  /** Called when a steer that timed out (and was therefore queued) turns out
-   * to have been accepted after all. The message is then in both places; the
-   * owner of the queue can drop the queued copy (consumeSessionTurn) so it is
-   * not sent a second time as the next turn. */
-  setLateSteerHandler(handler?: LateSteerHandler): void {
-    this.lateSteerHandler = handler;
-  }
-
-  /** Every steer still running after its message was queued has landed or
-   * failed. Awaited before the turn's journal is completed, so a message is
-   * either a steer in this turn or a queued next turn -- never both. */
-  async settled(): Promise<void> {
-    while (this.late.size) await Promise.allSettled([...this.late]);
-  }
-
-  /** The user is taking a queued message back. One the turn is holding to
-   * steer in must then never be sent: true if it was held and now is not,
-   * false if it is already on its way into the turn (too late -- taking its
-   * queued copy back too would send it twice), undefined if it was not held. */
-  withdraw(id: string): boolean | undefined {
-    const withdraw = this.holds.get(id);
-    if (!withdraw) return this.inflight.has(id) ? false : undefined;
-    this.holds.delete(id);
-    this.forces.delete(id);
-    return withdraw();
-  }
-
-  /** Enter again on a held message: send it into the turn now. The vendor
-   * cancels the tool call that made it wait, so the user, not ClikCode,
-   * decides a call is not worth waiting for. False if it was not held. */
-  force(id: string): boolean {
-    const force = this.forces.get(id);
-    if (!force) return false;
-    force();
-    return true;
-  }
-
-  /** The turn is already holding this message for its next pause. Enter
-   *  again must not submit it a second time. */
-  holding(id: string): boolean {
-    return this.holds.has(id) || this.inflight.has(id);
-  }
-
-  /** Release submissions if setup failed before a durable checkpoint could
-   * bind. The UI restores their text instead of waiting forever. */
-  close(): void {
-    this.steerHandler = undefined;
-    if (!this.queueHandler) {
-      this.queueHandler = async () => { throw new Error('turn ended before live input was ready'); };
-      this.resolveQueueReady();
+  /** Puts waiting messages into the turn, oldest first, until one is refused. `later`: not the submit that queued them. */
+  private async deliver(later: boolean): Promise<void> {
+    const ledger = this.ledger;
+    const port = this.port;
+    if (!ledger || !port) return;
+    let any = false;
+    for (;;) {
+      const next = ledger.nextSteer();
+      if (!next) break;
+      this.delivering = next.id;
+      let taken = false;
+      try { taken = await this.offer(port, next); } finally { this.delivering = undefined; }
+      if (!taken) break;
+      try { await ledger.delivered(next); } catch (error) { quiet('turn/live-input')(error); break; }
+      this.delivered.add(next.id);
+      any = true;
     }
-  }
-
-  /** `id` is the one the composer already shows the message under, so the
-   * durable copy -- a queued turn, or a steer recorded on the turn -- can be
-   * matched to that row by identity instead of by its words. Two messages
-   * that say the same thing are still two messages. */
-  async submit(raw: string, id: string = randomUUID(), options: { queue?: boolean } = {}): Promise<LiveTurnInputResult> {
-    const text = raw.trim();
-    if (!text) throw new Error('message is empty');
-    const submission = { id, text, submittedAt: new Date().toISOString() };
-    await this.queueReady;
-    // `/send queue`: never into the running turn, whatever it could take.
-    const steer = options.queue ? undefined : this.steerHandler;
-    if (steer) {
-      // A transport that never answers turn/steer (wedged app-server, a
-      // dropped JSON-RPC response) must not strand the message in a promise
-      // nobody settles: the composer has already cleared it. Race the steer,
-      // and on timeout fall through to the durable queue. A transport that
-      // HOLDS the message (SteerHold) is not slow: it is queued at once.
-      let timer: NodeJS.Timeout | undefined;
-      let signalHeld!: () => void;
-      const held = new Promise<typeof STEER_HELD>((resolve) => { signalHeld = () => resolve(STEER_HELD); });
-      let resolveQueued!: () => void;
-      let rejectQueued!: (error: unknown) => void;
-      const queued = new Promise<void>((resolve, reject) => { resolveQueued = resolve; rejectQueued = reject; });
-      queued.catch(quiet('turn/live-input'));
-      const hold: SteerHold = (withdraw, force) => { this.holds.set(id, withdraw); if (force) this.forces.set(id, force); signalHeld(); return queued; };
-      const attempt = Promise.resolve().then(() => steer(text, submission, hold));
-      let outcome: symbol | undefined;
-      try {
-        outcome = await Promise.race([attempt.then(() => STEERED), held, ...(this.steerTimeoutMs > 0
-          ? [new Promise<typeof STEER_TIMED_OUT>((resolve) => {
-            timer = setTimeout(() => resolve(STEER_TIMED_OUT), this.steerTimeoutMs);
-          })]
-          : [])]);
-      } catch {
-        // The active turn may complete between Enter and turn/steer. Falling
-        // back to the durable next-turn queue is lossless and preserves the
-        // user's instruction instead of surfacing a timing error.
-      } finally {
-        if (timer) clearTimeout(timer);
-      }
-      if (outcome === STEERED) return { disposition: 'steered', submission };
-      if (outcome === STEER_HELD) {
-        // Queued now, once: the fallback copy, not a second send. If it
-        // cannot be written the message goes back to the composer, and the
-        // rejected `queued` tells the transport to drop its hold.
-        try { await this.queueHandler!(submission, { held: true }); }
-        catch (error) { rejectQueued(error); throw error; }
-        resolveQueued();
-      }
-      if (outcome === STEER_HELD || outcome === STEER_TIMED_OUT) {
-        this.inflight.add(id);
-        const landed = attempt.then(
-          () => { try { this.lateSteerHandler?.(submission); } catch { /* fail-open-ok: de-duplication is best effort */ } return true; },
-          () => false, // it failed after all; the queued copy is the only one
-        );
-        const tracked = landed.then(() => { this.holds.delete(id); this.forces.delete(id); this.inflight.delete(id); });
-        this.late.add(tracked);
-        void tracked.finally(() => this.late.delete(tracked));
-        if (outcome === STEER_HELD) return { disposition: 'queued', submission, landed };
-      }
-    }
-    await this.queueHandler!(submission);
-    return { disposition: 'queued', submission, ...(!steer && !options.queue ? { unsteered: true as const } : {}) };
+    if (later && any) try { this.afterDelivery?.(); } catch { /* fail-open-ok: presentation only */ }
   }
 }

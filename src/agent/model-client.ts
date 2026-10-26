@@ -205,8 +205,8 @@ export interface AgentTurnInput {
   /** Credential fields go from the terminal/panel to the local vault, never into model context. */
   onPrivateSecret?: (name: string, hint: string, signal?: AbortSignal) => Promise<string | undefined>;
   onPrivateLogin?: (site: string, fields: readonly import('./computer/login-fields.js').LoginField[], signal?: AbortSignal) => Promise<Record<string, string> | undefined>;
-  /** `hold`: given when the message may wait for a moment the model can answer it (see TurnRuntime.heldSteers). */
-  onSteerReady?: (handler?: (text: string, hold?: (withdraw: () => boolean) => Promise<void>) => Promise<void>) => void;
+  /** Published while the turn can be steered, and with nothing when it cannot (live-input.ts SteerPort). */
+  onSteerReady?: (port?: import('../turn/live-input.js').SteerPort) => void;
   /** Steered messages still waiting in the agent's queue when the turn closed
    *  (cancelled, failed, or arrived after the loop's last check): they never
    *  reached the model, so the caller takes them back out of the turn. */

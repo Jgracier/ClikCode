@@ -83,7 +83,7 @@ describe('a message typed during a ClikCode agent turn', () => {
     const turn = runSessionTurn(config, 's1', 'first question', undefined, { liveInput });
     const first = await model.next();
     // Before the fix this never settled while the turn ran: nothing had bound the queue.
-    const typed = await liveInput.submit('and also this', 'typed-1');
+    const typed = await liveInput.submit('and also this', 'typed-1', { steer: true });
     expect(typed.disposition).toBe('steered');
     first.respond('answer one');
     const second = await model.next();
@@ -101,7 +101,7 @@ describe('a message typed during a ClikCode agent turn', () => {
     const turn = runSessionTurn(config, 's1', 'first question', undefined, { liveInput });
     (await model.next()).respond('done');
     await turn;
-    const late = await liveInput.submit('one more', 'typed-2');
+    const late = await liveInput.submit('one more', 'typed-2', { steer: true });
     expect(late.disposition).toBe('queued');
     const saved = (await readState()).sessions.find((item) => item.id === 's1')!;
     expect(saved.queuedTurns?.map((item) => item.text)).toEqual(['one more']);

@@ -99,7 +99,7 @@ export class DurableTurnCheckpoint {
   private writes: Promise<void> = Promise.resolve();
   private dirty = false;
   /** Something on the session's index row changed since the last full write
-   *  (touch, unqueueSoon): the debounced write must be a full one. */
+   *  (touch): the debounced write must be a full one. */
   private rowDirty = false;
   private saved = false;
   /** complete() has written the turn's final record. */
@@ -207,13 +207,12 @@ export class DurableTurnCheckpoint {
     return steer?.seq === undefined ? undefined : { seq: steer.seq, responseOffset: steer.responseOffset ?? 0 };
   }
 
-  async queue(submission: LiveTurnSubmission, options: { held?: boolean } = {}): Promise<void> {
+  /** Queues a message behind this turn: `steer` marks it to go into the turn when the vendor can take it. */
+  async queue(submission: LiveTurnSubmission, steer = false): Promise<void> {
     // ClikCode's own note to the model (steerNote) is never a queued turn.
     const { kind, ...rest } = submission;
     if (kind === 'note') return;
-    const queued = { ...rest, ...(kind ? { kind } : {}) };
-    const heldForTurn = options.held ? this.session.pendingTurn?.startedAt : undefined;
-    enqueueSessionTurn(this.session, heldForTurn ? { ...queued, heldForTurn } : queued, new Date().toISOString());
+    enqueueSessionTurn(this.session, { ...rest, ...(kind ? { kind } : {}), ...(steer ? { steer: true } : {}) }, new Date().toISOString());
     try {
       await this.persistNow();
     } catch (error) {
@@ -227,18 +226,39 @@ export class DurableTurnCheckpoint {
     }
   }
 
+  /** The oldest waiting message the user typed, marked to go into this turn or not. */
+  oldestMessage(): LiveTurnSubmission | undefined {
+    const entry = (this.session.queuedTurns ?? []).find((item) => item.kind === undefined);
+    return entry && { id: entry.id, text: entry.text, submittedAt: entry.submittedAt };
+  }
+
+  /** The oldest waiting message marked to go into this turn. */
+  nextSteer(): LiveTurnSubmission | undefined {
+    const entry = (this.session.queuedTurns ?? []).find((item) => item.kind === undefined && item.steer);
+    return entry && { id: entry.id, text: entry.text, submittedAt: entry.submittedAt };
+  }
+
+  /** Marks a waiting message to go into this turn. */
+  async mark(id: string): Promise<boolean> {
+    const entry = (this.session.queuedTurns ?? []).find((item) => item.id === id);
+    if (!entry) return false;
+    if (!entry.steer) { entry.steer = true; await this.persistNow(); }
+    return true;
+  }
+
+  /** Takes a waiting message out of the queue. */
+  async remove(id: string): Promise<boolean> {
+    if (!consumeSessionTurn(this.session, id)) return false;
+    await this.persistNow();
+    return true;
+  }
+
   /** A steer recorded on the turn that never reached the model: taken off the
    * turn and queued as a message for the next one, so transcript and model agree. */
   async requeueSteer(submission: LiveTurnSubmission): Promise<void> {
     const pending = this.session.pendingTurn;
     if (pending?.steers) pending.steers = pending.steers.filter((item) => item.id !== submission.id);
     await this.queue(submission);
-  }
-
-  /** A steer that timed out was queued, then turned out to have landed after
-   * all: drop the queued copy so it is not also sent as the next turn. */
-  async unqueue(submission: LiveTurnSubmission): Promise<void> {
-    if (consumeSessionTurn(this.session, submission.id)) await this.persistNow();
   }
 
   /** Records the steer and drops any queued copy of it in one write, so disk
@@ -326,15 +346,6 @@ export class DurableTurnCheckpoint {
     this.schedule(true);
   }
 
-  /** The steer-landed-late case, for a synchronous caller: drop the queued
-   *  copy so it is not also sent as the next turn. The state change is
-   *  immediate and the write is left to the debounce -- the old
-   *  `unqueue(...).catch(() => undefined)` could silently leave the queued
-   *  copy in place, which is a duplicate message sent later. */
-  unqueueSoon(submission: LiveTurnSubmission): void {
-    if (consumeSessionTurn(this.session, submission.id)) this.schedule(true);
-  }
-
   private schedule(row = false): void {
     this.dirty = true;
     if (row) this.rowDirty = true;
@@ -385,8 +396,14 @@ export async function startTurnCheckpoint(
   }
   checkpoint.notify = (message) => run.prompter?.activity?.(chalk.yellow(message));
   if (run.liveInput) { const live = run.liveInput; checkpoint.settleInput = () => live.settled(); }
-  run.liveInput?.bindQueue((submission, options) => checkpoint.queue(submission, options));
-  run.liveInput?.setLateSteerHandler((submission) => checkpoint.unqueueSoon(submission));
+  run.liveInput?.bindLedger({
+    queue: (submission, steer) => checkpoint.queue(submission, steer),
+    nextSteer: () => checkpoint.nextSteer(),
+    oldestMessage: () => checkpoint.oldestMessage(),
+    delivered: (submission) => checkpoint.steer(submission),
+    mark: (id) => checkpoint.mark(id),
+    remove: (id) => checkpoint.remove(id),
+  });
   return checkpoint;
 }
 

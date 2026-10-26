@@ -48,14 +48,19 @@ export function createLiveCommands(ctx: WorkerContext) {
       sendEvent(socket, { type: 'unqueued', id: command.id, outcome, ...(message ? { message } : {}) });
     };
     if (ctx.activeQueuedTurnId === command.id) { answer('running'); return; }
-    // One the running turn is holding to steer in must not be sent now;
-    // one already on its way into the turn is not the queue's any more.
-    if (ctx.activeLiveInput?.withdraw(command.id) === false) { answer('running'); return; }
+    // While a turn runs, its queue is the turn's: taking one back goes through it, so a message is
+    // never both taken back and put into the turn. `running`: it is going into the turn this moment.
+    const live = ctx.activeLiveInput;
     try {
-      const state = await readState({ transcripts: [sessionId] });
-      const found = state.sessions.find((item) => item.id === sessionId);
-      if (!found || !consumeSessionTurn(found, command.id)) { answer('gone'); return; }
-      await writeState(state);
+      if (live) {
+        const outcome = await live.takeBack(command.id);
+        if (outcome !== 'removed') { answer(outcome); return; }
+      } else {
+        const state = await readState({ transcripts: [sessionId] });
+        const found = state.sessions.find((item) => item.id === sessionId);
+        if (!found || !consumeSessionTurn(found, command.id)) { answer('gone'); return; }
+        await writeState(state);
+      }
     } catch (error) {
       answer('error', error instanceof Error ? error.message : String(error));
       return;
@@ -67,62 +72,27 @@ export function createLiveCommands(ctx: WorkerContext) {
     return;
   };
 
-  const handleSendQueued = async (socket: Socket, command: Extract<ClientCommand, { type: 'send-queued' }>): Promise<void> => {
-    // Enter again. The oldest message the user queued goes into this turn
-    // now: at once where the vendor takes a steer without harm, otherwise it
-    // cuts the one call it was waiting for. The turn is not cancelled, so a
-    // sub-agent it started keeps running. A command or a notice stays for the turn's end.
-    const answer = (disposition: 'steered' | 'queued' | 'error', id?: string, message?: string, unsteered?: boolean): void => {
-      if (id) sendEvent(socket, { type: 'submission', id, disposition, ...(message ? { message } : {}), ...(unsteered ? { unsteered } : {}), ...(disposition === 'steered' ? observer.steerOrder(id) ?? {} : {}) });
-    };
-    if (!ctx.activeLiveInput) return;
+  const handleSendQueued = async (socket: Socket, _command: Extract<ClientCommand, { type: 'send-queued' }>): Promise<void> => {
+    // Enter again: the oldest message the user queued is offered to the running turn now. The vendor takes
+    // it if it can without interrupting anything; if it cannot yet, it stays queued and goes in at the turn's
+    // next opening. Nothing is cut and the turn is not cancelled, so a sub-agent it started keeps running.
+    // A command or a notice stays for the turn's end.
     const liveInput = ctx.activeLiveInput;
-    let item: { id: string; text: string } | undefined;
-    let entry: NonNullable<Parameters<typeof enqueueSessionTurn>[1]> | undefined;
-    try {
-      const state = await readState({ transcripts: [sessionId] });
-      const session = state.sessions.find((entry) => entry.id === sessionId);
-      const queued = session?.queuedTurns?.find((entry) => entry.kind !== 'command' && entry.kind !== 'notification');
-      if (!session || !queued) return;
-      // The turn is holding it for a quiet moment: Enter is the user saying
-      // not to wait, so it goes in now and the call in the way is cut.
-      if (liveInput.holding(queued.id)) {
-        liveInput.force(queued.id);
-        answer('queued', queued.id);
-        return;
-      }
-      if (!consumeSessionTurn(session, queued.id)) return;
-      await writeState(state);
-      item = { id: queued.id, text: queued.text };
-      entry = queued;
-    } catch (error) {
-      answer('error', undefined, error instanceof Error ? error.message : String(error));
-      return;
-    }
-    if (!item) return;
-    const queuedItem = item;
-    observer.broadcast({ type: 'queue-changed' });
+    if (!liveInput) return;
     const handled = (async () => {
       try {
-        const result = await liveInput.submit(queuedItem.text, queuedItem.id, { queue: false });
-        if (result.disposition === 'queued') liveInput.force(queuedItem.id);
-        answer(result.disposition === 'steered' ? 'steered' : 'queued', queuedItem.id, undefined, result.unsteered);
-        if (result.disposition !== 'steered') broadcastQueueChanged();
-        else showEveryWindow();
-        void result.landed?.then((steered) => { if (steered) broadcastQueueChanged(); });
+        const result = await liveInput.sendNow();
+        if (!result) return;
+        sendEvent(socket, {
+          type: 'submission', id: result.submission.id, disposition: result.steered ? 'steered' : 'queued',
+          ...(!liveInput.steerable ? { unsteered: true } : {}),
+          ...(result.steered ? observer.steerOrder(result.submission.id) ?? {} : {}),
+        });
+        // The entry changed (marked to go in, or gone into the turn): every window redraws the queue.
+        broadcastQueueChanged();
+        if (result.steered) showEveryWindow();
       } catch (error) {
-        // The queued copy was consumed above: put it back, or the message is gone.
-        if (entry) {
-          const restore = entry;
-          await readState({ transcripts: [sessionId] }).then(async (state) => {
-            const session = state.sessions.find((value) => value.id === sessionId);
-            if (!session) return;
-            enqueueSessionTurn(session, restore, new Date().toISOString());
-            await writeState(state);
-          }).catch(quiet('worker/worker-live-commands'));
-          broadcastQueueChanged();
-        }
-        answer('error', queuedItem.id, error instanceof Error ? error.message : String(error));
+        note(`Could not send: ${error instanceof Error ? error.message : String(error)}`);
       }
     })();
     ctx.activeSubmissions?.add(handled);
@@ -258,9 +228,6 @@ export function createLiveCommands(ctx: WorkerContext) {
         // Every window shows the queue, not only the one that typed it.
         if (result.disposition !== 'steered') broadcastQueueChanged();
         else showEveryWindow();
-        // Held for the next pause, then steered in: out of the queue and
-        // into the turn, on every window.
-        void result.landed?.then((steered) => { if (steered) broadcastQueueChanged(); });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         answer('error', message);

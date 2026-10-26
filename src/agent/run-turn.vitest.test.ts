@@ -318,7 +318,7 @@ describe('runAgentLoop', () => {
     const controller = new AbortController();
     const h = harness([{ toolCalls: [{ name: 'bash', args: { command: `sleep 300 & echo $! > ${JSON.stringify(pidFile)}; wait` } }] }], { signal: controller.signal });
     const steerStates: boolean[] = [];
-    const turn = runAgentLoop({ ...h.input, onSteerReady: (handler) => steerStates.push(!!handler) });
+    const turn = runAgentLoop({ ...h.input, onSteerReady: (port) => steerStates.push(!!port) });
     let pid = 0;
     for (let attempt = 0; attempt < 100 && !pid; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 20));
@@ -447,13 +447,13 @@ describe('runAgentLoop', () => {
   });
 
   it('injects steering text as a user item before the next model step', async () => {
-    let steer: ((text: string) => Promise<void>) | undefined;
+    let steer: ((text: string) => Promise<boolean>) | undefined;
     const h = harness([
       { toolCalls: [{ name: 'list_dir', args: {} }], before: async () => { await steer!('use tabs, not spaces'); } },
       { text: 'ok, tabs' },
     ]);
     const published: boolean[] = [];
-    await runAgentLoop({ ...h.input, onSteerReady: (handler) => { steer = handler; published.push(!!handler); } });
+    await runAgentLoop({ ...h.input, onSteerReady: (port) => { steer = port && ((text) => port.offer(text, { id: 't', text, submittedAt: '' })); published.push(!!port); } });
     const items = h.client.requests[1].items;
     expect(items[items.length - 1]).toEqual({ type: 'text', role: 'user', text: 'use tabs, not spaces' });
     expect(published).toEqual([true, false]);
@@ -461,9 +461,9 @@ describe('runAgentLoop', () => {
   });
 
   it('continues instead of finishing when steering arrives during the final step', async () => {
-    let steer: ((text: string) => Promise<void>) | undefined;
+    let steer: ((text: string) => Promise<boolean>) | undefined;
     const h = harness([{ text: 'done', before: async () => { await steer!('one more thing'); } }, { text: 'handled' }]);
-    const result = await runAgentLoop({ ...h.input, onSteerReady: (handler) => { steer = handler; } });
+    const result = await runAgentLoop({ ...h.input, onSteerReady: (port) => { steer = port && ((text) => port.offer(text, { id: 't', text, submittedAt: '' })); } });
     expect(result.steps).toBe(2);
     expect(result.text).toBe('done\n\nhandled');
   });
@@ -848,7 +848,7 @@ describe('runAgentLoop', () => {
     });
 
     it('a message sent while the model starts waits in the queue and goes once it is ready', async () => {
-      let steer: ((text: string) => Promise<void>) | undefined;
+      let steer: ((text: string) => Promise<boolean>) | undefined;
       const starting = { error: gatewayError('MODEL_STARTING', { retryAfter: 5 }) };
       const h = harness([
         { ...starting, before: async () => { await steer!('and also this'); } },
@@ -856,7 +856,7 @@ describe('runAgentLoop', () => {
         { servedModel: 'qwen', text: 'up' },
         { text: 'and that too' },
       ]);
-      const result = await driven(runAgentLoop({ ...h.input, onSteerReady: (handler) => { steer = handler; } }));
+      const result = await driven(runAgentLoop({ ...h.input, onSteerReady: (port) => { steer = port && ((text) => port.offer(text, { id: 't', text, submittedAt: '' })); } }));
       const said = (n: number) => JSON.stringify(h.client.requests[n]!.items);
       // Not folded into a request the starting model never sees...
       expect(said(1)).not.toContain('and also this');

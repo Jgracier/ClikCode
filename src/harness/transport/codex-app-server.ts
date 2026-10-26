@@ -715,7 +715,8 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     stillRunning();
     turn.turnId = String(((turnResult.turn as JsonObject) ?? {}).id ?? '');
     if (!turn.turnId) throw new Error('Codex app-server did not return a turn id');
-    input.onSteerReady?.((text) => this.turn === turn ? this.steer(text) : Promise.reject(new Error('Codex turn ended')));
+    // Codex takes a steer at any moment: the vendor decides what it does with it.
+    input.onSteerReady?.({ offer: async (text) => { if (this.turn !== turn) throw new Error('Codex turn ended'); await this.steer(text); return true; } });
     await completion;
     const text = (turn.lastAgentMessage || turn.streamedMessage).trim();
     // Tool-only turns are real work with nothing to say.

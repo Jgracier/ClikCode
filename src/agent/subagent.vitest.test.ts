@@ -123,8 +123,8 @@ describe('task sub-agents', () => {
   });
 
   it('hands a steer typed during a foreground sub-agent to that sub-agent, and the main agent still hears it afterward', async () => {
-    let steer: ((text: string, hold?: (withdraw: () => boolean) => Promise<void>) => Promise<void>) | undefined;
-    let landed: Promise<void> | undefined;
+    let steer: ((text: string) => Promise<boolean>) | undefined;
+    let landed: Promise<boolean> | undefined;
     const client = new RoutedModelClient({
       [PARENT_PROMPT]: { script: [
         { toolCalls: [{ id: 'fg-1', name: 'agent', args: { prompt: 'Work for a moment' } }] },
@@ -132,11 +132,11 @@ describe('task sub-agents', () => {
       ] },
       'Work for a moment': { script: [
         // The sub-agent's first step runs while the user types: its call is open.
-        { before: () => { landed = steer!('use tabs', () => Promise.resolve()); }, toolCalls: [{ id: 'k-1', name: 'read_file', args: { path: 'a.txt' } }] },
+        { before: () => { landed = steer!('use tabs'); }, toolCalls: [{ id: 'k-1', name: 'read_file', args: { path: 'a.txt' } }] },
         { text: 'Done.' },
       ] },
     });
-    const { input } = turn(client, { onSteerReady: (handler) => { if (handler) steer = handler; } });
+    const { input } = turn(client, { onSteerReady: (port) => { if (port) steer = (text) => port.offer(text, { id: 't', text, submittedAt: '' }); } });
     await runAgentLoop(input);
     await landed;
     // The sub-agent saw it, before its next step...

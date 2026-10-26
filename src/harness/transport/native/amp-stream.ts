@@ -2,10 +2,9 @@
  * settle. `result` is emitted only after EOF. A steer is accepted only when
  * Amp echoes its user message, rather than when the pipe accepts a write.
  * https://ampcode.com/docs/cli/streaming-json */
-import type { SteerHold } from '../../../turn/live-input.js';
-
 type Json = Record<string, any>;
-type Message = { text: string; ready: Promise<void>; sent: boolean; resolve(): void; reject(error: Error): void };
+/** A steer written to Amp and waiting for Amp's echo of it, which is what says it was taken. */
+type Sent = { text: string; resolve(): void; reject(error: Error): void };
 
 export function ampUserMessage(text: string, steer = false): string {
   return `${JSON.stringify({ type: 'user', ...(steer ? { steer: true } : {}), message: { role: 'user', content: [{ type: 'text', text }] } })}\n`;
@@ -14,59 +13,37 @@ export function ampUserMessage(text: string, steer = false): string {
 export function createAmpStreamTurn(options: { prompt: string; write(text: string): boolean; close(): void }) {
   const calls = new Set<string>();
   const agents = new Set<string>();
-  const messages: Message[] = [];
+  const sent: Sent[] = [];
   let initial = true;
   let busy = true;
   const followUps = new Set<string>();
   let settled = false;
-  let flushing = false;
-  const reject = (message: Message, error: Error): boolean => {
-    const index = messages.indexOf(message);
-    if (index < 0 || message.sent) return false;
-    messages.splice(index, 1); message.reject(error);
-    return true;
-  };
+  let onWindow: (() => void) | undefined;
   const end = (): void => {
     if (settled) return;
     settled = true;
-    for (const message of messages.splice(0)) message.reject(new Error('Amp ended before accepting this message'));
+    for (const message of sent.splice(0)) message.reject(new Error('Amp ended before accepting this message'));
     options.close();
   };
   const check = (): void => {
-    if (!initial && !busy && !calls.size && !agents.size && !followUps.size && !messages.length) end();
-  };
-  const flush = async (): Promise<void> => {
-    if (flushing || settled || calls.size || agents.size) return;
-    flushing = true;
-    try {
-      for (;;) {
-        const message = messages.find((entry) => !entry.sent);
-        if (!message) break;
-        if (settled || calls.size || agents.size) break;
-        try { await message.ready; } catch (error) { reject(message, error instanceof Error ? error : new Error(String(error))); continue; }
-        if (!messages.includes(message)) continue;
-        if (settled || calls.size || agents.size) break;
-        message.sent = true;
-        try {
-          if (!options.write(ampUserMessage(message.text, true))) { end(); break; }
-        } catch { end(); break; }
-        busy = true;
-      }
-    } finally { flushing = false; check(); }
+    if (!initial && !busy && !calls.size && !agents.size && !followUps.size && !sent.length) end();
   };
   return {
     get settled() { return settled; },
-    steer(text: string, hold?: SteerHold): Promise<void> {
-      if (settled) return Promise.reject(new Error('Amp is finishing'));
-      const safe = !calls.size && !agents.size && !messages.length;
-      if (!safe && !hold) return Promise.reject(new Error('Amp is running a tool'));
-      return new Promise<void>((resolve, rejectMessage) => {
-        const message: Message = { text, ready: Promise.resolve(), sent: false, resolve, reject: rejectMessage };
-        messages.push(message);
-        if (!safe) message.ready = hold!(() => reject(message, new Error('Message taken back')));
-        message.ready.catch((error: unknown) => { reject(message, error instanceof Error ? error : new Error(String(error))); check(); });
-        void flush();
+    /** Set by the broker: called whenever no tool or sub-agent is running, which is when a message can be taken in. */
+    set onWindow(handler: (() => void) | undefined) { onWindow = handler; },
+    /** Writes a steer when nothing is running that it would cut, and settles once Amp echoes it. False when something is running. */
+    async steer(text: string): Promise<boolean> {
+      if (settled) throw new Error('Amp is finishing');
+      if (calls.size || agents.size) return false;
+      await new Promise<void>((resolve, reject) => {
+        sent.push({ text, resolve, reject });
+        try {
+          if (!options.write(ampUserMessage(text, true))) { end(); return; }
+        } catch { end(); return; }
+        busy = true;
       });
+      return true;
     },
     note(record: Json): void {
       if (settled) return;
@@ -91,8 +68,8 @@ export function createAmpStreamTurn(options: { prompt: string; write(text: strin
           const text = content.filter((part) => part.type === 'text').map((part) => part.text).join('');
           if (initial && text === options.prompt) initial = false;
           else {
-            const at = messages.findIndex((message) => message.sent && message.text === text);
-            if (at >= 0) messages.splice(at, 1)[0]!.resolve();
+            const at = sent.findIndex((message) => message.text === text);
+            if (at >= 0) sent.splice(at, 1)[0]!.resolve();
           }
           busy = true;
         }
@@ -104,7 +81,7 @@ export function createAmpStreamTurn(options: { prompt: string; write(text: strin
         }
         if (record.message?.stop_reason === 'end_turn') busy = false;
       }
-      void flush();
+      if (!calls.size && !agents.size) onWindow?.();
       check();
     },
     ended: end,

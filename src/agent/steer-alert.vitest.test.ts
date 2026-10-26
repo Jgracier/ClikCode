@@ -1,25 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import { BackgroundAgents } from './background-agents.js';
-import { holdSteer, releaseHeldSteers, steerAlert, type TurnRuntime } from './turn-runtime.js';
+import { steerAlert, type TurnRuntime } from './turn-runtime.js';
 
-const fakeRuntime = (): TurnRuntime => ({ steerQueue: [], steerWaiters: new Set(), steerOpen: true, callsOpen: 1, heldSteers: [], foregroundSteers: new Map() }) as unknown as TurnRuntime;
+const fakeRuntime = (): TurnRuntime => ({ steerQueue: [], steerWaiters: new Set(), steerOpen: true, callsOpen: 1, foregroundSteers: new Map() }) as unknown as TurnRuntime;
 
-describe('a steer held behind a running call', () => {
-  it('fires the call alert at once, then reaches the model when the call returns', async () => {
+describe('a steer typed while a call runs', () => {
+  it('fires the call alert at once, so a call that can wait returns and the model hears it', () => {
     const rt = fakeRuntime();
     const alert = steerAlert(rt);
     expect(alert.signal.aborted).toBe(false);
-    const landed = holdSteer(rt, 'use postgres', () => Promise.resolve());
+    rt.steerQueue.push('use postgres');
+    for (const wake of [...rt.steerWaiters]) wake();
     expect(alert.signal.aborted).toBe(true);
-    rt.callsOpen = 0;
-    await releaseHeldSteers(rt);
-    await landed;
-    expect(rt.steerQueue).toEqual(['use postgres']);
   });
 
-  it('a call that starts while one is already held is alerted immediately', () => {
+  it('a call that starts while a steer is still unheard is alerted immediately', () => {
     const rt = fakeRuntime();
-    void holdSteer(rt, 'x', () => Promise.resolve());
+    rt.steerQueue.push('x');
     expect(steerAlert(rt).signal.aborted).toBe(true);
   });
 

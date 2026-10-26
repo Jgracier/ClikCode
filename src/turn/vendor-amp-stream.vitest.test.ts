@@ -1,10 +1,11 @@
-import { expect, it, vi } from 'vitest';
+import { expect, it } from 'vitest';
 import { localHarnessForCommand } from '@clikcode/router/ai-local-harness';
 import { runVendorCliAttempt } from './vendor-cli-attempt.js';
 import { LiveTurnInputBroker, type LiveTurnInputResult } from './live-input.js';
+import { fakeLedger } from './test-support/live-ledger.js';
 import type { HarnessSession } from '../session/model.js';
 
-it('pipes Amp input, holds a live steer through tool execution, and journals its acknowledgement', async () => {
+it('pipes Amp input, waits out a tool for a live steer, and journals its acknowledgement', async () => {
   const script = `
     const send = (value) => process.stdout.write(JSON.stringify({session_id:'T-native',...value})+'\\n');
     const assistant = (content,stop_reason) => send({type:'assistant',message:{role:'assistant',content,stop_reason}});
@@ -27,25 +28,24 @@ it('pipes Amp input, holds a live steer through tool execution, and journals its
   const harness = { ...amp, binary: process.execPath, turn: { ...amp.turn!, startArgv: ['-e', script], mcpConfigArgv: undefined } };
   const session = { id: 'amp-test', route: 'local', nativeHarness: 'amp', workspace: process.cwd() } as HarnessSession;
   const broker = new LiveTurnInputBroker();
-  const queued = vi.fn(async () => undefined);
-  broker.bindQueue(queued);
-  const steer = vi.fn(async () => undefined);
+  const { ledger, queue, steered } = fakeLedger();
+  broker.bindLedger(ledger);
   let typed: Promise<LiveTurnInputResult> | undefined;
   const stop = new AbortController();
   const timer = setTimeout(() => stop.abort(), 3000);
   try {
     const result = await runVendorCliAttempt({ harness, session, turnText: 'first prompt', model: null, environment: {}, images: [], signal: stop.signal,
-      run: { liveInput: broker }, checkpoint: { steer, touch: () => undefined, persistNow: async () => undefined } as never,
+      run: { liveInput: broker }, checkpoint: { touch: () => undefined, persistNow: async () => undefined } as never,
       onOutputStart: () => undefined, onStreamError: () => undefined,
-      sharedObserver: { onActivity: (event) => { if (event.id === 'call1' && event.kind === 'tool-start' && !typed) typed = broker.submit('change answer', 'steer1'); } },
+      sharedObserver: { onActivity: (event) => { if (event.id === 'call1' && event.kind === 'tool-start' && !typed) typed = broker.submit('change answer', 'steer1', { steer: true }); } },
     });
     expect(result.text).toBe('STEERED');
     expect(result.nativeSessionId).toBe('T-native');
     expect(typed).toBeDefined();
     const submission = await typed!;
+    // It waited in the queue while the tool ran, then went into the turn once Amp echoed it.
     expect(submission.disposition).toBe('queued');
-    expect(await submission.landed).toBe(true);
-    expect(steer).toHaveBeenCalledWith(expect.objectContaining({ id: 'steer1', text: 'change answer' }));
-    expect(queued).toHaveBeenCalledOnce();
+    expect(steered).toEqual([expect.objectContaining({ id: 'steer1', text: 'change answer' })]);
+    expect(queue).toEqual([]);
   } finally { clearTimeout(timer); stop.abort(); }
 });

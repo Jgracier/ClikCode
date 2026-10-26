@@ -70,11 +70,8 @@ export interface TurnRuntime {
   /** Woken when a steer arrives, so a wait on background agents does not sit through it. */
   readonly steerWaiters: Set<() => void>;
   steerOpen: boolean;
-  /** Tool calls running now. The model cannot answer a steer until they return. */
+  /** Tool calls running now. The model hears a steer at its next step, after they return. */
   callsOpen: number;
-  /** Steers typed while a call runs: queued by the broker as the fallback and
-   * put into the turn when the last open call returns (releaseHeldSteers). */
-  readonly heldSteers: HeldSteer[];
   /** Foreground sub-agents running now (by their call id) and the handler that
    * steers each: a steer typed during their call goes to them to answer. */
   readonly foregroundSteers: Map<string, (text: string) => Promise<void>>;
@@ -239,7 +236,7 @@ export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime
     result: (extra) => ({
       text: segments.join('\n\n').trim(), nativeSessionId: input.sessionId, usage: rt.ledger.total, steps: rt.steps, contextProfile: profile.name, ...extra,
     }),
-    steerQueue: [], steerWaiters: new Set(), steerOpen: true, callsOpen: 0, heldSteers: [], foregroundSteers: new Map(), items, ledger, lastStepUsage: undefined, itemsAtLastUsage: items.length,
+    steerQueue: [], steerWaiters: new Set(), steerOpen: true, callsOpen: 0, foregroundSteers: new Map(), items, ledger, lastStepUsage: undefined, itemsAtLastUsage: items.length,
     contextWindow: input.modelClient.contextHints?.contextWindow ?? input.contextWindow,
     servedModel: undefined, segments, needsSeparator: false, steps: 0, stall: new StallGuard(), stalledCall: undefined,
     stepRetries: 0, retryWaitedSeconds: 0, contextScale: 1, contextRefits: 0, budgetClient: input.modelClient, lastRequestEstimate: 0, modelStartWaitedSeconds: 0, modelStartingSince: undefined, modelStartChecked: false, livePlanSeen: readLivePlan(input), lengthContinues: 0, stopContinues: 0,
@@ -250,28 +247,18 @@ export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime
     await rt.append({ type: 'text', role: 'user', text: `${environment}${hookNote}${input.prompt}${imageNote}`, ...(images.length ? { images } : {}) });
     await input.onRemembered?.();
   }
-  input.onSteerReady?.(async (text: string, hold) => {
-    if (!rt.steerOpen) throw new Error('The turn has already finished');
-    if (!text.trim()) return;
-    // A call is running: the model hears this when it returns, not before.
-    // Held (queued as the fallback, the row says "at the next pause") rather
-    // than shown as sent into a turn that cannot answer yet.
-    if (hold && rt.callsOpen > 0) {
-      // A foreground sub-agent is running: it can answer now, so it hears the
-      // message at once. The main agent hears it too, when the call returns.
-      for (const steer of [...rt.foregroundSteers.values()]) void steer(text).catch(quiet('agent/turn-runtime'));
-      return holdSteer(rt, text, hold);
-    }
-    pushSteer(rt, text);
+  // The model hears a steer at its next step, so one typed while a call runs is in the turn at once (the
+  // call returns early if it is a wait, steerAlert); a foreground sub-agent hears it now as well.
+  input.onSteerReady?.({
+    offer: async (text) => {
+      if (!rt.steerOpen) throw new Error('The turn has already finished');
+      if (!text.trim()) return true;
+      if (rt.callsOpen > 0) for (const steer of [...rt.foregroundSteers.values()]) void steer(text).catch(quiet('agent/turn-runtime'));
+      pushSteer(rt, text);
+      return true;
+    },
   });
   return { rt, promptBlocked };
-}
-
-export interface HeldSteer {
-  text: string;
-  ready: Promise<void>;
-  resolve: () => void;
-  reject: (error: Error) => void;
 }
 
 function pushSteer(rt: TurnRuntime, text: string): void {
@@ -279,45 +266,14 @@ function pushSteer(rt: TurnRuntime, text: string): void {
   for (const wake of [...rt.steerWaiters]) wake();
 }
 
-/** An abort for one call: fires when a steer is held (or already is) because a call is running. The call
- * returns early so the model hears it; `dispose` when the call ends. */
+/** An abort for one call: fires when a steer is waiting for the model's next step. A call that can wait
+ * for long returns now, so the message is heard in seconds, not when the call times out; `dispose` when the call ends. */
 export function steerAlert(rt: TurnRuntime): { signal: AbortSignal; dispose: () => void } {
   const controller = new AbortController();
-  if (rt.heldSteers.length) { controller.abort(); return { signal: controller.signal, dispose: () => undefined }; }
-  const wake = (): void => { if (rt.heldSteers.length) controller.abort(); };
+  if (rt.steerQueue.length) { controller.abort(); return { signal: controller.signal, dispose: () => undefined }; }
+  const wake = (): void => { if (rt.steerQueue.length) controller.abort(); };
   rt.steerWaiters.add(wake);
   return { signal: controller.signal, dispose: () => { rt.steerWaiters.delete(wake); } };
-}
-
-export function holdSteer(rt: TurnRuntime, text: string, hold: (withdraw: () => boolean) => Promise<void>): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const drop = (error: Error): boolean => {
-      const at = rt.heldSteers.indexOf(item);
-      if (at < 0) return false; // already in the turn
-      rt.heldSteers.splice(at, 1);
-      reject(error);
-      return true;
-    };
-    const ready = hold(() => drop(new Error('taken back from the queue')));
-    const item: HeldSteer = { text, ready, resolve, reject };
-    ready.catch((error: unknown) => drop(error instanceof Error ? error : new Error(String(error))));
-    rt.heldSteers.push(item);
-    // A call that can wait for long returns now, so this is heard in seconds, not when it times out.
-    for (const wake of [...rt.steerWaiters]) wake();
-  });
-}
-
-/** The last open call returned: what was typed meanwhile goes to the model, oldest first. */
-export async function releaseHeldSteers(rt: TurnRuntime): Promise<void> {
-  while (rt.heldSteers.length && rt.callsOpen === 0 && rt.steerOpen) {
-    const item = rt.heldSteers[0]!;
-    try { await item.ready; } catch { continue; } // dropped and rejected already
-    if (rt.heldSteers[0] !== item) continue; // taken back meanwhile
-    rt.heldSteers.shift();
-    if (!rt.steerOpen) { item.reject(new Error('The turn has already finished')); continue; }
-    pushSteer(rt, item.text);
-    item.resolve();
-  }
 }
 
 /** Ends a turn's background work and seals its checkpoints. */
@@ -325,8 +281,6 @@ export async function closeTurn(rt: TurnRuntime): Promise<void> {
   const { input } = rt;
   rt.steerOpen = false;
   input.onSteerReady?.(undefined);
-  // Typed while a call ran and never heard: their queued copies run as the next turn.
-  for (const item of rt.heldSteers.splice(0)) item.reject(new Error('The turn has already finished'));
   // Accepted after the loop's last look, or left when the turn ended early:
   // the model never saw them.
   const undelivered = rt.steerQueue.splice(0);

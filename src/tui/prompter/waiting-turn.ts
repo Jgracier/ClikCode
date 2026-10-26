@@ -37,7 +37,7 @@ export function waitingUserMessages(this: TerminalHarnessPrompter): Array<{ id: 
   const startedAt = this.currentSession?.pendingTurn?.startedAt;
   const unsteered = (id: string): WaitingMessage => (this.waitingSubmissions.some((item) => item.id === id && item.unsteered) ? { unsteered: true } : {});
   return [
-    ...stored.map((item) => ({ id: item.id, text: item.text, ...(item.heldForTurn && item.heldForTurn === startedAt ? { held: true } : {}), ...unsteered(item.id) })),
+    ...stored.map((item) => ({ id: item.id, text: item.text, ...(item.steer === true && startedAt !== undefined ? { held: true } : {}), ...unsteered(item.id) })),
     ...this.waitingSubmissions.filter((item) => item.state === 'queued' && item.id && !this.takingBack.has(item.id) && !stored.some((entry) => entry.id === item.id))
       .map((item) => ({ id: item.id!, text: item.text, ...unsteered(item.id!) })),
   ];

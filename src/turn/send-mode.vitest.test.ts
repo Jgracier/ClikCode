@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { LiveTurnInputBroker } from './live-input.js';
 import { deliverTyped, parseSendMode, sendModeOf } from './send-mode.js';
+import { fakeLedger } from './test-support/live-ledger.js';
 
 describe('/send: how a message typed mid-turn is delivered', () => {
   it('is steer unless the user chose queue', () => {
@@ -14,36 +15,32 @@ describe('/send: how a message typed mid-turn is delivered', () => {
 
   it('steers into a turn that takes steering, in steer mode', async () => {
     const broker = new LiveTurnInputBroker();
-    const queued = vi.fn(async () => undefined);
-    const steer = vi.fn(async () => undefined);
-    broker.bindQueue(queued);
-    broker.setSteerHandler(steer);
+    const { ledger, queue } = fakeLedger();
+    const offer = vi.fn(async () => true);
+    broker.bindLedger(ledger);
+    broker.setSteerPort({ offer });
     expect((await deliverTyped(broker, 'also this', 'a', { sendMode: 'steer' })).disposition).toBe('steered');
-    expect(steer).toHaveBeenCalledOnce();
-    expect(queued).not.toHaveBeenCalled();
+    expect(offer).toHaveBeenCalledOnce();
+    expect(queue).toEqual([]);
   });
 
-  it('never steers in queue mode, even into a turn that could take it at once or hold it', async () => {
+  it('never steers in queue mode, even into a turn that could take it at once', async () => {
     const broker = new LiveTurnInputBroker();
-    const queued = vi.fn(async () => undefined);
-    const steer = vi.fn(async () => undefined);
-    broker.bindQueue(queued);
-    broker.setSteerHandler(steer);
+    const { ledger, queue } = fakeLedger();
+    const offer = vi.fn(async () => true);
+    broker.bindLedger(ledger);
+    broker.setSteerPort({ offer });
     const result = await deliverTyped(broker, 'after the turn', 'b', { sendMode: 'queue' });
     expect(result.disposition).toBe('queued');
     expect(result.unsteered).toBeUndefined();
-    expect(steer).not.toHaveBeenCalled();
-    expect(queued).toHaveBeenCalledWith(result.submission);
-    // An ACP agent that would hold it for the next pause is not asked either.
-    const hold = vi.fn(async (_text: string, _submission: unknown, held: (withdraw: () => boolean) => Promise<void>) => { await held(() => true); });
-    broker.setSteerHandler(hold);
-    expect((await deliverTyped(broker, 'still after', 'c', { sendMode: 'queue' })).disposition).toBe('queued');
-    expect(hold).not.toHaveBeenCalled();
+    expect(offer).not.toHaveBeenCalled();
+    expect(queue).toEqual([expect.objectContaining({ id: 'b', text: 'after the turn' })]);
+    expect(queue[0]!.steer).toBeUndefined();
   });
 
   it('says so when steering was asked for and nothing could take it', async () => {
     const broker = new LiveTurnInputBroker();
-    broker.bindQueue(async () => undefined);
+    broker.bindLedger(fakeLedger().ledger);
     const result = await deliverTyped(broker, 'into the turn please', 'd', {});
     expect(result).toMatchObject({ disposition: 'queued', unsteered: true });
   });

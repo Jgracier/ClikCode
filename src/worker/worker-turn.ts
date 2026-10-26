@@ -26,16 +26,15 @@ async function pendingSteerCount(sessionId: string): Promise<number> {
   return state?.sessions.find((entry) => entry.id === sessionId)?.pendingTurn?.steers?.length ?? 0;
 }
 
-/** A message the turn was holding to steer in at its next pause (queued only
- * as a fallback, heldForTurn) that never went in: a stopped or failed turn
- * must not run it on its own as the next turn. It is taken off the queue and
- * its text is handed back to the composer, as a take-back does. */
+/** A message marked to go into the running turn (steer) that never went in: a
+ * stopped or failed turn must not run it on its own as the next turn. It is
+ * taken off the queue and its text is handed back to the composer, as a
+ * take-back does. */
 async function takeUnsentHeldSteers(sessionId: string): Promise<string[]> {
   const state = await readState({ transcripts: [sessionId] }).catch(quiet('worker/worker-turn'));
   const session = state?.sessions.find((entry) => entry.id === sessionId);
-  const startedAt = session?.pendingTurn?.startedAt;
-  if (!state || !session || !startedAt) return [];
-  const held = (session.queuedTurns ?? []).filter((entry) => entry.heldForTurn === startedAt && entry.kind !== 'command' && entry.kind !== 'notification');
+  if (!state || !session) return [];
+  const held = (session.queuedTurns ?? []).filter((entry) => entry.steer === true && entry.kind !== 'command' && entry.kind !== 'notification');
   if (!held.length) return [];
   for (const entry of held) consumeSessionTurn(session, entry.id);
   await writeState(state);
@@ -181,6 +180,8 @@ export function createTurnRunner(ctx: WorkerContext) {
     ctx.idleTimer = undefined;
     const controller = new AbortController();
     const liveInput = new LiveTurnInputBroker();
+    // A waiting message that goes into the turn later (its opening came) is shown so on every window.
+    liveInput.onLaterDelivery(() => { ctx.io.broadcastQueueChanged(); ctx.io.showEveryWindow(); });
     const submissions = new Set<Promise<void>>();
     ctx.activeController = controller;
     ctx.activeLiveInput = liveInput;
