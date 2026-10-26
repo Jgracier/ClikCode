@@ -25,12 +25,14 @@ export function summarizeApps(result: McpCallResult, query?: string): string | u
   const matches = (app: AppRecord): boolean => !needle || [app.name, app.bundle_id, ...(app.windows ?? []).map((window) => window.title)].some((part) => typeof part === 'string' && part.toLowerCase().includes(needle));
   // One process can match several launcher entries (VS Code's .desktop and snap ids): list it once.
   const seen = new Set<unknown>();
-  const running = apps.filter((app) => app.running === true && visibleWindows(app).length > 0 && matches(app) && (app.pid === undefined || !seen.has(app.pid) && seen.add(app.pid)));
+  // macOS lists apps with no per-app window list at all: a running desktop app counts, and `windows` gives its window ids.
+  const windowless = (app: AppRecord): boolean => app.windows === undefined && Boolean(app.kind);
+  const running = apps.filter((app) => app.running === true && (visibleWindows(app).length > 0 || windowless(app)) && matches(app) && (app.pid === undefined || !seen.has(app.pid) && seen.add(app.pid)));
   const installed = apps.filter((app) => app.running !== true && Boolean(app.kind) && Boolean(needle) && matches(app));
   const hiddenInstalled = apps.filter((app) => app.running !== true && Boolean(app.kind)).length;
   const lines: string[] = [];
   for (const app of running.slice(0, RUNNING_LIMIT)) {
-    const windows = visibleWindows(app).slice(0, 4).map((window) => `window ${String(window.window_id)} ${JSON.stringify(String(window.title ?? '').slice(0, 80))}`).join(', ');
+    const windows = windowless(app) ? 'use the windows action for its window ids' : visibleWindows(app).slice(0, 4).map((window) => `window ${String(window.window_id)} ${JSON.stringify(String(window.title ?? '').slice(0, 80))}`).join(', ');
     lines.push(`- ${String(app.name)} (pid ${String(app.pid)})${app.bundle_id ? ` [${String(app.bundle_id)}]` : ''}: ${windows}`);
   }
   if (running.length > RUNNING_LIMIT) lines.push(`... and ${running.length - RUNNING_LIMIT} more running apps; narrow with query.`);
