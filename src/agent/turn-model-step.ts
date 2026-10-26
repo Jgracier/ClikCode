@@ -16,6 +16,7 @@ import type { TurnRuntime } from './turn-runtime.js';
 import type { OwnModelStart } from '../gateway/own-models.js';
 import { FINDING_SERVER_PHASE, STARTING_MODEL_PHASE } from '../harness/protocol/turn-pace.js';
 import type { StartReading } from './turn-recovery.js';
+import { currentToolName } from './computer/tool-names.js';
 
 /** What a model step came to: its result, a retry of the loop, or the turn's end. */
 type ModelStepOutcome =
@@ -101,7 +102,7 @@ export async function runModelStep(rt: TurnRuntime, modelClient: ModelClient, sy
       ...(finalOnly ? {} : {
         onToolCallDelta: (call: { id: string; name: string; arguments: string }) => {
           if (signal?.aborted) return;
-          const tool = tools.find((candidate) => candidate.name === call.name);
+          const tool = tools.find((candidate) => candidate.name === currentToolName(call.name));
           const args = completedArguments(call.arguments);
           let label = call.name;
           if (tool) { try { label = tool.label(args); } catch { /* not enough of the arguments yet: the name */ } }
