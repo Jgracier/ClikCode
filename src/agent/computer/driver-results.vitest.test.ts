@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   backgroundOnly, backgroundOnlyNotice, foregroundUnavailableNotice, friendlyDriverError, macosAccessibilityNotice, macosScreenRecordingNotice,
-  permissionsNotice, scrubClipboard, summarizeApps, windowsElevatedNotice,
+  clipboardReply, permissionsNotice, scrubClipboard, summarizeApps, windowsElevatedNotice,
 } from './driver-results.js';
 
 const app = (name: string, extra: Record<string, unknown> = {}) => ({ name, pid: 0, running: false, bundle_id: null, kind: null, windows: [], ...extra });
@@ -44,6 +44,14 @@ describe('clipboard text', () => {
     expect(out).not.toContain('sk-abcdefghijklmnopqrstuv');
     expect(out).toContain('a normal sentence');
     expect(out).toContain('read on request');
+  });
+
+  it('takes the text from Cua\'s structured result, where it keeps it', () => {
+    const reply = clipboardReply({ structuredContent: { text: 'my note ghp_abcdefghijklmnopqrstuvwxyz0123456789', types: ['text/plain'] } }, 'Clipboard read succeeded.');
+    expect(reply).toContain('Clipboard text:\nmy note');
+    expect(reply).not.toContain('ghp_abcdef');
+    expect(clipboardReply({ structuredContent: { text: '', types: [] } }, 'ok')).toContain('holds no text');
+    expect(clipboardReply({}, 'ok')).toContain('holds no text');
   });
 
   it('cuts a very long clipboard', () => {

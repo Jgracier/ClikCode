@@ -48,6 +48,13 @@ export function scrubClipboard(output: string): string {
   return `${clipped}\n\n${CLIPBOARD_NOTE}`;
 }
 
+/** What `clipboard_read` returns: Cua's one-line summary, then the text (which it keeps in structuredContent), scrubbed. */
+export function clipboardReply(result: McpCallResult, summary: string): string {
+  const text = (result.structuredContent as { text?: unknown } | undefined)?.text;
+  const body = typeof text === 'string' ? (text.length ? `Clipboard text:\n${text}` : 'The clipboard holds no text.') : 'The clipboard holds no text.';
+  return scrubClipboard(`${summary}\n${body}`);
+}
+
 /** Cua's refusal to send keys or scrolling without bringing the window forward. */
 const BACKGROUND_UNAVAILABLE = /Background delivery is not available|background_unavailable/i;
 /** What Cua says when the foreground escalation is itself closed (GNOME 50 disabled its Shell helper). */

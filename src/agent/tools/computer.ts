@@ -7,7 +7,7 @@ import { formatMcpResult } from '../mcp/tools.js';
 import { COMPUTER_OFF, computerEnabled } from '../computer/settings.js';
 import { credentialOnScreen } from '../computer/sensitive-fields.js';
 import { computerDriverAction, DESKTOP_ACTIONS, type DesktopArgs } from '../computer/driver-actions.js';
-import { backgroundOnly, backgroundOnlyNotice, friendlyDriverError, scrubClipboard, summarizeApps } from '../computer/driver-results.js';
+import { backgroundOnly, backgroundOnlyNotice, clipboardReply, friendlyDriverError, summarizeApps } from '../computer/driver-results.js';
 
 export { computerDriverAction, backgroundOnly, backgroundOnlyNotice };
 
@@ -71,7 +71,7 @@ export const computerDesktopTool = defineTool<DesktopArgs>({
       const raw = await callComputerDriver(request.name, driverArgs, ctx.signal);
       let result = formatMcpResult(raw, withImage);
       if (args.action === 'apps' && !raw.isError) result = { ...result, output: summarizeApps(raw, args.query) ?? result.output };
-      if (args.action === 'clipboard_read' && !raw.isError) result = { ...result, output: scrubClipboard(result.output) };
+      if (args.action === 'clipboard_read' && !raw.isError) result = { ...result, output: clipboardReply(raw, result.output) };
       result = friendlyDriverError(backgroundOnly(result, args.delivery === 'foreground'));
       if (args.action !== 'windows') return result;
       const notices = (await Promise.all([driverNotice(), driverPermissionNotice()])).filter((notice): notice is string => Boolean(notice));
