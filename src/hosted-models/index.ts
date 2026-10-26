@@ -1,4 +1,5 @@
 /** The merged Hosted AI list: every target's rows in one list, best first, searchable by name and by where it runs. */
+import { discoveryRefresh } from '../local-models/discover.js';
 import { clikdeploy } from './clikdeploy.js';
 import { thisComputer } from './this-computer.js';
 import type { HostedAdapter, HostedList, HostedRow, HostedTarget } from './types.js';
@@ -42,7 +43,7 @@ export async function hostedList(query: string, adapters: readonly HostedAdapter
     if (answer.status === 'fulfilled') rows.push(...answer.value);
     else unavailable.push({ target: wanted[index]!.target, message: answer.reason instanceof Error ? answer.reason.message : String(answer.reason) });
   });
-  return { rows: ordered(rows), unavailable };
+  return { rows: ordered(rows), unavailable, ...(discoveryRefresh() ? { refreshing: true as const } : {}) };
 }
 
 export function hostedAdapter(target: HostedTarget, adapters: readonly HostedAdapter[] = HOSTED_ADAPTERS): HostedAdapter {

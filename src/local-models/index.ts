@@ -23,7 +23,7 @@ import {
   chooseModel, fitModel, kvCacheBytes, meetsBar, memoryBudget, rankModels, type Fit, type Footprint, type Measurement, type MemoryBudget, type RankedModel,
 } from './shared/index.js';
 import { formatBytes } from './download.js';
-import { discoverHuggingFaceModels } from './discover.js';
+import { discoverHuggingFaceModels, weightCapacityBytes } from './discover.js';
 import { probeHardware, type HardwareProfile } from './hardware.js';
 import { learnGpuReach, withKnownReach } from './gpu-reach.js';
 import { buildServerArgs, freePort, httpJson, threadPlan, usesMmap, waitForHealth } from './launch.js';
@@ -374,7 +374,9 @@ function placementLabel(row: RankedModel, view: MachineView): string {
  * First-reply and deep-conversation speed decide recommendation and order. */
 export async function localModelChoices(): Promise<LocalModelChoice[]> {
   const initial = await viewMachine();
-  await discoverHuggingFaceModels(initial.budget.ramBytes + (initial.budget.gpu?.bytes ?? 0));
+  // What the machine could hold, not what is free this moment: the candidates found for it stay good as memory comes and goes.
+  // Models already known are registered at once; a refresh that is due runs in the background (discover.ts).
+  await discoverHuggingFaceModels(weightCapacityBytes(initial.hardware));
   const view = await viewMachine();
   const rows: LocalModelChoice[] = [];
   for (const row of rankModels(allLocalModels(), view.hardware, view.budget, view.measurements, view.footprints)) {

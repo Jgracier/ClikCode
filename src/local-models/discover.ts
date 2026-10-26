@@ -8,8 +8,17 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { allLocalModels, registerRemoteModels, type CatalogModel, type KvGeometry } from './catalog.js';
 import { discoveredModelsFile } from './paths.js';
+import type { HardwareProfile } from './shared/index.js';
 
+/** A refresh that found everything is good for a day. */
 const CACHE_MS = 24 * 60 * 60 * 1000;
+/** One that failed, or left a header unread, is tried again after this, not at every open. */
+const RETRY_MS = 30 * 60 * 1000;
+/** A header is read in several requests and carries the whole tokenizer (about 12 MB), so it is slow: 47 to 62 s for twelve
+ * at once, measured. This only keeps a stalled connection from holding the refresh for ever. */
+const HEADER_DEADLINE_MS = 150_000;
+/** Candidates a header read has found ineligible, kept so they are not read again. */
+const MAX_REJECTED = 300;
 const SEARCHES = ['Qwen3.5-GGUF', 'Qwen3.6-GGUF', 'Gemma-4-GGUF', 'gpt-oss-GGUF', 'Ornith-GGUF'];
 const QUANT = /(?:Q4_K_M|Q4_0|MXFP4|Q6_K|Q8_0)\.gguf$/i;
 const LICENSES = new Set(['apache-2.0', 'mit']);
@@ -89,6 +98,19 @@ export const TENSOR_LAYOUT = new Map<number, [number, number]>([
   [39 /* MXFP4 */, [17, 32]],
 ]);
 
+/** A candidate's id: its repo, its revision and its file -- all of which pin the header, so a header read once is known for good. */
+export function candidateId(repo: Pick<HubModel, 'id' | 'sha'>, file: Pick<HubFile, 'rfilename'>): string {
+  return `hf:${repo.id}:${repo.sha.slice(0, 12)}:${file.rfilename}`;
+}
+
+/** What the machine could hold if nothing else ran: its memory, and a dedicated card's own. Free memory is not it -- that moves
+ * with whatever else is running, and a cache keyed on it was thrown away whenever memory freed up, so the slow refresh came back.
+ * What does not fit right now is dropped when the list is ranked, not here. */
+export function weightCapacityBytes(hardware: Pick<HardwareProfile, 'totalRamBytes' | 'gpus'>): number {
+  const dedicated = hardware.gpus.filter((gpu) => !gpu.unified && !gpu.integrated).reduce((sum, gpu) => sum + gpu.vramBytes, 0);
+  return hardware.totalRamBytes + dedicated;
+}
+
 export function remoteModelFromHeader(
   repo: HubModel, file: HubFile, header: Awaited<ReturnType<typeof import('@huggingface/gguf').gguf>>,
 ): CatalogModel | undefined {
@@ -124,7 +146,7 @@ export function remoteModelFromHeader(
   const quantization = file.rfilename.match(QUANT)?.[0].replace(/\.gguf$/i, '') ?? 'unknown';
   const name = String(metadata['general.name'] ?? repo.id.split('/')[1]).replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 80);
   return {
-    id: `hf:${repo.id}:${repo.sha.slice(0, 12)}:${file.rfilename}`, label: `${name} ${quantization}`,
+    id: candidateId(repo, file), label: `${name} ${quantization}`,
     weights: { repo: repo.id, revision: repo.sha, file: file.rfilename, sizeBytes, sha256 },
     architecture: String(metadata['general.architecture']), totalParamsB: totalParams / 1e9,
     activeParamsB: activeParams / 1e9, activeWeightBytes: activeBytes, quantization,
@@ -134,43 +156,122 @@ export function remoteModelFromHeader(
   };
 }
 
-async function inspect(repo: HubModel, file: HubFile): Promise<CatalogModel | undefined> {
-  const url = `https://huggingface.co/${repo.id}/resolve/${repo.sha}/${encodeURIComponent(file.rfilename)}`;
-  try { return remoteModelFromHeader(repo, file, await (await import('@huggingface/gguf')).gguf(url)); }
-  catch { return undefined; }
+type Header = Awaited<ReturnType<typeof import('@huggingface/gguf').gguf>>;
+/** `rejected`: the header was read and this candidate is not eligible (final for this revision). `failed`: it could not be read. */
+type Inspected = { model: CatalogModel } | { rejected: string } | { failed: true };
+
+/** What discovery reaches the network with. Replaceable so a test can run it without one. */
+export interface DiscoverDeps {
+  json<T>(url: string): Promise<T>;
+  header(url: string, signal: AbortSignal): Promise<Header>;
+  now(): number;
 }
 
-/** Refresh once daily. An offline or rate-limited Hub leaves the last
- * inspected candidates available; no weight download happens here. */
-export async function discoverHuggingFaceModels(maxWeightBytes: number): Promise<readonly CatalogModel[]> {
-  const cache: { at?: number; maxWeightBytes?: number; models?: CatalogModel[] } = await readFile(discoveredModelsFile(), 'utf8')
-    .then((text) => JSON.parse(text) as { at?: number; maxWeightBytes?: number; models?: CatalogModel[] }, () => ({}));
-  if (cache.at && Date.now() - cache.at < CACHE_MS && (cache.maxWeightBytes ?? 0) >= maxWeightBytes * 0.9 && Array.isArray(cache.models)) {
-    registerRemoteModels(cache.models);
-    return allLocalModels();
-  }
+const NETWORK: DiscoverDeps = {
+  json: hubJson,
+  async header(url, signal) {
+    const { gguf } = await import('@huggingface/gguf');
+    // One deadline over all the requests a header takes.
+    return gguf(url, { fetch: (input, init) => fetch(input, { ...init, signal }) });
+  },
+  now: () => Date.now(),
+};
+
+async function inspect(repo: HubModel, file: HubFile, deps: DiscoverDeps): Promise<Inspected> {
+  const url = `https://huggingface.co/${repo.id}/resolve/${repo.sha}/${encodeURIComponent(file.rfilename)}`;
   try {
-    const results = await Promise.all(SEARCHES.map(async (term) => hubJson<HubSearch[]>(
+    const model = remoteModelFromHeader(repo, file, await deps.header(url, AbortSignal.timeout(HEADER_DEADLINE_MS)));
+    return model ? { model } : { rejected: candidateId(repo, file) };
+  } catch { return { failed: true }; }
+}
+
+interface DiscoveryCache {
+  /** When a refresh last ended well (or with some headers unread: `incomplete`). */
+  at?: number;
+  /** The most weight the candidates were chosen for (weightCapacityBytes). */
+  maxWeightBytes?: number;
+  /** A refresh that failed outright, and when. */
+  failedAt?: number;
+  /** Some header could not be read: try again after RETRY_MS rather than after a day. */
+  incomplete?: boolean;
+  models?: CatalogModel[];
+  rejected?: string[];
+}
+
+async function readCache(): Promise<DiscoveryCache> {
+  return readFile(discoveredModelsFile(), 'utf8').then((text) => JSON.parse(text) as DiscoveryCache, () => ({}));
+}
+
+/** Whether the cache is current: made for a machine this big, and not past its time. A failed refresh is not retried at once. */
+function cacheState(cache: DiscoveryCache, capacity: number, now: number): 'fresh' | 'stale' {
+  if (cache.failedAt && now - cache.failedAt < RETRY_MS) return 'fresh';
+  const good = cache.at !== undefined && Array.isArray(cache.models) && (cache.maxWeightBytes ?? 0) >= capacity * 0.9;
+  return good && now - cache.at! < (cache.incomplete ? RETRY_MS : CACHE_MS) ? 'fresh' : 'stale';
+}
+
+let refreshing: Promise<boolean> | undefined;
+
+/** The discovery being refreshed now, if any: true once it ends with models the list did not have. */
+export function discoveryRefresh(): Promise<boolean> | undefined { return refreshing; }
+
+/** Look for new candidates: search the Hub, and read the header of each one not read before. Nothing is read twice -- a
+ * candidate's id pins its revision -- so a refresh costs a search unless the Hub has something new. Resolves true when
+ * models were added. */
+async function refresh(cache: DiscoveryCache, capacity: number, deps: DiscoverDeps): Promise<boolean> {
+  const known = new Map((cache.models ?? []).map((model) => [model.id, model]));
+  const rejected = new Set(cache.rejected ?? []);
+  try {
+    const results = await Promise.all(SEARCHES.map(async (term) => deps.json<HubSearch[]>(
       `https://huggingface.co/api/models?filter=gguf&search=${encodeURIComponent(term)}&sort=downloads&direction=-1&limit=8`)));
     const repos = [...new Map(results.flat().map((item) => [item.id, item])).values()]
       .sort((a, b) => (b.downloads ?? 0) - (a.downloads ?? 0)).slice(0, MAX_REPOS);
-    const details = await Promise.all(repos.map(async (item) => hubJson<HubModel>(
+    const details = await Promise.all(repos.map(async (item) => deps.json<HubModel>(
       `https://huggingface.co/api/models/${item.id}?blobs=true`).catch(quiet('local-models/discover'))));
     const candidates = details.filter((item): item is HubModel => Boolean(item && !item.gated && !item.private && !item.disabled))
       .flatMap((repo) => (repo.siblings ?? []).filter((file) => !file.rfilename.includes('/')
         && !/mmproj|projector/i.test(file.rfilename) && !/-\d{5}-of-\d{5}\.gguf$/i.test(file.rfilename)
-        && QUANT.test(file.rfilename) && (file.lfs?.size ?? file.size ?? Infinity) <= maxWeightBytes)
+        && QUANT.test(file.rfilename) && (file.lfs?.size ?? file.size ?? Infinity) <= capacity)
         .map((file) => ({ repo, file })))
       .sort((a, b) => {
         const quantRank = (name: string) => /Q4_K_M/i.test(name) ? 0 : /Q4_0|MXFP4/i.test(name) ? 1 : /Q6_K/i.test(name) ? 2 : 3;
         return quantRank(a.file.rfilename) - quantRank(b.file.rfilename);
       }).slice(0, MAX_HEADERS);
-    const inspected = (await Promise.all(candidates.map(({ repo, file }) => inspect(repo, file))))
-      .filter((model): model is CatalogModel => Boolean(model));
+    const unread = candidates.filter(({ repo, file }) => repo.sha && !known.has(candidateId(repo, file)) && !rejected.has(candidateId(repo, file)));
+    const read = await Promise.all(unread.map(({ repo, file }) => inspect(repo, file, deps)));
+    const added = read.flatMap((item) => ('model' in item ? [item.model] : []));
+    const unreadable = read.filter((item) => 'failed' in item).length;
+    // Every one failing is the Hub being unreachable, not a verdict on the models.
+    if (unread.length && unreadable === unread.length) throw new Error('no header could be read');
+    const merged = [...new Map([...(cache.models ?? []), ...added].map((model) => [model.id, model])).values()];
+    const verdicts = [...rejected, ...read.flatMap((item) => ('rejected' in item ? [item.rejected] : []))].slice(-MAX_REJECTED);
     await mkdir(dirname(discoveredModelsFile()), { recursive: true });
-    const merged = [...new Map([...(cache.models ?? []), ...inspected].map((model) => [model.id, model])).values()];
-    await writeFile(discoveredModelsFile(), JSON.stringify({ at: Date.now(), maxWeightBytes, models: merged }));
+    const next: DiscoveryCache = { at: deps.now(), maxWeightBytes: capacity, models: merged, rejected: verdicts, ...(unreadable ? { incomplete: true } : {}) };
+    await writeFile(discoveredModelsFile(), JSON.stringify(next));
     registerRemoteModels(merged);
-  } catch { /* Network failures retain the previous candidate cache. */ }
+    return added.length > 0;
+  } catch (error) {
+    quiet('local-models/discover')(error);
+    // Offline or rate-limited: remember it, so the next open does not try again at once. What was known stays.
+    try {
+      await mkdir(dirname(discoveredModelsFile()), { recursive: true });
+      await writeFile(discoveredModelsFile(), JSON.stringify({ ...cache, failedAt: deps.now() }));
+    } catch (writeError) { quiet('local-models/discover')(writeError); }
+    return false;
+  }
+}
+
+/** The candidates found on Hugging Face, registered with the catalog. The ones already known are registered at once -- from
+ * the cache, however old -- and a refresh that is due runs in the background: nothing here waits for the Hub, which takes
+ * about a minute the first time (a header is read for each candidate). `wait` waits for it anyway.
+ * `refresh: 'never'` is for a process that is about to exit, which a refresh in flight would keep alive. */
+export async function discoverHuggingFaceModels(
+  capacity: number, options: { wait?: boolean; refresh?: 'background' | 'never' } = {}, deps: DiscoverDeps = NETWORK,
+): Promise<readonly CatalogModel[]> {
+  const cache = await readCache();
+  if (Array.isArray(cache.models) && cache.models.length) registerRemoteModels(cache.models);
+  if (options.refresh !== 'never' && cacheState(cache, capacity, deps.now()) === 'stale') {
+    refreshing ??= refresh(cache, capacity, deps).finally(() => { refreshing = undefined; });
+    if (options.wait) await refreshing;
+  }
   return allLocalModels();
 }
