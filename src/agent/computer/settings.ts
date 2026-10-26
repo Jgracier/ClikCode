@@ -43,6 +43,17 @@ export async function setGeneratedPasswords(stateDir: string, allowed: boolean):
   await writeSettings(stateDir, { generatePasswords: allowed });
 }
 
+/** Off unless the user turned it on (`clikcode computer headless on`) or CLIKCODE_BROWSER_HEADLESS=1: the browser runs
+ * with no window at all. A Linux computer with no display does this by itself. */
+export async function headlessSetting(stateDir: string): Promise<boolean> {
+  try { return (JSON.parse(await fs.readFile(computerSettingsPath(stateDir), 'utf8')) as { headless?: unknown }).headless === true; }
+  catch { return false; }
+}
+
+export async function setHeadless(stateDir: string, on: boolean): Promise<void> {
+  await writeSettings(stateDir, { headless: on });
+}
+
 export const COMPUTER_OFF = 'Computer use is off. Run `clikcode computer on` to enable it.';
 
 /** Off unless the user turned it on: a private prompt the browser tool would show (a password, a code, an account
