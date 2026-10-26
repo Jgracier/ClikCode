@@ -21,7 +21,7 @@ export type Shown =
 /** Panels whose whole content is "that worked" (src/harness/output.ts). */
 const CONFIRMATIONS = new Set([
   'session-renamed', 'session-archived', 'session-deleted', 'session-closed', 'session-forked',
-  'settings-updated', 'conversation-reset', 'account-removed', 'add-dir', 'copied',
+  'settings-updated', 'conversation-reset', 'account-removed', 'add-dir', 'copied', 'redo-done',
 ]);
 
 const TITLES: Record<string, string> = {

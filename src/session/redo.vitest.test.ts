@@ -1,7 +1,8 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { eventDiff } from '../agent/line-diff.js';
 import { redoFrom } from './redo.js';
 import { readTurnChanges, writeTurnChanges } from './turn-changes.js';
 import type { HarnessSession, HarnessState } from './model.js';
@@ -24,6 +25,8 @@ describe('/redo', () => {
     await writeTurnChanges(stateDir, session.id, ['first', 'second', 'third'].map((prompt) => ({ at: '', prompt, changes: [] })));
     const redone = await redoFrom(state, session, 2, { keepFiles: true, stateDir, who: 'Claude Code', turnIsRunning: async () => false });
     expect(redone.prompt).toBe('second');
+    // Nothing to report: no recap of what the screen and the message box already show.
+    expect(redone.text).toBe('');
     expect(session.messages?.map((message) => message.content)).toEqual(['first', 'one']);
     expect(session.nativeSessionId).toBeUndefined();
     const archived = state.sessions.find((item) => item.id !== session.id)!;
@@ -31,6 +34,25 @@ describe('/redo', () => {
     expect(archived.messages).toHaveLength(6);
     // The kept edits' records go, so /undo cannot reverse turns no longer here.
     expect((await readTurnChanges(stateDir, session.id)).map((record) => record.prompt)).toEqual(['first']);
+  });
+
+  it('says so when an edit could not be put back, and only then', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'redo-files-'));
+    const stateDir = join(dir, 'state');
+    const workspace = join(dir, 'ws');
+    mkdirSync(workspace, { recursive: true });
+    const file = join(workspace, 'a.txt');
+    writeFileSync(file, 'something else entirely\n');
+    const session = { ...conversation(), route: 'local', workspace } as HarnessSession;
+    const state = { accounts: [], sessions: [session], invocations: [] } as unknown as HarnessState;
+    // The turn changed `a.txt` from `two` to `TWO`; it holds something else now, so putting it back would lose that.
+    await writeTurnChanges(stateDir, session.id, ['first', 'second', 'third'].map((prompt, index) => ({
+      at: new Date().toISOString(), prompt, changes: index === 2 ? eventDiff('two', 'TWO', { path: 'a.txt' })! : [],
+    })));
+    const redone = await redoFrom(state, session, 3, { keepFiles: false, stateDir, who: 'Claude Code', turnIsRunning: async () => false });
+    expect(redone.prompt).toBe('third');
+    expect(redone.text).toMatch(/a\.txt/);
+    expect(readFileSync(file, 'utf8')).toBe('something else entirely\n');
   });
 
   it('refuses while a turn runs, and a prompt that is not there', async () => {

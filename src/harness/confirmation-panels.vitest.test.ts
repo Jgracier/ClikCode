@@ -18,6 +18,8 @@ describe('a panel in the TUI', () => {
     emitHarnessOutput({ panel: 'session-archived', text: 'Conversation archived.' });
     emitHarnessOutput({ panel: 'settings-updated', text: 'Global default updated: effort = high' });
     emitHarnessOutput({ panel: 'copied', text: 'Last response copied to the clipboard.' });
+    // /redo that went to plan: the prompt is in the message box, and the rest is on the screen already.
+    emitHarnessOutput({ panel: 'redo-done', prompt: 'send it again' });
     emitHarnessOutput({ panel: 'cwd', text: 'Working directory is now ~/work', changed: true });
     emitHarnessOutput({ panel: 'attachments', attachments: ['/tmp/a.png'], changed: true });
     expect(opened).toEqual([]);
@@ -28,5 +30,11 @@ describe('a panel in the TUI', () => {
     emitHarnessOutput({ panel: 'help', helpText: '/model  choose a model' });
     emitHarnessOutput({ panel: 'cwd', text: '~/work', workspace: '/home/me/work' });
     expect(opened.length).toBe(2);
+  });
+
+  it('is opened when a /redo left a file alone, because that is news', () => {
+    TERMINAL.active = fakeTerminal;
+    emitHarnessOutput({ panel: 'redo', text: 'Not restored: a.txt changed since the turn.', prompt: 'p' });
+    expect(opened.length).toBe(1);
   });
 });

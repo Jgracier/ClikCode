@@ -254,7 +254,8 @@ export const conversationHandlers = {
     const who = isClikCodeAgent(session) ? clikCodeAgentLabel(session) : sessionHarness(session)?.displayName ?? 'This provider';
     const redone = await redoFrom(state, session, n, { keepFiles: words[1] === 'keep', stateDir: stateDirectory(), who });
     await writeState(state);
-    return emitHarnessOutput({ panel: 'redo', text: redone.text, prompt: redone.prompt });
+    // Said only when something needs saying; going back is already on the screen, and the prompt is in the message box.
+    return emitHarnessOutput({ panel: redone.text ? 'redo' : 'redo-done', text: redone.text, prompt: redone.prompt });
   },
   compact: async ({ id, session, args }) => compactConversation(id, session, args, sendSessionTurn),
   context: async ({ session }) => emitHarnessOutput({ panel: 'context', text: contextUsageText(session), usage: session.lastUsage ?? null }),
