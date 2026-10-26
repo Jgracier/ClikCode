@@ -7,6 +7,7 @@ import { lifecycle, setLifecycleSession } from '../runtime/lifecycle-log.js';
 import type { PaletteEntry } from './command-palette.js';
 import { stdin as input, stdout as output } from 'node:process';
 import { createStreamingBlockParser } from './render/markdown.js';
+import { ResponseReveal } from './render/response-reveal.js';
 import { ENTER_ALTERNATE_SCREEN, installTerminalRestoreSignals, REEXEC_TERMINAL_ENV, restoreTerminal, terminalModes, terminalPrepare } from './restore.js';
 import type { FocusState } from './terminal-signals.js';
 import { sessionTranscriptMessages, settledTranscriptMessages } from '../turn/checkpoint.js';
@@ -114,6 +115,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * frame is built (render/row-tags.ts). */
   readonly lineTags = new Map<number, string>();
   liveResponse = '';
+  /** What of the live answer is drawn: a burst is revealed over a moment, not shown whole. */
+  readonly reveal = new ResponseReveal(() => this.schedulePaint());
   responsePaintTimer?: NodeJS.Timeout;
   frameInFlight = false;
   /** Why the next frame that draws rows is drawn, when it is not routine:
@@ -491,6 +494,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
       this.responsePaintTimer = undefined;
       this.liveResponse = '';
+      this.reveal.reset();
     }
     // A picker owns the screen while it is open. A setting flipped from inside
     // one renders the status line (harness/output.ts), and painting the
@@ -522,6 +526,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       }
       this.liveResponse = text;
     } else this.liveResponse += text;
+    this.reveal.update(this.liveResponse.length);
+    // A whole replacement (a window joining, a snapshot) is not a burst to ease in.
+    if (mode === 'replace') this.reveal.flush();
     this.schedulePaint();
   }
 

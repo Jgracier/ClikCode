@@ -1,3 +1,4 @@
+import { ResponseReveal } from '../tui/render/response-reveal.js';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { access, mkdtemp, rm } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
@@ -94,6 +95,7 @@ function fakePrompter(): TerminalHarnessPrompter & { calls: string[] } {
     startWaiting: record('startWaiting'),
     turnStarting: record('turnStarting'),
     stopWaiting: record('stopWaiting'),
+    reveal: new ResponseReveal(() => undefined),
     suspend: async (...args: unknown[]) => { record('suspend')(...args); },
     resume: record('resume'),
     restoreDraft: record('restoreDraft'),

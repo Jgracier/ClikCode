@@ -4,6 +4,7 @@
  * Real spawned workers on real sockets, running ClikCode's own agent against
  * a real HTTP server that speaks the Gateway's turn protocol -- the model is
  * the only thing standing in. */
+import { ResponseReveal } from '../tui/render/response-reveal.js';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
@@ -530,7 +531,7 @@ function recordingPrompter(): TerminalHarnessPrompter & { calls: string[] } {
   const record = (name: string) => (...args: unknown[]) => { calls.push(`${name}(${args.map((arg) => (typeof arg === 'function' ? '[fn]' : JSON.stringify(arg))).join(',')})`); };
   return {
     calls, render: record('render'), response: record('response'), activity: record('activity'), activityEvent: record('activityEvent'),
-    phase: record('phase'), setPlan: record('setPlan'), setTurnUsage: record('setTurnUsage'), joinMark: record('joinMark'), joinThought: record('joinThought'), markDrawn: record('markDrawn'), startWaiting: record('startWaiting'), turnStarting: record('turnStarting'), stopWaiting: record('stopWaiting'),
+    phase: record('phase'), setPlan: record('setPlan'), setTurnUsage: record('setTurnUsage'), joinMark: record('joinMark'), joinThought: record('joinThought'), markDrawn: record('markDrawn'), startWaiting: record('startWaiting'), turnStarting: record('turnStarting'), stopWaiting: record('stopWaiting'), reveal: new ResponseReveal(() => undefined),
     approval: async (...args: unknown[]) => { record('approval')(...args); return true; },
     suspend: async () => undefined, resume: record('resume'), restoreDraft: record('restoreDraft'), submitted: record('submitted'),
   } as unknown as TerminalHarnessPrompter & { calls: string[] };

@@ -11,6 +11,7 @@ import { STEER_WORDS } from '../../../../src/tui/render/steer-rows';
 import { liveElapsedMs, turnMarks, type Activity, type ChatModel, type DecisionEntry, type LiveTurn, type Note, type PlanAt, type ThoughtEntry, type TurnTrace } from '../model';
 import { post } from './bus';
 import { renderMarkdown } from './markdown';
+import { usePacedText } from './reveal';
 import { Icon, Spinner } from './ui';
 import { foldedGroupCount, liveMeter, runItemKey, type RunItem, shimmerStyle, traceSummaryLine, workingDetail, workingIndicator, workingStatus } from './flow';
 import { CopyAnswer, LiveMarkdown, renderFinished } from './messages';
@@ -325,15 +326,19 @@ export function ActivityRun({ activities, workspace }: { activities: Activity[];
  * sub-agent is a row in that flow like any finished one, with a running mark,
  * and becomes done in place -- no separate band, so nothing moves. The working
  * line is not here: it sits below the pinned agents, nearest the composer. */
-export const LiveTurnView = memo(({ live, workspace, asking, plan, notes, turn, away, usage }: {
+export const LiveTurnView = memo(({ live, workspace, plan, notes, turn }: {
   live: LiveTurn | undefined; workspace?: string; asking: boolean; plan: ChatModel['plan']; notes: Note[]; turn?: number; away: boolean; usage?: TurnUsage;
-}): JSX.Element => (
-  <div class="message assistant live" aria-busy="true">
-    {live ? (
-      <TurnFlow text={live.text} activities={live.activities.filter((activity) => !isRunningAgent(activity))} thoughts={live.reasoning} steers={live.steers} workspace={workspace} live={{ startedAt: live.startedAt }}
-        {...(live.planAt ? { plan: { entries: plan, at: live.planAt } } : {})}
-        {...(live.decisions?.length ? { decisions: live.decisions } : {})}
-        {...(turn !== undefined ? { notes: notes.filter((note) => note.turn === turn) } : {})} />
-    ) : null}
-  </div>
-));
+}): JSX.Element => {
+  // A burst of text (some models hand over a whole answer at once) is revealed over a moment.
+  const text = usePacedText(live?.text ?? '');
+  return (
+    <div class="message assistant live" aria-busy="true">
+      {live ? (
+        <TurnFlow text={text} activities={live.activities.filter((activity) => !isRunningAgent(activity))} thoughts={live.reasoning} steers={live.steers} workspace={workspace} live={{ startedAt: live.startedAt }}
+          {...(live.planAt ? { plan: { entries: plan, at: live.planAt } } : {})}
+          {...(live.decisions?.length ? { decisions: live.decisions } : {})}
+          {...(turn !== undefined ? { notes: notes.filter((note) => note.turn === turn) } : {})} />
+      ) : null}
+    </div>
+  );
+});

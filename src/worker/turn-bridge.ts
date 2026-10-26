@@ -13,6 +13,7 @@
  */
 import { backgroundWorkOf, type BackgroundWork } from '../harness/protocol/background-agents.js';
 import type { HarnessQuestionResult } from '../harness/events/question.js';
+import { REVEAL_MAX_HOLD_MS } from '../harness/protocol/reveal-pace.js';
 import { diagnostic, lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { randomUUID } from 'node:crypto';
 import { commandDuringTurn } from '../tui/slash/queue.js';
@@ -429,7 +430,7 @@ async function driveWorkerTurn(
       };
       /** Approvals and questions this window has open, closed by `request-closed`. */
       const openPrompts = new Map<string, AbortController>();
-      const onEvent = (event: WorkerEvent): void => {
+      const handle = (event: WorkerEvent): void => {
         if (settled) return;
         switch (event.type) {
           case 'snapshot':
@@ -576,6 +577,26 @@ async function driveWorkerTurn(
             // below, before this event could possibly arrive.
             return;
         }
+      };
+      // A turn that ends while its answer is still being revealed (a model that hands over its whole answer
+      // at once) waits for the reveal: its end, and anything after, is held and delivered in order.
+      let held: WorkerEvent[] | undefined;
+      const release = (): void => {
+        const events = held ?? [];
+        held = undefined;
+        for (const event of events) handle(event);
+      };
+      const onEvent = (event: WorkerEvent): void => {
+        if (held) { held.push(event); return; }
+        const ends = (event.type === 'snapshot' && !event.live) || event.type === 'waiting-stop';
+        if (ends && !settled && rl.reveal.pending) {
+          held = [event];
+          const stop = rl.reveal.whenRevealed(() => { clearTimeout(cap); release(); });
+          const cap = setTimeout(() => { stop(); rl.reveal.flush(); release(); }, REVEAL_MAX_HOLD_MS);
+          cap.unref?.();
+          return;
+        }
+        handle(event);
       };
       const onClose = (): void => {
         if (settled) return;

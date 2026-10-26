@@ -12,6 +12,7 @@ import { command, listen, post, request, save, uid } from './bus';
 import { ApprovalCard, QuestionCard } from './approvals';
 import { Transcript } from './chat';
 import { RunningAgents, Working, waitingOnUser } from './turn';
+import { useHeldEnd } from './reveal';
 import { Composer, type ComposerHandle } from './composer';
 import { tildePath } from './format';
 import { choose } from './picker';
@@ -224,6 +225,8 @@ function probe(message: Extract<ToWebview, { type: 'probe' }>): unknown {
 
 function App(): JSX.Element {
   const [model, setModel] = useState<ChatModel>();
+  // The transcript lags the model by a moment at the end of a turn whose text is still being revealed.
+  const transcriptModel = useHeldEnd(model);
   const [history, setHistory] = useState(false);
   const [questions, setQuestions] = useState<Array<OpenQuestion & { items?: readonly IdePickItem[] }>>([]);
   const [error, setErrorState] = useState<{ message: string; id: number }>();
@@ -400,7 +403,7 @@ function App(): JSX.Element {
           <Banner model={model} />
           {model.connection === 'starting' && !model.sessionId ? <div class="starting inline"><Spinner /><span class="muted">Starting ClikCode…</span></div> : null}
           {model.connection === 'ready' && model.sessionId && empty ? <Welcome model={model} onPrompt={sendNow} onMenu={showMenu} /> : null}
-          {!empty ? <DrawGuard model={model}><Transcript model={model} reveal={searchFocus?.messageIndex} /></DrawGuard> : null}
+          {!empty ? <DrawGuard model={transcriptModel ?? model}><Transcript model={transcriptModel ?? model} reveal={searchFocus?.messageIndex} /></DrawGuard> : null}
         </div>
         {model.approvals[0] ? (
           // One at a time, as the terminal asks: the rest wait their turn.
