@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { McpClient, type McpCallResult } from '../mcp/client.js';
 import { permissionsNotice } from './driver-results.js';
+import { ensureDesktopDriverService } from './driver-macos-session.js';
 
 let pending: Promise<McpClient> | undefined;
 let connected: McpClient | undefined;
@@ -40,10 +41,11 @@ export function driverMcpArgs(platform: NodeJS.Platform = process.platform): str
 function start(): Promise<McpClient> {
   if (connected && !connected.closed) return Promise.resolve(connected);
   if (pending) return pending;
-  pending = McpClient.connect(
-    { name: 'clikcode-computer', transport: 'stdio', command: driverCommand(), args: driverMcpArgs(), env: driverEnv() },
+  const command = driverCommand();
+  pending = ensureDesktopDriverService(command).then(() => McpClient.connect(
+    { name: 'clikcode-computer', transport: 'stdio', command, args: driverMcpArgs(), env: driverEnv() },
     { timeoutMs: 15_000 },
-  ).then((client) => {
+  )).then((client) => {
     connected = client;
     fields = undefined;
     process.once('exit', () => client.killNow());
