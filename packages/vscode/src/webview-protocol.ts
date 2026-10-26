@@ -1,6 +1,7 @@
 /** Messages between the extension host and a chat webview. */
 import type { ChatModel } from './model';
 import type { ModelPatch } from './model-patch';
+import type { HostedRow } from '../../../src/hosted-models/types';
 import type { IdeChoice, IdeConversation, IdePickItem, IdeQueryName, IdeRequest, IdeSearchFocus, IdeUiRequest, IdeUiResult } from './protocol';
 
 /** A key that moves /search's walk. */
@@ -69,7 +70,7 @@ export type WebviewRequest =
   /** Update ClikCode on a machine ('local': this computer's, as /update does). */
   | { method: 'updateMachine'; machineId: string }
   | { method: 'openOnMachine'; machineId: string; mode: 'new' | 'resume'; sessionId?: string }
-  | { method: 'query'; query: IdeQueryName; provider?: string; network?: boolean }
+  | { method: 'query'; query: IdeQueryName; provider?: string; network?: boolean; search?: string; row?: HostedRow }
   | { method: 'choose'; choice: IdeChoice }
   /** A conversations list opened (`on`) or closed: ClikCode tells it of
    * changes while it is open. */

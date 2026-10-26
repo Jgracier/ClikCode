@@ -7,6 +7,8 @@ import { providerConversationKey } from '../tui/pickers/engine.js';
 import { addAccountForHarness, manageAccountAction, useAddedAccount } from '../tui/pickers/account.js';
 import { selectProviderConversation } from '../tui/pickers/conversation.js';
 import type { IdeChoice } from './protocol.js';
+import { hostedAdapter, hostedSelectionCommand } from '../hosted-models/index.js';
+import { GATEWAY_ID, LOCAL_ID } from '../session/picker-rows.js';
 import { gatewayCheckoutUrl } from './queries.js';
 import type { ChooseContext } from './bridge-choose.js';
 
@@ -36,6 +38,22 @@ export async function chooseProvider(cx: ChooseContext, choice: IdeChoice): Prom
       });
       return true;
     }
+    case 'hosted':
+      // The user saw the size or price (hosted-plan) and said go: start it where its row says, then move the chat
+      // onto it. A running turn keeps the call it has started, as a provider change does.
+      queued(async () => {
+        const selection = await hostedAdapter(choice.row.target).start(choice.row);
+        const id = host.requireSession();
+        const moved = await selectProviderConversation(host.config, host.prompter, id, providerConversationKey(selection.route === 'gateway' ? GATEWAY_ID : LOCAL_ID));
+        await aiSessionCommand(moved, hostedSelectionCommand(selection));
+        if (host.sessionId !== id) return { sessionId: moved };
+        if (moved !== id) await host.switchTo(moved);
+        await host.prepareRoute().catch(quiet('ide/bridge-choose-provider'));
+        await host.emitSession();
+        void host.refreshUsage().catch(quiet('ide/bridge-choose-provider'));
+        return { sessionId: host.sessionId };
+      });
+      return true;
     case 'add-account':
       queued(async () => {
         const harness = localHarnessForCommand(choice.provider);

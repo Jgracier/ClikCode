@@ -16,6 +16,7 @@
  * so a worker that learns a new event needs no change here -- and an editor
  * that does not know one ignores it.
  */
+import type { HostedRow } from '../hosted-models/types.js';
 import type { PeerMachine } from '../remote/peer.js';
 import type { ConversationSection, TurnFacts } from '../session/conversation-state.js';
 import type { HarnessSession } from '../session/model.js';
@@ -82,7 +83,9 @@ export type IdeRequest =
   /** Data for the editor's own screens. Only `slash-commands` before
    * revision 2 (a bridge from then answers every query with the command list,
    * so an editor checks `ready.revision` before asking for anything else). */
-  | { type: 'query'; requestId: string; query: IdeQueryName; provider?: string; network?: boolean }
+  | { type: 'query'; requestId: string; query: IdeQueryName; provider?: string; network?: boolean;
+      /** `hosted`: what to look for (and where: `local`, `cloud`). `hosted-plan`: the row to plan (revision 9). */
+      search?: string; row?: HostedRow }
   /** A choice made in the editor's own widgets, applied as the terminal's
    * picker would apply it (revision 2). Answered by a `result`. */
   | { type: 'choose'; requestId: string; choice: IdeChoice }
@@ -137,7 +140,7 @@ export interface IdeSlashCommand {
 
 // ---- revision 2: structured data for the editor's screens -----------------
 
-export type IdeQueryName = 'slash-commands' | 'providers' | 'models' | 'conversations' | 'accounts' | 'chat-settings' | 'gateway';
+export type IdeQueryName = 'slash-commands' | 'providers' | 'models' | 'conversations' | 'accounts' | 'chat-settings' | 'gateway' | 'hosted' | 'hosted-plan';
 
 /** One thing a conversation can run on: a vendor harness, ClikDeploy
  * Gateway, or ClikCode Local. `id` is what `choose` takes back. */
@@ -292,7 +295,10 @@ export type IdeChoice =
   /** Fork and archive are slash commands (/fork, /archive). */
   | { kind: 'conversation'; sessionId: string; action: 'rename' | 'delete'; name?: string }
   /** A Stripe checkout page for Gateway credit: `data.url`. */
-  | { kind: 'gateway-credit' };
+  | { kind: 'gateway-credit' }
+  /** Hosted AI (revision 9): start this model where its row says -- download it for this computer, or deploy it on
+   * ClikDeploy -- and move the chat onto it. The editor asks `hosted-plan` first and shows the size or price. */
+  | { kind: 'hosted'; row: HostedRow };
 
 export type IdeEvent =
   /** `protocol` is IDE_PROTOCOL.version (protocol-version.ts); a ClikCode

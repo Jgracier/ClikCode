@@ -9,8 +9,9 @@ import type { IdeQueryName, IdeSlashCommand } from './protocol.js';
 import { accountList, chatSettings, conversationList, gatewayStatus, modelList, providerList } from './queries.js';
 import { messageOf } from './bridge-support.js';
 import type { BridgeHost } from './bridge-host.js';
+import { hostedAdapter, hostedList, type HostedRow } from '../hosted-models/index.js';
 
-export async function answerQuery(host: BridgeHost, requestId: string, query: IdeQueryName, options: { provider?: string; network?: boolean }): Promise<void> {
+export async function answerQuery(host: BridgeHost, requestId: string, query: IdeQueryName, options: { provider?: string; network?: boolean; search?: string; row?: HostedRow }): Promise<void> {
   const answer = (data: unknown): void => host.channel.send({ type: 'result', requestId, ok: true, data });
   try {
     // Every screen lists from the index; only the open chat's history is read.
@@ -43,6 +44,11 @@ export async function answerQuery(host: BridgeHost, requestId: string, query: Id
       case 'accounts': answer(await accountList(state, session, Boolean(options.network))); return;
       case 'chat-settings': answer(session ? await chatSettings(state, session) : {}); return;
       case 'gateway': answer(await gatewayStatus(host.config)); return;
+      case 'hosted': answer(await hostedList(options.search ?? '')); return;
+      case 'hosted-plan':
+        if (!options.row) throw new Error('hosted-plan needs a row');
+        answer(await hostedAdapter(options.row.target).plan(options.row));
+        return;
       default: throw new Error(`unknown query "${String(query)}"`);
     }
   } catch (error) {

@@ -30,7 +30,7 @@ import { chooseOption } from '../pickers/choose.js';
 import { interactiveEnginePicker } from '../pickers/engine.js';
 import { selectProviderConversation } from '../pickers/conversation.js';
 import { addAccountForHarness, interactiveAccountPicker, manageAccountAction, useAddedAccount } from '../pickers/account.js';
-import { interactiveModelPicker, interactivePrivateModelsPicker } from '../pickers/model.js';
+import { interactiveHostedPicker, interactiveModelPicker } from '../pickers/model.js';
 import { interactiveEffortPicker } from '../pickers/effort.js';
 import { interactivePermissionPicker } from '../pickers/permissions.js';
 import { interactiveHarnessOptionPicker } from '../pickers/options.js';
@@ -271,7 +271,7 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
     },
     hostedModels: async () => {
       if (args && args.toLowerCase() !== 'ai') throw new Error('Usage: /hosted ai');
-      return interactivePrivateModelsPicker(rl, id);
+      return interactiveHostedPicker(rl, id);
     },
     effort: async () => args ? viaHeadless(text) : interactiveEffortPicker(rl, id),
     permissions: async () => args ? viaHeadless(text) : interactivePermissionPicker(rl, id),
