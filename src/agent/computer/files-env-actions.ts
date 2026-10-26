@@ -3,6 +3,7 @@
 import type { Page } from 'playwright-core';
 import type { ToolContext } from '../tool-contract.js';
 import { denyByDefault, describePermissions, parsePermissions, permissionOrigin, setSitePermissions } from './site-permissions.js';
+import { emulate, printPdf, siteCookies, type DeviceArgs, type DevicePreset } from './page-environment.js';
 import { disableHttpAuth, enableHttpAuth, httpAuthOrigin, httpCredentialsFor } from './http-auth.js';
 
 export type EnvArgs = { label?: string; http_auth?: boolean | string; clear?: boolean; grant?: string[] | string; deny?: string[] | string; url?: string };
@@ -39,3 +40,12 @@ export async function runPermissions(page: Page, args: EnvArgs): Promise<string>
 export async function denyPermissionsFor(page: Page, url: string): Promise<void> {
   try { await denyByDefault(page, permissionOrigin(url));  } catch { /* not a website address */ }
 }
+
+export async function runViewport(page: Page, args: DeviceArgs): Promise<string> {
+  const { devices } = await import('playwright-core');
+  return emulate(page, args, devices as unknown as Record<string, DevicePreset>);
+}
+
+export const runPdf = (page: Page, args: { landscape?: boolean; file_name?: string }, ctx: ToolContext): Promise<string> => printPdf(page, ctx.stateDir, ctx.sessionId, args);
+
+export const runCookies = (page: Page, args: { url?: string; clear?: boolean }): Promise<string> => siteCookies(page, { ...(args.url ? { url: args.url } : {}), ...(args.clear ? { clear: true } : {}) });

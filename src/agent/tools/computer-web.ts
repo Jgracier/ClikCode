@@ -29,7 +29,7 @@ import { hideKeyLikeText } from '../computer/secret-finder.js';
 import { answerDialog, bindDialogs, dialogNote, hasPendingDialog, pendingDialogNote, settleWaitingDialog, withDialogNotices, withDialogs } from '../computer/page-dialogs.js';
 import { FILES_ENV_ACTIONS, FILES_ENV_HELP, FILES_ENV_PARAMETERS, filesEnvLabel, type FilesEnvAction, type FilesEnvArgs } from '../computer/files-env-schema.js';
 import { documentView, requestDocumentPages } from '../computer/document-text.js';
-import { applyHttpAuth, clearHttpAuth, denyPermissionsFor, runPermissions } from '../computer/files-env-actions.js';
+import { applyHttpAuth, clearHttpAuth, denyPermissionsFor, runCookies, runPdf, runPermissions, runViewport } from '../computer/files-env-actions.js';
 import { approvedUploadPath, isUploadPath } from '../computer/upload-files.js';
 import { bindDownloads, describeDownloads, downloadNotes } from '../computer/downloads.js';
 import { SEND_TO_HELP, SEND_TO_SCHEMA } from './store-secret.js';
@@ -1023,6 +1023,9 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       const withAuth = authNote ? { ...withNotes, output: `${authNote}\n\n${withNotes.output}` } : withNotes;
       return recipes ? { ...withAuth, output: `${recipes}\n\n${withAuth.output}` } : withAuth;
     }
+    case 'viewport': return { output: await runViewport(page, args) };
+    case 'pdf': return { output: await runPdf(page, args, ctx) };
+    case 'cookies': return { output: await runCookies(page, args) };
     case 'permissions': return { output: await runPermissions(page, args) };
     case 'auth': {
       if (args.clear) return { output: await clearHttpAuth(page) };

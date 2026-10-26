@@ -185,6 +185,21 @@ other document says what it is. Text that looks like a key is hidden, as on any 
   words with what to install, and a failed download is not retried for an hour. The detached browser process
   reports why it could not start through `computer/host-status.json`, so these messages reach the agent.
 
+### Size, device, location, language, PDF and cookies
+- **`viewport`** sets how the tab presents itself, over the DevTools `Emulation` domain: `width`, `height`,
+  `scale` (device pixel ratio), `mobile` (mobile viewport and touch), or `device: "iPhone 15"` (any name in
+  Playwright's device list, matched loosely: size, scale, user agent and touch together); `geolocation`
+  (`{latitude, longitude}` or `"48.85,2.35"`; a site can read it once `permissions` grants `geolocation`),
+  `timezone` (`Europe/Paris`) and `locale` (`fr-FR`, JavaScript and `Accept-Language`). `reset: true` undoes
+  it all; with nothing given it says what is in force. Chrome drops emulation when the connection that set it
+  closes, so it lasts while the tab and the session do; reload for a new user agent or language to reach the site.
+- **`pdf`** prints the page to a PDF in the chat's downloads folder (`landscape`, `file_name`; the name defaults
+  to the page title) with the DevTools `Page.printToPDF`, and reports the path and size. It works in a window
+  and headless; a Chrome too old to print says so.
+- **`cookies`** lists the current site's cookies by name, domain, path and expiry, with `httpOnly`, `secure` and
+  `SameSite` flags, **never the values**; `clear: true` removes them for the site (`url` names another site).
+  There is no cookie import: ClikCode's browser never takes cookies from the user's own profile.
+
 ## Getting an API key without the agent seeing it
 
 The agent signs in, sets the options, then makes one `capture_secret` call: the final
