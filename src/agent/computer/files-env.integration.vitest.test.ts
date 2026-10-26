@@ -75,3 +75,25 @@ it.skipIf(!enabled)('does not keep a download that a key capture reads', async (
     lockCredentialVault(stateDir);
   });
 }, 60_000);
+
+it.skipIf(!enabled)('uploads a workspace file by path and refuses a dotfile', async () => {
+  await withSite((_request, response) => {
+    response.setHeader('Content-Type', 'text/html');
+    response.end('<label>Logo <input id="f" type="file"></label>');
+  }, async ({ run, base, cwd, stateDir }) => {
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(join(cwd, 'logo.png'), 'png-bytes');
+    await writeFile(join(cwd, '.env'), 'SECRET=1');
+    await run({ action: 'open', url: `${base}/` });
+    const ref = 'Logo';
+    const sent = await run({ action: 'upload', target: ref, text: join(cwd, 'logo.png') });
+    expect(sent.isError).toBeUndefined();
+    expect(sent.output).toContain('Uploaded logo.png');
+    const { computerPage } = await import('./browser.js');
+    const page = await computerPage(stateDir);
+    expect(await page.evaluate(() => (document.querySelector('input') as HTMLInputElement).files?.[0]?.name)).toBe('logo.png');
+    const refused = await run({ action: 'upload', target: ref, text: join(cwd, '.env') });
+    expect(refused.isError).toBe(true);
+    expect(refused.output).toMatch(/hidden/);
+  });
+}, 60_000);
