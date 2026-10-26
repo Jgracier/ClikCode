@@ -79,23 +79,22 @@ export function BusyLine({ label }: { label: string | undefined }): JSX.Element 
   return <span class="muted busy" role="status"><Spinner />{last.current.label}{elapsed >= 1000 ? ` · ${formatElapsed(elapsed)}` : ''}</span>;
 }
 
-/** How full the conversation's context window is, as a ring that fills; the
- * figures on hover, the breakdown (/context) on click. */
-export function ContextMeter({ context, tokens }: { context: NonNullable<ChatModel['context']>; tokens?: string }): JSX.Element {
+/** How full the conversation's context window is, as a ring that fills. All the stats are on hover --
+ * context, what the chat has cost, the last turn -- and nothing is written into the chat. */
+export function ContextMeter({ context, tokens, cost }: { context: NonNullable<ChatModel['context']>; tokens?: string; cost?: string }): JSX.Element {
   const radius = 6;
   const circumference = 2 * Math.PI * radius;
   const percent = context.percent;
   const figures = context.used ? `${compactCount(context.used)}${context.window ? ` of ${compactCount(context.window)}` : ''} tokens` : '';
   const label = `Context ${percent < 10 ? percent.toFixed(1) : Math.round(percent)}% used${figures ? ` (${figures})` : ''}`;
   return (
-    <button type="button" class={`context-meter${percent >= 90 ? ' high' : percent >= 70 ? ' warn' : ''}`} title={`${label}${tokens ? `\nLast turn: ${tokens}` : ''}\nClick for the breakdown.`} aria-label={label}
-      onClick={() => post({ type: 'send', text: '/context', id: uid() })}>
+    <span class={`context-meter${percent >= 90 ? ' high' : percent >= 70 ? ' warn' : ''}`} tabIndex={0} role="img" title={`${label}${cost ? `\nThis chat: ${cost}` : ''}${tokens ? `\nLast turn: ${tokens}` : ''}`} aria-label={`${label}${cost ? `. This chat: ${cost}` : ''}`}>
       <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
         <circle cx="8" cy="8" r={radius} class="context-track" />
         <circle cx="8" cy="8" r={radius} class="context-fill" stroke-dasharray={`${(percent / 100) * circumference} ${circumference}`} transform="rotate(-90 8 8)" />
       </svg>
       <span>{percent > 0 && percent < 1 ? '<1' : Math.round(percent)}%</span>
-    </button>
+    </span>
   );
 }
 
