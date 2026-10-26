@@ -135,6 +135,12 @@ export function ChildLine({ live }: { live: LiveChild }): JSX.Element {
   );
 }
 
+/** The elapsed time in a slot that is always there and always as wide, so the line does not shift as it ticks. */
+function AgentClock({ since }: { since: number }): JSX.Element {
+  const now = useNow();
+  return <span class="activity-outcome agent-clock">{now - since >= 1000 ? formatElapsed(now - since) : ''}</span>;
+}
+
 /** A running subagent as one line, the terminal's: its spinner, its name, how long it has run and
  * how many tools it has used, and under it the call it is running right now. That slot is always
  * one line tall and its text swaps in place, so the line never hops as the agent moves between
@@ -148,7 +154,7 @@ export function AgentLine({ activity, workspace }: { activity: Activity; workspa
       <div class="activity-line">
         <span class="activity-status tone-accent" aria-label="running"><Spinner tone="tone-accent" agent /></span>
         <ActivityLabel label={tensedLabel(activity.label, true)} workspace={workspace} />
-        {activity.startedAt ? <Clock since={activity.startedAt} /> : null}
+        {activity.startedAt ? <AgentClock since={activity.startedAt} /> : null}
         {uses ? <span class="activity-outcome">{toolUses(uses)}</span> : null}
         {activity.id ? <button type="button" class="icon-button tiny agent-toggle" aria-expanded={open} aria-label={open ? 'Hide subagent' : `View ${activity.label}`} onClick={() => setOpen(!open)}><Icon name={open ? 'chevron-up' : 'chevron-down'} /></button> : null}
       </div>

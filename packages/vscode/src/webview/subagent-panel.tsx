@@ -1,9 +1,10 @@
 /** A subagent's recorded work and its own message entry, on live and past rows. */
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
 import type { SubAgentRow } from '../../../../src/harness/subagent-read';
 import { request } from './bus';
 import { Icon } from './ui';
+import { renderMarkdown } from './markdown';
 
 interface View { rows: SubAgentRow[]; steer: 'direct' | 'relay' | 'none' }
 
@@ -13,6 +14,13 @@ export function SubagentBody({ parentId, agentId, label, running, onClose }: { p
   const [draft, setDraft] = useState('');
   const [notice, setNotice] = useState('');
   const [sending, setSending] = useState(false);
+  const scroller = useRef<HTMLDivElement>(null);
+  // Follows the latest while the reader is at the end; a scroll up to read stays put.
+  const following = useRef(true);
+  useLayoutEffect(() => {
+    const box = scroller.current;
+    if (box && following.current) box.scrollTop = box.scrollHeight;
+  }, [view]);
   useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -28,9 +36,9 @@ export function SubagentBody({ parentId, agentId, label, running, onClose }: { p
   }, [parentId, running]);
   return (
     <section class="subagent-view" aria-label={label} onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); onClose(); } }}>
-      <div class="subagent-view-rows">{view.rows.length ? view.rows.map((row, index) => row.kind === 'activity'
+      <div class="subagent-view-rows" ref={scroller} onScroll={(event) => { const box = event.currentTarget; following.current = box.scrollHeight - box.scrollTop - box.clientHeight < 24; }}>{view.rows.length ? view.rows.map((row, index) => row.kind === 'activity'
         ? <pre key={index}>{row.event.label}{row.event.output?.length ? `\n${row.event.output.join('\n')}` : ''}</pre>
-        : <p key={index} class={row.kind === 'prompt' ? 'muted' : undefined}>{row.text}</p>) : <p class="muted">No recorded child messages or tool calls.</p>}</div>
+        : <div key={index} class={row.kind === 'prompt' ? 'markdown muted' : 'markdown'} dangerouslySetInnerHTML={{ __html: renderMarkdown(row.text) }} />) : <p class="muted">No recorded child messages or tool calls.</p>}</div>
       {running && view.steer !== 'none' ? <form onSubmit={(event) => {
         event.preventDefault();
         if (!draft.trim() || sending) return;
