@@ -82,6 +82,7 @@ export function backgroundOnly<T extends Reply>(result: T, askedForeground = fal
 export const macosAccessibilityNotice = 'cua-driver does not have the macOS Accessibility permission, so it can neither read nor control any window. Open System Settings > Privacy & Security > Accessibility and turn on CuaDriver (run `cua-driver permissions grant` to be prompted), then try again.';
 export const macosScreenRecordingNotice = 'cua-driver does not have the macOS Screen Recording permission, so screenshots and pixel clicks are unavailable (the accessibility tree still works: use element_token actions). Open System Settings > Privacy & Security > Screen & System Audio Recording and turn on CuaDriver (run `cua-driver permissions grant`), then try again.';
 export const macosPermissionsPendingNotice = 'cua-driver has not been given its macOS permissions yet (Accessibility and Screen Recording), so it sees no windows. Run `cua-driver permissions grant` and turn on CuaDriver in the System Settings pages it opens, then try again.';
+export const noWindowFrameNotice = 'x and y in a window need a screenshot of it first: observe that window (pid and window_id) again and take x, y from its picture. When this model cannot see images, act on an element_token instead (click, double_click, right_click and type take one); drag has only a pixel form.';
 export const windowsElevatedNotice = 'Windows refused the input: the target window most likely runs as administrator (elevated), and a program that is not elevated, as ClikCode is, cannot drive it. Ask the user to close it and open it again without "Run as administrator", or to start ClikCode elevated.';
 export const windowsSessionNotice = 'cua-driver is running in Windows session 0 (a service or SSH session) where there is no desktop to read. Start it from the user\'s signed-in desktop session (`schtasks /Run /TN cua-driver-serve`), then try again.';
 
@@ -96,6 +97,8 @@ export function friendlyDriverError<T extends Reply>(result: T, platform: NodeJS
     if (/Screen Recording permission (is )?not granted|screen recording[^.\n]*not (been )?(granted|enabled)/i.test(said)) return withCause(macosScreenRecordingNotice);
     if (/permissions_pending|permission[^.\n]*still pending/i.test(said)) return withCause(macosPermissionsPendingNotice);
   }
+  // Cua's own wording names its internal tool (get_window_state), which the model does not have.
+  if (/No screenshot frame for window/i.test(said)) return { ...result, output: noWindowFrameNotice };
   if (platform === 'win32') {
     if (/session ?0|SessionId[: ]+0/i.test(said)) return withCause(windowsSessionNotice);
     if (/access is denied|UIPI|elevated|integrity level|0x80070005/i.test(said)) return withCause(windowsElevatedNotice);

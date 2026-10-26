@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  backgroundOnly, backgroundOnlyNotice, foregroundUnavailableNotice, friendlyDriverError, macosAccessibilityNotice, macosPermissionsPendingNotice, macosScreenRecordingNotice,
+  backgroundOnly, backgroundOnlyNotice, foregroundUnavailableNotice, friendlyDriverError, macosAccessibilityNotice, macosPermissionsPendingNotice, noWindowFrameNotice, macosScreenRecordingNotice,
   clipboardReply, permissionsNotice, scrubClipboard, summarizeApps, windowsElevatedNotice,
 } from './driver-results.js';
 
@@ -106,6 +106,13 @@ describe('driver errors', () => {
     expect(friendlyDriverError({ output: 'SendInput failed: Access is denied (0x80070005)', isError: true }, 'win32').output).toContain(windowsElevatedNotice);
     expect(friendlyDriverError({ output: 'Refused: SessionId 0 has no desktop', isError: true }, 'win32').output).toContain('session 0');
     expect(friendlyDriverError({ output: 'fine', isError: false }, 'win32').output).toBe('fine');
+  });
+
+  it('replaces cua\'s internal tool name when a window pixel action has no screenshot yet', () => {
+    const said = 'No screenshot frame for window 9639: its latest read had no screenshot. Call get_window_state(pid:1, window_id:2) with the default screenshot.';
+    const reply = friendlyDriverError({ output: said, isError: true }, 'darwin');
+    expect(reply.output.startsWith(noWindowFrameNotice)).toBe(true);
+    expect(friendlyDriverError({ output: said, isError: true }, 'linux').output.startsWith(noWindowFrameNotice)).toBe(true);
   });
 
   it('reads the macOS grants from permissions status', () => {
