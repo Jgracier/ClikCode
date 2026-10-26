@@ -194,7 +194,7 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
 .message.assistant:hover .message-actions, .message-actions:focus-within { opacity: 1; }
 .bubble-context { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; margin-top: 4px; font-size: 0.88em; opacity: 0.75; }
 .bubble-chip { display: inline-flex; gap: 4px; align-items: center; }
-.context-meter { display: inline-flex; align-items: center; gap: 4px; background: none; border: none; padding: 0 2px; color: var(--muted); font-size: 0.9em; font-variant-numeric: tabular-nums; }
+.context-meter { display: inline-flex; align-items: center; gap: 4px; background: none; border: none; padding: 0 2px; cursor: default; color: var(--muted); font-size: 0.9em; font-variant-numeric: tabular-nums; }
 .context-meter:hover { color: var(--vscode-foreground); }
 .context-track { fill: none; stroke: var(--border); stroke-width: 2; }
 .context-fill { fill: none; stroke: var(--vscode-textLink-foreground); stroke-width: 2; stroke-linecap: round; }
@@ -378,8 +378,6 @@ textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
 .composer-usage.spent { color: var(--vscode-errorForeground, var(--err)); }
 @container composer-wrap (max-width: 360px) { .composer-usage .usage-reset { display: none; } }
 /* "$1.23 this chat": the conversation's cost so far, only where one was reported. */
-.status-cost { flex: 0 0 auto; white-space: nowrap; height: 24px; line-height: 24px; padding: 0 6px; font-size: 0.88em; }
-@container (max-width: 320px) { .status-cost { display: none; } }
 .chip-button {
   flex: none; display: inline-flex; align-items: center; gap: 4px; max-width: 100%; min-width: 0; height: 24px; padding: 0 8px; border-radius: var(--radius-small);
   border: 1px solid transparent; background: transparent; color: var(--muted); font-size: 0.93em;

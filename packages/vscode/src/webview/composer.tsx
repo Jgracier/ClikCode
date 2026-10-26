@@ -407,10 +407,9 @@ export function Composer(props: {
           onClick={() => { void request({ method: 'updateMachine', machineId: model.machineId! }).catch((error: Error) => props.onError(error.message)); }}>Update</button> : null}
         <span class="spacer" />
         <BusyLine label={busy && !installing && !model.signIn ? busy : undefined} />
-        {model.chatCost ? <span class="muted status-cost" title="What this chat has cost so far">{model.chatCost}</span> : null}
-        {/* Context ring: fills as context window is used; figures on hover, breakdown on click. */}
-        {model.context ? <ContextMeter context={model.context} tokens={tokens} />
-          : tokens ? <span class="muted turn-tokens" title="Tokens used by the last turn">{tokens}</span> : null}
+        {/* Context ring: fills as the context window is used. Its stats (context, cost, last turn) are on hover. */}
+        {model.context ? <ContextMeter context={model.context} tokens={tokens} cost={model.chatCost} />
+          : tokens || model.chatCost ? <span class="muted turn-tokens" title={[model.chatCost ? `This chat: ${model.chatCost}` : '', tokens ? `Last turn: ${tokens}` : ''].filter(Boolean).join('\n')}>{tokens ?? model.chatCost}</span> : null}
       </div>
     </div>
   );
