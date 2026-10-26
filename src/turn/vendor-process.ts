@@ -208,8 +208,7 @@ export async function closePersistentTransport(sessionId?: string): Promise<void
 
 /** A second vendor child per ClikCode session, opened for the account a
  * failover would move to while the current account's turn runs: its agent
- * started and the thread loaded, so a refusal hands the turn over without a
- * cold start (seconds: a Claude session connects every MCP server first). */
+ * started and initialized. Threads are carried and loaded only on failover. */
 interface StandbyTransport { accountId: string; transport: PersistentTransport; ready: Promise<boolean> }
 const standbyTransports = new Map<string, StandbyTransport>();
 

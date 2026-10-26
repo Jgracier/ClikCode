@@ -6,7 +6,7 @@ import { failureText } from '../../../../src/harness/protocol/stderr-line';
 import { isUsageExhaustedMessage } from '../../../../src/turn/usage-exhausted';
 import { noticeLevel, stripAnsi } from '../text';
 import type { WorkerEvent } from '../protocol';
-import { applyActivity, cleanDiff, freshLive, liveBackground, rebaseOffsets, settled, stampAfter, takeSeq, withoutPhase } from './activity';
+import { applyActivity, cleanDiff, freshLive, liveBackground, rebaseOffsets, settled, settledCalls, stampAfter, takeSeq, withoutPhase } from './activity';
 import { answeredApproval, askedAt } from './approvals';
 import { applySnapshot } from './snapshot';
 import { NO_TRANSIENT } from './session';
@@ -134,14 +134,17 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
         ...(event.responseOffset !== undefined ? { offset: event.responseOffset } : {}),
       });
     case 'turn-error': {
+      // The worker has ended this attempt. A shell whose completion never
+      // reached it must stop animating now, even before waiting-stop arrives.
+      const failed = model.live ? { ...model, live: { ...model.live, activities: settledCalls(model.live.activities, true) } } : model;
       // The turn's own note already says it.
-      if (event.said) return model;
+      if (event.said) return failed;
       // The whole cause, as the terminal's note shows it: the notice wraps.
       const msg = failureText(stripAnsi(event.message));
       // Exhaustion is an outcome, not a fault — show it as informational chat
       // text rather than a red error banner so it reads as part of the flow.
       const exhausted = isUsageExhaustedMessage(msg);
-      return withNote(model, { kind: 'notice', level: exhausted ? 'info' : 'error', text: msg });
+      return withNote(failed, { kind: 'notice', level: exhausted ? 'info' : 'error', text: msg });
     }
     case 'submission': {
       const submissions = model.submissions.map((item) => (item.id === event.id ? { ...item, disposition: event.disposition, ...(event.unsteered ? { unsteered: true } : {}) } : item));

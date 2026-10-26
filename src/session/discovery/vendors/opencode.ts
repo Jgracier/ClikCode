@@ -2,7 +2,7 @@
 
 import { captureNativeHarnessOutput } from '../../../harness/transport/native/command.js';
 import type { AiLocalHarnessDefinition } from '../../../harness/definition.js';
-import { ADOPTED_TRANSCRIPT_LIMIT } from '../transcript.js';
+import type { NativeSessionEnvironment } from '../stores.js';
 
 /** opencode publishes a real export command (`opencode export <sessionID>`,
  * confirmed live) that dumps the full session as JSON: a `messages` array of
@@ -11,9 +11,9 @@ import { ADOPTED_TRANSCRIPT_LIMIT } from '../transcript.js';
  * plain-text representation in ClikCode's own {role, content: string}
  * message model, the same reason Claude/Codex transcripts above only keep
  * text blocks. */
-export async function readOpencodeTranscript(harness: AiLocalHarnessDefinition, nativeId: string, workspace: string): Promise<Array<{ role: 'user' | 'assistant'; content: string }>> {
+export async function readOpencodeTranscript(harness: AiLocalHarnessDefinition, nativeId: string, workspace: string, environment: NativeSessionEnvironment = {}): Promise<Array<{ role: 'user' | 'assistant'; content: string }>> {
   let raw: string;
-  try { raw = await captureNativeHarnessOutput(harness, ['export', nativeId], {}, undefined, workspace); } catch {
+  try { raw = await captureNativeHarnessOutput(harness, ['export', nativeId], environment, undefined, workspace); } catch {
     // fail-open-ok: session adoption is optional; a failed read-only vendor export has no importable messages.
     return [];
   }
@@ -33,5 +33,5 @@ export async function readOpencodeTranscript(harness: AiLocalHarnessDefinition, 
     const text = (message.parts ?? []).filter((part) => part.type === 'text').map((part) => part.text ?? '').join(' ').trim();
     if (text) messages.push({ role, content: text });
   }
-  return messages.slice(-ADOPTED_TRANSCRIPT_LIMIT);
+  return messages;
 }

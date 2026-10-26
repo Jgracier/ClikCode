@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { usageNextReset, usageWindowsDetail } from './usage-reading';
+import { usageNextReset, usageWindowsDetail, usageResetLabel, accountBackAt, outOfUsageText } from './usage-reading';
+import type { AiHarnessAccount } from '../definition.js';
 
 // Local times, so the wording ("5:34PM", the weekday) holds in any timezone.
 const NOW = new Date(2026, 9, 10, 9, 0).getTime();
 const at = (day: number, hour: number, minute = 0) => new Date(2026, 9, day, hour, minute).toISOString();
 
 describe('the composer\'s reset beside the figure', () => {
+  it('reports availability after every exhausted window resets', () => {
+    const windows = [{ name: '5h', usedPct: 100, resetsAt: at(10, 17) }, { name: 'weekly', usedPct: 100, resetsAt: at(14, 9) }];
+    const account = { usage: { at: NOW, windows } } as unknown as AiHarnessAccount;
+    expect(usageResetLabel(windows, NOW)).toBe(outOfUsageText(accountBackAt(account, NOW), NOW));
+  });
   it('names the window closest to running out, with the date once it is not today', () => {
     const windows = [{ name: '5h', usedPct: 30, resetsAt: at(10, 17, 34) }, { name: 'weekly', usedPct: 80, resetsAt: at(14, 9) }];
     expect(usageNextReset(windows, NOW)).toBe('Weekly resets 9:00AM Wednesday Oct 14');

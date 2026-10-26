@@ -294,6 +294,7 @@ describe('active_conversations', () => {
     await writeWorkerRecord({
       pid: process.pid, sessionId: OTHER, socketPath: '/nowhere', installationId: 'test', startedAt: minutesAgo(5), token: 't',
       awaitingApproval: { title: 'Run pnpm test auth?', since: minutesAgo(1) },
+      runningTurn: { since: minutesAgo(3) },
     });
     const result = await run('active_conversations', {}, CURRENT);
     expect(result.text).toContain('Auth refresh bug — id aaaaaaaa · codex · gpt-5 · working for 3m · last active just now');

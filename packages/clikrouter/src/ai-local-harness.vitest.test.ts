@@ -499,11 +499,11 @@ describe('local harness catalog', () => {
     expect(localHarnessForCommand('kilo')!.loginAccountChoose).toEqual(['Kilo Gateway']);
   });
 
-  it('upgrades Amp to stream-json while keeping the text contract as its fallback', () => {
+  it('sends Amp prompts on its native JSON input for fresh and resumed threads', () => {
     const amp = localHarnessForCommand('amp')!;
-    expect(amp).toMatchObject({ transport: 'structured-cli', integration: 'structured', experimental: true });
-    expect(nativeHarnessTurnArgv(amp, { prompt: 'hi' })).toEqual(['--stream-json', '-x', 'hi']);
-    expect(nativeHarnessTurnArgv(amp, { prompt: 'hi', nativeSessionId: 'T-1' })).toEqual(['threads', 'continue', 'T-1', '--stream-json', '-x', 'hi']);
+    expect(amp).toMatchObject({ transport: 'structured-cli', integration: 'structured' });
+    expect(nativeHarnessTurnArgv(amp, { prompt: 'hi' })).toEqual(['--execute', '--stream-json', '--stream-json-input', '--no-archive-after-execute']);
+    expect(nativeHarnessTurnArgv(amp, { prompt: 'hi', nativeSessionId: 'T-1' })).toEqual(['threads', 'continue', 'T-1', '--execute', '--stream-json', '--stream-json-input', '--no-archive-after-execute']);
   });
 
   it('pipes the prompt where the vendor reads stdin and never leaves it in argv', () => {

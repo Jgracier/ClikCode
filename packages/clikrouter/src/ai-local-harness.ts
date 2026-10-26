@@ -168,7 +168,10 @@ export interface AiHarnessManagerDefinition {
 /** One file a vendor reads its MCP servers from. */
 export interface AiHarnessMcpServerFile {
   /** Under the user's home (or an isolated profile that is a whole HOME). */
-  homeRelative: readonly string[];
+  homeRelative?: readonly string[];
+  /** Under the session workspace; these are read for deduplication, never
+   * copied into ClikCode's global MCP inventory. */
+  projectRelative?: readonly string[];
   /** Under the vendor's own directory variable (CLAUDE_CONFIG_DIR,
    *  CODEX_HOME), which is what an isolated account profile points at. */
   rootRelative?: readonly string[];
@@ -189,6 +192,8 @@ export interface AiHarnessCapabilityManifest {
 
 /** One-shot, non-interactive invocation used by the persistent ClikCode UI. */
 export interface AiHarnessTurnDefinition {
+  /** No native conversation persists between invocations. */
+  stateless?: true;
   startArgv: readonly string[];
   resumeArgv?: readonly string[];
   resumeIdPrefix?: readonly string[];
@@ -204,7 +209,7 @@ export interface AiHarnessTurnDefinition {
    * it while the vendor reports background work, so a task that finishes
    * after the turn's `result` still gets its follow-up turn. Claude Code only:
    * its `-p` mode kills background tasks the moment stdin closes. */
-  stdinFormat?: 'stream-json' | 'pi-rpc';
+  stdinFormat?: 'stream-json' | 'pi-rpc' | 'amp-json';
   /* `pi-rpc`: Pi's `--mode rpc` -- the prompt is a JSON command on stdin, stdin stays open for the
    * turn, and a message typed meanwhile is a `steer` command (delivered after the running tool calls,
    * before the next model call: pi docs/rpc.md; verified against pi 0.87.0). Images travel in the
@@ -961,12 +966,10 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
       anthropic: 'Anthropic', openrouter: 'OpenRouter', openai: ['OpenAI', 'Yes'], google: 'Google Gemini (API Key)', xai: 'xAI', groq: 'Groq', cerebras: 'Cerebras', huggingface: 'Hugging Face',
       fireworks: 'Fireworks AI', mistral: 'Mistral AI', deepseek: 'DeepSeek', moonshot: 'Moonshot', zai: 'Z.AI', minimax: 'MiniMax', together: 'Together AI',
     }), providerLoginArgv: ['configure'], modelProviderSeparator: '/', modelProviderArgvPrefix: ['--provider'], modelArgvPrefix: ['--model'], permissionModes: ['ask', 'bypass', 'auto'], permissionEnv: { ask: { GOOSE_MODE: 'approve' }, bypass: { GOOSE_MODE: 'auto' }, auto: { GOOSE_MODE: 'smart_approve' } }, turn: { startArgv: ['run', '--output-format', 'stream-json'], createIdPrefix: ['--name'], resumeIdPrefix: ['--resume', '--session-id'], promptArgvPrefix: ['--text'], output: 'json-lines', responseFields: ['text', 'content', 'response'], statelessProviders: ['claude-code'] }, session: { idKind: 'uuid', idByName: true, createIdPrefix: ['--name'], resumeIdPrefix: ['session', '--resume', '--session-id'], discoverArgv: ['session', 'list', '--format', 'json'], discoverFormat: 'json', discoverAllFolders: true } },
-  // Amp's execute mode has a documented `--stream-json` switch that emits
-  // Claude Code-compatible stream-json (system/assistant/result envelopes), so
-  // it borrows the claude-stream-json parser family. UNVERIFIED LIVE: amp is
-  // not installed where this was written, hence `experimental`. A turn that
-  // fails fails visibly: ClikCode does not retry on another contract.
-  { command: 'amp', keyIdentityArgv: ['usage'], quotaProbe: true, subagents: { read: 'frames', steer: 'none' }, capabilities: { childActivity: true, thinking: true, plan: true, usage: true, toolOutput: true, backgroundAgents: false, backgroundTerminals: false, workflows: false }, provider: 'amp', displayName: 'Amp', tier: 'more', transport: 'structured-cli', integration: 'structured', parser: 'claude-stream-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'amp', npmPackage: '@ampcode/cli', authFiles: [{ path: '${XDG_DATA_HOME:-~/.local/share}/amp/secrets.json', contains: 'apiKey@' }], authEnv: ['AMP_API_KEY'], loginArgv: ['login'], versionArgv: ['version'], turn: { startArgv: ['--stream-json'], resumeArgv: ['threads', 'continue'], resumeIdSuffix: ['--stream-json'], promptArgvPrefix: ['-x'], output: 'json-lines', responseFields: ['result'], mcpConfigArgv: ['--mcp-config'] }, session: { resumeIdPrefix: ['threads', 'continue'] } },
+  // Amp's native JSON stdin and safe steering passed a live turn on 2026-10-25.
+  // Input closes after the main reply and background agents settle; the final
+  // result follows EOF. It shares Claude-shaped output, not Claude's lifecycle.
+  { command: 'amp', keyIdentityArgv: ['usage'], quotaProbe: true, subagents: { read: 'frames', steer: 'none' }, capabilities: { childActivity: true, thinking: true, plan: true, usage: true, toolOutput: true, backgroundAgents: true, backgroundTerminals: false, workflows: false }, provider: 'amp', displayName: 'Amp', tier: 'more', transport: 'structured-cli', integration: 'structured', parser: 'claude-stream-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'amp', npmPackage: '@ampcode/cli', authFiles: [{ path: '${XDG_DATA_HOME:-~/.local/share}/amp/secrets.json', contains: 'apiKey@' }], authEnv: ['AMP_API_KEY'], loginArgv: ['login'], versionArgv: ['version'], turn: { startArgv: ['--execute', '--stream-json', '--stream-json-input', '--no-archive-after-execute'], resumeArgv: ['threads', 'continue'], resumeIdSuffix: ['--execute', '--stream-json', '--stream-json-input', '--no-archive-after-execute'], promptInput: 'stdin', stdinFormat: 'amp-json', stdinArgv: [], output: 'json-lines', responseFields: ['result'], mcpConfigArgv: ['--mcp-config'] }, session: { resumeIdPrefix: ['threads', 'continue'] } },
   // Verified against Antigravity's own official headless-mode docs
   // (antigravity.google/docs/cli/headless/): -p/--print for a single
   // non-interactive prompt, --model <slug>, --continue/-c for the most
@@ -1207,7 +1210,7 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // fails at the one moment it matters.
   // cn 1.5.47 has no model selector: `--model <slug>` ADDS a hub model (owner/package), so a
   // plain model id is not passed; the model comes from the assistant's config.yaml / --config.
-  { command: 'cn', quotaProbe: { none: '`cn --help` has no usage, status or quota command' }, subagents: { read: 'none', steer: 'none' }, capabilities: { childActivity: false, thinking: false, plan: false, usage: false, toolOutput: false, backgroundAgents: false, backgroundTerminals: false, workflows: false }, provider: 'continue', displayName: 'Continue', tier: 'more', transport: 'text-cli', integration: 'compatibility', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'cn', npmPackage: '@continuedev/cli', loginArgv: [], authFiles: [{ path: '${CONTINUE_GLOBAL_DIR:-~/.continue}/config.yaml', contains: 'apiKey:' }], authEnv: ['ANTHROPIC_API_KEY'], planMode: { option: 'readonly', value: true }, permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--auto'] } }, turn: { startArgv: [], promptArgvPrefix: ['-p'], output: 'text' } },
+  { command: 'cn', quotaProbe: { none: '`cn --help` has no usage, status or quota command' }, subagents: { read: 'none', steer: 'none' }, capabilities: { childActivity: false, thinking: false, plan: false, usage: false, toolOutput: false, backgroundAgents: false, backgroundTerminals: false, workflows: false }, provider: 'continue', displayName: 'Continue', tier: 'more', transport: 'text-cli', integration: 'compatibility', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'cn', npmPackage: '@continuedev/cli', loginArgv: [], authFiles: [{ path: '${CONTINUE_GLOBAL_DIR:-~/.continue}/config.yaml', contains: 'apiKey:' }], authEnv: ['ANTHROPIC_API_KEY'], planMode: { option: 'readonly', value: true }, permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--auto'] } }, turn: { stateless: true, startArgv: [], promptArgvPrefix: ['-p'], output: 'text' } },
   // ACP entrypoints checked against each vendor's own source. Devin CLI and
   // MiniMax Code also have session stores and native-thread writers, and
   // their failover carry was verified live on 2026-10-05: Devin with signed-in
@@ -1676,7 +1679,33 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       value('add-dir', 'Additional directories', 'Additional working directories for file access', 'context', ['--add-dir'], 'path-list', { argvStyle: 'repeat' }),
       flag('worktree', 'Managed worktree', 'Run inside a Git worktree under $VIBE_HOME/worktrees', 'session', ['--worktree'], { requiresNewSession: true }),
     ],
-    managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] } },
+    managers: { mcp: { label: 'MCP servers', serverFiles: [{ homeRelative: ['.vibe', 'config.toml'], rootRelative: ['config.toml'], rootEnv: 'VIBE_HOME', format: 'toml', key: ['mcp_servers'], dialect: 'mcp-servers' }], manageArgv: ['mcp'] } },
+  },
+  dcode: {
+    options: [],
+    managers: { mcp: { label: 'MCP servers', serverFiles: [
+      { homeRelative: ['.deepagents', '.mcp.json'], format: 'json', key: ['mcpServers'], dialect: 'mcp-servers' },
+      { projectRelative: ['.deepagents', '.mcp.json'], format: 'json', key: ['mcpServers'], dialect: 'mcp-servers' },
+    ] } },
+  },
+  junie: {
+    options: [],
+    managers: { mcp: { label: 'MCP servers', serverFiles: [
+      { homeRelative: ['.junie', 'mcp', 'mcp.json'], format: 'json', key: ['mcpServers'], dialect: 'mcp-servers' },
+      { projectRelative: ['.junie', 'mcp', 'mcp.json'], format: 'json', key: ['mcpServers'], dialect: 'mcp-servers' },
+    ] } },
+  },
+  devin: {
+    options: [],
+    managers: { mcp: { label: 'MCP servers', serverFiles: [
+      { homeRelative: ['.config', 'devin', 'mcp_config.json'], format: 'json', key: ['mcpServers'], dialect: 'mcp-servers' },
+      { projectRelative: ['.devin', 'mcp_config.json'], format: 'json', key: ['mcpServers'], dialect: 'mcp-servers' },
+      { projectRelative: ['.devin', 'mcp_config.local.json'], format: 'json', key: ['mcpServers'], dialect: 'mcp-servers' },
+    ] } },
+  },
+  mcode: {
+    options: [],
+    managers: { mcp: { label: 'MCP servers', serverFiles: [{ projectRelative: ['.mcp.json'], format: 'json', key: ['mcpServers'], dialect: 'mcp-servers' }] } },
   },
   // `openclaw agent` (2026.9.6). --agent, --session-id/--session-key,
   // --model, --thinking and --message are the turn itself; delivery flags

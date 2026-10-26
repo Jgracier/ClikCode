@@ -5,7 +5,6 @@ import { useRef, useState } from 'preact/hooks';
 import { exploreRuns } from '../../../../src/harness/protocol/turn-flow';
 import { useNow, useSpinFrame } from './clock';
 import type { TurnUsage } from '../../../../src/harness/protocol/turn-usage';
-import { turnStalled } from '../../../../src/harness/protocol/turn-pace';
 import { withoutOtherOrgThinkingNotice } from '../../../../src/harness/protocol/claude-thinking-notice';
 import { planWindow } from '../../../../src/tui/render/plan-window';
 import { STEER_WORDS } from '../../../../src/tui/render/steer-rows';
@@ -255,7 +254,7 @@ export function Working({ live, asking, usage, reconnecting: away = false }: { l
         {/* Waiting on the user is not working: a still dot, as the terminal
             shows it, and no clock -- it is stopped. */}
         {held || rowRunning ? <span class={`spinner ${status.toneClass}`} aria-hidden="true">●</span>
-          : <Spinner tone={live && turnStalled(now - live.activeAt) ? 'tone-stopped' : status.toneClass} />}
+          : <Spinner tone={status.toneClass} />}
         <span class={workingLabelClass(status.toneClass, held)} style={held ? undefined : shimmerStyle(status.label)} title={thought ? (thought.length > 600 ? `…${thought.slice(-600)}` : thought) : undefined}>{status.label}</span>
         {thought ? (
           <button type="button" class="icon-button tiny working-thought" aria-expanded={open} title={open ? 'Hide reasoning' : 'Show reasoning'} aria-label={open ? 'Hide reasoning' : 'Show reasoning'}

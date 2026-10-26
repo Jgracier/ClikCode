@@ -29,11 +29,12 @@ import { readStoredPendingTurn } from './store/transcripts.js';
 type PendingTurn = NonNullable<HarnessSession['pendingTurn']>;
 
 /** The background work a live worker reports for a session (its record). */
-type BackgroundOf = (sessionId: string) => WorkerRuntimeRecord['background'];
+export type BackgroundOf = (sessionId: string) => WorkerRuntimeRecord['background'];
 
 /** Whether a worker process exists for a session id. Supplied by the caller so
  *  one filesystem pass answers for a whole list. */
 export type WorkerLiveness = (sessionId: string) => boolean;
+export type RunningTurnLookup = (sessionId: string) => string | undefined;
 
 /** True when some process is running this session right now.
  *
@@ -63,10 +64,11 @@ export async function liveWorkerSessions(): Promise<(sessionId: string) => boole
 /** The same pass, and which live workers have an approval waiting on the
  * user: the record a worker keeps beside its pid (onAwaitingApproval), so a
  * list can say a conversation needs the user without attaching to it. */
-export async function liveWorkers(): Promise<{ isLive: WorkerLiveness; isOpen: WorkerLiveness; awaitingYou: (sessionId: string) => boolean; background: BackgroundOf }> {
+export async function liveWorkers(): Promise<{ isLive: WorkerLiveness; isOpen: WorkerLiveness; awaitingYou: (sessionId: string) => boolean; background: BackgroundOf; runningTurn: RunningTurnLookup }> {
   const live = new Set<string>();
   const awaiting = new Set<string>();
   const background = new Map<string, NonNullable<WorkerRuntimeRecord['background']>>();
+  const turns = new Map<string, string>();
   const [records, isOpen] = await Promise.all([listWorkerRecords().catch(() => []), liveOpenConversations().catch(() => () => false)]);
   await Promise.all(records.map(async (record) => {
     try {
@@ -78,8 +80,9 @@ export async function liveWorkers(): Promise<{ isLive: WorkerLiveness; isOpen: W
     live.add(record.sessionId);
     if (record.awaitingApproval) awaiting.add(record.sessionId);
     if (record.background) background.set(record.sessionId, record.background);
+    if (record.runningTurn?.since) turns.set(record.sessionId, record.runningTurn.since);
   }));
-  return { isLive: (sessionId) => live.has(sessionId), isOpen, awaitingYou: (sessionId) => awaiting.has(sessionId), background: (sessionId) => background.get(sessionId) };
+  return { isLive: (sessionId) => live.has(sessionId), isOpen, awaitingYou: (sessionId) => awaiting.has(sessionId), background: (sessionId) => background.get(sessionId), runningTurn: (sessionId) => turns.get(sessionId) };
 }
 
 /** The turn each live-worker session is generating, read from its transcript.
@@ -93,11 +96,18 @@ export async function livePendingTurns(
   workerIsLive: WorkerLiveness,
   /** Work the vendor still runs for a chat whose own turn is over (liveWorkers). */
   background: BackgroundOf = () => undefined,
+  runningTurn: RunningTurnLookup = () => undefined,
 ): Promise<Map<string, PendingTurn>> {
   const pending = new Map<string, PendingTurn>();
   await Promise.all(sessions.filter((session) => session.status === 'active' && workerIsLive(session.id)).map(async (session) => {
-    const turn = await readStoredPendingTurn(session.id).catch(() => undefined);
-    if (turn && !turn.failedAt) { pending.set(session.id, turn); return; }
+    const startedAt = runningTurn(session.id);
+    if (startedAt) {
+      const turn = await readStoredPendingTurn(session.id).catch(() => undefined);
+      pending.set(session.id, turn && !turn.failedAt ? turn : {
+        prompt: '', startedAt, updatedAt: startedAt, outputStarted: false,
+      });
+      return;
+    }
     const work = background(session.id);
     if (work) pending.set(session.id, backgroundAsTurn(work));
   }));
@@ -125,7 +135,9 @@ export function sessionActivity(
   workerIsLive: WorkerLiveness,
   pending: HarnessSession['pendingTurn'] = session.pendingTurn,
   isOpen: WorkerLiveness = () => false,
+  runningTurn: RunningTurnLookup = () => undefined,
+  background: BackgroundOf = () => undefined,
 ): 'working' | 'idle' | undefined {
   if (!sessionIsLive(session, workerIsLive, isOpen)) return undefined;
-  return pending && !pending.failedAt && workerIsLive(session.id) ? 'working' : 'idle';
+  return pending && !pending.failedAt && (runningTurn(session.id) || background(session.id)) ? 'working' : 'idle';
 }

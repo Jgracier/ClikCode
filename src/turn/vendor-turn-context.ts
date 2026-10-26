@@ -21,9 +21,6 @@ export interface AttemptState {
   authRetried: boolean;
   /** Whether this turn opened a standby for its failover account. */
   standbyOpened: boolean;
-  /** The account this turn's thread was copied to before its first attempt
-   * wrote anything: a failover to it with nothing written needs no copy. */
-  threadCopiedTo: string | undefined;
   /** A fresh native thread gets one recovery attempt per account. */
   nativeThreadRetried: boolean;
 }
@@ -50,10 +47,9 @@ export interface VendorTurnContext {
   account: AiHarnessAccount;
   model: string | null;
   turnText: string;
-  /** The request this turn was asked, before a retry replaces it. A failover
-   * that produced no output sends this again; rebuilding the transcript
-   * would repeat the whole conversation on top of a thread that already has it. */
-  askedText: string;
+  /** The original request with attachments, before any handoff framing.
+   * Fresh-thread recovery must never retell a prepared transfer as a request. */
+  readonly askedText: string;
   readonly attempt: AttemptState;
 }
 
@@ -111,7 +107,7 @@ export async function createVendorTurnContext(input: AccountTurnInput): Promise<
     state, session, harness, text, startedAt, signal, run, prompter, checkpoint, accounts,
     requestContext: prepared.textContext, images, cliCarriesImages, baseMessages,
     account: input.account, model, turnText: withResourceNotes(session.id, turnText), askedText: turnText,
-    attempt: { authRetried: false, standbyOpened: false, threadCopiedTo: undefined, nativeThreadRetried: false },
+    attempt: { authRetried: false, standbyOpened: false, nativeThreadRetried: false },
   };
   return context;
 }

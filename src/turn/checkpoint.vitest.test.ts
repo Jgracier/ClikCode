@@ -480,6 +480,19 @@ describe('joining a turn another window is running', () => {
     expect(runningActivityLabel(done.pendingTurn)).toBeUndefined();
   });
 
+  it('settles open calls when a turn fails, including checkpoints written by older workers', () => {
+    const failed = running();
+    expect(failPendingTurn(failed, 'continue', '2026-01-02T00:11:00.000Z')).toBe(true);
+    expect(runningActivityLabel(failed.pendingTurn)).toBeUndefined();
+    expect(sessionTranscriptMessages(failed).at(-1)?.activities?.map((item) => [item.event.kind, item.event.stopped])).toEqual([
+      ['tool-done', undefined], ['tool-error', true],
+    ]);
+    const legacy = running();
+    legacy.pendingTurn!.failedAt = '2026-01-02T00:11:00.000Z';
+    expect(runningActivityLabel(legacy.pendingTurn)).toBeUndefined();
+    expect(sessionTranscriptMessages(legacy).at(-1)?.activities?.at(-1)?.event).toMatchObject({ kind: 'tool-error', stopped: true });
+  });
+
   it('reads a journal of one-line strings as calls, and never throws on one', () => {
     expect(runningActivityLabel(legacy().pendingTurn)).toBe('running $ node scripts/verify.mjs');
     const messages = sessionTranscriptMessages(legacy());

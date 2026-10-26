@@ -26,6 +26,8 @@ export interface WorkItem {
   prompt?: string;
   /** Where a command writes its output. */
   outputFile?: string;
+  /** The native parent thread whose child transcript this task belongs to. */
+  nativeSessionId?: string;
 }
 
 export class BackgroundWorkTracker<T extends WorkItem = WorkItem> {

@@ -22,12 +22,13 @@ import { captureNativeHarnessTurn, createTurnInput, createTurnRelease } from '..
 import { nativeMcpConfig } from '../harness/transport/native/mcp-config.js';
 import { createBackgroundWait, streamJsonUserMessage } from '../harness/transport/native/background-wait.js';
 import { createPiRpcTurn, piRpcPrompt, piRpcSteer } from '../harness/transport/native/pi-rpc.js';
+import { ampUserMessage, createAmpStreamTurn } from '../harness/transport/native/amp-stream.js';
 import { settleHeldVendor } from './turn-steps.js';
 import { holdVendorProcess, type HeldVendor } from '../harness/transport/native/held-vendor.js';
 import { recordNativeStreamUsage } from '../harness/accounts/stream-usage.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { maxPromptArgvBytes, nativeHarnessTurnArgv, promptExceedsArgvLimit } from '../runtime/lazy-bridge.js';
-import { vendorBackgroundTurnHandlerFor } from './vendor-process.js';
+import { reportEndedWork, vendorBackgroundTurnHandlerFor } from './vendor-process.js';
 import { turnCancelledError } from '../agent/cancellation.js';
 import { turnPermissionMode } from './turn-permission.js';
 
@@ -121,7 +122,8 @@ export async function runVendorCliAttempt(input: {
   // Pi's RPC mode takes the same: stdin stays open for the turn so a message
   // typed meanwhile is a `steer` command (pi-rpc.ts).
   const piRpc = turn.promptInput === 'stdin' && turn.stdinFormat === 'pi-rpc';
-  const heldInput = streamJsonInput || piRpc ? createTurnInput() : undefined;
+  const ampStream = turn.promptInput === 'stdin' && turn.stdinFormat === 'amp-json';
+  const heldInput = streamJsonInput || piRpc || ampStream ? createTurnInput() : undefined;
   // An answer with background tasks still running ends this
   // turn at once; the process is kept, and what it says when a task
   // finishes becomes a background turn (held-vendor.ts). With nobody to
@@ -151,6 +153,14 @@ export async function runVendorCliAttempt(input: {
   const piTurn = piRpc && heldInput ? createPiRpcTurn({
     close: () => { run.liveInput?.setSteerHandler(undefined); heldInput.end(); },
   }) : undefined;
+  const ampTurn = ampStream && heldInput ? createAmpStreamTurn({
+    prompt: turnText, write: (text) => heldInput.write(text),
+    close: () => { run.liveInput?.setSteerHandler(undefined); heldInput.end(); },
+  }) : undefined;
+  if (ampTurn) run.liveInput?.setSteerHandler(async (text, submission, hold) => {
+    await ampTurn.steer(text, hold);
+    if (submission.kind !== 'note') await checkpoint.steer(submission);
+  });
   if (heldInput && piTurn) {
     run.liveInput?.setSteerHandler(async (steerText, submission) => {
       if (piTurn.settled) throw new Error('turn is finishing');
@@ -170,7 +180,7 @@ export async function runVendorCliAttempt(input: {
     });
   }
   const stdinText = turn.promptInput !== 'stdin' ? undefined
-    : piRpc ? await piRpcPrompt(turnText, images) : heldInput ? streamJsonUserMessage(turnText) : turnText;
+    : piRpc ? await piRpcPrompt(turnText, images) : ampStream ? ampUserMessage(turnText) : heldInput ? streamJsonUserMessage(turnText) : turnText;
   // The global MCP servers, for a harness that takes them per run (Amp's --mcp-config).
   const mcp = await nativeMcpConfig(harness);
   argv.unshift(...mcp.argv);
@@ -185,6 +195,7 @@ export async function runVendorCliAttempt(input: {
       // Parsed here, once: every reader below takes this record.
       const record = parseJsonRecord(lineText);
       if (piTurn && record) piTurn.note(record);
+      if (ampTurn && record) ampTurn.note(record);
       if (held) {
         held.line(lineText, record);
         void recordNativeStreamUsage(session, lineText).catch(() => undefined);
@@ -215,9 +226,11 @@ export async function runVendorCliAttempt(input: {
       if (outcome.result && release && background && backgroundHandler
         && background.pending > 0 && background.quiet && !background.settled) {
         run.liveInput?.setSteerHandler(undefined);
+        const owner = { harness: harness.command, accountId: session.nativeThreadAccountId ?? session.accountId ?? undefined };
         held = holdVendorProcess({
           sessionId: session.id, background, release, handler: backgroundHandler,
-          owner: { harness: harness.command, ...(session.nativeThreadAccountId ? { accountId: session.nativeThreadAccountId } : {}) },
+          owner,
+          workEnded: (ended) => reportEndedWork(session.id, ended, owner),
           endInput: () => heldInput!.end(),
           // One stream position per background turn, like per attempt.
           report: (text, observer, parsed) => {
@@ -259,6 +272,7 @@ export async function runVendorCliAttempt(input: {
       piTurn.ended();
       run.liveInput?.setSteerHandler(undefined);
     }
+    if (ampTurn) { ampTurn.ended(); run.liveInput?.setSteerHandler(undefined); }
   }
   if (turnOutput.interrupted) throw turnCancelledError();
   let cliResult = nativeTurnResult(harness, turnOutput.stdout, { exitCode: turnOutput.exitCode, stderr: turnOutput.stderr });

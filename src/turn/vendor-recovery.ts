@@ -65,11 +65,7 @@ async function switchAccount(ctx: VendorTurnContext, failed: Failed): Promise<vo
   const { value: moved, to } = await switchAccountAfterFailure({
     accounts: ctx.accounts, from, failure, kind: failureKind, signal: ctx.signal, harness: harness.command,
     carry: async (fallback, { switchAt, chooseMs }) => {
-      // Claude streams "You've hit your session limit · resets …" as message
-      // text, then fails the prompt. That text stays on the turn, as the
-      // vendor said it; it only means this attempt gave the next account no
-      // answer to carry on from, so the standby copy of the thread (loaded
-      // before this turn) is still the whole conversation.
+      // A refusal is not assistant work to continue on the next account.
       const attemptText = (session.pendingTurn?.response ?? '').slice(responseBefore);
       const refusalOnly = attemptText.trim() !== '' && echoesRefusal(attemptText, failure);
       const wrote = refusalOnly ? wroteBefore : Boolean(session.pendingTurn?.outputStarted || cliOutputStarted);
@@ -77,22 +73,18 @@ async function switchAccount(ctx: VendorTurnContext, failed: Failed): Promise<vo
       // transcript before the receiving account copies it.
       await leavePersistentTransport(session.id);
       const closeMs = Date.now() - switchAt - chooseMs;
-      // The account this turn opened a standby for, its thread loaded as it
-      // stood before this turn: taken up when the attempt wrote nothing, so
-      // its copy is still the whole conversation. Anything else starts cold.
-      const standby = !wrote ? standbyFor(session.id, fallback.id) : undefined;
+      // Standbys hold only an initialized process, safe to reuse whether
+      // or not the failed attempt produced output.
+      const standby = standbyFor(session.id, fallback.id);
       const warm = standby ? await standby.ready : false;
       if (!warm) await closeStandby(session.id);
-      // The thread as it stood before this turn is already in the account's
-      // profile (copied with the standby, or for a CLI harness on its own):
-      // copying again would bring the refused attempt with it.
-      const precopied = warm || (!wrote && attempt.threadCopiedTo === fallback.id);
-      const carriedThread = precopied ? 'present' as const : await moveThreadToAccount(session, harness, from, fallback);
-      if (precopied && session.nativeSessionId) session.nativeThreadAccountId = fallback.id;
+      // A warm process holds no snapshot. Carry only on a real failover,
+      // from the vendor's flushed thread, then resume it on that process.
+      const carriedThread = await moveThreadToAccount(session, harness, from, fallback);
       const carryMs = Date.now() - switchAt - chooseMs - closeMs;
       return {
         value: { wrote, carriedThread },
-        fields: { closeMs, carryMs, carried: warm ? 'standby' : precopied ? 'precopied' : carriedThread ?? 'none' },
+        fields: { closeMs, carryMs, carried: warm ? 'standby' : carriedThread ?? 'none' },
       };
     },
   });
@@ -111,6 +103,8 @@ async function switchAccount(ctx: VendorTurnContext, failed: Failed): Promise<vo
   if (carriedThread) {
     // ('present' counts as much as 'carried': both accounts run this
     // harness against one vendor home, so the thread never had to move.)
+    // The flushed thread includes the handoff/delta already sent to it.
+    // Never replay that framing on top of the carried conversation.
     ctx.turnText = nextRequest;
     if (wrote || session.pendingTurn?.response?.trim()) continueAnswer(ctx, edit);
   } else {

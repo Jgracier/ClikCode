@@ -247,7 +247,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('status', 'Info', 'current configuration'),
   entry('context', 'Info', 'context window and token usage reported by the harness'),
   entry('usage', 'Info', 'quota, tokens, and cost for this provider', { aliases: ['cost'], argHint: '[all]' }),
-  entry('agents', 'Tools', 'background agents: list them, or stop one (Esc and Ctrl+C never do)', { argHint: '[stop <id>|stop all] [confirm]', duringTurn: 'apply' }),
+  entry('agents', 'Tools', 'background agents: list, view recorded work, or stop one', { argHint: '[view [id]|stop <id>|stop all] [confirm]', duringTurn: 'apply' }),
   entry('doctor', 'Info', 'check installed harnesses and accounts'),
   entry('update', 'Info', "update ClikCode on the machine this chat runs on: to GitHub main, or a commit for a ClikCode Remote install", { argHint: '[commit]' }),
   entry('help', 'Info', 'all commands'),

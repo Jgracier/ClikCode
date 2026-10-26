@@ -1,5 +1,7 @@
 /** The worker's command dispatch: what each message a window sends does. */
 import type { Socket } from 'node:net';
+import { readConversationSubagent } from './read-subagent.js';
+import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import { persistentWorkRunning } from '../turn/vendor-process.js';
 import { isClikCodeAgent, isGatewayService } from '../session/route.js';
@@ -210,6 +212,13 @@ export function createCommandHandler(ctx: WorkerContext) {
       return;
     }
     if (command.type === 'settings-changed') { ctx.liveSettings.apply(command.settings); return; }
+    if (command.type === 'read-subagent') {
+      const { session, nativeAccount } = await currentSessionAndAccount();
+      const rows = await readConversationSubagent(session, nativeAccount, command.parentId).catch(() => []);
+      const mode = isClikCodeAgent(session) ? 'direct' : session.nativeHarness ? localHarnessForCommand(session.nativeHarness)?.subagents?.steer : 'none';
+      sendEvent(socket, { type: 'subagent', id: command.id, rows, steer: mode === 'direct' ? 'direct' : mode === 'relay' ? 'relay' : 'none' });
+      return;
+    }
     if (command.type === 'prepare') { await prepareForRoute(); return; }
     // Another window's turn may be using them: a turn keeps what it started,
     // and the turn's own end releases them if nobody is left.

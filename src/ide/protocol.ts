@@ -51,6 +51,7 @@ export type IdeUiResult =
   | { text: string };
 
 export type IdeRequest =
+  | { type: 'subagent'; requestId: string; parentId: string; action: 'read' | 'steer'; text?: string; agentId?: string }
   /** Show a conversation: `resume` an id, `continue` the workspace's latest,
    * or start a `new` one in `workspace`. `workspace` is a folder of the
    * machine running the bridge: a client on another machine names none (or

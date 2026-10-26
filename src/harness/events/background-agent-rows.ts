@@ -16,8 +16,12 @@ const count = (value: unknown): number | undefined => (typeof value === 'number'
 export class BackgroundAgentRows {
   /** Held rows by the launching call's id, with the label the call had. */
   private readonly held = new Map<string, { label?: string; agentId?: string }>();
+  private readonly calls = new Map<string, string>();
 
   get size(): number { return this.held.size; }
+  running(): Array<{ id: string; label: string }> {
+    return [...this.held].map(([id, row]) => ({ id, label: row.label ?? 'Background agent' }));
+  }
 
   /** An agent the vendor says it launched from call `id` (ACP `subagent_spawned`). */
   launched(id: string): void { if (!this.held.has(id)) this.held.set(id, {}); }
@@ -27,21 +31,76 @@ export class BackgroundAgentRows {
     const row = this.held.get(id);
     if (!row) return [];
     this.held.delete(id);
+    this.calls.delete(id);
     const stopped = state === 'cancelled' || state === 'disconnected';
     return [{ kind: state === 'completed' ? 'tool-done' : 'tool-error', label: row.label ?? 'tool', agent: true, id,
       ...(row.agentId ? { agentId: row.agentId } : {}), ...(stopped ? { stopped: true } : {}) }];
   }
 
   /** The activity as it should be shown: the launch call's completion is withheld (undefined). */
-  filter(event: HarnessActivityEvent): HarnessActivityEvent | undefined {
+  filter(event: HarnessActivityEvent, result?: unknown): HarnessActivityEvent | undefined {
+    if (event.agent && event.id && event.kind === 'tool-start') this.calls.set(event.id, event.label);
+    const launch = event.id && !event.parentId ? this.launchResult(event.id, result) : undefined;
+    if (launch) event = { ...event, ...launch, output: undefined };
     const row = event.id ? this.held.get(event.id) : undefined;
-    if (!row) return event;
+    if (!row) {
+      if (event.id && event.kind !== 'tool-start') this.calls.delete(event.id);
+      return event;
+    }
     if (event.agent && event.label !== 'tool') row.label = event.label;
     return event.kind === 'tool-start' ? { ...event, ...(row.agentId ? { agentId: row.agentId } : {}) } : undefined;
   }
 
+  /** A successful async launch is also an authoritative call -> task link.
+   * Some SDK versions omit task_started's optional background flag; others
+   * return the launch before that notification. Never match agents by label. */
+  private launchResult(id: string, result: unknown): Pick<HarnessActivityEvent, 'kind' | 'id' | 'agent' | 'agentId'> | undefined {
+    if (!this.calls.has(id) && !this.held.has(id)) return undefined;
+    const value = asRecord(result);
+    const text = typeof result === 'string' ? result : Array.isArray(result)
+      ? result.flatMap((part) => { const block = asRecord(part); return block?.type === 'text' && typeof block.text === 'string' ? [block.text] : []; }).join('\n') : '';
+    const agentId = value?.status === 'async_launched' && typeof value.agentId === 'string' ? value.agentId
+      : /^Async agent launched successfully\./.test(text) ? /^agentId:\s*([\w-]+)\b/m.exec(text)?.[1] : undefined;
+    if (!agentId) return undefined;
+    if (this.held.get(id)?.agentId === agentId) return undefined;
+    const row = { label: this.calls.get(id), ...this.held.get(id), agentId };
+    this.held.set(id, row);
+    return { kind: 'tool-start', id, agent: true, agentId };
+  }
+
   /** What one `system` record changes: the row's progress or end. */
   frame(record: JsonRecord): HarnessActivityEvent[] {
+    if (record.type === 'user' && !record.parent_tool_use_id) {
+      const content = asRecord(record.message)?.content;
+      return (Array.isArray(content) ? content : []).flatMap((part): HarnessActivityEvent[] => {
+        const result = asRecord(part);
+        if (result?.type !== 'tool_result' || result.is_error || typeof result.tool_use_id !== 'string') return [];
+        const launch = this.launchResult(result.tool_use_id, result.content);
+        return launch ? [{ ...launch, label: this.held.get(result.tool_use_id)?.label ?? 'tool' }] : [];
+      });
+    }
+    // Amp returns an async Task's launch before the agent finishes. Its own
+    // end event, not that tool result, settles the same row.
+    if (record.type === 'assistant' && !record.parent_tool_use_id) {
+      const content = asRecord(record.message)?.content;
+      for (const part of Array.isArray(content) ? content : []) {
+        const call = asRecord(part);
+        if (call?.type === 'tool_use' && call.name === 'Task' && typeof call.id === 'string' && asRecord(call.input)?.mode === 'async') this.launched(call.id);
+      }
+    }
+    if (record.type === 'system' && record.subtype === 'init' && Array.isArray(record.subagents)) {
+      return record.subagents.flatMap((value): HarnessActivityEvent[] => {
+        const agent = asRecord(value);
+        if (typeof agent?.tool_use_id !== 'string') return [];
+        const id = agent.tool_use_id;
+        const label = typeof agent.description === 'string' ? `Agent ${agent.description}` : 'Background agent';
+        this.held.set(id, { label });
+        return [{ kind: 'tool-start', id, label, agent: true }];
+      });
+    }
+    if (record.type === 'system' && record.subtype === 'subagent_finished' && typeof record.tool_use_id === 'string') {
+      return this.ended(record.tool_use_id, String(record.status ?? 'failed'));
+    }
     const event = this.read(record);
     return event ? [event] : [];
   }
@@ -71,6 +130,7 @@ export class BackgroundAgentRows {
     const label = row.label ?? 'tool';
     if (record.subtype === 'task_progress') return { kind: 'tool-start', label, agent: true, id, ...spent };
     this.held.delete(id);
+    this.calls.delete(id);
     const status = String(record.status ?? 'completed');
     const duration = count(usage?.duration_ms);
     return {
@@ -85,6 +145,7 @@ export class BackgroundAgentRows {
     const events = [...this.held].map(([id, row]): HarnessActivityEvent => ({ kind, label: row.label ?? 'tool', agent: true, id,
       ...(row.agentId ? { agentId: row.agentId } : {}), ...(stopped ? { stopped: true } : {}) }));
     this.held.clear();
+    this.calls.clear();
     return events;
   }
 }

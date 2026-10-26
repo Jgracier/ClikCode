@@ -18,6 +18,10 @@ export const FAILURE_TEXT_LIMIT = 8000;
  * traces, carets and bare paths: where the failure happened, not what it was. */
 const NOISE = /^\s*(?:at\s|Require stack|throw\s|\^+\s*$|node:internal|\(Use `node --trace|\/[^\s]*$|[A-Za-z]:\\[^\s]*$|-\s+\/)/;
 const DEPRECATION = /\bDeprecationWarning\b/;
+/** Codex's startup banners, printed to stderr on every launch: which folders are not yet
+ * trusted (with the numbered path list and the how-to line under it) and a model it has no
+ * metadata for. They describe Codex's setup, never why a turn failed. */
+const CODEX_BANNER = /^\s*(?:Codex:\s*(?:Project-local config, hooks, and exec policies are disabled|Model metadata for\b)|\d+\.\s+\/\S+\s*$|To load project-local config, hooks, and exec policies\b)/;
 
 /** The readable text of a parsed error body, or undefined when it holds none. */
 function bodyMessage(body: unknown): string | undefined {
@@ -76,7 +80,7 @@ export function failureText(message: string, limit = FAILURE_TEXT_LIMIT): string
   const plain = message.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '');
   const kept = readableBodies(plain)
     .split(/\r?\n/)
-    .filter((line) => !NOISE.test(line) && !DEPRECATION.test(line))
+    .filter((line) => !NOISE.test(line) && !DEPRECATION.test(line) && !CODEX_BANNER.test(line))
     .map((line) => line.trimEnd());
   // Blank runs collapse; the lines themselves are never reduced to one.
   const text = kept.join('\n').replace(/\n{3,}/g, '\n\n').trim() || plain.trim();

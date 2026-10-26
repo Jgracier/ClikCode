@@ -84,6 +84,15 @@ describe("a turn's changes, together", () => {
 });
 
 describe('stop: "stopping" is the worker\'s word, shown until the turn ends', () => {
+  it('settles an open call when a failed-turn snapshot arrives before the end event', () => {
+    const running = applyEvent(begin(), activity({ kind: 'tool-start', id: 't', label: '$ git push', category: 'run' }));
+    const failed = run([worker({ type: 'snapshot', session: session({ pendingTurn: {
+      prompt: 'hi', startedAt: '2026-10-26T00:00:00.000Z', updatedAt: '2026-10-26T00:00:01.000Z', outputStarted: true,
+      failedAt: '2026-10-26T00:00:01.000Z',
+    } }) })], running);
+    expect(failed.running).toBe(false);
+    expect(failed.traces.at(-1)?.activities[0]).toMatchObject({ kind: 'tool-error', stopped: true });
+  });
   it('says "Stopping" over the open call only once the worker says stopping', () => {
     const running = applyEvent(begin(), activity({ kind: 'tool-start', id: 't', label: '$ sleep 30', category: 'run' }));
     expect(workingStatus(running.live, false, Date.now()).label).toBe('Running sleep…');

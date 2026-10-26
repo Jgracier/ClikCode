@@ -37,11 +37,11 @@
  * snapshot Cursor built for that request), reasoning (signed by the model
  * vendor; cannot be forged).
  *
- * The open question that keeps this disabled: every real store starts its
+ * Every real store starts its
  * field 1 with Cursor's own system message and a `<user_info>` environment
  * message, whose wording depends on the model and the build. This writer
- * writes neither. Whether the client puts its own in front when the stored
- * history has none has to be seen on a real model turn. */
+ * writes neither. A live model recall on 2026-10-25 proved the client supplies
+ * the environment it needs when this history has none. */
 
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
@@ -49,22 +49,14 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import type { CanonicalRecord, CanonicalToolCall } from '../../canonical.js';
 import type { NativeSessionEnvironment, NativeSessionFile, NativeSessionStore, NativeThreadWriter, NativeThreadWritten } from '../stores.js';
-import { testedVersion } from './thread-writer-files.js';
 import {
   absolutePath, assistantSteps, callCommand, callPath, callResultText, inputString, isWriteCall, requestText,
 } from './thread-writer-files.js';
 
-/** EMPTY ON PURPOSE: the writer is disabled. A store written here was
- * REPLAYED in full by `session/load` of cursor-agent 2026.09.26-dd393fe
- * (codeword, Shell call, StrReplace edit; cursor-writer.vitest.test.ts has
- * the check), but no model turn could run on it -- every account was out of
- * quota ("Upgrade your plan to continue", reset ~2026-11-01). Enable once ONE
- * ACP model turn on a written store recalls the codeword:
- *
- *   node scripts/verify-thread-writer.mjs cursor --link .config/cursor/auth.json
- *
- * then add the `cursor-agent --version` it printed here. */
-export const CURSOR_WRITER_TESTED_VERSIONS: readonly string[] = [];
+/** Live recall passed 2026-10-25 under an isolated profile, using the default
+ * signed-in account (--account none). This date/hash build is matched whole;
+ * a semver release line would incorrectly admit other Cursor daily builds. */
+export const CURSOR_WRITER_TESTED_VERSIONS: readonly string[] = ['2026.09.26-dd393fe'];
 
 /** Where `cursor-agent acp` keeps its sessions under `environment`. */
 export function cursorAcpSessionsRoot(environment: NativeSessionEnvironment): string {
@@ -365,7 +357,7 @@ function profileRoot(environment: NativeSessionEnvironment): string | undefined 
 
 export const cursorThreadWriter: NativeThreadWriter = {
   testedVersions: CURSOR_WRITER_TESTED_VERSIONS,
-  versionOk: testedVersion(CURSOR_WRITER_TESTED_VERSIONS),
+  versionOk: (context) => CURSOR_WRITER_TESTED_VERSIONS.includes(context.version ?? ''),
   async write(record, context): Promise<NativeThreadWritten | undefined> {
     const root = profileRoot(context.environment);
     if (!root || !record.turns.length) return undefined;
@@ -394,22 +386,14 @@ export async function locateCursorSession(root: string, nativeId: string): Promi
   return directory && store ? { path, root } : undefined;
 }
 
-/** OFF, with the writer and for the same reason: no Cursor model turn has run
- *  on a session that was not made in its own profile -- every account was
- *  out of quota. `session/load` replays a store written elsewhere (the
- *  writer's check), but whether another ACCOUNT's model turn accepts a
- *  session another account started (its agentId, its blobEncryptionKey) is
- *  unseen. Turn on once one carried session answers a model turn there:
- *  `locateCursorSession` is the whole of what this enables.
- *
- *  Re-tried 2026-10-05 (cursor-agent 2026.09.26-dd393fe, vendor-sandbox, ACP
- *  session/new + "Reply OK."): all 13 accounts, on the default model and on
- *  `auto` and `composer-2.5`, answered "Upgrade your plan to continue". */
-export const CURSOR_CARRY_VERIFIED: boolean = false;
-
-/** Until then a failover re-seeds, exactly as before. */
+/** Across accounts, rebuild from the canonical record with the proven writer.
+ * Direct copies of another account's encrypted store have not been verified. */
 export const cursorSessionStore: NativeSessionStore = {
+  async remove(id, _cwd, environment) {
+    const root = cursorAcpSessionsRoot(environment);
+    const found = await locateCursorSession(root, id);
+    if (found) await rm(found.path, { recursive: true, force: true });
+  },
   root: cursorAcpSessionsRoot,
-  ...(CURSOR_CARRY_VERIFIED ? { locate: locateCursorSession } : {}),
   writer: cursorThreadWriter,
 };

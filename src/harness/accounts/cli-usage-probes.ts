@@ -484,9 +484,9 @@ export function kiroQuotaReading(data: unknown): UsageReading | undefined {
 export async function kiroUsageReading(environment: Environment): Promise<UsageReading | undefined> {
   const harness = localHarnessForCommand('kiro');
   if (!harness?.acp) return undefined;
-  return queryAcp(harness.acp.binary ?? harness.binary, harness.acp.argv, environment, async (request, capabilities) => {
-    // One kept session per Kiro profile, never a new one per reading.
-    const started = await acpDiscoverySession(request, capabilities, `kiro:usage:${environment.HOME ?? 'default'}`);
+  return queryAcp(harness.acp.binary ?? harness.binary, harness.acp.argv, environment, async (request) => {
+    // The query owns this temporary session and removes it after reading usage.
+    const started = await acpDiscoverySession(request);
     const sessionId = typeof started.sessionId === 'string' ? started.sessionId : undefined;
     if (!sessionId) return undefined;
     const answer = await request('_kiro.dev/commands/execute', { sessionId, command: { command: 'usage', args: {} } });
@@ -494,7 +494,7 @@ export async function kiroUsageReading(environment: Environment): Promise<UsageR
     const reading = kiroQuotaReading(answer.data);
     const plan = (answer.data as Json | undefined)?.planName;
     return reading && typeof plan === 'string' ? { ...reading, plan: { name: plan } } : reading;
-  }).catch(() => undefined);
+  }, undefined, { discovery: harness }).catch(() => undefined);
 }
 
 // ---------------------------------------------------------------- Command Code

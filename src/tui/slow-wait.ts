@@ -1,8 +1,4 @@
-/** A wait the user sees only when it is slow: the band appears after
- * SLOW_WAIT_MS, and work that finishes sooner shows nothing at all. Starting
- * and stopping a spinner at once read as a flash ("signing out · 0s" for
- * 40 ms on /logout, a blank frame on a fast `!true`). Once shown it stays
- * MIN_VISIBLE_MS at least, by the same gate (slow-wait-gate.ts). */
+/** Show slow operations while their work runs. */
 
 import { slowWaitGate } from '../harness/protocol/slow-wait-gate.js';
 

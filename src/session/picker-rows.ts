@@ -14,7 +14,7 @@ import { inspectNativeHarnessForPicker } from '../harness/transport/native/inspe
 import { harnessInstallRoute } from '../harness/transport/native/install-route.js';
 import { authEvidencePresent, hasAuthEvidence, harnessCanLogout } from '../harness/accounts/auth-files.js';
 import { effortChoicesFor } from '../harness/accounts/effort-choices.js';
-import { accountBackAt, accountQuotaSpent, usageReadingIsCurrent, vendorWindows, type UsageWindow } from '../harness/accounts/usage-reading.js';
+import { accountBackAt, accountDisplayUsage, quotaRefusalHolds, usageReadingIsCurrent, type AccountUsageReading, type UsageWindow } from '../harness/accounts/usage-reading.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
 import {
   allLocalHarnesses, harnessCanRunTurns, harnessSupportsEffort, harnessSupportsModelSelection, localHarnessForCommand,
@@ -85,7 +85,7 @@ export function accountRow(
   const problem: IdeAccount['problem'] = account.verification ? 'verify'
     : neverSignedIn ? 'sign-in'
       : account.status === 'needs_login' ? 'reauth'
-        : accountQuotaSpent(account, now) ? 'out-of-usage' : undefined;
+        : quotaRefusalHolds(account, now) ? 'out-of-usage' : undefined;
   const backAt = problem === 'out-of-usage' ? accountBackAt(account, now) : undefined;
   const vendorSignIn = account.authKind === 'vendor-cli';
   const actions: IdeAccount['actions'] = [
@@ -106,14 +106,15 @@ export function accountRow(
 
 /** Windows as they are sent and shown: name, use and reset only. */
 export const usageWindows = (windows: readonly UsageWindow[]): UsageWindow[] =>
-  windows.map((window) => ({ name: window.name, usedPct: window.usedPct, ...(window.resetsAt ? { resetsAt: window.resetsAt } : {}) }));
+  windows.map((window) => ({ name: window.name, usedPct: window.usedPct, ...(window.resetsAt ? { resetsAt: window.resetsAt } : {}), ...(window.advisory ? { advisory: true as const } : {}) }));
 
 /** What an account's usage reads without asking the vendor: the windows it
  * last reported while they still hold, else a balance it reported (a label with no window). */
 export function accountUsage(account: AiHarnessAccount, state: HarnessState, now = Date.now()): IdeAccount['usage'] {
-  const windows = vendorWindows(account);
+  const reading = account.usage as AccountUsageReading | undefined;
+  const windows = !reading?.failed ? reading?.windows ?? [] : [];
   if (windows.length && usageReadingIsCurrent({ windows }, now)) {
-    return { ...(account.usage?.label ? { label: account.usage.label } : {}), windows: usageWindows(windows) };
+    return accountDisplayUsage(account, { ...(account.usage?.label ? { label: account.usage.label } : {}), windows: usageWindows(windows) }, now);
   }
   const stored = account.usage;
   if (stored?.label && !stored.failed && !windows.length) return { label: stored.label, windows: [] };

@@ -22,7 +22,7 @@ import { carryNativeSession } from '../../carry.js';
 import { NATIVE_SESSION_STORES } from '../registry.js';
 import type { NativeSessionCarry, NativeThreadWriteContext } from '../stores.js';
 import { openCodeExport } from './opencode-writer.js';
-import { CURSOR_CARRY_VERIFIED, cursorAcpSessionsRoot, cursorStore, locateCursorSession, writeCursorStore } from './cursor-writer.js';
+import { cursorAcpSessionsRoot, cursorStore, locateCursorSession, writeCursorStore } from './cursor-writer.js';
 
 const sqlite = await import('node:sqlite').then((m) => m, () => undefined);
 type Db = { exec(sql: string): void; prepare(sql: string): { all(...v: unknown[]): unknown[]; get(...v: unknown[]): unknown; run(...v: unknown[]): unknown }; close(): void };
@@ -487,9 +487,9 @@ describe('cursor: a session is its own directory, carried only once verified', (
     await expect(locateCursorSession(root, '../escape')).resolves.toBeUndefined();
   });
 
-  it('stays off until a model turn proves it: a failover re-seeds', async () => {
-    expect(CURSOR_CARRY_VERIFIED).toBe(false);
+  it('uses a native writer instead of an unverified encrypted-store copy across accounts', async () => {
     expect(NATIVE_SESSION_STORES.cursor!.locate).toBeUndefined();
     expect(NATIVE_SESSION_STORES.cursor!.carry).toBeUndefined();
+    expect(NATIVE_SESSION_STORES.cursor!.writer).toBeDefined();
   });
 });

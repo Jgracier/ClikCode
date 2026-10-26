@@ -48,8 +48,8 @@ export function remoteConversationOption(machine: MachineView, chat: IdeConversa
     ...(chat.resumeAt ? { resumeAt: chat.resumeAt } : {}),
   }, now);
   const offline = machine.state === 'offline';
-  const activity = !offline && (state.kind === 'working' || state.kind === 'stalled' || state.kind === 'needs-you') ? state.kind : undefined;
-  const text = state.kind === 'stalled' ? chalk.yellow(state.text) : state.text;
+  const activity = !offline && (state.kind === 'working' || state.kind === 'needs-you') ? state.kind : undefined;
+  const text = state.text;
   const detail = [`· ${text}`, chat.preview].filter(Boolean).join(' · ');
   return {
     label: offline ? chalk.dim(chat.title) : chat.title,

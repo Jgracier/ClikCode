@@ -51,9 +51,10 @@ it('does not call a failed turn working when its worker remains open', () => {
   const session = {
     id: 'chat', status: 'active', pendingTurn: { prompt: 'go', startedAt: now, updatedAt: now, outputStarted: true, failedAt: now },
   } as HarnessSession;
-  expect(sessionActivity(session, () => true)).toBe('idle');
+  const marked = () => now;
+  expect(sessionActivity(session, () => true, session.pendingTurn, () => false, marked)).toBe('idle');
   delete session.pendingTurn!.failedAt;
-  expect(sessionActivity(session, () => true)).toBe('working');
+  expect(sessionActivity(session, () => true, session.pendingTurn, () => false, marked)).toBe('working');
 });
 
 describe('a chat whose turn is over but whose background work runs', () => {
@@ -65,13 +66,25 @@ describe('a chat whose turn is over but whose background work runs', () => {
     await writeWorkerRecord({ ...record, background: { agents: 2, terminals: 1, since: '2026-10-17T10:00:00.000Z' } });
     const session = { id: 'waiting', status: 'active' } as HarnessSession;
     let workers = await liveWorkers();
-    let pending = await livePendingTurns([session], workers.isLive, workers.background);
+    let pending = await livePendingTurns([session], workers.isLive, workers.background, workers.runningTurn);
     expect(pending.get('waiting')).toMatchObject({ startedAt: '2026-10-17T10:00:00.000Z' });
     expect(pending.get('waiting')?.subagents).toHaveLength(2);
-    expect(sessionActivity(session, workers.isLive, pending.get('waiting'))).toBe('working');
+    expect(sessionActivity(session, workers.isLive, pending.get('waiting'), workers.isOpen, workers.runningTurn, workers.background)).toBe('working');
     await writeWorkerRecord(record);
     workers = await liveWorkers();
-    pending = await livePendingTurns([session], workers.isLive, workers.background);
+    pending = await livePendingTurns([session], workers.isLive, workers.background, workers.runningTurn);
     expect(pending.has('waiting')).toBe(false);
+  });
+
+  it('does not treat a stale pending journal as a live turn without the worker turn marker', async () => {
+    root = await mkdtemp(join(tmpdir(), 'clikcode-idle-worker-'));
+    process.env.CLIKCODE_HOME = root;
+    await ensureWorkersDirectory();
+    await writeWorkerRecord({ sessionId: 'idle', pid: process.pid, socketPath: join(root, 'idle.sock'), token: 't', installationId: 'install', build: 'test', startedAt: new Date().toISOString() });
+    const session = { id: 'idle', status: 'active', pendingTurn: { prompt: 'stale', startedAt: '2026-10-26T12:00:00.000Z', updatedAt: '2026-10-26T12:00:00.000Z', outputStarted: true } } as HarnessSession;
+    const workers = await liveWorkers();
+    const pending = await livePendingTurns([session], workers.isLive, workers.background, workers.runningTurn);
+    expect(pending.has('idle')).toBe(false);
+    expect(sessionActivity(session, workers.isLive, pending.get('idle'), workers.isOpen, workers.runningTurn)).toBe('idle');
   });
 });

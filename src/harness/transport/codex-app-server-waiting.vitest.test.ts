@@ -29,6 +29,11 @@ function fakeServer(turns: Step[][]): string {
     process.stdin.on('data', (d) => { buf += d; let i; while ((i = buf.indexOf('\\n')) >= 0) {
       const m = JSON.parse(buf.slice(0, i)); buf = buf.slice(i + 1);
       if (m.method === 'initialize') send({ id: m.id, result: {} });
+      else if (m.method === 'thread/read') send({ id: m.id, result: { thread: { id: m.params.threadId, turns: [{ items: [
+        { type: 'userMessage', content: [{ type: 'text', text: 'Check the child task' }] },
+        { type: 'commandExecution', id: 'child-tool', command: 'git status', status: 'completed', exitCode: 0 },
+        { type: 'agentMessage', text: 'Child task finished' }
+      ] }] } } });
       else if (m.method === 'thread/start' || m.method === 'thread/resume') send({ id: m.id, result: { thread: { id: 'T' } } });
       else if (m.method === 'turn/start') { const turn = 'U' + (++n); send({ id: m.id, result: { turn: { id: turn } } }); run(turns[n - 1] ?? [], turn); }
       else if (m.method === 'turn/interrupt') send({ id: m.id, result: {} });
@@ -59,6 +64,16 @@ const command = (id: string, done: boolean, turnId = '{{turn}}') => ({
 });
 
 describe('a Codex failover standby', () => {
+  it('initializes without creating a thread and reads child history through the same server', async () => {
+    const codex = session([]);
+    try {
+      expect(await codex.runTurn(input([], { prompt: '', initializeOnly: true }))).toEqual({ text: '', nativeSessionId: '' });
+      const rows = await codex.readSubagentThread('CHILD');
+      expect(rows[0]).toEqual({ kind: 'prompt', text: 'Check the child task' });
+      expect(rows[1]).toMatchObject({ kind: 'activity', event: { id: 'child-tool', kind: 'tool-done' } });
+      expect(rows[2]).toEqual({ kind: 'text', text: 'Child task finished' });
+    } finally { await codex.close(); }
+  });
   it('resumes the thread up to the turn, and the next turn on it starts at turn/start', async () => {
     const methods: string[] = [];
     const codex = createCodexSession({

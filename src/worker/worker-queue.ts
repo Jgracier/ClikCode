@@ -41,12 +41,16 @@ export function createWorkerQueue(ctx: WorkerContext) {
   const startTurn = (command: Extract<ClientCommand, { type: 'submit' }>): boolean => {
     if (ctx.turnRunning) return false;
     ctx.turnRunning = true;
+    ctx.turnStartedAt = new Date().toISOString();
+    void ctx.onTurnRunningChange?.(ctx.turnStartedAt);
     ctx.lastTurnStopped = false;
     ctx.activeQueuedTurnId = command.queuedTurnId;
     // runTurn settles its own end; this is for a throw it did not foresee,
     // which must still end the turn on every window rather than leave it open.
     void ctx.runTurn(command).catch((error: unknown) => {
       ctx.turnRunning = false;
+      ctx.turnStartedAt = undefined;
+      void ctx.onTurnRunningChange?.(undefined);
       ctx.activeController = undefined; ctx.activeLiveInput = undefined; ctx.activeSubmissions = undefined; ctx.activeRestoreDraft = undefined;
       ctx.activeQueuedTurnId = undefined;
       ctx.stopAnnounced = false; ctx.pendingCancel = undefined; ctx.turnWorkDone = false; ctx.forceStop = undefined;
@@ -75,7 +79,8 @@ export function createWorkerQueue(ctx: WorkerContext) {
     try {
       let { session: current } = await currentSessionAndAccount();
       // Dropped without a word, and never run.
-      while (current.queuedTurns?.[0]?.kind === 'notification' && Date.parse(current.queuedTurns[0].submittedAt) < startedAt) {
+      while (current.queuedTurns?.[0]?.kind === 'notification' && !current.queuedTurns[0].durable
+        && Date.parse(current.queuedTurns[0].submittedAt) < startedAt) {
         if (await consumeQueuedTurn(sessionId, current.queuedTurns[0].id) === 'gone') break;
         current = (await currentSessionAndAccount()).session;
       }

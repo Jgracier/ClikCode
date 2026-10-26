@@ -9,6 +9,7 @@ import { formatElapsed } from '../../../../src/harness/protocol/format';
 import { liveChildren, type Activity, type DecisionEntry, type LiveChild, type ThoughtEntry } from '../model';
 import type { FileDiff } from '../protocol';
 import { post } from './bus';
+import { SubagentPanel } from './subagent-panel';
 import { pathIn, relative } from './format';
 import { Icon, Spinner } from './ui';
 import { activityMore, decisionBadge, foldedSummary, runGroupSummary, runGroupView, runItemKey, runItemStandsAlone, type RunItem } from './flow';
@@ -172,6 +173,7 @@ export function ActivityRow({ activity, workspace, userIndex }: { activity: Acti
           {status === 'running' ? <Spinner tone="tone-accent" agent={agentRunning} /> : <ActivityGlyph status={status} />}
         </span>
         <ActivityLabel label={status === 'stopped' ? activity.label : tensedLabel(activity.label, status === 'running')} workspace={workspace} />
+        {activity.agent && activity.id ? <SubagentPanel key={activity.id} parentId={activity.id} agentId={activity.agentId} label={activity.label} running={status === 'running'} /> : null}
         {status === 'stopped' ? <span class="activity-outcome stopped">stopped</span> : null}
         {status === 'error' ? <span class="activity-outcome failed-word">failed</span> : null}
         {activity.decision ? <span class={`activity-outcome activity-decision ${decisionBadge(activity.decision).tone}`}>{decisionBadge(activity.decision).text}</span> : null}

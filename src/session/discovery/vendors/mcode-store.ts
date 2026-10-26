@@ -41,7 +41,7 @@ import {
 } from './thread-writer-files.js';
 import { piStepMessages } from './pi-store.js';
 import { writeDirectoryAtomic } from './thread-writer-directory.js';
-import { carrySqliteSession, openVendorDatabase, tableColumns, type CarryDb, type CarrySchema, type SqliteCarrySpec } from './sqlite-carry.js';
+import { removeSqliteSession, carrySqliteSession, openVendorDatabase, tableColumns, type CarryDb, type CarrySchema, type SqliteCarrySpec } from './sqlite-carry.js';
 
 /** mcode's data dir for an environment (its own `MINIMAX_DATA_DIR ||
  *  MAVIS_DATA_DIR || ~/.minimax`). */
@@ -301,5 +301,14 @@ const mcodeCarry: SqliteCarrySpec = {
 export const mcodeSessionStore: NativeSessionStore = {
   root: mcodeRoot,
   carry: (input) => carrySqliteSession(mcodeCarry, input),
+  async remove(id, _cwd, environment) {
+    const path = mcodeCarry.database(environment);
+    if (!await stat(path).then((info) => info.isFile(), () => false)) return;
+    const db = await openVendorDatabase(path);
+    let history: string | undefined;
+    try { history = historyDirectory(db, 'main', id); } finally { db.close(); }
+    await removeSqliteSession(mcodeCarry, id, environment);
+    if (history) await rm(join(mcodeRoot(environment), history), { recursive: true, force: true });
+  },
   writer: mcodeThreadWriter,
 };

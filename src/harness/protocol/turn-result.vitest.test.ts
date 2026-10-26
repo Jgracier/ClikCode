@@ -5,6 +5,11 @@ import { localHarnessForCommand } from '@clikcode/router/ai-local-harness';
 import { codex } from './vendor-fixtures.vitest';
 
 describe('native harness turn results', () => {
+  it('never treats assistant prose as a session identity for a text harness', () => {
+    const result = nativeTurnResult(localHarnessForCommand('cn')!, 'Example session: abcdefgh1234', { exitCode: 0 });
+    expect(result.text).toBe('Example session: abcdefgh1234');
+    expect(result.nativeSessionId).toBeUndefined();
+  });
   it('keeps a valid final answer successful after a failed internal sub-command', () => {
     const stdout = [
       JSON.stringify({ type: 'item.completed', item: { type: 'command_execution', command: 'exit 1', status: 'failed', exit_code: 1 } }),

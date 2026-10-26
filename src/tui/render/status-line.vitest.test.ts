@@ -36,14 +36,6 @@ describe('the status line', () => {
     expect(colours.size).toBeGreaterThan(1);
   });
 
-  it('turns only the spinner to the stopped colour when the turn has stalled', () => {
-    const chalk = new Chalk({ level: 3 });
-    const stalled = paintStatus({ ...base, tone: 'thinking', stalled: true }, chalk);
-    expect(stalled.spinner).toBe(chalk.rgb(...xtermRgb(LOOK.roles.stopped.ansi))('⣿'));
-    expect(stalled.label).toBe(paintStatus({ ...base, tone: 'thinking' }, chalk).label);
-    expect(paintStatus({ ...base, tone: 'thinking', stalled: true }, new Chalk({ level: 1 })).spinner).toBe(new Chalk({ level: 1 }).ansi256(LOOK.roles.stopped.ansi)('⣿'));
-  });
-
   it('writes a colour where it changes, not around every character', () => {
     const label = 'thinking about the repository layout now';
     for (const level of [1, 3] as const) {

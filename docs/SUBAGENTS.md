@@ -26,7 +26,7 @@ main agent asking it to message the sub-agent), `none`.
 | codex | yes (V: probe, `spawn_agent`, multi-agent v2) | yes (V: probe, `subAgentActivity{agentThreadId}` and `collabAgentToolCall` arrive on the parent's connection; child `turn/completed` too) | V (probe): `thread/read {threadId, includeTurns}` returns the child, `parentThreadId` set, its `agentMessage` item present | **no** (V, probe): `turn/start` on the child is refused: `direct app-server input is not allowed for multi-agent v2 sub-agents`. `turn/steer` not tried; the server's message covers direct input | `thread` / `none` |
 | cursor | yes (V: `subagent_spawned` with `subagentSessionId`, acp-client.ts) | yes (V: frames with parent keys) | live frames only (V). Reading the session by id: unknown | unknown: whether `session/prompt` to `subagentSessionId` steers was never tried | `frames` / `none` |
 | qwen | yes (V: `--max-subagent-depth` in `qwen --help`) | yes (V: conformance fixture, `parent_tool_use_id`) | live frames only | unknown | `frames` / `none` |
-| amp | yes (C: Amp docs describe sub-agents) | yes (V: conformance fixture) | live frames only | unknown | `frames` / `none` |
+| amp | yes (C: Amp docs describe sub-agents) | yes (V: conformance fixture) | live frames, async rows stay active until `subagent_finished` | no direct child steer | `frames` / `none` |
 | grok | yes (V: `--agents`, `--no-subagents`, `Agent Dashboard` in `grok --help`) | no (V: counts at most) | the dashboard lists sub-agents as sessions (V: help text); no client route known | unknown | `none` / `none` |
 | copilot | yes (V: `--fleet` in `copilot --help`) | no | unknown | unknown | `none` / `none` |
 | opencode | yes (C: child sessions) | no | C: child sessions; `opencode export [sessionID]` exists (V: help) but ClikCode is never told a child's id | unknown | `none` / `none` |
@@ -76,16 +76,21 @@ with Right, the read-only line, back with Left.
 - Terminal, live turn, any harness with `read !== 'none'` (claude, codex,
   cursor, qwen, amp): open, watch the live frames (Claude: the transcript on
   disk when it is found), switch siblings, go back.
-- Steer: Claude Code only, as a relay through the main agent. Not exercised
+- Vendor steer: Claude Code only, as a relay through the main agent. Not exercised
   against a real Claude Code (no quota-spending probe was made); the
   `steer-subagent` command, the relay text and the refusal lines are unit
-  tested. Everything else is read-only with the line saying why.
-- A background sub-agent's row now stays running until the vendor says the agent ended, where the vendor says so: Claude Code (stream-json `task_started`/`task_progress`/`task_notification`, and over claude-agent-acp the same frames as `_claude/sdkMessage`), Cursor (`subagent_spawned`/`subagent_state_update`), Codex (`subAgentActivity` and the child thread's `turn/completed`), the own agent (`continuesAs`). `events/background-agent-rows.ts`; `subagent-lifecycle-conformance.vitest.test.ts`.
-- Not done: the VS Code panel; reopening a finished sub-agent in a reopened
-  chat; reading a Codex child thread live in the view (nothing reads
-  `thread/read` for it; an unused reader was removed 2026-10-20); the own
-  agent's sub-agents (Gateway `session` steer: `BackgroundAgents.send` exists
-  but is not reachable from a window).
+  tested. Other vendors remain read-only; ClikCode's own background agents accept direct messages.
+- A background sub-agent's row now stays running until the vendor says the agent ended, where the vendor says so: Claude Code (stream-json `task_started`/`task_progress`/`task_notification`, and over claude-agent-acp the same frames as `_claude/sdkMessage`), Cursor (`subagent_spawned`/`subagent_state_update`), Codex (`subAgentActivity` and the child thread's `turn/completed`), Amp (`Task` with `mode: "async"`, then `subagent_finished`), the own agent (`continuesAs`). `events/background-agent-rows.ts`; `subagent-lifecycle-conformance.vitest.test.ts`.
+- The conversation worker now owns subagent reads for both clients. Codex uses
+  `thread/read` on its existing app-server, with saved child prose and captured
+  activity as the fallback after it closes. Claude reads the selected account's
+  transcript; other adapters expose the frames they actually publish.
+- VS Code agent rows have a view on live and finished calls. It polls only while
+  open and running, and stops when closed or unmounted. Messaging is offered only
+  for a declared relay or ClikCode's own direct background-agent session.
+- `/agents view [id]` lists or reads recorded subagents in a reopened terminal
+  conversation. ClikCode's own background agents are also reachable from the live
+  terminal view and the VS Code view through `BackgroundAgents.send`.
 - The webview does receive `call.input`: the worker broadcasts the whole
   normalized event, `asActivity` spreads it, `Activity` picks `call`, and
   model-patch is a structural diff with no field filter (read, not run).

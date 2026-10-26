@@ -82,7 +82,9 @@ export function reportStructuredLine(
   if (parsed.usage) observer.onUsage?.(parsed.usage);
   for (const event of parsed.activities ?? []) observer.onActivity?.(event);
   if (!record) return outcome;
-  const background = backgroundWork(record) ?? backgroundShellWork(record, turn);
+  const background = backgroundWork(record) ?? backgroundShellWork(record, turn)
+    ?? (harness.turn?.stdinFormat === 'amp-json' && !record.parent_tool_use_id
+      ? { agents: turn.agentRows.size, agentTasks: turn.agentRows.running() } : undefined);
   if (background) observer.onBackgroundWork?.(background);
   // A structured CLI writes its todo list with a tool (TodoWrite, write_todos, ...); show it as the plan.
   // Claude Code's task tools build it a call at a time; the turn's tracker keeps the list.

@@ -94,8 +94,9 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
       throw processFailure(`${harness.displayName}: ${reason || `exited ${process.exitCode}`}`, process, stdout, true);
     }
     if (!text) throw new Error(`${harness.displayName} returned no assistant text`);
-    const nativeSessionId = /(?:session|thread|chat)(?:\s+id)?\s*[:=]\s*([\w-]{8,})/i.exec(stdout)?.[1];
-    return { text, ...(nativeSessionId ? { nativeSessionId } : {}) };
+    // Plain assistant prose cannot establish a vendor session identity.
+    // Text harnesses that keep history allocate it through their adapter.
+    return { text };
   }
   const values = harness.turn.output === 'json' ? parseJsonDocument(stdout) : parseJsonLines(stdout).values;
   if (values.length === 0) {

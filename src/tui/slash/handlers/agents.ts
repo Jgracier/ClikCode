@@ -8,6 +8,7 @@ import { stateDirectory } from '../../../session/store/paths.js';
 import { emitHarnessOutput } from '../../../harness/output.js';
 import type { ClientCommand, WorkerEvent } from '../../../worker/protocol.js';
 import type { HeadlessSlashHandler } from './shared.js';
+import { conversationSubagentEvents, readConversationSubagent } from '../../../worker/read-subagent.js';
 
 const ANSWER_MS = 10_000;
 
@@ -43,7 +44,19 @@ export function parseAgentsArgs(words: readonly string[]): { action: 'list' } | 
 }
 
 export const agentsHandlers: { agents: HeadlessSlashHandler } = {
-  agents: async ({ id, words }) => {
+  agents: async ({ id, words, session, state }) => {
+    if (words[0]?.toLowerCase() === 'view') {
+      const parentId = words[1];
+      if (!parentId) {
+        const agents = new Map(conversationSubagentEvents(session).filter((event) => event.agent && event.id).map((event) => [event.id!, event.label]));
+        return emitHarnessOutput({ panel: 'agents', text: agents.size
+          ? [...agents].map(([key, label]) => `${key} · ${label}`).join('\n') + '\n\n/agents view <id>'
+          : 'No recorded subagents in this conversation.' });
+      }
+      const rows = await readConversationSubagent(session, state.accounts.find((account) => account.id === session.accountId), parentId);
+      return emitHarnessOutput({ panel: 'agents', text: rows.length ? rows.map((row) => row.kind === 'activity'
+        ? [row.event.label, ...(row.event.output ?? [])].join('\n') : row.text).join('\n\n') : 'No recorded messages or tool calls for this subagent.' });
+    }
     const parsed = parseAgentsArgs(words);
     if (parsed.action === 'stop' && !parsed.all && !parsed.ids.length) throw new Error('usage: /agents stop <id> [confirm], or /agents stop all [confirm]');
     const text = await askAgents(id, { type: 'agents', ...parsed });

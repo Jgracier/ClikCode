@@ -43,7 +43,7 @@ if (!process.env.VERIFY_THREAD_WRITER_INSIDE) {
   // harness's provider, not the vendor's default home (often expired).
   // --account <id prefix> picks one; --account none keeps the default home.
   const profile = option('--account') === 'none' ? undefined : accountProfile(command, option('--account'));
-  if (profile) console.log(`signing in as ClikCode account ${profile.id.slice(0, 8)} (${profile.label ?? profile.provider})`);
+  if (profile) console.log(`signing in as ClikCode account ${profile.id.slice(0, 8)}`);
   const result = spawnSync(process.execPath, [
     join(root, 'scripts', 'vendor-sandbox.mjs'), '--auth', command, ...links.flatMap((path) => ['--link', path]),
     '--', process.execPath, fileURLToPath(import.meta.url), ...argv,
@@ -69,16 +69,17 @@ const { build } = await import('esbuild');
 const bundle = join(home, 'writers.mjs');
 await build({
   stdin: {
-    contents: "export { NATIVE_SESSION_STORES } from './src/session/discovery/registry.ts';\nexport { AI_LOCAL_HARNESSES } from '@clikcode/router/ai-local-harness';\nexport { summaryNote } from './src/session/conversation-summary.ts';",
+    contents: "export { NATIVE_SESSION_STORES } from './src/session/discovery/registry.ts';\nexport { cursorThreadWriter } from './src/session/discovery/vendors/cursor-writer.ts';\nexport { AI_LOCAL_HARNESSES } from '@clikcode/router/ai-local-harness';\nexport { summaryNote } from './src/session/conversation-summary.ts';",
     resolveDir: root, loader: 'ts',
   },
   bundle: true, platform: 'node', format: 'esm', outfile: bundle, logLevel: 'error',
   define: { __CLIKCODE_VERSION__: '"verify"' },
   banner: { js: "import { createRequire as __r } from 'node:module'; const require = __r(import.meta.url);" },
 });
-const { NATIVE_SESSION_STORES, AI_LOCAL_HARNESSES, summaryNote } = await import(pathToFileURL(bundle).href);
+const { NATIVE_SESSION_STORES, AI_LOCAL_HARNESSES, summaryNote, cursorThreadWriter } = await import(pathToFileURL(bundle).href);
 const harness = AI_LOCAL_HARNESSES.find((item) => item.command === command);
-const writer = NATIVE_SESSION_STORES[command]?.writer;
+// A candidate must remain testable before it has earned runtime registration.
+const writer = NATIVE_SESSION_STORES[command]?.writer ?? (command === 'cursor' ? cursorThreadWriter : undefined);
 if (!harness || !writer) { console.error(`${command}: ${harness ? 'no thread writer registered' : 'no such harness'}`); process.exit(2); }
 
 // A profile the way ClikCode gives an account one: a redirected HOME with its
@@ -182,6 +183,7 @@ if (!written) { console.error('the writer wrote nothing'); process.exit(1); }
 console.log(`wrote thread ${written.nativeId}${written.transport ? ` (pinned to ${written.transport})` : ''}`);
 const question = 'What is the codeword I asked you to remember? Reply with the codeword only.';
 const env = { ...process.env, ...environment };
+
 const acp = written.transport ? written.transport === 'acp' : harness.transport === 'acp' && Boolean(harness.acp);
 const answer = acp ? await acpTurn() : cliTurn();
 const proved = answer.includes(codeword);

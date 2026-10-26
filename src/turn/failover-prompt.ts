@@ -52,9 +52,18 @@ function unescapeFailoverContent(text: string): string {
  * still replace it -- a malformed frame is no more worth showing than a
  * well-formed one. */
 export function failoverPromptRequest(text: string): string | undefined {
-  if (![FAILOVER_PREAMBLE, ...EARLIER_PREAMBLES].some((preamble) => text.startsWith(preamble))) return undefined;
-  const request = /<current_request>\n([\s\S]*?)\n<\/current_request>\s*$/.exec(text)?.[1];
-  return unescapeFailoverContent(request ?? '').trim();
+  const framed = (value: string): boolean => [FAILOVER_PREAMBLE, ...EARLIER_PREAMBLES].some((preamble) => value.startsWith(preamble));
+  if (!framed(text)) return undefined;
+  // Older retries could wrap a prepared handoff again. Importing those must
+  // recover the original request too, and remain idempotent.
+  let current = text;
+  while (framed(current)) {
+    const request = /<current_request>\n([\s\S]*?)\n<\/current_request>\s*$/.exec(current)?.[1];
+    const next = unescapeFailoverContent(request ?? '').trim();
+    if (next.length >= current.length) return '';
+    current = next;
+  }
+  return current;
 }
 
 /** What older ClikCode builds sent a vendor to carry on an interrupted turn.
@@ -94,7 +103,16 @@ export function normalizeImportedTranscript<T extends { role: string; content: s
 ): T[] {
   const normalized: T[] = [];
   for (const original of messages) {
-    if (original.role !== 'user') { normalized.push(original); continue; }
+    if (original.role !== 'user') {
+      // Old workers recorded a completion with only the ACP placeholder
+      // "tool" as if it were an assistant reply. It carries no result.
+      if (original.role === 'assistant' && /^Background work finished: (?:failed )?tool\.$/.test(original.content.trim())) continue;
+      normalized.push(original);
+      continue;
+    }
+    // Claude writes task completion notices as role:user in its native
+    // transcript. They are vendor events, never a prompt the user typed.
+    if (/^<task-notification\b[^>]*>[\s\S]*?<\/task-notification>\s*$/.test(original.content.trim())) continue;
     // A resource note ClikCode sent the model (turn/resource-notes.ts) is not
     // the user's: one steered in alone is dropped, one on a turn's text cut off it.
     const content = stripResourceNotes(original.content.replace(PROVIDER_BOUNDARY_NOTE, ''));

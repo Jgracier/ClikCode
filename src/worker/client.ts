@@ -95,9 +95,9 @@ function removeStartLog(sessionId: string): void {
 /** Starts a fresh worker for a session and waits until its socket actually
  * accepts a connection -- not until the child process merely exists, which
  * would race the worker's own listen() call. */
-async function spawnSessionWorker(sessionId: string): Promise<WorkerRuntimeRecord> {
+async function spawnSessionWorker(sessionId: string, extra: readonly string[] = []): Promise<WorkerRuntimeRecord> {
   lifecycle('client.worker.spawn', { worker: sessionId });
-  launchWorker(sessionId);
+  launchWorker(sessionId, extra);
   let deadline = Date.now() + SPAWN_TIMEOUT_MS;
   let handoffAskedAt = 0;
   let holder: Awaited<ReturnType<typeof conversationHolder>>;
@@ -274,18 +274,26 @@ async function recordIsLive(record: WorkerRuntimeRecord): Promise<boolean> {
  * conversation loaded into it, no model call. Returns once that is asked;
  * the warming is the worker's, so the move never waits on it. */
 export async function warmSessionWorker(sessionId: string): Promise<void> {
-  const record = await findRunningWorker(sessionId);
-  if (!record) {
-    lifecycle('client.worker.spawn', { worker: sessionId, warm: true });
-    launchWorker(sessionId, ['--warm']);
-    return;
-  }
-  await tellWorker(record, { type: 'warm', token: record.token });
+  const pending = warmingWorkerStarts.get(sessionId);
+  if (pending) { await pending; return; }
+  const starting = (async () => {
+    const running = await usableWorker(sessionId);
+    return running ? { record: running, launched: false } : { record: await spawnSessionWorker(sessionId, ['--warm']), launched: true };
+  })();
+  warmingWorkerStarts.set(sessionId, starting);
+  let ready: { record: WorkerRuntimeRecord; launched: boolean };
+  try { ready = await starting; }
+  finally { if (warmingWorkerStarts.get(sessionId) === starting) warmingWorkerStarts.delete(sessionId); }
+  if (!ready.launched) await tellWorker(ready.record, { type: 'warm', token: ready.record.token });
 }
+
+/** A prompt arriving just after an open joins that worker's startup. */
+const warmingWorkerStarts = new Map<string, Promise<{ record: WorkerRuntimeRecord; launched: boolean }>>();
 
 /** The conversation's worker to send a command to without attaching: the one
  * running, else one started for it (as `WorkerClient.attach` would). */
 export async function workerForCommands(sessionId: string): Promise<WorkerRuntimeRecord> {
+  await warmingWorkerStarts.get(sessionId)?.catch(() => undefined);
   const running = await usableWorker(sessionId);
   if (running) return running;
   await ensureSessionOnDisk(sessionId);
@@ -426,6 +434,7 @@ export class WorkerClient extends EventEmitter {
   }
 
   static async attach(sessionId: string): Promise<WorkerClient> {
+    await warmingWorkerStarts.get(sessionId)?.catch(() => undefined);
     const running = await usableWorker(sessionId);
     if (running) {
       try {

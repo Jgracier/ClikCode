@@ -28,7 +28,7 @@ describe('the conversation list on the welcome screen and in the history menu', 
     const working = row({ activity: 'working', turn: { startedAt: new Date(now - 60_000).toISOString(), activeAt: new Date(now - 1_000).toISOString() } });
     expect(conversationMark(working, rowState(working, now))).toBe('working');
     const stalled = row({ activity: 'working', turn: { startedAt: new Date(now - 600_000).toISOString(), activeAt: new Date(now - 300_000).toISOString() } });
-    expect(conversationMark(stalled, rowState(stalled, now))).toBe('stalled');
+    expect(conversationMark(stalled, rowState(stalled, now))).toBe('working');
     const asking = row({ activity: 'working', needsYou: true, turn: { startedAt: new Date(now - 60_000).toISOString(), activeAt: new Date(now - 1_000).toISOString() } });
     expect(conversationMark(asking, rowState(asking, now))).toBe('needs-you');
     const finished = row();

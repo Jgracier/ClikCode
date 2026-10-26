@@ -2,6 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import type { HarnessSession } from '../session/model.js';
 import { readState } from '../session/state/read.js';
+import type { AiHarnessAccount } from '../harness/definition.js';
 import { writeState } from '../session/state/write.js';
 import { enqueueSessionTurn } from '../turn/checkpoint.js';
 import { formatShellNotifications, type ShellNotification } from '../agent/session-state.js';
@@ -9,12 +10,13 @@ import type { WorkerContext } from './worker-context.js';
 
 export function createWorkerIo(ctx: WorkerContext) {
   const { observer, sessionId } = ctx;
-  const currentSessionAndAccount = async (): Promise<{ session: HarnessSession; account?: string }> => {
+  const currentSessionAndAccount = async (): Promise<{ session: HarnessSession; account?: string; nativeAccount?: AiHarnessAccount }> => {
     const latest = await readState({ transcripts: [sessionId] });
     const found = latest.sessions.find((item) => item.id === sessionId);
     if (!found) throw new Error(`AI session "${sessionId}" was not found`);
-    const account = found.accountId ? latest.accounts.find((item) => item.id === found.accountId)?.label : undefined;
-    return { session: found, account };
+    const nativeAccount = found.accountId ? latest.accounts.find((item) => item.id === found.accountId) : undefined;
+    const account = nativeAccount?.label;
+    return { session: found, account, nativeAccount };
   };
 
   /** One muted line in the chat, from the turn if one runs (saved with it). */
@@ -48,13 +50,13 @@ export function createWorkerIo(ctx: WorkerContext) {
     if (notes.length) await recordNotificationText(formatShellNotifications(notes));
   };
   /** One notification the model alone reads, queued as its own turn (recordNotifications). */
-  const recordNotificationText = async (text: string): Promise<void> => {
+  const recordNotificationText = async (text: string, durable = false): Promise<void> => {
     if (!text) return;
     const latest = await readState({ transcripts: [sessionId] });
     const found = latest.sessions.find((item) => item.id === sessionId);
     if (!found) return;
     const submittedAt = new Date().toISOString();
-    enqueueSessionTurn(found, { id: randomUUID(), text, submittedAt, kind: 'notification' }, submittedAt);
+    enqueueSessionTurn(found, { id: randomUUID(), text, submittedAt, kind: 'notification', ...(durable ? { durable: true } : {}) }, submittedAt);
     await writeState(latest);
   };
   return { currentSessionAndAccount, note, broadcastQueueChanged, showEveryWindow, recordNotifications, recordNotificationText };

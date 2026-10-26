@@ -335,6 +335,7 @@ export function parseHarnessLine(
 /** parseHarnessLine for a record the caller has already parsed. */
 function parseHarnessValue(harness: AiLocalHarnessDefinition, value: Json, turn: StreamState): ParsedHarnessLine {
   const parsedResponse = nativeResponseUpdateFromValue(harness, value, turn);
+  const backgroundFrames = claudeShaped(harness) ? turn.agentRows.frame(value) : [];
   const read = stampThoughts(harness, turn, value, pairAnonymousCalls(harness, turn, value, [
     ...(claudeShaped(harness) ? (turn.claudeBlocks ??= new ClaudeBlocks(harness.command)).note(value) : []),
     ...(harness.parser === 'cline-json' ? clineLine(value, turn, harness.command) : []),
@@ -342,7 +343,7 @@ function parseHarnessValue(harness: AiLocalHarnessDefinition, value: Json, turn:
   ]));
   // A background Agent's call returns at launch; its row is held to its own end.
   const activities = claudeShaped(harness)
-    ? [...read.flatMap((event) => turn.agentRows.filter(event) ?? []), ...turn.agentRows.frame(value)]
+    ? [...read.flatMap((event) => turn.agentRows.filter(event) ?? []), ...backgroundFrames]
     : read;
   // ONE PARAGRAPH RULE FOR EVERY FAMILY. Text that follows a tool call is a new paragraph, whichever
   // parser read it: the families that build their update directly (pi, antigravity, goose, opencode)

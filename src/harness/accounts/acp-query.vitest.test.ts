@@ -76,36 +76,14 @@ describe('the model-list session', () => {
     return { calls, made, request };
   };
 
-  it('reopens the first session instead of leaving a new chat on every refresh', async () => {
+  it('requests temporary metadata sessions without a persistent session cache', async () => {
     const vendor = agent();
-    for (let index = 0; index < 3; index += 1) await acpDiscoverySession(vendor.request, { sessionCapabilities: { resume: {} } }, 'cursor:default');
-    expect(vendor.made.size).toBe(1);
-    expect(vendor.calls.map((call) => call.method)).toEqual(['session/new', 'session/resume', 'session/resume']);
-    expect(vendor.calls.every((call) => call.params?.cwd === acpDiscoveryDirectory())).toBe(true);
+    await acpDiscoverySession(vendor.request);
+    await acpDiscoverySession(vendor.request);
+    expect(vendor.calls.map((call) => call.method)).toEqual(['session/new', 'session/new']);
+    expect(vendor.calls.every((call) => call.params?.cwd === acpDiscoveryDirectory() && Array.isArray(call.params.mcpServers) && !call.params.mcpServers.length)).toBe(true);
   });
 
-  it('loads it when the agent can load but not resume', async () => {
-    const vendor = agent();
-    await acpDiscoverySession(vendor.request, { loadSession: true }, 'goose:default');
-    await acpDiscoverySession(vendor.request, { loadSession: true }, 'goose:default');
-    expect(vendor.calls.map((call) => call.method)).toEqual(['session/new', 'session/load']);
-  });
-
-  it('starts another when the kept one is gone, and keeps that', async () => {
-    const vendor = agent();
-    await acpDiscoverySession(vendor.request, { loadSession: true }, 'goose:default');
-    vendor.made.clear();
-    await acpDiscoverySession(vendor.request, { loadSession: true }, 'goose:default');
-    await acpDiscoverySession(vendor.request, { loadSession: true }, 'goose:default');
-    expect(vendor.calls.map((call) => call.method)).toEqual(['session/new', 'session/load', 'session/new', 'session/load']);
-  });
-
-  it('keeps one session per account', async () => {
-    const vendor = agent();
-    await acpDiscoverySession(vendor.request, { loadSession: true }, 'goose:a');
-    await acpDiscoverySession(vendor.request, { loadSession: true }, 'goose:b');
-    expect(vendor.made.size).toBe(2);
-  });
 });
 
 describe.runIf(process.platform === 'linux')('an ACP query ending', () => {

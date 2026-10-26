@@ -18,9 +18,9 @@ describe('a conversation row\'s one state', () => {
       .toBe('working 3m · 1 agent');
   });
 
-  it('is stalled, and for how long, once the turn has been quiet three minutes', () => {
+  it('keeps a quiet live turn working without inferring failure', () => {
     expect(conversationState({ updatedAt: ago(0), turn: { startedAt: ago(20 * MINUTE), activeAt: ago(4 * MINUTE), agents: 2 } }, NOW))
-      .toEqual({ kind: 'stalled', text: 'stalled 4m' });
+      .toEqual({ kind: 'working', text: 'working 20m · 2 agents' });
   });
 
   it('says what a turn waits on while a private model finds a server or loads, and never calls that stalled', () => {

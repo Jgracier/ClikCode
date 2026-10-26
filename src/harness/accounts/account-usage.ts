@@ -15,7 +15,7 @@ import { localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import type { AiHarnessAccount } from '../definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { NATIVE_USAGE_PROBES } from './usage-probes.js';
-import { AccountUsageReading, USAGE_RECHECK_MS, UsageCacheEntry, UsageReading, nativeUsageCache, settleQuotaMark, usageAskedAt, usageCacheKey, usageReadingIsCurrent, vendorWindows, windowSpent } from './usage-reading.js';
+import { AccountUsageReading, USAGE_RECHECK_MS, UsageCacheEntry, UsageReading, nativeUsageCache, accountDisplayUsage, settleQuotaMark, usageAskedAt, usageCacheKey, usageReadingIsCurrent, vendorWindows, windowSpent } from './usage-reading.js';
 import { NATIVE_STREAM_USAGE_READINGS, accountUsageFrom } from './stream-usage.js';
 
 /** Probes in flight, by usage cache key. Opening a conversation asks for its
@@ -45,6 +45,14 @@ const USAGE_PAINT_WAIT_MS = 3_000;
 /** The structured reading behind nativeUsageLabel: same caching, same sharing. */
 export async function nativeUsageReading(
   session: HarnessSession, state: HarnessState, options: { network?: boolean; cachedOnly?: boolean } = {},
+): Promise<UsageReading | undefined> {
+  const reading = await reportedNativeUsageReading(session, state, options);
+  return accountDisplayUsage(state.accounts.find((account) => account.id === session.accountId), reading);
+}
+
+/** The unmodified vendor reading: only this layer writes the usage cache. */
+async function reportedNativeUsageReading(
+  session: HarnessSession, state: HarnessState, options: { network?: boolean; cachedOnly?: boolean },
 ): Promise<UsageReading | undefined> {
   const probe = session.nativeHarness ? NATIVE_USAGE_PROBES[session.nativeHarness] : undefined;
   // A harness that reports on its own turn stream has a usage source even with
@@ -207,7 +215,7 @@ export function cachedAccountUsageLabel(account: AiHarnessAccount, state: Harnes
     ? { at: sharedAt, label: shared.label, failed: shared.failed, windows: shared.windows }
     : reported;
   if (!latest || latest.failed || latest.label === undefined) return undefined;
-  if (latest.windows?.length) return usageReadingIsCurrent(latest) ? latest.label : undefined;
+  if (latest.windows?.length) return usageReadingIsCurrent(latest) ? accountDisplayUsage(account, { windows: latest.windows, label: latest.label })?.label : undefined;
   return Date.now() - latest.at < USAGE_RECHECK_MS ? latest.label : undefined;
 }
 

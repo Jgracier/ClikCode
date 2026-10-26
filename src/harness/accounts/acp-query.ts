@@ -6,10 +6,11 @@
  * prompted, so no turn is spent. */
 
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { atomicWriteFile } from '../../session/store/files.js';
+import { discoveryCleanup } from './discovery-cleanup.js';
+import { lifecycle } from '../../runtime/lifecycle-log.js';
 import { stateDirectory } from '../../session/store/paths.js';
 import { resolveBinaryPath } from '../transport/native/binary.js';
 import { JsonRpcPeer } from '../transport/jsonrpc-peer.js';
@@ -22,13 +23,14 @@ type Json = Record<string, any>;
 
 /** Runs `ask` against an initialized ACP peer and always shuts it down.
  * Undefined when the binary is missing or the server exits or errors before
- * answering. No clock unless the caller passes one: a slow start is not a
- * missing answer. */
+ * answering. These are bounded metadata probes, never conversation turns. */
 export async function queryAcp<T>(
   binary: string, argv: readonly string[], environment: Readonly<Record<string, string>>,
   ask: (request: (method: string, params?: Json) => Promise<Json>, capabilities: Json) => Promise<T>,
-  timeoutMs?: number,
+  timeoutMs = 30_000,
+  options: { signal?: AbortSignal; onNotification?: (method: string, params: Json) => void; cwd?: string; discovery?: AiLocalHarnessDefinition } = {},
 ): Promise<T | undefined> {
+  if (options.signal?.aborted) return undefined;
   const executable = await resolveBinaryPath(binary);
   if (!executable) return undefined;
   const detached = process.platform !== 'win32';
@@ -37,17 +39,57 @@ export async function queryAcp<T>(
   const tag = randomBytes(8).toString('hex');
   const child = spawnPortable(executable, [...argv], {
     env: { ...process.env, ...environment, [QUERY_TAG]: tag }, stdio: ['pipe', 'pipe', 'pipe'], detached,
+    ...(options.cwd ? { cwd: options.cwd } : {}),
   });
-  const peer = new JsonRpcPeer(child, { label: `${binary} ACP`, detached, forwardParentSignals: false });
-  const request = (method: string, params: Json = {}): Promise<Json> => peer.request(method, params, { timeoutMs });
+  const peer = new JsonRpcPeer(child, { label: `${binary} ACP`, detached, forwardParentSignals: false, onNotification: options.onNotification });
+  const signal = options.signal;
+  let closing: Promise<void> | undefined;
+  const close = (): Promise<void> => closing ??= peer.shutdown({ graceMs: 500, killMs: 1000 }).catch(() => undefined);
+  const abort = (): void => { void close(); };
+  signal?.addEventListener('abort', abort, { once: true });
+  const deadline = setTimeout(abort, timeoutMs);
+  deadline.unref();
+  let capabilities: Json = {};
+  let remove: ((id: string, cwd: string) => Promise<void>) | undefined;
+  const created = new Map<string, string>();
+  const request = async (method: string, params: Json = {}): Promise<Json> => {
+    if (method === 'session/new') {
+      if (!options.discovery) throw new Error('Metadata sessions need an owned cleanup lifecycle');
+      if (!capabilities.sessionCapabilities?.delete) {
+        remove ??= await discoveryCleanup(options.discovery, environment);
+        if (!remove) throw new Error('This vendor cannot clean up a metadata session');
+      }
+    }
+    const result = await peer.request(method, params, { timeoutMs });
+    if (method === 'session/new' && typeof result.sessionId === 'string') created.set(result.sessionId, String(params.cwd ?? ''));
+    return result;
+  };
   try {
+    if (signal?.aborted) return undefined;
     const initialized = await request('initialize', { protocolVersion: 1, clientCapabilities: {} });
-    return await ask(request, (initialized.agentCapabilities as Json | undefined) ?? {});
+    capabilities = (initialized.agentCapabilities as Json | undefined) ?? {};
+    return await ask(request, capabilities);
   } catch {
     return undefined;
   } finally {
-    await peer.shutdown({ graceMs: 500, killMs: 1000 }).catch(() => undefined);
+    clearTimeout(deadline);
+    signal?.removeEventListener('abort', abort);
+    if (capabilities.sessionCapabilities?.delete && !peer.closed) {
+      for (const id of created.keys()) {
+        try { await peer.request('session/delete', { sessionId: id }, { timeoutMs: 1_000 }); created.delete(id); }
+        catch { /* local cleanup after shutdown, where supported */ }
+      }
+    }
+    await close();
     await stopEscaped(tag).catch(() => undefined);
+    for (const [id, cwd] of created) {
+      try {
+        if (!remove && options.discovery) remove = await discoveryCleanup(options.discovery, environment);
+        if (!remove) throw new Error('No local cleanup after the vendor delete failed');
+        await remove(id, cwd);
+      }
+      catch { lifecycle('vendor.discovery-cleanup-failed', { harness: options.discovery?.command }); }
+    }
   }
 }
 
@@ -74,35 +116,14 @@ export function acpDiscoveryDirectory(): string {
   return join(stateDirectory(), 'model-discovery');
 }
 
-function discoverySessionsFile(): string {
-  return join(stateDirectory(), 'cache', 'acp-discovery-sessions.json');
-}
-
-/** The session an agent offers its models on. Most agents store every
- * `session/new` as a chat of the user's, even one never prompted, so asking
- * again on each refresh left a new empty chat each time. The first session is
- * kept and reopened after that; an agent that can neither resume nor load one
- * gets a new session, in the same out-of-the-way folder. */
+/** A temporary metadata session, owned and removed by queryAcp. The model
+ * catalog caches the answer; no persistent session cache or cache lock is needed. */
 export async function acpDiscoverySession(
-  request: (method: string, params?: Json) => Promise<Json>, capabilities: Json, key: string,
+  request: (method: string, params?: Json) => Promise<Json>,
 ): Promise<Json> {
   const cwd = acpDiscoveryDirectory();
   await mkdir(cwd, { recursive: true });
-  const file = discoverySessionsFile();
-  const kept: Record<string, string> = await readFile(file, 'utf8').then((text) => JSON.parse(text) as Record<string, string>).catch(() => ({}));
-  const previous = kept[key];
-  const reopen = capabilities.sessionCapabilities?.resume ? 'session/resume' : capabilities.loadSession ? 'session/load' : undefined;
-  if (previous && reopen) {
-    // A load or resume answers without the id it was given; it is put back,
-    // so a caller can address the reopened session.
-    try { return { sessionId: previous, ...await request(reopen, { sessionId: previous, cwd, mcpServers: [] }) }; } catch { /* gone: start another */ }
-  }
-  const started = await request('session/new', { cwd, mcpServers: [] });
-  if (reopen && typeof started.sessionId === 'string' && started.sessionId) {
-    await mkdir(join(stateDirectory(), 'cache'), { recursive: true });
-    await atomicWriteFile(file, JSON.stringify({ ...kept, [key]: started.sessionId }, null, 2)).catch(() => undefined);
-  }
-  return started;
+  return request('session/new', { cwd, mcpServers: [] });
 }
 
 /** The models an agent's `session/new` offers, with their display names. */

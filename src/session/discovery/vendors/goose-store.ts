@@ -15,7 +15,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { NativeSessionEnvironment, NativeSessionStore } from '../stores.js';
 import { claudeImportWriter } from './claude-import.js';
-import { carrySqliteSession, progressQuery, type SqliteCarrySpec } from './sqlite-carry.js';
+import { removeSqliteSession, carrySqliteSession, progressQuery, type SqliteCarrySpec } from './sqlite-carry.js';
 import { jsonPartText, sqliteOpenings } from './sqlite-openings.js';
 
 function gooseRoot(environment: NativeSessionEnvironment): string {
@@ -64,6 +64,7 @@ const gooseCarry: SqliteCarrySpec = {
 export const gooseSessionStore: NativeSessionStore = {
   root: gooseRoot,
   carry: (input) => carrySqliteSession(gooseCarry, input),
+  remove: (id, _cwd, environment) => removeSqliteSession(gooseCarry, id, environment),
   // `messages.content_json` is the message's parts (observed on 1.51.0).
   openings: (root, nativeIds) => sqliteOpenings(join(root, 'sessions.db'), nativeIds,
     "SELECT content_json AS text FROM messages WHERE session_id = ? AND role = 'user' ORDER BY id LIMIT 1", jsonPartText),

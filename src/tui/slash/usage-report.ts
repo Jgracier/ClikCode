@@ -5,7 +5,7 @@ import { isClikCodeAgent } from '../../session/route.js';
 import type { AiHarnessAccount } from '../../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { compactCount, dollars } from '../../harness/protocol/format.js';
-import { invocationRollups } from '../../session/state/invocations.js';
+import { invocationRollups, invocationTokenCount } from '../../session/state/invocations.js';
 import { accountBackAt, accountQuotaSpent, accountUsageText, outOfUsageText, usageResetLabel } from '../../harness/accounts/usage-reading.js';
 import { costSplitParts } from '../render/usage-words.js';
 import { accountUsage } from '../../session/picker-rows.js';
@@ -15,9 +15,11 @@ type Invocation = HarnessState['invocations'][number];
 interface UsageReportTotals {
   accounts: number;
   turns: number;
+  maintenance: number;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
+  cacheWriteTokens: number;
   totalTokens: number;
   costUsd: number;
   costKnown: boolean;
@@ -25,26 +27,23 @@ interface UsageReportTotals {
   breakdown?: { meteredUsd: number; gpuUsd: number };
 }
 
-function tokenCount(invocation: Invocation): number {
-  if (invocation.totalTokens !== undefined) return invocation.totalTokens;
-  return (invocation.inputTokens ?? 0) + (invocation.outputTokens ?? 0);
-}
-
 function sumInvocations(invocations: readonly Invocation[]): UsageReportTotals {
   return invocations.reduce<UsageReportTotals>((total, invocation) => ({
     accounts: total.accounts,
-    turns: total.turns + 1,
+    turns: total.turns + (invocation.kind === 'maintenance' ? 0 : 1),
+    maintenance: total.maintenance + (invocation.kind === 'maintenance' ? 1 : 0),
     inputTokens: total.inputTokens + (invocation.inputTokens ?? 0),
     outputTokens: total.outputTokens + (invocation.outputTokens ?? 0),
     cacheReadTokens: total.cacheReadTokens + (invocation.cacheReadTokens ?? 0),
-    totalTokens: total.totalTokens + tokenCount(invocation),
+    cacheWriteTokens: total.cacheWriteTokens + (invocation.cacheWriteTokens ?? 0),
+    totalTokens: total.totalTokens + invocationTokenCount(invocation),
     costUsd: total.costUsd + (invocation.costUsd ?? 0),
     costKnown: total.costKnown || invocation.costUsd !== undefined,
     ...(invocation.costBreakdown || total.breakdown ? { breakdown: {
       meteredUsd: (total.breakdown?.meteredUsd ?? 0) + (invocation.costBreakdown?.meteredUsd ?? 0),
       gpuUsd: (total.breakdown?.gpuUsd ?? 0) + (invocation.costBreakdown?.gpuUsd ?? 0),
     } } : {}),
-  }), { accounts: 0, turns: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, totalTokens: 0, costUsd: 0, costKnown: false });
+  }), { accounts: 0, turns: 0, maintenance: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, costUsd: 0, costKnown: false });
 }
 
 function allowance(account: AiHarnessAccount, state: HarnessState, now: number): { label: string; reset?: string } {
@@ -63,7 +62,7 @@ function accountLines(account: AiHarnessAccount, state: HarnessState, session: H
   const totals = sumInvocations(state.invocations.filter((item) => item.accountId === account.id));
   const quota = allowance(account, state, now);
   const name = account.id === session.accountId ? `${account.label} · current` : account.label;
-  const figures = [tokenFigure(totals.totalTokens)];
+  const figures = [tokenFigure(totals.totalTokens), ...(totals.maintenance ? [`${totals.maintenance} cache refresh${totals.maintenance === 1 ? '' : 'es'}`] : [])];
   if (totals.costKnown) figures.push(dollars(totals.costUsd));
   const shown = figures.filter(Boolean);
   return [
@@ -80,13 +79,14 @@ function tokenFigure(tokens: number): string {
   return tokens ? `${compactCount(tokens)} tokens` : '';
 }
 
-function splitLines(totals: UsageReportTotals): string[] {
+function splitLines(totals: UsageReportTotals, cacheWithinInput: boolean): string[] {
   const flow = [
-    ...(totals.inputTokens ? [`${compactCount(totals.inputTokens)} in`] : []),
+    ...(totals.inputTokens ? [`${compactCount(totals.inputTokens)} in${cacheWithinInput && totals.cacheReadTokens ? ' (includes cached)' : ''}`] : []),
     ...(totals.outputTokens ? [`${compactCount(totals.outputTokens)} out`] : []),
   ];
   const lines = flow.length ? [`  ${flow.join(' · ')}`] : [];
-  if (totals.cacheReadTokens > 0) lines.push(`  ${compactCount(totals.cacheReadTokens)} cached`);
+  if (totals.cacheReadTokens > 0) lines.push(`  ${compactCount(totals.cacheReadTokens)} cached${cacheWithinInput ? ' within input' : ''}`);
+  if (totals.cacheWriteTokens > 0) lines.push(`  ${compactCount(totals.cacheWriteTokens)} cache written`);
   return lines;
 }
 
@@ -127,7 +127,7 @@ export function usageReport(
   const providerInvocations = state.invocations.filter((item) => accountIds.has(item.accountId) || ids.has(item.provider));
   const totals = { ...sumInvocations(providerInvocations), accounts: accounts.length };
   const conversation = sumInvocations(state.invocations.filter((item) => item.sessionId === session.id));
-  const chatBits = [`${conversation.turns} ${conversation.turns === 1 ? 'turn' : 'turns'}`, ...(conversation.totalTokens ? [tokenFigure(conversation.totalTokens)] : [])];
+  const chatBits = [`${conversation.turns} ${conversation.turns === 1 ? 'turn' : 'turns'}`, ...(conversation.maintenance ? [`${conversation.maintenance} cache refresh${conversation.maintenance === 1 ? '' : 'es'}`] : []), ...(conversation.totalTokens ? [tokenFigure(conversation.totalTokens)] : [])];
   const cost = conversationCost(state, session.id);
   if (cost !== undefined) chatBits.push(dollars(cost), ...costSplitParts(conversation.breakdown));
   const lines = [
@@ -135,8 +135,8 @@ export function usageReport(
     '',
     ...(accounts.length ? accounts.flatMap((account, index) => [...(index ? [''] : []), ...accountLines(account, state, session, now)]) : ['  No accounts on this provider']),
     '',
-    ...(accounts.length === 1 ? [] : [`  ${totals.accounts} accounts · ${totals.turns} ${totals.turns === 1 ? 'turn' : 'turns'}`]),
-    ...splitLines(totals),
+    ...(accounts.length === 1 ? [] : [`  ${totals.accounts} accounts · ${totals.turns} ${totals.turns === 1 ? 'turn' : 'turns'}${totals.maintenance ? ` · ${totals.maintenance} cache refresh${totals.maintenance === 1 ? '' : 'es'}` : ''}`]),
+    ...splitLines(totals, providerInvocations.some((item) => item.provider === 'openai') && providerInvocations.every((item) => item.provider === 'openai')),
     ...(totals.costKnown && accounts.length !== 1 ? [`  ${dollars(totals.costUsd)}`] : []),
     '',
     `  This chat · ${chatBits.join(' · ')}`,
@@ -167,7 +167,7 @@ function tokensText(tokens: number, turns: number): string {
   return turns && !tokens ? '' : compactCount(tokens);
 }
 
-interface UsageDay { day: string; turns: number; tokens: number; costUsd: number; costTurns: number; unknownCostTurns: number }
+interface UsageDay { day: string; turns: number; maintenance: number; tokens: number; costUsd: number; costTurns: number; unknownCostTurns: number }
 
 /** The last `days` days, newest first, from the turn log and its per-day
  * rollups (invocationRollups: folded records keep tokens but no cost, so
@@ -176,13 +176,14 @@ export function usageDays(state: HarnessState, now: number = Date.now(), days = 
   const table = new Map<string, UsageDay>();
   for (let back = 0; back < days; back += 1) {
     const day = localDay(now - back * DAY_MS);
-    table.set(day, { day, turns: 0, tokens: 0, costUsd: 0, costTurns: 0, unknownCostTurns: 0 });
+    table.set(day, { day, turns: 0, maintenance: 0, tokens: 0, costUsd: 0, costTurns: 0, unknownCostTurns: 0 });
   }
   for (const invocation of state.invocations) {
     const row = table.get(localDay(Date.parse(invocation.at)));
     if (!row) continue;
-    row.turns += 1;
-    row.tokens += tokenCount(invocation);
+    row.turns += invocation.kind === 'maintenance' ? 0 : 1;
+    row.maintenance += invocation.kind === 'maintenance' ? 1 : 0;
+    row.tokens += invocationTokenCount(invocation);
     if (invocation.costUsd !== undefined) { row.costUsd += invocation.costUsd; row.costTurns += 1; } else row.unknownCostTurns += 1;
   }
   // Rollups are per UTC day: well past the raw retention, so never within
@@ -190,8 +191,9 @@ export function usageDays(state: HarnessState, now: number = Date.now(), days = 
   for (const rollup of invocationRollups(state)) {
     const row = table.get(rollup.day);
     if (!row) continue;
-    row.turns += rollup.calls;
-    row.tokens += rollup.inputTokens + rollup.outputTokens;
+    row.turns += rollup.calls - (rollup.maintenanceCalls ?? 0);
+    row.maintenance += rollup.maintenanceCalls ?? 0;
+    row.tokens += rollup.totalTokens ?? rollup.inputTokens + rollup.outputTokens;
     row.unknownCostTurns += rollup.calls;
   }
   return [...table.values()];
@@ -210,7 +212,7 @@ export function usageReportAll(
     const accounts = state.accounts.filter((account) => account.provider === provider);
     const totals = sumInvocations(state.invocations.filter((item) => item.provider === provider));
     const unknown = state.invocations.filter((item) => item.provider === provider && item.costUsd === undefined).length;
-    const cost = costText(totals.costUsd, unknown, totals.turns - unknown);
+    const cost = costText(totals.costUsd, unknown, totals.turns + totals.maintenance - unknown);
     return [
       name(provider),
       ...accounts.flatMap((account) => {
@@ -218,18 +220,18 @@ export function usageReportAll(
         const label = account.id === session.accountId ? `${account.label} · current` : account.label;
         return [`  ${label}${quota.label === 'not reported yet' ? '' : ` · ${quota.label}`}${quota.reset ? ` · ${quota.reset}` : ''}`];
       }),
-      `  ${[`${totals.turns} ${totals.turns === 1 ? 'turn' : 'turns'}`, tokensText(totals.totalTokens, totals.turns), cost].filter(Boolean).join(' · ')}`,
+      `  ${[`${totals.turns} ${totals.turns === 1 ? 'turn' : 'turns'}`, ...(totals.maintenance ? [`${totals.maintenance} cache refresh${totals.maintenance === 1 ? '' : 'es'}`] : []), tokensText(totals.totalTokens, totals.turns + totals.maintenance), cost].filter(Boolean).join(' · ')}`,
     ].join('\n');
   });
   // Only the days with use: an idle day is a row saying nothing.
-  const days = usageDays(state, now).filter((row) => row.turns);
-  const width = Math.max(0, ...days.map((row) => tokensText(row.tokens, row.turns).length));
+  const days = usageDays(state, now).filter((row) => row.turns || row.maintenance);
+  const width = Math.max(0, ...days.map((row) => tokensText(row.tokens, row.turns + row.maintenance).length));
   const week = days.map((row) => {
     // Spelled out, not toLocaleDateString: the same on every machine.
     const date = new Date(`${row.day}T12:00:00`);
     const label = `${WEEKDAYS[date.getDay()]} ${MONTHS[date.getMonth()]} ${date.getDate()}`;
     const cost = costText(row.costUsd, row.unknownCostTurns, row.costTurns);
-    const figures = [...(width ? [tokensText(row.tokens, row.turns).padStart(width)] : []), `${row.turns} ${row.turns === 1 ? 'turn' : 'turns'}`, ...(cost ? [cost] : [])];
+    const figures = [...(width ? [tokensText(row.tokens, row.turns + row.maintenance).padStart(width)] : []), `${row.turns} ${row.turns === 1 ? 'turn' : 'turns'}`, ...(row.maintenance ? [`${row.maintenance} cache refresh${row.maintenance === 1 ? '' : 'es'}`] : []), ...(cost ? [cost] : [])];
     return `  ${label.padEnd(11)}  ${figures.join(' · ')}`;
   });
   return { text: [...(sections.length ? sections : ['No providers yet']), ['Last 7 days', ...(week.length ? week : ['  Nothing recorded'])].join('\n')].join('\n\n') };

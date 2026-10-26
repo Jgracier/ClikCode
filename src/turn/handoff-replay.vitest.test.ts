@@ -104,7 +104,7 @@ describe("the first vendor turn after a provider switch", () => {
     expect(wire).toMatch(/<attachments>[\s\S]*spec\.md/);
   }, 30_000);
 
-  it('writes the conversation as the vendor\'s own thread where a writer exists, and sends only the request', async () => {
+  it('always transfers history to a stateless harness, even if a writer was registered', async () => {
     const writes: Array<{ record: CanonicalRecord; context: NativeThreadWriteContext }> = [];
     const stores = NATIVE_SESSION_STORES as Record<string, NativeSessionStore>;
     stores.cn = {
@@ -119,16 +119,12 @@ describe("the first vendor turn after a provider switch", () => {
       const id = await handedOff();
       await runSessionTurn({} as never, id, 'now run the focused test');
       const [wire] = await sentPrompts();
-      // The request as the turn sends it (an unnamed chat also asks for a
-      // title); nothing of the history is retold.
-      expect(wire!.startsWith('now run the focused test')).toBe(true);
-      expect(wire).not.toContain('rename the parser');
-      expect(writes).toHaveLength(1);
-      expect(writes[0]!.record.turns.map((turn) => turn.user)).toEqual(['rename the parser']);
-      expect(writes[0]!.record.turns[0]!.tools.map((call) => call.name)).toEqual(['Edit', 'shell']);
-      expect(writes[0]!.context).toMatchObject({ workspace: root, version: '1.0.0' });
+      expect(wire).toContain('now run the focused test');
+      expect(wire).toContain('rename the parser');
+      expect(wire).toContain('renamed it to Reader');
+      expect(writes).toHaveLength(0);
       const state = await readState();
-      expect(state.sessions.find((item) => item.id === id)?.nativeSessionId).toBe('written-thread');
+      expect(state.sessions.find((item) => item.id === id)?.nativeSessionId).toBeUndefined();
     } finally {
       delete stores.cn;
     }

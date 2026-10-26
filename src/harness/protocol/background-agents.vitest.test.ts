@@ -127,9 +127,9 @@ describe('recorded vendor streams (src/harness/transport/native/fixtures)', () =
         onActivity: (event) => { if (event.agent && event.id === 'toolu_013yyax3JAMzifVzKLgUP5DF') rows.push([event.kind, event.childTools, event.durationMs]); },
       }, state);
     }
-    // start, then progress (still running), and only the notification settles it.
-    expect(rows.map(([kind]) => kind)).toEqual(['tool-start', 'tool-start', 'tool-done']);
-    expect(rows[2]![2]).toBe(11067);
+    // Launch, identity link, progress, and only the notification settles it.
+    expect(rows.map(([kind]) => kind)).toEqual(['tool-start', 'tool-start', 'tool-start', 'tool-done']);
+    expect(rows.at(-1)![2]).toBe(11067);
     expect(state.agentRows.size).toBe(0);
   });
 

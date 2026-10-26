@@ -53,7 +53,9 @@ describe('recoverFromFailure', () => {
 
   it('retries once on a fresh thread when the thread to resume is gone, then switches', async () => {
     const ctx = ctxWith({ authRetried: false, nativeThreadRetried: false });
+    ctx.turnText = 'A prepared handoff containing the old conversation and go';
     await recoverFromFailure(ctx, observer, lostThread());
+    expect(steps.retell).toHaveBeenCalledWith(ctx, 'go', 'clear', false);
     expect(ctx.attempt.nativeThreadRetried).toBe(true);
     expect(ctx.turnText).toBe('retold');
     expect(steps.switched).not.toHaveBeenCalled();

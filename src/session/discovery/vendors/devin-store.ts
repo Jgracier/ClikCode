@@ -22,7 +22,7 @@ import { join } from 'node:path';
 import type { CanonicalRecord, CanonicalToolCall } from '../../canonical.js';
 import { type NativeSessionEnvironment, type NativeSessionStore, type NativeThreadWriter } from '../stores.js';
 import { assistantSteps, callCommand, callResultText, requestText, sequentialIds, testedVersion } from './thread-writer-files.js';
-import { carrySqliteSession, openVendorDatabase, progressQuery, tableColumns, type CarryDb, type SqliteCarrySpec } from './sqlite-carry.js';
+import { removeSqliteSession, carrySqliteSession, openVendorDatabase, progressQuery, tableColumns, type CarryDb, type SqliteCarrySpec } from './sqlite-carry.js';
 
 function devinRoot(environment: NativeSessionEnvironment): string {
   const data = environment.XDG_DATA_HOME?.trim() || join(environment.HOME?.trim() || homedir(), '.local', 'share');
@@ -155,5 +155,6 @@ const devinCarry: SqliteCarrySpec = {
 export const devinSessionStore: NativeSessionStore = {
   root: devinRoot,
   carry: (input) => carrySqliteSession(devinCarry, input),
+  remove: (id, _cwd, environment) => removeSqliteSession(devinCarry, id, environment),
   writer: devinThreadWriter,
 };

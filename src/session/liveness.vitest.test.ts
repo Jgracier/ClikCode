@@ -67,11 +67,15 @@ describe('what a live session is doing', () => {
   const turn = { prompt: 'go', startedAt: ago(5_000), updatedAt: ago(1_000), outputStarted: true };
 
   it('is working while a live session has a turn in flight', () => {
-    expect(sessionActivity(session({ pendingTurn: turn }), workerFor('session-1'))).toBe('working');
+    expect(sessionActivity(session({ pendingTurn: turn }), workerFor('session-1'), turn, () => false, () => turn.startedAt)).toBe('working');
   });
 
   it('is working on the transcript turn a list read for it', () => {
-    expect(sessionActivity(session(), workerFor('session-1'), turn)).toBe('working');
+    expect(sessionActivity(session(), workerFor('session-1'), turn, () => false, () => turn.startedAt)).toBe('working');
+  });
+
+  it('does not revive a stale pending journal just because its worker is still open', () => {
+    expect(sessionActivity(session({ pendingTurn: turn }), workerFor('session-1'), turn, () => false, () => undefined)).toBe('idle');
   });
 
   it('is never working on presence alone: generating needs the worker', () => {

@@ -19,6 +19,8 @@ import { newConversation } from '../conversations.js';
 import { dispatchLine } from '../../../tui/slash/dispatch.js';
 import { stopWaitingForReset, type ExhaustionRetryGuard } from '../../../tui/pickers/resume-in.js';
 import { followWorkerTurn, prepareSessionWorker, pushSessionSettings, questionOrWorker, refreshSessionWorker, releaseSessionWorker, workerQueueMark, workerTurn } from '../../../worker/turn-bridge.js';
+import { warmSessionWorker } from '../../../worker/client.js';
+import { shouldWarmVendorChat } from '../../../worker/warm-policy.js';
 import { shownSettingsKey } from '../../../worker/protocol.js';
 import { liveSettingsOf } from '../../../turn/live-settings.js';
 import { BOARD_LINE, DELETED_ELSEWHERE, joinedTurn } from './board.js';
@@ -181,12 +183,15 @@ export class ChatLoop {
     // Gateway (or ClikCode Local) has its MCP servers started and the
     // Gateway connection opened before the first message; one that moved
     // to a vendor harness, or that this terminal left, stops them.
-    const routeKey = `${latest.id} ${latest.route}`;
+    const routeKey = `${latest.id} ${latest.route} ${latest.nativeHarness ?? ''} ${latest.accountId ?? ''}`;
     if (routeKey !== this.preparedRoute) {
       const leftId = this.preparedRoute?.split(' ')[0];
       if (leftId && leftId !== latest.id) releaseSessionWorker(leftId);
       this.preparedRoute = routeKey;
       void prepareSessionWorker(latest.id, { spawn: isClikCodeAgent(latest) }).catch(() => undefined);
+      if (shouldWarmVendorChat(latest)) {
+        void warmSessionWorker(latest.id).catch(() => undefined);
+      }
     }
     const settingsKey = shownSettingsKey(latest);
     if (this.shownSettings?.startsWith(`${latest.id}|`) && this.shownSettings !== settingsKey) refreshSessionWorker(latest.id);
@@ -407,7 +412,7 @@ export class ChatLoop {
       const host = createSlashHost({
         config, rl, terminal,
         runTurn: (targetId, promptText) => this.runInteractiveTurn(targetId, promptText, { echo: false }),
-        openConversationPicker: () => openConversationPicker({ config, rl, terminal, beginBuildReplace }, this.id),
+        openConversationPicker: () => openConversationPicker({ rl, terminal, beginBuildReplace, dispatch: (id, command) => dispatchLine(host, id, command) }, this.id),
       });
       const outcome = await dispatchLine(host, this.id, line, { fromQueuedCommand });
       if (outcome.notice) this.notice = outcome.notice;

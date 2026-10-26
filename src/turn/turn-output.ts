@@ -22,17 +22,20 @@ type Invocation = HarnessState['invocations'][number];
 export function recordInvocation(state: HarnessState, turn: {
   sessionId: string; accountId: string; provider: string; model?: string | null;
   startedAt: number; usage?: TurnUsage; contextProfile?: string;
+  kind?: 'maintenance';
   /** Set only for a turn that did not complete: what it spent is still spent. */
   stopReason?: 'stopped' | 'error';
 }): Invocation {
   const { usage } = turn;
   const invocation: Invocation = {
     id: randomUUID(), sessionId: turn.sessionId, accountId: turn.accountId, provider: turn.provider,
+    ...(turn.kind ? { kind: turn.kind } : {}),
     ...(turn.model ? { model: turn.model } : {}),
     at: new Date().toISOString(), latencyMs: Date.now() - turn.startedAt,
     ...(usage?.input !== undefined ? { inputTokens: usage.input } : {}),
     ...(usage?.output !== undefined ? { outputTokens: usage.output } : {}),
     ...(usage?.cacheRead !== undefined ? { cacheReadTokens: usage.cacheRead } : {}),
+    ...(usage?.cacheWrite !== undefined ? { cacheWriteTokens: usage.cacheWrite } : {}),
     ...(usage?.totalTokens !== undefined ? { totalTokens: usage.totalTokens } : {}),
     ...(usage?.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
     ...(usage?.costBreakdown ? { costBreakdown: usage.costBreakdown } : {}),

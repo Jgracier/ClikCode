@@ -68,6 +68,7 @@ export async function globalMcpServers(
    * a server that needs ClikCode's stored sign-in is left out, since its token is never
    * written anywhere new. */
   signIns = true,
+  workspace?: string,
 ): Promise<McpServerSpec[]> {
   try {
     const stateDir = stateDirectory();
@@ -76,7 +77,7 @@ export async function globalMcpServers(
     const builtIn = builtInMcpServer();
     const servers = builtIn && !recorded.some((server) => server.name === builtIn.name) ? [builtIn, ...recorded] : recorded;
     if (!servers.length) return [];
-    const { names } = await vendorMcpServerNames(command, home, profile);
+    const { names } = await vendorMcpServerNames(command, home, profile, workspace);
     const wanted = servers.filter((server) => !names.has(server.name));
     const resolved = await Promise.all(wanted.map(async (server) => {
       if (server.transport === 'stdio') return server;
@@ -90,9 +91,9 @@ export async function globalMcpServers(
 }
 
 export async function globalMcpServersForAcp(
-  command: string, capabilities: Json | undefined, profile?: { env: string; path: string }, home: string = homedir(),
+  command: string, capabilities: Json | undefined, profile?: { env: string; path: string }, home: string = homedir(), workspace?: string,
 ): Promise<Json[]> {
-  return (await globalMcpServers(command, profile, home)).flatMap((server) => acpMcpServer(server, capabilities) ?? []);
+  return (await globalMcpServers(command, profile, home, true, workspace)).flatMap((server) => acpMcpServer(server, capabilities) ?? []);
 }
 
 /** A TOML key: bare when it may be, else quoted. */

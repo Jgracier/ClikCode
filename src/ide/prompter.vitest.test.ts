@@ -29,7 +29,7 @@ describe('IdePrompter', () => {
     const request = nextRequest();
     const chosen = prompter.select('Choose', [{ label: 'a', value: 1 }, { label: 'b', value: 2, detail: 'second' }]);
     const asked = await request;
-    expect(asked.request).toEqual({ kind: 'pick', title: 'Choose', canGoBack: false, items: [{ label: 'a' }, { label: 'b', detail: 'second' }] });
+    expect(asked.request).toEqual({ kind: 'pick', title: 'Choose', canGoBack: false, searchable: false, items: [{ label: 'a' }, { label: 'b', detail: 'second' }] });
     prompter.answer(asked.id, { index: 1 });
     expect(await chosen).toBe(2);
   });

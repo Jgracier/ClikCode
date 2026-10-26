@@ -26,13 +26,14 @@ const claude = { command: 'claude', parser: 'claude-stream-json' } as unknown as
 
 /** Stand-in claude: the head up to the first result at once, the rest after
  * `delayMs` (never, when null) unless stdin closed first; exits when stdin ends. */
-const vendor = (delayMs: number | null, ignoresEnd = false, asAgent = false, failed = false): string[] => {
+const vendor = (delayMs: number | null, ignoresEnd = false, asAgent = false, failed = false, quota = false): string[] => {
   const timeline = records.map((record) => {
     if (asAgent && (record.subtype === 'task_started' || record.subtype === 'background_tasks_changed')) {
       const tasks = Array.isArray(record.tasks) ? record.tasks.map((task: Json) => ({ ...task, task_type: 'local_agent' })) : undefined;
       return { ...record, ...(tasks ? { tasks } : {}), ...(record.subtype === 'task_started' ? { task_type: 'local_agent' } : {}) };
     }
     if (failed && record.type === 'result' && record === records[firstResult - 1]) return { ...record, is_error: true, subtype: 'error_during_execution' };
+    if (quota && record.subtype === 'task_notification') return { ...record, status: 'failed', summary: "You've hit your weekly limit · resets Oct 28, 1am" };
     return record;
   });
   const head = timeline.slice(0, firstResult).map((record) => JSON.stringify(record));
@@ -51,7 +52,7 @@ const vendor = (delayMs: number | null, ignoresEnd = false, asAgent = false, fai
 };
 
 /** The turn loop's side, as the vendor turn wires it. */
-async function runTurn(sessionId: string, delayMs: number | null, ignoresEnd = false, asAgent = false, failed = false) {
+async function runTurn(sessionId: string, delayMs: number | null, ignoresEnd = false, asAgent = false, failed = false, quota = false, workEnded?: (ended: readonly EndedWork[]) => void) {
   const input = createTurnInput();
   const release = createTurnRelease();
   const turns: VendorBackgroundTurn[] = [];
@@ -60,7 +61,7 @@ async function runTurn(sessionId: string, delayMs: number | null, ignoresEnd = f
   const streams = new WeakMap<object, ReturnType<typeof createStreamState>>();
   const started = Date.now();
   const output = await captureNativeHarnessTurn(
-    { command: 'fixture', binary: process.execPath, displayName: 'Fixture' }, vendor(delayMs, ignoresEnd, asAgent, failed), {}, {
+    { command: 'fixture', binary: process.execPath, displayName: 'Fixture' }, vendor(delayMs, ignoresEnd, asAgent, failed, quota), {}, {
       stdinText: streamJsonUserMessage('go'), input, release,
       onStdoutLine: (line) => {
         const record = JSON.parse(line) as Json;
@@ -68,7 +69,7 @@ async function runTurn(sessionId: string, delayMs: number | null, ignoresEnd = f
         background.note(record);
         if (record.type === 'result' && background.pending > 0 && background.quiet) {
           held = holdVendorProcess({
-            sessionId, background, release, endInput: () => input.end(), handler: (turn) => { turns.push(turn); },
+            sessionId, background, release, endInput: () => input.end(), handler: (turn) => { turns.push(turn); }, workEnded,
             report: (text, observer, parsed) => {
               let position = streams.get(observer);
               if (!position) streams.set(observer, position = createStreamState());
@@ -82,6 +83,14 @@ async function runTurn(sessionId: string, delayMs: number | null, ignoresEnd = f
 }
 
 describe('a Claude turn that leaves background tasks running', () => {
+  it('reports a quota-refused agent while its parent process is still active', async () => {
+    const ended: EndedWork[][] = [];
+    await runTurn('held-agent-limit', 100, false, true, false, true, (items) => ended.push([...items]));
+    await vi.waitFor(() => expect(ended).toHaveLength(1), { timeout: 5_000 });
+    expect(ended[0]![0]).toMatchObject({ id: taskId, kind: 'agent', outcome: 'cut-off', limit: expect.stringContaining("You've hit your weekly limit") });
+    await whenHeldVendorGone('held-agent-limit');
+    expect(ended).toHaveLength(1);
+  });
   it('holds a subagent through a failed parent reply and lets it finish before release', async () => {
     const { turns } = await runTurn('held-agent', 400, false, true, true);
     expect(hasHeldVendorProcess('held-agent')).toBe(true);

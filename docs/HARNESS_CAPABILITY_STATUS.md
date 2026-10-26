@@ -6,33 +6,33 @@ Checked against the ClikCode catalog on 2026-10-23. The Model source, Effort, Pe
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Claude Code | Installed vendor model table | Yes | Ask, bypass, auto | - | Direct probe, and its turn stream | ACP `_session/steering` (VERIFIED) | CLI resume id; ACP session, shared store with the CLI | ACP mode `plan`; plan card | reads transcript, steers relay, child activity, background agents |
 | Grok Build | Vendor CLI | Yes (minimal to max) | Ask, bypass, auto | Plan's own list | Direct probe (ACP extension call) | None (queues) | CLI resume id; ACP session, shared store with the CLI | - | - |
-| Gemini CLI | ACP when available | No declared control | Ask, bypass, auto | - | Learned after refusals | None (queues) | CLI resume id; ACP session | - | - |
+| Gemini CLI | ACP when available | No declared control | Ask, bypass, auto | - | No direct quota probe | None (queues) | CLI resume id; ACP session | - | - |
 | Codex | The running app-server's `model/list`, for this account (`models_cache.json` when no server is live) | Yes, per model | Ask, bypass, auto | Plan's own list | Direct probe | app-server `turn/steer` (CLAIMED) | CLI resume id | plan card | reads thread, child activity |
-| OpenCode | Vendor CLI | Yes | Ask (`OPENCODE_PERMISSION` edit/bash = ask), bypass; plan mode | Zero-price models in its list | Learned after refusals | None (queues) | CLI resume id; ACP session, shared store with the CLI | ACP mode `plan` | - |
+| OpenCode | Vendor CLI | Yes | Ask (`OPENCODE_PERMISSION` edit/bash = ask), bypass; plan mode | Zero-price models in its list | No direct quota probe | None (queues) | CLI resume id; ACP session, shared store with the CLI | ACP mode `plan` | - |
 | Copilot | Its own server, for this account (`models.list`); public models.dev catalog only when that fails | Yes, over ACP (levels from `copilot --help`) | Ask, bypass | Plan's own list | Direct probe (`account.getQuota`) | None (queues) | CLI resume id; ACP session, shared store with the CLI | option `plan` | - |
-| Aider | Configured providers and their caches | No declared control | Bypass only (`--yes-always`); no ask (see below) | `:free` models | Learned after refusals | None found (queues) | CLI resume id; history file | - | - |
-| Goose | Configured providers and ACP | Yes, over ACP (levels from its `thinking_effort` option) | Ask, bypass, auto | `:free` models | Learned after refusals | None (queues) | CLI resume id; ACP session, shared store with the CLI | - | - |
-| Amp | No model selector; `--mode low/medium/high/ultra` is an option row (model tier) | No declared control | None: Inert (see below) | - | Credit balance (`amp usage`) | stream-json `steer` line (CLAIMED) | CLI resume id | plan card | reads frames, child activity |
+| Aider | Configured providers and their caches | No declared control | Bypass only (`--yes-always`); no ask (see below) | `:free` models | No direct quota probe | None found (queues) | CLI resume id; history file | - | - |
+| Goose | Configured providers and ACP | Yes, over ACP (levels from its `thinking_effort` option) | Ask, bypass, auto | `:free` models | No direct quota probe | None (queues) | CLI resume id; ACP session, shared store with the CLI | - | - |
+| Amp | No model selector; `--mode low/medium/high/ultra` is an option row (model tier) | No declared control | None: Inert (see below) | - | Credit balance (`amp usage`) | stream-json `steer` line (VERIFIED 2026-10-25) | CLI resume id | plan card | reads frames, child activity |
 | Antigravity | Vendor CLI | No declared control | Ask, bypass | Plan's own list | Direct probe (quota pools) | None found (queues) | CLI resume id | option `mode` | - |
-| Pi | Vendor CLI | Yes | No declared modes | `:free` models | Learned after refusals | RPC `steer` (VERIFIED against pi 0.87.0) | CLI resume id | - | - |
-| Droid | ACP when available | Yes, from its session's `reasoning_effort` option (per model); static list is the union | Ask, bypass, auto, over ACP modes; plan mode (`spec`) | - | Learned after refusals | None (queues) | CLI resume id; ACP session | ACP mode `spec`; option `spec-mode` | - |
+| Pi | Vendor CLI | Yes | No declared modes | `:free` models | No direct quota probe | RPC `steer` (VERIFIED against pi 0.87.0) | CLI resume id | - | - |
+| Droid | ACP when available | Yes, from its session's `reasoning_effort` option (per model); static list is the union | Ask, bypass, auto, over ACP modes; plan mode (`spec`) | - | No direct quota probe | None (queues) | CLI resume id; ACP session | ACP mode `spec`; option `spec-mode` | - |
 | Kiro | ACP when available | Yes | Ask, bypass | Plan's own list | Direct probe (its `/usage` over ACP) | Unknown (needs a sign-in to probe); queues | CLI resume id; ACP session | - | - |
-| Qwen Code | ACP when available | Yes, from its session's `reasoning_effort` option (per model) | Ask, bypass, auto, over ACP; plan mode | - | Learned after refusals | None (queues) | CLI resume id; ACP session | ACP mode `plan`; plan card | reads frames, child activity |
+| Qwen Code | ACP when available | Yes, from its session's `reasoning_effort` option (per model) | Ask, bypass, auto, over ACP; plan mode | - | No direct quota probe | None (queues) | CLI resume id; ACP session | ACP mode `plan`; plan card | reads frames, child activity |
 | Cline | ACP when available | Yes (`--thinking`; its ACP session has no effort option) | Ask, bypass (its ACP modes are plan and act); plan mode | `:free` models | Credit balance, advisory (`:free` models still run when it is spent) | None (queues) | CLI resume id; ACP session | ACP mode `plan`; option `plan` | - |
 | Kilo | Vendor CLI | Yes | Ask (`KILO_PERMISSION` edit/bash = ask), auto; plan mode | `:free` models, and the ones its list marks free | Credit balance (`kilo profile`) | None (queues) | CLI resume id; ACP session, shared store with the CLI | ACP mode `plan` | - |
 | Cursor Agent | ACP when available | No declared control | Ask, bypass, auto | Auto (the models it does not count as named) | Direct probe | None (queues) | CLI resume id; ACP session | ACP mode `plan`; option `mode`; plan card | reads frames, child activity |
 | Hermes | Provider inventory and cache; chosen over ACP | Yes, but only on a one-shot CLI turn: `hermes acp` has no effort control | Ask, bypass (`--yolo`) | `:free` models | Direct probe (Nous Portal credits) | None (queues) | CLI resume id; ACP session | - | - |
-| OpenClaw | Vendor configuration and provider inventory | Yes | No declared modes | - | Learned after refusals | None found (queues) | CLI resume id | - | - |
+| OpenClaw | Vendor configuration and provider inventory | Yes | No declared modes | - | No direct quota probe | None found (queues) | CLI resume id | - | - |
 | Command Code | Vendor CLI list (ACP lists the same 84) | Yes, per model over ACP | Ask, bypass, auto over ACP modes; plan mode | - | Direct probe | None (queues) | CLI resume id; ACP session | ACP mode `plan`; option `plan` | - |
 | Kimi CLI | ACP when available | No declared control | Ask, bypass, auto | - | Direct probe | None (queues) | ACP session | ACP mode `plan`; option `plan`; plan card | - |
 | Auggie | Vendor CLI | Yes (not sent for haiku4.5, which answers HTTP 400) | No declared modes | - | Credit balance (`auggie account status`) | None (queues) | CLI resume id; ACP session | option `ask`; plan card | - |
 | Mistral Vibe | ACP when available | No declared control | Ask, bypass, auto | - | Direct probe (a key whose plan allows no requests reads spent) | None (queues) | ACP session | - | - |
-| OpenHands | ACP when available | No declared control | Bypass, auto | - | Learned after refusals | None (queues) | ACP session | - | - |
-| Continue | Saved account models (no `--model`: `cn --model` adds a hub model) | No declared control | Ask, bypass | - | Learned after refusals | None found (queues) | None: the transcript is carried | option `readonly` | - |
-| Deep Agents Code | ACP when available | No declared control | Ask, auto (`-y`) | - | Learned after refusals | Unknown (needs a sign-in to probe); queues | ACP session | - | - |
+| OpenHands | ACP when available | No declared control | Bypass, auto | - | No direct quota probe | None (queues) | ACP session | - | - |
+| Continue | Saved account models (no `--model`: `cn --model` adds a hub model) | No declared control | Ask, bypass | - | No direct quota probe | None found (queues) | None: the transcript is carried | option `readonly` | - |
+| Deep Agents Code | ACP when available | No declared control | Ask, auto (`-y`) | - | No direct quota probe | Unknown (needs a sign-in to probe); queues | ACP session | - | - |
 | Devin CLI | ACP when available | No declared control | Ask, auto (Smart), bypass over ACP modes; plan mode | Plan's own list | Direct probe (daily and weekly) | None (queues) | ACP session | ACP mode `plan` | - |
-| Junie CLI | ACP when available | Yes | No declared modes | - | Learned after refusals | None usable: advertised, not answered (`acp.steering: false`; VERIFIED on 26.9.22) | ACP session | ACP mode `plan` | - |
-| MiniMax Code | ACP when available | No declared control | No declared modes | - | Learned after refusals | ACP `mcode/session/steer` (CLAIMED) | ACP session | - | - |
+| Junie CLI | ACP when available | Yes | No declared modes | - | No direct quota probe | None usable: advertised, not answered (`acp.steering: false`; VERIFIED on 26.9.22) | ACP session | ACP mode `plan` | - |
+| MiniMax Code | ACP when available | No declared control | No declared modes | - | No direct quota probe | ACP `mcode/session/steer` (CLAIMED) | ACP session | - | - |
 
 `Plan's own list` means the vendor lists only what the account's plan runs, so on a plan the vendor itself calls free every listed model is a free one; the plan comes from the account's usage reading. `:free` is OpenRouter's free-model suffix, which those harnesses route through. A credit balance is shown as a label, not a window: it never marks an account spent by itself.
 
@@ -62,11 +62,13 @@ Ask and Bypass do nothing for these, and ClikCode does not offer the control: Am
 ### Left
 
 - Claude ACP `additionalDirectories` is sent with `session/new|load|resume` for `/add-dir` (agents that advertise `sessionCapabilities.additionalDirectories`; others refuse the turn naming it). Not run live. `fork`, `list`, `delete` and `providers` are still unused.
-- Droid and Command Code efforts are asked of the agent per model (`session/set_config_option` model, then the effort option) on a reusable discovery session; `--help` is the fallback. Command Code's open ACP session also reports its model list (`liveModelList`), so no agent is started for it. Not run live.
+- Droid and Command Code efforts are asked of the agent per model (`session/set_config_option` model, then the effort option) on a temporary discovery session; `--help` is the fallback. Command Code's open ACP session also reports its model list (`liveModelList`), so no agent is started for it. Not run live.
 
 Effort levels come from the vendor wherever it states them: Codex's model cache per model, a harness's `--help` for its effort flag, or Goose's ACP session. The catalog's list is the fallback for harnesses that publish none.
 
-`Learned after refusals` is an estimate from the selected account's turn history. It is withheld until enough quota failures make it meaningful. It cannot supply an exact vendor balance or reset time. Turn token usage is separate from account quota and appears only when the vendor sends it. ACP itself does not require any agent to expose an account balance or an effort picker.
+`No direct quota probe` means no numeric account balance or reset is inferred.
+Vendor refusals still drive account failover. Turn tokens and costs are separate
+and appear only when the vendor supplies them.
 
 ClikCode keeps model and usage data keyed to the selected account or its isolated vendor profile. The model picker and account picker now refresh server lists and share current usage readings between ClikCode processes. This does not create multiple simultaneous vendor logins where a vendor refuses them.
 
@@ -103,6 +105,44 @@ The servers recorded for ClikCode (`<state dir>/mcp.json`, `clikcode mcp add`), 
 | OpenClaw | None per run | Its MCP servers are its own configuration (`openclaw mcp`); no per-run flag is known. |
 | Continue | None per run | `cn --mcp` takes Continue Hub slugs (`owner/package`, an option row), not a local server definition. |
 
-Not deduplicated: an ACP harness whose catalog entry declares no MCP config file (Mistral Vibe, OpenHands, Deep Agents Code, Devin, Junie, MiniMax Code) is handed every global server; one it also has of its own runs twice. Not verified live: Codex reading `env_http_headers` from the app-server's environment, and Amp's `--mcp-config` taking a file path (both from their published configuration, not a run). A token refreshed while a session or app-server is open is not handed to it; the next session or process gets the new one.
+MCP name deduplication reads the confirmed user and project config paths for Mistral Vibe, Deep Agents Code, Devin, Junie and MiniMax Code. OpenHands' effective MCP file location is not confirmed, so its own server may also be handed through ClikCode. Not verified live: Codex reading `env_http_headers` from the app-server's environment, and Amp's `--mcp-config` taking a file path (both from their published configuration, not a run). A token refreshed while a session or app-server is open is not handed to it; the next session or process gets the new one.
 
 The one-time import into mcp.json (`src/agent/mcp/import.ts`) is kept. It is not the same job as the per-session dedupe: the dedupe stops a vendor getting a server twice, while the import gives ClikCode's own agent the servers the user configured in their vendors before `clikcode mcp add` wrote mcp.json -- without it those servers would be missing from ClikCode's agent and from the harnesses that have no config of their own.
+
+## Implementation corrections, 2026-10-25
+
+- History and unsent chats use the same full slash-command registry and dispatcher
+  as the composer. Setup targets a fresh draft; closing it discards that draft.
+- Metadata-only ACP queries have a bounded lifetime. Temporary sessions are deleted
+  through an advertised protocol method or an observed store cleanup. A vendor
+  without either is not given a background session; its live session/cached model
+  list remains usable. There is no persistent discovery-session cache.
+- Native transcript readers retain the full available record. An authoritative
+  source containing the entire local cache can restore its missing older prefix.
+  Known native startup envelopes are removed without dropping HTML/XML prompts.
+- ACP session replay covers agents advertising `loadSession`, including custom
+  ACP harnesses. Store/export readers handle Claude, Codex, OpenCode, Amp, Pi,
+  Aider, Antigravity and OpenClaw. Unsupported store versions/encodings remain
+  a failed optional import, never an invented transcript. Continue is stateless
+  and receives ClikCode's canonical history on every invocation.
+- ACP model, effort and mode changes use the agent's native controls while a turn
+  runs. Rejections defer the selection without cancelling tools. Codex and other
+  turn-scoped controls take effect at their supported vendor boundary. An account
+  or provider switch cannot replace a credential inside an opaque vendor request.
+- Failover standbys initialize only: no speculative thread copy or empty thread.
+  The actual failover carries the flushed thread before resuming it.
+- Silence does not mark a conversation stalled in either client, and animation
+  minimums no longer delay completed operations.
+- Cursor native history import passed a real model codeword recall on
+  `2026.09.26-dd393fe` and is enabled for that exact build. Across accounts it
+  rebuilds the thread through the proven native writer; no unverified encrypted
+  store-copy branch remains.
+- Amp native steering passed a live tool-and-steer run. The tool finished,
+  Amp echoed the message, and the same run answered the steered instruction.
+  Async Task rows now wait for `subagent_finished`, including resumed tasks.
+  Multiple completed agents retain separate pending follow-ups; a child's
+  terminal result cannot close the parent. Failed input writes return the
+  unacknowledged message to the durable queue.
+- Turning ACP plan mode off applies even when the stored off value is absent.
+  Metadata probes use native deletion without first importing the local store
+  registry; local cleanup loads only when needed.

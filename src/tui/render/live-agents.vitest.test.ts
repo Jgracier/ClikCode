@@ -6,6 +6,24 @@ import { BackgroundAgentRows } from '../../harness/events/background-agent-rows.
 const plain = (text: string): string => text.replace(/\u001b\[[0-9;]*m/g, '');
 
 describe('composer subagents', () => {
+  it('joins an SDK async launch receipt to its task list when task_started is missing', () => {
+    const lifecycle = new BackgroundAgentRows();
+    const start = lifecycle.filter({ kind: 'tool-start', id: 'launch', label: 'Agent Review auth', agent: true })!;
+    let entries = upsertActivityEvent([], 0, 0, start);
+    const frames = lifecycle.frame({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'launch',
+      content: [{ type: 'text', text: 'Async agent launched successfully.\nagentId: task-a (internal ID)' }] }] } });
+    expect(frames).toHaveLength(1);
+    expect(lifecycle.filter({ kind: 'tool-done', id: 'launch', label: 'tool' })).toBeUndefined();
+    for (const frame of frames) entries = upsertActivityEvent(entries, 0, 0, frame);
+    expect(liveAgentRows(entries, () => undefined, 0, 80, 5, {
+      agents: 1, agentTasks: [{ id: 'task-a', label: 'Review auth' }],
+    })).toHaveLength(1);
+    const [end] = lifecycle.frame({ type: 'system', subtype: 'task_notification', tool_use_id: 'launch', task_id: 'task-a', status: 'completed' });
+    entries = upsertActivityEvent(entries, 0, 0, end!);
+    expect(liveAgentRows(entries, () => undefined, 0, 80, 5)).toHaveLength(0);
+    expect(lifecycle.frame({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'unrelated-command',
+      content: 'Async agent launched successfully.\nagentId: task-a (internal ID)' }] } })).toEqual([]);
+  });
   it('links Claude launch calls to background tasks before progress, keeping distinct agents with the same label', () => {
     const lifecycle = new BackgroundAgentRows();
     let entries: ReturnType<typeof upsertActivityEvent> = [];

@@ -1098,6 +1098,11 @@ export class ClikCodeController implements vscode.Disposable {
     await this.ensureStarted();
     const bridge = this.bridge;
     if (!bridge?.running) throw new Error('ClikCode is not connected.');
+    if (request.method === 'subagent') {
+      if (this.revision < 8) throw new Error('Update ClikCode on this machine to view or message subagents.');
+      const { method: _method, ...body } = request;
+      return bridge.call({ type: 'subagent', ...body }, TIMEOUT.structured);
+    }
     if (request.method === 'query') {
       const data = await bridge.call({ type: 'query', query: request.query, ...(request.provider ? { provider: request.provider } : {}), ...(request.network ? { network: true } : {}) }, TIMEOUT.query);
       if (request.query !== 'conversations') return data;

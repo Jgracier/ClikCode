@@ -98,6 +98,24 @@ describe('ACP status updates and extension notifications', () => {
     expect(events.slice(1).every((event) => event.agentId === 'T')).toBe(true);
   });
 
+  it.each(['text', 'structured'])('links an async launch result without a background flag (%s)', async (shape) => {
+    const events: Array<Record<string, unknown>> = [];
+    const launch = shape === 'text'
+      ? [{ type: 'text', text: 'Async agent launched successfully.\nagentId: task-a (internal ID)' }]
+      : { status: 'async_launched', isAsync: true, agentId: 'task-a' };
+    await run({ steps: [
+      update({ sessionUpdate: 'tool_call', toolCallId: 'call-a', title: 'Agent', kind: 'other', status: 'in_progress', rawInput: { description: 'review', run_in_background: true, subagent_type: 'general-purpose' } }),
+      { send: { method: '_claude/sdkMessage', params: { sessionId: 's1', message: { type: 'system', subtype: 'task_started', task_id: 'task-a', tool_use_id: 'call-a', subagent_type: 'general-purpose' } } } },
+      update({ sessionUpdate: 'tool_call_update', toolCallId: 'call-a', status: 'completed', rawOutput: launch }),
+      { send: { method: '_claude/sdkMessage', params: { sessionId: 's1', message: { type: 'system', subtype: 'task_notification', task_id: 'task-a', tool_use_id: 'call-a', status: 'completed' } } } },
+    ] }, { onActivity: (event: Record<string, unknown>) => events.push(event) });
+    expect(events.map((event) => [event.kind, event.agentId])).toEqual([
+      ['tool-start', undefined], ['tool-start', 'task-a'], ['tool-done', 'task-a'],
+    ]);
+    expect(events.every((event) => event.id === 'call-a')).toBe(true);
+    expect(events[1]?.output).toBeUndefined();
+  });
+
   it("Cursor: a sub-agent's spawning call row runs until subagent_state_update, though the call returns first", async () => {
     const events: Array<Record<string, unknown>> = [];
     await run({ steps: [

@@ -10,6 +10,7 @@ import { lifecycle } from '../runtime/lifecycle-log.js';
 import type { HarnessSession } from '../session/model.js';
 
 export interface LiveSettingsFields {
+  nativeHarness?: string;
   route?: HarnessSession['route'];
   model?: string | null;
   effort?: string;
@@ -23,9 +24,10 @@ export interface LiveSettingsFields {
   planMode?: boolean;
 }
 
-type Source = Pick<HarnessSession, 'route' | 'model' | 'effort' | 'speed' | 'permissionMode' | 'accountId' | 'sandbox' | 'planMode'>;
+type Source = Pick<HarnessSession, 'route' | 'nativeHarness' | 'model' | 'effort' | 'speed' | 'permissionMode' | 'accountId' | 'sandbox' | 'planMode'>;
 
 export class LiveSettings {
+  private readonly listeners = new Set<(changes: LiveSettingsFields) => void>();
   private current: Required<Pick<LiveSettingsFields, 'route'>> & LiveSettingsFields;
 
   constructor(session: Source) {
@@ -44,6 +46,7 @@ export class LiveSettings {
     const changed = (Object.keys(changes) as (keyof LiveSettingsFields)[]).filter((key) => before[key] !== next[key]);
     this.current = next;
     if (!changed.length) return;
+    for (const listener of this.listeners) listener(changes);
     const account = changed.includes('accountId') && next.accountId ? String(next.accountId).slice(0, 8) : undefined;
     lifecycle('turn.settings', {
       changed: changed.join(','),
@@ -59,6 +62,11 @@ export class LiveSettings {
   }
 
   get route(): HarnessSession['route'] { return this.current.route; }
+  get nativeHarness(): string | undefined { return this.current.nativeHarness; }
+  subscribe(listener: (changes: LiveSettingsFields) => void): () => void {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
   get model(): string | null | undefined { return this.current.model; }
   get effort(): string | undefined { return this.current.effort; }
   get speed(): 'fast' | undefined { return this.current.speed; }
@@ -73,10 +81,11 @@ export class LiveSettings {
  * Another account of this provider is not: the next attempt runs as that account. */
 export function liveCallsForSwitch(
   live: LiveSettings | undefined,
-  here: { route?: string; accountId?: string | null; accountProvider?: string },
+  here: { route?: string; nativeHarness?: string; accountId?: string | null; accountProvider?: string },
   accounts: readonly { id: string; provider: string }[],
 ): boolean {
   if (!live) return false;
+  if (live.nativeHarness !== undefined && here.nativeHarness !== undefined && live.nativeHarness !== here.nativeHarness) return true;
   if (live.route !== undefined && here.route !== undefined && live.route !== here.route) return true;
   const id = live.accountId;
   if (!id || id === here.accountId) return false;
@@ -86,7 +95,7 @@ export function liveCallsForSwitch(
 
 function pick(session: Source): Required<Pick<LiveSettingsFields, 'route'>> & LiveSettingsFields {
   return {
-    route: session.route, model: session.model, effort: session.effort, speed: session.speed,
+    route: session.route, nativeHarness: session.nativeHarness, model: session.model, effort: session.effort, speed: session.speed,
     permissionMode: session.permissionMode, accountId: session.accountId, sandbox: session.sandbox,
     planMode: session.planMode,
   };

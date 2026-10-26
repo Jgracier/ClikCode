@@ -669,11 +669,11 @@ async function nativeModelCatalogUncached(
   const liveOnly = Boolean(liveListed && harness.acp?.liveModelList);
   if (harness.acp && harness.acp.listsModels !== false && (!harness.modelDiscoveryArgv || liveOnly)) {
     const listed = liveListed ?? await queryAcp(harness.acp.binary ?? harness.binary, [...harness.acp.argv, ...await acpProbeArgv(harness, account)], nativeProfileEnvironment(account?.nativeProfile),
-      async (request, capabilities) => {
-        const session = await acpDiscoverySession(request, capabilities, cacheKey(harness, account));
+      async (request) => {
+        const session = await acpDiscoverySession(request);
         const efforts = harness.acp?.effortConfigId ? acpConfigOptionValues(session, harness.acp.effortConfigId) : [];
         return { ...acpSessionModels(session), ...(efforts.length ? { efforts } : {}) };
-      }).catch(() => undefined);
+      }, undefined, { discovery: harness }).catch(() => undefined);
     if (listed?.models.length) {
       // A declared ACP model list is authoritative for ACP sessions. Keeping
       // persisted CLI ids alongside it can select an id this transport does
@@ -724,8 +724,8 @@ export async function acpModelEffortChoices(
   const effortConfigId = harness.acp?.effortConfigId;
   if (!harness.acp || !effortConfigId) return undefined;
   return queryAcp(harness.acp.binary ?? harness.binary, [...harness.acp.argv, ...await acpProbeArgv(harness, account)], nativeProfileEnvironment(account?.nativeProfile),
-    async (request, capabilities) => {
-      const session = await acpDiscoverySession(request, capabilities, `${cacheKey(harness, account)}:effort`);
+    async (request) => {
+      const session = await acpDiscoverySession(request);
       let answer: Record<string, any> = session;
       const modelOption = Array.isArray(session.configOptions) ? session.configOptions.find((option: Record<string, any>) => (option?.id ?? option?.configId) === 'model') : undefined;
       const current = session.models?.currentModelId ?? modelOption?.currentValue;
@@ -740,5 +740,5 @@ export async function acpModelEffortChoices(
       const option = (answer.configOptions as Record<string, any>[] | undefined)?.find((entry) => (entry?.id ?? entry?.configId) === effortConfigId);
       const fallback = typeof option?.currentValue === 'string' && values.includes(option.currentValue) ? option.currentValue : undefined;
       return { values, ...(fallback ? { default: fallback } : {}) };
-    });
+    }, undefined, { discovery: harness });
 }

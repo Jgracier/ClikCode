@@ -16,7 +16,7 @@ import { harnessInstallRoute, manualInstallCommand } from '../harness/transport/
 import { loginNativeHarness, withSignInScreen } from '../harness/transport/native/login.js';
 import { SignInCancelled } from '../gateway/login/vendor-sign-in.js';
 import { builtInHarnesses, harnessAdapterVersion, harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsModelSelection, localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
-import { ADOPTED_TRANSCRIPT_READERS, FS_SESSION_DISCOVERY } from '../session/discovery/registry.js';
+import { nativeTranscriptReader, FS_SESSION_DISCOVERY } from '../session/discovery/registry.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { readState } from '../session/state/read.js';
 import { accountView } from '../session/state/views.js';
@@ -161,7 +161,7 @@ export async function aiDoctor(): Promise<void> {
         exactResume: Boolean(harness.session?.resumeIdPrefix),
         preallocatedSessionIdentity: Boolean(harness.session?.createIdPrefix || harness.session?.createSessionArgv),
         sessionDiscovery: Boolean(harness.session?.discoverArgv || FS_SESSION_DISCOVERY[harness.command]),
-        transcriptImport: Boolean(ADOPTED_TRANSCRIPT_READERS[harness.command]),
+        transcriptImport: Boolean(nativeTranscriptReader(harness)),
       },
     };
   }));
