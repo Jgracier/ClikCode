@@ -603,7 +603,13 @@ body.vscode-high-contrast .keylist-row.active { outline: 1px dashed var(--vscode
 .running-agents-other { display: flex; align-items: center; gap: 6px; font-size: .85em; padding: 3px 0; }
 .agent-line .activity-line { margin: 0; }
 .agent-child { min-height: 1.4em; margin-bottom: 0; }
-.agent-line .activity-outcome { font-variant-numeric: tabular-nums; }
+.agent-line .activity-text { flex: 1; }
+.agent-line .activity-status { width: 2.4ch; overflow: hidden; }
+.agent-line .spinner { width: 2.4ch; overflow: hidden; white-space: nowrap; text-align: center; }
+.agent-clock { min-width: 7ch; text-align: right; white-space: nowrap; }
+.agent-child { height: 1.4em; overflow: hidden; }
+.subagent-view .markdown > :first-child { margin-top: 0; }
+.subagent-view .markdown > :last-child { margin-bottom: 0; }
 .agent-line .subagent-view { margin: 4px 0 6px 24px; }
 .working-wrap .working { margin-top: 0; }
 .working-wrap .reasoning { margin-top: 4px; }
