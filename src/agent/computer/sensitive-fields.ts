@@ -2,7 +2,7 @@
  * read, but the VALUE of a password, one-time-code or card field never is. Nothing here
  * guesses which pages are "sign-in pages". */
 import type { Page } from 'playwright-core';
-import { allComputerPages } from './browser.js';
+import { allComputerPages, computerBrowserPids } from './browser.js';
 
 const SENSITIVE = 'input[type="password"], input[autocomplete="one-time-code"], input[autocomplete="current-password"], input[autocomplete="new-password"], input[autocomplete^="cc-"]';
 const MIN_LENGTH = 3;
@@ -59,11 +59,20 @@ export async function maskSensitive(page: Page, text: string): Promise<string> {
   return out;
 }
 
-/** A typed or revealed credential is on a screen the desktop tool could photograph. */
-export async function credentialOnScreen(stateDir: string): Promise<boolean> {
+/** A typed or revealed credential is in a tab a screenshot could show: the front tab of a window that is not
+ * minimized (a tab behind it, or a closed window, is not on screen). With `windowPid`, only when that window is
+ * the ClikCode browser itself: a picture of another app cannot hold the browser's fields. */
+export async function credentialOnScreen(stateDir: string, windowPid?: number): Promise<boolean> {
   let pages: Page[];
   try { pages = await allComputerPages(stateDir); }
   catch { return false; } // No ClikCode browser is open.
-  for (const page of pages) if ((await sensitiveValues(page)).length) return true;
+  if (windowPid !== undefined) {
+    const pids = await computerBrowserPids(stateDir);
+    if (pids && !pids.includes(windowPid)) return false; // Unknown pids: guard as if it were the browser.
+  }
+  for (const page of pages) {
+    if (!(await sensitiveValues(page)).length) continue;
+    if (await page.evaluate(() => (globalThis as unknown as { document: { visibilityState: string } }).document.visibilityState !== 'hidden').catch(() => true)) return true;
+  }
   return false;
 }

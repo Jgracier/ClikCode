@@ -2,7 +2,7 @@
  * one exact window (for example a browser popup or native dialog that the page
  * tools cannot reach) when a pid and window id are given. */
 import { defineTool, type ToolDefinition } from '../tool-contract.js';
-import { callComputerDriver } from '../computer/driver.js';
+import { callComputerDriver, driverNotice } from '../computer/driver.js';
 import { formatMcpResult } from '../mcp/tools.js';
 import { COMPUTER_OFF, computerEnabled } from '../computer/settings.js';
 import { credentialOnScreen } from '../computer/sensitive-fields.js';
@@ -58,7 +58,7 @@ export function computerDriverAction(args: DesktopArgs): { name: string; args: R
 
 export const computerDesktopTool = defineTool<DesktopArgs>({
   name: 'computer_desktop', class: 'exec',
-  description: 'Control the local desktop through cua-driver. Use it for what page tools cannot reach: a browser popup window, a native permission or file dialog, or any other app. `windows` lists windows; `observe`, then click, type, key, hotkey or scroll. With no pid and window_id it acts on the primary desktop by screenshot coordinates; with both (from `windows`) it acts on that one window and prefers a fresh element_token. Always observe first; coordinates and tokens expire. `observe` is refused while a sign-in page is open in the ClikCode browser, so the screen cannot show what the page withholds. Never type credentials.',
+  description: 'Control the local desktop through cua-driver. Use it for what page tools cannot reach: a browser popup window, a native permission or file dialog, or any other app. `windows` lists windows; `observe`, then click, type, key, hotkey or scroll. With no pid and window_id it acts on the primary desktop by screenshot coordinates; with both (from `windows`) it acts on that one window and prefers a fresh element_token. Always observe first; coordinates and tokens expire. On Linux Wayland a window observe may come back without a screenshot: act on its element_token, which works without one. Observing the desktop or the ClikCode browser window is refused while a typed password, code or card number is in a tab on screen. Never type credentials.',
   parameters: { type: 'object', additionalProperties: false, required: ['action'], properties: {
     action: { type: 'string', enum: ['windows', 'observe', 'click', 'type', 'key', 'hotkey', 'scroll'] },
     pid: { type: 'integer', minimum: 1, description: 'Process id from windows, to act on one window.' },
@@ -78,12 +78,15 @@ export const computerDesktopTool = defineTool<DesktopArgs>({
   async run(args, ctx) {
     if (!(await computerEnabled(ctx.stateDir))) return { output: COMPUTER_OFF, isError: true };
     // Only the picture of the screen could show a typed credential: acting (an OAuth popup) is allowed, looking is not.
-    if (args.action === 'observe' && await credentialOnScreen(ctx.stateDir)) return { output: privateNotice, isError: true };
+    // One window that is not the ClikCode browser cannot show the browser's fields; the whole desktop can.
+    if (args.action === 'observe' && await credentialOnScreen(ctx.stateDir, args.pid)) return { output: privateNotice, isError: true };
     try {
       const request = computerDriverAction(args);
       const withImage = ctx.acceptsImages === true && args.action === 'observe';
       const driverArgs = request.name === 'get_window_state' ? { ...request.args, include_screenshot: withImage } : request.args;
-      return formatMcpResult(await callComputerDriver(request.name, driverArgs, ctx.signal), withImage);
+      const result = formatMcpResult(await callComputerDriver(request.name, driverArgs, ctx.signal), withImage);
+      const stale = args.action === 'windows' ? await driverNotice() : undefined;
+      return stale ? { ...result, output: `${stale}\n\n${result.output}` } : result;
     } catch (error) { return { output: error instanceof Error ? error.message : String(error), isError: true }; }
   },
 });
