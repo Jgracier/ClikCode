@@ -38,6 +38,18 @@ export function HostedPicker(props: { onBack: () => void; onClose: () => void; o
     return () => { live = false; clearTimeout(timer); };
   }, [search]);
 
+  // Models Hugging Face has are looked for behind the list (about a minute the first time): ask again until that is done,
+  // so they appear without a keystroke.
+  const refreshing = list?.refreshing === true;
+  useEffect(() => {
+    if (!refreshing) return undefined;
+    let live = true;
+    const timer = setInterval(() => {
+      request<HostedList>({ method: 'query', query: 'hosted', search }).then((answer) => { if (live) setList(answer); }, () => undefined);
+    }, 5_000);
+    return () => { live = false; clearInterval(timer); };
+  }, [refreshing, search]);
+
   const plan = (row: HostedRow): void => {
     setStep({ row });
     request<HostedPlan>({ method: 'query', query: 'hosted-plan', row }).then(
@@ -102,6 +114,7 @@ export function HostedPicker(props: { onBack: () => void; onClose: () => void; o
         <input ref={input} type="text" value={search} placeholder="Search models · add “local” or “cloud” to choose where"
           aria-label="Search hosted models" aria-controls="hosted-list" onInput={(event) => setSearch((event.target as HTMLInputElement).value)} />
       </div>
+      {refreshing ? <div class="picker-note muted"><Spinner /> Looking for more models…</div> : null}
       {(list?.unavailable ?? []).map((item) => <div class="picker-note muted" key={item.target} title={item.message}><Icon name="info" /> {UNAVAILABLE_WORDS[item.target] ?? item.message}</div>)}
       <KeyList id="hosted-list" rows={rows} label="Hosted models" inputRef={input} onEscape={props.onBack}
         emptyText={loading ? (slow ? 'Finding models…' : undefined) : 'No models match.'} />

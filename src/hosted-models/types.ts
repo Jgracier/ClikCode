@@ -59,6 +59,8 @@ export interface HostedAdapter {
 export interface HostedList {
   rows: HostedRow[];
   unavailable: Array<{ target: HostedTarget; message: string }>;
+  /** More models are still being looked for in the background (a refresh of what Hugging Face has): ask again shortly. */
+  refreshing?: true;
 }
 
 /** The words the picker shows on a row. */
