@@ -84,7 +84,7 @@ import { constants } from 'node:fs';
 import { copyFile, link, open, readFile, rename, stat, unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { HarnessSession } from '../model.js';
-import { lifecycle } from '../../runtime/lifecycle-log.js';
+import { lifecycle, quiet } from '../../runtime/lifecycle-log.js';
 import {
   appendChatLog, chatLogText, loadChatLog, loadPendingFile, parseChatLog, removeChatLog, removePendingFile, storePendingFile, writeChatLog,
   type ChatLog, type LegacyBase, type LogRecord, type PendingTurn, type TranscriptMessage,
@@ -352,7 +352,7 @@ export const MIGRATION_FAULTS: { at?: (step: 'read' | 'write' | 'sync' | 'verify
 
 async function syncDirectory(directory: string): Promise<void> {
   if (process.platform === 'win32') return;
-  const handle = await open(directory, 'r').catch(() => undefined);
+  const handle = await open(directory, 'r').catch(quiet('session/store/transcripts'));
   if (!handle) return;
   try { await handle.sync(); } catch { /* fail-open-ok: some filesystems refuse a directory fsync */ } finally { await handle.close(); }
 }
@@ -363,7 +363,7 @@ async function keepLegacyCopy(id: string): Promise<void> {
   const sourceInfo = await stat(source);
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const target = attempt === 0 ? sessionLegacyBackupPath(id) : `${sessionLegacyBackupPath(id)}-${Date.now()}${attempt}`;
-    const existing = await stat(target).catch(() => undefined);
+    const existing = await stat(target).catch(quiet('session/store/transcripts'));
     if (existing) {
       if (existing.ino === sourceInfo.ino && existing.dev === sourceInfo.dev) return;
       continue; // an earlier copy (an earlier version of the file) is kept as it is
@@ -424,7 +424,7 @@ async function migrate(id: string): Promise<ChatLog | undefined> {
     await rename(temporary, path);
     placed = true;
   } finally {
-    if (!placed) await unlink(temporary).catch(() => undefined);
+    if (!placed) await unlink(temporary).catch(quiet('session/store/transcripts'));
   }
   fault('placed');
   await syncDirectory(dirname(path));
@@ -453,7 +453,7 @@ async function writeStub(id: string): Promise<string | undefined> {
     // Already there (an older build wrote one meanwhile: taken in like any), or no links: no stub.
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') lifecycle('store.stub-failed', { session: id, error: (error as Error).message });
   } finally {
-    await unlink(temporary).catch(() => undefined);
+    await unlink(temporary).catch(quiet('session/store/transcripts'));
   }
   return fileIdentity(path);
 }

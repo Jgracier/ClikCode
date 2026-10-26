@@ -1,5 +1,5 @@
 /** One structured CLI attempt, including its native session and background process. */
-import { lifecycle } from '../runtime/lifecycle-log.js';
+import { lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -166,7 +166,7 @@ export async function runVendorCliAttempt(input: {
       if (piTurn.settled) throw new Error('turn is finishing');
       const id = randomUUID();
       const taken = piTurn.await(id);
-      taken.catch(() => undefined);
+      taken.catch(quiet('turn/vendor-cli-attempt'));
       if (!heldInput.write(piRpcSteer(id, steerText))) throw new Error('turn is finishing');
       await taken;
       if (submission.kind !== 'note') await checkpoint.steer(submission);
@@ -198,7 +198,7 @@ export async function runVendorCliAttempt(input: {
       if (ampTurn && record) ampTurn.note(record);
       if (held) {
         held.line(lineText, record);
-        void recordNativeStreamUsage(session, lineText).catch(() => undefined);
+        void recordNativeStreamUsage(session, lineText).catch(quiet('turn/vendor-cli-attempt'));
         return;
       }
       if (background && record) background.note(record);
@@ -245,7 +245,7 @@ export async function runVendorCliAttempt(input: {
       // shared OAuth usage endpoint -- a per-account budget several open
       // chats used to exhaust between them -- down to a cold-start probe.
       // (Self-gated on a substring, so it does not re-parse ordinary lines.)
-      void recordNativeStreamUsage(session, lineText).catch(() => undefined);
+      void recordNativeStreamUsage(session, lineText).catch(quiet('turn/vendor-cli-attempt'));
       const reported = outcome.selfReport;
       if (reported?.model || reported?.permissionMode) {
         session.reported = {

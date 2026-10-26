@@ -1,5 +1,6 @@
 /** The bridge's attachment to the conversation's worker: attach, follow its
  * events, and stop a turn and see that it lands. */
+import { quiet } from '../runtime/lifecycle-log.js';
 import { noticeLevel } from './notice-level.js';
 import { withSignIn } from '../commands/account.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
@@ -49,7 +50,7 @@ export class WorkerLink {
       if (this.host.closed || this.host.sessionId !== sessionId || movedAway) return;
       this.host.enqueue(async () => {
         if (this.host.closed || this.host.sessionId !== sessionId || this.worker) return;
-        await this.workerFor(sessionId).catch(() => undefined);
+        await this.workerFor(sessionId).catch(quiet('ide/bridge-worker'));
       });
     });
     return client;
@@ -104,7 +105,7 @@ export class WorkerLink {
         const waiter = this.turnWaiter;
         this.turnWaiter = undefined;
         // The turn's cost is on the conversation's figure now.
-        if (this.host.shown) void this.host.refreshUsage().catch(() => undefined);
+        if (this.host.shown) void this.host.refreshUsage().catch(quiet('ide/bridge-worker'));
         if (waiter) (waiter.error ? waiter.reject(waiter.error) : waiter.resolve());
         // A turn this editor only followed (a terminal's, or one the worker
         // started) ended: what was queued behind it is this client's to send.

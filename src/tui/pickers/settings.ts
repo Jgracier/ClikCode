@@ -10,6 +10,7 @@
  * harness. That was only reachable before by typing
  * `/settings provider <id> <key> <value>`. */
 
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { clikCodeAgentLabel, isClikCodeAgent } from '../../session/route.js';
 import type Conf from 'conf';
 import { vendorFacingOptions } from '../../harness/options.js';
@@ -72,7 +73,7 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
     // The Gateway's chats: how long the user's own models may sit idle before their GPU is released (the account's
     // setting, on the Gateway). Unread (offline, an older Gateway): the row is left out.
     const idle = isGatewayService(session)
-      ? await import('../../gateway/own-models.js').then(async (own) => ({ own, minutes: await own.ownModelIdleMinutes({ config, timeoutMs: 5_000 }) })).catch(() => undefined)
+      ? await import('../../gateway/own-models.js').then(async (own) => ({ own, minutes: await own.ownModelIdleMinutes({ config, timeoutMs: 5_000 }) })).catch(quiet('tui/pickers/settings'))
       : undefined;
     const optionCount = harness ? vendorFacingOptions(localHarnessCapabilityManifest(harness).options, harness).length : 0;
     const setOptions = Object.keys(session.harnessOptions ?? {}).length;

@@ -12,6 +12,7 @@
  * Not covered, by design: files git ignores, files outside the working
  * directory's subtree, and what git operations themselves move (a commit or
  * checkout leaves no dirty file behind to compare). */
+import { quiet } from '../runtime/lifecycle-log.js';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -117,7 +118,7 @@ async function readRegular(file: string): Promise<{ content?: Buffer; mode: numb
 export async function snapshotBeforeShell(cwd: string): Promise<ShellSnapshot | undefined> {
   const top = await git(cwd, ['rev-parse', '--show-toplevel']);
   if (!top) return undefined;
-  const root = await fs.realpath(top.toString('utf8').trim()).catch(() => undefined);
+  const root = await fs.realpath(top.toString('utf8').trim()).catch(quiet('agent/shell-changes'));
   if (!root) return undefined;
   const startedAt = Date.now();
   const entries = await status(cwd);

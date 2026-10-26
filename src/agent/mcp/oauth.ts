@@ -26,6 +26,7 @@
  * Tokens live in `<state dir>/mcp-oauth/<name>.json`, 0600, one file per
  * server, and only there: they are never written into mcp.json, a header, or
  * any vendor's config. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { readFile, rm, stat } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
@@ -152,7 +153,7 @@ interface McpOAuthDiscovery {
 async function getJson(url: string, fetchImpl: Fetch): Promise<Record<string, any> | undefined> {
   try {
     const response = await fetchImpl(url, { headers: { accept: 'application/json', 'mcp-protocol-version': '2025-06-18' }, signal: AbortSignal.timeout(10_000) });
-    if (!response.ok) { await response.body?.cancel().catch(() => undefined); return undefined; }
+    if (!response.ok) { await response.body?.cancel().catch(quiet('agent/mcp/oauth')); return undefined; }
     const parsed: unknown = await response.json();
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, any> : undefined;
   } catch { return undefined; }
@@ -294,7 +295,7 @@ export function mcpOAuthProvider(
   const read = () => readMcpOAuth(stateDir, spec.name, spec.url);
   const markNeedsSignIn = async (): Promise<void> => {
     const record = await read();
-    await writeMcpOAuth(stateDir, spec.name, { ...(record ?? { server: spec.url }), tokens: undefined, needsSignIn: true }).catch(() => undefined);
+    await writeMcpOAuth(stateDir, spec.name, { ...(record ?? { server: spec.url }), tokens: undefined, needsSignIn: true }).catch(quiet('agent/mcp/oauth'));
   };
   // One refresh at a time: two requests finding the token stale share it.
   const refresh = (): Promise<'ok' | 'refused' | 'failed'> => refreshing ??= (async () => {

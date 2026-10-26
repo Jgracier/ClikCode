@@ -1,6 +1,7 @@
 /** The state index file itself: parsing it, its version gate, and the single
  * cached copy every read shares. */
 
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { readFile, readdir, stat, unlink } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import type { AiHarnessAccount } from '../../harness/definition.js';
@@ -117,7 +118,7 @@ export async function storeIndex(index: StateIndex, options: { backup: boolean; 
   const path = harnessIndexPath();
   await storeInvocationLog(index.invocations);
   const { invocations: _logged, ...rest } = index;
-  const replacing = await indexFile.load().catch(() => undefined);
+  const replacing = await indexFile.load().catch(quiet('session/state/index-file'));
   const file = { ...rest, accounts: await storeAccountReadings(await storeAccountModels(index.accounts, replacing?.accounts)) };
   const raw = `${JSON.stringify(file)}\n`;
   // What is there already says the same: a rename would only wake every
@@ -130,10 +131,10 @@ export async function storeIndex(index: StateIndex, options: { backup: boolean; 
   HARNESS_STATE_STATS.indexWrites += 1;
   if (Date.now() - tempsSweptAt > TEMP_SWEEP_EVERY_MS) {
     tempsSweptAt = Date.now();
-    await sweepDeadWriterTemps(path).catch(() => undefined);
+    await sweepDeadWriterTemps(path).catch(quiet('session/state/index-file'));
   }
   await indexFile.remember(raw, { ...cloneData(file), invocations: [] } as StateIndex);
-  if (options.backup) await atomicWriteFile(`${path}.bak`, raw).catch(() => undefined);
+  if (options.backup) await atomicWriteFile(`${path}.bak`, raw).catch(quiet('session/state/index-file'));
 }
 
 /** A writer killed mid-write leaves its `index.json.<pid>.<hex>.tmp` -- a
@@ -152,7 +153,7 @@ export async function sweepDeadWriterTemps(path: string, now = Date.now()): Prom
     const pid = name.startsWith(prefix) ? /^(\d+)\.[0-9a-f]+\.tmp$/.exec(name.slice(prefix.length))?.[1] : undefined;
     if (!pid || Number(pid) === process.pid || pidIsAlive(Number(pid))) continue;
     const temp = join(dirname(path), name);
-    const info = await stat(temp).catch(() => undefined);
+    const info = await stat(temp).catch(quiet('session/state/index-file'));
     if (!info || now - info.mtimeMs < DEAD_TEMP_MIN_AGE_MS) continue;
     await unlink(temp).then(() => { removed += 1; }, () => undefined);
   }

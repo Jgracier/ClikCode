@@ -1,6 +1,7 @@
 /** The device's own secrets file: the loopback API token and the device key.
  * Separate from the index because it is the only part that is 0600. */
 
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { chmod, readFile, stat } from 'node:fs/promises';
 import { cloneData } from '../store/data.js';
@@ -26,7 +27,7 @@ export async function readSecretsFile(): Promise<HarnessSecrets> {
   const path = harnessSecretsPath();
   try {
     const info = await stat(path);
-    if ((info.mode & 0o077) !== 0) await chmod(path, 0o600).catch(() => undefined);
+    if ((info.mode & 0o077) !== 0) await chmod(path, 0o600).catch(quiet('session/state/secrets'));
     const parsed = JSON.parse(await readFile(path, 'utf8')) as HarnessSecrets;
     return parsed && typeof parsed === 'object' ? parsed : {};
   } catch (error) {

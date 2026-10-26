@@ -4,6 +4,7 @@
  * what the repository and a snapshot taken before it say they were
  * (agent/shell-changes.ts). Anything else a command changed is invisible
  * here, and the undo result says so. */
+import { quiet } from '../runtime/lifecycle-log.js';
 import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -107,7 +108,7 @@ export class FileCheckpointStore {
 
   private serial<T>(work: () => Promise<T>): Promise<T> {
     const next = this.queue.then(work, work);
-    this.queue = next.catch(() => undefined);
+    this.queue = next.catch(quiet('agent/file-checkpoints'));
     return next;
   }
 
@@ -174,7 +175,7 @@ export class FileCheckpointStore {
     // Named by its content: one already there (an earlier path of this turn
     // with the same bytes) is this blob. Written whole or not at all, before
     // the manifest that points at it.
-    if ((await fs.stat(blob).catch(() => undefined))?.size !== prior.content.length) await atomicWriteFile(blob, prior.content);
+    if ((await fs.stat(blob).catch(quiet('agent/file-checkpoints')))?.size !== prior.content.length) await atomicWriteFile(blob, prior.content);
     return { path: target, existed: true, mode: prior.mode & 0o7777, hash, size: prior.content.length };
   }
 

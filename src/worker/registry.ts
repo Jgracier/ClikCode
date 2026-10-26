@@ -7,6 +7,7 @@
  * assumption explicit instead of coordinated by convention. It also means a
  * worker can crash without taking any other open conversation down with it.
  */
+import { quiet } from '../runtime/lifecycle-log.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { statSync } from 'node:fs';
 import { link, mkdir, readdir, readFile, stat, unlink, utimes, writeFile } from 'node:fs/promises';
@@ -190,7 +191,7 @@ export function generateWorkerToken(): string {
 /** Removes the record only while it is still `token`'s: a worker shutting
  * down must never delete the record of the worker that replaced it. */
 export async function removeWorkerRecord(sessionId: string, token: string): Promise<void> {
-  if ((await readWorkerRecord(sessionId).catch(() => undefined))?.token !== token) return;
+  if ((await readWorkerRecord(sessionId).catch(quiet('worker/registry')))?.token !== token) return;
   await unlink(recordPath(sessionId)).catch((error: NodeJS.ErrnoException) => {
     if (error.code !== 'ENOENT') throw error;
   });
@@ -262,7 +263,7 @@ export async function requestConversationHandoff(sessionId: string): Promise<boo
 /** The worker on the machine being left honors a recent request. The
  * destination's worker ignores the same file after it takes the lease. */
 export async function conversationHandoffRequested(sessionId: string, workerHost: string = hostname()): Promise<boolean> {
-  const raw = await readFile(handoffPath(sessionId), 'utf8').catch(() => undefined);
+  const raw = await readFile(handoffPath(sessionId), 'utf8').catch(quiet('worker/registry'));
   if (!raw) return false;
   try {
     const request = JSON.parse(raw) as Partial<HandoffRequest>;
@@ -296,7 +297,7 @@ async function ownerIsLive(sessionId: string, owner: ConversationOwner | undefin
 
 /** Who runs the conversation's turns now, if anyone does. */
 export async function conversationHolder(sessionId: string): Promise<ConversationOwner | undefined> {
-  const raw = await readFile(ownerPath(sessionId), 'utf8').catch(() => undefined);
+  const raw = await readFile(ownerPath(sessionId), 'utf8').catch(quiet('worker/registry'));
   const owner = raw === undefined ? undefined : parseOwner(raw);
   return owner && await ownerIsLive(sessionId, owner) ? owner : undefined;
 }
@@ -318,9 +319,9 @@ export async function takeConversation(
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
     } finally {
-      await unlink(staging).catch(() => undefined);
+      await unlink(staging).catch(quiet('worker/registry'));
     }
-    const raw = await readFile(path, 'utf8').catch(() => undefined);
+    const raw = await readFile(path, 'utf8').catch(quiet('worker/registry'));
     if (raw === undefined) continue; // Released between the two calls.
     const holder = parseOwner(raw);
     if (holder && await ownerIsLive(sessionId, holder, path)) return { holder };
@@ -341,7 +342,7 @@ export async function liveOpenConversations(): Promise<(sessionId: string) => bo
   const names = await readdir(workersDirectory()).catch(() => [] as string[]);
   await Promise.all(names.filter((name) => name.endsWith('.open')).map(async (name) => {
     const path = join(workersDirectory(), name);
-    const raw = await readFile(path, 'utf8').catch(() => undefined);
+    const raw = await readFile(path, 'utf8').catch(quiet('worker/registry'));
     const owner = raw === undefined ? undefined : parseOwner(raw);
     if (!owner || (owner.pid === process.pid && owner.host === hostname())) return;
     if (await ownerIsLive('', owner, path)) keys.add(name.slice(0, -'.open'.length));
@@ -350,20 +351,20 @@ export async function liveOpenConversations(): Promise<(sessionId: string) => bo
 }
 
 function holdOf(path: string, mine: string): ConversationHold {
-  const held = async (): Promise<boolean> => (await readFile(path, 'utf8').catch(() => undefined)) === mine;
+  const held = async (): Promise<boolean> => (await readFile(path, 'utf8').catch(quiet('worker/registry'))) === mine;
   const refresh = setInterval(() => {
     void held().then((still) => {
       if (!still) { clearInterval(refresh); return undefined; }
       const now = new Date();
       return utimes(path, now, now);
-    }).catch(() => undefined);
+    }).catch(quiet('worker/registry'));
   }, OWNER_REFRESH_MS);
   refresh.unref();
   return {
     held,
     release: async () => {
       clearInterval(refresh);
-      if (await held()) await unlink(path).catch(() => undefined);
+      if (await held()) await unlink(path).catch(quiet('worker/registry'));
     },
   };
 }

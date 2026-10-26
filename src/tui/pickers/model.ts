@@ -1,4 +1,4 @@
-import { diagnostic } from '../../runtime/lifecycle-log.js';
+import { diagnostic, quiet } from '../../runtime/lifecycle-log.js';
 import Conf from 'conf';
 /** Choosing a model from the active harness's catalog. */
 
@@ -282,7 +282,7 @@ async function gatewayModelPicker(rl: HarnessPrompter, id: string, current: stri
   const fresh = gatewayModels({ fresh: true }).then((latest) => { list = latest; return latest; });
   // The model request may finish before the roster request; attach rejection
   // handling now so an early failure cannot become an unhandled rejection.
-  void fresh.catch(() => undefined);
+  void fresh.catch(quiet('tui/pickers/model'));
   // Account-private roster: always ask with the current key; never display
   // another account's cached agents. A missing roster does not block models.
   const agents = await gatewayAgents().catch((error: unknown) => {

@@ -9,7 +9,7 @@ import { nativeSessionStore } from '../session/discovery/registry.js';
 import { modelsDevFiles } from '../harness/accounts/goose-discovery.js';
 import { inspectNativeHarness } from '../harness/transport/native/inspect.js';
 import { maxPromptArgvBytes, localHarnessForCommand } from '../runtime/lazy-bridge.js';
-import { lifecycle } from '../runtime/lifecycle-log.js';
+import { lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { sessionTurnTransport } from '../harness/transport/select.js';
 import { turnEnvironment } from './turn-environment.js';
 import type { VendorTurnContext } from './vendor-turn-context.js';
@@ -48,7 +48,7 @@ export async function takeUp(
   if (options.interrupted && options.requestContext && last) last.user = `${last.user}${options.requestContext}`;
   const transport = sessionTurnTransport(harness, session);
   const argvBound = (transport === 'structured-cli' || transport === 'text-cli') && harness.turn?.promptInput !== 'stdin';
-  const contextWindow = await targetContextWindow(state.sessions, harness.command, ctx.model, modelsDevFiles()).catch(() => undefined);
+  const contextWindow = await targetContextWindow(state.sessions, harness.command, ctx.model, modelsDevFiles()).catch(quiet('turn/vendor-thread-takeup'));
   const writer = nativeSessionStore(harness)?.writer;
   // The whole conversation is always kept in a file the receiving provider can
   // read, so whatever its window cannot hold is still within reach. A summary

@@ -3,6 +3,7 @@
  * and the tensor directory with HTTP ranges. Unknown architectures are skipped
  * because their KV memory cannot yet be fitted safely. */
 
+import { quiet } from '../runtime/lifecycle-log.js';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { allLocalModels, registerRemoteModels, type CatalogModel, type KvGeometry } from './catalog.js';
@@ -154,7 +155,7 @@ export async function discoverHuggingFaceModels(maxWeightBytes: number): Promise
     const repos = [...new Map(results.flat().map((item) => [item.id, item])).values()]
       .sort((a, b) => (b.downloads ?? 0) - (a.downloads ?? 0)).slice(0, MAX_REPOS);
     const details = await Promise.all(repos.map(async (item) => hubJson<HubModel>(
-      `https://huggingface.co/api/models/${item.id}?blobs=true`).catch(() => undefined)));
+      `https://huggingface.co/api/models/${item.id}?blobs=true`).catch(quiet('local-models/discover'))));
     const candidates = details.filter((item): item is HubModel => Boolean(item && !item.gated && !item.private && !item.disabled))
       .flatMap((repo) => (repo.siblings ?? []).filter((file) => !file.rfilename.includes('/')
         && !/mmproj|projector/i.test(file.rfilename) && !/-\d{5}-of-\d{5}\.gguf$/i.test(file.rfilename)

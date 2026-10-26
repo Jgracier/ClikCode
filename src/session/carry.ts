@@ -23,6 +23,7 @@
  * conversation across a few files needs a store entry and nothing more.
  */
 
+import { quiet } from '../runtime/lifecycle-log.js';
 import { join, relative } from 'node:path';
 import { placeArtifact } from './carry-artifact.js';
 import { locateNativeSessionFile, nativeSessionRoot, nativeSessionStore, type NativeSessionEnvironment } from './discovery/registry.js';
@@ -101,7 +102,7 @@ export async function moveThreadToAccount(
   const carried = harness && from ? await carryNativeSession({
     harness, nativeId: session.nativeSessionPreallocated ? undefined : session.nativeSessionId, workspace: session.workspace,
     from: turnEnvironment(harness, from), to: turnEnvironment(harness, to),
-  }).catch(() => undefined) : undefined;
+  }).catch(quiet('session/carry')) : undefined;
   if (carried) session.nativeThreadAccountId = to.id;
   else forgetNativeThread(session);
   return carried;
@@ -144,7 +145,7 @@ export async function reconcileNativeThread(
     const carried = await carryNativeSession({
       harness, nativeId: session.nativeSessionId, workspace: session.workspace,
       from: turnEnvironment(harness, from), to: turnEnvironment(harness, to),
-    }).catch(() => undefined);
+    }).catch(quiet('session/carry'));
     if (carried) {
       session.nativeThreadAccountId = to.id;
       return carried;
@@ -155,7 +156,7 @@ export async function reconcileNativeThread(
   // already -- the conversation never left it -- and where the vendor's layout
   // can say so, it does.
   if (!holder) {
-    const here = await locateNativeSessionFile(harness, session.nativeSessionId!, session.workspace ?? '', turnEnvironment(harness, to)).catch(() => undefined);
+    const here = await locateNativeSessionFile(harness, session.nativeSessionId!, session.workspace ?? '', turnEnvironment(harness, to)).catch(quiet('session/carry'));
     // A vendor that keeps conversations as database rows cannot be asked
     // whether `to` has it: assume so, as every turn before this did, and keep
     // the answer so the other accounts are not searched on every turn.

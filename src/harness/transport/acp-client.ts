@@ -22,7 +22,7 @@ import { type JsonRpcPeer } from './jsonrpc-peer.js';
 import { panicMessage } from './rust-panic.js';
 import { BackgroundTurnChannel, type BackgroundTurnEnd } from './background-turn.js';
 import { PersistentSession, runOneTurn, turnFailure, type PersistentSessionOptions, type VendorWorkSession } from './persistent-session.js';
-import { diagnostic, lifecycle } from '../../runtime/lifecycle-log.js';
+import { diagnostic, lifecycle, quiet } from '../../runtime/lifecycle-log.js';
 import { globalMcpServersForAcp } from './acp-mcp-servers.js';
 import { BackgroundAgentRows } from '../events/background-agent-rows.js';
 import { endedAgentWork, VendorTasks, type RunningWork } from './handoff-work.js';
@@ -874,7 +874,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       const previous = live.sessionId;
       live.sessionId = undefined;
       // fail-open-ok: the agent ending it already, or not knowing it, leaves nothing to close.
-      await call('session/close', { sessionId: previous }).catch(() => undefined);
+      await call('session/close', { sessionId: previous }).catch(quiet('harness/transport/acp-client'));
     }
     if (wanted) {
       if (live.sessionId !== wanted) {
@@ -1593,7 +1593,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     const ended = this.vendorTasks.frame(message);
     if (!ended || ended.work.kind !== 'agent') return;
     void endedAgentWork(ended.work, ended.status, ended.summary, ended.outputFile)
-      .then((work) => this.agentEnded(work)).catch(() => undefined);
+      .then((work) => this.agentEnded(work)).catch(quiet('harness/transport/acp-client'));
   }
 
   /** A background Agent's lifecycle, from the raw `task_*` frames
@@ -1708,7 +1708,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       return choice ? optionAnswer(choice.optionId) : cancelled;
     }
     const readLive = turn?.input.currentPermissionMode;
-      const liveMode = readLive ? await readLive().catch(() => undefined) : undefined; // fail-open-ok: the mode the turn started with still stands.
+      const liveMode = readLive ? await readLive().catch(quiet('harness/transport/acp-client')) : undefined; // fail-open-ok: the mode the turn started with still stands.
     const plan = acpPermissionPlan(liveMode ?? turn?.input.permissionMode ?? 'ask', params);
     let accepted = plan.action === 'allow';
     // The call being asked about is open from here, whether or not the agent

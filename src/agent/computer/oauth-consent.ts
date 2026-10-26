@@ -3,6 +3,7 @@
  * screen. It never types: a login password, a verification code, a captcha or a screen it does not know is where it stops,
  * with a plain reason that holds no page text beyond the address and the names of what can be pressed. Success is not the
  * vendor's word for it: the callback page must be reached and ClikDeploy must then show an active connection. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { spawn } from 'node:child_process';
 import type { Page } from 'playwright-core';
 import { scrubSecrets } from './secret-scrubber.js';
@@ -303,9 +304,9 @@ async function readSelectors(page: Page): Promise<Selector[]> {
     const shown = ((await box.innerText({ timeout: 1_000 }).catch(() => '')) || '').replace(/\s+/g, ' ').trim();
     const label = ((await box.getAttribute('aria-label').catch(() => '')) || '').trim();
     if (shown && !PLACEHOLDER.test(shown)) { found.push({ label, options: [shown], selected: shown }); continue; }
-    await box.click({ timeout: 2_000 }).catch(() => undefined);
+    await box.click({ timeout: 2_000 }).catch(quiet('agent/computer/oauth-consent'));
     const options = (await page.locator('[role=option]:visible').allInnerTexts().catch(() => [] as string[])).map(t => t.replace(/\s+/g, ' ').trim()).filter(t => t && !PLACEHOLDER.test(t));
-    await page.keyboard.press('Escape').catch(() => undefined);
+    await page.keyboard.press('Escape').catch(quiet('agent/computer/oauth-consent'));
     found.push({ label: label || shown, options });
   }
   return found;
@@ -319,10 +320,10 @@ async function settleSelectors(page: Page): Promise<string | undefined> {
   for (const { selector, option } of plan.choose) {
     const native = page.locator('select:visible');
     const n = await native.count().catch(() => 0);
-    if (selector < n) { await native.nth(selector).selectOption({ label: option }).catch(() => undefined); continue; }
+    if (selector < n) { await native.nth(selector).selectOption({ label: option }).catch(quiet('agent/computer/oauth-consent')); continue; }
     const boxes = page.locator('[role=combobox]:visible, button[aria-haspopup=listbox]:visible');
-    await boxes.nth(selector - n).click({ timeout: 2_000 }).catch(() => undefined);
-    await page.getByRole('option', { name: option }).first().click({ timeout: 2_000 }).catch(() => undefined);
+    await boxes.nth(selector - n).click({ timeout: 2_000 }).catch(quiet('agent/computer/oauth-consent'));
+    await page.getByRole('option', { name: option }).first().click({ timeout: 2_000 }).catch(quiet('agent/computer/oauth-consent'));
   }
   return undefined;
 }
@@ -351,13 +352,13 @@ async function tickScopes(page: Page, text: string, options: { redirectHost?: st
   for (const index of plan) {
     const box = page.locator(BOXES).nth(index);
     const done = await box.click({ timeout: 2_000, force: true }).then(() => true, () => false);
-    if (!done) await box.evaluate(n => (n as unknown as { click(): void }).click()).catch(() => undefined);
+    if (!done) await box.evaluate(n => (n as unknown as { click(): void }).click()).catch(quiet('agent/computer/oauth-consent'));
   }
-  await page.waitForTimeout(300).catch(() => undefined);
+  await page.waitForTimeout(300).catch(quiet('agent/computer/oauth-consent'));
   const after = await readScopeBoxes(page).catch(() => [] as ScopeBox[]);
   const left = after.filter(b => !b.checked && !NOT_A_SCOPE.test(b.name));
   // Google's "Select all" ticks the rest itself; a rest that stayed unticked gets its own press.
-  for (const b of left.filter(b => !SELECT_ALL.test(b.name.trim()))) await page.locator(BOXES).nth(b.index).click({ timeout: 2_000, force: true }).catch(() => undefined);
+  for (const b of left.filter(b => !SELECT_ALL.test(b.name.trim()))) await page.locator(BOXES).nth(b.index).click({ timeout: 2_000, force: true }).catch(quiet('agent/computer/oauth-consent'));
   const final = left.length ? await readScopeBoxes(page).catch(() => [] as ScopeBox[]) : after;
   if (!scopesTicked(final)) return { stop: `The consent page has scope checkboxes that would not tick (${final.filter(b => !b.checked).map(b => b.name).slice(0, 6).join(' | ')}). Nothing was pressed.` };
   return { ticked: plan.length };
@@ -463,7 +464,7 @@ async function driveConsent(connector: string, page: Page, options: OAuthConsent
   try {
     let redirectUri: string | undefined;
     try { redirectUri = new URL(started.url).searchParams.get('redirect_uri') ?? undefined; } catch { redirectUri = undefined; }
-    await page.goto(started.url, { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => undefined);
+    await page.goto(started.url, { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(quiet('agent/computer/oauth-consent'));
     const deadline = Date.now() + (options.timeoutMs ?? 120_000);
     let idle = 0, stopSeen = 0, chosenOn = '', lastPress = { key: '', at: 0 }, controls: Control[] = [], lastText = '';
     while (Date.now() < deadline) {
@@ -481,7 +482,7 @@ async function driveConsent(connector: string, page: Page, options: OAuthConsent
           const state = await status(connector, options.signal);
           if (state.connected) { steps.push('Confirmed: ClikDeploy shows an active connection.'); return { connector, steps }; }
           last = state.reason ?? '';
-          await page.waitForTimeout(2_500).catch(() => undefined);
+          await page.waitForTimeout(2_500).catch(quiet('agent/computer/oauth-consent'));
         }
         throw new ConsentStop(`The callback page was reached but ClikDeploy shows no active connection${last ? ` (${scrubSecrets(last)})` : ''}.`);
       }
@@ -520,7 +521,7 @@ async function driveConsent(connector: string, page: Page, options: OAuthConsent
           if (++idle >= (kind ? 3 : 15)) throw new ConsentStop(`Stopped at ${kind ? kind.label : 'a screen it does not recognize'}. ${stuckOn(page, controls, text)}`, kind?.reason, stopDetail(page, controls, text));
         }
       }
-      await page.waitForTimeout(700).catch(() => undefined);
+      await page.waitForTimeout(700).catch(quiet('agent/computer/oauth-consent'));
     }
     { const kind = classifyStuck(lastText); throw new ConsentStop(`Consent did not finish in time. ${stuckOn(page, controls, lastText)}`, kind?.reason, stopDetail(page, controls, lastText)); }
   } finally { started.stop(); }

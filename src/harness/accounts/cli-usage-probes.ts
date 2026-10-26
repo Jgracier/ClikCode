@@ -19,6 +19,7 @@
  * Verified against copilot 1.0.88, kimi 2.0.2, amp 0.0.1790126705 and kilo
  * 7.7.6 on this machine's accounts (2026-09-30). None opens a session. */
 
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -174,7 +175,7 @@ async function antigravityAccessToken(environment: Environment): Promise<string 
  * renews it: `agy models` does, as it lists. */
 export async function antigravityUsageReading(environment: Environment): Promise<UsageReading | undefined> {
   try {
-    let token = await antigravityAccessToken(environment).catch(() => undefined);
+    let token = await antigravityAccessToken(environment).catch(quiet('harness/accounts/cli-usage-probes'));
     if (!token) {
       const harness = localHarnessForCommand('antigravity');
       if (harness) await captureNativeHarnessOutput(harness, ['models'], environment).catch(() => '');
@@ -329,13 +330,13 @@ export async function cursorUsageReading(environment: Environment): Promise<Usag
       response = await ask('GetCurrentPeriodUsage');
     }
     if (!response?.ok) return undefined;
-    const plan = await ask('GetPlanInfo').then(async (answer) => answer?.ok ? (await answer.json() as Json).planInfo?.planName as string | undefined : undefined).catch(() => undefined);
+    const plan = await ask('GetPlanInfo').then(async (answer) => answer?.ok ? (await answer.json() as Json).planInfo?.planName as string | undefined : undefined).catch(quiet('harness/accounts/cli-usage-probes'));
     const reading = cursorQuotaReading(await response.json(), plan);
     if (!reading || !plan) return reading;
     // A Free plan runs only what Cursor does not file as a "named" model
     // (`namedModelSectionIndex`): Auto. Its refusal says the same, "Named
     // models unavailable. Free plans can only use Auto" (2026-10-06).
-    const models = planIsFree({ name: plan }) ? await cursorUnnamedModels(environment).catch(() => undefined) : undefined;
+    const models = planIsFree({ name: plan }) ? await cursorUnnamedModels(environment).catch(quiet('harness/accounts/cli-usage-probes')) : undefined;
     return { ...reading, plan: { name: plan, ...(models?.length ? { models } : {}) } };
   } catch {
     return undefined; // fail-open-ok: no figure beats a wrong one
@@ -494,7 +495,7 @@ export async function kiroUsageReading(environment: Environment): Promise<UsageR
     const reading = kiroQuotaReading(answer.data);
     const plan = (answer.data as Json | undefined)?.planName;
     return reading && typeof plan === 'string' ? { ...reading, plan: { name: plan } } : reading;
-  }, undefined, { discovery: harness }).catch(() => undefined);
+  }, undefined, { discovery: harness }).catch(quiet('harness/accounts/cli-usage-probes'));
 }
 
 // ---------------------------------------------------------------- Command Code

@@ -1,4 +1,5 @@
 /** Choices about providers and accounts: switch provider, add an account, act on one. */
+import { quiet } from '../runtime/lifecycle-log.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { resolveSessionModel } from '../session/attach.js';
 import { aiSessionCommand } from '../tui/slash/handlers.js';
@@ -28,9 +29,9 @@ export async function chooseProvider(cx: ChooseContext, choice: IdeChoice): Prom
         // chat meanwhile, and keeps it.
         if (host.sessionId !== id) return { sessionId: moved };
         if (moved !== id) await host.switchTo(moved);
-        await host.prepareRoute().catch(() => undefined);
+        await host.prepareRoute().catch(quiet('ide/bridge-choose-provider'));
         await host.emitSession();
-        void host.refreshUsage().catch(() => undefined);
+        void host.refreshUsage().catch(quiet('ide/bridge-choose-provider'));
         return { sessionId: host.sessionId };
       });
       return true;
@@ -51,7 +52,7 @@ export async function chooseProvider(cx: ChooseContext, choice: IdeChoice): Prom
     case 'account-action':
       queued(async () => {
         await manageAccountAction(host.prompter, choice.accountId, choice.action);
-        await host.emitSession().catch(() => undefined);
+        await host.emitSession().catch(quiet('ide/bridge-choose-provider'));
       });
       return true;
     case 'gateway-credit': done({ url: await gatewayCheckoutUrl(host.config) }); return true;

@@ -13,6 +13,7 @@
  * costs a readdir and avoids guessing how a cwd becomes a directory name.
  */
 
+import { quiet } from '../../../runtime/lifecycle-log.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readdir, readFile, rmdir, stat, writeFile } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
@@ -181,7 +182,7 @@ async function geminiProjectDirectory(geminiDirectory: string, workspace: string
     }
     return join(bases[0]!, slug);
   } finally {
-    await rmdir(lock).catch(() => undefined);
+    await rmdir(lock).catch(quiet('session/discovery/vendors/gemini-store'));
   }
 }
 

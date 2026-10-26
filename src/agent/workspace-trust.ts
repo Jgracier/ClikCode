@@ -7,6 +7,7 @@
  * yes for that folder. The record lives in the state directory, which the
  * agent can neither read nor write (security.ts), so a model cannot trust a
  * workspace on the user's behalf. */
+import { quiet } from '../runtime/lifecycle-log.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { objectOrEmpty, updateJsonFile } from '../session/store/json-file.js';
@@ -25,7 +26,7 @@ function trustedIn(raw: string | undefined): string[] {
 
 async function readTrusted(stateDir: string): Promise<string[]> {
   // fail-open-ok: no record (or an unreadable one) trusts nothing, the safe answer.
-  return trustedIn(await fs.readFile(path.join(stateDir, TRUST_FILE), 'utf8').catch(() => undefined));
+  return trustedIn(await fs.readFile(path.join(stateDir, TRUST_FILE), 'utf8').catch(quiet('agent/workspace-trust')));
 }
 
 /** True when `cwd` is a trusted folder or inside one. */

@@ -13,6 +13,7 @@
  * no one rather than popping an unlock prompt. macOS (Keychain access dialog)
  * and Windows (Credential Manager) are not read for the same reason. */
 
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { execFile } from 'node:child_process';
 import { createDecipheriv } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -72,7 +73,7 @@ function keyringKey(): Promise<Buffer | undefined> {
 
 export async function droidAccountEmail(profilePath: string | undefined): Promise<string | undefined> {
   const dir = profilePath ? join(profilePath, '.factory') : process.env.FACTORY_HOME_OVERRIDE?.trim() || join(homedir(), '.factory');
-  const read = (name: string): Promise<string | undefined> => readFile(join(dir, name), 'utf8').catch(() => undefined);
+  const read = (name: string): Promise<string | undefined> => readFile(join(dir, name), 'utf8').catch(quiet('harness/accounts/droid-identity'));
   const [keyring, keyFile, file] = await Promise.all([read('auth.v2.keyring'), read('auth.v2.key'), read('auth.v2.file')]);
   if (file && keyFile) {
     const found = droidCredentialEmail(file, Buffer.from(keyFile.trim(), 'base64'));

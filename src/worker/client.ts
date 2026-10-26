@@ -4,7 +4,7 @@
  * either way, which is the whole point: a reconnect is never a special case
  * (see reseedTranscript in tui/prompter.ts for what that used to cost).
  */
-import { lifecycle } from '../runtime/lifecycle-log.js';
+import { lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { spawn } from 'node:child_process';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync } from 'node:fs';
 import { userManagerLaunch } from './own-scope.js';
@@ -293,7 +293,7 @@ const warmingWorkerStarts = new Map<string, Promise<{ record: WorkerRuntimeRecor
 /** The conversation's worker to send a command to without attaching: the one
  * running, else one started for it (as `WorkerClient.attach` would). */
 export async function workerForCommands(sessionId: string): Promise<WorkerRuntimeRecord> {
-  await warmingWorkerStarts.get(sessionId)?.catch(() => undefined);
+  await warmingWorkerStarts.get(sessionId)?.catch(quiet('worker/client'));
   const running = await usableWorker(sessionId);
   if (running) return running;
   await ensureSessionOnDisk(sessionId);
@@ -375,7 +375,7 @@ export class WorkerClient extends EventEmitter {
     let sawInitial = false;
     this.initialSnapshot = new Promise((resolve, reject) => { resolveInitial = resolve; rejectInitial = reject; });
     // Settled by an attach that is no longer waiting on it (timed out, given up): not an unhandled rejection.
-    this.initialSnapshot.catch(() => undefined);
+    this.initialSnapshot.catch(quiet('worker/client'));
     const deliver = (event: WorkerEvent): void => {
       if (!sawInitial && (event.type === 'snapshot' || event.type === 'attach-rejected')) {
         sawInitial = true;
@@ -434,7 +434,7 @@ export class WorkerClient extends EventEmitter {
   }
 
   static async attach(sessionId: string): Promise<WorkerClient> {
-    await warmingWorkerStarts.get(sessionId)?.catch(() => undefined);
+    await warmingWorkerStarts.get(sessionId)?.catch(quiet('worker/client'));
     const running = await usableWorker(sessionId);
     if (running) {
       try {

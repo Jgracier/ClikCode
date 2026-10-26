@@ -1,6 +1,6 @@
 /** The worker's idle exit, vendor idle close and build-watch retirement: the
  * timers and the rules for when each lets the worker go. */
-import { lifecycle } from '../runtime/lifecycle-log.js';
+import { lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { existingSessionAgents } from '../agent/background-agents.js';
 import { idleDecision, vendorIdleDecision } from './idle-decisions.js';
 import { hasHeldVendorProcess, whenHeldVendorGone } from '../harness/transport/native/held-vendor.js';
@@ -124,7 +124,7 @@ export function createIdleControl(ctx: WorkerContext) {
       if (retireBlocker() || quietLeft() > 0) return;
       if (running) { noteIdle('held: retiring once the vendor\'s work ends'); return; }
       void ctx.shutdown('replaced by a newer ClikCode build');
-    })().catch(() => undefined).finally(() => { retireCheck = undefined; });
+    })().catch(quiet('worker/worker-idle')).finally(() => { retireCheck = undefined; });
   };
 
   let awaitingHeldVendor = false;

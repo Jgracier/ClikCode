@@ -1,5 +1,5 @@
 /** One ACP or app-server attempt, with a CLI fallback where the vendor permits it. */
-import { diagnostic, lifecycle } from '../runtime/lifecycle-log.js';
+import { diagnostic, lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { LiveSettings } from './live-settings.js';
 import type { HarnessSession } from '../session/model.js';
@@ -205,10 +205,10 @@ function acpLaunchInput(input: {
     plansListModels: Boolean(harness.freePlan?.listed),
     // Claude Code's quota, carried by the turn itself: published like a
     // stream reading, so the composer and the account picker see it.
-    onQuotaReading: (reading) => { void recordDerivedUsage(session, reading).catch(() => undefined); },
+    onQuotaReading: (reading) => { void recordDerivedUsage(session, reading).catch(quiet('turn/vendor-session-attempt')); },
     // The models this session offers are the catalog model discovery
     // would otherwise start a second copy of the agent to read.
-    onSessionModels: (answer, fresh) => { void recordLiveModelCatalog(harness, account, answer, fresh).catch(() => undefined); },
+    onSessionModels: (answer, fresh) => { void recordLiveModelCatalog(harness, account, answer, fresh).catch(quiet('turn/vendor-session-attempt')); },
     environment: launch.env && Object.keys(launch.env).length ? { ...environment, ...launch.env } : environment,
     // The account's own config is what the agent reads: global servers it already has there are not sent again.
     ...(account.nativeProfile ? { mcpProfile: { env: account.nativeProfile.env, path: account.nativeProfile.path } } : {}),
@@ -279,7 +279,7 @@ function codexLaunchInput(input: {
       onRateLimits: (rateLimits) => {
         // The structured reading (not just its label) so the windows'
         // resetsAt survives into account.usage for the reset-time line.
-        void recordDerivedUsage(session, codexRateLimitsReading(rateLimits)).catch(() => undefined);
+        void recordDerivedUsage(session, codexRateLimitsReading(rateLimits)).catch(quiet('turn/vendor-session-attempt'));
       },
     },
   };

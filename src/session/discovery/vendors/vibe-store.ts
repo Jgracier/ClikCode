@@ -30,6 +30,7 @@
  * allowance at all, not a busy one.
  */
 
+import { quiet } from '../../../runtime/lifecycle-log.js';
 import { randomUUID } from 'node:crypto';
 import { readdir, readFile, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -156,7 +157,7 @@ const vibeThreadWriter: NativeThreadWriter = {
       await writeFileAtomic(join(directory, 'messages.jsonl'), files.messages);
       await writeFileAtomic(join(directory, 'meta.json'), files.meta);
     } catch (error) {
-      await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+      await rm(directory, { recursive: true, force: true }).catch(quiet('session/discovery/vendors/vibe-store'));
       throw error;
     }
     return { nativeId: sessionId };

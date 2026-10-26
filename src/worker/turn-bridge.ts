@@ -13,7 +13,7 @@
  */
 import { backgroundWorkOf, type BackgroundWork } from '../harness/protocol/background-agents.js';
 import type { HarnessQuestionResult } from '../harness/events/question.js';
-import { diagnostic, lifecycle } from '../runtime/lifecycle-log.js';
+import { diagnostic, lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { randomUUID } from 'node:crypto';
 import { commandDuringTurn } from '../tui/slash/queue.js';
 import type { TerminalHarnessPrompter } from '../tui/prompter.js';
@@ -286,7 +286,7 @@ type IdleWake = { line: string } | { woke: 'turn'; prompt?: string } | { woke: '
  * reopened conversation mid-turn looked idle, and a queued message waited
  * for a keypress. Attaches only to a worker that is already running. */
 export async function questionOrWorker(sessionId: string, ask: (signal?: AbortSignal) => Promise<string>, queueMark?: number): Promise<IdleWake> {
-  const client = await connect(sessionId, false).catch(() => undefined);
+  const client = await connect(sessionId, false).catch(quiet('worker/turn-bridge'));
   const tracker = client ? trackers.get(client) : undefined;
   if (!tracker) return askUntilWorker(sessionId, ask);
   if (tracker.running) return { woke: 'turn', ...(tracker.prompt !== undefined ? { prompt: tracker.prompt } : {}) };
@@ -319,7 +319,7 @@ async function askUntilWorker(sessionId: string, ask: (signal?: AbortSignal) => 
   const controller = new AbortController();
   const watch = watchConversationList(() => {
     if (controller.signal.aborted) return;
-    void connect(sessionId, false).catch(() => undefined).then((client) => {
+    void connect(sessionId, false).catch(quiet('worker/turn-bridge')).then((client) => {
       if (client && !controller.signal.aborted) controller.abort();
     });
   }, { directories: [stateDirectory(), workersDirectory()] });
@@ -340,7 +340,7 @@ async function askUntilWorker(sessionId: string, ask: (signal?: AbortSignal) => 
  * running, UNATTACHED -- which questionOrWorker treats as already stale if
  * it does find one. */
 export async function workerQueueMark(sessionId: string): Promise<number> {
-  const client = await connect(sessionId, false).catch(() => undefined);
+  const client = await connect(sessionId, false).catch(quiet('worker/turn-bridge'));
   return (client ? trackers.get(client)?.queueVersion : undefined) ?? UNATTACHED;
 }
 const UNATTACHED = -1;
@@ -372,7 +372,7 @@ function showLive(rl: TerminalHarnessPrompter, tracker: WorkerTracker): void {
  * answer. The journal alone cannot say: a crashed worker leaves one behind on
  * purpose. Attaches to a running worker; never starts one. */
 export async function workerTurn(sessionId: string): Promise<{ prompt?: string } | undefined> {
-  const client = await connect(sessionId, false).catch(() => undefined);
+  const client = await connect(sessionId, false).catch(quiet('worker/turn-bridge'));
   const tracker = client ? trackers.get(client) : undefined;
   if (!tracker?.running) return undefined;
   return tracker.prompt !== undefined ? { prompt: tracker.prompt } : {};
@@ -588,7 +588,7 @@ async function driveWorkerTurn(
         void readState({ transcripts: [sessionId] }).then((state) => {
           const saved = state.sessions.find((item) => item.id === sessionId);
           if (saved && !settled) rl.render({ ...saved, messages: sessionTranscriptMessages(saved), pendingTurn: undefined }, account, { running: false });
-        }).catch(() => undefined).finally(() => finish('closed', () => resolveTurn()));
+        }).catch(quiet('worker/turn-bridge')).finally(() => finish('closed', () => resolveTurn()));
       };
       client.on('event', onEvent);
       client.on('close', onClose);

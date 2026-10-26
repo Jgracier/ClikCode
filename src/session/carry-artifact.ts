@@ -6,6 +6,7 @@
  * one-shot CLI sessions), so "which copy wins" and "never leave a half copy"
  * are decided in one place. */
 
+import { quiet } from '../runtime/lifecycle-log.js';
 import { cp, mkdir, readdir, rename, rm, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
@@ -57,7 +58,7 @@ export async function placeArtifact(source: string, destination: string): Promis
 async function measure(
   path: string,
 ): Promise<{ size: number; mtime: number; directory: boolean } | undefined> {
-  const entry = await stat(path).catch(() => undefined);
+  const entry = await stat(path).catch(quiet('session/carry-artifact'));
   if (!entry) return undefined;
   if (!entry.isDirectory()) return { size: entry.size, mtime: entry.mtimeMs, directory: false };
   let size = 0;

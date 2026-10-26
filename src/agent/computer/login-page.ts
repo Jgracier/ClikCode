@@ -2,6 +2,7 @@
  * (picked if there are several), email, password, then a one-time code.
  * Answers stay in this worker, and a new login is saved only after the
  * browser has moved past sign-in. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import type { Page } from 'playwright-core';
 import { loginLabel, sameSite, saveLoginFields, savedLoginFields, savedLoginsForSite, setLoginRejected } from './credential-vault.js';
 import { LoginError } from './login-error.js';
@@ -66,7 +67,7 @@ async function progress(page: Page, before: string, signal?: AbortSignal, nudge?
     if (signal?.aborted) throw new LoginError('Private login cancelled.');
     await page.waitForTimeout(250);
     if (signature(page.url(), await visible(page)) !== before) return true;
-    if (!nudged && poll >= NUDGE_POLLS && !await loading(page)) { nudged = true; await nudge!().catch(() => undefined); }
+    if (!nudged && poll >= NUDGE_POLLS && !await loading(page)) { nudged = true; await nudge!().catch(quiet('agent/computer/login-page')); }
     if (poll + 1 >= deadline && deadline < MAX_POLLS && await loading(page)) deadline += 20;
   }
   return false;

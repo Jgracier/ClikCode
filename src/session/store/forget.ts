@@ -7,6 +7,7 @@
  * the turn-change log stayed behind: 176 of 178 harness histories and 135 of 136
  * checkpoint directories on one machine belonged to chats long gone. */
 
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { readdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { safeRecordFileName, sessionsDirectory, stateDirectory } from './paths.js';
@@ -34,7 +35,7 @@ function artifactPaths(id: string): string[] {
 /** Removes every per-session artifact of a deleted conversation. Its
  * transcript and index row are the state writer's (writeState), and go first. */
 export async function forgetSessionArtifacts(id: string): Promise<void> {
-  await Promise.all(artifactPaths(id).map((path) => rm(path, { recursive: true, force: true }).catch(() => undefined)));
+  await Promise.all(artifactPaths(id).map((path) => rm(path, { recursive: true, force: true }).catch(quiet('session/store/forget'))));
 }
 
 /** Session ids that have artifacts on disk, for a sweep of ones whose chat is
@@ -61,7 +62,7 @@ export async function removeStrandedFiles(olderThanMs: number, now = Date.now())
     for (const name of await readdir(directory).catch(() => [] as string[])) {
       if (!/\.(tmp|new)$/.test(name)) continue;
       const path = join(directory, name);
-      const info = await stat(path).catch(() => undefined);
+      const info = await stat(path).catch(quiet('session/store/forget'));
       if (!info?.isFile() || now - info.mtimeMs < olderThanMs) continue;
       await rm(path, { force: true }).then(() => { removed += 1; }, () => undefined);
     }

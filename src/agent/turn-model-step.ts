@@ -11,7 +11,7 @@ import { ContextFitError, fitContext, learnScale, outputRoom, responseReserve, U
 import { classifyModelError, modelStartWaitSeconds, pause, retryDelaySeconds, startMayContinue, STEP_RETRY_BUDGET_SECONDS, stepRecovery } from './turn-recovery.js';
 import { abortable, categoryForTool, withUniqueIds } from './turn-support.js';
 import { recordUsage } from './usage.js';
-import { lifecycle } from '../runtime/lifecycle-log.js';
+import { lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import type { TurnRuntime } from './turn-runtime.js';
 import type { OwnModelStart } from '../gateway/own-models.js';
 import { FINDING_SERVER_PHASE, STARTING_MODEL_PHASE } from '../harness/protocol/turn-pace.js';
@@ -50,7 +50,7 @@ export async function runModelStep(rt: TurnRuntime, modelClient: ModelClient, sy
     // Gateway's wake is a no-op for a model that is running, and starts one that sleeps.
     if (!rt.modelStartChecked && modelClient.startStatus) {
       rt.modelStartChecked = true;
-      const start = await abortable(modelClient.startStatus().catch(() => undefined), signal);
+      const start = await abortable(modelClient.startStatus().catch(quiet('agent/turn-model-step')), signal);
       if (start) {
         rt.modelStart = { start, at: Date.now() };
         rt.modelStartingSince ??= Date.now();
@@ -150,7 +150,7 @@ export async function runModelStep(rt: TurnRuntime, modelClient: ModelClient, sy
       // The Gateway's status says whether this is a model still coming up (then it is waited for as one,
       // below). Otherwise the model is up and busy, and nothing reports when that ends: the wait spends
       // the step retry budget like any failing step, so the loop ends in minutes with the real answer.
-      const start = await modelClient.startStatus?.().catch(() => undefined);
+      const start = await modelClient.startStatus?.().catch(quiet('agent/turn-model-step'));
       if (start) {
         rt.modelStart = { start, at: Date.now() };
         recovery = 'model-starting';

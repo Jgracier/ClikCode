@@ -22,6 +22,7 @@
  * it prefers (its localhost callback finishes without a pasted code); where
  * none is (SSH from a phone), the printed one is.
  */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
@@ -678,7 +679,7 @@ export async function runVendorSignIn(input: {
     if (watch) clearInterval(watch);
     if (settle) clearTimeout(settle);
     if (deadline) clearTimeout(deadline);
-    if (standIns) await rm(standIns.dir, { recursive: true, force: true }).catch(() => undefined);
+    if (standIns) await rm(standIns.dir, { recursive: true, force: true }).catch(quiet('gateway/login/vendor-sign-in'));
   }
   if (succeeded) return;
   if (controller.signal.aborted) throw cancelled();

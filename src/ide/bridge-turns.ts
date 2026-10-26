@@ -1,6 +1,7 @@
 /** Running lines and turns for the open conversation: what is sent at once or
  * queued, the queue's drain, one turn through the worker, and how a failed
  * turn is recovered (another account, another provider, a wait for the reset). */
+import { quiet } from '../runtime/lifecycle-log.js';
 import { queuedNext } from '../session/queue-next.js';
 import { existsSync } from 'node:fs';
 import { expandHomePath } from '../session/attachments.js';
@@ -143,7 +144,7 @@ export class BridgeTurns {
         // The worker sends it at the reset; it hears of the parked turn now.
         this.host.link.worker?.client.send({ type: 'refresh' });
         this.host.channel.send({ type: 'notice', message: `${resumeWaitLabel(next.waiting)} · a new message cancels`, level: 'info' });
-        void this.host.refreshUsage().catch(() => undefined);
+        void this.host.refreshUsage().catch(quiet('ide/bridge-turns'));
         return;
       }
       // A typed message that failed before its turn began (no worker, a route
@@ -155,7 +156,7 @@ export class BridgeTurns {
       if (back.length) this.host.channel.send({ type: 'restore-draft', text: back.join('\n\n') });
       this.host.report(error);
     } finally {
-      await this.host.emitSession().catch(() => undefined);
+      await this.host.emitSession().catch(quiet('ide/bridge-turns'));
     }
   }
 

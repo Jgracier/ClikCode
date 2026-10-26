@@ -1,7 +1,7 @@
 /** The worker's shutdown: what it stops, and the successor it may start. */
 import { spawn } from 'node:child_process';
 import { unlink } from 'node:fs/promises';
-import { lifecycle } from '../runtime/lifecycle-log.js';
+import { lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { startsSuccessor } from './idle-decisions.js';
 import { closePersistentTransport } from '../turn/vendor-process.js';
 import { disposeSessionState, takeShellNotifications } from '../agent/session-state.js';
@@ -62,7 +62,7 @@ export function createShutdown(ctx: WorkerContext) {
     await Promise.race([agents.stopAll(`ClikCode's worker stopped (${reason}); its work is committed to its branch`), new Promise<void>((resolve) => { setTimeout(resolve, AGENT_WIND_DOWN_MS).unref(); })]);
     const owed = takeShellNotifications(ctx.agentSession);
     ctx.agentSession.notifications.push(...owed.filter((note) => note.kind !== 'agent'));
-    await ctx.io.recordNotifications(owed.filter((note) => note.kind === 'agent').map((note) => ({ ...note, reason: 'interrupted' }))).catch(() => undefined);
+    await ctx.io.recordNotifications(owed.filter((note) => note.kind === 'agent').map((note) => ({ ...note, reason: 'interrupted' }))).catch(quiet('worker/worker-shutdown'));
   };
   const shutdownOnce = async (reason: string): Promise<void> => {
     lifecycle('worker.shutdown', { reason, turnRunning: ctx.turnRunning, clients: observer.attachedCount });
@@ -90,7 +90,7 @@ export function createShutdown(ctx: WorkerContext) {
     currentStep = 'language servers';
     await boundedStep(currentStep, () => shutdownLanguageServers());
     // The tab this chat opened in the shared Chrome goes with it, so tabs do not pile up (Chrome and other chats' tabs stay).
-    await Promise.race([closeComputerPage(stateDirectory()).catch(() => undefined), new Promise<void>((resolve) => { setTimeout(resolve, 3_000).unref(); })]);
+    await Promise.race([closeComputerPage(stateDirectory()).catch(quiet('worker/worker-shutdown')), new Promise<void>((resolve) => { setTimeout(resolve, 3_000).unref(); })]);
     currentStep = 'window flush';
     const flushed: Promise<void>[] = [];
     for (const connection of connections.keys()) {
@@ -116,9 +116,9 @@ export function createShutdown(ctx: WorkerContext) {
     ctx.keepWarm?.stop();
     observer.onBackgroundWork = undefined;
     await ctx.recordWrite;
-    await removeWorkerRecord(sessionId, token).catch(() => undefined);
-    if (await hold.held()) await unlink(socketPath).catch(() => undefined);
-    await hold.release().catch(() => undefined);
+    await removeWorkerRecord(sessionId, token).catch(quiet('worker/worker-shutdown'));
+    if (await hold.held()) await unlink(socketPath).catch(quiet('worker/worker-shutdown'));
+    await hold.release().catch(quiet('worker/worker-shutdown'));
     // A turn parked for the reset is owed: stopped by nobody's choice (a
     // newer build, the 24-hour ceiling), a successor -- on whatever build is
     // installed now -- sends it. Stopped by a signal, it stays stopped.

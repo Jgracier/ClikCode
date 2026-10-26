@@ -16,8 +16,8 @@
  * worker-shutdown.
  */
 import { createKeepWarm } from './cache-keepwarm.js';
-import { dropRetiredVendorMcp } from '../harness/retired-mcp.js';
-import { lifecycle } from '../runtime/lifecycle-log.js';
+import { dropRetiredVendorMcp, homeForOwnState } from '../harness/retired-mcp.js';
+import { lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { LEGACY_INTERRUPTED_TURN_REQUEST } from '../turn/failover-prompt.js';
 import { statSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
@@ -97,7 +97,7 @@ export async function runSessionWorker(sessionId: string, options: { warm?: bool
   if (!session) { lifecycle('worker.no-session'); return; }
   // Profiles still naming removed ClikCode commands (conversations-mcp and
   // the rest) are rewritten once. It does not wait on the turn.
-  void dropRetiredVendorMcp(stateDirectory()).catch((error: unknown) => lifecycle('mcp.retired', { error: error instanceof Error ? error.message.slice(0, 200) : String(error) }));
+  void dropRetiredVendorMcp(stateDirectory(), homeForOwnState(stateDirectory())).catch((error: unknown) => lifecycle('mcp.retired', { error: error instanceof Error ? error.message.slice(0, 200) : String(error) }));
 
   // Two windows that both found no worker each spawn one: the second to get
   // here exits, and the spawning window finds the first by its record.
@@ -116,7 +116,7 @@ export async function runSessionWorker(sessionId: string, options: { warm?: bool
   // without a hold (its owner file lost or judged stale). Anything else at
   // the path is left over from a worker that is gone, and binding over it is safe.
   if (await workerIsReachable(socketPath)) { await hold.release(); return; }
-  await unlink(socketPath).catch(() => undefined);
+  await unlink(socketPath).catch(quiet('worker/session-worker'));
   const observer = new BroadcastObserver();
   observer.sessionId = sessionId;
   const token = generateWorkerToken();
@@ -211,7 +211,7 @@ export async function runSessionWorker(sessionId: string, options: { warm?: bool
       if (!await conversationHandoffRequested(sessionId)) return;
       if (ctx.idle.retireBlocker() || await persistentWorkRunning(sessionId)) return;
       await ctx.shutdown(CONVERSATION_HANDOFF_REASON);
-    })().catch(() => undefined).finally(() => { checkingHandoff = false; });
+    })().catch(quiet('worker/session-worker')).finally(() => { checkingHandoff = false; });
   }, 1_000).unref();
   // A loop of its own that never yields would keep this worker -- and what it
   // holds -- forever: a thread ends it (worker/stuck-watchdog.ts).
@@ -255,7 +255,7 @@ export async function runSessionWorker(sessionId: string, options: { warm?: bool
     if (!reports.length) return;
     await ctx.io.recordNotifications(reports.map((entry) => ({ kind: 'agent' as const, shellId: entry.id, command: entry.label, tail: entry.report, reason: 'interrupted', at: Date.now() })));
     await ctx.queue.deliverNotifications();
-  }).catch(() => undefined);
+  }).catch(quiet('worker/session-worker'));
   // The record carries what a list needs to say about this conversation: an approval it waits on,
   // and background work still running. Each change rewrites the whole of it.
   let awaiting: { title: string; since: string } | undefined;
@@ -264,7 +264,7 @@ export async function runSessionWorker(sessionId: string, options: { warm?: bool
   const rewriteRecord = (): Promise<void> => {
     ctx.recordWrite = ctx.recordWrite
       .then(() => writeWorkerRecord({ ...record, ...(awaiting ? { awaitingApproval: awaiting } : {}), ...(background ? { background } : {}), ...(runningTurn ? { runningTurn } : {}) }, { existing: true }))
-      .catch(() => undefined);
+      .catch(quiet('worker/session-worker'));
     return ctx.recordWrite;
   };
   ctx.onTurnRunningChange = async (since) => {

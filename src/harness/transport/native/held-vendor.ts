@@ -26,7 +26,7 @@
  * vendor's `task_notification`, the process exiting, or the user's Stop.
  *
  * One per ClikCode session. */
-import { lifecycle } from '../../../runtime/lifecycle-log.js';
+import { lifecycle, quiet } from '../../../runtime/lifecycle-log.js';
 import { BackgroundTurnChannel, type BackgroundTurnEnd, type VendorBackgroundTurnHandler } from '../background-turn.js';
 import type { HarnessTurnObserver } from '../../events/turn-observer.js';
 import type { BackgroundWait } from './background-wait.js';
@@ -135,7 +135,7 @@ export function holdVendorProcess(options: HeldVendorOptions): HeldVendor | unde
     const summary = typeof record.summary === 'string' ? record.summary : '';
     const file = typeof record.output_file === 'string' ? record.output_file : undefined;
     void endedAgentWork(agent, String(record.status ?? 'completed'), summary, file)
-      .then((work) => tell([work])).catch(() => undefined);
+      .then((work) => tell([work])).catch(quiet('harness/transport/native/held-vendor'));
   };
   const vendor: HeldVendor = {
     get agentWork() { return options.background.agentWork; },
@@ -167,7 +167,7 @@ export function holdVendorProcess(options: HeldVendorOptions): HeldVendor | unde
         const agent = options.background.agents().find((work) => work.id === record.task_id);
         if (agent) void endedAgentWork(agent, String(record.status ?? 'completed'),
           typeof record.summary === 'string' ? record.summary : '', typeof record.output_file === 'string' ? record.output_file : undefined)
-          .then((work) => { if (work.outcome === 'cut-off' && work.limit) options.workEnded?.([work]); }).catch(() => undefined);
+          .then((work) => { if (work.outcome === 'cut-off' && work.limit) options.workEnded?.([work]); }).catch(quiet('harness/transport/native/held-vendor'));
       }
       if (!channel && !closing && record && opensBackgroundTurn(record) && !options.background.settled) {
         channel = new BackgroundTurnChannel('structured-cli', 'background-work');

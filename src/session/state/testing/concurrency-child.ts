@@ -1,6 +1,7 @@
 /** A separate ClikCode process for the concurrency tests: bundled and run by
  * concurrency.ts against the CLIKCODE_HOME it is given. Not shipped. */
 
+import { quiet } from '../../../runtime/lifecycle-log.js';
 import { forceStoreSession, unforceStoreSession } from '../../ephemeral.js';
 import type { HarnessSession } from '../../model.js';
 import { open, unlink } from 'node:fs/promises';
@@ -53,7 +54,7 @@ createdAt: at, updatedAt: at, status: 'active',
     // the only holder by creating a marker exclusively.
     for (let step = 0; step < count; step += 1) {
       await withFileLock(id, async () => {
-        const marker = await open(`${id}.inside`, 'wx').catch(() => undefined);
+        const marker = await open(`${id}.inside`, 'wx').catch(quiet('session/state/testing/concurrency-child'));
         if (!marker) throw new Error('two holders at once');
         await marker.close();
         await new Promise((resolve) => setTimeout(resolve, 1));

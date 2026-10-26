@@ -6,6 +6,7 @@
  * chat it refers into is deleted (transcripts.ts says why). Listing and the
  * per-process caches of both formats are here too. */
 
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { readFile, readdir, rename, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { chatLogId, resetChatLogCache, type PendingTurn, type TranscriptMessage } from './chat-log.js';
@@ -43,7 +44,7 @@ export function resetSessionStoreCache(): void {
  * second name given to the file (migration's hard link) changes that, and
  * the file is the same. Undefined: no such file. */
 export async function fileIdentity(path: string): Promise<string | undefined> {
-  const info = await stat(path).catch(() => undefined);
+  const info = await stat(path).catch(quiet('session/store/records'));
   return info ? `${info.ino}:${info.size}:${info.mtimeMs}` : undefined;
 }
 
@@ -52,7 +53,7 @@ export async function fileIdentity(path: string): Promise<string | undefined> {
  * of the state loading). The object is the cached one: never change it. */
 export async function loadLegacyFile(id: string): Promise<SessionFile | undefined> {
   const path = sessionFilePath(id);
-  const info = await stat(path).catch(() => undefined);
+  const info = await stat(path).catch(quiet('session/store/records'));
   if (!info) {
     fileCache.delete(path);
     return undefined;
@@ -75,7 +76,7 @@ export async function loadLegacyFile(id: string): Promise<SessionFile | undefine
     file = parsed;
   } catch {
     // Replacement is atomic, so this is external damage.
-    await rename(path, `${path}.corrupt-${Date.now()}`).catch(() => undefined);
+    await rename(path, `${path}.corrupt-${Date.now()}`).catch(quiet('session/store/records'));
     fileCache.delete(path);
     return undefined;
   }
@@ -85,7 +86,7 @@ export async function loadLegacyFile(id: string): Promise<SessionFile | undefine
 
 async function loadTurnFile(id: string): Promise<PendingTurn | undefined> {
   const path = sessionTurnPath(id);
-  const info = await stat(path).catch(() => undefined);
+  const info = await stat(path).catch(quiet('session/store/records'));
   if (!info) {
     turnCache.delete(path);
     return undefined;
@@ -212,7 +213,7 @@ export async function giveLegacyChildrenTheirCopy(parentId: string, withChildLoc
 async function storeLegacyFile(id: string, file: SessionFile): Promise<void> {
   const path = sessionFilePath(id);
   await atomicWriteFile(path, JSON.stringify(file));
-  const info = await stat(path).catch(() => undefined);
+  const info = await stat(path).catch(quiet('session/store/records'));
   if (info) fileCache.set(path, { ino: info.ino, mtimeMs: info.mtimeMs, ctimeMs: info.ctimeMs, size: info.size, file });
   else fileCache.delete(path);
 }

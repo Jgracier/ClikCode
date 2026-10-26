@@ -2,7 +2,7 @@
 import type { Socket } from 'node:net';
 import { readConversationSubagent } from './read-subagent.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
-import { lifecycle } from '../runtime/lifecycle-log.js';
+import { lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { persistentWorkRunning } from '../turn/vendor-process.js';
 import { isClikCodeAgent, isGatewayService } from '../session/route.js';
 import { gatewayModels } from '../gateway/models.js';
@@ -37,7 +37,7 @@ export function createCommandHandler(ctx: WorkerContext) {
     prepareMcp(stateDirectory(), routeMcpServers(current, config));
     // Opens the connection the first step will reuse, and has the model list
     // ready for the picker.
-    if (isGatewayService(current)) void gatewayModels({ config }).catch(() => undefined);
+    if (isGatewayService(current)) void gatewayModels({ config }).catch(quiet('worker/worker-commands'));
   };
 
   /** `attach`: a window joins, after its token is checked. */
@@ -143,7 +143,7 @@ export function createCommandHandler(ctx: WorkerContext) {
       runComputerTool(socket, command, connection);
       return;
     }
-    if (connection.attaching) await connection.attaching.catch(() => undefined);
+    if (connection.attaching) await connection.attaching.catch(quiet('worker/worker-commands'));
     if (!connection.attached) return;
     if (command.type === 'submit') {
       // Counted from acceptance to the answer: a Stop that comes in between

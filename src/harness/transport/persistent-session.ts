@@ -3,7 +3,7 @@
  * against its failure, a polite cancel that settles before the child is
  * killed, and background turns for work the vendor does between ours. What
  * a turn says and how it is cancelled stay with each transport. */
-import { lifecycle } from '../../runtime/lifecycle-log.js';
+import { lifecycle, quiet } from '../../runtime/lifecycle-log.js';
 import { markTurn } from '../../runtime/turn-latency.js';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { isTurnCancelled, turnCancelledError } from '../../agent/cancellation.js';
@@ -100,7 +100,7 @@ interface PersistentBackground { channel: BackgroundTurnChannel }
 export function turnFailure(): { failure: Promise<never>; fail: (error: Error) => void } {
   let fail!: (error: Error) => void;
   const failure = new Promise<never>((_, reject) => { fail = reject; });
-  failure.catch(() => undefined);
+  failure.catch(quiet('harness/transport/persistent-session'));
   return { failure, fail };
 }
 
@@ -110,7 +110,7 @@ export async function runOneTurn<I, R>(session: { runTurn(input: I): Promise<R>;
     return await session.runTurn(input);
   } finally {
     // Shutdown is graceful (up to seconds); the caller already has its answer.
-    void session.close().catch(() => undefined);
+    void session.close().catch(quiet('harness/transport/persistent-session'));
   }
 }
 
@@ -211,7 +211,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
       // The group outlives its leader: a command still runs after the vendor itself has gone.
       // Unreadable (no /proc, `ps` failing) is not "ended": nothing is told on a failed read,
       // and the ceiling bounds how long it is looked at.
-      const group = await readProcessGroup(retirement.root).catch(() => undefined);
+      const group = await readProcessGroup(retirement.root).catch(quiet('harness/transport/persistent-session'));
       if (this.retirement !== retirement) return;
       if (group) {
         const ended: EndedWork[] = [];
@@ -265,7 +265,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     if (!retirement.work.count()) {
       if (retirement.timer) clearTimeout(retirement.timer);
       if (retirement.ceiling) clearTimeout(retirement.ceiling);
-      void this.close().catch(() => undefined);
+      void this.close().catch(quiet('harness/transport/persistent-session'));
     }
   }
 
@@ -390,7 +390,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
       // Cancelled while it waited: nothing of it may start now.
       if (signal?.aborted || turn.done) throw turnCancelledError();
       const running = flow();
-      running.catch(() => undefined);
+      running.catch(quiet('harness/transport/persistent-session'));
       const result = await Promise.race([running, failure]);
       succeeded = true;
       return result;
@@ -404,7 +404,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
       signal?.removeEventListener('abort', onAbort);
       if (this.turn === turn) this.turn = undefined;
       hooks.ended(succeeded);
-      void this.noteLeftRunning().catch(() => undefined);
+      void this.noteLeftRunning().catch(quiet('harness/transport/persistent-session'));
     }
   }
 

@@ -9,6 +9,7 @@
  * off. Each one's end is told to the conversation as a notification its
  * current account reads (a queued turn the model alone sees): a result to use,
  * or an agent's task to start again. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { open } from 'node:fs/promises';
 import { asRecord, type JsonRecord } from '../protocol/json-lines.js';
 import { redactSecrets } from '../../agent/security.js';
@@ -25,7 +26,7 @@ export async function agentResult(file: string | undefined): Promise<string> {
 
 async function agentTranscriptResult(file: string | undefined): Promise<{ tail: string; limit?: string }> {
   if (!file) return { tail: '' };
-  const handle = await open(file, 'r').catch(() => undefined);
+  const handle = await open(file, 'r').catch(quiet('harness/transport/handoff-work'));
   if (!handle) return { tail: '' };
   let text: string;
   try {

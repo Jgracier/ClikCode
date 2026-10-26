@@ -1,3 +1,4 @@
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { readFile, stat } from 'node:fs/promises';
 import { atomicWriteFile } from '../../session/store/files.js';
 import { stateDirectory } from '../../session/store/paths.js';
@@ -78,8 +79,8 @@ export async function discoverGooseProviders(
 ): Promise<GooseProvider[] | undefined> {
   return queryAcp(harness.binary, harness.acp?.argv ?? ['acp'], environment, async (request) => {
     const status = await request('_goose/unstable/providers/config/status');
-    const setup = await request('_goose/unstable/providers/setup/catalog/list').catch(() => undefined);
-    const catalog = await request('_goose/unstable/providers/catalog/list').catch(() => undefined);
+    const setup = await request('_goose/unstable/providers/setup/catalog/list').catch(quiet('harness/accounts/goose-discovery'));
+    const catalog = await request('_goose/unstable/providers/catalog/list').catch(quiet('harness/accounts/goose-discovery'));
     return gooseProviders(status, setup, catalog);
   });
 }
@@ -96,13 +97,13 @@ export async function modelsDevCache(): Promise<string> {
   const [opencodeFile, own] = modelsDevFiles();
   const opencode = await readFile(opencodeFile, 'utf8').catch(() => '');
   if (opencode) return opencode;
-  const kept = await stat(own).catch(() => undefined);
+  const kept = await stat(own).catch(quiet('harness/accounts/goose-discovery'));
   if (kept && Date.now() - kept.mtimeMs < 24 * 60 * 60_000) return readFile(own, 'utf8').catch(() => '');
   try {
     const response = await fetch('https://models.dev/api.json');
     if (!response.ok) throw new Error(String(response.status));
     const body = await response.text();
-    await atomicWriteFile(own, body).catch(() => undefined);
+    await atomicWriteFile(own, body).catch(quiet('harness/accounts/goose-discovery'));
     return body;
   } catch {
     return kept ? readFile(own, 'utf8').catch(() => '') : '';

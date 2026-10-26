@@ -1,6 +1,7 @@
 /** The filesystem reads discovery is built on, all bounded: a file's head or
  * tail, a capped recursive walk, and the newest entries of a directory. */
 
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { open, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -51,7 +52,7 @@ export async function walkFilesRecursive(dir: string, maxDepth: number, suffix: 
 
 export async function newestFiles(paths: readonly string[], limit: number): Promise<Array<{ path: string; mtimeMs: number }>> {
   const stats = await Promise.all(paths.map(async (path) => {
-    const info = await stat(path).catch(() => undefined);
+    const info = await stat(path).catch(quiet('session/discovery/files'));
     return info ? { path, mtimeMs: info.mtimeMs } : undefined;
   }));
   return stats.filter((item): item is { path: string; mtimeMs: number } => Boolean(item))

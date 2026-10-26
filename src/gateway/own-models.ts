@@ -4,6 +4,7 @@
  * is released (the account's setting: 5 minutes unless changed, 0 = never; the same one the canvas's Preferences
  * change).
  */
+import { quiet } from '../runtime/lifecycle-log.js';
 import Conf from 'conf';
 import { gatewayConnection } from '../agent/models/for-session.js';
 import { CLIKCODE_USER_AGENT } from '../version.js';
@@ -37,7 +38,7 @@ async function gatewayCall(path: string, init: { method: string; body?: unknown 
     ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
     signal: AbortSignal.timeout(options.timeoutMs ?? 15_000),
   });
-  const body = await response.json().catch(() => undefined) as Record<string, unknown> | undefined;
+  const body = await response.json().catch(quiet('gateway/own-models')) as Record<string, unknown> | undefined;
   return { ok: response.ok, status: response.status, body };
 }
 

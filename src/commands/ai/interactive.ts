@@ -7,7 +7,7 @@
  * unwinding of all of that on exit -- including exits it did not choose, like
  * a mobile SSH connection dropping mid-turn.
  */
-import { lifecycle, setLifecycleRole } from '../../runtime/lifecycle-log.js';
+import { lifecycle, setLifecycleRole, quiet } from '../../runtime/lifecycle-log.js';
 import Conf from 'conf';
 import { adoptHandedOverDraft } from '../../session/ephemeral.js';
 import { openConversation } from '../../session/attach.js';
@@ -42,7 +42,7 @@ const sayOnOpen = (message: string): void => { process.stderr.write(`${message}\
 async function aiSessionInteractive(config: Conf, id: string): Promise<void> {
   // Fetched while the app starts, so Copilot's model list is there the first
   // time the picker opens rather than racing the picker's short wait.
-  void import('../../harness/accounts/goose-discovery.js').then(({ modelsDevCache }) => modelsDevCache()).catch(() => undefined);
+  void import('../../harness/accounts/goose-discovery.js').then(({ modelsDevCache }) => modelsDevCache()).catch(quiet('commands/ai/interactive'));
   // SIGINT is ignored for a related but distinct reason: run()'s own Ctrl+C
   // forwarding to a login/turn subprocess is removed the INSTANT that
   // subprocess exits -- but the terminal stays in cooked mode (raw mode

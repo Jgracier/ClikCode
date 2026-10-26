@@ -1,4 +1,5 @@
 /** /model, /effort and /fast: choosing what runs the conversation. */
+import { quiet } from '../../../runtime/lifecycle-log.js';
 import { isGatewayService } from '../../../session/route.js';
 import { localModelChosen } from '../../../commands/ai/local-model.js';
 import { localModelChoices } from '../../../local-models/index.js';
@@ -112,7 +113,7 @@ export const modelHandlers = {
       // from their first message (which waits for it, "Starting model", and goes as soon as it is up).
       const chosen = (await gatewayModels().catch(() => ({ models: [] }))).models.find((model) => model.id === session.model);
       if (chosen?.own && chosen.own.state !== 'running') {
-        const state = await wakeOwnModel(chosen.id).catch(() => undefined);
+        const state = await wakeOwnModel(chosen.id).catch(quiet('tui/slash/handlers/model'));
         if (state === 'starting') {
           return emitHarnessOutput({ panel: 'settings-updated', text: `Starting ${chosen.id} on its GPU. Type away: your message waits and goes the moment it is ready.` });
         }

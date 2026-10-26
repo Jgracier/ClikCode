@@ -18,6 +18,7 @@
  * One thing is changed there, by the machine's own policy: a ClikCode on
  * another commit than this build is updated to it in the background
  * (updates.ts), and the connection made again once it is. */
+import { quiet } from '../runtime/lifecycle-log.js';
 import type { ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
@@ -484,7 +485,7 @@ export class RemoteMachines {
       for (const link of ended) void link.stop();
       this.notify();
     });
-    this.syncing = run.catch(() => undefined);
+    this.syncing = run.catch(quiet('remote/connection'));
     return run;
   }
 
@@ -505,7 +506,7 @@ export class RemoteMachines {
       stops.clear();
     };
     // fail-open-ok: machines.json unreadable now -- the list shows the connections it already has.
-    await this.sync().catch(() => undefined);
+    await this.sync().catch(quiet('remote/connection'));
     for (const link of this.links) link.wake();
     if (use.autoUpdate) for (const link of this.links) link.considerUpdate();
     return {

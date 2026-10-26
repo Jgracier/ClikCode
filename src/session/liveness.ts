@@ -22,6 +22,7 @@
  * simply not alive, whenever you ask. So there is nothing to reconcile.
  */
 
+import { quiet } from '../runtime/lifecycle-log.js';
 import type { HarnessSession } from './model.js';
 import { listWorkerRecords, liveOpenConversations, type WorkerRuntimeRecord } from '../worker/registry.js';
 import { readStoredPendingTurn } from './store/transcripts.js';
@@ -102,7 +103,7 @@ export async function livePendingTurns(
   await Promise.all(sessions.filter((session) => session.status === 'active' && workerIsLive(session.id)).map(async (session) => {
     const startedAt = runningTurn(session.id);
     if (startedAt) {
-      const turn = await readStoredPendingTurn(session.id).catch(() => undefined);
+      const turn = await readStoredPendingTurn(session.id).catch(quiet('session/liveness'));
       pending.set(session.id, turn && !turn.failedAt ? turn : {
         prompt: '', startedAt, updatedAt: startedAt, outputStarted: false,
       });

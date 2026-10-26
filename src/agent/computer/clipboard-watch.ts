@@ -1,6 +1,7 @@
 /** Takes what the site's own Copy button copies. The page's own copy is observed, not the
  * computer's shared clipboard, so another program copying something else can never be
  * mistaken for the key. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import type { Page } from 'playwright-core';
 
 type Hooked = { __clikcodeCopied?: string | null; navigator: { clipboard?: { writeText(text: string): Promise<void>; write?(items: unknown[]): Promise<void> } }; document: { getSelection(): { toString(): string } | null; addEventListener(type: string, listener: () => void, capture: boolean): void; execCommand?(command: string, ...rest: unknown[]): boolean } };
@@ -99,7 +100,7 @@ export async function listenForCopies(page: Page): Promise<void> {
 
 /** What the page copied since `listenForCopies`, if it looks like a key. */
 export async function copiedSince(page: Page): Promise<string | undefined> {
-  return plausibleCopy(await page.evaluate(() => (globalThis as unknown as Hooked).__clikcodeCopied).catch(() => undefined));
+  return plausibleCopy(await page.evaluate(() => (globalThis as unknown as Hooked).__clikcodeCopied).catch(quiet('agent/computer/clipboard-watch')));
 }
 
 /** The system clipboard as this page sees it, when the browser lets it be read. A last resort behind the
@@ -108,7 +109,7 @@ export async function readClipboard(page: Page): Promise<string | undefined> {
   try { await page.context().grantPermissions(['clipboard-read', 'clipboard-write']); } catch { /* not grantable here */ }
   return page.evaluate(async () => {
     try { return await (globalThis as unknown as { navigator: { clipboard: { readText(): Promise<string> } } }).navigator.clipboard.readText(); } catch { return undefined; }
-  }).catch(() => undefined);
+  }).catch(quiet('agent/computer/clipboard-watch'));
 }
 
 /** Press that button and take what the page copies. What the site itself puts on
@@ -129,9 +130,9 @@ export async function copyWithSiteButton(page: Page, waitMs = 3_000): Promise<{ 
   } catch { return undefined; }
   for (let waited = 0; waited < waitMs; waited += 250) {
     await new Promise(resolve => setTimeout(resolve, 250));
-    const found = plausibleCopy(await page.evaluate(() => (globalThis as unknown as Hooked).__clikcodeCopied).catch(() => undefined));
+    const found = plausibleCopy(await page.evaluate(() => (globalThis as unknown as Hooked).__clikcodeCopied).catch(quiet('agent/computer/clipboard-watch')));
     if (found) {
-      await page.evaluate(() => { (globalThis as unknown as Hooked).__clikcodeCopied = null; }).catch(() => undefined);
+      await page.evaluate(() => { (globalThis as unknown as Hooked).__clikcodeCopied = null; }).catch(quiet('agent/computer/clipboard-watch'));
       return { value: found, label };
     }
   }

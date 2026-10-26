@@ -1,5 +1,6 @@
 /** The directories a session may read and write, and what changed in them. */
 
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { stat } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 import { spawnPortable as spawn } from '../../harness/transport/spawn.js';
@@ -52,7 +53,7 @@ export async function workspaceDiff(workspace: string): Promise<string | undefin
 async function resolveExistingDirectory(session: HarnessSession, raw: string): Promise<string> {
   const expanded = expandHomePath(decodeAttachmentPath(raw));
   const path = isAbsolute(expanded) ? resolve(expanded) : resolve(session.workspace ?? process.cwd(), expanded);
-  const info = await stat(path).catch(() => undefined);
+  const info = await stat(path).catch(quiet('tui/slash/workspace'));
   if (!info) throw new Error(`${compactPath(path)} does not exist.`);
   if (!info.isDirectory()) throw new Error(`${compactPath(path)} is not a directory.`);
   return path;

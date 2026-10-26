@@ -1,4 +1,5 @@
 /** Opening a window: the terminal, the attached and claimed conversation, its first frame, the usage tick and the newer-build watch. */
+import { quiet } from '../../../runtime/lifecycle-log.js';
 import { currentWorkerBuild } from '../../../worker/registry.js';
 import { isClikCodeAgent, isGatewayService } from '../../../session/route.js';
 import { gatewayConversationUsageLabel, gatewayCreditLabel } from '../../../gateway/credit-label.js';
@@ -190,14 +191,14 @@ function startBuildWatch(
   const releaseWindow = async (): Promise<void> => {
     if (usageInterval) clearInterval(usageInterval);
     stopLockNotices?.();
-    await closeAllWorkerClients().catch(() => undefined);
-    await closePersistentTransport().catch(() => undefined);
+    await closeAllWorkerClients().catch(quiet('commands/ai/interactive/window'));
+    await closePersistentTransport().catch(quiet('commands/ai/interactive/window'));
     // The one SSH connection per other machine the window kept for its
     // lists and moves: the bridges there exit as their stdin closes.
-    await import('../../../remote/connection.js').then((remote) => remote.closeWindowMachines()).catch(() => undefined);
+    await import('../../../remote/connection.js').then((remote) => remote.closeWindowMachines()).catch(quiet('commands/ai/interactive/window'));
     // Nothing it showed keeps a local model up, even if this process lives
     // on (the exit hook covers a hard exit).
-    await reconcileLocalModelLeases(undefined).catch(() => undefined);
+    await reconcileLocalModelLeases(undefined).catch(quiet('commands/ai/interactive/window'));
   };
   const newerBuild = (): boolean => Boolean(startupBuild && currentWorkerBuild() !== startupBuild);
   const beginBuildReplace = (): Promise<void> | undefined => {
@@ -212,7 +213,7 @@ function startBuildWatch(
         await releaseWindow();
         // The chat stays. Discarding a blank one here would make the new
         // process's `sessions resume` miss it.
-        await releaseConversationClaim(sessionId).catch(() => undefined);
+        await releaseConversationClaim(sessionId).catch(quiet('commands/ai/interactive/window'));
       },
     });
   };
@@ -223,7 +224,7 @@ function startBuildWatch(
       // Unattached workers notice the rebuild themselves. A worker a window
       // keeps attached -- one never idle enough to re-exec (a draft, a
       // picker) -- is reached only by this ask.
-      void retireStaleWorkers().catch(() => undefined);
+      void retireStaleWorkers().catch(quiet('commands/ai/interactive/window'));
     }
     if (terminal?.idleForBuildReplace()) void beginBuildReplace();
   };

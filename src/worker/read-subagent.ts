@@ -1,4 +1,5 @@
 /** Subagent history belongs to the conversation worker, shared by every UI. */
+import { quiet } from '../runtime/lifecycle-log.js';
 import type { HarnessSession } from '../session/model.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
 import { readTurnActivities } from '../turn/turn-activities.js';
@@ -41,7 +42,7 @@ export async function readConversationSubagent(session: HarnessSession, account:
     }
   } else if (session.nativeHarness === 'claude' && session.nativeSessionId) {
     const environment = nativeProfileEnvironment(account?.nativeProfile);
-    const found = await readClaudeSubagent(session.workspace ?? '', session.nativeSessionId, parentId, environment.CLAUDE_CONFIG_DIR).catch(() => undefined);
+    const found = await readClaudeSubagent(session.workspace ?? '', session.nativeSessionId, parentId, environment.CLAUDE_CONFIG_DIR).catch(quiet('worker/read-subagent'));
     if (found?.rows.length) return found.rows;
   }
   return frames;

@@ -21,6 +21,7 @@
  * file-derived answer is keyed on that file's identity, so it holds for as
  * long as the file does and not a moment longer.
  */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readFile, stat } from 'node:fs/promises';
@@ -169,7 +170,7 @@ async function memoized(
   const identity = await harnessBinaryIdentity(harness.binary) ?? 'unknown';
   const kept = acpEfforts.get(key);
   if (kept?.identity === identity) return kept.result;
-  const result = await ask().catch(() => undefined);
+  const result = await ask().catch(quiet('harness/accounts/effort-choices'));
   if (result) acpEfforts.set(key, { identity, result });
   return result;
 }
@@ -207,7 +208,7 @@ export async function effortChoicesFor(
   // lists its values in the session discovery already reads for its models.
   if (harness.acp?.effortConfigId) {
     const { nativeModelCatalog } = await import('./model-catalog.js');
-    const offered = (await nativeModelCatalog(harness, account).catch(() => undefined))?.effortValues;
+    const offered = (await nativeModelCatalog(harness, account).catch(quiet('harness/accounts/effort-choices')))?.effortValues;
     if (offered?.length) return { values: [...offered], source: 'vendor-config' };
   }
   return { values: [...(harness.effortValues ?? [])], source: 'catalog' };

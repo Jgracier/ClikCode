@@ -20,6 +20,7 @@
  * the import starts warm (turn/vendor-warm.ts) -- with a note to the agent,
  * unseen, that it moved (moveNote). The copy left behind is read-only, and
  * its worker goes. */
+import { quiet } from '../runtime/lifecycle-log.js';
 import { homedir } from 'node:os';
 import type Conf from 'conf';
 import type { AiHarnessAccount, AiHarnessPermissionMode, AiLocalHarnessDefinition } from '../harness/definition.js';
@@ -146,7 +147,7 @@ export async function markMoved(id: string, movedTo: Omit<ChatMovedTo, 'at'>): P
   await writeState(state);
   // Read-only now: its worker, and the vendor it holds, go rather than idle out.
   const { retireMovedWorker } = await import('../worker/client.js');
-  await retireMovedWorker(id).catch(() => undefined);
+  await retireMovedWorker(id).catch(quiet('session/move'));
 }
 
 /** The chat is wanted here again and the machine it went to cannot hand it
@@ -163,7 +164,7 @@ export async function reclaimMovedChat(id: string): Promise<string> {
   forgetNativeThread(session);
   await writeState(state);
   const { warmSessionWorker } = await import('../worker/client.js');
-  await warmSessionWorker(id).catch(() => undefined);
+  await warmSessionWorker(id).catch(quiet('session/move'));
   return id;
 }
 
@@ -210,10 +211,10 @@ export function machineFacts(config: Conf | undefined): MoveFacts {
       const { authEvidencePresent, hasAuthEvidence } = await import('../harness/accounts/auth-files.js');
       if (!hasAuthEvidence(harness) || !await authEvidencePresent(harness, {}).catch(() => false)) return undefined;
       const { deriveAccountLabel } = await import('../harness/accounts/labels.js');
-      return await deriveAccountLabel(harness, undefined).catch(() => undefined) ?? harness.displayName;
+      return await deriveAccountLabel(harness, undefined).catch(quiet('session/move')) ?? harness.displayName;
     },
     efforts: async (harness, account, model) => (harnessSupportsEffort(harness)
-      ? (await (await import('../harness/accounts/effort-choices.js')).effortChoicesFor(harness, account, model).catch(() => undefined))?.values
+      ? (await (await import('../harness/accounts/effort-choices.js')).effortChoicesFor(harness, account, model).catch(quiet('session/move')))?.values
       : undefined),
     home: homedir,
   };
@@ -358,11 +359,11 @@ export async function importChat(chat: ChatExport, names: MoveNames, facts: Move
   // vendor's own sign-in, if any): the first turn signs in where it must.
   if (session.route === 'local' && session.nativeHarness && !session.accountId) {
     const { aiHarnessSelect } = await import('../commands/ai/harness.js');
-    await aiHarnessSelect(session.nativeHarness, id, { emit: false, signIn: false }).catch(() => undefined);
+    await aiHarnessSelect(session.nativeHarness, id, { emit: false, signIn: false }).catch(quiet('session/move'));
   }
   // Warm here now, so the first reply comes at warm speed (turn/vendor-warm.ts).
   const { warmSessionWorker } = await import('../worker/client.js');
-  await warmSessionWorker(id).catch(() => undefined);
+  await warmSessionWorker(id).catch(quiet('session/move'));
   return { sessionId: id, changes: planned.changes, folder: planned.folder, installationId: state.installationId };
 }
 

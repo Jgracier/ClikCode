@@ -1,4 +1,5 @@
 /** Select a usable account for a turn or a failover. */
+import { quiet } from '../runtime/lifecycle-log.js';
 import { USAGE_RECHECK_MS, accountCanTakeTurn, quotaRefusalHolds, usageReadingIsCurrent, vendorWindows } from '../harness/accounts/usage-reading.js';
 import { isDirectModelProvider } from '../runtime/lazy-bridge.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
@@ -149,7 +150,7 @@ export function terminalFailoverError(input: {
  * next write cannot store these fields as its own. `own`: the account that just
  * refused, as this turn recorded it. */
 async function storedView(state: HarnessState, own?: AiHarnessAccount): Promise<HarnessState> {
-  const stored = new Map(((await loadIndex().catch(() => undefined))?.accounts ?? []).map((account) => [account.id, account]));
+  const stored = new Map(((await loadIndex().catch(quiet('turn/account-routing')))?.accounts ?? []).map((account) => [account.id, account]));
   return { ...state, accounts: state.accounts.map((account) => account === own ? account : stored.get(account.id) ?? account) };
 }
 

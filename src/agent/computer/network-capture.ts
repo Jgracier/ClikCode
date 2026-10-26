@@ -2,6 +2,7 @@
  * the real endpoints, methods and answer shapes a vendor's own web app uses when its docs are thin. What it keeps is
  * built to be safe to show: header NAMES only (never values), query parameter names only, and bodies only when
  * asked for, truncated and with anything key-shaped hidden. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import type { Page, Request } from 'playwright-core';
 import { hideKeyLikeText } from './secret-finder.js';
 import { scrubSecrets } from './secret-scrubber.js';
@@ -54,7 +55,7 @@ export async function recordNetwork<T>(page: Page, run: () => Promise<T>, option
       call.status = response.status();
       call.contentType = response.headers()['content-type']?.split(';')[0];
       if (call.contentType?.includes('json')) {
-        const parsed = await response.json().catch(() => undefined);
+        const parsed = await response.json().catch(quiet('agent/computer/network-capture'));
         if (parsed !== undefined) { call.jsonShape = jsonShape(parsed); if (options.bodies) call.answer = clip(JSON.stringify(parsed)); }
       }
     })());

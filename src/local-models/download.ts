@@ -12,6 +12,7 @@
  * and connection read 32-46 MB/s -- the difference between a 2.7 GB model
  * arriving in one minute and in fifteen. */
 
+import { quiet } from '../runtime/lifecycle-log.js';
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream, existsSync } from 'node:fs';
 import { mkdir, rename, rm, stat, statfs } from 'node:fs/promises';
@@ -43,7 +44,7 @@ export function formatBytes(bytes: number): string {
 async function freeDiskBytes(directory: string): Promise<number | undefined> {
   let target = directory;
   while (!existsSync(target) && dirname(target) !== target) target = dirname(target);
-  const disk = await statfs(target).catch(() => undefined);
+  const disk = await statfs(target).catch(quiet('local-models/download'));
   return disk ? disk.bavail * disk.bsize : undefined;
 }
 
@@ -73,7 +74,7 @@ export async function sha256File(path: string, onProgress?: (bytes: number) => v
 /** Whether a finished file is present. Size alone: a file only reaches its
  * final name after its hash matched. */
 export async function isDownloaded(destination: string, sizeBytes: number): Promise<boolean> {
-  return (await stat(destination).catch(() => undefined))?.size === sizeBytes;
+  return (await stat(destination).catch(quiet('local-models/download')))?.size === sizeBytes;
 }
 
 /** GET with a Range from `offset`, following redirects (Hugging Face
@@ -106,7 +107,7 @@ export async function downloadVerified(request: DownloadRequest): Promise<void> 
   if (await isDownloaded(destination, sizeBytes)) return;
   await mkdir(dirname(destination), { recursive: true });
   const partial = `${destination}.part`;
-  let offset = (await stat(partial).catch(() => undefined))?.size ?? 0;
+  let offset = (await stat(partial).catch(quiet('local-models/download')))?.size ?? 0;
   if (offset > sizeBytes) { await rm(partial, { force: true }); offset = 0; }
   await checkDiskSpace(dirname(destination), sizeBytes - offset);
 

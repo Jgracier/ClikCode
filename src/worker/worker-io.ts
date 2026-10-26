@@ -1,4 +1,5 @@
 /** Reading the conversation, and telling every window about it. */
+import { quiet } from '../runtime/lifecycle-log.js';
 import { randomUUID } from 'node:crypto';
 import type { HarnessSession } from '../session/model.js';
 import { readState } from '../session/state/read.js';
@@ -40,7 +41,7 @@ export function createWorkerIo(ctx: WorkerContext) {
     void currentSessionAndAccount().then(({ session: current, account }) => {
       if (!ctx.turnRunning || ctx.activeController !== controller) return;
       observer.render(current, account);
-    }).catch(() => undefined);
+    }).catch(quiet('worker/worker-io'));
   };
 
   /** Shell notifications become a queued turn the model alone reads: run

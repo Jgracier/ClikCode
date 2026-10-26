@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { existingSessionAgents } from '../agent/background-agents.js';
 import { isClikCodeAgent } from '../session/route.js';
 import type { Socket } from 'node:net';
-import { lifecycle } from '../runtime/lifecycle-log.js';
+import { lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import { consumeSessionTurn, enqueueSessionTurn } from '../turn/checkpoint.js';
@@ -63,7 +63,7 @@ export function createLiveCommands(ctx: WorkerContext) {
     answer('removed');
     observer.broadcast({ type: 'queue-changed' });
     // Every window drops it now, a turn running or not.
-    void currentSessionAndAccount().then(({ session: current, account }) => observer.render(current, account)).catch(() => undefined);
+    void currentSessionAndAccount().then(({ session: current, account }) => observer.render(current, account)).catch(quiet('worker/worker-live-commands'));
     return;
   };
 
@@ -119,7 +119,7 @@ export function createLiveCommands(ctx: WorkerContext) {
             if (!session) return;
             enqueueSessionTurn(session, restore, new Date().toISOString());
             await writeState(state);
-          }).catch(() => undefined);
+          }).catch(quiet('worker/worker-live-commands'));
           broadcastQueueChanged();
         }
         answer('error', queuedItem.id, error instanceof Error ? error.message : String(error));

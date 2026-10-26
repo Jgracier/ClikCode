@@ -8,6 +8,7 @@
  * the other way through `choose` in bridge.ts, onto the same commands the
  * pickers end in.
  */
+import { quiet } from '../runtime/lifecycle-log.js';
 import { sendModeOf } from '../turn/send-mode.js';
 import { turnFacts } from '../session/conversation-state.js';
 import type Conf from 'conf';
@@ -170,7 +171,7 @@ export async function accountList(state: HarnessState, session: HarnessSession |
   const accounts = await Promise.all(state.accounts.map(async (account): Promise<IdeAccount> => {
     const harness = localHarnessForProvider(account.provider);
     const asked = network && harness && account.authKind === 'vendor-cli' && NATIVE_USAGE_PROBES[harness.command]
-      ? await accountUsageReading(account, state, { network: true }).catch(() => undefined) : undefined;
+      ? await accountUsageReading(account, state, { network: true }).catch(quiet('ide/queries')) : undefined;
     const usage: IdeAccount['usage'] = asked ? { ...(asked.label ? { label: asked.label } : {}), windows: usageWindows(asked.windows) } : accountUsage(account, state, now);
     return { ...accountRow(account, harness, session, now), ...(usage ? { usage } : {}) };
   }));
@@ -212,7 +213,7 @@ export async function gatewayStatus(config: Conf, fetchImpl: typeof fetch = fetc
       headers: { authorization: `Bearer ${apiKey}`, accept: 'application/json', 'user-agent': CLIKCODE_USER_AGENT },
       signal: AbortSignal.timeout(10_000),
     });
-    const body = await response.json().catch(() => undefined) as { data?: Record<string, unknown> } | undefined;
+    const body = await response.json().catch(quiet('ide/queries')) as { data?: Record<string, unknown> } | undefined;
     if (!response.ok || !body?.data) return { connected: true, apiUrl, error: `the Gateway answered HTTP ${response.status}` };
     return { connected: true, apiUrl, credit: creditOf(body.data) };
   } catch (error) {
@@ -250,7 +251,7 @@ export async function gatewayCheckoutUrl(config: Conf, fetchImpl: typeof fetch =
     headers: { authorization: `Bearer ${apiKey}`, accept: 'application/json', 'content-type': 'application/json', 'user-agent': CLIKCODE_USER_AGENT },
     body: '{}',
   });
-  const body = await response.json().catch(() => undefined) as { data?: { url?: unknown } } | undefined;
+  const body = await response.json().catch(quiet('ide/queries')) as { data?: { url?: unknown } } | undefined;
   const url = typeof body?.data?.url === 'string' ? body.data.url : undefined;
   if (!response.ok || !url) throw new Error(`ClikDeploy Gateway credit: HTTP ${response.status}`);
   return url;

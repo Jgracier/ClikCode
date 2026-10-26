@@ -22,6 +22,7 @@
  * updates. It follows what the machine says of itself (addedBy 'peer'); one
  * the user added keeps the address and policy the user gave, and is only
  * refreshed (installation, version, last seen). */
+import { quiet } from '../runtime/lifecycle-log.js';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { hostname, userInfo } from 'node:os';
 import { readFile } from 'node:fs/promises';
@@ -121,7 +122,7 @@ export function selfAsPeer(): Promise<PeerMachine | undefined> {
     const user = (() => { try { return userInfo().username; } catch { return process.env.USER ?? ''; } })();
     if (!user) return undefined;
     return peerFromStatus(status, { user, ...(installationId ? { installationId } : {}), host: hostname() });
-  })().catch(() => undefined);
+  })().catch(quiet('remote/peer'));
   return self;
 }
 

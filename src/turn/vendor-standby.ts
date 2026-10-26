@@ -2,7 +2,7 @@
 import type { AiHarnessAccount } from '../harness/definition.js';
 import { quotaRefusalHolds, vendorWindows } from '../harness/accounts/usage-reading.js';
 import type { HarnessState } from '../session/model.js';
-import { lifecycle } from '../runtime/lifecycle-log.js';
+import { lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { nextUsableFailoverAccount, turnBackendForAccount } from './account-routing.js';
 import { turnEnvironment } from './turn-environment.js';
 import { prepareAcpStandby, prepareCodexStandby } from './vendor-session-attempt.js';
@@ -60,5 +60,5 @@ export function openFailoverStandby(ctx: VendorTurnContext, transport: VendorTra
     await prepareAcpStandby({
       harness, account: standbyFor, session, model, effort: turnEffort(ctx), environment: standbyEnvironment,
     });
-  })().catch(() => undefined);
+  })().catch(quiet('turn/vendor-standby'));
 }

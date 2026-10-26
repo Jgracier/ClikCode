@@ -1,6 +1,7 @@
 /** The terminal as a client of a chat owned by another machine. The same
  * multiplexed bridge that VS Code uses carries its session and worker events;
  * only the screen and keyboard stay on this machine. */
+import { quiet } from '../runtime/lifecycle-log.js';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
@@ -443,7 +444,7 @@ export async function runRemoteChat(
       // machine's own policy (remote/updates.ts): a production machine set to ask is
       // updated when the user says so.
       if (bridge.outdated && !rejoining) {
-        const started = await autoUpdates.consider(machine).catch(() => undefined);
+        const started = await autoUpdates.consider(machine).catch(quiet('remote/terminal-chat'));
         terminal.activity(outdatedNotice(machine, Boolean(started)));
         void started?.done.then((outcome) => {
           // The window's connection there (the board's) goes to the new build.

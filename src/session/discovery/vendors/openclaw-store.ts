@@ -25,6 +25,7 @@
  *     OpenClaw's own receipts, kept.
  */
 
+import { quiet } from '../../../runtime/lifecycle-log.js';
 import { randomUUID } from 'node:crypto';
 import { readdir, rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -101,8 +102,8 @@ const openClawThreadWriter: NativeThreadWriter = {
     } catch {
       // fail-open-ok: a transfer follows; legacy files left behind would
       // stop a Gateway from starting.
-      await rm(transcript, { force: true }).catch(() => undefined);
-      await rm(index, { force: true }).catch(() => undefined);
+      await rm(transcript, { force: true }).catch(quiet('session/discovery/vendors/openclaw-store'));
+      await rm(index, { force: true }).catch(quiet('session/discovery/vendors/openclaw-store'));
       return undefined;
     }
   },

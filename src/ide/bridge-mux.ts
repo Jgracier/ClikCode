@@ -22,7 +22,7 @@
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type Conf from 'conf';
-import { lifecycle, setLifecycleSessionSource } from '../runtime/lifecycle-log.js';
+import { lifecycle, setLifecycleSessionSource, quiet } from '../runtime/lifecycle-log.js';
 import { setHarnessInstallReporter } from '../harness/transport/native/install.js';
 import { currentWorkerBuild } from '../worker/registry.js';
 import { CLIKCODE_COMMIT, CLIKCODE_VERSION } from '../version.js';
@@ -144,7 +144,7 @@ export class MultiplexHost {
   /** One chat leaves: its bridge shuts down (leaving its conversation), and
    * the editor is told. The others carry on. */
   private close(chat: Chat): Promise<void> {
-    chat.closing ??= this.current.run(chat, () => chat.bridge.shutdown()).catch(() => undefined).finally(() => {
+    chat.closing ??= this.current.run(chat, () => chat.bridge.shutdown()).catch(quiet('ide/bridge-mux')).finally(() => {
       this.chats.delete(chat.id);
       lifecycle('bridge.chat.close', { chats: this.chats.size });
       this.send({ type: 'chat-closed', chat: chat.id });

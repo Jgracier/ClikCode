@@ -1,5 +1,6 @@
 /** The agent loop's turn: what it is given (fixed for the turn) and what it
  * changes as it goes, in one object the loop's parts all take. */
+import { quiet } from '../runtime/lifecycle-log.js';
 import os from 'node:os';
 import path from 'node:path';
 import { ConversationStore } from './conversation.js';
@@ -196,7 +197,7 @@ export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime
   const notifyHook = (message: string, notificationType: 'permission_prompt' | 'idle_prompt'): void => {
     if (!input.hooks?.notification) return;
     const sessionId = input.subagent?.parentSessionId ?? input.sessionId;
-    void input.hooks.notification({ ...turnHookInfo, sessionId, message, notificationType }).catch(() => undefined);
+    void input.hooks.notification({ ...turnHookInfo, sessionId, message, notificationType }).catch(quiet('agent/turn-runtime'));
   };
   const hookContexts: string[] = [];
   let promptBlocked: string | undefined;
@@ -221,7 +222,7 @@ export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime
   let mutationTail: Promise<unknown> = Promise.resolve();
   const mutate = input.runMutation ?? (<T>(work: () => Promise<T>): Promise<T> => {
     const next = mutationTail.then(work);
-    mutationTail = next.catch(() => undefined);
+    mutationTail = next.catch(quiet('agent/turn-runtime'));
     return next;
   });
   const rt: TurnRuntime = {
@@ -258,7 +259,7 @@ export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime
     if (hold && rt.callsOpen > 0) {
       // A foreground sub-agent is running: it can answer now, so it hears the
       // message at once. The main agent hears it too, when the call returns.
-      for (const steer of [...rt.foregroundSteers.values()]) void steer(text).catch(() => undefined);
+      for (const steer of [...rt.foregroundSteers.values()]) void steer(text).catch(quiet('agent/turn-runtime'));
       return holdSteer(rt, text, hold);
     }
     pushSteer(rt, text);
@@ -329,11 +330,11 @@ export async function closeTurn(rt: TurnRuntime): Promise<void> {
   // Accepted after the loop's last look, or left when the turn ended early:
   // the model never saw them.
   const undelivered = rt.steerQueue.splice(0);
-  if (undelivered.length) await input.onSteersUndelivered?.(undelivered).catch(() => undefined);
+  if (undelivered.length) await input.onSteersUndelivered?.(undelivered).catch(quiet('agent/turn-runtime'));
   // An early end (cancel, error, step limit, a question) does NOT stop them: a
   // background agent's life is the session's, and only an explicit stop ends
   // it (background-agents.ts). What it finishes later is queued as a notification.
   rt.backgroundAgents?.detachTurn();
-  await rt.checkpoints.seal(input.sessionId, rt.turnId).catch(() => undefined);
-  await rt.checkpoints.prune(input.sessionId).catch(() => undefined);
+  await rt.checkpoints.seal(input.sessionId, rt.turnId).catch(quiet('agent/turn-runtime'));
+  await rt.checkpoints.prune(input.sessionId).catch(quiet('agent/turn-runtime'));
 }

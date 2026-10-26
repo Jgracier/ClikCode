@@ -1,6 +1,7 @@
 /** Usage learned from a turn that is already running, rather than from a
  * probe: the quota lines vendors emit mid-stream. */
 
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
 import type { HarnessSession } from '../../session/model.js';
@@ -96,7 +97,7 @@ async function publishUsageReading(cacheKey: string, accountId: string | null | 
       slot.timer = undefined;
       const latest = slot.latest;
       slot.latest = undefined;
-      if (latest) void storeAccountUsage(accountId, latest).catch(() => undefined);
+      if (latest) void storeAccountUsage(accountId, latest).catch(quiet('harness/accounts/stream-usage'));
     }, slot.at + PUBLISH_INTERVAL_MS - entry.at).unref();
     return;
   }
@@ -114,7 +115,7 @@ async function storeAccountUsage(accountId: string, entry: UsageCacheEntry): Pro
   account.usage = accountUsageFrom(entry);
   // writeState merges usage by newest `at`, so this cannot disturb another
   // terminal or be reverted by one holding an older snapshot.
-  await writeState(state).catch(() => undefined);
+  await writeState(state).catch(quiet('harness/accounts/stream-usage'));
 }
 
 /** Read usage off a turn's own output line, if this harness reports it there.
@@ -134,6 +135,6 @@ export async function recordNativeStreamUsage(session: HarnessSession, lineText:
 export async function recordDerivedUsage(session: HarnessSession, reading: UsageReading | undefined): Promise<string | undefined> {
   if (!reading?.label) return undefined;
   const cacheKey = usageCacheKey(session.nativeHarness, session.accountId, session.nativeSessionId);
-  await publishUsageReading(cacheKey, session.accountId, reading).catch(() => undefined);
+  await publishUsageReading(cacheKey, session.accountId, reading).catch(quiet('harness/accounts/stream-usage'));
   return reading.label;
 }

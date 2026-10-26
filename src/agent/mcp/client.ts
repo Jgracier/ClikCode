@@ -1,4 +1,5 @@
 /** One connected MCP server: the handshake, its tool list, and calls. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { CLIKCODE_VERSION } from '../../version.js';
 import type { McpServerSpec } from './config.js';
 import type { McpAuth } from './oauth.js';
@@ -80,7 +81,7 @@ export class McpClient {
       return new McpClient(spec, transport, serverName, Boolean(resources) && typeof resources === 'object');
     } catch (error) {
       const detail = transport.detail();
-      await transport.close().catch(() => undefined);
+      await transport.close().catch(quiet('agent/mcp/client'));
       throw withDetail(error, detail);
     } finally {
       options.signal?.removeEventListener('abort', onAbort);

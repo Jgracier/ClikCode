@@ -10,7 +10,7 @@
  * transport ends it and hands the vendor to that turn), and one that arrives
  * while a user turn is still finishing starts right after. */
 import { mergeBackgroundWork, type BackgroundWork } from '../harness/protocol/background-agents.js';
-import { diagnostic, lifecycle } from '../runtime/lifecycle-log.js';
+import { diagnostic, lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import type { HarnessSession } from '../session/model.js';
@@ -84,13 +84,13 @@ export function createVendorBackgroundRunner(deps: RunnerDependencies): VendorBa
       await writeState(state);
       return session;
     });
-    saving = write.catch(() => undefined);
+    saving = write.catch(quiet('worker/vendor-background'));
     return write;
   };
 
   const saveSuperseded = (): Promise<HarnessSession | undefined> => {
     if (!superseded.length) return Promise.resolve(undefined);
-    return persist(superseded.splice(0)).catch(() => undefined);
+    return persist(superseded.splice(0)).catch(quiet('worker/vendor-background'));
   };
 
   const run = async (turn: VendorBackgroundTurn): Promise<void> => {
@@ -135,14 +135,14 @@ export function createVendorBackgroundRunner(deps: RunnerDependencies): VendorBa
       const record = backgroundTurnRecord(outcome, finished);
       // Only background work that left something in the conversation is a
       // turn there to undo.
-      if (record) await recorder.finish(stateDirectory(), deps.sessionId).catch(() => undefined);
+      if (record) await recorder.finish(stateDirectory(), deps.sessionId).catch(quiet('worker/vendor-background'));
       if (!owned()) {
         // A user turn superseded this one: it owns the windows' waiting line,
         // and the conversation until it is saved.
         if (record) superseded.push(record);
         return;
       }
-      const session = record ? await persist([record]).catch(() => undefined) : undefined;
+      const session = record ? await persist([record]).catch(quiet('worker/vendor-background')) : undefined;
       // Still this turn's to end: a user turn may have started (and even
       // finished) while that was saved -- and the waiting-stop belongs to
       // whatever turn is showing now, not to this one.

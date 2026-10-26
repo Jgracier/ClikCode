@@ -1,6 +1,7 @@
 /** Is the vendor CLI installed, at what version, and install it if not --
  * cached, because a picker asks this about every harness at once. */
 
+import { quiet } from '../../../runtime/lifecycle-log.js';
 import { spawnPortable as spawn, terminatePortable } from '../spawn.js';
 import { binaryFingerprint, harnessBinaryIdentity, rememberVersion, rememberedVersion, resetVersionMemo, saveVersionMemo } from './version-memo.js';
 import { resolveBinaryPath } from './binary.js';
@@ -95,7 +96,7 @@ export async function inspectNativeHarness(spec: NativeHarnessSpec, timeoutMs = 
       ...(result.version ? { version: result.version } : {}),
       ...(result.error ? { error: result.error } : {}),
     });
-    await saveVersionMemo().catch(() => undefined);
+    await saveVersionMemo().catch(quiet('harness/transport/native/inspect'));
   }
   return result;
 }

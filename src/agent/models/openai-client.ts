@@ -4,7 +4,7 @@ import { estimateRequestTokens, outputRoom } from '../context-view.js';
  * `POST {baseUrl}/v1/chat/completions` with `stream: true`. */
 import type { ConversationItem, ImageInput, ModelClient, ReasoningBlock, ModelStepRequest, ModelStepResult, ModelToolCall, TokenUsage, ToolSpec } from '../model-client.js';
 import { turnCancelledError } from '../cancellation.js';
-import { lifecycle } from '../../runtime/lifecycle-log.js';
+import { lifecycle, quiet } from '../../runtime/lifecycle-log.js';
 import type { ContextHints } from '../context-profile.js';
 import { ModelClientError, parseRetryAfter, readWithin, SseParser, STREAM_IDLE_TIMEOUT_MS, streamSilenceLimit, type SseEvent } from './gateway-client.js';
 
@@ -469,7 +469,7 @@ export class OpenAIModelClient implements ModelClient {
       }
       for (const event of parser.flush()) handle(event);
     } catch (error) {
-      await reader.cancel().catch(() => undefined);
+      await reader.cancel().catch(quiet('agent/models/openai-client'));
       if (request.signal?.aborted) throw turnCancelledError();
       if (error instanceof ModelClientError) throw error;
       throw new ModelClientError(`${this.label} stream failed: ${error instanceof Error ? error.message : String(error)}`, { kind: 'other' });

@@ -51,6 +51,7 @@
  *     Calls with none of those shapes (fetch, MCP, ...) are told as text.
  */
 
+import { quiet } from '../../../runtime/lifecycle-log.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { copyFile, mkdir, realpath, rename, rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -276,7 +277,7 @@ const kiroThreadWriter: NativeThreadWriter = {
 /** Size and recency of a session's pair taken together, the way carry.ts
  *  measures a directory; undefined unless both files are there. */
 async function measureKiroSession(files: { conversation: string; session: string }): Promise<{ size: number; mtime: number } | undefined> {
-  const entries = await Promise.all([files.conversation, files.session].map((path) => stat(path).catch(() => undefined)));
+  const entries = await Promise.all([files.conversation, files.session].map((path) => stat(path).catch(quiet('session/discovery/vendors/kiro-store'))));
   if (entries.some((entry) => !entry?.isFile())) return undefined;
   return {
     size: entries.reduce((sum, entry) => sum + entry!.size, 0),

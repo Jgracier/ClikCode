@@ -1,4 +1,5 @@
 /** ClikDeploy's authenticated model deployment flow for private Hugging Face models. */
+import { quiet } from '../runtime/lifecycle-log.js';
 import Conf from 'conf';
 import { gatewayConnection } from '../agent/models/for-session.js';
 import { CLIKCODE_USER_AGENT } from '../version.js';
@@ -55,7 +56,7 @@ async function request<T>(path: string, init: { method?: 'GET' | 'POST'; body?: 
     ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
     signal: AbortSignal.timeout(60_000),
   });
-  const payload = await response.json().catch(() => undefined) as {
+  const payload = await response.json().catch(quiet('gateway/private-models')) as {
     data?: T;
     error?: string | { message?: string };
     message?: string;

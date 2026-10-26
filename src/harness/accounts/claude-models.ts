@@ -17,6 +17,7 @@
  * one moment after an update changes them. The same rule version-memo.ts
  * follows, for the same reason: a TTL here would be wrong both ways.
  */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { open } from 'node:fs/promises';
 import { jsonMemo } from '../../session/store/json-memo.js';
 import { binaryFingerprint, sameFingerprint, type BinaryFingerprint } from '../transport/native/version-memo.js';
@@ -101,7 +102,7 @@ export async function claudeModelTable(binary = 'claude'): Promise<ClaudeModelTa
       await memo.write({ v: 1, fingerprint, table });
     }
     return table;
-  }).catch(() => undefined).finally(() => { pending = undefined; });
+  }).catch(quiet('harness/accounts/claude-models')).finally(() => { pending = undefined; });
   return pending;
 }
 

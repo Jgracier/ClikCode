@@ -10,6 +10,7 @@
  * still running in another terminal writes the full list, and that is the
  * newer fact. The next write from this build stores it by reference again. */
 
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import type { AiHarnessAccount } from '../../harness/definition.js';
@@ -38,7 +39,7 @@ const listsFile = cachedFile<Lists>(listsPath, (raw) => {
 
 async function loadLists(): Promise<Lists> {
   // fail-open-ok: a damaged list file costs one model rediscovery, never an account.
-  return (await listsFile.load().catch(() => undefined)) ?? {};
+  return (await listsFile.load().catch(quiet('session/state/model-lists'))) ?? {};
 }
 
 function listKey(models: readonly string[]): string {

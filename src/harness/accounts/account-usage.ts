@@ -1,6 +1,7 @@
 /** The account-facing answer: given an account, what is its usage and what
  * should it say on screen. */
 
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { randomBytes } from 'node:crypto';
 import { readFile, unlink, utimes, writeFile } from 'node:fs/promises';
 import { hostname } from 'node:os';
@@ -27,7 +28,7 @@ const probesInFlight = new Map<string, Promise<UsageReading | undefined>>();
 function probeOnce(key: string, probe: () => Promise<UsageReading | undefined>): Promise<UsageReading | undefined> {
   const running = probesInFlight.get(key);
   if (running) return running;
-  const asked = probe().catch(() => undefined).finally(() => probesInFlight.delete(key));
+  const asked = probe().catch(quiet('harness/accounts/account-usage')).finally(() => probesInFlight.delete(key));
   probesInFlight.set(key, asked);
   return asked;
 }
@@ -115,7 +116,7 @@ async function reportedNativeUsageReading(
   // Written before the vendor is asked, not after it answers: a probe that
   // never answers must still be seen as asked by every other process, or each
   // list would start another one.
-  if (probe) await writeState(state).catch(() => undefined);
+  if (probe) await writeState(state).catch(quiet('harness/accounts/account-usage'));
   const environment = nativeProfileEnvironment(account?.nativeProfile);
   const settle = async (reading: UsageReading | undefined): Promise<UsageReading | undefined> => {
     // Carry the last known figure through a failure rather than blanking it --
@@ -149,7 +150,7 @@ async function reportedNativeUsageReading(
     }
     // writeState merges per field, so publishing this reading cannot disturb
     // anything another terminal changed meanwhile.
-    await writeState(state).catch(() => undefined);
+    await writeState(state).catch(quiet('harness/accounts/account-usage'));
     const shown = !reading?.label && carried?.windows?.length ? carried : next;
     return {
       windows: shown.windows ?? [],
@@ -166,7 +167,7 @@ async function reportedNativeUsageReading(
   // running and records its reading when it lands; until then the paint shows
   // the last known figure (nothing, if there is none yet). This wait only
   // decides what to paint now: it never cancels the probe.
-  settled.catch(() => undefined);
+  settled.catch(quiet('harness/accounts/account-usage'));
   const stale = entry?.label === undefined ? undefined : { windows: entry.windows ?? [], label: entry.label };
   return Promise.race([settled, new Promise<UsageReading | undefined>((resolve) => { setTimeout(() => resolve(stale), USAGE_PAINT_WAIT_MS).unref(); })]);
 }
@@ -277,7 +278,7 @@ export function recheckRecoveredAccounts(state: HarnessState, options: {
         const latest = await readState({ transcripts: [] });
         const account = latest.accounts.find((item) => item.id === id);
         if (!account || !accountsDueForUsageRecheck({ ...latest, accounts: [account] }, Date.now(), canBeAsked).length) continue;
-        await ask(account, latest).catch(() => undefined);
+        await ask(account, latest).catch(quiet('harness/accounts/account-usage'));
       }
     } finally {
       await release();
@@ -299,16 +300,16 @@ async function takeRecheckLease(): Promise<(() => Promise<void>) | undefined> {
       await writeFile(path, mine, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return undefined;
-      const raw = await readFile(path, 'utf8').catch(() => undefined);
+      const raw = await readFile(path, 'utf8').catch(quiet('harness/accounts/account-usage'));
       if (raw !== undefined && !await lockLooksStale(path, raw)) return undefined;
-      if (raw !== undefined) await unlink(path).catch(() => undefined);
+      if (raw !== undefined) await unlink(path).catch(quiet('harness/accounts/account-usage'));
       continue;
     }
-    const heartbeat = setInterval(() => { const now = new Date(); void utimes(path, now, now).catch(() => undefined); }, LOCK_TUNING.heartbeatMs);
+    const heartbeat = setInterval(() => { const now = new Date(); void utimes(path, now, now).catch(quiet('harness/accounts/account-usage')); }, LOCK_TUNING.heartbeatMs);
     heartbeat.unref();
     return async () => {
       clearInterval(heartbeat);
-      if (await readFile(path, 'utf8').catch(() => undefined) === mine) await unlink(path).catch(() => undefined);
+      if (await readFile(path, 'utf8').catch(quiet('harness/accounts/account-usage')) === mine) await unlink(path).catch(quiet('harness/accounts/account-usage'));
     };
   }
   return undefined;

@@ -7,6 +7,7 @@
  * nothing depends on it running, and a failure only means the next one
  * tries again. */
 
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { stat, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { blankChatSweepable } from '../blank.js';
@@ -40,7 +41,7 @@ function staleTurn(session: HarnessSession, workerIsLive: (id: string) => boolea
 }
 
 async function oldEnough(path: string, now: number): Promise<boolean> {
-  const info = await stat(path).catch(() => undefined);
+  const info = await stat(path).catch(quiet('session/state/sweep'));
   return !info || now - info.mtimeMs > ORPHAN_MIN_AGE_MS;
 }
 
@@ -89,12 +90,12 @@ export function sweepStateDaily(): Promise<SweepReport | undefined> {
   running ??= (async () => {
     await ensurePrivateDirectory(join(stateDirectory(), 'cache'));
     const marker = join(stateDirectory(), 'cache', 'state-sweep');
-    const last = await stat(marker).catch(() => undefined);
+    const last = await stat(marker).catch(quiet('session/state/sweep'));
     if (last && Date.now() - last.mtimeMs < SWEEP_EVERY_MS) return undefined;
     // Claimed before the pass, so two launches at once do not both run it.
-    await writeFile(marker, '', { mode: 0o600 }).catch(() => undefined);
+    await writeFile(marker, '', { mode: 0o600 }).catch(quiet('session/state/sweep'));
     const now = new Date();
-    await utimes(marker, now, now).catch(() => undefined);
+    await utimes(marker, now, now).catch(quiet('session/state/sweep'));
     return sweepState();
   })();
   return running;

@@ -1,6 +1,7 @@
 /** Check a resumable vendor thread at the point where ClikCode chooses it.
  * Claude and Qwen use parentUuid JSONL. Other stores have different formats
  * and must be left to their own resume/error handling. */
+import { quiet } from '../runtime/lifecycle-log.js';
 import { createReadStream } from 'node:fs';
 import { open, stat } from 'node:fs/promises';
 import { locateNativeSessionFile } from '../session/discovery/registry.js';
@@ -78,7 +79,7 @@ export async function nativeThreadHoldsConversation(
   if (!session.workspace) return false;
   const file = await locateNativeSessionFile(
     harness, session.nativeSessionId, session.workspace, nativeProfileEnvironment(account.nativeProfile),
-  ).catch(() => undefined);
+  ).catch(quiet('turn/native-thread-continuity'));
   if (!file?.path.endsWith('.jsonl')) return false;
   return await checkFile(file.path).catch(() => {
     checked.delete(file.path);

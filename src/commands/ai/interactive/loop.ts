@@ -1,6 +1,6 @@
 /** The window loop. */
 import { queuedNext } from '../../../session/queue-next.js';
-import { diagnostic } from '../../../runtime/lifecycle-log.js';
+import { diagnostic, quiet } from '../../../runtime/lifecycle-log.js';
 import { beginTurnClock, endTurnClock, markTurn } from '../../../runtime/turn-latency.js';
 import { randomUUID } from 'node:crypto';
 import { isClikCodeAgent } from '../../../session/route.js';
@@ -146,7 +146,7 @@ export class ChatLoop {
       // this window carries on in a fresh conversation set up the same
       // way, and says so. Leaving ClikCode is never the answer to that.
       this.id = await newConversation(this.lastSeen.id, { sameModel: true, lastSeen: this.lastSeen });
-      await claimConversation(this.id).catch(() => undefined);
+      await claimConversation(this.id).catch(quiet('commands/ai/interactive/loop'));
       diagnostic('window.conversation-deleted', DELETED_ELSEWHERE);
       return 'continue';
     }
@@ -167,7 +167,7 @@ export class ChatLoop {
         if (!changed || syncId !== this.id) return;
         await writeState(latestState);
         if (syncId === this.id) terminal?.render(latest, account, running ? { running: true, ...running } : { running: false });
-      }).catch(() => undefined);
+      }).catch(quiet('commands/ai/interactive/loop'));
     }
     return this.pickLine(latest, latestState, account, running, queueMark);
   }
@@ -188,9 +188,9 @@ export class ChatLoop {
       const leftId = this.preparedRoute?.split(' ')[0];
       if (leftId && leftId !== latest.id) releaseSessionWorker(leftId);
       this.preparedRoute = routeKey;
-      void prepareSessionWorker(latest.id, { spawn: isClikCodeAgent(latest) }).catch(() => undefined);
+      void prepareSessionWorker(latest.id, { spawn: isClikCodeAgent(latest) }).catch(quiet('commands/ai/interactive/loop'));
       if (shouldWarmVendorChat(latest)) {
-        void warmSessionWorker(latest.id).catch(() => undefined);
+        void warmSessionWorker(latest.id).catch(quiet('commands/ai/interactive/loop'));
       }
     }
     const settingsKey = shownSettingsKey(latest);
@@ -212,7 +212,7 @@ export class ChatLoop {
           delete latest.resumeAt;
           terminal.render(latest, account, { running: false });
           refreshUsage(latest, latestState);
-        }).catch(() => undefined);
+        }).catch(quiet('commands/ai/interactive/loop'));
       } : undefined;
     }
     return account;
@@ -353,7 +353,7 @@ export class ChatLoop {
       if (typeof end === 'object') { this.leaving = true; return; }
       if (end) this.id = end;
     } finally {
-      await claimConversation(this.id).catch(() => undefined);
+      await claimConversation(this.id).catch(quiet('commands/ai/interactive/loop'));
     }
     // The chat it comes back to may be a copy that moved (picked on the board there).
     await this.followMoved(terminal, hops + 1);
@@ -371,7 +371,7 @@ export class ChatLoop {
     if (live.here.local === this.id) return false;
     await leaveConversation(this.id);
     this.id = live.here.local;
-    await claimConversation(this.id).catch(() => undefined);
+    await claimConversation(this.id).catch(quiet('commands/ai/interactive/loop'));
     return false;
   }
 
@@ -425,7 +425,7 @@ export class ChatLoop {
         // Leaving a chat nothing happened in: it does not stay behind.
         await leaveConversation(this.id);
         this.id = outcome.id;
-        await claimConversation(this.id).catch(() => undefined);
+        await claimConversation(this.id).catch(quiet('commands/ai/interactive/loop'));
         // A copy that moved (/resume <id>, a fork's row): the live chat instead.
         if (terminal && await this.followMoved(terminal)) return;
       }

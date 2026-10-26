@@ -1,5 +1,5 @@
 /** ClikCode's own agent turn, using Gateway or a local model for inference. */
-import { diagnostic } from '../runtime/lifecycle-log.js';
+import { diagnostic, quiet } from '../runtime/lifecycle-log.js';
 import { agentMcpServer, gatewayAgentSession, type GatewayAgentSession } from '../gateway/agent-session.js';
 import type Conf from 'conf';
 import { routeMcpServers } from '../gateway/mcp.js';
@@ -206,7 +206,7 @@ export async function runAgentTurn(input: {
           await handler(steerText, submission.kind === 'note' ? undefined : hold);
           if (submission.kind === 'note') return;
           const write = checkpoint.steer(submission);
-          steerWrites.push(write.catch(() => undefined));
+          steerWrites.push(write.catch(quiet('turn/agent-turn')));
           accepted.push(submission);
           await write;
         } : undefined),

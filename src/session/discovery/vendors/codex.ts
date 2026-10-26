@@ -1,5 +1,6 @@
 /** Codex's rollout files, laid out by day. */
 
+import { quiet } from '../../../runtime/lifecycle-log.js';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -109,7 +110,7 @@ export async function discoverCodexFsSessions(workspace: string, environment: Na
       // project first meant a busy other repo could hide all of this one's chats.
       if (workspace && facts.cwd && facts.cwd !== workspace) continue;
       // Only files that survive the filter are stat-ed at all.
-      const info = await stat(path).catch(() => undefined);
+      const info = await stat(path).catch(quiet('session/discovery/vendors/codex'));
       if (!info) continue;
       matches.push({ nativeId: facts.id, title: facts.title, ...(facts.byClikCode ? { byClikCode: true } : {}), updatedAt: new Date(info.mtimeMs).toISOString(), updatedAtMs: info.mtimeMs, ...(facts.cwd ? { workspace: facts.cwd } : {}) });
     }

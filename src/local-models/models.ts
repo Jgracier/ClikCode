@@ -7,6 +7,7 @@
  * ClikCode's store (copied when it is on another disk). Anything else is
  * downloaded from the pinned Hugging Face revision. */
 
+import { quiet } from '../runtime/lifecycle-log.js';
 import { copyFile, link, mkdir, readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -31,7 +32,7 @@ async function findBySizeAndName(directory: string, name: string, size: number, 
   const found: string[] = [];
   for (const entry of entries) {
     const path = join(directory, entry.name);
-    if (entry.isFile() && entry.name === name && (await stat(path).catch(() => undefined))?.size === size) found.push(path);
+    if (entry.isFile() && entry.name === name && (await stat(path).catch(quiet('local-models/models')))?.size === size) found.push(path);
     else if (entry.isDirectory() && depth > 0 && !entry.name.startsWith('.')) found.push(...await findBySizeAndName(path, name, size, depth - 1));
   }
   return found;

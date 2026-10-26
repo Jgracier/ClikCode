@@ -1,6 +1,7 @@
 /** Writing a file so that a crash cannot leave a half-written one, into a
  * directory only this user can read. */
 
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { randomBytes } from 'node:crypto';
 import { chmod, mkdir, open, rename, unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
@@ -13,7 +14,7 @@ const hardenedDirectories = new Set<string>();
 export async function ensurePrivateDirectory(directory: string): Promise<void> {
   await mkdir(directory, { recursive: true, mode: 0o700 });
   if (hardenedDirectories.has(directory)) return;
-  await chmod(directory, 0o700).catch(() => undefined);
+  await chmod(directory, 0o700).catch(quiet('session/store/files'));
   hardenedDirectories.add(directory);
 }
 
@@ -43,7 +44,7 @@ export async function atomicWriteFile(path: string, data: string | Uint8Array, o
     await rename(temporary, path);
     renamed = true;
   } finally {
-    if (!renamed) await unlink(temporary).catch(() => undefined);
+    if (!renamed) await unlink(temporary).catch(quiet('session/store/files'));
   }
   if (durable) await syncDirectory(directory);
 }
@@ -51,7 +52,7 @@ export async function atomicWriteFile(path: string, data: string | Uint8Array, o
 /** Windows cannot open a directory to sync it, and does not need to. */
 async function syncDirectory(directory: string): Promise<void> {
   if (process.platform === 'win32') return;
-  const handle = await open(directory, 'r').catch(() => undefined);
+  const handle = await open(directory, 'r').catch(quiet('session/store/files'));
   if (!handle) return;
   try { await handle.sync(); } catch { /* fail-open-ok: some filesystems refuse a directory fsync; the file itself is synced */ } finally { await handle.close(); }
 }

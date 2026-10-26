@@ -2,6 +2,7 @@
  * another under looser rules and try again, a bounded number of times. Every password made here is registered with
  * the scrubber and typed straight into the page; the model sees neither the password nor a count of its characters.
  * What it may be told is that the site refused and how many tries it took. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import type { Page } from 'playwright-core';
 import { holdSignup } from './signup-login.js';
 import { generatePassword, MAX_PASSWORD_ATTEMPTS, parsePolicy, relax, type PasswordPolicy, type PolicyHints } from './password-policy.js';
@@ -71,7 +72,7 @@ export async function typePassword(page: Page, password: string): Promise<number
     const box = boxes.nth(index);
     await box.fill('', { timeout: 10_000 });
     await box.pressSequentially(password, { timeout: 10_000 });
-    await box.blur().catch(() => undefined);
+    await box.blur().catch(quiet('agent/computer/password-retry'));
   }
   return count;
 }
@@ -109,7 +110,7 @@ export async function retryRejectedPassword(options: RetryOptions): Promise<stri
     state.password = next;
     await holdSignup(options.stateDir, page, next, options.username);
     if (!await typePassword(page, next)) break;
-    if (options.resubmit) { await options.resubmit().catch(() => undefined); await options.settle(page); }
+    if (options.resubmit) { await options.resubmit().catch(quiet('agent/computer/password-retry')); await options.settle(page); }
     if (page.isClosed() || !await page.locator(PASSWORD_BOX).count().catch(() => 0)) { rejection = ''; break; } // the form is gone: the site took it
     rejection = await readPasswordRejection(page);
   }
