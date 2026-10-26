@@ -53,7 +53,7 @@ export const LEAN_MAX_CONTEXT_WINDOW = 32_768;
  * bimodal: laptop CPUs read 50-100 tokens/s (the engine's floor for a usable
  * model is 50), while any discrete or Apple GPU reads several hundred to
  * thousands. 150 sits in the gap, so the exact value matters little; what
- * it separates is "an extra 8K-token tool result is about a minute" from
+ * it separates is "an extra 8K-token tool result is about two minutes" from
  * "it is a few seconds". */
 export const LEAN_BELOW_PROMPT_PER_SECOND = 150;
 
@@ -125,6 +125,9 @@ export interface ContextHints {
   /** A hosted provider (the Gateway): prompt reading is fast and cached
    * input is discounted, even when neither number is known. */
   hosted?: boolean;
+  /** The most history a conversation carried into this model may hold: what it reads in about two minutes (local-models/read-budget.ts).
+   * Set for a local model, whose window says little about it. Bounds a conversation's carry-in only; once read, the server keeps the prefix. */
+  readableTokens?: number;
 }
 
 export function parseContextProfile(value: unknown): ContextProfileName | undefined {

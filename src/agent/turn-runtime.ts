@@ -84,6 +84,8 @@ export interface TurnRuntime {
    * here compacted a 1M-window Gateway model on its first step (MEASURED 2026-10-10: 458 turns
    * seeded for Opus 5.5, compaction before the model answered). */
   contextWindow: number | undefined;
+  /** Tokens the model reads before it answers, for a local model (ContextHints.readableTokens). */
+  readBudget: number | undefined;
   servedModel: string | undefined;
   readonly segments: string[];
   needsSeparator: boolean;
@@ -238,6 +240,7 @@ export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime
     }),
     steerQueue: [], steerWaiters: new Set(), steerOpen: true, callsOpen: 0, foregroundSteers: new Map(), items, ledger, lastStepUsage: undefined, itemsAtLastUsage: items.length,
     contextWindow: input.modelClient.contextHints?.contextWindow ?? input.contextWindow,
+    readBudget: input.modelClient.contextHints?.readableTokens,
     servedModel: undefined, segments, needsSeparator: false, steps: 0, stall: new StallGuard(), stalledCall: undefined,
     stepRetries: 0, retryWaitedSeconds: 0, contextScale: 1, contextRefits: 0, budgetClient: input.modelClient, lastRequestEstimate: 0, modelStartWaitedSeconds: 0, modelStartingSince: undefined, modelStartChecked: false, livePlanSeen: readLivePlan(input), lengthContinues: 0, stopContinues: 0,
     shownCalls: new Map(), continuesCutAnswer: false, lastContext: { contextProfile: profile.name },

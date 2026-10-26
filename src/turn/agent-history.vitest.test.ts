@@ -225,6 +225,42 @@ describe('what the agent\'s memory is told', () => {
     });
   });
 
+  describe('a local model is handed what it can read in about a minute, not what its window could hold', () => {
+    const long = (): TranscriptMessage[] => Array.from({ length: 1_500 }, (_, index) => turn(`Request ${index}`, `Answer ${index} ${'y'.repeat(900)}`, claude)).flat();
+    const seeded = async (extra: { contextWindow?: number; readableTokens?: number }): Promise<string> => {
+      await seedAgentConversation({ session: session(long()), stateDir, ...extra });
+      const items = await new ConversationStore(stateDir, 's1').load();
+      return items.map((item) => (item.type === 'text' ? item.text : '')).join('\n');
+    };
+
+    it('takes the smaller of the window\'s share and what it reads in the time', () => {
+      expect(agentSeedBudget(262_144, 15_000)).toBe(15_000 * 4);
+      // A window smaller than the reading budget stays the bound.
+      expect(agentSeedBudget(8_000, 15_000)).toBe(8_000 * 0.5 * 4);
+      // Hosted: no reading bound, so the window alone, as before.
+      expect(agentSeedBudget(262_144)).toBe(262_144 * 0.5 * 4);
+      expect(agentSeedBudget(262_144, 0)).toBe(262_144 * 0.5 * 4);
+    });
+
+    it('seeds far less than the window would allow, newest turns first, and says what it left out and where the rest is', async () => {
+      const window = 262_144;
+      const readable = 15_000;
+      const text = await seeded({ contextWindow: window, readableTokens: readable });
+      const bytes = Buffer.byteLength(text, 'utf8');
+      expect(bytes).toBeLessThanOrEqual(readable * 4 + 2_000);
+      expect(bytes).toBeLessThan(window * 0.5 * 4 / 4);
+      expect(text).toContain('Request 1499');
+      expect(text).not.toContain('Answer 0 ');
+      expect(text).toMatch(/earlier turns? (is|are) left out/);
+    });
+
+    it('is unchanged for a model that reads fast: the same window and no reading bound hand it the window\'s share', async () => {
+      const text = await seeded({ contextWindow: 262_144 });
+      // ~1.5 MB of conversation against a 512 KB share of the window: far more than the local bound lets through.
+      expect(Buffer.byteLength(text, 'utf8')).toBeGreaterThan(400_000);
+    });
+  });
+
   it('keeps the newest turns when the model\'s window is small, and says what it left out', async () => {
     const long = Array.from({ length: 40 }, (_, index) => turn(`Request ${index}`, `Answer ${index} ${'x'.repeat(400)}`, claude)).flat();
     const chat = session(long);

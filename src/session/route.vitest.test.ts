@@ -1,3 +1,4 @@
+import { readableTokens } from '../local-models/read-budget.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -154,7 +155,15 @@ describe('the model-client seam', () => {
   it('hands the engine\'s window and measured prompt speed to the loop, which picks the context profile from them', async () => {
     engine.ensureLocalModel.mockResolvedValue({ baseUrl: 'http://127.0.0.1:1/v1', model: 'qwen3.5-4b', contextWindow: 65536, promptPerSecond: 1200 });
     const client = await modelClientForSession(local(), config);
-    expect(client.contextHints).toEqual({ contextWindow: 65536, promptPerSecond: 1200 });
+    // And what it reads in two minutes at that speed, which bounds the history it is handed (local-models/read-budget.ts).
+    expect(client.contextHints).toEqual({ contextWindow: 65536, promptPerSecond: 1200, readableTokens: readableTokens(1200) });
+    expect(client.contextHints.readableTokens).toBeGreaterThan(30_000);
+  });
+
+  it('puts no reading bound on a model whose speed the engine did not report', async () => {
+    engine.ensureLocalModel.mockResolvedValue({ baseUrl: 'http://127.0.0.1:1/v1', model: 'qwen3.5-4b', contextWindow: 65536 });
+    const client = await modelClientForSession(local(), config);
+    expect(client.contextHints).toEqual({ contextWindow: 65536 });
   });
 
   it('asks the engine for the session\'s own model, passes progress through, and keeps its notice to the log', async () => {
