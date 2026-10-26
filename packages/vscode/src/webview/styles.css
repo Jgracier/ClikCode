@@ -602,7 +602,9 @@ body.vscode-high-contrast .keylist-row.active { outline: 1px dashed var(--vscode
 .running-agents { flex: none; margin: 2px var(--gap) 4px; }
 .running-agents-other { display: flex; align-items: center; gap: 6px; font-size: .85em; padding: 3px 0; }
 .agent-line .activity-line { margin: 0; }
-@media (prefers-reduced-motion: no-preference) { .agent-child { animation: agent-child-in .25s ease-out; } @keyframes agent-child-in { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } } }
+.agent-child { min-height: 1.4em; margin-bottom: 0; }
+.agent-line .activity-outcome { font-variant-numeric: tabular-nums; }
+.agent-line .subagent-view { margin: 4px 0 6px 24px; }
 .working-wrap .working { margin-top: 0; }
 .working-wrap .reasoning { margin-top: 4px; }
 .working-thought { color: var(--muted); }
@@ -611,7 +613,6 @@ body.vscode-high-contrast .keylist-row.active { outline: 1px dashed var(--vscode
 .steer .muted { font-size: 0.9em; }
 
 .subagent-view { flex-basis: 100%; min-width: 0; border: 1px solid var(--vscode-widget-border); border-radius: 6px; padding: 8px; }
-.subagent-view-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .subagent-view-rows { max-height: 40vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .subagent-view-rows pre { white-space: pre-wrap; font: inherit; }
 .subagent-view form { display: flex; gap: 6px; }
