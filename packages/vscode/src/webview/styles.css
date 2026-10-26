@@ -599,6 +599,7 @@ body.vscode-high-contrast .keylist-row.active { outline: 1px dashed var(--vscode
   .working .working-label { background: none; -webkit-text-fill-color: currentColor; animation: none; }
 }
 .working-wrap { margin-top: 6px; }
+.working-pinned { flex: none; margin: 0 var(--gap) 4px; }
 .running-agents { flex: none; margin: 2px var(--gap) 4px; }
 .running-agents-other { display: flex; align-items: center; gap: 6px; font-size: .85em; padding: 3px 0; }
 .agent-line .activity-line { margin: 0; }

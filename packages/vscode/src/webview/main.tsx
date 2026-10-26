@@ -4,14 +4,14 @@
 import { COPIED_MS, NOTICE_MS } from '../../../../src/harness/protocol/timings';
 import { Component, render, type ComponentChildren, type JSX } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { chatModelLabel, currentProvider, preparing, turnHasAnswer, type ChatModel } from '../model';
+import { chatModelLabel, currentProvider, preparing, reconnecting, turnHasAnswer, type ChatModel } from '../model';
 import { applyModelPatch } from '../model-patch';
 import type { IdePickItem, IdeSearchFocus, IdeUiResult } from '../protocol';
 import type { ToWebview, WebviewMenu } from '../webview-protocol';
 import { command, listen, post, request, save, uid } from './bus';
 import { ApprovalCard, QuestionCard } from './approvals';
 import { Transcript } from './chat';
-import { RunningAgents } from './turn';
+import { RunningAgents, Working, waitingOnUser } from './turn';
 import { Composer, type ComposerHandle } from './composer';
 import { tildePath } from './format';
 import { choose } from './picker';
@@ -421,6 +421,7 @@ function App(): JSX.Element {
         ) : null}
         {search ? <SearchBar focus={search} /> : null}
         {model.live || model.background ? <RunningAgents live={model.live ?? { activities: [], background: model.background }} workspace={model.workspace} /> : null}
+        {model.running ? <div class="working-pinned" aria-busy="true"><Working live={model.live} asking={waitingOnUser(model)} reconnecting={reconnecting(model)} {...(model.turnUsage ? { usage: model.turnUsage } : {})} /></div> : null}
         <Composer model={model} handle={composer} onError={setError} onOpenHistory={() => setHistory(true)} />
       </main>
       {question ? <Sheet key={question.id} question={question} items={question.items} answer={(result) => answer(question.id, result)}

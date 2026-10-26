@@ -323,7 +323,8 @@ export function ActivityRun({ activities, workspace }: { activities: Activity[];
  * sent into the turn) where it happened in the answer, the paragraphs around
  * it, the newest still streaming; then the working line. A running call or
  * sub-agent is a row in that flow like any finished one, with a running mark,
- * and becomes done in place -- no separate band, so nothing moves. */
+ * and becomes done in place -- no separate band, so nothing moves. The working
+ * line is not here: it sits below the pinned agents, nearest the composer. */
 export const LiveTurnView = memo(({ live, workspace, asking, plan, notes, turn, away, usage }: {
   live: LiveTurn | undefined; workspace?: string; asking: boolean; plan: ChatModel['plan']; notes: Note[]; turn?: number; away: boolean; usage?: TurnUsage;
 }): JSX.Element => (
@@ -334,6 +335,5 @@ export const LiveTurnView = memo(({ live, workspace, asking, plan, notes, turn, 
         {...(live.decisions?.length ? { decisions: live.decisions } : {})}
         {...(turn !== undefined ? { notes: notes.filter((note) => note.turn === turn) } : {})} />
     ) : null}
-    <Working live={live} asking={asking} reconnecting={away} {...(usage ? { usage } : {})} />
   </div>
 ));
