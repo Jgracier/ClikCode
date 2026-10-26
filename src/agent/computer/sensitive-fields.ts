@@ -59,6 +59,15 @@ export async function maskSensitive(page: Page, text: string): Promise<string> {
   return out;
 }
 
+/** Whether a picture of the window owned by `windowPid` could show the ClikCode browser's fields. The browser's
+ * process ids come from Chrome itself (CDP SystemInfo), so this is one integer comparison on every OS: Linux, macOS
+ * and Windows all report the OS process id that `list_windows` names as the window's owner. A window with no pid, or a
+ * browser that cannot list its processes, is guarded as if it were the browser. */
+export function windowMayShowBrowser(browserPids: readonly number[] | undefined, windowPid: number | undefined): boolean {
+  if (windowPid === undefined || !browserPids) return true;
+  return browserPids.includes(windowPid);
+}
+
 /** A typed or revealed credential is in a tab a screenshot could show: the front tab of a window that is not
  * minimized (a tab behind it, or a closed window, is not on screen). With `windowPid`, only when that window is
  * the ClikCode browser itself: a picture of another app cannot hold the browser's fields. */
@@ -68,7 +77,7 @@ export async function credentialOnScreen(stateDir: string, windowPid?: number): 
   catch { return false; } // No ClikCode browser is open.
   if (windowPid !== undefined) {
     const pids = await computerBrowserPids(stateDir);
-    if (pids && !pids.includes(windowPid)) return false; // Unknown pids: guard as if it were the browser.
+    if (!windowMayShowBrowser(pids, windowPid)) return false;
   }
   for (const page of pages) {
     if (!(await sensitiveValues(page)).length) continue;

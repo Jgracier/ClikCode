@@ -12,7 +12,7 @@ describe('computer_use boundary', () => {
     expect(computerDriverAction({ action: 'windows' })).toEqual({ name: 'list_windows', args: { on_screen_only: true } });
     expect(computerDriverAction({ action: 'observe' })).toEqual({ name: 'get_desktop_state', args: {} });
     expect(computerDriverAction({ action: 'observe', pid: 42, window_id: 7, query: 'OK' }))
-      .toEqual({ name: 'get_window_state', args: { pid: 42, window_id: 7, max_elements: 1500, query: 'OK' } });
+      .toEqual({ name: 'get_window_state', args: { pid: 42, window_id: 7, max_elements: 1500, timeout_ms: 10_000, query: 'OK' } });
   });
 
   it('sends an exact window target and a fresh element handle to Cua', () => {
@@ -48,7 +48,7 @@ describe('computer_use on Linux Wayland', () => {
   });
 
   it('names an installed cua-driver too old to see Wayland windows, and nothing else', () => {
-    expect(driverVersionNotice('cua-driver 0.21.0\n', true)).toContain('cua-driver update --apply');
+    expect(driverVersionNotice('cua-driver 0.21.0\n', true)).toContain('clikcode computer driver update');
     expect(driverVersionNotice('cua-driver 0.38.0\n', true)).toBeUndefined();
     expect(driverVersionNotice('cua-driver 1.0.0\n', true)).toBeUndefined();
     expect(driverVersionNotice('cua-driver 0.21.0\n', false)).toBeUndefined();
