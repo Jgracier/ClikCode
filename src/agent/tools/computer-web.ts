@@ -28,6 +28,7 @@ import { Parked, park } from '../computer/parking.js';
 import { hideKeyLikeText } from '../computer/secret-finder.js';
 import { answerDialog, bindDialogs, dialogNote, hasPendingDialog, pendingDialogNote, settleWaitingDialog, withDialogNotices, withDialogs } from '../computer/page-dialogs.js';
 import { FILES_ENV_ACTIONS, FILES_ENV_HELP, FILES_ENV_PARAMETERS, filesEnvLabel, type FilesEnvAction, type FilesEnvArgs } from '../computer/files-env-schema.js';
+import { documentView, requestDocumentPages } from '../computer/document-text.js';
 import { applyHttpAuth, clearHttpAuth, denyPermissionsFor, runPermissions } from '../computer/files-env-actions.js';
 import { approvedUploadPath, isUploadPath } from '../computer/upload-files.js';
 import { bindDownloads, describeDownloads, downloadNotes } from '../computer/downloads.js';
@@ -239,6 +240,9 @@ export function changedLines(previous: string, shown: string): { text: string; c
 
 /** `compact`: after an action, show only what changed (plus any open dialog) instead of the whole page again. */
 export async function observeComputerPage(page: Page, acceptsImages: boolean, full = false, find?: string, compact = false): Promise<ToolRunResult> {
+  // A PDF or other document in the tab has no page to read: its text is fetched and returned instead.
+  const document = await documentView(page);
+  if (document) return { output: document };
   const raw = scrubSecrets(await maskSensitive(page, await page.ariaSnapshot({ mode: 'ai', timeout: 10_000 } as never) as string));
   // A key the page is showing is not for the model to read: capture_secret takes it.
   const { text: shown, hidden } = hideKeyLikeText(raw.replace(/^(\s*- \/url: )(\S{160})\S+$/gm, '$1$2…'));
@@ -1061,7 +1065,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       if (next) return { output: `${said}\n\n${next}` };
       return { output: `${said}\n\n${(await observeComputerPage(page, false, false, undefined, true)).output}` };
     }
-    case 'observe': return observeComputerPage(page, ctx.acceptsImages === true, args.full === true, args.find);
+    case 'observe': requestDocumentPages(page, args.pages); return observeComputerPage(page, ctx.acceptsImages === true, args.full === true, args.find);
     case 'steps':
       const list = typeof args.steps === 'string' ? (() => { try { return JSON.parse(args.steps) as Step[]; } catch { return undefined; } })() : args.steps;
       if (!Array.isArray(list) || !list.length) throw new Error('steps needs a list, e.g. [{"do":"click","target":"e5"}].');
