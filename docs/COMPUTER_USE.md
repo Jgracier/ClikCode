@@ -86,6 +86,16 @@ The tool result that follows the click or open says `Downloaded name.csv (8 B) a
 reserved characters, a clash becomes `name (1).ext`). The one exception is a key being captured with
 `capture_secret`: that download is read and deleted, as before.
 
+### Uploads
+`upload` (a file input, or the button that opens the file chooser, plus `text`) sends either a file the
+user saved in a profile under a name ending `_file` (`logo_file`), or an **absolute path** to a file in
+the workspace or in this chat's downloads folder. Anything else is refused with the reason: a path
+outside those two folders (symlinks are followed, so a link that points out is refused), a dotfile or
+file inside a dot folder (`.env`, `.git`, `~/.ssh`, `~/.aws`), ClikCode's own state, another chat's
+downloads, private keys and credential files (`id_rsa`, `*.pem`, `*.key`, `credentials`), a
+directory, or a file over 50 MB. The approval prompt shows the path being sent; permission rules for
+paths apply to it.
+
 ## Getting an API key without the agent seeing it
 
 The agent signs in, sets the options, then makes one `capture_secret` call: the final

@@ -1,6 +1,7 @@
 /** Page-level browser actions in ClikCode's own Chrome profile. */
 import { quiet } from '../../runtime/lifecycle-log.js';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { defineTool } from '../tool-contract.js';
 import { adoptPage, closeComputerPage, computerPage, openComputerPage } from '../computer/browser.js';
@@ -26,6 +27,7 @@ import { Parked, park } from '../computer/parking.js';
 import { hideKeyLikeText } from '../computer/secret-finder.js';
 import { dialogNote, withDialogs } from '../computer/page-dialogs.js';
 import { FILES_ENV_ACTIONS, FILES_ENV_HELP, FILES_ENV_PARAMETERS, type FilesEnvAction, type FilesEnvArgs } from '../computer/files-env-schema.js';
+import { approvedUploadPath, isUploadPath } from '../computer/upload-files.js';
 import { bindDownloads, describeDownloads, downloadNotes } from '../computer/downloads.js';
 import { SEND_TO_HELP, SEND_TO_SCHEMA } from './store-secret.js';
 import { destinationProblem, normalizeSendTo, type Destination } from '../computer/secret-destinations.js';
@@ -332,7 +334,7 @@ const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: [
 
 const WEB_DESCRIPTION = [
     "Drive ClikCode's own Chrome (its own saved profile; it starts by itself). open and observe return the page, with a [ref=…] on each element: pass a ref as target (or visible text) to click or fill. After an action you get only what changed (and any open dialog); observe shows the whole page again. A new tab or popup the page opens is followed automatically.",
-    'Actions: open (a URL) · observe (the page again; full: true adds header and footer; find: "words" shows only the lines that mention them, for a long page) · click · fill · choose (an option of a dropdown: target + text) · press · scroll · wait (for text to appear or go, up to 2 minutes; for jobs that finish on their own) · steps (several of those in order, one call, stops at the first failure) · login · handoff · capture_secret · profile · open_email_link (find the newest email from a sender in the signed-in Gmail and open a link in it, one call: verification and sign-in emails) · upload (a file input or its button + text: the name of a profile file detail ending _file such as logo_file; only files the user saved in the profile can be sent) · notes (read or add what was learned on a site: the URL that worked, the order of screens, what was missing; shown again whenever a page on that host is opened, so write one when a task finally works) · recipe (save the steps of a signup or key capture that worked, by control text, never secrets; run replays them and stops for the user at a captcha, code, payment or review page; list) · email_connect (one consent in this browser connects the signed-in Gmail; after that read_email_code and open_email_link read mail through the Gmail API, wait for it to arrive, and return only the code or the link) · oauth_connect (target = a ClikDeploy connector id: starts its OAuth connect, presses through the vendor consent screens in this signed-in browser (account named by the profile sso_email, Advanced / Go to ... (unsafe), Continue / Allow / Authorize), stops with a plain reason at a login password, MFA code, captcha or an unknown screen (sign in first with login), and confirms ClikDeploy shows an active connection) · read_email_code (the one-time code in the newest email from a sender, read in a tab of its own, so a sign-up that wants an emailed code does not need the user) · forget_login (remove the saved login for a site from the vault: target = the site, label = one account; returns only a count; use it for a login the site keeps refusing) · close.',
+    'Actions: open (a URL) · observe (the page again; full: true adds header and footer; find: "words" shows only the lines that mention them, for a long page) · click · fill · choose (an option of a dropdown: target + text) · press · scroll · wait (for text to appear or go, up to 2 minutes; for jobs that finish on their own) · steps (several of those in order, one call, stops at the first failure) · login · handoff · capture_secret · profile · open_email_link (find the newest email from a sender in the signed-in Gmail and open a link in it, one call: verification and sign-in emails) · upload (a file input or its button + text: the name of a profile file detail ending _file such as logo_file, or the absolute path of a file in the workspace or the chat\'s downloads folder; nothing else can be sent) · notes (read or add what was learned on a site: the URL that worked, the order of screens, what was missing; shown again whenever a page on that host is opened, so write one when a task finally works) · recipe (save the steps of a signup or key capture that worked, by control text, never secrets; run replays them and stops for the user at a captcha, code, payment or review page; list) · email_connect (one consent in this browser connects the signed-in Gmail; after that read_email_code and open_email_link read mail through the Gmail API, wait for it to arrive, and return only the code or the link) · oauth_connect (target = a ClikDeploy connector id: starts its OAuth connect, presses through the vendor consent screens in this signed-in browser (account named by the profile sso_email, Advanced / Go to ... (unsafe), Continue / Allow / Authorize), stops with a plain reason at a login password, MFA code, captcha or an unknown screen (sign in first with login), and confirms ClikDeploy shows an active connection) · read_email_code (the one-time code in the newest email from a sender, read in a tab of its own, so a sign-up that wants an emailed code does not need the user) · forget_login (remove the saved login for a site from the vault: target = the site, label = one account; returns only a count; use it for a login the site keeps refusing) · close.',
     'Each chat has its own tab. The user\'s autofill profile (name, email, phone, address, and any custom details you asked for with profile ask_fields) fills forms for you: fill a field with no text and it is filled from the profile, or the user is asked once and the answer is kept. If a site wants another format, fill that field with the exact text, and save the corrected value with action profile and fields. When a site offers Continue/Sign in with Google and the browser is already signed in to Google, prefer it: no new password or email check. If it offers GitHub and not Google, use Continue with GitHub (sign in to GitHub with the saved login; there is no Google sign-in inside GitHub). Only when neither is offered, fill the form with no text: the profile email fills it, and on a sign-up every password box gets a strong password made up for that site (fitted to what the page asks, retried if the site refuses it, saved with the login, never shown to you); a later sign-in fills the saved login. Every page can be read, including sign-in and signup forms; the values of password, code and card fields are masked. For anything only the user knows (a password, a code, an address, a phone number), fill the field with no text: a saved login for the site or the profile fills it, else the user is asked privately, and you are not shown the answer. That is all a sign-in or signup needs: fill the fields, click Next, repeat. (login does the same in one action for a plain email-then-password sign-in.) Never ask for a password or code in chat. When a sign-in page offers different ways in (root or IAM, another account), ask the user with ask_user, click their choice, then login. handoff returns a phone link for a CAPTCHA or MFA at once; give it to the user, then call handoff again to wait until they finish.',
     'Work through the whole task you were given without checking in at each step. Ask real choices (project, account, role set) once, up front, in one question; after that ask only when genuinely blocked (a sign-in they must type, a payment).',
     FILES_ENV_HELP,
@@ -362,7 +364,8 @@ export const computerWebTool = defineTool<WebArgs>({
       default: return `Web ${args.action}`;
     }
   },
-  describe: async (args) => `ClikCode browser: ${args.action}${args.url ? ` ${args.url}` : ''}${args.target ? ` ${args.target}` : ''}${args.action === 'fill' ? ` (${args.text?.length ?? 0} characters)` : ''}`,
+  paths: (args) => uploadPaths(args),
+  describe: async (args) => `ClikCode browser: ${args.action}${args.url ? ` ${args.url}` : ''}${args.target ? ` ${args.target}` : ''}${uploadPaths(args).length ? ` (sends ${uploadPaths(args).join(', ')})` : ''}${args.action === 'fill' ? ` (${args.text?.length ?? 0} characters)` : ''}`,
   // One chat's browser calls run in the order they were made. The model can send two at once (a capture and
   // the click that closes the dialog it reads), and a one-time key does not survive that race.
   run: (args, hostCtx) => inOrder(args.tab ? `${hostCtx.stateDir}#${args.tab}` : hostCtx.stateDir, async (): Promise<ToolRunResult> => {
@@ -462,6 +465,13 @@ export const computerWebTool = defineTool<WebArgs>({
   }),
 });
 
+/** The files an upload names by path, so the permission system can show them and apply its path rules. */
+function uploadPaths(args: WebArgs): string[] {
+  const steps = typeof args.steps === 'string' ? [] : Array.isArray(args.steps) ? args.steps : [];
+  const named = [args.action === 'upload' ? args.text : undefined, ...steps.map(step => step?.do === 'upload' ? step.text : undefined)];
+  return named.filter((text): text is string => typeof text === 'string' && path.isAbsolute(text));
+}
+
 const queues = sharedState('computer-web-queue', () => new Map<string, Promise<unknown>>());
 export function inOrder<T>(key: string, job: () => Promise<T>): Promise<T> {
   const run = (queues.get(key) ?? Promise.resolve()).then(job, job);
@@ -477,7 +487,7 @@ const INTERACTIONS: ReadonlySet<string> = new Set(['click', 'fill', 'choose', 'p
 
 /** The profile file an upload step names (`text` is the detail's name, e.g. logo_file): saved by the user, ending _file, and present on disk. */
 export async function approvedFile(ctx: ToolContext | undefined, name: string | undefined): Promise<string> {
-  if (!ctx || !name || !/_file$/.test(name)) throw new Error('Upload needs text naming a profile file detail ending _file, such as logo_file. Save one with profile custom.');
+  if (!ctx || !name || !/_file$/.test(name)) throw new Error('Upload needs text naming a profile file detail ending _file, such as logo_file (save one with profile custom), or the absolute path of a file in the workspace or the downloads folder.');
   for (const profile of await listProfiles(ctx.stateDir)) {
     const value = profile.custom?.[name]?.value;
     if (value) {
@@ -512,7 +522,7 @@ async function doStep(page: Page, step: Step, ctx?: ToolContext): Promise<StepOu
   switch (step.do) {
     case 'upload': {
       // Only a file the user put in their profile (a custom detail whose name ends _file, such as logo_file) can be sent to a site.
-      const file = await approvedFile(ctx, step.text);
+      const file = isUploadPath(step.text) ? await approvedUploadPath({ cwd: ctx?.cwd ?? process.cwd(), stateDir: ctx?.stateDir ?? '', homeDir: ctx?.homeDir ?? os.homedir(), ...(ctx?.sessionId ? { sessionId: ctx.sessionId } : {}) }, step.text!) : await approvedFile(ctx, step.text);
       const target = await locate(page, step.target);
       const isFileInput = await target.evaluate(node => { const input = node as unknown as { tagName: string; type?: string }; return input.tagName === 'INPUT' && input.type === 'file'; }).catch(() => false);
       if (isFileInput) await target.setInputFiles(file, { timeout: 10_000 });
@@ -520,7 +530,7 @@ async function doStep(page: Page, step: Step, ctx?: ToolContext): Promise<StepOu
         const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: 8_000 }), clickOrHint(target)]);
         await chooser.setFiles(file);
       }
-      return `Uploaded ${path.basename(file)} (${step.text}) to ${step.target}.`;
+      return `Uploaded ${path.basename(file)}${isUploadPath(step.text) ? '' : ` (${step.text})`} to ${step.target}.`;
     }
     case 'click': {
       const target = await locate(page, step.target);
