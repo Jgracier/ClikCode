@@ -25,6 +25,14 @@ describe('apps listing', () => {
     expect(text).toContain('1 installed apps are not listed; pass query');
   });
 
+  it('lists a process once when two launcher entries match it', () => {
+    const twice = { structuredContent: { apps: [
+      app('Code', { pid: 7, running: true, bundle_id: 'com.microsoft.VSCode', windows: [window(5, 'Editor')] }),
+      app('Code', { pid: 7, running: true, bundle_id: 'code_code', windows: [window(5, 'Editor')] }),
+    ] } };
+    expect(summarizeApps(twice)!).toContain('1 running app(s) with a window');
+  });
+
   it('searches installed apps only when asked', () => {
     const text = summarizeApps(result, 'ink')!;
     expect(text).toContain('Inkscape [org.inkscape.Inkscape] (installed, not running)');
