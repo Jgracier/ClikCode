@@ -96,6 +96,22 @@ downloads, private keys and credential files (`id_rsa`, `*.pem`, `*.key`, `crede
 directory, or a file over 50 MB. The approval prompt shows the path being sent; permission rules for
 paths apply to it.
 
+### Dialogs
+A page's `alert`, `confirm`, `prompt` and "leave this page?" (`beforeunload`) boxes are watched for the
+whole life of the tab, not only during a click. Nothing is silently lost, and the safe answer is the default:
+- During a **click** (or a step), a box is declined and the result says what was asked
+  (`confirm: "Delete this token?" (declined)`); click again with `accept_dialog: true` to accept.
+- A box that arrives **at any other time** (a timer, Enter in a form, a page reaction) is **held**: the
+  page waits, the next result shows the question, and every other action answers with it until the
+  agent replies with `dialog`: `accept_dialog: true` accepts (for a `prompt`, `text` is the answer),
+  leaving it out dismisses. A held box nobody answers is dismissed after two minutes.
+- An `alert` has one button, so it is closed at once and mentioned in the next result.
+- `open` accepts a "leave this page?" box, since leaving was the request.
+- During actions that do not expect one (a sign-in, a key capture) a box is dismissed and reported.
+
+The process that owns Chrome also listens, so it does not dismiss a box before the worker's answer
+arrives (before this, an accepted confirm could still come out as "cancel").
+
 ## Getting an API key without the agent seeing it
 
 The agent signs in, sets the options, then makes one `capture_secret` call: the final

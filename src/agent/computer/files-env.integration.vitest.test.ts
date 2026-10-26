@@ -28,7 +28,7 @@ async function withSite<T>(handler: Parameters<typeof createServer>[1], use: (si
   } finally {
     server.close();
     await closeComputerBrowser(stateDir);
-    await rm(stateDir, { recursive: true, force: true });
+    await rm(stateDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
     await rm(cwd, { recursive: true, force: true });
   }
 }
@@ -95,5 +95,64 @@ it.skipIf(!enabled)('uploads a workspace file by path and refuses a dotfile', as
     const refused = await run({ action: 'upload', target: ref, text: join(cwd, '.env') });
     expect(refused.isError).toBe(true);
     expect(refused.output).toMatch(/hidden/);
+  });
+}, 60_000);
+
+const dialogPage = (script: string): string => `<title>start</title><button id="b" onclick="document.title = confirm('Delete everything?') ? 'deleted' : 'kept'">Delete</button><script>${script}</script>`;
+
+it.skipIf(!enabled)('holds a dialog that arrives between actions, shows it, and answers it', async () => {
+  await withSite((_request, response) => {
+    response.setHeader('Content-Type', 'text/html');
+    response.end(`<title>start</title><button onclick="setTimeout(() => { document.title = confirm('Send the report?') ? 'sent' : 'not sent'; }, 1000)">Later</button>
+      <button onclick="setTimeout(() => { document.title += '/' + (prompt('Name?', 'anon') ?? 'null'); }, 1000)">Ask</button>`);
+  }, async ({ run, base, stateDir }) => {
+    const { computerPage } = await import('./browser.js');
+    await run({ action: 'open', url: `${base}/` });
+    await run({ action: 'click', target: 'Later' });
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    // Anything else is told about the waiting box instead of hanging on the blocked page.
+    const waiting = await run({ action: 'observe' });
+    expect(waiting.output).toContain('confirm box: "Send the report?"');
+    expect(waiting.output).toContain('dialog action');
+    const accepted = await run({ action: 'dialog', accept_dialog: true });
+    expect(accepted.output).toContain('accepted');
+    const page = await computerPage(stateDir);
+    expect(await page.title()).toBe('sent');
+    await run({ action: 'click', target: 'Ask' });
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    expect((await run({ action: 'observe' })).output).toMatch(/prompt box: "Name\?" \(default answer "anon"\)/);
+    expect((await run({ action: 'dialog', accept_dialog: true, text: 'Ada' })).output).toContain('accepted');
+    expect(await page.title()).toBe('sent/Ada');
+    expect((await run({ action: 'dialog' })).output).toContain('No dialog is waiting');
+  });
+}, 60_000);
+
+it.skipIf(!enabled)('declines a confirm during a click and reports it; accepts when told', async () => {
+  await withSite((_request, response) => {
+    response.setHeader('Content-Type', 'text/html');
+    response.end(dialogPage(''));
+  }, async ({ run, base, stateDir }) => {
+    const { computerPage } = await import('./browser.js');
+    await run({ action: 'open', url: `${base}/` });
+    const declined = await run({ action: 'click', target: 'Delete' });
+    expect(declined.output).toContain('confirm: "Delete everything?" (declined)');
+    expect(await (await computerPage(stateDir)).title()).toBe('kept');
+    const accepted = await run({ action: 'click', target: 'Delete', accept_dialog: true });
+    expect(accepted.output).toContain('(accepted)');
+    expect(await (await computerPage(stateDir)).title()).toBe('deleted');
+  });
+}, 60_000);
+
+it.skipIf(!enabled)('reports an alert and leaves a page that asks "leave this page?"', async () => {
+  await withSite((request, response) => {
+    response.setHeader('Content-Type', 'text/html');
+    response.end(request.url === '/next' ? '<h1>Next page</h1>' : '<button id="b" onclick="addEventListener(\'beforeunload\', e => { e.preventDefault(); e.returnValue = \'x\'; }); alert(\'Saved\')">Arm</button>');
+  }, async ({ run, base }) => {
+    await run({ action: 'open', url: `${base}/` });
+    const armed = await run({ action: 'click', target: 'Arm' });
+    expect(armed.output).toContain('alert: "Saved"');
+    const left = await run({ action: 'open', url: `${base}/next` });
+    expect(left.isError).toBeUndefined();
+    expect(left.output).toContain('Next page');
   });
 }, 60_000);
