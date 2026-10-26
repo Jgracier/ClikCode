@@ -143,6 +143,17 @@ whole life of the tab, not only during a click. Nothing is silently lost, and th
 The process that owns Chrome also listens, so it does not dismiss a box before the worker's answer
 arrives (before this, an accepted confirm could still come out as "cancel").
 
+### HTTP sign-in (the browser's own username/password box)
+A site behind HTTP Basic or Digest authentication (a 401 with `WWW-Authenticate`) shows the browser's
+own box, which no page action can fill. `open` with `http_auth: true` (or `http_auth: "<username or
+email>"` to choose between saved logins), or `auth` (`url` = the site, default the open page, then it
+reloads), answers the challenge from the **saved login for that origin** in the encrypted vault. With no
+saved login the user is asked once, privately, and it is kept. It works through the DevTools protocol
+(`Fetch.authRequired`), because Playwright's `httpCredentials` cannot be set on a browser that is
+already running. The credentials are used for that origin only, never for a proxy, sent once per request
+(a wrong password is not retried in a loop), and never appear in a result. https sites only, like the
+vault. `auth` with `clear: true` turns it off for the tab.
+
 ## Getting an API key without the agent seeing it
 
 The agent signs in, sets the options, then makes one `capture_secret` call: the final

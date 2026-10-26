@@ -27,7 +27,8 @@ import { profileLoginAnswers } from '../computer/profile-login.js';
 import { Parked, park } from '../computer/parking.js';
 import { hideKeyLikeText } from '../computer/secret-finder.js';
 import { answerDialog, bindDialogs, dialogNote, hasPendingDialog, pendingDialogNote, settleWaitingDialog, withDialogNotices, withDialogs } from '../computer/page-dialogs.js';
-import { FILES_ENV_ACTIONS, FILES_ENV_HELP, FILES_ENV_PARAMETERS, type FilesEnvAction, type FilesEnvArgs } from '../computer/files-env-schema.js';
+import { FILES_ENV_ACTIONS, FILES_ENV_HELP, FILES_ENV_PARAMETERS, filesEnvLabel, type FilesEnvAction, type FilesEnvArgs } from '../computer/files-env-schema.js';
+import { applyHttpAuth, clearHttpAuth } from '../computer/files-env-actions.js';
 import { approvedUploadPath, isUploadPath } from '../computer/upload-files.js';
 import { bindDownloads, describeDownloads, downloadNotes } from '../computer/downloads.js';
 import { SEND_TO_HELP, SEND_TO_SCHEMA } from './store-secret.js';
@@ -375,8 +376,7 @@ export const computerWebTool = defineTool<WebArgs>({
       case 'handoff': return 'Hand off to phone';
       case 'capture_secret': return `Capture key${args.secret_name ? ` as ${args.secret_name}` : ''}`;
       case 'close': return 'Close browser';
-      case 'downloads': return 'List downloads';
-      default: return `Web ${args.action}`;
+      default: return filesEnvLabel(args) ?? `Web ${args.action}`;
     }
   },
   paths: (args) => uploadPaths(args),
@@ -1003,6 +1003,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
   }
   switch (args.action) {
     case 'open': {
+      const authNote = args.http_auth ? await applyHttpAuth(page, webAddress(args.url), args, ctx) : undefined;
       // An address that is a file download does not navigate: the file is saved and reported instead.
       // Leaving the page was asked for, so a "leave this page?" box is accepted.
       const { result: isDownload } = await withDialogs(page, true, () => withNetworkRetry(() => page.goto(webAddress(args.url), { waitUntil: 'domcontentloaded', timeout: 30_000 })).then(() => false, error => { if (error instanceof Error && /Download is starting/i.test(error.message)) return true; throw error; }), 0);
@@ -1014,7 +1015,17 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       const notes = await readSiteNotes(ctx.stateDir, new URL(page.url()).hostname).catch(() => '');
       const recipes = await listRecipesFor(ctx.stateDir, page.url());
       const withNotes = notes ? { ...seen, output: `Notes from earlier on this site:\n${notes}\n\n${seen.output}` } : seen;
-      return recipes ? { ...withNotes, output: `${recipes}\n\n${withNotes.output}` } : withNotes;
+      const withAuth = authNote ? { ...withNotes, output: `${authNote}\n\n${withNotes.output}` } : withNotes;
+      return recipes ? { ...withAuth, output: `${recipes}\n\n${withAuth.output}` } : withAuth;
+    }
+    case 'auth': {
+      if (args.clear) return { output: await clearHttpAuth(page) };
+      // Sign-in for the named site (or the open page's), then the page is loaded again with it.
+      if (args.url) return act(page, { ...args, action: 'open', http_auth: args.http_auth || args.label || true }, ctx);
+      const note = await applyHttpAuth(page, page.url(), args, ctx);
+      await withNetworkRetry(() => page.reload({ waitUntil: 'domcontentloaded', timeout: 30_000 }));
+      await settle(page);
+      return { output: `${note}\n\n${(await observeComputerPage(page, false)).output}` };
     }
     case 'notes': {
       const host = args.host?.trim() || new URL(page.url()).hostname;
