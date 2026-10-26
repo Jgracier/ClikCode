@@ -156,3 +156,42 @@ it.skipIf(!enabled)('reports an alert and leaves a page that asks "leave this pa
     expect(left.output).toContain('Next page');
   });
 }, 60_000);
+
+it.skipIf(!enabled)('answers HTTP Basic and Digest challenges for its origin only, once per request', async () => {
+  const { createHash } = await import('node:crypto');
+  const md5 = (text: string): string => createHash('md5').update(text).digest('hex');
+  const seen: string[] = [];
+  await withSite((request, response) => {
+    const header = request.headers.authorization ?? '';
+    seen.push(`${request.url} ${header.split(' ')[0] || 'none'}`);
+    if (request.url?.startsWith('/basic')) {
+      if (header === `Basic ${Buffer.from('ada:s3cret').toString('base64')}`) { response.setHeader('Content-Type', 'text/html'); response.end('<h1>Basic welcome</h1>'); return; }
+      response.writeHead(401, { 'WWW-Authenticate': 'Basic realm="files"' }); response.end('no'); return;
+    }
+    if (request.url?.startsWith('/digest')) {
+      const fields = Object.fromEntries([...header.matchAll(/(\w+)=(?:"([^"]*)"|([^,\s]+))/g)].map(match => [match[1], match[2] ?? match[3]]));
+      const expected = fields.username === 'ada' && fields.nonce === 'abc123' && fields.response === md5(`${md5('ada:files:s3cret')}:abc123:${fields.nc}:${fields.cnonce}:auth:${md5(`GET:${fields.uri}`)}`);
+      if (header.startsWith('Digest') && expected) { response.setHeader('Content-Type', 'text/html'); response.end('<h1>Digest welcome</h1>'); return; }
+      response.writeHead(401, { 'WWW-Authenticate': 'Digest realm="files", qop="auth", nonce="abc123", algorithm=MD5' }); response.end('no'); return;
+    }
+    response.setHeader('Content-Type', 'text/html'); response.end('<h1>Public</h1>');
+  }, async ({ base, stateDir }) => {
+    const { openComputerPage } = await import('./browser.js');
+    const { enableHttpAuth, disableHttpAuth } = await import('./http-auth.js');
+    const page = await openComputerPage(stateDir);
+    await enableHttpAuth(page, base, { username: 'ada', password: 's3cret' });
+    await page.goto(`${base}/basic`);
+    expect(await page.locator('h1').innerText()).toBe('Basic welcome');
+    await page.goto(`${base}/digest`);
+    expect(await page.locator('h1').innerText()).toBe('Digest welcome');
+    await page.goto(`${base}/public`);
+    expect(await page.locator('h1').innerText()).toBe('Public');
+    // A wrong password is sent once, not in a loop.
+    await enableHttpAuth(page, base, { username: 'ada', password: 'wrong' });
+    seen.length = 0;
+    await page.goto(`${base}/basic`);
+    expect(seen.filter(line => line.startsWith('/basic Basic')).length).toBe(1);
+    expect(await disableHttpAuth(page)).toBe(true);
+    expect(await disableHttpAuth(page)).toBe(false);
+  });
+}, 60_000);
