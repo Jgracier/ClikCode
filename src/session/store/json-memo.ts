@@ -18,6 +18,7 @@
  * file's version (a deleted entry stays deleted). Entries are merged whole --
  * mixing the fields of two writers' entries could pair one's fingerprint with
  * the other's result. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileIdentity } from './cached-file.js';
@@ -79,14 +80,14 @@ export function jsonMemo<T>(relativePath: string, empty: () => T, accept: (parse
   };
   const readAt = async (path: string | undefined): Promise<T | undefined> => {
     if (!path) return undefined;
-    const raw = await readFile(path, 'utf8').catch(() => undefined);
+    const raw = await readFile(path, 'utf8').catch(quiet('session/store/json-memo'));
     return raw === undefined ? undefined : parse(raw);
   };
   const identityOf = (path: string): Promise<string | undefined> => stat(path).then(fileIdentity, () => undefined);
   /** The file now, twice parsed: one copy to merge from, one to keep as base. */
   const snapshot = async (path: string | undefined): Promise<{ theirs: T; base: T; identity: string | undefined }> => {
     const identity = path ? await identityOf(path) : undefined;
-    const raw = identity && path ? await readFile(path, 'utf8').catch(() => undefined) : undefined;
+    const raw = identity && path ? await readFile(path, 'utf8').catch(quiet('session/store/json-memo')) : undefined;
     const read = () => (raw === undefined ? undefined : parse(raw)) ?? empty();
     return { theirs: read(), base: read(), identity };
   };

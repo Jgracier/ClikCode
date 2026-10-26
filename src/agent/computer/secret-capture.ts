@@ -5,6 +5,7 @@
  * Copy button, read a file the site hands over, or recognise the key on the page.
  * Only when none of that is clear does a person step in, by pasting into the private
  * prompt. Every failure says "Not saved" and why; nothing is ever saved half-way. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import type { Page } from 'playwright-core';
 import { namedSecretNames, readNamedSecret, saveNamedSecret } from './credential-vault.js';
 import { copyWithSiteButton, listenForCopies, copiedSince, plausibleCopy, readClipboard } from './clipboard-watch.js';
@@ -50,7 +51,7 @@ export async function captureSecret(input: {
     let value: string | undefined;
     let via = 'the page';
     // A target that is itself key-shaped text is the key: nothing needs clicking.
-    const own = input.paste ? undefined : (await input.readTarget?.().catch(() => undefined))?.trim();
+    const own = input.paste ? undefined : (await input.readTarget?.().catch(quiet('agent/computer/secret-capture')))?.trim();
     if (own && (keyShaped(own) || shortKeyText(own))) { value = own; via = 'the text of the target itself'; }
     else if (input.trigger) { clicked = true; await input.trigger(); }
     let ambiguous = false;
@@ -97,7 +98,7 @@ export async function captureSecret(input: {
     // A second value that equals one already saved under another name is the first value again (an
     // access key id taken twice for a pair), never a new secret.
     for (const other of await namedSecretNames(input.stateDir)) {
-      if (other.toLowerCase() !== input.name.toLowerCase() && await readNamedSecret(input.stateDir, other).catch(() => undefined) === value) {
+      if (other.toLowerCase() !== input.name.toLowerCase() && await readNamedSecret(input.stateDir, other).catch(quiet('agent/computer/secret-capture')) === value) {
         throw new LoginError(`Not saved: this is the same value already saved as "${other}", not a different secret. Press the Copy button for the other value, or paste it.`);
       }
     }

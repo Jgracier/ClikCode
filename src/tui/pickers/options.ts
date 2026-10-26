@@ -1,5 +1,6 @@
 /** Choosing among a harness's own declared options. */
 
+import { quiet } from '../../runtime/lifecycle-log.js';
 import chalk from 'chalk';
 import { vendorFacingOptions } from '../../harness/options.js';
 import { discoverHermesChoices } from '../../harness/accounts/hermes-discovery.js';
@@ -27,7 +28,7 @@ async function harnessOptionPickerOnce(rl: HarnessPrompter, id: string): Promise
   if (!harness) throw new Error('Choose a provider first.');
   const manifest = localHarnessCapabilityManifest(harness);
   const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
-  const discovered = harness.command === 'hermes' ? await discoverHermesChoices(harness, account).catch(() => undefined) : undefined;
+  const discovered = harness.command === 'hermes' ? await discoverHermesChoices(harness, account).catch(quiet('tui/pickers/options')) : undefined;
   const options = manifest.options.map((item) => {
     if (!discovered) return item;
     if (item.id === 'toolsets' && discovered.toolsets.length) return { ...item, values: discovered.toolsets };

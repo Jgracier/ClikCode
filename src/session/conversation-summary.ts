@@ -10,6 +10,7 @@
  * Codex's compactions are encrypted for OpenAI's own servers
  * (`encrypted_content`, an empty `message`): only Codex can read them, so
  * there is nothing here to carry. */
+import { quiet } from '../runtime/lifecycle-log.js';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -271,7 +272,7 @@ export async function conversationSummary(session: HarnessSession, record: Canon
   for (const thread of threads) {
     const reader = THREAD_READERS[thread.harness];
     if (!reader || !sources.threadFile) continue;
-    const located = await sources.threadFile(thread).catch(() => undefined);
+    const located = await sources.threadFile(thread).catch(quiet('session/conversation-summary'));
     // A store that keeps a session as a directory names the file it is in.
     const file = located && reader.file && await fs.stat(located).then((stat) => stat.isDirectory(), () => false) ? path.join(located, reader.file) : located;
     const text = file ? await readText(file) : undefined;

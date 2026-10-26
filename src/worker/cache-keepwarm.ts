@@ -15,7 +15,7 @@
 import { randomUUID } from 'node:crypto';
 import { readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { diagnostic, lifecycle } from '../runtime/lifecycle-log.js';
+import { diagnostic, lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import { locateNativeSessionFile } from '../session/discovery/registry.js';
@@ -120,7 +120,7 @@ export function createKeepWarm(deps: {
     async turnEnded(lastHarness) {
       if (lastHarness !== 'claude') { stop(); return; }
       const current = ++revision;
-      const session = await (deps.readSession?.() ?? readState({ transcripts: [] }).then((state) => state.sessions.find((item) => item.id === deps.sessionId))).catch(() => undefined);
+      const session = await (deps.readSession?.() ?? readState({ transcripts: [] }).then((state) => state.sessions.find((item) => item.id === deps.sessionId))).catch(quiet('worker/cache-keepwarm'));
       if (current !== revision) return;
       if (!keepsWarm(session)) { stop(); return; }
       const starting = lastTurnAt === undefined;

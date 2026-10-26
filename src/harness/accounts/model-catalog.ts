@@ -2,6 +2,7 @@
  * itself -- its CLI, its config, or its own bundled table -- and cached only
  * for as long as what it was derived from stays the same. */
 
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readFile, stat } from 'node:fs/promises';
@@ -277,7 +278,7 @@ export function warmNativeModelCatalog(
   account?: AiHarnessAccount,
 ): void {
   if (!harness) return;
-  void nativeModelCatalog(harness, account).catch(() => undefined);
+  void nativeModelCatalog(harness, account).catch(quiet('harness/accounts/model-catalog'));
 }
 
 /** The model list for a picker that is about to open.
@@ -296,14 +297,14 @@ export async function nativeModelCatalogForPicker(
   const cached = await cachedCatalog(harness, account, { allowStale: true });
   if (cached) {
     if (serverModelList(harness) && !(await cachedCatalog(harness, account))) {
-      nativeModelCatalog(harness, account).catch(() => undefined);
+      nativeModelCatalog(harness, account).catch(quiet('harness/accounts/model-catalog'));
     }
     return cached;
   }
   const fallback = defaultModelCatalogFallback(harness, account);
   // The discovery promise is never abandoned, only outrun: it keeps going and
   // populates the cache whether or not this picker still cares.
-  const discovery = nativeModelCatalog(harness, account).catch(() => undefined);
+  const discovery = nativeModelCatalog(harness, account).catch(quiet('harness/accounts/model-catalog'));
   let timer: NodeJS.Timeout | undefined;
   const deadline = new Promise<undefined>((resolve) => {
     timer = setTimeout(() => resolve(undefined), waitMs);
@@ -410,7 +411,7 @@ async function rememberCatalog(
   memo.changed();
   await memo.save();
   if (account?.id && result.models.length) {
-    syncAccountModels(account.id, result.models).catch(() => undefined);
+    syncAccountModels(account.id, result.models).catch(quiet('harness/accounts/model-catalog'));
   }
 }
 
@@ -559,7 +560,7 @@ const VENDOR_MODEL_DISCOVERY: Readonly<Record<NonNullable<AiLocalHarnessDefiniti
   // --json`'s `default` plus `provider` (`{"default":"gpt-6-astra","provider":"openai-codex",...}`).
   'hermes-inventory': async ({ harness, account, profileRoot, state: d }) => {
     const environment = nativeProfileEnvironment(account?.nativeProfile);
-    const inventory = await discoverHermesModels(harness, account).catch(() => undefined);
+    const inventory = await discoverHermesModels(harness, account).catch(quiet('harness/accounts/model-catalog'));
     if (inventory) {
       adoptInventory(d, inventory);
     } else if (profileRoot) {
@@ -577,12 +578,12 @@ const VENDOR_MODEL_DISCOVERY: Readonly<Record<NonNullable<AiLocalHarnessDefiniti
     } catch { /* Keep account models. A missing config is not an empty catalog. */ }
   },
   'openclaw-inventory': async ({ harness, account, state: d }) => {
-    const inventory = await discoverOpenClawModels(harness, account).catch(() => undefined);
+    const inventory = await discoverOpenClawModels(harness, account).catch(quiet('harness/accounts/model-catalog'));
     if (inventory) adoptInventory(d, inventory);
   },
   // Aider: the models of each provider it has a key for (aider-discovery.ts).
   'aider-providers': async ({ harness, account, state: d }) => {
-    const found = await discoverAiderModels(harness, nativeAccountEnvironment(harness, account)).catch(() => undefined);
+    const found = await discoverAiderModels(harness, nativeAccountEnvironment(harness, account)).catch(quiet('harness/accounts/model-catalog'));
     if (!found) return;
     found.models.forEach((model) => d.models.add(model));
     d.labels = { ...d.labels, ...found.labels };
@@ -594,7 +595,7 @@ const VENDOR_MODEL_DISCOVERY: Readonly<Record<NonNullable<AiLocalHarnessDefiniti
   // has no `copilot models` command (github/copilot-cli#700, #1356, #236), so
   // no hardcoded list stands in for them.
   'copilot-server': async ({ account, state: d }) => {
-    const own = await copilotAccountModels(nativeProfileEnvironment(account?.nativeProfile)).catch(() => undefined);
+    const own = await copilotAccountModels(nativeProfileEnvironment(account?.nativeProfile)).catch(quiet('harness/accounts/model-catalog'));
     const listed = own ?? modelsDevProvider(await modelsDevCache(), 'github-copilot');
     // The account's own list is the whole truth; ids remembered from the
     // public catalog would offer models this plan refuses.
@@ -606,7 +607,7 @@ const VENDOR_MODEL_DISCOVERY: Readonly<Record<NonNullable<AiLocalHarnessDefiniti
   // provider that is another agent CLI (claude-code) lists that harness's own
   // models, so its sign-in carries over with nothing more to do.
   'goose-providers': async ({ harness, account, state: d }) => {
-    const providers = await discoverGooseProviders(harness, nativeProfileEnvironment(account?.nativeProfile)).catch(() => undefined);
+    const providers = await discoverGooseProviders(harness, nativeProfileEnvironment(account?.nativeProfile)).catch(quiet('harness/accounts/model-catalog'));
     if (!providers) return;
     const modelsDev = await modelsDevCache();
     const labels = { ...d.labels };
@@ -614,7 +615,7 @@ const VENDOR_MODEL_DISCOVERY: Readonly<Record<NonNullable<AiLocalHarnessDefiniti
       const drivenCommand = GOOSE_DRIVEN_HARNESSES[provider.id];
       const drivenHarness = drivenCommand ? localHarnessForCommand(drivenCommand) : undefined;
       if (drivenHarness) {
-        const driven = await nativeModelCatalog(drivenHarness).catch(() => undefined);
+        const driven = await nativeModelCatalog(drivenHarness).catch(quiet('harness/accounts/model-catalog'));
         for (const model of driven?.models ?? []) {
           d.models.add(`${provider.id}/${model}`);
           const name = driven?.labels?.[model];
@@ -673,7 +674,7 @@ async function nativeModelCatalogUncached(
         const session = await acpDiscoverySession(request);
         const efforts = harness.acp?.effortConfigId ? acpConfigOptionValues(session, harness.acp.effortConfigId) : [];
         return { ...acpSessionModels(session), ...(efforts.length ? { efforts } : {}) };
-      }, undefined, { discovery: harness }).catch(() => undefined);
+      }, undefined, { discovery: harness }).catch(quiet('harness/accounts/model-catalog'));
     if (listed?.models.length) {
       // A declared ACP model list is authoritative for ACP sessions. Keeping
       // persisted CLI ids alongside it can select an id this transport does

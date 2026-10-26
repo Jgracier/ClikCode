@@ -22,7 +22,7 @@ import { McpClient, type McpCallResult, type McpToolInfo } from './client.js';
 import { loadMcpServers, type McpServerSpec } from './config.js';
 import { carriesCredentials } from '../../harness/mcp-sign-in.js';
 import { importNotice, importVendorMcpServers } from './import.js';
-import { diagnostic, lifecycle } from '../../runtime/lifecycle-log.js';
+import { diagnostic, lifecycle, quiet } from '../../runtime/lifecycle-log.js';
 import { enabledPluginMcpServers } from '../plugins.js';
 import { isMcpSignInRequired, mcpOAuthProvider, mcpSignInNote, type McpAuth } from './oauth.js';
 import { mcpResourceTools, type McpResourceSource } from './resources.js';
@@ -172,7 +172,7 @@ export class McpManager {
     const wasUp = Boolean(client);
     state.client = undefined;
     state.tools = undefined;
-    await client?.close().catch(() => undefined);
+    await client?.close().catch(quiet('agent/mcp/manager'));
     if (wasUp) lifecycle('mcp.stop', { server: state.spec.name, reason: state.retired ? 'removed' : 'stopped' });
   }
 
@@ -215,7 +215,7 @@ export class McpManager {
         // Shut down while it was starting: nothing owns it any more, and the
         // exit hook that would have killed it is gone -- close it now.
         state.starting = undefined;
-        if (state.retired) { await client.close().catch(() => undefined); return; }
+        if (state.retired) { await client.close().catch(quiet('agent/mcp/manager')); return; }
         state.client = client;
       }
       state.stale = false;
@@ -368,7 +368,7 @@ async function sharedToolset(stateDir: string): Promise<McpToolset> {
  * is reported by the turn that wanted it, as before. */
 export function prepareMcp(stateDir: string, builtins: readonly McpServerSpec[] = []): void {
   builtinServers = builtins;
-  void sharedToolset(stateDir).catch(() => undefined);
+  void sharedToolset(stateDir).catch(quiet('agent/mcp/manager'));
 }
 
 /** Stop every server this process started: the conversation left the agent

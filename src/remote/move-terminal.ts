@@ -8,6 +8,7 @@
  * does not answer is listed as offline and moves nothing. Choosing one from
  * the tailnet adds it first: which user to log in as, then
  * the install. */
+import { quiet } from '../runtime/lifecycle-log.js';
 import Conf from 'conf';
 import type { HarnessPrompter, PickerOption } from '../harness/prompter.js';
 import type { ChatMovedTo } from '../session/model.js';
@@ -182,7 +183,7 @@ export async function moveTerminalChat(
   startBridge?: RemoteBridgeStarter,
 ): Promise<Here | undefined> {
   const current = 'local' in here ? 'local' : here.remote.machineId;
-  const links = (await readMachines()).some((machine) => machine.ready) ? await holdWindowMachines().catch(() => undefined) : undefined;
+  const links = (await readMachines()).some((machine) => machine.ready) ? await holdWindowMachines().catch(quiet('remote/move-terminal')) : undefined;
   let bridge: TerminalBridge | undefined;
   let channel: LinkChannel | undefined;
   try {
@@ -195,7 +196,7 @@ export async function moveTerminalChat(
       return { local: await newConversation(sessionId) };
     }
     if (!choice.machine) return { local: (await moveChat(source, localMoveEnd(), sessionId)).sessionId };
-    channel = await links?.channel(choice.machine.id).catch(() => undefined);
+    channel = await links?.channel(choice.machine.id).catch(quiet('remote/move-terminal'));
     if (!channel) {
       bridge = new TerminalBridge(choice.machine.sshTarget, startBridge);
       await bridge.connected();
@@ -224,9 +225,9 @@ export type MachineReach = (machineId: string) => Promise<boolean>;
 /** Over the window's connection to it (the board's): it answers once a chat
  * channel opens on it -- one still connecting is waited for. */
 const windowReach: MachineReach = async (machineId) => {
-  const links = await holdWindowMachines().catch(() => undefined);
+  const links = await holdWindowMachines().catch(quiet('remote/move-terminal'));
   try {
-    const channel = await links?.channel(machineId).catch(() => undefined);
+    const channel = await links?.channel(machineId).catch(quiet('remote/move-terminal'));
     channel?.close();
     return Boolean(channel);
   } finally { links?.release(); }

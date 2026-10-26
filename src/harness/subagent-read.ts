@@ -5,6 +5,7 @@
  * written where the vendor gives a client the means (a Claude sub-agent's
  * transcript on disk, a Codex child thread, the live `parentId` frames);
  * nothing is read from anywhere else. */
+import { quiet } from '../runtime/lifecycle-log.js';
 import { readFile, readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -108,7 +109,7 @@ export async function findClaudeSubagent(workspace: string, sessionId: string, p
   for (const dir of claudeSubagentDirs(workspace, sessionId, profile)) {
     const names = await readdir(dir).catch(() => [] as string[]);
     for (const name of names.filter((entry) => entry.endsWith('.meta.json'))) {
-      const meta = record(await readFile(join(dir, name), 'utf8').then(JSON.parse).catch(() => undefined));
+      const meta = record(await readFile(join(dir, name), 'utf8').then(JSON.parse).catch(quiet('harness/subagent-read')));
       if (meta?.toolUseId !== parentCallId) continue;
       const stem = name.slice(0, -'.meta.json'.length);
       return {
@@ -124,7 +125,7 @@ export async function findClaudeSubagent(workspace: string, sessionId: string, p
 /** The rows of a Claude Code sub-agent, from the transcript on disk. */
 export async function readClaudeSubagent(workspace: string, sessionId: string, parentCallId: string, profile?: string): Promise<{ agentId: string; rows: SubAgentRow[] } | undefined> {
   const found = await findClaudeSubagent(workspace, sessionId, parentCallId, profile);
-  const text = found ? await readFile(found.file, 'utf8').catch(() => undefined) : undefined;
+  const text = found ? await readFile(found.file, 'utf8').catch(quiet('harness/subagent-read')) : undefined;
   return found && text !== undefined ? { agentId: found.agentId, rows: claudeTranscriptRows(text) } : undefined;
 }
 

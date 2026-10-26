@@ -14,7 +14,7 @@ import {
   ensureLocalModel, releaseLocalModel, releaseLocalModelsOnExit, type LocalModelEndpoint, type LocalModelProgress,
 } from '../../local-models/index.js';
 import type { LocalModelHooks } from '../../agent/models/for-session.js';
-import { diagnostic } from '../../runtime/lifecycle-log.js';
+import { diagnostic, quiet } from '../../runtime/lifecycle-log.js';
 import type { HarnessSession } from '../../session/model.js';
 import { TERMINAL } from '../../tui/active-terminal.js';
 
@@ -126,7 +126,7 @@ export async function localModelChosen(sessionId: string, modelId: string): Prom
  * route, or no longer the conversation this terminal shows. */
 export async function releaseHeldLocalModel(sessionId: string): Promise<void> {
   if (!held.delete(sessionId)) return;
-  await releaseLocalModel(sessionId).catch(() => undefined);
+  await releaseLocalModel(sessionId).catch(quiet('commands/ai/local-model'));
 }
 
 /** The interactive loop's rule, applied on every pass: this terminal holds

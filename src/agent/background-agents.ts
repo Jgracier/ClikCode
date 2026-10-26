@@ -13,6 +13,7 @@
  * stopped gracefully so its work is committed to its branch (subagent.ts).
  * A result that finishes while no turn runs is queued as a notification, and
  * the worker starts a follow-up turn to deliver it. */
+import { quiet } from '../runtime/lifecycle-log.js';
 import type { ToolRunResult } from './tool-contract.js';
 import type { HarnessSessionState } from './session-state.js';
 import { queueShellNotification } from './session-state.js';
@@ -83,7 +84,7 @@ export class BackgroundAgents {
     };
     const onSteerReady: SteerReady = (handler) => {
       agent.steer = handler;
-      if (handler) for (const text of agent.pending.splice(0)) void handler(text).catch(() => undefined);
+      if (handler) for (const text of agent.pending.splice(0)) void handler(text).catch(quiet('agent/background-agents'));
     };
     agent.done = run(onSteerReady, agent.stop.signal, started).then(
       (result) => { agent.result = result; },

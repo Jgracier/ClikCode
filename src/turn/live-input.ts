@@ -1,3 +1,4 @@
+import { quiet } from '../runtime/lifecycle-log.js';
 import { randomUUID } from 'node:crypto';
 
 export interface LiveTurnSubmission {
@@ -195,7 +196,7 @@ export class LiveTurnInputBroker {
       let resolveQueued!: () => void;
       let rejectQueued!: (error: unknown) => void;
       const queued = new Promise<void>((resolve, reject) => { resolveQueued = resolve; rejectQueued = reject; });
-      queued.catch(() => undefined);
+      queued.catch(quiet('turn/live-input'));
       const hold: SteerHold = (withdraw, force) => { this.holds.set(id, withdraw); if (force) this.forces.set(id, force); signalHeld(); return queued; };
       const attempt = Promise.resolve().then(() => steer(text, submission, hold));
       let outcome: symbol | undefined;

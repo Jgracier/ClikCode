@@ -1,4 +1,5 @@
 /** Local encrypted login vault. Only opaque item ids cross the model boundary. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -318,7 +319,7 @@ export type VaultSnapshot = {
 
 export async function snapshotVault(stateDir: string): Promise<VaultSnapshot> {
   const items = await readItems(stateDir);
-  const key = await vaultKey(stateDir, false).catch(() => undefined);
+  const key = await vaultKey(stateDir, false).catch(quiet('agent/computer/credential-vault'));
   const secrets: VaultSnapshot['secrets'] = [];
   const dir = path.join(vaultDir(stateDir), 'secrets');
   for (const file of key ? await fs.readdir(dir).catch(() => [] as string[]) : []) {

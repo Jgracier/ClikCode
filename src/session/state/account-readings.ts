@@ -10,6 +10,7 @@
  * In memory nothing changes: `account.usage` and `account.usageCheckedAt` are where they were. An
  * older build still writes them into index.json; the newer of the two copies wins. */
 
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { join } from 'node:path';
 import type { AiHarnessAccount } from '../../harness/definition.js';
 import { cachedFile } from '../store/cached-file.js';
@@ -33,7 +34,7 @@ const EMPTY: Readings = {};
 
 export async function loadReadings(): Promise<Readings> {
   // fail-open-ok: a damaged readings file costs one usage probe per account, nothing else.
-  return (await readingsFile.load().catch(() => undefined)) ?? EMPTY;
+  return (await readingsFile.load().catch(quiet('session/state/account-readings'))) ?? EMPTY;
 }
 
 const time = (at: string | undefined): number => {

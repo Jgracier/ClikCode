@@ -3,6 +3,7 @@
  * accounts a harness runs as.
  */
 
+import { quiet } from '../runtime/lifecycle-log.js';
 import { randomUUID } from 'node:crypto';
 import { saveVersionMemo } from '../harness/transport/native/version-memo.js';
 import { mkdir } from 'node:fs/promises';
@@ -128,7 +129,7 @@ export function versionFromOutput(text: string): string | undefined {
 export async function aiDoctor(): Promise<void> {
   // One write for the whole sweep: every harness inspected here contributes a
   // version memo, and flushing per harness would be 24 writes for one answer.
-  const flush = async (): Promise<void> => { await saveVersionMemo().catch(() => undefined); };
+  const flush = async (): Promise<void> => { await saveVersionMemo().catch(quiet('commands/account')); };
   const harnesses = await Promise.all(builtInHarnesses().map(async (harness) => {
     const inspection = await inspectNativeHarness(harness);
     // The probe reports the first line of output; where that is noise rather
@@ -577,6 +578,6 @@ export async function aiAccountRemove(labelOrId: string, options: AccountRemoveO
   await writeState(state);
   // Its profile directory (its vendor credentials) goes too, only ever one
   // ClikCode created under its own profiles root.
-  const purged = await purgeAccountProfile(removed, state.accounts).catch(() => undefined);
+  const purged = await purgeAccountProfile(removed, state.accounts).catch(quiet('commands/account'));
   emitHarnessOutput({ panel: 'account-removed', account: removed.label, loggedOut, ...(purged ? { profileRemoved: purged } : {}) });
 }

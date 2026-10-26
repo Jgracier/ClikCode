@@ -15,6 +15,7 @@
  * is updated by itself. Policy 'ask' never updates by itself; the user
  * updates from /machine, the editor's machine list, or /update in one of
  * that machine's chats. */
+import { quiet } from '../runtime/lifecycle-log.js';
 import { CLIKCODE_COMMIT } from '../version.js';
 import { installOnMachine, type InstallOutcome, type InstallReporter, type RemoteInfo } from './install.js';
 import { readMachines, updateMachine, updatePolicy, type RemoteMachine } from './machines.js';
@@ -50,7 +51,7 @@ export async function updateRemoteMachine(machine: RemoteMachine, reporter: Inst
   await updateMachine(machine.id, (record) => {
     if (outcome.ok) installedRecord(record, outcome.info);
     else record.updateError = `${outcome.step}: ${outcome.message}`;
-  }).catch(() => undefined);
+  }).catch(quiet('remote/updates'));
   return outcome;
 }
 

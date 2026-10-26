@@ -3,6 +3,7 @@
  * saved recipe, call a pipeline tool, call onboard again). A screen or task it does not know is handed to an agent as a structured request
  * in the work item's note; a wall only a person clears (captcha, SMS or authenticator code, payment, identity, review) is reported blocked
  * with a full humanStep. It never solves a captcha, spends money, or prints a key, and every vendor has a step and time budget. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { scrubSecrets } from './secret-scrubber.js';
 import { IDENTITY_WALL } from './keygrab.js';
 import { BACKOFF_HOURS } from './keygrab-park.js';
@@ -252,7 +253,7 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
     if (!human) return handoff(`${stop.kind === 'unknown' ? 'an unrecognized screen' : stop.kind}: ${stop.message}`, stop);
     // A captcha ("confirm you are human") means the vendor is watching: do not come back for six hours. The end time goes in the attention item.
     let until: Date | undefined;
-    if (human.kind === 'captcha' && driver.recordBackoff) until = await driver.recordBackoff(id).catch(() => undefined);
+    if (human.kind === 'captcha' && driver.recordBackoff) until = await driver.recordBackoff(id).catch(quiet('agent/computer/connector-runner'));
     const note = until ? ` Backed off ${BACKOFF_HOURS} hours: the runner will not try ${id} again before ${until.toISOString()}.` : '';
     const out2 = await wall({ ...human, instructions: `${cap(human.instructions ?? '', 220)}${note}`.trim() }, false);
     return { ...out2, ...(resume ? { resume } : {}), ...(until ? { backoffUntil: until.toISOString() } : {}) };
@@ -382,7 +383,7 @@ export async function runConnectors(client: DeployClient, driver: BrowserDriver,
   options.log?.(`advanced ${batch.results.length} vendors by one step`);
   // One browser: browser work takes turns whatever the vendor parallelism.
   let tail: Promise<unknown> = Promise.resolve();
-  const gate = <T>(job: () => Promise<T>): Promise<T> => { const run = tail.then(job, job); tail = run.catch(() => undefined); return run; };
+  const gate = <T>(job: () => Promise<T>): Promise<T> => { const run = tail.then(job, job); tail = run.catch(quiet('agent/computer/connector-runner')); return run; };
   const outcomes: VendorOutcome[] = [];
   const queue = [...batch.results];
   const worker = async (): Promise<void> => {

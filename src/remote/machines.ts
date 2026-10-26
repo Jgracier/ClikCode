@@ -5,6 +5,7 @@
  * updated, forgotten, or reports its chats (kept as the offline cache).
  * Written with atomicWriteFile into a 0700 directory, the file 0600. It
  * holds no secrets -- an SSH target, names, versions and chat titles. */
+import { quiet } from '../runtime/lifecycle-log.js';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -114,7 +115,7 @@ export function updateMachines(
     await atomicWriteFile(machinesPath(), `${JSON.stringify(body, null, 2)}\n`, { ...(options.durable !== undefined ? { durable: options.durable } : {}) });
     return changed;
   });
-  writing = next.catch(() => undefined);
+  writing = next.catch(quiet('remote/machines'));
   return next;
 }
 

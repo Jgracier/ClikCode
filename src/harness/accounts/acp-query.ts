@@ -10,7 +10,7 @@ import { mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { discoveryCleanup } from './discovery-cleanup.js';
-import { lifecycle } from '../../runtime/lifecycle-log.js';
+import { lifecycle, quiet } from '../../runtime/lifecycle-log.js';
 import { stateDirectory } from '../../session/store/paths.js';
 import { resolveBinaryPath } from '../transport/native/binary.js';
 import { JsonRpcPeer } from '../transport/jsonrpc-peer.js';
@@ -44,7 +44,7 @@ export async function queryAcp<T>(
   const peer = new JsonRpcPeer(child, { label: `${binary} ACP`, detached, forwardParentSignals: false, onNotification: options.onNotification });
   const signal = options.signal;
   let closing: Promise<void> | undefined;
-  const close = (): Promise<void> => closing ??= peer.shutdown({ graceMs: 500, killMs: 1000 }).catch(() => undefined);
+  const close = (): Promise<void> => closing ??= peer.shutdown({ graceMs: 500, killMs: 1000 }).catch(quiet('harness/accounts/acp-query'));
   const abort = (): void => { void close(); };
   signal?.addEventListener('abort', abort, { once: true });
   const deadline = setTimeout(abort, timeoutMs);
@@ -81,7 +81,7 @@ export async function queryAcp<T>(
       }
     }
     await close();
-    await stopEscaped(tag).catch(() => undefined);
+    await stopEscaped(tag).catch(quiet('harness/accounts/acp-query'));
     for (const [id, cwd] of created) {
       try {
         if (!remove && options.discovery) remove = await discoveryCleanup(options.discovery, environment);

@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { isTurnCancelled, turnCancelledError } from '../agent/cancellation.js';
 import chalk from 'chalk';
 import { failureText } from '../harness/protocol/stderr-line.js';
-import { diagnostic, lifecycle } from '../runtime/lifecycle-log.js';
+import { diagnostic, lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { beginTurnClock, endTurnClock, markTurn } from '../runtime/turn-latency.js';
 import { isUsageExhaustedMessage } from '../turn/usage-exhausted.js';
 import { runSessionTurn } from '../turn/session-turn.js';
@@ -22,7 +22,7 @@ import type { WorkerContext } from './worker-context.js';
 type SubmitCommand = Extract<ClientCommand, { type: 'submit' }>;
 
 async function pendingSteerCount(sessionId: string): Promise<number> {
-  const state = await readState({ transcripts: [sessionId] }).catch(() => undefined);
+  const state = await readState({ transcripts: [sessionId] }).catch(quiet('worker/worker-turn'));
   return state?.sessions.find((entry) => entry.id === sessionId)?.pendingTurn?.steers?.length ?? 0;
 }
 
@@ -31,7 +31,7 @@ async function pendingSteerCount(sessionId: string): Promise<number> {
  * must not run it on its own as the next turn. It is taken off the queue and
  * its text is handed back to the composer, as a take-back does. */
 async function takeUnsentHeldSteers(sessionId: string): Promise<string[]> {
-  const state = await readState({ transcripts: [sessionId] }).catch(() => undefined);
+  const state = await readState({ transcripts: [sessionId] }).catch(quiet('worker/worker-turn'));
   const session = state?.sessions.find((entry) => entry.id === sessionId);
   const startedAt = session?.pendingTurn?.startedAt;
   if (!state || !session || !startedAt) return [];
@@ -127,11 +127,11 @@ export function createTurnRunner(ctx: WorkerContext) {
     await Promise.allSettled([...submissions]);
     // What background work this turn superseded did, now that the turn's own
     // save (which rewrites the transcript) is done.
-    await ctx.vendorBackground.saveSuperseded().catch(() => undefined);
+    await ctx.vendorBackground.saveSuperseded().catch(quiet('worker/worker-turn'));
     // The terminal event goes out whatever the read of the conversation did:
     // a window waits on it, and a worker that never sent it would hold the
     // turn open on every window for ever.
-    const ended = await currentSessionAndAccount().catch(() => undefined);
+    const ended = await currentSessionAndAccount().catch(quiet('worker/worker-turn'));
     ctx.turnRunning = false;
     ctx.turnStartedAt = undefined;
     // Not awaited: nothing may sit between the turn being over and its end being told (a message
@@ -142,7 +142,7 @@ export function createTurnRunner(ctx: WorkerContext) {
     observer.endTurn(ended?.session, ended?.account, turnOutcome === 'cancelled');
     lifecycle('worker.turn.end', { outcome: turnOutcome, ms: Date.now() - turnStarted });
     // Only a completed Claude Code turn refreshes its prompt cache window.
-    void ctx.keepWarm?.turnEnded(turnOutcome === 'completed' ? lastHarness : undefined).catch(() => undefined);
+    void ctx.keepWarm?.turnEnded(turnOutcome === 'completed' ? lastHarness : undefined).catch(quiet('worker/worker-turn'));
     endTurnClock(turnId);
     ctx.idle.vendorUsed();
     ctx.activeQueuedTurnId = undefined;
@@ -188,7 +188,7 @@ export function createTurnRunner(ctx: WorkerContext) {
     ctx.turnWorkDone = false;
     // A hard Stop ends the turn here even when what it waits on never answers.
     const forced = new Promise<never>((_, reject) => { ctx.forceStop = () => reject(turnCancelledError()); });
-    forced.catch(() => undefined);
+    forced.catch(quiet('worker/worker-turn'));
     // A Stop that arrived before this turn started: applied now, and the turn
     // ends through the ordinary cancelled path.
     const earlyStop = ctx.pendingCancel;
@@ -231,7 +231,7 @@ export function createTurnRunner(ctx: WorkerContext) {
         ...(command.queuedTurnId ? { queuedTurnId: command.queuedTurnId } : {}),
         ...(command.automatic ? { automatic: command.automatic } : {}),
       });
-      running.catch(() => undefined);
+      running.catch(quiet('worker/worker-turn'));
       await Promise.race([running, forced]);
     } catch (error) {
       const cancelled = isTurnCancelled(error);

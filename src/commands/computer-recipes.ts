@@ -1,3 +1,4 @@
+import { quiet } from '../runtime/lifecycle-log.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { emitResult } from '../cli/structured-output.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
@@ -62,7 +63,7 @@ export async function recipeDryRunCommand(host: string | undefined): Promise<voi
     if (isJsonDefaultMode()) emitResult({ dryRun: report }); else out(printDry(report));
     if (!report.ok) process.exitCode = 1;
   } finally {
-    await browser.closeComputerPage(stateDir, 'connectors').catch(() => undefined);
-    await browser.releaseComputerBrowser(stateDir).catch(() => undefined);
+    await browser.closeComputerPage(stateDir, 'connectors').catch(quiet('commands/computer-recipes'));
+    await browser.releaseComputerBrowser(stateDir).catch(quiet('commands/computer-recipes'));
   }
 }

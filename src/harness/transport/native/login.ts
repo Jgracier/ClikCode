@@ -3,7 +3,7 @@
  * withSignInScreen -- the CLI's, the VS Code panel's -- or, with none, plain
  * stdin/stdout (`clikcode accounts login` from a shell). */
 
-import { lifecycle } from '../../../runtime/lifecycle-log.js';
+import { lifecycle, quiet } from '../../../runtime/lifecycle-log.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createInterface } from 'node:readline/promises';
 import { runVendorSignIn, SEARCH_CHOICE, type SignInScreen, type SignInUi } from '../../../gateway/login/vendor-sign-in.js';
@@ -96,7 +96,7 @@ async function loginNativeHarnessInner(spec: NativeHarnessSpec, envOverrides: Re
       const instead = spec.loginAccountChoose
         ? await accountFirst(spec.displayName, spec.loginAccountChoose, screen, run, {
           prompt: `Or paste your ${spec.displayName} API key · Enter for other sign-ins`, others: true,
-          isKey: async (text) => keyCandidates(routes, text, keyProviders()).length > 0 && Boolean(await routeFor(spec, routes, text, screen.signal).catch(() => undefined)),
+          isKey: async (text) => keyCandidates(routes, text, keyProviders()).length > 0 && Boolean(await routeFor(spec, routes, text, screen.signal).catch(quiet('harness/transport/native/login'))),
         })
         : { key: undefined };
       if (instead) await run(await keyRoutedScreen(spec, routes, screen, keyProviders(), instead.key));
@@ -177,7 +177,7 @@ export async function accountFirst(
   });
   const done = await Promise.race([finished, pasted.then(() => false)]);
   if (done) { current++; return undefined; }
-  await finished.catch(() => undefined);
+  await finished.catch(quiet('harness/transport/native/login'));
   if (screen.signal.aborted) throw new Error(`sign-in to ${name} was cancelled`);
   return { key: instead ?? '' };
 }

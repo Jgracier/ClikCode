@@ -5,6 +5,7 @@
  * browser tool's read_email_code and open_email_link read mail through the API and return only the code or the link.
  * The token is read inside the worker and is never in a tool result.
  */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { createHash, randomBytes } from 'node:crypto';
 import http from 'node:http';
 import { claimMessage, isClaimed } from './email-consumed.js';
@@ -66,7 +67,7 @@ export async function startConsent(stateDir: string, options: { loginHint?: stri
   const state = b64u(randomBytes(16));
   let finish!: (value: { email: string }) => void, fail!: (error: Error) => void;
   const done = new Promise<{ email: string }>((resolve, reject) => { finish = resolve; fail = reject; });
-  done.catch(() => undefined);
+  done.catch(quiet('agent/computer/email-api'));
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
     if (url.pathname !== '/callback') { res.writeHead(404).end(); return; }

@@ -6,6 +6,7 @@
  * server into it. This file's `mcpServers` object is the user's, so a write
  * merges one entry and leaves everything else as it was.
  */
+import { quiet } from '../runtime/lifecycle-log.js';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { MCP_SERVERS_KEY, mcpConfigFilePath } from '../agent/mcp/config.js';
@@ -44,7 +45,7 @@ function nonEmpty(record: Readonly<Record<string, string>> | undefined): record 
 }
 
 async function readRoot(path: string): Promise<Record<string, unknown> | undefined> {
-  const existing = await readFile(path, 'utf8').catch(() => undefined);
+  const existing = await readFile(path, 'utf8').catch(quiet('harness/mcp-registry'));
   if (!existing?.trim()) return undefined;
   const parsed: unknown = JSON.parse(existing);
   // A file that is not an object is not something to merge into.

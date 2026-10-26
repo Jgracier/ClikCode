@@ -1,5 +1,6 @@
 /** Shell execution. Every command runs in its own process group so a timeout
  * or a cancelled turn takes the whole tree down, not just the shell. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { createWriteStream, existsSync, type WriteStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -218,16 +219,16 @@ export const bashTool = defineTool<BashArgs>({
     const timeoutMs = Math.min(Math.max(args.timeout_ms ?? BASH_DEFAULT_TIMEOUT_MS, 1), BASH_MAX_TIMEOUT_MS);
     const callName = (ctx.callId ?? `call-${Date.now()}`).replace(/[^A-Za-z0-9._-]/g, '_');
     const invocation = sandboxedInvocation(args, ctx);
-    const before = await snapshotBeforeShell(ctx.cwd).catch(() => undefined);
+    const before = await snapshotBeforeShell(ctx.cwd).catch(quiet('agent/tools/bash'));
     let result: ToolRunResult & { timedOut?: boolean };
     try {
       result = await runForeground(invocation, args.command, timeoutMs, path.join(toolOutputDir(ctx.stateDir, ctx.sessionId), `${callName}.log`), ctx);
     } catch (error) {
       // Stopped mid-command: what it changed so far is still this turn's.
-      if (before) await recordShellChanges(before, ctx).catch(() => undefined);
+      if (before) await recordShellChanges(before, ctx).catch(quiet('agent/tools/bash'));
       throw error;
     }
-    const changes = before ? await recordShellChanges(before, ctx).catch(() => undefined) : undefined;
+    const changes = before ? await recordShellChanges(before, ctx).catch(quiet('agent/tools/bash')) : undefined;
     const hint = invocation.sandboxed && result.isError && !result.timedOut ? sandboxDenialHint(result.output, invocation.writable) : undefined;
     const shown = withNote(withNote(withNote(result, invocation.notice), hint, 'after'), changes && describeShellChanges(changes), 'after');
     return changes?.diff.length ? { ...shown, diff: changes.diff } : shown;
@@ -258,7 +259,7 @@ function runForeground(invocation: { file: string; args: string[] }, invocationC
     let timedOut = false;
     let pending: Promise<void> = Promise.resolve();
     const onData = (chunk: string): void => {
-      pending = pending.then(() => output.push(chunk)).catch(() => undefined);
+      pending = pending.then(() => output.push(chunk)).catch(quiet('agent/tools/bash'));
       try { ctx.emitOutput?.(chunk); } catch { /* a UI fault must not break the command */ }
     };
     const timer = setTimeout(() => { timedOut = true; killTree(child, detached); }, timeoutMs);

@@ -1,4 +1,5 @@
 /** One persistent Chrome profile shared by ClikCode's terminal and editor workers. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { accessSync, constants as fsConstants } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -80,7 +81,7 @@ async function startHost(stateDir: string): Promise<Connected> {
         await pause(200);
       }
       throw new Error('ClikCode could not start its browser. Check that Chrome or Edge is installed and the desktop is available.');
-    } finally { await fs.unlink(lock).catch(() => undefined); }
+    } finally { await fs.unlink(lock).catch(quiet('agent/computer/browser')); }
   }
   for (let attempt = 0; attempt < 110; attempt++) {
     const result = await connect(stateDir);
@@ -102,7 +103,7 @@ async function browserFor(stateDir: string, start: boolean): Promise<Connected> 
     running.set(stateDir, opening);
     void opening.then(({ browser }) => {
       browser.on('disconnected', () => { if (running.get(stateDir) === opening) running.delete(stateDir); });
-    }).catch(() => undefined);
+    }).catch(quiet('agent/computer/browser'));
     opening.catch(() => { if (running.get(stateDir) === opening) running.delete(stateDir); });
   }
   return opening;
@@ -167,7 +168,7 @@ export async function closeComputerPage(stateDir: string, tab?: string): Promise
   const key = ownerKey(stateDir, tab);
   const pages = owned.get(key) ?? [];
   owned.delete(key);
-  for (const page of pages) await page.close().catch(() => undefined);
+  for (const page of pages) await page.close().catch(quiet('agent/computer/browser'));
 }
 
 /** Keep a tab open for a later command (a keygrab that could not finish): mark it, and stop owning it so closing this process's connection or opening the next vendor leaves it alone. */
@@ -185,7 +186,7 @@ export async function reattachParkedPage(stateDir: string, tab: string, marker: 
   if (!context) return undefined;
   for (const page of context.pages()) {
     if (page.isClosed()) continue;
-    const name = await page.evaluate(() => (globalThis as unknown as { name: string }).name).catch(() => undefined);
+    const name = await page.evaluate(() => (globalThis as unknown as { name: string }).name).catch(quiet('agent/computer/browser'));
     if (name === marker) { adoptPage(stateDir, page, tab); return page; }
   }
   return undefined;
@@ -194,7 +195,7 @@ export async function reattachParkedPage(stateDir: string, tab: string, marker: 
 /** Close a parked tab (the keygrab finished, or a newer one replaced it). */
 export async function closeParkedPage(stateDir: string, marker: string): Promise<void> {
   const page = await reattachParkedPage(stateDir, `parked-close-${marker}`, marker);
-  if (page) await page.close().catch(() => undefined);
+  if (page) await page.close().catch(quiet('agent/computer/browser'));
   owned.delete(ownerKey(stateDir, `parked-close-${marker}`));
 }
 
@@ -203,15 +204,15 @@ export async function releaseComputerBrowser(stateDir: string): Promise<void> {
   owned.delete(stateDir);
   const opening = running.get(stateDir);
   running.delete(stateDir);
-  await (await opening?.catch(() => undefined))?.browser.close().catch(() => undefined);
+  await (await opening?.catch(quiet('agent/computer/browser')))?.browser.close().catch(quiet('agent/computer/browser'));
 }
 
 export async function closeComputerBrowser(stateDir: string): Promise<void> {
   owned.delete(stateDir);
   const opening = running.get(stateDir);
   running.delete(stateDir);
-  const connected = await opening?.catch(() => undefined);
-  await connected?.browser.close().catch(() => undefined);
+  const connected = await opening?.catch(quiet('agent/computer/browser'));
+  await connected?.browser.close().catch(quiet('agent/computer/browser'));
   try {
     const record = JSON.parse(await fs.readFile(computerHostFile(stateDir), 'utf8')) as { pid?: number };
     if (Number.isSafeInteger(record.pid) && record.pid! > 1) process.kill(record.pid!, 'SIGTERM');

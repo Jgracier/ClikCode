@@ -1,4 +1,5 @@
 /** Small pure helpers of the agent loop: cancellation-aware waiting, call ids, tool rows. */
+import { quiet } from '../runtime/lifecycle-log.js';
 import { turnCancelledError } from './cancellation.js';
 import type { ModelToolCall } from './model-client.js';
 import type { ToolDefinition, ToolRunResult } from './tool-contract.js';
@@ -35,9 +36,9 @@ export function stableStringify(value: unknown): string {
 /** Rejects as soon as the signal fires, even if `work` ignores it. */
 export function abortable<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) return work;
-  if (signal.aborted) { work.catch(() => undefined); return Promise.reject(turnCancelledError()); }
+  if (signal.aborted) { work.catch(quiet('agent/turn-support')); return Promise.reject(turnCancelledError()); }
   return new Promise<T>((resolve, reject) => {
-    const onAbort = (): void => { work.catch(() => undefined); reject(turnCancelledError()); };
+    const onAbort = (): void => { work.catch(quiet('agent/turn-support')); reject(turnCancelledError()); };
     signal.addEventListener('abort', onAbort, { once: true });
     work.then(
       (value) => { signal.removeEventListener('abort', onAbort); resolve(value); },

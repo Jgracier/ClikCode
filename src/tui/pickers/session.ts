@@ -1,6 +1,7 @@
 /** Choosing a session to resume, including sessions a vendor CLI started
  * outside ClikCode and that can be adopted. */
 
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { slowWaitGate } from '../../harness/protocol/slow-wait-gate.js';
 import { newConversation } from '../../commands/ai/conversations.js';
 import { randomUUID } from 'node:crypto';
@@ -121,7 +122,7 @@ async function discoverAdoptableSessions(
   // save it on the way past.
   if (early) void Promise.all([seen, files]).then(async ([seenShell, fsDiscovered]) => early(await notAdopted([...seenShell, ...fsDiscovered])), () => undefined);
   const [shellDiscovered, fsDiscovered] = await Promise.all([shell, files]);
-  await saveDiscoveryCache().catch(() => undefined);
+  await saveDiscoveryCache().catch(quiet('tui/pickers/session'));
   return notAdopted([...shellDiscovered, ...fsDiscovered]);
 }
 
@@ -264,7 +265,7 @@ export async function interactiveSessionPicker(
   // enough to read.
   let slowDiscovery = false;
   const looking = slowWaitGate(() => { slowDiscovery = true; }, () => { slowDiscovery = false; });
-  const lookingGone = discovery.catch(() => undefined).then(() => looking.end());
+  const lookingGone = discovery.catch(quiet('tui/pickers/session')).then(() => looking.end());
   const refreshes = [early, discovery, looking.shown, lookingGone];
   let listRevision = 0;
   let built: { machine: string; discovering: boolean; slow: boolean; discovered: AdoptableNativeSession[]; revision: number; second: number; options: PickerOption<string>[] } | undefined;
@@ -377,8 +378,8 @@ export async function interactiveSessionPicker(
       const added = (await readMachines()).filter((machine) => machine.ready);
       tailnet = notYetAdded(discoverMachines(status), added);
       if (tailnet.length) listChanged?.();
-    }).catch(() => undefined);
-    const machines = await holdWindowMachines({ autoUpdate: true }).catch(() => undefined);
+    }).catch(quiet('tui/pickers/session'));
+    const machines = await holdWindowMachines({ autoUpdate: true }).catch(quiet('tui/pickers/session'));
     if (machines?.views().length) {
       remote = machines;
       remote.onChange(() => { listRevision += 1; built = undefined; listChanged?.(); });

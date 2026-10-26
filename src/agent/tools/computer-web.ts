@@ -1,4 +1,5 @@
 /** Page-level browser actions in ClikCode's own Chrome profile. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { defineTool } from '../tool-contract.js';
@@ -263,7 +264,7 @@ export async function observeComputerPage(page: Page, acceptsImages: boolean, fu
 
 /** Wait for what an action started to land, so the view that follows is a finished page, not a spinner. */
 async function settle(page: Page): Promise<void> {
-  await page.waitForLoadState('domcontentloaded', { timeout: 5_000 }).catch(() => undefined);
+  await page.waitForLoadState('domcontentloaded', { timeout: 5_000 }).catch(quiet('agent/tools/computer-web'));
   // Quiet, not "network idle" (many sites never go idle): done once the page has stopped changing for a moment.
   await page.evaluate(() => new Promise<void>(resolve => {
     const g = globalThis as unknown as { document: object; MutationObserver: new (callback: () => void) => { observe(target: object, options: object): void; disconnect(): void }; setTimeout(callback: () => void, ms: number): number; clearTimeout(id: number): void };
@@ -272,7 +273,7 @@ async function settle(page: Page): Promise<void> {
     watcher.observe(g.document, { subtree: true, childList: true, attributes: true, characterData: true });
     g.setTimeout(done, 1_500);
     function done(): void { watcher.disconnect(); resolve(); }
-  })).catch(() => undefined); // a navigation destroys the page being watched: the next look is a new page
+  })).catch(quiet('agent/tools/computer-web')); // a navigation destroys the page being watched: the next look is a new page
 }
 
 const ACTION_LIST = 'open · close · observe · click · fill · choose · press · scroll · wait · upload · steps · login · handoff · capture_secret · send_secret · profile · open_email_link · read_email_code · email_connect · oauth_connect · notes · recipe · queue · network · preflight · forget_login · help';
@@ -429,7 +430,7 @@ export const computerWebTool = defineTool<WebArgs>({
       // and the browser carries on harmlessly in the background.
       let onAbort = (): void => undefined;
       const stopped = new Promise<never>((_resolve, reject) => { onAbort = () => reject(new Error('Stopped.')); });
-      stopped.catch(() => undefined);
+      stopped.catch(quiet('agent/tools/computer-web'));
       ctx.signal?.addEventListener('abort', onAbort, { once: true });
       try {
         if (ctx.signal?.aborted) throw new Error('Stopped.');
@@ -446,7 +447,7 @@ export const computerWebTool = defineTool<WebArgs>({
         // A click that creates a key at the site cannot be undone from here: say so, or a live key is left behind unnoticed.
         const clicked = (error as { afterClick?: boolean }).afterClick ? ` The click on "${args.target ?? 'the button'}" may already have created a key at the site; if so, delete it there.` : '';
         // The site often says why (an error under the button, "purchase credits"): say it too, instead of only "not found".
-        const siteSaid = (error as { afterClick?: boolean }).afterClick ? await pageProblem(await computerPage(ctx.stateDir, args.tab).catch(() => undefined)) : '';
+        const siteSaid = (error as { afterClick?: boolean }).afterClick ? await pageProblem(await computerPage(ctx.stateDir, args.tab).catch(quiet('agent/tools/computer-web'))) : '';
         return { output: scrubSecrets(`${why.startsWith('Not saved') ? why : `Not saved: ${why}`}${siteSaid ? ` The page says: "${siteSaid}".` : ''}${clicked}`), isError: true };
       }
       return { output: error instanceof Error ? error.message : String(error), isError: true };
@@ -457,7 +458,7 @@ export const computerWebTool = defineTool<WebArgs>({
 const queues = sharedState('computer-web-queue', () => new Map<string, Promise<unknown>>());
 export function inOrder<T>(key: string, job: () => Promise<T>): Promise<T> {
   const run = (queues.get(key) ?? Promise.resolve()).then(job, job);
-  const tail = run.catch(() => undefined);
+  const tail = run.catch(quiet('agent/tools/computer-web'));
   queues.set(key, tail);
   void tail.then(() => { if (queues.get(key) === tail) queues.delete(key); });
   return run;
@@ -528,7 +529,7 @@ async function doStep(page: Page, step: Step, ctx?: ToolContext): Promise<StepOu
       if (step.text.length <= 200 && tag !== 'TEXTAREA') {
         await target.fill('', { timeout: 10_000 });
         await target.pressSequentially(step.text, { timeout: 10_000 });
-        await target.blur().catch(() => undefined);
+        await target.blur().catch(quiet('agent/tools/computer-web'));
       } else await target.fill(step.text, { timeout: 10_000 });
       return `Filled ${step.target}.`;
     }
@@ -538,7 +539,7 @@ async function doStep(page: Page, step: Step, ctx?: ToolContext): Promise<StepOu
       const target = await locate(page, step.target);
       if (await target.evaluate(element => (element as unknown as { tagName: string }).tagName).catch(() => '') === 'SELECT') { await target.selectOption({ label: step.text }, { timeout: 10_000 }); return `Chose "${step.text}".`; }
       await clickOrHint(target);
-      await page.keyboard.insertText(step.text).catch(() => undefined);
+      await page.keyboard.insertText(step.text).catch(quiet('agent/tools/computer-web'));
       await page.waitForTimeout(250);
       const option = page.getByRole('option', { name: step.text, exact: true }).or(page.getByRole('option', { name: new RegExp(step.text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') })).first();
       if (await option.count().catch(() => 0)) await option.click({ timeout: 5_000 });
@@ -622,7 +623,7 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
         account = accounts[labels.indexOf(answer?.account ?? '')];
         if (account) profileChoice.set(`${ctx.stateDir}|login|${origin}`, account.id);
       }
-      if (account) login = await savedLoginFields(ctx.stateDir, page.url(), account.id).catch(() => undefined);
+      if (account) login = await savedLoginFields(ctx.stateDir, page.url(), account.id).catch(quiet('agent/tools/computer-web'));
     }
     // A sign-in shows what it would fill, to edit or leave alone, instead of typing it unseen.
     if (signIn) confirmSignIn = true;
@@ -727,7 +728,7 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
         else if (!entered.username) entered.username = answer;
       }
       // Same email replaces that account's password. A different email is a new account.
-      if (entered.username && entered.password) await saveLoginFields(ctx.stateDir, page.url(), entered).catch(() => undefined);
+      if (entered.username && entered.password) await saveLoginFields(ctx.stateDir, page.url(), entered).catch(quiet('agent/tools/computer-web'));
     }
   }
   return steps.map(step => values.has(step) ? { ...step, text: values.get(step)! } : step);
@@ -805,7 +806,7 @@ export async function runSteps(page: Page, steps: readonly Step[], ctx: ToolCont
       }
       if (!halted) {
         // What changed, not the whole page again: a failed step in a long batch used to repeat thousands of tokens.
-        const view = await observeComputerPage(current, false, false, undefined, true).catch(() => undefined);
+        const view = await observeComputerPage(current, false, false, undefined, true).catch(quiet('agent/tools/computer-web'));
         return { output: `${[...notes, `Step ${index + 1} (${step.do}${step.target ? ` ${step.target}` : ''}) failed: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`].join('\n')}${view ? `\n\n${view.output}` : ''}`, isError: true };
       }
     }
@@ -818,7 +819,7 @@ export async function runSteps(page: Page, steps: readonly Step[], ctx: ToolCont
       notes.push(`A new tab opened and is now the page: ${displayUrl(current.url())}`);
     }
     // A replay looks at the page each step lands on (after any new tab is followed) and stops for a person's page.
-    if (guard && !halted && await guard(current).catch(() => undefined)) halted = true;
+    if (guard && !halted && await guard(current).catch(quiet('agent/tools/computer-web'))) halted = true;
     if (halted) {
       const rest = steps.length - index - 1;
       if (rest > 0) notes.push(`${rest} later step${rest === 1 ? ' was' : 's were'} not run.`);
@@ -900,17 +901,17 @@ async function openLatestEmail(page: Page, args: WebArgs, stateDir: string): Pro
   // Gmail's search defaults to "most relevant", which is not the newest: a reset link from an hour ago can come first.
   const relevant = page.getByRole('button', { name: /showing most relevant/i });
   if (await relevant.count()) {
-    await relevant.first().click({ timeout: 3_000 }).catch(() => undefined);
-    await page.getByRole('menuitemradio', { name: /most recent/i }).click({ timeout: 3_000 }).catch(() => undefined);
+    await relevant.first().click({ timeout: 3_000 }).catch(quiet('agent/tools/computer-web'));
+    await page.getByRole('menuitemradio', { name: /most recent/i }).click({ timeout: 3_000 }).catch(quiet('agent/tools/computer-web'));
     await page.waitForTimeout(800);
   }
   await row.click();
   // Gmail folds a thread to its first message and its unread ones: expand them all, so the last body is the newest
   // message (a reset link from five minutes ago, not the stale one from the start of the thread).
-  await page.locator('[aria-label="Expand all"]').first().click({ timeout: 2_000 }).catch(() => undefined);
+  await page.locator('[aria-label="Expand all"]').first().click({ timeout: 2_000 }).catch(quiet('agent/tools/computer-web'));
   const body = page.locator('.a3s:visible').last();
   await body.waitFor({ timeout: 15_000 });
-  await page.locator('.ajR').last().click({ timeout: 1_500 }).catch(() => undefined); // "show trimmed content"
+  await page.locator('.ajR').last().click({ timeout: 1_500 }).catch(quiet('agent/tools/computer-web')); // "show trimmed content"
   return body;
 }
 
@@ -961,7 +962,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       const mine = (await listProfiles(ctx.stateDir)).map(profile => profile.fields.sso_email).find(Boolean);
       const filled = { ...recipe, steps: recipe.steps.map(step => ({ ...step, ...(step.target ? { target: fillPlaceholders(step.target, { sso_email: mine }) } : {}), ...(step.text ? { text: fillPlaceholders(step.text, { sso_email: mine }) } : {}) })) };
       const replay = await replayRecipe(filled, (steps, guard) => runSteps(page, steps as Step[], ctx, args.tab, args.label, async current => { ended = current; return guard(); }), async () => scrubSecrets(await ended.ariaSnapshot({ mode: 'ai', timeout: 8_000 } as never) as string));
-      if (replay.completed) await saveRecipe(ctx.stateDir, { host: recipe.host, loginRoute: recipe.loginRoute, steps: recipe.steps, ...(recipe.keyPage ? { keyPage: recipe.keyPage } : {}), ...(recipe.captureHint ? { captureHint: recipe.captureHint } : {}) }).catch(() => undefined);
+      if (replay.completed) await saveRecipe(ctx.stateDir, { host: recipe.host, loginRoute: recipe.loginRoute, steps: recipe.steps, ...(recipe.keyPage ? { keyPage: recipe.keyPage } : {}), ...(recipe.captureHint ? { captureHint: recipe.captureHint } : {}) }).catch(quiet('agent/tools/computer-web'));
       return { output: replay.output, ...(replay.isError ? { isError: true } : {}) };
     }
     case 'observe': return observeComputerPage(page, ctx.acceptsImages === true, args.full === true, args.find);
@@ -1026,7 +1027,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
         const code = verificationCode(text);
         if (!code) throw new Error(`The email from ${args.from ?? args.subject} has no code in it. It says: "${text.replace(/\s+/g, ' ').slice(0, 160)}".`);
         return { output: `Code: ${code}. Type it into the page that asked for it; it is already waiting in the tab you left.` };
-      } finally { await mail.close().catch(() => undefined); }
+      } finally { await mail.close().catch(quiet('agent/tools/computer-web')); }
     }
     case 'login': {
       const outcome = await loginComputerPage({ stateDir: ctx.stateDir, page, signal: ctx.signal, newAccount: args.new_account === true,
@@ -1039,7 +1040,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
           return ctx.requestPrivateLogin(site, fields, signal);
         }, onVerification: () => ctx.emitOutput?.('Approve the sign-in or finish verification in the open browser.\n') });
       const failed = outcome === 'unverified' || outcome === 'saved_login_rejected';
-      if (outcome === 'signed_in' || outcome === 'session_reused') await recordVerified(ctx.stateDir, journalKey(ctx.stateDir, args.tab), { kind: 'login' }).catch(() => undefined);
+      if (outcome === 'signed_in' || outcome === 'session_reused') await recordVerified(ctx.stateDir, journalKey(ctx.stateDir, args.tab), { kind: 'login' }).catch(quiet('agent/tools/computer-web'));
       // Signed in: the page you landed on comes with it, so there is nothing more to ask for.
       const landed = failed ? undefined : await (async () => {
         try { return await observeComputerPage(page.isClosed() ? await computerPage(ctx.stateDir, args.tab) : page, false); }
@@ -1055,7 +1056,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       const triggerLabel = args.target ? (await controlName(page, args.target)) ?? (REF.test(args.target.trim()) ? undefined : args.target.trim()) : undefined;
       const name = args.secret_name?.trim() || `${new URL(page.url()).hostname.replace(/^www\./, '')}/key`;
       // The clipboard is one thing and a Copy button only works in the focused tab: captures take turns, each in front.
-      const { length, shape, via, check, sent } = await inOrder('clipboard', async () => { await page.bringToFront().catch(() => undefined); return captureSecret({ ...(args.paste ? { paste: true } : {}), stateDir: ctx.stateDir, page, name, signal: ctx.signal,
+      const { length, shape, via, check, sent } = await inOrder('clipboard', async () => { await page.bringToFront().catch(quiet('agent/tools/computer-web')); return captureSecret({ ...(args.paste ? { paste: true } : {}), stateDir: ctx.stateDir, page, name, signal: ctx.signal,
         meta: { vendor: args.vendor ?? new URL(page.url()).hostname.replace(/^www\./, ''), owner: args.owner ?? (await listProfiles(ctx.stateDir))[0]?.fields.sso_email, ...(args.env ? { env: args.env } : {}) },
         ...(plan?.length ? { sendTo: plan } : {}),
         ...(args.target ? { trigger: async () => { await clickOrHint(await locate(page, args.target)); } } : {}),
@@ -1069,7 +1070,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       if (!refused) {
         const key = journalKey(ctx.stateDir, args.tab);
         if (triggerLabel) noteStep(key, page.url(), { do: 'click', target: triggerLabel });
-        const saved = await recordVerified(ctx.stateDir, key, { kind: 'capture', url: page.url(), hint: `${triggerLabel ? `Click "${triggerLabel}" to make the key show, then capture_secret. ` : ''}Verified: ${check.verdict === 'works' ? 'the key works' : 'a key was found and stored'}.` }).catch(() => undefined);
+        const saved = await recordVerified(ctx.stateDir, key, { kind: 'capture', url: page.url(), hint: `${triggerLabel ? `Click "${triggerLabel}" to make the key show, then capture_secret. ` : ''}Verified: ${check.verdict === 'works' ? 'the key works' : 'a key was found and stored'}.` }).catch(quiet('agent/tools/computer-web'));
         if (saved) recipeLint = lintRecipe(saved).map(finding => finding.message);
       }
       const lines = [
@@ -1090,7 +1091,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
         const stop = new AbortController();
         let resolveLink!: (link: string) => void; let failLink!: (error: Error) => void;
         const link = new Promise<string>((resolve, reject) => { resolveLink = resolve; failLink = reject; });
-        link.catch(() => undefined);
+        link.catch(quiet('agent/tools/computer-web'));
         // The phone reaches this computer directly over the user's Tailscale network: no relay, no third party.
         const host = tailnetAddress();
         if (!host) throw new Error('A handoff needs this computer and your phone on the same Tailscale network, and this computer is not on one (no Tailscale address). Install Tailscale and sign in on both, or finish this step at the computer.');

@@ -17,6 +17,7 @@
  * keeps no history (keepsNoHistory): a written thread would be resumed into
  * a provider that never sees it. */
 
+import { quiet } from '../runtime/lifecycle-log.js';
 import type { AiLocalHarnessDefinition } from '../harness/definition.js';
 import { type CanonicalRecord, type CanonicalTurn } from '../session/canonical.js';
 import { fullRecordNote } from '../session/full-record.js';
@@ -185,7 +186,7 @@ async function written(input: ThreadStartInput): Promise<{ written: NativeThread
   try {
     const context = {
       harness: input.harness, workspace: input.workspace, environment: input.environment, model: input.model,
-      version: await input.version?.().catch(() => undefined),
+      version: await input.version?.().catch(quiet('turn/thread-start')),
     };
     if (!await writer.versionOk(context)) {
       input.onFallback?.(`${input.harness.command} ${context.version ?? '(version unknown)'} is not a build its thread writer was verified against (${writer.testedVersions.join(', ') || 'none'})`);

@@ -3,6 +3,7 @@
  * Copy button. If a download starts while a key is being captured, the worker
  * reads it and deletes the file, so its content goes nowhere but into the Secrets
  * Manager. Nothing has to be asked for: a download is simply noticed. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import fs from 'node:fs/promises';
 import type { Download, Page } from 'playwright-core';
 
@@ -20,7 +21,7 @@ export function watchDownload(page: Page): DownloadWatch {
       if (info.size > MAX_BYTES) return undefined;
       return (await fs.readFile(file, 'utf8')).trim() || undefined;
     } catch { return undefined; }
-    finally { await download.delete().catch(() => undefined); }
+    finally { await download.delete().catch(quiet('agent/computer/download-capture')); }
   };
   const onDownload = (download: Download): void => { reading ??= read(download); };
   page.on('download', onDownload);

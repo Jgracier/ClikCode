@@ -1,5 +1,6 @@
 /** Private agents published for the currently connected Gateway account. */
 
+import { quiet } from '../runtime/lifecycle-log.js';
 import Conf from 'conf';
 import { gatewayConnection } from '../agent/models/for-session.js';
 import { CLIKCODE_USER_AGENT } from '../version.js';
@@ -12,7 +13,7 @@ export async function gatewayAgents(options: { config?: Conf; fetchImpl?: typeof
     headers: { authorization: `Bearer ${apiKey}`, accept: 'application/json', 'user-agent': CLIKCODE_USER_AGENT },
     signal: AbortSignal.timeout(10_000),
   });
-  const body: unknown = await response.json().catch(() => undefined);
+  const body: unknown = await response.json().catch(quiet('gateway/agents'));
   if (!response.ok) throw new Error(`ClikDeploy Gateway agents: HTTP ${response.status}`);
   if (!body || typeof body !== 'object' || !Array.isArray((body as { data?: unknown }).data)) throw new Error('ClikDeploy Gateway agents: invalid roster response');
   // The server scopes this list to the key's account. Do not cache it on disk:

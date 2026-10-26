@@ -40,6 +40,7 @@
  * exactly as for a session that profile had created itself.
  */
 
+import { quiet } from '../../../runtime/lifecycle-log.js';
 import { randomUUID } from 'node:crypto';
 import { removeSqliteSession } from './sqlite-carry.js';
 import { stat } from 'node:fs/promises';
@@ -332,7 +333,7 @@ async function writeHermesThread(record: CanonicalRecord, context: NativeThreadW
   // its own schema on any command, so the thread lands in exactly the
   // layout it reads.
   if (!await stat(database).then(() => true, () => false)) {
-    await captureNativeHarnessOutput(context.harness, ['sessions', 'list', '--limit', '1'], context.environment, undefined, context.workspace).catch(() => undefined);
+    await captureNativeHarnessOutput(context.harness, ['sessions', 'list', '--limit', '1'], context.environment, undefined, context.workspace).catch(quiet('session/discovery/vendors/hermes-store'));
     if (!await stat(database).then(() => true, () => false)) return undefined;
   }
   const db = await openSqlite(database);

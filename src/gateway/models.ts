@@ -5,6 +5,7 @@
  * the Gateway serves that model from its cheapest provider and never swaps in
  * a different one. No choice (`null`) sends `auto`: the Gateway picks. */
 
+import { quiet } from '../runtime/lifecycle-log.js';
 import Conf from 'conf';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -209,7 +210,7 @@ export async function gatewayModels(
       headers: { authorization: `Bearer ${apiKey}`, accept: 'application/json', 'user-agent': CLIKCODE_USER_AGENT, ...subscriptionsHeader(subscriptions) },
       signal,
     });
-    body = await response.json().catch(() => undefined) as typeof body;
+    body = await response.json().catch(quiet('gateway/models')) as typeof body;
   } catch (error) {
     // A Gateway that does not answer in time: the last list received is better than none.
     const saved = await savedGatewayModels({ config });
@@ -227,7 +228,7 @@ export async function gatewayModels(
   const list = { ...fromOpenAIModelList(body.data), ...(typeof switchState === 'boolean' ? { subscriptions: switchState } : {}) };
   cached = { baseUrl, auth, subscriptions, at: Date.now(), list };
   // fail-open-ok: a list that cannot be saved still answers this request; only the next instant open is lost.
-  await saveGatewayModels(baseUrl, auth, subscriptions, list).catch(() => undefined);
+  await saveGatewayModels(baseUrl, auth, subscriptions, list).catch(quiet('gateway/models'));
   return list;
 }
 

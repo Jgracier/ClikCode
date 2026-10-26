@@ -12,6 +12,7 @@
  * (read and refreshed by agent/mcp/oauth.ts, the same code ClikCode's own agent
  * uses); one recorded as needing a sign-in is left out, since a vendor handed
  * it would start a browser sign-in of its own on every session. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { homedir } from 'node:os';
 import { loadMcpServers, type McpServerSpec } from '../../agent/mcp/config.js';
 import { vendorMcpServerNames } from '../../agent/mcp/import.js';
@@ -83,7 +84,7 @@ export async function globalMcpServers(
       if (server.transport === 'stdio') return server;
       if (!signIns) return await mcpOAuthState(stateDir, server) === 'none' ? server : undefined;
       return withSignIn(stateDir, server);
-    }).map((pending) => pending.catch(() => undefined)));
+    }).map((pending) => pending.catch(quiet('harness/transport/acp-mcp-servers'))));
     return resolved.filter((server): server is McpServerSpec => server !== undefined);
   } catch {
     return [];

@@ -7,7 +7,7 @@ import { readlinkSync } from 'node:fs';
 import { link, open, readdir, readFile, rename, stat, unlink, utimes, writeFile } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { basename, dirname, join } from 'node:path';
-import { lifecycle } from '../../runtime/lifecycle-log.js';
+import { lifecycle, quiet } from '../../runtime/lifecycle-log.js';
 import { ensurePrivateDirectory } from './files.js';
 import { stateDirectory } from './paths.js';
 
@@ -45,7 +45,7 @@ export async function writeOwnerFile(path: string, contents: string, writer: Own
   try {
     await writer(path, contents, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
   } catch (error) {
-    await unlink(path).catch(() => undefined);
+    await unlink(path).catch(quiet('session/store/locks'));
     throw error;
   }
 }
@@ -112,7 +112,7 @@ function parseLockOwner(raw: string): LockOwner | undefined {
  * another container -- says nothing; only the heartbeat does. An owner
  * written without `pidns` (an older build) is judged as one in ours. */
 export async function lockLooksStale(lockPath: string, raw: string): Promise<boolean> {
-  const age = await stat(lockPath).then((info) => Date.now() - info.mtimeMs).catch(() => undefined);
+  const age = await stat(lockPath).then((info) => Date.now() - info.mtimeMs).catch(quiet('session/store/locks'));
   if (age === undefined) return false; // Already gone; the open will simply succeed.
   if (age > LOCK_TUNING.staleMs) return true;
   const owner = parseLockOwner(raw);
@@ -141,13 +141,13 @@ export async function breakStaleLock(lockPath: string, observedRaw: string, stil
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return;
     // A breaker killed mid-turn leaves its marker; a live one holds it for
     // milliseconds.
-    const age = await stat(breaking).then((info) => Date.now() - info.mtimeMs).catch(() => undefined);
-    if (age !== undefined && age > LOCK_TUNING.staleMs) await unlink(breaking).catch(() => undefined);
+    const age = await stat(breaking).then((info) => Date.now() - info.mtimeMs).catch(quiet('session/store/locks'));
+    if (age !== undefined && age > LOCK_TUNING.staleMs) await unlink(breaking).catch(quiet('session/store/locks'));
     return;
   }
   try {
-    const judged = await stat(lockPath).catch(() => undefined);
-    const current = await readFile(lockPath, 'utf8').catch(() => undefined);
+    const judged = await stat(lockPath).catch(quiet('session/store/locks'));
+    const current = await readFile(lockPath, 'utf8').catch(quiet('session/store/locks'));
     if (!judged || current !== observedRaw) return;
     if (stillStale && !await stillStale(current)) return;
     const aside = `${lockPath}.${process.pid}.${randomBytes(6).toString('hex')}.stale`;
@@ -156,12 +156,12 @@ export async function breakStaleLock(lockPath: string, observedRaw: string, stil
     } catch {
       return; // Released meanwhile.
     }
-    const taken = await stat(aside).catch(() => undefined);
-    if (!taken || taken.ino !== judged.ino) await link(aside, lockPath).catch(() => undefined);
-    await unlink(aside).catch(() => undefined);
+    const taken = await stat(aside).catch(quiet('session/store/locks'));
+    if (!taken || taken.ino !== judged.ino) await link(aside, lockPath).catch(quiet('session/store/locks'));
+    await unlink(aside).catch(quiet('session/store/locks'));
     await sweepOrphanTemps(lockPath);
   } finally {
-    await unlink(breaking).catch(() => undefined);
+    await unlink(breaking).catch(quiet('session/store/locks'));
   }
 }
 
@@ -174,8 +174,8 @@ async function sweepOrphanTemps(lockPath: string): Promise<void> {
   const names = await readdir(dirname(lockPath)).catch(() => [] as string[]);
   await Promise.all(names.filter((name) => name.startsWith(prefix) && /\.\d+\.[0-9a-f]+\.(new|stale)$/.test(name)).map(async (name) => {
     const path = join(dirname(lockPath), name);
-    const age = await stat(path).then((info) => Date.now() - info.mtimeMs).catch(() => undefined);
-    if (age !== undefined && age > ORPHAN_TEMP_MS) await unlink(path).catch(() => undefined);
+    const age = await stat(path).then((info) => Date.now() - info.mtimeMs).catch(quiet('session/store/locks'));
+    if (age !== undefined && age > ORPHAN_TEMP_MS) await unlink(path).catch(quiet('session/store/locks'));
   }));
 }
 const ORPHAN_TEMP_MS = 60_000;
@@ -190,7 +190,7 @@ const ORPHAN_TEMP_MS = 60_000;
 export async function withFileLock<T>(lockPath: string, run: () => Promise<T>, options: { fair?: boolean } = {}): Promise<T> {
   const previous = lockQueues.get(lockPath) ?? Promise.resolve();
   const result = queueTurn(lockPath, previous).then(() => holdFileLock(lockPath, run, options.fair === true));
-  const settled = result.catch(() => undefined);
+  const settled = result.catch(quiet('session/store/locks'));
   lockQueues.set(lockPath, settled);
   void settled.then(() => { if (lockQueues.get(lockPath) === settled) lockQueues.delete(lockPath); });
   return result;
@@ -253,7 +253,7 @@ async function createLock(lockPath: string, mine: string): Promise<boolean> {
     if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
     throw error;
   } finally {
-    await unlink(temp).catch(() => undefined);
+    await unlink(temp).catch(quiet('session/store/locks'));
   }
 }
 
@@ -276,10 +276,10 @@ async function firstInLine(ticket: string): Promise<boolean> {
   const names = (await readdir(queue).catch(() => [] as string[])).filter((name) => name < own).sort();
   for (const name of names) {
     const path = join(queue, name);
-    const raw = await readFile(path, 'utf8').catch(() => undefined);
+    const raw = await readFile(path, 'utf8').catch(quiet('session/store/locks'));
     if (raw === undefined) continue; // Left the line meanwhile.
     if (!await lockLooksStale(path, raw)) return false;
-    await unlink(path).catch(() => undefined);
+    await unlink(path).catch(quiet('session/store/locks'));
   }
   return true;
 }
@@ -302,7 +302,7 @@ async function holdFileLock<T>(lockPath: string, run: () => Promise<T>, fair: bo
     for (;;) {
       const next = !ticket || await firstInLine(ticket);
       if (next && await createLock(lockPath, mine)) break;
-      const raw = await readFile(lockPath, 'utf8').catch(() => undefined);
+      const raw = await readFile(lockPath, 'utf8').catch(quiet('session/store/locks'));
       if (raw !== undefined) {
         const other = parseLockOwner(raw);
         holder = other ? `pid ${other.pid} on ${other.host}` : undefined;
@@ -328,7 +328,7 @@ async function holdFileLock<T>(lockPath: string, run: () => Promise<T>, fair: bo
       if (ticket && Date.now() - ticketTouched > LOCK_TUNING.heartbeatMs) {
         ticketTouched = Date.now();
         const now = new Date();
-        await utimes(ticket, now, now).catch(() => undefined);
+        await utimes(ticket, now, now).catch(quiet('session/store/locks'));
       }
       // The next in line looks often, so the lock is not left idle between
       // holders; the rest only wait for their turn.
@@ -336,7 +336,7 @@ async function holdFileLock<T>(lockPath: string, run: () => Promise<T>, fair: bo
     }
   } finally {
     // Out of line once it holds the lock (or gave up): the next may go.
-    if (ticket) await unlink(ticket).catch(() => undefined);
+    if (ticket) await unlink(ticket).catch(quiet('session/store/locks'));
     ticket = undefined;
   }
   // A wait anyone would notice is recorded with whoever held it: a send in
@@ -352,7 +352,7 @@ async function holdFileLock<T>(lockPath: string, run: () => Promise<T>, fair: bo
       if (current !== mine) { clearInterval(heartbeat); return undefined; }
       const now = new Date();
       return utimes(lockPath, now, now);
-    }).catch(() => undefined);
+    }).catch(quiet('session/store/locks'));
   }, LOCK_TUNING.heartbeatMs);
   heartbeat.unref();
   running.set(lockPath, Date.now());
@@ -363,8 +363,8 @@ async function holdFileLock<T>(lockPath: string, run: () => Promise<T>, fair: bo
     clearInterval(heartbeat);
     // Only ever remove our own lock: if it was judged stale and replaced while
     // we ran, the file now belongs to someone else.
-    const current = await readFile(lockPath, 'utf8').catch(() => undefined);
-    if (current === mine) await unlink(lockPath).catch(() => undefined);
+    const current = await readFile(lockPath, 'utf8').catch(quiet('session/store/locks'));
+    if (current === mine) await unlink(lockPath).catch(quiet('session/store/locks'));
   }
 }
 

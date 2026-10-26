@@ -12,6 +12,7 @@
  * Cached by URL (the server's identity) with a clock, since it is a remote
  * server's answer and nothing local changes when it does. An unknown is never
  * cached: the next turn asks again. */
+import { quiet } from '../runtime/lifecycle-log.js';
 import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { atomicWriteFile } from '../session/store/files.js';
@@ -49,7 +50,7 @@ export async function mcpChallenge(url: string, options: {
   const ask = async (init: RequestInit): Promise<{ status: number; challenge: string | null }> => {
     const response = await fetchImpl(url, { ...init, redirect: 'follow', signal: AbortSignal.timeout(options.timeoutMs ?? PROBE_TIMEOUT_MS) });
     const result = { status: response.status, challenge: response.headers.get('www-authenticate') };
-    await response.body?.cancel().catch(() => undefined);
+    await response.body?.cancel().catch(quiet('harness/mcp-sign-in'));
     return result;
   };
   const posted = await ask({
@@ -109,7 +110,7 @@ export async function mcpServerNeedsSignIn(entry: McpServerEntry, options: SignI
     const fresh = await readCache(options.stateDir);
     fresh[entry.target] = { answer, at: now };
     await mkdir(join(options.stateDir, 'cache'), { recursive: true });
-    await atomicWriteFile(join(options.stateDir, 'cache', CACHE_FILE), `${JSON.stringify(fresh, null, 2)}\n`).catch(() => undefined);
+    await atomicWriteFile(join(options.stateDir, 'cache', CACHE_FILE), `${JSON.stringify(fresh, null, 2)}\n`).catch(quiet('harness/mcp-sign-in'));
   }
   return answer;
 }

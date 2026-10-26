@@ -32,7 +32,7 @@ import { randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
 import { open, readFile, stat, unlink } from 'node:fs/promises';
 import type { HarnessSession } from '../model.js';
-import { lifecycle } from '../../runtime/lifecycle-log.js';
+import { lifecycle, quiet } from '../../runtime/lifecycle-log.js';
 import { atomicWriteFile } from './files.js';
 import { sessionLogPath, sessionPendingPath } from './paths.js';
 
@@ -285,14 +285,14 @@ const pendingCache = new Map<string, CachedPending>();
 export async function storePendingFile(id: string, turn: PendingTurn): Promise<void> {
   const path = sessionPendingPath(id);
   await atomicWriteFile(path, JSON.stringify(turn), { durable: false });
-  const info = await stat(path).catch(() => undefined);
+  const info = await stat(path).catch(quiet('session/store/chat-log'));
   if (info) pendingCache.set(path, { ino: info.ino, mtimeMs: info.mtimeMs, size: info.size, turn });
   else pendingCache.delete(path);
 }
 
 export async function loadPendingFile(id: string): Promise<PendingTurn | undefined> {
   const path = sessionPendingPath(id);
-  const info = await stat(path).catch(() => undefined);
+  const info = await stat(path).catch(quiet('session/store/chat-log'));
   if (!info) {
     pendingCache.delete(path);
     return undefined;
@@ -327,7 +327,7 @@ export async function removeChatLog(id: string): Promise<void> {
 
 /** The id a log's header names (listing a digest-named file). */
 export async function chatLogId(path: string): Promise<string | undefined> {
-  const handle = await open(path, 'r').catch(() => undefined);
+  const handle = await open(path, 'r').catch(quiet('session/store/chat-log'));
   if (!handle) return undefined;
   try {
     const head = (await readRange(handle, 0, 4096)).toString('utf8');

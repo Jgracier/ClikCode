@@ -13,7 +13,7 @@
  */
 import { stripVTControlCharacters } from 'node:util';
 import { panelParts, renderPanelText } from '../harness/output.js';
-import { lifecycle, setLifecycleSession } from '../runtime/lifecycle-log.js';
+import { lifecycle, setLifecycleSession, quiet } from '../runtime/lifecycle-log.js';
 import { randomUUID } from 'node:crypto';
 import type Conf from 'conf';
 import { CLIKCODE_VERSION } from '../version.js';
@@ -156,7 +156,7 @@ export class IdeBridge {
   }
 
   start(): void {
-    const usage = setInterval(() => { if (this.shown) void this.refreshUsage(true).catch(() => undefined); }, USAGE_REFRESH_MS);
+    const usage = setInterval(() => { if (this.shown) void this.refreshUsage(true).catch(quiet('ide/bridge')); }, USAGE_REFRESH_MS);
     usage.unref();
     this.timers.push(usage);
     const build = currentWorkerBuild();
@@ -179,7 +179,7 @@ export class IdeBridge {
     void work.finally(() => {
       this.inFlight -= 1;
       if (activity) this.lastActivityAt = Date.now();
-    }).catch(() => undefined);
+    }).catch(quiet('ide/bridge'));
   }
 
   handle(request: IdeRequest): void {
@@ -297,7 +297,7 @@ export class IdeBridge {
       case 'visible': {
         const appeared = request.visible && !this.shown;
         this.shown = request.visible;
-        if (appeared) void this.refreshUsage().catch(() => undefined);
+        if (appeared) void this.refreshUsage().catch(quiet('ide/bridge'));
         return;
       }
       case 'close':
@@ -323,7 +323,7 @@ export class IdeBridge {
       if (move.type === 'mark-moved' && move.sessionId === this.link.worker?.sessionId) this.link.detach();
       const data = await answerMoveRequest(this.config, move, this.sessionId, following ? { turnRunning: async () => this.link.running } : {});
       this.channel.send({ type: 'result', requestId, ok: true, ...(data === undefined ? {} : { data }) });
-      if ((move.type === 'mark-moved' || move.type === 'reclaim-moved') && move.sessionId === this.sessionId) await this.emitSession().catch(() => undefined);
+      if ((move.type === 'mark-moved' || move.type === 'reclaim-moved') && move.sessionId === this.sessionId) await this.emitSession().catch(quiet('ide/bridge'));
     } catch (error) {
       this.channel.send({ type: 'result', requestId, ok: false, error: messageOf(error) });
     }
@@ -362,7 +362,7 @@ export class IdeBridge {
     for (const pending of this.signIns.values()) pending.reject(new Error('the editor closed'));
     this.signIns.clear();
     this.link.detach();
-    await reconcileLocalModelLeases(undefined, this.elsewhere()).catch(() => undefined);
+    await reconcileLocalModelLeases(undefined, this.elsewhere()).catch(quiet('ide/bridge'));
     if (this.sessionId) await this.leave(this.sessionId);
   }
 
@@ -476,10 +476,10 @@ export class IdeBridge {
     // Follow a turn another client has running here, and have a worker that
     // is already up paint what it has streamed; nothing is started for a
     // conversation that has none yet.
-    const record = await readWorkerRecord(id).catch(() => undefined);
-    if (record && await workerIsReachable(record.socketPath)) await this.link.workerFor(id).catch(() => undefined);
+    const record = await readWorkerRecord(id).catch(quiet('ide/bridge'));
+    if (record && await workerIsReachable(record.socketPath)) await this.link.workerFor(id).catch(quiet('ide/bridge'));
     await this.prepareRoute();
-    void this.refreshUsage().catch(() => undefined);
+    void this.refreshUsage().catch(quiet('ide/bridge'));
   }
 
   /** `poll`: the periodic redraw (a vendor's reset countdown moves with time). Anything else is an
@@ -492,10 +492,10 @@ export class IdeBridge {
     if (!session) return;
     // The other accounts too, as the terminal does: one whose quota may have
     // come back is re-read, so failover and the picker see it.
-    void recheckRecoveredAccounts(state).catch(() => undefined);
+    void recheckRecoveredAccounts(state).catch(quiet('ide/bridge'));
     // A Gateway chat's allowance is its credit, worded as the terminal's composer rule words it.
     const reading = isGatewayService(session)
-      ? await gatewayCreditLabel(this.config, poll ? { cachedOnly: true } : { fresh: true }).then((label) => (label ? { label, windows: undefined } : undefined)).catch(() => undefined)
+      ? await gatewayCreditLabel(this.config, poll ? { cachedOnly: true } : { fresh: true }).then((label) => (label ? { label, windows: undefined } : undefined)).catch(quiet('ide/bridge'))
       : await nativeUsageReading(session, state);
     // A turn parked for the reset says so instead of when it comes back.
     const reset = session.resumeAt ? resumeWaitLabel(session.resumeAt) : usageResetLabel(reading?.windows);
@@ -513,15 +513,15 @@ export class IdeBridge {
    * for one that moved off it. Mirrors the interactive loop's preparedRoute. */
   private async prepareRoute(): Promise<void> {
     const { session } = await this.current();
-    await reconcileLocalModelLeases(session, this.elsewhere()).catch(() => undefined);
+    await reconcileLocalModelLeases(session, this.elsewhere()).catch(quiet('ide/bridge'));
     const key = `${session.id} ${session.route} ${session.nativeHarness ?? ''} ${session.accountId ?? ''}`;
     if (key === this.preparedRoute) return;
     this.preparedRoute = key;
     if (shouldWarmVendorChat(session)) {
-      void warmSessionWorker(session.id).catch(() => undefined);
+      void warmSessionWorker(session.id).catch(quiet('ide/bridge'));
     }
     if (!isClikCodeAgent(session) && this.link.worker?.sessionId !== session.id) return;
-    const client = await this.link.workerFor(session.id).catch(() => undefined);
+    const client = await this.link.workerFor(session.id).catch(quiet('ide/bridge'));
     client?.send({ type: 'prepare' });
   }
 

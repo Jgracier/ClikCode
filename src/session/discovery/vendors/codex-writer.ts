@@ -36,6 +36,7 @@
  *   projection row ClikCode wrote would be a second source for the same
  *   items, and Codex keeps its own offsets into the file. */
 
+import { quiet } from '../../../runtime/lifecycle-log.js';
 import { randomBytes } from 'node:crypto';
 import { mkdir, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -310,7 +311,7 @@ export const codexThreadWriter: NativeThreadWriter = {
       if (!await reconcileCodexThreadRow(codexHome, threadId, path)) throw new Error('state row');
     } catch {
       // fail-open-ok: a partial thread is removed; the caller transfers instead.
-      await rm(path, { force: true }).catch(() => undefined);
+      await rm(path, { force: true }).catch(quiet('session/discovery/vendors/codex-writer'));
       return undefined;
     }
     return { nativeId: threadId };

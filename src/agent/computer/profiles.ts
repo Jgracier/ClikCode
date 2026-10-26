@@ -3,6 +3,7 @@
  * (the password for sign-ups, a recovery code): only their names are in the profile record, the values live in
  * Secrets Manager, and nothing returns one to the agent; a form field is filled from it without being shown it.
  * Several profiles can exist (personal, company); the user picks one when more than one fits. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { randomUUID } from 'node:crypto';
 import { deleteNamedSecret, readNamedSecret, readVaultRecords, removeVaultRecord, saveNamedSecret, writeVaultRecord } from './credential-vault.js';
 import { keyShaped } from './secret-finder.js';
@@ -74,7 +75,7 @@ export async function saveProfileSecret(stateDir: string, id: string, key: strin
 
 /** For filling a form box only: callers must never put the value in model-visible output. */
 export async function readProfileSecret(stateDir: string, profile: { id: string; secrets?: Record<string, SecretField> }, key: string): Promise<string | undefined> {
-  return profile.secrets?.[key] ? readNamedSecret(stateDir, secretName(profile.id, key)).catch(() => undefined) : undefined;
+  return profile.secrets?.[key] ? readNamedSecret(stateDir, secretName(profile.id, key)).catch(quiet('agent/computer/profiles')) : undefined;
 }
 
 const CUSTOM_KEY = /^[a-z][a-z0-9_]{0,39}$/;

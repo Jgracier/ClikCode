@@ -10,6 +10,7 @@
  * work) has an owner after this process exits: its exit reaches the model,
  * and nothing is orphaned. Only when no worker can start does it run here,
  * holding the conversation so none starts mid-turn. */
+import { quiet } from '../runtime/lifecycle-log.js';
 import type Conf from 'conf';
 import { stdout as output } from 'node:process';
 import { WorkerClient } from './client.js';
@@ -34,7 +35,7 @@ export async function sendScriptedTurn(config: Conf, sessionId: string, prompt: 
   let spawnFailed = false;
   for (;;) {
     if (signal?.aborted) throw turnCancelledError();
-    const client = await WorkerClient.attachExisting(sessionId).catch(() => undefined)
+    const client = await WorkerClient.attachExisting(sessionId).catch(quiet('worker/scripted-send'))
       ?? (spawnFailed ? undefined : await WorkerClient.attach(sessionId).catch(() => { spawnFailed = true; return undefined; }));
     if (client) {
       try {
@@ -139,7 +140,7 @@ function turnThroughWorker(client: WorkerClient, sessionId: string, text: string
           else void sendWhenDue().catch((error: unknown) => finish(() => rejectTurn(error)));
           return;
         case 'queue-changed':
-          void sendWhenDue().catch(() => undefined);
+          void sendWhenDue().catch(quiet('worker/scripted-send'));
           return;
         // A script or pipe has no one to answer. The worker waits on each of
         // these for ever (a signed-out amp/aider/devin/mcode send, a goose

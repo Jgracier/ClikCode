@@ -2,13 +2,14 @@
  * driver dismisses them (confirm answers "cancel"), so a delete that asks "are
  * you sure?" silently does nothing. Listening lets the agent see what was asked
  * and choose: declined by default, accepted when the agent says so. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import type { Dialog, Page } from 'playwright-core';
 
 export async function withDialogs<T>(page: Page, accept: boolean, act: () => Promise<T>): Promise<{ result: T; dialogs: string[] }> {
   const seen: string[] = [];
   const onDialog = (dialog: Dialog): void => {
     seen.push(`${dialog.type()}: "${dialog.message().replace(/\s+/g, ' ').slice(0, 200)}" (${accept ? 'accepted' : 'declined'})`);
-    void (accept ? dialog.accept() : dialog.dismiss()).catch(() => undefined);
+    void (accept ? dialog.accept() : dialog.dismiss()).catch(quiet('agent/computer/page-dialogs'));
   };
   page.on('dialog', onDialog);
   try {

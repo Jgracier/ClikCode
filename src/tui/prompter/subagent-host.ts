@@ -3,6 +3,7 @@
  * above is untouched), left with Left / Esc / Ctrl+C. The main turn runs on
  * underneath; none of these keys reaches it. State, keys and rows are
  * tui/subagent-view.ts; this file only connects them to the prompter. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { stdout as output } from 'node:process';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { turnElapsedMs } from '../../harness/protocol/activity-view.js';
@@ -33,7 +34,7 @@ async function readRows(p: TerminalHarnessPrompter, view: SubView): Promise<SubA
   const frames = liveSubAgentRows(p.childEntries.flatMap((entry) => (entry.event ? [entry.event] : [])), ref.id);
   const session = p.currentSession;
   if (ref.read !== 'transcript' || ref.harness !== 'claude' || !session?.nativeSessionId) return frames;
-  const found = await readClaudeSubagent(session.workspace ?? '', session.nativeSessionId, ref.id).catch(() => undefined);
+  const found = await readClaudeSubagent(session.workspace ?? '', session.nativeSessionId, ref.id).catch(quiet('tui/prompter/subagent-host'));
   return found?.rows.length ? found.rows : frames;
 }
 

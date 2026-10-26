@@ -30,6 +30,7 @@
  * case, and any schema without the columns used here, is a transfer.
  */
 
+import { quiet } from '../../../runtime/lifecycle-log.js';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { cp, mkdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -257,7 +258,7 @@ const mcodeCarry: SqliteCarrySpec = {
   async progress(db, schema, input) {
     const relative = historyDirectory(db, schema, input.nativeId);
     const root = mcodeRoot(schema === 'src' ? input.from : input.to);
-    const text = relative ? await readFile(join(root, relative, 'messages.jsonl'), 'utf8').catch(() => undefined) : undefined;
+    const text = relative ? await readFile(join(root, relative, 'messages.jsonl'), 'utf8').catch(quiet('session/discovery/vendors/mcode-store')) : undefined;
     // A destination without the file holds nothing to keep.
     if (text === undefined) return schema === 'main' ? [] : undefined;
     return text.split('\n').filter((line) => line.trim());
@@ -284,7 +285,7 @@ const mcodeCarry: SqliteCarrySpec = {
       if (had) await rename(target, displaced);
       await rename(staged, target);
     } catch {
-      if (had && !await stat(target).then(() => true, () => false)) await rename(displaced, target).catch(() => undefined);
+      if (had && !await stat(target).then(() => true, () => false)) await rename(displaced, target).catch(quiet('session/discovery/vendors/mcode-store'));
       await rm(staged, { recursive: true, force: true });
       return undefined;
     }

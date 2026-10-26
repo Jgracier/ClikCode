@@ -14,6 +14,7 @@
  * every keystroke, so they appear as they arrive rather than making the
  * composer wait. Loading is kicked off once per session, not once per prompt.
  */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { harnessModelLabel, modelSettingsDetail, nativeModelCatalog } from '../../harness/accounts/model-catalog.js';
@@ -41,11 +42,11 @@ function loadVendorValues(session: HarnessSession, harness: AiLocalHarnessDefini
       const detail = modelSettingsDetail(model) ?? (name && name !== label ? name : undefined);
       return { value: model, label, ...(detail ? { detail } : {}) };
     });
-  }).catch(() => undefined);
+  }).catch(quiet('tui/slash/arg-values'));
   void effortChoicesFor(harness, account, session.model).then((choices) => {
     // Default too, as the picker offers it: no level sent, the harness decides.
     slot.efforts = choices.values.length ? [{ value: 'default', detail: `· ${harness.displayName} decides` }, ...choices.values.map((value) => ({ value }))] : [];
-  }).catch(() => undefined);
+  }).catch(quiet('tui/slash/arg-values'));
   return slot;
 }
 

@@ -6,7 +6,7 @@
  * engine (src/local-models) plugs in here and nowhere else. */
 
 import type Conf from 'conf';
-import { diagnostic } from '../../runtime/lifecycle-log.js';
+import { diagnostic, quiet } from '../../runtime/lifecycle-log.js';
 import type { ModelClient } from '../model-client.js';
 import { OpenAIModelClient } from './openai-client.js';
 import { gatewaySubscriptionsOn, subscriptionsHeader } from '../../gateway/subscriptions.js';
@@ -125,7 +125,7 @@ async function gatewayModelFacts(session: HarnessSession, config: Conf): Promise
     // list request's own timeout, after which the turn runs on what it has.
     let list = await savedGatewayModels({ config });
     const fetchedNow = !list;
-    if (!list) list = await gatewayModels({ config }).catch(() => undefined);
+    if (!list) list = await gatewayModels({ config }).catch(quiet('agent/models/for-session'));
     let auto = list?.auto ?? null;
     const id = session.model ?? undefined;
     // However the id is spelled (an agent's own pin is `claude-opus-5-5`, the list `claude-opus-5.5`).

@@ -42,6 +42,7 @@
  *   (WINDSURF_API_KEY), Junie (JUNIE_API_KEY), Nous (NOUS_API_KEY) and
  *   OpenHands' LLM_API_KEY (a model key, not its cloud key) publish none. */
 
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { createHash } from 'node:crypto';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -292,7 +293,7 @@ async function commandCodeEmail(harness: AiLocalHarnessDefinition, profilePath: 
   if (typeof auth?.apiKey === 'string' && auth.apiKey) {
     const response = await fetch('https://api.commandcode.ai/alpha/whoami', {
       headers: { Authorization: `Bearer ${auth.apiKey}`, Accept: 'application/json' },
-    }).catch(() => undefined);
+    }).catch(quiet('harness/accounts/vendor-identity'));
     const found = response?.ok ? parseCommandCodeApiWhoami(await response.text()) : undefined;
     if (found) return found;
   }
@@ -361,7 +362,7 @@ async function antigravityEmail(profilePath: string | undefined): Promise<string
     const entries = await readdir(logDir, { withFileTypes: true }).catch(() => []);
     const logs = (await Promise.all(entries.filter((entry) => entry.isFile() && entry.name.endsWith('.log')).map(async (entry) => {
       const full = join(logDir, entry.name);
-      const info = await stat(full).catch(() => undefined);
+      const info = await stat(full).catch(quiet('harness/accounts/vendor-identity'));
       return info ? { full, mtime: info.mtimeMs } : undefined;
     }))).filter((item): item is { full: string; mtime: number } => Boolean(item)).sort((left, right) => right.mtime - left.mtime);
     for (const { full } of logs.slice(0, 3)) {

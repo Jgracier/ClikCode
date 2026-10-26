@@ -3,6 +3,7 @@
  * console loop. The route decides what runs it: ClikCode's own agent (the
  * Gateway, ClikCode Local) or an account's harness, reached through its
  * vendor CLI or protocol or, for an API key on a model API, directly. */
+import { quiet } from '../runtime/lifecycle-log.js';
 import type Conf from 'conf';
 import { readState } from '../session/state/read.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
@@ -159,7 +160,7 @@ export async function runSessionTurn(
     run.onWorkFinished?.();
     if (ownClock) endTurnClock(ownClock);
     // A record that failed to write must not fail the turn it records.
-    await recorder.finish(stateDirectory(), id).catch(() => undefined);
+    await recorder.finish(stateDirectory(), id).catch(quiet('turn/session-turn'));
   }
 }
 

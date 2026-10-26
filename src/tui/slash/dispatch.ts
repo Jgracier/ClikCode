@@ -9,6 +9,7 @@
  *
  * `!<command>` lines are not routed here: each client runs them its own way
  * (runShellLine, in tui/slash/handlers.ts). */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { existsSync } from 'node:fs';
 import type Conf from 'conf';
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
@@ -178,7 +179,7 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
     // An image named in the message goes with the message.
     const images = await embeddedImagePaths(route.prompt, workspace);
     if (images.length) {
-      for (const image of images) await queueAttachment(session, image).catch(() => undefined);
+      for (const image of images) await queueAttachment(session, image).catch(quiet('tui/slash/dispatch'));
       await writeState(state);
     }
     if (host.pickProviderBeforeSending && !session.nativeHarness && !isClikCodeAgent(session)) {

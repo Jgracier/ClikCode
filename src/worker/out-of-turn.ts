@@ -1,5 +1,6 @@
 /** What the vendor says with no turn open (harness/transport/background-turn.ts OutOfTurnRelay):
  * streamed to every attached window as it arrives, and kept in the conversation once said. */
+import { quiet } from '../runtime/lifecycle-log.js';
 import { outOfTurnRecorder } from '../turn/out-of-turn-record.js';
 import { classifyAccountFailure } from '../turn/failover.js';
 import { storeQuotaRefusal } from '../turn/account-outcome.js';
@@ -54,7 +55,7 @@ export function createOutOfTurnRelay(ctx: WorkerContext): OutOfTurn {
       if (ctx.observer.turnGeneration !== said.generation) return;
       const { session, account } = await ctx.io.currentSessionAndAccount();
       if (ctx.observer.turnGeneration === said.generation) ctx.observer.endTurn(session, account);
-    }).catch(() => undefined).finally(() => { pending -= 1; ctx.idle.scheduleIdleExit(); });
+    }).catch(quiet('worker/out-of-turn')).finally(() => { pending -= 1; ctx.idle.scheduleIdleExit(); });
     return saving;
   };
 
@@ -83,7 +84,7 @@ export function createOutOfTurnRelay(ctx: WorkerContext): OutOfTurn {
         const accountId = (await readState({ transcripts: [] })).sessions.find((item) => item.id === ctx.sessionId)?.nativeThreadAccountId;
         if (!accountId || !await storeQuotaRefusal(accountId, new Error(sofar))) return;
         await leavePersistentTransport(ctx.sessionId, { accountId });
-      })().catch(() => undefined);
+      })().catch(quiet('worker/out-of-turn'));
       return;
     }
     // A thought after words, or words after a thought: the one said so far is a message of its own.

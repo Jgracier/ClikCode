@@ -4,6 +4,7 @@
  * is over -- not inline, where any process could read them on the command line.
  * A harness with no per-run mechanism gets none: what each one has is recorded
  * in docs/HARNESS_CAPABILITY_STATUS.md. */
+import { quiet } from '../../../runtime/lifecycle-log.js';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -29,7 +30,7 @@ export async function nativeMcpConfig(harness: Pick<AiLocalHarnessDefinition, 'c
     const directory = await mkdtemp(join(tmpdir(), 'clikcode-mcp-'));
     const file = join(directory, 'mcp.json');
     await writeFile(file, `${JSON.stringify(ampMcpConfig(servers))}\n`, { encoding: 'utf8', mode: 0o600 });
-    return { argv: [...flag, file], dispose: () => rm(directory, { recursive: true, force: true }).catch(() => undefined) };
+    return { argv: [...flag, file], dispose: () => rm(directory, { recursive: true, force: true }).catch(quiet('harness/transport/native/mcp-config')) };
   } catch {
     // MCP must never be the reason a turn did not run.
     return NONE;

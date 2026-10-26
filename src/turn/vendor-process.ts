@@ -1,4 +1,5 @@
 /** Reusable vendor processes. */
+import { quiet } from '../runtime/lifecycle-log.js';
 import { createCodexSession } from '../harness/transport/codex-app-server.js';
 import { createAcpSession } from '../harness/transport/acp-client.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
@@ -175,7 +176,7 @@ async function leaveTransport(sessionId: string, live: PersistentTransport): Pro
     retiredWorkChanged(sessionId);
     return;
   }
-  await live.session.close().catch(() => undefined);
+  await live.session.close().catch(quiet('turn/vendor-process'));
 }
 
 /** The conversation is moving off its vendor process -- another account, provider, workspace or
@@ -201,7 +202,7 @@ export async function closePersistentTransport(sessionId?: string): Promise<void
     const retired = [...retiredTransports.get(id) ?? []];
     retiredTransports.delete(id);
     if (live) persistentTransports.delete(id);
-    await Promise.all([live, ...retired].map((item) => item?.session.close().catch(() => undefined)));
+    await Promise.all([live, ...retired].map((item) => item?.session.close().catch(quiet('turn/vendor-process'))));
     if (retired.length) retiredWorkChanged(id);
   }));
 }
@@ -244,5 +245,5 @@ export async function closeStandby(sessionId: string): Promise<void> {
   const standby = standbyTransports.get(sessionId);
   if (!standby) return;
   standbyTransports.delete(sessionId);
-  await standby.transport.session.close().catch(() => undefined);
+  await standby.transport.session.close().catch(quiet('turn/vendor-process'));
 }

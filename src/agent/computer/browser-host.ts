@@ -1,4 +1,5 @@
 /** Detached owner of ClikCode's Chrome profile. Workers connect over local CDP. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -37,7 +38,7 @@ export async function runComputerHost(stateDir: string): Promise<void> {
   const record = JSON.stringify({ pid: process.pid });
   try {
     await fs.writeFile(hostFile, record, { mode: 0o600 });
-    const stop = (): void => { void context.close().catch(() => undefined); };
+    const stop = (): void => { void context.close().catch(quiet('agent/computer/browser-host')); };
     process.once('SIGTERM', stop);
     process.once('SIGINT', stop);
     await new Promise<void>(resolve => (context as unknown as { once(event: 'close', callback: () => void): void }).once('close', resolve));
@@ -45,6 +46,6 @@ export async function runComputerHost(stateDir: string): Promise<void> {
     process.off('SIGINT', stop);
   } finally {
     try { if (await fs.readFile(hostFile, 'utf8') === record) await fs.unlink(hostFile); } catch { /* already gone */ }
-    await context.close().catch(() => undefined);
+    await context.close().catch(quiet('agent/computer/browser-host'));
   }
 }

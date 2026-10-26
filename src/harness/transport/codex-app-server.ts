@@ -2,7 +2,7 @@ import { codexMcpLaunch, globalMcpServers } from './acp-mcp-servers.js';
 import { askHarnessQuestion, CANCELLED, type HarnessQuestion, type HarnessQuestionRequest, type HarnessQuestionResult } from '../events/question.js';
 import { formToQuestions } from '../events/form-questions.js';
 import { activityOutput } from '../protocol/activity-events.js';
-import { lifecycle } from '../../runtime/lifecycle-log.js';
+import { lifecycle, quiet } from '../../runtime/lifecycle-log.js';
 import { markTurn } from '../../runtime/turn-latency.js';
 import { turnCancelledError } from '../../agent/cancellation.js';
 import { type JsonRpcPeer } from './jsonrpc-peer.js';
@@ -418,7 +418,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     const { failure, fail } = turnFailure();
     let complete!: (error?: Error) => void;
     const completion = new Promise<void>((resolve, reject) => { complete = (error) => error ? reject(error) : resolve(); });
-    completion.catch(() => undefined);
+    completion.catch(quiet('harness/transport/codex-app-server'));
     const turn: ActiveTurn = {
       input, observer: input, done: false, lastAgentMessage: '', streamedMessage: '', sawActivity: false,
       items: new Map(), output: new Map(), thoughts: new Map(), complete, fail,
@@ -486,7 +486,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     if (this.turn && !this.turn.done) throw new Error('Codex is working; compact when the turn ends');
     if (this.compactWaiter) throw new Error('Codex is already compacting this conversation');
     const compacted = new Promise<void>((resolve, reject) => { this.compactWaiter = { done: resolve, fail: reject }; });
-    compacted.catch(() => undefined);
+    compacted.catch(quiet('harness/transport/codex-app-server'));
     try {
       await compactCodexThread(live.peer, threadId);
       await compacted;
@@ -513,7 +513,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     this.settleCancel(live, (settled) => {
       this.turnCompletedWaiter = () => { this.turnCompletedWaiter = undefined; settled(); };
     }, () => { this.turnCompletedWaiter = undefined; });
-    live.peer.request('turn/interrupt', { threadId: turn.threadId, turnId: turn.turnId }, { timeoutMs: CANCEL_SETTLE_MS }).catch(() => undefined);
+    live.peer.request('turn/interrupt', { threadId: turn.threadId, turnId: turn.turnId }, { timeoutMs: CANCEL_SETTLE_MS }).catch(quiet('harness/transport/codex-app-server'));
     return true;
   }
 
@@ -679,7 +679,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
       live.modelsListed = true;
       void listCodexModels(peer).then((models) => {
         if (models.length) input.onSessionModels?.({ models: { availableModels: models.map((m) => ({ modelId: m.model, name: m.displayName })) } }, true);
-      }).catch(() => undefined);
+      }).catch(quiet('harness/transport/codex-app-server'));
     }
     if (input.initializeOnly) return { text: '', nativeSessionId: input.nativeSessionId ?? '' };
     const wanted = input.nativeSessionId ?? this.threadId;
@@ -774,7 +774,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
       const stream: Stream | undefined = turn ?? this.background ?? this.openBackground('vendor-turn');
       if (!stream) return answer(false, true);
       const readLive = turn?.input.currentPermissionMode;
-      const liveMode = readLive ? await readLive().catch(() => undefined) : undefined; // fail-open-ok: the mode the turn started with still stands.
+      const liveMode = readLive ? await readLive().catch(quiet('harness/transport/codex-app-server')) : undefined; // fail-open-ok: the mode the turn started with still stands.
       const permissionMode = liveMode ?? turn?.input.permissionMode ?? this.lastPermissionMode;
       if (permissionMode === 'bypass') return answer(true);
       // `auto` delegates routine review to Codex's own auto_review reviewer.

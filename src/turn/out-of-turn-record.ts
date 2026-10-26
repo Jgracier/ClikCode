@@ -5,6 +5,7 @@
  * Chunks of one message arrive one at a time: each joins the record the
  * previous one made, as long as nothing else was added to the conversation
  * since. */
+import { quiet } from '../runtime/lifecycle-log.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import type { OutOfTurnRelay } from '../harness/transport/background-turn.js';
@@ -31,7 +32,7 @@ export function outOfTurnRecorder(sessionId: string): (said: Parameters<OutOfTur
       session.updatedAt = new Date().toISOString();
       last.set(sessionId, { kind: said.kind, content });
       await writeState(state);
-    }).catch(() => undefined);
+    }).catch(quiet('turn/out-of-turn-record'));
     writing.set(sessionId, next);
     return next;
   };

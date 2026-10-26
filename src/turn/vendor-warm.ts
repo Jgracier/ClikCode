@@ -20,7 +20,7 @@ import { nativeSessionStore } from '../session/discovery/registry.js';
 import { harnessCanRunTurns, localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { inspectNativeHarness } from '../harness/transport/native/inspect.js';
 import { sessionTurnTransport } from '../harness/transport/select.js';
-import { lifecycle } from '../runtime/lifecycle-log.js';
+import { lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { sessionTranscriptMessages } from './checkpoint.js';
 import { turnBackendForAccount } from './account-routing.js';
 import { turnEnvironment } from './turn-environment.js';
@@ -44,7 +44,7 @@ export async function warmVendor(sessionId: string): Promise<boolean> {
   if (account.status !== 'ready' || turnBackendForAccount(account) !== 'vendor') return false;
   const transport = sessionTurnTransport(harness, session);
   if (transport !== 'acp' && transport !== 'codex-app-server') return false;
-  if (!(await inspectNativeHarness(harness).catch(() => undefined))?.installed) return false;
+  if (!(await inspectNativeHarness(harness).catch(quiet('turn/vendor-warm')))?.installed) return false;
   session.workspace ??= homedir();
   const persistNow = async (): Promise<void> => {
     const latest = await readState({ transcripts: [] });

@@ -1,5 +1,6 @@
 /** The real ports of the connector runner: ClikDeploy through its CLI (the saved admin key is its own sign-in), the ClikCode browser
  * through the consent driver and the saved signup recipes. Nothing here prints or logs a key. The arguments (ids, plain-words reasons and notes) hold no secret, so they go on the command line: clikdeploy 1.0.34 cannot read them from stdin. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -109,8 +110,8 @@ export function liveDriver(options: LiveDriverOptions): BrowserDriver {
         const screenshot = await shoot(page, id, shotDir);
         return { ok: false, stop: { ...seen, message: message.slice(0, 300), ...(screenshot ? { screenshot } : {}) } };
       } finally {
-        await closeComputerPage(options.stateDir, 'connectors').catch(() => undefined);
-        await releaseComputerBrowser(options.stateDir).catch(() => undefined);
+        await closeComputerPage(options.stateDir, 'connectors').catch(quiet('agent/computer/connector-runner-live'));
+        await releaseComputerBrowser(options.stateDir).catch(quiet('agent/computer/connector-runner-live'));
       }
     },
     async backoff(id) { return (await import('./keygrab-park.js')).backoffUntil(options.stateDir, id); },
@@ -134,7 +135,7 @@ export function liveDriver(options: LiveDriverOptions): BrowserDriver {
       const stop = async (message: string): Promise<DriveOutcome> => {
         const { computerPage } = await import('./browser.js');
         const { pageExcerpt } = await import('./oauth-consent.js');
-        const page = await computerPage(options.stateDir, 'connectors').catch(() => undefined);
+        const page = await computerPage(options.stateDir, 'connectors').catch(quiet('agent/computer/connector-runner-live'));
         const seen = page ? await look(page) : { text: '', controls: [] as string[] };
         const blocker = detectBlocker(seen.text);
         const kind: StopInfo['kind'] = blocker === 'a captcha' ? 'captcha' : blocker === 'an SMS or authenticator code' ? 'mfa' : blocker === 'a payment page' ? 'payment' : 'unknown';
@@ -154,8 +155,8 @@ export function liveDriver(options: LiveDriverOptions): BrowserDriver {
         return { ok: true, note: 'key captured and sent to ClikDeploy; it was not shown' };
       } finally {
         const { closeComputerPage, releaseComputerBrowser } = await import('./browser.js');
-        await closeComputerPage(options.stateDir, 'connectors').catch(() => undefined);
-        await releaseComputerBrowser(options.stateDir).catch(() => undefined);
+        await closeComputerPage(options.stateDir, 'connectors').catch(quiet('agent/computer/connector-runner-live'));
+        await releaseComputerBrowser(options.stateDir).catch(quiet('agent/computer/connector-runner-live'));
       }
     },
   };

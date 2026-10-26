@@ -1,6 +1,7 @@
 /** Language-server diagnostics and code navigation, from servers already
  * installed on PATH (lsp/servers.ts). Positions are 1-based here and 0-based
  * (UTF-16) on the wire. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { defineTool, type ToolContext } from '../tool-contract.js';
@@ -130,7 +131,7 @@ async function changedThisTurn(ctx: ToolContext): Promise<string[]> {
   const sessionId = ctx.checkpoint?.sessionId ?? ctx.sessionId;
   const turnId = ctx.checkpoint?.turnId ?? ctx.turnId;
   const turn = (await ctx.checkpoints.listTurns(sessionId).catch(() => [])).find((entry) => entry.turnId === turnId);
-  const files = await Promise.all((turn?.files ?? []).map(async (file) => (await fs.stat(file).catch(() => undefined))?.isFile() && languageFor(file) ? file : undefined));
+  const files = await Promise.all((turn?.files ?? []).map(async (file) => (await fs.stat(file).catch(quiet('agent/tools/lsp')))?.isFile() && languageFor(file) ? file : undefined));
   return files.filter((file): file is string => Boolean(file));
 }
 
@@ -200,7 +201,7 @@ export const lspTool = defineTool<LspArgs>({
       }
       if (!args.file) throw new ToolInputError(`${args.operation} needs file.`);
       const resolved = resolveForRead(args.file, ctx);
-      const stat = await fs.stat(resolved.real).catch(() => undefined);
+      const stat = await fs.stat(resolved.real).catch(quiet('agent/tools/lsp'));
       if (!stat?.isFile()) return { output: `File not found: ${args.file}`, isError: true };
       const file = resolved.real;
       if (args.operation === 'diagnostics') return { output: await diagnostics([file], ctx) };

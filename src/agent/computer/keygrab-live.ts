@@ -1,5 +1,6 @@
 /** The real port of keygrab: ClikCode's hidden browser through the `computer_web` tool (so its recorder saves the recipe as the actions
  * succeed) and a plain look at the page for what it shows. Nothing here prints or logs a key: capture is the tool's own unseen capture. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -150,7 +151,7 @@ export async function liveKeygrabPort(options: LiveKeygrabOptions): Promise<Keyg
       try {
         const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(8_000), headers: { 'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36', accept: 'text/html,application/xhtml+xml' } });
         const type = res.headers.get('content-type') ?? '';
-        await res.body?.cancel().catch(() => undefined);
+        await res.body?.cancel().catch(quiet('agent/computer/keygrab-live'));
         return { html: /html/i.test(type), status: res.status, url: res.url || url };
       } catch { return undefined; }
     },
@@ -183,12 +184,12 @@ export async function liveKeygrab(options: { stateDir: string; signal?: AbortSig
     });
     if (done.ok) {
       await park.clearParked(options.stateDir, id);
-      await browser.closeParkedPage(options.stateDir, marker).catch(() => undefined);
+      await browser.closeParkedPage(options.stateDir, marker).catch(quiet('agent/computer/keygrab-live'));
       const hosts = [...new Set(changed(before, await stamp()))];
       return { ok: true, note: `${done.note} (${done.steps} browser actions, signed in via ${done.route}; ${hosts.length ? `a recipe for ${hosts.join(', ')} was recorded` : 'no new recipe was recorded'})`, actions: done.steps, recipe: hosts.length > 0 };
     }
     // Not finished: keep the hidden tab where it is. A tab parked earlier for this vendor is replaced (unless it is the one being resumed).
-    if (!budget.resume) await browser.closeParkedPage(options.stateDir, marker).catch(() => undefined);
+    if (!budget.resume) await browser.closeParkedPage(options.stateDir, marker).catch(quiet('agent/computer/keygrab-live'));
     const stop = done.stop;
     const record: ParkedRecord = {
       id, marker, parkedAt: new Date().toISOString(), url: stop.url, vendorUrl: url, ...(budget.alternates?.length ? { alternates: budget.alternates } : {}),
@@ -198,11 +199,11 @@ export async function liveKeygrab(options: { stateDir: string; signal?: AbortSig
     parked = await browser.parkComputerPage(options.stateDir, TAB, marker);
     if (parked) {
       await park.saveParked(options.stateDir, record);
-      for (const old of (await park.listParked(options.stateDir)).slice(0, -park.MAX_PARKED)) { await browser.closeParkedPage(options.stateDir, old.marker).catch(() => undefined); await park.clearParked(options.stateDir, old.id); }
+      for (const old of (await park.listParked(options.stateDir)).slice(0, -park.MAX_PARKED)) { await browser.closeParkedPage(options.stateDir, old.marker).catch(quiet('agent/computer/keygrab-live')); await park.clearParked(options.stateDir, old.id); }
     }
     return { ok: false, stop: { ...stop, vendorUrl: url, ...(parked ? { parked: true } : {}) } };
   } finally {
-    if (!parked) await closeComputerPage(options.stateDir, TAB).catch(() => undefined);
-    await releaseComputerBrowser(options.stateDir).catch(() => undefined);
+    if (!parked) await closeComputerPage(options.stateDir, TAB).catch(quiet('agent/computer/keygrab-live'));
+    await releaseComputerBrowser(options.stateDir).catch(quiet('agent/computer/keygrab-live'));
   }
 }

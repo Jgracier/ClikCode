@@ -1,6 +1,7 @@
 /** Switching the conversation a session is attached to, including the
  * handover a change of provider forces. */
 
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { recallRouteModel, rememberRouteModel } from '../../session/route-models.js';
 import type { HarnessPrompter } from '../../harness/prompter.js';
 import { randomUUID } from 'node:crypto';
@@ -101,14 +102,14 @@ export async function newConversation(
  * alone, and so is the journal it is writing. */
 export async function turnIsRunning(id: string): Promise<boolean> {
   const { workerTurn } = await import('../../worker/turn-bridge.js');
-  return Boolean(await workerTurn(id).catch(() => undefined));
+  return Boolean(await workerTurn(id).catch(quiet('commands/ai/conversations')));
 }
 
 /** A turn is running in this conversation's worker. Moving the chat to another machine copies it, so it
  * must wait; changing provider or account does not (the running turn follows the change at its next step). */
 export async function refuseWhileTurnRuns(id: string): Promise<void> {
   const { workerTurn } = await import('../../worker/turn-bridge.js');
-  if (await workerTurn(id).catch(() => undefined)) {
+  if (await workerTurn(id).catch(quiet('commands/ai/conversations'))) {
     throw new Error('A turn is still running in this conversation -- switch when it ends, or stop it first.');
   }
 }
@@ -137,7 +138,7 @@ export async function moveToProvider(
   const account = accountId ? state.accounts.find((item) => item.id === accountId) : undefined;
   // Effort and permission mode are the conversation's, not the provider's.
   const efforts = harnessSupportsEffort(harness)
-    ? (await effortChoicesFor(harness, account, current.model).catch(() => undefined))?.values
+    ? (await effortChoicesFor(harness, account, current.model).catch(quiet('commands/ai/conversations')))?.values
     : undefined;
   const defaults = carriedHandoffSettings(current, harness, resolveDefaultSettings(state, harness.provider), efforts);
   const lastUsedModel = [...state.sessions]

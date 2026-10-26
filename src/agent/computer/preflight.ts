@@ -9,6 +9,7 @@
  *                   (a link into /tmp breaks the installed CLI on the next cleanup or reboot).
  * Only the page's address and whether a few controls exist are looked at: no page text, field value or cookie is read.
  * Nothing here throws; a check that cannot run is a no with its reason. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { existsSync, lstatSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { homedir, tmpdir } from 'node:os';
@@ -92,7 +93,7 @@ export type PreflightDeps = {
   buildId?: string;
 };
 
-const settle = async (page: PreflightPage): Promise<void> => { await page.waitForLoadState?.('load', { timeout: 8_000 }).catch(() => undefined); };
+const settle = async (page: PreflightPage): Promise<void> => { await page.waitForLoadState?.('load', { timeout: 8_000 }).catch(quiet('agent/computer/preflight')); };
 
 export async function runPreflight(deps: PreflightDeps): Promise<PreflightResult> {
   const reasons: string[] = [];
@@ -121,7 +122,7 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightResult
           if (!verdict.readable) reasons.push(`gmailReadable: ${verdict.reason}`);
         } catch (error) { reasons.push(`gmailReadable: ${oneLine(error)}`); }
       } else reasons.push('gmailReadable: not checked, Google is not signed in');
-    } finally { await page.close().catch(() => undefined); }
+    } finally { await page.close().catch(quiet('agent/computer/preflight')); }
   } else reasons.push('googleSignedIn: not checked, the browser did not start', 'gmailReadable: not checked, the browser did not start');
   const deps_ = checkDepsLink('releaseDir' in deps ? deps.releaseDir : installedReleaseDir(), deps.temp);
   if (!deps_.ok) reasons.push(`depsLinkOk: ${deps_.reason}`);

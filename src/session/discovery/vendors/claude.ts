@@ -1,6 +1,7 @@
 /** Claude Code's own session history: project directories, and the JSONL
  * transcripts inside them. */
 
+import { quiet } from '../../../runtime/lifecycle-log.js';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -139,7 +140,7 @@ export async function readClaudeFsTranscript(nativeId: string, workspace: string
   let raw: string | undefined;
   for (const dir of claudeProjectDirectories(workspace, environment)) {
     // fail-open-ok: an optional native transcript that disappeared during discovery contributes no messages.
-    raw = await readFile(join(dir, `${nativeId}.jsonl`), 'utf8').catch(() => undefined);
+    raw = await readFile(join(dir, `${nativeId}.jsonl`), 'utf8').catch(quiet('session/discovery/vendors/claude'));
     if (raw !== undefined) break;
   }
   if (raw === undefined) return [];
@@ -173,7 +174,7 @@ export async function readClaudeFsTranscriptForSync(
   if (!cached.length) return readClaudeFsTranscript(nativeId, workspace, environment);
   for (const dir of claudeProjectDirectories(workspace, environment)) {
     const path = join(dir, `${nativeId}.jsonl`);
-    const info = await stat(path).catch(() => undefined);
+    const info = await stat(path).catch(quiet('session/discovery/vendors/claude'));
     if (!info?.isFile()) continue;
     let bytes = 256 * 1024;
     while (bytes < info.size) {

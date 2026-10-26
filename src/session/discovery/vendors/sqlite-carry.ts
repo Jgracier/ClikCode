@@ -32,6 +32,7 @@
  * ids are left to the destination (`omit`), which is what keeps them from
  * colliding with its own rows. */
 
+import { quiet } from '../../../runtime/lifecycle-log.js';
 import { stat } from 'node:fs/promises';
 import type { NativeSessionCarry, NativeSessionEnvironment } from '../stores.js';
 
@@ -244,10 +245,10 @@ export async function carrySqliteSession(spec: SqliteCarrySpec, input: NativeSes
       db.exec('COMMIT');
     } catch {
       try { db.exec('ROLLBACK'); } catch { /* fail-open-ok: no transaction left to roll back. */ }
-      await swap?.undo().catch(() => undefined);
+      await swap?.undo().catch(quiet('session/discovery/vendors/sqlite-carry'));
       return false;
     }
-    await swap?.commit().catch(() => undefined);
+    await swap?.commit().catch(quiet('session/discovery/vendors/sqlite-carry'));
     return true;
   } catch {
     return false;

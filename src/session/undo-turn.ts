@@ -18,6 +18,7 @@
  * than reaching back. Repeated, it walks back one turn at a time. It is
  * refused while a turn is running in the conversation. */
 
+import { quiet } from '../runtime/lifecycle-log.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { FileCheckpointStore } from '../agent/file-checkpoints.js';
@@ -112,7 +113,7 @@ async function undoReportedTurn(record: TurnChangeRecord, workspace: string, res
       result.conflicts.push({ path: target, reason: OUTSIDE_WORKSPACE });
       continue;
     }
-    const current = await fs.readFile(target, 'utf8').catch(() => undefined);
+    const current = await fs.readFile(target, 'utf8').catch(quiet('session/undo-turn'));
     const unwound = unwindChanges(current, changes);
     if (!unwound.whole) {
       const why = conflictReason(current, changes);
@@ -134,10 +135,10 @@ async function undoReportedTurn(record: TurnChangeRecord, workspace: string, res
 /** A turn is running in the conversation now: a scripted turn holds it, or
  * the worker holding it has a turn in flight (its journal, read fresh). */
 export async function turnIsRunning(sessionId: string): Promise<boolean> {
-  const holder = await conversationHolder(sessionId).catch(() => undefined);
+  const holder = await conversationHolder(sessionId).catch(quiet('session/undo-turn'));
   if (!holder) return false;
   if (holder.kind === 'turn') return true;
-  return Boolean(await readStoredPendingTurn(sessionId).catch(() => undefined));
+  return Boolean(await readStoredPendingTurn(sessionId).catch(quiet('session/undo-turn')));
 }
 
 export async function undoLastTurn(

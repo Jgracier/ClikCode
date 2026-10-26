@@ -1,6 +1,7 @@
 /** Append-only JSONL transcript plus the renderers that turn structured
  * items into what a transport can carry. The file on disk is never rewritten:
  * compaction appends a `compaction` marker, so the full history survives. */
+import { quiet } from '../runtime/lifecycle-log.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { ConversationItem, ImageInput } from './model-client.js';
@@ -74,14 +75,14 @@ export class ConversationStore {
   /** Cuts the history back to `bytes` (a size() taken earlier): what a turn
    * that never got an answer wrote, taken back before it is sent again. */
   async truncate(bytes: number): Promise<void> {
-    await this.queue.catch(() => undefined);
+    await this.queue.catch(quiet('agent/conversation'));
     if (await this.size() > bytes) await fs.truncate(this.file, bytes);
   }
 
   /** Sets the history aside, kept beside it, so the next turn starts the
    * agent's memory over (the conversation was cut back: /redo). */
   async archive(): Promise<void> {
-    await this.queue.catch(() => undefined);
+    await this.queue.catch(quiet('agent/conversation'));
     try { await fs.rename(this.file, `${this.file}.${Date.now()}.discarded`); } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
@@ -108,7 +109,7 @@ export class ConversationStore {
       await fs.appendFile(this.file, prefix + records.map((record) => `${JSON.stringify(record)}\n`).join(''), { mode: 0o600 });
     };
     const next = this.queue.then(work, work);
-    this.queue = next.catch(() => undefined);
+    this.queue = next.catch(quiet('agent/conversation'));
     return next;
   }
 

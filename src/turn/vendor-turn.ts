@@ -1,6 +1,6 @@
 /** Run a turn through a vendor's CLI or structured session protocol. */
 import { moveThreadToAccount, reconcileNativeThread } from '../session/carry.js';
-import { lifecycle } from '../runtime/lifecycle-log.js';
+import { lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { liveCallsForSwitch } from './live-settings.js';
 import { completeTurnCheckpoint, discardInterruptedTurn } from './turn-journal.js';
 import { closePersistentTransport, closeStandby, leavePersistentTransport } from './vendor-process.js';
@@ -72,7 +72,7 @@ async function startVendorTurn(ctx: VendorTurnContext): Promise<void> {
   if (returningThrough !== undefined && session.nativeSessionId) {
     const transport = sessionTurnTransport(harness, session);
     const argvBound = (transport === 'structured-cli' || transport === 'text-cli') && harness.turn?.promptInput !== 'stdin';
-    const contextWindow = await targetContextWindow(ctx.state.sessions, harness.command, ctx.model, modelsDevFiles()).catch(() => undefined);
+    const contextWindow = await targetContextWindow(ctx.state.sessions, harness.command, ctx.model, modelsDevFiles()).catch(quiet('turn/vendor-turn'));
     const budget = transferBudget({ ...(contextWindow ? { contextWindow } : {}), ...(argvBound ? { argvLimit: maxPromptArgvBytes() } : {}) });
     const missed = ctx.baseMessages.slice(returningThrough);
     if (missed.length) {

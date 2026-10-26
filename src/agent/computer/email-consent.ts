@@ -1,4 +1,5 @@
 /** Drives Google's consent screens in the ClikCode browser, already signed in, so connecting a mailbox is one command and no extra steps. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import type { Page } from 'playwright-core';
 import { startConsent, type GoogleEndpoints } from './email-api.js';
 
@@ -20,7 +21,7 @@ export async function connectEmail(stateDir: string, page: Page, options: { emai
   const consent = await startConsent(stateDir, { loginHint: options.email, endpoints: options.endpoints, timeoutMs: options.timeoutMs });
   let finished = false;
   consent.done.then(() => { finished = true; }, () => { finished = true; });
-  await page.goto(consent.url, { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => undefined);
+  await page.goto(consent.url, { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(quiet('agent/computer/email-consent'));
   const click = async (locator: ReturnType<Page['locator']>): Promise<boolean> => {
     const shown = locator.filter({ visible: true });
     if (!(await shown.count().catch(() => 0))) return false;
@@ -36,10 +37,10 @@ export async function connectEmail(stateDir: string, page: Page, options: { emai
       else if (await click(page.getByRole('link', { name: /go to .*\(unsafe\)/i }))) options.progress?.('Continued past the unverified-app notice.\n');
       else if (await click(page.getByText(/^advanced$/i))) options.progress?.('');
       else if (await click(page.getByRole('button', { name: /^(continue|allow)$/i }))) options.progress?.('Allowed read access to mail.\n');
-      await page.waitForTimeout(1_000).catch(() => undefined);
+      await page.waitForTimeout(1_000).catch(quiet('agent/computer/email-consent'));
     }
   })();
   try { return await consent.done; }
   catch (error) { throw new Error(`${(error as Error).message} ${await stuckOn(page)}`); }
-  finally { await steps.catch(() => undefined); }
+  finally { await steps.catch(quiet('agent/computer/email-consent')); }
 }

@@ -6,6 +6,7 @@
  * read is not pinned to that identity -- it is compared by its bytes next
  * time instead. Parsed values are shared and must be treated as immutable. */
 
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { readFile, stat } from 'node:fs/promises';
 
 interface Entry<T> { identity?: string; raw: string; value: T }
@@ -53,7 +54,7 @@ export function cachedFile<T>(path: () => string, parse: (raw: string) => T): Ca
     },
     async remember(raw, value) {
       const file = path();
-      const info = await stat(file).catch(() => undefined);
+      const info = await stat(file).catch(quiet('session/store/cached-file'));
       entry = { path: file, raw, value, ...(info ? { identity: fileIdentity(info) } : {}) };
     },
     raw: () => current()?.raw,

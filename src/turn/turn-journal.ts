@@ -6,7 +6,7 @@ import type { HarnessSession, HarnessState, OpenThought, TurnMark } from '../ses
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { LiveTurnSubmission } from './live-input.js';
 import type { TurnRunOptions } from './session-turn.js';
-import { lifecycle } from '../runtime/lifecycle-log.js';
+import { lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { readState } from '../session/state/read.js';
 import { writeState, writeTranscriptCheckpoint } from '../session/state/write.js';
 import { beginPendingTurn, consumeSessionTurn, discardPendingTurn, enqueueSessionTurn, failPendingTurn, finishPendingTurn, recordPendingActivity, recordPendingMark, recordPendingSteer, setPendingThought, stopPendingCalls, updatePendingResponse } from './checkpoint.js';
@@ -23,7 +23,7 @@ async function nameSession(
 ): Promise<void> {
   if (session.nameSource === 'user') return;
   if (session.nameSource !== 'message' && session.name) return;
-  const vendorRaw = await sources.vendor?.().catch(() => undefined);
+  const vendorRaw = await sources.vendor?.().catch(quiet('turn/turn-journal'));
   const vendorTitle = vendorRaw ? normalizeSessionTitle(vendorRaw) : undefined;
   if (vendorTitle) {
     session.name = vendorTitle;
@@ -361,12 +361,12 @@ export class DurableTurnCheckpoint {
     // So the chain the NEXT write builds on is always settled, while the
     // promise handed back to THIS caller still carries its own real failure.
     if (!transcriptOnly) this.rowDirty = false;
-    const write = this.writes.catch(() => undefined).then(async () => {
+    const write = this.writes.catch(quiet('turn/turn-journal')).then(async () => {
       if (transcriptOnly && await writeTranscriptCheckpoint(this.state, this.session.id)) return;
       await writeState(this.state);
       this.saveFailureSaid = false;
     });
-    this.writes = write.catch(() => undefined);
+    this.writes = write.catch(quiet('turn/turn-journal'));
     return write;
   }
 }

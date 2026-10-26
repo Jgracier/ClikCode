@@ -1,5 +1,6 @@
 /** What ClikCode reports about itself: models, usage, gateway status. */
 
+import { quiet } from '../../runtime/lifecycle-log.js';
 import type Conf from 'conf';
 import { getApiKeyForUrl, getApiUrl } from '../../gateway/credentials.js';
 import { emitResult } from '../../cli/structured-output.js';
@@ -76,11 +77,11 @@ export async function aiGatewayUsage(config: Conf, options: { days?: string } = 
   if (days !== undefined) url.searchParams.set('days', String(days));
   const headers = { authorization: `Bearer ${apiKey}`, accept: 'application/json', 'user-agent': CLIKCODE_USER_AGENT };
   const [response, creditResponse] = await Promise.all([fetchImpl(url, { headers }), fetchImpl(new URL('/v1/credits', apiUrl), { headers })]);
-  const body = await response.json().catch(() => undefined) as { data?: unknown; error?: unknown } | undefined;
+  const body = await response.json().catch(quiet('commands/ai/status')) as { data?: unknown; error?: unknown } | undefined;
   if (!response.ok || !body?.data) {
     throw Object.assign(new Error(`ClikDeploy Gateway usage: ${gatewayErrorReason(body, response.status, 'this Gateway does not report usage yet')}`), { statusCode: response.status });
   }
-  const credit = await creditResponse.json().catch(() => undefined) as { data?: unknown } | undefined;
+  const credit = await creditResponse.json().catch(quiet('commands/ai/status')) as { data?: unknown } | undefined;
   emitResult({ apiUrl, ...(body.data as Record<string, unknown>), ...(creditResponse.ok && credit?.data ? { credit: credit.data } : {}) });
 }
 
@@ -108,7 +109,7 @@ export async function aiGatewayCredit(
     headers: { authorization: `Bearer ${apiKey}`, accept: 'application/json', 'content-type': 'application/json', 'user-agent': CLIKCODE_USER_AGENT },
     body: JSON.stringify(amountUsd === undefined ? {} : { amountUsd }),
   });
-  const body = await response.json().catch(() => undefined) as { data?: { url?: unknown; amountCents?: unknown }; error?: unknown } | undefined;
+  const body = await response.json().catch(quiet('commands/ai/status')) as { data?: { url?: unknown; amountCents?: unknown }; error?: unknown } | undefined;
   const url = typeof body?.data?.url === 'string' ? body.data.url : undefined;
   if (!response.ok || !url) {
     throw Object.assign(new Error(`ClikDeploy Gateway credit: ${gatewayErrorReason(body, response.status, 'this Gateway does not sell credit yet')}`), { statusCode: response.status });
@@ -129,7 +130,7 @@ async function setAutoTopUp(apiUrl: string, apiKey: string, value: string, fetch
     headers: { authorization: `Bearer ${apiKey}`, accept: 'application/json', 'content-type': 'application/json', 'user-agent': CLIKCODE_USER_AGENT },
     body: JSON.stringify({ autoTopUpEnabled: word === 'on' }),
   });
-  const body = await response.json().catch(() => undefined) as { data?: { autoTopUpEnabled?: unknown }; error?: unknown } | undefined;
+  const body = await response.json().catch(quiet('commands/ai/status')) as { data?: { autoTopUpEnabled?: unknown }; error?: unknown } | undefined;
   if (!response.ok || typeof body?.data?.autoTopUpEnabled !== 'boolean') {
     throw Object.assign(new Error(`ClikDeploy Gateway auto top-up: ${gatewayErrorReason(body, response.status, 'this Gateway does not offer automatic top-up yet')}`), { statusCode: response.status });
   }

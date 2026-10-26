@@ -8,6 +8,7 @@
  * Presence is bookkeeping, never a lock: any number of clients can have a
  * chat open, and its worker serializes their turns (worker/turn-bridge.ts).
  */
+import { quiet } from '../runtime/lifecycle-log.js';
 import { homedir } from 'node:os';
 import { folderExists, missingFolderMessage } from '../runtime/machine-folder.js';
 import { readState } from './state/read.js';
@@ -55,7 +56,7 @@ export async function openConversation(
   const workspace = requested && folderExists(requested) ? requested : home;
   const state = await readState({ transcripts: [] });
   // Housekeeping, in the background and at most daily (session/state/sweep.ts).
-  void sweepStateDaily().catch(() => undefined);
+  void sweepStateDaily().catch(quiet('session/attach'));
   let session: HarnessSession | undefined;
   if (mode === 'resume') {
     if (!ref) throw new Error('resume needs a conversation id');
@@ -110,7 +111,7 @@ export async function resolveSessionModel(id: string): Promise<void> {
   const harness = sessionOrProviderHarness(session);
   if (!harness) return;
   const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
-  const resolved = await resolveNativeModel(harness, account).catch(() => undefined);
+  const resolved = await resolveNativeModel(harness, account).catch(quiet('session/attach'));
   if (!resolved) return;
   session.model = resolved;
   session.updatedAt = new Date().toISOString();
@@ -144,8 +145,8 @@ export async function releaseConversationClaim(id: string): Promise<void> {
 /** This client stops showing a conversation: its presence goes, and one that
  * was never started is not kept. */
 export async function leaveConversation(id: string): Promise<void> {
-  await releaseConversationClaim(id).catch(() => undefined);
-  await discardIfBlank(id).catch(() => undefined);
+  await releaseConversationClaim(id).catch(quiet('session/attach'));
+  await discardIfBlank(id).catch(quiet('session/attach'));
 }
 
 /** What a turn needs before the worker is handed it, done by the client:
@@ -188,7 +189,7 @@ export async function afterTurnFailure(
 ): Promise<TurnFailureNext> {
   const cancelled = isTurnCancelled(error);
   const queued = Boolean(turn.queuedTurnId && !cancelled);
-  if (queued) await releaseQueuedTurn(id, turn.queuedTurnId!).catch(() => undefined);
+  if (queued) await releaseQueuedTurn(id, turn.queuedTurnId!).catch(quiet('session/attach'));
   const back = queued && turn.line ? [turn.line] : [];
   const message = error instanceof Error ? error.message : String(error);
   if (cancelled || !prompter || !turn.line || !isUsageExhaustedMessage(message)) return { cancelled, back };

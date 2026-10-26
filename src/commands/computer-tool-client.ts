@@ -10,7 +10,7 @@
  * connection does not attach: a tool call carries the worker's token. */
 import { randomUUID } from 'node:crypto';
 import { connect, type Socket } from 'node:net';
-import { lifecycle } from '../runtime/lifecycle-log.js';
+import { lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { WorkerClient, workerForCommands } from '../worker/client.js';
 import { encodeFrame, FrameDecoder, type WorkerEvent } from '../worker/protocol.js';
 import { listWorkerRecords, type WorkerRuntimeRecord } from '../worker/registry.js';
@@ -100,7 +100,7 @@ const attachOnly = new Set<number>();
 async function toolLine(sessionId: string): Promise<ToolLine> {
   const existing = lines.get(sessionId);
   if (existing) {
-    const line = await existing.catch(() => undefined);
+    const line = await existing.catch(quiet('commands/computer-tool-client'));
     if (line && !line.closed) return line;
     if (lines.get(sessionId) === existing) lines.delete(sessionId);
     else return toolLine(sessionId);

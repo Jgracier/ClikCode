@@ -9,6 +9,7 @@
  * client would never run, and the part of the protocol a tool-calling client
  * needs is three requests and two notifications.
  */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { JsonRpcPeer } from '../../harness/transport/jsonrpc-peer.js';
 import { spawnPortable } from '../../harness/transport/spawn.js';
 import type { McpServerSpec } from './config.js';
@@ -211,7 +212,7 @@ class HttpTransport implements McpTransport {
 
   notify(method: string, params?: Message): void {
     if (this.isClosed) return;
-    this.send({ jsonrpc: '2.0', method, ...(params ? { params } : {}) }).catch(() => undefined);
+    this.send({ jsonrpc: '2.0', method, ...(params ? { params } : {}) }).catch(quiet('agent/mcp/transport'));
   }
 
   async close(): Promise<void> {
@@ -221,10 +222,10 @@ class HttpTransport implements McpTransport {
     // Ending the session tells the server it may free what it holds for us.
     // Best effort: a server that ignores DELETE (405) is within the spec.
     if (sessionId) {
-      const authorization = await this.auth?.authorization().catch(() => undefined);
+      const authorization = await this.auth?.authorization().catch(quiet('agent/mcp/transport'));
       await this.fetchImpl(this.spec.url, {
         method: 'DELETE', headers: { ...this.spec.headers, 'mcp-session-id': sessionId, ...(authorization ? { authorization } : {}) }, signal: AbortSignal.timeout(2000),
-      }).catch(() => undefined);
+      }).catch(quiet('agent/mcp/transport'));
     }
   }
 
@@ -258,7 +259,7 @@ class HttpTransport implements McpTransport {
       if (response.status !== 401 || !this.auth) return response;
       const verdict = await this.auth.unauthorized(response.headers.get('www-authenticate'), authorization, attempt > 0);
       if (verdict === 'fail') return response;
-      await response.body?.cancel().catch(() => undefined);
+      await response.body?.cancel().catch(quiet('agent/mcp/transport'));
       if (verdict === 'sign-in') throw new McpSignInRequired(this.spec.name);
     }
   }
@@ -313,7 +314,7 @@ class HttpTransport implements McpTransport {
       this.lastError = `HTTP ${response.status}`;
       throw new McpRequestError(`MCP server ${this.spec.name} answered ${this.lastError}`);
     }
-    await response.body?.cancel().catch(() => undefined);
+    await response.body?.cancel().catch(quiet('agent/mcp/transport'));
   }
 
   private legacyOpening?: Promise<string>;
@@ -375,8 +376,8 @@ class HttpTransport implements McpTransport {
         return;
       }
       const answered = answerServerRequest(message.method);
-      if (answered) void answered.then((result) => this.send({ jsonrpc: '2.0', id: message.id, result }).catch(() => undefined));
-      else void this.send({ jsonrpc: '2.0', id: message.id, error: { code: -32601, message: `Unsupported client method: ${message.method}` } }).catch(() => undefined);
+      if (answered) void answered.then((result) => this.send({ jsonrpc: '2.0', id: message.id, result }).catch(quiet('agent/mcp/transport')));
+      else void this.send({ jsonrpc: '2.0', id: message.id, error: { code: -32601, message: `Unsupported client method: ${message.method}` } }).catch(quiet('agent/mcp/transport'));
       return;
     }
     if (hasId) this.settle(Number(message.id), message);

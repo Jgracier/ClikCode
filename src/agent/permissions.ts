@@ -1,6 +1,7 @@
 /** The permission decision for one tool call, the persisted allow rules that
  * feed it, and the approval text a human sees. Pure apart from the settings
  * file helpers at the bottom. */
+import { quiet } from '../runtime/lifecycle-log.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { matchGlob } from './glob-match.js';
@@ -279,7 +280,7 @@ export async function buildApprovalPrompt(
   let diff: import('./line-diff.js').FileDiff[] | undefined;
   let unavailable: string | undefined;
   try { diff = await tool.preview?.(args, ctx); } catch (error) { unavailable = `(preview unavailable: ${error instanceof Error ? error.message : String(error)})`; }
-  const described = await tool.describe?.(args).catch(() => undefined);
+  const described = await tool.describe?.(args).catch(quiet('agent/permissions'));
   if (tool.class === 'write') {
     const shown = paths.map((entry) => path.resolve(ctx.cwd, entry)).join(', ') || tool.label(args);
     return { title: `Approve ${tool.label(args)}`, detail: [shown, ...(unavailable ? [unavailable] : []), `why: ${reason}`].join('\n'), ...(diff?.length ? { diff } : {}) };

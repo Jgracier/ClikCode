@@ -1,6 +1,7 @@
 /** `clikcode connectors resume <id>`: reattach to the hidden tab a keygrab run left open, optionally press one thing or go to one address,
  * and carry on with keygrab from there. The recorder journal parked with the tab is restored, so a key captured here saves the recipe
  * like an uninterrupted run would. When it still cannot finish, the tab is left parked again with a fresh record. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import type { DriveOutcome } from './connector-runner.js';
 import { liveKeygrab, liveKeygrabPort } from './keygrab-live.js';
 import { loadParked, markerFor, type ParkedRecord } from './keygrab-park.js';
@@ -32,7 +33,7 @@ export async function resumeKeygrab(options: ResumeOptions): Promise<ResumeResul
     pressed = options.goto ? `goto ${options.goto}` : `click ${options.click}`;
     if (err) {
       await browser.parkComputerPage(options.stateDir, 'connectors', markerFor(options.id));
-      await browser.releaseComputerBrowser(options.stateDir).catch(() => undefined);
+      await browser.releaseComputerBrowser(options.stateDir).catch(quiet('agent/computer/keygrab-resume'));
       return { id: options.id, reattached, pressed, record, outcome: { ok: false, stop: { kind: 'unknown', message: `${pressed} failed: ${err}`.slice(0, 300), url: record.url, pageText: '', controls: record.controls, trail: record.trail, parked: true, vendorUrl: record.vendorUrl, visited: record.visited, menus: record.menus } } };
     }
     // Keep what the press did in the carried-over trail.
@@ -50,7 +51,7 @@ export async function resumeKeygrab(options: ResumeOptions): Promise<ResumeResul
     const next: ParkedRecord = { ...record, parkedAt: new Date().toISOString(), url, trail, controls: seen.controls.filter(c => !c.leaf).map(c => c.name).slice(0, 40), ...(journal ? { journal } : {}) };
     await browser.parkComputerPage(options.stateDir, 'connectors', markerFor(options.id));
     await saveParked(options.stateDir, next);
-    await browser.releaseComputerBrowser(options.stateDir).catch(() => undefined);
+    await browser.releaseComputerBrowser(options.stateDir).catch(quiet('agent/computer/keygrab-resume'));
     return { id: options.id, reattached, ...(pressed ? { pressed } : {}), record: next, outcome: { ok: false, stop: { kind: 'unknown', message: `${pressed ?? 'nothing'} pressed; keygrab was not run (--only)`, url, pageText: pageExcerpt(seen.text), controls: seen.controls.map(c => c.name).slice(0, 60), trail, parked: true, vendorUrl: record.vendorUrl, visited: record.visited, menus: record.menus } } };
   }
   const outcome = await liveKeygrab(

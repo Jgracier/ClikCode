@@ -1,6 +1,7 @@
 /** Discovery is a lot of stat calls, and /resume has to open now. This is
  * the on-disk record of what was found last time, per directory. */
 
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { readdir, stat } from 'node:fs/promises';
 import { jsonMemo } from '../store/json-memo.js';
 import type { DiscoveredNativeSession } from './discovered-session.js';
@@ -108,7 +109,7 @@ export function resetNativeSessionDiscoveryCache(): void {
  * listing only when the directory changed. Returns undefined if it is gone. */
 export async function cachedDirectory(directory: string, suffix: string): Promise<CachedDirectory | undefined> {
   const cache = await loadDiscoveryCache();
-  const info = await stat(directory).catch(() => undefined);
+  const info = await stat(directory).catch(quiet('session/discovery/cache'));
   if (!info?.isDirectory()) {
     if (cache.directories[directory]) { delete cache.directories[directory]; memo.changed(); }
     return undefined;

@@ -4,6 +4,7 @@
  * delivery. Walls only a person clears (captcha, SMS, payment, identity, approval, a refused email) end it with a human step; a screen it
  * does not know ends it with what the page showed. It never solves a captcha, never pays, and never reads or prints a key: it only drives
  * a `KeygrabPort`, so the policy is tested with a fake site. The ClikCode recorder saves the recipe as the real browser actions succeed. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import type { HumanKind, HumanStep, StopInfo } from './connector-runner.js';
 import { nextPress, pageExcerpt, type Control } from './oauth-consent.js';
 import { keyShaped } from './secret-finder.js';
@@ -181,7 +182,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
   };
   const stop = async (kind: StopInfo['kind'], message: string, human?: HumanStep, view?: KeyView): Promise<Halt> => {
     const seen = view ?? await port.look().catch((): KeyView => ({ url: '', text: '', controls: [], fields: [], hasPassword: false }));
-    const screenshot = await port.screenshot().catch(() => undefined);
+    const screenshot = await port.screenshot().catch(quiet('agent/computer/keygrab'));
     return new Halt({ kind, message, url: pathOf(seen.url) || seen.url, pageText: pageExcerpt(seen.text), controls: seen.controls.filter(c => !c.leaf).map(c => c.name).slice(0, 12), ...(screenshot ? { screenshot } : {}), ...(human ? { human } : {}), trail: trail.slice(-30), actions: steps, ...(signedIn ? { signedIn: true } : {}), ...(visited.length ? { visited: visited.slice(-30) } : {}), ...(menus.length ? { menus: menus.slice(-12) } : {}) });
   };
   /** Ends the run on a wall with a human step: kind, the page, and what to do. */
@@ -240,7 +241,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
 
   /** Press through a provider's own screens (Google account chooser and consent, GitHub authorize) until back on the vendor. */
   const providerScreens = async (): Promise<void> => {
-    const email = await port.profileEmail().catch(() => undefined);
+    const email = await port.profileEmail().catch(quiet('agent/computer/keygrab'));
     let idle = 0, chosen = false;
     for (let round = 0; round < 10; round++) {
       await sleep(600);
@@ -385,7 +386,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
   let exploredRuns = 0;
   const exploreSignedIn = async (v: KeyView): Promise<{ found?: KeyView; last: KeyView } | undefined> => {
     if (exploredRuns >= 2 || isKeyPage(v)) return undefined;
-    const email = await port.profileEmail().catch(() => undefined);
+    const email = await port.profileEmail().catch(quiet('agent/computer/keygrab'));
     // Signed in: this run signed in, or the page looks like an app (an account menu or the signed-in address, no sign-in entry).
     const looksSignedIn = !offersSignIn(v) && menuOpeners(v, email).some(c => c.menu === true || (!!email && c.name.toLowerCase().includes(email.toLowerCase())));
     if (!((signedIn || looksSignedIn) && !authWall(v))) return undefined;
@@ -462,7 +463,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
       }
     }
     // Leave the browser on the most useful page seen, not on the last guessed path (a 404): the tab is kept for a resumed run.
-    if (pathOf(shown.url) && pathOf(shown.url) !== pathOf(await port.look().then(l => l.url).catch(() => ''))) { trail.push(`go back to ${pathOf(shown.url).replace(/^https:\/\//, '')}`); await port.open(shown.url).catch(() => undefined); }
+    if (pathOf(shown.url) && pathOf(shown.url) !== pathOf(await port.look().then(l => l.url).catch(() => ''))) { trail.push(`go back to ${pathOf(shown.url).replace(/^https:\/\//, '')}`); await port.open(shown.url).catch(quiet('agent/computer/keygrab')); }
     const gone = RETIRED.exec(start.text)?.[0];
     const human: HumanStep | undefined = gone ? { kind: 'retire', ...(pathOf(start.url).startsWith('https://') ? { url: pathOf(start.url) } : {}), reasonCode: 'vendor-retired', instructions: `${hostOf(start.url)} says "${gone.slice(0, 120)}" and has no API key page; confirm and retire the connector.` } : undefined;
     throw await stop('unknown', 'no API key page was found (menu links and the common paths were tried)', human, shown);
@@ -500,7 +501,7 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
     let startUrl = options.url;
     if (port.probe && !options.resume) {
       for (const candidate of startCandidates(options.url, options.alternates).slice(0, 14)) {
-        const got = await port.probe(candidate).catch(() => undefined);
+        const got = await port.probe(candidate).catch(quiet('agent/computer/keygrab'));
         if (got?.html && got.status !== 404 && got.status !== 410 && got.status < 500) { startUrl = got.url || candidate; break; }
       }
     }

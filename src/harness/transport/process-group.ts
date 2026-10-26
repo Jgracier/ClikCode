@@ -13,6 +13,7 @@
  * definition. Read from /proc on Linux (no process spawned), from one `ps`
  * elsewhere on Unix; Windows has no process groups to read, and reports
  * none. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { execFile } from 'node:child_process';
 import { readdir, readFile, readlink } from 'node:fs/promises';
 import { basename } from 'node:path';
@@ -33,10 +34,10 @@ export async function readProcessGroup(pgid: number, platform: NodeJS.Platform =
   const members = new Map<number, GroupProcess>();
   if (platform === 'win32' || !Number.isInteger(pgid) || pgid <= 1) return members;
   if (platform === 'linux') {
-    const entries = await readdir('/proc').catch(() => undefined);
+    const entries = await readdir('/proc').catch(quiet('harness/transport/process-group'));
     if (!entries) return undefined;
     await Promise.all(entries.filter((name) => /^\d+$/.test(name)).map(async (name) => {
-      const stat = await readFile(`/proc/${name}/stat`, 'utf8').catch(() => undefined);
+      const stat = await readFile(`/proc/${name}/stat`, 'utf8').catch(quiet('harness/transport/process-group'));
       if (!stat) return;
       // `pid (comm) state ppid pgrp ...`; comm may hold spaces and parens.
       const close = stat.lastIndexOf(')');
@@ -134,7 +135,7 @@ export function commandRoots(group: ReadonlyMap<number, GroupProcess>, candidate
  * Linux only (/proc); elsewhere undefined. */
 export async function commandLine(pid: number, platform: NodeJS.Platform = process.platform): Promise<string | undefined> {
   if (platform !== 'linux') return undefined;
-  const raw = await readFile(`/proc/${pid}/cmdline`, 'utf8').catch(() => undefined);
+  const raw = await readFile(`/proc/${pid}/cmdline`, 'utf8').catch(quiet('harness/transport/process-group'));
   if (!raw) return undefined;
   const argv = raw.split('\0').filter(Boolean);
   const script = argv.findIndex((arg) => arg === '-c' || /^-\w*c$/.test(arg));
@@ -147,7 +148,7 @@ export async function commandLine(pid: number, platform: NodeJS.Platform = proce
 /** The file `pid` writes its output to (its stdout), when that is a file. Linux only. */
 export async function outputFile(pid: number, platform: NodeJS.Platform = process.platform): Promise<string | undefined> {
   if (platform !== 'linux') return undefined;
-  const target = await readlink(`/proc/${pid}/fd/1`).catch(() => undefined);
+  const target = await readlink(`/proc/${pid}/fd/1`).catch(quiet('harness/transport/process-group'));
   return target?.startsWith('/') && !target.startsWith('/dev/') && !target.startsWith('/proc/') ? target.replace(/ \(deleted\)$/, '') : undefined;
 }
 
@@ -166,7 +167,7 @@ export async function processesWithEnvironment(name: string, value: string, plat
   const entries = await readdir('/proc').catch(() => [] as string[]);
   const found: number[] = [];
   await Promise.all(entries.filter((entry) => /^\d+$/.test(entry) && Number(entry) !== process.pid).map(async (entry) => {
-    const environment = await readFile(`/proc/${entry}/environ`, 'latin1').catch(() => undefined);
+    const environment = await readFile(`/proc/${entry}/environ`, 'latin1').catch(quiet('harness/transport/process-group'));
     if (environment && `\0${environment}`.includes(needle)) found.push(Number(entry));
   }));
   return found;

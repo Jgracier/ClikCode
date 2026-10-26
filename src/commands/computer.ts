@@ -1,3 +1,4 @@
+import { quiet } from '../runtime/lifecycle-log.js';
 import { computerEnabled, generatedPasswordsAllowed, setComputerEnabled, setGeneratedPasswords } from '../agent/computer/settings.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { emitResult } from '../cli/structured-output.js';
@@ -61,7 +62,7 @@ export async function computerInspect(): Promise<void> {
     const controls = await pageControls(page);
     if (isJsonDefaultMode()) return emitResult({ computer: { site, fields: fields.map(({ label, kind }) => ({ label, kind })), controls } });
     process.stdout.write(`${loginFieldSummary(site, fields, controls)}\n`);
-  } finally { await page.context().browser()?.close().catch(() => undefined); }
+  } finally { await page.context().browser()?.close().catch(quiet('commands/computer')); }
 }
 
 /** Ask for a site's credentials in the attached chat panel. This command's
@@ -306,7 +307,7 @@ export async function computerEmail(action: 'connect' | 'status' | 'disconnect')
     const { openComputerPage } = await import('../agent/computer/browser.js');
     const { listProfiles } = await import('../agent/computer/profiles.js');
     const email = (await listProfiles(dir)).map(profile => profile.fields.sso_email).find(Boolean);
-    const done = await connectEmail(dir, await openComputerPage(dir, 'email'), { email, progress: line => line && process.stdout.write(line) }).finally(async () => { await closeComputerPage(dir, 'email').catch(() => undefined); await releaseComputerBrowser(dir); });
+    const done = await connectEmail(dir, await openComputerPage(dir, 'email'), { email, progress: line => line && process.stdout.write(line) }).finally(async () => { await closeComputerPage(dir, 'email').catch(quiet('commands/computer')); await releaseComputerBrowser(dir); });
     return isJsonDefaultMode() ? emitResult({ email: { connected: true, address: done.email } }) : void process.stdout.write(`Mailbox connected${done.email ? `: ${done.email}` : ''}.\n`);
   }
   const status = await emailStatus(dir);
@@ -321,6 +322,6 @@ export async function computerOauthConnect(connector: string): Promise<void> {
   const { openComputerPage } = await import('../agent/computer/browser.js');
   const { listProfiles } = await import('../agent/computer/profiles.js');
   const email = (await listProfiles(dir)).map(profile => profile.fields.sso_email).find(Boolean);
-  const done = await oauthConnect(connector, await openComputerPage(dir, 'oauth'), { email, stateDir: dir, progress: line => line && process.stdout.write(line) }).finally(async () => { await closeComputerPage(dir, 'oauth').catch(() => undefined); await releaseComputerBrowser(dir); });
+  const done = await oauthConnect(connector, await openComputerPage(dir, 'oauth'), { email, stateDir: dir, progress: line => line && process.stdout.write(line) }).finally(async () => { await closeComputerPage(dir, 'oauth').catch(quiet('commands/computer')); await releaseComputerBrowser(dir); });
   return isJsonDefaultMode() ? emitResult({ computer: { oauthConnect: { connector: done.connector, connected: true } } }) : void process.stdout.write(`Connected ${done.connector}: ClikDeploy shows an active connection.\n`);
 }

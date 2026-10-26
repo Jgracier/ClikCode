@@ -41,6 +41,7 @@
  * which is why a failover carries a session's rows across (the store's
  * `carry`, below). */
 
+import { quiet } from '../../../runtime/lifecycle-log.js';
 import { jsonPartText, sqliteOpenings } from './sqlite-openings.js';
 import { removeSqliteSession, carrySqliteSession, progressQuery, type SqliteCarrySpec } from './sqlite-carry.js';
 import { absolutePath, shellQuote, testedVersion } from './thread-writer-files.js';
@@ -378,10 +379,10 @@ export function openCodeFamilyThreadWriter(testedVersions: readonly string[]): N
         // the session row, so a refusal can leave part of it behind; the
         // caller transfers instead.
         await captureNativeHarnessOutput(context.harness, ['session', 'delete', '--pure', nativeId], context.environment, undefined, context.workspace)
-          .catch(() => undefined);
+          .catch(quiet('session/discovery/vendors/opencode-writer'));
         return undefined;
       } finally {
-        await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+        await rm(directory, { recursive: true, force: true }).catch(quiet('session/discovery/vendors/opencode-writer'));
       }
     },
   };

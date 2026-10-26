@@ -16,6 +16,7 @@
  * listing now runs in a scratch directory with `--no-git`. Checked against
  * Aider 0.86.2. */
 
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -75,13 +76,13 @@ export function openRouterCacheFile(): string {
 /** OpenRouter's list, kept a day: a server's list, so a clock is the rule. */
 async function openRouterList(): Promise<string> {
   const file = openRouterCacheFile();
-  const kept = await stat(file).catch(() => undefined);
+  const kept = await stat(file).catch(quiet('harness/accounts/aider-discovery'));
   if (kept && Date.now() - kept.mtimeMs < 24 * 60 * 60_000) return readFile(file, 'utf8').catch(() => '');
   try {
     const response = await fetch('https://openrouter.ai/api/v1/models');
     if (!response.ok) throw new Error(String(response.status));
     const body = await response.text();
-    await atomicWriteFile(file, body).catch(() => undefined);
+    await atomicWriteFile(file, body).catch(quiet('harness/accounts/aider-discovery'));
     return body;
   } catch {
     return kept ? readFile(file, 'utf8').catch(() => '') : '';
@@ -116,7 +117,7 @@ export async function discoverAiderModels(
       models.push(...aiderListedModels(printed, provider.prefix));
     }
   } finally {
-    await rm(scratch, { recursive: true, force: true }).catch(() => undefined);
+    await rm(scratch, { recursive: true, force: true }).catch(quiet('harness/accounts/aider-discovery'));
   }
   // No key at all: Aider's one sign-in is OpenRouter's, from its own first run.
   const connect: ModelCatalogConnect[] = providers.length ? [] : [{

@@ -2,6 +2,7 @@
  * (only ones already on PATH, never installed), one running server per
  * (language, workspace root) kept for the life of the process, and the
  * document sync and diagnostics wait every query goes through. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -286,7 +287,7 @@ export async function serverFor(file: string, fallbackRoot: string): Promise<Lan
   const id = key(language, root);
   const existing = servers.get(id);
   if (existing) {
-    const server = await existing.catch(() => undefined);
+    const server = await existing.catch(quiet('agent/lsp/servers'));
     if (server?.running) { server.lastUsed = Date.now(); return server; }
     if (servers.get(id) === existing) { servers.delete(id); settled.delete(id); }
   }
@@ -324,7 +325,7 @@ async function evictIfFull(): Promise<void> {
 
 /** Stops every server this process started. The worker calls it on shutdown. */
 export async function shutdownLanguageServers(): Promise<void> {
-  const all = await Promise.all([...servers.values()].map((pending) => pending.catch(() => undefined)));
+  const all = await Promise.all([...servers.values()].map((pending) => pending.catch(quiet('agent/lsp/servers'))));
   servers.clear();
   settled.clear();
   await Promise.all(all.map((server) => server?.shutdown()));

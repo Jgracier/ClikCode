@@ -26,6 +26,7 @@
  * wait for the first, then find the binary already there.
  */
 
+import { quiet } from '../../../runtime/lifecycle-log.js';
 import { constants } from 'node:fs';
 import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
@@ -323,7 +324,7 @@ async function downloadInstaller(url: string, destination: string): Promise<void
   // and later included) does not, and is what the vendors' own one-liners use.
   if (body === undefined) {
     const result = await runInstallCommand('curl', ['-fsSL', '--proto', '=https', '--proto-redir', '=https', '-o', destination, url], { timeoutMs: 180_000 })
-      .catch(() => undefined);
+      .catch(quiet('harness/transport/native/install'));
     if (result?.code === 0) return;
     throw new Error(`could not download ${url}: ${fetchError instanceof Error ? fetchError.message : String(fetchError)}`);
   }
@@ -355,7 +356,7 @@ async function runInstallerScript(step: Extract<AiHarnessInstallStep, { kind: 's
     const result = await runInstallCommand(command, args, { env, cwd: directory });
     if (result.code !== 0) throw commandFailure(`the installer from ${step.url}`, result);
   } finally {
-    await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+    await rm(directory, { recursive: true, force: true }).catch(quiet('harness/transport/native/install'));
   }
 }
 
@@ -386,7 +387,7 @@ async function installUvTool(step: Extract<AiHarnessInstallStep, { kind: 'uv-too
     ...(step.with ?? []).flatMap((name) => ['--with', name])];
   const result = await runInstallCommand('uv', installArgv);
   if (result.code !== 0) throw commandFailure(`uv ${installArgv.join(' ')}`, result);
-  const bin = await runInstallCommand('uv', ['tool', 'dir', '--bin'], { timeoutMs: 60_000 }).catch(() => undefined);
+  const bin = await runInstallCommand('uv', ['tool', 'dir', '--bin'], { timeoutMs: 60_000 }).catch(quiet('harness/transport/native/install'));
   const dir = bin?.code === 0 ? bin.output.trim().split(/\r?\n/).pop()?.trim() : undefined;
   if (dir) addToProcessPath([dir]);
 }
@@ -431,7 +432,7 @@ export async function withInstallLock<T>(
     const since = holder?.at ?? (await stat(lock).then((info) => info.mtimeMs).catch(() => Date.now()));
     const dead = holder?.pid !== undefined && !processAlive(holder.pid);
     if (dead || Date.now() - since > (options.staleMs ?? LOCK_STALE_MS)) {
-      await rm(lock, { recursive: true, force: true }).catch(() => undefined);
+      await rm(lock, { recursive: true, force: true }).catch(quiet('harness/transport/native/install'));
       continue;
     }
     if (!waited) { waited = true; onWait?.(); }
@@ -442,5 +443,5 @@ export async function withInstallLock<T>(
     }
     await new Promise((resolve) => setTimeout(resolve, options.pollMs ?? LOCK_POLL_MS));
   }
-  try { return await work(); } finally { await rm(lock, { recursive: true, force: true }).catch(() => undefined); }
+  try { return await work(); } finally { await rm(lock, { recursive: true, force: true }).catch(quiet('harness/transport/native/install')); }
 }
