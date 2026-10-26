@@ -336,7 +336,7 @@ const WEB_DESCRIPTION = [
   ].join('\n');
 
 export const computerWebTool = defineTool<WebArgs>({
-  name: 'computer_web', class: 'exec',
+  name: 'browser_use', class: 'exec',
   description: WEB_DESCRIPTION,
   // Open on purpose: a chat keeps the argument list it started with, and the reloaded code (hot-tools.ts) understands more.
   parameters: WEB_PARAMETERS,
@@ -919,7 +919,7 @@ async function openLatestEmail(page: Page, args: WebArgs, stateDir: string): Pro
 async function listRecipesFor(stateDir: string, url: string): Promise<string> {
   try {
     const recipes = (await listRecipes(stateDir)).filter(r => { const host = new URL(url).hostname.toLowerCase().replace(/^www\./, ''); return host === r.host || host.endsWith(`.${r.host}`); });
-    return recipes.length ? `A recipe is saved for this site (${recipes.map(r => `via ${r.loginRoute}`).join(', ')}, verified ${recipes[0]!.verifiedAt.slice(0, 10)}): computer_web action recipe, recipe_op run replays it and stops at a captcha, code, payment or review page; recipe_op get shows its steps.` : '';
+    return recipes.length ? `A recipe is saved for this site (${recipes.map(r => `via ${r.loginRoute}`).join(', ')}, verified ${recipes[0]!.verifiedAt.slice(0, 10)}): browser_use action recipe, recipe_op run replays it and stops at a captcha, code, payment or review page; recipe_op get shows its steps.` : '';
   } catch { return ''; }
 }
 
@@ -1117,6 +1117,6 @@ async function clickOrHint(target: Locator, at?: 'start' | 'end'): Promise<void>
   try { await press(target, at); }
   catch (error) {
     if (!(error instanceof Error) || !/timeout/i.test(error.message)) throw error;
-    throw new Error(`${error.message.split('\n')[0]} If a popup window or browser dialog is in front of the page, use computer_desktop to see and answer it.`);
+    throw new Error(`${error.message.split('\n')[0]} If a popup window or browser dialog is in front of the page, use computer_use to see and answer it.`);
   }
 }

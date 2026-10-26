@@ -64,7 +64,7 @@ export function backgroundOnly<T extends { output: string; isError?: boolean }>(
 }
 
 export const computerDesktopTool = defineTool<DesktopArgs>({
-  name: 'computer_desktop', class: 'exec',
+  name: 'computer_use', class: 'exec',
   description: 'Control the local desktop through cua-driver. Use it for what page tools cannot reach: a browser popup window, a native permission or file dialog, or any other app. `windows` lists windows; `observe`, then click, type, key, hotkey or scroll. With no pid and window_id it acts on the primary desktop by screenshot coordinates; with both (from `windows`) it acts on that one window and prefers a fresh element_token. Always observe first; coordinates and tokens expire. On Linux Wayland a window observe may come back without a screenshot: act on its element_token, which works without one. Observing the desktop or the ClikCode browser window is refused while a typed password, code or card number is in a tab on screen. Never type credentials.',
   parameters: { type: 'object', additionalProperties: false, required: ['action'], properties: {
     action: { type: 'string', enum: ['windows', 'observe', 'click', 'type', 'key', 'hotkey', 'scroll'] },

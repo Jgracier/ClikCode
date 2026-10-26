@@ -6,8 +6,11 @@ and closes the browser, `on` brings them back.
 
 | Tool | What it is for |
 |---|---|
-| `computer_web` | A Chrome with its own saved profile (Edge if Chrome is missing), shared by every terminal and VS Code window, never your personal profile. **Each chat gets its own tab**: a chat only sees, acts on and follows tabs it opened itself, so chats working at once do not collide. `close` closes that chat's tab only. |
-| `computer_desktop` | Everything outside the page, through [cua-driver](https://github.com/trycua/cua) (a separate install): a popup window, a native dialog, another app. Give it a `pid` and `window_id` from `windows` to act on one window. |
+| `browser_use` | A Chrome with its own saved profile (Edge if Chrome is missing), shared by every terminal and VS Code window, never your personal profile. **Each chat gets its own tab**: a chat only sees, acts on and follows tabs it opened itself, so chats working at once do not collide. `close` closes that chat's tab only. |
+| `computer_use` | Everything outside the page, through [cua-driver](https://github.com/trycua/cua) (a separate install): a popup window, a native dialog, another app. Give it a `pid` and `window_id` from `windows` to act on one window. On Linux Wayland it finds windows through the accessibility bus (cua-driver 0.38 or newer) and acts on their elements; keys, scrolling and window screenshots need GNOME 45–49 with cua's Shell helper. |
+
+They were called `computer_web` and `computer_desktop` before 2026-10-26; permission rules and MCP calls that use
+those names still reach the same tools.
 
 Nothing here asks you anything of its own: in Auto mode these tools just run, and the
 agent stops only for what it cannot do itself (a sign-in you must type, a choice
@@ -130,7 +133,7 @@ by a page the agent is reading. `{{secret|json}}` is the key inside a JSON strin
 destination's `--stdin` keeps the key out of the command line. Every result begins
 `SAVED` or `Not saved:` and says what really happened, including a warning when a
 click may have made the site create a key that was then not saved (delete it there).
-`send_secret` (an action of `computer_web`) sends a saved key again, or somewhere else, with `{secret, to, with}`.
+`send_secret` (an action of `browser_use`) sends a saved key again, or somewhere else, with `{secret, to, with}`.
 
 Once held, a key's exact value (and its base64, URL-encoded and JSON forms, and the
 secret fields of a JSON file such as its private key, but not its public ids) is replaced with `[secret hidden]` in every tool result,
@@ -175,7 +178,7 @@ this protects against a copied folder, not against other programs running as you
 - The key is briefly in the `clikdeploy` command line, visible to the same OS user.
 - A URL change is the only success signal for a sign-in; no site-independent proof
   exists.
-- `computer_desktop observe` is refused while a browser tab holds a typed password, code or
+- `computer_use observe` is refused while a browser tab holds a typed password, code or
   card number, since a screenshot would show it. Acting is allowed.
 
 ## Doing a long run of sign-ups and app registrations
@@ -185,7 +188,7 @@ What the browser tool does so a run does not depend on luck or on the user:
 - **Waits report state.** A `wait` whose words do not appear is the page's answer, not a failed tool: the
   batch stops there, says how many later steps did not run, and shows what changed. A tab that closes
   itself (a sign-in popup) is read from the page's own state and the batch carries on from the tab left.
-- **Calls run in order.** Two `computer_web` calls made together run one after the other, so a capture
+- **Calls run in order.** Two `browser_use` calls made together run one after the other, so a capture
   and the click that closes the one-time dialog it reads cannot race.
 - **Capture takes every copy route.** `writeText`, `write` (ClipboardItem), `execCommand("copy")`, then the
   clipboard itself when it changed across the click. Copy buttons with qualifiers ("Copy client secret")
@@ -208,7 +211,7 @@ What the browser tool does so a run does not depend on luck or on the user:
   (`handoff`, `ask_user`, `queue`); nothing tries to solve or get around them. Opening a page on a host with a
   recipe mentions it. Recipes live in `computer/recipes/<host>.json` in the state dir.
 
-- **Generated site passwords (on by default).** Like a phone's "Strong Password": when `computer_web` fills a sign-up or
+- **Generated site passwords (on by default).** Like a phone's "Strong Password": when `browser_use` fills a sign-up or
   new-password form (two password boxes, a `new-password` box, or a sign-up page) it makes up a password for that site,
   types it into every password box, and keeps the login (site, email, password) in Secrets Manager once the form is gone.
   Nothing is typed by a person and no one password is shared across sites. The password is registered with the scrubber
@@ -269,7 +272,7 @@ schema ClikDeploy serves (`connector_spec_guide`).
 
 ## Connecting a connector's OAuth: `oauth_connect`
 
-`clikcode computer oauth-connect <connector>` (or `computer_web` `action=oauth_connect`, `target` = the ClikDeploy connector id) connects a connector that uses OAuth, with no clicking by the agent:
+`clikcode computer oauth-connect <connector>` (or `browser_use` `action=oauth_connect`, `target` = the ClikDeploy connector id) connects a connector that uses OAuth, with no clicking by the agent:
 
 1. It starts ClikDeploy's connect (`clikdeploy integrations connect <id> --no-browser`, which signs in with the saved admin key) and takes the authorization URL it prints.
 2. It opens that URL in the ClikCode browser and presses through the consent screens from a data table in `src/agent/computer/oauth-consent.ts` (add a row to teach it a screen): the account named by the profile `sso_email`; Google's "Advanced" and "Go to ... (unsafe)", Continue/Allow; Microsoft Accept; GitHub "Authorize ..."; Slack Allow; Atlassian Accept; Notion Allow access; and for any other vendor Allow, Authorize, Accept, Grant access, Approve (and Continue only on a page that asks for access). It never presses Deny, Cancel, Sign out or Sign up.
@@ -279,7 +282,7 @@ It never types or reads a password. It stops, with a plain reason (the address a
 
 ## Recipes record themselves
 
-Agents rarely call `recipe save`, so ClikCode does it. Every successful `computer_web` click, fill, choice and key press after an `open` is journaled in memory for that tab, by the control's visible text (a `[ref=eN]` is turned into the control's name). When the sequence ends in a **verified** `capture_secret` (a key was found and stored, not rejected by its check) or a successful `login`, the journal is saved as that host's recipe (`~/.clikcode/computer/recipes/<host>.json`) with the login route (`google` or `github` if the sequence passed through them, else `email`), the key page (address without query or fragment) and a capture hint. Nothing else is needed from the agent.
+Agents rarely call `recipe save`, so ClikCode does it. Every successful `browser_use` click, fill, choice and key press after an `open` is journaled in memory for that tab, by the control's visible text (a `[ref=eN]` is turned into the control's name). When the sequence ends in a **verified** `capture_secret` (a key was found and stored, not rejected by its check) or a successful `login`, the journal is saved as that host's recipe (`~/.clikcode/computer/recipes/<host>.json`) with the login route (`google` or `github` if the sequence passed through them, else `email`), the key page (address without query or fragment) and a capture hint. Nothing else is needed from the agent.
 
 - **Never stored:** typed values (a fill is saved with no text, so a replay fills from the profile or saved login), secrets, ids or numbers of six digits or more in a control name, anything key-shaped. An email in a control name (the Google account chooser) is saved as the placeholder `{{sso_email}}` and replaced from the profile at replay. A step that cannot be saved safely (a reference with no readable name, a control named after an id) spoils that journal, so a partial recipe is never saved.
 - **De-duplicated:** one recipe per host and route, the newest verified one wins. A plain login recipe never replaces a capture recipe that has a key page and hint.
@@ -287,7 +290,7 @@ Agents rarely call `recipe save`, so ClikCode does it. Every successful `compute
 
 ## Preflight: is this computer ready for onboarding work
 
-`clikcode computer preflight` (or `computer_web` `action=preflight`) is one deterministic check with no agent in it, for an agent to run before a batch and for a scheduled check. It prints JSON and exits 1 when anything is not ready:
+`clikcode computer preflight` (or `browser_use` `action=preflight`) is one deterministic check with no agent in it, for an agent to run before a batch and for a scheduled check. It prints JSON and exits 1 when anything is not ready:
 
 - `browserOk`: ClikCode's Chrome starts and opens a tab.
 - `googleSignedIn`: `accounts.google.com`, opened in a throwaway tab, ends on the account page (signed in) and not on the sign-in form or account chooser. Only the page address and whether an email box exists are looked at.
@@ -315,8 +318,8 @@ When a vendor offers a choice when creating a key (scopes, permissions, "restric
 
 Durable notes go under `~/.clikcode`, never `/tmp` (a cleanup or reboot loses `/tmp`, and a restarted agent then repeats the work).
 
-- **Per-site notes** (what worked on a vendor's site: URL, order of screens, gotchas): `computer_web` `action=notes` with `host` and `note` saves one (newest last, 4,000 characters kept; a note shaped like a key or token is refused whole); with only `host` it reads them back. They are kept in `~/.clikcode/computer/notes/<host>.md` and are shown again when a page on that host is opened. The call needs an open tab (`open` a URL first). From a shell: `clikcode computer tool computer_web --args-json '{"action":"notes","host":"app.example.com","note":"API keys: Settings > Developer > New key"}'`.
-- **Run progress** (which vendors are done, what is next): record each outcome in the queue (`computer_web` `action=queue`, `clikcode computer queue`), which is the durable list to resume from. Anything more free-form goes in a file under `~/.clikcode/computer/progress/`, one per run, appended to as work happens. Never put a key, password or code in either.
+- **Per-site notes** (what worked on a vendor's site: URL, order of screens, gotchas): `browser_use` `action=notes` with `host` and `note` saves one (newest last, 4,000 characters kept; a note shaped like a key or token is refused whole); with only `host` it reads them back. They are kept in `~/.clikcode/computer/notes/<host>.md` and are shown again when a page on that host is opened. The call needs an open tab (`open` a URL first). From a shell: `clikcode computer tool browser_use --args-json '{"action":"notes","host":"app.example.com","note":"API keys: Settings > Developer > New key"}'`.
+- **Run progress** (which vendors are done, what is next): record each outcome in the queue (`browser_use` `action=queue`, `clikcode computer queue`), which is the durable list to resume from. Anything more free-form goes in a file under `~/.clikcode/computer/progress/`, one per run, appended to as work happens. Never put a key, password or code in either.
 
 ## Email: a connected mailbox
 

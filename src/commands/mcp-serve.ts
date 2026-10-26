@@ -6,6 +6,7 @@ import { createInterface } from 'node:readline';
 import { SHARED_COMPUTER_TOOLS } from '../worker/computer-tool.js';
 import { installedBuildStamp, latestTool } from '../agent/computer/hot-tools.js';
 import { callWorkerTool } from './computer-tool-client.js';
+import { currentToolName } from '../agent/computer/tool-names.js';
 
 type Rpc = { jsonrpc: '2.0'; id?: number | string; method?: string; params?: Record<string, any> };
 const VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
@@ -38,7 +39,7 @@ export async function handleMcpRequest(message: Rpc, call = callWorkerTool): Pro
     case 'ping': return reply({});
     case 'tools/list': { listedStamp = await installedBuildStamp(); return reply({ tools: await tools() }); }
     case 'tools/call': {
-      const name = String(message.params?.name ?? '');
+      const name = currentToolName(String(message.params?.name ?? ''));
       if (!SHARED_COMPUTER_TOOLS.some(tool => tool.name === name)) return { jsonrpc: '2.0', id: message.id, error: { code: -32602, message: `Unknown tool "${name}".` } };
       try {
         const result = await call({ tool: name, args: (message.params?.arguments ?? {}) as Record<string, unknown> });

@@ -41,8 +41,10 @@ describe('permission matrix', () => {
     await setComputerEnabled(scope.stateDir, true);
     expect(judge('auto')).toBe('allow');
     expect(judge('ask')).toBe('ask');
+    expect(judge('auto', parsePermissionSettings({ deny: ['browser_use'] }))).toBe('deny');
+    expect(judge('auto', parsePermissionSettings({ ask: ['browser_use'] }))).toBe('ask');
+    // The names before the 2026-10-26 rename still mean the same tools.
     expect(judge('auto', parsePermissionSettings({ deny: ['computer_web'] }))).toBe('deny');
-    expect(judge('auto', parsePermissionSettings({ ask: ['computer_web'] }))).toBe('ask');
     await setComputerEnabled(scope.stateDir, false);
     expect(judge('auto')).toBe('ask');
   });

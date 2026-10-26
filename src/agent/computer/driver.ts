@@ -53,7 +53,7 @@ export function driverNotice(): Promise<string | undefined> {
 }
 
 /** The Cua driver is a separate install; say so plainly instead of leaking a spawn error. */
-export const DRIVER_MISSING = 'Desktop control needs cua-driver installed on this computer (https://github.com/trycua/cua). Browser pages work without it through computer_web.';
+export const DRIVER_MISSING = 'Desktop control needs cua-driver installed on this computer (https://github.com/trycua/cua). Browser pages work without it through browser_use.';
 
 export async function callComputerDriver(
   tool: string, args: Record<string, unknown>, signal?: AbortSignal,

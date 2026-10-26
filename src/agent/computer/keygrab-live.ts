@@ -1,4 +1,4 @@
-/** The real port of keygrab: ClikCode's hidden browser through the `computer_web` tool (so its recorder saves the recipe as the actions
+/** The real port of keygrab: ClikCode's hidden browser through the `browser_use` tool (so its recorder saves the recipe as the actions
  * succeed) and a plain look at the page for what it shows. Nothing here prints or logs a key: capture is the tool's own unseen capture. */
 import { quiet } from '../../runtime/lifecycle-log.js';
 import { mkdtemp } from 'node:fs/promises';

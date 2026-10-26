@@ -13,6 +13,7 @@ import type { ToolContext, ToolDefinition } from './tool-contract.js';
 import type { AiHarnessPermissionMode } from '../harness/definition.js';
 import { updateJsonFile } from '../session/store/json-file.js';
 import { computerEnabledSync } from './computer/settings.js';
+import { currentToolName } from './computer/tool-names.js';
 
 type PermissionVerdict = 'allow' | 'ask' | 'deny';
 /** `invalidArguments`: the call named no usable path (empty, or with a NUL byte). That is a mistake in the call, not a
@@ -29,7 +30,7 @@ export const NO_RULES: PermissionRules = { allow: [], deny: [], ask: [] };
 const EXIT_PLAN_MODE_TOOL = 'exit_plan_mode';
 const ENTER_PLAN_MODE_TOOL = 'enter_plan_mode';
 const BASH_TOOL = 'bash';
-const COMPUTER_TOOLS = new Set(['computer_desktop', 'computer_web']);
+const COMPUTER_TOOLS = new Set(['computer_use', 'browser_use']);
 
 
 /** `Bash(git status:*)`, `Edit(src/**)`, `WebFetch(domain:example.com)`, or a
@@ -59,7 +60,7 @@ export function parsePermissionSettings(permissions: unknown): PermissionRules {
 
 /** Rule families → the tool classes/names they cover. */
 function ruleCoversTool(rule: PermissionRule, tool: ToolDefinition): boolean {
-  const family = rule.tool.toLowerCase();
+  const family = currentToolName(rule.tool.toLowerCase());
   if (family === tool.name.toLowerCase()) return true;
   // An MCP tool's class comes from its server's own hints; only a rule naming
   // the tool exactly vouches for it, never a family like `Read`.
