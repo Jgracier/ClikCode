@@ -34,7 +34,7 @@ function logCrashToDisk(kind: 'uncaughtException' | 'unhandledRejection', error:
     const dir = stateDirectory();
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const detail = error instanceof Error ? (error.stack ?? `${error.name}: ${error.message}`) : String(error);
-    appendFileSync(join(dir, 'crash.log'), `[${new Date().toISOString()}] ${kind} (pid ${process.pid})\n${detail}\n\n`, { encoding: 'utf8', mode: 0o600 });
+    appendFileSync(join(dir, 'crash.log'), `[${new Date().toISOString()}] ${kind} (pid ${process.pid}, ${process.argv.slice(2, 4).join(' ') || 'no command'}, clikcode ${CLIKCODE_VERSION})\n${detail}\n\n`, { encoding: 'utf8', mode: 0o600 });
   } catch { /* fail-open-ok: a broken crash log must never block the actual crash handling below it. */ }
 }
 

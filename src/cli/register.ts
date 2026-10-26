@@ -28,6 +28,12 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   program.command('session-worker <id>', { hidden: true }).option('--warm').action((id: string, options: { warm?: boolean }) => later(() => import('../worker/session-worker.js'), 'runSessionWorker')(id, { warm: Boolean(options.warm) }));
   program.command('mcp-serve').description("Serve ClikCode's computer tools to a harness over MCP (stdio); started for you in every harness session")
     .action(async () => (await import('../commands/mcp-serve.js')).mcpServe());
+  // Servers ClikCode no longer provides, still named in a vendor config that was missed
+  // (commands/retired-mcp.ts): answered as empty servers rather than failed.
+  for (const retired of ['conversations-mcp', 'swarm-mcp']) {
+    program.command(retired, { hidden: true }).allowUnknownOption().allowExcessArguments()
+      .action(async () => (await import('../commands/retired-mcp.js')).serveRetiredMcp(retired));
+  }
   program.command('computer-host <stateDir>', { hidden: true }).action(async (stateDir: string) => (await import('../agent/computer/browser-host.js')).runComputerHost(stateDir));
   // An editor extension's client (ide/bridge.ts), over an IPC channel the
   // extension opens; and the terminal it runs a vendor sign-in in. Hidden for
@@ -168,6 +174,7 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .option('-n, --lines <count>', 'How many lines (default 100)')
     .option('-f, --follow', 'Keep printing as it is written')
     .option('--latency', 'Where each turn\'s time went (marks per turn, median per harness) instead of the log lines')
+    .option('--check', 'Read the log for what is wrong -- failing commands, failed tools, swallowed errors, slow writes -- over the last day')
     .option('--last <count>', 'With --latency: how many turns (default 20)')
     .action(async (options) => (await import('../commands/logs.js')).showLogs(options));
   program.command('permissions [mode]').description('Choose Ask, Bypass, or Auto approval behavior for the active chat')

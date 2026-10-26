@@ -28,6 +28,7 @@
  * and servers added from now on reach mcp.json through `mcp add` directly.
  * An entry already in mcp.json is never touched, whatever it holds.
  */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { chmod, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -37,7 +38,7 @@ import { allLocalHarnesses, localHarnessCapabilityManifest } from '../../runtime
 
 /** One vendor file, as the catalog records it (managers.mcp.serverFiles),
  * with the vendor it belongs to. */
-type VendorSource = AiHarnessMcpServerFile & { vendor: string; command: string };
+export type VendorSource = AiHarnessMcpServerFile & { vendor: string; command: string };
 
 /** Every vendor's MCP files, in precedence order: on a name conflict the
  * earlier source wins, and the catalog lists Claude Code first. Only Claude's
@@ -260,7 +261,7 @@ export async function vendorMcpServerNames(
 /** The files to read for one source: the user's own, then each isolated
  * ClikCode account profile for that vendor, whose directory is either a
  * whole fake HOME or the vendor's own config root. */
-async function candidatePaths(source: VendorSource, home: string, stateDir: string): Promise<string[]> {
+export async function vendorConfigFiles(source: VendorSource, home: string, stateDir: string): Promise<string[]> {
   if (!source.homeRelative) return [];
   const paths = [join(home, ...source.homeRelative)];
   const profiles = join(stateDir, 'profiles', source.command);
@@ -281,7 +282,7 @@ export async function importVendorMcpServers(
 
   const configPath = mcpConfigFilePath(stateDir);
   let root: Record<string, unknown> = {};
-  const existingText = await readFile(configPath, 'utf8').catch(() => undefined);
+  const existingText = await readFile(configPath, 'utf8').catch(quiet('agent/mcp/import'));
   if (existingText?.trim()) {
     let parsed: unknown;
     try { parsed = JSON.parse(existingText); } catch { parsed = undefined; }
@@ -302,7 +303,7 @@ export async function importVendorMcpServers(
   const added: Record<string, Record<string, unknown>> = {};
 
   for (const source of vendorSources()) {
-    for (const path of await candidatePaths(source, home, stateDir)) {
+    for (const path of await vendorConfigFiles(source, home, stateDir)) {
       const table = await readServerTable(path, source);
       if (!table) continue;
       for (const [name, raw] of Object.entries(table)) {
@@ -341,7 +342,7 @@ export async function importVendorMcpServers(
   if (imported.length) {
     // Re-read just before writing so a server added a moment ago by
     // `clikcode mcp add` in another process is not lost; its name still wins.
-    const latestText = await readFile(configPath, 'utf8').catch(() => undefined);
+    const latestText = await readFile(configPath, 'utf8').catch(quiet('agent/mcp/import'));
     let latest: Record<string, unknown> = root;
     if (latestText?.trim() && latestText !== existingText) {
       try { const parsed: unknown = JSON.parse(latestText); if (isRecord(parsed)) latest = parsed; } catch { /* keep the earlier read */ }
@@ -353,7 +354,7 @@ export async function importVendorMcpServers(
     await writeFile(configPath, `${JSON.stringify({ ...latest, [MCP_SERVERS_KEY]: merged }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
     // The copied env and headers are often API keys; the vendor files they
     // came from are private to the user, and this one must be too.
-    await chmod(configPath, 0o600).catch(() => undefined);
+    await chmod(configPath, 0o600).catch(quiet('agent/mcp/import'));
   }
   await mkdir(stateDir, { recursive: true });
   await writeFile(markerPath, `${JSON.stringify({ ranAt: new Date().toISOString(), imported, skipped }, null, 2)}\n`, 'utf8');

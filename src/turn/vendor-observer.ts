@@ -10,6 +10,7 @@ import { thoughtLabel } from '../harness/protocol/activity-events.js';
 import { sessionTurnTransport } from '../harness/transport/select.js';
 import { mergeBackgroundWork, type BackgroundWork, type BackgroundWorkUpdate } from '../harness/protocol/background-agents.js';
 import { createPendingWorkTracker } from './pending-work.js';
+import { createToolLog } from './tool-log.js';
 import { unfinishedUsageRecorder } from './turn-steps.js';
 import { turnSink } from './turn-output.js';
 import { nativeAvailableCommands } from './vendor-process.js';
@@ -42,15 +43,11 @@ export function createVendorObserver(ctx: VendorTurnContext) {
   /** The response-delta rule, in one place: to the checkpoint and to the
    * screen alike, so what is shown and what is saved cannot differ. */
   const sink = turnSink(checkpoint, prompter);
+  const toolLog = createToolLog();
   const onActivity = (event: HarnessActivityEvent): void => {
     pendingWork.note(event);
-    if (event.kind === 'tool-done' || event.kind === 'tool-error') {
-      lifecycle('turn.tool', {
-        name: (event.call?.name || event.category || 'tool').slice(0, 80),
-        ok: event.kind === 'tool-done',
-        ...(event.durationMs !== undefined ? { ms: event.durationMs } : {}),
-      });
-    }
+    toolLog.note(event);
+    if (event.kind === 'tool-done' || event.kind === 'tool-error') lifecycle('turn.tool', { ...toolLog.finished(event) });
     sink.activity(withWorkspacePaths(event, session.workspace));
   };
   /** A transport's thought is the whole of it so far: one row per id,

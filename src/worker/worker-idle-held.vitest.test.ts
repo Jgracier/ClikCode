@@ -5,7 +5,7 @@ vi.mock('../harness/transport/native/held-vendor.js', () => ({
   hasHeldVendorProcess: () => heldVendor.held,
   whenHeldVendorGone: () => new Promise<void>(() => undefined),
 }));
-vi.mock('../runtime/lifecycle-log.js', () => ({ lifecycle: vi.fn() }));
+vi.mock('../runtime/lifecycle-log.js', () => ({ lifecycle: vi.fn(), quiet: () => () => undefined, swallowed: () => undefined }));
 
 const { createIdleControl } = await import('./worker-idle.js');
 

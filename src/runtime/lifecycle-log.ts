@@ -15,9 +15,12 @@
  *
  * Never throws, never writes prompt or answer text, and never creates a
  * ClikCode home that is not there (a deleted test home stays deleted). */
-import { appendFileSync, existsSync, mkdirSync, renameSync, statSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { stateDirectory } from '../session/store/paths.js';
+import { subscribe } from 'node:diagnostics_channel';
+import { basename } from 'node:path';
+import { redactForLog } from './redact.js';
 
 type LifecycleRole = 'window' | 'worker' | 'bridge' | 'command';
 
@@ -82,19 +85,109 @@ export function lifecycle(event: string, fields: Readonly<Record<string, unknown
  * worth interrupting them for: ClikCode's log is where it goes, never the chat.
  * `kind` is a short stable name; `message` the one line of why. */
 export function diagnostic(kind: string, message: string): void {
-  lifecycle('note', { kind, message: message.slice(0, 300) });
+  lifecycle('note', { kind, message: redactForLog(message).slice(0, 300) });
+}
+
+/** What is not worth a line: the file that was not there, the process already gone, a request
+ * the person cancelled. */
+const BENIGN_CODES = new Set(['ENOENT', 'ESRCH', 'ECANCELED', 'EEXIST', 'ENOTEMPTY']);
+const QUIET_WINDOW_MS = 60_000;
+const quietSeen = new Map<string, { at: number; skipped: number }>();
+
+/** One line per area per minute, and how many more came in between. */
+function oncePerWindow(key: string): { more: number } | undefined {
+  const now = Date.now();
+  const seen = quietSeen.get(key);
+  if (seen && now - seen.at < QUIET_WINDOW_MS) { seen.skipped += 1; return undefined; }
+  quietSeen.set(key, { at: now, skipped: 0 });
+  if (quietSeen.size > 500) quietSeen.delete(quietSeen.keys().next().value as string);
+  return { more: seen?.skipped ?? 0 };
+}
+
+/** An error nothing will act on -- a best-effort write, a check that may fail -- written down
+ * rather than dropped. The work goes on exactly as before; the log learns that it failed, once
+ * a minute per `area` with a count, so a path that fails on every call is a line, not a flood.
+ * `area` is where it happened (`worker/session-worker`); a person searching the log finds it by
+ * that name. */
+export function swallowed(area: string, error: unknown): undefined {
+  const code = errnoOf(error);
+  if (code && BENIGN_CODES.has(code)) return undefined;
+  if ((error as { name?: unknown } | null | undefined)?.name === 'AbortError') return undefined;
+  const window = oncePerWindow(`swallowed:${area}`);
+  if (!window) return undefined;
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  lifecycle('swallowed', { area, ...(code ? { errno: code } : {}), message: redactForLog(message).slice(0, 200), ...(window.more ? { more: window.more } : {}) });
+  return undefined;
+}
+
+/** `.catch(quiet('area'))`: swallowed(), as a promise's rejection handler. */
+export const quiet = (area: string) => (error: unknown): undefined => swallowed(area, error);
+
+let childrenObserved = false;
+
+/** Every child process this one starts, by the runtime's own channel -- `spawn`, `execFile`, the
+ * promisified forms, a command that does not exist -- so no call site has to say so. Only a
+ * failure is written (a non-zero exit, a signal, a process that never started), per command per
+ * minute: what ran is the person's, not the log's, so the line names the program and how many
+ * arguments it had, never what they were. */
+export function observeChildProcesses(): void {
+  if (childrenObserved) return;
+  childrenObserved = true;
+  subscribe('child_process', (message) => {
+    const child = (message as { process?: import('node:child_process').ChildProcess }).process;
+    if (!child) return;
+    const startedAt = Date.now();
+    const report = (how: Record<string, unknown>): void => {
+      const program = basename(child.spawnfile || 'unknown').slice(0, 40);
+      const window = oncePerWindow(`child:${program}:${String(how.errno ?? how.code ?? how.signal ?? '')}`);
+      if (window) lifecycle('child.failed', { program, argc: Math.max(0, (child.spawnargs?.length ?? 1) - 1), ms: Date.now() - startedAt, ...how, ...(window.more ? { more: window.more } : {}) });
+    };
+    child.once('error', (error) => report({ errno: errnoOf(error) ?? 'error' }));
+    child.once('exit', (code, signal) => { if (code !== 0) report({ ...(code !== null ? { code } : {}), ...(signal ? { signal } : {}) }); });
+  });
 }
 
 let exitHooked = false;
 
+/** The name of the process that started this one (`claude`, `codex`, `node`), where the
+ * system says so (Linux /proc). It is what tells a vendor's launch of a stale command from a
+ * person's: without it a process that starts, fails and exits is only a line. */
+function errnoOf(error: unknown): string | undefined {
+  const code = (error as { code?: unknown } | null | undefined)?.code;
+  return typeof code === 'string' ? code : undefined;
+}
+
+export function parentProcessName(): string | undefined {
+  try { return readFileSync(`/proc/${process.ppid}/comm`, 'utf8').trim().slice(0, 40) || undefined; } catch { return undefined; }
+}
+
 /** Log this process's start, and its end: an exit with its code, and an
  * uncaught error with its message (crash.log keeps the stack). */
 export function lifecycleProcess(details: Readonly<Record<string, unknown>> = {}): void {
-  lifecycle('process.start', { argv: process.argv.slice(2, 4).join(' '), node: process.version, ...details });
+  const argv = process.argv.slice(2, 4).join(' ');
+  const parent = parentProcessName();
+  const startedAt = Date.now();
+  observeChildProcesses();
+  lifecycle('process.start', { argv, ppid: process.ppid, ...(parent ? { parent } : {}), node: process.version, ...details });
   if (exitHooked) return;
   exitHooked = true;
-  process.on('exit', (code) => lifecycle('process.exit', { code }));
+  // The exit line stands alone: what ran, who started it, how long it lived and how it ended, so a
+  // failing command is named without joining it back to its start by pid.
+  process.on('exit', (code) => lifecycle('process.exit', { code, argv, ...(parent ? { parent } : {}), ms: Date.now() - startedAt }));
+  // A process ended by a signal it does not handle never reaches 'exit': a start with no end, which
+  // is how 109 in a day looked. Say which signal, then die of it exactly as before -- unless
+  // something else listens (a worker's graceful shutdown, a window's hangup guard), in which case
+  // that is left to do what it does and this only writes it down.
+  for (const signal of ['SIGTERM', 'SIGHUP'] as const) {
+    const onSignal = (): void => {
+      lifecycle('process.signal', { signal, argv, ...(parent ? { parent } : {}), ms: Date.now() - startedAt });
+      if (process.listenerCount(signal) > 1) return;
+      process.removeListener(signal, onSignal);
+      process.kill(process.pid, signal);
+    };
+    process.on(signal, onSignal);
+  }
   // The monitor observes without handling: a listener on uncaughtException
   // itself would stop Node exiting on the error.
-  process.on('uncaughtExceptionMonitor', (error, origin) => lifecycle('process.error', { origin, message: error?.message?.slice(0, 300) }));
+  process.on('uncaughtExceptionMonitor', (error, origin) => lifecycle('process.error', { origin, argv, ...(errnoOf(error) ? { errno: errnoOf(error) } : {}), message: redactForLog(error?.message ?? '').slice(0, 300) }));
 }

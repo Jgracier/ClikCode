@@ -7,7 +7,7 @@ import { LOCK_TUNING, breakStaleLock, lockLooksStale, onLockWait, withFileLock, 
 import { lifecycle } from '../../runtime/lifecycle-log.js';
 import { runChild } from '../state/testing/concurrency.js';
 
-vi.mock('../../runtime/lifecycle-log.js', () => ({ lifecycle: vi.fn() }));
+vi.mock('../../runtime/lifecycle-log.js', () => ({ lifecycle: vi.fn(), quiet: () => () => undefined, swallowed: () => undefined }));
 
 let root: string | undefined;
 const defaults = { ...LOCK_TUNING };

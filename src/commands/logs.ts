@@ -5,8 +5,9 @@ import { closeSync, createReadStream, existsSync, openSync, readFileSync, readSy
 import { lifecycleLogPath } from '../runtime/lifecycle-log.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
 import { formatLatencyTable, medianLatencyByHarness, turnsLatency } from '../runtime/turn-latency.js';
+import { formatHealth, healthReport } from './logs-check.js';
 
-interface LogsOptions { session?: string; role?: string; since?: string; lines?: string; follow?: boolean; latency?: boolean; last?: string }
+interface LogsOptions { session?: string; role?: string; since?: string; lines?: string; follow?: boolean; latency?: boolean; last?: string; check?: boolean }
 
 type Entry = Record<string, unknown> & { t: string; pid: number; role: string; event: string; session?: string };
 
@@ -58,18 +59,25 @@ function readTail(path: string, maxBytes: number): string {
 export async function showLogs(options: LogsOptions): Promise<void> {
   const path = lifecycleLogPath();
   const json = isJsonDefaultMode();
-  const cutoff = sinceCutoff(options.since);
+  // A check reads a day by default: what is wrong shows over hours, not over the last hundred lines.
+  const cutoff = sinceCutoff(options.since ?? (options.check ? '24h' : undefined));
   const limit = Math.max(1, Number.parseInt(options.lines ?? '100', 10) || 100);
   const print = (entry: Entry): void => { process.stdout.write(`${json ? JSON.stringify(entry) : formatEntry(entry)}\n`); };
   // --since and --latency need the window. The default asks for the last
   // lines, which are at the end of the current file.
-  const wantAll = Boolean(options.since || options.latency);
+  const wantAll = Boolean(options.since || options.latency || options.check);
   const text = wantAll
     ? [`${path}.1`, path].filter((file) => existsSync(file)).map((file) => readFileSync(file, 'utf8')).join('')
     : `${readTail(`${path}.1`, 256 * 1024)}${readTail(path, 512 * 1024)}`;
   const entries = text.split('\n').map(parse).filter((entry): entry is Entry => Boolean(entry) && matches(entry!, options, cutoff));
   if (!entries.length && !options.follow) {
     process.stderr.write(existsSync(path) ? 'No lifecycle records match.\n' : `No lifecycle log yet (${path}).\n`);
+  }
+  if (options.check) {
+    const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; } };
+    const report = healthReport(entries, alive);
+    process.stdout.write(`${json ? JSON.stringify(report) : formatHealth(report)}\n`);
+    return;
   }
   if (options.latency) {
     // Where each turn's time went: the marks of the turns, newest --last N.

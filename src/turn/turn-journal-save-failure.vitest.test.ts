@@ -6,7 +6,7 @@ vi.mock('../session/state/write.js', () => ({
   writeState: vi.fn(async () => { if (disk.failing) throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' }); }),
   writeTranscriptCheckpoint: vi.fn(async () => false),
 }));
-vi.mock('../runtime/lifecycle-log.js', () => ({ lifecycle: vi.fn(), diagnostic: vi.fn() }));
+vi.mock('../runtime/lifecycle-log.js', () => ({ lifecycle: vi.fn(), diagnostic: vi.fn(), quiet: () => () => undefined, swallowed: () => undefined }));
 
 import { DurableTurnCheckpoint } from './turn-journal.js';
 

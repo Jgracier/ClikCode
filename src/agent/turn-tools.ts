@@ -15,7 +15,8 @@ import { recordUsage } from './usage.js';
 import { createSubagentRunner } from './subagent.js';
 import { STALL_LIMIT } from './stall.js';
 import type { AiHarnessPermissionMode } from '../harness/definition.js';
-import { lifecycle } from '../runtime/lifecycle-log.js';
+import { lifecycle, quiet } from '../runtime/lifecycle-log.js';
+import { firstErrorLine } from '../turn/tool-log.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import { abortable, type CallOutcome, SHELL_TOOLS, stableStringify, categoryForTool } from './turn-support.js';
 import { releaseHeldSteers, steerAlert, type TurnRuntime } from './turn-runtime.js';
@@ -63,7 +64,7 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
   };
   const queueApproval = <T>(ask: () => Promise<T>): Promise<T> => {
     const next = approvalChain.then(ask);
-    approvalChain = next.catch(() => undefined);
+    approvalChain = next.catch(quiet('agent/turn-tools'));
     return next;
   };
   const onApproval = input.onApproval;
@@ -185,11 +186,13 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
     let startedAt: number | undefined;
     const finish = async (result: ToolRunResult): Promise<ToolRunResult> => {
       result = { ...result, output: scrubSecrets(result.output) };
+      const err = result.isError ? firstErrorLine(result.output) : undefined;
       lifecycle('turn.tool', {
-        name: call.name, ok: !result.isError,
+        name: call.name, ok: !result.isError, id: call.id.slice(-8), ...(category.category ? { category: category.category } : {}),
         ...(startedAt !== undefined ? { ms: Date.now() - startedAt } : {}),
         ...(result.exitCode !== undefined ? { exit: result.exitCode } : {}),
         ...(result.continuesAs ? { state: 'background' } : {}),
+        ...(err ? { err } : {}),
       });
       const output = eventOutputPreview(result.output);
       // A background agent's call returns at launch; its row is the agent's, and
