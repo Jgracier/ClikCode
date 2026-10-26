@@ -142,6 +142,7 @@ export async function runAgentTurn(input: {
   try {
     held = await seedAgentConversation({
       session, stateDir: stateDirectory(), ...(modelClient.contextHints?.contextWindow ? { contextWindow: modelClient.contextHints.contextWindow } : {}),
+      ...(modelClient.contextHints?.readableTokens ? { readableTokens: modelClient.contextHints.readableTokens } : {}),
       displayName: (command) => localHarnessForCommand(command)?.displayName,
     });
     if (held.seeded) lifecycle('thread.take-up', { harness: attributedTo, how: 'agent-memory', turns: held.total, seeded: held.seeded });

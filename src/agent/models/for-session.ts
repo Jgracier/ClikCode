@@ -5,6 +5,7 @@
  * turn path never asks "which route?" to build a client, and ClikCode Local's
  * engine (src/local-models) plugs in here and nowhere else. */
 
+import { localReadableTokens } from '../../local-models/read-budget.js';
 import type Conf from 'conf';
 import { diagnostic, quiet } from '../../runtime/lifecycle-log.js';
 import type { ModelClient } from '../model-client.js';
@@ -190,6 +191,8 @@ export async function modelClientForSession(session: HarnessSession, config: Con
       // unchanged history should be read once, on every supported machine.
       body: { cache_prompt: true },
       ...(endpoint.promptPerSecond ? { promptPerSecond: endpoint.promptPerSecond } : {}),
+      // What a conversation carried in may hold: what this model reads in about two minutes, not what its window could carry.
+      ...(localReadableTokens(endpoint.promptPerSecond) ? { readableTokens: localReadableTokens(endpoint.promptPerSecond)! } : {}),
     });
   }
   throw new Error(`a ${session.route} session runs a vendor harness, not ClikCode's own agent`);

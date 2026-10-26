@@ -18,6 +18,7 @@ import { canonicalRecord, markProviderBoundaries, withProviderNote, type Canonic
 import type { HarnessSession } from '../session/model.js';
 import { writeFullRecord } from '../session/full-record.js';
 import { fitRecord, nativeThreadBudget } from './thread-start.js';
+import { BYTES_PER_TOKEN } from './transfer.js';
 
 /** Bytes of history the agent is seeded with: half the target model's window, as for any
  * written thread (thread-start.ts nativeThreadBudget), so the first request leaves the other
@@ -26,8 +27,11 @@ import { fitRecord, nativeThreadBudget } from './thread-start.js';
  * 1M window can carry. (A fixed 120k cap used to stop it at a fifth of that; what it saved was
  * the first step's price on a long conversation, which is the price of that conversation.) The
  * agent's context view (agent/context-view.ts) still fits every request to the model's window. */
-export function agentSeedBudget(contextWindow?: number): number {
-  return nativeThreadBudget(contextWindow);
+export function agentSeedBudget(contextWindow?: number, readableTokens?: number): number {
+  const byWindow = nativeThreadBudget(contextWindow);
+  // A local model is also bounded by what it can read in about two minutes (local-models/read-budget.ts): there the window is
+  // not the limit. What does not fit stays in the full record, which the agent can search and read.
+  return readableTokens && readableTokens > 0 ? Math.min(byWindow, readableTokens * BYTES_PER_TOKEN) : byWindow;
 }
 
 /** One turn as the two messages the agent's memory holds. */
@@ -80,7 +84,7 @@ async function noteInterruptedTail(store: ConversationStore, last: CanonicalTurn
  * the conversation's turns it now holds. `receiving` is the provider key the
  * agent's own turns carry (`gateway:gateway`, `clikcode-local:…`). */
 export async function seedAgentConversation(input: {
-  session: HarnessSession; stateDir: string; contextWindow?: number; displayName?: (harness: string) => string | undefined;
+  session: HarnessSession; stateDir: string; contextWindow?: number; readableTokens?: number; displayName?: (harness: string) => string | undefined;
 }): Promise<{ total: number; seeded: number }> {
   const { session } = input;
   // The turn about to run is not a turn yet: only what came before it.
@@ -103,7 +107,7 @@ export async function seedAgentConversation(input: {
   // What does not fit is named with the file that holds the whole conversation:
   // no provider's summary stands in for turns (a handoff carries the conversation).
   const recordPath = await writeFullRecord(session, input.stateDir);
-  const fitted = fitRecord(markProviderBoundaries(missing, receiving, input.displayName), agentSeedBudget(input.contextWindow), recordPath ? { recordPath } : {});
+  const fitted = fitRecord(markProviderBoundaries(missing, receiving, input.displayName), agentSeedBudget(input.contextWindow, input.readableTokens), recordPath ? { recordPath } : {});
   await store.append(...fitted.record.turns.flatMap(agentItemsFromTurn));
   return { total, seeded: missing.turns.length };
 }

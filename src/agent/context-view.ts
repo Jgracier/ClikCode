@@ -126,9 +126,68 @@ export interface ContextView {
   omittedGroups: number;
 }
 
+/** What the stable view says is outside it. No count: a number that changes every step would change the first item, and
+ * with it everything the server had already read. */
+const TAIL_NOTE = '[Working context: older work in this conversation is outside this view, to keep the model\'s first read short. The current user request remains verbatim. Everything earlier remains in the retained history: use read_context to search it before relying on missing details. Excerpts are not complete evidence.]';
+const TAIL_NOTE_ITEM: ConversationItem = { type: 'text', role: 'assistant', text: TAIL_NOTE };
+
+/** The share of the read budget the cut point moves by. Half: the view then holds between half and all of the budget, and the
+ * server re-reads about as many tokens as the conversation grew by, not the whole view at every step. */
+const TAIL_STEP_SHARE = 0.5;
+
+/**
+ * A view bounded by what the model can read, and stable: the conversation from one cut point to the end, in order.
+ *
+ * The relevance fit above picks different groups at every step once the conversation passes its budget, so a model server
+ * that keeps the prefix it has read (llama.cpp does) re-reads the whole view each time -- measured on a real conversation at
+ * 97% of the view per step, whatever the window. This one cuts at a fixed grid of positions in the conversation (every half
+ * budget of tokens from its start, which appending never moves) and takes the first that fits, so a step that only appends
+ * leaves the prefix alone, and the cut moves once the conversation has grown by half the budget. The latest request is always in.
+ *
+ * Undefined when the latest request and what follows it do not fit the window either: the caller's own fit then decides.
+ */
+export function stableTail(
+  input: { system: string; items: readonly ConversationItem[]; tools: readonly ToolSpec[]; scale: number; maxItems: number },
+  windowBudget: number, readBudget: number,
+): ContextView | undefined {
+  const all = groups(input.items);
+  const requiredAt = all.findIndex((group) => group.required);
+  if (requiredAt < 0) return undefined;
+  const empty = estimateRequestTokens('', [], []);
+  const tokens = all.map((group) => Math.ceil((estimateRequestTokens('', group.items, []) - empty) * input.scale));
+  const before: number[] = [];
+  const itemsFrom: number[] = new Array(all.length + 1).fill(0);
+  let running = 0;
+  for (const index of all.keys()) { before.push(running); running += tokens[index]!; }
+  for (let index = all.length - 1; index >= 0; index -= 1) itemsFrom[index] = itemsFrom[index + 1]! + all[index]!.items.length;
+  const total = running;
+  const fixed = Math.ceil(estimateRequestTokens(input.system, [TAIL_NOTE_ITEM], input.tools) * input.scale);
+  const tail = (from: number): number => fixed + total - before[from]!;
+  const fits = (from: number): boolean => tail(from) <= readBudget && itemsFrom[from]! + 1 <= input.maxItems;
+
+  const step = Math.max(1, Math.floor(readBudget * TAIL_STEP_SHARE));
+  let cut = requiredAt;
+  let at = 0;
+  for (let grid = 1; ; grid += 1) {
+    while (at < requiredAt && before[at]! < grid * step) at += 1;
+    if (at >= requiredAt) break;
+    if (fits(at)) { cut = at; break; }
+  }
+  // Even the latest request and what follows it may be more than the budget; it is read anyway, unless the window cannot hold it.
+  if (tail(cut) > windowBudget) return undefined;
+  // The cut at the very start leaves nothing outside the view (the budget is smaller than the instructions and tools alone, or the
+  // conversation is one request): no note, for there is nothing to say.
+  if (cut === 0) return { items: input.items, tools: input.tools, estimatedTokens: Math.ceil(estimateRequestTokens(input.system, input.items, input.tools) * input.scale), omittedGroups: 0 };
+  const kept = all.slice(cut).flatMap((group) => group.items);
+  const view = [TAIL_NOTE_ITEM, ...kept];
+  return { items: view, tools: input.tools, estimatedTokens: Math.ceil(estimateRequestTokens(input.system, view, input.tools) * input.scale), omittedGroups: cut };
+}
+
 export function fitContext(input: {
   system: string; items: readonly ConversationItem[]; tools: readonly ToolSpec[];
   window?: number; outputReserve?: number; scale?: number; maxItems?: number; requiredTools?: readonly string[];
+  /** Tokens the model can read before it answers (ContextHints.readableTokens): a local model's real limit, far below its window. */
+  readBudget?: number;
 }): ContextView {
   // A window nobody reported is a guess, and the guess is never a reason to refuse: the server knows its own limit.
   const windowKnown = Boolean(input.window && input.window > 0);
@@ -139,6 +198,12 @@ export function fitContext(input: {
   const cost = (items: readonly ConversationItem[], tools: readonly ToolSpec[]) => Math.ceil(estimateRequestTokens(input.system, items, tools) * scale);
   const maxItems = input.maxItems ?? 1_500;
   const initial = cost(input.items, input.tools);
+  // A model that reads slowly is held to what it reads in about two minutes, by a view that moves only forward (stableTail).
+  if (input.readBudget && input.readBudget > 0 && initial > input.readBudget) {
+    const tail = stableTail({ ...input, scale, maxItems }, budget, input.readBudget);
+    if (tail) return tail;
+  }
+
   if (initial <= budget && input.items.length <= maxItems) return { items: input.items, tools: input.tools, estimatedTokens: initial, omittedGroups: 0 };
 
   const all = groups(input.items);

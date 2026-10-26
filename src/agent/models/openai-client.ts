@@ -29,6 +29,8 @@ interface OpenAIModelClientOptions {
   /** Measured prompt reading speed, tokens/s, when the server's owner knows
    * it (ClikCode Local); with the window it picks the context profile. */
   promptPerSecond?: number;
+  /** See ContextHints.readableTokens. */
+  readableTokens?: number;
   /** Send user images as `image_url` parts. Off by default: a text-only
    * server either rejects them or silently drops them. */
   vision?: boolean;
@@ -281,6 +283,7 @@ export class OpenAIModelClient implements ModelClient {
       ...(options.hosted ? { hosted: true } : {}),
       ...(options.contextWindow ? { contextWindow: options.contextWindow } : {}),
       ...(options.promptPerSecond ? { promptPerSecond: options.promptPerSecond } : {}),
+      ...(options.readableTokens ? { readableTokens: options.readableTokens } : {}),
     };
   }
 

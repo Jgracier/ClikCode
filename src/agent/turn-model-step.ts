@@ -44,6 +44,7 @@ export async function runModelStep(rt: TurnRuntime, modelClient: ModelClient, sy
     if (rt.budgetClient !== modelClient) {
       rt.budgetClient = modelClient;
       rt.contextWindow = modelClient.contextHints?.contextWindow;
+      rt.readBudget = modelClient.contextHints?.readableTokens;
       rt.contextScale = 1;
     }
     // Once per turn, before the first request: if the user's own model is not up, the status says what it is
@@ -74,10 +75,11 @@ export async function runModelStep(rt: TurnRuntime, modelClient: ModelClient, sy
       tools: rt.profile.shapeSpecs(toolSpecs(visibleTools(advertised, session.plan.active))),
       requiredTools,
       window: rt.contextWindow, outputReserve, scale: rt.contextScale,
+      ...(rt.readBudget ? { readBudget: rt.readBudget } : {}),
     });
     rt.lastRequestEstimate = view.estimatedTokens;
     // Said once per step that left something out, with the numbers: a refused or trimmed view is otherwise only knowable from a transcript.
-    if (view.omittedGroups > 0) lifecycle('turn.context', { window: rt.contextWindow, tokens: view.estimatedTokens, omitted: view.omittedGroups, scale: rt.contextScale });
+    if (view.omittedGroups > 0) lifecycle('turn.context', { window: rt.contextWindow, ...(rt.readBudget ? { read: rt.readBudget } : {}), tokens: view.estimatedTokens, omitted: view.omittedGroups, scale: rt.contextScale });
     step = await abortable(modelClient.step({
       system, items: view.items, signal, tools: view.tools,
       maxOutputTokens: outputRoom(rt.contextWindow ?? UNKNOWN_CONTEXT_WINDOW, view.estimatedTokens),
@@ -168,7 +170,7 @@ export async function runModelStep(rt: TurnRuntime, modelClient: ModelClient, sy
       for (let n = 0; n < 6; n++) {
         scale *= 1.35;
         let smaller: ContextView;
-        try { smaller = fitContext({ system, items: rt.items, tools: view.tools, requiredTools, window: rt.contextWindow, scale }); }
+        try { smaller = fitContext({ system, items: rt.items, tools: view.tools, requiredTools, window: rt.contextWindow, scale, ...(rt.readBudget ? { readBudget: rt.readBudget } : {}) }); }
         catch { break; }
         if (JSON.stringify(smaller.items) !== JSON.stringify(view.items) || JSON.stringify(smaller.tools) !== JSON.stringify(view.tools)) {
           await preservePartial();

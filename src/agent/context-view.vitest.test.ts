@@ -308,3 +308,94 @@ describe('what refuses, and on what evidence', () => {
     expect(outputRoom(8_192, 8_000)).toBe(128);
   });
 });
+
+describe('a model bounded by what it can read (a local model): one cut point that moves forward', () => {
+  const turnItems = (index: number): ConversationItem[] => [
+    user(`Request ${index}: change something in file ${index}`),
+    { type: 'text', role: 'assistant', text: `Looking at file ${index}` },
+    { type: 'tool_call', name: 'read_file', id: `c${index}`, args: { path: `file-${index}` } },
+    { type: 'tool_result', name: 'read_file', id: `c${index}`, output: `file ${index}\n${'diagnostic output '.repeat(120)}\nend ${index}` },
+    { type: 'text', role: 'assistant', text: `Done with ${index}.` },
+  ];
+  const conversation = (turns: number): ConversationItem[] => Array.from({ length: turns }, (_, index) => turnItems(index)).flat();
+  const WINDOW = 262_144;
+  const BUDGET = 8_000;
+  const fit = (items: ConversationItem[], extra: { readBudget?: number } = {}) => fitContext({ system: 'S', items, tools, window: WINDOW, ...extra });
+
+  it('changes nothing for a conversation that fits what it can read, or for a model with no such bound', () => {
+    const small = conversation(4);
+    expect(fit(small, { readBudget: BUDGET }).items).toEqual(small);
+    const big = conversation(120);
+    // Hosted: the window is the only bound, and a window this size holds all of it.
+    expect(fit(big).items).toEqual(big);
+  });
+
+  it('holds a long conversation to the read budget, keeps the newest requests and the latest verbatim, and says it left the rest out', () => {
+    const items = conversation(120);
+    const view = fit(items, { readBudget: BUDGET });
+    expect(view.estimatedTokens).toBeLessThanOrEqual(BUDGET);
+    expect(view.omittedGroups).toBeGreaterThan(0);
+    expect(view.items[0]).toMatchObject({ type: 'text', role: 'assistant' });
+    expect((view.items[0] as { text: string }).text).toMatch(/outside this view/);
+    // No count in the note: a number that changes each step would change the first item and with it everything already read.
+    expect((view.items[0] as { text: string }).text).not.toMatch(/\d/);
+    expect(view.items.at(-1)).toEqual(items.at(-1));
+    expect(view.items.some((item) => item.type === 'text' && item.text.startsWith('Request 119'))).toBe(true);
+    expect(view.items.some((item) => item.type === 'text' && item.text.startsWith('Request 0:'))).toBe(false);
+    // A call and its result are never split.
+    const calls = view.items.filter((item) => item.type === 'tool_call').map((item) => (item as { id: string }).id);
+    const results = view.items.filter((item) => item.type === 'tool_result').map((item) => (item as { id: string }).id);
+    expect(results).toEqual(calls);
+  });
+
+  it('only appends from step to step, so the server keeps what it has read: the cut moves once per half budget of growth, not at every step', () => {
+    const all = conversation(200);
+    let previous: string[] | undefined;
+    let changed = 0;
+    let steps = 0;
+    const read: number[] = [];
+    for (let n = 60 * 5; n <= all.length; n += 1) {
+      const view = fit(all.slice(0, n), { readBudget: BUDGET });
+      const keys = view.items.map((item) => JSON.stringify(item));
+      if (previous) {
+        let common = 0;
+        while (common < previous.length && common < keys.length && previous[common] === keys[common]) common += 1;
+        if (common < previous.length) changed += 1;
+        read.push(estimateRequestTokens('', view.items.slice(common), []));
+        steps += 1;
+      }
+      previous = keys;
+    }
+    // The relevance fit changes the prefix at nearly every step (measured 297 of 300 on a real conversation).
+    expect(changed).toBeLessThan(steps * 0.1);
+    const mean = read.reduce((sum, value) => sum + value, 0) / read.length;
+    expect(mean).toBeLessThan(BUDGET * 0.25);
+  });
+
+  it('says nothing is outside the view only when something is: a budget smaller than the instructions alone leaves a short conversation whole', () => {
+    const items = conversation(1);
+    const view = fit(items, { readBudget: 10 });
+    expect(view.items).toEqual(items);
+    expect(view.omittedGroups).toBe(0);
+  });
+
+  it('is deterministic: the same conversation gives the same view, wherever it was fitted', () => {
+    const items = conversation(150);
+    expect(fit(items, { readBudget: BUDGET }).items).toEqual(fit([...items], { readBudget: BUDGET }).items);
+  });
+
+  it('always carries the latest request, even one larger than the read budget, and offers every tool', () => {
+    const items = [...conversation(50), user(`Please review this:\n${'line of a pasted file\n'.repeat(1_500)}`)];
+    const view = fit(items, { readBudget: BUDGET });
+    expect(view.items.at(-1)).toEqual(items.at(-1));
+    expect(view.estimatedTokens).toBeGreaterThan(BUDGET);
+    expect(view.tools).toEqual(tools);
+  });
+
+  it('is not what refuses a request: a model that could hold it is read slowly, not turned away', () => {
+    const items = [...conversation(30), user(`Look at this:\n${'x'.repeat(60_000)}`)];
+    expect(() => fit(items, { readBudget: 1_000 })).not.toThrow();
+    // The window itself still decides what cannot be sent at all.
+    expect(() => fitContext({ system: 'S', items, tools, window: 4_096, readBudget: 1_000 })).toThrow(ContextFitError);
+  });
+});
