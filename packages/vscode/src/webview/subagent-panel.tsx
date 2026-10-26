@@ -77,7 +77,7 @@ export function SubagentBody({ parentId, agentId, label, running, onClose }: { p
           : <div key={index} class="markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(withoutOtherOrgThinkingNotice(group.text)) }} />)
           : <p class="muted">No recorded child messages or tool calls.</p>}
       </div>
-      {running && view.steer !== 'none' ? <form onSubmit={(event) => {
+      {running && view.steer !== 'none' ? <form class="subagent-compose" onSubmit={(event) => {
         event.preventDefault();
         if (!draft.trim() || sending) return;
         const text = draft;
@@ -85,7 +85,7 @@ export function SubagentBody({ parentId, agentId, label, running, onClose }: { p
         void request({ method: 'subagent', action: 'steer', parentId, agentId, text }).then(() => {
           setDraft(''); setNotice(view.steer === 'relay' ? 'Sent through the main agent.' : 'Sent to the subagent.');
         }, (error: unknown) => setNotice(error instanceof Error ? error.message : 'Not sent.')).finally(() => setSending(false));
-      }}><input aria-label="Message this subagent" value={draft} onInput={(event) => setDraft(event.currentTarget.value)} placeholder={view.steer === 'relay' ? 'Message through the main agent…' : 'Message this subagent…'} /><button type="submit" disabled={sending || !draft.trim()}>Send</button></form>
+      }}><input aria-label="Message this subagent" value={draft} onInput={(event) => setDraft(event.currentTarget.value)} placeholder={view.steer === 'relay' ? 'Message through the main agent…' : 'Message this subagent…'} /><button type="submit" class="send" aria-label="Send to the subagent" title="Send" disabled={sending || !draft.trim()}><Icon name="arrow-up" /></button></form>
         : <p class="muted">{running ? 'This harness does not support messaging this subagent.' : 'Finished · read-only'}</p>}
       {notice ? <p role="status" class="muted">{notice}</p> : null}
     </section>
