@@ -97,7 +97,7 @@ async function browserFor(stateDir: string, start: boolean): Promise<Connected> 
     opening = (async () => {
       const current = await connect(stateDir);
       if (current) return current;
-      if (!start) throw new Error('ClikCode browser is closed. Open a URL with computer_web first.');
+      if (!start) throw new Error('ClikCode browser is closed. Open a URL with browser_use first.');
       return startHost(stateDir);
     })();
     running.set(stateDir, opening);
@@ -140,7 +140,7 @@ export async function openComputerPage(stateDir: string, tab?: string): Promise<
 export async function computerPage(stateDir: string, tab?: string): Promise<Page> {
   await browserFor(stateDir, false);
   const page = mine(stateDir, tab);
-  if (!page) throw new Error('This chat has no open tab. Open a URL with computer_web first.');
+  if (!page) throw new Error('This chat has no open tab. Open a URL with browser_use first.');
   return page;
 }
 

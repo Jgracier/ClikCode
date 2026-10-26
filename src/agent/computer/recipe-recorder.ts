@@ -1,4 +1,4 @@
-/** Records signup recipes without the agent doing anything. Every successful `computer_web` interaction since a tab opened a
+/** Records signup recipes without the agent doing anything. Every successful `browser_use` interaction since a tab opened a
  * site is kept in a short in-memory journal (by control text, never a typed value). When the sequence ends in a verified
  * capture_secret or login, the journal is saved as that host's recipe. A step that cannot be saved safely (a control named
  * after an id or a key, a page reference with no readable name) spoils the journal, so a partial recipe is never saved. */

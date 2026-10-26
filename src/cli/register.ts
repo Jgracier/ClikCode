@@ -106,7 +106,7 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .option('--chat <chat>', 'Chat id, prefix or name when run outside a chat')
     .option('--new', 'Sign in with a different account instead of the saved one')
     .action(async (url: string | undefined, options: { chat?: string; new?: boolean }) => (await import('../commands/computer.js')).computerLogin(options.chat, { ...(url ? { url } : {}), ...(options.new ? { newAccount: true } : {}) }));
-  computer.command('tool <name>').description('Run a computer tool (computer_web, computer_desktop) in the current chat; prints its scrubbed result')
+  computer.command('tool <name>').description('Run a computer tool (browser_use, computer_use) in the current chat; prints its scrubbed result')
     .option('--args-json <json>', 'The tool arguments as one JSON object', '{}')
     .option('--chat <chat>', 'Chat to use when run from outside a ClikCode chat')
     .action(async (name: string, options: { argsJson: string; chat?: string }) => {
@@ -122,7 +122,7 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .option('--chat <chat>', 'Chat to use when run from outside a ClikCode chat')
     .action(async (secret: string, options: { click?: string; to?: string; with?: string[]; chat?: string }) => {
       const params = Object.fromEntries((options.with ?? []).map(pair => { const at = pair.indexOf('='); if (at < 1) throw new Error('--with is slot=value'); return [pair.slice(0, at), pair.slice(at + 1)]; }));
-      await (await import('../commands/computer.js')).computerTool('computer_web', { action: 'capture_secret', secret_name: secret,
+      await (await import('../commands/computer.js')).computerTool('browser_use', { action: 'capture_secret', secret_name: secret,
         ...(options.click ? { target: options.click } : {}), ...(options.to ? { send_to: { to: options.to, ...(Object.keys(params).length ? { with: params } : {}) } } : {}) }, options.chat);
     });
   computer.command('store <secret-name>').description('Send a saved secret on to a destination, for example --to clikdeploy-secret --with key=SALAD_API_KEY')
@@ -131,7 +131,7 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .option('--chat <chat>', 'Chat to use when run from outside a ClikCode chat')
     .action(async (secret: string, options: { to: string; with?: string[]; chat?: string }) => {
       const params = Object.fromEntries((options.with ?? []).map(pair => { const at = pair.indexOf('='); if (at < 1) throw new Error('--with is slot=value'); return [pair.slice(0, at), pair.slice(at + 1)]; }));
-      await (await import('../commands/computer.js')).computerTool('computer_web', { action: 'send_secret', secret, send_to: [{ to: options.to, ...(Object.keys(params).length ? { with: params } : {}) }] }, options.chat);
+      await (await import('../commands/computer.js')).computerTool('browser_use', { action: 'send_secret', secret, send_to: [{ to: options.to, ...(Object.keys(params).length ? { with: params } : {}) }] }, options.chat);
     });
   computer.command('profile').description('Autofill profiles an agent fills forms from (name, email, phone, address, and custom details): list, --set key=value, --custom key=value, --delete')
     .option('--create', 'Ask for the details and save them as a profile').option('--label <name>', 'Which profile (default Personal)').option('--set <pair...>', 'key=value, for example phone=719-555-0123').option('--custom <pair...>', 'key=value of a detail beyond the standard ones, for example app_name="My App" (details only, never a key)').option('--secret <name>', 'Keep a secret with the profile, typed hidden (password = the password used for sign-ups); never shown to an agent').option('--delete <label>', 'Remove a profile')

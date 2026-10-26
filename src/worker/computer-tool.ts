@@ -14,6 +14,7 @@ import { computerWebTool } from '../agent/tools/computer-web.js';
 import { clikDeployStepUpTool } from '../agent/tools/clikdeploy-step-up.js';
 import type { ToolContext, ToolDefinition } from '../agent/tool-contract.js';
 import type { TurnObserver } from '../turn/observer.js';
+import { currentToolName } from '../agent/computer/tool-names.js';
 
 export const SHARED_COMPUTER_TOOLS: readonly ToolDefinition[] = ([computerWebTool, computerDesktopTool, clikDeployStepUpTool] as unknown as ToolDefinition[]).map(hotTool);
 
@@ -25,7 +26,7 @@ export async function runSharedComputerTool(input: {
   /** Chat windows that can show a private prompt, the caller not counted. */
   windows: () => number;
 }): Promise<{ ok: boolean; output: string }> {
-  const tool = SHARED_COMPUTER_TOOLS.find(candidate => candidate.name === input.tool);
+  const tool = SHARED_COMPUTER_TOOLS.find(candidate => candidate.name === currentToolName(input.tool));
   if (!tool) return { ok: false, output: `Unknown tool "${input.tool}". Available: ${SHARED_COMPUTER_TOOLS.map(entry => entry.name).join(', ')}.` };
   try {
     if (!await computerEnabled(input.stateDir)) return { ok: false, output: COMPUTER_OFF };

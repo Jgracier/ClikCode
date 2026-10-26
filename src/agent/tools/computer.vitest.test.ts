@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { backgroundOnly, backgroundOnlyNotice, computerDriverAction, computerTools } from './computer.js';
 import { driverEnv, driverVersionNotice } from '../computer/driver.js';
 
-describe('computer_desktop boundary', () => {
+describe('computer_use boundary', () => {
   it('is one tool', () => {
-    expect(computerTools.map((tool) => tool.name)).toEqual(['computer_desktop']);
+    expect(computerTools.map((tool) => tool.name)).toEqual(['computer_use']);
     expect(computerTools.map((tool) => tool.class)).toEqual(['exec']);
   });
 
@@ -39,7 +39,7 @@ describe('computer_desktop boundary', () => {
   });
 });
 
-describe('computer_desktop on Linux Wayland', () => {
+describe('computer_use on Linux Wayland', () => {
   it('turns on Cua\'s Wayland backend only in a Linux Wayland session', () => {
     expect(driverEnv({ XDG_SESSION_TYPE: 'wayland' }, 'linux')).toEqual({ CUA_DRIVER_RS_ENABLE_WAYLAND: '1' });
     expect(driverEnv({ WAYLAND_DISPLAY: 'wayland-0' }, 'linux')).toEqual({ CUA_DRIVER_RS_ENABLE_WAYLAND: '1' });

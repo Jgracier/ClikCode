@@ -69,7 +69,7 @@ describe('findInSnapshot', () => {
   });
 });
 
-describe('computer_web labels and plan text', () => {
+describe('browser_use labels and plan text', () => {
   const label = (args: Record<string, unknown>): string => computerWebTool.label(args as never);
   it('reads like what is happening, not like the call', () => {
     expect(label({ action: 'open', url: 'https://www.huggingface.co/settings/tokens' })).toBe('Open huggingface.co');
