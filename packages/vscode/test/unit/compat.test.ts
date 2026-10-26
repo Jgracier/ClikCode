@@ -75,6 +75,15 @@ describe('Open the conversation that edited this file', () => {
   });
 });
 
+describe('Even out indentation', () => {
+  it('is a command on the editor context menu, for editable text', () => {
+    const id = 'clikcode.evenOutIndentation';
+    expect(pkg.contributes.commands.some((command: { command: string }) => command.command === id)).toBe(true);
+    const menus = pkg.contributes.menus as Record<string, Array<{ command: string; when?: string }>>;
+    expect(menus['editor/context']!.find((item) => item.command === id)?.when).toContain('!editorReadonly');
+  });
+});
+
 describe('version skew', () => {
   it('says nothing when the bridge speaks the revision the bundle was built for', () => {
     expect(versionSkew({ version: '1.0.0', revision: IDE_PROTOCOL.revision })).toBeUndefined();

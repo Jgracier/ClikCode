@@ -344,6 +344,12 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
       if (question.trim()) await target.send(questionWithSelection(question, selected));
       else { target.post({ type: 'mention', mention }); target.post({ type: 'focus' }); }
     }),
+    // Leading tabs and spaces become whichever the editor is set to use (the status bar's "Spaces: 4").
+    vscode.commands.registerCommand('clikcode.evenOutIndentation', async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) return;
+      await vscode.commands.executeCommand(editor.options.insertSpaces ? 'editor.action.indentationToSpaces' : 'editor.action.indentationToTabs');
+    }),
   );
 
   return {

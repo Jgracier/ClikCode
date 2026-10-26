@@ -221,6 +221,11 @@
         "category": "ClikCode"
       },
       {
+        "command": "clikcode.evenOutIndentation",
+        "title": "Even Out Indentation",
+        "category": "ClikCode"
+      },
+      {
         "command": "clikcode.acceptProposedDiff",
         "title": "Accept Proposed Change",
         "category": "ClikCode",
@@ -335,6 +340,11 @@
           "group": "clikcode@3"
         },
         {
+          "command": "clikcode.evenOutIndentation",
+          "when": "editorTextFocus && !editorReadonly",
+          "group": "clikcode@4"
+        },
+        {
           "command": "clikcode.acceptProposedDiff",
           "when": "resourceScheme == clikcode-diff",
           "group": "clikcode@1"
@@ -385,6 +395,10 @@
         {
           "command": "clikcode.askAboutSelection",
           "when": "editorHasSelection"
+        },
+        {
+          "command": "clikcode.evenOutIndentation",
+          "when": "editorIsOpen && !editorReadonly"
         },
         {
           "command": "clikcode.acceptProposedDiff",
