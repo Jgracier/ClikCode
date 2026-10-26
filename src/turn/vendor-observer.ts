@@ -1,6 +1,7 @@
 /** What one vendor turn's transports report, folded into the checkpoint and the
  * screen: the shared observer, usage and pending work. */
 import { diagnostic, lifecycle } from '../runtime/lifecycle-log.js';
+import { markTurn } from '../runtime/turn-latency.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { HarnessAvailableCommand, HarnessPlanEntry, HarnessTurnObserver } from '../harness/events/turn-observer.js';
@@ -53,6 +54,7 @@ export function createVendorObserver(ctx: VendorTurnContext) {
   /** A transport's thought is the whole of it so far: one row per id,
    *  replaced as it grows (activity-events.ts thoughtLabel). */
   const onThought = (thought: string, id?: string): void => {
+    markTurn('first-thought');
     const label = thoughtLabel(thought);
     if (label) onActivity({ kind: 'thinking', label, ...(id ? { id } : {}) });
   };

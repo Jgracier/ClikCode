@@ -16,7 +16,7 @@ import { lifecycle } from './lifecycle-log.js';
 /** The moments, in the order they happen on the path. */
 const TURN_MARKS = [
   'submit', 'accepted', 'account', 'spawned', 'ready', 'prompt-sent',
-  'first-byte', 'first-event', 'first-text', 'first-paint', 'first-text-paint', 'end',
+  'first-byte', 'first-thought', 'first-event', 'first-text', 'first-paint', 'first-text-paint', 'end',
 ] as const;
 type TurnMarkName = (typeof TURN_MARKS)[number];
 
@@ -104,9 +104,12 @@ interface TurnBreakdown {
   /** submit -> the first answer text on screen (the user's wait). */
   submitToTextPaint?: number;
   total?: number;
-  /** The harness's own time: prompt-sent .. first-byte. */
+  /** first byte -> the first thought shown: what the vendor sends (its command list, usage) before the model starts thinking. */
+  firstByteToFirstThought?: number;
+  /** The harness's own time: prompt-sent .. the first answer text (or, with none, the first event or byte). The model's thinking is in it. */
   vendorMs?: number;
-  /** Everything else up to the first answer text being seen -- ClikCode's. */
+  /** What ClikCode controls: everything before the vendor is asked (submit .. prompt-sent), and the lag from the first
+   * answer text to its being drawn. Not the model's time, which is the vendor's. */
   clikcodeMs?: number;
 }
 
@@ -157,6 +160,7 @@ export function turnLatency(lines: ReadonlyArray<string | Raw>, turnId?: string)
   set('readyToPromptSent', span(marks, 'ready', 'prompt-sent'));
   set('promptToFirstByte', span(marks, 'prompt-sent', 'first-byte'));
   set('readyToFirstByte', span(marks, 'ready', 'first-byte'));
+  set('firstByteToFirstThought', span(marks, 'first-byte', 'first-thought'));
   set('firstByteToFirstEvent', span(marks, 'first-byte', 'first-event'));
   set('firstEventToFirstText', span(marks, 'first-event', 'first-text'));
   set('submitToFirstPaint', marks['first-paint']);
@@ -164,11 +168,13 @@ export function turnLatency(lines: ReadonlyArray<string | Raw>, turnId?: string)
   set('firstTextToTextPaint', span(marks, 'first-text', 'first-text-paint'));
   set('submitToTextPaint', marks['first-text-paint']);
   set('total', marks.end);
-  const seen = marks['first-text-paint'] ?? marks['first-text'] ?? marks['first-event'];
-  const vendor = out.promptToFirstByte ?? out.readyToFirstByte;
-  if (vendor !== undefined) {
-    out.vendorMs = vendor;
-    if (seen !== undefined) out.clikcodeMs = Math.max(0, seen - vendor);
+  // The vendor's time runs from the prompt going out to the first answer text: the model's thinking is the vendor's.
+  const answered = marks['first-text'] ?? marks['first-event'] ?? marks['first-byte'];
+  const from = marks['prompt-sent'] ?? marks.ready;
+  if (from !== undefined && answered !== undefined) out.vendorMs = Math.max(0, answered - from);
+  // ClikCode's: what came before the vendor was asked, and the lag from the first text to its being drawn.
+  if (marks['prompt-sent'] !== undefined) {
+    out.clikcodeMs = marks['prompt-sent'] + (span(marks, 'first-text', 'first-text-paint') ?? 0);
   }
   return out;
 }
@@ -186,7 +192,7 @@ export function turnsLatency(lines: ReadonlyArray<string | Raw>): TurnBreakdown[
 }
 
 const NUMERIC: ReadonlyArray<keyof TurnBreakdown> = [
-  'submitToAccepted', 'submitToSpawn', 'spawnToReady', 'readyToPromptSent', 'promptToFirstByte', 'readyToFirstByte', 'firstByteToFirstEvent',
+  'submitToAccepted', 'submitToSpawn', 'spawnToReady', 'readyToPromptSent', 'promptToFirstByte', 'readyToFirstByte', 'firstByteToFirstThought', 'firstByteToFirstEvent',
   'firstEventToFirstText', 'submitToFirstPaint', 'firstEventToFirstPaint', 'firstTextToTextPaint', 'submitToTextPaint', 'total', 'vendorMs', 'clikcodeMs',
 ];
 
@@ -220,6 +226,7 @@ const COLUMNS: ReadonlyArray<{ head: string; key: keyof TurnBreakdown }> = [
   { head: 'spawn', key: 'submitToSpawn' },
   { head: 'ready', key: 'spawnToReady' },
   { head: 'vendor', key: 'vendorMs' },
+  { head: 'thought', key: 'firstByteToFirstThought' },
   { head: 'event', key: 'firstByteToFirstEvent' },
   { head: 'textpaint', key: 'submitToTextPaint' },
   { head: 'clikcode', key: 'clikcodeMs' },
@@ -242,5 +249,5 @@ export function formatLatencyTable(turns: readonly TurnBreakdown[]): string {
     const widths = table[0]!.map((_, index) => Math.max(...table.map((row) => row[index]!.length)));
     return table.map((row) => row.map((value, index) => (index < 2 ? value.padEnd(widths[index]!) : value.padStart(widths[index]!))).join('  ').trimEnd());
   };
-  return [...draw(rows), '', ...draw(summary), '', 'ms since submit; vendor = prompt-sent..first-byte, clikcode = everything else up to the first answer text on screen.'].join('\n');
+  return [...draw(rows), '', ...draw(summary), '', 'ms. vendor = prompt-sent..first answer text (the model\'s thinking included); clikcode = submit..prompt-sent plus first text..drawn; thought = first byte..first thought, event = first byte..first answer or tool.'].join('\n');
 }
