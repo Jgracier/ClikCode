@@ -440,6 +440,7 @@ async function driveWorkerTurn(
             // the live view's and is never drawn as ended; a snapshot without
             // it (the one that closes a turn) holds an interrupted one.
             rl.render(event.session, event.account, event.live ? { running: true, ...(event.live.prompt !== undefined ? { prompt: event.live.prompt } : {}) } : { running: false });
+            rl.setSteerable(Boolean(event.live?.steerable));
             rl.setBackgroundWork?.(event.background ?? backgroundWorkOf(event.live));
             // The turn as far as it has got -- one this window did not start
             // (a queued message it is behind) included.
@@ -560,6 +561,9 @@ async function driveWorkerTurn(
             if (tracker.running) { rl.submitted?.(tracker.prompt); return; }
             finish('queued-after-end', () => resolveTurn());
             return;
+          case 'steerable':
+            rl.setSteerable(event.value);
+            return;
           case 'stopping':
             rl.turnStopping(event.restoreDraft === true);
             return;
@@ -621,13 +625,13 @@ async function driveWorkerTurn(
       rl.startWaiting(
         'thinking',
         (restoreDraft, trigger) => { const origin = cancelOrigin('window', trigger ?? 'esc'); if (submitSent) client.send({ type: 'cancel', restoreDraft, origin }); else earlyStop = { restoreDraft, origin }; },
-        async (text) => {
+        async (text, typedId) => {
           // The worker decides steered vs. queued -- it owns the broker the
           // steer races -- and now says which, on a `submission` event
           // carrying this id. The client used to assume "queued" and never
           // learn otherwise, so a message steered into the answer read
           // "queued for next turn" for the rest of the turn.
-          const id = randomUUID();
+          const id = typedId ?? randomUUID();
           const submission = { id, text, submittedAt: new Date().toISOString() };
           const answered = new Promise<Extract<WorkerEvent, { type: 'submission' }>>((resolveAnswer) => {
             pendingSubmissions.set(id, resolveAnswer);
@@ -639,7 +643,7 @@ async function driveWorkerTurn(
           pendingSubmissions.delete(id);
           if (!outcome) throw new Error('connection to the worker was lost');
           if (outcome.disposition === 'error') throw new Error(outcome.message ?? 'message not sent');
-          return { disposition: outcome.disposition, submission, ...(outcome.unsteered ? { unsteered: true as const } : {}) };
+          return { disposition: outcome.disposition, submission };
         },
         // A slash line is never the worker's business: it is ClikCode's own
         // command, and it runs here when the turn ends.

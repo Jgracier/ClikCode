@@ -37,18 +37,16 @@ describe('/send across transport kinds', () => {
       const result = await deliverTyped(b, 'go right', 'b', { sendMode: 'queue' });
       expect(steer.offer).not.toHaveBeenCalled();
       expect(result).toMatchObject({ disposition: 'queued' });
-      expect(result.unsteered).toBeUndefined();
       expect(queue.map((item) => item.id)).toEqual(['b']);
     });
   }
 
   for (const kind of UNSTEERABLE) {
-    it(`${kind}: queues in both modes, and only steer mode says it could not steer`, async () => {
+    it(`${kind}: queues in both modes`, async () => {
       const { b, queue } = broker(undefined);
-      expect(await deliverTyped(b, 'x', 'a', undefined)).toMatchObject({ disposition: 'queued', unsteered: true });
-      const asked = await deliverTyped(b, 'y', 'b', { sendMode: 'queue' });
-      expect(asked.disposition).toBe('queued');
-      expect(asked.unsteered).toBeUndefined();
+      expect((await deliverTyped(b, 'x', 'a', undefined)).disposition).toBe('queued');
+      expect((await deliverTyped(b, 'y', 'b', { sendMode: 'queue' })).disposition).toBe('queued');
+      expect(b.steerable).toBe(false);
       expect(queue.map((item) => item.id)).toEqual(['a', 'b']);
     });
   }

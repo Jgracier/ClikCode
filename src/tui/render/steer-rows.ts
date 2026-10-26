@@ -17,31 +17,27 @@
 import { keyHint } from '../../harness/protocol/wording.js';
 
 /** What a message typed during a turn is called on screen, by where it is.
- *  Enter delivers it. Enter again, with nothing typed, puts a waiting
- *  message into the chat now. The turn and its sub-agents keep running; a
- *  call the turn was waiting on to take it is cut. */
+ *  Enter delivers it. Enter again, with nothing typed, offers the oldest queued
+ *  message to the turn now; the turn and its sub-agents keep running and no
+ *  call is cut -- the vendor takes it when it can. */
 export const STEER_WORDS = {
-  /** Held by the turn until no tool call is open (acp-client.ts). */
-  held: 'sending at the next pause',
+  /** Marked to go into the turn: the vendor takes it at its next opening (no tool call open). */
+  held: 'going in at the next pause',
   steered: 'steered',
-  /** `/send steer`, but nothing running could take a steer: it queued. */
-  unsteered: "this turn can't take it",
   sendNow: keyHint('sendNow'),
 } as const;
 
-/** A message of the user's waiting while a turn runs, as Enter again sees
- *  it: `held` -- the turn is holding it for its next pause (Enter forces it);
- *  `unsteered` -- the turn said it could not take one. */
-export type WaitingMessage = { held?: boolean; unsteered?: boolean };
+/** A message of the user's waiting while a turn runs, as Enter again sees it:
+ *  `held` -- it is marked to go into the turn already, so Enter has nothing to add. */
+export type WaitingMessage = { held?: boolean };
 
-/** Whether Enter again -- nothing typed -- puts the oldest waiting message
- *  (`waiting[0]`, the one the worker takes) into the chat; a held one too, the
- *  worker then sends it now. Not when this turn could not take a message: sending it again only queues
- *  it again. The hint, the key and VS Code's button all ask this, so none of
- *  them offers what will not happen. */
-export function enterAgainSends(waiting: readonly WaitingMessage[]): boolean {
+/** Whether Enter again -- nothing typed -- offers the oldest waiting message to
+ *  the turn: only when the turn can take a message into itself, and only if that
+ *  message is not already going in. The hint, the key and VS Code's button all
+ *  ask this, so none of them offers what will not happen. */
+export function enterAgainSends(waiting: readonly WaitingMessage[], steerable: boolean): boolean {
   const oldest = waiting[0];
-  return Boolean(oldest) && !waiting.some((message) => message.unsteered);
+  return steerable && Boolean(oldest) && oldest!.held !== true;
 }
 
 /** Anything the live composer is tracking. Only 'steered' entries are ever

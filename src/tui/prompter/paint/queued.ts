@@ -8,7 +8,7 @@ import type { TerminalHarnessPrompter } from '../../prompter.js';
 import type { HarnessSession } from '../../../session/model.js';
 
 
-type QueuedMessage = { role: 'user'; content: string; queueState: string; unsteered?: boolean; user: boolean };
+type QueuedMessage = { role: 'user'; content: string; queueState: string; user: boolean };
 
 /** The queued and waiting messages to draw. */
 export function queuedMessagesOf(
@@ -26,22 +26,12 @@ export function queuedMessagesOf(
   const becameTurn = (item: { text: string; submittedAt: string }): boolean => drawn.prompt !== undefined && item.text === drawn.prompt
     && (!pending || item.submittedAt <= pending.startedAt);
   const storedQueued = (session.queuedTurns ?? []).filter((item) => !p.takingBack.has(item.id) && !steerIds.has(item.id) && !becameTurn(item));
-  // A queued message has two sources and they overlap. It is drawn live the
-  // moment it is typed (waitingSubmissions), and the loop then writes it
-  // into the session (queuedTurns) -- so between the write landing and the
-  // turn consuming it, both hold the same message and it was drawn twice.
-  // The stored copy wins, being the one that survives this process. Steers
-  // are deduplicated against their durable copy the same way, just below.
-  const storedQueuedTexts = new Set(storedQueued.map((item) => item.text));
+  // A queued message has two sources and they overlap: it is drawn live the moment it is typed
+  // (waitingSubmissions), and the worker then writes it into the session (queuedTurns). Both carry
+  // the id the window gave it, so the stored copy -- the one that survives this process -- is the
+  // one drawn, and the live one only until it lands.
   const storedQueuedIds = new Set(storedQueued.map((item) => item.id));
-  // By identity once the worker has answered with one; by text only in the
-  // moment before -- when a match can only be this same message, already
-  // written. Matching by text alone showed "yes" sent twice as one row.
-  const storedCopy = (item: { id?: string; text: string }): boolean => (item.id ? storedQueuedIds.has(item.id) : storedQueuedTexts.has(item.text));
-  // Steering was asked for and nothing running could take it: the row
-  // says so, by identity, on whichever copy is drawn.
-  const unsteeredIds = new Set(p.waitingSubmissions.flatMap((item) => (item.unsteered && item.id ? [item.id] : [])));
-  const queuedMessages: Array<{ role: 'user'; content: string; queueState: string; unsteered?: boolean; user: boolean }> = [
+  const queuedMessages: QueuedMessage[] = [
     // A queued COMMAND is not a message and gets no row: it runs when the
     // turn ends and shows whatever it shows then. Nor does a notice
     // ClikCode owes the model: it is not the user's to see.
@@ -49,24 +39,24 @@ export function queuedMessagesOf(
       // Held by the running turn to steer in once no tool call is open
       // (acp-client.ts): it is on its way into this turn, not the next.
       .map((item) => ({
-        role: 'user' as const, content: item.text, user: true, ...(unsteeredIds.has(item.id) ? { unsteered: true } : {}),
+        role: 'user' as const, content: item.text, user: true,
         queueState: p.turn && item.steer === true && pending?.startedAt !== undefined ? 'pause' as const : 'queued' as const,
       })),
     // The bottom row stays until the steer's own row exists in what this
     // frame built (`drawn`), so it never leaves one place before it is in
     // the other. A message that is already a saved message (the pending turn
     // was folded into the transcript) is that row.
-    ...p.waitingSubmissions.filter((item) => item.state !== 'steered' && !(item.id && p.takingBack.has(item.id)) && !storedCopy(item)
+    ...p.waitingSubmissions.filter((item) => item.state !== 'steered' && !(item.id && p.takingBack.has(item.id)) && !storedQueuedIds.has(item.id!)
       && !hasDurableSteer(item, drawn.steers.map((steer) => ({ text: steer.text, ...(steer.steerId ? { id: steer.steerId } : {}) })))
       && !(drawn.materialized && hasDurableSteer(item, pending?.steers ?? [])))
-      .map((item) => ({ role: 'user' as const, content: item.text, queueState: item.state, user: true, ...(item.unsteered ? { unsteered: true } : {}) })),
+      .map((item) => ({ role: 'user' as const, content: item.text, queueState: item.state, user: true })),
   ];
   // Enter again puts the oldest waiting user message into the chat, when
   // it would (enterAgainSends -- the key asks the same). Esc takes the
   // newest back. With one message they are the same row.
   const waitingUser = (message: { user: boolean; queueState: string }): boolean => message.user && !['steered', 'sending', 'error'].includes(message.queueState);
   const enterAt = p.turn?.sendWaiting && !p.turn.cancelled && !p.turn.draft.trim()
-    && enterAgainSends(queuedMessages.filter(waitingUser).map((message) => ({ held: message.queueState === 'pause', ...(message.unsteered ? { unsteered: true } : {}) })))
+    && enterAgainSends(queuedMessages.filter(waitingUser).map((message) => ({ held: message.queueState === 'pause' })), p.steerable)
     ? queuedMessages.findIndex(waitingUser) : -1;
   const escAt = p.turn?.takeBack ? queuedMessages.map(waitingUser).lastIndexOf(true) : -1;
   return { queuedMessages, enterAt, escAt };
@@ -91,7 +81,7 @@ export function queuedMessageRows(
       return message.queueState === 'pause' ? `${STEER_WORDS.held}${said}`
         : message.queueState === 'sending' ? 'sending'
           : message.queueState === 'error' ? 'not sent'
-            : `queued for next turn${said}${message.unsteered ? ` · ${STEER_WORDS.unsteered}` : ''}`;
+            : `queued for next turn${said}`;
     };
     const hintRoom = Math.max(1, inner - 4);
     const roomy = statusWith([...enterKey, ...escKey]);

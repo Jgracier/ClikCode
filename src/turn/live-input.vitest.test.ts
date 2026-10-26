@@ -37,7 +37,6 @@ describe('a message typed while a turn runs', () => {
     broker.setSteerPort(fake.port);
     const result = await broker.submit('use postgres', 'm1', { steer: true });
     expect(result.disposition).toBe('queued');
-    expect(result.unsteered).toBeUndefined();
     expect(queue.map((item) => [item.id, item.steer])).toEqual([['m1', true]]);
     fake.openWindow();
     await broker.settled();
@@ -57,10 +56,11 @@ describe('a message typed while a turn runs', () => {
     expect(steered.map((item) => item.id)).toEqual(['a', 'b']);
   });
 
-  it('is left queued for the turn to end when the turn has no way to take it, and the row says so', async () => {
+  it('is left queued for the turn to end when the turn has no way to take it', async () => {
     const { broker, queue } = bound();
     const result = await broker.submit('later please', 'm1', { steer: true });
-    expect(result).toMatchObject({ disposition: 'queued', unsteered: true });
+    expect(result.disposition).toBe('queued');
+    expect(broker.steerable).toBe(false);
     expect(queue.map((item) => item.id)).toEqual(['m1']);
   });
 
@@ -70,7 +70,6 @@ describe('a message typed while a turn runs', () => {
     broker.setSteerPort(fake.port);
     const result = await broker.submit('after this', 'm1', { steer: false });
     expect(result).toMatchObject({ disposition: 'queued' });
-    expect(result.unsteered).toBeUndefined();
     expect(fake.state.offered).toEqual([]);
     expect(queue.map((item) => [item.id, item.steer])).toEqual([['m1', undefined]]);
   });

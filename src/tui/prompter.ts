@@ -115,6 +115,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * frame is built (render/row-tags.ts). */
   readonly lineTags = new Map<number, string>();
   liveResponse = '';
+  /** The running turn can take a message into itself (the worker says so): Enter again on a waiting one can put it in. */
+  steerable = false;
   /** What of the live answer is drawn: a burst is revealed over a moment, not shown whole. */
   readonly reveal = new ResponseReveal(() => this.schedulePaint());
   responsePaintTimer?: NodeJS.Timeout;
@@ -145,7 +147,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   journal: JournalState = { running: true };
   /** `id` arrives with the answer to the submission, and is the same id its
    * durable copy (a queued turn, a recorded steer) is stored under. */
-  waitingSubmissions: Array<{ localId: number; id?: string; text: string; responseOffset: number; sequence: number; ack?: { sequence: number; responseOffset: number }; state: 'sending' | 'queued' | 'steered' | 'error' | 'command'; unsteered?: boolean }> = [];
+  waitingSubmissions: Array<{ localId: number; id?: string; text: string; responseOffset: number; sequence: number; ack?: { sequence: number; responseOffset: number }; state: 'sending' | 'queued' | 'steered' | 'error' | 'command' }> = [];
   waitingSubmissionId = 0;
   timelineSequence = 0;
   readonly waitingSubmissionWrites = new Set<Promise<void>>();
@@ -506,6 +508,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // and a stop arrive together, and a direct paint drew each in between.
     if (this.turn) this.updateWaiting();
     else if (!(this.journal.running && this.journal.following)) this.paint('', [], 0, '› ', 0);
+  }
+
+  setSteerable(value: boolean): void {
+    if (this.steerable === value) return;
+    this.steerable = value;
+    if (this.turn) this.updateWaiting();
   }
 
   response(text: string, mode: 'append' | 'replace' = 'append'): void {

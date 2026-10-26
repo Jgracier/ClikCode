@@ -32,16 +32,16 @@ describe('/send: how a message typed mid-turn is delivered', () => {
     broker.setSteerPort({ offer });
     const result = await deliverTyped(broker, 'after the turn', 'b', { sendMode: 'queue' });
     expect(result.disposition).toBe('queued');
-    expect(result.unsteered).toBeUndefined();
     expect(offer).not.toHaveBeenCalled();
     expect(queue).toEqual([expect.objectContaining({ id: 'b', text: 'after the turn' })]);
     expect(queue[0]!.steer).toBeUndefined();
   });
 
-  it('says so when steering was asked for and nothing could take it', async () => {
+  it('queues when steering was asked for and nothing could take it, and the turn says it cannot', async () => {
     const broker = new LiveTurnInputBroker();
     broker.bindLedger(fakeLedger().ledger);
     const result = await deliverTyped(broker, 'into the turn please', 'd', {});
-    expect(result).toMatchObject({ disposition: 'queued', unsteered: true });
+    expect(result.disposition).toBe('queued');
+    expect(broker.steerable).toBe(false);
   });
 });

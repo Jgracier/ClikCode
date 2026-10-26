@@ -73,7 +73,8 @@ export type WaitingTurn = {
    * it is the user's again -- not already on its way into the turn. */
   takeBack?: (id: string) => Promise<TakeBackOutcome>;
   /** Absent for a wait that takes no messages. */
-  submit?: (text: string) => Promise<LiveTurnInputResult>;
+  /** `id`: the message's identity, chosen by the window so its row matches its saved copy without guessing by words. */
+  submit?: (text: string, id?: string) => Promise<LiveTurnInputResult>;
   command?: (text: string) => Promise<LiveTurnInputResult>;
   /** Stop showing the running turn without stopping it (Left, empty draft). */
   leave?: () => void;

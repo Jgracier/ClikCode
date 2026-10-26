@@ -85,7 +85,6 @@ export function createLiveCommands(ctx: WorkerContext) {
         if (!result) return;
         sendEvent(socket, {
           type: 'submission', id: result.submission.id, disposition: result.steered ? 'steered' : 'queued',
-          ...(!liveInput.steerable ? { unsteered: true } : {}),
           ...(result.steered ? observer.steerOrder(result.submission.id) ?? {} : {}),
         });
         // The entry changed (marked to go in, or gone into the turn): every window redraws the queue.
@@ -195,8 +194,8 @@ export function createLiveCommands(ctx: WorkerContext) {
   };
 
   const handleSteer = async (socket: Socket, command: Extract<ClientCommand, { type: 'steer' }>): Promise<void> => {
-    const answer = (disposition: 'steered' | 'queued' | 'error', message?: string, unsteered?: boolean): void => {
-      if (command.id) sendEvent(socket, { type: 'submission', id: command.id, disposition, ...(message ? { message } : {}), ...(unsteered ? { unsteered } : {}), ...(disposition === 'steered' ? observer.steerOrder(command.id) ?? {} : {}) });
+    const answer = (disposition: 'steered' | 'queued' | 'error', message?: string): void => {
+      if (command.id) sendEvent(socket, { type: 'submission', id: command.id, disposition, ...(message ? { message } : {}), ...(disposition === 'steered' ? observer.steerOrder(command.id) ?? {} : {}) });
     };
     // The turn ended between the client's Enter and this arriving. This used
     // to `return` -- and the message was simply gone. Nothing is running to
@@ -224,7 +223,7 @@ export function createLiveCommands(ctx: WorkerContext) {
         // arrives so a change mid-turn applies to the next one typed.
         const settings = await readState({ transcripts: [] }).then((state) => state.globalSettings, () => undefined);
         const result = await deliverTyped(liveInput, command.text, command.id, settings);
-        answer(result.disposition === 'steered' ? 'steered' : 'queued', undefined, result.unsteered);
+        answer(result.disposition === 'steered' ? 'steered' : 'queued');
         // Every window shows the queue, not only the one that typed it.
         if (result.disposition !== 'steered') broadcastQueueChanged();
         else showEveryWindow();

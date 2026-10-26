@@ -95,7 +95,7 @@ function fakePrompter(): TerminalHarnessPrompter & { calls: string[] } {
     startWaiting: record('startWaiting'),
     turnStarting: record('turnStarting'),
     stopWaiting: record('stopWaiting'),
-    reveal: new ResponseReveal(() => undefined),
+    reveal: new ResponseReveal(() => undefined), setSteerable: record('setSteerable'),
     suspend: async (...args: unknown[]) => { record('suspend')(...args); },
     resume: record('resume'),
     restoreDraft: record('restoreDraft'),

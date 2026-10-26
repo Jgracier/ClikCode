@@ -176,12 +176,9 @@ export function takenBackText(takingBack: Map<string, string>, event: Extract<Wo
  * Only when it would (enterAgainSends, the terminal's rule too): not a
  * message the turn already holds for its next pause, nor in a turn that
  * could not take one, nor once Stop was asked for. */
-export function enterAgainReady(model: Pick<ChatModel, 'queued' | 'running' | 'submissions' | 'live'>): boolean {
+export function enterAgainReady(model: Pick<ChatModel, 'queued' | 'running' | 'steerable' | 'live'>): boolean {
   if (!model.running || model.live?.stopping) return false;
-  return enterAgainSends(model.queued.filter((item) => !item.command).map((item) => ({
-    ...(item.held ? { held: true } : {}),
-    ...(model.submissions.some((entry) => entry.id === item.id && entry.unsteered) ? { unsteered: true } : {}),
-  })));
+  return enterAgainSends(model.queued.filter((item) => !item.command), model.steerable === true);
 }
 
 /** The turn has an answer: assistant text, or a tool row. A thought is not
@@ -193,12 +190,10 @@ export function turnHasAnswer(model: Pick<ChatModel, 'live'>): boolean {
   return live.activities.some((item) => item.kind !== 'thinking');
 }
 
-/** A queued row's words: where it waits, why when steering was asked for
- * and the turn could not take it, and -- while Enter would do it -- that
- * Enter again puts it into the chat. */
-export function queuedRowLabel(model: Pick<ChatModel, 'submissions'>, item: { id: string; held?: boolean }, enterAgain: boolean): string {
-  const unsteered = model.submissions.some((entry) => entry.id === item.id && entry.unsteered);
-  return [item.held ? STEER_WORDS.held : 'queued', ...(unsteered ? [STEER_WORDS.unsteered] : []), ...(enterAgain ? [STEER_WORDS.sendNow] : [])].join(' · ');
+/** A queued row's words: where it waits, or that it is already going into the turn, and -- while
+ * Enter would do it -- that Enter again offers it to the turn. */
+export function queuedRowLabel(item: { held?: boolean }, enterAgain: boolean): string {
+  return [item.held ? STEER_WORDS.held : 'queued', ...(enterAgain ? [STEER_WORDS.sendNow] : [])].join(' · ');
 }
 
 export function typedDuringTurn(model: ChatModel, id: string, text: string): ChatModel {

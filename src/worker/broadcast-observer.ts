@@ -88,6 +88,7 @@ export class BroadcastObserver implements TurnObserver {
   private livePrompt: string | undefined;
   /** The running turn is the vendor's own background work (waiting-start `vendorWork`). */
   private liveVendorWork = false;
+  private liveSteerable = false;
   /** Vendor background tasks continue after the parent turn ends. */
   private backgroundLevel?: BackgroundWork;
   /** The running turn's tool rows and plan, so a window joining it mid-way
@@ -185,6 +186,7 @@ export class BroadcastObserver implements TurnObserver {
     return {
       text: this.liveText, waitingLabel: this.waitingLabel, ...(this.livePrompt !== undefined ? { prompt: this.livePrompt } : {}),
       ...(this.liveVendorWork ? { vendorWork: true as const } : {}),
+      ...(this.liveSteerable ? { steerable: true as const } : {}),
       activities: [...this.liveActivities], plan: [...this.livePlan],
       ...(this.livePlan.length ? this.planOffset() : {}),
       ...(this.liveMarks.length ? { marks: [...this.liveMarks] } : {}),
@@ -469,7 +471,7 @@ export class BroadcastObserver implements TurnObserver {
    * observer at all. Accepted and ignored here rather than left off the
    * signature, so this still satisfies the one interface both a worker and
    * a real terminal are held to. */
-  startWaiting(message: string, _onCancel?: (restoreDraft: boolean) => void, _onSubmit?: (text: string) => Promise<LiveTurnInputResult>, _onCommand?: (text: string) => Promise<LiveTurnInputResult>): void {
+  startWaiting(message: string, _onCancel?: (restoreDraft: boolean) => void, _onSubmit?: (text: string, id?: string) => Promise<LiveTurnInputResult>, _onCommand?: (text: string) => Promise<LiveTurnInputResult>): void {
     this.startTurn(message);
   }
 
@@ -481,10 +483,18 @@ export class BroadcastObserver implements TurnObserver {
     return this.generation;
   }
 
+  /** The running turn gained or lost a way to take a message into itself. */
+  setSteerable(value: boolean): void {
+    if (this.liveSteerable === value) return;
+    this.liveSteerable = value;
+    this.broadcast({ type: 'steerable', value });
+  }
+
   /** startWaiting, naming the prompt the turn runs, for clients following it. */
   startTurn(message: string, prompt?: string, vendorWork = false): void {
     this.generation++;
     this.liveVendorWork = vendorWork;
+    this.liveSteerable = false;
     this.recordFinal = false;
     this.seenActivity.clear();
     this.liveText = '';
@@ -525,6 +535,7 @@ export class BroadcastObserver implements TurnObserver {
     this.waitingLabel = '';
     this.livePrompt = undefined;
     this.liveVendorWork = false;
+    this.liveSteerable = false;
     this.liveActivities = [];
     this.livePlan = [];
     this.resetLiveMarks();

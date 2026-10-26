@@ -80,7 +80,7 @@ export function applySession(model: ChatModel, session: HarnessSession, account?
       id: item.id, text: item.text, command: item.kind === 'command',
       // The running turn is holding it to send in once no tool call is open
       // (acp-client.ts); queued only in case that moment never comes.
-      ...(item.heldForTurn && item.heldForTurn === pending?.startedAt ? { held: true } : {}),
+      ...(item.steer === true && pending?.startedAt !== undefined ? { held: true } : {}),
     })),
     submissions: confirmedSubmissions(model, session),
     // The worker's journal of the running turn has the prompt from here on.

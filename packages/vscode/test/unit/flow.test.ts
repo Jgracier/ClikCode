@@ -240,8 +240,8 @@ describe('esc / edit: taking a waiting message back', () => {
 describe('enter again: send into the chat', () => {
   const message = { id: 'a', text: 'first', command: false };
   const command = { id: 'c', text: '/model opus', command: true };
-  const ready = (queued: ChatModel['queued'], patch: Partial<Pick<ChatModel, 'running' | 'submissions' | 'live'>> = {}): boolean =>
-    enterAgainReady({ queued, running: true, submissions: [], ...patch });
+  const ready = (queued: ChatModel['queued'], patch: Partial<Pick<ChatModel, 'running' | 'steerable' | 'live'>> = {}): boolean =>
+    enterAgainReady({ queued, running: true, steerable: true, ...patch });
 
   it('is ready when a message of the user\'s is waiting', () => {
     expect(ready([message])).toBe(true);
@@ -255,9 +255,9 @@ describe('enter again: send into the chat', () => {
 
   // The terminal's rule (enterAgainSends): no hint and no button for what
   // will not happen.
-  it('also for a message the turn holds for its next pause (Enter cuts the call it waits for), never in a turn that could not take one', () => {
-    expect(ready([{ ...message, held: true }])).toBe(true);
-    expect(ready([message], { submissions: [{ id: 'a', text: 'first', disposition: 'queued', unsteered: true }] })).toBe(false);
+  it('not for a message already going into the turn at its next pause, and never in a turn that cannot take one', () => {
+    expect(ready([{ ...message, held: true }])).toBe(false);
+    expect(ready([message], { steerable: false })).toBe(false);
   });
 
   it('never once Stop was asked for', () => {
@@ -278,17 +278,17 @@ describe('esc: an answer is text or a tool', () => {
 });
 
 describe('a queued row says where it waits and what Enter does', () => {
-  it('names the hold, a steer the turn could not take, and enter again', () => {
-    const submissions = [{ id: 'u', text: 'x', disposition: 'queued', unsteered: true }];
-    expect(queuedRowLabel({ submissions: [] }, { id: 'a' }, false)).toBe('queued');
-    expect(queuedRowLabel({ submissions: [] }, { id: 'a', held: true }, true)).toBe('sending at the next pause · enter again send into the chat');
-    expect(queuedRowLabel({ submissions }, { id: 'u' }, true)).toBe("queued · this turn can't take it · enter again send into the chat");
+  it('names the hold and enter again', () => {
+    expect(queuedRowLabel({}, false)).toBe('queued');
+    expect(queuedRowLabel({ held: true }, false)).toBe('going in at the next pause');
+    expect(queuedRowLabel({}, true)).toBe('queued · enter again send into the chat');
   });
 
-  it('carries the worker\'s unsteered answer onto the typed message', () => {
-    const typed = { ...emptyModel(), submissions: [{ id: 'u', text: 'x' }] };
-    const next = applyEvent(typed, { type: 'worker', sessionId: 's', event: { type: 'submission', id: 'u', disposition: 'queued', unsteered: true } });
-    expect(next.submissions[0]).toMatchObject({ disposition: 'queued', unsteered: true });
+  it('follows the worker on whether the running turn can take a message', () => {
+    const running = { ...emptyModel(), running: true };
+    const on = applyEvent(running, { type: 'worker', sessionId: 's', event: { type: 'steerable', value: true } });
+    expect(on.steerable).toBe(true);
+    expect(applyEvent(on, { type: 'worker', sessionId: 's', event: { type: 'steerable', value: false } }).steerable).toBe(false);
   });
 });
 

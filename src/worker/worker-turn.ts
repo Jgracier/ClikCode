@@ -181,6 +181,7 @@ export function createTurnRunner(ctx: WorkerContext) {
     const controller = new AbortController();
     const liveInput = new LiveTurnInputBroker();
     // A waiting message that goes into the turn later (its opening came) is shown so on every window.
+    liveInput.onSteerableChange((steerable) => observer.setSteerable(steerable));
     liveInput.onLaterDelivery(() => { ctx.io.broadcastQueueChanged(); ctx.io.showEveryWindow(); });
     const submissions = new Set<Promise<void>>();
     ctx.activeController = controller;

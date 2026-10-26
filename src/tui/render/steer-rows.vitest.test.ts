@@ -98,18 +98,17 @@ describe('which steers reach the transcript', () => {
 });
 
 describe('Enter again on a waiting message', () => {
-  it('sends the oldest when it is only queued', () => {
-    expect(enterAgainSends([{}, { held: true }])).toBe(true);
+  it('offers the oldest to a turn that can take a message, when it is only queued', () => {
+    expect(enterAgainSends([{}, { held: true }], true)).toBe(true);
   });
-  it('offers to send one the turn is holding for its next pause: Enter cuts the call it waits for', () => {
-    expect(enterAgainSends([{ held: true }, {}])).toBe(true);
+  it('offers nothing for one already going into the turn at its next pause: there is nothing to add', () => {
+    expect(enterAgainSends([{ held: true }, {}], true)).toBe(false);
   });
-  it('offers nothing when this turn could not take a message: it would only queue again', () => {
-    expect(enterAgainSends([{ unsteered: true }])).toBe(false);
-    expect(enterAgainSends([{}, { unsteered: true }])).toBe(false);
+  it('offers nothing when this turn cannot take a message: it would only wait', () => {
+    expect(enterAgainSends([{}], false)).toBe(false);
   });
   it('offers nothing with nothing waiting', () => {
-    expect(enterAgainSends([])).toBe(false);
+    expect(enterAgainSends([], true)).toBe(false);
   });
 });
 
