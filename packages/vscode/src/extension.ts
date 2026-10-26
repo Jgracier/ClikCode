@@ -344,6 +344,24 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
       if (question.trim()) await target.send(questionWithSelection(question, selected));
       else { target.post({ type: 'mention', mention }); target.post({ type: 'focus' }); }
     }),
+    // Fixed tab sizing with no practical maximum: every tab is the bar's width over the number of tabs,
+    // down to the minimum, after which the bar scrolls. Run again to put the previous sizing back.
+    vscode.commands.registerCommand('clikcode.evenOutTabs', async () => {
+      const editor = vscode.workspace.getConfiguration('workbench.editor');
+      const saved = context.globalState.get<{ sizing?: string; maxWidth?: number }>('clikcode.tabSizingBeforeEvenOut');
+      if (saved) {
+        await editor.update('tabSizing', saved.sizing, vscode.ConfigurationTarget.Global);
+        await editor.update('tabSizingFixedMaxWidth', saved.maxWidth, vscode.ConfigurationTarget.Global);
+        await context.globalState.update('clikcode.tabSizingBeforeEvenOut', undefined);
+        return;
+      }
+      await context.globalState.update('clikcode.tabSizingBeforeEvenOut', {
+        sizing: editor.inspect<string>('tabSizing')?.globalValue,
+        maxWidth: editor.inspect<number>('tabSizingFixedMaxWidth')?.globalValue,
+      });
+      await editor.update('tabSizing', 'fixed', vscode.ConfigurationTarget.Global);
+      await editor.update('tabSizingFixedMaxWidth', 100_000, vscode.ConfigurationTarget.Global);
+    }),
     // Leading tabs and spaces become whichever the editor is set to use (the status bar's "Spaces: 4").
     vscode.commands.registerCommand('clikcode.evenOutIndentation', async () => {
       const editor = vscode.window.activeTextEditor;

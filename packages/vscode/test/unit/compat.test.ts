@@ -84,6 +84,15 @@ describe('Even out indentation', () => {
   });
 });
 
+describe('Even out tabs', () => {
+  it('is in the editor title bar\'s "..." menu, not its icons', () => {
+    const menus = pkg.contributes.menus as Record<string, Array<{ command: string; group?: string }>>;
+    const item = menus['editor/title']!.find((entry) => entry.command === 'clikcode.evenOutTabs');
+    expect(item?.group).toBeDefined();
+    expect(item?.group).not.toMatch(/^navigation/);
+  });
+});
+
 describe('version skew', () => {
   it('says nothing when the bridge speaks the revision the bundle was built for', () => {
     expect(versionSkew({ version: '1.0.0', revision: IDE_PROTOCOL.revision })).toBeUndefined();
