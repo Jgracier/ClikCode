@@ -185,6 +185,15 @@ install as you.
 Switch by hand with `/account` in a session, or
 `clikcode sessions set <id> --account <label>`.
 
+### An older Intel Mac
+
+Claude Code is built for macOS 13. A 2012-2016 Intel iMac or MacBook that cannot update past macOS 10.15, 11 or 12 cannot start it: it stops at
+launch with `Symbol not found ... built for Mac OS X 13.0`. On such a Mac ClikCode makes a copy of the program without its code signature and starts
+it with a small library that supplies the few system functions macOS lacks (`native/macos-compat`), for sign-in, version checks and chats alike. The
+copy is made on the Mac, the installed program is never touched, and nothing happens on any other Mac. Anthropic does not support this: number-range
+formatting in `Intl` is the one feature known not to work, and a future release that imports something else the old system lacks stops at launch
+until the library gains it.
+
 ## When an account runs out
 
 ClikCode watches how much each account has left — `/usage` shows it, and it
