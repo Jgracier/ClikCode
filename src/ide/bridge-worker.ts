@@ -8,7 +8,7 @@ import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { WorkerClient } from '../worker/client.js';
 import { cancelOrigin, MOVED_REASON, type WorkerEvent } from '../worker/protocol.js';
 import { CONVERSATION_HANDOFF_REASON } from '../worker/registry.js';
-import { messageOf, TurnFailed } from './bridge-support.js';
+import { messageOf, TurnFailed, WorkerRetiring } from './bridge-support.js';
 import type { BridgeHost } from './bridge-host.js';
 
 export class WorkerLink {
@@ -76,6 +76,8 @@ export class WorkerLink {
   }
 
   onWorkerEvent(sessionId: string, client: WorkerClient, event: WorkerEvent): void {
+    // The prompt was not started: the editor keeps showing it, and the turn is sent again to the worker that replaces this one (bridge-turns.ts).
+    if (event.type === 'submit-rejected' && event.retry) { this.failTurn(new WorkerRetiring(event.message)); return; }
     this.host.channel.send({ type: 'worker', sessionId, event, ...(event.type === 'note' ? { level: noticeLevel(event.message) } : {}) });
     switch (event.type) {
       case 'waiting-start':

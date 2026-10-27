@@ -162,6 +162,10 @@ function turnThroughWorker(client: WorkerClient, sessionId: string, text: string
             client.send({ type: 'question-response', id: event.id, result: { kind: 'cancelled' } });
           }
           return;
+        case 'submit-rejected':
+          // The worker was being replaced and did not start the turn; nothing follows.
+          if (event.retry && ours) finish(() => rejectTurn(new Error('the conversation\'s worker was being replaced, so the message was not sent; send it again')));
+          return;
         case 'shutdown':
           onGone(event.reason);
           return;

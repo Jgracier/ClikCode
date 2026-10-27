@@ -244,8 +244,9 @@ export type WorkerEvent =
   | { type: 'stop-done'; nothing?: true }
   /** A `submit` the worker could not take on (it failed before a turn began).
    * The submitting client drops the prompt it echoed. Always followed by
-   * `waiting-stop`. */
-  | { type: 'submit-rejected'; message: string }
+   * `waiting-stop`. With `retry` the worker is going away (replaced by a newer build, moved): the prompt was not started and the sender sends
+   * it again to the worker that replaces this one; no `turn-error` or `waiting-stop` follows. */
+  | { type: 'submit-rejected'; message: string; retry?: true }
   /** A turn needs the vendor signed in. The worker has no terminal to run a
    * sign-in on, so the client runs it on its own and answers with
    * `sign-in-response`; the worker then retries the turn. */

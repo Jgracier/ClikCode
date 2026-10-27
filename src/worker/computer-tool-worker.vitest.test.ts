@@ -94,7 +94,7 @@ it('offers the tools over MCP with typed schemas', async () => {
 
 it('sends a saved secret without asking anyone, and returns no value', async () => {
   const { id, home } = await session();
-  await saveNamedSecret(home, 'salad/api-key', VALUE);
+  await saveNamedSecret(home, 'salad/api-key', VALUE, { url: 'https://salad.com' });
   const bin = join(root!, 'bin');
   await mkdir(bin);
   await writeFile(join(bin, 'clikdeploy'), `#!/bin/sh\ncase "$3" in admin_platform_set_secret) { printf '%s\\n' "$@"; cat; } > "${root}/argv"; echo '{"status":"success","message":"stored"}';; *) echo '{}';; esac\n`);
@@ -111,7 +111,7 @@ it('sends a saved secret without asking anyone, and returns no value', async () 
 
 it('answers an unknown destination with the real list, so the agent can correct itself', async () => {
   const { id, home } = await session();
-  await saveNamedSecret(home, 'salad/api-key', VALUE);
+  await saveNamedSecret(home, 'salad/api-key', VALUE, { url: 'https://salad.com' });
   await attach(id);
   const server = await mcpServer(id);
   const result = (await server.call('tools/call', { name: 'browser_use', arguments: { action: 'send_secret', secret: 'salad/api-key', send_to: [{ to: 'nowhere' }] } })).result;

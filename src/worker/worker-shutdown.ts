@@ -44,6 +44,7 @@ export function createShutdown(ctx: WorkerContext) {
     // would otherwise leave shuttingDown set and every later signal doing
     // nothing. A step that throws must still end in an exit too.
     if (!shuttingDown) {
+      ctx.shuttingDown = true;
       const ceiling = setTimeout(() => { lifecycle('worker.shutdown.stalled', { step: currentStep, afterMs: SHUTDOWN_CEILING_MS }); process.exit(0); }, SHUTDOWN_CEILING_MS);
       ceiling.unref();
       shuttingDown = shutdownOnce(reason).catch(() => process.exit(0));
