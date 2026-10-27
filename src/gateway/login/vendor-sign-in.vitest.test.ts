@@ -2,7 +2,7 @@ import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { terminalReplies, chooseLoginLink, choiceKeys, extractLoginCode, readScreenPrompt, runVendorSignIn, type LoginLink, type SignInUi } from './vendor-sign-in.js';
+import { builtForNewerMacos, terminalReplies, chooseLoginLink, choiceKeys, extractLoginCode, readScreenPrompt, runVendorSignIn, type LoginLink, type SignInUi } from './vendor-sign-in.js';
 import { extractLoginUrl } from './url.js';
 
 describe('reading a link sign-in', () => {
@@ -304,6 +304,20 @@ describe.skipIf(process.platform === 'win32')('running a sign-in', () => {
     const vendor = await script('echo "token rejected"\nexit 3\n');
     await expect(runVendorSignIn({ binary: vendor, args: [], env: {}, displayName: 'Example', local: false, ui: ui().value }))
       .rejects.toThrow(/Example sign-in exited with status 3: token rejected/);
+  });
+
+  it('says plainly when the vendor was built for a newer macOS than this one, not the loader\'s last line', async () => {
+    const vendor = await script(`printf "dyld: Symbol not found: _ubrk_clone\\r\\n  Referenced from: /usr/local/bin/claude (which was built for Mac OS X 13.0)\\r\\n  Expected in: /usr/lib/libicucore.A.dylib\\r\\n"\nexit 6\n`);
+    const error = await runVendorSignIn({ binary: vendor, args: [], env: {}, displayName: 'Claude Code', local: false, ui: ui().value }).then(() => undefined, (e: Error) => e);
+    expect(error?.message).toMatch(/Claude Code sign-in exited with status 6: it was built for macOS 13\.0 or newer and this Mac is older/);
+    expect(error?.message).not.toContain('libicucore');
+  });
+
+  it('recognises that loader message and nothing like it', () => {
+    expect(builtForNewerMacos('dyld: Symbol not found: _x\n  Referenced from: /a/b (which was built for Mac OS X 13.0)\n  Expected in: /usr/lib/y.dylib')).toBe('13.0');
+    expect(builtForNewerMacos('dyld: Library not loaded: /x\n  Reason: built for macOS 14.2')).toBe('14.2');
+    expect(builtForNewerMacos('token rejected')).toBeUndefined();
+    expect(builtForNewerMacos('This tool was built for macOS 13.0 only')).toBeUndefined();
   });
 
   it('stops the vendor when cancelled', async () => {
