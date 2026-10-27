@@ -7,10 +7,24 @@ and closes the browser, `on` brings them back.
 | Tool | What it is for |
 |---|---|
 | `browser_use` | A Chrome with its own saved profile (Edge if Chrome is missing), shared by every terminal and VS Code window, never your personal profile. **Each chat gets its own tab**: a chat only sees, acts on and follows tabs it opened itself, so chats working at once do not collide. `close` closes that chat's tab only (see [Page control](#page-control) for tabs, history, scripts, screenshots and the console). |
+| `account_use` | Everything that signs in or keeps something for later, on the same browser tab and profile as `browser_use`: `login`, `forget_login`, `profile`, `oauth_connect`; `email_connect`, `read_email_code`, `open_email_link`; `capture_secret`, `send_secret`; `queue`, `notes`, `recipe`, `preflight`. |
 | `computer_use` | Everything outside the page, through [cua-driver](https://github.com/trycua/cua) (a separate install: `clikcode computer driver install`): a popup window, a native dialog, another app. Give it a `pid` and `window_id` from `windows` to act on one window. See [Desktop control](#desktop-control-computer_use) for the actions and what each OS can do. |
 
-They were called `computer_web` and `computer_desktop` before 2026-10-26; permission rules and MCP calls that use
-those names still reach the same tools.
+They were called `computer_web` and `computer_desktop` before 2026-10-26, and `computer_web` was one tool until
+2026-10-27, when its sign-in and keeping actions moved to `account_use`. Permission rules and MCP calls that use the old
+names still reach the right tools (`computer_web` with a sign-in action goes to `account_use`).
+
+### What an agent needs to know
+
+- **Three tools, no overlap.** `browser_use` for the page, `account_use` for accounts, `computer_use` for the rest of the desktop.
+  Calling an action on the wrong tool is an error that names the right one.
+- **`help` is built from the same table as the schemas** (`src/agent/computer/actions.ts`), so it cannot drift:
+  `help` lists every action grouped, `help` with `topic: "<action>"` gives that action's parameters and an example, and
+  `topic: "guide"` gives the working rules. The tool descriptions are kept short on purpose (token budgets are tested in
+  `computer-web-contract.vitest.test.ts`).
+- **Adding an action** means one row in `actions.ts` (name, tool, group, one-line purpose, parameters, example) plus its
+  handler; descriptions, per-tool schemas, `help` and the wrong-tool error follow from the row.
+- `computer_use` is one self-contained description (its actions are in the table below), so it has no `help`.
 
 Nothing here asks you anything of its own: in Auto mode these tools just run, and the
 agent stops only for what it cannot do itself (a sign-in you must type, a choice
@@ -306,7 +320,7 @@ by a page the agent is reading. `{{secret|json}}` is the key inside a JSON strin
 destination's `--stdin` keeps the key out of the command line. Every result begins
 `SAVED` or `Not saved:` and says what really happened, including a warning when a
 click may have made the site create a key that was then not saved (delete it there).
-`send_secret` (an action of `browser_use`) sends a saved key again, or somewhere else, with `{secret, to, with}`.
+`send_secret` (an action of `account_use`) sends a saved key again, or somewhere else, with `{secret, to, with}`.
 
 Once held, a key's exact value (and its base64, URL-encoded and JSON forms, and the
 secret fields of a JSON file such as its private key, but not its public ids) is replaced with `[secret hidden]` in every tool result,
@@ -528,7 +542,7 @@ schema ClikDeploy serves (`connector_spec_guide`).
 
 ## Connecting a connector's OAuth: `oauth_connect`
 
-`clikcode computer oauth-connect <connector>` (or `browser_use` `action=oauth_connect`, `target` = the ClikDeploy connector id) connects a connector that uses OAuth, with no clicking by the agent:
+`clikcode computer oauth-connect <connector>` (or `account_use` `action=oauth_connect`, `target` = the ClikDeploy connector id) connects a connector that uses OAuth, with no clicking by the agent:
 
 1. It starts ClikDeploy's connect (`clikdeploy integrations connect <id> --no-browser`, which signs in with the saved admin key) and takes the authorization URL it prints.
 2. It opens that URL in the ClikCode browser and presses through the consent screens from a data table in `src/agent/computer/oauth-consent.ts` (add a row to teach it a screen): the account named by the profile `sso_email`; Google's "Advanced" and "Go to ... (unsafe)", Continue/Allow; Microsoft Accept; GitHub "Authorize ..."; Slack Allow; Atlassian Accept; Notion Allow access; and for any other vendor Allow, Authorize, Accept, Grant access, Approve (and Continue only on a page that asks for access). It never presses Deny, Cancel, Sign out or Sign up.
@@ -546,7 +560,7 @@ Agents rarely call `recipe save`, so ClikCode does it. Every successful `browser
 
 ## Preflight: is this computer ready for onboarding work
 
-`clikcode computer preflight` (or `browser_use` `action=preflight`) is one deterministic check with no agent in it, for an agent to run before a batch and for a scheduled check. It prints JSON and exits 1 when anything is not ready:
+`clikcode computer preflight` (or `account_use` `action=preflight`) is one deterministic check with no agent in it, for an agent to run before a batch and for a scheduled check. It prints JSON and exits 1 when anything is not ready:
 
 - `browserOk`: ClikCode's Chrome starts and opens a tab.
 - `googleSignedIn`: `accounts.google.com`, opened in a throwaway tab, ends on the account page (signed in) and not on the sign-in form or account chooser. Only the page address and whether an email box exists are looked at.
@@ -574,8 +588,8 @@ When a vendor offers a choice when creating a key (scopes, permissions, "restric
 
 Durable notes go under `~/.clikcode`, never `/tmp` (a cleanup or reboot loses `/tmp`, and a restarted agent then repeats the work).
 
-- **Per-site notes** (what worked on a vendor's site: URL, order of screens, gotchas): `browser_use` `action=notes` with `host` and `note` saves one (newest last, 4,000 characters kept; a note shaped like a key or token is refused whole); with only `host` it reads them back. They are kept in `~/.clikcode/computer/notes/<host>.md` and are shown again when a page on that host is opened. The call needs an open tab (`open` a URL first). From a shell: `clikcode computer tool browser_use --args-json '{"action":"notes","host":"app.example.com","note":"API keys: Settings > Developer > New key"}'`.
-- **Run progress** (which vendors are done, what is next): record each outcome in the queue (`browser_use` `action=queue`, `clikcode computer queue`), which is the durable list to resume from. Anything more free-form goes in a file under `~/.clikcode/computer/progress/`, one per run, appended to as work happens. Never put a key, password or code in either.
+- **Per-site notes** (what worked on a vendor's site: URL, order of screens, gotchas): `account_use` `action=notes` with `host` and `note` saves one (newest last, 4,000 characters kept; a note shaped like a key or token is refused whole); with only `host` it reads them back. They are kept in `~/.clikcode/computer/notes/<host>.md` and are shown again when a page on that host is opened. The call needs an open tab (`open` a URL first). From a shell: `clikcode computer tool account_use --args-json '{"action":"notes","host":"app.example.com","note":"API keys: Settings > Developer > New key"}'`.
+- **Run progress** (which vendors are done, what is next): record each outcome in the queue (`account_use` `action=queue`, `clikcode computer queue`), which is the durable list to resume from. Anything more free-form goes in a file under `~/.clikcode/computer/progress/`, one per run, appended to as work happens. Never put a key, password or code in either.
 
 ## Email: a connected mailbox
 
