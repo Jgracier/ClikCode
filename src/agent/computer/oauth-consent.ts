@@ -9,6 +9,7 @@ import type { Page } from 'playwright-core';
 import { scrubSecrets } from './secret-scrubber.js';
 import { detectBlocker } from './signup-recipes.js';
 import { connectionState } from './secret-destinations.js';
+import { OPENS_ANOTHER_APP, PRESSABLE, readPageControls } from './page-controls.js';
 import { saveTask, type TaskReason } from './work-queue.js';
 
 /** One press: a control whose visible name matches `name`, only while the page text matches `when` (if given). */
@@ -53,11 +54,7 @@ export interface Control { name: string; leaf: boolean }
 
 export const providerFor = (host: string): ConsentProvider | undefined => CONSENT_PROVIDERS.find(p => p.host.test(host));
 
-/** A link whose address starts a program other than the page (mailto:, tel:, sms:, callto:, facetime:, an app's own scheme). The browser hands
- * it to the operating system, which opens a mail client or a chooser, and the page never moves on: the sign-in driver would press it again.
- * Google's "hasn't verified this app" page prints the developer's address as a mailto: link, which a text match for the profile's email took for
- * the account to choose. Web, javascript:, about: and relative addresses are the page's own. */
-export const OPENS_ANOTHER_APP = /^\s*(?!https?:|javascript:|about:)[a-z][a-z0-9+.-]*:/i;
+export { OPENS_ANOTHER_APP };
 
 const NOT_CHOOSER = /\b(sign out|log ?out|switch|remove|use another|add (?:an )?account|different account)\b/i;
 
@@ -259,32 +256,8 @@ export function startViaCli(connector: string, signal?: AbortSignal): Promise<Co
   });
 }
 
-const PRESSABLE = 'button, [role=button], a, [role=link], input[type=submit], input[type=button], summary, [data-identifier], [data-email], [data-test-id], [onclick]';
-
 async function readControls(page: Page): Promise<Control[]> {
-  return page.evaluate(({ pressable, otherApp }) => {
-    const leavesPage = new RegExp(otherApp, 'i');
-    const out: { name: string; leaf: boolean }[] = [];
-    const seen = new Set<string>();
-    const doc = (globalThis as unknown as { document: { querySelectorAll(s: string): ArrayLike<Record<string, unknown>> } }).document;
-    const all = Array.from(doc.querySelectorAll(`${pressable}, span, div, p, li, label`)).slice(0, 1500) as unknown as Array<{ matches(s: string): boolean; getClientRects(): { length: number }; children: { length: number }; textContent: string | null; getAttribute(n: string): string | null; closest(s: string): { getAttribute(n: string): string | null } | null; value?: string }>;
-    for (const n of all) {
-      if (!n.getClientRects().length) continue;
-      // Not on, or inside, a link that opens another program: pressing it would never change the page.
-      if (leavesPage.test(n.closest('a[href]')?.getAttribute('href') ?? '')) continue;
-      const isPress = n.matches(pressable);
-      if (!isPress && n.children.length) continue;
-      const text = (n.getAttribute('aria-label') || n.value || n.textContent || '').replace(/\s+/g, ' ').trim();
-      const ident = n.getAttribute('data-identifier') || n.getAttribute('data-email') || '';
-      const name = (ident && !text.includes(ident) ? `${text} ${ident}` : text).trim();
-      if (!name || name.length > 120) continue;
-      const key = `${isPress}|${name}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push({ name, leaf: !isPress });
-    }
-    return out;
-  }, { pressable: PRESSABLE, otherApp: OPENS_ANOTHER_APP.source });
+  return page.evaluate(readPageControls, { pressable: PRESSABLE, otherApp: OPENS_ANOTHER_APP.source, cap: 1500, identifiers: true });
 }
 
 

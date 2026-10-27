@@ -8,17 +8,18 @@ import type { Page } from 'playwright-core';
 import type { DriveOutcome } from './connector-runner.js';
 import type { KeyControl, KeyView, KeygrabPort } from './keygrab.js';
 import type { ParkedRecord } from './keygrab-park.js';
+import { OPENS_ANOTHER_APP, PRESSABLE_SITE, withPageControls, type PageControl } from './page-controls.js';
 import { scrubSecrets } from './secret-scrubber.js';
 
 const TAB = 'connectors';
 const clean = (text: string): string => scrubSecrets(text).replace(/\s+/g, ' ').trim().slice(0, 300);
 
+type PageView = { text: string; controls: KeyControl[]; fields: string[]; hasPassword: boolean; captchaFrame: boolean };
 /** Runs in the page (and in each frame): the visible text, what can be pressed, the visible boxes by label, and a real captcha challenge. */
-function collectView(): { text: string; controls: KeyControl[]; fields: string[]; hasPassword: boolean; captchaFrame: boolean } {
+function collectView(readControls: () => PageControl[]): PageView {
   const doc = (globalThis as unknown as { document: { body?: { innerText?: string }; querySelectorAll(s: string): ArrayLike<Record<string, unknown>> } }).document;
   type El = { closest(s: string): unknown; matches(s: string): boolean; getClientRects(): { length: number }; children: { length: number }; textContent: string | null; getAttribute(n: string): string | null; value?: string; href?: string; labels?: ArrayLike<{ textContent: string | null }>; type?: string; tagName: string };
   const norm = (t: string | null | undefined): string => (t ?? '').replace(/\s+/g, ' ').trim();
-  const pressable = 'button, [role=button], a, [role=link], [role=menuitem], [role=tab], input[type=submit], input[type=button], summary';
   // Open shadow roots (web-component forms) are part of the page: every query below reaches into them.
   const all = (selector: string): El[] => {
     const found: El[] = [];
@@ -29,29 +30,7 @@ function collectView(): { text: string; controls: KeyControl[]; fields: string[]
     walk(doc as unknown as { querySelectorAll(s: string): ArrayLike<unknown> });
     return found;
   };
-  const controls: KeyControl[] = [];
-  const seenNames = new Set<string>();
-  // Not a link that opens another program (mailto:, tel:, ...): the page would not move and the computer would open a mail program. Same rule as OPENS_ANOTHER_APP.
-  const leavesPage = /^\s*(?!https?:|javascript:|about:)[a-z][a-z0-9+.-]*:/i;
-  for (const n of all(`${pressable}, span, div, p, li, label`).slice(0, 2500)) {
-    if (!n.getClientRects().length) continue;
-    if (leavesPage.test((n.closest('a[href]') as { getAttribute(n: string): string | null } | null)?.getAttribute('href') ?? '')) continue;
-    const isPress = n.matches(pressable);
-    if (!isPress && n.children.length) continue;
-    const name = norm(n.getAttribute('aria-label') || n.value || n.textContent);
-    if (!name || name.length > 120) continue;
-    const key = `${isPress}|${name}`;
-    if (seenNames.has(key)) continue;
-    seenNames.add(key);
-    const popup = n.getAttribute('aria-haspopup');
-    controls.push({
-      name, leaf: !isPress,
-      ...(n.tagName === 'A' && n.href ? { href: n.href } : {}),
-      ...(n.closest('footer, [role=contentinfo]') ? { footer: true } : {}),
-      ...(n.closest('nav, aside, [role=navigation], [role=complementary]') ? { nav: true } : {}),
-      ...(name.length <= 40 && ((popup && popup !== 'false') || n.getAttribute('aria-expanded') === 'false' || n.closest('[aria-haspopup]:not([aria-haspopup=false]), [aria-expanded=false], [role=listbox], [role=combobox], .dropdown, [class*=dropdown], [class*=avatar], [class*=user-menu], [class*=UserMenu]')) ? { menu: true } : {}),
-    });
-  }
+  const controls: KeyControl[] = readControls();
   const fields: string[] = [];
   let hasPassword = false;
   for (const n of all('input, textarea')) {
@@ -75,6 +54,9 @@ function collectView(): { text: string; controls: KeyControl[]; fields: string[]
   return { text: text.slice(0, 6000), controls, fields, hasPassword, captchaFrame };
 }
 
+/** collectView with the shared control reader in front of it, as one page function. */
+const VIEW_SOURCE = withPageControls(collectView, { pressable: PRESSABLE_SITE, otherApp: OPENS_ANOTHER_APP.source, cap: 2500, shadow: true, detail: true });
+
 /** Frames that are the page's own forms and widgets (a sign-up form, a sign-in button) are read; captcha challenges, ads and trackers are not. */
 const SKIP_FRAME = /recaptcha|hcaptcha|challenges\.cloudflare|turnstile|arkoselabs|funcaptcha|doubleclick|googletagmanager|googlesyndication|facebook\.com\/tr|youtube\.com|vimeo\.com|google\.com\/maps|stripe\.com\/(?:v3|elements-inner-(?:fraud|controller))|intercom|crisp\.chat|hotjar|clarity\.ms/i;
 const MAX_FRAMES = 6;
@@ -82,7 +64,7 @@ const MAX_FRAMES = 6;
 /** What the page shows: its text, what can be pressed (with the address of a link), and the visible boxes by their label. The visible
  * controls and text of iframes (same-origin or not) are read too, so a sign-up form inside a frame is seen like any other. */
 export async function lookAt(page: Page): Promise<KeyView> {
-  const seen = await page.evaluate(collectView).catch(() => ({ text: '', controls: [] as KeyControl[], fields: [] as string[], hasPassword: false, captchaFrame: false }));
+  const seen = await page.evaluate<PageView>(VIEW_SOURCE).catch(() => ({ text: '', controls: [] as KeyControl[], fields: [] as string[], hasPassword: false, captchaFrame: false }));
   const controls = [...seen.controls];
   const fields = [...seen.fields];
   let text = seen.text, hasPassword = seen.hasPassword;
@@ -95,7 +77,7 @@ export async function lookAt(page: Page): Promise<KeyView> {
       const element = await frame.frameElement();
       const box = await element.boundingBox();
       if (!box || box.width < 40 || box.height < 24) continue;
-      const inside = await Promise.race([frame.evaluate(collectView), new Promise<undefined>(resolve => setTimeout(() => resolve(undefined), 3_000))]);
+      const inside = await Promise.race([frame.evaluate<PageView>(VIEW_SOURCE), new Promise<undefined>(resolve => setTimeout(() => resolve(undefined), 3_000))]);
       if (!inside) continue;
       read++;
       const have = new Set(controls.map(c => `${c.leaf ? 'l' : 'p'}|${c.name}`));
