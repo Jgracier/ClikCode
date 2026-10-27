@@ -458,6 +458,30 @@ SCENARIOS = {
         'watch': [], 'final_contains': ['from the other window'],
         'final_once': ['Second answer arrives here.'], 'final2_once': ['Second answer arrives here.'],
     },
+    # Two windows on one chat, both attached to its worker. A message sent from one shows on the other WHILE its turn runs, not
+    # after it ends (the held call keeps the turn open for 20 s: the prompt has to be there well before that).
+    'prompt-shows-in-other-window': {
+        'turns': [{'blocks': ['First chat answered.']}, {'intro': 'Starting the long build.', 'hold_ms': 20000, 'blocks': ['The build passed.']}],
+        'steps': [
+            ('type', 'hello'), ('wait_for', 'First chat answered.', 30), ('settle', 2),
+            ('open2', 6, ['--continue']), ('wait_for2', 'First chat answered.', 10), ('settle', 2),
+            ('type2', 'sent from window two'), ('wait_for', 'sent from window two', 8), ('snap', 'during'),
+            ('wait_for', 'The build passed.', 40), ('settle', 2),
+        ],
+        'watch': [], 'final_contains': ['sent from window two', 'The build passed.'],
+        'snap_contains': {'during': ['sent from window two']},
+    },
+    'prompt-shows-in-first-window': {
+        'turns': [{'blocks': ['First chat answered.']}, {'intro': 'Starting the long build.', 'hold_ms': 20000, 'blocks': ['The build passed.']}],
+        'steps': [
+            ('type', 'hello'), ('wait_for', 'First chat answered.', 30), ('settle', 2),
+            ('open2', 6, ['--continue']), ('wait_for2', 'First chat answered.', 10), ('settle', 2),
+            ('type', 'sent from window one'), ('wait_for2', 'sent from window one', 8), ('snap2', 'during'),
+            ('wait_for2', 'The build passed.', 40), ('settle', 2),
+        ],
+        'watch': [], 'final_contains': ['sent from window one', 'The build passed.'],
+        'snap_contains': {'during': ['sent from window one']},
+    },
     # The worker running a turn is killed mid-call. The turn ends there as a
     # stopped one, under its own prompt -- its answer used to be drawn above
     # it, the call left running (‣), and "session worker connection closed
