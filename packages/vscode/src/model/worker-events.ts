@@ -25,6 +25,10 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
     case 'waiting-start':
       return {
         ...model, running: true, turnUserIndex: model.messages.length,
+        // A turn another window started (the phone's, a terminal's): this panel never saw the message sent, and until the turn
+        // is saved nothing else says what was asked. The worker names it here. A turn this panel sent holds what the user
+        // typed already (the line, not the text a command expanded to) and keeps it.
+        ...(event.prompt !== undefined && !model.ownTurn && !model.pendingPrompt ? { pendingPrompt: event.prompt } : {}),
         live: { ...freshLive(stripAnsi(event.message)), ...liveBackground(model.background) }, plan: [], submissions: [],
         turnUsage: undefined, stopPending: undefined,
       };

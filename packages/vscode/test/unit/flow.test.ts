@@ -36,6 +36,43 @@ describe('submitted prompt before worker startup', () => {
   });
 });
 
+describe("a message another window sent", () => {
+  const earlier = [{ role: 'user' as const, content: 'earlier' }, { role: 'assistant' as const, content: 'done' }];
+  const open = () => run([{ type: 'session', session: session({ messages: earlier }) }]);
+
+  it('is on screen the moment its turn starts, before any snapshot of it', () => {
+    const followed = applyEvent(open(), worker({ type: 'waiting-start', message: 'thinking', prompt: 'sent from the phone' }));
+    expect(followed.running).toBe(true);
+    expect(followed.pendingPrompt).toBe('sent from the phone');
+    expect(followed.turnUserIndex).toBe(2);
+  });
+
+  it('stays through a snapshot read before the worker has saved the turn, and is one message once it is saved', () => {
+    const followed = applyEvent(open(), worker({ type: 'waiting-start', message: 'thinking', prompt: 'sent from the phone' }));
+    expect(run([{ type: 'session', session: session({ messages: earlier }) }], followed).pendingPrompt).toBe('sent from the phone');
+    const saved = [...earlier, { role: 'user' as const, content: 'sent from the phone' }, { role: 'assistant' as const, content: 'answer' }];
+    const ended = applyEvent(followed, worker({ type: 'snapshot', session: session({ messages: saved }) }));
+    expect(ended.pendingPrompt).toBeUndefined();
+    expect(ended.running).toBe(false);
+    expect(ended.messages.filter((m) => m.content === 'sent from the phone')).toHaveLength(1);
+  });
+
+  it('is gone when its turn ends without being saved (stopped before it began)', () => {
+    const followed = applyEvent(open(), worker({ type: 'waiting-start', message: 'thinking', prompt: 'sent from the phone' }));
+    expect(applyEvent(followed, worker({ type: 'waiting-stop', stopped: true })).pendingPrompt).toBeUndefined();
+  });
+
+  it('does not replace what this panel typed: a command it expanded keeps the line the user wrote', () => {
+    const sent = run([{ type: 'turn-start', sessionId: 's1', prompt: '/review' }], submittingPrompt(open(), '/review'));
+    const started = applyEvent(sent, worker({ type: 'waiting-start', message: 'thinking', prompt: 'Review the changes in detail' }));
+    expect(started.pendingPrompt).toBe('/review');
+  });
+
+  it('shows no message for a turn ClikCode started itself (nothing was sent by anyone)', () => {
+    expect(applyEvent(open(), worker({ type: 'waiting-start', message: 'thinking' })).pendingPrompt).toBeUndefined();
+  });
+});
+
 describe('how long the model has thought', () => {
   it('counts from the turn start, and again from when its last call closed', () => {
     vi.useFakeTimers();
