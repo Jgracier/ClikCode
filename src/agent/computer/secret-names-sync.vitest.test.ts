@@ -76,3 +76,18 @@ it('syncs into a computer that has no vault yet, and out of one that has nothing
   await syncVault(back, payload => exchangeVault(full, payload));
   expect(await readNamedSecret(back, 'acme/key')).toBe('value-1111');
 });
+
+it('lets an agent list what is saved, names and dates only', async () => {
+  const dir = await fresh();
+  await saveNamedSecret(dir, 'acme/key', 'value-1111');
+  await saveNamedSecret(dir, 'other/client-id', 'value-2222');
+  const { accountUseTool } = await import('../tools/computer-web.js');
+  const all = await accountUseTool.run({ action: 'secrets' } as never, { stateDir: dir } as never);
+  expect(all.output).toContain('2 saved keys');
+  expect(all.output).toContain('acme/key');
+  expect(all.output).not.toContain('value-1111');
+  const some = await accountUseTool.run({ action: 'secrets', target: 'other' } as never, { stateDir: dir } as never);
+  expect(some.output).toContain('1 saved key');
+  expect(some.output).not.toContain('acme/key');
+  expect((await accountUseTool.run({ action: 'secrets', target: 'nothing' } as never, { stateDir: dir } as never)).output).toContain('No saved key matches');
+});

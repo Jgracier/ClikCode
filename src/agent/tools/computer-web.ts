@@ -50,7 +50,7 @@ type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'u
 type WebArgs = {
   /** help: an action name, or "guide". */
   topic?: string;
-  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'profile' | 'open_email_link' | 'read_email_code' | 'email_connect' | 'oauth_connect' | 'notes' | 'recipe' | 'queue' | 'network' | 'preflight' | 'forget_login' | 'help' | 'hover' | 'drag' | PageAction | FilesEnvAction;
+  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'secrets' | 'profile' | 'open_email_link' | 'read_email_code' | 'email_connect' | 'oauth_connect' | 'notes' | 'recipe' | 'queue' | 'network' | 'preflight' | 'forget_login' | 'help' | 'hover' | 'drag' | PageAction | FilesEnvAction;
   tab?: string; at?: 'start' | 'end'; url?: string; host?: string; note?: string; recipe_op?: 'save' | 'get' | 'run' | 'list'; login_route?: string; key_page?: string; capture_hint?: string; target?: string; text?: string; key?: string; direction?: ScrollDirection; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
   new_account?: boolean; secret?: string; to?: string; with?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean; format?: string; options?: string[]; secret?: boolean }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; vendor?: string; owner?: string; env?: string; task?: { vendor: string; kind?: string; status?: string; reason?: string; note?: string; owner?: string; connectors?: string[] }; bodies?: boolean; tasks?: boolean; task_status?: string; task_reason?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
 } & PageArgs & FilesEnvArgs;
@@ -402,6 +402,14 @@ export const computerWebTool = defineTool<WebArgs>({
       if (!(await computerEnabled(ctx.stateDir))) throw new Error(COMPUTER_OFF);
       if (!ALL_ACTION_NAMES.includes(String(args.action))) throw new Error(`Unknown action "${String(args.action)}". Actions: ${ACTION_LIST}.`);
       if (args.action === 'send_secret') return storeSecretTool.run({ secret: args.secret ?? '', ...(args.to ? { to: args.to } : {}), ...(args.with ? { with: args.with } : {}), ...(args.send_to ? { send_to: args.send_to } : {}) }, ctx);
+      if (args.action === 'secrets') {
+        const { namedSecretInfo } = await import('../computer/credential-vault.js');
+        const words = (args.target ?? '').toLowerCase().split(/\s+/).filter(Boolean);
+        const found = (await namedSecretInfo(ctx.stateDir)).filter(({ name }) => words.every(word => name.toLowerCase().includes(word)));
+        if (!found.length) return { output: words.length ? `No saved key matches "${args.target}". Capture one with capture_secret.` : 'No keys are saved yet. Capture one with capture_secret.' };
+        const shown = found.slice(0, 150).map(({ name, meta }) => `${name}${meta ? `  (saved ${meta.createdAt.slice(0, 10)}${meta.rotatedAt ? `, rotated ${meta.rotatedAt.slice(0, 10)}` : ''})` : ''}`);
+        return { output: `${found.length} saved key${found.length === 1 ? '' : 's'}${found.length > shown.length ? `, first ${shown.length}; add words to target to narrow` : ''}. Values are never shown; send one on with send_secret.\n${shown.join('\n')}` };
+      }
       if (args.action === 'preflight') {
         // Deterministic readiness check (browser, Google sign-in, Gmail, build, deps link); a throwaway tab, no chat tab needed.
         const { runPreflightHere } = await import('../computer/preflight.js');

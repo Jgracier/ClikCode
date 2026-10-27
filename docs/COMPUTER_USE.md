@@ -508,6 +508,7 @@ What the browser tool does so a run does not depend on luck or on the user:
   `acme/secret-key`, `www.acme/key` all find `acme/key`, a second save under another spelling rotates the saved secret instead of
   making a twin, and a name that matches nothing says what is saved for that vendor. `admin-key` and `sandbox-key` stay their
   own. Deleting takes the exact name only.
+- **What an agent can do with keys:** `account_use` `capture_secret` (take a key from a page, check it, save it, send it on), `secrets` (list saved names and dates, never values; `target` filters), `send_secret` (send a saved key on by name). That is the whole surface; values never reach the agent.
 - **Audit.** `clikcode computer secrets --audit` lists twins, odd names (no vendor, dated, numbered), secrets with no
   owner, and logins a site rejected: names only, nothing is changed.
 - **Sync between your computers.** `clikcode computer secrets --sync chronos@macbook` makes this computer's vault and that
