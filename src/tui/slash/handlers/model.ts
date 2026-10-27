@@ -2,6 +2,8 @@
 import { quiet } from '../../../runtime/lifecycle-log.js';
 import { isGatewayService } from '../../../session/route.js';
 import { localModelChosen } from '../../../commands/ai/local-model.js';
+import { backgroundDownloadsAllowed, reportDownloadOutcome, startModelDownload } from '../../../local-models/downloads.js';
+import { putOnAgentRoute } from '../../pickers/conversation.js';
 import { localModelChoices } from '../../../local-models/index.js';
 import { resolveLocalModelId, catalogModel } from '../../../local-models/catalog.js';
 import { missingBytes } from '../../../local-models/models.js';
@@ -28,6 +30,40 @@ import { type HeadlessSlashHandler, saveSettings } from './shared.js';
 /** Whether `value` names one of this computer's own models (by id or label), as `/model <name>` takes it. */
 function isLocalModelName(value: string): boolean {
   try { return Boolean(catalogModel(resolveLocalModelId(value))); } catch { return false; }
+}
+
+/** Where a chat stands, for telling that the user moved it while a model downloaded. */
+const placeOf = (session: Pick<HarnessSession, 'route' | 'model' | 'nativeHarness'>): string => `${session.route}|${session.model ?? ''}|${session.nativeHarness ?? ''}`;
+
+/** The model downloads on its own and the chat moves to it when it is on this machine. The chat is left as it is until then -- a
+ * failed download, or a chat changed by the user meanwhile, moves nothing. Returns at once: nothing here waits. */
+async function switchWhenDownloaded(session: HarnessSession, model: string, label: string, bytes: number): Promise<void> {
+  const sessionId = session.id;
+  const before = placeOf(session);
+  const job = startModelDownload(model);
+  const outcome = (level: 'info' | 'error', switched: boolean, text: string): void => reportDownloadOutcome({ sessionId, modelId: model, switched, level, text });
+  job.done.then(async () => {
+    const state = await readState({ transcripts: [sessionId] });
+    const current = state.sessions.find((item) => item.id === sessionId);
+    if (!current) return;
+    const name = current.name ? `"${current.name}"` : 'This chat';
+    if (placeOf(current) !== before) {
+      outcome('info', false, `${label} is downloaded. ${name} was changed while it downloaded, so it was left as it is: /model ${model} moves it.`);
+      return;
+    }
+    if (current.route !== 'clikcode-local') await putOnAgentRoute(sessionId, 'clikcode-local');
+    const moved = await readState({ transcripts: [sessionId] });
+    const chat = moved.sessions.find((item) => item.id === sessionId);
+    if (!chat) return;
+    chat.model = model;
+    if (chat.reported?.model) delete chat.reported.model;
+    chat.updatedAt = new Date().toISOString();
+    await writeState(moved);
+    outcome('info', true, `${label} is downloaded: ${name} runs on it now.`);
+  }).catch((error: unknown) => {
+    outcome('error', false, `The download of ${label} failed: ${error instanceof Error ? error.message : String(error)} It resumes from where it stopped when you ask again; this chat is as it was.`);
+  });
+  outcome('info', false, `Downloading ${label} (${formatBytes(bytes)}) in the background. This chat moves to it when it is ready: carry on meanwhile.`);
 }
 
 /** `/model` on a chat that runs a model on this computer. With no name, fitting local and Hub models;
@@ -59,6 +95,12 @@ async function localModelCommand(session: HarnessSession, value: string): Promis
     ]);
     if (!confirmed) return;
   }
+  // A download is fetched on its own, not inside this command: the window stays free to change chats, settings and models while it
+  // runs, and the chat moves when the files are there. Only where something outlives the command (a window, the editor): a script
+  // that runs one command and exits waits for it, as it always did.
+  if (bytes && backgroundDownloadsAllowed()) return switchWhenDownloaded(session, model, entry.label, bytes);
+  // A model already on this machine (or one a script waited for): the chat moves now, then loads it.
+  if (session.route !== 'clikcode-local') await putOnAgentRoute(session.id, 'clikcode-local');
   await localModelChosen(session.id, model);
   // Re-read: loading a model can take a minute, and the turn worker or
   // another command may have written the state since this command read it.
@@ -97,8 +139,10 @@ export const modelHandlers = {
     let trusted = words[0] === '--any';
     if (trusted) words.shift();
     let value = words.join(' ').trim();
+    // A model on this computer asked for from any chat (the hosted list's choice): the chat moves to it, once it is there.
+    if (value.startsWith('--download ')) return localModelCommand(session, value);
     if (session.route === 'clikcode-local') {
-      if (!value || value.startsWith('--download ') || isLocalModelName(value)) return localModelCommand(session, value);
+      if (!value || isLocalModelName(value)) return localModelCommand(session, value);
       // Not a model this computer runs, so a Gateway model: both are the Gateway provider (hosted-models/), and the chat moves
       // to it with the model. Checked against the Gateway's list first, so a typo changes nothing and keeps the local model.
       // Automatic comes back as null; the word stays, and the Gateway branch below turns it into Automatic.

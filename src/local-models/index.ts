@@ -119,6 +119,20 @@ async function viewMachine(probed?: HardwareProfile): Promise<MachineView> {
   };
 }
 
+/** A model's files on this machine -- the llama.cpp build for it and its weights -- with nothing started: no server, no lease.
+ * What a download that must not tie anything up is made of; the first turn on the model then only loads it. Refused up front
+ * for a model this machine cannot run, so a download of several GB is never spent on one that will not start. */
+export async function prefetchLocalModel(
+  modelId: string, progress: (update: LocalModelProgress) => void, signal?: AbortSignal,
+): Promise<void> {
+  if (!catalogModel(modelId)) throw new Error(`${modelId} is not a model this computer can run.`);
+  progress({ stage: 'probe', message: 'checking this machine…' });
+  const view = await viewMachine(await learnGpuReach(await probeHardware(), (update) => progress({ stage: 'runtime', ...update })));
+  const choice = chooseModel(rankModels(allLocalModels(), view.hardware, view.budget, view.measurements, view.footprints), modelId);
+  await ensureRuntime(view.build, (update) => progress({ stage: 'runtime', ...update }));
+  await ensureModelFile(choice.row.model.weights, (update) => progress({ stage: 'download', ...update }), signal);
+}
+
 /** A running server for this model, if there is one: its process is
  * alive, or its supervisor is restarting it (smaller, to give memory back),
  * which a caller waits for rather than starting a second one beside it. */

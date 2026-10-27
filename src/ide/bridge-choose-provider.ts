@@ -8,7 +8,7 @@ import { addAccountForHarness, manageAccountAction, useAddedAccount } from '../t
 import { selectProviderConversation } from '../tui/pickers/conversation.js';
 import type { IdeChoice } from './protocol.js';
 import { hostedAdapter, hostedSelectionCommand } from '../hosted-models/index.js';
-import { GATEWAY_ID, LOCAL_ID } from '../session/picker-rows.js';
+import { GATEWAY_ID } from '../session/picker-rows.js';
 import { gatewayCheckoutUrl } from './queries.js';
 import type { ChooseContext } from './bridge-choose.js';
 
@@ -44,7 +44,7 @@ export async function chooseProvider(cx: ChooseContext, choice: IdeChoice): Prom
       queued(async () => {
         const selection = await hostedAdapter(choice.row.target).start(choice.row);
         const id = host.requireSession();
-        const moved = await selectProviderConversation(host.config, host.prompter, id, providerConversationKey(selection.route === 'gateway' ? GATEWAY_ID : LOCAL_ID));
+        const moved = selection.route === 'gateway' ? await selectProviderConversation(host.config, host.prompter, id, providerConversationKey(GATEWAY_ID)) : id;
         await aiSessionCommand(moved, hostedSelectionCommand(selection));
         if (host.sessionId !== id) return { sessionId: moved };
         if (moved !== id) await host.switchTo(moved);

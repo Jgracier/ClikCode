@@ -51,12 +51,18 @@ async function moveToAgentRoute(
       return id;
     }
   }
+  await putOnAgentRoute(id, route);
+  return id;
+}
+
+/** The move itself, with no sign-in and no question: the chat runs ClikCode's own agent on `route` from now on, history and all. For
+ * what has already been asked and confirmed -- a model downloaded for it. The call already started finishes on the route it
+ * started on; the next model step reads this route (turn/live-settings.ts) and moves. */
+export async function putOnAgentRoute(id: string, route: 'gateway' | 'clikcode-local'): Promise<void> {
   const state = await readState({ transcripts: [id] });
   const current = state.sessions.find((item) => item.id === id);
   if (!current) throw new Error(`AI session "${id}" was not found`);
-  if (current.route === route) return id;
-  // The call already started finishes on the route it started on. The next
-  // model step reads this route (turn/live-settings.ts) and moves.
+  if (current.route === route) return;
   const running = await turnIsRunning(id);
   if (!running) {
     await synchronizeNativeTranscript(state, current);
@@ -64,7 +70,6 @@ async function moveToAgentRoute(
   } else parkNativeThread(current);
   applyClikCodeAgentSessionPolicy(current, route, state);
   await writeState(state);
-  return id;
 }
 
 export async function selectProviderConversation(config: Conf, rl: HarnessPrompter, id: string, selected: string, options: { offerLocal?: boolean } = {}): Promise<string> {

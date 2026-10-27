@@ -136,6 +136,19 @@ describe('the chat and the composer stay put while a list is open', () => {
     expect(footer).not.toContain('ClikCode Local');
   });
 
+  it('shows a download in the footer for as long as it runs, whichever chat is open, and takes it away when it ends', () => {
+    const prompter = open();
+    prompter.render(session(4));
+    expect(prompter.statusText(COLS)).not.toContain('↓');
+    prompter.setTransfer('↓ Gemma 4 12B 16%');
+    expect(prompter.statusText(COLS)).toContain('Grok Build  •  ↓ Gemma 4 12B 16%');
+    // Another chat opened: the download is the window's, so it is still there.
+    prompter.render({ ...session(4), id: 'other', conversationId: 'other', name: 'Another chat' } as HarnessSession);
+    expect(prompter.statusText(COLS)).toContain('↓ Gemma 4 12B 16%');
+    prompter.setTransfer(undefined);
+    expect(prompter.statusText(COLS)).not.toContain('↓');
+  });
+
   it('does not shorten a draft when the list opens', () => {
     const prompter = open();
     prompter.render(session(8));

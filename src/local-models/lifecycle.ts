@@ -177,6 +177,31 @@ export async function withStartLock<T>(modelId: string, work: () => Promise<T>, 
   try { return await work(); } finally { await rm(lock, { force: true }); }
 }
 
+/** One download at a time per model, across processes: two windows fetching the same weights would append to one `.part` file
+ * from two places. Unlike the start lock this one has no age limit -- a download of several GB takes as long as the link does --
+ * so only a holder that is gone loses it. Waiting is cancellable. */
+export async function withDownloadLock<T>(modelId: string, work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  const lock = join(serverDir(modelId), 'download.lock');
+  await mkdir(serverDir(modelId), { recursive: true });
+  for (;;) {
+    if (signal?.aborted) throw new Error('The download was cancelled.');
+    try {
+      closeSync(openSync(lock, 'wx'));
+      await writeFile(lock, JSON.stringify({ pid: process.pid, at: Date.now() }));
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      const holder = await readFile(lock, 'utf8').then((text) => JSON.parse(text) as { pid?: number }, () => undefined);
+      const age = Date.now() - ((await stat(lock).catch(() => undefined))?.mtimeMs ?? 0);
+      // An empty lock is one being written this instant; give it a moment.
+      const stale = holder ? !pidIsAlive(Number(holder.pid)) : age > 5000;
+      if (stale) { await rm(lock, { force: true }); continue; }
+      await new Promise((done) => setTimeout(done, 500));
+    }
+  }
+  try { return await work(); } finally { await rm(lock, { force: true }); }
+}
+
 /** A configuration the server can be restarted in to give memory back. */
 export interface ShrinkStep {
   context: number;

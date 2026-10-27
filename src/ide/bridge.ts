@@ -30,7 +30,7 @@ import { usageNextReset, usageResetLabel, usageWindowsDetail } from '../harness/
 import { resumeWaitLabel } from '../turn/usage-exhausted.js';
 import { signInCancelledLine } from '../commands/account.js';
 import { setHarnessInstallReporter, type HarnessInstallReporter } from '../harness/transport/native/install.js';
-import { reconcileLocalModelLeases } from '../commands/ai/local-model.js';
+import { followModelDownloadsInEditor, reconcileLocalModelLeases } from '../commands/ai/local-model.js';
 import { conversationCost } from '../tui/slash/usage-report.js';
 import { autoSelectSessionHarness } from '../tui/pickers/engine.js';
 import { currentWorkerBuild, readWorkerRecord, workerIsReachable } from '../worker/registry.js';
@@ -153,7 +153,12 @@ export class IdeBridge {
     };
     this.link = new WorkerLink(this.host);
     this.turns = new BridgeTurns(this.host);
+    // A model download is not this chat's wait: it shows on the busy line, and the chat that asked is told how it ended.
+    this.stopDownloadFeed = followModelDownloadsInEditor((event) => channel.send(event), {
+      sessionId: () => this.sessionId, refresh: () => this.emitSession(),
+    });
   }
+  private readonly stopDownloadFeed: () => void;
 
   start(): void {
     const usage = setInterval(() => { if (this.shown) void this.refreshUsage(true).catch(quiet('ide/bridge')); }, USAGE_REFRESH_MS);
@@ -354,6 +359,7 @@ export class IdeBridge {
 
   private async stop(): Promise<void> {
     this.closed = true;
+    this.stopDownloadFeed();
     this.listWatch?.stop();
     this.listWatch = undefined;
     for (const timer of this.timers) clearInterval(timer);

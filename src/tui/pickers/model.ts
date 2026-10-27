@@ -24,7 +24,7 @@ import { withSignIn } from '../../commands/account.js';
 import { chooseOption } from './choose.js';
 import { withSlowWait } from '../slow-wait.js';
 import { hostedAdapter, hostedList, hostedSelectionCommand, HOSTED_TAGS, type HostedRow } from '../../hosted-models/index.js';
-import { GATEWAY_ID, LOCAL_ID } from '../../session/picker-rows.js';
+import { GATEWAY_ID } from '../../session/picker-rows.js';
 import { providerConversationKey } from './engine.js';
 import { selectProviderConversation } from './conversation.js';
 
@@ -196,7 +196,8 @@ export async function interactiveHostedPicker(rl: HarnessPrompter, id: string): 
   const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   let target = id;
-  if (session?.route !== selection.route) target = await selectProviderConversation(config, rl, id, providerConversationKey(selection.route === 'gateway' ? GATEWAY_ID : LOCAL_ID));
+  // A model for this computer moves the chat itself, when it is on this machine (`/model --download`); a GPU's route is moved to first.
+  if (selection.route === 'gateway' && session?.route !== selection.route) target = await selectProviderConversation(config, rl, id, providerConversationKey(GATEWAY_ID));
   await aiSessionCommand(target, hostedSelectionCommand(selection));
 }
 
