@@ -3,7 +3,7 @@
  * events. The page's fields are told to the phone with where each is on its screen, so the phone can lay a real input over each one: a finger
  * on a field then lands on a real input of the phone's own (its keyboard, autofill and pickers), and what is entered is filled into the page. */
 import { quiet } from '../../runtime/lifecycle-log.js';
-import type { CDPSession, Page } from 'playwright-core';
+import type { CDPSession, Frame, Page } from 'playwright-core';
 import { cleanPoints, cleanSize, keyEvent, MAX_REPEAT, MAX_TEXT, OUTSIDE, type KeyEvent, type Size } from './handoff-input.js';
 import type { LiteSocket } from './ws-lite.js';
 
@@ -108,6 +108,11 @@ const READ_VIEW = '({ scale: visualViewport.scale, x: visualViewport.offsetLeft,
 
 const BUTTONS = ['left', 'middle', 'right'] as const;
 
+const FRAME_IDS = 1_000_000;
+const MAX_FRAMES = 4;
+/** How long a finger held still on a frame from another site becomes a mouse button held down. */
+const HOLD_MS = 350;
+
 export class LiveView {
   private cdp: CDPSession | undefined;
   private size: Size | undefined;
@@ -124,7 +129,8 @@ export class LiveView {
   private up = false;
   private lastView: PageView = SAME_VIEW;
   /** A finger that went down on a frame from another site and has not yet moved: it is a click if it lifts, a scroll if it moves. */
-  private foreign: { start: { x: number; y: number }; screen: { x: number; y: number; id: number }; scrolling?: boolean; last?: { x: number; y: number } } | undefined;
+  private frames: Frame[] = [];
+  private foreign: { start: { x: number; y: number }; screen: { x: number; y: number; id: number }; scrolling?: boolean; last?: { x: number; y: number }; pressed?: boolean; timer?: NodeJS.Timeout } | undefined;
   /** What the phone's finger is: touch (the page sees a touch screen, laid out for the phone) or a mouse (the page sees a pointer). */
   private mode: 'touch' | 'mouse' = 'touch';
   private laidOutAs: 'touch' | 'mouse' | undefined;
@@ -215,20 +221,30 @@ export class LiveView {
         // A frame from another site (a CAPTCHA, a payment form) runs in a process of its own, and Chrome does not pass emulated touch into it; it does
         // pass a mouse click. So a finger that goes down on one waits: lifted without moving it clicks, moved it is a touch and scrolls as usual.
         if (type === 'touchStart' && points.length === 1 && !this.foreign && await this.overForeignFrame(mapped[0]!.x, mapped[0]!.y)) {
-          this.foreign = { start: { x: mapped[0]!.x, y: mapped[0]!.y }, screen: { x: points[0]!.x, y: points[0]!.y, id: points[0]!.id } };
+          const waiting: NonNullable<LiveView['foreign']> = { start: { x: mapped[0]!.x, y: mapped[0]!.y }, screen: { x: points[0]!.x, y: points[0]!.y, id: points[0]!.id } };
+          // Held still, the finger is a button held down (a press-and-hold CAPTCHA): the press is sent now and the release when the finger lifts.
+          waiting.timer = setTimeout(() => {
+            if (this.foreign !== waiting || waiting.scrolling || waiting.pressed || this.stopped) return;
+            waiting.pressed = true;
+            void this.pressMouse(waiting.start.x, waiting.start.y, true).catch(quiet('agent/computer/handoff-live'));
+          }, HOLD_MS);
+          this.foreign = waiting;
           return;
         }
         if (this.foreign) {
           const waiting = this.foreign;
           if (type === 'touchEnd' || type === 'touchCancel') {
             this.foreign = undefined;
-            if (type === 'touchEnd' && points.length === 0 && !waiting.scrolling) await this.click(waiting.start.x, waiting.start.y);
+            clearTimeout(waiting.timer);
+            if (waiting.pressed) await this.pressMouse(waiting.start.x, waiting.start.y, false);
+            else if (type === 'touchEnd' && points.length === 0 && !waiting.scrolling) await this.click(waiting.start.x, waiting.start.y);
             return;
           }
           // A drag that began on the frame scrolls the page itself, one for one with the finger: the frame is handed the whole touch and does not pass the scroll on.
           if (waiting.scrolling || (points.length === 1 && Math.hypot(points[0]!.x - waiting.screen.x, points[0]!.y - waiting.screen.y) > 10)) {
             if (points.length === 1) {
               const from = waiting.last ?? waiting.screen, now = points[0]!, scale = view.scale > 0.05 ? view.scale : 1;
+              if (waiting.pressed) { waiting.pressed = false; await this.pressMouse(waiting.start.x, waiting.start.y, false); }
               waiting.scrolling = true; waiting.last = { x: now.x, y: now.y };
               await this.evaluate(`window.scrollBy(${(from.x - now.x) / scale}, ${(from.y - now.y) / scale})`);
               return;
@@ -238,6 +254,8 @@ export class LiveView {
           if (!moved) return;
           // Two fingers (a pinch) are a gesture of their own: the touch is replayed from where it began.
           this.foreign = undefined;
+          clearTimeout(waiting.timer);
+          if (waiting.pressed) await this.pressMouse(waiting.start.x, waiting.start.y, false);
           await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: waiting.start.x, y: waiting.start.y, id: waiting.screen.id }] });
         }
         await cdp.send('Input.dispatchTouchEvent', { type, touchPoints: mapped });
@@ -265,7 +283,7 @@ export class LiveView {
         // The whole value of one field, as a person typing it would put it in (the page hears real input).
         const index = Number(message.i), value = message.v;
         if (!Number.isInteger(index) || index < 0 || typeof value !== 'string' || value.length > MAX_TEXT) return;
-        if (await this.evaluate<string>(prepareFill(index)) !== 'ok') return;
+        if (await this.evaluateFor<string>(index, prepareFill) !== 'ok') return;
         if (value === '') await this.pressKey(keyEvent('Backspace')!, 1);
         else await cdp.send('Input.insertText', { text: value });
         return;
@@ -273,7 +291,11 @@ export class LiveView {
       case 'set': {
         const value = message.v;
         const ok = typeof value === 'string' ? value.length <= 2_000 : Array.isArray(value) && value.length <= 300 && value.every(item => typeof item === 'string' && item.length <= 2_000);
-        if (ok) await cdp.send('Runtime.evaluate', { expression: setValueExpression(value as string | string[], Number.isInteger(message.i) ? Number(message.i) : -1) });
+        if (ok) {
+          const index = Number.isInteger(message.i) ? Number(message.i) : -1;
+          if (index >= 0) await this.evaluateFor(index, local => setValueExpression(value as string | string[], local));
+          else await cdp.send('Runtime.evaluate', { expression: setValueExpression(value as string | string[], -1) });
+        }
         return;
       }
       case 'done': this.finish(); return;
@@ -310,6 +332,12 @@ export class LiveView {
   private async overForeignFrame(x: number, y: number): Promise<boolean> {
     const result = await this.evaluate<boolean>(`((x, y) => { const e = document.elementFromPoint(x, y); if (!e || e.tagName !== 'IFRAME') return false; try { return !e.contentDocument; } catch (error) { return true; } })(${x}, ${y})`);
     return result === true;
+  }
+
+  private async pressMouse(x: number, y: number, down: boolean): Promise<void> {
+    const cdp = this.cdp!;
+    if (down) await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none', buttons: 0 });
+    await cdp.send('Input.dispatchMouseEvent', { type: down ? 'mousePressed' : 'mouseReleased', x, y, button: 'left', buttons: down ? 1 : 0, clickCount: 1 });
   }
 
   private async click(x: number, y: number): Promise<void> {
@@ -390,11 +418,46 @@ export class LiveView {
     if (this.stopped || this.socket.closed || !this.cdp) return;
     try {
       const result = await this.cdp.send('Runtime.evaluate', { expression: FIELDS_SCRIPT, returnByValue: true }) as { result?: { value?: string } };
-      const text = result.result?.value;
-      if (typeof text !== 'string' || text === this.lastFields) return;
+      const main = result.result?.value;
+      if (typeof main !== 'string') return;
+      const fields = JSON.parse(main) as Array<Record<string, unknown>>;
+      fields.push(...await this.frameFields());
+      const text = JSON.stringify(fields);
+      if (text === this.lastFields) return;
       this.lastFields = text;
-      this.send({ t: 'fields', f: JSON.parse(text) as unknown });
+      this.send({ t: 'fields', f: fields });
     } catch { /* the page is changing */ }
+  }
+
+  /** The fields inside frames (a sign-in box or a CAPTCHA's answer line, often from another site), placed on the phone's screen like the page's own.
+   * A field of frame n is numbered n * FRAME_IDS + its number in the frame, so a name reaches the frame it belongs to. */
+  private async frameFields(): Promise<Array<Record<string, unknown>>> {
+    const out: Array<Record<string, unknown>> = [];
+    const known: Frame[] = [this.page.mainFrame()];
+    const view = await this.view();
+    for (const frame of this.page.frames()) {
+      if (frame === this.page.mainFrame() || known.length > MAX_FRAMES) continue;
+      try {
+        const box = await (await frame.frameElement()).boundingBox();
+        if (!box || box.width < 4 || box.height < 4) continue;
+        // A frame from another site is a process of its own: the page's script for new documents does not reach it.
+        await frame.evaluate(DESCRIBE_SCRIPT);
+        const list = JSON.parse(await frame.evaluate(FIELDS_SCRIPT) as string) as Array<{ i: number; x: number; y: number; w: number; h: number; d: Record<string, unknown> }>;
+        const n = known.push(frame) - 1;
+        for (const field of list) out.push({ ...field, i: n * FRAME_IDS + field.i, x: Math.round((box.x + field.x - view.x) * view.scale * 10) / 10, y: Math.round((box.y + field.y - view.y) * view.scale * 10) / 10, w: Math.round(field.w * view.scale * 10) / 10, h: Math.round(field.h * view.scale * 10) / 10, d: { ...field.d, idx: n * FRAME_IDS + field.i } });
+      } catch { /* a frame that went away or is not ready */ }
+    }
+    this.frames = known;
+    return out;
+  }
+
+  /** Runs a script in the frame a field number belongs to, with the number inside that frame. */
+  private async evaluateFor<T>(index: number, script: (local: number) => string): Promise<T | undefined> {
+    const frame = this.frames[Math.floor(index / FRAME_IDS)];
+    const local = index % FRAME_IDS;
+    if (!frame) return undefined;
+    if (frame === this.page.mainFrame()) return this.evaluate<T>(script(local));
+    try { return await frame.evaluate(script(local)) as T; } catch { return undefined; }
   }
 
   private async ackChrome(sessionId: number): Promise<void> {
