@@ -18,11 +18,7 @@ button{font:inherit;min-height:34px;border-radius:8px;border:1px solid #484f58;b
 #done{background:#238636;border-color:#2ea043;font-weight:600}
 #stage{flex:1;min-height:0;position:relative;background:#000;overflow:hidden}
 #c{position:absolute;left:0;top:0;touch-action:none;outline:none;background:#000}
-#accessory{display:none;position:absolute;left:0;right:0;bottom:0;z-index:5;gap:6px;align-items:center;padding:6px 8px;padding-bottom:max(6px,env(safe-area-inset-bottom));background:#161b22;border-top:1px solid #30363d}
-#accessory.on{display:flex}
-#label{font-size:11px;color:#8b949e;max-width:28%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#proxy{flex:1;min-width:0;font-size:16px;min-height:38px;box-sizing:border-box;background:#0d1117;color:#f0f6fc;border:1px solid #58a6ff;border-radius:8px;padding:0 10px;-webkit-user-select:text;user-select:text}
-textarea#proxy{min-height:60px;padding:8px 10px}
+#proxy{position:absolute;z-index:6;margin:0;padding:0;border:0;outline:0;background:transparent;color:transparent;caret-color:transparent;opacity:.01;font-size:16px;pointer-events:none;resize:none;-webkit-user-select:text;user-select:text;-webkit-appearance:none}
 #veil{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.78);text-align:center;padding:24px;line-height:1.4}
 #veil.on{display:flex}
 #sheet{display:none;position:absolute;inset:0;z-index:10;background:rgba(0,0,0,.55);align-items:flex-end}
@@ -38,7 +34,6 @@ textarea#proxy{min-height:60px;padding:8px 10px}
 <div id="app">
 <div id="bar"><span id="dot"></span><span id="host">Connecting…</span><span id="ms"></span><button id="mode" aria-label="Switch between touch and mouse">Mouse</button><button id="done">Done</button></div>
 <div id="stage"><canvas id="c" tabindex="0"></canvas><div id="veil" class="on"><span id="veilText">Connecting…</span></div></div>
-<div id="accessory"><span id="label"></span><span id="slot" style="display:contents"></span><button id="tab">Tab</button><button id="enter">Go</button></div>
 <div id="sheet"><div id="sheetBox"><div id="sheetTitle"></div><div id="sheetBody"></div><div id="sheetActions"></div></div></div>
 </div>
 <script>
@@ -122,7 +117,7 @@ const connect = () => {
     if (typeof event.data !== 'string') { newest = new Uint8Array(event.data, 1); if (!decoding) drawNewest(); return; }
     let msg; try { msg = JSON.parse(event.data); } catch (error) { return; }
     if (msg.t === 'page') $('host').textContent = msg.host || '';
-    else if (msg.t === 'fields') { fields = Array.isArray(msg.f) ? msg.f : []; T.fields = fields.length; }
+    else if (msg.t === 'fields') { fields = Array.isArray(msg.f) ? msg.f : []; T.fields = fields.length; followField(); }
     else if (msg.t === 'focus') showFocus(msg.d);
     else if (msg.t === 'blur') hideFocus();
     else if (msg.t === 'done') { finished = true; T.ended = true; veil('Done. ClikCode will continue.'); }
@@ -184,7 +179,7 @@ const touchMode = (k, list) => {
     const f = tap ? fieldAt(g.x, g.y) : null;
     g = null;
     // In the person's own tap, so the phone lets its keyboard come up.
-    if (f && f.d.kind === 'text') openProxy(f.d, f.i);
+    if (f && f.d.kind === 'text') openProxy(f);
   }
 };
 
@@ -230,7 +225,7 @@ const mouseMode = (k, list) => {
     if (!m.pressed) press();
     input({ t: 'mouse', k: 'u', b: 0, x: m.last.x, y: m.last.y });
     m = null;
-    if (tap && f && f.d.kind === 'text') openProxy(f.d, f.i);
+    if (tap && f && f.d.kind === 'text') openProxy(f);
   }
 };
 
@@ -259,7 +254,7 @@ window.addEventListener('mouseup', (e) => {
   const p = at(e), d = down; down = null;
   if (d.held) { if (dist(p, d) < 6) openSheet(d.field.d, d.field.i); return; }
   input({ t: 'mouse', k: 'u', b: e.button, ...p });
-  if (d.field && d.field.d.kind === 'text' && dist(p, d) < 6) openProxy(d.field.d, d.field.i);
+  if (d.field && d.field.d.kind === 'text' && dist(p, d) < 6) openProxy(d.field);
 });
 canvas.addEventListener('mousemove', (e) => { const now = performance.now(); if (now - lastMove < 16 || (down && down.held)) return; lastMove = now; send({ t: 'mouse', k: 'm', down: down ? 1 : 0, ...at(e) }); });
 canvas.addEventListener('wheel', (e) => { e.preventDefault(); input({ t: 'mouse', k: 'w', dx: e.deltaX, dy: e.deltaY, ...at(e) }); }, { passive: false });
@@ -270,21 +265,28 @@ canvas.addEventListener('keydown', (e) => {
   else if (e.key.length === 1) { e.preventDefault(); input({ t: 'text', s: e.key }); }
 });
 
-// ── the phone's own box for the field being typed in ──
+// ── typing: the phone's keyboard, into the field in the page ──
+// A real input, invisible, laid exactly over the field that was tapped and focused in that tap, so the phone brings up its keyboard (with the
+// field's kind, autofill and Enter key) and the field in the picture is the one that is typed in. What changes in it is replayed in the page.
 let proxy = null, proxyLast = '', multiline = false;
-const hideFocus = () => { T.focus = null; $('accessory').classList.remove('on'); if (proxy) { proxy.blur(); proxy.remove(); proxy = null; } $('label').textContent = ''; };
-const openProxy = (d, idx) => {
+const place = (el, f) => { el.style.left = f.x + 'px'; el.style.top = f.y + 'px'; el.style.width = Math.max(f.w, 20) + 'px'; el.style.height = Math.max(f.h, 20) + 'px'; };
+const hideFocus = () => { T.focus = null; if (proxy) { proxy.blur(); proxy.remove(); proxy = null; } };
+const followField = () => { if (!proxy) return; const f = fields.find((x) => x.i === Number(proxy.dataset.idx)); if (f) place(proxy, f); };
+const openProxy = (f) => {
+  const d = f.d;
+  // The same field again: keep its box, and focus it again in this tap in case the keyboard was put away.
+  if (proxy && Number(proxy.dataset.idx) === f.i) { place(proxy, f); try { proxy.focus({ preventScroll: true }); } catch (error) { /* nothing to do */ } return; }
   hideFocus(); T.focus = d;
   multiline = Boolean(d.multiline);
   const el = document.createElement(multiline ? 'textarea' : 'input');
-  if (!multiline) el.type = d.type === 'editable' || d.generic ? 'text' : d.type;
+  if (!multiline) el.type = d.type === 'editable' ? 'text' : d.type;
   if (d.inputmode) el.inputMode = d.inputmode;
   if (d.autocomplete) el.setAttribute('autocomplete', d.autocomplete);
   if (d.enterkeyhint) el.enterKeyHint = d.enterkeyhint;
   if (d.maxlength) el.maxLength = d.maxlength;
   if (['email', 'url', 'password'].includes(d.type)) { el.autocapitalize = 'off'; el.autocorrect = 'off'; el.spellcheck = false; }
   el.value = d.value || ''; proxyLast = el.value;
-  el.dataset.idx = String(typeof idx === 'number' ? idx : -1);
+  el.dataset.idx = String(f.i);
   el.addEventListener('input', () => {
     const { remove, add } = diffText(proxyLast, el.value);
     proxyLast = el.value;
@@ -295,16 +297,16 @@ const openProxy = (d, idx) => {
     if (e.key === 'Enter' && !multiline) { e.preventDefault(); input({ t: 'key', key: 'Enter' }); }
     else if (e.key === 'Tab') { e.preventDefault(); input({ t: 'key', key: 'Tab' }); }
   });
-  el.id = 'proxy'; $('slot').appendChild(el); proxy = el;
-  $('label').textContent = d.label || ''; $('accessory').classList.add('on');
-  // Called from the person's own tap where it can be, which is what lets a phone bring up the keyboard at once.
-  try { el.focus({ preventScroll: true }); } catch (error) { /* tap the box */ }
+  el.id = 'proxy'; place(el, f); stage.appendChild(el); proxy = el;
+  // Called from the person's own tap, which is what lets a phone bring up the keyboard at once.
+  try { el.focus({ preventScroll: true }); } catch (error) { /* nothing to do */ }
 };
 const showFocus = (d) => {
-  // A choice or a date has its own sheet, opened by the tap; only typing needs the box.
-  if (d.kind !== 'text') return;
-  if (proxy && d.idx >= 0 && Number(proxy.dataset.idx) === d.idx) { $('label').textContent = d.label || ''; return; }
-  openProxy(d, d.idx);
+  // A choice or a date has its own sheet, opened by the tap; only typing needs a box. One already over this field stays.
+  if (d.kind !== 'text' || d.generic) return;
+  if (proxy && d.idx >= 0 && Number(proxy.dataset.idx) === d.idx) return;
+  const f = fields.find((x) => x.i === d.idx);
+  if (f) openProxy(f);
 };
 
 // ── a choice or a date: the phone's own sheet ──
@@ -339,9 +341,7 @@ const openSheet = (d, idx) => {
 $('sheet').addEventListener('click', (e) => { if (e.target === $('sheet')) closeSheet(); });
 
 // ── the bar ──
-for (const id of ['tab', 'enter', 'mode', 'done']) $(id).addEventListener('pointerdown', (e) => e.preventDefault());
-$('tab').onclick = () => input({ t: 'key', key: 'Tab' });
-$('enter').onclick = () => input({ t: 'key', key: 'Enter' });
+for (const id of ['mode', 'done']) $(id).addEventListener('pointerdown', (e) => e.preventDefault());
 $('mode').onclick = () => {
   mode = mode === 'touch' ? 'mouse' : 'touch'; T.mode = mode;
   try { localStorage.setItem('clikcode-handoff-mode', mode); } catch (error) { /* private browsing */ }

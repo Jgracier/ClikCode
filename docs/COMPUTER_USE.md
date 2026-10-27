@@ -111,19 +111,19 @@ simply not recorded, rather than recorded wrong.
   the page reflows the way it would on the phone instead of being shrunk, and it is put back when you
   tap Done or the link ends. Touch reaches the page as real touch
   events (tap, drag, fling and pinch are tested; long press has not been tried); a computer's browser opening the link gets real mouse, wheel and keyboard instead.
-  **Typing uses the phone's own keyboard, and it comes up when you tap a field.** ClikCode tells the
-  phone where the page's fields are on its screen (refreshed as the page moves). A tap that lands on a
-  text field puts a matching native box (text, password, email, number, a one-time code, a multi-line
-  box) at the bottom and focuses it in that same tap, which is what lets a phone bring up its keyboard
-  at once; the box carries the field's `inputmode`, `autocomplete` and Enter-key hint, so the keyboard
-  type, autofill, the password manager and the text-message code suggestion work. What changes in the
-  box is replayed in the page as key presses and text. A field inside an iframe is not tracked: when
-  focus moves into one, a plain box types into whatever the page has focused (on an iPhone that one
-  needs a second tap on the box). A `<select>` and a date, time, month, week or colour field open the
-  phone's own sheet from the tap (the tap is kept from the page, whose pop-up would open unseen on the
-  computer); the choice is set the way a person choosing it would (the page hears `input` and `change`).
-  A slider is touched in the page itself. Not tried on an iPhone yet: Safari is expected to accept the
-  focus from the tap, and if it does not, the box stays at the bottom for one more tap.
+  **Typing is into the field in the page, with the phone's own keyboard.** ClikCode tells the phone where
+  the page's fields are on its screen (refreshed as the page moves). A tap that lands on a text field
+  puts a real, invisible input exactly over that field and focuses it in that same tap, which is what
+  lets a phone bring up its keyboard at once. Nothing else is added to the screen (no bar, no box). The
+  input carries the field's type, `inputmode`, `autocomplete` and Enter-key hint, so the keyboard type,
+  autofill, the password manager and the text-message code suggestion work; what you type goes into the
+  page at the field's caret, which is where the tap put it. Tapping the same field again keeps the box
+  and brings the keyboard back; tapping away closes it. A `<select>` and a date, time, month, week or
+  colour field open the phone's own sheet from the tap (the tap is kept from the page, whose pop-up
+  would open unseen on the computer); the choice is set the way a person choosing it would (the page
+  hears `input` and `change`). A slider is touched in the page itself. A field inside an iframe (a
+  payment form from another site, a CAPTCHA) is not tracked, so tapping it does not bring up the
+  keyboard. Not tried on an iPhone yet: Safari is expected to accept the focus from the tap.
   **Touch or mouse.** The button beside Done switches, and always names the other one (**Mouse** while
   in touch, **Touch** while in mouse). The link starts in touch on a phone or tablet and in mouse on a
   computer, and remembers the last choice on that device. *Touch*: the page is laid out for the phone

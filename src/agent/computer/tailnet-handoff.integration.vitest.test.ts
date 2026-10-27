@@ -118,6 +118,14 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('shows the tab live on a 
     await tap('#name');
     // The box is in place and focused in the tap itself (a phone only opens its keyboard from the person's own touch), not after the page answers.
     expect(await phone.evaluate(() => document.activeElement && document.activeElement.id)).toBe('proxy');
+    // Nothing else is added to the screen: no bar, no visible text box. The box is invisible and sits exactly over the field.
+    for (const gone of ['#accessory', '#tab', '#enter', '#kb', '#label']) expect(await phone.locator(gone).count(), gone).toBe(0);
+    const fieldBox = (await page.locator('#name').boundingBox())!;
+    const boxOver = (await phone.locator('#proxy').boundingBox())!;
+    expect(Math.abs(boxOver.x - (stage.left + fieldBox.x))).toBeLessThan(3);
+    expect(Math.abs(boxOver.y - (stage.top + fieldBox.y))).toBeLessThan(3);
+    expect(Math.abs(boxOver.width - fieldBox.width)).toBeLessThan(3);
+    expect(Number(await phone.locator('#proxy').evaluate(el => getComputedStyle(el).opacity))).toBeLessThan(0.1);
     await wait(() => handoff<string | null>('h => h.focus && h.focus.kind'), kind => kind === 'text');
     expect(await phone.locator('#proxy').getAttribute('type')).toBe('text');
     await phone.keyboard.type('hello');
@@ -126,6 +134,14 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('shows the tab live on a 
     expect(await wait(() => page.locator('#name').inputValue(), value => value === 'hel')).toBe('hel');
     await phone.locator('#proxy').fill('replaced by autofill');
     expect(await wait(() => page.locator('#name').inputValue(), value => value === 'replaced by autofill')).toBe('replaced by autofill');
+
+    // Tapping inside the text puts the caret there, and what is typed goes in at that spot.
+    await phone.touchscreen.tap(stage.left + fieldBox.x + 3, stage.top + fieldBox.y + fieldBox.height / 2);
+    await phone.keyboard.type('X');
+    // Near the start: a tap puts the caret at the nearest letter, and what is typed goes in there rather than at the end.
+    const typedAt = await wait(() => page.locator('#name').inputValue(), value => value.includes('X'));
+    expect(typedAt.indexOf('X')).toBeLessThan(3);
+    expect(typedAt.replace('X', '')).toBe('replaced by autofill');
 
     await tap('#pw');
     await wait(() => handoff<string | null>('h => h.focus && h.focus.type'), type => type === 'password');

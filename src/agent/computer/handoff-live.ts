@@ -80,12 +80,6 @@ export const FIELDS_SCRIPT = `(() => {
   return JSON.stringify(out);
 })()`;
 
-/** After a field takes focus the caret goes to its end: what the phone types is replayed from there. */
-const CARET_TO_END = `(() => { const e = document.activeElement; try {
-  if (e && typeof e.setSelectionRange === 'function' && typeof e.value === 'string') { const n = e.value.length; e.setSelectionRange(n, n); }
-  else if (e && e.isContentEditable) { const r = document.createRange(); r.selectNodeContents(e); r.collapse(false); const s = getSelection(); s.removeAllRanges(); s.addRange(r); }
-} catch (error) {} })()`;
-
 /** Sets a select, a date or a colour from the phone's native control, the way a person choosing it would (the page hears input and change). */
 const setValueExpression = (value: string | string[], index: number): string => `((value, index) => {
   const e = (index >= 0 && (window.__clikFields || [])[index]) || document.activeElement;
@@ -276,8 +270,6 @@ export class LiveView {
     let descriptor: unknown;
     try { descriptor = JSON.parse(payload); } catch { return; }
     if (!descriptor) { this.send({ t: 'blur' }); return; }
-    const kind = (descriptor as { kind?: string }).kind;
-    if (kind === 'text') await this.cdp?.send('Runtime.evaluate', { expression: CARET_TO_END }).catch(quiet('agent/computer/handoff-live'));
     this.send({ t: 'focus', d: descriptor });
   }
 
