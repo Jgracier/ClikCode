@@ -23,6 +23,7 @@
     "test:router": "pnpm --filter @clikcode/router test",
     "test:all": "pnpm run test && pnpm run test:router",
     "test:smoke": "pnpm run build && node dist/index.js --help && node dist/index.js --human doctor",
+    "test:browser": "node scripts/test-browser.mjs",
     "test:pack": "node scripts/test-pack.mjs",
     "test:display": "node scripts/build.mjs && uv run --quiet --with pyte scripts/tui-e2e/run.py --repeat 3",
     "prepack": "node scripts/build.mjs"

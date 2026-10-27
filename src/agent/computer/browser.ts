@@ -290,8 +290,16 @@ export async function closeComputerBrowser(stateDir: string): Promise<void> {
   await connected?.browser.close().catch(quiet('agent/computer/browser'));
   try {
     const record = JSON.parse(await fs.readFile(computerHostFile(stateDir), 'utf8')) as { pid?: number };
-    if (Number.isSafeInteger(record.pid) && record.pid! > 1) process.kill(record.pid!, 'SIGTERM');
+    if (Number.isSafeInteger(record.pid) && record.pid! > 1) {
+      process.kill(record.pid!, 'SIGTERM');
+      // Return once it has really exited: a caller that removes the profile next would race its last writes.
+      for (let waited = 0; waited < 5_000 && processAlive(record.pid!); waited += 100) await new Promise(resolve => setTimeout(resolve, 100));
+    }
   } catch { /* no ClikCode-owned browser */ }
+}
+
+function processAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
 /** A tab for one check, not owned by any chat: the caller closes it. Starts the shared Chrome when it is not running. */

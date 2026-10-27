@@ -19,6 +19,10 @@ All four must pass before a change is merged. `pnpm test:smoke` and
 extension (`packages/vscode`) also needs `pnpm --dir packages/vscode type-check`,
 `pnpm --dir packages/vscode test` and `pnpm --dir packages/vscode run package`.
 
+The real-Chrome tests under `src/agent` are skipped by `pnpm test`, so a change to the browser tool
+must also pass `pnpm test:browser`. It builds `dist/` if needed and runs them all headless with no display
+or setup, and prints which tests it skipped (those that need a download or a running browser) and why.
+
 ## Making a change
 
 - Keep changes focused; one concern per pull request.
