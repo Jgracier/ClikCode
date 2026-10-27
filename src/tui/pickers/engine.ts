@@ -19,8 +19,7 @@ export function providerPickerOptions(rows: readonly IdeProvider[]): PickerOptio
   return rows.map((row) => {
     // First, so a narrow screen cuts the description, never "current".
     const current = row.current ? '· current ' : '';
-    if (row.kind === 'gateway') return { label: row.name, detail: `${current}· ${row.signedIn ? 'connected' : 'sign in with OAuth'}`, value: row.id };
-    if (row.kind === 'clikcode-local') return { label: row.name, detail: `${current}· local models on this machine`, value: row.id };
+    if (row.kind === 'gateway') return { label: row.name, detail: `${current}· ${row.signedIn ? 'connected' : 'sign in, or use a model on this computer'}`, value: row.id };
     const install = row.install === 'ready' ? `installed${row.version ? ` ${row.version}` : ''}` : row.install === 'auto' ? 'installs when chosen' : 'install it yourself';
     return { label: row.name, detail: `${current}· ${install} · ${row.integration}`, value: row.id };
   });
@@ -31,7 +30,7 @@ export async function interactiveEnginePicker(config: Conf, rl: HarnessPrompter,
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
   const provider = await chooseOption(rl, 'Choose a provider', providerPickerOptions(await providerRows(config, state, session)));
-  return provider ? selectProviderConversation(config, rl, id, providerConversationKey(provider)) : undefined;
+  return provider ? selectProviderConversation(config, rl, id, providerConversationKey(provider), { offerLocal: true }) : undefined;
 }
 
 /** The provider id a row (or the editor's `choose`) names, as

@@ -22,7 +22,7 @@ export async function chooseProvider(cx: ChooseContext, choice: IdeChoice): Prom
       // account failover uses).
       queued(async () => {
         const id = host.requireSession();
-        const moved = await selectProviderConversation(host.config, host.prompter, id, providerConversationKey(choice.provider));
+        const moved = await selectProviderConversation(host.config, host.prompter, id, providerConversationKey(choice.provider), { offerLocal: true });
         if (choice.model) {
           const { session } = await host.current(moved);
           await aiSessionCommand(moved, session.route === 'clikcode-local' ? `/model --download ${choice.model}` : `/model ${choice.model}`);

@@ -143,14 +143,14 @@ export function ProviderModelPicker(props: { mode: 'provider' | 'model'; model: 
       const matching = list.filter((item) => !query || item.label.toLowerCase().includes(query) || item.id.toLowerCase().includes(query) || item.detail?.toLowerCase().includes(query));
       const agents = (models?.agents ?? []).filter((agent) => !query || agent.name.toLowerCase().includes(query) || agent.detail?.toLowerCase().includes(query));
       const result: ListRow[] = [];
-      // Models that run on this computer or on a ClikDeploy GPU: one list, behind one row.
-      if ((drill === 'gateway' || drill === 'clikcode-local') && (props.model.revision ?? 1) >= 9) {
+      // Models that run on this computer or on a ClikDeploy GPU: one list, behind one row. A chat that runs one says which.
+      if (drill === 'gateway' && (props.model.revision ?? 1) >= 9) {
         result.push({
           key: 'hosted', onSelect: () => setHosted(true),
           render: () => (
             <div class="row">
-              <span class="row-check"><Icon name="server-process" /></span>
-              <span class="row-main"><span class="row-label">Hosted AI</span><span class="row-detail">Run a model on this computer (free, works offline) or on a ClikDeploy GPU</span></span>
+              <span class="row-check"><Icon name={models?.onThisComputer ? 'check' : 'server-process'} /></span>
+              <span class="row-main"><span class="row-label">Hosted AI</span><span class="row-detail">{models?.onThisComputer ? `Running ${models.onThisComputer} on this computer` : 'Run a model on this computer (free, works offline) or on a ClikDeploy GPU'}</span></span>
               <Icon name="chevron-right" />
             </div>
           ),

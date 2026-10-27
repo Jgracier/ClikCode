@@ -35,7 +35,7 @@ import { writeState } from './state/write.js';
 import { resolveDefaultSettings } from './state/settings.js';
 import { folderExists } from '../runtime/machine-folder.js';
 import { harnessSupportsEffort, harnessSupportsPermissionMode, localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
-import { CLIKCODE_LOCAL_LABEL, GATEWAY_LABEL } from './route.js';
+import { GATEWAY_LABEL } from './route.js';
 import { messageOrigin, sessionTranscriptMessages } from '../turn/checkpoint.js';
 import { carriedHandoffSettings } from '../turn/handoff.js';
 import { forgetNativeThread } from './native-thread.js';
@@ -182,8 +182,7 @@ const MODE_NAMES: Record<AiHarnessPermissionMode, string> = { ask: 'Ask', auto: 
 
 /** What a route or harness is called, in a sentence. */
 function providerName(settings: Pick<ChatExport['settings'], 'route' | 'nativeHarness' | 'provider'>): string {
-  if (settings.route === 'gateway') return GATEWAY_LABEL;
-  if (settings.route === 'clikcode-local') return CLIKCODE_LOCAL_LABEL;
+  if (settings.route === 'gateway' || settings.route === 'clikcode-local') return GATEWAY_LABEL;
   const harness = settings.nativeHarness ? localHarnessForCommand(settings.nativeHarness) : settings.provider ? localHarnessForProvider(settings.provider) : undefined;
   return harness?.displayName ?? settings.provider ?? 'its provider';
 }

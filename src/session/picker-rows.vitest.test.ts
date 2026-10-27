@@ -77,12 +77,31 @@ describe('signed in', () => {
     expect(await harnessSignedIn(codex, [account({ status: 'needs_login' })], true)).toBe(true);
   });
 
-  it('is on every provider row, the terminal\'s included, after the Gateway and ClikCode Local', async () => {
+  it('is on every provider row, the terminal\'s included, after the Gateway, which lists no separate ClikCode Local', async () => {
     vendor.installed.add('codex');
     const config = { get: () => undefined } as unknown as Conf;
     const rows = await providerRows(config, state([account()]), session());
-    expect(rows.slice(0, 2).map((row) => row.id)).toEqual(['gateway', 'clikcode-local']);
+    expect(rows[0]!.id).toBe('gateway');
+    // Models on this computer are hosted AI under the Gateway, not a provider of their own.
+    expect(rows.map((row) => row.id)).not.toContain('clikcode-local');
     expect(rows.find((row) => row.id === 'codex')).toMatchObject({ installed: true, install: 'ready', signedIn: true, current: true });
+  });
+});
+
+describe('which provider row is current', () => {
+  const config = { get: () => undefined } as unknown as Conf;
+  it('is the Gateway for a chat on a model on this computer, as for one on a Gateway model', async () => {
+    for (const route of ['gateway', 'clikcode-local'] as const) {
+      const rows = await providerRows(config, state([account()]), { ...session(), route } as HarnessSession);
+      expect(rows.find((row) => row.id === 'gateway')?.current).toBe(true);
+      expect(rows.filter((row) => row.current).map((row) => row.id)).toEqual(['gateway']);
+    }
+  });
+
+  it('is the harness, and not the Gateway, for a chat on a vendor harness', async () => {
+    const rows = await providerRows(config, state([account()]), session());
+    expect(rows.find((row) => row.id === 'gateway')?.current).toBe(false);
+    expect(rows.find((row) => row.id === 'codex')?.current).toBe(true);
   });
 });
 

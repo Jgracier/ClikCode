@@ -197,6 +197,8 @@ export interface IdeModels {
   /** The terminal offers "Enter a model ID…" here. */
   custom: boolean;
   error?: string;
+  /** The Gateway only: this chat runs a model on this computer (hosted AI, revision 9). Its name, for the Hosted AI row. */
+  onThisComputer?: string;
 }
 
 export interface IdeConversation {

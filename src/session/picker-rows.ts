@@ -21,7 +21,7 @@ import {
 } from '../runtime/lazy-bridge.js';
 import type { IdeAccount, IdeProvider } from '../ide/protocol.js';
 import type { HarnessSession, HarnessState } from './model.js';
-import { CLIKCODE_LOCAL_LABEL, GATEWAY_LABEL, isClikCodeAgent, isGatewayService } from './route.js';
+import { GATEWAY_LABEL, isClikCodeAgent, isGatewayService } from './route.js';
 import { compareProviders, integrationLabel } from './options.js';
 
 export const GATEWAY_ID = 'gateway';
@@ -35,8 +35,9 @@ export async function harnessSignedIn(harness: AiLocalHarnessDefinition, account
   return installed && hasAuthEvidence(harness) && await authEvidencePresent(harness, {}).catch(() => false);
 }
 
-/** Every provider /provider lists, in its order: the ClikDeploy Gateway,
- * ClikCode Local, then every harness that runs turns (compareProviders). */
+/** Every provider /provider lists, in its order: the ClikDeploy Gateway, then every harness that runs turns
+ * (compareProviders). Models that run on this computer are not a provider of their own: they are hosted AI under the
+ * Gateway (hosted-models/), so a chat on one is on the Gateway here. */
 export async function providerRows(config: Conf, state: HarnessState, session: HarnessSession | undefined): Promise<IdeProvider[]> {
   const harnesses = allLocalHarnesses().filter((harness) => harnessCanRunTurns(harness));
   const inspected = await Promise.all(harnesses.map(async (harness) => {
@@ -49,13 +50,7 @@ export async function providerRows(config: Conf, state: HarnessState, session: H
   return [
     {
       id: GATEWAY_ID, kind: 'gateway', name: GATEWAY_LABEL, installed: true, install: 'ready',
-      signedIn: Boolean(getApiKeyForUrl(config, getApiUrl(config))), current: session?.route === 'gateway', choosesModel: true,
-    },
-    // Always listed, engine or not: choosing it is how a user learns what it
-    // is, and a turn on it says plainly when this build cannot serve one yet.
-    {
-      id: LOCAL_ID, kind: 'clikcode-local', name: CLIKCODE_LOCAL_LABEL, installed: true, install: 'ready',
-      signedIn: true, current: session?.route === 'clikcode-local', choosesModel: true,
+      signedIn: Boolean(getApiKeyForUrl(config, getApiUrl(config))), current: isClikCodeAgent(session), choosesModel: true,
     },
     ...inspected.map(({ harness, inspection, signedIn }): IdeProvider => ({
       id: harness.command, kind: 'harness', name: harness.displayName, installed: inspection.installed,
