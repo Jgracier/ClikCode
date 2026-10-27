@@ -571,7 +571,8 @@ async function driveWorkerTurn(
             rl.stopSettled();
             return;
           case 'submit-rejected':
-            // The turn-error and waiting-stop that follow carry it.
+            // The turn-error and waiting-stop that follow carry it. A refusal to retry has none: the worker is going away and did not start the turn.
+            if (event.retry) finish('worker-replaced', () => rejectTurn(new Error('The conversation\'s worker was being replaced, so the message was not sent. Send it again.')));
             return;
           case 'queue-changed':
           case 'retire-declined':

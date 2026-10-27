@@ -39,7 +39,8 @@ export function createWorkerQueue(ctx: WorkerContext) {
   /** Starts a turn unless one is already running. Synchronous from the check
    * to the flag, so nothing can slip a second turn in between. */
   const startTurn = (command: Extract<ClientCommand, { type: 'submit' }>): boolean => {
-    if (ctx.turnRunning) return false;
+    // A shutting-down worker starts nothing: what is queued waits for the worker that replaces it.
+    if (ctx.turnRunning || ctx.shuttingDown) return false;
     ctx.turnRunning = true;
     ctx.turnStartedAt = new Date().toISOString();
     void ctx.onTurnRunningChange?.(ctx.turnStartedAt);
@@ -132,6 +133,9 @@ export function createWorkerQueue(ctx: WorkerContext) {
     // window that sent it says so, in a line before its answer (a notice
     // from here was drawn under that answer).
     if (!command.queuedTurnId) await ctx.resumeWaiter.cancel();
+    // The shutdown began while this was being read: the turn would run on a vendor that is being closed and be lost. Refused, so the sender takes it
+    // to the replacement (worker-commands.ts answers `submit-rejected` with `retry`).
+    if (ctx.shuttingDown) throw new Error('This conversation\'s worker is being replaced.');
     if (startTurn(command)) return;
     let queuedTurnId = command.queuedTurnId;
     if (!queuedTurnId) {

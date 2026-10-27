@@ -146,14 +146,20 @@ export function createCommandHandler(ctx: WorkerContext) {
     if (connection.attaching) await connection.attaching.catch(quiet('worker/worker-commands'));
     if (!connection.attached) return;
     if (command.type === 'submit') {
+      // The shutdown has begun: a turn started now dies with the vendor it is closing, and nobody is told. The sender is, and takes the prompt to the
+      // worker that replaces this one (it attaches to a new worker when none is running).
+      if (ctx.shuttingDown) { sendEvent(socket, { type: 'submit-rejected', message: 'This conversation\'s worker is being replaced.', retry: true }); return; }
       // Counted from acceptance to the answer: a Stop that comes in between
       // is the turn's, kept until it starts (worker-live-commands.ts).
       ctx.submitsInFlight++;
       try { await ctx.queue.handleSubmit(socket, command); } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        sendEvent(socket, { type: 'submit-rejected', message });
-        sendEvent(socket, { type: 'turn-error', message });
-        sendEvent(socket, { type: 'waiting-stop' });
+        if (ctx.shuttingDown) sendEvent(socket, { type: 'submit-rejected', message, retry: true });
+        else {
+          sendEvent(socket, { type: 'submit-rejected', message });
+          sendEvent(socket, { type: 'turn-error', message });
+          sendEvent(socket, { type: 'waiting-stop' });
+        }
       } finally {
         ctx.submitsInFlight--;
         // The submit ended without a turn to stop (queued, rejected): the Stop

@@ -45,7 +45,7 @@ function build(options: { sessionReadMs?: number; sessionFails?: boolean } = {})
     sessionId: 's1', config: {}, observer, token: 't', agentSession: { notifications: [] },
     turnRunning: false, activeQueuedTurnId: undefined, draining: false, stalledQueuedTurnId: undefined, idleTimer: undefined,
     activeController: undefined, activeLiveInput: undefined, activeSubmissions: undefined, activeRestoreDraft: undefined,
-    submitsInFlight: 0, pendingCancel: undefined, stopAnnounced: false, resumingTurn: false, retireWhenIdle: false,
+    submitsInFlight: 0, shuttingDown: false, pendingCancel: undefined, stopAnnounced: false, resumingTurn: false, retireWhenIdle: false,
     vendorBackground: { busy: false, settled: async () => undefined, saveSuperseded: async () => undefined, userTurnEnded: () => undefined },
     outOfTurn: { relay: () => undefined, active: false, settle: async () => undefined },
     resumeWaiter: { pending: false, cancel: async () => undefined, check: async () => undefined },
@@ -285,5 +285,41 @@ describe('a Stop while sub-agents are running', () => {
     await send({ type: 'cancel', restoreDraft: false, origin: { client: 'scripted', pid: 1, trigger: 'abort-signal' } });
     expect(ctx.activeController!.signal.aborted).toBe(true);
     await submitted;
+  });
+});
+
+describe('a prompt that reaches a worker that is being replaced', () => {
+  it('is refused with a retry and never started, so its sender takes it to the replacement', async () => {
+    const { ctx, send, alice, types } = build();
+    ctx.shuttingDown = true;
+    await send({ type: 'submit', text: 'hello', echo: true } as never);
+    expect(alice.events).toContainEqual({ type: 'submit-rejected', message: expect.stringContaining('being replaced'), retry: true });
+    expect(types()).not.toContain('turn-error');
+    expect(types()).not.toContain('waiting-stop');
+    expect(turn.signals).toHaveLength(0);
+    expect(ctx.turnRunning).toBe(false);
+    expect(ctx.submitsInFlight).toBe(0);
+  });
+
+  it('is refused the same way when the shutdown begins while the submit is being read', async () => {
+    const { ctx, send, alice, types } = build({ sessionReadMs: 40 });
+    const submitted = send({ type: 'submit', text: 'hello', echo: true, queuedTurnId: 'q1' } as never);
+    await settle(5);
+    ctx.shuttingDown = true;
+    await submitted;
+    expect(alice.events.some((event) => event.type === 'submit-rejected' && 'retry' in event && event.retry === true)).toBe(true);
+    expect(types()).not.toContain('turn-error');
+    expect(types()).not.toContain('waiting-stop');
+    expect(turn.signals).toHaveLength(0);
+    expect(ctx.turnRunning).toBe(false);
+  });
+
+  it('still starts the turn when nothing is shutting down', async () => {
+    const { ctx, send, types } = build();
+    turn.run = async () => undefined;
+    await send({ type: 'submit', text: 'hello', echo: true } as never);
+    await waitForTurnEnd(types);
+    expect(turn.signals).toHaveLength(1);
+    expect(ctx.shuttingDown).toBe(false);
   });
 });

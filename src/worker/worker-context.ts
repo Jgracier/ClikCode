@@ -80,6 +80,9 @@ export interface WorkerContext {
    * `cancel` that finds no turn while one is in flight is kept in
    * `pendingCancel` and applied the moment the turn starts. */
   submitsInFlight: number;
+  /** The shutdown has begun. A prompt that reaches the worker from here on is refused (`submit-rejected`, `retry`) so its sender takes it to the
+   * replacement: started here, it would be lost with the vendor this shutdown is closing. */
+  shuttingDown: boolean;
   /** A Stop that arrived before the turn it is for had started. */
   pendingCancel: { restoreDraft: Socket | undefined; askers: Set<Socket> } | undefined;
   /** The running turn's Stop has been accepted and announced (`stopping`). */

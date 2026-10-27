@@ -138,7 +138,7 @@ export async function runSessionWorker(sessionId: string, options: { warm?: bool
     spawnedBuild: currentWorkerBuild(),
     turnRunning: false, activeQueuedTurnId: undefined, draining: false, lastTurnStopped: false, queuedUserTurn: false, stalledQueuedTurnId: undefined,
     idleTimer: undefined, activeController: undefined, activeLiveInput: undefined, activeSubmissions: undefined,
-    activeRestoreDraft: undefined, submitsInFlight: 0, pendingCancel: undefined, stopAnnounced: false, resumingTurn: false, retireWhenIdle: false, recordWrite: Promise.resolve(),
+    activeRestoreDraft: undefined, submitsInFlight: 0, shuttingDown: false, pendingCancel: undefined, stopAnnounced: false, resumingTurn: false, retireWhenIdle: false, recordWrite: Promise.resolve(),
     warming: undefined,
   } as Omit<WorkerContext, 'vendorBackground' | 'outOfTurn' | 'resumeWaiter' | 'keepWarm' | 'io' | 'idle' | 'queue' | 'runTurn' | 'shutdown' | 'server'> as WorkerContext;
   ctx.io = createWorkerIo(ctx);

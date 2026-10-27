@@ -17,9 +17,11 @@ import { sessionHarness, slashRouteContextFor } from '../tui/slash/context.js';
 import { commandDuringTurn, slashLineIsCommand } from '../tui/slash/queue.js';
 import type { InteractiveSlashOutcome } from '../tui/slash/interactive-keys.js';
 import type { ExhaustionRetryGuard } from '../tui/pickers/resume-in.js';
-import { messageOf, TurnFailed } from './bridge-support.js';
+import { messageOf, TurnFailed, WorkerRetiring } from './bridge-support.js';
 import { createSlashHost } from './bridge-slash-host.js';
 import type { BridgeHost } from './bridge-host.js';
+
+const RETIRING_RETRY_MS = [150, 300, 600, 1_200, 2_400] as const;
 
 export class BridgeTurns {
   /** The same-provider retry after running out: once per interrupted turn. */
@@ -178,13 +180,25 @@ export class BridgeTurns {
     }
     this.turnStarted = true;
     this.host.channel.send({ type: 'turn-start', sessionId: targetId, ...(turn.echo ? { prompt } : {}), ...(turn.queuedTurnId ? { queuedTurnId: turn.queuedTurnId } : {}) });
-    try {
-      await new Promise<void>((resolve, reject) => {
-        this.host.link.turnWaiter = { resolve, reject };
-        client.send({ type: 'submit', text: prompt, echo: turn.echo, ...(turn.queuedTurnId ? { queuedTurnId: turn.queuedTurnId } : {}) });
-      });
-    } catch (error) {
-      throw error instanceof TurnFailed ? error : new TurnFailed(messageOf(error));
+    // A worker being replaced for a newer build refuses the prompt (nothing was started): it goes to the worker that replaces it. The old one is
+    // let go first, and the delay lets it finish exiting so the next attach starts a new worker instead of finding it.
+    let current = client;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await new Promise<void>((resolve, reject) => {
+          this.host.link.turnWaiter = { resolve, reject };
+          current.send({ type: 'submit', text: prompt, echo: turn.echo, ...(turn.queuedTurnId ? { queuedTurnId: turn.queuedTurnId } : {}) });
+        });
+        return;
+      } catch (error) {
+        if (error instanceof WorkerRetiring && attempt < RETIRING_RETRY_MS.length) {
+          this.host.link.detach();
+          await new Promise<void>((resolve) => { setTimeout(resolve, RETIRING_RETRY_MS[attempt]); });
+          current = await this.host.link.workerFor(targetId);
+          continue;
+        }
+        throw error instanceof TurnFailed || error instanceof WorkerRetiring ? error : new TurnFailed(messageOf(error));
+      }
     }
   }
 
