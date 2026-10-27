@@ -129,7 +129,10 @@ simply not recorded, rather than recorded wrong.
   has said where its fields moved to. A field the page has switched off has no input over it. Checkboxes,
   radio buttons and buttons are tapped in the picture like anything else. A field inside an iframe (a
   payment form from another site, a CAPTCHA) is not tracked, so it gets no input; a computer's browser
-  can still type into it with its own keyboard. A password's value is never read back from the page. Not
+  can still type into it with its own keyboard. Such a frame runs in a process of its own, and Chrome
+  does not pass emulated touch into it (a CAPTCHA checkbox ignores a touch tap, and takes a click), so a
+  finger that lands on one waits: lifted without moving it is a click at that spot, and dragged it scrolls
+  the page itself, one for one with the finger. A frame from the same site takes touch as any page does. A password's value is never read back from the page. Not
   tried on an iPhone yet.
   **Touch or mouse.** The button beside Done switches, and always names the other one (**Mouse** while
   in touch, **Touch** while in mouse). The link starts in touch on a phone or tablet and in mouse on a
