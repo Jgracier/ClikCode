@@ -14,7 +14,7 @@ export { BROWSER_CHANNELS, launchFirst } from './browser-launch.js';
 export async function runComputerHost(stateDir: string): Promise<void> {
   const profile = computerProfile(stateDir);
   await fs.mkdir(profile, { recursive: true, mode: 0o700 });
-  await fs.unlink(hostStatusFile(stateDir)).catch(() => undefined);
+  await fs.unlink(hostStatusFile(stateDir)).catch(quiet('agent/computer/browser-host'));
   await writeHostStatus(stateDir, { pid: process.pid, state: 'starting' });
   const { chromium } = await import('playwright-core');
   const headless = shouldRunHeadless({ setting: await headlessSetting(stateDir) });
@@ -47,7 +47,7 @@ export async function runComputerHost(stateDir: string): Promise<void> {
     process.off('SIGINT', stop);
   } finally {
     try { if (await fs.readFile(hostFile, 'utf8') === record) await fs.unlink(hostFile); } catch { /* already gone */ }
-    await fs.unlink(hostStatusFile(stateDir)).catch(() => undefined);
+    await fs.unlink(hostStatusFile(stateDir)).catch(quiet('agent/computer/browser-host'));
     await context.close().catch(quiet('agent/computer/browser-host'));
   }
 }

@@ -11,6 +11,7 @@
  *   ~/.local/bin/cua-driver                        Linux: symlink into current/
  * macOS keeps Cua's .app-in-/Applications layout and the permission identity that goes with it, so there Cua's own
  * installer script does the placing, pinned to the version found here (a pin needs no API call either). */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rename, rmdir, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises';
@@ -216,7 +217,7 @@ async function linkVisible(deps: InstallDeps, target: DriverTarget): Promise<str
   if (deps.platform === 'win32') return undefined; // Windows finds it through the junction; ClikCode does not need PATH.
   const link = join(deps.binDir, target.binary);
   const via = join(packagesDir(deps), 'current', target.binary);
-  const existing = await lstat(link).catch(() => undefined);
+  const existing = await lstat(link).catch(quiet('agent/computer/driver-install'));
   if (existing && !existing.isSymbolicLink()) return `${link} is a real file, so it was left alone; ClikCode uses ${via}`;
   await mkdir(deps.binDir, { recursive: true });
   await rm(link, { force: true });
