@@ -17,6 +17,12 @@ import type { LocalModelHooks } from '../../agent/models/for-session.js';
 import { diagnostic, quiet } from '../../runtime/lifecycle-log.js';
 import type { HarnessSession } from '../../session/model.js';
 import { TERMINAL } from '../../tui/active-terminal.js';
+import type { TerminalHarnessPrompter } from '../../tui/prompter.js';
+import {
+  allowBackgroundDownloads, modelDownloads, onDownloadOutcome, onModelDownload, type ModelDownload,
+} from '../../local-models/downloads.js';
+import { readState } from '../../session/state/read.js';
+import chalk from 'chalk';
 
 /** Sessions this process has taken a lease for, so letting go costs
  * nothing for the (usual) session that never had one. */
@@ -24,14 +30,61 @@ const held = new Set<string>();
 /** Notices already shown, per session: the engine repeats its remark on
  * every cold start, and once is enough to know a model is slow here. */
 
-/** One progress update as a line: a download or runtime fetch with its
- * percentage, everything else as the engine words it. */
+/** One progress update as a line: a download or runtime fetch is its own message with the percentage after it, everything else
+ * as the engine words it. */
 export function localProgressText(update: LocalModelProgress): string {
   if ((update.stage === 'download' || update.stage === 'runtime') && update.totalBytes) {
     const percent = Math.min(100, Math.floor(((update.bytes ?? 0) / update.totalBytes) * 100));
-    return `${update.stage === 'download' ? 'downloading' : 'fetching llama.cpp'} ${update.message} ${percent}%`;
+    // The message is already the whole phrase ("downloading gemma-4-12b-it-Q4_0.gguf (6.7 GB)", or "downloading llama.cpp …" for
+    // the runtime): a prefix here said "downloading downloading".
+    return `${update.message} ${percent}%`;
   }
   return update.message;
+}
+
+/** A download as the footer says it: the model and how far along, short enough to share the line with the provider and directory. */
+export function downloadFooterText(download: Pick<ModelDownload, 'label' | 'progress'>): string {
+  const progress = download.progress;
+  const percent = progress?.totalBytes ? Math.min(100, Math.floor(((progress.bytes ?? 0) / progress.totalBytes) * 100)) : undefined;
+  return `↓ ${download.label}${percent === undefined ? '…' : ` ${percent}%`}`;
+}
+
+/** Every download this process runs, in `terminal`'s footer for as long as it runs. Per window, not per chat: it is still there
+ * after a switch to another chat. Returns what ends it. */
+export function followModelDownloads(terminal: Pick<TerminalHarnessPrompter, 'setTransfer' | 'activity' | 'render' | 'currentSession'>): () => void {
+  const show = (): void => terminal.setTransfer(modelDownloads().map(downloadFooterText).join('  ·  ') || undefined);
+  show();
+  const withdraw = allowBackgroundDownloads();
+  const stopProgress = onModelDownload(show);
+  const stopOutcomes = onDownloadOutcome((outcome) => {
+    // In whichever chat is open: it names the chat it is about.
+    terminal.activity(outcome.level === 'error' ? chalk.red(outcome.text) : chalk.green(outcome.text));
+    // The chat it moved is the one shown: the footer says the new model now.
+    if (!outcome.switched || terminal.currentSession?.id !== outcome.sessionId) return;
+    void readState({ transcripts: [outcome.sessionId] }).then((state) => {
+      const fresh = state.sessions.find((item) => item.id === outcome.sessionId);
+      if (fresh && terminal.currentSession?.id === fresh.id) terminal.render(fresh);
+    }).catch(quiet('commands/ai/local-model'));
+  });
+  return () => { stopOutcomes(); stopProgress(); withdraw(); terminal.setTransfer(undefined); };
+}
+
+/** The same for the editor: the transfer on every chat's busy line, and a notice and a fresh session in the chat that asked. */
+export function followModelDownloadsInEditor(
+  send: (event: { type: 'busy'; label?: string } | { type: 'notice'; message: string; level: 'info' | 'error' }) => void,
+  chat: { sessionId: () => string | undefined; refresh: () => Promise<void> },
+): () => void {
+  const withdraw = allowBackgroundDownloads();
+  const stopProgress = onModelDownload(() => {
+    const text = modelDownloads().map(downloadFooterText).join('  ·  ');
+    send(text ? { type: 'busy', label: text } : { type: 'busy' });
+  });
+  const stopOutcomes = onDownloadOutcome((outcome) => {
+    if (outcome.sessionId !== chat.sessionId()) return;
+    send({ type: 'notice', message: outcome.text, level: outcome.level });
+    if (outcome.switched) void chat.refresh().catch(quiet('commands/ai/local-model'));
+  });
+  return () => { stopOutcomes(); stopProgress(); withdraw(); };
 }
 
 /** Where progress shows for a surface that is not this terminal: the

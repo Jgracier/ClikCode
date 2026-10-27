@@ -46,7 +46,7 @@ export function statusText(this: TerminalHarnessPrompter, width: number): string
   const effort = harness && harnessSupportsEffort(harness) ? session.effort : undefined;
   // The title is not on this line: it sits on the rule under the composer,
   // so a long one never truncates the provider, model or directory.
-  const lead = [this.remoteMachineName, provider, [model, effort].filter(Boolean).join(' ')].filter(Boolean).join('  •  ');
+  const lead = [this.remoteMachineName, provider, [model, effort].filter(Boolean).join(' '), this.transferLabel].filter(Boolean).join('  •  ');
   const context = visiblePathTail(path, Math.max(12, width - terminalCellWidth(lead) - 5));
   return visibleSlice([lead, context].filter(Boolean).join('  •  '), width);
 }

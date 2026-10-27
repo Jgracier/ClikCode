@@ -560,6 +560,15 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * the interactive loop's way to stop waiting (one press, then cleared). */
   idleEscape?: () => void;
 
+  /** Work this window runs that no chat owns (a model being downloaded), as one segment of the line under the composer: it stays
+   * while the chat shown changes, and the composer stays free. */
+  transferLabel: string | undefined;
+  setTransfer(label?: string): void {
+    if (this.transferLabel === label) return;
+    this.transferLabel = label;
+    this.schedulePaint();
+  }
+
   usage(label?: string, resetLabel?: string): void {
     if (this.usageLabel === label && this.usageResetLabel === resetLabel) return;
     this.usageLabel = label;

@@ -10,6 +10,7 @@ const engine = vi.hoisted(() => ({
   ensureLocalModel: vi.fn(),
   releaseLocalModel: vi.fn(async () => undefined),
   localModelChoices: vi.fn(),
+  prefetchLocalModel: vi.fn(),
 }));
 const files = vi.hoisted(() => ({ missingBytes: vi.fn(async () => 0) }));
 // The Gateway's own list, which a name typed on a chat running a model on this computer is checked against.
@@ -26,6 +27,7 @@ vi.mock('../../local-models/index', async (importOriginal) => ({
   ensureLocalModel: engine.ensureLocalModel,
   releaseLocalModel: engine.releaseLocalModel,
   localModelChoices: engine.localModelChoices,
+  prefetchLocalModel: engine.prefetchLocalModel,
   releaseLocalModelsOnExit: () => undefined,
 }));
 
@@ -99,28 +101,31 @@ describe('before a turn', () => {
       updateWaitingLabel: (text: string) => { calls.push(`label ${text}`); label = text; },
     } as never;
     engine.ensureLocalModel.mockImplementation(async (options: { progress: (update: unknown) => void }) => {
-      options.progress({ stage: 'download', message: 'model.gguf', bytes: 50, totalBytes: 200 });
+      options.progress({ stage: 'download', message: 'downloading model.gguf (200 B)', bytes: 50, totalBytes: 200 });
       return { baseUrl: 'http://127.0.0.1:1/v1', model: 'qwen3.5-4b', contextWindow: 8192 };
     });
     try {
       await ensureLocalModelForTurn(session({ model: 'qwen3.5-4b' }));
     } finally { TERMINAL.active = undefined; }
-    expect(calls).toEqual(['label downloading model.gguf 25%', 'label thinking']);
+    expect(calls).toEqual(['label downloading model.gguf (200 B) 25%', 'label thinking']);
   });
 
   it('sends its progress to the surface that asked (the editor\'s busy line), not to stderr', async () => {
     engine.ensureLocalModel.mockImplementation(async (options: { progress: (update: unknown) => void }) => {
-      options.progress({ stage: 'download', message: 'model.gguf', bytes: 150, totalBytes: 200 });
+      options.progress({ stage: 'download', message: 'downloading model.gguf (200 B)', bytes: 150, totalBytes: 200 });
       return { baseUrl: 'http://127.0.0.1:1/v1', model: 'qwen3.5-4b', contextWindow: 8192 };
     });
     const shown: string[] = [];
     await ensureLocalModelForTurn(session({ model: 'qwen3.5-4b' }), (label) => shown.push(label));
-    expect(shown).toEqual(['downloading model.gguf 75%']);
+    expect(shown).toEqual(['downloading model.gguf (200 B) 75%']);
     expect(process.stderr.write).not.toHaveBeenCalled();
   });
 
-  it('words download progress as a percentage', () => {
-    expect(localProgressText({ stage: 'download', message: 'Qwen3.5-4B-Q4_K_M.gguf', bytes: 50, totalBytes: 200 })).toBe('downloading Qwen3.5-4B-Q4_K_M.gguf 25%');
+  it('words download progress as its own message and a percentage: "downloading" once, for the weights and for the runtime', () => {
+    expect(localProgressText({ stage: 'download', message: 'downloading gemma-4-12b-it-Q4_0.gguf (6.7 GB)', bytes: 1_072_000_000, totalBytes: 6_700_000_000 }))
+      .toBe('downloading gemma-4-12b-it-Q4_0.gguf (6.7 GB) 16%');
+    expect(localProgressText({ stage: 'runtime', message: 'downloading llama.cpp b11194 (vulkan, 90.0 MB)', bytes: 45_000_000, totalBytes: 90_000_000 }))
+      .toBe('downloading llama.cpp b11194 (vulkan, 90.0 MB) 50%');
     expect(localProgressText({ stage: 'start', message: 'loading Qwen3.5 4B… 12s' })).toBe('loading Qwen3.5 4B… 12s');
   });
 });
@@ -290,5 +295,124 @@ describe('clikcode send --harness clikcode-local', () => {
   it('continues a chat only on the route it is on', async () => {
     await stored(session({ id: 'aaaaaaaa-1111', route: 'gateway', messages: [{ role: 'user', content: 'hi' }] } as Partial<HarnessSession>));
     await expect(startOrResumeChat({ harness: 'clikcode-local', chat: 'aaaaaaaa-1111' })).rejects.toThrow(/runs on ClikDeploy Gateway/);
+  });
+});
+
+
+describe('/model --download while the window is free to do other things', () => {
+  // A chat that has been used: one with no messages is a draft that lives only in this process, which two writes at once do not merge.
+  const GATEWAY = { route: 'gateway' as const, provider: 'gateway', model: 'claude-sonnet-5.5', messages: [{ role: 'user' as const, content: 'hello' }] };
+  let outcomes: Array<{ sessionId: string; switched: boolean; level: string; text: string }>;
+  let stopOutcomes: () => void;
+  let withdraw: () => void;
+  let release: (() => void) | undefined;
+  let failWith: ((error: Error) => void) | undefined;
+
+  beforeEach(async () => {
+    const { onDownloadOutcome, allowBackgroundDownloads } = await import('../../local-models/downloads');
+    outcomes = [];
+    stopOutcomes = onDownloadOutcome((outcome) => outcomes.push(outcome));
+    withdraw = allowBackgroundDownloads();
+    files.missingBytes.mockResolvedValue(6_700_000_000);
+    engine.prefetchLocalModel.mockReset();
+    engine.prefetchLocalModel.mockImplementation(() => new Promise<void>((resolve, reject) => { release = resolve; failWith = reject; }));
+  });
+  afterEach(async () => {
+    stopOutcomes(); withdraw();
+    // A download a test left running must not be the next test's.
+    const { modelDownloads } = await import('../../local-models/downloads');
+    for (const job of modelDownloads()) { job.cancel(); await job.done.catch(() => undefined); }
+    release = undefined; failWith = undefined;
+  });
+
+  const waitFor = async (check: () => boolean | Promise<boolean>): Promise<void> => {
+    const deadline = Date.now() + 5_000;
+    while (!await check()) { if (Date.now() > deadline) throw new Error('timed out'); await new Promise((resolve) => setTimeout(resolve, 10)); }
+  };
+
+  it('returns at once, leaves the chat exactly as it was while the model downloads, and moves it when the files are there', async () => {
+    await stored(session(GATEWAY));
+    const started = Date.now();
+    await aiSessionCommand('s1', '/model --download qwen3.5-9b');
+    // Nothing waited for the download: the command is over, and the chat is where it was.
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect((await readState()).sessions[0]!).toMatchObject({ route: 'gateway', model: 'claude-sonnet-5.5' });
+    expect(outcomes.map((outcome) => [outcome.switched, outcome.level])).toEqual([[false, 'info']]);
+    expect(outcomes[0]!.text).toMatch(/^Downloading Qwen3\.5 9B \(6\.7 GB\) in the background/);
+    expect(engine.ensureLocalModel).not.toHaveBeenCalled();
+
+    await waitFor(() => release !== undefined);
+    release!();
+    await waitFor(() => outcomes.length === 2);
+    expect(outcomes[1]).toMatchObject({ switched: true, level: 'info', sessionId: 's1' });
+    expect(outcomes[1]!.text).toContain('is downloaded');
+    expect((await readState()).sessions[0]!).toMatchObject({ route: 'clikcode-local', model: 'qwen3.5-9b' });
+    // The first turn loads it, on that turn's own wait: the download did not start a server or take a lease.
+    expect(engine.ensureLocalModel).not.toHaveBeenCalled();
+  });
+
+  it('leaves the chat as it was when the download fails, and says the fetch resumes', async () => {
+    await stored(session(GATEWAY));
+    await aiSessionCommand('s1', '/model --download qwen3.5-9b');
+    await waitFor(() => failWith !== undefined);
+    failWith!(new Error('Download failed (HTTP 503) for https://huggingface.co/x.'));
+    await waitFor(() => outcomes.length === 2);
+    expect(outcomes[1]).toMatchObject({ switched: false, level: 'error' });
+    expect(outcomes[1]!.text).toMatch(/failed: Download failed \(HTTP 503\).*resumes from where it stopped.*as it was/);
+    expect((await readState()).sessions[0]!).toMatchObject({ route: 'gateway', model: 'claude-sonnet-5.5' });
+  });
+
+  it('does not pull the chat back when the user moved it while the model downloaded', async () => {
+    await stored(session(GATEWAY));
+    await aiSessionCommand('s1', '/model --download qwen3.5-9b');
+    await waitFor(() => release !== undefined);
+    // Meanwhile the user chose another model for the chat.
+    const state = await readState();
+    state.sessions[0]!.model = 'claude-opus-5.5';
+    await writeState(state);
+    release!();
+    await waitFor(() => outcomes.length === 2);
+    expect(outcomes[1]).toMatchObject({ switched: false, level: 'info' });
+    expect(outcomes[1]!.text).toMatch(/downloaded.*changed while it downloaded.*left as it is: \/model qwen3\.5-9b moves it/);
+    expect((await readState()).sessions[0]!).toMatchObject({ route: 'gateway', model: 'claude-opus-5.5' });
+  });
+
+  it('is one download for two chats asking for the same model, and each chat moves when it is done', async () => {
+    await stored(session({ ...GATEWAY, id: 's1' }));
+    await stored(session({ ...GATEWAY, id: 's2', conversationId: 's2' }));
+    await aiSessionCommand('s1', '/model --download qwen3.5-9b');
+    await aiSessionCommand('s2', '/model --download qwen3.5-9b');
+    await waitFor(() => release !== undefined);
+    expect(engine.prefetchLocalModel).toHaveBeenCalledTimes(1);
+    release!();
+    await waitFor(() => outcomes.filter((outcome) => outcome.switched).length === 2);
+    expect((await readState()).sessions.map((chat) => [chat.id, chat.route, chat.model])).toEqual([['s1', 'clikcode-local', 'qwen3.5-9b'], ['s2', 'clikcode-local', 'qwen3.5-9b']]);
+  });
+
+  it('moves a new chat with nothing in it too -- the model chosen before the first message', async () => {
+    await stored(session({ route: 'gateway', provider: 'gateway', model: 'claude-sonnet-5.5' }));
+    await aiSessionCommand('s1', '/model --download qwen3.5-9b');
+    await waitFor(() => release !== undefined);
+    expect((await readState()).sessions[0]!).toMatchObject({ route: 'gateway', model: 'claude-sonnet-5.5' });
+    release!();
+    await waitFor(() => outcomes.some((outcome) => outcome.switched));
+    expect((await readState()).sessions[0]!).toMatchObject({ route: 'clikcode-local', model: 'qwen3.5-9b' });
+  });
+
+  it('moves a chat to a model already on this machine at once, from any route, with nothing downloaded', async () => {
+    files.missingBytes.mockResolvedValue(0);
+    await stored(session(GATEWAY));
+    await aiSessionCommand('s1', '/model --download qwen3.5-9b');
+    expect(engine.prefetchLocalModel).not.toHaveBeenCalled();
+    expect((await readState()).sessions[0]!).toMatchObject({ route: 'clikcode-local', model: 'qwen3.5-9b' });
+  });
+
+  it('waits for the download where nothing outlives the command (a script), as it always did', async () => {
+    withdraw();
+    await stored(session({ ...GATEWAY, route: 'clikcode-local', provider: 'clikcode-local', model: 'qwen3.5-4b' }));
+    await aiSessionCommand('s1', '/model --download qwen3.5-9b');
+    expect(engine.prefetchLocalModel).not.toHaveBeenCalled();
+    expect(engine.ensureLocalModel).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'qwen3.5-9b', allowDownload: true }));
+    expect(outcomes).toEqual([]);
   });
 });

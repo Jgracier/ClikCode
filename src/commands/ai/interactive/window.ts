@@ -4,7 +4,7 @@ import { currentWorkerBuild } from '../../../worker/registry.js';
 import { isClikCodeAgent, isGatewayService } from '../../../session/route.js';
 import { gatewayConversationUsageLabel, gatewayCreditLabel } from '../../../gateway/credit-label.js';
 import { conversationCost } from '../../../tui/slash/usage-report.js';
-import { reconcileLocalModelLeases } from '../local-model.js';
+import { followModelDownloads, reconcileLocalModelLeases } from '../local-model.js';
 import { resumeWaitLabel } from '../../../turn/usage-exhausted.js';
 import Conf from 'conf';
 import { createInterface } from 'node:readline/promises';
@@ -134,7 +134,14 @@ export async function openWindow(config: Conf, startId: string): Promise<ChatWin
   const refreshUsage = createUsageRefresher(config, terminal);
   // A wait on a lock long enough to notice is told here, with who holds it: this window's send
   // stands still otherwise, with nothing saying why.
-  const stopLockNotices = terminal ? onLockWait((message) => { if (TERMINAL.active === terminal) terminal.activity(chalk.yellow(message)); }) : undefined;
+  // What runs beside the chats, told in this window whichever chat is open: a lock wait on the transcript, a download in the footer.
+  const stopLockNotices = terminal ? ((): (() => void) => {
+    const stops = [
+      onLockWait((message) => { if (TERMINAL.active === terminal) terminal.activity(chalk.yellow(message)); }),
+      followModelDownloads(terminal),
+    ];
+    return () => { for (const stop of stops) stop(); };
+  })() : undefined;
   refreshUsage(session, state);
   const { beginBuildReplace, releaseWindow } = startBuildWatch(terminal, ref, refreshUsage, stopLockNotices);
   return { config, terminal, rl, ref, session, slashCommandsFor, warmCatalogFor, refreshUsage, beginBuildReplace, releaseWindow };

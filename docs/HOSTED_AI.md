@@ -29,3 +29,12 @@ Only a model that fits this machine is tagged Local, with its download size and 
 ## Not yet
 
 - The user's other connected machines (ClikDeploy's `own-machine` provider, offered at $0 ahead of cloud GPUs) would come through the same adapter shape as another target; the planner side decides placement, so the picker needs no change beyond a tag.
+
+## Downloads run on their own
+
+A model for this computer that is not on disk yet is fetched by a background job (`local-models/downloads.ts`), not inside the command or the turn that asked. One job per model in the process, shared by every chat that asks for it; it takes a lock that only a dead process loses (`withDownloadLock`), so two windows never write one `.part` file, and it resumes from that file if the process ends.
+
+- **Nothing is held.** The terminal's composer, chat switching, `/settings` and the other chats all work while it runs. Progress is one footer segment per window (`↓ Qwen3.5 9B 16%`), kept when the chat shown changes; the editor shows it on every chat's busy line.
+- **The chat is untouched until the files are there.** Then it moves onto the model (route and model together, as `/model` does for one already on disk) and the window says so. A failed download, or a chat the user changed meanwhile, moves nothing; a failure says it resumes where it stopped.
+- **Loading is the first turn's.** The job fetches the llama.cpp build and the weights only. No server is started and no lease is taken until a turn needs the model, which waits on its own band as it always did.
+- **A script waits.** `backgroundDownloadsAllowed()` is true only while a host that outlives the command (a terminal window, the editor's bridge) is open; `clikcode sessions command …` and the like have none, so they wait for the fetch.

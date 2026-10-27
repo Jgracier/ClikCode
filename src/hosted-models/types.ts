@@ -39,7 +39,8 @@ export interface HostedSelection {
   route: 'clikcode-local' | 'gateway';
   /** The model id to select on that route. */
   model: string;
-  /** `/model --download`: the user has seen the size and accepted it. */
+  /** `/model --download`: a model for this computer, fetched if it is not here yet (the user has seen the size and accepted it). The
+   * command moves the chat to it when it is there. */
   download?: true;
   /** `/model --any`: a model id the Gateway's own list does not carry (a deployment of the user's). */
   any?: true;

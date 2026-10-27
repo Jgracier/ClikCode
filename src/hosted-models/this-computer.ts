@@ -22,7 +22,7 @@ export const thisComputer: HostedAdapter = {
     return {
       title: `${row.label} on this computer`,
       lines: [
-        onDisk ? 'Already downloaded.' : `Downloads ${formatBytes(row.downloadBytes ?? 0)} once.`,
+        onDisk ? 'Already downloaded.' : `Downloads ${formatBytes(row.downloadBytes ?? 0)} once, in the background: carry on meanwhile, and this chat moves to it when it is ready.`,
         'Runs on this computer: free, and works with no internet or sign-in afterwards.',
         row.detail,
       ],
@@ -32,6 +32,8 @@ export const thisComputer: HostedAdapter = {
   },
 
   async start(row): Promise<HostedSelection> {
-    return { route: 'clikcode-local', model: row.id, ...(row.downloadBytes ? { download: true as const } : {}) };
+    // Always the download form, on disk or not: it moves the chat once the model is on this machine (a missing one is fetched on its
+    // own meanwhile), so no caller moves the chat first and leaves it on a route with no model.
+    return { route: 'clikcode-local', model: row.id, download: true };
   },
 };
