@@ -172,20 +172,22 @@ it.skipIf(!enabled)('uses the profile password only when generating is switched 
   expect(received.plain).toEqual(['Profile-Fallback-12345']);
 }, 60_000);
 
-const signIn = async (askedRef: { count: number }): Promise<{ run: () => ReturnType<typeof runSteps>; tab: Page }> => {
+const signIn = async (askedRef: { count: number; fields?: { label: string; current?: string }[] }, accept = false): Promise<{ run: () => ReturnType<typeof runSteps>; tab: Page }> => {
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-pw-state-')); made.push(stateDir);
   const tab = await (await browser!.newContext({ ignoreHTTPSErrors: true })).newPage();
   await tab.goto(`${base}/signin`);
-  const ctx = { stateDir, acceptsImages: false, requestPrivateLogin: async () => { askedRef.count++; return undefined; } } as unknown as ToolContext;
+  const ctx = { stateDir, acceptsImages: false, requestPrivateLogin: async (_origin: string, fields: { key: string; label: string; current?: string }[]) => { askedRef.count++; askedRef.fields = fields; return accept ? Object.fromEntries(fields.map(field => [field.key, field.current ?? ''])) : undefined; } } as unknown as ToolContext;
   return { tab, run: () => runSteps(tab, [{ do: 'fill', target: 'Email' }, { do: 'fill', target: 'Password' }], ctx) };
 };
 
-it.skipIf(!enabled)('a sign-in fill with no text uses the site\'s saved login, with no prompt and no profile password', async () => {
-  const asked = { count: 0 };
-  const { tab, run } = await signIn(asked);
+it.skipIf(!enabled)('a sign-in fill with no text offers the site\'s saved login to confirm, and fills it without the profile password', async () => {
+  const asked = { count: 0 } as { count: number; fields?: { label: string; current?: string }[] };
+  const { tab, run } = await signIn(asked, true);
   await saveLoginFields(stateDir, `${base}/`, { username: 'ada@example.com', password: ['Saved', 'Site', 'Pw', '991'].join('-') });
   const result = await run();
-  expect(asked.count).toBe(0);
+  // A sign-in shows the saved account for the person to confirm (42faf653); accepting it fills the saved values.
+  expect(asked.count).toBe(1);
+  expect(asked.fields?.map(field => field.current)).toEqual(['ada@example.com', 'Saved-Site-Pw-991']);
   expect(await tab.locator('input[name=email]').inputValue()).toBe('ada@example.com');
   expect(await tab.locator('input[name=pw]').inputValue()).toBe('Saved-Site-Pw-991');
   expect(result.output).not.toContain('Saved-Site-Pw-991');

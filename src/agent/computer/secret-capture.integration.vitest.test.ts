@@ -96,19 +96,18 @@ it.skipIf(!enabled)('finds a key that the page only reveals, with no request', a
   expect(await readNamedSecret(stateDir, 'revealed')).toBe(KEY);
 }, 60_000);
 
-it.skipIf(!enabled)('asks instead of guessing when two keys are equally likely', async () => {
+it.skipIf(!enabled)('does not guess between two equally likely keys, and does not ask the person', async () => {
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
   const tab = await open('/two');
-  let hint = '';
-  const result = await captureSecret({ stateDir, page: tab, name: 'two', trigger: () => tap(tab, '#go'), ask: async (_n, h) => { hint = h; return KEY; } });
-  expect(result).toMatchObject({ length: KEY.length, found: false });
-  expect(hint).toContain('More than one');
+  await expect(captureSecret({ stateDir, page: tab, name: 'two', trigger: () => tap(tab, '#go'), ask: neverAsked })).rejects.toThrow('Not saved: more than one possible key is on the page');
+  await expect(readNamedSecret(stateDir, 'two')).rejects.toThrow();
 }, 60_000);
 
-it.skipIf(!enabled)('asks when nothing key-like appears, and saves nothing if the person cancels', async () => {
+it.skipIf(!enabled)('saves nothing when nothing key-like appears: the agent is told, the person is not asked unless paste was requested', async () => {
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
   const tab = await open('/plain');
-  await expect(captureSecret({ stateDir, page: tab, name: 'nothing', trigger: () => tap(tab, '#go'), ask: async () => undefined })).rejects.toThrow('Not saved: no key was found');
+  await expect(captureSecret({ stateDir, page: tab, name: 'nothing', trigger: () => tap(tab, '#go'), ask: neverAsked })).rejects.toThrow('Not saved: the key could not be read from the page');
+  await expect(captureSecret({ stateDir, page: tab, name: 'nothing', paste: true, ask: async () => undefined })).rejects.toThrow('Not saved: no key was found and none was pasted');
   await expect(readNamedSecret(stateDir, 'nothing')).rejects.toThrow();
 }, 60_000);
 
@@ -129,7 +128,7 @@ it.skipIf(!enabled)('presses the page\'s own Copy button by itself and ignores o
 it.skipIf(!enabled)('takes a pasted key', async () => {
   stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
   const tab = await open('/plain');
-  const result = await captureSecret({ stateDir, page: tab, name: 'pasted', trigger: () => tap(tab, '#go'), ask: async () => KEY });
+  const result = await captureSecret({ stateDir, page: tab, name: 'pasted', paste: true, ask: async () => KEY });
   expect(result).toMatchObject({ length: KEY.length, found: false });
   expect(await readNamedSecret(stateDir, 'pasted')).toBe(KEY);
 }, 60_000);
