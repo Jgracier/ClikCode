@@ -111,31 +111,31 @@ simply not recorded, rather than recorded wrong.
   the page reflows the way it would on the phone instead of being shrunk, and it is put back when you
   tap Done or the link ends. Touch reaches the page as real touch
   events (tap, drag, fling and pinch are tested; long press has not been tried); a computer's browser opening the link gets real mouse, wheel and keyboard instead.
-  **Fields or page.** The link opens as a form when the page has anything to fill in, and as the
-  picture when it does not; the button beside Done switches and names the other one (**Page** while in
-  the form, **Fields** while in the picture), and the last choice is remembered on the device.
-  *Fields* shows every fillable thing on the page as a real form on the phone, in the page's order:
-  text, password, email, number, one-time-code and multi-line fields, dropdowns, dates and times,
-  checkboxes and radio buttons, and the page's buttons (up to 25). They are the phone's own controls, so
-  a tap brings up the phone's keyboard with the field's type, `inputmode`, `autocomplete` and Enter-key
-  hint, autofill and the password manager work, and a dropdown or date opens the phone's own picker.
-  What is entered is put into the real field on the page as it is typed (the whole value, selected and
-  replaced with real input, so the page hears `input`); a choice or a date is set the way a person
-  choosing it would (`input` and `change`); a box is ticked and a button pressed with a real click at its
-  middle. The form follows the page (it is read twice a second): a field the page changes is updated
-  unless it is being typed in, and a new field appears. A page with a CAPTCHA frame says so at the top,
-  with a button to the picture. A password's value is never read back from the page. A control the page has
-  switched off (a sample form, a field that waits for another) is listed too, greyed out with the page's
-  own value and marked locked, and cannot be changed from the phone. In the form no frames are sent.
-  *Page* is the live picture, for what a form cannot show (a CAPTCHA, a map, a drawing). A tap on a text
-  field in the picture goes to that field in the form, in the tap, so the keyboard comes up; a dropdown
-  or date opens a sheet. A field inside an iframe (a payment form from another site, a CAPTCHA) is not
-  in the form. Not tried on an iPhone yet.
+  **Fields are the phone's own inputs, in place.** ClikCode tells the phone where the page's fields are on
+  its screen (refreshed as the page moves, and each field keeps one number while the page keeps it), and
+  the phone lays a real, invisible input exactly over each one: text, password, email, number,
+  one-time-code and multi-line fields, dropdowns, and date, time, month, week and colour fields. A finger
+  on a field therefore lands on an input of the phone itself, and the phone does what it does for any
+  input: it focuses it and opens its keyboard (with the field's type, `inputmode`, `autocomplete` and
+  Enter-key hint, so autofill, the password manager and the text-message code suggestion work) or its
+  own picker. Nothing in the page asks the phone to open a keyboard, which is something Safari on an
+  iPhone declines to do. What is entered goes into the real field on the page as it is typed (the whole
+  value, selected and replaced with real input, so the page hears `input`; a choice or a date is set
+  the way a person choosing it would, `input` and `change`), and the picture shows it arrive. A tap on a
+  field is also sent to the page, so its own focus and caret show; a tap on a dropdown or date is kept
+  from the page, whose pop-up would open unseen on the computer. A drag that starts on a field is a
+  scroll (the input steps aside for it, and goes on being one when the finger leaves the picture), a tap
+  anywhere else puts the keyboard away, and for a moment after a scroll the inputs wait until the page
+  has said where its fields moved to. A field the page has switched off has no input over it. Checkboxes,
+  radio buttons and buttons are tapped in the picture like anything else. A field inside an iframe (a
+  payment form from another site, a CAPTCHA) is not tracked, so it gets no input; a computer's browser
+  can still type into it with its own keyboard. A password's value is never read back from the page. Not
+  tried on an iPhone yet.
   **Touch or mouse.** The button beside Done switches, and always names the other one (**Mouse** while
   in touch, **Touch** while in mouse). The link starts in touch on a phone or tablet and in mouse on a
   computer, and remembers the last choice on that device. *Touch*: the page is laid out for the phone
   and sees a touch screen (tap, drag, fling, and pinch to zoom, which are touch events to the page).
-  These two apply to the picture. *Mouse*: the page sees a mouse at the phone's width, no touch screen, so hover menus, `:hover` styles,
+  *Mouse*: the page sees a mouse at the phone's width, no touch screen, so hover menus, `:hover` styles,
   dragging, text selection and drag-and-drop work. Your finger is the pointer: touching moves it (and
   hovers), a tap clicks, dragging drags, two fingers scroll, and a quick two-finger tap right-clicks.
   **Limits.** The view shows the page, not the browser's own windows: a file chooser, a permission

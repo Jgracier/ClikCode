@@ -2,7 +2,9 @@
 
 export type Point = { id: number; x: number; y: number };
 
-const finite = (value: unknown, max = 20_000): value is number => typeof value === 'number' && Number.isFinite(value) && value >= -1 && value <= max;
+/** A finger can leave the picture mid-drag (up over the bar, down past the edge) and the drag goes on: positions a good way outside it are real. */
+export const OUTSIDE = 5_000;
+const finite = (value: unknown, max = 20_000): value is number => typeof value === 'number' && Number.isFinite(value) && value >= -OUTSIDE && value <= max;
 
 /** Up to five touch points as [id, x, y], or undefined when anything about them is off. */
 export function cleanPoints(raw: unknown): Point[] | undefined {
