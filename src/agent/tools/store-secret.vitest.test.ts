@@ -16,7 +16,7 @@ beforeEach(async () => {
   bin = join(dir, 'bin');
   await mkdir(bin);
   process.env.PATH = `${bin}:${oldPath}`;
-  await saveNamedSecret(dir, 'salad/api-key', VALUE);
+  await saveNamedSecret(dir, 'salad/api-key', VALUE, { url: 'https://salad.com' });
 });
 afterEach(async () => { process.env.PATH = oldPath; forgetSecrets(); lockCredentialVault(dir); await rm(dir, { recursive: true, force: true }); });
 const fake = async (name: string, script: string): Promise<void> => { await writeFile(join(bin, name), `#!/bin/sh\n${script}\n`); await chmod(join(bin, name), 0o755); };
