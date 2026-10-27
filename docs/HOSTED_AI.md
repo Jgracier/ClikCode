@@ -11,12 +11,14 @@ A hosted model is one that runs on compute, whoever owns the compute. The picker
 
 One list, one search. `hostedList` merges every target's rows, this computer's first (recommended before the rest), then the GPUs. Words in the search that name a place choose it: `local`, `offline`, `computer`, `here` mean this computer; `cloud`, `gpu`, `hosted`, `clikdeploy` mean ClikDeploy. The rest names the model. A target that cannot answer (offline, signed out) does not hide the other: it is named in `unavailable`, and the picker says why.
 
+In the terminal the two groups are headed **Run on this computer** and **Run on ClikDeploy**, so where it runs is the group a row is under, not a tag on each. A row says only what helps choose between models: for this computer what it takes (`6.7 GB download`, or `downloaded`) and how fast it writes (`~8 tok/s`), plus `tool use unverified` for a model found on Hugging Face, which has not shown it can make the tool calls a coding agent needs; for a GPU its parameters. The rest of what the ranking knows (the backend, the first-reply estimate, the context, where it came from) stays in `LocalModelChoice.detail`, which `/model` with no name still prints, and is not on this screen.
+
 Only a model that fits this machine is tagged Local, with its download size and speed. The local side is a curated, ranked catalog (`local-models/catalog`) plus what `discover.ts` finds, not a raw Hugging Face search, so a model that is only on Hugging Face is offered on the GPU side alone.
 
 ## Starting one
 
-1. `plan(row)` says what it takes, before anything is spent or downloaded: for a local model the download size and that it works offline afterwards; for a GPU the planner's GPU, speed, context and price per hour.
-2. The user confirms. A GPU always asks (unless the user chose "always start hosted AI models"); a local model tells its download and asks once.
+1. `plan(row)` says what it takes, before anything is spent or downloaded: for a local model that is not on disk the download size, in the question (`Download Gemma 4 12B (6.7 GB)?`) with one line under it; for a GPU the planner's GPU, speed, context and price per hour.
+2. The user confirms, if there is anything to confirm (`HostedPlan.consent`). A GPU always asks (unless the user chose "always start hosted AI models"); a download asks once. A model already on this computer is free and offline already, so choosing the row is the whole decision and nothing is asked -- in the terminal and in the editor, which starts it without opening the card.
 3. `start(row)` returns a `HostedSelection`: the route (`clikcode-local` or `gateway`) and the model id. A local model's download happens on its first turn, with `/model --download` recording that the size was accepted; a GPU deployment is created now, and the first prompt waits for it to be ready.
 4. The chat moves onto that route (history and all, as a provider change does) and `hostedSelectionCommand` selects the model.
 

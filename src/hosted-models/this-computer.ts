@@ -12,22 +12,21 @@ export const thisComputer: HostedAdapter = {
     return choices
       .filter((choice) => !needle || `${choice.label} ${choice.id}`.toLowerCase().includes(needle))
       .map((choice): HostedRow => ({
-        target: 'this-computer', id: choice.id, label: choice.label, detail: choice.detail,
+        target: 'this-computer', id: choice.id, label: choice.label, detail: choice.brief || choice.detail,
         downloadBytes: choice.downloadBytes, recommended: choice.recommended,
       }));
   },
 
   async plan(row): Promise<HostedPlan> {
-    const onDisk = !row.downloadBytes;
+    // On disk, it is free and offline already: choosing the row is the whole decision, so nothing is asked.
+    if (!row.downloadBytes) return { title: row.label, lines: [], confirm: 'Use it', costly: false, consent: false };
+    const size = formatBytes(row.downloadBytes);
     return {
-      title: `${row.label} on this computer`,
-      lines: [
-        onDisk ? 'Already downloaded.' : `Downloads ${formatBytes(row.downloadBytes ?? 0)} once, in the background: carry on meanwhile, and this chat moves to it when it is ready.`,
-        'Runs on this computer: free, and works with no internet or sign-in afterwards.',
-        row.detail,
-      ],
-      confirm: onDisk ? 'Use it' : `Download ${formatBytes(row.downloadBytes ?? 0)} and use it`,
+      title: `Download ${row.label} (${size})?`,
+      lines: ['Runs on this computer, free and offline. It downloads in the background; this chat moves to it when it is ready.'],
+      confirm: 'Download',
       costly: false,
+      consent: true,
     };
   },
 

@@ -50,19 +50,20 @@ export function HostedPicker(props: { onBack: () => void; onClose: () => void; o
     return () => { live = false; clearInterval(timer); };
   }, [refreshing, search]);
 
-  const plan = (row: HostedRow): void => {
-    setStep({ row });
-    request<HostedPlan>({ method: 'query', query: 'hosted-plan', row }).then(
-      (answer) => setStep((now) => (now?.row === row ? { row, plan: answer } : now)),
-      (failure: Error) => setStep((now) => (now?.row === row ? { row, error: failure.message } : now)),
-    );
-  };
-
   const start = (row: HostedRow): void => {
     setStep((now) => (now ? { ...now, starting: true } : now));
     choose({ kind: 'hosted', row }).then(
       () => props.onClose(),
       (failure: Error) => setStep((now) => (now ? { row: now.row, plan: now.plan, error: failure.message } : now)),
+    );
+  };
+
+  const plan = (row: HostedRow): void => {
+    setStep({ row });
+    request<HostedPlan>({ method: 'query', query: 'hosted-plan', row }).then(
+      // Nothing to agree to (a model already on this computer): choosing the row was the decision, so no card.
+      (answer) => { if (answer.consent === false) start(row); else setStep((now) => (now?.row === row ? { row, plan: answer } : now)); },
+      (failure: Error) => setStep((now) => (now?.row === row ? { row, error: failure.message } : now)),
     );
   };
 

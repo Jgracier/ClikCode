@@ -373,6 +373,9 @@ export interface LocalModelChoice {
   id: string;
   label: string;
   detail: string;
+  /** What a list says about it: what it takes (a download, or that it is on disk) and how fast it writes. `detail` has the rest -- the
+   * backend, the first-reply estimate, the context, where it came from -- for a screen that has room and a reason to read it. */
+  brief: string;
   fits: boolean;
   /** Passes the first-reply and deep-turn speed bars. */
   recommended: boolean;
@@ -405,7 +408,11 @@ export async function localModelChoices(): Promise<LocalModelChoice[]> {
     const parts = [placementLabel(row, view), firstLabel, speed, `${Math.round(row.fit.context / 1024)}K context`,
       ...(row.model.discovered ? [`Hugging Face ${row.model.weights.repo}`, 'tool use unverified'] : [])];
     parts.push(downloadBytes ? `${formatBytes(downloadBytes)} download` : 'downloaded');
-    rows.push({ id: row.model.id, label: row.model.label, detail: parts.join(' · '), fits: row.fit.fits, recommended: row.passes, downloadBytes });
+    const writing = Math.round(row.speed.generatePerSecond);
+    const brief = [downloadBytes ? `${formatBytes(downloadBytes)} download` : 'downloaded', writing > 0 ? `~${writing} tok/s` : '',
+      // The one caveat that changes a choice: a coding agent needs tool calls, and a model found on Hugging Face has not shown it can.
+      ...(row.model.discovered ? ['tool use unverified'] : [])].filter(Boolean).join(' · ');
+    rows.push({ id: row.model.id, label: row.model.label, detail: parts.join(' · '), brief, fits: row.fit.fits, recommended: row.passes, downloadBytes });
   }
   return rows;
 }

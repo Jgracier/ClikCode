@@ -22,16 +22,33 @@ it('selects the newly created private deployment without a model-list publicatio
   expect(aiSessionCommand).toHaveBeenCalledWith('gw', '/model --any private-deployment:dep-1');
 });
 
-it('sends a Gateway chat to a model that runs on this computer, after telling the download, with no price asked and no move first', async () => {
-  local.choices = [{ id: 'qwen', label: 'Qwen', detail: 'GPU · 30 tok/s', fits: true, recommended: true, downloadBytes: 12e9 }];
+it('asks once for a download of a model for this computer -- the size in the question, no panel of numbers -- and no price', async () => {
+  local.choices = [{ id: 'qwen', label: 'Qwen', detail: 'GPU · first reply 3s · 30 tok/s reading · 32K context', brief: '12.0 GB download · ~30 tok/s', fits: true, recommended: true, downloadBytes: 12e9 }];
   const asked: string[] = [];
+  const panels: string[] = [];
   const select = vi.fn(async (title: string, rows: Array<{ value: unknown }>) => { asked.push(title); return rows[0]!.value; });
-  await interactiveHostedPicker({ select, panel: () => undefined } as never, 'gw');
-  // The list, then one confirmation of the download; this computer's models never ask about a price.
-  expect(asked[0]).toBe('Hosted AI');
-  expect(asked.some((title) => /Start /.test(title))).toBe(false);
+  await interactiveHostedPicker({ select, panel: (title: string) => { panels.push(title); } } as never, 'gw');
+  expect(asked).toEqual(['Hosted AI', 'Download Qwen (12.0 GB)?']);
+  expect(panels).toEqual([]);
   // The chat is not moved first: the command moves it once the model is on this machine, and until then it is as it was, so a download
   // that takes minutes (or fails) never leaves it on a route with no model.
   expect(route.selectProviderConversation).not.toHaveBeenCalled();
   expect(aiSessionCommand).toHaveBeenCalledWith('gw', '/model --download qwen');
+});
+
+it('asks nothing for a model that is already on this computer: choosing it is the decision', async () => {
+  local.choices = [{ id: 'gemma', label: 'Gemma 4 12B', detail: 'long', brief: 'downloaded · ~8 tok/s', fits: true, recommended: false, downloadBytes: 0 }];
+  const listed: Array<{ label: string; detail?: string; group?: string }> = [];
+  const asked: string[] = [];
+  const select = vi.fn(async (title: string, rows: Array<{ value: unknown; label: string; detail?: string; group?: string }>) => {
+    asked.push(title);
+    if (!listed.length) listed.push(...rows);
+    return rows[0]!.value;
+  });
+  await interactiveHostedPicker({ select, panel: () => undefined } as never, 'gw');
+  expect(asked).toEqual(['Hosted AI']);
+  // The row says what it takes and how fast it writes; where it runs is the group it is under.
+  expect(listed[0]).toMatchObject({ label: 'Gemma 4 12B', group: 'Run on this computer' });
+  expect(listed[0]!.detail).toBe('· downloaded · ~8 tok/s');
+  expect(aiSessionCommand).toHaveBeenLastCalledWith('gw', '/model --download gemma');
 });

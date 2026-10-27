@@ -29,6 +29,9 @@ export interface HostedPlan {
   lines: string[];
   /** The button: what the click does. */
   confirm: string;
+  /** There is something to agree to: a download, or a price. False (a model already on this computer) means choosing the row is the
+   * whole decision and nothing is asked. Absent is true, for a bridge that does not say. */
+  consent?: boolean;
   /** It bills by the hour. A target that bills always asks first, unless the user said to always start. */
   costly: boolean;
 }
