@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computerWebTool } from '../tools/computer-web.js';
+import { browserUseTool, computerWebTool } from '../tools/computer-web.js';
 import { describeConsole, pickConsole, type ConsoleEntry } from './console-log.js';
 import { checkKey, checkModifiers, clickExtras, normalizeDateValue, PAGE_ACTIONS, showResult } from './page-control.js';
 
@@ -81,8 +81,11 @@ describe('browser_use page control definition', () => {
   const label = (args: Record<string, unknown>): string => computerWebTool.label(args as never);
   it('lists every new action in the action list and the help', async () => {
     for (const action of [...PAGE_ACTIONS, 'hover', 'drag']) expect(properties['action']!.description, action).toContain(action);
-    const help = await computerWebTool.run({ action: 'help' } as never, { stateDir: '/nonexistent-clikcode-test' } as never);
+    // What an agent sees: the tool's own description lists them, and help gives each one's usage.
+    for (const action of [...PAGE_ACTIONS, 'hover', 'drag']) expect(browserUseTool.description, action).toContain(action);
+    const help = await browserUseTool.run({ action: 'help', topic: 'evaluate' } as never, { stateDir: '/nonexistent-clikcode-test' } as never);
     expect(help.output).toContain('evaluate');
+    expect(help.output).toContain('Example:');
   });
   it('has a schema entry for every new argument', () => {
     for (const name of ['index', 'new_tab', 'expression', 'with_screenshot', 'button', 'count', 'modifiers', 'x', 'y', 'to_target', 'to_x', 'to_y', 'amount', 'until', 'selector', 'level', 'limit', 'clear']) expect(properties[name], name).toBeDefined();

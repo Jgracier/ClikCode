@@ -30,7 +30,7 @@ export const NO_RULES: PermissionRules = { allow: [], deny: [], ask: [] };
 const EXIT_PLAN_MODE_TOOL = 'exit_plan_mode';
 const ENTER_PLAN_MODE_TOOL = 'enter_plan_mode';
 const BASH_TOOL = 'bash';
-const COMPUTER_TOOLS = new Set(['computer_use', 'browser_use']);
+const COMPUTER_TOOLS = new Set(['computer_use', 'browser_use', 'account_use']);
 
 
 /** `Bash(git status:*)`, `Edit(src/**)`, `WebFetch(domain:example.com)`, or a
@@ -62,6 +62,8 @@ export function parsePermissionSettings(permissions: unknown): PermissionRules {
 function ruleCoversTool(rule: PermissionRule, tool: ToolDefinition): boolean {
   const family = currentToolName(rule.tool.toLowerCase());
   if (family === tool.name.toLowerCase()) return true;
+  // browser_use used to carry the sign-in, key and email actions: a rule written for it still covers them, now account_use.
+  if (family === 'browser_use' && tool.name === 'account_use') return true;
   // An MCP tool's class comes from its server's own hints; only a rule naming
   // the tool exactly vouches for it, never a family like `Read`.
   if (tool.mcp) return false;

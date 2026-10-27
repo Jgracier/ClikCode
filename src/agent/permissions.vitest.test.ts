@@ -11,7 +11,7 @@ import {
 import type { PathScope } from './security.js';
 import { sessionState } from './session-state.js';
 import { defaultTools } from './tools/registry.js';
-import { computerWebTool } from './tools/computer-web.js';
+import { accountUseTool, computerWebTool } from './tools/computer-web.js';
 import { setComputerEnabled } from './computer/settings.js';
 import type { ToolContext, ToolDefinition } from './tool-contract.js';
 import type { AiHarnessPermissionMode } from '../harness/definition.js';
@@ -43,6 +43,14 @@ describe('permission matrix', () => {
     expect(judge('ask')).toBe('ask');
     expect(judge('auto', parsePermissionSettings({ deny: ['browser_use'] }))).toBe('deny');
     expect(judge('auto', parsePermissionSettings({ ask: ['browser_use'] }))).toBe('ask');
+    // account_use is what browser_use's sign-in, key and email actions became: a rule written for browser_use (or computer_web) still covers it.
+    const judgeAccount = (mode: AiHarnessPermissionMode, rules = NO_RULES) => decidePermission({
+      tool: accountUseTool, args: { action: 'login' }, mode, rules, planMode: false, scope, hasApprover: true,
+    }).decision;
+    expect(judgeAccount('auto')).toBe('allow');
+    expect(judgeAccount('auto', parsePermissionSettings({ deny: ['browser_use'] }))).toBe('deny');
+    expect(judgeAccount('auto', parsePermissionSettings({ deny: ['computer_web'] }))).toBe('deny');
+    expect(judgeAccount('auto', parsePermissionSettings({ ask: ['account_use'] }))).toBe('ask');
     // The names before the 2026-10-26 rename still mean the same tools.
     expect(judge('auto', parsePermissionSettings({ deny: ['computer_web'] }))).toBe('deny');
     await setComputerEnabled(scope.stateDir, false);

@@ -67,7 +67,7 @@ export const settingsHandlers = {
       if (urls.length <= 1) { await computerLogin(session.id, { ...(urls[0] ? { url: urls[0] } : {}), ...(newAccount ? { newAccount: true } : {}) }); return; }
     }
     if (value === 'logins' && words.length === 1) { await computerLogin(session.id, { manage: true }); return; }
-    if (value === 'profile' && words.length === 1) { await computerTool('browser_use', { action: 'profile', ask: true }, session.id); return; }
+    if (value === 'profile' && words.length === 1) { await computerTool('account_use', { action: 'profile', ask: true }, session.id); return; }
     if (value === 'inspect' && words.length === 1) { await computerInspect(); return; }
     if (words.length > 1 || (value && value !== 'on' && value !== 'off')) throw new Error('usage: /computer [on|off|inspect|logins|profile|login [url] [--new]]');
     if (value) {
