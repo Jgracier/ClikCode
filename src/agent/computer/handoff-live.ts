@@ -11,11 +11,17 @@ export const FOCUS_SCRIPT = `(() => {
   if (window.__clikFocusInstalled) return;
   window.__clikFocusInstalled = true;
   const TEXT = /^(text|search|url|tel|email|password|number)$/;
-  const NATIVE = /^(date|time|datetime-local|month|week|color|range)$/;
+  const NATIVE = /^(date|time|datetime-local|month|week|color)$/;
   const label = (e) => ((e.labels && e.labels[0] && e.labels[0].innerText) || e.getAttribute('aria-label') || e.placeholder || e.name || '').replace(/\\s+/g, ' ').trim().slice(0, 80);
   const common = (e) => ({ label: label(e), inputmode: e.inputMode || e.getAttribute('inputmode') || '', autocomplete: e.getAttribute('autocomplete') || '', enterkeyhint: e.enterKeyHint || e.getAttribute('enterkeyhint') || '', maxlength: e.maxLength > 0 ? e.maxLength : 0 });
   const describe = (e) => {
+    const d = describeElement(e);
+    if (d && d.idx === undefined) d.idx = (window.__clikFields || []).indexOf(e);
+    return d;
+  };
+  const describeElement = (e) => {
     if (!e || e === document.body || e === document.documentElement) return null;
+    if (e.tagName === 'IFRAME') return { kind: 'text', type: 'text', generic: true, label: 'Type into the page', idx: -1 };
     if (e.tagName === 'SELECT') return { kind: 'select', multiple: e.multiple, label: label(e), options: Array.from(e.options).slice(0, 300).map((o) => ({ v: o.value, t: o.text.replace(/\\s+/g, ' ').trim().slice(0, 100), s: o.selected, d: o.disabled })) };
     if (e.tagName === 'TEXTAREA') return { kind: 'text', type: 'textarea', multiline: true, value: e.value.slice(0, 2000), ...common(e) };
     if (e.tagName === 'INPUT') {
@@ -27,6 +33,7 @@ export const FOCUS_SCRIPT = `(() => {
     if (e.isContentEditable) return { kind: 'text', type: 'editable', multiline: true, value: (e.innerText || '').slice(0, 2000), ...common(e) };
     return null;
   };
+  window.__clikDescribe = describe;
   let last = 'null';
   const report = () => {
     if (window !== window.top) return;
@@ -40,6 +47,39 @@ export const FOCUS_SCRIPT = `(() => {
   report();
 })();`;
 
+/** The fields on screen right now, with where each is on the phone's screen: the phone puts its own box over a tapped field, in the tap, so
+ * its keyboard can come up (a phone only opens one from the person's own touch). Also remembers the elements, so a choice can name one. */
+export const FIELDS_SCRIPT = `(() => {
+  const describe = window.__clikDescribe;
+  const v = window.visualViewport;
+  if (!describe || !v) return '[]';
+  const s = v.scale, ox = v.offsetLeft, oy = v.offsetTop, sw = v.width * s, sh = v.height * s;
+  const KIND = /^(text|search|url|tel|email|password|number|date|time|datetime-local|month|week|color)$/;
+  const els = [], out = [];
+  for (const e of document.querySelectorAll('input, textarea, select, [contenteditable=""], [contenteditable="true"]')) {
+    if (out.length >= 60) break;
+    if (e.disabled || e.readOnly) continue;
+    if (e.tagName === 'INPUT' && !KIND.test((e.type || 'text').toLowerCase())) continue;
+    const r = e.getBoundingClientRect();
+    if (r.width < 4 || r.height < 4) continue;
+    const x = (r.left - ox) * s, y = (r.top - oy) * s, w = r.width * s, h = r.height * s;
+    if (x + w < 0 || y + h < 0 || x > sw || y > sh) continue;
+    const cs = getComputedStyle(e);
+    if (cs.visibility === 'hidden' || cs.display === 'none') continue;
+    // Something else drawn over it (a dialog, a menu): not a field a tap would reach.
+    const top = document.elementFromPoint(Math.min(Math.max(r.left + r.width / 2, 0), innerWidth - 1), Math.min(Math.max(r.top + r.height / 2, 0), innerHeight - 1));
+    if (top && top !== e && !e.contains(top) && !top.contains(e) && !(top.closest && top.closest('label') && top.closest('label').control === e)) continue;
+    els.push(e);
+    const d = describe(e);
+    if (!d) { els.pop(); continue; }
+    d.idx = els.length - 1;
+    if (d.options && d.options.length > 200) d.options = d.options.slice(0, 200);
+    out.push({ i: d.idx, x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10, w: Math.round(w * 10) / 10, h: Math.round(h * 10) / 10, d });
+  }
+  window.__clikFields = els;
+  return JSON.stringify(out);
+})()`;
+
 /** After a field takes focus the caret goes to its end: what the phone types is replayed from there. */
 const CARET_TO_END = `(() => { const e = document.activeElement; try {
   if (e && typeof e.setSelectionRange === 'function' && typeof e.value === 'string') { const n = e.value.length; e.setSelectionRange(n, n); }
@@ -47,8 +87,8 @@ const CARET_TO_END = `(() => { const e = document.activeElement; try {
 } catch (error) {} })()`;
 
 /** Sets a select, a date or a colour from the phone's native control, the way a person choosing it would (the page hears input and change). */
-const setValueExpression = (value: string | string[]): string => `((value) => {
-  const e = document.activeElement;
+const setValueExpression = (value: string | string[], index: number): string => `((value, index) => {
+  const e = (index >= 0 && (window.__clikFields || [])[index]) || document.activeElement;
   if (!e) return false;
   if (e.tagName === 'SELECT') {
     const wanted = Array.isArray(value) ? value : [value];
@@ -60,7 +100,7 @@ const setValueExpression = (value: string | string[]): string => `((value) => {
   e.dispatchEvent(new Event('input', { bubbles: true }));
   e.dispatchEvent(new Event('change', { bubbles: true }));
   return true;
-})(${JSON.stringify(value)})`;
+})(${JSON.stringify(value)}, ${index})`;
 
 type Message = { t?: string; [key: string]: unknown };
 
@@ -93,6 +133,11 @@ export class LiveView {
   /** Chrome side is set up (domains on, field tracking installed): queued messages may run. */
   private up = false;
   private lastView: PageView = SAME_VIEW;
+  /** What the phone's finger is: touch (the page sees a touch screen, laid out for the phone) or a mouse (the page sees a pointer). */
+  private mode: 'touch' | 'mouse' = 'touch';
+  private laidOutAs: 'touch' | 'mouse' | undefined;
+  private fieldsTimer: NodeJS.Timeout | undefined;
+  private lastFields = '';
   /** What happened, for tests and for the phone's status line. */
   readonly stats = { frames: 0, restarts: 0 };
 
@@ -124,6 +169,7 @@ export class LiveView {
     if (this.stopped) return;
     this.stopped = true;
     clearTimeout(this.unstick);
+    clearTimeout(this.fieldsTimer);
     const cdp = this.cdp;
     if (!cdp) return;
     const quietly = quiet('agent/computer/handoff-live');
@@ -156,6 +202,7 @@ export class LiveView {
     try {
       for (let message = this.queue.shift(); message && !this.stopped; message = this.queue.shift()) {
         await this.handle(message).catch(quiet('agent/computer/handoff-live'));
+        if (message.t === 'touch' || message.t === 'mouse') this.scheduleFields(80);
       }
     } finally { this.draining = false; }
   }
@@ -164,6 +211,7 @@ export class LiveView {
     const cdp = this.cdp!;
     switch (message.t) {
       case 'hello': case 'resize': {
+        this.mode = message.m === 'mouse' ? 'mouse' : 'touch';
         const size = cleanSize(message);
         if (size) await this.layout(size);
         return;
@@ -206,7 +254,7 @@ export class LiveView {
       case 'set': {
         const value = message.v;
         const ok = typeof value === 'string' ? value.length <= 2_000 : Array.isArray(value) && value.length <= 300 && value.every(item => typeof item === 'string' && item.length <= 2_000);
-        if (ok) await cdp.send('Runtime.evaluate', { expression: setValueExpression(value as string | string[]) });
+        if (ok) await cdp.send('Runtime.evaluate', { expression: setValueExpression(value as string | string[], Number.isInteger(message.i) ? Number(message.i) : -1) });
         return;
       }
       case 'done': this.finish(); return;
@@ -245,11 +293,14 @@ export class LiveView {
 
   private async layout(size: Size): Promise<void> {
     const cdp = this.cdp!;
-    const same = this.size && this.size.w === size.w && this.size.h === size.h && this.size.dpr === size.dpr;
+    const same = this.size && this.size.w === size.w && this.size.h === size.h && this.size.dpr === size.dpr && this.laidOutAs === this.mode;
     this.size = size;
     if (same && this.streaming) return;
-    await cdp.send('Emulation.setDeviceMetricsOverride', { width: size.w, height: size.h, deviceScaleFactor: size.dpr, mobile: true });
-    await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+    const touch = this.mode === 'touch';
+    this.laidOutAs = this.mode;
+    // A mouse sees the page at the phone's width at full size; a finger sees the mobile layout (zoomed out for a page with no layout tag, pinchable).
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: size.w, height: size.h, deviceScaleFactor: size.dpr, mobile: touch });
+    await cdp.send('Emulation.setTouchEmulationEnabled', touch ? { enabled: true, maxTouchPoints: 5 } : { enabled: false });
     // Frames at the screen's own density up to 2x: a phone's 3x costs more to send than the eye can tell from 2x.
     const scale = Math.min(size.dpr, 2);
     if (this.streaming) await cdp.send('Page.stopScreencast').catch(quiet('agent/computer/handoff-live'));
@@ -259,6 +310,7 @@ export class LiveView {
     this.streaming = true;
     this.stats.restarts++;
     this.send({ t: 'size', w: size.w, h: size.h });
+    this.scheduleFields(250);
   }
 
   /** One frame in flight at a time: Chrome is told a frame was received only once it has gone to the phone, so it paints no faster than the phone draws, and the phone always gets the newest. */
@@ -275,6 +327,7 @@ export class LiveView {
   private async deliver(frame: { data: string; sessionId: number }): Promise<void> {
     this.ready = false;
     this.stats.frames++;
+    this.scheduleFields();
     this.socket.send(Buffer.concat([Buffer.from([1]), Buffer.from(frame.data, 'base64')]));
     await this.ackChrome(frame.sessionId);
     clearTimeout(this.unstick);
@@ -287,6 +340,23 @@ export class LiveView {
     this.ready = true;
     const held = this.held;
     if (held) { this.held = undefined; void this.deliver(held); }
+  }
+
+  /** Tells the phone where the page's fields are, when that changed: after frames (the page moved) and after input. */
+  private scheduleFields(delay = 140): void {
+    if (this.fieldsTimer || this.stopped) return;
+    this.fieldsTimer = setTimeout(() => { this.fieldsTimer = undefined; void this.refreshFields(); }, delay);
+  }
+
+  private async refreshFields(): Promise<void> {
+    if (this.stopped || this.socket.closed || !this.cdp) return;
+    try {
+      const result = await this.cdp.send('Runtime.evaluate', { expression: FIELDS_SCRIPT, returnByValue: true }) as { result?: { value?: string } };
+      const text = result.result?.value;
+      if (typeof text !== 'string' || text === this.lastFields) return;
+      this.lastFields = text;
+      this.send({ t: 'fields', f: JSON.parse(text) as unknown });
+    } catch { /* the page is changing */ }
   }
 
   private async ackChrome(sessionId: number): Promise<void> {
