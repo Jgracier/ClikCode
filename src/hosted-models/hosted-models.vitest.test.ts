@@ -1,16 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 import { thisComputer } from './this-computer.js';
-import { hostedAdapter, hostedList, hostedSelectionCommand, parseHostedQuery, type HostedAdapter, type HostedRow } from './index.js';
+import { hostedAdapter, hostedList, hostedPlan, hostedSelectionCommand, parseHostedQuery, type HostedAdapter, type HostedPlan, type HostedRow } from './index.js';
 
 // The engine is mocked: what is under test is what the list and the question say, not this machine's ranking.
 const choices = vi.hoisted(() => ({ rows: [] as Array<Record<string, unknown>> }));
 vi.mock('../local-models/index.js', () => ({ localModelChoices: async () => choices.rows }));
 
 const row = (target: HostedRow['target'], id: string, extra: Partial<HostedRow> = {}): HostedRow => ({ target, id, label: id, detail: '', ...extra });
-const adapter = (target: HostedAdapter['target'], rows: HostedRow[] | Error): HostedAdapter => ({
+const adapter = (target: HostedAdapter['target'], rows: HostedRow[] | Error, plan?: (item: HostedRow) => Promise<HostedPlan>): HostedAdapter => ({
   target,
   list: async (query) => { if (rows instanceof Error) throw rows; return rows.filter((item) => item.label.includes(query)); },
-  plan: async (item) => ({ title: item.label, lines: [], confirm: 'go', costly: target === 'clikdeploy' }),
+  plan: plan ?? (async (item) => ({ title: item.label, lines: [], confirm: 'go', costly: target === 'clikdeploy', summary: `${target}:${item.id}` })),
   start: async (item) => ({ route: target === 'clikdeploy' ? 'gateway' : 'clikcode-local', model: item.id }),
 });
 
@@ -65,14 +65,68 @@ describe('a model for this computer, as the list and the question say it', () =>
 
   it('asks nothing for a model that is already on this computer: choosing it is the decision', async () => {
     const plan = await thisComputer.plan({ target: 'this-computer', id: 'gemma', label: 'Gemma 4 12B', detail: '', downloadBytes: 0 });
-    expect(plan).toMatchObject({ consent: false, costly: false, lines: [] });
+    expect(plan).toMatchObject({ consent: false, costly: false, lines: [], summary: 'downloaded · free, works offline' });
   });
 
   it('asks once for a download, with the size in the question and one line under it', async () => {
     const plan = await thisComputer.plan({ target: 'this-computer', id: 'gemma', label: 'Gemma 4 12B', detail: '', downloadBytes: 6_700_000_000 });
-    expect(plan).toMatchObject({ consent: true, costly: false, confirm: 'Download' });
+    expect(plan).toMatchObject({ consent: true, costly: false, confirm: 'Download', summary: '6.7 GB download · free after, works offline' });
     expect(plan.title).toBe('Download Gemma 4 12B (6.7 GB)?');
     expect(plan.lines).toHaveLength(1);
     expect(plan.lines[0]).toMatch(/free and offline/);
+  });
+});
+
+
+describe('one row per model, and the plan that carries the other place to run it', () => {
+  const fits = row('this-computer', 'qwen', { label: 'Qwen3.5 4B', repo: 'unsloth/Qwen3.5-4B-GGUF' });
+
+  it('lists a model that fits this computer once, though ClikDeploy\'s search lists the same repo too', async () => {
+    const { rows } = await hostedList('', [
+      adapter('this-computer', [fits]),
+      adapter('clikdeploy', [row('clikdeploy', 'unsloth/Qwen3.5-4B-GGUF'), row('clikdeploy', 'Qwen/Qwen3.5-4B')]),
+    ]);
+    expect(rows.map((item) => item.id)).toEqual(['qwen', 'Qwen/Qwen3.5-4B']);
+  });
+
+  it('prices a model that fits this computer on ClikDeploy from the repo its weights come from, and offers it beside running here', async () => {
+    const priced: string[] = [];
+    const cloud = adapter('clikdeploy', [], async (item) => { priced.push(item.id); return { title: item.label, lines: [], confirm: 'go', costly: true, summary: '$0.068/hour' }; });
+    const plan = await hostedPlan(fits, [adapter('this-computer', []), cloud]);
+    expect(priced).toEqual(['unsloth/Qwen3.5-4B-GGUF']);
+    expect(plan.summary).toBe('this-computer:qwen');
+    expect(plan.alternative).toMatchObject({ row: { target: 'clikdeploy', id: 'unsloth/Qwen3.5-4B-GGUF', label: 'Qwen3.5 4B' }, plan: { summary: '$0.068/hour', costly: true } });
+  });
+
+  it('runs it here with no alternative when ClikDeploy cannot price it -- signed out, offline, gated -- rather than failing', async () => {
+    const cloud = adapter('clikdeploy', [], async () => { throw new Error('ClikDeploy Gateway is not connected'); });
+    const plan = await hostedPlan(fits, [adapter('this-computer', []), cloud]);
+    expect(plan.alternative).toBeUndefined();
+    expect(plan.summary).toBe('this-computer:qwen');
+  });
+
+  it('gives up on a price that does not come in time, and says nothing of it', async () => {
+    vi.useFakeTimers();
+    try {
+      const cloud = adapter('clikdeploy', [], (_item) => new Promise<HostedPlan>(() => undefined));
+      let signal: AbortSignal | undefined;
+      const watching: HostedAdapter = { ...cloud, plan: (item, aborted) => { signal = aborted; return cloud.plan(item); } };
+      const pending = hostedPlan(fits, [adapter('this-computer', []), watching]);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(signal?.aborted).toBe(true);
+      void pending;
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('has only its own plan for a model that needs a GPU, or one with no repo to price', async () => {
+    const asked: string[] = [];
+    const cloud = adapter('clikdeploy', [], async (item) => { asked.push(item.id); return { title: item.label, lines: [], confirm: 'go', costly: true, summary: '$1/hour' }; });
+    const gpu = row('clikdeploy', 'owner/huge');
+    expect((await hostedPlan(gpu, [adapter('this-computer', []), cloud])).alternative).toBeUndefined();
+    expect((await hostedPlan(row('this-computer', 'no-repo'), [adapter('this-computer', []), cloud])).alternative).toBeUndefined();
+    // Once for the model that needs the GPU, and not at all for the one with nothing to price.
+    expect(asked).toEqual(['owner/huge']);
   });
 });

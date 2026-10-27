@@ -11,22 +11,27 @@ A hosted model is one that runs on compute, whoever owns the compute. The picker
 
 One list, one search. `hostedList` merges every target's rows, this computer's first (recommended before the rest), then the GPUs. Words in the search that name a place choose it: `local`, `offline`, `computer`, `here` mean this computer; `cloud`, `gpu`, `hosted`, `clikdeploy` mean ClikDeploy. The rest names the model. A target that cannot answer (offline, signed out) does not hide the other: it is named in `unavailable`, and the picker says why.
 
-In the terminal the two groups are headed **Run on this computer** and **Run on ClikDeploy**, so where it runs is the group a row is under, not a tag on each. A row says only what helps choose between models: for this computer what it takes (`6.7 GB download`, or `downloaded`) and how fast it writes (`~8 tok/s`), plus `tool use unverified` for a model found on Hugging Face, which has not shown it can make the tool calls a coding agent needs; for a GPU its parameters. The rest of what the ranking knows (the backend, the first-reply estimate, the context, where it came from) stays in `LocalModelChoice.detail`, which `/model` with no name still prints, and is not on this screen.
+The two groups are headed **Fits this computer** and **On ClikDeploy** (in the terminal and in the editor), so which a model is is the group it is under, not a tag on each row. A model whose weights come from a repo ClikDeploy lists too appears once, under *Fits this computer*. A row says only what helps choose between models: for this computer what it takes (`6.7 GB download`, or `downloaded`) and how fast it writes (`~8 tok/s`), plus `tool use unverified` for a model found on Hugging Face, which has not shown it can make the tool calls a coding agent needs; for a GPU its parameters. The rest of what the ranking knows (the backend, the first-reply estimate, the context, where it came from) stays in `LocalModelChoice.detail`, which `/model` with no name still prints, and is not on this screen.
 
 Only a model that fits this machine is tagged Local, with its download size and speed. The local side is a curated, ranked catalog (`local-models/catalog`) plus what `discover.ts` finds, not a raw Hugging Face search, so a model that is only on Hugging Face is offered on the GPU side alone.
 
-## Starting one
+## Starting one: run here, or on ClikDeploy
 
-1. `plan(row)` says what it takes, before anything is spent or downloaded: for a local model that is not on disk the download size, in the question (`Download Gemma 4 12B (6.7 GB)?`) with one line under it; for a GPU the planner's GPU, speed, context and price per hour.
-2. The user confirms, if there is anything to confirm (`HostedPlan.consent`). A GPU always asks (unless the user chose "always start hosted AI models"); a download asks once. A model already on this computer is free and offline already, so choosing the row is the whole decision and nothing is asked -- in the terminal and in the editor, which starts it without opening the card.
-3. `start(row)` returns a `HostedSelection`: the route (`clikcode-local` or `gateway`) and the model id. A local model's download happens on its first turn, with `/model --download` recording that the size was accepted; a GPU deployment is created now, and the first prompt waits for it to be ready.
-4. The chat moves onto that route (history and all, as a provider change does) and `hostedSelectionCommand` selects the model.
+`hostedPlan(row)` says what choosing a row takes, before anything is spent or downloaded, and carries the other place to run it:
+
+- **A model that fits this computer** has a plan for running here (`downloaded · free, works offline`, or `6.7 GB download · free after, works offline`) and, when ClikDeploy's planner can price it, an `alternative`: the same model on a GPU (`$0.068/hour · 1 GPU · 17 GB · ~52 tok/s`). ClikDeploy plans from a Hugging Face repo, and a local model is one -- its GGUF weights' repo (`HostedRow.repo`) -- so every model that fits can be priced, whether or not ClikDeploy's own search lists it. The question is then one line each: **Run on this computer** or **Run on ClikDeploy**. Choosing is the consent -- the size or the price is on the option -- so nothing is asked again. Enter takes the first.
+- **A model that needs a GPU** has only its ClikDeploy estimate: one question (`Start X on ClikDeploy?` with the price, GPU and speed under *Start*), unless the user said to always start. Nothing about running it here, because it cannot.
+- **A model that fits and cannot be priced** (signed out, offline, gated, or no answer within 6 s) is run here with no choice: a download asks once with its size, a model on disk asks nothing.
+
+Esc at the question goes back to the list. The estimate is the planner's, not a promise: it can differ from what a deployment ends up as.
+
+`start(row)` returns a `HostedSelection`: the route (`clikcode-local` or `gateway`) and the model id. A local model's download happens in the background (see below); a GPU deployment is created now, and the chat moves onto it with `hostedSelectionCommand`.
 
 `clikcode-local` stays a route and a harness alias, so existing chats and scripts keep working; only the separate "ClikCode Local" entry in the pickers gives way to this list.
 
 ## Editor protocol (revision 9)
 
-`query hosted` `{ search }` returns the merged list; `query hosted-plan` `{ row }` returns the plan; `choose { kind: 'hosted', row }` starts it and moves the chat. An older bridge has none of these, so the editor shows the Hosted AI row only for revision 9 or later.
+`query hosted` `{ search }` returns the merged list; `query hosted-plan` `{ row }` returns the plan, with `alternative` (the same model on ClikDeploy) when there is one -- an optional field, so no revision change: an older editor ignores it and a newer one with an older bridge never sees it; `choose { kind: 'hosted', row }` starts it and moves the chat. An older bridge has none of these, so the editor shows the Hosted AI row only for revision 9 or later.
 
 ## Not yet
 

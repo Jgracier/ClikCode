@@ -13,13 +13,13 @@ export const thisComputer: HostedAdapter = {
       .filter((choice) => !needle || `${choice.label} ${choice.id}`.toLowerCase().includes(needle))
       .map((choice): HostedRow => ({
         target: 'this-computer', id: choice.id, label: choice.label, detail: choice.brief || choice.detail,
-        downloadBytes: choice.downloadBytes, recommended: choice.recommended,
+        downloadBytes: choice.downloadBytes, recommended: choice.recommended, repo: choice.repo,
       }));
   },
 
   async plan(row): Promise<HostedPlan> {
     // On disk, it is free and offline already: choosing the row is the whole decision, so nothing is asked.
-    if (!row.downloadBytes) return { title: row.label, lines: [], confirm: 'Use it', costly: false, consent: false };
+    if (!row.downloadBytes) return { title: row.label, lines: [], confirm: 'Use it', costly: false, consent: false, summary: 'downloaded · free, works offline' };
     const size = formatBytes(row.downloadBytes);
     return {
       title: `Download ${row.label} (${size})?`,
@@ -27,6 +27,7 @@ export const thisComputer: HostedAdapter = {
       confirm: 'Download',
       costly: false,
       consent: true,
+      summary: `${size} download · free after, works offline`,
     };
   },
 

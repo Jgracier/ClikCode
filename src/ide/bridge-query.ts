@@ -9,7 +9,7 @@ import type { IdeQueryName, IdeSlashCommand } from './protocol.js';
 import { accountList, chatSettings, conversationList, gatewayStatus, modelList, providerList } from './queries.js';
 import { messageOf } from './bridge-support.js';
 import type { BridgeHost } from './bridge-host.js';
-import { hostedAdapter, hostedList, type HostedRow } from '../hosted-models/index.js';
+import { hostedList, hostedPlan, type HostedRow } from '../hosted-models/index.js';
 
 export async function answerQuery(host: BridgeHost, requestId: string, query: IdeQueryName, options: { provider?: string; network?: boolean; search?: string; row?: HostedRow }): Promise<void> {
   const answer = (data: unknown): void => host.channel.send({ type: 'result', requestId, ok: true, data });
@@ -47,7 +47,7 @@ export async function answerQuery(host: BridgeHost, requestId: string, query: Id
       case 'hosted': answer(await hostedList(options.search ?? '')); return;
       case 'hosted-plan':
         if (!options.row) throw new Error('hosted-plan needs a row');
-        answer(await hostedAdapter(options.row.target).plan(options.row));
+        answer(await hostedPlan(options.row));
         return;
       default: throw new Error(`unknown query "${String(query)}"`);
     }

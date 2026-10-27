@@ -2,7 +2,8 @@
 import { discoveryRefresh } from '../local-models/discover.js';
 import { clikdeploy } from './clikdeploy.js';
 import { thisComputer } from './this-computer.js';
-import type { HostedAdapter, HostedList, HostedRow, HostedTarget } from './types.js';
+import { quiet } from '../runtime/lifecycle-log.js';
+import type { HostedAdapter, HostedList, HostedPlan, HostedRow, HostedTarget } from './types.js';
 
 export * from './types.js';
 
@@ -43,7 +44,35 @@ export async function hostedList(query: string, adapters: readonly HostedAdapter
     if (answer.status === 'fulfilled') rows.push(...answer.value);
     else unavailable.push({ target: wanted[index]!.target, message: answer.reason instanceof Error ? answer.reason.message : String(answer.reason) });
   });
-  return { rows: ordered(rows), unavailable, ...(discoveryRefresh() ? { refreshing: true as const } : {}) };
+  // A model that fits this computer is priced for ClikDeploy from the repo it comes from (hostedPlan), so the same repo listed again by
+  // ClikDeploy's search is the one model twice: it stays where it fits this computer.
+  const local = new Set(rows.flatMap((row) => (row.target === 'this-computer' && row.repo ? [row.repo] : [])));
+  const merged = rows.filter((row) => !(row.target === 'clikdeploy' && local.has(row.id)));
+  return { rows: ordered(merged), unavailable, ...(discoveryRefresh() ? { refreshing: true as const } : {}) };
+}
+
+/** How long to wait for ClikDeploy's price for a model that already fits this computer. A model that does not fit is waited for: its price
+ * is the whole answer. */
+const ALTERNATIVE_MS = 6_000;
+
+/** What choosing `row` takes, said before anything is spent or downloaded.
+ *
+ * A model that fits this computer comes with the same model on ClikDeploy (`alternative`) when its planner can price it -- it takes the
+ * repo the local weights come from -- so the choice is "here, or there, at this price". Signed out, offline, gated or slow, there is no
+ * alternative and the model is simply run here, as before. A model that does not fit this computer has only its ClikDeploy estimate. */
+export async function hostedPlan(row: HostedRow, adapters: readonly HostedAdapter[] = HOSTED_ADAPTERS): Promise<HostedPlan> {
+  const plan = await hostedAdapter(row.target, adapters).plan(row);
+  const cloud = adapters.find((adapter) => adapter.target === 'clikdeploy');
+  if (row.target !== 'this-computer' || !row.repo || !cloud) return plan;
+  const cloudRow: HostedRow = { target: 'clikdeploy', id: row.repo, label: row.label, detail: '' };
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(), ALTERNATIVE_MS);
+  try {
+    return { ...plan, alternative: { row: cloudRow, plan: await cloud.plan(cloudRow, deadline.signal) } };
+  } catch (error) {
+    quiet('hosted-models')(error);
+    return plan;
+  } finally { clearTimeout(timer); }
 }
 
 export function hostedAdapter(target: HostedTarget, adapters: readonly HostedAdapter[] = HOSTED_ADAPTERS): HostedAdapter {
