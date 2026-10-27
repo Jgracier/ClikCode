@@ -91,3 +91,13 @@ it('lets an agent list what is saved, names and dates only', async () => {
   expect(some.output).not.toContain('acme/key');
   expect((await accountUseTool.run({ action: 'secrets', target: 'nothing' } as never, { stateDir: dir } as never)).output).toContain('No saved key matches');
 });
+
+it('asks the other computer once more when its first answer is not a vault, and says what came back if the second is not either', async () => {
+  const a = await fresh(), b = await fresh();
+  await saveNamedSecret(a, 'acme/key', 'value-1111');
+  let calls = 0;
+  await syncVault(a, payload => (calls++ === 0 ? Promise.resolve('{"status":"error","message":"hiccup"}') : exchangeVault(b, payload)));
+  expect(calls).toBe(2);
+  expect(await readNamedSecret(b, 'acme/key')).toBe('value-1111');
+  await expect(syncVault(a, () => Promise.resolve('{"status":"error","message":"nope"}'))).rejects.toThrow('nope');
+});
