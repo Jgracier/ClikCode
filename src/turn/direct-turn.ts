@@ -16,6 +16,8 @@ import { matchesDirectTurnModel, turnAccounts } from './account-routing.js';
 import { recordInvocation, turnSink } from './turn-output.js';
 import { emitHarnessOutput } from '../harness/output.js';
 import { withMoveNote } from './resource-notes.js';
+import { withAccountSwitchNote } from './account-switch-note.js';
+import { cachedAccountUsageLabel } from '../harness/accounts/account-usage.js';
 
 export async function sendDirectApiTurn(input: AccountTurnInput): Promise<'switch' | void> {
   const { state, session, text, prepared, startedAt, signal, run } = input;
@@ -54,7 +56,8 @@ export async function sendDirectApiTurn(input: AccountTurnInput): Promise<'switc
     // Each provider delta then goes straight to the checkpoint and the screen.
     checkpoint.response('', 'replace');
     prompter?.response('', 'replace');
-    const messages = [...baseMessages, { role: 'user', content: turnText }];
+    // After a switch the model is told (account-switch-note.ts); the first attempt on the first account has nothing to add.
+    const messages = [...baseMessages, { role: 'user', content: withAccountSwitchNote(turnText, session.pendingTurn?.accountSwitch, cachedAccountUsageLabel(active, state)) }];
     promptChars = messages.reduce((sum, message) => sum + message.content.length, 0);
     return streamLocalAiTurn({
       provider: session.provider ?? active.provider, model, apiKey: localApiKey(active),

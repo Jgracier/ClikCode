@@ -22,6 +22,7 @@ import { writeFullRecord } from '../session/full-record.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { createVendorTurnContext, type VendorTurnContext } from './vendor-turn-context.js';
 import { withMoveNote } from './resource-notes.js';
+import { noteAccountSwitch } from './account-switch-note.js';
 
 /** The thread under the account this turn runs on (session/carry.ts). */
 async function settleThread(ctx: VendorTurnContext): Promise<void> {
@@ -154,12 +155,16 @@ export async function sendVendorTurn(input: AccountTurnInput): Promise<'switch' 
     // A chat that just moved here: the agent is told so, ahead of everything
     // the turn sends -- the taken-up conversation included (session/move.ts).
     ctx.turnText = withMoveNote(ctx.session, ctx.turnText);
+    // Moved off a spent account before the first attempt: the agent is told which, and how much the new one has.
+    noteAccountSwitch(ctx);
     const observer = createVendorObserver(ctx);
     for (;;) {
       if (await followLiveSettings(ctx, seen) === 'switch') return 'switch';
       const attempt = await runAttempt(ctx, observer);
       if (await settleAttempt(ctx, observer, attempt)) {
         await recoverFromFailure(ctx, observer, attempt);
+        // A switch rebuilds the retry's text from the user's request: the note goes in again, after it (once per account).
+        noteAccountSwitch(ctx);
         continue;
       }
       await completeVendorTurn(ctx, observer, attempt);
