@@ -19,7 +19,7 @@ it('finds the Tailscale address among the interfaces, and none without one', () 
 const SITE = `<title>t0</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;font:16px sans-serif}input,select,button{display:block;margin:14px 20px;width:300px;height:44px;font-size:16px}#n{font-size:40px;margin:0 20px}</style>
 <button id="b" onclick="document.title='clicked'">Tap me</button>
 <input id="name" aria-label="Full name"><input id="pw" type="password" autocomplete="current-password" aria-label="Password">
-<input id="otp" autocomplete="one-time-code" inputmode="numeric" aria-label="Code">
+<input id="locked" disabled value="fixed" aria-label="Account number"><input id="otp" autocomplete="one-time-code" inputmode="numeric" aria-label="Code">
 <select id="sel" aria-label="Plan" onchange="document.title='plan '+this.value"><option value="a">Free</option><option value="b">Pro</option></select>
 <input id="when" type="date" aria-label="Start date" onchange="document.title='date '+this.value">
 <label><input id="agree" type="checkbox" onchange="document.title='agree '+this.checked"> I agree to the terms</label>
@@ -90,7 +90,11 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('shows the tab live on a 
     expect(await phone.locator('#stage').isVisible()).toBe(false);
     expect(await phone.locator('#view').innerText()).toBe('Page');
     const control = (label: string) => phone.locator('.row', { has: phone.locator('.lab', { hasText: label }) }).locator('.ctl');
-    expect(await phone.locator('.lab').allInnerTexts()).toEqual(['Full name', 'Password', 'Code', 'Plan', 'Start date']);
+    expect(await phone.locator('.lab').allInnerTexts()).toEqual(['Full name', 'Password', 'Account number', 'Code', 'Plan', 'Start date']);
+    expect(await phone.locator('.lab.locked').allInnerTexts()).toEqual(['Account number']);
+    // A field the page has switched off is shown with the page's own value, greyed out, and cannot be changed from the phone.
+    expect(await control('Account number').isDisabled()).toBe(true);
+    expect(await control('Account number').inputValue()).toBe('fixed');
     await control('Full name').fill('hello');
     expect(await wait(() => page.locator('#name').inputValue(), value => value === 'hello')).toBe('hello');
     await control('Full name').fill('Ada Lovelace');
@@ -127,7 +131,7 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('shows the tab live on a 
     expect(await phone.locator('.note').innerText()).toContain('picture check');
     await page.goto(`http://127.0.0.1:${(site.address() as AddressInfo).port}/`);
     await wait(() => phone.locator('.note').count(), count => count === 0);
-    await wait(() => phone.locator('.lab').count(), count => count === 5);
+    await wait(() => phone.locator('.lab').count(), count => count === 6);
 
     // The picture, for what a form cannot show: frames arrive and keep arriving as the page changes, drawn on the canvas.
     await phone.locator('#view').click();
@@ -148,8 +152,14 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('shows the tab live on a 
     expect(await wait(() => handoff<number>('h => h.fields'), count => count >= 5)).toBeGreaterThanOrEqual(5);
     expect(await phone.locator('#mode').innerText()).toBe('Mouse');
 
+    // Where a control is, once the page has stopped moving (a mode or a page change re-lays it out): the same answer three times running.
+    const settled = async <T,>(read: () => Promise<T>): Promise<T> => {
+      let last = '', same = 0, value: T = await read();
+      for (let i = 0; i < 60 && same < 3; i++) { await new Promise(resolve => setTimeout(resolve, 60)); value = await read(); const now = JSON.stringify(value); same = now === last ? same + 1 : 0; last = now; }
+      return value;
+    };
     const tap = async (selector: string): Promise<void> => {
-      const box = (await page.locator(selector).boundingBox())!;
+      const box = (await settled(() => page.locator(selector).boundingBox()))!;
       await phone.touchscreen.tap(stage.left + box.x + box.width / 2, stage.top + box.y + box.height / 2);
     };
 
@@ -242,7 +252,7 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('shows the tab live on a 
     await page.goto(`http://127.0.0.1:${(site.address() as AddressInfo).port}/wide`);
     const zoomedOut = await wait(() => page.evaluate(() => visualViewport!.scale), scale => scale < 0.6);
     expect(zoomedOut).toBeLessThan(0.6);
-    const drawn = await page.evaluate(() => { const v = visualViewport!, r = document.getElementById('far')!.getBoundingClientRect(); return { x: (r.x + r.width / 2 - v.offsetLeft) * v.scale, y: (r.y + r.height / 2 - v.offsetTop) * v.scale }; });
+    const drawn = await settled(() => page.evaluate(() => { const v = visualViewport!, r = document.getElementById('far')!.getBoundingClientRect(); return { x: Math.round((r.x + r.width / 2 - v.offsetLeft) * v.scale), y: Math.round((r.y + r.height / 2 - v.offsetTop) * v.scale), s: Math.round(v.scale * 1000) }; }));
     await phone.touchscreen.tap(stage.left + drawn.x, stage.top + drawn.y);
     expect(await wait(() => page.title(), title => title === 'far hit')).toBe('far hit');
     const fingers = async (type: string, a: [number, number], b: [number, number]): Promise<void> => { await cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x: stage.left + a[0], y: stage.top + a[1], id: 1 }, { x: stage.left + b[0], y: stage.top + b[1], id: 2 }] } as never); };
