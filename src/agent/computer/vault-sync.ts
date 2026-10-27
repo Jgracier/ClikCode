@@ -31,8 +31,8 @@ export async function syncVault(stateDir: string, transport: Transport): Promise
 /** `tailscale ssh <target> clikcode computer secrets --exchange`, the message on its standard input and the answer on its standard output. */
 export function tailscaleTransport(target: string): Transport {
   if (!/^[\w.-]+@[\w.-]+$/.test(target)) throw new Error('Name the other computer as user@host, for example chronos@macbook.');
-  // A non-interactive ssh shell does not have the user's PATH; ClikCode installs to ~/.local/bin.
-  const remote = 'PATH="$HOME/.local/bin:$PATH" clikcode computer secrets --exchange';
+  // A non-interactive ssh shell does not have the user's PATH; ClikCode installs to ~/.local/bin, and may carry its own node beside it.
+  const remote = 'PATH="$HOME/.local/bin:$HOME/.local/share/clikcode/node/bin:$PATH" clikcode computer secrets --exchange';
   return payload => new Promise((resolve, reject) => {
     const child = spawn('tailscale', ['ssh', target, remote], { stdio: ['pipe', 'pipe', 'pipe'] });
     let out = '', err = '';
