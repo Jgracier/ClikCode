@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { listTasks } from './work-queue.js';
-import { authorizationUrl, classifyStuck, oauthConnect, type ConsentStop, startFailure, callbackState, GENERIC_ACTIONS, nextPress, readConsent, decideSelectors, providerFor, scopeTicks, scopesTicked, type ScopeBox, stopReason, type Control } from './oauth-consent.js';
+import { OPENS_ANOTHER_APP, authorizationUrl, classifyStuck, oauthConnect, type ConsentStop, startFailure, callbackState, GENERIC_ACTIONS, nextPress, readConsent, decideSelectors, providerFor, scopeTicks, scopesTicked, type ScopeBox, stopReason, type Control } from './oauth-consent.js';
 
 const press = (...names: string[]): Control[] => names.map(name => ({ name, leaf: false }));
 const pick = (host: string, controls: Control[], text = '', options: { email?: string; skipAccount?: boolean } = {}): string | undefined => {
@@ -271,5 +271,12 @@ describe('Google granular consent and the unverified-app chain', () => {
 
   it('does not press Continue on a payment page', () => {
     expect(pick(google, press('Continue'), 'Add a payment method. Card number. Continue')).toBeUndefined();
+  });
+});
+
+describe('links that open another program', () => {
+  it('are told apart from the page\'s own addresses', () => {
+    for (const href of ['mailto:me@example.com', ' MAILTO:me@example.com', 'tel:+15555550100', 'sms:+15555550100', 'callto:me', 'facetime:me@example.com', 'zoommtg://zoom.us/join']) expect(OPENS_ANOTHER_APP.test(href), href).toBe(true);
+    for (const href of ['', '#', '/signin/oauth', 'signin?x=1', 'https://accounts.google.com/x', 'http://127.0.0.1:1/y', 'javascript:void(0)', 'about:blank']) expect(OPENS_ANOTHER_APP.test(href), href).toBe(false);
   });
 });

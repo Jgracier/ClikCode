@@ -31,8 +31,11 @@ function collectView(): { text: string; controls: KeyControl[]; fields: string[]
   };
   const controls: KeyControl[] = [];
   const seenNames = new Set<string>();
+  // Not a link that opens another program (mailto:, tel:, ...): the page would not move and the computer would open a mail program. Same rule as OPENS_ANOTHER_APP.
+  const leavesPage = /^\s*(?!https?:|javascript:|about:)[a-z][a-z0-9+.-]*:/i;
   for (const n of all(`${pressable}, span, div, p, li, label`).slice(0, 2500)) {
     if (!n.getClientRects().length) continue;
+    if (leavesPage.test((n.closest('a[href]') as { getAttribute(n: string): string | null } | null)?.getAttribute('href') ?? '')) continue;
     const isPress = n.matches(pressable);
     if (!isPress && n.children.length) continue;
     const name = norm(n.getAttribute('aria-label') || n.value || n.textContent);

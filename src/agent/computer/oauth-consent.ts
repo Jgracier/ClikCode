@@ -53,6 +53,12 @@ export interface Control { name: string; leaf: boolean }
 
 export const providerFor = (host: string): ConsentProvider | undefined => CONSENT_PROVIDERS.find(p => p.host.test(host));
 
+/** A link whose address starts a program other than the page (mailto:, tel:, sms:, callto:, facetime:, an app's own scheme). The browser hands
+ * it to the operating system, which opens a mail client or a chooser, and the page never moves on: the sign-in driver would press it again.
+ * Google's "hasn't verified this app" page prints the developer's address as a mailto: link, which a text match for the profile's email took for
+ * the account to choose. Web, javascript:, about: and relative addresses are the page's own. */
+export const OPENS_ANOTHER_APP = /^\s*(?!https?:|javascript:|about:)[a-z][a-z0-9+.-]*:/i;
+
 const NOT_CHOOSER = /\b(sign out|log ?out|switch|remove|use another|add (?:an )?account|different account)\b/i;
 
 /** The platform's own name as a vendor's consent page shows it ("Authorize ClikDeploy"). */
@@ -256,13 +262,16 @@ export function startViaCli(connector: string, signal?: AbortSignal): Promise<Co
 const PRESSABLE = 'button, [role=button], a, [role=link], input[type=submit], input[type=button], summary, [data-identifier], [data-email], [data-test-id], [onclick]';
 
 async function readControls(page: Page): Promise<Control[]> {
-  return page.evaluate(({ pressable }) => {
+  return page.evaluate(({ pressable, otherApp }) => {
+    const leavesPage = new RegExp(otherApp, 'i');
     const out: { name: string; leaf: boolean }[] = [];
     const seen = new Set<string>();
     const doc = (globalThis as unknown as { document: { querySelectorAll(s: string): ArrayLike<Record<string, unknown>> } }).document;
-    const all = Array.from(doc.querySelectorAll(`${pressable}, span, div, p, li, label`)).slice(0, 1500) as unknown as Array<{ matches(s: string): boolean; getClientRects(): { length: number }; children: { length: number }; textContent: string | null; getAttribute(n: string): string | null; value?: string }>;
+    const all = Array.from(doc.querySelectorAll(`${pressable}, span, div, p, li, label`)).slice(0, 1500) as unknown as Array<{ matches(s: string): boolean; getClientRects(): { length: number }; children: { length: number }; textContent: string | null; getAttribute(n: string): string | null; closest(s: string): { getAttribute(n: string): string | null } | null; value?: string }>;
     for (const n of all) {
       if (!n.getClientRects().length) continue;
+      // Not on, or inside, a link that opens another program: pressing it would never change the page.
+      if (leavesPage.test(n.closest('a[href]')?.getAttribute('href') ?? '')) continue;
       const isPress = n.matches(pressable);
       if (!isPress && n.children.length) continue;
       const text = (n.getAttribute('aria-label') || n.value || n.textContent || '').replace(/\s+/g, ' ').trim();
@@ -275,7 +284,7 @@ async function readControls(page: Page): Promise<Control[]> {
       out.push({ name, leaf: !isPress });
     }
     return out;
-  }, { pressable: PRESSABLE });
+  }, { pressable: PRESSABLE, otherApp: OPENS_ANOTHER_APP.source });
 }
 
 
@@ -369,8 +378,15 @@ async function press(page: Page, control: Control): Promise<boolean> {
   const candidates = control.leaf ? [page.getByText(exact, { exact: true })] : [page.getByRole('button', { name: exact, exact: true }), page.getByRole('link', { name: exact, exact: true }), page.locator(PRESSABLE).filter({ hasText: exact }), page.getByText(exact, { exact: true })];
   for (const base of candidates) {
     const shown = base.filter({ visible: true });
-    if (!(await shown.count().catch(() => 0))) continue;
-    if (await shown.first().click({ timeout: 3_000 }).then(() => true, () => false)) return true;
+    const count = await shown.count().catch(() => 0);
+    // The same words can sit on a link that opens another program (an email address as text): never that one.
+    for (let i = 0; i < Math.min(count, 8); i++) {
+      const one = shown.nth(i);
+      const away = await one.evaluate((node, otherApp) => new RegExp(otherApp, 'i').test((node as unknown as { closest(s: string): { getAttribute(n: string): string | null } | null }).closest('a[href]')?.getAttribute('href') ?? ''), OPENS_ANOTHER_APP.source).catch(() => false);
+      if (away) continue;
+      if (await one.click({ timeout: 3_000 }).then(() => true, () => false)) return true;
+      break;
+    }
   }
   return false;
 }
