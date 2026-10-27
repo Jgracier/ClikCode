@@ -155,11 +155,12 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   computer.command('secrets').description('List the names of saved secrets, or delete one (values are never shown)')
     .option('--delete <name>', 'Delete this secret').option('--backfill', 'Record a vendor (and --owner) on secrets saved before records existed').option('--owner <email>', 'With --backfill: the account these belong to')
     .option('--export <file>', 'Write an encrypted backup of every login, secret and profile (passphrase typed hidden)').option('--import <file>', 'Restore a backup written by --export (passphrase typed hidden)').option('--overwrite', 'With --import: replace items that are already here')
-    .option('--audit', 'Show what is untidy: twin names, odd names, secrets with no owner, rejected logins').option('--sync <user@host>', 'Make this computer\'s vault and another one\'s the same, over Tailscale (the newer secret wins, nothing is deleted)').option('--exchange', 'The other end of --sync (reads a vault on standard input)')
-    .action(async (options: { delete?: string; backfill?: boolean; owner?: string; export?: string; import?: string; overwrite?: boolean; audit?: boolean; sync?: string; exchange?: boolean }) => {
+    .option('--url <name=https://site>', 'Record the site a saved key is for').option('--audit', 'Show what is untidy: twin names, odd names, keys with no site or owner, incomplete or rejected logins').option('--sync <user@host>', 'Make this computer\'s vault and another one\'s the same, over Tailscale (the newer secret wins, nothing is deleted)').option('--exchange', 'The other end of --sync (reads a vault on standard input)')
+    .action(async (options: { delete?: string; backfill?: boolean; owner?: string; export?: string; import?: string; overwrite?: boolean; audit?: boolean; sync?: string; exchange?: boolean; url?: string }) => {
       const computer = await import('../commands/computer.js');
       if (options.exchange) return computer.computerVaultExchange();
       if (options.sync) return computer.computerVaultSync(options.sync);
+      if (options.url) return computer.computerSecretUrl(options.url);
       if (options.audit) return computer.computerVaultAudit();
       return computer.computerSecrets(options.delete, options.backfill ? { ...(options.owner ? { owner: options.owner } : {}) } : undefined,
         options.export || options.import ? { ...(options.export ? { export: options.export } : {}), ...(options.import ? { import: options.import } : {}), ...(options.overwrite ? { overwrite: true } : {}) } : undefined);

@@ -50,9 +50,9 @@ type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'u
 type WebArgs = {
   /** help: an action name, or "guide". */
   topic?: string;
-  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'secrets' | 'profile' | 'open_email_link' | 'read_email_code' | 'email_connect' | 'oauth_connect' | 'notes' | 'recipe' | 'queue' | 'network' | 'preflight' | 'forget_login' | 'help' | 'hover' | 'drag' | PageAction | FilesEnvAction;
+  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'secrets' | 'accounts' | 'profile' | 'open_email_link' | 'read_email_code' | 'email_connect' | 'oauth_connect' | 'notes' | 'recipe' | 'queue' | 'network' | 'preflight' | 'forget_login' | 'help' | 'hover' | 'drag' | PageAction | FilesEnvAction;
   tab?: string; at?: 'start' | 'end'; url?: string; host?: string; note?: string; recipe_op?: 'save' | 'get' | 'run' | 'list'; login_route?: string; key_page?: string; capture_hint?: string; target?: string; text?: string; key?: string; direction?: ScrollDirection; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
-  new_account?: boolean; secret?: string; to?: string; with?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean; format?: string; options?: string[]; secret?: boolean }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; vendor?: string; owner?: string; env?: string; task?: { vendor: string; kind?: string; status?: string; reason?: string; note?: string; owner?: string; connectors?: string[] }; bodies?: boolean; tasks?: boolean; task_status?: string; task_reason?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
+  new_account?: boolean; method?: string; secret?: string; to?: string; with?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean; format?: string; options?: string[]; secret?: boolean }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; vendor?: string; owner?: string; env?: string; task?: { vendor: string; kind?: string; status?: string; reason?: string; note?: string; owner?: string; connectors?: string[] }; bodies?: boolean; tasks?: boolean; task_status?: string; task_reason?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
 } & PageArgs & FilesEnvArgs;
 
 export function webAddress(value: string | undefined): string {
@@ -338,6 +338,7 @@ const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: [
     bodies: { type: 'boolean', description: 'network: also show request and answer bodies (truncated, key-like values hidden). Default: shapes only.' },
     tasks: { type: 'boolean', description: 'queue: list the tasks (filter with task_status, task_reason) with a summary.' },
     task_status: { type: 'string' }, task_reason: { type: 'string' },
+    method: { type: 'string', description: 'accounts: the provider an OAuth sign-in went through (google, github, microsoft) when recording one.' },
     secret_name: { type: 'string', description: 'capture_secret: name to save the key under (default: the site\'s name plus "/key").' },
     send_to: { ...SEND_TO_SCHEMA, description: 'capture_secret: ' + SEND_TO_HELP },
     ...FILES_ENV_PARAMETERS,
@@ -402,12 +403,26 @@ export const computerWebTool = defineTool<WebArgs>({
       if (!(await computerEnabled(ctx.stateDir))) throw new Error(COMPUTER_OFF);
       if (!ALL_ACTION_NAMES.includes(String(args.action))) throw new Error(`Unknown action "${String(args.action)}". Actions: ${ACTION_LIST}.`);
       if (args.action === 'send_secret') return storeSecretTool.run({ secret: args.secret ?? '', ...(args.to ? { to: args.to } : {}), ...(args.with ? { with: args.with } : {}), ...(args.send_to ? { send_to: args.send_to } : {}) }, ctx);
+      if (args.action === 'accounts') {
+        const { allSavedLogins, saveSignInMethod } = await import('../computer/credential-vault.js');
+        // Record how a site was signed in to when it went through a provider: accounts + target (the site) + method + fields.email.
+        if (args.method) {
+          const account = args.fields?.email ?? args.fields?.username ?? '';
+          const id = await saveSignInMethod(ctx.stateDir, /^https?:/i.test(args.target ?? '') ? args.target! : `https://${args.target ?? ''}`, args.method.toLowerCase(), account);
+          return { output: `Recorded: ${args.target} is signed in to with ${args.method} as ${account} (${id.slice(0, 8)}).` };
+        }
+        const words = (args.target ?? '').toLowerCase().split(/\s+/).filter(Boolean);
+        const found = (await allSavedLogins(ctx.stateDir)).filter(login => words.every(word => `${login.name} ${login.baseUrl}`.toLowerCase().includes(word)));
+        if (!found.length) return { output: words.length ? `No saved sign-in matches "${args.target}".` : 'No sign-ins are saved yet.' };
+        const lines = found.slice(0, 150).map(login => `${login.name}  ${login.baseUrl}  ${login.method === 'password' ? 'password' : `via ${login.method}`}  ${login.label}${login.complete ? '' : '  (incomplete)'}`);
+        return { output: `${found.length} saved sign-in${found.length === 1 ? '' : 's'}${found.length > lines.length ? `, first ${lines.length}; add words to target to narrow` : ''}. Passwords are never shown; login signs in with one.\n${lines.join('\n')}` };
+      }
       if (args.action === 'secrets') {
         const { namedSecretInfo } = await import('../computer/credential-vault.js');
         const words = (args.target ?? '').toLowerCase().split(/\s+/).filter(Boolean);
         const found = (await namedSecretInfo(ctx.stateDir)).filter(({ name }) => words.every(word => name.toLowerCase().includes(word)));
         if (!found.length) return { output: words.length ? `No saved key matches "${args.target}". Capture one with capture_secret.` : 'No keys are saved yet. Capture one with capture_secret.' };
-        const shown = found.slice(0, 150).map(({ name, meta }) => `${name}${meta ? `  (saved ${meta.createdAt.slice(0, 10)}${meta.rotatedAt ? `, rotated ${meta.rotatedAt.slice(0, 10)}` : ''})` : ''}`);
+        const shown = found.slice(0, 150).map(({ name, meta }) => `${name}${meta ? `  ${meta.url ?? 'no site recorded'}  (saved ${meta.createdAt.slice(0, 10)}${meta.rotatedAt ? `, rotated ${meta.rotatedAt.slice(0, 10)}` : ''})` : ''}`);
         return { output: `${found.length} saved key${found.length === 1 ? '' : 's'}${found.length > shown.length ? `, first ${shown.length}; add words to target to narrow` : ''}. Values are never shown; send one on with send_secret.\n${shown.join('\n')}` };
       }
       if (args.action === 'preflight') {
@@ -546,7 +561,7 @@ const SHARED_TEXT: Record<ToolKind, Record<string, string>> = {
   },
   account: {
     action: 'What to do. help lists every action with an example.',
-    target: 'capture_secret: the final Create button ([ref=…] or its visible text). oauth_connect: the connector id (slack, github).',
+    target: 'capture_secret: the final Create button ([ref=…] or its visible text). oauth_connect: the connector id (slack, github). secrets, accounts: words to filter by (accounts with method: the site\'s address).',
     seconds: 'read_email_code, open_email_link: how long to wait for the email to arrive (default 90).',
     steps: 'recipe save: the steps that worked, e.g. [{do:"click", target:"Create key"}]. Never typed values.',
   },
@@ -1285,7 +1300,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       const name = args.secret_name?.trim() || `${new URL(page.url()).hostname.replace(/^www\./, '')}/key`;
       // The clipboard is one thing and a Copy button only works in the focused tab: captures take turns, each in front.
       const { length, shape, via, check, sent } = await inOrder('clipboard', async () => { await page.bringToFront().catch(quiet('agent/tools/computer-web')); return captureSecret({ ...(args.paste ? { paste: true } : {}), stateDir: ctx.stateDir, page, name, signal: ctx.signal,
-        meta: { vendor: args.vendor ?? new URL(page.url()).hostname.replace(/^www\./, ''), owner: args.owner ?? (await listProfiles(ctx.stateDir))[0]?.fields.sso_email, ...(args.env ? { env: args.env } : {}) },
+        meta: { url: new URL(page.url()).origin, vendor: args.vendor ?? new URL(page.url()).hostname.replace(/^www\./, ''), owner: args.owner ?? (await listProfiles(ctx.stateDir))[0]?.fields.sso_email, ...(args.env ? { env: args.env } : {}) },
         ...(plan?.length ? { sendTo: plan } : {}),
         ...(args.target ? { trigger: async () => { await clickOrHint(await locate(page, args.target)); } } : {}),
         ...(args.target ? { readTarget: async () => { const element = await locate(page, args.target); return (await element.inputValue({ timeout: 1_000 }).catch(() => '')) || (await element.innerText({ timeout: 1_000 }).catch(() => '')); } } : {}),

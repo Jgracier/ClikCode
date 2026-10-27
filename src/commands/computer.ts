@@ -173,10 +173,22 @@ export async function computerVaultAudit(): Promise<void> {
   const lines = [
     `Twin names (one key saved under two spellings): ${audit.twins.length ? audit.twins.map(names => names.join(' = ')).join('; ') : 'none'}`,
     `Odd names (no vendor/, or dated or numbered): ${audit.oddNames.length ? audit.oddNames.join(', ') : 'none'}`,
+    `Keys with no site recorded: ${audit.noUrl.length}${audit.noUrl.length ? ` (${audit.noUrl.slice(0, 12).join(', ')}${audit.noUrl.length > 12 ? ', …' : ''}); clikcode computer secrets --backfill fills in what the name or a saved login tells, --url name=https://site does the rest` : ''}`,
+    `Sign-ins missing an account or a password: ${audit.incompleteLogins.length ? audit.incompleteLogins.map(login => `${login.site} (${login.method})`).join(', ') : 'none'}`,
     `No owner recorded: ${audit.noOwner.length} secret${audit.noOwner.length === 1 ? '' : 's'}${audit.noOwner.length ? ' (clikcode computer secrets --backfill --owner <email>)' : ''}`,
     `Logins the site rejected: ${audit.rejectedLogins.length ? audit.rejectedLogins.map(login => `${login.site} (${login.label})`).join(', ') : 'none'}`,
   ];
   process.stdout.write(`${lines.join('\n')}\n`);
+}
+
+/** `--url name=https://site`: records the site a saved key is for. */
+export async function computerSecretUrl(assignment: string): Promise<void> {
+  const at = assignment.indexOf('=');
+  if (at < 1) throw new Error('Give it as name=https://site, for example acme/key=https://acme.com.');
+  const { setSecretUrl } = await import('../agent/computer/credential-vault.js');
+  await setSecretUrl(stateDirectory(), assignment.slice(0, at), assignment.slice(at + 1));
+  if (isJsonDefaultMode()) return emitResult({ computer: { url: assignment.slice(0, at) } });
+  process.stdout.write(`Recorded the site for "${assignment.slice(0, at)}".\n`);
 }
 
 /** `--sync <user@host>`: both computers end up with every login, secret and profile of the two. */

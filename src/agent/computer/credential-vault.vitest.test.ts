@@ -60,8 +60,8 @@ it('lists saved logins across sites for the user and removes only the one named'
   const google = await saveLoginFields(dir, 'https://accounts.google.com/', { username: 'one@example.com', password: 'a' });
   const aws = await saveLoginFields(dir, 'https://signin.aws.amazon.com/', { username: 'admin', password: 'b' });
   expect(await allSavedLogins(dir)).toEqual([
-    { id: google, site: 'accounts.google.com', label: 'one@example.com' },
-    { id: aws, site: 'signin.aws.amazon.com', label: 'admin' },
+    { id: google, site: 'accounts.google.com', label: 'one@example.com', name: 'Google', baseUrl: 'https://accounts.google.com', method: 'password', complete: true },
+    { id: aws, site: 'signin.aws.amazon.com', label: 'admin', name: 'Amazon', baseUrl: 'https://signin.aws.amazon.com', method: 'password', complete: true },
   ].sort((a, b) => a.site.localeCompare(b.site)));
   expect(await removeSavedLogin(dir, google)).toBe(true);
   expect(await removeSavedLogin(dir, google)).toBe(false);

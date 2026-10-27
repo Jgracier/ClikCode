@@ -32,7 +32,7 @@ export async function captureSecret(input: {
   /** Where the key goes once it is captured and checked, decided and approved beforehand. */
   sendTo?: readonly Destination[];
   /** Whose it is and what for, recorded with the secret. */
-  meta?: { vendor?: string; owner?: string; env?: string };
+  meta?: { vendor?: string; owner?: string; env?: string; url?: string };
   /** Skip looking and ask the user to paste it (the agent knows the page hides it or shows it as an image). */
   paste?: boolean;
 }): Promise<{ length: number; found: boolean; shape: string; via: string; check: KeyCheck; sent: Delivery[] }> {

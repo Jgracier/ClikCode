@@ -509,6 +509,14 @@ What the browser tool does so a run does not depend on luck or on the user:
   making a twin, and a name that matches nothing says what is saved for that vendor. `admin-key` and `sandbox-key` stay their
   own. Deleting takes the exact name only.
 - **What an agent can do with keys:** `account_use` `capture_secret` (take a key from a page, check it, save it, send it on), `secrets` (list saved names and dates, never values; `target` filters), `send_secret` (send a saved key on by name). That is the whole surface; values never reach the agent.
+- **Every record says what and where.** A saved **sign-in** has a name (the site's own, `Supabase` for `login.supabase.com`), its base URL, how it
+  signs in (`password`, or the provider it went through: `google`, `github`) and the account; a password sign-in also holds the password. A
+  sign-in made through a provider is recorded with `account_use` `accounts` (`target` the site, `method`, `fields {email}`), and its password,
+  if any, is the provider's own saved login. A saved **key** has its name (`vendor/kind`) and the base URL of the site it is for, taken from the
+  page it was captured on; a key cannot be saved without one (`profile/…` and `email/…`, which the program keeps for itself, are the only
+  exceptions). Older records are filled in by `clikcode computer secrets --backfill` where the name or a saved login for that vendor says
+  the site, and `--url name=https://site` does the rest. `account_use` `accounts` and `secrets` list them for an agent: name, base URL, method,
+  account, never a password or a value.
 - **Audit.** `clikcode computer secrets --audit` lists twins, odd names (no vendor, dated, numbered), secrets with no
   owner, and logins a site rejected: names only, nothing is changed.
 - **Sync between your computers.** `clikcode computer secrets --sync chronos@macbook` makes this computer's vault and that
