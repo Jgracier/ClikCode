@@ -1,4 +1,5 @@
 /** Test helper: builds the browser host entry from source (esbuild) and points the browser at it. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,7 +8,7 @@ import { build } from 'esbuild';
 export async function useSourceBrowserHost(): Promise<string> {
   const here = path.dirname(fileURLToPath(import.meta.url));
   let root = here;
-  while (!(await fs.stat(path.join(root, 'node_modules')).catch(() => undefined))) {
+  while (!(await fs.stat(path.join(root, 'node_modules')).catch(quiet('agent/computer/test-host-build')))) {
     const up = path.dirname(root);
     if (up === root) throw new Error('No node_modules above the tests.');
     root = up;

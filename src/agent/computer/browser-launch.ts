@@ -1,6 +1,7 @@
 /** Starting ClikCode's browser on whatever machine this is: Chrome, else Edge, else Playwright's own Chromium (fetched
  * once when it is not there), visible or headless. The host process writes what it is doing to a small status file,
  * because it runs detached and the worker that asked for it cannot see its output. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -121,10 +122,10 @@ export async function launchComputerBrowser(chromium: BrowserType, profile: stri
   try {
     await install(line => { if (Date.now() - lastWrite > 700) { lastWrite = Date.now(); void writeHostStatus(stateDir, { pid: process.pid, state: 'installing', text: line }); } });
   } catch (error) {
-    await fs.writeFile(marker, JSON.stringify({ at: Date.now(), ok: false }), { mode: 0o600 }).catch(() => undefined);
+    await fs.writeFile(marker, JSON.stringify({ at: Date.now(), ok: false }), { mode: 0o600 }).catch(quiet('agent/computer/browser-launch'));
     throw new Error(noBrowserMessage(error instanceof Error ? error.message : String(error)));
   }
-  await fs.writeFile(marker, JSON.stringify({ at: Date.now(), ok: true }), { mode: 0o600 }).catch(() => undefined);
+  await fs.writeFile(marker, JSON.stringify({ at: Date.now(), ok: true }), { mode: 0o600 }).catch(quiet('agent/computer/browser-launch'));
   await writeHostStatus(stateDir, { pid: process.pid, state: 'starting' });
   try { return await launch(); }
   catch (error) { throw new Error(noBrowserMessage(error instanceof Error ? error.message.split('\n')[0]! : String(error))); }

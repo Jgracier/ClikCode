@@ -398,6 +398,6 @@ export class LiveView {
   }
 
   private async ackChrome(sessionId: number): Promise<void> {
-    await this.cdp?.send('Page.screencastFrameAck', { sessionId }).catch(() => undefined);
+    await this.cdp?.send('Page.screencastFrameAck', { sessionId }).catch(quiet('agent/computer/handoff-live'));
   }
 }
