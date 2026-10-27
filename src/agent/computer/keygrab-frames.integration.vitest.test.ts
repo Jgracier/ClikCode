@@ -55,3 +55,17 @@ it.skipIf(SKIP)('reads controls and fields inside open shadow roots (a web-compo
     host.close();
   }
 }, 60_000);
+
+it.skipIf(SKIP)('does not offer a mailto: link, or text inside one, as something to press', async () => {
+  const server = await serve(() => '<p>Until the developer (<a href="mailto:me@example.com">me@example.com</a>) verifies this app, you shouldn\'t use it. <a href="tel:+15555550100"><span>Call us</span></a></p><a href="/help">Help center</a><button>Advanced</button>');
+  const browser = await chromium.launch({ channel: 'chrome', headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.goto(`http://127.0.0.1:${(server.address() as AddressInfo).port}/`);
+    const names = (await lookAt(page)).controls.map(control => control.name);
+    expect(names).toContain('Help center');
+    expect(names).toContain('Advanced');
+    expect(names).not.toContain('me@example.com');
+    expect(names).not.toContain('Call us');
+  } finally { await browser.close(); server.close(); }
+}, 40_000);
