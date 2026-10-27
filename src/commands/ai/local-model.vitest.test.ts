@@ -12,6 +12,12 @@ const engine = vi.hoisted(() => ({
   localModelChoices: vi.fn(),
 }));
 const files = vi.hoisted(() => ({ missingBytes: vi.fn(async () => 0) }));
+// The Gateway's own list, which a name typed on a chat running a model on this computer is checked against.
+const gateway = vi.hoisted(() => ({ models: [{ id: 'claude-opus-5.5' }, { id: 'claude-sonnet-5.5' }] as Array<{ id: string }> }));
+vi.mock('../../gateway/models', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../gateway/models')>(),
+  gatewayModels: async () => ({ models: gateway.models }),
+}));
 vi.mock('../../local-models/models', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../local-models/models')>(), missingBytes: files.missingBytes,
 }));
@@ -184,12 +190,27 @@ describe('/model on ClikCode Local', () => {
     expect((await readState()).sessions[0]!.model).toBe('qwen3.5-4b');
   });
 
-  it('refuses a name outside the catalog before loading anything', async () => {
-    await stored(session());
-    await expect(aiSessionCommand('s1', '/model claude-opus')).rejects.toThrow(/not a ClikCode Local model.*Open \/model/);
+  it('moves the chat to the Gateway with a Gateway model typed on it, because both are the Gateway provider', async () => {
+    await stored(session({ model: 'qwen3.5-4b' }));
+    await aiSessionCommand('s1', '/model opus');
+    expect((await readState()).sessions[0]!).toMatchObject({ route: 'gateway', model: 'claude-opus-5.5' });
+    // Nothing was loaded on this computer for it.
+    expect(engine.ensureLocalModel).not.toHaveBeenCalled();
+  });
+
+  it('keeps the chat on its model on this computer when the typed name is not a Gateway model either, and loads nothing', async () => {
+    await stored(session({ model: 'qwen3.5-4b' }));
+    await expect(aiSessionCommand('s1', '/model nonesuch')).rejects.toThrow(/is not a model ClikDeploy Gateway offers you/);
+    expect((await readState()).sessions[0]!).toMatchObject({ route: 'clikcode-local', model: 'qwen3.5-4b' });
     expect(engine.ensureLocalModel).not.toHaveBeenCalled();
     await localModelChosen('s1', 'qwen3.5-4b');
     expect(engine.ensureLocalModel).toHaveBeenCalledTimes(1);
+  });
+
+  it('still takes one of this computer\'s own models by its label, as before', async () => {
+    await stored(session({ model: 'qwen3.5-4b' }));
+    await aiSessionCommand('s1', '/model gpt-oss 20B');
+    expect((await readState()).sessions[0]!).toMatchObject({ route: 'clikcode-local', model: 'gpt-oss-20b' });
   });
 
   it('is offered, waits for the turn boundary rather than applying mid-turn, and /effort says why it is not', () => {
@@ -197,7 +218,7 @@ describe('/model on ClikCode Local', () => {
     expect(resolveSlashCommand('model')!.availability(local, undefined).available).toBe(true);
     expect(slashRouteAppliesDuringTurn(routeSlashInput('/model qwen3.5-9b'), local)).toBe(false);
     expect(slashRouteAppliesDuringTurn(routeSlashInput('/model sonnet'), session({ route: 'local' }))).toBe(true);
-    expect(resolveSlashCommand('effort')!.availability(local, undefined)).toMatchObject({ available: false, reason: expect.stringContaining('ClikCode Local') });
+    expect(resolveSlashCommand('effort')!.availability(local, undefined)).toMatchObject({ available: false, reason: expect.stringContaining('model on this computer') });
   });
 });
 
@@ -205,7 +226,7 @@ describe('the model on a session', () => {
   it('is validated against the catalog and named by its label', () => {
     expect(resolveLocalModelId('Qwen3.5 4B')).toBe('qwen3.5-4b');
     expect(resolveLocalModelId('GPT-OSS-20B')).toBe('gpt-oss-20b');
-    expect(() => resolveLocalModelId('llama3')).toThrow(/not a ClikCode Local model/);
+    expect(() => resolveLocalModelId('llama3')).toThrow(/not a model this computer can run/);
     expect(localModelLabel('ornith-1.5-35b-a3b')).toBe('Ornith 1.5 35B-A3B');
     expect(localModelLabel(null)).toBeUndefined();
   });
@@ -235,7 +256,7 @@ describe('the model on a session', () => {
     expect(created).toMatchObject({ route: 'clikcode-local', model: 'qwen3.5-4b' });
     await aiSessionSet(created.id, { model: 'gpt-oss-20b' });
     expect((await readState()).sessions[0]!.model).toBe('gpt-oss-20b');
-    await expect(aiSessionSet(created.id, { model: 'sonnet' })).rejects.toThrow(/not a ClikCode Local model/);
+    await expect(aiSessionSet(created.id, { model: 'sonnet' })).rejects.toThrow(/not a model this computer can run/);
     await expect(aiSessionCreate({ route: 'clikcode-local', effort: 'high' })).rejects.toThrow(/effort/);
   });
 });
@@ -256,7 +277,7 @@ describe('clikcode send --harness clikcode-local', () => {
   });
 
   it('refuses a model outside the catalog and a mode that does not exist', async () => {
-    await expect(startOrResumeChat({ harness: 'clikcode-local', model: 'sonnet' })).rejects.toThrow(/not a ClikCode Local model/);
+    await expect(startOrResumeChat({ harness: 'clikcode-local', model: 'sonnet' })).rejects.toThrow(/not a model this computer can run/);
     await expect(startOrResumeChat({ harness: 'clikcode-local', permissions: 'yolo' })).rejects.toThrow(/permission modes/);
   });
 

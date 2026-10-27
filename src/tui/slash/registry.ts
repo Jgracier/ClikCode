@@ -81,8 +81,8 @@ interface SlashCommandEntry {
 
 const always = (): SlashAvailability => ({ available: true });
 const GATEWAY_MANAGED = 'ClikDeploy Gateway selects this by platform policy; it applies only to local harnesses.';
-const CLIKCODE_LOCAL_AGENT = "ClikCode Local runs ClikCode's own agent; this applies only to vendor harnesses.";
-const CLIKCODE_LOCAL_NO_EFFORT = 'ClikCode Local runs each model with its own default reasoning; llama.cpp publishes no effort control to set.';
+const CLIKCODE_LOCAL_AGENT = "A model on this computer runs ClikCode's own agent; this applies only to vendor harnesses.";
+const CLIKCODE_LOCAL_NO_EFFORT = 'A model on this computer runs with its own default reasoning; llama.cpp publishes no effort control to set.';
 /** Vendor-harness commands: neither route that runs ClikCode's own agent has
  * a harness for them to reach. The reason names why for each route. */
 const localOnly = (session: HarnessSession | undefined): SlashAvailability => {
@@ -109,7 +109,7 @@ const ownOrNative = (name: string) => (session: HarnessSession | undefined, harn
 /** ClikCode's own agent's settings: a vendor harness runs its own commands. */
 const agentOnly = (session: HarnessSession | undefined): SlashAvailability => (isClikCodeAgent(session)
   ? { available: true }
-  : { available: false, reason: "The sandbox applies to ClikCode's own agent (ClikDeploy Gateway or ClikCode Local); a vendor harness sandboxes its own commands." });
+  : { available: false, reason: "The sandbox applies to ClikCode's own agent (ClikDeploy Gateway, a model on this computer included); a vendor harness sandboxes its own commands." });
 const needsHarness = (what: string) => (session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined): SlashAvailability => {
   const local = localOnly(session);
   if (!local.available) return local;

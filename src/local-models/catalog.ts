@@ -37,6 +37,6 @@ export function localModelLabel(id: string | null | undefined): string | undefin
 export function resolveLocalModelId(typed: string): string {
   const wanted = typed.trim().toLowerCase();
   const model = allLocalModels().find((item) => item.id.toLowerCase() === wanted || item.label.toLowerCase() === wanted);
-  if (!model) throw new Error(`"${typed.trim()}" is not a ClikCode Local model. Open /model to see models that fit this machine.`);
+  if (!model) throw new Error(`"${typed.trim()}" is not a model this computer can run. Open /model to see the ones that fit.`);
   return model.id;
 }

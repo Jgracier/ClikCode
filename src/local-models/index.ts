@@ -90,7 +90,7 @@ async function readPreference(): Promise<string | undefined> {
 /** Remember (or, with undefined, forget) the user's model pick. */
 async function setLocalModelPreference(modelId: string | undefined): Promise<void> {
   if (!modelId) { await rm(preferencesFile(), { force: true }); return; }
-  if (!catalogModel(modelId)) throw new Error(`${modelId} is not a ClikCode Local model.`);
+  if (!catalogModel(modelId)) throw new Error(`${modelId} is not a model this computer can run.`);
   await mkdir(dirname(preferencesFile()), { recursive: true });
   await writeFile(preferencesFile(), JSON.stringify({ modelId, at: new Date().toISOString() }));
 }
@@ -240,7 +240,7 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
   let choice: ReturnType<typeof chooseModel>;
   try { choice = chooseModel(eligible, pick); } catch (error) {
     const stopped = ranked[0] ? stopNotice(stops, ranked[0].model, undefined) : undefined;
-    if (!pick && !eligible.length) throw new Error('Choose a ClikCode Local model with /model before its first download.');
+    if (!pick && !eligible.length) throw new Error('Choose a model for this computer with /model before its first download.');
     throw stopped ? new Error(`${stopped} ${(error as Error).message}`) : error;
   }
   const model = choice.row.model;

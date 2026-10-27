@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { clikCodeAgentLabel, isAiHarnessRoute, isClikCodeAgent, isGatewayService } from './route';
+import { GATEWAY_LABEL, isAiHarnessRoute, isClikCodeAgent, isGatewayService } from './route';
 import { sessionPermissionModes, VALID_PERMISSION_MODES } from './options';
 import { providerPickerOptions } from '../tui/pickers/engine';
 import { sessionProviderLabel } from '../harness/protocol/labels';
@@ -51,13 +51,14 @@ describe('the two meanings of a route', () => {
     expect(isAiHarnessRoute('remote')).toBe(false);
   });
 
-  it('names each route by the inference behind it', () => {
-    expect(clikCodeAgentLabel(local())).toBe('ClikCode Local');
-    expect(sessionProviderLabel(local())).toBe('ClikCode Local');
+  it('names a chat on a model on this computer as the Gateway does: it is hosted AI under the Gateway, with no provider of its own', () => {
+    expect(GATEWAY_LABEL).toBe('ClikDeploy Gateway');
+    // The terminal's footer, the settings row and the move menu all take the provider from here.
+    expect(sessionProviderLabel(local())).toBe('ClikDeploy Gateway');
     expect(sessionProviderLabel(gateway())).toBe('ClikDeploy Gateway');
-    expect(contextUsageText(local())).toMatch(/^ClikCode Local has not reported/);
-    expect(capabilitiesText(local())).toMatch(/^ClikCode Local capabilities/);
-    expect(capabilitiesText(gateway())).toMatch(/^ClikDeploy Gateway capabilities/);
+    expect(contextUsageText(local())).toMatch(/^ClikDeploy Gateway has not reported/);
+    expect(capabilitiesText(local())).toMatch(/^ClikDeploy Gateway capabilities \(a model on this computer\)/);
+    expect(capabilitiesText(gateway())).toMatch(/^ClikDeploy Gateway capabilities\n/);
   });
 });
 
@@ -71,7 +72,8 @@ describe('a ClikCode Local session is ClikCode\'s own agent', () => {
     for (const name of ['login', 'effort', 'options']) {
       const availability = resolveSlashCommand(name)!.availability(local(), undefined);
       expect(availability.available, `/${name} offered on ClikCode Local`).toBe(false);
-      expect(availability.reason).toContain('ClikCode Local');
+      expect(availability.reason).toContain('model on this computer');
+      expect(availability.reason).not.toContain('ClikCode Local');
     }
     // On the Gateway the model, the effort and the speed are the user's to choose.
     for (const name of ['model', 'effort', 'fast']) expect(resolveSlashCommand(name)!.availability(gateway(), undefined).available).toBe(true);
@@ -142,7 +144,7 @@ describe('the model-client seam', () => {
       throw new Error('refused');
     });
     try {
-      await expect(client.step({ system: 's', items: [], tools: [] } as never)).rejects.toThrow(/ClikCode Local at http:\/\/127\.0\.0\.1:4321/);
+      await expect(client.step({ system: 's', items: [], tools: [] } as never)).rejects.toThrow(/The local model at http:\/\/127\.0\.0\.1:4321/);
     } finally { fetchSpy.mockRestore(); }
     expect(seen).toEqual(['http://127.0.0.1:4321/v1/chat/completions', 'qwen3.5-4b']);
   });

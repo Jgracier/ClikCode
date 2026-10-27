@@ -6,7 +6,7 @@ import { runsOn } from '../../../search/format.js';
 import { hindsightPanelText } from '../hindsight-panel.js';
 import { shownSummary } from '../../../session/conversation-summary.js';
 import { changesPath, fileTurnRows, fileTurnsText, isChangesPath } from '../file-changes.js';
-import { clikCodeAgentLabel, isClikCodeAgent } from '../../../session/route.js';
+import { GATEWAY_LABEL, isClikCodeAgent } from '../../../session/route.js';
 import { randomUUID } from 'node:crypto';
 import { isAbsolute, resolve } from 'node:path';
 import type { HarnessSession } from '../../../session/model.js';
@@ -251,7 +251,7 @@ export const conversationHandlers = {
   redo: async ({ state, session, words }) => {
     const n = forkPoint(words[0]);
     if (n === undefined) throw new Error('usage: /redo @N [keep]  -- N as /fork numbers your prompts; keep leaves files as they are');
-    const who = isClikCodeAgent(session) ? clikCodeAgentLabel(session) : sessionHarness(session)?.displayName ?? 'This provider';
+    const who = isClikCodeAgent(session) ? GATEWAY_LABEL : sessionHarness(session)?.displayName ?? 'This provider';
     const redone = await redoFrom(state, session, n, { keepFiles: words[1] === 'keep', stateDir: stateDirectory(), who });
     await writeState(state);
     // Said only when something needs saying; going back is already on the screen, and the prompt is in the message box.

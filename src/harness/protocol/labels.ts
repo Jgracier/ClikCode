@@ -4,14 +4,14 @@ import { homedir } from 'node:os';
 import { tildePath } from './format.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import type { HarnessSession } from '../../session/model.js';
-import { clikCodeAgentLabel, isClikCodeAgent } from '../../session/route.js';
+import { GATEWAY_LABEL, isClikCodeAgent } from '../../session/route.js';
 
 export function compactPath(path: string): string {
   return tildePath(path, homedir());
 }
 
 export function sessionProviderLabel(session: HarnessSession): string {
-  if (isClikCodeAgent(session)) return clikCodeAgentLabel(session);
+  if (isClikCodeAgent(session)) return GATEWAY_LABEL;
   const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
   return harness?.displayName ?? session.provider ?? 'Not selected';
 }

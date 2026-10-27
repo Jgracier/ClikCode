@@ -127,6 +127,15 @@ describe('the chat and the composer stay put while a list is open', () => {
     expect(prompter.statusText(COLS)).toBe(before);
   });
 
+  it('names a chat on a model on this computer as the Gateway in the footer: hosted AI under the Gateway, no provider of its own', () => {
+    const prompter = open();
+    prompter.render({ ...session(4), route: 'clikcode-local', provider: 'clikcode-local', accountId: null, model: 'qwen3.5-4b' } as HarnessSession);
+    const footer = prompter.statusText(COLS);
+    expect(footer).toContain('ClikDeploy Gateway');
+    expect(footer).toContain('Qwen3.5 4B');
+    expect(footer).not.toContain('ClikCode Local');
+  });
+
   it('does not shorten a draft when the list opens', () => {
     const prompter = open();
     prompter.render(session(8));

@@ -11,7 +11,7 @@ export async function interactiveEffortPicker(rl: HarnessPrompter, id: string): 
   const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
-  if (session.route === 'clikcode-local') throw new Error('ClikCode Local does not publish a reasoning-effort control yet.');
+  if (session.route === 'clikcode-local') throw new Error('A model on this computer has no reasoning-effort control to set.');
   const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
   const effort = await effortChoices(state, session, harness);
   if (!effort) throw new Error(`${harness?.displayName ?? 'This provider'} does not publish a configurable reasoning-effort flag.`);
