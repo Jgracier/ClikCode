@@ -44,18 +44,18 @@ export const FIELDS_SCRIPT = `(() => {
   for (const e of document.querySelectorAll('input, textarea, select, button, [role=button], [contenteditable=""], [contenteditable="true"]')) {
     if (out.length >= 120) break;
     const tag = e.tagName, type = (e.type || '').toLowerCase();
+    // A control the page has switched off (a sample form, a field that waits for another) is listed as it is: shown, but locked.
+    const locked = Boolean(e.disabled || e.readOnly || e.getAttribute('aria-disabled') === 'true');
     let d = null;
     if (tag === 'BUTTON' || (tag === 'INPUT' && /^(submit|button)$/.test(type)) || (tag !== 'INPUT' && e.getAttribute('role') === 'button')) {
-      if (e.disabled || e.getAttribute('aria-disabled') === 'true' || buttons >= 25) continue;
+      if (buttons >= 25) continue;
       const text = clean(tag === 'INPUT' ? e.value : (e.innerText || e.getAttribute('aria-label')));
       if (!text || text.length > 60) continue;
       d = { kind: 'button', label: text };
     } else if (tag === 'INPUT' && (type === 'checkbox' || type === 'radio')) {
-      if (e.disabled) continue;
       const own = e.closest('label');
       d = { kind: 'check', type, checked: e.checked, group: e.name || '', label: clean((e.labels && e.labels[0] && e.labels[0].innerText) || e.getAttribute('aria-label') || (own && own.innerText)).slice(0, 100) };
     } else {
-      if (e.disabled || e.readOnly) continue;
       if (tag === 'INPUT' && !KIND.test(type || 'text')) continue;
       d = describe(e);
       if (!d) continue;
@@ -73,6 +73,7 @@ export const FIELDS_SCRIPT = `(() => {
     if (d.kind === 'button') buttons++;
     els.push(e);
     d.idx = els.length - 1;
+    if (locked) d.disabled = true;
     if (d.options && d.options.length > 200) d.options = d.options.slice(0, 200);
     const round = (n) => Math.round(n * 10) / 10;
     out.push({ i: d.idx, x: round((r.left - ox) * s), y: round((r.top - oy) * s), w: round(r.width * s), h: round(r.height * s), d });
@@ -86,6 +87,7 @@ export const FIELDS_SCRIPT = `(() => {
 const prepareFill = (index: number): string => `((index) => {
   const e = (window.__clikFields || [])[index];
   if (!e) return 'gone';
+  if (e.disabled || e.readOnly) return 'locked';
   e.focus();
   try { if (typeof e.select === 'function') e.select(); else if (e.isContentEditable) document.execCommand('selectAll'); } catch (error) { /* a field that cannot select */ }
   return 'ok';
@@ -100,7 +102,7 @@ const pointOf = (index: number): string => `((index) => {
   const x = r.left + r.width / 2, y = r.top + r.height / 2;
   const top = document.elementFromPoint(x, y);
   const hit = Boolean(top) && (top === e || e.contains(top) || Boolean(top.closest && top.closest('label') && top.closest('label').control === e));
-  return { x, y, hit, checked: Boolean(e.checked) };
+  return { x, y, hit, checked: Boolean(e.checked), locked: Boolean(e.disabled || e.getAttribute('aria-disabled') === 'true') };
 })(${index})`;
 
 const clickInPage = (index: number): string => `((index) => { const e = (window.__clikFields || [])[index]; if (e) e.click(); return Boolean(e); })(${index})`;
@@ -108,7 +110,7 @@ const clickInPage = (index: number): string => `((index) => { const e = (window.
 /** Sets a select, a date or a colour from the phone's native control, the way a person choosing it would (the page hears input and change). */
 const setValueExpression = (value: string | string[], index: number): string => `((value, index) => {
   const e = (index >= 0 && (window.__clikFields || [])[index]) || document.activeElement;
-  if (!e) return false;
+  if (!e || e.disabled) return false;
   if (e.tagName === 'SELECT') {
     const wanted = Array.isArray(value) ? value : [value];
     for (const o of Array.from(e.options)) o.selected = wanted.includes(o.value);
@@ -275,8 +277,8 @@ export class LiveView {
       case 'check': case 'press': {
         const index = Number(message.i);
         if (!Number.isInteger(index) || index < 0) return;
-        const where = await this.evaluate<{ x: number; y: number; hit: boolean; checked: boolean } | null>(pointOf(index));
-        if (!where) return;
+        const where = await this.evaluate<{ x: number; y: number; hit: boolean; checked: boolean; locked: boolean } | null>(pointOf(index));
+        if (!where || where.locked) return;
         // A box that is already as asked is left alone; a button is pressed.
         if (message.t === 'check' && where.checked === Boolean(message.v)) return;
         if (where.hit) {

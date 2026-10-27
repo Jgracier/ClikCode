@@ -124,8 +124,9 @@ simply not recorded, rather than recorded wrong.
   choosing it would (`input` and `change`); a box is ticked and a button pressed with a real click at its
   middle. The form follows the page (it is read twice a second): a field the page changes is updated
   unless it is being typed in, and a new field appears. A page with a CAPTCHA frame says so at the top,
-  with a button to the picture. A password's value is never read back from the page. In the form no
-  frames are sent.
+  with a button to the picture. A password's value is never read back from the page. A control the page has
+  switched off (a sample form, a field that waits for another) is listed too, greyed out with the page's
+  own value and marked locked, and cannot be changed from the phone. In the form no frames are sent.
   *Page* is the live picture, for what a form cannot show (a CAPTCHA, a map, a drawing). A tap on a text
   field in the picture goes to that field in the form, in the tap, so the keyboard comes up; a dropdown
   or date opens a sheet. A field inside an iframe (a payment form from another site, a CAPTCHA) is not

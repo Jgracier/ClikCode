@@ -20,6 +20,8 @@ button{font:inherit;min-height:34px;border-radius:8px;border:1px solid #484f58;b
 .row{margin:0 0 16px}
 .lab{font-size:13px;color:#8b949e;margin:0 0 6px}.lab.req::after{content:" *";color:#f85149}
 .ctl{display:block;width:100%;box-sizing:border-box;font:inherit;font-size:16px;min-height:48px;padding:10px 12px;background:#161b22;color:#f0f6fc;border:1px solid #484f58;border-radius:10px;-webkit-user-select:text;user-select:text;-webkit-appearance:none;appearance:none}
+.ctl:disabled,.act:disabled{opacity:.5}
+.lab.locked::after{content:" · locked on this page";color:#6e7681}
 .ctl:focus{outline:0;border-color:#58a6ff;box-shadow:0 0 0 3px rgba(88,166,255,.25)}
 textarea.ctl{min-height:96px}
 .chk{display:flex;gap:12px;align-items:center;min-height:46px;font-size:16px}.chk input{width:26px;height:26px;flex:none}
@@ -135,7 +137,7 @@ const connect = () => {
 const fieldAt = (x, y) => {
   let best = null;
   for (const f of fields) {
-    if (f.d.kind !== 'text' && f.d.kind !== 'select' && f.d.kind !== 'native') continue;
+    if (f.d.disabled || (f.d.kind !== 'text' && f.d.kind !== 'select' && f.d.kind !== 'native')) continue;
     if (x < f.x - 6 || x > f.x + f.w + 6 || y < f.y - 6 || y > f.y + f.h + 6) continue;
     if (!best || f.w * f.h < best.w * best.h) best = f;
   }
@@ -280,14 +282,14 @@ const el = (tag, className, text) => { const n = document.createElement(tag); if
 const note = (text, action, go) => { const n = el('div', 'note', text); const b = el('button', '', action); b.onclick = go; n.appendChild(b); return n; };
 const buildRow = (f) => {
   const d = f.d, row = el('div', 'row');
-  if (d.kind === 'button') { const b = el('button', 'act', d.label); b.onclick = () => input({ t: 'press', i: f.i }); row.appendChild(b); return row; }
+  if (d.kind === 'button') { const b = el('button', 'act', d.label); b.disabled = Boolean(d.disabled); b.onclick = () => input({ t: 'press', i: f.i }); row.appendChild(b); return row; }
   if (d.kind === 'check') {
-    const l = el('label', 'chk'), c = el('input'); c.type = d.type; c.checked = Boolean(d.checked); c.dataset.i = String(f.i);
+    const l = el('label', 'chk'), c = el('input'); c.type = d.type; c.checked = Boolean(d.checked); c.disabled = Boolean(d.disabled); c.dataset.i = String(f.i);
     c.onchange = () => input({ t: 'check', i: f.i, v: c.checked });
     l.appendChild(c); l.appendChild(el('span', '', d.label || (d.type === 'radio' ? 'Option' : 'Tick this')));
     row.appendChild(l); return row;
   }
-  row.appendChild(el('div', 'lab' + (d.required ? ' req' : ''), d.label || d.placeholder || 'Field'));
+  row.appendChild(el('div', 'lab' + (d.required ? ' req' : '') + (d.disabled ? ' locked' : ''), d.label || d.placeholder || 'Field'));
   let c;
   if (d.kind === 'select') {
     c = el('select'); c.multiple = Boolean(d.multiple);
@@ -310,7 +312,7 @@ const buildRow = (f) => {
     c.addEventListener('input', () => input({ t: 'fill', i: f.i, v: c.value }));
     if (!multiline) c.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); input({ t: 'key', key: 'Enter' }); } });
   }
-  c.className = 'ctl'; c.dataset.i = String(f.i);
+  c.className = 'ctl'; c.dataset.i = String(f.i); c.disabled = Boolean(d.disabled);
   row.appendChild(c); return row;
 };
 let formKey = '';
@@ -319,7 +321,9 @@ const patchForm = () => {
   const body = $('formBody');
   for (const f of fields) {
     const c = body.querySelector('[data-i="' + f.i + '"]'), d = f.d;
-    if (!c || c === document.activeElement || d.type === 'password') continue;
+    if (!c) continue;
+    c.disabled = Boolean(d.disabled);
+    if (c === document.activeElement || d.type === 'password') continue;
     if (d.kind === 'check') c.checked = Boolean(d.checked);
     else if (d.kind === 'select') { for (const o of c.options) o.selected = d.options.some((x) => x.v === o.value && x.s); }
     else if ((d.kind === 'text' || d.kind === 'native') && c.value !== (d.value || '')) c.value = d.value || '';
@@ -327,7 +331,7 @@ const patchForm = () => {
 };
 const renderForm = () => {
   const body = $('formBody');
-  const key = JSON.stringify([captcha, fields.map((f) => [f.i, f.d.kind, f.d.type || '', f.d.label || '', f.d.options ? f.d.options.length : 0])]);
+  const key = JSON.stringify([captcha, fields.map((f) => [f.i, f.d.kind, f.d.type || '', f.d.label || '', f.d.options ? f.d.options.length : 0, Boolean(f.d.disabled)])]);
   if (key === formKey) { patchForm(); return; }
   formKey = key;
   // A field being typed in is kept as it is, caret and all, when the form is rebuilt around it.
@@ -360,7 +364,7 @@ const setView = (v, remember) => {
 };
 // The first time the page's fields are known: a page with something to fill in opens as the form, one without as the picture.
 const gotFields = () => {
-  if (view === 'auto') setView(fields.some((f) => f.d.kind !== 'button') ? 'fields' : 'page', false);
+  if (view === 'auto') setView(fields.some((f) => f.d.kind !== 'button' && !f.d.disabled) ? 'fields' : 'page', false);
   else if (view === 'fields') renderForm();
 };
 // A tap on a text field in the picture goes to that field in the form, in the tap itself, so the phone brings up its keyboard.
