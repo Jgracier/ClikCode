@@ -52,6 +52,9 @@ const spent = { id: 'acct-a', provider: 'fake', label: 'a', status: 'ready', mod
 const spare = { id: 'acct-b', provider: 'fake', label: 'b', status: 'ready', models: [] } as unknown as AiHarnessAccount;
 const REFUSAL = "You've hit your session limit · resets 3:50pm (America/Denver)";
 
+/** What the account a turn moves to is sent: the note that the account changed (account-switch-note.ts), then the user's own request unchanged. */
+const afterSwitch = (request: string): string => `<clikcode_resource_note>\nThe account changed: a ran out of usage, so this conversation continues on b. The conversation, files and tools are unchanged; a limit or error mentioned earlier was a's, not this account's.\n</clikcode_resource_note>\n\n${request}`;
+
 describe('a failover standby', () => {
   const previousHome = process.env.CLIKCODE_HOME;
   let home: string;
@@ -115,7 +118,7 @@ describe('a failover standby', () => {
       state, session, account: state.accounts.find((item) => item.id === 'acct-a')!, model: 'm1', text: 'Reply SWITCHED',
       prepared: { images: [], textContext: '' } as never, turnText: 'Reply SWITCHED', startedAt: Date.now(), run: { persistentTransports: true },
     });
-    expect(asked.map((item) => [item.account, item.text])).toEqual([['acct-a', 'Reply SWITCHED'], ['acct-b', 'Reply SWITCHED']]);
+    expect(asked.map((item) => [item.account, item.text])).toEqual([['acct-a', 'Reply SWITCHED'], ['acct-b', afterSwitch('Reply SWITCHED')]]);
     const saved = (await readState({ transcripts: ['s1'] })).sessions.find((item) => item.id === 's1')!;
     const answer = saved.messages?.at(-1);
     // What the vendor said stays on the turn, the refusal included.
@@ -151,7 +154,7 @@ describe('a failover standby', () => {
       state, session, account: state.accounts.find((item) => item.id === 'acct-a')!, model: 'm1', text: 'Reply SWITCHED',
       prepared: { images: [], textContext: '' } as never, turnText: 'Reply SWITCHED', startedAt: Date.now(), run: {},
     });
-    expect(order).toEqual(['attempt Reply SWITCHED', 'attempt Reply SWITCHED']);
+    expect(order).toEqual(['attempt Reply SWITCHED', `attempt ${afterSwitch('Reply SWITCHED')}`]);
     expect(attempt.carry).not.toHaveBeenCalled();
     expect(attempt.move).toHaveBeenCalledTimes(1);
     expect(attempt.prepare).not.toHaveBeenCalled();
@@ -181,7 +184,7 @@ describe('a failover standby', () => {
       state, session, account: state.accounts.find((item) => item.id === 'acct-a')!, model: 'm1', text: 'Reply SWITCHED',
       prepared: { images: [], textContext: '' } as never, turnText: 'Reply SWITCHED', startedAt: Date.now(), run: {},
     });
-    expect(asked).toEqual(['Reply SWITCHED', 'Reply SWITCHED']);
+    expect(asked).toEqual(['Reply SWITCHED', afterSwitch('Reply SWITCHED')]);
     const saved = (await readState({ transcripts: ['s1'] })).sessions.find((item) => item.id === 's1')!;
     expect(saved.messages?.at(-1)?.content).toBe('Half of the answer\n\nthe rest');
   });

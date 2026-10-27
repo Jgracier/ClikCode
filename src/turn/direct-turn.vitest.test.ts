@@ -89,6 +89,19 @@ describe('a direct API-key turn', () => {
   });
   const spent = async () => (await readState()).invocations ?? [];
 
+  it('tells the model when the request moved to another account, and not on the first account', async () => {
+    const { state, session } = await seeded();
+    stream.mockImplementationOnce(async () => { throw Object.assign(new Error('You exceeded your current quota, please check your plan and billing details.'), { statusCode: 429 }); });
+    stream.mockImplementationOnce(async () => ({ text: 'done', toolCalls: [], usage: { input: 1, output: 1 } }));
+    await attempt(state, session);
+    const lastUser = (call: number): string => (stream.mock.calls[call]![0] as { messages: { role: string; content: string }[] }).messages.at(-1)!.content;
+    expect(lastUser(0)).toBe('hello');
+    expect(stream).toHaveBeenCalledTimes(2);
+    expect(lastUser(1)).toContain('<clikcode_resource_note>');
+    expect(lastUser(1)).toMatch(/The account changed: first (ran out of usage|failed \(.+\)), so this conversation continues on second\./);
+    expect(lastUser(1).endsWith('\n\nhello')).toBe(true);
+  });
+
   it('records what a cancelled turn already streamed', async () => {
     const { state, session } = await seeded();
     const controller = new AbortController();
