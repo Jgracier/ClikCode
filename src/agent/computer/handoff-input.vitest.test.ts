@@ -5,6 +5,9 @@ describe('input checks', () => {
   it('accepts up to five well-formed touch points and nothing else', () => {
     expect(cleanPoints([[0, 10.5, 20], [1, 30, 40]])).toEqual([{ id: 0, x: 10.5, y: 20 }, { id: 1, x: 30, y: 40 }]);
     expect(cleanPoints([])).toEqual([]);
+    // A drag that leaves the picture (up over the bar) carries on.
+    expect(cleanPoints([[0, 50, -300]])).toEqual([{ id: 0, x: 50, y: -300 }]);
+    expect(cleanPoints([[0, 50, -1e6]])).toBeUndefined();
     for (const bad of [null, 'x', [[0, 1]], [[0, 'a', 2]], [[-1, 1, 2]], [[0, NaN, 2]], [[0, 1e9, 2]], [[0.5, 1, 2]], Array.from({ length: 6 }, (_, i) => [i, 1, 1])]) expect(cleanPoints(bad), JSON.stringify(bad)).toBeUndefined();
   });
 
