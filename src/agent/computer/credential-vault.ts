@@ -428,6 +428,9 @@ export async function mergeVault(stateDir: string, snapshot: VaultSnapshot): Pro
     const have = mine.get(canonicalSecretName(secret.name));
     if (!have) { await saveNamedSecret(stateDir, secret.name, secret.value, secret.meta ?? {}, { legacy: true }); await stampMeta(stateDir, secret.name, secret.meta); added++; continue; }
     if (stamp(secret.meta) > stamp(have.meta) && await readNamedSecret(stateDir, have.name) !== secret.value) { await saveNamedSecret(stateDir, have.name, secret.value, secret.meta ?? {}, { legacy: true }); await stampMeta(stateDir, have.name, secret.meta); updated++; continue; }
+    // The same key with a site, owner or vendor the other computer was missing: the record is filled in, the key is untouched.
+    const fill = (['url', 'owner', 'vendor'] as const).filter(field => secret.meta?.[field] && !have.meta?.[field]);
+    if (fill.length) { await saveNamedSecret(stateDir, have.name, await readNamedSecret(stateDir, have.name), Object.fromEntries(fill.map(field => [field, secret.meta![field]])), { legacy: true }); updated++; continue; }
     same++;
   }
   return { added, updated, same };

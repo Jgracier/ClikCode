@@ -149,3 +149,15 @@ it('lets an agent list the saved sign-ins and record one made through a provider
   expect(all.output).not.toContain('pw-secret-1234');
   expect((await accountUseTool.run({ action: 'accounts', target: 'nothing' } as never, ctx)).output).toContain('No saved sign-in matches');
 });
+
+it('sync fills in the site a key was missing on the other computer without touching the key', async () => {
+  const a = await fresh(), b = await fresh();
+  await saveNamedSecret(a, 'acme/key', 'value-1111', {}, { legacy: true });
+  await syncVault(a, payload => exchangeVault(b, payload));
+  const { setSecretUrl, namedSecretInfo } = await import('./credential-vault.js');
+  await setSecretUrl(a, 'acme/key', 'https://acme.com');
+  await syncVault(a, payload => exchangeVault(b, payload));
+  expect((await namedSecretInfo(b))[0]?.meta?.url).toBe('https://acme.com');
+  expect(await readNamedSecret(b, 'acme/key')).toBe('value-1111');
+  expect((await namedSecretInfo(b))[0]?.meta?.rotatedAt).toBeUndefined();
+});
