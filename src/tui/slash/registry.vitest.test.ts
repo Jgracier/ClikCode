@@ -90,6 +90,27 @@ describe('slash registry', () => {
     expect(resolveSlashCommand('hosted')?.name).toBe('hosted');
   });
 
+  it('offers /hosted to every chat that runs ClikCode\'s own agent -- one on a model on this computer included -- and says how to get it on a vendor chat', () => {
+    const hosted = resolveSlashCommand('hosted')!;
+    expect(hosted.availability(session({ route: 'gateway', nativeHarness: undefined }), undefined)).toEqual({ available: true });
+    // The chat that chose a model on this computer: hiding the command here left no way to the next hosted model but /provider first.
+    expect(hosted.availability(session({ route: 'clikcode-local', nativeHarness: undefined }), undefined)).toEqual({ available: true });
+    const vendor = hosted.availability(session(), harness());
+    expect(vendor.available).toBe(false);
+    expect(vendor.reason).toContain('/provider');
+  });
+
+  it('keeps /hosted among the common choices of a chat on a model on this computer, as it is on the Gateway, and marks it unavailable on a vendor chat', () => {
+    // The pinned block at the top of the menu. A pinned command a chat cannot run leaves it (and shows below as unavailable), so this is
+    // the block that lost /hosted the moment a model on this computer was chosen.
+    const common = (rows: ReturnType<typeof slashPalette>): string[] => rows.filter((row) => row.group === 'Common').map((row) => row.value);
+    expect(common(slashPalette(session({ route: 'gateway', nativeHarness: undefined }), undefined, {}))).toContain('/hosted');
+    expect(common(slashPalette(session({ route: 'clikcode-local', nativeHarness: undefined }), undefined, {}))).toContain('/hosted');
+    const vendor = slashPalette(session(), harness(), {});
+    expect(common(vendor)).not.toContain('/hosted');
+    expect(vendor.find((row) => row.value === '/hosted')?.detail).toMatch(/^unavailable · /);
+  });
+
   it('offers the private computer login command on every route', () => {
     const computer = resolveSlashCommand('computer')!;
     for (const route of ['gateway', 'clikcode-local', 'local'] as const) {

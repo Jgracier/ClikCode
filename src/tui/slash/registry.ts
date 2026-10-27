@@ -205,9 +205,11 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   }),
   entry('hosted', 'Settings', 'hosted AI: run a model on this computer or on a ClikDeploy GPU', {
     handlerKey: 'hostedModels', argHint: 'ai',
-    availability: (session) => isGatewayService(session)
+    // Any chat that runs ClikCode's own agent: a model on this computer is hosted AI under the Gateway, so a chat that chose one
+    // keeps this command -- it is how the next hosted model is chosen. A vendor harness's chat has to choose the Gateway first.
+    availability: (session) => isClikCodeAgent(session)
       ? { available: true }
-      : { available: false, reason: 'Hosted AI is available on ClikDeploy Gateway conversations.' },
+      : { available: false, reason: 'Hosted AI runs on ClikDeploy Gateway: choose it with /provider first.' },
   }),
   entry('effort', 'Settings', 'reasoning level', {
     argHint: '[level]', duringTurn: 'apply',
