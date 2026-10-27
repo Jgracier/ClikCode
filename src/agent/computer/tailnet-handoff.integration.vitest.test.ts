@@ -22,6 +22,7 @@ const SITE = `<title>t0</title><meta name="viewport" content="width=device-width
 <input id="otp" autocomplete="one-time-code" inputmode="numeric" aria-label="Code">
 <select id="sel" aria-label="Plan" onchange="document.title='plan '+this.value"><option value="a">Free</option><option value="b">Pro</option></select>
 <input id="when" type="date" aria-label="Start date" onchange="document.title='date '+this.value">
+<div id="hov" style="margin:0 20px 10px;height:34px;background:#ddd" onmouseover="document.title='hovered'" oncontextmenu="document.title='context';return false">Hover or right-click</div>
 <div id="n"></div><div style="height:3000px"></div>
 <script>setInterval(()=>{document.getElementById('n').textContent=String(Date.now()%100000)},40)</script>`;
 
@@ -61,6 +62,13 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('shows the tab live on a 
     expect(foreign).not.toBe('upgraded');
 
     phoneBrowser = await chromium.launch({ channel: 'chrome', headless: true });
+    // A computer's browser (a mouse, no touch screen) opens in mouse mode, and the button offers the other one.
+    const computerView = await (await phoneBrowser.newContext({ viewport: { width: 800, height: 600 } })).newPage();
+    await computerView.goto(link);
+    expect(await wait(() => computerView.evaluate(() => (window as unknown as { __handoff: { mode: string } }).__handoff.mode), mode => mode === 'mouse')).toBe('mouse');
+    expect(await computerView.locator('#mode').innerText()).toBe('Touch');
+    expect(await computerView.locator('#kb').count()).toBe(0);
+    await computerView.close();
     const context = await phoneBrowser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true });
     const phone = await context.newPage();
     const notes: string[] = [];
@@ -82,6 +90,9 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('shows the tab live on a 
     const stage = await phone.evaluate(() => { const s = document.getElementById('stage')!; const r = document.getElementById('c')!.getBoundingClientRect(); return { w: s.clientWidth, h: s.clientHeight, left: r.left, top: r.top }; });
     expect(await wait(() => page.evaluate(() => innerWidth), width => width === stage.w)).toBe(stage.w);
     expect(await page.evaluate(() => ({ touch: navigator.maxTouchPoints, dpr: devicePixelRatio }))).toEqual({ touch: 5, dpr: 3 });
+
+    expect(await wait(() => handoff<number>('h => h.fields'), count => count >= 5)).toBeGreaterThanOrEqual(5);
+    expect(await phone.locator('#mode').innerText()).toBe('Mouse');
 
     const tap = async (selector: string): Promise<void> => {
       const box = (await page.locator(selector).boundingBox())!;
@@ -105,6 +116,8 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('shows the tab live on a 
 
     // Text: the phone's own box, of the page field's kind, and what is typed in it reaches the page.
     await tap('#name');
+    // The box is in place and focused in the tap itself (a phone only opens its keyboard from the person's own touch), not after the page answers.
+    expect(await phone.evaluate(() => document.activeElement && document.activeElement.id)).toBe('proxy');
     await wait(() => handoff<string | null>('h => h.focus && h.focus.kind'), kind => kind === 'text');
     expect(await phone.locator('#proxy').getAttribute('type')).toBe('text');
     await phone.keyboard.type('hello');
@@ -126,17 +139,19 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('shows the tab live on a 
     expect(await phone.locator('#proxy').getAttribute('autocomplete')).toBe('one-time-code');
     expect(await phone.locator('#proxy').getAttribute('inputmode')).toBe('numeric');
 
-    // A choice and a date use the phone's own pickers, not a picture of the desktop's.
+    // A choice and a date open the phone's own sheet. The tap is kept from the page: its pop-up would open on the computer, where no one sees it.
     await tap('#sel');
-    await wait(() => handoff<string | null>('h => h.focus && h.focus.kind'), kind => kind === 'select');
-    expect(await phone.locator('#proxy option').allInnerTexts()).toEqual(['Free', 'Pro']);
-    await phone.locator('#proxy').selectOption('b');
+    await wait(() => phone.locator('#sheet.on').count(), count => count === 1);
+    expect(await phone.locator('#sheet .opt').allInnerTexts()).toEqual(['Free', 'Pro']);
+    expect(await page.evaluate(() => document.activeElement && document.activeElement.id)).not.toBe('sel');
+    await phone.locator('#sheet .opt', { hasText: 'Pro' }).click();
     expect(await wait(() => page.title(), title => title === 'plan b')).toBe('plan b');
-    await page.keyboard.press('Escape').catch(() => undefined);
+    expect(await phone.locator('#sheet.on').count()).toBe(0);
 
     await tap('#when');
-    await wait(() => handoff<string | null>('h => h.focus && h.focus.kind'), kind => kind === 'native');
-    await phone.locator('#proxy').fill('2026-10-27');
+    await wait(() => phone.locator('#sheet.on').count(), count => count === 1);
+    await phone.locator('#sheetInput').fill('2026-10-27');
+    await phone.locator('#sheetActions button', { hasText: 'OK' }).click();
     expect(await wait(() => page.title(), title => title === 'date 2026-10-27')).toBe('date 2026-10-27');
 
     // Scrolling by dragging a finger, and with a wheel.
@@ -154,6 +169,36 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('shows the tab live on a 
     await phone.mouse.wheel(0, 300);
     // A wheel of 300 reaches the phone's page as 100 CSS pixels (3x density); the mobile layout may glide further.
     expect(await wait(() => page.evaluate(() => scrollY), y => y > scrolled + 50)).toBeGreaterThan(scrolled + 50);
+
+    // Mouse mode: the page sees a mouse, not a touch screen. A tap clicks, touching a hover target hovers it, two fingers scroll, a two-finger tap right-clicks.
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await phone.locator('#mode').click();
+    expect(await phone.locator('#mode').innerText()).toBe('Touch');
+    expect(await wait(() => page.evaluate(() => navigator.maxTouchPoints), points => points === 0)).toBe(0);
+    await page.evaluate(() => { document.title = 'reset'; });
+    await tap('#b');
+    expect(await wait(() => page.title(), title => title === 'clicked')).toBe('clicked');
+    await page.evaluate(() => { document.title = 'reset'; });
+    await tap('#hov');
+    expect(await wait(() => page.title(), title => title === 'hovered')).toBe('hovered');
+    const twoFingers = async (type: string, y: number, x1 = 100, x2 = 260): Promise<void> => { await cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x: stage.left + x1, y: stage.top + y, id: 1 }, { x: stage.left + x2, y: stage.top + y, id: 2 }] } as never); };
+    const hover = (await page.locator('#hov').boundingBox())!;
+    const [rx1, rx2, ry] = [hover.x + 40, hover.x + 140, hover.y + hover.height / 2];
+    await page.evaluate(() => { document.title = 'reset'; });
+    await twoFingers('touchStart', ry, rx1, rx2); await twoFingers('touchEnd', ry, rx1, rx2);
+    expect(await wait(() => page.title(), title => title === 'context')).toBe('context');
+    const topBefore = await page.evaluate(() => scrollY);
+    await twoFingers('touchStart', 500);
+    for (let y = 480; y >= 380; y -= 20) { await twoFingers('touchMove', y); await new Promise(resolve => setTimeout(resolve, 20)); }
+    await twoFingers('touchEnd', 380);
+    expect(await wait(() => page.evaluate(() => scrollY), y => y > topBefore + 60)).toBeGreaterThan(topBefore + 60);
+    // Back to touch.
+    await phone.locator('#mode').click();
+    expect(await phone.locator('#mode').innerText()).toBe('Mouse');
+    expect(await wait(() => page.evaluate(() => navigator.maxTouchPoints), points => points === 5)).toBe(5);
+    await page.evaluate(() => { window.scrollTo(0, 0); document.title = 'reset'; });
+    await tap('#b');
+    expect(await wait(() => page.title(), title => title === 'clicked')).toBe('clicked');
 
     // A page with no mobile layout tag is laid out wide and shown zoomed out. A tap where the button is drawn must still hit it
     // (it landed above the finger, and a pinch or a drag did nothing), and a pinch must zoom.

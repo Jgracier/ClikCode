@@ -110,17 +110,27 @@ simply not recorded, rather than recorded wrong.
   screen and touch (a phone-sized viewport, touch emulation, the phone's pixel density up to 2x), so
   the page reflows the way it would on the phone instead of being shrunk, and it is put back when you
   tap Done or the link ends. Touch reaches the page as real touch
-  events (tap, drag and fling are tested; pinch and long press travel the same way but have not been tried); a computer's browser opening the link gets real mouse, wheel and keyboard instead.
-  **Typing uses the phone's own keyboard.** When a field in the page takes focus, the phone shows a
-  matching native box (text, password, email, number, a one-time code, a multi-line box), carrying the
-  field's `inputmode`, `autocomplete` and Enter-key hint, so the keyboard type, autofill and the
-  password manager work. What changes in that box is replayed in the page as key presses and text. A
-  `<select>` shows the phone's own picker, and date, time, month, week, colour and range fields show
-  the phone's own control, which set the value the way a person choosing it would (the page hears
-  `input` and `change`). The ⌨ button opens a plain box that types into whatever the page has focused
-  (a field in an iframe, which is not tracked). Safari on an iPhone is expected to open the keyboard
-  only from the person's own tap, so the first tap into a field may need a second tap on the box at the
-  bottom; that has not been tried on a phone yet.
+  events (tap, drag, fling and pinch are tested; long press has not been tried); a computer's browser opening the link gets real mouse, wheel and keyboard instead.
+  **Typing uses the phone's own keyboard, and it comes up when you tap a field.** ClikCode tells the
+  phone where the page's fields are on its screen (refreshed as the page moves). A tap that lands on a
+  text field puts a matching native box (text, password, email, number, a one-time code, a multi-line
+  box) at the bottom and focuses it in that same tap, which is what lets a phone bring up its keyboard
+  at once; the box carries the field's `inputmode`, `autocomplete` and Enter-key hint, so the keyboard
+  type, autofill, the password manager and the text-message code suggestion work. What changes in the
+  box is replayed in the page as key presses and text. A field inside an iframe is not tracked: when
+  focus moves into one, a plain box types into whatever the page has focused (on an iPhone that one
+  needs a second tap on the box). A `<select>` and a date, time, month, week or colour field open the
+  phone's own sheet from the tap (the tap is kept from the page, whose pop-up would open unseen on the
+  computer); the choice is set the way a person choosing it would (the page hears `input` and `change`).
+  A slider is touched in the page itself. Not tried on an iPhone yet: Safari is expected to accept the
+  focus from the tap, and if it does not, the box stays at the bottom for one more tap.
+  **Touch or mouse.** The button beside Done switches, and always names the other one (**Mouse** while
+  in touch, **Touch** while in mouse). The link starts in touch on a phone or tablet and in mouse on a
+  computer, and remembers the last choice on that device. *Touch*: the page is laid out for the phone
+  and sees a touch screen (tap, drag, fling, and pinch to zoom, which are touch events to the page).
+  *Mouse*: the page sees a mouse at the phone's width, no touch screen, so hover menus, `:hover` styles,
+  dragging, text selection and drag-and-drop work. Your finger is the pointer: touching moves it (and
+  hovers), a tap clicks, dragging drags, two fingers scroll, and a quick two-finger tap right-clicks.
   **Limits.** The view shows the page, not the browser's own windows: a file chooser, a permission
   prompt and a JavaScript dialog do not appear on the phone (a dialog is held for the agent, see
   Dialogs). It does not carry the phone's passkeys or biometrics to the site, because the browser is
