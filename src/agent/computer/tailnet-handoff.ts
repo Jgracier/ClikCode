@@ -1,15 +1,19 @@
-/** Handoff over the user's own Tailscale network, for a phone that is on it: a tiny web page on the
- * computer's Tailscale address (and nowhere else) shows this chat's tab and takes taps and typing.
- * No relay, no WebAssembly, no third-party host; a random path is the one-use secret and the
- * link stops working after ten minutes or once the user says they are done. */
+/** Handoff over the user's own Tailscale network, for a phone that is on it: a live view of this chat's tab on the computer's Tailscale
+ * address (and nowhere else). The page is laid out for the phone and drawn as Chrome paints it; touch and the phone's own keyboard reach it
+ * as real input (handoff-live.ts). No relay, no WebAssembly, no third-party host; a random path is the one-use secret, and the link stops
+ * working after ten idle minutes or once the user says they are done. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { networkInterfaces } from 'node:os';
+import type { Duplex } from 'node:stream';
 import { computerPage } from './browser.js';
+import { LiveView } from './handoff-live.js';
+import { handoffPage } from './handoff-page.js';
+import { acceptWebSocket, type LiteSocket } from './ws-lite.js';
 
-const TEN_MINUTES = 10 * 60_000;
-type Action = { type?: string; x?: number; y?: number; text?: string; key?: string; direction?: string };
+const IDLE_LIMIT = 10 * 60_000;
 
 /** This computer's Tailscale IPv4 address (100.64.0.0/10), if it is on a tailnet. */
 export function tailnetAddress(interfaces = networkInterfaces()): string | undefined {
@@ -23,27 +27,14 @@ export function tailnetAddress(interfaces = networkInterfaces()): string | undef
   return undefined;
 }
 
-const PAGE = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Finish in ClikCode</title>
-<style>body{font:16px system-ui,sans-serif;margin:0;background:#10151c;color:#f2f5f8}main{max-width:900px;margin:auto;padding:12px}img{width:100%;border:1px solid #505c68;border-radius:8px;touch-action:manipulation}
-button,input{font:inherit;min-height:44px;box-sizing:border-box}button{background:#263443;color:#fff;border:1px solid #65788b;border-radius:8px;padding:0 14px}input{flex:1;min-width:0;background:#1a222c;color:#fff;border:1px solid #65788b;border-radius:8px;padding:0 10px}
-#controls{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}</style>
-<main><h1>Finish in ClikCode</h1><p id="status">Loading…</p><img id="screen" alt="ClikCode browser">
-<div id="controls"><input id="entry" autocomplete="off" autocapitalize="off"><button id="type">Type</button><button id="enter">Enter</button><button id="tab">Tab</button><button id="up">Up</button><button id="down">Down</button><button id="done">Done</button></div></main>
-<script>
-const $=id=>document.getElementById(id);const base=location.pathname.replace(/\\/$/,'');
-const act=a=>fetch(base+'/act',{method:'POST',body:JSON.stringify(a)}).catch(()=>$('status').textContent='The connection was lost. Ask ClikCode for a new link.');
-let busy=false;async function frame(){if(busy)return;busy=true;try{const r=await fetch(base+'/frame.jpg?'+Date.now());if(r.status===410){$('status').textContent='Done. ClikCode will continue.';return}
-if(r.ok){const u=URL.createObjectURL(await r.blob());const old=$('screen').src;$('screen').src=u;if(old.startsWith('blob:'))URL.revokeObjectURL(old);$('status').textContent='Tap the browser, type, or press Done when finished.'}}catch{}busy=false;setTimeout(frame,900)}
-$('screen').onclick=e=>{const i=$('screen'),b=i.getBoundingClientRect();act({type:'click',x:Math.round((e.clientX-b.left)*i.naturalWidth/b.width),y:Math.round((e.clientY-b.top)*i.naturalHeight/b.height)})};
-$('type').onclick=()=>{act({type:'type',text:$('entry').value});$('entry').value=''};
-$('enter').onclick=()=>act({type:'key',key:'Enter'});$('tab').onclick=()=>act({type:'key',key:'Tab'});
-$('up').onclick=()=>act({type:'scroll',direction:'up'});$('down').onclick=()=>act({type:'scroll',direction:'down'});
-$('done').onclick=()=>{act({type:'done'});$('status').textContent='Finishing…'};
-frame();
-</script></html>`;
-
 function sameToken(a: string, b: string): boolean {
   return a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
+
+/** The origin a page of this server sends from, or nothing at all (a script, a test): never another site's page opening the socket. */
+function sameOrigin(origin: string | undefined, host: string | undefined): boolean {
+  if (origin === undefined) return true;
+  try { return new URL(origin).host === host; } catch { return false; }
 }
 
 export async function runTailnetHandoff(input: {
@@ -53,48 +44,80 @@ export async function runTailnetHandoff(input: {
   let finish!: () => void;
   const finished = new Promise<void>(resolve => { finish = resolve; });
   let over = false;
+  let current: { socket: LiteSocket; view: LiveView } | undefined;
+  let idle: NodeJS.Timeout | undefined;
+  let expire!: (error: Error) => void;
+  const expired = new Promise<never>((_, reject) => { expire = reject; });
+  expired.catch(() => undefined);
+  const keepAlive = (): void => {
+    clearTimeout(idle);
+    idle = setTimeout(() => expire(new Error('The phone handoff expired after 10 idle minutes.')), IDLE_LIMIT);
+  };
+
+  const pathOf = (request: IncomingMessage): { first?: string; rest?: string } => {
+    const [, first, rest] = /^\/([^/?]+)(\/[^?]*)?/.exec(request.url ?? '/') ?? [];
+    return { ...(first ? { first } : {}), ...(rest ? { rest } : {}) };
+  };
+
   const server = createServer((request: IncomingMessage, response: ServerResponse) => {
-    void (async () => {
-      const url = new URL(request.url ?? '/', 'http://x');
-      const [, first, rest] = /^\/([^/]+)(\/.*)?$/.exec(url.pathname) ?? [];
-      if (!first || !sameToken(first, token)) { response.writeHead(404).end(); return; }
-      if (over) { response.writeHead(410).end(); return; }
-      response.setHeader('cache-control', 'no-store');
-      if (request.method === 'GET' && (!rest || rest === '/')) { response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(PAGE); return; }
-      const page = await computerPage(input.stateDir, input.tab);
-      if (request.method === 'GET' && rest === '/frame.jpg') {
-        let image = await page.screenshot({ type: 'jpeg', quality: 50, scale: 'css', timeout: 10_000 });
-        if (image.length > 900_000) image = await page.screenshot({ type: 'jpeg', quality: 28, scale: 'css', timeout: 10_000 });
-        response.writeHead(200, { 'content-type': 'image/jpeg' }).end(image);
-        return;
-      }
-      if (request.method === 'POST' && rest === '/act') {
-        let body = '';
-        for await (const chunk of request) { body += String(chunk); if (body.length > 5_000) { response.writeHead(413).end(); return; } }
-        const action = JSON.parse(body) as Action;
-        if (action.type === 'done') { over = true; response.writeHead(204).end(); finish(); return; }
-        if (action.type === 'click' && Number.isFinite(action.x) && Number.isFinite(action.y) && action.x! >= 0 && action.y! >= 0) await page.mouse.click(action.x!, action.y!);
-        else if (action.type === 'type' && typeof action.text === 'string' && action.text.length <= 1000) await page.keyboard.insertText(action.text);
-        else if (action.type === 'key' && ['Enter', 'Tab', 'Backspace', 'Escape'].includes(action.key ?? '')) await page.keyboard.press(action.key!);
-        else if (action.type === 'scroll' && ['up', 'down'].includes(action.direction ?? '')) await page.mouse.wheel(0, action.direction === 'up' ? -600 : 600);
-        else { response.writeHead(400).end(); return; }
-        response.writeHead(204).end();
-        return;
-      }
-      response.writeHead(404).end();
-    })().catch(() => { if (!response.headersSent) response.writeHead(500); response.end(); });
+    const { first, rest } = pathOf(request);
+    if (!first || !sameToken(first, token)) { response.writeHead(404).end(); return; }
+    if (over) { response.writeHead(410).end(); return; }
+    response.setHeader('cache-control', 'no-store');
+    if (request.method === 'GET' && rest === '/ping') { response.writeHead(204).end(); return; }
+    if (request.method === 'GET' && (!rest || rest === '/')) {
+      const host = request.headers.host ?? '';
+      // The page may talk to this server and draw its own pictures; nothing else.
+      const origin = /^[\w.:[\]-]{1,80}$/.test(host) ? ` ws://${host}` : '';
+      response.writeHead(200, {
+        'content-type': 'text/html; charset=utf-8',
+        'content-security-policy': `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src blob: data:; connect-src 'self'${origin}`,
+      }).end(handoffPage());
+      keepAlive();
+      return;
+    }
+    response.writeHead(404).end();
   });
-  let timer: NodeJS.Timeout | undefined;
+
+  server.on('upgrade', (request: IncomingMessage, socket: Duplex, head: Buffer) => {
+    const { first, rest } = pathOf(request);
+    if (!first || !sameToken(first, token) || rest !== '/live') { socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n'); return; }
+    if (over) { socket.end('HTTP/1.1 410 Gone\r\nConnection: close\r\n\r\n'); return; }
+    const accepted = acceptWebSocket(request, socket, head, { allowOrigin: origin => sameOrigin(origin, request.headers.host) });
+    if (!accepted) return;
+    void (async () => {
+      // One phone at a time: a reconnect (or a second tab) takes over from the one before.
+      const before = current;
+      current = undefined;
+      before?.socket.close(1000);
+      await before?.view.stop();
+      const view = new LiveView(await computerPage(input.stateDir, input.tab), accepted, () => {
+        over = true;
+        if (!accepted.closed) accepted.send(JSON.stringify({ t: 'done' }));
+        finish();
+      }, keepAlive);
+      current = { socket: accepted, view };
+      keepAlive();
+      await view.start();
+    })().catch(error => { quiet('agent/computer/tailnet-handoff')(error); accepted.close(1011); });
+  });
+
   const stopped = new Promise<never>((_, reject) => { input.signal?.addEventListener('abort', () => reject(new Error('Handoff stopped.')), { once: true }); });
   stopped.catch(() => undefined);
   try {
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, input.host, () => { server.off('error', reject); resolve(); }); });
     const port = (server.address() as AddressInfo).port;
     input.onLink(`http://${input.host}:${port}/${token}/`);
-    const expired = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('The phone handoff expired after 10 minutes.')), TEN_MINUTES); });
+    keepAlive();
     await Promise.race([finished, expired, stopped]);
   } finally {
-    if (timer) clearTimeout(timer);
+    clearTimeout(idle);
+    const last = current;
+    current = undefined;
+    // Give the "done" message a moment to leave before the socket goes.
+    await new Promise(resolve => setTimeout(resolve, 60));
+    last?.socket.close(1000);
+    await last?.view.stop();
     server.close();
     server.closeAllConnections();
   }

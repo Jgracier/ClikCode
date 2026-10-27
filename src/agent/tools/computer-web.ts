@@ -1204,7 +1204,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
         running = { link, done, stop };
         handoffs.set(handoffKey, running);
         const url = await Promise.race([running.link, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('The phone link did not come up.')), 45_000))]);
-        return { output: `Phone link over Tailscale (the phone must be on the same tailnet; valid 10 minutes, one use): ${url}\nTell the user to open it and finish the browser step (CAPTCHA, MFA). Then call handoff again to wait until they are done.` };
+        return { output: `Phone link over Tailscale (a live view of the browser for the phone, which must be on the same tailnet; one use, ends after 10 idle minutes): ${url}\nTell the user to open it, finish the browser step (CAPTCHA, MFA, a code) with their own keyboard, and tap Done. Then call handoff again to wait until they are done.` };
       }
       const outcome = await Promise.race([running.done, new Promise<'waiting'>(resolve => setTimeout(() => resolve('waiting'), 90_000))]);
       if (outcome === 'waiting') return { output: 'The user has not finished yet. Call handoff again to keep waiting.' };

@@ -103,6 +103,35 @@ simply not recorded, rather than recorded wrong.
   the phone just has to be on the same tailnet). The agent gives you the link, then calls `handoff`
   again to wait until you tap Done. Without Tailscale a handoff says so, and the step is finished at
   the computer.
+
+  **What the link is.** A live view of the chat's real tab, not a picture that refreshes: Chrome pushes
+  each frame as it paints it over one WebSocket (one frame in flight at a time, so a slow phone gets
+  the newest, never a queue). For as long as the link is open the tab is laid out for the phone's own
+  screen and touch (a phone-sized viewport, touch emulation, the phone's pixel density up to 2x), so
+  the page reflows the way it would on the phone instead of being shrunk, and it is put back when you
+  tap Done or the link ends. Touch reaches the page as real touch
+  events (tap, drag and fling are tested; pinch and long press travel the same way but have not been tried); a computer's browser opening the link gets real mouse, wheel and keyboard instead.
+  **Typing uses the phone's own keyboard.** When a field in the page takes focus, the phone shows a
+  matching native box (text, password, email, number, a one-time code, a multi-line box), carrying the
+  field's `inputmode`, `autocomplete` and Enter-key hint, so the keyboard type, autofill and the
+  password manager work. What changes in that box is replayed in the page as key presses and text. A
+  `<select>` shows the phone's own picker, and date, time, month, week, colour and range fields show
+  the phone's own control, which set the value the way a person choosing it would (the page hears
+  `input` and `change`). The ⌨ button opens a plain box that types into whatever the page has focused
+  (a field in an iframe, which is not tracked). Safari on an iPhone is expected to open the keyboard
+  only from the person's own tap, so the first tap into a field may need a second tap on the box at the
+  bottom; that has not been tried on a phone yet.
+  **Limits.** The view shows the page, not the browser's own windows: a file chooser, a permission
+  prompt and a JavaScript dialog do not appear on the phone (a dialog is held for the agent, see
+  Dialogs). It does not carry the phone's passkeys or biometrics to the site, because the browser is
+  this computer's. Latency is the network round trip plus about one paint: on the same computer a tap
+  was back as a new picture in about 10-20 ms; across a direct Tailscale path expect the path's round
+  trip on top. A `viewport` emulation set earlier is replaced while the link is open and is not
+  restored afterwards.
+  **Safety.** The link carries a random one-use secret (24 random bytes) and only the Tailscale
+  address answers. The socket refuses another site's page as `Origin`, one phone drives at a time (a
+  reconnect takes over), the link ends when you tap Done, after 10 idle minutes, or when the chat
+  stops, and the page is served with a content-security policy that allows only its own socket.
 - **Each chat has its own tab** in the shared Chrome: a chat only sees, acts on and follows
   tabs it opened itself, so chats working at once do not collide. `close` closes that chat's
   tab only.
