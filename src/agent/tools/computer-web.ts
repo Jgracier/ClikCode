@@ -401,6 +401,14 @@ export const computerWebTool = defineTool<WebArgs>({
       if (!(await computerEnabled(ctx.stateDir))) throw new Error(COMPUTER_OFF);
       if (!ALL_ACTION_NAMES.includes(String(args.action))) throw new Error(`Unknown action "${String(args.action)}". Actions: ${ACTION_LIST}.`);
       if (args.action === 'send_secret') return storeSecretTool.run({ secret: args.secret ?? '', ...(args.to ? { to: args.to } : {}), ...(args.with ? { with: args.with } : {}), ...(args.send_to ? { send_to: args.send_to } : {}) }, ctx);
+      if (args.action === 'secrets') {
+        const { namedSecretInfo } = await import('../computer/credential-vault.js');
+        const words = (args.target ?? '').toLowerCase().split(/\s+/).filter(Boolean);
+        const found = (await namedSecretInfo(ctx.stateDir)).filter(({ name }) => words.every(word => name.toLowerCase().includes(word)));
+        if (!found.length) return { output: words.length ? `No saved key matches "${args.target}". Capture one with capture_secret.` : 'No keys are saved yet. Capture one with capture_secret.' };
+        const shown = found.slice(0, 150).map(({ name, meta }) => `${name}${meta ? `  (saved ${meta.createdAt.slice(0, 10)}${meta.rotatedAt ? `, rotated ${meta.rotatedAt.slice(0, 10)}` : ''})` : ''}`);
+        return { output: `${found.length} saved key${found.length === 1 ? '' : 's'}${found.length > shown.length ? `, first ${shown.length}; add words to target to narrow` : ''}. Values are never shown; send one on with send_secret.\n${shown.join('\n')}` };
+      }
         // Deterministic readiness check (browser, Google sign-in, Gmail, build, deps link); a throwaway tab, no chat tab needed.
         return { output: JSON.stringify(result, null, 2), ...(result.ok ? {} : { isError: true }) };
       }
