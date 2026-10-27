@@ -65,3 +65,14 @@ it('syncs two vaults both ways: each gets what the other has, the newer secret w
   const again = await syncVault(a, payload => exchangeVault(b, payload));
   expect(again.received.added + again.received.updated).toBe(0);
 });
+
+it('syncs into a computer that has no vault yet, and out of one that has nothing to give', async () => {
+  const full = await fresh(), empty = await fresh();
+  await saveNamedSecret(full, 'acme/key', 'value-1111');
+  const result = await syncVault(full, payload => exchangeVault(empty, payload));
+  expect(await readNamedSecret(empty, 'acme/key')).toBe('value-1111');
+  expect(result.received.added).toBe(0);
+  const back = await fresh();
+  await syncVault(back, payload => exchangeVault(full, payload));
+  expect(await readNamedSecret(back, 'acme/key')).toBe('value-1111');
+});

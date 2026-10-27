@@ -503,6 +503,18 @@ What the browser tool does so a run does not depend on luck or on the user:
     login saved at `example.com` is found at `www.example.com` and the other way round, and across a cloud region label).
     With none, and no profile password, the need is parked in the vendor queue (`needs-human`) with a clear note and the
     agent goes on; it no longer fails with "The user did not provide the values". `login` does the same as before.
+- **One name per key.** Name a secret `<vendor>/<kind>` (`acme/key`, `acme/client-id`, `acme/client-secret`, `acme/token`;
+  with no name, `capture_secret` uses the site's host plus `/key`). The usual spellings are one name: `acme/api-key`,
+  `acme/secret-key`, `www.acme/key` all find `acme/key`, a second save under another spelling rotates the saved secret instead of
+  making a twin, and a name that matches nothing says what is saved for that vendor. `admin-key` and `sandbox-key` stay their
+  own. Deleting takes the exact name only.
+- **Audit.** `clikcode computer secrets --audit` lists twins, odd names (no vendor, dated, numbered), secrets with no
+  owner, and logins a site rejected: names only, nothing is changed.
+- **Sync between your computers.** `clikcode computer secrets --sync chronos@macbook` makes this computer's vault and that
+  one's the same over `tailscale ssh` (no relay, no passphrase): each gets what the other has, the newer of a secret both
+  have wins, and nothing is deleted. Run it again any time; a second run changes nothing. The other computer needs ClikCode
+  (found in `~/.local/bin`) and Tailscale SSH. Each computer keeps its own vault key; values travel only inside the SSH
+  connection and are never printed.
 - **Backup and restore of the vault.** `clikcode computer secrets --export <file>` writes every login, secret and
   profile as one encrypted file; `--import <file>` restores it (items already present are kept; `--overwrite` replaces
   them). The passphrase (at least 12 characters, asked twice on export) is typed hidden at a terminal; both commands refuse
