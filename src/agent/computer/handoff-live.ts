@@ -1,28 +1,23 @@
-/** The live view of one tab for a phone, over the DevTools protocol: Chrome pushes screen frames as it paints them, the page is laid out for the
- * phone's own size and touch screen (so it reflows instead of being shrunk), and what the phone does reaches the page as real touch, mouse and key
- * events. The phone's own keyboard is used for text: this tells it when a field takes focus and what kind of field it is. */
+/** The live view of one tab for a phone, over the DevTools protocol. Two views of the same page: the picture (Chrome pushes screen frames as it
+ * paints them, the page is laid out for the phone's own size and touch screen so it reflows instead of being shrunk, and what the phone does
+ * reaches the page as real touch, mouse and key events), and the fields (every fillable control on the page as a real form on the phone, filled
+ * into the page as it is typed, so the phone's own keyboard, autofill and password manager work). */
 import { quiet } from '../../runtime/lifecycle-log.js';
 import type { CDPSession, Page } from 'playwright-core';
-import { cleanPoints, cleanSize, keyEvent, MAX_REPEAT, MAX_TEXT, type Size } from './handoff-input.js';
+import { cleanPoints, cleanSize, keyEvent, MAX_REPEAT, MAX_TEXT, type KeyEvent, type Size } from './handoff-input.js';
 import type { LiteSocket } from './ws-lite.js';
 
-/** Runs in every page of the tab: reports which field has focus, as what the phone needs to show a matching one. A password's value is never read. */
-export const FOCUS_SCRIPT = `(() => {
-  if (window.__clikFocusInstalled) return;
-  window.__clikFocusInstalled = true;
+/** Runs in every page of the tab: says what a control is, as what the phone needs to show a matching one. A password's value is never read. */
+export const DESCRIBE_SCRIPT = `(() => {
+  if (window.__clikDescribe) return;
   const TEXT = /^(text|search|url|tel|email|password|number)$/;
   const NATIVE = /^(date|time|datetime-local|month|week|color)$/;
-  const label = (e) => ((e.labels && e.labels[0] && e.labels[0].innerText) || e.getAttribute('aria-label') || e.placeholder || e.name || '').replace(/\\s+/g, ' ').trim().slice(0, 80);
-  const common = (e) => ({ label: label(e), inputmode: e.inputMode || e.getAttribute('inputmode') || '', autocomplete: e.getAttribute('autocomplete') || '', enterkeyhint: e.enterKeyHint || e.getAttribute('enterkeyhint') || '', maxlength: e.maxLength > 0 ? e.maxLength : 0 });
-  const describe = (e) => {
-    const d = describeElement(e);
-    if (d && d.idx === undefined) d.idx = (window.__clikFields || []).indexOf(e);
-    return d;
-  };
-  const describeElement = (e) => {
+  const clean = (text) => String(text || '').replace(/\\s+/g, ' ').trim();
+  const label = (e) => clean((e.labels && e.labels[0] && e.labels[0].innerText) || e.getAttribute('aria-label') || e.getAttribute('title') || e.placeholder || e.name).slice(0, 100);
+  const common = (e) => ({ label: label(e), required: Boolean(e.required), inputmode: e.inputMode || e.getAttribute('inputmode') || '', autocomplete: e.getAttribute('autocomplete') || '', enterkeyhint: e.enterKeyHint || e.getAttribute('enterkeyhint') || '', maxlength: e.maxLength > 0 ? e.maxLength : 0, placeholder: clean(e.placeholder).slice(0, 80) });
+  window.__clikDescribe = (e) => {
     if (!e || e === document.body || e === document.documentElement) return null;
-    if (e.tagName === 'IFRAME') return { kind: 'text', type: 'text', generic: true, label: 'Type into the page', idx: -1 };
-    if (e.tagName === 'SELECT') return { kind: 'select', multiple: e.multiple, label: label(e), options: Array.from(e.options).slice(0, 300).map((o) => ({ v: o.value, t: o.text.replace(/\\s+/g, ' ').trim().slice(0, 100), s: o.selected, d: o.disabled })) };
+    if (e.tagName === 'SELECT') return { kind: 'select', multiple: e.multiple, required: Boolean(e.required), label: label(e), options: Array.from(e.options).slice(0, 300).map((o) => ({ v: o.value, t: clean(o.text).slice(0, 100), s: o.selected, d: o.disabled })) };
     if (e.tagName === 'TEXTAREA') return { kind: 'text', type: 'textarea', multiline: true, value: e.value.slice(0, 2000), ...common(e) };
     if (e.tagName === 'INPUT') {
       const type = (e.type || 'text').toLowerCase();
@@ -33,52 +28,82 @@ export const FOCUS_SCRIPT = `(() => {
     if (e.isContentEditable) return { kind: 'text', type: 'editable', multiline: true, value: (e.innerText || '').slice(0, 2000), ...common(e) };
     return null;
   };
-  window.__clikDescribe = describe;
-  let last = 'null';
-  const report = () => {
-    if (window !== window.top) return;
-    const text = JSON.stringify(describe(document.activeElement));
-    if (text === last) return;
-    last = text;
-    if (typeof window.__clikFocus === 'function') window.__clikFocus(text);
-  };
-  document.addEventListener('focusin', () => setTimeout(report, 0), true);
-  document.addEventListener('focusout', () => setTimeout(report, 40), true);
-  report();
 })();`;
 
-/** The fields on screen right now, with where each is on the phone's screen: the phone puts its own box over a tapped field, in the tap, so
- * its keyboard can come up (a phone only opens one from the person's own touch). Also remembers the elements, so a choice can name one. */
+/** Everything on the page a person can fill or press, in the page's order, with where each is on the phone's screen (a tap on a field in the
+ * picture opens it in the form) and whether a CAPTCHA sits on the page. Also remembers the elements, so the phone can name one. */
 export const FIELDS_SCRIPT = `(() => {
   const describe = window.__clikDescribe;
   const v = window.visualViewport;
-  if (!describe || !v) return '[]';
-  const s = v.scale, ox = v.offsetLeft, oy = v.offsetTop, sw = v.width * s, sh = v.height * s;
+  if (!describe || !v) return JSON.stringify({ f: [], c: false });
+  const s = v.scale, ox = v.offsetLeft, oy = v.offsetTop;
   const KIND = /^(text|search|url|tel|email|password|number|date|time|datetime-local|month|week|color)$/;
+  const clean = (text) => String(text || '').replace(/\\s+/g, ' ').trim();
   const els = [], out = [];
-  for (const e of document.querySelectorAll('input, textarea, select, [contenteditable=""], [contenteditable="true"]')) {
-    if (out.length >= 60) break;
-    if (e.disabled || e.readOnly) continue;
-    if (e.tagName === 'INPUT' && !KIND.test((e.type || 'text').toLowerCase())) continue;
+  let buttons = 0;
+  for (const e of document.querySelectorAll('input, textarea, select, button, [role=button], [contenteditable=""], [contenteditable="true"]')) {
+    if (out.length >= 120) break;
+    const tag = e.tagName, type = (e.type || '').toLowerCase();
+    let d = null;
+    if (tag === 'BUTTON' || (tag === 'INPUT' && /^(submit|button)$/.test(type)) || (tag !== 'INPUT' && e.getAttribute('role') === 'button')) {
+      if (e.disabled || e.getAttribute('aria-disabled') === 'true' || buttons >= 25) continue;
+      const text = clean(tag === 'INPUT' ? e.value : (e.innerText || e.getAttribute('aria-label')));
+      if (!text || text.length > 60) continue;
+      d = { kind: 'button', label: text };
+    } else if (tag === 'INPUT' && (type === 'checkbox' || type === 'radio')) {
+      if (e.disabled) continue;
+      const own = e.closest('label');
+      d = { kind: 'check', type, checked: e.checked, group: e.name || '', label: clean((e.labels && e.labels[0] && e.labels[0].innerText) || e.getAttribute('aria-label') || (own && own.innerText)).slice(0, 100) };
+    } else {
+      if (e.disabled || e.readOnly) continue;
+      if (tag === 'INPUT' && !KIND.test(type || 'text')) continue;
+      d = describe(e);
+      if (!d) continue;
+    }
     const r = e.getBoundingClientRect();
     if (r.width < 4 || r.height < 4) continue;
-    const x = (r.left - ox) * s, y = (r.top - oy) * s, w = r.width * s, h = r.height * s;
-    if (x + w < 0 || y + h < 0 || x > sw || y > sh) continue;
     const cs = getComputedStyle(e);
     if (cs.visibility === 'hidden' || cs.display === 'none') continue;
-    // Something else drawn over it (a dialog, a menu): not a field a tap would reach.
-    const top = document.elementFromPoint(Math.min(Math.max(r.left + r.width / 2, 0), innerWidth - 1), Math.min(Math.max(r.top + r.height / 2, 0), innerHeight - 1));
-    if (top && top !== e && !e.contains(top) && !top.contains(e) && !(top.closest && top.closest('label') && top.closest('label').control === e)) continue;
+    // Something else drawn over it (a dialog, a menu): not a control a tap would reach. Only checked where the control is on screen.
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    if (cx >= 0 && cy >= 0 && cx < innerWidth && cy < innerHeight) {
+      const top = document.elementFromPoint(cx, cy);
+      if (top && top !== e && !e.contains(top) && !top.contains(e) && !(top.closest && top.closest('label') && top.closest('label').control === e)) continue;
+    }
+    if (d.kind === 'button') buttons++;
     els.push(e);
-    const d = describe(e);
-    if (!d) { els.pop(); continue; }
     d.idx = els.length - 1;
     if (d.options && d.options.length > 200) d.options = d.options.slice(0, 200);
-    out.push({ i: d.idx, x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10, w: Math.round(w * 10) / 10, h: Math.round(h * 10) / 10, d });
+    const round = (n) => Math.round(n * 10) / 10;
+    out.push({ i: d.idx, x: round((r.left - ox) * s), y: round((r.top - oy) * s), w: round(r.width * s), h: round(r.height * s), d });
   }
   window.__clikFields = els;
-  return JSON.stringify(out);
+  const captcha = Array.from(document.querySelectorAll('iframe')).some((f) => /recaptcha|hcaptcha|turnstile|captcha/i.test((f.src || '') + ' ' + (f.title || '')) && f.getBoundingClientRect().width > 20);
+  return JSON.stringify({ f: out, c: captcha });
 })()`;
+
+/** Puts the caret in a control and selects what is in it, so what is typed next replaces it. */
+const prepareFill = (index: number): string => `((index) => {
+  const e = (window.__clikFields || [])[index];
+  if (!e) return 'gone';
+  e.focus();
+  try { if (typeof e.select === 'function') e.select(); else if (e.isContentEditable) document.execCommand('selectAll'); } catch (error) { /* a field that cannot select */ }
+  return 'ok';
+})(${index})`;
+
+/** Brings a control into view and says where its middle is (in the page's own pixels), whether something else covers it, and whether it is ticked. */
+const pointOf = (index: number): string => `((index) => {
+  const e = (window.__clikFields || [])[index];
+  if (!e) return null;
+  e.scrollIntoView({ block: 'center', inline: 'center' });
+  const r = e.getBoundingClientRect();
+  const x = r.left + r.width / 2, y = r.top + r.height / 2;
+  const top = document.elementFromPoint(x, y);
+  const hit = Boolean(top) && (top === e || e.contains(top) || Boolean(top.closest && top.closest('label') && top.closest('label').control === e));
+  return { x, y, hit, checked: Boolean(e.checked) };
+})(${index})`;
+
+const clickInPage = (index: number): string => `((index) => { const e = (window.__clikFields || [])[index]; if (e) e.click(); return Boolean(e); })(${index})`;
 
 /** Sets a select, a date or a colour from the phone's native control, the way a person choosing it would (the page hears input and change). */
 const setValueExpression = (value: string | string[], index: number): string => `((value, index) => {
@@ -131,6 +156,9 @@ export class LiveView {
   private mode: 'touch' | 'mouse' = 'touch';
   private laidOutAs: 'touch' | 'mouse' | undefined;
   private fieldsTimer: NodeJS.Timeout | undefined;
+  /** The phone is showing the form, not the picture: no frames are sent, and the fields are re-read on a timer. */
+  private formView = false;
+  private poll: NodeJS.Timeout | undefined;
   private lastFields = '';
   /** What happened, for tests and for the phone's status line. */
   readonly stats = { frames: 0, restarts: 0 };
@@ -145,14 +173,12 @@ export class LiveView {
     const cdp = await this.page.context().newCDPSession(this.page);
     this.cdp = cdp;
     cdp.on('Page.screencastFrame', (frame: { data: string; sessionId: number }) => { void this.onFrame(frame); });
-    cdp.on('Runtime.bindingCalled', (event: { name: string; payload: string }) => { if (event.name === '__clikFocus') void this.onFocus(event.payload); });
     cdp.on('Page.frameNavigated', (event: { frame: { parentId?: string; url: string } }) => { if (!event.frame.parentId) this.sendPage(event.frame.url); });
     await cdp.send('Page.enable');
     await cdp.send('Runtime.enable');
-    await cdp.send('Runtime.addBinding', { name: '__clikFocus' });
-    const added = await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: FOCUS_SCRIPT }) as { identifier: string };
+    const added = await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: DESCRIBE_SCRIPT }) as { identifier: string };
     this.scriptId = added.identifier;
-    await cdp.send('Runtime.evaluate', { expression: FOCUS_SCRIPT }).catch(quiet('agent/computer/handoff-live'));
+    await cdp.send('Runtime.evaluate', { expression: DESCRIBE_SCRIPT }).catch(quiet('agent/computer/handoff-live'));
     await this.page.bringToFront().catch(quiet('agent/computer/handoff-live'));
     this.sendPage(this.page.url());
     this.up = true;
@@ -164,6 +190,7 @@ export class LiveView {
     this.stopped = true;
     clearTimeout(this.unstick);
     clearTimeout(this.fieldsTimer);
+    clearInterval(this.poll);
     const cdp = this.cdp;
     if (!cdp) return;
     const quietly = quiet('agent/computer/handoff-live');
@@ -184,7 +211,7 @@ export class LiveView {
     if (message.t === 'ack') { this.onAck(); return; }
     // A stream of moves only matters at its latest point: a slow page must not make the phone's finger lag behind by a queue of them.
     const last = this.queue.at(-1);
-    if (last && ((message.t === 'touch' && message.k === 'm' && last.t === 'touch' && last.k === 'm') || (message.t === 'mouse' && message.k === 'm' && last.t === 'mouse' && last.k === 'm') || (message.t === 'resize' && last.t === 'resize'))) this.queue[this.queue.length - 1] = message;
+    if (last && ((message.t === 'touch' && message.k === 'm' && last.t === 'touch' && last.k === 'm') || (message.t === 'mouse' && message.k === 'm' && last.t === 'mouse' && last.k === 'm') || (message.t === 'resize' && last.t === 'resize') || (message.t === 'fill' && last.t === 'fill' && message.i === last.i))) this.queue[this.queue.length - 1] = message;
     else this.queue.push(message);
     if (this.queue.length > 400) this.queue.splice(0, this.queue.length - 400);
     void this.drain();
@@ -196,7 +223,7 @@ export class LiveView {
     try {
       for (let message = this.queue.shift(); message && !this.stopped; message = this.queue.shift()) {
         await this.handle(message).catch(quiet('agent/computer/handoff-live'));
-        if (message.t === 'touch' || message.t === 'mouse') this.scheduleFields(80);
+        if (message.t !== 'hello' && message.t !== 'resize' && message.t !== 'view' && message.t !== 'done') this.scheduleFields(80);
       }
     } finally { this.draining = false; }
   }
@@ -233,12 +260,35 @@ export class LiveView {
       }
       case 'key': {
         const key = keyEvent(message.key);
-        if (!key) return;
-        const times = Math.max(1, Math.min(MAX_REPEAT, Math.floor(Number(message.n) || 1)));
-        for (let i = 0; i < times; i++) {
-          await cdp.send('Input.dispatchKeyEvent', { type: key.text ? 'keyDown' : 'rawKeyDown', key: key.key, code: key.code, windowsVirtualKeyCode: key.vk, nativeVirtualKeyCode: key.vk, ...(key.text ? { text: key.text, unmodifiedText: key.text } : {}) });
-          await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: key.key, code: key.code, windowsVirtualKeyCode: key.vk, nativeVirtualKeyCode: key.vk });
-        }
+        if (key) await this.pressKey(key, Math.max(1, Math.min(MAX_REPEAT, Math.floor(Number(message.n) || 1))));
+        return;
+      }
+      case 'fill': {
+        // The whole value of one field, as a person typing it would put it in (the page hears real input).
+        const index = Number(message.i), value = message.v;
+        if (!Number.isInteger(index) || index < 0 || typeof value !== 'string' || value.length > MAX_TEXT) return;
+        if (await this.evaluate<string>(prepareFill(index)) !== 'ok') return;
+        if (value === '') await this.pressKey(keyEvent('Backspace')!, 1);
+        else await cdp.send('Input.insertText', { text: value });
+        return;
+      }
+      case 'check': case 'press': {
+        const index = Number(message.i);
+        if (!Number.isInteger(index) || index < 0) return;
+        const where = await this.evaluate<{ x: number; y: number; hit: boolean; checked: boolean } | null>(pointOf(index));
+        if (!where) return;
+        // A box that is already as asked is left alone; a button is pressed.
+        if (message.t === 'check' && where.checked === Boolean(message.v)) return;
+        if (where.hit) {
+          await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: where.x, y: where.y, button: 'none', buttons: 0 });
+          await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: where.x, y: where.y, button: 'left', buttons: 1, clickCount: 1 });
+          await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: where.x, y: where.y, button: 'left', buttons: 0, clickCount: 1 });
+        } else await this.evaluate<boolean>(clickInPage(index));
+        return;
+      }
+      case 'view': {
+        this.formView = message.v === 'fields';
+        await this.applyView();
         return;
       }
       case 'text': {
@@ -266,11 +316,34 @@ export class LiveView {
     this.send({ t: 'page', host });
   }
 
-  private async onFocus(payload: string): Promise<void> {
-    let descriptor: unknown;
-    try { descriptor = JSON.parse(payload); } catch { return; }
-    if (!descriptor) { this.send({ t: 'blur' }); return; }
-    this.send({ t: 'focus', d: descriptor });
+  private async evaluate<T>(expression: string): Promise<T | undefined> {
+    try {
+      const result = await this.cdp!.send('Runtime.evaluate', { expression, returnByValue: true }) as { result?: { value?: T } };
+      return result.result?.value;
+    } catch { return undefined; }
+  }
+
+  private async pressKey(key: KeyEvent, times: number): Promise<void> {
+    const cdp = this.cdp!;
+    for (let i = 0; i < times; i++) {
+      await cdp.send('Input.dispatchKeyEvent', { type: key.text ? 'keyDown' : 'rawKeyDown', key: key.key, code: key.code, windowsVirtualKeyCode: key.vk, nativeVirtualKeyCode: key.vk, ...(key.text ? { text: key.text, unmodifiedText: key.text } : {}) });
+      await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: key.key, code: key.code, windowsVirtualKeyCode: key.vk, nativeVirtualKeyCode: key.vk });
+    }
+  }
+
+  /** Switches between the picture (frames flow) and the form (no frames; the fields are re-read twice a second, as the page changes under it). */
+  private async applyView(): Promise<void> {
+    const cdp = this.cdp!;
+    clearInterval(this.poll);
+    this.poll = undefined;
+    if (this.formView) {
+      if (this.streaming) await cdp.send('Page.stopScreencast').catch(quiet('agent/computer/handoff-live'));
+      this.streaming = false;
+      this.held = undefined;
+      this.lastFields = '';
+      this.poll = setInterval(() => { void this.refreshFields(); }, 600);
+      void this.refreshFields();
+    } else if (this.size) await this.layout(this.size);
   }
 
   /** The visual viewport right now, read before each input so a pinch or a pan that just happened is already in the next position. */
@@ -287,7 +360,7 @@ export class LiveView {
     const cdp = this.cdp!;
     const same = this.size && this.size.w === size.w && this.size.h === size.h && this.size.dpr === size.dpr && this.laidOutAs === this.mode;
     this.size = size;
-    if (same && this.streaming) return;
+    if (same && (this.streaming || this.formView)) return;
     const touch = this.mode === 'touch';
     this.laidOutAs = this.mode;
     // A mouse sees the page at the phone's width at full size; a finger sees the mobile layout (zoomed out for a page with no layout tag, pinchable).
@@ -298,6 +371,7 @@ export class LiveView {
     if (this.streaming) await cdp.send('Page.stopScreencast').catch(quiet('agent/computer/handoff-live'));
     this.held = undefined;
     this.ready = true;
+    if (this.formView) { this.streaming = false; this.scheduleFields(100); return; }
     await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 70, maxWidth: Math.round(size.w * scale), maxHeight: Math.round(size.h * scale), everyNthFrame: 1 });
     this.streaming = true;
     this.stats.restarts++;
@@ -347,7 +421,8 @@ export class LiveView {
       const text = result.result?.value;
       if (typeof text !== 'string' || text === this.lastFields) return;
       this.lastFields = text;
-      this.send({ t: 'fields', f: JSON.parse(text) as unknown });
+      const parsed = JSON.parse(text) as { f?: unknown; c?: unknown };
+      this.send({ t: 'fields', f: parsed.f ?? [], c: Boolean(parsed.c) });
     } catch { /* the page is changing */ }
   }
 

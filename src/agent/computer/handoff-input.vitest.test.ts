@@ -1,31 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cleanPoints, cleanSize, DIFF_SOURCE, keyEvent } from './handoff-input.js';
-
-// The phone's page runs this same source.
-const diffText = new Function(`return (${DIFF_SOURCE})`)() as (prev: string, next: string) => { remove: number; add: string };
-
-describe('what a change in the phone\'s typing box means in the page', () => {
-  it('types at the end, and backspaces from the end', () => {
-    expect(diffText('', 'a')).toEqual({ remove: 0, add: 'a' });
-    expect(diffText('abc', 'abcd')).toEqual({ remove: 0, add: 'd' });
-    expect(diffText('abc', 'ab')).toEqual({ remove: 1, add: '' });
-    expect(diffText('abc', 'abc')).toEqual({ remove: 0, add: '' });
-  });
-
-  it('replaces a whole value (an autofill) or the tail of one', () => {
-    expect(diffText('', 'me@example.com')).toEqual({ remove: 0, add: 'me@example.com' });
-    expect(diffText('old', 'new')).toEqual({ remove: 3, add: 'new' });
-    expect(diffText('hello world', 'hello there')).toEqual({ remove: 5, add: 'there' });
-    // An edit in the middle is retyped from the change to the end, which is where the page's caret is.
-    expect(diffText('abXcd', 'abcd')).toEqual({ remove: 3, add: 'cd' });
-  });
-
-  it('counts characters, not UTF-16 units, and does not cut an emoji in half', () => {
-    expect(diffText('a😀', 'a')).toEqual({ remove: 1, add: '' });
-    expect(diffText('a😀', 'a😁')).toEqual({ remove: 1, add: '😁' });
-    expect(diffText('😀', '')).toEqual({ remove: 1, add: '' });
-  });
-});
+import { cleanPoints, cleanSize, keyEvent } from './handoff-input.js';
 
 describe('input checks', () => {
   it('accepts up to five well-formed touch points and nothing else', () => {

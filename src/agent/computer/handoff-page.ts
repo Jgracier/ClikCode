@@ -1,7 +1,5 @@
-/** The page the phone opens: the live view of the browser tab, and the phone's own controls for it. Plain HTML and JavaScript in one response
- * (no library, no second request, nothing from a third party). */
-import { DIFF_SOURCE } from './handoff-input.js';
-
+/** The page the phone opens: the browser tab as a form of real, fillable fields (the phone's own keyboard, autofill and pickers) or as a live
+ * picture, and the phone's own controls for it. Plain HTML and JavaScript in one response (no library, no second request, nothing from a third party). */
 export function handoffPage(): string {
   return `<!doctype html><html lang="en"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
@@ -18,7 +16,16 @@ button{font:inherit;min-height:34px;border-radius:8px;border:1px solid #484f58;b
 #done{background:#238636;border-color:#2ea043;font-weight:600}
 #stage{flex:1;min-height:0;position:relative;background:#000;overflow:hidden}
 #c{position:absolute;left:0;top:0;touch-action:none;outline:none;background:#000}
-#proxy{position:absolute;z-index:6;margin:0;padding:0;border:0;outline:0;background:transparent;color:transparent;caret-color:transparent;opacity:.01;font-size:16px;pointer-events:none;resize:none;-webkit-user-select:text;user-select:text;-webkit-appearance:none}
+#form{display:none;flex:1;min-height:0;overflow:auto;-webkit-overflow-scrolling:touch;background:#0d1117;padding:14px 14px calc(env(safe-area-inset-bottom) + 28px)}
+.row{margin:0 0 16px}
+.lab{font-size:13px;color:#8b949e;margin:0 0 6px}.lab.req::after{content:" *";color:#f85149}
+.ctl{display:block;width:100%;box-sizing:border-box;font:inherit;font-size:16px;min-height:48px;padding:10px 12px;background:#161b22;color:#f0f6fc;border:1px solid #484f58;border-radius:10px;-webkit-user-select:text;user-select:text;-webkit-appearance:none;appearance:none}
+.ctl:focus{outline:0;border-color:#58a6ff;box-shadow:0 0 0 3px rgba(88,166,255,.25)}
+textarea.ctl{min-height:96px}
+.chk{display:flex;gap:12px;align-items:center;min-height:46px;font-size:16px}.chk input{width:26px;height:26px;flex:none}
+.act{display:block;width:100%;min-height:50px;font-size:17px;font-weight:600;background:#1f6feb;border-color:#388bfd}
+.note{background:#1f3350;border:1px solid #1f6feb;border-radius:10px;padding:12px 14px;margin:0 0 16px;line-height:1.4}.note button{margin-top:10px;width:100%}
+@media (max-width:430px){#ms{display:none}}
 #veil{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.78);text-align:center;padding:24px;line-height:1.4}
 #veil.on{display:flex}
 #sheet{display:none;position:absolute;inset:0;z-index:10;background:rgba(0,0,0,.55);align-items:flex-end}
@@ -32,18 +39,18 @@ button{font:inherit;min-height:34px;border-radius:8px;border:1px solid #484f58;b
 #sheetInput{width:100%;box-sizing:border-box;font-size:18px;min-height:46px;background:#0d1117;color:#f0f6fc;border:1px solid #58a6ff;border-radius:8px;padding:0 10px;margin-bottom:6px}
 </style>
 <div id="app">
-<div id="bar"><span id="dot"></span><span id="host">Connecting…</span><span id="ms"></span><button id="mode" aria-label="Switch between touch and mouse">Mouse</button><button id="done">Done</button></div>
+<div id="bar"><span id="dot"></span><span id="host">Connecting…</span><span id="ms"></span><button id="view" aria-label="Switch between the fields and the page">Fields</button><button id="mode" aria-label="Switch between touch and mouse">Mouse</button><button id="done">Done</button></div>
 <div id="stage"><canvas id="c" tabindex="0"></canvas><div id="veil" class="on"><span id="veilText">Connecting…</span></div></div>
+<div id="form"><div id="formBody"></div></div>
 <div id="sheet"><div id="sheetBox"><div id="sheetTitle"></div><div id="sheetBody"></div><div id="sheetActions"></div></div></div>
 </div>
 <script>
 (() => {
 const $ = (id) => document.getElementById(id);
-const diffText = ${DIFF_SOURCE};
 const base = location.pathname.replace(/\\/$/, '');
 const canvas = $('c'), ctx = canvas.getContext('2d', { alpha: false });
 const stage = $('stage'), app = $('app');
-const T = window.__handoff = { frames: 0, latency: 0, focus: null, connected: false, ended: false, mode: 'touch', fields: 0 };
+const T = window.__handoff = { frames: 0, latency: 0, connected: false, ended: false, mode: 'touch', view: 'auto', fields: 0 };
 let ws = null, retry = 0, finished = false, sentAt = 0, lastSize = '';
 
 // Touch on a phone or tablet, mouse on a computer; the button beside Done switches, and says what it would switch to.
@@ -66,7 +73,8 @@ if (window.visualViewport) { visualViewport.addEventListener('resize', fit); vis
 fit();
 let sizeTimer = 0;
 const sendSize = (force) => {
-  const w = stage.clientWidth, h = stage.clientHeight;
+  const area = stage.clientWidth >= 50 ? stage : $('form');
+  const w = area.clientWidth, h = area.clientHeight;
   if (w < 50 || h < 50) return;
   const o = { t: 'resize', w, h, dpr: Math.min(window.devicePixelRatio || 1, 3), m: mode };
   const key = JSON.stringify(o);
@@ -75,7 +83,8 @@ const sendSize = (force) => {
   canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
   send(o);
 };
-new ResizeObserver(() => { clearTimeout(sizeTimer); sizeTimer = setTimeout(() => sendSize(false), 80); }).observe(stage);
+const resizer = new ResizeObserver(() => { clearTimeout(sizeTimer); sizeTimer = setTimeout(() => sendSize(false), 80); });
+resizer.observe(stage); resizer.observe($('form'));
 
 // ── frames ──
 let decoding = false, newest = null;
@@ -98,11 +107,11 @@ const drawNewest = async () => {
 };
 
 // ── connection ──
-let fields = [];
+let fields = [], captcha = false;
 const connect = () => {
   ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + base + '/live');
   ws.binaryType = 'arraybuffer';
-  ws.onopen = () => { retry = 0; T.connected = true; $('dot').className = 'on'; lastSize = ''; sendSize(true); };
+  ws.onopen = () => { retry = 0; T.connected = true; $('dot').className = 'on'; lastSize = ''; sendSize(true); send({ t: 'view', v: view === 'fields' ? 'fields' : 'page' }); };
   ws.onclose = async () => {
     T.connected = false; $('dot').className = '';
     if (finished) return;
@@ -117,9 +126,7 @@ const connect = () => {
     if (typeof event.data !== 'string') { newest = new Uint8Array(event.data, 1); if (!decoding) drawNewest(); return; }
     let msg; try { msg = JSON.parse(event.data); } catch (error) { return; }
     if (msg.t === 'page') $('host').textContent = msg.host || '';
-    else if (msg.t === 'fields') { fields = Array.isArray(msg.f) ? msg.f : []; T.fields = fields.length; followField(); }
-    else if (msg.t === 'focus') showFocus(msg.d);
-    else if (msg.t === 'blur') hideFocus();
+    else if (msg.t === 'fields') { fields = Array.isArray(msg.f) ? msg.f : []; captcha = Boolean(msg.c); T.fields = fields.length; gotFields(); }
     else if (msg.t === 'done') { finished = true; T.ended = true; veil('Done. ClikCode will continue.'); }
   };
 };
@@ -128,12 +135,13 @@ const connect = () => {
 const fieldAt = (x, y) => {
   let best = null;
   for (const f of fields) {
+    if (f.d.kind !== 'text' && f.d.kind !== 'select' && f.d.kind !== 'native') continue;
     if (x < f.x - 6 || x > f.x + f.w + 6 || y < f.y - 6 || y > f.y + f.h + 6) continue;
     if (!best || f.w * f.h < best.w * best.h) best = f;
   }
   return best;
 };
-const needsSheet = (f) => Boolean(f) && f.d.kind !== 'text';
+const needsSheet = (f) => Boolean(f) && (f.d.kind === 'select' || f.d.kind === 'native');
 
 // ── touch or mouse, on a phone's screen ──
 const slots = new Map();
@@ -179,7 +187,7 @@ const touchMode = (k, list) => {
     const f = tap ? fieldAt(g.x, g.y) : null;
     g = null;
     // In the person's own tap, so the phone lets its keyboard come up.
-    if (f && f.d.kind === 'text') openProxy(f);
+    if (f && f.d.kind === 'text') gotoField(f);
   }
 };
 
@@ -225,7 +233,7 @@ const mouseMode = (k, list) => {
     if (!m.pressed) press();
     input({ t: 'mouse', k: 'u', b: 0, x: m.last.x, y: m.last.y });
     m = null;
-    if (tap && f && f.d.kind === 'text') openProxy(f);
+    if (tap && f && f.d.kind === 'text') gotoField(f);
   }
 };
 
@@ -238,7 +246,7 @@ const onTouch = (k) => (event) => {
 };
 for (const [name, k] of [['touchstart', 's'], ['touchmove', 'm'], ['touchend', 'e'], ['touchcancel', 'c']]) canvas.addEventListener(name, onTouch(k), { passive: false });
 document.addEventListener('gesturestart', (e) => e.preventDefault());
-document.body.addEventListener('touchmove', (e) => { if (!e.target.closest('#proxy, #sheetBody')) e.preventDefault(); }, { passive: false });
+document.body.addEventListener('touchmove', (e) => { if (!e.target.closest('#form, #sheetBody')) e.preventDefault(); }, { passive: false });
 
 // A computer's own mouse and keyboard.
 let down = null, lastMove = 0;
@@ -254,7 +262,7 @@ window.addEventListener('mouseup', (e) => {
   const p = at(e), d = down; down = null;
   if (d.held) { if (dist(p, d) < 6) openSheet(d.field.d, d.field.i); return; }
   input({ t: 'mouse', k: 'u', b: e.button, ...p });
-  if (d.field && d.field.d.kind === 'text' && dist(p, d) < 6) openProxy(d.field);
+  if (d.field && d.field.d.kind === 'text' && dist(p, d) < 6) gotoField(d.field);
 });
 canvas.addEventListener('mousemove', (e) => { const now = performance.now(); if (now - lastMove < 16 || (down && down.held)) return; lastMove = now; send({ t: 'mouse', k: 'm', down: down ? 1 : 0, ...at(e) }); });
 canvas.addEventListener('wheel', (e) => { e.preventDefault(); input({ t: 'mouse', k: 'w', dx: e.deltaX, dy: e.deltaY, ...at(e) }); }, { passive: false });
@@ -265,49 +273,103 @@ canvas.addEventListener('keydown', (e) => {
   else if (e.key.length === 1) { e.preventDefault(); input({ t: 'text', s: e.key }); }
 });
 
-// ── typing: the phone's keyboard, into the field in the page ──
-// A real input, invisible, laid exactly over the field that was tapped and focused in that tap, so the phone brings up its keyboard (with the
-// field's kind, autofill and Enter key) and the field in the picture is the one that is typed in. What changes in it is replayed in the page.
-let proxy = null, proxyLast = '', multiline = false;
-const place = (el, f) => { el.style.left = f.x + 'px'; el.style.top = f.y + 'px'; el.style.width = Math.max(f.w, 20) + 'px'; el.style.height = Math.max(f.h, 20) + 'px'; };
-const hideFocus = () => { T.focus = null; if (proxy) { proxy.blur(); proxy.remove(); proxy = null; } };
-const followField = () => { if (!proxy) return; const f = fields.find((x) => x.i === Number(proxy.dataset.idx)); if (f) place(proxy, f); };
-const openProxy = (f) => {
-  const d = f.d;
-  // The same field again: keep its box, and focus it again in this tap in case the keyboard was put away.
-  if (proxy && Number(proxy.dataset.idx) === f.i) { place(proxy, f); try { proxy.focus({ preventScroll: true }); } catch (error) { /* nothing to do */ } return; }
-  hideFocus(); T.focus = d;
-  multiline = Boolean(d.multiline);
-  const el = document.createElement(multiline ? 'textarea' : 'input');
-  if (!multiline) el.type = d.type === 'editable' ? 'text' : d.type;
-  if (d.inputmode) el.inputMode = d.inputmode;
-  if (d.autocomplete) el.setAttribute('autocomplete', d.autocomplete);
-  if (d.enterkeyhint) el.enterKeyHint = d.enterkeyhint;
-  if (d.maxlength) el.maxLength = d.maxlength;
-  if (['email', 'url', 'password'].includes(d.type)) { el.autocapitalize = 'off'; el.autocorrect = 'off'; el.spellcheck = false; }
-  el.value = d.value || ''; proxyLast = el.value;
-  el.dataset.idx = String(f.i);
-  el.addEventListener('input', () => {
-    const { remove, add } = diffText(proxyLast, el.value);
-    proxyLast = el.value;
-    if (remove) input({ t: 'key', key: 'Backspace', n: remove });
-    if (add) input({ t: 'text', s: add });
-  });
-  el.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !multiline) { e.preventDefault(); input({ t: 'key', key: 'Enter' }); }
-    else if (e.key === 'Tab') { e.preventDefault(); input({ t: 'key', key: 'Tab' }); }
-  });
-  el.id = 'proxy'; place(el, f); stage.appendChild(el); proxy = el;
-  // Called from the person's own tap, which is what lets a phone bring up the keyboard at once.
-  try { el.focus({ preventScroll: true }); } catch (error) { /* nothing to do */ }
+// ── the fields: a real form ──
+// Every fillable control on the page, as the phone's own: tap one and the phone's keyboard (or picker) comes up, autofill and the password
+// manager work, and what is entered goes into the real field on the page as it is typed.
+const el = (tag, className, text) => { const n = document.createElement(tag); if (className) n.className = className; if (text !== undefined) n.textContent = text; return n; };
+const note = (text, action, go) => { const n = el('div', 'note', text); const b = el('button', '', action); b.onclick = go; n.appendChild(b); return n; };
+const buildRow = (f) => {
+  const d = f.d, row = el('div', 'row');
+  if (d.kind === 'button') { const b = el('button', 'act', d.label); b.onclick = () => input({ t: 'press', i: f.i }); row.appendChild(b); return row; }
+  if (d.kind === 'check') {
+    const l = el('label', 'chk'), c = el('input'); c.type = d.type; c.checked = Boolean(d.checked); c.dataset.i = String(f.i);
+    c.onchange = () => input({ t: 'check', i: f.i, v: c.checked });
+    l.appendChild(c); l.appendChild(el('span', '', d.label || (d.type === 'radio' ? 'Option' : 'Tick this')));
+    row.appendChild(l); return row;
+  }
+  row.appendChild(el('div', 'lab' + (d.required ? ' req' : ''), d.label || d.placeholder || 'Field'));
+  let c;
+  if (d.kind === 'select') {
+    c = el('select'); c.multiple = Boolean(d.multiple);
+    for (const o of d.options) { const op = el('option', '', o.t || o.v || '—'); op.value = o.v; op.selected = Boolean(o.s); op.disabled = Boolean(o.d); c.appendChild(op); }
+    c.onchange = () => input({ t: 'set', i: f.i, v: d.multiple ? Array.from(c.selectedOptions).map((o) => o.value) : c.value });
+  } else if (d.kind === 'native') {
+    c = el('input'); c.type = d.type; if (d.min) c.min = d.min; if (d.max) c.max = d.max; if (d.step) c.step = d.step; c.value = d.value || '';
+    c.onchange = () => input({ t: 'set', i: f.i, v: c.value });
+  } else {
+    const multiline = Boolean(d.multiline);
+    c = el(multiline ? 'textarea' : 'input');
+    if (!multiline) c.type = d.type === 'editable' ? 'text' : d.type;
+    if (d.inputmode) c.inputMode = d.inputmode;
+    if (d.autocomplete) c.setAttribute('autocomplete', d.autocomplete);
+    if (d.enterkeyhint) c.enterKeyHint = d.enterkeyhint;
+    if (d.maxlength) c.maxLength = d.maxlength;
+    if (d.placeholder) c.placeholder = d.placeholder;
+    if (['email', 'url', 'password'].includes(d.type)) { c.autocapitalize = 'off'; c.autocorrect = 'off'; c.spellcheck = false; }
+    c.value = d.value || '';
+    c.addEventListener('input', () => input({ t: 'fill', i: f.i, v: c.value }));
+    if (!multiline) c.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); input({ t: 'key', key: 'Enter' }); } });
+  }
+  c.className = 'ctl'; c.dataset.i = String(f.i);
+  row.appendChild(c); return row;
 };
-const showFocus = (d) => {
-  // A choice or a date has its own sheet, opened by the tap; only typing needs a box. One already over this field stays.
-  if (d.kind !== 'text' || d.generic) return;
-  if (proxy && d.idx >= 0 && Number(proxy.dataset.idx) === d.idx) return;
-  const f = fields.find((x) => x.i === d.idx);
-  if (f) openProxy(f);
+let formKey = '';
+// The page changed: put its new values in the controls that are not being typed in (a password's value is never sent, so it is left alone).
+const patchForm = () => {
+  const body = $('formBody');
+  for (const f of fields) {
+    const c = body.querySelector('[data-i="' + f.i + '"]'), d = f.d;
+    if (!c || c === document.activeElement || d.type === 'password') continue;
+    if (d.kind === 'check') c.checked = Boolean(d.checked);
+    else if (d.kind === 'select') { for (const o of c.options) o.selected = d.options.some((x) => x.v === o.value && x.s); }
+    else if ((d.kind === 'text' || d.kind === 'native') && c.value !== (d.value || '')) c.value = d.value || '';
+  }
 };
+const renderForm = () => {
+  const body = $('formBody');
+  const key = JSON.stringify([captcha, fields.map((f) => [f.i, f.d.kind, f.d.type || '', f.d.label || '', f.d.options ? f.d.options.length : 0])]);
+  if (key === formKey) { patchForm(); return; }
+  formKey = key;
+  // A field being typed in is kept as it is, caret and all, when the form is rebuilt around it.
+  const active = document.activeElement && body.contains(document.activeElement) ? document.activeElement : null;
+  const keep = active ? { i: active.dataset.i, value: active.value, start: active.selectionStart, end: active.selectionEnd } : null;
+  body.textContent = '';
+  if (captcha) body.appendChild(note('This page also has a picture check (CAPTCHA). It cannot be filled in as a field: open the page to do it.', 'Open the page', () => setView('page', true)));
+  if (!fields.length) body.appendChild(note('There is nothing to fill in on this page.', 'Open the page', () => setView('page', true)));
+  for (const f of fields) body.appendChild(buildRow(f));
+  if (keep) { const c = body.querySelector('[data-i="' + keep.i + '"]'); if (c) { c.value = keep.value; try { c.focus({ preventScroll: true }); c.setSelectionRange(keep.start, keep.end); } catch (error) { /* a field that has no caret */ } } }
+};
+
+// ── the fields or the page ──
+let view = '';
+try { view = localStorage.getItem('clikcode-handoff-view') || ''; } catch (error) { /* private browsing */ }
+if (view !== 'fields' && view !== 'page') view = 'auto';
+const applyView = () => {
+  const form = view === 'fields';
+  $('form').style.display = form ? 'block' : 'none';
+  $('stage').style.display = form ? 'none' : '';
+  $('view').textContent = form ? 'Page' : 'Fields';
+  T.view = view;
+  send({ t: 'view', v: form ? 'fields' : 'page' });
+  if (form) renderForm(); else { lastSize = ''; setTimeout(() => sendSize(true), 40); }
+};
+const setView = (v, remember) => {
+  view = v;
+  if (remember) { try { localStorage.setItem('clikcode-handoff-view', v); } catch (error) { /* private browsing */ } }
+  applyView();
+};
+// The first time the page's fields are known: a page with something to fill in opens as the form, one without as the picture.
+const gotFields = () => {
+  if (view === 'auto') setView(fields.some((f) => f.d.kind !== 'button') ? 'fields' : 'page', false);
+  else if (view === 'fields') renderForm();
+};
+// A tap on a text field in the picture goes to that field in the form, in the tap itself, so the phone brings up its keyboard.
+const gotoField = (f) => {
+  view = 'fields'; T.view = view; applyView();
+  const c = $('formBody').querySelector('[data-i="' + f.i + '"]');
+  if (c) { try { c.focus(); } catch (error) { /* nothing to do */ } if (c.scrollIntoView) c.scrollIntoView({ block: 'center' }); }
+};
+applyView();
 
 // ── a choice or a date: the phone's own sheet ──
 const closeSheet = () => { $('sheet').classList.remove('on'); $('sheetBody').textContent = ''; $('sheetActions').textContent = ''; };
@@ -341,7 +403,8 @@ const openSheet = (d, idx) => {
 $('sheet').addEventListener('click', (e) => { if (e.target === $('sheet')) closeSheet(); });
 
 // ── the bar ──
-for (const id of ['mode', 'done']) $(id).addEventListener('pointerdown', (e) => e.preventDefault());
+for (const id of ['view', 'mode', 'done']) $(id).addEventListener('pointerdown', (e) => e.preventDefault());
+$('view').onclick = () => setView(view === 'fields' ? 'page' : 'fields', true);
 $('mode').onclick = () => {
   mode = mode === 'touch' ? 'mouse' : 'touch'; T.mode = mode;
   try { localStorage.setItem('clikcode-handoff-mode', mode); } catch (error) { /* private browsing */ }
