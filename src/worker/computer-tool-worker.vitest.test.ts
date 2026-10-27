@@ -87,7 +87,7 @@ it('offers the tools over MCP with typed schemas', async () => {
   const init = await server.call('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } });
   expect(init.result.serverInfo.name).toBe('clikcode');
   const listed = await server.call('tools/list');
-  expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toEqual(['browser_use', 'computer_use', 'clikdeploy_step_up']);
+  expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toEqual(['browser_use', 'account_use', 'computer_use', 'clikdeploy_step_up']);
   expect(listed.result.tools[0].inputSchema.additionalProperties).toBe(true);
   expect((await server.call('tools/call', { name: 'nope', arguments: {} })).error.code).toBe(-32602);
 }, 60_000);

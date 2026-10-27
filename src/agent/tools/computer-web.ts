@@ -27,7 +27,8 @@ import { profileLoginAnswers } from '../computer/profile-login.js';
 import { Parked, park } from '../computer/parking.js';
 import { hideKeyLikeText } from '../computer/secret-finder.js';
 import { answerDialog, bindDialogs, dialogNote, hasPendingDialog, pendingDialogNote, settleWaitingDialog, withDialogNotices, withDialogs } from '../computer/page-dialogs.js';
-import { FILES_ENV_ACTIONS, FILES_ENV_HELP, FILES_ENV_PARAMETERS, filesEnvLabel, type FilesEnvAction, type FilesEnvArgs } from '../computer/files-env-schema.js';
+import { ALL_ACTION_NAMES, elsewhere, listing, overview, paramsOf, specOf, toolNameOf, usage, type ToolKind } from '../computer/actions.js';
+import { FILES_ENV_HELP, FILES_ENV_PARAMETERS, filesEnvLabel, type FilesEnvAction, type FilesEnvArgs } from '../computer/files-env-schema.js';
 import { documentView, requestDocumentPages } from '../computer/document-text.js';
 import { applyHttpAuth, clearHttpAuth, denyPermissionsFor, runCookies, runPdf, runPermissions, runViewport } from '../computer/files-env-actions.js';
 import { approvedUploadPath, isUploadPath } from '../computer/upload-files.js';
@@ -47,6 +48,8 @@ import type { ToolContext, ToolRunResult } from '../tool-contract.js';
 
 type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'hover' | 'drag'; target?: string; at?: 'start' | 'end'; text?: string; key?: string; direction?: ScrollDirection; accept_dialog?: boolean; gone?: boolean; seconds?: number } & StepExtras;
 type WebArgs = {
+  /** help: an action name, or "guide". */
+  topic?: string;
   action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'profile' | 'open_email_link' | 'read_email_code' | 'email_connect' | 'oauth_connect' | 'notes' | 'recipe' | 'queue' | 'network' | 'preflight' | 'forget_login' | 'help' | 'hover' | 'drag' | PageAction | FilesEnvAction;
   tab?: string; at?: 'start' | 'end'; url?: string; host?: string; note?: string; recipe_op?: 'save' | 'get' | 'run' | 'list'; login_route?: string; key_page?: string; capture_hint?: string; target?: string; text?: string; key?: string; direction?: ScrollDirection; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
   new_account?: boolean; secret?: string; to?: string; with?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean; format?: string; options?: string[]; secret?: boolean }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; vendor?: string; owner?: string; env?: string; task?: { vendor: string; kind?: string; status?: string; reason?: string; note?: string; owner?: string; connectors?: string[] }; bodies?: boolean; tasks?: boolean; task_status?: string; task_reason?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
@@ -286,7 +289,7 @@ async function settle(page: Page): Promise<void> {
   })).catch(quiet('agent/tools/computer-web')); // a navigation destroys the page being watched: the next look is a new page
 }
 
-const ACTION_LIST = ['open · close · observe · click · fill · choose · press · scroll · wait · upload · steps · login · handoff · capture_secret · send_secret · profile · open_email_link · read_email_code · email_connect · oauth_connect · notes · recipe · queue · network · preflight · forget_login · help · hover · drag · back · forward · reload · tabs · switch · evaluate · screenshot · console', ...FILES_ENV_ACTIONS].join(' · ');
+const ACTION_LIST = ALL_ACTION_NAMES.join(' · ');
 
 const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: ['action'], properties: {
     action: { type: 'string', description: ACTION_LIST },
@@ -340,7 +343,7 @@ const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: [
     ...FILES_ENV_PARAMETERS,
   } };
 
-const WEB_DESCRIPTION = [
+const WEB_TEXT = [
     "Drive ClikCode's own Chrome (its own saved profile; it starts by itself). open and observe return the page, with a [ref=…] on each element: pass a ref as target (or visible text) to click or fill. After an action you get only what changed (and any open dialog); observe shows the whole page again. A new tab or popup the page opens is followed automatically.",
     'Actions: open (a URL) · observe (the page again; full: true adds header and footer; find: "words" shows only the lines that mention them, for a long page) · click · fill · choose (an option of a dropdown: target + text) · press · scroll · wait (for text to appear or go, up to 2 minutes; for jobs that finish on their own) · steps (several of those in order, one call, stops at the first failure) · login · handoff · capture_secret · profile · open_email_link (find the newest email from a sender in the signed-in Gmail and open a link in it, one call: verification and sign-in emails) · upload (a file input or its button + text: the name of a profile file detail ending _file such as logo_file, or the absolute path of a file in the workspace or the chat\'s downloads folder; nothing else can be sent) · notes (read or add what was learned on a site: the URL that worked, the order of screens, what was missing; shown again whenever a page on that host is opened, so write one when a task finally works) · recipe (save the steps of a signup or key capture that worked, by control text, never secrets; run replays them and stops for the user at a captcha, code, payment or review page; list) · email_connect (one consent in this browser connects the signed-in Gmail; after that read_email_code and open_email_link read mail through the Gmail API, wait for it to arrive, and return only the code or the link) · oauth_connect (target = a ClikDeploy connector id: starts its OAuth connect, presses through the vendor consent screens in this signed-in browser (account named by the profile sso_email, Advanced / Go to ... (unsafe), Continue / Allow / Authorize), stops with a plain reason at a login password, MFA code, captcha or an unknown screen (sign in first with login), and confirms ClikDeploy shows an active connection) · read_email_code (the one-time code in the newest email from a sender, read in a tab of its own, so a sign-up that wants an emailed code does not need the user) · forget_login (remove the saved login for a site from the vault: target = the site, label = one account; returns only a count; use it for a login the site keeps refusing) · close.',
     PAGE_DESCRIPTION,
@@ -348,8 +351,10 @@ const WEB_DESCRIPTION = [
     'Work through the whole task you were given without checking in at each step. Ask real choices (project, account, role set) once, up front, in one question; after that ask only when genuinely blocked (a sign-in they must type, a payment).',
     FILES_ENV_HELP,
     'API keys: go to the key page, set the options, then capture_secret with target = the final Create button and a send_to plan. It presses the site\'s Copy button or reads the file it hands over, checks the key against its service, saves it to ClikCode Secrets Manager and sends it where send_to says. You never see the key. With no target it takes a key the page already shows; never click Regenerate just to see one.',
-  ].join('\n');
+  ];
+const WEB_DESCRIPTION = WEB_TEXT.join('\n');
 
+/** The engine behind both tools: every action, the whole schema. Not given to a model; browser_use and account_use below are what agents see. */
 export const computerWebTool = defineTool<WebArgs>({
   name: 'browser_use', class: 'exec',
   description: WEB_DESCRIPTION,
@@ -395,8 +400,7 @@ export const computerWebTool = defineTool<WebArgs>({
       : hostCtx;
     try {
       if (!(await computerEnabled(ctx.stateDir))) throw new Error(COMPUTER_OFF);
-      if (args.action === 'help') return { output: `${WEB_DESCRIPTION}\n\nArguments: ${Object.entries((WEB_PARAMETERS as { properties: Record<string, { description?: string }> }).properties).map(([name, spec]) => `${name}${spec.description ? ` (${spec.description})` : ''}`).join('; ')}` };
-      if (!ACTION_LIST.split(' · ').includes(String(args.action))) throw new Error(`Unknown action "${String(args.action)}". Actions: ${ACTION_LIST}.`);
+      if (!ALL_ACTION_NAMES.includes(String(args.action))) throw new Error(`Unknown action "${String(args.action)}". Actions: ${ACTION_LIST}.`);
       if (args.action === 'send_secret') return storeSecretTool.run({ secret: args.secret ?? '', ...(args.to ? { to: args.to } : {}), ...(args.with ? { with: args.with } : {}), ...(args.send_to ? { send_to: args.send_to } : {}) }, ctx);
       if (args.action === 'preflight') {
         // Deterministic readiness check (browser, Google sign-in, Gmail, build, deps link); a throwaway tab, no chat tab needed.
@@ -493,6 +497,119 @@ export const computerWebTool = defineTool<WebArgs>({
     }
   }),
 });
+
+
+// ── What an agent is given ───────────────────────────────────────────────────
+// Two tools, each with one job and only its own actions and parameters, made from the table in computer/actions.ts. The long rules that used to
+// open the one big description are still here, one call away: help with topic "guide".
+
+const GUIDE: Record<ToolKind, string> = {
+  browser: [WEB_TEXT[2], WEB_TEXT[5]].join('\n\n'),
+  account: [WEB_TEXT[3], WEB_TEXT[4], WEB_TEXT[6]].join('\n\n'),
+};
+
+const HELP_LINE = '{"action":"help"} lists every action with an example; {"action":"help","topic":"<action>"} gives one in full; topic "guide" has the longer rules.';
+const DESCRIPTION: Record<ToolKind, string> = {
+  browser: [
+    "Drive ClikCode's own Chrome (its own saved profile; it starts by itself, and each chat has its own tab). Begin with open: it returns the page with a [ref=eN] on every element. Pass a ref (or the control's visible text) as target to act on it. After an action you get only what changed; observe shows the whole page again. A new tab or popup the page opens is followed automatically.",
+    `${listing('browser')}.`,
+    'fill with no text fills what only the user knows (name, email, phone, a password) from their saved profile or login, or asks them privately: you are never shown it. Signing in, signing up, API keys and emailed codes are account_use. For a CAPTCHA, or anything only the user can do, use handoff.',
+    `Work through the whole task without checking in at each step; ask only when genuinely blocked. ${HELP_LINE}`,
+  ].join('\n'),
+  account: [
+    'Sign in, create accounts, get API keys and read emailed codes, in the same Chrome tab as browser_use: use browser_use to open pages and click and fill, and this for the parts that handle secrets. You are never shown a password, code or key: ClikCode keeps them and types them in.',
+    `${listing('account')}.`,
+    'A sign-up: open the page with browser_use. If it offers Continue with Google (and the browser is signed in to Google) use that, else GitHub; only then fill the form with no text: the profile email fills it, and every password box gets a strong password made up for the site and saved. A code by email: read_email_code. Then open the key page and capture_secret with target = the final Create button and a send_to plan. Never click Regenerate just to see a key.',
+    `Work through the whole task without checking in at each step; ask real choices (project, account, role) once, up front, and after that only when genuinely blocked. ${HELP_LINE}`,
+  ].join('\n'),
+};
+
+type Spec = { description?: string } & Record<string, unknown>;
+const FULL = WEB_PARAMETERS as unknown as { properties: Record<string, Spec> };
+
+/** The few parameters both tools read, worded for each. */
+const SHARED_TEXT: Record<ToolKind, Record<string, string>> = {
+  browser: {
+    action: 'What to do. help lists every action with an example.',
+    target: 'A [ref=…] from the page (e5, or f1e2 inside a frame) or the visible text of the control. For hover, drag, scroll, screenshot, evaluate and wait: the element to use.',
+    text: 'fill, choose: the text or option. Leave it out for what only the user knows. wait: the words. upload: a file detail (logo_file) or an absolute path. switch: words of a tab\'s title or address. dialog: a prompt\'s answer.',
+    seconds: 'wait, network: the most to wait or record (default 30, up to 120).',
+    steps: 'steps, network: what to do, in order, e.g. [{do:"fill", target:"e4", text:"My key"}, {do:"click", target:"e9"}]. do is click, fill, choose, press, scroll, wait, upload, hover or drag; the rest of a step is that action\'s own arguments.',
+  },
+  account: {
+    action: 'What to do. help lists every action with an example.',
+    target: 'capture_secret: the final Create button ([ref=…] or its visible text). oauth_connect: the connector id (slack, github).',
+    seconds: 'read_email_code, open_email_link: how long to wait for the email to arrive (default 90).',
+    steps: 'recipe save: the steps that worked, e.g. [{do:"click", target:"Create key"}]. Never typed values.',
+  },
+};
+
+/** A long description cut at the end of a sentence: the whole text is still what `help` shows for the action. */
+function shorten(text: string, max = 400): string {
+  if (text.length <= max) return text;
+  const head = text.slice(0, max);
+  const end = Math.max(head.lastIndexOf('. '), head.lastIndexOf('; '));
+  return end > 80 ? head.slice(0, end + 1) : `${head.trimEnd()}…`;
+}
+
+/** Parameters whose inner shape is explained by `help` for the action and checked when the action runs: carrying their full nested type
+ * definitions in every conversation cost more than the whole rest of the tool. */
+const LOOSE = new Set(['steps', 'ask_fields', 'send_to', 'task', 'custom']);
+const loosen = (spec: Spec, description: string | undefined): Spec => {
+  const type = spec['type'];
+  const kinds = Array.isArray(type) ? type : [type];
+  return {
+    type,
+    ...(description !== undefined ? { description } : {}),
+    ...(kinds.includes('array') ? { items: { type: 'object', additionalProperties: true } } : {}),
+    ...(kinds.includes('object') ? { additionalProperties: true } : {}),
+  };
+};
+
+function parametersFor(kind: ToolKind): Record<string, unknown> {
+  const keep = paramsOf(kind);
+  const properties: Record<string, unknown> = {};
+  for (const [name, spec] of Object.entries(FULL.properties)) {
+    if (!keep.has(name)) continue;
+    const description = SHARED_TEXT[kind][name] ?? (typeof spec.description === 'string' ? shorten(spec.description) : undefined);
+    properties[name] = LOOSE.has(name) ? loosen(spec, description) : description === undefined ? spec : { ...spec, description };
+  }
+  properties['topic'] = { type: 'string', description: 'help: an action name for its full usage, or "guide" for the longer rules.' };
+  // Open on purpose: a chat keeps the argument list it started with, and the reloaded code (hot-tools.ts) understands more.
+  return { type: 'object', additionalProperties: true, required: ['action'], properties };
+}
+
+/** `help`: every action in a line, or one in full, or the longer rules. */
+export function helpFor(kind: ToolKind, topic: string | undefined): string {
+  const describe = (name: string): string | undefined => SHARED_TEXT[kind][name] ?? (typeof FULL.properties[name]?.description === 'string' ? FULL.properties[name]!.description : undefined);
+  const wanted = topic?.trim();
+  if (!wanted) return overview(kind, 'help with topic "guide" gives the longer rules.');
+  if (wanted === 'guide') return GUIDE[kind];
+  const spec = specOf(wanted);
+  if (!spec) return `No action or topic "${wanted}". ${listing(kind)}.`;
+  return spec.kind === kind ? usage(spec, describe) : elsewhere(kind, wanted)!;
+}
+
+function webTool(kind: ToolKind) {
+  return defineTool<WebArgs>({
+    name: toolNameOf(kind), class: 'exec',
+    description: DESCRIPTION[kind],
+    parameters: parametersFor(kind),
+    label: computerWebTool.label, paths: computerWebTool.paths, describe: computerWebTool.describe,
+    run: async (args, ctx) => {
+      const action = String(args.action);
+      if (action === 'help') return { output: helpFor(kind, args.topic) };
+      const wrong = elsewhere(kind, action);
+      if (wrong) return { output: wrong, isError: true };
+      if (!specOf(action)) return { output: `Unknown action "${action}" for ${toolNameOf(kind)}. ${listing(kind)}. help lists them with examples.`, isError: true };
+      return computerWebTool.run(args, ctx);
+    },
+  });
+}
+
+/** What agents see: the browser, and the part of it that handles accounts and secrets. */
+export const browserUseTool = webTool('browser');
+export const accountUseTool = webTool('account');
 
 /** The files an upload names by path, so the permission system can show them and apply its path rules. */
 function uploadPaths(args: WebArgs): string[] {

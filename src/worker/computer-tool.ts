@@ -10,13 +10,13 @@ import { scrubSecrets } from '../agent/computer/secret-scrubber.js';
 import { hotTool, latestTool } from '../agent/computer/hot-tools.js';
 import { validateAgainstSchema } from '../agent/schema-validate.js';
 import { computerDesktopTool } from '../agent/tools/computer.js';
-import { computerWebTool } from '../agent/tools/computer-web.js';
+import { accountUseTool, browserUseTool } from '../agent/tools/computer-web.js';
 import { clikDeployStepUpTool } from '../agent/tools/clikdeploy-step-up.js';
 import type { ToolContext, ToolDefinition } from '../agent/tool-contract.js';
 import type { TurnObserver } from '../turn/observer.js';
-import { currentToolName } from '../agent/computer/tool-names.js';
+import { toolForCall } from '../agent/computer/tool-names.js';
 
-export const SHARED_COMPUTER_TOOLS: readonly ToolDefinition[] = ([computerWebTool, computerDesktopTool, clikDeployStepUpTool] as unknown as ToolDefinition[]).map(hotTool);
+export const SHARED_COMPUTER_TOOLS: readonly ToolDefinition[] = ([browserUseTool, accountUseTool, computerDesktopTool, clikDeployStepUpTool] as unknown as ToolDefinition[]).map(hotTool);
 
 /** A private prompt needs a window that can show it; the caller is not one. */
 const NO_WINDOW = 'No chat window is open to show the prompt. Open this chat in the terminal or VS Code.';
@@ -26,12 +26,13 @@ export async function runSharedComputerTool(input: {
   /** Chat windows that can show a private prompt, the caller not counted. */
   windows: () => number;
 }): Promise<{ ok: boolean; output: string }> {
-  const tool = SHARED_COMPUTER_TOOLS.find(candidate => candidate.name === currentToolName(input.tool));
+  const name = toolForCall(input.tool, input.args);
+  const tool = SHARED_COMPUTER_TOOLS.find(candidate => candidate.name === name);
   if (!tool) return { ok: false, output: `Unknown tool "${input.tool}". Available: ${SHARED_COMPUTER_TOOLS.map(entry => entry.name).join(', ')}.` };
   try {
     if (!await computerEnabled(input.stateDir)) return { ok: false, output: COMPUTER_OFF };
     // The schema of the installed build, not the one this long-running worker started with: a newer build may accept more arguments.
-    const problems = validateAgainstSchema(input.args, ((await latestTool(input.tool)) ?? tool).parameters);
+    const problems = validateAgainstSchema(input.args, ((await latestTool(name)) ?? tool).parameters);
     if (problems.length) return { ok: false, output: `Invalid arguments: ${problems.join('; ')}` };
     const needWindow = (): void => { if (input.windows() < 1) throw new LoginError(NO_WINDOW); };
     const context: Partial<ToolContext> = {

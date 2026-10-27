@@ -14,7 +14,7 @@ import { agentTypesPromptSection, enabledPluginAgents } from './plugins.js';
 import { defaultTools, mergeTools } from './tools/registry.js';
 import { computerEnabled } from './computer/settings.js';
 import { computerTools } from './tools/computer.js';
-import { computerWebTool } from './tools/computer-web.js';
+import { accountUseTool, browserUseTool } from './tools/computer-web.js';
 import { clikDeployStepUpTool } from './tools/clikdeploy-step-up.js';
 import { hotTool } from './computer/hot-tools.js';
 import { exposeTools } from './mcp/deferred.js';
@@ -151,7 +151,7 @@ export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime
     hints: { ...input.modelClient.contextHints, contextWindow: input.modelClient.contextHints?.contextWindow ?? input.contextWindow },
     session: input.contextProfile,
   });
-  const ownTools = input.tools ?? [...defaultTools(), ...(await computerEnabled(input.stateDir) ? [...computerTools, computerWebTool, clikDeployStepUpTool].map(hotTool) : [])];
+  const ownTools = input.tools ?? [...defaultTools(), ...(await computerEnabled(input.stateDir) ? [...computerTools, browserUseTool, accountUseTool, clikDeployStepUpTool].map(hotTool) : [])];
   const contextReader = readContextTool(() => rt.items, !input.subagent);
   const exposure = exposeTools(mergeTools([contextReader, ...ownTools], input.extraTools), profile.mcpEagerSchemaTokens);
   const specialists = exposeSpecialists(exposure.all);
