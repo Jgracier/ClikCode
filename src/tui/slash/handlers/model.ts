@@ -41,6 +41,8 @@ async function switchWhenDownloaded(session: HarnessSession, model: string, labe
   const sessionId = session.id;
   const before = placeOf(session);
   const job = startModelDownload(model);
+  // Shown in this chat and in no other: switching to another chat shows nothing of it, and coming back shows it again.
+  job.ask(sessionId);
   const outcome = (level: 'info' | 'error', switched: boolean, text: string): void => reportDownloadOutcome({ sessionId, modelId: model, switched, level, text });
   job.done.then(async () => {
     const state = await readState({ transcripts: [sessionId] });

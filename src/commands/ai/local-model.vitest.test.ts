@@ -315,7 +315,11 @@ describe('/model --download while the window is free to do other things', () => 
     withdraw = allowBackgroundDownloads();
     files.missingBytes.mockResolvedValue(6_700_000_000);
     engine.prefetchLocalModel.mockReset();
-    engine.prefetchLocalModel.mockImplementation(() => new Promise<void>((resolve, reject) => { release = resolve; failWith = reject; }));
+    // Stops when told to, as the real fetch does, so a test that fails part way cannot leave a download holding the next one up.
+    engine.prefetchLocalModel.mockImplementation((_model: string, _progress: unknown, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
+      release = resolve; failWith = reject;
+      signal?.addEventListener('abort', () => reject(new Error('cancelled')));
+    }));
   });
   afterEach(async () => {
     stopOutcomes(); withdraw();
@@ -342,6 +346,8 @@ describe('/model --download while the window is free to do other things', () => 
     expect(engine.ensureLocalModel).not.toHaveBeenCalled();
 
     await waitFor(() => release !== undefined);
+    // Shown in the chat that asked, and in no other.
+    expect([...(await import('../../local-models/downloads')).modelDownloads()[0]!.askers]).toEqual(['s1']);
     release!();
     await waitFor(() => outcomes.length === 2);
     expect(outcomes[1]).toMatchObject({ switched: true, level: 'info', sessionId: 's1' });
@@ -384,6 +390,8 @@ describe('/model --download while the window is free to do other things', () => 
     await aiSessionCommand('s2', '/model --download qwen3.5-9b');
     await waitFor(() => release !== undefined);
     expect(engine.prefetchLocalModel).toHaveBeenCalledTimes(1);
+    // One download, shown in each of the two chats that asked for it and in no third.
+    expect([...(await import('../../local-models/downloads')).modelDownloads()[0]!.askers]).toEqual(['s1', 's2']);
     release!();
     await waitFor(() => outcomes.filter((outcome) => outcome.switched).length === 2);
     expect((await readState()).sessions.map((chat) => [chat.id, chat.route, chat.model])).toEqual([['s1', 'clikcode-local', 'qwen3.5-9b'], ['s2', 'clikcode-local', 'qwen3.5-9b']]);

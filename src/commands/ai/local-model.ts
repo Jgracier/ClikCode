@@ -42,23 +42,37 @@ export function localProgressText(update: LocalModelProgress): string {
   return update.message;
 }
 
-/** A download as the footer says it: the model and how far along, short enough to share the line with the provider and directory. */
-export function downloadFooterText(download: Pick<ModelDownload, 'label' | 'progress'>): string {
+/** A download as one line: the model and how far along. */
+export function downloadText(download: Pick<ModelDownload, 'label' | 'progress'>): string {
   const progress = download.progress;
   const percent = progress?.totalBytes ? Math.min(100, Math.floor(((progress.bytes ?? 0) / progress.totalBytes) * 100)) : undefined;
-  return `↓ ${download.label}${percent === undefined ? '…' : ` ${percent}%`}`;
+  return `Downloading ${download.label}${percent === undefined ? '…' : ` ${percent}%`}`;
 }
 
-/** Every download this process runs, in `terminal`'s footer for as long as it runs. Per window, not per chat: it is still there
- * after a switch to another chat. Returns what ends it. */
-export function followModelDownloads(terminal: Pick<TerminalHarnessPrompter, 'setTransfer' | 'activity' | 'render' | 'currentSession'>): () => void {
-  const show = (): void => terminal.setTransfer(modelDownloads().map(downloadFooterText).join('  ·  ') || undefined);
+/** What each chat's downloads say: a chat that asked for one is in the map, every other chat is not. A download shows in the chat that
+ * asked for it and nowhere else -- another chat has nothing to do with it, and switching to one must not carry it along. */
+export function downloadsByChat(): Map<string, string> {
+  const lines = new Map<string, string[]>();
+  for (const job of modelDownloads()) for (const sessionId of job.askers) lines.set(sessionId, [...(lines.get(sessionId) ?? []), downloadText(job)]);
+  return new Map([...lines].map(([sessionId, parts]) => [sessionId, parts.join('  ·  ')]));
+}
+
+/** Downloads in `terminal`, in the chat that asked for each: a spinner row while that chat is open, nothing in any other, and again
+ * when it is opened again. How one ends is said in that chat too -- at once if it is open, else when it is next opened. Returns
+ * what ends it. */
+export function followModelDownloads(terminal: Pick<TerminalHarnessPrompter, 'setTransfer' | 'noteFor' | 'render' | 'currentSession'>): () => void {
+  let shown = new Set<string>();
+  const show = (): void => {
+    const next = downloadsByChat();
+    for (const sessionId of shown) if (!next.has(sessionId)) terminal.setTransfer(sessionId);
+    for (const [sessionId, text] of next) terminal.setTransfer(sessionId, text);
+    shown = new Set(next.keys());
+  };
   show();
   const withdraw = allowBackgroundDownloads();
   const stopProgress = onModelDownload(show);
   const stopOutcomes = onDownloadOutcome((outcome) => {
-    // In whichever chat is open: it names the chat it is about.
-    terminal.activity(outcome.level === 'error' ? chalk.red(outcome.text) : chalk.green(outcome.text));
+    terminal.noteFor(outcome.sessionId, outcome.level === 'error' ? chalk.red(outcome.text) : chalk.green(outcome.text));
     // The chat it moved is the one shown: the footer says the new model now.
     if (!outcome.switched || terminal.currentSession?.id !== outcome.sessionId) return;
     void readState({ transcripts: [outcome.sessionId] }).then((state) => {
@@ -66,18 +80,22 @@ export function followModelDownloads(terminal: Pick<TerminalHarnessPrompter, 'se
       if (fresh && terminal.currentSession?.id === fresh.id) terminal.render(fresh);
     }).catch(quiet('commands/ai/local-model'));
   });
-  return () => { stopOutcomes(); stopProgress(); withdraw(); terminal.setTransfer(undefined); };
+  return () => { stopOutcomes(); stopProgress(); withdraw(); for (const sessionId of shown) terminal.setTransfer(sessionId); };
 }
 
-/** The same for the editor: the transfer on every chat's busy line, and a notice and a fresh session in the chat that asked. */
+/** The same for the editor, whose chats each have their own bridge: the busy line of the chat that asked says how far along it is, no
+ * other chat's does, and that chat gets a notice and a fresh session when it ends. */
 export function followModelDownloadsInEditor(
   send: (event: { type: 'busy'; label?: string } | { type: 'notice'; message: string; level: 'info' | 'error' }) => void,
   chat: { sessionId: () => string | undefined; refresh: () => Promise<void> },
 ): () => void {
   const withdraw = allowBackgroundDownloads();
+  // Only this chat's own line is ever cleared: a busy label something else set (an install, a sign-in) is not ours to take away.
+  let showing = false;
   const stopProgress = onModelDownload(() => {
-    const text = modelDownloads().map(downloadFooterText).join('  ·  ');
-    send(text ? { type: 'busy', label: text } : { type: 'busy' });
+    const sessionId = chat.sessionId();
+    const text = sessionId ? downloadsByChat().get(sessionId) : undefined;
+    if (text) { showing = true; send({ type: 'busy', label: text }); } else if (showing) { showing = false; send({ type: 'busy' }); }
   });
   const stopOutcomes = onDownloadOutcome((outcome) => {
     if (outcome.sessionId !== chat.sessionId()) return;

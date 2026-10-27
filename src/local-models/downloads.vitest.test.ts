@@ -136,4 +136,22 @@ describe('the download lock', () => {
     await expect(withDownloadLock('gemma-4-12b', async () => 'ran')).resolves.toBe('ran');
     expect(existsSync(lock)).toBe(false);
   });
+
+  it('remembers which chats asked for it, once each, and tells the listeners when another asks', async () => {
+    const fake = controlled();
+    const job = startModelDownload('qwen3.5-4b', fake.fetch);
+    expect([...job.askers]).toEqual([]);
+    const seen: number[] = [];
+    const stop = onModelDownload((download) => seen.push(download.askers.size));
+    job.ask('s1');
+    job.ask('s1');
+    // The same job for the same model, so a second chat asking is the same download shown in that chat too.
+    startModelDownload('qwen3.5-4b', fake.fetch).ask('s2');
+    expect([...job.askers]).toEqual(['s1', 's2']);
+    expect(seen).toEqual([1, 2]);
+    stop();
+    await tick();
+    fake.finish();
+    await job.done;
+  });
 });

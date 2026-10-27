@@ -68,7 +68,9 @@ export function frameBands(p: TerminalHarnessPrompter, input: BandInput) {
   // that took footer rows moved the composer when it came and again when it
   // expired.
   const noticeShown = notice ? noticeLines(notice, inner) : [];
-  const indicatorText = turn ? backgroundTerminalsLabel(p.backgroundTerminals) : undefined;
+  // Beside the status while a turn runs: what is running in the background, and a download this chat asked for.
+  const transfer = conversation && p.currentSession ? p.transferOf(p.currentSession.id) : undefined;
+  const indicatorText = turn ? [backgroundTerminalsLabel(p.backgroundTerminals), transfer].filter(Boolean).join(' · ') || undefined : undefined;
   const budget = frameRowBudget({ targetHeight, waiting: Boolean(turn), requestedPaletteCapacity });
   const { waitingRows, paletteRows, optionalRows } = budget;
   const composerWidth = Math.max(8, inner - terminalCellWidth(prompt));

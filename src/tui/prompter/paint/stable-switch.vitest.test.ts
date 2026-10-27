@@ -136,17 +136,76 @@ describe('the chat and the composer stay put while a list is open', () => {
     expect(footer).not.toContain('ClikCode Local');
   });
 
-  it('shows a download in the footer for as long as it runs, whichever chat is open, and takes it away when it ends', () => {
+  it('shows a download in the chat that asked for it and in no other, in a row that was already there, and shows it again when that chat is opened again', () => {
     const prompter = open();
-    prompter.render(session(4));
-    expect(prompter.statusText(COLS)).not.toContain('↓');
-    prompter.setTransfer('↓ Gemma 4 12B 16%');
-    expect(prompter.statusText(COLS)).toContain('Grok Build  •  ↓ Gemma 4 12B 16%');
-    // Another chat opened: the download is the window's, so it is still there.
-    prompter.render({ ...session(4), id: 'other', conversationId: 'other', name: 'Another chat' } as HarnessSession);
-    expect(prompter.statusText(COLS)).toContain('↓ Gemma 4 12B 16%');
-    prompter.setTransfer(undefined);
-    expect(prompter.statusText(COLS)).not.toContain('↓');
+    prompter.render(session(40));
+    const idle = screenFrom(written);
+    const composer = composerRow(idle);
+    expect(idle.join('\n')).not.toContain('Downloading');
+
+    // The chat that asked: a spinner row directly above the composer's rule, with the composer where it was.
+    prompter.setTransfer('s', 'Downloading Gemma 4 12B 16%');
+    prompter.flushPaint();
+    const asking = screenFrom(written);
+    const row = rowOf(asking, 'Downloading Gemma 4 12B 16%');
+    expect(row).toBeLessThan(composer);
+    expect(composer - row).toBeLessThanOrEqual(2);
+    expect(composerRow(asking)).toBe(composer);
+    // Not twice: the line under the composer does not carry it as well.
+    expect(prompter.statusText(COLS)).not.toContain('Downloading');
+
+    // Another chat opened: nothing of it is drawn there, and the composer is where it was.
+    prompter.render({ ...session(40), id: 'other', conversationId: 'other', name: 'Another chat' } as HarnessSession);
+    const elsewhere = screenFrom(written);
+    expect(elsewhere.join('\n')).not.toContain('Downloading');
+    expect(composerRow(elsewhere)).toBe(composer);
+    // It goes on while the other chat is open; progress reports change nothing there.
+    prompter.setTransfer('s', 'Downloading Gemma 4 12B 40%');
+    prompter.flushPaint();
+    expect(screenFrom(written).join('\n')).not.toContain('Downloading');
+
+    // Back in the chat that asked: where it has got to.
+    prompter.render(session(40));
+    const back = screenFrom(written);
+    expect(back[rowOf(back, 'Downloading Gemma 4 12B 40%')]).toContain('Downloading Gemma 4 12B 40%');
+    expect(composerRow(back)).toBe(composer);
+
+    // It ends: the row is gone and the composer has not moved.
+    prompter.setTransfer('s');
+    prompter.flushPaint();
+    const done = screenFrom(written);
+    expect(done.join('\n')).not.toContain('Downloading');
+    expect(composerRow(done)).toBe(composer);
+  });
+
+  it('says it beside the status while a turn runs in the chat that asked, and not in another chat', () => {
+    const prompter = open();
+    prompter.render(session(20));
+    prompter.startWaiting('thinking');
+    prompter.setTransfer('s', 'Downloading Gemma 4 12B 16%');
+    prompter.flushPaint();
+    expect(screenFrom(written).join('\n')).toContain('Downloading Gemma 4 12B 16%');
+    prompter.stopWaiting(false, 'saved');
+    prompter.setTransfer('s');
+  });
+
+  it('keeps a line about another chat until that chat is opened, and says it there once', () => {
+    const prompter = open();
+    prompter.render(session(10));
+    prompter.noteFor('other', 'Gemma 4 12B is downloaded: "Another chat" runs on it now.');
+    prompter.flushPaint();
+    expect(screenFrom(written).join('\n')).not.toContain('Gemma 4 12B is downloaded');
+    prompter.noteFor('s', 'This chat is the open one: said at once.');
+    prompter.flushPaint();
+    expect(screenFrom(written).join('\n')).toContain('This chat is the open one: said at once.');
+    prompter.render({ ...session(10), id: 'other', conversationId: 'other', name: 'Another chat' } as HarnessSession);
+    prompter.flushPaint();
+    expect(screenFrom(written).join('\n')).toContain('Gemma 4 12B is downloaded: "Another chat" runs on it now.');
+    // Said once: opening it again does not repeat it.
+    written.length = 0;
+    prompter.render({ ...session(10), id: 'other', conversationId: 'other', name: 'Another chat' } as HarnessSession);
+    prompter.flushPaint();
+    expect(written.join('')).not.toContain('is downloaded');
   });
 
   it('does not shorten a draft when the list opens', () => {
