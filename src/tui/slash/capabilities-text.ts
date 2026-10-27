@@ -9,7 +9,7 @@ import { isGatewayService } from '../../session/route.js';
 export function capabilitiesText(session: HarnessSession): string {
   if (session.route === 'clikcode-local') {
     return [
-      'ClikCode Local capabilities',
+      'ClikDeploy Gateway capabilities (a model on this computer)',
       'Inference: a local model on this machine',
       'Tools: ClikCode\'s own tools, MCP servers, and skills',
       'Permissions: ClikCode\'s own ask / auto / bypass modes',

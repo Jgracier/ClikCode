@@ -11,7 +11,7 @@
  * `/settings provider <id> <key> <value>`. */
 
 import { quiet } from '../../runtime/lifecycle-log.js';
-import { clikCodeAgentLabel, isClikCodeAgent } from '../../session/route.js';
+import { GATEWAY_LABEL, isClikCodeAgent } from '../../session/route.js';
 import type Conf from 'conf';
 import { vendorFacingOptions } from '../../harness/options.js';
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
@@ -84,7 +84,7 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
     const rows: PickerOption<string>[] = [
       { label: 'Resume', detail: 'choose a conversation', value: 'resume' },
       {
-        label: 'Provider', detail: harness?.displayName ?? (isClikCodeAgent(session) ? clikCodeAgentLabel(session) : 'none chosen'), value: 'provider',
+        label: 'Provider', detail: harness?.displayName ?? (isClikCodeAgent(session) ? GATEWAY_LABEL : 'none chosen'), value: 'provider',
         ...(harness ? { actions: [{ label: `Use global defaults for ${harness.displayName}`, value: 'clear-provider' }] } : {}),
       },
       ...(!harness ? [

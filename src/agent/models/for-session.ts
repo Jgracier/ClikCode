@@ -14,7 +14,6 @@ import { gatewaySubscriptionsOn, subscriptionsHeader } from '../../gateway/subsc
 import { STREAM_IDLE_TIMEOUT_MS } from './gateway-client.js';
 import { gatewayStepOptions } from '../../gateway/options.js';
 import { ensureLocalModel, releaseLocalModelsOnExit, type LocalModelProgress } from '../../local-models/index.js';
-import { CLIKCODE_LOCAL_LABEL } from '../../session/route.js';
 import { getApiKeyForUrl, getApiUrl } from '../../gateway/credentials.js';
 import { harnessCommand } from '../../session/state/paths.js';
 import { CLIKCODE_VERSION } from '../../version.js';
@@ -154,6 +153,10 @@ async function gatewayModelFacts(session: HarnessSession, config: Conf): Promise
   }
 }
 
+/** How a model client for a model on this computer names itself in messages ("Could not reach The local model at …"). Never
+ * 'ClikDeploy Gateway': the client branches on that label for the Gateway's own stream format. */
+const LOCAL_MODEL_LABEL = 'The local model';
+
 /** The model client for a session that runs ClikCode's own agent. Async
  * because a local engine may have to load or start a model before its first
  * step. Throws, before any turn state is written, when the route cannot
@@ -186,7 +189,7 @@ export async function modelClientForSession(session: HarnessSession, config: Con
     return new OpenAIModelClient({
       // The engine's URL ends in /v1 and the client appends /v1 itself.
       baseUrl: endpoint.baseUrl.replace(/\/v1\/?$/, ''), model: endpoint.model,
-      contextWindow: endpoint.contextWindow, label: CLIKCODE_LOCAL_LABEL,
+      contextWindow: endpoint.contextWindow, label: LOCAL_MODEL_LABEL,
       // The cache is part of the local-turn contract, not a server default:
       // unchanged history should be read once, on every supported machine.
       body: { cache_prompt: true },

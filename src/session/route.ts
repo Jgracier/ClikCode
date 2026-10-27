@@ -30,14 +30,9 @@ export function isGatewayService(session: Routed): boolean {
   return session?.route === 'gateway';
 }
 
+/** The provider of every session that runs ClikCode's own agent. A model on this computer is hosted AI under the Gateway
+ * (hosted-models/), so a chat on one is on the Gateway here too: no screen names a provider of its own for it. */
 export const GATEWAY_LABEL = 'ClikDeploy Gateway';
-export const CLIKCODE_LOCAL_LABEL = 'ClikCode Local';
-
-/** The name of the inference behind ClikCode's own agent, for a session that
- * runs it. Callers check isClikCodeAgent first. */
-export function clikCodeAgentLabel(session: Routed): string {
-  return session?.route === 'clikcode-local' ? CLIKCODE_LOCAL_LABEL : GATEWAY_LABEL;
-}
 
 /** The built-in agent has no native compaction operation to relay. */
 export const AGENT_COMPACT_UNAVAILABLE = '/compact is only available for vendor harnesses that support it.';

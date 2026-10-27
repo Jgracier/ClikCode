@@ -18,13 +18,19 @@ import type { SlashHandlerKey } from '../registry.js';
 import { modelChoicesFor } from '../model-choices.js';
 import { effortChoicesFor } from '../../../harness/accounts/effort-choices.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../../../harness/definition.js';
-import { assertRealModel, chooseGatewayModel } from '../../../commands/ai/sessions.js';
+import { applyClikCodeAgentSessionPolicy, assertRealModel, chooseGatewayModel } from '../../../commands/ai/sessions.js';
+import { releaseHeldLocalModel } from '../../../commands/ai/local-model.js';
 import { gatewayModelDetail, gatewayModelLabel, gatewayModels, isAutomaticModelWord } from '../../../gateway/models.js';
 import { wakeOwnModel } from '../../../gateway/own-models.js';
 import { GATEWAY_DEFAULT_EFFORT, GATEWAY_EFFORTS } from '../../../gateway/options.js';
 import { type HeadlessSlashHandler, saveSettings } from './shared.js';
 
-/** `/model` on ClikCode Local. With no name, fitting local and Hub models;
+/** Whether `value` names one of this computer's own models (by id or label), as `/model <name>` takes it. */
+function isLocalModelName(value: string): boolean {
+  try { return Boolean(catalogModel(resolveLocalModelId(value))); } catch { return false; }
+}
+
+/** `/model` on a chat that runs a model on this computer. With no name, fitting local and Hub models;
  * with one, download consent is required before it is loaded and answering, and
  * the session moves to it -- a failure (it does not fit, a download failed)
  * leaves the session on the model it had. */
@@ -88,10 +94,19 @@ export const modelHandlers = {
     // `--any`: an id typed on purpose (the picker's "Enter a model ID…") is
     // taken as given. The published-list check catches a typo in `/model x`;
     // it made "Enter a model ID…" able to enter only ids already listed.
-    const trusted = words[0] === '--any';
+    let trusted = words[0] === '--any';
     if (trusted) words.shift();
-    const value = words.join(' ').trim();
-    if (session.route === 'clikcode-local') return localModelCommand(session, value);
+    let value = words.join(' ').trim();
+    if (session.route === 'clikcode-local') {
+      if (!value || value.startsWith('--download ') || isLocalModelName(value)) return localModelCommand(session, value);
+      // Not a model this computer runs, so a Gateway model: both are the Gateway provider (hosted-models/), and the chat moves
+      // to it with the model. Checked against the Gateway's list first, so a typo changes nothing and keeps the local model.
+      // Automatic comes back as null; the word stays, and the Gateway branch below turns it into Automatic.
+      value = (trusted && !isAutomaticModelWord(value) ? value : await chooseGatewayModel(value)) ?? value;
+      trusted = true;
+      await releaseHeldLocalModel(session.id);
+      applyClikCodeAgentSessionPolicy(session, 'gateway', state);
+    }
     // A Gateway conversation chooses from the Gateway's own list; `auto` hands
     // the choice back to it. The Gateway serves the model from its cheapest
     // provider -- subscription, then free, then paid -- and never another model.
