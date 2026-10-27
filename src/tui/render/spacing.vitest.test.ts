@@ -34,9 +34,11 @@ describe('the composer has room to breathe', () => {
 
   it('keeps the footer the same height on both sides of a turn', async () => {
     // The generating band is a blank and the status (two rows); the resting
-    // footer says two blank rows there instead, so ending a turn moves nothing.
+    // footer says two rows there instead, so ending a turn moves nothing. The second is blank, or a download this chat asked for takes
+    // it (a row of its own was never added: stable-switch.vitest.test.ts checks that the composer does not move for it).
     const source = await readFile(new URL('../prompter/paint/footer.ts', import.meta.url), 'utf8');
-    expect(source).toContain("if (!turn) footer.push('', ...(hasBandBlank(targetHeight) && !approvalRows.length ? [''] : []))");
+    expect(source).toContain("if (!turn) footer.push('', ...(hasBandBlank(targetHeight) && !approvalRows.length ? [transferRow] : []))");
+    expect(source).toContain(": '';\n  if (!turn) footer.push(");
   });
 });
 

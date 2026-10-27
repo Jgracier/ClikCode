@@ -15,6 +15,10 @@ export interface ModelDownload {
   readonly label: string;
   /** The last thing the fetch reported: a message, and bytes of total when it is a transfer. */
   progress: LocalModelProgress | undefined;
+  /** The chats that asked for it. Its progress is shown in these chats and in no other. */
+  readonly askers: ReadonlySet<string>;
+  /** `sessionId` asked for it: it shows there from now on. Asking again, or another chat asking for the same model, adds nothing. */
+  ask(sessionId: string): void;
   /** Settles when the files are on this machine; rejects with why they are not. */
   readonly done: Promise<void>;
   /** Stops it. The partial file stays for the next try. */
@@ -39,8 +43,10 @@ export function startModelDownload(modelId: string, fetch: typeof prefetchLocalM
   const running = jobs.get(modelId);
   if (running) return running;
   const controller = new AbortController();
+  const askers = new Set<string>();
   const job: ModelDownload = {
-    modelId, label: catalogModel(modelId)?.label ?? modelId, progress: undefined,
+    modelId, label: catalogModel(modelId)?.label ?? modelId, progress: undefined, askers,
+    ask: (sessionId) => { if (!askers.has(sessionId)) { askers.add(sessionId); tell(); } },
     done: Promise.resolve(), cancel: () => controller.abort(),
   };
   const tell = (): void => { for (const listener of [...listeners]) { try { listener(job); } catch (error) { quiet('local-models/downloads')(error); } } };

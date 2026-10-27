@@ -11,6 +11,7 @@ import type { TerminalHarnessPrompter } from '../../prompter.js';
 import type { HarnessSession } from '../../../session/model.js';
 import { frameBands } from './bands.js';
 import { liveAgentRows } from '../../render/live-agents.js';
+import { waitingSpinnerGlyph } from '../../../harness/protocol/activity-view.js';
 
 
 export type FooterInput = {
@@ -37,7 +38,13 @@ export function buildFooter(this: TerminalHarnessPrompter, input: FooterInput): 
   // The row count is the same on both sides of a turn's end -- the band's
   // blank and its status line become two blank rows -- so nothing under or
   // above the composer shifts when the status goes.
-  if (!turn) footer.push('', ...(hasBandBlank(targetHeight) && !approvalRows.length ? [''] : []));
+  // That second row is where the generating status sits while a turn runs, so a download this chat asked for takes it at rest: a
+  // spinner and how far along it is, with the composer, the chat's height and every other chat untouched.
+  const transfer = this.surface === 'conversation' ? this.transferOf(session.id) : undefined;
+  const transferRow = transfer
+    ? `  ${chalk.cyan(waitingSpinnerGlyph(this.reducedMotion ? 0 : Math.floor(Date.now() / 160)))} ${chalk.dim(visibleSlice(transfer, Math.max(1, inner - 3)))}`
+    : '';
+  if (!turn) footer.push('', ...(hasBandBlank(targetHeight) && !approvalRows.length ? [transferRow] : []));
   // Rows drawn over the chat, just above the footer: a notice, then an open list.
   const pickerRows: string[] = noticeShown.map((row) => `  ${chalk.yellow(row)}`);
   if (paletteCapacity) {

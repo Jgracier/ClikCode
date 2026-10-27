@@ -485,6 +485,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
     if (!this.turn) this.waitingSubmissions = [];
     this.currentSession = session;
+    // What was said about this chat while another was open: said now, where it belongs.
+    const held = this.heldNotes.get(session.id);
+    if (held) { this.heldNotes.delete(session.id); for (const text of held) this.activity(text); }
     // A render receives authoritative persisted state. Drop the transient
     // stream so the just-saved assistant message is never painted twice --
     // but NOT while a turn is running, where the live answer is the one thing
@@ -560,13 +563,22 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * the interactive loop's way to stop waiting (one press, then cleared). */
   idleEscape?: () => void;
 
-  /** Work this window runs that no chat owns (a model being downloaded), as one segment of the line under the composer: it stays
-   * while the chat shown changes, and the composer stays free. */
-  transferLabel: string | undefined;
-  setTransfer(label?: string): void {
-    if (this.transferLabel === label) return;
-    this.transferLabel = label;
-    this.schedulePaint();
+  /** What a chat is fetching (a model being downloaded), by chat: shown in the chat that asked and in no other. Another chat has
+   * nothing of it on screen, and the one that asked has it again when it is opened -- the composer is free throughout. */
+  private readonly transfers = new Map<string, string>();
+  setTransfer(sessionId: string, label?: string): void {
+    if (this.transfers.get(sessionId) === label) return;
+    if (label === undefined) this.transfers.delete(sessionId); else this.transfers.set(sessionId, label);
+    // A chat that is not open has nothing to redraw: its row is drawn when it is opened.
+    if (this.currentSession?.id === sessionId) this.schedulePaint();
+  }
+  transferOf(sessionId: string): string | undefined { return this.transfers.get(sessionId); }
+
+  /** A line about a chat that is not open stays until it is: said in the chat it names, never in another. */
+  private readonly heldNotes = new Map<string, string[]>();
+  noteFor(sessionId: string, text: string): void {
+    if (this.currentSession?.id === sessionId) { this.activity(text); return; }
+    this.heldNotes.set(sessionId, [...(this.heldNotes.get(sessionId) ?? []), text]);
   }
 
   usage(label?: string, resetLabel?: string): void {
