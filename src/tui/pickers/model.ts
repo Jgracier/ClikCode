@@ -23,7 +23,7 @@ import { selectGatewayAgent } from '../../commands/ai/sessions.js';
 import { withSignIn } from '../../commands/account.js';
 import { chooseOption } from './choose.js';
 import { withSlowWait } from '../slow-wait.js';
-import { hostedAdapter, hostedList, hostedSelectionCommand, HOSTED_TAGS, type HostedRow } from '../../hosted-models/index.js';
+import { hostedAdapter, hostedList, hostedSelectionCommand, type HostedRow } from '../../hosted-models/index.js';
 import { GATEWAY_ID } from '../../session/picker-rows.js';
 import { providerConversationKey } from './engine.js';
 import { selectProviderConversation } from './conversation.js';
@@ -144,9 +144,10 @@ export async function interactiveHostedPicker(rl: HarnessPrompter, id: string): 
   const onThisComputer = open?.route === 'clikcode-local' ? open.model : undefined;
   const rows = (rowsOf: readonly HostedRow[]): PickerOption<HostedRow | typeof GATEWAY_MODELS>[] => rowsOf.map((row) => ({
     label: row.label,
-    detail: `· ${[row.target === 'this-computer' && row.id === onThisComputer ? 'current' : '', HOSTED_TAGS[row.target], row.recommended ? 'recommended' : '', row.detail].filter(Boolean).join(' · ')}`,
+    // Where it runs is the group it is under, not a tag on every row.
+    detail: `· ${[row.target === 'this-computer' && row.id === onThisComputer ? 'current' : '', row.recommended ? 'recommended' : '', row.detail].filter(Boolean).join(' · ')}`,
     value: row,
-    group: row.target === 'this-computer' ? 'Fits this computer' : 'ClikDeploy GPU',
+    group: row.target === 'this-computer' ? 'Run on this computer' : 'Run on ClikDeploy',
   }));
   const initial = await withSlowWait(waiting, 'finding hosted AI models…', () => hostedList(''));
   for (const note of initial.unavailable) {
@@ -179,11 +180,10 @@ export async function interactiveHostedPicker(rl: HarnessPrompter, id: string): 
     if (answer === 'back') return interactiveHostedPicker(rl, id);
     if (answer === 'always') setAlwaysStartOwnModels(true, config);
     else if (answer !== 'start') return;
-  } else if (!plan.costly) {
-    // A download is told in full before it begins: its size, and that it works offline after.
-    if (rl.panel) rl.panel(plan.title, plan.lines.join('\n'));
-    const answer = await chooseOption(rl, plan.confirm, [
-      { label: plan.confirm, value: 'start' },
+  } else if (!plan.costly && plan.consent !== false) {
+    // A download asks once, with its size in the question. A model already on this computer asks nothing: choosing it was the decision.
+    const answer = await chooseOption(rl, plan.title, [
+      { label: plan.confirm, ...(plan.lines[0] ? { detail: `· ${plan.lines[0]}` } : {}), value: 'start' },
       { label: 'Choose another model', value: 'back' },
     ]);
     if (answer === 'back') return interactiveHostedPicker(rl, id);

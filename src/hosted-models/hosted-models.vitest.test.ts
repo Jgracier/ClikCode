@@ -1,5 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { thisComputer } from './this-computer.js';
 import { hostedAdapter, hostedList, hostedSelectionCommand, parseHostedQuery, type HostedAdapter, type HostedRow } from './index.js';
+
+// The engine is mocked: what is under test is what the list and the question say, not this machine's ranking.
+const choices = vi.hoisted(() => ({ rows: [] as Array<Record<string, unknown>> }));
+vi.mock('../local-models/index.js', () => ({ localModelChoices: async () => choices.rows }));
 
 const row = (target: HostedRow['target'], id: string, extra: Partial<HostedRow> = {}): HostedRow => ({ target, id, label: id, detail: '', ...extra });
 const adapter = (target: HostedAdapter['target'], rows: HostedRow[] | Error): HostedAdapter => ({
@@ -43,5 +48,31 @@ describe('selecting a started model', () => {
     expect(hostedSelectionCommand({ route: 'clikcode-local', model: 'qwen', download: true })).toBe('/model --download qwen');
     expect(hostedSelectionCommand({ route: 'gateway', model: 'private-deployment:d1', any: true })).toBe('/model --any private-deployment:d1');
     expect(hostedSelectionCommand({ route: 'clikcode-local', model: 'qwen' })).toBe('/model qwen');
+  });
+});
+
+describe('a model for this computer, as the list and the question say it', () => {
+  it('lists each model with the short line (what it takes, how fast it writes), not the long one', async () => {
+    choices.rows = [{
+      id: 'gemma', label: 'Gemma 4 12B', fits: true, recommended: false, downloadBytes: 0,
+      brief: 'downloaded · ~8 tok/s · tool use unverified',
+      detail: 'VULKAN · first reply ~53–131s after loading · short-context estimate; deep GPU speed unverified: 116 tok/s reading, 8 writing · 32K context · Hugging Face unsloth/gemma-4-12b-it-GGUF · tool use unverified · downloaded',
+    }];
+    const [only] = await thisComputer.list('');
+    expect(only).toMatchObject({ target: 'this-computer', id: 'gemma', detail: 'downloaded · ~8 tok/s · tool use unverified' });
+    expect(only!.detail).not.toMatch(/VULKAN|first reply|context|Hugging Face/);
+  });
+
+  it('asks nothing for a model that is already on this computer: choosing it is the decision', async () => {
+    const plan = await thisComputer.plan({ target: 'this-computer', id: 'gemma', label: 'Gemma 4 12B', detail: '', downloadBytes: 0 });
+    expect(plan).toMatchObject({ consent: false, costly: false, lines: [] });
+  });
+
+  it('asks once for a download, with the size in the question and one line under it', async () => {
+    const plan = await thisComputer.plan({ target: 'this-computer', id: 'gemma', label: 'Gemma 4 12B', detail: '', downloadBytes: 6_700_000_000 });
+    expect(plan).toMatchObject({ consent: true, costly: false, confirm: 'Download' });
+    expect(plan.title).toBe('Download Gemma 4 12B (6.7 GB)?');
+    expect(plan.lines).toHaveLength(1);
+    expect(plan.lines[0]).toMatch(/free and offline/);
   });
 });
