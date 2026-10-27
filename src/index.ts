@@ -16,4 +16,6 @@ const program = buildBaseProgram()
   .action((options: { continue?: boolean }) => import('./commands/ai/interactive.js').then((module) => module.aiSessionOpenDefault(config, options)));
 
 registerClikCodeCommands(program, config);
+// An Intel Mac too old for the installed Claude Code runs it through a compatibility copy; this is a no-op everywhere else.
+if (process.platform === 'darwin' && process.arch === 'x64') await import('./harness/compat/macos-legacy.js').then((module) => module.activateMacosCompat());
 runProgram(program);
