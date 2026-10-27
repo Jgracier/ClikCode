@@ -20,7 +20,13 @@ export type Transport = (payload: string) => Promise<string>;
 
 export async function syncVault(stateDir: string, transport: Transport): Promise<SyncResult> {
   const mine = await snapshotVault(stateDir);
-  const reply = JSON.parse(await transport(JSON.stringify(mine))) as VaultSnapshot;
+  // The first run on a computer that was just updated has answered with something other than its vault; the second always has. Ask once more, and say what came back if it still is not one.
+  let reply: VaultSnapshot | undefined, last = '';
+  for (let attempt = 0; attempt < 2 && !reply; attempt++) {
+    last = await transport(JSON.stringify(mine));
+    try { const parsed = JSON.parse(last) as VaultSnapshot; if (parsed?.v === 1 && Array.isArray(parsed.secrets)) reply = parsed; } catch { /* not JSON */ }
+  }
+  if (!reply) throw new Error(`The other computer answered with something that is not a vault: ${last.replace(/\s+/g, ' ').slice(0, 160)}`);
   const received = await mergeVault(stateDir, reply);
   // What the other computer gained is what it lacked of mine: counted from the reply rather than asked for again.
   const theirs = new Set(reply.secrets.map(secret => secret.name.toLowerCase()));
