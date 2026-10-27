@@ -36,7 +36,6 @@ const {
 } = await import('./local-model');
 const { aiSessionClose, aiSessionCreate, aiSessionSet, applyClikCodeLocalSessionPolicy } = await import('./sessions');
 const { aiSessionCommand } = await import('../../tui/slash/handlers');
-const { localModelRows, localModelSelection } = await import('../../tui/pickers/model');
 const { resolveLocalModelId, localModelLabel } = await import('../../local-models/catalog');
 const { resolveSlashCommand, routeSlashInput, slashRouteAppliesDuringTurn } = await import('../../tui/slash/registry');
 const { readState } = await import('../../session/state/read');
@@ -199,22 +198,6 @@ describe('/model on ClikCode Local', () => {
     expect(slashRouteAppliesDuringTurn(routeSlashInput('/model qwen3.5-9b'), local)).toBe(false);
     expect(slashRouteAppliesDuringTurn(routeSlashInput('/model sonnet'), session({ route: 'local' }))).toBe(true);
     expect(resolveSlashCommand('effort')!.availability(local, undefined)).toMatchObject({ available: false, reason: expect.stringContaining('ClikCode Local') });
-  });
-
-  it('lists every model: the current and recommended marked, one that does not fit explained rather than loaded', () => {
-    const choices = [
-      { id: 'ornith-1.5-35b-a3b', label: 'Ornith 1.5 35B-A3B', detail: 'CPU · measured 97 tok/s reading, 20 writing', fits: true, recommended: true, downloadBytes: 1 },
-      { id: 'qwen3.5-4b', label: 'Qwen3.5 4B', detail: 'CPU · downloaded', fits: true, recommended: false, downloadBytes: 0 },
-      { id: 'qwen3.8-27b', label: 'Qwen3.8 27B', detail: 'does not fit: needs 40 GB · 17 GB download', fits: false, recommended: true, downloadBytes: 1 },
-    ];
-    const rows = localModelRows(choices, 'qwen3.5-4b');
-    expect(rows.map((row) => [row.label, row.detail])).toEqual([
-      ['Ornith 1.5 35B-A3B', '· recommended · CPU · measured 97 tok/s reading, 20 writing'],
-      ['Qwen3.5 4B', '· current · CPU · downloaded'],
-      ['Qwen3.8 27B', '· does not fit: needs 40 GB · 17 GB download'],
-    ]);
-    expect(localModelSelection(choices, rows[0]!.value)).toBe('ornith-1.5-35b-a3b');
-    expect(() => localModelSelection(choices, rows[2]!.value)).toThrow(/Qwen3\.8 27B cannot run on this machine: does not fit/);
   });
 });
 

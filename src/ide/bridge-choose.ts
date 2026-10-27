@@ -2,6 +2,8 @@
  * terminal's picker ends in. A setting that can change mid-turn does so
  * (commandDuringTurn). A provider or account change is recorded the same way:
  * the call already started finishes, and the next model call moves. One module per kind family. */
+import { catalogModel, resolveLocalModelId } from '../local-models/catalog.js';
+import { GATEWAY_ID } from '../session/picker-rows.js';
 import { aiSessionCommand } from '../tui/slash/handlers.js';
 import { commandDuringTurn } from '../tui/slash/queue.js';
 import type { IdeChoice } from './protocol.js';
@@ -22,6 +24,16 @@ export interface ChooseContext {
   queued: (job: () => Promise<unknown>) => void;
 }
 
+/** A model chosen in the Gateway's list while the chat runs one on this computer: both are the Gateway provider, so the chat
+ * moves to the Gateway route with it. A model of this computer's own stays a model setting. */
+export async function routedChoice(host: BridgeHost, choice: IdeChoice): Promise<IdeChoice> {
+  if (choice.kind !== 'model') return choice;
+  const { session } = await host.current();
+  if (session.route !== 'clikcode-local') return choice;
+  const local = (() => { try { return Boolean(catalogModel(resolveLocalModelId(choice.model))); } catch { return false; } })();
+  return local ? choice : { kind: 'provider', provider: GATEWAY_ID, model: choice.model };
+}
+
 export async function choose(host: BridgeHost, requestId: string, choice: IdeChoice): Promise<void> {
   const done = (data?: unknown): void => host.channel.send({ type: 'result', requestId, ok: true, ...(data === undefined ? {} : { data }) });
   const failed = (error: unknown): void => host.channel.send({ type: 'result', requestId, ok: false, error: messageOf(error) });
@@ -38,9 +50,10 @@ export async function choose(host: BridgeHost, requestId: string, choice: IdeCho
   };
   const cx: ChooseContext = { host, done, setting, queued };
   try {
-    if (await chooseSetting(cx, choice)) return;
-    if (await chooseProvider(cx, choice)) return;
-    if (await chooseConversation(cx, choice)) return;
+    const routed = await routedChoice(host, choice);
+    if (await chooseSetting(cx, routed)) return;
+    if (await chooseProvider(cx, routed)) return;
+    if (await chooseConversation(cx, routed)) return;
     throw new Error(`unknown choice "${String((choice as { kind?: unknown }).kind)}"`);
   } catch (error) {
     failed(error);

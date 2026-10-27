@@ -112,17 +112,12 @@ describe('a ClikCode Local session is ClikCode\'s own agent', () => {
 });
 
 describe('the provider picker', () => {
-  it('always lists ClikCode Local, right after the Gateway, and marks it current', () => {
-    // The two rows picker-rows.ts providerRows always starts with.
-    const ours = (on: 'gateway' | 'clikcode-local' | 'local') => providerPickerOptions([
-      { id: 'gateway', kind: 'gateway', name: 'ClikDeploy Gateway', installed: true, install: 'ready', signedIn: false, current: on === 'gateway', choosesModel: true },
-      { id: 'clikcode-local', kind: 'clikcode-local', name: 'ClikCode Local', installed: true, install: 'ready', signedIn: true, current: on === 'clikcode-local', choosesModel: true },
+  it('offers a model on this computer under the Gateway, not as a provider of its own', () => {
+    const rows = providerPickerOptions([
+      { id: 'gateway', kind: 'gateway', name: 'ClikDeploy Gateway', installed: true, install: 'ready', signedIn: false, current: true, choosesModel: true },
     ]);
-    const rows = ours('local');
-    expect(rows.map((row) => row.label)).toEqual(['ClikDeploy Gateway', 'ClikCode Local']);
-    expect(rows[1]).toMatchObject({ value: 'clikcode-local', detail: '· local models on this machine' });
-    expect(ours('clikcode-local')[1]!.detail).toContain('current');
-    expect(ours('gateway')[1]!.detail).not.toContain('current');
+    expect(rows.map((row) => row.label)).toEqual(['ClikDeploy Gateway']);
+    expect(rows[0]!.detail).toBe('· current · sign in, or use a model on this computer');
   });
 });
 

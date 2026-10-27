@@ -12,8 +12,8 @@ export function emptyModel(): ChatModel {
 /** What `choose provider` calls the provider a session runs on, for a bridge
  * that does not say (the `session` event's `providerId` does). */
 export function providerIdOf(session: HarnessSession): string | undefined {
-  if (session.route === 'gateway') return 'gateway';
-  if (session.route === 'clikcode-local') return 'clikcode-local';
+  // A model on this computer is hosted AI under the Gateway: the same provider.
+  if (session.route === 'gateway' || session.route === 'clikcode-local') return 'gateway';
   return session.nativeHarness ?? undefined;
 }
 
@@ -55,7 +55,7 @@ export function applySession(model: ChatModel, session: HarnessSession, account?
     ...(label ? { modelLabel: label } : {}),
     sessionId: session.id,
     title: session.name,
-    harness: session.route === 'gateway' ? 'ClikDeploy Gateway' : session.route === 'clikcode-local' ? 'ClikCode Local' : session.nativeHarness,
+    harness: session.route === 'gateway' || session.route === 'clikcode-local' ? 'ClikDeploy Gateway' : session.nativeHarness,
     providerId,
     // A snapshot from the worker names no provider: the name stands while it is the same one.
     ...(provider ? (provider.name ? { providerName: provider.name } : { providerName: undefined }) : model.providerId === providerId && model.providerName ? { providerName: model.providerName } : { providerName: undefined }),

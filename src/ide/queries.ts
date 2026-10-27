@@ -24,12 +24,12 @@ import {
   allLocalHarnesses, harnessCanRunTurns, harnessSupportsModelSelection,
   localHarnessForCommand, localHarnessForProvider,
 } from '../runtime/lazy-bridge.js';
-import { localModelChoices } from '../local-models/index.js';
+import { localModelLabel } from '../local-models/catalog.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
-import { CLIKCODE_LOCAL_LABEL, isClikCodeAgent, isGatewayService } from '../session/route.js';
+import { GATEWAY_LABEL, isClikCodeAgent, isGatewayService } from '../session/route.js';
 import { conversationPreview, transcriptWasLoaded } from '../session/list-facts.js';
 import { compareProviders, isBlankConversation, sessionPermissionModes } from '../session/options.js';
-import { accountRow, accountUsage, effortChoices, GATEWAY_ID, harnessCanAddAccount, LOCAL_ID, providerRows, usageWindows } from '../session/picker-rows.js';
+import { accountRow, accountUsage, effortChoices, GATEWAY_ID, harnessCanAddAccount, providerRows, usageWindows } from '../session/picker-rows.js';
 import { livePendingTurns, liveWorkers } from '../session/liveness.js';
 import { conversationRows } from '../session/conversation-rows.js';
 import { sessionTranscriptMessages } from '../turn/checkpoint.js';
@@ -66,7 +66,9 @@ export async function modelList(config: Conf, state: HarnessState, session: Harn
   if (provider === GATEWAY_ID) {
     // The roster is private to the key's account and never cached: asked beside the models, and a
     // roster that cannot be read still leaves the models choosable (as the terminal's picker).
-    const roster = gatewayAgents({ config }).then(
+    // A chat on a model on this computer has no use for them: an agent runs on a Gateway chat.
+    const onThisComputer = session?.route === 'clikcode-local';
+    const roster = onThisComputer ? Promise.resolve({ agents: [], agentsError: undefined }) : gatewayAgents({ config }).then(
       (agents) => ({ agents, agentsError: undefined }),
       (error: unknown) => ({ agents: [], agentsError: error instanceof Error ? error.message : String(error) }),
     );
@@ -74,33 +76,24 @@ export async function modelList(config: Conf, state: HarnessState, session: Harn
     // which tier, move as subscriptions and balances do); the saved list stands in only when it cannot answer.
     const list = await gatewayModels({ config }).catch(async (error: unknown) => {
       const saved = await savedGatewayModels({ config });
-      if (!saved) throw error;
-      return saved;
+      if (saved) return saved;
+      // Signed out or offline, a chat on this computer's own model still has its Hosted AI row: no error to show.
+      if (onThisComputer) return undefined;
+      throw error;
     });
+    if (!list) return { provider, custom: false, models: [], onThisComputer: localModelLabel(session?.model) ?? session?.model ?? 'a model on this computer' };
     const { agents, agentsError } = await roster;
     const current = session && isGatewayService(session) ? session.model ?? undefined : undefined;
     const currentAgent = session?.route === 'gateway' ? session.gatewayAgentId : undefined;
     return {
       provider, custom: false,
+      ...(onThisComputer ? { onThisComputer: localModelLabel(session?.model) ?? session?.model ?? 'a model on this computer' } : {}),
       agents: agents.map((agent) => ({ id: agent.id, name: agent.name, detail: `Runs on ClikDeploy${agent.description ? ` · ${agent.description}` : ''}`, current: agent.id === currentAgent })),
       ...(agentsError ? { agentsError } : {}),
       models: [
         { id: 'auto', label: 'Automatic', detail: 'the Gateway chooses', current: session?.route === 'gateway' && !current },
         ...gatewayModelsByMaker(list.models).map((model) => ({ id: model.id, group: gatewayMakerName(model), label: gatewayModelLabel(model), ...(gatewayModelDetail(model) ? { detail: gatewayModelDetail(model) } : {}), current: model.id === current })),
       ],
-    };
-  }
-  if (provider === LOCAL_ID) {
-    const current = session?.route === 'clikcode-local' ? session.model ?? undefined : undefined;
-    const choices = await localModelChoices();
-    return {
-      provider, custom: false,
-      models: choices.map((choice) => ({
-        id: choice.id, label: choice.label,
-        detail: [choice.recommended ? 'recommended' : undefined, choice.detail].filter(Boolean).join(' · '),
-        current: choice.id === current,
-        ...(choice.fits ? {} : { unavailable: choice.detail }),
-      })),
     };
   }
   const harness = localHarnessForCommand(provider);
@@ -146,7 +139,7 @@ export async function conversationList(state: HarnessState, currentId: string | 
       id: latest.id,
       title: titled,
       workspace: latest.workspace,
-      ...(latest.route === 'gateway' ? { provider: 'ClikDeploy Gateway' } : latest.route === 'clikcode-local' ? { provider: CLIKCODE_LOCAL_LABEL } : harness ? { provider: harness.displayName } : {}),
+      ...(latest.route === 'gateway' || latest.route === 'clikcode-local' ? { provider: GATEWAY_LABEL } : harness ? { provider: harness.displayName } : {}),
       updatedAt: latest.updatedAt,
       messages: opened ? messages.length : (latest.listMessageCount ?? 0),
       ...(last ? { preview: last.slice(0, 140) } : {}),

@@ -9,9 +9,9 @@ import { sessionEvent } from './session-event.js';
 const base = { id: 's1', name: 'x', messages: [] } as unknown as HarnessSession;
 
 describe('the session event names its provider', () => {
-  it('names the Gateway and ClikCode Local without a harness lookup', () => {
+  it('names the Gateway without a harness lookup, and a model on this computer is the same provider: hosted AI under the Gateway', () => {
     expect(sessionEvent({ ...base, route: 'gateway' } as HarnessSession)).toMatchObject({ providerId: 'gateway', providerName: 'ClikDeploy Gateway' });
-    expect(sessionEvent({ ...base, route: 'clikcode-local' } as HarnessSession)).toMatchObject({ providerId: 'clikcode-local' });
+    expect(sessionEvent({ ...base, route: 'clikcode-local' } as HarnessSession)).toMatchObject({ providerId: 'gateway', providerName: 'ClikDeploy Gateway' });
   });
 
   it('carries a harness command as the id', () => {

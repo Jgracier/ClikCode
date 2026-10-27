@@ -22,56 +22,11 @@ import { aiSessionCommand } from '../slash/handlers.js';
 import { selectGatewayAgent } from '../../commands/ai/sessions.js';
 import { withSignIn } from '../../commands/account.js';
 import { chooseOption } from './choose.js';
-import { localModelChoices, type LocalModelChoice } from '../../local-models/index.js';
 import { withSlowWait } from '../slow-wait.js';
 import { hostedAdapter, hostedList, hostedSelectionCommand, HOSTED_TAGS, type HostedRow } from '../../hosted-models/index.js';
 import { GATEWAY_ID, LOCAL_ID } from '../../session/picker-rows.js';
 import { providerConversationKey } from './engine.js';
 import { selectProviderConversation } from './conversation.js';
-
-/** Prefix of a row for a model this machine cannot run: listed, so the
- * catalog is honest about what exists and why it is out of reach, but
- * choosing it explains rather than starting a load that would fail. */
-const UNFIT = '__unfit__:';
-
-/** ClikCode Local's /model rows, in the engine's order (best first). */
-export function localModelRows(choices: readonly LocalModelChoice[], current: string | null | undefined): PickerOption<string>[] {
-  return choices.map((choice) => {
-    const parts = [
-      choice.id === current ? 'current' : undefined,
-      choice.fits && choice.recommended ? 'recommended' : undefined,
-      choice.detail,
-    ].filter((part): part is string => Boolean(part));
-    return { label: choice.label, detail: `· ${parts.join(' · ')}`, value: choice.fits ? choice.id : `${UNFIT}${choice.id}` };
-  });
-}
-
-/** The row a picker selection names, as the model to load: a model that
- * does not fit is refused with the engine's reason. */
-export function localModelSelection(choices: readonly LocalModelChoice[], selected: string): string {
-  if (!selected.startsWith(UNFIT)) return selected;
-  const choice = choices.find((item) => item.id === selected.slice(UNFIT.length));
-  throw new Error(`${choice?.label ?? selected.slice(UNFIT.length)} cannot run on this machine: ${choice?.detail ?? 'it does not fit'}.`);
-}
-
-/** The row that opens the one list of hosted models, in a local or a Gateway chat's /model. */
-const HOSTED_VALUE = '__hosted__';
-const HOSTED_ROW: PickerOption<string> = { label: 'Hosted AI…', detail: '· run a model on this computer (free, works offline) or on a ClikDeploy GPU', value: HOSTED_VALUE };
-
-async function localModelPicker(rl: HarnessPrompter, id: string, current: string | null | undefined): Promise<void> {
-  const waiting = TERMINAL.active === rl ? TERMINAL.active : undefined;
-  const choices = await withSlowWait(waiting, 'checking which models fit this machine…', () => localModelChoices());
-  if (!choices.length) {
-    rl.panel?.('ClikCode Local', 'No supported GGUF model fits the memory currently available. Close other programs or free memory, then open /model again.');
-    return;
-  }
-  const selected = await chooseOption(rl, 'Choose a ClikCode Local model', [...localModelRows(choices, current), HOSTED_ROW]);
-  if (!selected) return;
-  if (selected === HOSTED_VALUE) return interactiveHostedPicker(rl, id);
-  // The handler asks before a download, then loads it (progress on the
-  // waiting line) before the session switches: the path `/model <id>` takes.
-  await aiSessionCommand(id, `/model ${localModelSelection(choices, selected)}`);
-}
 
 /** One model as every model list shows it. A harness that drives other
  * providers shows `provider/model` (never its own name as the provider:
@@ -105,7 +60,8 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
   if (isGatewayService(session)) return gatewayModelPicker(rl, id, session.model ?? null, session.gatewayAgentId);
-  if (session.route === 'clikcode-local') return localModelPicker(rl, id, session.model);
+  // A model on this computer is hosted AI under the Gateway: the same list as /hosted, with this computer's models first.
+  if (session.route === 'clikcode-local') return interactiveHostedPicker(rl, id);
   const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
   const harness = sessionOrProviderHarness(session);
   // Awaited, not fired and forgotten: opening /model on a cold cache used to
@@ -183,9 +139,12 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
  * the GPU and price -- and only then starts it and moves the chat onto it (hosted-models/). */
 export async function interactiveHostedPicker(rl: HarnessPrompter, id: string): Promise<void> {
   const waiting = TERMINAL.active === rl ? TERMINAL.active : undefined;
-  const rows = (rowsOf: readonly HostedRow[]): PickerOption<HostedRow>[] => rowsOf.map((row) => ({
+  const open = (await readState({ transcripts: [id] })).sessions.find((item) => item.id === id);
+  // A chat on a model on this computer: that model is current, and the Gateway's own (token-billed) models are one row away.
+  const onThisComputer = open?.route === 'clikcode-local' ? open.model : undefined;
+  const rows = (rowsOf: readonly HostedRow[]): PickerOption<HostedRow | typeof GATEWAY_MODELS>[] => rowsOf.map((row) => ({
     label: row.label,
-    detail: `· ${[HOSTED_TAGS[row.target], row.recommended ? 'recommended' : '', row.detail].filter(Boolean).join(' · ')}`,
+    detail: `· ${[row.target === 'this-computer' && row.id === onThisComputer ? 'current' : '', HOSTED_TAGS[row.target], row.recommended ? 'recommended' : '', row.detail].filter(Boolean).join(' · ')}`,
     value: row,
     group: row.target === 'this-computer' ? 'Fits this computer' : 'ClikDeploy GPU',
   }));
@@ -193,9 +152,17 @@ export async function interactiveHostedPicker(rl: HarnessPrompter, id: string): 
   for (const note of initial.unavailable) {
     if (note.target === 'clikdeploy') rl.panel?.('Hosted AI', 'ClikDeploy GPUs need an internet connection and a Gateway sign-in; models for this computer are listed.');
   }
-  const selected = await chooseOption(rl, 'Hosted AI', rows(initial.rows), undefined, {
+  const gatewayRow: PickerOption<typeof GATEWAY_MODELS>[] = open?.route === 'clikcode-local'
+    ? [{ label: 'ClikDeploy Gateway models…', detail: '· billed by the token, from every lab', value: GATEWAY_MODELS, group: 'ClikDeploy Gateway' }] : [];
+  const picked = await chooseOption(rl, 'Hosted AI', [...rows(initial.rows), ...gatewayRow], undefined, {
     onFilter: async (query) => rows((await withSlowWait(waiting, 'searching…', () => hostedList(query))).rows),
   });
+  if (picked === GATEWAY_MODELS) {
+    // Moves the chat to the Gateway (a sign-in if it has none), then lists the Gateway's models.
+    const moved = await selectProviderConversation(new Conf({ projectName: 'clikcode', configFileMode: 0o600 }), rl, id, '__gateway__');
+    return interactiveModelPicker(rl, moved);
+  }
+  const selected = picked;
   if (!selected) return;
 
   const adapter = hostedAdapter(selected.target);
@@ -235,6 +202,9 @@ export async function interactiveHostedPicker(rl: HarnessPrompter, id: string): 
 
 /** A Gateway conversation's picker. Models run ClikCode locally; selected
  * platform agents run on ClikDeploy with their own tools. */
+/** The row, in a chat on a model on this computer, that goes to the Gateway's own models. */
+const GATEWAY_MODELS = '__gateway_models__' as const;
+
 type GatewayChoice = { kind: 'agent'; id?: string } | { kind: 'model'; id: string } | { kind: 'subscriptions' } | { kind: 'hosted' };
 
 /** Top to bottom: the super admin's subscription switch (only when the Gateway reports it, which it
