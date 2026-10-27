@@ -123,6 +123,8 @@ export class LiveView {
   /** Chrome side is set up (domains on, field tracking installed): queued messages may run. */
   private up = false;
   private lastView: PageView = SAME_VIEW;
+  /** A finger that went down on a frame from another site and has not yet moved: it is a click if it lifts, a scroll if it moves. */
+  private foreign: { start: { x: number; y: number }; screen: { x: number; y: number; id: number }; scrolling?: boolean; last?: { x: number; y: number } } | undefined;
   /** What the phone's finger is: touch (the page sees a touch screen, laid out for the phone) or a mouse (the page sees a pointer). */
   private mode: 'touch' | 'mouse' = 'touch';
   private laidOutAs: 'touch' | 'mouse' | undefined;
@@ -209,7 +211,36 @@ export class LiveView {
         const type = ({ s: 'touchStart', m: 'touchMove', e: 'touchEnd', c: 'touchCancel' } as Record<string, 'touchStart' | 'touchMove' | 'touchEnd' | 'touchCancel'>)[String(message.k)];
         if (!points || !type) return;
         const view = this.lastView = await this.view();
-        await cdp.send('Input.dispatchTouchEvent', { type, touchPoints: points.map(point => ({ ...toPage(view, point.x, point.y), id: point.id })) });
+        const mapped = points.map(point => ({ ...toPage(view, point.x, point.y), id: point.id }));
+        // A frame from another site (a CAPTCHA, a payment form) runs in a process of its own, and Chrome does not pass emulated touch into it; it does
+        // pass a mouse click. So a finger that goes down on one waits: lifted without moving it clicks, moved it is a touch and scrolls as usual.
+        if (type === 'touchStart' && points.length === 1 && !this.foreign && await this.overForeignFrame(mapped[0]!.x, mapped[0]!.y)) {
+          this.foreign = { start: { x: mapped[0]!.x, y: mapped[0]!.y }, screen: { x: points[0]!.x, y: points[0]!.y, id: points[0]!.id } };
+          return;
+        }
+        if (this.foreign) {
+          const waiting = this.foreign;
+          if (type === 'touchEnd' || type === 'touchCancel') {
+            this.foreign = undefined;
+            if (type === 'touchEnd' && points.length === 0 && !waiting.scrolling) await this.click(waiting.start.x, waiting.start.y);
+            return;
+          }
+          // A drag that began on the frame scrolls the page itself, one for one with the finger: the frame is handed the whole touch and does not pass the scroll on.
+          if (waiting.scrolling || (points.length === 1 && Math.hypot(points[0]!.x - waiting.screen.x, points[0]!.y - waiting.screen.y) > 10)) {
+            if (points.length === 1) {
+              const from = waiting.last ?? waiting.screen, now = points[0]!, scale = view.scale > 0.05 ? view.scale : 1;
+              waiting.scrolling = true; waiting.last = { x: now.x, y: now.y };
+              await this.evaluate(`window.scrollBy(${(from.x - now.x) / scale}, ${(from.y - now.y) / scale})`);
+              return;
+            }
+          }
+          const moved = points.length !== 1;
+          if (!moved) return;
+          // Two fingers (a pinch) are a gesture of their own: the touch is replayed from where it began.
+          this.foreign = undefined;
+          await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: waiting.start.x, y: waiting.start.y, id: waiting.screen.id }] });
+        }
+        await cdp.send('Input.dispatchTouchEvent', { type, touchPoints: mapped });
         return;
       }
       case 'mouse': {
@@ -273,6 +304,19 @@ export class LiveView {
       await cdp.send('Input.dispatchKeyEvent', { type: key.text ? 'keyDown' : 'rawKeyDown', key: key.key, code: key.code, windowsVirtualKeyCode: key.vk, nativeVirtualKeyCode: key.vk, ...(key.text ? { text: key.text, unmodifiedText: key.text } : {}) });
       await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: key.key, code: key.code, windowsVirtualKeyCode: key.vk, nativeVirtualKeyCode: key.vk });
     }
+  }
+
+  /** Whether a point of the page is over a frame from another site (its document cannot be read from here). */
+  private async overForeignFrame(x: number, y: number): Promise<boolean> {
+    const result = await this.evaluate<boolean>(`((x, y) => { const e = document.elementFromPoint(x, y); if (!e || e.tagName !== 'IFRAME') return false; try { return !e.contentDocument; } catch (error) { return true; } })(${x}, ${y})`);
+    return result === true;
+  }
+
+  private async click(x: number, y: number): Promise<void> {
+    const cdp = this.cdp!;
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none', buttons: 0 });
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1 });
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1 });
   }
 
   /** The visual viewport right now, read before each input so a pinch or a pan that just happened is already in the next position. */

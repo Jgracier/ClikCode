@@ -37,7 +37,11 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('shows the tab live on a 
   const stateDir = await mkdtemp(join(tmpdir(), 'clikcode-tailnet-'));
   // /wide has no mobile layout tag: Chrome lays it out 980px wide and shows it zoomed out, as a phone does.
   const WIDE = '<!doctype html><body style="margin:0"><div style="width:700px;height:1600px;position:relative"><button id="far" style="position:absolute;left:400px;top:900px;width:240px;height:90px" onclick="document.title=\'far hit\'">Verify</button></div>';
-  const site = createServer((request, response) => { response.setHeader('content-type', 'text/html'); response.end(request.url === '/wide' ? WIDE : SITE); });
+  // A frame from another site: `localhost` and `127.0.0.1` are different sites, so Chrome runs the frame in a process of its own, as it does a CAPTCHA.
+  const inner = createServer((_request, response) => { response.setHeader('content-type', 'text/html'); response.end('<!doctype html><body style="margin:0"><button style="margin:10px;width:200px;height:60px" onclick="parent.postMessage(\'hit\', \'*\')">Inside</button>'); });
+  await new Promise<void>(resolve => inner.listen(0, '127.0.0.1', resolve));
+  const FRAME_PAGE = `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>frame</title><body style="margin:0"><iframe src="http://localhost:${(inner.address() as AddressInfo).port}/" style="position:absolute;left:20px;top:200px;width:300px;height:120px;border:0"></iframe><div style="height:3000px"></div><script>addEventListener('message', e => { if (e.data === 'hit') document.title = 'frame hit'; });</script>`;
+  const site = createServer((request, response) => { response.setHeader('content-type', 'text/html'); response.end(request.url === '/wide' ? WIDE : request.url === '/frame' ? FRAME_PAGE : SITE); });
   await new Promise<void>(resolve => site.listen(0, '127.0.0.1', resolve));
   let phoneBrowser: Browser | undefined;
   try {
@@ -210,6 +214,21 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('shows the tab live on a 
     await page.evaluate(() => window.scrollTo(0, 0));
     expect(await settled(() => page.evaluate(() => scrollY))).toBe(0);
 
+    // A frame from another site (a CAPTCHA, a payment form) takes no emulated touch: a tap on it is delivered as a click, and a drag over it still scrolls.
+    await page.goto(`http://127.0.0.1:${(site.address() as AddressInfo).port}/frame`);
+    const frameBox = (await settled(() => page.locator('iframe').boundingBox()))!;
+    await page.evaluate(() => { document.title = 'reset'; });
+    await phone.touchscreen.tap(stage.left + frameBox.x + 110, stage.top + frameBox.y + 40);
+    expect(await wait(() => page.title(), title => title === 'frame hit')).toBe('frame hit');
+    const overX = stage.left + frameBox.x + 150, overY = stage.top + frameBox.y + 60;
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: overX, y: overY, id: 1 }] } as never);
+    for (let i = 1; i <= 8; i++) { await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: overX, y: overY - i * 20, id: 1 }] } as never); await new Promise(resolve => setTimeout(resolve, 12)); }
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] } as never);
+    expect(await wait(() => page.evaluate(() => scrollY), y => y > 80)).toBeGreaterThan(80);
+    await settled(() => page.evaluate(() => scrollY));
+    await page.goto(`http://127.0.0.1:${(site.address() as AddressInfo).port}/`);
+    await wait(() => handoff<number>('h => h.overlays'), count => count === 5);
+
     // Mouse mode: the page sees a mouse, not a touch screen. A tap clicks, touching a hover target hovers it, two fingers scroll, a two-finger tap right-clicks.
     await page.evaluate(() => window.scrollTo(0, 0));
     await phone.locator('#mode').click();
@@ -272,6 +291,7 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('shows the tab live on a 
   } finally {
     await phoneBrowser?.close();
     site.close();
+    inner.close();
     await closeComputerBrowser(stateDir);
     await rm(stateDir, { recursive: true, force: true });
   }
