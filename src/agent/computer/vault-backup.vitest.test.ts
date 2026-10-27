@@ -18,7 +18,7 @@ it('writes an encrypted backup that restores logins, secrets and profiles on ano
   const loginPassword = ['Gen', 'Pw', String(Date.now())].join('-');
   const keyValue = ['k', Math.random().toString(36).slice(2), 'value'].join('_');
   await saveLoginFields(source, 'https://shop.example.com/', { username: 'ada@example.com', password: loginPassword });
-  await saveNamedSecret(source, 'acme/key', keyValue, { vendor: 'acme', owner: 'ada@example.com' });
+  await saveNamedSecret(source, 'acme/key', keyValue, { vendor: 'acme', owner: 'ada@example.com', url: 'https://acme.example' });
   const profile = await saveProfile(source, { label: 'Personal', fields: { given_name: 'Ada' } });
   await saveProfileSecret(source, profile.id, 'password', 'profile-fallback-value');
   const file = join(source, 'backup.json');
@@ -40,13 +40,13 @@ it('writes an encrypted backup that restores logins, secrets and profiles on ano
 it('refuses a wrong passphrase, a short one, and a file that is not a backup, and keeps what is already there unless told to replace it', async () => {
   const source = await fresh();
   const file = join(source, 'backup.json');
-  await saveNamedSecret(source, 'acme/key', 'first-value-123');
+  await saveNamedSecret(source, 'acme/key', 'first-value-123', { url: 'https://example.com' });
   await expect(writeVaultBackup(source, file, 'short')).rejects.toThrow('at least 12');
   await writeVaultBackup(source, file, PASSPHRASE);
   const target = await fresh();
   await expect(readVaultBackup(target, file, 'not the passphrase at all')).rejects.toThrow('Wrong passphrase');
   await expect(readVaultBackup(target, join(source, 'missing.json'), PASSPHRASE)).rejects.toThrow('could not be read');
-  await saveNamedSecret(target, 'acme/key', 'newer-value-456');
+  await saveNamedSecret(target, 'acme/key', 'newer-value-456', { url: 'https://example.com' });
   expect(await readVaultBackup(target, file, PASSPHRASE)).toEqual({ added: 0, skipped: 1 });
   expect(await readNamedSecret(target, 'acme/key')).toBe('newer-value-456');
   expect(await readVaultBackup(target, file, PASSPHRASE, { overwrite: true })).toEqual({ added: 1, skipped: 0 });

@@ -81,7 +81,7 @@ it('registers a connector\'s OAuth app: the client id from the agent, the secret
 });
 
 it('a client id the agent never saw: client_id may name a saved secret, read from the vault only when it is sent', async () => {
-  await saveNamedSecret(dir, 'google/connectors-client-id', '1234567890-abcdefghij.apps.googleusercontent.com');
+  await saveNamedSecret(dir, 'google/connectors-client-id', '1234567890-abcdefghij.apps.googleusercontent.com', { url: 'https://example.com' });
   await fake('clikdeploy', `printf '%s\\n' "$@" > "${dir}/argv"; ${recordArgsJson()}; echo '{}'`);
   const plan = [{ to: 'clikdeploy-connector', with: { integration: 'googlesheets', client_id: 'secret:google/connectors-client-id' } }];
   expect(await destinationProblem(dir, plan)).toBeUndefined();
@@ -174,7 +174,7 @@ it('connects a vendor key as a ClikDeploy connection through the product\'s own 
 });
 
 it('a username the vendor hides from the browser (Mux\'s token id): the basic-auth username may name a saved secret, read from the vault only when sent', async () => {
-  await saveNamedSecret(dir, 'mux/token-id', '3f2a9c1e-token-id-uuid');
+  await saveNamedSecret(dir, 'mux/token-id', '3f2a9c1e-token-id-uuid', { url: 'https://example.com' });
   await fake('clikdeploy', `case "$1" in integrations) echo '{"status":"success","data":{"connection":{"status":"active"}}}';; *) printf '%s\\n' "$@" > "${dir}/argv"; ${recordArgsJson()}; echo '{}';; esac`);
   const plan = [{ to: 'clikdeploy-connection-basic', with: { integration: 'mux', username: 'secret:mux/token-id' } }];
   expect(await destinationProblem(dir, plan)).toBeUndefined();

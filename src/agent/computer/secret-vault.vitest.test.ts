@@ -9,7 +9,7 @@ afterEach(async () => { if (dir) { lockCredentialVault(dir); await rm(dir, { rec
 
 it('saves a secret encrypted, reads it back, and lists only names', async () => {
   dir = await mkdtemp(join(tmpdir(), 'clikcode-secret-'));
-  await saveNamedSecret(dir, 'salad/api-key', 'salad_key_0123456789');
+  await saveNamedSecret(dir, 'salad/api-key', 'salad_key_0123456789', { url: 'https://example.com' });
   expect(await readNamedSecret(dir, 'salad/api-key')).toBe('salad_key_0123456789');
   expect(await readNamedSecret(dir, 'SALAD/api-key')).toBe('salad_key_0123456789');
   expect(await namedSecretNames(dir)).toEqual(['salad/api-key']);
@@ -22,10 +22,10 @@ it('saves a secret encrypted, reads it back, and lists only names', async () => 
 
 it('overwrites a secret of the same name and refuses bad names, empty values and missing secrets', async () => {
   dir = await mkdtemp(join(tmpdir(), 'clikcode-secret-'));
-  await saveNamedSecret(dir, 'a', 'first-value-1');
-  await saveNamedSecret(dir, 'a', 'second-value-2');
+  await saveNamedSecret(dir, 'a', 'first-value-1', { url: 'https://example.com' });
+  await saveNamedSecret(dir, 'a', 'second-value-2', { url: 'https://example.com' });
   expect(await readNamedSecret(dir, 'a')).toBe('second-value-2');
-  await expect(saveNamedSecret(dir, '../x', 'v')).rejects.toThrow('secret name');
-  await expect(saveNamedSecret(dir, 'b', '')).rejects.toThrow('empty');
+  await expect(saveNamedSecret(dir, '../x', 'v', { url: 'https://example.com' })).rejects.toThrow('secret name');
+  await expect(saveNamedSecret(dir, 'b', '', { url: 'https://example.com' })).rejects.toThrow('empty');
   await expect(readNamedSecret(dir, 'nope')).rejects.toThrow('No secret named');
 });

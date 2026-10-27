@@ -7,7 +7,9 @@ import path from 'node:path';
 const SESSION_MS = 10 * 60_000;
 const sessions = new Map<string, { key: Buffer; expires: number }>();
 export class CredentialError extends Error {}
-type Item = { origin: string; fields?: Record<string, string>; rejected?: true };
+/** A saved sign-in: the site's base URL (`origin`), a name for it, how it signs in (`method`: `password`, or the provider an OAuth sign-in
+ * went through, such as `google`), and the account's fields. `name` and `method` are worked out when an older record has none. */
+type Item = { origin: string; name?: string; method?: string; fields?: Record<string, string>; rejected?: true };
 
 function vaultDir(stateDir: string): string { return path.join(stateDir, 'computer', 'vault'); }
 function keyFile(stateDir: string): string { return path.join(vaultDir(stateDir), 'vault.key'); }
@@ -87,11 +89,30 @@ function itemFields(item: Item): Record<string, string> {
   return { ...item.fields };
 }
 
+const TWO_PART_TLD = /^(?:co|com|org|net|gov|ac|edu)\.[a-z]{2}$/;
+/** What to call a site: its own name, not the part of the address around it (login.wordnik.com is Wordnik, app.kit.com is Kit). */
+export function siteName(urlOrOrigin: string): string {
+  let host = '';
+  try { host = new URL(urlOrOrigin).hostname.replace(/^www\./, ''); } catch { return urlOrOrigin; }
+  const labels = host.split('.');
+  const tail = labels.slice(-2).join('.');
+  const own = labels.length >= 3 && TWO_PART_TLD.test(tail) ? labels.at(-3)! : labels.length >= 2 ? labels.at(-2)! : labels[0]!;
+  return own.charAt(0).toUpperCase() + own.slice(1);
+}
+
+export interface LoginRecord { id: string; name: string; site: string; method: string; account: string; complete: boolean; rejected: boolean }
+function loginRecord(id: string, item: Item): LoginRecord {
+  const fields = itemFields(item);
+  const method = item.method ?? (fields.password ? 'password' : 'unknown');
+  const identified = Boolean(fields.email || fields.username || fields.accountId);
+  return { id, name: item.name ?? siteName(item.origin), site: item.origin, method, account: loginLabel(fields), complete: identified && (method !== 'password' || Boolean(fields.password)), rejected: item.rejected === true };
+}
+
 export async function savedLoginFields(stateDir: string, url: string, id: string): Promise<Record<string, string>> {
   return itemFields(await readCredential(stateDir, url, id));
 }
 
-export async function saveLoginFields(stateDir: string, url: string, fields: Record<string, string>, id?: string): Promise<string> {
+export async function saveLoginFields(stateDir: string, url: string, fields: Record<string, string>, id?: string, extra: { name?: string; method?: string } = {}): Promise<string> {
   const origin = siteOrigin(url);
   if (!Object.keys(fields).length || Object.values(fields).some(value => !value)) throw new CredentialError('Complete the visible login fields.');
   const key = await vaultKey(stateDir, true);
@@ -100,11 +121,12 @@ export async function saveLoginFields(stateDir: string, url: string, fields: Rec
   const username = fields.username?.trim().toLowerCase();
   id ??= username ? (await readItems(stateDir)).find(({ item }) => sameSite(item.origin, url) && item.fields?.username?.trim().toLowerCase() === username)?.id : undefined;
   const item: Item = id ? await readCredential(stateDir, url, id) : { origin };
+  const method = extra.method ?? item.method ?? (fields.password || item.fields?.password ? 'password' : undefined);
   const itemId = id ?? randomUUID();
   const dir = path.join(vaultDir(stateDir), 'items');
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const { rejected: _worked, ...kept } = item;
-  await fs.writeFile(path.join(dir, `${itemId}.json`), seal(key, `item:${itemId}`, JSON.stringify({ ...kept, fields: { ...item.fields, ...fields } })), { mode: 0o600, flag: id ? 'w' : 'wx' });
+  await fs.writeFile(path.join(dir, `${itemId}.json`), seal(key, `item:${itemId}`, JSON.stringify({ ...kept, name: extra.name ?? kept.name ?? siteName(origin), ...(method ? { method } : {}), fields: { ...item.fields, ...fields } })), { mode: 0o600, flag: id ? 'w' : 'wx' });
   return itemId;
 }
 
@@ -168,11 +190,19 @@ export async function savedLoginsForSite(stateDir: string, url: string): Promise
     .sort(byLabel);
 }
 
-/** Every saved login on every site, for the user's own review. */
-export async function allSavedLogins(stateDir: string): Promise<{ id: string; site: string; label: string }[]> {
+/** Every saved login on every site, for the user's own review (and for an agent to see which accounts exist: never a password). */
+export async function allSavedLogins(stateDir: string): Promise<{ id: string; site: string; label: string; name: string; baseUrl: string; method: string; complete: boolean }[]> {
   return (await readItems(stateDir))
-    .map(({ id, item }) => ({ id, site: new URL(item.origin).hostname, label: loginLabel(itemFields(item)) }))
+    .map(({ id, item }) => { const record = loginRecord(id, item); return { id, site: new URL(item.origin).hostname, label: record.account, name: record.name, baseUrl: record.site, method: record.method, complete: record.complete }; })
     .sort((a, b) => a.site.localeCompare(b.site) || byLabel(a, b));
+}
+
+/** Records that a site was signed in to through a provider (`google`, `github`, ...) as this account, so the way in is known the next time.
+ * The password, if any, is the provider's own saved login. */
+export async function saveSignInMethod(stateDir: string, url: string, method: string, account: string, name?: string): Promise<string> {
+  if (!/^[a-z][a-z0-9-]{1,30}$/.test(method) || method === 'password') throw new CredentialError('Name the provider the sign-in went through, such as google or github.');
+  if (!account.trim()) throw new CredentialError('Say which account was used.');
+  return saveLoginFields(stateDir, url, { email: account.trim() }, undefined, { method, ...(name ? { name } : {}) });
 }
 
 /** A site given as a host ("wordnik.com") or a URL. */
@@ -241,8 +271,24 @@ async function nearNames(stateDir: string, name: string): Promise<string[]> {
 }
 
 /** What a secret is for and who owns it, kept beside the value so a long list of credentials can be audited and rotated. */
-export type SecretMeta = { vendor?: string; owner?: string; env?: string; createdAt: string; rotatedAt?: string };
-export async function saveNamedSecret(stateDir: string, name: string, value: string, meta: { vendor?: string; owner?: string; env?: string } = {}): Promise<void> {
+export type SecretMeta = { vendor?: string; owner?: string; env?: string; url?: string; createdAt: string; rotatedAt?: string };
+/** A website's base URL (https, or http for a local test page); nothing else, and never with a login in it. */
+function webOrigin(value: string | undefined): string | undefined {
+  try { const url = new URL(value ?? ''); return (url.protocol === 'https:' || url.protocol === 'http:') && !url.username && !url.password ? url.origin : undefined; } catch { return undefined; }
+}
+/** Secrets the program keeps for itself (profile answers, the mailbox) have no website. Every other key must say which site it is for. */
+const INTERNAL_SECRET = /^(?:profile|email)\//i;
+/** The base URL a key is for: given, else the one it had, else the host in its name (app.mailgun.com/key), else the site of the one saved login for its vendor. */
+async function baseUrlFor(stateDir: string, name: string, given: string | undefined, before: string | undefined): Promise<string | undefined> {
+  for (const candidate of [given, before]) { const origin = webOrigin(candidate); if (origin) return origin; }
+  const first = name.split('/')[0]!;
+  if (/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(first)) return `https://${first.toLowerCase()}`;
+  const vendor = first.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (vendor.length < 3) return undefined;
+  const sites = new Set((await readItems(stateDir).catch(() => [])).map(({ item }) => item.origin).filter(origin => new URL(origin).hostname.toLowerCase().replace(/[^a-z0-9]/g, '').includes(vendor)));
+  return sites.size === 1 ? [...sites][0] : undefined;
+}
+export async function saveNamedSecret(stateDir: string, name: string, value: string, meta: { vendor?: string; owner?: string; env?: string; url?: string } = {}, options: { legacy?: boolean } = {}): Promise<void> {
   if (!value) throw new CredentialError('The secret is empty.');
   // A spelling variant of a saved secret is that secret, rotated: no twin is made.
   name = await savedNameFor(stateDir, name) ?? name;
@@ -255,7 +301,9 @@ export async function saveNamedSecret(stateDir: string, name: string, value: str
   if (before.value !== undefined && !before.meta) { const made = await fs.stat(file).then(info => info.mtime.toISOString(), () => undefined); if (made) before.meta = { createdAt: made }; }
   const now = new Date().toISOString();
   const kept = (field: 'vendor' | 'owner' | 'env'): Partial<SecretMeta> => { const v = meta[field]?.trim() || before.meta?.[field]; return v ? { [field]: v } : {}; };
-  const saved: SecretMeta = { ...kept('vendor'), ...kept('owner'), ...kept('env'), createdAt: before.meta?.createdAt ?? now, ...(before.value !== undefined && before.value !== value ? { rotatedAt: now } : before.meta?.rotatedAt ? { rotatedAt: before.meta.rotatedAt } : {}) };
+  const url = INTERNAL_SECRET.test(name) ? undefined : await baseUrlFor(stateDir, name, meta.url, before.meta?.url);
+  if (!url && !INTERNAL_SECRET.test(name) && !options.legacy) throw new CredentialError(`A saved key must say which site it is for: give its base URL (https://example.com) when saving "${name}".`);
+  const saved: SecretMeta = { ...kept('vendor'), ...kept('owner'), ...kept('env'), ...(url ? { url } : {}), createdAt: before.meta?.createdAt ?? now, ...(before.value !== undefined && before.value !== value ? { rotatedAt: now } : before.meta?.rotatedAt ? { rotatedAt: before.meta.rotatedAt } : {}) };
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   await fs.writeFile(file, seal(key, aad, JSON.stringify({ name, value, meta: saved })), { mode: 0o600 });
 }
@@ -335,20 +383,21 @@ export async function removeVaultRecord(stateDir: string, folder: string, id: st
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw new CredentialError('The record could not be removed.'); }
 }
 
-/** Gives every secret saved before records existed a vendor (the first part of its name, "netlify/client-id" is netlify). The value is untouched and never leaves this file. */
+/** Gives every secret saved before records existed a vendor (the first part of its name, "netlify/client-id" is netlify) and, where it can be told, its site's base URL. The value is untouched and never leaves this file. */
 export async function backfillSecretMeta(stateDir: string, owner?: string): Promise<string[]> {
   const done: string[] = [];
   for (const { name, meta } of await namedSecretInfo(stateDir)) {
     const vendor = name.includes('/') ? name.split('/')[0] : undefined;
-    if ((meta?.vendor || !vendor) && (meta?.owner || !owner)) continue;
-    await saveNamedSecret(stateDir, name, await readNamedSecret(stateDir, name), { ...(vendor && !meta?.vendor ? { vendor } : {}), ...(owner && !meta?.owner ? { owner } : {}) });
+    const url = INTERNAL_SECRET.test(name) || meta?.url ? undefined : await baseUrlFor(stateDir, name, undefined, undefined);
+    if ((meta?.vendor || !vendor) && (meta?.owner || !owner) && !url) continue;
+    await saveNamedSecret(stateDir, name, await readNamedSecret(stateDir, name), { ...(vendor && !meta?.vendor ? { vendor } : {}), ...(owner && !meta?.owner ? { owner } : {}), ...(url ? { url } : {}) }, { legacy: true });
     done.push(name);
   }
   return done;
 }
 
 /** What is untidy in the vault, by name only. Nothing here changes anything. */
-export interface VaultAudit { twins: string[][]; oddNames: string[]; noOwner: string[]; rejectedLogins: { site: string; label: string }[] }
+export interface VaultAudit { twins: string[][]; oddNames: string[]; noOwner: string[]; noUrl: string[]; incompleteLogins: { site: string; label: string; method: string }[]; rejectedLogins: { site: string; label: string }[] }
 export async function auditVault(stateDir: string): Promise<VaultAudit> {
   const info = await namedSecretInfo(stateDir);
   const groups = new Map<string, string[]>();
@@ -358,6 +407,8 @@ export async function auditVault(stateDir: string): Promise<VaultAudit> {
     twins: [...groups.values()].filter(names => names.length > 1),
     oddNames: info.map(({ name }) => name).filter(name => !name.includes('/') || odd.test(name)),
     noOwner: info.filter(({ meta }) => !meta?.owner).map(({ name }) => name),
+    noUrl: info.filter(({ name, meta }) => !meta?.url && !INTERNAL_SECRET.test(name)).map(({ name }) => name),
+    incompleteLogins: (await readItems(stateDir)).map(({ id, item }) => loginRecord(id, item)).filter(record => !record.complete).map(record => ({ site: new URL(record.site).hostname, label: record.account, method: record.method })),
     rejectedLogins: (await readItems(stateDir)).filter(({ item }) => item.rejected).map(({ item }) => ({ site: new URL(item.origin).hostname, label: loginLabel(itemFields(item)) })),
   };
 }
@@ -375,8 +426,8 @@ export async function mergeVault(stateDir: string, snapshot: VaultSnapshot): Pro
   same += logins.skipped;
   for (const secret of snapshot.secrets) {
     const have = mine.get(canonicalSecretName(secret.name));
-    if (!have) { await saveNamedSecret(stateDir, secret.name, secret.value, secret.meta ?? {}); await stampMeta(stateDir, secret.name, secret.meta); added++; continue; }
-    if (stamp(secret.meta) > stamp(have.meta) && await readNamedSecret(stateDir, have.name) !== secret.value) { await saveNamedSecret(stateDir, have.name, secret.value, secret.meta ?? {}); await stampMeta(stateDir, have.name, secret.meta); updated++; continue; }
+    if (!have) { await saveNamedSecret(stateDir, secret.name, secret.value, secret.meta ?? {}, { legacy: true }); await stampMeta(stateDir, secret.name, secret.meta); added++; continue; }
+    if (stamp(secret.meta) > stamp(have.meta) && await readNamedSecret(stateDir, have.name) !== secret.value) { await saveNamedSecret(stateDir, have.name, secret.value, secret.meta ?? {}, { legacy: true }); await stampMeta(stateDir, have.name, secret.meta); updated++; continue; }
     same++;
   }
   return { added, updated, same };
@@ -439,4 +490,11 @@ export async function restoreVault(stateDir: string, snapshot: VaultSnapshot, op
     await put(path.join(vaultDir(stateDir), folder, `${id}.json`), `${folder}:${id}`, value);
   }
   return { added, skipped };
+}
+
+/** Records the base URL a saved key is for. */
+export async function setSecretUrl(stateDir: string, name: string, url: string): Promise<void> {
+  const saved = await savedNameFor(stateDir, name);
+  if (!saved) throw new CredentialError(`No secret named "${name}" is saved.`);
+  await saveNamedSecret(stateDir, saved, await readNamedSecret(stateDir, saved), { url: webOrigin(url) ?? (() => { throw new CredentialError('Give the site\'s base URL, such as https://example.com.'); })() }, { legacy: true });
 }
