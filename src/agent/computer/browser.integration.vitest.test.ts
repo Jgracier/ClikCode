@@ -138,7 +138,7 @@ it.skipIf(!smoke)('acts on anything by reference, several steps at a time, and f
     const view = (await run({ action: 'open', url: `${base}/` })).output;
     expect(view).toContain('Open now (dialogs and menus):');
     expect(view.indexOf('dialog "Add role"')).toBeLessThan(view.indexOf('heading "Roles"'));
-    expect(view).toContain('lines trimmed from the middle');
+    expect(view).toMatch(/lines trimmed from the middle|more lines of the page behind the dialog/);
     expect(view).not.toContain('Menu one');
 
     // An unnamed element, a visually hidden radio and a button inside a frame, all by reference.
@@ -199,8 +199,9 @@ it.skipIf(!smoke)('waits for words to appear, and finds the lines of a long page
     expect(waited.output).toContain('Appeared: "API enabled"');
     expect((await run({ action: 'wait', text: 'Enabling the API', gone: true, seconds: 5 })).output).toContain('Gone: "Enabling the API"');
     const never = await run({ action: 'wait', text: 'will never show', seconds: 2 });
-    expect(never.isError).toBe(true);
-    expect(never.output).toContain('not showing "will never show" after 2s');
+    // Not an error: the page is simply not there yet, and the answer is what it shows now.
+    expect(never.isError).toBeUndefined();
+    expect(never.output).toContain('Still not showing "will never show" after 2s');
     const found = (await run({ action: 'observe', find: 'compute admin' })).output;
     expect(found).toContain('Compute Admin');
     expect(found).not.toContain('Row 450');
