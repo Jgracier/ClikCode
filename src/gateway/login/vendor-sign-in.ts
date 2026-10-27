@@ -697,7 +697,17 @@ export class SignInCancelled extends Error {
 /** `: <the vendor's last line>`, the reason a failed sign-in gives -- never a
  * line holding an answer to a secret question (it is the prompt with the
  * typed key echoed on it), nor the prompt that asked for one. */
+/** The macOS a program says it was built for, when the system loader refused it ("dyld: Symbol not found: _x ... which was built for
+ * Mac OS X 13.0"): the program cannot run on this Mac at all, and the loader's last line ("Expected in: /usr/lib/libicucore.A.dylib")
+ * means nothing to the person reading it. */
+export function builtForNewerMacos(raw: string): string | undefined {
+  const text = screenLines(raw).join('\n');
+  return /\bdyld\b/i.test(text) ? /built for (?:Mac OS X|macOS) (\d+(?:\.\d+)*)/i.exec(text)?.[1] : undefined;
+}
+
 function failureReason(raw: string, secrets: readonly string[]): string {
+  const newer = builtForNewerMacos(raw);
+  if (newer) return `: it was built for macOS ${newer} or newer and this Mac is older, so it cannot run here at all. Sign in to it on a newer computer, or use another provider on this one`;
   const said = screenLines(raw).map((line) => line.trim()).filter(Boolean)
     .filter((line) => !secrets.some((secret) => line.includes(secret)) && !(secrets.length && isSecret(line)))
     .pop();
