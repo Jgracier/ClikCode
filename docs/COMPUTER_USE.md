@@ -111,24 +111,30 @@ simply not recorded, rather than recorded wrong.
   the page reflows the way it would on the phone instead of being shrunk, and it is put back when you
   tap Done or the link ends. Touch reaches the page as real touch
   events (tap, drag, fling and pinch are tested; long press has not been tried); a computer's browser opening the link gets real mouse, wheel and keyboard instead.
-  **Typing is into the field in the page, with the phone's own keyboard.** ClikCode tells the phone where
-  the page's fields are on its screen (refreshed as the page moves). A tap that lands on a text field
-  puts a real, invisible input exactly over that field and focuses it in that same tap, which is what
-  lets a phone bring up its keyboard at once. Nothing else is added to the screen (no bar, no box). The
-  input carries the field's type, `inputmode`, `autocomplete` and Enter-key hint, so the keyboard type,
-  autofill, the password manager and the text-message code suggestion work; what you type goes into the
-  page at the field's caret, which is where the tap put it. Tapping the same field again keeps the box
-  and brings the keyboard back; tapping away closes it. A `<select>` and a date, time, month, week or
-  colour field open the phone's own sheet from the tap (the tap is kept from the page, whose pop-up
-  would open unseen on the computer); the choice is set the way a person choosing it would (the page
-  hears `input` and `change`). A slider is touched in the page itself. A field inside an iframe (a
-  payment form from another site, a CAPTCHA) is not tracked, so tapping it does not bring up the
-  keyboard. Not tried on an iPhone yet: Safari is expected to accept the focus from the tap.
+  **Fields or page.** The link opens as a form when the page has anything to fill in, and as the
+  picture when it does not; the button beside Done switches and names the other one (**Page** while in
+  the form, **Fields** while in the picture), and the last choice is remembered on the device.
+  *Fields* shows every fillable thing on the page as a real form on the phone, in the page's order:
+  text, password, email, number, one-time-code and multi-line fields, dropdowns, dates and times,
+  checkboxes and radio buttons, and the page's buttons (up to 25). They are the phone's own controls, so
+  a tap brings up the phone's keyboard with the field's type, `inputmode`, `autocomplete` and Enter-key
+  hint, autofill and the password manager work, and a dropdown or date opens the phone's own picker.
+  What is entered is put into the real field on the page as it is typed (the whole value, selected and
+  replaced with real input, so the page hears `input`); a choice or a date is set the way a person
+  choosing it would (`input` and `change`); a box is ticked and a button pressed with a real click at its
+  middle. The form follows the page (it is read twice a second): a field the page changes is updated
+  unless it is being typed in, and a new field appears. A page with a CAPTCHA frame says so at the top,
+  with a button to the picture. A password's value is never read back from the page. In the form no
+  frames are sent.
+  *Page* is the live picture, for what a form cannot show (a CAPTCHA, a map, a drawing). A tap on a text
+  field in the picture goes to that field in the form, in the tap, so the keyboard comes up; a dropdown
+  or date opens a sheet. A field inside an iframe (a payment form from another site, a CAPTCHA) is not
+  in the form. Not tried on an iPhone yet.
   **Touch or mouse.** The button beside Done switches, and always names the other one (**Mouse** while
   in touch, **Touch** while in mouse). The link starts in touch on a phone or tablet and in mouse on a
   computer, and remembers the last choice on that device. *Touch*: the page is laid out for the phone
   and sees a touch screen (tap, drag, fling, and pinch to zoom, which are touch events to the page).
-  *Mouse*: the page sees a mouse at the phone's width, no touch screen, so hover menus, `:hover` styles,
+  These two apply to the picture. *Mouse*: the page sees a mouse at the phone's width, no touch screen, so hover menus, `:hover` styles,
   dragging, text selection and drag-and-drop work. Your finger is the pointer: touching moves it (and
   hovers), a tap clicks, dragging drags, two fingers scroll, and a quick two-finger tap right-clicks.
   **Limits.** The view shows the page, not the browser's own windows: a file chooser, a permission

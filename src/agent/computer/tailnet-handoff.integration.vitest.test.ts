@@ -22,9 +22,13 @@ const SITE = `<title>t0</title><meta name="viewport" content="width=device-width
 <input id="otp" autocomplete="one-time-code" inputmode="numeric" aria-label="Code">
 <select id="sel" aria-label="Plan" onchange="document.title='plan '+this.value"><option value="a">Free</option><option value="b">Pro</option></select>
 <input id="when" type="date" aria-label="Start date" onchange="document.title='date '+this.value">
+<label><input id="agree" type="checkbox" onchange="document.title='agree '+this.checked"> I agree to the terms</label>
+<label><input id="sm" type="radio" name="size" onchange="document.title='size small'"> Small</label><label><input id="lg" type="radio" name="size" onchange="document.title='size large'"> Large</label>
 <div id="hov" style="margin:0 20px 10px;height:34px;background:#ddd" onmouseover="document.title='hovered'" oncontextmenu="document.title='context';return false">Hover or right-click</div>
 <div id="n"></div><div style="height:3000px"></div>
 <script>setInterval(()=>{document.getElementById('n').textContent=String(Date.now()%100000)},40)</script>`;
+
+const CAPTCHA_PAGE = '<!doctype html><title>cap</title><meta name="viewport" content="width=device-width,initial-scale=1"><input aria-label="Email" id="email"><iframe title="reCAPTCHA" src="about:blank" width="300" height="80"></iframe>';
 
 const wait = async <T>(read: () => Promise<T> | T, ok: (value: T) => boolean, ms = 6_000): Promise<T> => {
   const end = Date.now() + ms;
@@ -35,7 +39,7 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('shows the tab live on a 
   const stateDir = await mkdtemp(join(tmpdir(), 'clikcode-tailnet-'));
   // /wide has no mobile layout tag: Chrome lays it out 980px wide and shows it zoomed out, as a phone does.
   const WIDE = '<!doctype html><body style="margin:0"><div style="width:700px;height:1600px;position:relative"><button id="far" style="position:absolute;left:400px;top:900px;width:240px;height:90px" onclick="document.title=\'far hit\'">Verify</button></div>';
-  const site = createServer((request, response) => { response.setHeader('content-type', 'text/html'); response.end(request.url === '/wide' ? WIDE : SITE); });
+  const site = createServer((request, response) => { response.setHeader('content-type', 'text/html'); response.end(request.url === '/wide' ? WIDE : request.url === '/captcha' ? CAPTCHA_PAGE : SITE); });
   await new Promise<void>(resolve => site.listen(0, '127.0.0.1', resolve));
   let phoneBrowser: Browser | undefined;
   try {
@@ -68,6 +72,8 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('shows the tab live on a 
     expect(await wait(() => computerView.evaluate(() => (window as unknown as { __handoff: { mode: string } }).__handoff.mode), mode => mode === 'mouse')).toBe('mouse');
     expect(await computerView.locator('#mode').innerText()).toBe('Touch');
     expect(await computerView.locator('#kb').count()).toBe(0);
+    expect(await wait(() => computerView.evaluate(() => (window as unknown as { __handoff: { view: string } }).__handoff.view), view => view === 'fields')).toBe('fields');
+    expect(await computerView.locator('#view').innerText()).toBe('Page');
     await computerView.close();
     const context = await phoneBrowser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true });
     const phone = await context.newPage();
@@ -78,7 +84,55 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('shows the tab live on a 
     await phone.goto(link);
     const handoff = <T,>(read: string): Promise<T> => phone.evaluate(`(${read})(window.__handoff)`) as Promise<T>;
 
-    // Frames arrive and keep arriving as the page changes, drawn on the canvas.
+    // A page with something to fill in opens as a form of real fields: the phone's own keyboard, autofill and pickers, filled into the page.
+    expect(await wait(() => handoff<string>('h => h.view'), view => view === 'fields')).toBe('fields');
+    expect(await phone.locator('#form').isVisible()).toBe(true);
+    expect(await phone.locator('#stage').isVisible()).toBe(false);
+    expect(await phone.locator('#view').innerText()).toBe('Page');
+    const control = (label: string) => phone.locator('.row', { has: phone.locator('.lab', { hasText: label }) }).locator('.ctl');
+    expect(await phone.locator('.lab').allInnerTexts()).toEqual(['Full name', 'Password', 'Code', 'Plan', 'Start date']);
+    await control('Full name').fill('hello');
+    expect(await wait(() => page.locator('#name').inputValue(), value => value === 'hello')).toBe('hello');
+    await control('Full name').fill('Ada Lovelace');
+    expect(await wait(() => page.locator('#name').inputValue(), value => value === 'Ada Lovelace')).toBe('Ada Lovelace');
+    await control('Full name').fill('');
+    expect(await wait(() => page.locator('#name').inputValue(), value => value === '')).toBe('');
+    expect(await control('Password').getAttribute('type')).toBe('password');
+    expect(await control('Password').getAttribute('autocomplete')).toBe('current-password');
+    await control('Password').fill('s3cret');
+    expect(await wait(() => page.locator('#pw').inputValue(), value => value === 's3cret')).toBe('s3cret');
+    expect(await control('Code').getAttribute('autocomplete')).toBe('one-time-code');
+    expect(await control('Code').getAttribute('inputmode')).toBe('numeric');
+    await control('Code').fill('123456');
+    expect(await wait(() => page.locator('#otp').inputValue(), value => value === '123456')).toBe('123456');
+    await control('Plan').selectOption('b');
+    expect(await wait(() => page.title(), title => title === 'plan b')).toBe('plan b');
+    await control('Start date').fill('2026-10-27');
+    expect(await wait(() => page.title(), title => title === 'date 2026-10-27')).toBe('date 2026-10-27');
+    await phone.locator('.chk', { hasText: 'I agree' }).locator('input').check();
+    expect(await wait(() => page.title(), title => title === 'agree true')).toBe('agree true');
+    await phone.locator('.chk', { hasText: 'I agree' }).locator('input').uncheck();
+    expect(await wait(() => page.title(), title => title === 'agree false')).toBe('agree false');
+    await phone.locator('.chk', { hasText: 'Large' }).locator('input').check();
+    expect(await wait(() => page.title(), title => title === 'size large')).toBe('size large');
+    await page.evaluate(() => { document.title = 'reset'; });
+    await phone.locator('.act', { hasText: 'Tap me' }).click();
+    expect(await wait(() => page.title(), title => title === 'clicked')).toBe('clicked');
+    // What the page does to a field shows up in the form (a field being typed in is left alone).
+    await page.evaluate(() => { (document.getElementById('name') as HTMLInputElement).value = 'from the page'; });
+    expect(await wait(() => control('Full name').inputValue(), value => value === 'from the page')).toBe('from the page');
+    // A page with a picture check says so, and the way to it.
+    await page.goto(`http://127.0.0.1:${(site.address() as AddressInfo).port}/captcha`);
+    await wait(() => phone.locator('.note').count(), count => count === 1);
+    expect(await phone.locator('.note').innerText()).toContain('picture check');
+    await page.goto(`http://127.0.0.1:${(site.address() as AddressInfo).port}/`);
+    await wait(() => phone.locator('.note').count(), count => count === 0);
+    await wait(() => phone.locator('.lab').count(), count => count === 5);
+
+    // The picture, for what a form cannot show: frames arrive and keep arriving as the page changes, drawn on the canvas.
+    await phone.locator('#view').click();
+    expect(await phone.locator('#view').innerText()).toBe('Fields');
+    expect(await phone.locator('#stage').isVisible()).toBe(true);
     const first = await wait(() => handoff<number>('h => h.frames'), frames => frames > 5);
     if (first <= 5) console.log(`no frames; phone page said: ${JSON.stringify(notes)} state ${JSON.stringify(await phone.evaluate(() => (window as unknown as { __handoff: unknown }).__handoff))}`);
     expect(first).toBeGreaterThan(5);
@@ -114,46 +168,13 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('shows the tab live on a 
     console.log(`phone link: tap to picture ${latencies.join(', ')} ms (median ${latencies[2]} ms, same machine)`);
     expect(latencies[2]).toBeLessThan(500);
 
-    // Text: the phone's own box, of the page field's kind, and what is typed in it reaches the page.
+    // A tap on a text field in the picture goes to that field in the form, in the tap itself, with the field focused so the phone's keyboard comes up.
     await tap('#name');
-    // The box is in place and focused in the tap itself (a phone only opens its keyboard from the person's own touch), not after the page answers.
-    expect(await phone.evaluate(() => document.activeElement && document.activeElement.id)).toBe('proxy');
-    // Nothing else is added to the screen: no bar, no visible text box. The box is invisible and sits exactly over the field.
-    for (const gone of ['#accessory', '#tab', '#enter', '#kb', '#label']) expect(await phone.locator(gone).count(), gone).toBe(0);
-    const fieldBox = (await page.locator('#name').boundingBox())!;
-    const boxOver = (await phone.locator('#proxy').boundingBox())!;
-    expect(Math.abs(boxOver.x - (stage.left + fieldBox.x))).toBeLessThan(3);
-    expect(Math.abs(boxOver.y - (stage.top + fieldBox.y))).toBeLessThan(3);
-    expect(Math.abs(boxOver.width - fieldBox.width)).toBeLessThan(3);
-    expect(Number(await phone.locator('#proxy').evaluate(el => getComputedStyle(el).opacity))).toBeLessThan(0.1);
-    await wait(() => handoff<string | null>('h => h.focus && h.focus.kind'), kind => kind === 'text');
-    expect(await phone.locator('#proxy').getAttribute('type')).toBe('text');
-    await phone.keyboard.type('hello');
-    expect(await wait(() => page.locator('#name').inputValue(), value => value === 'hello')).toBe('hello');
-    await phone.keyboard.press('Backspace'); await phone.keyboard.press('Backspace');
-    expect(await wait(() => page.locator('#name').inputValue(), value => value === 'hel')).toBe('hel');
-    await phone.locator('#proxy').fill('replaced by autofill');
-    expect(await wait(() => page.locator('#name').inputValue(), value => value === 'replaced by autofill')).toBe('replaced by autofill');
-
-    // Tapping inside the text puts the caret there, and what is typed goes in at that spot.
-    await phone.touchscreen.tap(stage.left + fieldBox.x + 3, stage.top + fieldBox.y + fieldBox.height / 2);
-    await phone.keyboard.type('X');
-    // Near the start: a tap puts the caret at the nearest letter, and what is typed goes in there rather than at the end.
-    const typedAt = await wait(() => page.locator('#name').inputValue(), value => value.includes('X'));
-    expect(typedAt.indexOf('X')).toBeLessThan(3);
-    expect(typedAt.replace('X', '')).toBe('replaced by autofill');
-
-    await tap('#pw');
-    await wait(() => handoff<string | null>('h => h.focus && h.focus.type'), type => type === 'password');
-    expect(await phone.locator('#proxy').getAttribute('type')).toBe('password');
-    expect(await phone.locator('#proxy').getAttribute('autocomplete')).toBe('current-password');
-    await phone.keyboard.type('s3cret');
-    expect(await wait(() => page.locator('#pw').inputValue(), value => value === 's3cret')).toBe('s3cret');
-
-    await tap('#otp');
-    await wait(() => handoff<string | null>('h => h.focus && h.focus.autocomplete'), value => value === 'one-time-code');
-    expect(await phone.locator('#proxy').getAttribute('autocomplete')).toBe('one-time-code');
-    expect(await phone.locator('#proxy').getAttribute('inputmode')).toBe('numeric');
+    expect(await wait(() => handoff<string>('h => h.view'), view => view === 'fields')).toBe('fields');
+    expect(await phone.evaluate(() => { const a = document.activeElement as HTMLElement | null; const row = a && a.closest('.row'); return row ? (row.querySelector('.lab') as HTMLElement).textContent : null; })).toBe('Full name');
+    for (const gone of ['#accessory', '#proxy', '#tab', '#enter', '#kb']) expect(await phone.locator(gone).count(), gone).toBe(0);
+    await phone.locator('#view').click();
+    expect(await phone.locator('#stage').isVisible()).toBe(true);
 
     // A choice and a date open the phone's own sheet. The tap is kept from the page: its pop-up would open on the computer, where no one sees it.
     await tap('#sel');

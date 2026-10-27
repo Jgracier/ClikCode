@@ -1,19 +1,5 @@
 /** What the phone may send to the live view, checked before any of it reaches the browser. Pure, so it is tested without one. */
 
-/** The phone's keyboard types into an invisible box laid over the tapped field; what changed in that box is replayed in the page as key presses
- * and text, at the page's own caret (where the tap put it). Written as source because the phone's page runs it too: one definition, tested
- * here. A letter typed is inserted at the caret, a letter deleted is a Backspace there, and a whole value put in at once (an autofill) is
- * "remove what was there, then add this". */
-export const DIFF_SOURCE = `(prev, next) => {
-  let start = 0;
-  const shortest = Math.min(prev.length, next.length);
-  while (start < shortest && prev.charCodeAt(start) === next.charCodeAt(start)) start++;
-  // Never split an emoji or other surrogate pair: back up to its first half.
-  if (start > 0 && start < prev.length && prev.charCodeAt(start - 1) >= 0xD800 && prev.charCodeAt(start - 1) <= 0xDBFF) start--;
-  // Backspace removes a whole character, so the count is in characters, not UTF-16 units.
-  return { remove: Array.from(prev.slice(start)).length, add: next.slice(start) };
-}`;
-
 export type Point = { id: number; x: number; y: number };
 
 const finite = (value: unknown, max = 20_000): value is number => typeof value === 'number' && Number.isFinite(value) && value >= -1 && value <= max;
