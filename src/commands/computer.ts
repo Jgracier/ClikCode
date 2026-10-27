@@ -165,6 +165,36 @@ export async function computerSecrets(remove?: string, backfill?: { owner?: stri
   process.stdout.write(info.length ? `${info.map(({ name, meta }) => `  ${name}${meta ? `  (${[meta.vendor, meta.owner, meta.env, `saved ${meta.createdAt.slice(0, 10)}`, meta.rotatedAt ? `rotated ${meta.rotatedAt.slice(0, 10)}` : ''].filter(Boolean).join(', ')})` : ''}`).join('\n')}\n` : 'No secrets are saved.\n');
 }
 
+/** `--audit`: what is untidy in the vault, by name only. */
+export async function computerVaultAudit(): Promise<void> {
+  const { auditVault } = await import('../agent/computer/credential-vault.js');
+  const audit = await auditVault(stateDirectory());
+  if (isJsonDefaultMode()) return emitResult({ computer: { audit } });
+  const lines = [
+    `Twin names (one key saved under two spellings): ${audit.twins.length ? audit.twins.map(names => names.join(' = ')).join('; ') : 'none'}`,
+    `Odd names (no vendor/, or dated or numbered): ${audit.oddNames.length ? audit.oddNames.join(', ') : 'none'}`,
+    `No owner recorded: ${audit.noOwner.length} secret${audit.noOwner.length === 1 ? '' : 's'}${audit.noOwner.length ? ' (clikcode computer secrets --backfill --owner <email>)' : ''}`,
+    `Logins the site rejected: ${audit.rejectedLogins.length ? audit.rejectedLogins.map(login => `${login.site} (${login.label})`).join(', ') : 'none'}`,
+  ];
+  process.stdout.write(`${lines.join('\n')}\n`);
+}
+
+/** `--sync <user@host>`: both computers end up with every login, secret and profile of the two. */
+export async function computerVaultSync(target: string): Promise<void> {
+  const { syncVault, tailscaleTransport } = await import('../agent/computer/vault-sync.js');
+  const result = await syncVault(stateDirectory(), tailscaleTransport(target));
+  if (isJsonDefaultMode()) return emitResult({ computer: { synced: target, ...result } });
+  process.stdout.write(`Synced with ${target}: it gained ${result.sent.added} secret${result.sent.added === 1 ? '' : 's'}, this computer gained ${result.received.added} and updated ${result.received.updated}.\n`);
+}
+
+/** The other end of `--sync`: reads the sender's vault on standard input, merges it, and answers with this vault as it was. */
+export async function computerVaultExchange(): Promise<void> {
+  const { exchangeVault } = await import('../agent/computer/vault-sync.js');
+  let input = '';
+  for await (const chunk of process.stdin) input += String(chunk);
+  process.stdout.write(await exchangeVault(stateDirectory(), input));
+}
+
 /** `--export <file>` / `--import <file>`: an encrypted backup of the whole vault, under a passphrase typed hidden. A terminal is required, so the
  * passphrase never passes through an agent, a pipe or a log; nothing is printed but counts. */
 async function computerSecretsBackup(backup: { export?: string; import?: string; overwrite?: boolean }): Promise<void> {

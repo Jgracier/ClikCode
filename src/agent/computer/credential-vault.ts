@@ -211,10 +211,41 @@ function secretFile(stateDir: string, name: string): { file: string; aad: string
   const hash = createHash('sha256').update(name.toLowerCase()).digest('hex').slice(0, 32);
   return { file: path.join(vaultDir(stateDir), 'secrets', `${hash}.json`), aad: `secret:${hash}` };
 }
+/** The same key written the ways agents write it ("acme/api-key", "www.acme.com/key", "Acme/secret-key") has one canonical form, so a name that
+ * differs only by spelling still finds the secret, and a second save updates it instead of leaving a twin. `admin-key` and `sandbox-key` stay themselves. */
+const KIND_ALIASES: Record<string, string> = {
+  'api-key': 'key', apikey: 'key', 'api_key': 'key', 'secret-key': 'key', 'secret': 'key',
+  'api-token': 'token', 'access-token': 'token', 'auth-token': 'token',
+  clientid: 'client-id', 'client_id': 'client-id', clientsecret: 'client-secret', 'client_secret': 'client-secret',
+};
+export function canonicalSecretName(name: string): string {
+  const lower = name.trim().toLowerCase();
+  const slash = lower.indexOf('/');
+  if (slash < 0) return lower;
+  const vendor = lower.slice(0, slash).replace(/^www\./, '');
+  const kind = lower.slice(slash + 1);
+  return `${vendor}/${KIND_ALIASES[kind] ?? kind}`;
+}
+/** The saved name a given name means: itself when it exists, else the one saved secret with the same canonical form. */
+async function savedNameFor(stateDir: string, name: string): Promise<string | undefined> {
+  const names = await namedSecretNames(stateDir).catch(() => [] as string[]);
+  const exact = names.find(saved => saved.toLowerCase() === name.trim().toLowerCase());
+  if (exact) return exact;
+  const same = names.filter(saved => canonicalSecretName(saved) === canonicalSecretName(name));
+  return same.length === 1 ? same[0] : undefined;
+}
+/** Names that share a vendor with a missing one, for the error: names only, never values. */
+async function nearNames(stateDir: string, name: string): Promise<string[]> {
+  const vendor = canonicalSecretName(name).split('/')[0];
+  return (await namedSecretNames(stateDir).catch(() => [] as string[])).filter(saved => canonicalSecretName(saved).split('/')[0] === vendor).slice(0, 8);
+}
+
 /** What a secret is for and who owns it, kept beside the value so a long list of credentials can be audited and rotated. */
 export type SecretMeta = { vendor?: string; owner?: string; env?: string; createdAt: string; rotatedAt?: string };
 export async function saveNamedSecret(stateDir: string, name: string, value: string, meta: { vendor?: string; owner?: string; env?: string } = {}): Promise<void> {
   if (!value) throw new CredentialError('The secret is empty.');
+  // A spelling variant of a saved secret is that secret, rotated: no twin is made.
+  name = await savedNameFor(stateDir, name) ?? name;
   const { file, aad } = secretFile(stateDir, name);
   const key = await vaultKey(stateDir, true);
   // A second save of the same name is a rotation: the first date stays, and what was given before stays unless given again.
@@ -242,10 +273,16 @@ export async function namedSecretInfo(stateDir: string): Promise<{ name: string;
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 export async function readNamedSecret(stateDir: string, name: string): Promise<string> {
-  const { file, aad } = secretFile(stateDir, name);
-  const key = await vaultKey(stateDir, false);
-  try { return (JSON.parse(open(key, aad, await fs.readFile(file, 'utf8'))) as { value: string }).value; }
-  catch { throw new CredentialError(`No secret named "${name}" is saved.`); }
+  const read = async (wanted: string): Promise<string> => {
+    const { file, aad } = secretFile(stateDir, wanted);
+    const key = await vaultKey(stateDir, false);
+    return (JSON.parse(open(key, aad, await fs.readFile(file, 'utf8'))) as { value: string }).value;
+  };
+  try { return await read(name); } catch { /* not under that spelling: try the saved one */ }
+  const saved = await savedNameFor(stateDir, name);
+  if (saved) { try { return await read(saved); } catch { /* fall through to the plain error */ } }
+  const near = await nearNames(stateDir, name);
+  throw new CredentialError(`No secret named "${name}" is saved.${near.length ? ` Saved for that vendor: ${near.join(', ')}.` : ''}`);
 }
 export async function namedSecretNames(stateDir: string): Promise<string[]> {
   const dir = path.join(vaultDir(stateDir), 'secrets');
@@ -261,6 +298,7 @@ export async function namedSecretNames(stateDir: string): Promise<string[]> {
 }
 
 export async function deleteNamedSecret(stateDir: string, name: string): Promise<boolean> {
+  // Only the exact name is deleted: a spelling variant must never remove a different key.
   const { file } = secretFile(stateDir, name);
   try { await fs.unlink(file); return true; }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw new CredentialError('The secret could not be removed.'); }
@@ -307,6 +345,50 @@ export async function backfillSecretMeta(stateDir: string, owner?: string): Prom
     done.push(name);
   }
   return done;
+}
+
+/** What is untidy in the vault, by name only. Nothing here changes anything. */
+export interface VaultAudit { twins: string[][]; oddNames: string[]; noOwner: string[]; rejectedLogins: { site: string; label: string }[] }
+export async function auditVault(stateDir: string): Promise<VaultAudit> {
+  const info = await namedSecretInfo(stateDir);
+  const groups = new Map<string, string[]>();
+  for (const { name } of info) groups.set(canonicalSecretName(name), [...(groups.get(canonicalSecretName(name)) ?? []), name]);
+  const odd = /\d{4}-\d{2}-\d{2}|-m\d+$|\btry-|-\d$/;
+  return {
+    twins: [...groups.values()].filter(names => names.length > 1),
+    oddNames: info.map(({ name }) => name).filter(name => !name.includes('/') || odd.test(name)),
+    noOwner: info.filter(({ meta }) => !meta?.owner).map(({ name }) => name),
+    rejectedLogins: (await readItems(stateDir)).filter(({ item }) => item.rejected).map(({ item }) => ({ site: new URL(item.origin).hostname, label: loginLabel(itemFields(item)) })),
+  };
+}
+
+/** Brings another computer's vault into this one: what is missing is added, a secret both have is the newer one, and nothing is ever removed.
+ * Logins and profiles are added when missing and never replaced. Safe to run in both directions, in any order, any number of times. */
+export async function mergeVault(stateDir: string, snapshot: VaultSnapshot): Promise<{ added: number; updated: number; same: number }> {
+  if (snapshot?.v !== 1 || !Array.isArray(snapshot.items) || !Array.isArray(snapshot.secrets) || !Array.isArray(snapshot.records)) throw new CredentialError('That is not a ClikCode vault snapshot.');
+  const mine = new Map((await namedSecretInfo(stateDir)).map(entry => [canonicalSecretName(entry.name), entry]));
+  const stamp = (meta?: SecretMeta): string => meta?.rotatedAt ?? meta?.createdAt ?? '';
+  let updated = 0, same = 0;
+  const forLogins: VaultSnapshot = { v: 1, items: snapshot.items, secrets: [], records: snapshot.records };
+  const logins = await restoreVault(stateDir, forLogins);
+  let added = logins.added;
+  same += logins.skipped;
+  for (const secret of snapshot.secrets) {
+    const have = mine.get(canonicalSecretName(secret.name));
+    if (!have) { await saveNamedSecret(stateDir, secret.name, secret.value, secret.meta ?? {}); await stampMeta(stateDir, secret.name, secret.meta); added++; continue; }
+    if (stamp(secret.meta) > stamp(have.meta) && await readNamedSecret(stateDir, have.name) !== secret.value) { await saveNamedSecret(stateDir, have.name, secret.value, secret.meta ?? {}); await stampMeta(stateDir, have.name, secret.meta); updated++; continue; }
+    same++;
+  }
+  return { added, updated, same };
+}
+/** A merged-in secret keeps the dates it had where it was made. */
+async function stampMeta(stateDir: string, name: string, meta: SecretMeta | undefined): Promise<void> {
+  if (!meta?.createdAt) return;
+  const { file, aad } = secretFile(stateDir, name);
+  const key = await vaultKey(stateDir, false);
+  const record = JSON.parse(open(key, aad, await fs.readFile(file, 'utf8'))) as { meta?: SecretMeta };
+  record.meta = { ...record.meta, ...meta };
+  await fs.writeFile(file, seal(key, aad, JSON.stringify(record)), { mode: 0o600 });
 }
 
 /** Everything in the vault in the clear, for an encrypted backup (see vault-backup.ts). Never leaves this process unencrypted. */
