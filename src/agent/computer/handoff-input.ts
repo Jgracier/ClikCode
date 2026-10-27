@@ -1,8 +1,9 @@
 /** What the phone may send to the live view, checked before any of it reaches the browser. Pure, so it is tested without one. */
 
-/** The phone's own keyboard types into a stand-in box; what changed in that box is replayed in the page as key presses and text.
- * Written as source because the phone's page runs it too: one definition, tested here. The page's caret is kept at the end of
- * the field when it takes focus, so "remove N from the end, then add this" is what an edit means. */
+/** The phone's keyboard types into an invisible box laid over the tapped field; what changed in that box is replayed in the page as key presses
+ * and text, at the page's own caret (where the tap put it). Written as source because the phone's page runs it too: one definition, tested
+ * here. A letter typed is inserted at the caret, a letter deleted is a Backspace there, and a whole value put in at once (an autofill) is
+ * "remove what was there, then add this". */
 export const DIFF_SOURCE = `(prev, next) => {
   let start = 0;
   const shortest = Math.min(prev.length, next.length);
