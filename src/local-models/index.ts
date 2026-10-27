@@ -372,6 +372,8 @@ export function releaseLocalModelsOnExit(): void {
 export interface LocalModelChoice {
   id: string;
   label: string;
+  /** The Hugging Face repo its weights come from: ClikDeploy can plan and price the same model from it. */
+  repo: string;
   detail: string;
   /** What a list says about it: what it takes (a download, or that it is on disk) and how fast it writes. `detail` has the rest -- the
    * backend, the first-reply estimate, the context, where it came from -- for a screen that has room and a reason to read it. */
@@ -412,7 +414,7 @@ export async function localModelChoices(): Promise<LocalModelChoice[]> {
     const brief = [downloadBytes ? `${formatBytes(downloadBytes)} download` : 'downloaded', writing > 0 ? `~${writing} tok/s` : '',
       // The one caveat that changes a choice: a coding agent needs tool calls, and a model found on Hugging Face has not shown it can.
       ...(row.model.discovered ? ['tool use unverified'] : [])].filter(Boolean).join(' · ');
-    rows.push({ id: row.model.id, label: row.model.label, detail: parts.join(' · '), brief, fits: row.fit.fits, recommended: row.passes, downloadBytes });
+    rows.push({ id: row.model.id, label: row.model.label, repo: row.model.weights.repo, detail: parts.join(' · '), brief, fits: row.fit.fits, recommended: row.passes, downloadBytes });
   }
   return rows;
 }

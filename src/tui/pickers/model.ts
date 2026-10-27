@@ -23,7 +23,7 @@ import { selectGatewayAgent } from '../../commands/ai/sessions.js';
 import { withSignIn } from '../../commands/account.js';
 import { chooseOption } from './choose.js';
 import { withSlowWait } from '../slow-wait.js';
-import { hostedAdapter, hostedList, hostedSelectionCommand, type HostedRow } from '../../hosted-models/index.js';
+import { hostedAdapter, hostedList, hostedPlan, hostedSelectionCommand, type HostedPlan, type HostedRow } from '../../hosted-models/index.js';
 import { GATEWAY_ID } from '../../session/picker-rows.js';
 import { providerConversationKey } from './engine.js';
 import { selectProviderConversation } from './conversation.js';
@@ -134,6 +134,37 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
   }
 }
 
+/** The one question before a hosted model starts, and the row to start (undefined: back to the list).
+ *
+ * - A model that fits this computer and that ClikDeploy can also price: here, or there, each with what it takes. Choosing is the
+ *   consent -- the download's size, or the price per hour, is on the option -- so nothing is asked again.
+ * - A model that fits this computer and nothing else: on disk, nothing is asked; to download, the size is asked once.
+ * - A model that needs a GPU: only ClikDeploy's estimate, asked once (unless the user said to always start). */
+async function chooseWhereToRun(rl: HarnessPrompter, config: Conf, row: HostedRow, plan: HostedPlan): Promise<HostedRow | undefined> {
+  if (plan.alternative) {
+    return chooseOption(rl, row.label, [
+      { label: 'Run on this computer', detail: `· ${plan.summary}`, value: row },
+      { label: 'Run on ClikDeploy', detail: `· ${plan.alternative.plan.summary}`, value: plan.alternative.row },
+    ]);
+  }
+  if (plan.costly) {
+    if (alwaysStartOwnModels(config)) return row;
+    const answer = await chooseOption(rl, `Start ${row.label} on ClikDeploy?`, [
+      { label: 'Start', detail: `· ${plan.summary}`, value: 'start' as const },
+      { label: 'Always start hosted AI models', detail: '· remember this on this machine', value: 'always' as const },
+    ]);
+    if (answer === 'always') setAlwaysStartOwnModels(true, config);
+    return answer ? row : undefined;
+  }
+  // A model already on this computer asks nothing: it is free and offline already, so choosing the row was the decision.
+  if (plan.consent === false) return row;
+  const answer = await chooseOption(rl, plan.title, [
+    { label: plan.confirm, ...(plan.lines[0] ? { detail: `· ${plan.lines[0]}` } : {}), value: 'start' as const },
+    { label: 'Choose another model', value: 'back' as const },
+  ]);
+  return answer === 'start' ? row : undefined;
+}
+
 /** Hosted AI: models that run on this computer (tagged Local) or on a ClikDeploy GPU, in one list. A search names
  * the model, and `local` or `cloud` in it names where. Choosing one shows what starting it takes -- the download, or
  * the GPU and price -- and only then starts it and moves the chat onto it (hosted-models/). */
@@ -147,7 +178,7 @@ export async function interactiveHostedPicker(rl: HarnessPrompter, id: string): 
     // Where it runs is the group it is under, not a tag on every row.
     detail: `· ${[row.target === 'this-computer' && row.id === onThisComputer ? 'current' : '', row.recommended ? 'recommended' : '', row.detail].filter(Boolean).join(' · ')}`,
     value: row,
-    group: row.target === 'this-computer' ? 'Run on this computer' : 'Run on ClikDeploy',
+    group: row.target === 'this-computer' ? 'Fits this computer' : 'On ClikDeploy',
   }));
   const initial = await withSlowWait(waiting, 'finding hosted AI models…', () => hostedList(''));
   for (const note of initial.unavailable) {
@@ -166,31 +197,14 @@ export async function interactiveHostedPicker(rl: HarnessPrompter, id: string): 
   const selected = picked;
   if (!selected) return;
 
-  const adapter = hostedAdapter(selected.target);
-  const plan = await withSlowWait(waiting, selected.target === 'clikdeploy' ? `checking ${selected.label} and matching compute…` : `checking ${selected.label}…`, () => adapter.plan(selected));
+  const plan = await withSlowWait(waiting, selected.target === 'clikdeploy' ? `checking ${selected.label} and matching compute…` : `checking ${selected.label}…`, () => hostedPlan(selected));
   const config = new Conf({ projectName: 'clikcode', configFileMode: 0o600 });
-  // Only what bills asks to be sure; "always start" is the user's own standing answer.
-  if (plan.costly && !alwaysStartOwnModels(config)) {
-    if (rl.panel) rl.panel(plan.title, plan.lines.join('\n')); else process.stdout.write(`\n${plan.title}\n${plan.lines.join('\n')}\n`);
-    const answer = await chooseOption(rl, `Start ${selected.label}?`, [
-      { label: `Yes, ${plan.confirm.charAt(0).toLowerCase()}${plan.confirm.slice(1)}`, value: 'start' },
-      { label: 'No, choose another model', detail: 'Back to the list.', value: 'back' },
-      { label: 'Always start hosted AI models', detail: 'Remember this on this machine.', value: 'always' },
-    ]);
-    if (answer === 'back') return interactiveHostedPicker(rl, id);
-    if (answer === 'always') setAlwaysStartOwnModels(true, config);
-    else if (answer !== 'start') return;
-  } else if (!plan.costly && plan.consent !== false) {
-    // A download asks once, with its size in the question. A model already on this computer asks nothing: choosing it was the decision.
-    const answer = await chooseOption(rl, plan.title, [
-      { label: plan.confirm, ...(plan.lines[0] ? { detail: `· ${plan.lines[0]}` } : {}), value: 'start' },
-      { label: 'Choose another model', value: 'back' },
-    ]);
-    if (answer === 'back') return interactiveHostedPicker(rl, id);
-    if (answer !== 'start') return;
-  }
+  // Esc at the question goes back to the list; Esc at the list leaves.
+  const start = await chooseWhereToRun(rl, config, selected, plan);
+  if (!start) return interactiveHostedPicker(rl, id);
+  const adapter = hostedAdapter(start.target);
 
-  const selection = await withSlowWait(waiting, selected.target === 'clikdeploy' ? `starting ${selected.label} on ClikDeploy…` : `preparing ${selected.label}…`, () => adapter.start(selected));
+  const selection = await withSlowWait(waiting, start.target === 'clikdeploy' ? `starting ${start.label} on ClikDeploy…` : `preparing ${start.label}…`, () => adapter.start(start));
   // The route may differ from the chat's (a Gateway chat choosing a model for this computer): the chat moves
   // onto it, history and all, as a provider change does.
   const state = await readState({ transcripts: [id] });

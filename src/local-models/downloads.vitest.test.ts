@@ -115,8 +115,17 @@ describe('background downloads', () => {
 describe('the download lock', () => {
   it('runs two downloads of one model one after the other, never together', async () => {
     const order: string[] = [];
-    const run = (name: string, ms: number) => withDownloadLock('qwen3.5-4b', async () => { order.push(`${name} start`); await tick(ms); order.push(`${name} end`); });
-    await Promise.all([run('a', 120), run('b', 10)]);
+    let release!: () => void;
+    // `a` holds the lock until it is let go, so which of two started together wins it is not what the test depends on.
+    const a = withDownloadLock('qwen3.5-4b', async () => { order.push('a start'); await new Promise<void>((resolve) => { release = resolve; }); order.push('a end'); });
+    const deadline = Date.now() + 5_000;
+    while (!order.includes('a start') && Date.now() < deadline) await tick(5);
+    const b = withDownloadLock('qwen3.5-4b', async () => { order.push('b start'); order.push('b end'); });
+    // Longer than the lock's poll (500 ms): `b` has had two chances to take it, and must not have.
+    await tick(1_200);
+    expect(order).toEqual(['a start']);
+    release();
+    await Promise.all([a, b]);
     expect(order).toEqual(['a start', 'a end', 'b start', 'b end']);
   });
 

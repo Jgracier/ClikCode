@@ -43,7 +43,7 @@ export function quoteSummary(model: Pick<DeployableModel, 'modelId' | 'displayNa
   return { title: `${model.displayName || model.modelId} on ClikDeploy`, body: lines.join('\n') };
 }
 
-async function request<T>(path: string, init: { method?: 'GET' | 'POST'; body?: unknown } = {}): Promise<T> {
+async function request<T>(path: string, init: { method?: 'GET' | 'POST'; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
   const { baseUrl, apiKey } = gatewayConnection(new Conf({ projectName: 'clikcode', configFileMode: 0o600 }));
   const response = await fetch(`${baseUrl}${path}`, {
     method: init.method ?? 'GET',
@@ -54,7 +54,7 @@ async function request<T>(path: string, init: { method?: 'GET' | 'POST'; body?: 
       ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
     },
     ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
-    signal: AbortSignal.timeout(60_000),
+    signal: init.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000),
   });
   const payload = await response.json().catch(quiet('gateway/private-models')) as {
     data?: T;
@@ -76,9 +76,9 @@ export async function searchDeployableModels(query = ''): Promise<DeployableMode
 }
 
 /** Ask ClikDeploy's planner for a compatible runtime, GPU, and hourly price. */
-export async function quotePrivateModel(modelId: string): Promise<PrivateModelQuote> {
+export async function quotePrivateModel(modelId: string, signal?: AbortSignal): Promise<PrivateModelQuote> {
   const params = new URLSearchParams({ source: 'huggingface', modelId });
-  return request<PrivateModelQuote>(`/api/models/resolve?${params}`);
+  return request<PrivateModelQuote>(`/api/models/resolve?${params}`, signal ? { signal } : {});
 }
 
 /** Create through the shared planner. Omitting gpuType lets ClikDeploy select compute. */

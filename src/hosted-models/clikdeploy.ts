@@ -8,6 +8,11 @@ function parameters(count: number | undefined): string {
   return `${Math.round(count / 1e6)}M params`;
 }
 
+/** An hourly price at the precision that matters: a cent is a lot for a small model, so those show a third decimal. */
+export function perHour(price: number): string {
+  return `$${price < 0.1 ? price.toFixed(3).replace(/0$/, '') : price.toFixed(2)}/hour`;
+}
+
 /** The quote a plan was shown, kept to start with: the price accepted is the one deployed. */
 const quoted = new Map<string, { quote: PrivateModelQuote; model: DeployableModel }>();
 const models = new Map<string, DeployableModel>();
@@ -30,11 +35,11 @@ export const clikdeploy: HostedAdapter = {
     return rows;
   },
 
-  async plan(row): Promise<HostedPlan> {
+  async plan(row, signal): Promise<HostedPlan> {
     const model = models.get(row.id) ?? { sourceId: 'huggingface', modelId: row.id, displayName: row.label, gated: row.gated === true };
     let quote: PrivateModelQuote;
     try {
-      quote = await quotePrivateModel(row.id);
+      quote = await quotePrivateModel(row.id, signal);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(model.gated ? `${message} Connect Hugging Face in ClikDeploy, then try again.` : message);
@@ -44,8 +49,11 @@ export const clikdeploy: HostedAdapter = {
     return {
       title: summary.title,
       lines: summary.body.split('\n'),
-      confirm: `Start · $${quote.pricePerHour.toFixed(2)}/hour`,
+      confirm: `Start · ${perHour(quote.pricePerHour)}`,
       costly: true,
+      // The price, what it runs on, and the speed as the planner estimates it: what a choice between here and there turns on.
+      summary: [perHour(quote.pricePerHour), quote.sku?.displayName, quote.throughput?.decodeTokensPerSec ? `~${Math.round(quote.throughput.decodeTokensPerSec)} tok/s` : '']
+        .filter(Boolean).join(' · '),
     };
   },
 

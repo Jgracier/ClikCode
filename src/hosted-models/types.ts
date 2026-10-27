@@ -20,6 +20,9 @@ export interface HostedRow {
   recommended?: boolean;
   /** Needs access granted at Hugging Face first. */
   gated?: boolean;
+  /** The Hugging Face repo ClikDeploy can plan this model from. A model for this computer is a repo too (its GGUF weights), so the same
+   * model can be priced to run on a GPU. */
+  repo?: string;
 }
 
 /** What starting one takes, said before anything is spent or downloaded. */
@@ -34,6 +37,12 @@ export interface HostedPlan {
   consent?: boolean;
   /** It bills by the hour. A target that bills always asks first, unless the user said to always start. */
   costly: boolean;
+  /** One short line for a question that sets this plan beside another: what it takes ("downloaded · free, works offline",
+   * "$0.07/hour · 1 GPU · 17 GB · ~52 tok/s"). */
+  summary: string;
+  /** The same model run somewhere else, offered beside this plan: a model that fits this computer can also run on ClikDeploy, priced
+   * by its planner. Absent when it cannot (it does not fit here, the Gateway is not signed in, or it did not answer in time). */
+  alternative?: { row: HostedRow; plan: HostedPlan };
 }
 
 /** Where the chat goes once the model is ready. */
@@ -54,7 +63,7 @@ export interface HostedAdapter {
   /** What this target can run, best first. An empty query is its default list. Rejects when it is unreachable. */
   list(query: string, signal?: AbortSignal): Promise<HostedRow[]>;
   /** What starting `row` takes. */
-  plan(row: HostedRow): Promise<HostedPlan>;
+  plan(row: HostedRow, signal?: AbortSignal): Promise<HostedPlan>;
   /** Starts it (downloads are left to the first turn, after the plan was accepted). */
   start(row: HostedRow): Promise<HostedSelection>;
 }
@@ -66,12 +75,6 @@ export interface HostedList {
   /** More models are still being looked for in the background (a refresh of what Hugging Face has): ask again shortly. */
   refreshing?: true;
 }
-
-/** The words the picker shows on a row. */
-export const HOSTED_TAGS: Readonly<Record<HostedTarget, string>> = {
-  'this-computer': 'Local',
-  clikdeploy: 'ClikDeploy GPU',
-};
 
 /** The slash command that selects a started model. */
 export function hostedSelectionCommand(selection: HostedSelection): string {
