@@ -64,6 +64,18 @@ const setValueExpression = (value: string | string[]): string => `((value) => {
 
 type Message = { t?: string; [key: string]: unknown };
 
+/** Where the phone's screen sits in the page. Chrome reads input positions as the page's own (layout) pixels, but the phone shows the
+ * page through a visual viewport that can be zoomed out (a page with no mobile layout tag is laid out 980px wide and shown at about 0.4)
+ * or pinched in and panned. A finger at (x, y) on the screen is at offset + (x, y) / scale in the page. Sent as-is, a tap lands above and
+ * left of the finger, by more the lower and further right it is, and pinch and drag do nothing. */
+export interface PageView { scale: number; x: number; y: number }
+export const SAME_VIEW: PageView = { scale: 1, x: 0, y: 0 };
+export function toPage(view: PageView, x: number, y: number): { x: number; y: number } {
+  const scale = view.scale > 0.05 && view.scale < 20 ? view.scale : 1;
+  return { x: view.x + x / scale, y: view.y + y / scale };
+}
+const READ_VIEW = '({ scale: visualViewport.scale, x: visualViewport.offsetLeft, y: visualViewport.offsetTop })';
+
 const BUTTONS = ['left', 'middle', 'right'] as const;
 
 export class LiveView {
@@ -80,6 +92,7 @@ export class LiveView {
   private streaming = false;
   /** Chrome side is set up (domains on, field tracking installed): queued messages may run. */
   private up = false;
+  private lastView: PageView = SAME_VIEW;
   /** What happened, for tests and for the phone's status line. */
   readonly stats = { frames: 0, restarts: 0 };
 
@@ -159,18 +172,21 @@ export class LiveView {
         const points = cleanPoints(message.p);
         const type = ({ s: 'touchStart', m: 'touchMove', e: 'touchEnd', c: 'touchCancel' } as Record<string, 'touchStart' | 'touchMove' | 'touchEnd' | 'touchCancel'>)[String(message.k)];
         if (!points || !type) return;
-        await cdp.send('Input.dispatchTouchEvent', { type, touchPoints: points.map(point => ({ x: point.x, y: point.y, id: point.id })) });
+        const view = this.lastView = await this.view();
+        await cdp.send('Input.dispatchTouchEvent', { type, touchPoints: points.map(point => ({ ...toPage(view, point.x, point.y), id: point.id })) });
         return;
       }
       case 'mouse': {
         const x = Number(message.x), y = Number(message.y);
         if (!Number.isFinite(x) || !Number.isFinite(y) || x < -1 || y < -1 || x > 20_000 || y > 20_000) return;
+        const view = this.lastView = await this.view();
+        const at = toPage(view, x, y);
         const button = BUTTONS[Number(message.b)] ?? 'left';
         const mask = { left: 1, middle: 4, right: 2 }[button];
-        if (message.k === 'w') { await cdp.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x, y, deltaX: Math.max(-2000, Math.min(2000, Number(message.dx) || 0)), deltaY: Math.max(-2000, Math.min(2000, Number(message.dy) || 0)) }); return; }
+        if (message.k === 'w') { await cdp.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: at.x, y: at.y, deltaX: Math.max(-2000, Math.min(2000, Number(message.dx) || 0)), deltaY: Math.max(-2000, Math.min(2000, Number(message.dy) || 0)) }); return; }
         const type = ({ d: 'mousePressed', u: 'mouseReleased', m: 'mouseMoved' } as Record<string, 'mousePressed' | 'mouseReleased' | 'mouseMoved'>)[String(message.k)];
         if (!type) return;
-        await cdp.send('Input.dispatchMouseEvent', { type, x, y, button: type === 'mouseMoved' && !message.down ? 'none' : button, buttons: type === 'mouseReleased' ? 0 : (type === 'mousePressed' || message.down ? mask : 0), clickCount: type === 'mouseMoved' ? 0 : 1 });
+        await cdp.send('Input.dispatchMouseEvent', { type, x: at.x, y: at.y, button: type === 'mouseMoved' && !message.down ? 'none' : button, buttons: type === 'mouseReleased' ? 0 : (type === 'mousePressed' || message.down ? mask : 0), clickCount: type === 'mouseMoved' ? 0 : 1 });
         return;
       }
       case 'key': {
@@ -215,6 +231,16 @@ export class LiveView {
     const kind = (descriptor as { kind?: string }).kind;
     if (kind === 'text') await this.cdp?.send('Runtime.evaluate', { expression: CARET_TO_END }).catch(quiet('agent/computer/handoff-live'));
     this.send({ t: 'focus', d: descriptor });
+  }
+
+  /** The visual viewport right now, read before each input so a pinch or a pan that just happened is already in the next position. */
+  private async view(): Promise<PageView> {
+    try {
+      const result = await this.cdp!.send('Runtime.evaluate', { expression: READ_VIEW, returnByValue: true }) as { result?: { value?: PageView } };
+      const value = result.result?.value;
+      if (value && Number.isFinite(value.scale) && Number.isFinite(value.x) && Number.isFinite(value.y)) return value;
+    } catch { /* the page is changing: the last good view is the best there is */ }
+    return this.lastView;
   }
 
   private async layout(size: Size): Promise<void> {

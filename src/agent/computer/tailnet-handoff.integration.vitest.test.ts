@@ -32,7 +32,9 @@ const wait = async <T>(read: () => Promise<T> | T, ok: (value: T) => boolean, ms
 
 it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('shows the tab live on a phone, takes touch and the phone\'s own keyboard, and ends when the user is done', async () => {
   const stateDir = await mkdtemp(join(tmpdir(), 'clikcode-tailnet-'));
-  const site = createServer((_request, response) => { response.setHeader('content-type', 'text/html'); response.end(SITE); });
+  // /wide has no mobile layout tag: Chrome lays it out 980px wide and shows it zoomed out, as a phone does.
+  const WIDE = '<!doctype html><body style="margin:0"><div style="width:700px;height:1600px;position:relative"><button id="far" style="position:absolute;left:400px;top:900px;width:240px;height:90px" onclick="document.title=\'far hit\'">Verify</button></div>';
+  const site = createServer((request, response) => { response.setHeader('content-type', 'text/html'); response.end(request.url === '/wide' ? WIDE : SITE); });
   await new Promise<void>(resolve => site.listen(0, '127.0.0.1', resolve));
   let phoneBrowser: Browser | undefined;
   try {
@@ -152,6 +154,20 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('shows the tab live on a 
     await phone.mouse.wheel(0, 300);
     // A wheel of 300 reaches the phone's page as 100 CSS pixels (3x density); the mobile layout may glide further.
     expect(await wait(() => page.evaluate(() => scrollY), y => y > scrolled + 50)).toBeGreaterThan(scrolled + 50);
+
+    // A page with no mobile layout tag is laid out wide and shown zoomed out. A tap where the button is drawn must still hit it
+    // (it landed above the finger, and a pinch or a drag did nothing), and a pinch must zoom.
+    await page.goto(`http://127.0.0.1:${(site.address() as AddressInfo).port}/wide`);
+    const zoomedOut = await wait(() => page.evaluate(() => visualViewport!.scale), scale => scale < 0.6);
+    expect(zoomedOut).toBeLessThan(0.6);
+    const drawn = await page.evaluate(() => { const v = visualViewport!, r = document.getElementById('far')!.getBoundingClientRect(); return { x: (r.x + r.width / 2 - v.offsetLeft) * v.scale, y: (r.y + r.height / 2 - v.offsetTop) * v.scale }; });
+    await phone.touchscreen.tap(stage.left + drawn.x, stage.top + drawn.y);
+    expect(await wait(() => page.title(), title => title === 'far hit')).toBe('far hit');
+    const fingers = async (type: string, a: [number, number], b: [number, number]): Promise<void> => { await cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x: stage.left + a[0], y: stage.top + a[1], id: 1 }, { x: stage.left + b[0], y: stage.top + b[1], id: 2 }] } as never); };
+    await fingers('touchStart', [150, 300], [240, 300]);
+    for (let i = 1; i <= 10; i++) { await fingers('touchMove', [150 - i * 7, 300], [240 + i * 8, 300]); await new Promise(resolve => setTimeout(resolve, 16)); }
+    await fingers('touchEnd', [0, 0], [0, 0]);
+    expect(await wait(() => page.evaluate(() => visualViewport!.scale), scale => scale > zoomedOut * 1.4)).toBeGreaterThan(zoomedOut * 1.4);
 
     // The phone turning sideways re-lays the page out.
     await phone.setViewportSize({ width: 700, height: 390 });
