@@ -233,7 +233,7 @@ it.skipIf(process.env.CLIKCODE_COMPUTER_SMOKE !== '1')('shows the tab live on a 
     await page.evaluate(() => window.scrollTo(0, 0));
     await phone.locator('#mode').click();
     expect(await phone.locator('#mode').innerText()).toBe('Touch');
-    expect(await wait(() => page.evaluate(() => navigator.maxTouchPoints), points => points === 0)).toBe(0);
+    expect(await wait(() => page.evaluate(() => navigator.maxTouchPoints), points => points === touchBefore)).toBe(touchBefore);
     await page.evaluate(() => { document.title = 'reset'; });
     await tap('#b');
     expect(await wait(() => page.title(), title => title === 'clicked')).toBe('clicked');
