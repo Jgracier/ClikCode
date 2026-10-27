@@ -25,7 +25,7 @@
  * */
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmod, readFile, mkdir, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, readFile, mkdir, writeFile } from 'node:fs/promises';
 import { builtinModules } from 'node:module';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -168,6 +168,8 @@ const router = await build({
 });
 
 if (process.platform !== 'win32') await chmod('dist/index.js', 0o755);
+// The library that lets a vendor program built for a newer macOS start on an older Intel Mac (src/harness/compat/macos-legacy.ts).
+await copyFile('native/macos-compat/libclikcode-compat-x64.dylib', 'dist/libclikcode-compat-x64.dylib');
 
 // ---------------------------------------------------------------- guards ----
 
