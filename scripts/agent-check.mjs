@@ -20,6 +20,7 @@ const flag = (name) => { const at = args.indexOf(`--${name}`); return at >= 0 ? 
 const harness = flag('harness');
 const model = flag('model');
 const only = flag('only')?.split(',');
+const repeat = Number(flag('repeat') ?? 1);
 const timeoutMs = Number(flag('timeout') ?? 900) * 1000;
 if (!harness) { console.error('usage: agent-check.mjs --harness <clikcode-local|gateway> [--model <id>] [--only a,b] [--timeout seconds]'); process.exit(2); }
 
@@ -120,8 +121,18 @@ const TASKS = [
   },
 ];
 
+/** What the turn used, from the last `send --json` record that carries a usage block. */
+function usageOf(output) {
+  let usage;
+  for (const line of output.split('\n')) {
+    if (!line.includes('"usage"')) continue;
+    try { const record = JSON.parse(line); if (record.usage && record.usage.input !== undefined) usage = record.usage; } catch { /* not a record */ }
+  }
+  return usage ?? {};
+}
+
 const results = [];
-for (const task of TASKS) {
+for (const task of TASKS.flatMap((item) => Array.from({ length: repeat }, () => item))) {
   if (only && !only.includes(task.name)) continue;
   mkdirSync(work, { recursive: true });
   const dir = mkdtempSync(join(work, `${task.name}-`));
@@ -134,10 +145,13 @@ for (const task of TASKS) {
   let passed = false;
   try { passed = Boolean(task.check(dir, reply)); } catch { passed = false; }
   const note = run.error ? ` (${run.error.code ?? run.error.message})` : run.status ? ` (exit ${run.status}: ${String(run.stderr).trim().split('\n').pop()?.slice(0, 160)})` : '';
-  results.push({ name: task.name, passed, seconds });
-  console.log(`${passed ? 'pass' : 'FAIL'}  ${task.name.padEnd(11)} ${String(seconds).padStart(5)}s${note}`);
+  const usage = usageOf(reply);
+  results.push({ name: task.name, passed, seconds, input: usage.input ?? 0, cached: usage.cacheRead ?? 0, cost: usage.costUsd ?? 0 });
+  console.log(`${passed ? 'pass' : 'FAIL'}  ${task.name.padEnd(11)} ${String(seconds).padStart(5)}s  in ${String(usage.input ?? '?').padStart(7)}  cached ${String(usage.cacheRead ?? '?').padStart(7)}  $${(usage.costUsd ?? 0).toFixed(4)}${note}`);
   if (!process.env.AGENT_CHECK_KEEP) rmSync(dir, { recursive: true, force: true }); else console.log(`      kept ${dir}`);
 }
 const passed = results.filter((row) => row.passed).length;
+const sum = (key) => results.reduce((total, row) => total + row[key], 0);
+console.log(`total input ${sum('input')}, cached ${sum('cached')} (${sum('input') ? Math.round(100 * sum('cached') / sum('input')) : 0}%), cost $${sum('cost').toFixed(4)}`);
 console.log(`${passed}/${results.length} passed on ${harness}${model ? ` ${model}` : ''} in ${results.reduce((sum, row) => sum + row.seconds, 0)}s`);
 process.exit(passed === results.length ? 0 : 1);

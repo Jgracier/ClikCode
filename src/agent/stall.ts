@@ -27,11 +27,12 @@ export class StallGuard {
 }
 
 /** The same call giving the same output this many times: the model is checking something that cannot change. */
-export const REPEAT_NOTE_AT = 3;
+export const REPEAT_NOTE_AT = 4;
 /** And this many: it is not going to stop on its own, so the turn ends with what was done. */
-export const REPEAT_STOP_AT = 6;
-/** Calls whose identical answers mean no progress. Polling tools (bash_output, wait, monitor) are expected to repeat. */
-export const REPEAT_CHECKED = new Set(['read_file', 'list_dir', 'glob', 'grep', 'bash']);
+export const REPEAT_STOP_AT = 8;
+/** Calls whose identical answers mean no progress. Only pure reads: a shell command may be polling for something that has not happened yet,
+ * and that is not a loop. The measured runaways (27 and 53 steps) were reads of one file, repeated. */
+export const REPEAT_CHECKED = new Set(['read_file', 'list_dir', 'glob', 'grep']);
 
 /** Counts how often each call has returned exactly the same output. A different output (the file changed, the test now passes)
  * starts the count again, so re-reading after a real change never counts. */
@@ -39,6 +40,9 @@ export class RepeatGuard {
   private readonly seen = new Map<string, { output: string; count: number }>();
 
   /** Record a successful call's output; returns how many times in a row this call has now given exactly it. */
+  /** A successful edit or write may change what any read returns: every count starts again. */
+  reset(): void { this.seen.clear(); }
+
   record(key: string, output: string): number {
     const before = this.seen.get(key);
     const count = before && before.output === output ? before.count + 1 : 1;
