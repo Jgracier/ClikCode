@@ -33,3 +33,40 @@ describe('grep on a file larger than 5 MB', () => {
     expect(result.output).toMatch(/1 file over 5 MB not searched.*big\.log/);
   });
 });
+
+describe('how much a broad search returns', () => {
+  const searches = [['with ripgrep', undefined], ['without ripgrep', '/nonexistent']] as const;
+  for (const [name, noPath] of searches) {
+    describe(name, () => {
+      const grep = async () => {
+        if (noPath) vi.stubEnv('PATH', noPath);
+        vi.resetModules();
+        return (await import('./grep.js')).grepTool;
+      };
+      beforeEach(async () => {
+        await fs.writeFile(path.join(root, 'many.txt'), `${Array.from({ length: 150 }, (_, index) => `match number ${index}`).join('\n')}\n`);
+        await fs.writeFile(path.join(root, 'minified.js'), `match ${'x'.repeat(2000)}\n`);
+        for (let index = 0; index < 120; index += 1) await fs.writeFile(path.join(root, `file-${index}.md`), 'listed\n');
+      });
+
+      it('shows 80 matching lines and says how to see the rest', async () => {
+        const result = await (await grep()).run({ pattern: 'match number', glob: 'many.txt' }, context());
+        expect(result.output.split('\n').filter((line) => line.includes('match number'))).toHaveLength(80);
+        expect(result.output).toContain('70 more lines; narrow the search or raise head_limit.');
+        const all = await (await grep()).run({ pattern: 'match number', glob: 'many.txt', head_limit: 200 }, context());
+        expect(all.output.split('\n').filter((line) => line.includes('match number'))).toHaveLength(150);
+      });
+
+      it('cuts a very long matching line and says how much it left out', async () => {
+        const result = await (await grep()).run({ pattern: '^match x', glob: 'minified.js' }, context());
+        expect(result.output).toMatch(/\[\d+ more characters\]/);
+        expect(result.output.length).toBeLessThan(500);
+      });
+
+      it('still lists up to 200 files and counts', async () => {
+        const result = await (await grep()).run({ pattern: 'listed', output_mode: 'files', glob: '*.md' }, context());
+        expect(result.output.split('\n').filter((line) => line.endsWith('.md'))).toHaveLength(120);
+      });
+    });
+  }
+});
