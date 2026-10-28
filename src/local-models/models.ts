@@ -15,7 +15,7 @@ import type { CatalogFile } from './catalog.js';
 import { checkDiskSpace, downloadVerified, formatBytes, isDownloaded, sha256File } from './download.js';
 import { modelsDir } from './paths.js';
 
-function modelFilePath(file: CatalogFile): string {
+export function modelFilePath(file: CatalogFile): string {
   return join(modelsDir(), file.repo.replace('/', '--'), file.revision.slice(0, 12), file.file);
 }
 

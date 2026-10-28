@@ -3,7 +3,7 @@
 
 import { readFileSync } from 'node:fs';
 import { catalogModels } from './catalog-source.js';
-import { discoveredModelsFile } from './paths.js';
+import { discoveredModelsFile, tunedModelsFile } from './paths.js';
 import type { CatalogModel } from './shared/index.js';
 
 export type { CatalogFile, CatalogModel, KvGeometry } from './shared/index.js';
@@ -17,10 +17,21 @@ try {
     model.discovered && model.id?.startsWith('hf:') && model.weights?.sha256?.match(/^[0-9a-f]{64}$/)
     && model.weights?.revision?.match(/^[0-9a-f]{40}$/) && model.weights.sizeBytes > 0);
 } catch { /* A first run has no cache. */ }
+/** Models fine-tuned on this computer (tuned.ts). Read on every call, so one registered while ClikCode runs is found without a restart. */
+export const TUNED_ID_PREFIX = 'tuned:';
+export const TUNED_REPO_PREFIX = 'clikcode-tuned/';
+function tunedModels(): CatalogModel[] {
+  try {
+    const saved = JSON.parse(readFileSync(tunedModelsFile(), 'utf8')) as { models?: CatalogModel[] };
+    return (saved.models ?? []).filter((model) =>
+      model.id?.startsWith(TUNED_ID_PREFIX) && model.weights?.repo?.startsWith(TUNED_REPO_PREFIX) && model.weights.sha256?.match(/^[0-9a-f]{64}$/)
+      && model.weights.revision?.match(/^[0-9a-f]{40}$/) && model.weights.sizeBytes > 0);
+  } catch { return []; }
+}
 export function allLocalModels(): readonly CatalogModel[] {
   const builtIn = new Set(catalogModels().map((model) => `${model.weights.repo}/${model.weights.revision}/${model.weights.file}`));
   return [...catalogModels(), ...remoteModels.filter((model) =>
-    !builtIn.has(`${model.weights.repo}/${model.weights.revision}/${model.weights.file}`))];
+    !builtIn.has(`${model.weights.repo}/${model.weights.revision}/${model.weights.file}`)), ...tunedModels()];
 }
 export function catalogModel(id: string): CatalogModel | undefined {
   return allLocalModels().find((model) => model.id === id);

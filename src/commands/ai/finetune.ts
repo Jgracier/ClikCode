@@ -58,7 +58,7 @@ export async function aiGatewayFineTune(config: Conf, datasetPath: string, optio
   const epochs = options.epochs === undefined ? undefined : Number(options.epochs);
   if (epochs !== undefined && (!Number.isInteger(epochs) || epochs < 1 || epochs > 10)) throw new Error('--epochs must be a whole number from 1 to 10');
 
-  const info = await stat(datasetPath).catch(() => undefined);
+  const info = await stat(datasetPath).catch(quiet('commands/ai/finetune'));
   if (!info?.isFile()) throw new Error(`No dataset file at ${datasetPath}.`);
   if (info.size > MAX_DATASET_BYTES) throw new Error('The dataset is over 50 MB: upload it to your ClikDeploy data pool and name it there.');
 
