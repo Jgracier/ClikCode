@@ -2,6 +2,7 @@
  * queued, the queue's drain, one turn through the worker, and how a failed
  * turn is recovered (another account, another provider, a wait for the reset). */
 import { quiet } from '../runtime/lifecycle-log.js';
+import { holdLocalModelAfterTurn } from '../commands/ai/local-model.js';
 import { queuedNext } from '../session/queue-next.js';
 import { existsSync } from 'node:fs';
 import { expandHomePath } from '../session/attachments.js';
@@ -165,9 +166,16 @@ export class BridgeTurns {
   /** One turn through the conversation's worker, after what the terminal
    * does before one (prepareTurn). */
   async runTurn(targetId: string, prompt: string, turn: { echo: boolean; queuedTurnId?: string }): Promise<void> {
+    try { await this.sendTurn(targetId, prompt, turn); } finally {
+      // A local model the turn brought up is held for this chat's panel from here, so it stays warm for the next message.
+      await holdLocalModelAfterTurn(targetId).catch(quiet('ide/bridge-turns'));
+    }
+  }
+
+  private async sendTurn(targetId: string, prompt: string, turn: { echo: boolean; queuedTurnId?: string }): Promise<void> {
     const epoch = this.submitEpoch ?? this.cancelEpoch;
     this.submitEpoch = undefined;
-    await prepareTurn(targetId, (label) => this.host.channel.send({ type: 'busy', ...(label ? { label } : {}) }));
+    await prepareTurn(targetId);
     await this.host.prepareRoute();
     const client = await this.host.link.workerFor(targetId);
     if (epoch !== this.cancelEpoch) {

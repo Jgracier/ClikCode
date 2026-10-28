@@ -23,7 +23,6 @@ import type { HarnessSession, HarnessState } from './model.js';
 import { launchSession } from '../commands/ai/sessions.js';
 import { sessionOrProviderHarness } from '../tui/slash/context.js';
 import { resolveNativeModel } from '../harness/accounts/model-catalog.js';
-import { ensureLocalModelForTurn } from '../commands/ai/local-model.js';
 import { releaseQueuedTurn } from '../commands/ai/conversations.js';
 import { isTurnCancelled } from '../agent/cancellation.js';
 import { isUsageExhaustedMessage, type ResumeAt } from '../turn/usage-exhausted.js';
@@ -151,22 +150,16 @@ export async function leaveConversation(id: string): Promise<void> {
 
 /** What a turn needs before the worker is handed it, done by the client:
  * the chat is on disk (a draft lives only in this process, and the worker is
- * another one that must read it), and a ClikCode Local model is up
- * -- held by this client, which outlives nothing it shows, not by the worker.
- * `busy` labels the wait, where the client has a line for it. */
+ * another one that must read it). A ClikCode Local model is NOT loaded here:
+ * that wait had no key handling at all (Left, Esc, Ctrl+C and the wheel did
+ * nothing for the minute a large model takes), so the worker brings it up
+ * inside the turn, where a window can leave or stop it like any other turn. */
 export async function prepareTurn(
-  targetId: string, busy?: (label?: string) => void,
+  targetId: string,
 ): Promise<{ state: HarnessState; active: HarnessSession | undefined }> {
   await ensureSessionOnDisk(targetId);
   const state = await readState({ transcripts: [targetId] });
-  const active = state.sessions.find((item) => item.id === targetId);
-  if (active?.route === 'clikcode-local') {
-    busy?.('loading the local model…');
-    // Its download's percentage on the same line, where the caller shows
-    // one (the editor's busy line); the terminal's band otherwise.
-    try { await ensureLocalModelForTurn(active, busy); } finally { busy?.(); }
-  }
-  return { state, active };
+  return { state, active: state.sessions.find((item) => item.id === targetId) };
 }
 
 /** What follows a turn that failed: send it again here, carry it on in the

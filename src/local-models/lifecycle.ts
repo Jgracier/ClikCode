@@ -42,22 +42,30 @@ export function serverDir(modelId: string): string { return join(serversDir(), s
 function leasesDir(modelId: string): string { return join(serverDir(modelId), 'leases'); }
 
 /** Lease files, one per process and session: `<pid>-<session>.json` in a
- * directory of their holder's choosing (a model's server). */
-function leaseFile(directory: string, sessionId: string): string {
-  return join(directory, `${process.pid}-${safeName(sessionId)}.json`);
+ * directory of their holder's choosing (a model's server). A turn's own is
+ * `<pid>-turn-<session>.json`: the process RUNNING a turn holds the server for
+ * that turn and not a moment longer, apart from whoever shows the chat. */
+function leaseFile(directory: string, sessionId: string, turn = false): string {
+  return join(directory, `${process.pid}-${turn ? 'turn-' : ''}${safeName(sessionId)}.json`);
 }
 
-async function writeLeaseFile(directory: string, sessionId: string): Promise<void> {
+/** A lease taken for one running turn (see leaseFile). */
+const isTurnLease = (name: string): boolean => /^\d+-turn-/.test(name);
+
+async function writeLeaseFile(directory: string, sessionId: string, turn = false): Promise<void> {
   await mkdir(directory, { recursive: true });
-  await writeFile(leaseFile(directory, sessionId), JSON.stringify({ pid: process.pid, session: sessionId, at: new Date().toISOString() }));
+  await writeFile(leaseFile(directory, sessionId, turn), JSON.stringify({ pid: process.pid, session: sessionId, ...(turn ? { turn: true } : {}), at: new Date().toISOString() }));
 }
 
 /** Whether a live process holds a lease in `directory` -- for this session
- * only, when one is named; other than this process, when `elsewhere`. */
+ * only, when one is named; other than this process, when `elsewhere`. Asked
+ * about a session, a turn's lease does not count: it says the turn is using
+ * the server, not that anyone is showing the chat. */
 async function leaseHeld(directory: string, options: { sessionId?: string; elsewhere?: boolean } = {}): Promise<boolean> {
   const suffix = options.sessionId === undefined ? '' : `-${safeName(options.sessionId)}.json`;
   for (const name of await readdir(directory).catch(() => [] as string[])) {
     if (!name.endsWith(suffix)) continue;
+    if (options.sessionId !== undefined && isTurnLease(name)) continue;
     const pid = Number(name.slice(0, name.indexOf('-')));
     if (!(options.elsewhere && pid === process.pid) && pidIsAlive(pid)) return true;
   }
@@ -75,6 +83,17 @@ function removeOwnLeasesSync(directory: string): void {
 /** This process's hold on a model's server for one session. */
 export async function writeLease(modelId: string, sessionId: string): Promise<void> {
   await writeLeaseFile(leasesDir(modelId), sessionId);
+}
+
+/** This process's hold on a model's server for one running turn. The worker
+ * that runs a turn takes it itself and gives it back when the turn ends: the
+ * window that sent the turn holds the model only for the chat it shows, so
+ * a window leaving the chat mid-turn used to take the server out from under
+ * the request (found live 2026-10-28: left a chat during a 27B turn, and the
+ * supervisor stopped the model 22 s later, "no live ClikCode process holds a
+ * lease"). */
+export async function writeTurnLease(modelId: string, sessionId: string): Promise<void> {
+  await writeLeaseFile(leasesDir(modelId), sessionId, true);
 }
 
 /** Whether a live process other than this one holds this session's lease on
@@ -99,6 +118,14 @@ export async function removeLeases(sessionId: string, keep?: string): Promise<vo
   for (const model of await readdir(serversDir()).catch(() => [] as string[])) {
     if (model === (keep && safeName(keep))) continue;
     await rm(leaseFile(join(serversDir(), model, 'leases'), sessionId), { force: true });
+  }
+}
+
+/** This process's turn leases for a session, on every model but `keep`. */
+export async function removeTurnLeases(sessionId: string, keep?: string): Promise<void> {
+  for (const model of await readdir(serversDir()).catch(() => [] as string[])) {
+    if (model === (keep && safeName(keep))) continue;
+    await rm(leaseFile(join(serversDir(), model, 'leases'), sessionId, true), { force: true });
   }
 }
 
@@ -246,6 +273,8 @@ interface SupervisorConfig {
   pollMs: number;
   /** How often the logs' size is checked; tests only. */
   logCheckMs?: number;
+  /** How long the server outlives its last lease (default 10 s); a test shortens it. */
+  leaseGraceMs?: number;
   /** Watch the machine's memory while the model runs. */
   memory?: MemoryWatchConfig;
 }
@@ -495,7 +524,7 @@ function memoryTick() {
 // How long the server outlives its last lease: a ClikCode run that starts
 // right after another one joins it, instead of loading the model again
 // beside a copy that is still shutting down.
-const LEASE_GRACE_MS = 10000;
+const LEASE_GRACE_MS = config.leaseGraceMs || 10000;
 let lastActive = Date.now(), lastSignature = '', leaselessSince;
 async function tick() {
   if (stopping) return;

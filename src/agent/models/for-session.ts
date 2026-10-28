@@ -23,6 +23,8 @@ import type { HarnessSession } from '../../session/model.js';
  * waiting line (or stderr headless); nothing is shown when omitted. */
 export interface LocalModelHooks {
   progress?: (update: LocalModelProgress) => void;
+  /** The caller runs a turn on the model: it holds the server for that turn (ensureLocalModel `forTurn`). */
+  forTurn?: boolean;
 }
 
 /** The Gateway's base URL and the credential for it, or the error that says
@@ -179,6 +181,7 @@ export async function modelClientForSession(session: HarnessSession, config: Con
     const endpoint = await ensureLocalModel({
       ...(session.model ? { modelId: session.model } : {}), sessionId: session.id,
       ...(local.progress ? { progress: local.progress } : {}),
+      ...(local.forTurn ? { forTurn: true } : {}),
     });
     if (endpoint.notice) diagnostic('local-model.notice', endpoint.notice);
     // A session with no pick runs what the engine chose; recording it keeps

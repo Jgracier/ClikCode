@@ -10,6 +10,8 @@ import { prepareTurn } from '../../../session/attach.js';
 import { sessionTranscriptMessages } from '../../../turn/checkpoint.js';
 import { signInBeforeUse } from '../harness.js';
 import { signInOutcomeSaid } from '../../account.js';
+import { holdLocalModelAfterTurn } from '../local-model.js';
+import { quiet } from '../../../runtime/lifecycle-log.js';
 import { runTurnThroughWorker } from '../../../worker/turn-bridge.js';
 
 /** What a turn left for the loop: whether Left was pressed to open the board. */
@@ -60,8 +62,15 @@ export async function runTimedTurn(
       // The worker owns cancellation, steering and the preserve-vs-discard
       // decision on a cancel (worker/session-worker.ts's runTurn), and
       // runTurnThroughWorker rethrows only a genuine failure.
-      const outcome = await runTurnThroughWorker(targetId, terminal, promptText, turn);
-      return outcome.left ? { left: true } : {};
+      // A local model the turn brought up is held for this window once the turn is over, if it still shows the chat.
+      let left = false;
+      try {
+        const outcome = await runTurnThroughWorker(targetId, terminal, promptText, turn);
+        left = Boolean(outcome.left);
+        return outcome.left ? { left: true } : {};
+      } finally {
+        if (!left) await holdLocalModelAfterTurn(targetId).catch(quiet('commands/ai/interactive/run-turn'));
+      }
     }
     output.write(`${chalk.dim(`${active ? sessionProviderLabel(active) : 'Provider'} · working…`)}\n`);
     await runSessionTurn(config, targetId, promptText, undefined, {

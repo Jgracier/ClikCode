@@ -3,7 +3,7 @@ import { diagnostic } from '../runtime/lifecycle-log.js';
 import { agentMcpServer, gatewayAgentSession, type GatewayAgentSession } from '../gateway/agent-session.js';
 import type Conf from 'conf';
 import { routeMcpServers } from '../gateway/mcp.js';
-import { modelClientForSession } from '../agent/models/for-session.js';
+import { modelClientForSession, type LocalModelHooks } from '../agent/models/for-session.js';
 import { sessionSandboxMode } from '../agent/sandbox.js';
 import { isClikCodeAgent, isGatewayService } from '../session/route.js';
 import { LiveSettings } from './live-settings.js';
@@ -36,6 +36,8 @@ import { withMoveNote, withResourceNotes } from './resource-notes.js';
  * setting is logged, not thrown as a failed turn. */
 export function stepClientRefresher(input: {
   session: HarnessSession; config: Conf; agentModel: string | undefined; live: LiveSettings;
+  /** A model on this machine: held for the turn, as the turn's first client was. */
+  local?: LocalModelHooks;
   current: () => Awaited<ReturnType<typeof modelClientForSession>>;
   adopt: (client: Awaited<ReturnType<typeof modelClientForSession>>) => void;
 }) {
@@ -57,7 +59,7 @@ export function stepClientRefresher(input: {
     try {
       // The same effective session the turn started with: the agent's own
       // model, unless the conversation chose one.
-      const next = await modelClientForSession(input.agentModel && !session.model ? { ...session, model: input.agentModel } : session, config);
+      const next = await modelClientForSession(input.agentModel && !session.model ? { ...session, model: input.agentModel } : session, config, input.local);
       input.adopt(next);
       return next;
     } catch (error) {
@@ -73,6 +75,18 @@ export function stepClientRefresher(input: {
 export async function runAgentTurn(input: {
   config: Conf; state: HarnessState; session: HarnessSession; prompt: string; signal?: AbortSignal; run: TurnRunOptions;
 }): Promise<'continue' | 'resend' | void> {
+  // A model on this machine is held for this turn, and let go when it is over however it ends: the window that sent the
+  // turn holds it only for the chat it shows, and it may leave the chat while the turn runs. Its load shows on the turn's
+  // own line, in every window following it.
+  const { prompter } = input.run;
+  const local = input.session.route === 'clikcode-local'
+    ? localModelTurnHooks(input.session.id, prompter?.phase ? (label) => prompter.phase!(label) : undefined) : undefined;
+  try { return await runAgentTurnOn(input, local); } finally { await local?.release(); }
+}
+
+async function runAgentTurnOn(input: {
+  config: Conf; state: HarnessState; session: HarnessSession; prompt: string; signal?: AbortSignal; run: TurnRunOptions;
+}, local: ReturnType<typeof localModelTurnHooks> | undefined): Promise<'continue' | 'resend' | void> {
   const { config, state, session, prompt, signal, run } = input;
   // A Gateway agent runs HERE, as ClikCode's own agent: the Gateway is the intelligence, the agent adds
   // its instructions and its platform tools, ClikCode is the harness (gateway/agent-session.ts).
@@ -94,10 +108,9 @@ export async function runAgentTurn(input: {
   // Before the checkpoint, so a route that cannot serve a turn (the Gateway
   // not signed in, ClikCode Local's engine absent) fails without recording
   // a turn that never ran.
-  // ClikCode Local shows its model coming up here: on the waiting line in a
-  // terminal, on stderr headless. In a worker the terminal already brought
-  // it up, so this is a silent join.
-  const localHooks = session.route === 'clikcode-local' ? localModelTurnHooks(session.id) : undefined;
+  // ClikCode Local shows its model coming up here, on the turn's line (stderr headless): this is where it is
+  // loaded, inside the turn, so a window can leave or stop it meanwhile like any other turn.
+  const localHooks = local;
   let modelClient: Awaited<ReturnType<typeof modelClientForSession>>;
   // The agent's own model, unless the conversation chose one.
   const modelSession = agent?.model && !session.model ? { ...session, model: agent.model } : session;
@@ -107,7 +120,7 @@ export async function runAgentTurn(input: {
    * step. Leaving this agent route hands the conversation to that account
    * without ending it. */
   const modelClientForStep = stepClientRefresher({
-    session, config, agentModel: agent?.model ?? undefined, live: liveSettings,
+    session, config, agentModel: agent?.model ?? undefined, live: liveSettings, ...(localHooks ? { local: localHooks } : {}),
     current: () => modelClient, adopt: (next) => { modelClient = next; },
   });
   const agentServer = agent ? agentMcpServer(config, agent) : undefined;
@@ -228,7 +241,7 @@ export async function runAgentTurn(input: {
       // What the refused attempt wrote to the agent's memory (the request) is
       // taken back: the retry writes it again.
       await memory.truncate(memoryBytes);
-      modelClient = await modelClientForSession(modelSession, config);
+      modelClient = await modelClientForSession(modelSession, config, localHooks);
     }
     if (harnessTurn.stopReason === 'account-switch') {
       recordUnfinished('stopped');

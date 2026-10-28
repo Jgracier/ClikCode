@@ -4,14 +4,16 @@
  * session leaves the route or closes. The engine is src/local-models; this
  * is where it meets the screen.
  *
- * Leases are per process and session. The interactive terminal takes one
- * before handing a turn to its worker, and the worker joins without its
- * own; so the model stops when the terminal closes (or after the engine's
- * idle period), not whenever the long-lived worker happens to exit. A
- * headless send holds one for as long as it runs. */
+ * Leases are per process and session, of two kinds. Whoever SHOWS a chat
+ * holds its model (the terminal or editor window, once a turn has brought it
+ * up), so it stops when the window closes or leaves the chat, not whenever
+ * the long-lived worker happens to exit. Whoever RUNS a turn holds it for
+ * that turn only (the worker, localModelTurnHooks): a window that leaves a
+ * chat mid-turn must not take the model out from under the request. */
 
 import {
-  ensureLocalModel, releaseLocalModel, releaseLocalModelsOnExit, type LocalModelEndpoint, type LocalModelProgress,
+  ensureLocalModel, holdRunningLocalModel, releaseLocalModel, releaseLocalModelsOnExit, releaseLocalModelTurn,
+  type LocalModelEndpoint, type LocalModelProgress,
 } from '../../local-models/index.js';
 import type { LocalModelHooks } from '../../agent/models/for-session.js';
 import { diagnostic, quiet } from '../../runtime/lifecycle-log.js';
@@ -170,19 +172,27 @@ async function ensureWithProgress(sessionId: string, modelId: string | undefined
   } finally { shown.done(); }
 }
 
-/** The turn path's hooks into the seam (agent/models/for-session.ts):
- * progress where this process shows it. */
-export function localModelTurnHooks(sessionId: string): LocalModelHooks & { done: () => void } {
-  const shown = localModelProgress();
-  held.add(sessionId);
-  return { progress: shown.progress, done: shown.done };
+/** The turn path's hooks into the seam (agent/models/for-session.ts): progress
+ * where this process shows it, and the server held for this turn only --
+ * `release` gives it back when the turn is over, however it ended. In a turn
+ * worker the progress goes to `sink` (the windows following the turn), not to
+ * a terminal the worker does not have. */
+export function localModelTurnHooks(sessionId: string, sink?: ProgressSink): LocalModelHooks & { done: () => void; release: () => Promise<void> } {
+  const shown = localModelProgress(sink);
+  return {
+    progress: shown.progress, forTurn: true, done: shown.done,
+    release: () => releaseLocalModelTurn(sessionId).catch(quiet('commands/ai/local-model')),
+  };
 }
 
-/** Before a turn is handed to the worker: a ClikCode Local session's model
- * is running and this terminal holds it. Anything else is left alone. */
-export async function ensureLocalModelForTurn(session: HarnessSession | undefined, sink?: ProgressSink): Promise<void> {
+/** A turn on a ClikCode Local session is over and its window still shows the chat: the model that turn
+ * brought up is held for the window from here, so it stays warm for the next message. Nothing is started: a
+ * model that is not running (the turn failed to bring it up) is left alone. */
+export async function holdLocalModelAfterTurn(sessionId: string): Promise<void> {
+  const session = (await readState({ transcripts: [] })).sessions.find((item) => item.id === sessionId);
   if (session?.route !== 'clikcode-local') return;
-  await ensureWithProgress(session.id, session.model ?? undefined, false, sink);
+  releaseLocalModelsOnExit();
+  if (await holdRunningLocalModel(session.id, session.model ?? undefined)) held.add(session.id);
 }
 
 /** `/model <id>` after download consent: the model is downloaded, loaded and

@@ -117,6 +117,8 @@ export interface HarnessPrompter {
   panel?(title: string, body: string): void;
   /** A line in the conversation outside any turn's own output. */
   activity?(message: string): void;
+  /** What the turn is doing before it has output: the label every window following it shows ("loading Qwen… 23s"). */
+  phase?(message: string): void;
   /** Where a vendor sign-in shows its link, code and questions
    * (commands/account.ts withSignIn): the CLI's band, the VS Code card. */
   signInScreen?(name: string): import('../gateway/login/vendor-sign-in.js').SignInScreen;
