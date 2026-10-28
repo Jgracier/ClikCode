@@ -399,3 +399,39 @@ describe('a model bounded by what it can read (a local model): one cut point tha
     expect(() => fitContext({ system: 'S', items, tools, window: 4_096, readBudget: 1_000 })).toThrow(ContextFitError);
   });
 });
+
+describe('a model bounded only by its window: the same stable view once the window is outgrown', () => {
+  const turn = (index: number): ConversationItem[] => [
+    user(`Request ${index}: change something in file ${index}`),
+    { type: 'tool_call', name: 'read_file', id: `c${index}`, args: { path: `file-${index}` } },
+    { type: 'tool_result', name: 'read_file', id: `c${index}`, output: `file ${index}\n${'diagnostic output '.repeat(120)}` },
+    { type: 'text', role: 'assistant', text: `Done with ${index}.` },
+  ];
+  const conversation = (turns: number): ConversationItem[] => Array.from({ length: turns }, (_, index) => turn(index)).flat();
+  const WINDOW = 12_000;
+  const fit = (items: ConversationItem[]) => fitContext({ system: 'S', items, tools, window: WINDOW });
+
+  it('only appends from step to step: the first items of one view are the first of the next, until the cut moves', () => {
+    const views = Array.from({ length: 40 }, (_, index) => fit(conversation(30 + index)).items);
+    let moves = 0;
+    for (let index = 1; index < views.length; index += 1) {
+      const [before, after] = [views[index - 1]!, views[index]!];
+      if (!after.slice(0, before.length).every((item, at) => item === before[at] || JSON.stringify(item) === JSON.stringify(before[at]))) moves += 1;
+    }
+    expect(moves).toBeLessThan(views.length / 3);
+  });
+
+  it('fits the window, keeps the latest request verbatim, and says it left the rest out', () => {
+    const items = conversation(80);
+    const view = fit(items);
+    expect(view.estimatedTokens).toBeLessThanOrEqual(WINDOW);
+    expect(view.omittedGroups).toBeGreaterThan(0);
+    expect(view.items.at(-1)).toEqual(items.at(-1));
+    expect(JSON.stringify(view.items)).toContain('Request 79');
+  });
+
+  it('leaves a conversation that fits the window whole', () => {
+    const small = conversation(5);
+    expect(fit(small).items).toEqual(small);
+  });
+});
