@@ -83,6 +83,16 @@ describe('runPreflight', () => {
     expect(page.closed).toBe(true);
   });
 
+  it('a Gmail check that never answers is skipped with a plain reason instead of hanging, and the tab is still closed', async () => {
+    const page = fakePage({ 'https://accounts.google.com/': 'https://myaccount.google.com/' }, ['role="main"']);
+    const goto = page.goto.bind(page);
+    page.goto = async (url, options) => { if (url.startsWith('https://mail.google.com')) await new Promise(() => undefined); return goto(url, options); };
+    const result = await runPreflight({ stateDir: await scratch(), openPage: async () => page, releaseDir: await good(), temp: await scratch(), buildId: 'b', timeoutMs: 100 });
+    expect(result).toMatchObject({ browserOk: true, googleSignedIn: true, gmailReadable: false, ok: false });
+    expect(result.reasons).toContain('gmail: skipped (timeout)');
+    expect(page.closed).toBe(true);
+  });
+
   it('signed out: says why, skips Gmail, and is not ok', async () => {
     const page = fakePage({ 'https://accounts.google.com/': 'https://accounts.google.com/v3/signin/identifier' }, ['#identifierId']);
     const result = await runPreflight({ stateDir: await scratch(), openPage: async () => page, releaseDir: await good(), temp: await scratch(), buildId: 'b' });

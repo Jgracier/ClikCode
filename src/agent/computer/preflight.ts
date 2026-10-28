@@ -91,7 +91,18 @@ export type PreflightDeps = {
   /** Reports the result to ClikDeploy; absent means it is not tried. Returns one line. */
   post?: (result: PreflightResult) => Promise<string>;
   buildId?: string;
+  /** Most time for each sub-check, in ms (default: tab 45s, Google 45s, Gmail 40s, closing the tab 5s, posting 60s). A check that takes longer is skipped. */
+  timeoutMs?: number;
 };
+
+const TIMED_OUT = Symbol('timed out');
+/** `job` or, when it takes longer than `ms`, TIMED_OUT (the job is left to finish or fail by itself; its late failure is ignored). */
+async function bounded<T>(job: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
+  let timer: NodeJS.Timeout | undefined;
+  job.catch(quiet('agent/computer/preflight'));
+  try { return await Promise.race([job, new Promise<typeof TIMED_OUT>(resolve => { timer = setTimeout(() => resolve(TIMED_OUT), ms); })]); }
+  finally { clearTimeout(timer); }
+}
 
 const settle = async (page: PreflightPage): Promise<void> => { await page.waitForLoadState?.('load', { timeout: 8_000 }).catch(quiet('agent/computer/preflight')); };
 
@@ -100,34 +111,45 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightResult
   const buildId = deps.buildId ?? CLIKCODE_COMMIT ?? `${CLIKCODE_VERSION}-nocommit`;
   let browserOk = false; let googleSignedIn = false; let gmailReadable = false;
   let page: PreflightPage | undefined;
-  try { page = await deps.openPage(); browserOk = true; }
-  catch (error) { reasons.push(`browserOk: ${oneLine(error)}`); }
+  const limit = (fallback: number): number => deps.timeoutMs ?? fallback;
+  try {
+    const opened = await bounded(deps.openPage(), limit(45_000));
+    if (opened === TIMED_OUT) reasons.push('browserOk: skipped (timeout), the browser did not open a tab in time');
+    else { page = opened; browserOk = true; }
+  } catch (error) { reasons.push(`browserOk: ${oneLine(error)}`); }
   if (page) {
     try {
-      try {
-        await page.goto('https://accounts.google.com/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
-        await settle(page);
-        const verdict = classifyGoogleSignIn(page.url(), { emailBox: await page.locator('input[type="email"], #identifierId').count().then(n => n > 0, () => false) });
+      const checkGoogle = async (): Promise<void> => {
+        await page!.goto('https://accounts.google.com/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+        await settle(page!);
+        const verdict = classifyGoogleSignIn(page!.url(), { emailBox: await page!.locator('input[type="email"], #identifierId').count().then(n => n > 0, () => false) });
         googleSignedIn = verdict.signedIn;
         if (!verdict.signedIn) reasons.push(`googleSignedIn: ${verdict.reason}`);
-      } catch (error) { reasons.push(`googleSignedIn: ${oneLine(error)}`); }
+      };
+      try { if (await bounded(checkGoogle(), limit(45_000)) === TIMED_OUT) reasons.push('google: skipped (timeout)'); }
+      catch (error) { reasons.push(`googleSignedIn: ${oneLine(error)}`); }
       if (googleSignedIn) {
-        try {
+        const checkGmail = async (): Promise<void> => {
           // The mailbox is the default profile's sign-in account, as the email tools use it.
           const mailbox = (defaultProfile(await listProfiles(deps.stateDir).catch(() => []))?.fields.sso_email) || '0';
-          await page.goto(`https://mail.google.com/mail/u/${encodeURIComponent(mailbox)}/#inbox`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-          const rendered = await page.locator('[role="main"], tr.zA').first().waitFor({ timeout: 15_000 }).then(() => true, () => false);
-          const verdict = classifyGmail(page.url(), rendered);
+          await page!.goto(`https://mail.google.com/mail/u/${encodeURIComponent(mailbox)}/#inbox`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+          const rendered = await page!.locator('[role="main"], tr.zA').first().waitFor({ timeout: 15_000 }).then(() => true, () => false);
+          const verdict = classifyGmail(page!.url(), rendered);
           gmailReadable = verdict.readable;
           if (!verdict.readable) reasons.push(`gmailReadable: ${verdict.reason}`);
-        } catch (error) { reasons.push(`gmailReadable: ${oneLine(error)}`); }
+        };
+        try { if (await bounded(checkGmail(), limit(40_000)) === TIMED_OUT) reasons.push('gmail: skipped (timeout)'); }
+        catch (error) { reasons.push(`gmailReadable: ${oneLine(error)}`); }
       } else reasons.push('gmailReadable: not checked, Google is not signed in');
-    } finally { await page.close().catch(quiet('agent/computer/preflight')); }
+    } finally { await bounded(page.close(), limit(5_000)); }
   } else reasons.push('googleSignedIn: not checked, the browser did not start', 'gmailReadable: not checked, the browser did not start');
   const deps_ = checkDepsLink('releaseDir' in deps ? deps.releaseDir : installedReleaseDir(), deps.temp);
   if (!deps_.ok) reasons.push(`depsLinkOk: ${deps_.reason}`);
   const result: PreflightResult = { browserOk, googleSignedIn, gmailReadable, buildId, depsLinkOk: deps_.ok, ok: browserOk && googleSignedIn && gmailReadable && deps_.ok, reasons, checkedAt: new Date().toISOString() };
-  if (deps.post) result.clikdeploy = await deps.post(result).catch(error => `not posted: ${oneLine(error)}`);
+  if (deps.post) {
+    const sent = await bounded(deps.post(result).catch(error => `not posted: ${oneLine(error)}`), limit(60_000));
+    result.clikdeploy = sent === TIMED_OUT ? 'not posted: ClikDeploy did not answer in time' : sent;
+  }
   return result;
 }
 
