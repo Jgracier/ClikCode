@@ -307,6 +307,13 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   gateway.command('login').description('Sign in to ClikDeploy Gateway')
     .option('--github', 'Use GitHub OAuth instead of Google OAuth')
     .action(async (options) => { await later(() => import('../commands/gateway.js'), 'gatewayLogin')(config, { google: !options.github, github: Boolean(options.github) }); });
+  program.command('finetune <dataset>').description('Fine-tune a small model on your data (JSONL or CSV) on this computer and use it again here as a local model (the cloud version: gateway finetune)')
+    .requiredOption('--base <repo>', 'The base model\'s Hugging Face repo, e.g. Qwen/Qwen2.5-0.5B-Instruct (original weights, not a GGUF)')
+    .requiredOption('--name <name>', 'The name you will choose it by: it becomes tuned:<name>')
+    .option('--epochs <count>', 'Passes over the data, 1-10 (default 2)')
+    .option('--rank <rank>', 'LoRA rank, 4-128 (default 8)')
+    .option('--license <license>', 'The base model\'s license: apache-2.0 (default) or mit')
+    .action((dataset: string, options: Record<string, unknown>) => later(() => import('../commands/ai/finetune-local.js'), 'aiLocalFineTune')(dataset, options));
   const sessions = program.command('sessions').alias('session').description('Create and resume persistent coding sessions');
   sessions.command('list').alias('ls').description('List saved sessions').action(later(sessionCommands, 'aiSessionsList'));
   sessions.command('show <id>').description('Show a saved session').action(later(sessionCommands, 'aiSessionShow'));

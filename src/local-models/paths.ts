@@ -24,6 +24,11 @@ export function preferencesFile(): string { return join(localModelsHome(), 'pref
 /** Pinned Hugging Face GGUF candidates inspected from remote headers. */
 export function discoveredModelsFile(): string { return join(localModelsHome(), 'discovered-models.json'); }
 
+/** Models this user fine-tuned on this computer (tuned.ts): registered by id `tuned:<name>`, their weights in the models store. */
+export function tunedModelsFile(): string { return join(localModelsHome(), 'tuned-models.json'); }
+/** Scratch for a fine-tune running on this computer, and the caches (Hugging Face, pip) its container reuses between runs. */
+export function fineTuneDir(): string { return join(localModelsHome(), 'finetune'); }
+
 /** The last verified copy of the public model catalog and when it was last checked. */
 export function catalogCacheFile(): string { return join(localModelsHome(), 'catalog-cache.json'); }
 
