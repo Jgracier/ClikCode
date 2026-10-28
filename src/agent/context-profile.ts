@@ -4,8 +4,8 @@
  * only when necessary, keeping fitting prefixes byte-stable. */
 import type { ToolSpec } from './model-client.js';
 
-export type ContextProfileName = 'minimal' | 'lean' | 'full';
-const CONTEXT_PROFILES: readonly ContextProfileName[] = ['minimal', 'lean', 'full'];
+export type ContextProfileName = 'minimal' | 'lean' | 'full' | 'compact' | 'bare';
+const CONTEXT_PROFILES: readonly ContextProfileName[] = ['minimal', 'lean', 'full', 'compact', 'bare'];
 
 /** Forces a profile for every turn in this process, over a session's own
  * setting and the automatic choice: an evaluation must be able to pin each
@@ -99,6 +99,46 @@ function minimalSpecs(specs: readonly ToolSpec[]): ToolSpec[] {
   }));
 }
 
+/** The first sentence, at most `max` characters, cut at a word (never mid-word) with an ellipsis when it had to be cut. */
+const firstSentence = (text: string, max: number): string => {
+  const sentence = text.split(/(?<=[.!?])\s/)[0] ?? text;
+  if (sentence.length <= max) return sentence;
+  const cut = sentence.slice(0, max);
+  return `${cut.slice(0, Math.max(1, cut.lastIndexOf(' '))).replace(/[\s,;:]+$/, '')}…`;
+};
+
+/** A schema with its closed-object markers dropped and every string `description` cut to its first sentence, at most `max` characters (none at 0). */
+function shortenDocs(schema: unknown, max: number): unknown {
+  if (Array.isArray(schema)) return schema.map((item) => shortenDocs(item, max));
+  if (!schema || typeof schema !== 'object') return schema;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(schema)) {
+    if (key === 'additionalProperties' && value === false) continue;
+    if (key === 'description' && typeof value === 'string') { if (max > 0) out[key] = firstSentence(value, max); continue; }
+    out[key] = shortenDocs(value, max);
+  }
+  return out;
+}
+
+/** Compact: each tool's first sentence and short parameter notes. MEASURED 2026-10-29: the built-in tool schemas go from 4,538 to about 2,470
+ * tokens. What is dropped is advice on WHEN and HOW to use a tool well (what the loop's own notes and the instructions repeat), never what
+ * a call must look like: the names, types, required fields and enums stay. An experiment profile: chosen only by the environment override
+ * until the agent check has compared it. */
+function compactSpecs(specs: readonly ToolSpec[]): ToolSpec[] {
+  return specs.map((spec) => ({
+    name: spec.name,
+    description: firstSentence(spec.description, 120),
+    parameters: shortenDocs(spec.parameters, 60) as Record<string, unknown>,
+  }));
+}
+
+/** Bare: a name, a one-line purpose of at most 50 characters, and the argument skeleton with no notes: about 1,760 tokens for the built-in tools.
+ * For a model that has LEARNED the tools (a fine-tune on tool traces), where the request only has to name them so the server's tool-call parser
+ * engages. An experiment profile, chosen only by the environment override. */
+function bareSpecs(specs: readonly ToolSpec[]): ToolSpec[] {
+  return specs.map((spec) => ({ name: spec.name, description: firstSentence(spec.description, 50), parameters: shortenDocs(spec.parameters, 0) as Record<string, unknown> }));
+}
+
 export const PROFILES: Readonly<Record<ContextProfileName, ContextProfile>> = {
   minimal: {
     name: 'minimal', mcpEagerSchemaTokens: MCP_EAGER_TOKENS, toolOutputBytes: TOOL_OUTPUT_BYTES,
@@ -107,6 +147,14 @@ export const PROFILES: Readonly<Record<ContextProfileName, ContextProfile>> = {
   lean: {
     name: 'lean', mcpEagerSchemaTokens: MCP_EAGER_TOKENS, toolOutputBytes: TOOL_OUTPUT_BYTES,
     ...SKILLS.lean, toolUsageGuidance: true, shapeSpecs: unchanged,
+  },
+  compact: {
+    name: 'compact', mcpEagerSchemaTokens: MCP_EAGER_TOKENS, toolOutputBytes: TOOL_OUTPUT_BYTES,
+    ...SKILLS.lean, toolUsageGuidance: true, shapeSpecs: compactSpecs,
+  },
+  bare: {
+    name: 'bare', mcpEagerSchemaTokens: MCP_EAGER_TOKENS, toolOutputBytes: TOOL_OUTPUT_BYTES,
+    ...SKILLS.lean, toolUsageGuidance: true, shapeSpecs: bareSpecs,
   },
   full: {
     name: 'full', mcpEagerSchemaTokens: MCP_EAGER_TOKENS, toolOutputBytes: TOOL_OUTPUT_BYTES,
