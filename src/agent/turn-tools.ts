@@ -23,6 +23,8 @@ import { steerAlert, type TurnRuntime } from './turn-runtime.js';
 import { currentToolName } from './computer/tool-names.js';
 
 const STREAM_EVENT_INTERVAL_MS = 150;
+/** Read results one step may bring in. About 10K tokens: a batch of small reads fits, a batch of twenty whole files does not. */
+const STEP_RESULT_BYTES = 40 * 1024;
 
 /** Plan mode the user set while this turn runs, onto the session the loop reads. */
 export function applyLivePlan(rt: TurnRuntime): void {
@@ -284,8 +286,16 @@ export async function runToolCalls(rt: TurnRuntime, runner: ToolRunner, calls: r
   } finally {
     // Persist whatever finished, even when the turn is being cancelled.
     const done = new Map(outcomes.map((outcome) => [outcome.call.id, outcome]));
+    // Reads beyond a step's budget are answered with a request to make them again: a slow model that asked for twenty files at once
+    // spends minutes reading them, and a small one loses the thread. Calls that change things are never held back, since they ran.
+    let stepBytes = 0;
     const resultItems = calls.flatMap((call): ConversationItem[] => {
       const outcome = done.get(call.id);
+      if (outcome && !outcome.result.isError && tools.find((candidate) => candidate.name === currentToolName(call.name))?.class === 'read') {
+        if (stepBytes > 0 && stepBytes + outcome.result.output.length > STEP_RESULT_BYTES) {
+          outcome.result = { output: `Not shown: this step's results already reached ${Math.round(stepBytes / 1024)} KB. Make this call again in a later step, on its own or with a few others.`, isError: true };
+        } else stepBytes += outcome.result.output.length;
+      }
       return outcome ? [{ type: 'tool_result', id: call.id, name: call.name, output: outcome.result.output, ...(outcome.result.isError ? { isError: true } : {}), ...(outcome.result.images?.length ? { images: outcome.result.images } : {}) }] : [];
     });
     // A result that is not on disk reads, on resume, as a call that never

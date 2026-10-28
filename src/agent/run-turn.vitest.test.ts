@@ -1130,3 +1130,18 @@ describe('a model that sends far too many calls in one step', () => {
     expect(skipped.every((item) => item.type === 'tool_result' && item.isError)).toBe(true);
   });
 });
+
+describe('a step that reads more than a step should bring in', () => {
+  it('shows reads up to the budget and asks for the rest again, so none is silently dropped', async () => {
+    for (let index = 0; index < 24; index += 1) await fs.writeFile(path.join(cwd, `big-${index}.txt`), `${'line of text '.repeat(500)}\n`);
+    const calls = Array.from({ length: 24 }, (_, index) => ({ id: `b${index}`, name: 'read_file', args: { path: `big-${index}.txt` } }));
+    const h = harness([{ toolCalls: calls }, { text: 'done' }]);
+    await runAgentLoop(h.input);
+    const results = h.client.requests[1].items.filter((item) => item.type === 'tool_result');
+    expect(results).toHaveLength(24);
+    const held = results.filter((item) => item.type === 'tool_result' && item.output.startsWith('Not shown: this step'));
+    expect(held.length).toBeGreaterThan(0);
+    expect(held.length).toBeLessThan(24);
+    expect(results[0].type === 'tool_result' && results[0].output.startsWith('Not shown')).toBe(false);
+  });
+});
