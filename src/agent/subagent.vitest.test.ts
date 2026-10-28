@@ -332,7 +332,7 @@ describe('task sub-agents', () => {
     const steps = 45;
     const client = new RoutedModelClient({
       [PARENT_PROMPT]: { script: [{ toolCalls: [{ name: 'task', args: { prompt: 'long' } }] }, { text: 'done' }] },
-      long: { script: [], fallback: (_request: unknown, index: number) => (index < steps - 1 ? { toolCalls: [{ name: 'list_dir', args: { path: '.' }, id: `l${index}` }] } : { text: 'Found it after a long search.' }) },
+      long: { script: [], fallback: (_request: unknown, index: number) => (index < steps - 1 ? { toolCalls: [{ name: 'glob', args: { pattern: `*.search-${index}` }, id: `l${index}` }] } : { text: 'Found it after a long search.' }) },
     });
     const result = await runAgentLoop(turn(client).input);
     expect(result.stopReason).toBe('completed');

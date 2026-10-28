@@ -28,7 +28,7 @@ import { emptyLedger } from './usage.js';
 import { resolveContextProfile } from './context-profile.js';
 import { readImageInputs } from './images.js';
 import { sessionAgents, type BackgroundAgents } from './background-agents.js';
-import { StallGuard } from './stall.js';
+import { RepeatGuard, StallGuard } from './stall.js';
 import { TASK_TOOL_NAME } from './tools/task.js';
 import { abortable } from './turn-support.js';
 
@@ -91,6 +91,9 @@ export interface TurnRuntime {
   needsSeparator: boolean;
   steps: number;
   readonly stall: StallGuard;
+  readonly repeats: RepeatGuard;
+  /** The call that has just repeated its result most often this step, until the loop has told the model. */
+  repeatedCall: { call: ModelToolCall; times: number } | undefined;
   stalledCall: ModelToolCall | undefined;
   stepRetries: number;
   retryWaitedSeconds: number;
@@ -246,7 +249,7 @@ export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime
     steerQueue: [], steerWaiters: new Set(), steerOpen: true, callsOpen: 0, foregroundSteers: new Map(), items, ledger, lastStepUsage: undefined, itemsAtLastUsage: items.length,
     contextWindow: input.modelClient.contextHints?.contextWindow ?? input.contextWindow,
     readBudget: input.modelClient.contextHints?.readableTokens,
-    servedModel: undefined, segments, needsSeparator: false, steps: 0, stall: new StallGuard(), stalledCall: undefined,
+    servedModel: undefined, segments, needsSeparator: false, steps: 0, stall: new StallGuard(), repeats: new RepeatGuard(), repeatedCall: undefined, stalledCall: undefined,
     stepRetries: 0, retryWaitedSeconds: 0, contextScale: 1, contextRefits: 0, budgetClient: input.modelClient, lastRequestEstimate: 0, modelStartWaitedSeconds: 0, modelStartingSince: undefined, modelStartChecked: false, livePlanSeen: readLivePlan(input), lengthContinues: 0, stopContinues: 0,
     shownCalls: new Map(), continuesCutAnswer: false, lastContext: { contextProfile: profile.name },
     stepAcceptsImages: input.modelClient.acceptsImages === true,

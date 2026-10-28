@@ -57,6 +57,32 @@ function harness(script: ScriptEntry[], overrides: Partial<AgentTurnInput> = {},
 }
 
 describe('runAgentLoop', () => {
+  describe('a model checking the same thing again and again', () => {
+    const read = (id: string) => ({ toolCalls: [{ id, name: 'read_file', args: { path: 'total.txt' } }] });
+
+    it('is told at the third identical result and stopped at the sixth, with what it did kept', async () => {
+      await fs.writeFile(path.join(cwd, 'total.txt'), '142\n');
+      const h = harness(Array.from({ length: 8 }, (_, index) => read(`r${index}`)));
+      const result = await runAgentLoop(h.input);
+      expect(result.stopReason).toBe('completed');
+      expect(result.text).toContain('returned exactly the same result 6 times');
+      expect(h.client.requests).toHaveLength(6);
+      const notes = (index: number) => h.client.requests[index].items.filter((item) => item.type === 'text' && item.text.includes('exactly the same result'));
+      expect(notes(2)).toHaveLength(0);
+      expect(notes(3).length).toBeGreaterThan(0);
+    });
+
+    it('never counts a read whose result changed, however often it is read', async () => {
+      await fs.writeFile(path.join(cwd, 'total.txt'), '0\n');
+      const write = (id: string, text: string) => ({ toolCalls: [{ id, name: 'write_file', args: { path: 'total.txt', content: text } }] });
+      const script = Array.from({ length: 8 }, (_, index) => [write(`w${index}`, `${index}\n`), read(`r${index}`)]).flat();
+      const h = harness([...script, { text: 'done' }]);
+      const result = await runAgentLoop(h.input);
+      expect(result.text).toBe('done');
+      expect(h.client.requests.flatMap((request) => request.items).some((item) => item.type === 'text' && item.text.includes('exactly the same result'))).toBe(false);
+    });
+  });
+
   it('offers the skill tool only when there is a skill to load', async () => {
     // A repository root stops the search for skills there, so the user's own skills above the temp folder are not found.
     execFileSync('git', ['init', '-q'], { cwd });
@@ -279,7 +305,7 @@ describe('runAgentLoop', () => {
 
   it('is not cut off by a step count: a long run of distinct work finishes on its own', async () => {
     const h = harness([], {}, (_request, index) => index < 89
-      ? { toolCalls: [{ name: 'list_dir', args: { path: '.' }, id: `walk${index}` }] }
+      ? { toolCalls: [{ name: 'glob', args: { pattern: `*.step-${index}` }, id: `walk${index}` }] }
       : { text: 'All ninety steps done.' });
     const result = await runAgentLoop(h.input);
     expect(result).toMatchObject({ steps: 90, stopReason: 'completed', text: 'All ninety steps done.' });
