@@ -91,6 +91,24 @@ const TASKS = [
     check: (dir) => read(dir, 'answer.txt').trim() === '7310',
   },
   {
+    // More reading than a 131K window holds, one fact per file: a model that writes each down as it goes passes; one that means to
+    // collect them at the end needs the early files still in view.
+    name: 'long',
+    prompt: 'The folder docs has 70 files, doc-01.txt to doc-70.txt. Each has one line "key: <word>". Read each file with read_file (no grep, cat or other shell shortcuts, no scripts), then write the 70 words, one per line in file order, to keys.txt.',
+    setup: (dir) => {
+      mkdirSync(join(dir, 'docs'), { recursive: true });
+      const words = Array.from({ length: 70 }, (_, i) => `w${String(i + 1).padStart(2, '0')}${['fox', 'owl', 'elk', 'ram'][i % 4]}`);
+      writeFileSync(join(dir, 'words.json'), JSON.stringify(words));
+      words.forEach((word, i) => writeFileSync(join(dir, 'docs', `doc-${String(i + 1).padStart(2, '0')}.txt`),
+        `${Array.from({ length: 70 }, (_, line) => `background paragraph ${i + 1}.${line}: ${'lorem ipsum dolor sit amet '.repeat(5)}`).join('\n')}\nkey: ${word}\n`));
+    },
+    check: (dir) => {
+      const expected = JSON.parse(read(dir, 'words.json'));
+      const got = read(dir, 'keys.txt').split('\n').map((line) => line.trim()).filter(Boolean);
+      return got.length === expected.length && expected.every((word, i) => got[i] === word);
+    },
+  },
+  {
     // The risk of a shortened view: a fact given early, then a long run of work, then a question that needs the early fact.
     name: 'recall',
     prompt: 'Remember this for later: the release codename is "heron-9". Now do this: read each of the twelve files part-1.txt .. part-12.txt, '

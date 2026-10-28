@@ -97,6 +97,8 @@ export interface ModelToolCall {
    * the call with this instead of running it, so the model hears that its
    * JSON was broken rather than that some required field is missing. */
   argumentsError?: string;
+  /** Set by the loop on a call it did not run, with why: answered as an error that says to make the call again. */
+  skipped?: string;
 }
 
 export interface ModelStepResult {

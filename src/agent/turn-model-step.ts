@@ -295,8 +295,14 @@ export async function recordStep(
   return { calls, stepText, cutOff };
 }
 
+/** Calls run in one step. A model that sent 139 reads in one reply (measured) put about 180K tokens of results into a 131K window and
+ * then answered without them; twenty-four is more than any real step needs, and the rest are asked for again. */
+export const MAX_CALLS_PER_STEP = 24;
+
 function withCutOffNotes(toolCalls: readonly ModelToolCall[], cutOff: boolean) {
-  return withUniqueIds(toolCalls).map((call) => cutOff && call.argumentsError
+  return withUniqueIds(toolCalls).map((call, index) => index >= MAX_CALLS_PER_STEP
+    ? { ...call, skipped: `Not run: this step had more than ${MAX_CALLS_PER_STEP} tool calls, and the results of that many would not fit. Make this call again in a later step, together with at most ${MAX_CALLS_PER_STEP - 1} others.` }
+    : cutOff && call.argumentsError
     // Cut off mid-call: the model hears why its JSON is incomplete, so it
     // sends a smaller call rather than the same one again.
     ? { ...call, argumentsError: `the reply reached the output limit while these arguments were being written, so they are incomplete. Make the call again with less in it, for example a large file written in several smaller edits` }
