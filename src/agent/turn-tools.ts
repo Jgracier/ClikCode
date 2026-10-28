@@ -23,8 +23,11 @@ import { steerAlert, type TurnRuntime } from './turn-runtime.js';
 import { currentToolName } from './computer/tool-names.js';
 
 const STREAM_EVENT_INTERVAL_MS = 150;
-/** Read results one step may bring in. About 10K tokens: a batch of small reads fits, a batch of twenty whole files does not. */
-const STEP_RESULT_BYTES = 40 * 1024;
+/** Read results one step may bring in. */
+const MIN_STEP_RESULT_BYTES = 40 * 1024;
+const MAX_STEP_RESULT_BYTES = 160 * 1024;
+/** About 10K tokens for a small window, more for a large one: a model with room should not be sent back for the rest of a batch of reads. */
+const stepResultBytes = (contextWindow: number | undefined): number => Math.min(MAX_STEP_RESULT_BYTES, Math.max(MIN_STEP_RESULT_BYTES, Math.floor((contextWindow ?? 0) * 0.4)));
 
 /** Plan mode the user set while this turn runs, onto the session the loop reads. */
 export function applyLivePlan(rt: TurnRuntime): void {
@@ -289,10 +292,11 @@ export async function runToolCalls(rt: TurnRuntime, runner: ToolRunner, calls: r
     // Reads beyond a step's budget are answered with a request to make them again: a slow model that asked for twenty files at once
     // spends minutes reading them, and a small one loses the thread. Calls that change things are never held back, since they ran.
     let stepBytes = 0;
+    const stepBudget = stepResultBytes(rt.contextWindow);
     const resultItems = calls.flatMap((call): ConversationItem[] => {
       const outcome = done.get(call.id);
       if (outcome && !outcome.result.isError && tools.find((candidate) => candidate.name === currentToolName(call.name))?.class === 'read') {
-        if (stepBytes > 0 && stepBytes + outcome.result.output.length > STEP_RESULT_BYTES) {
+        if (stepBytes > 0 && stepBytes + outcome.result.output.length > stepBudget) {
           outcome.result = { output: `Not shown: this step's results already reached ${Math.round(stepBytes / 1024)} KB. Make this call again in a later step, on its own or with a few others.`, isError: true };
         } else stepBytes += outcome.result.output.length;
       }
@@ -330,6 +334,7 @@ export async function runToolCalls(rt: TurnRuntime, runner: ToolRunner, calls: r
       mayChangeState: toolClass === 'write' || toolClass === 'exec',
     });
     if (stalled) rt.stalledCall ??= call;
+    if (!outcome.isError && toolClass === 'write') rt.repeats.reset();
     if (!outcome.isError && REPEAT_CHECKED.has(call.name)) {
       const times = rt.repeats.record(`${call.name}\0${stableStringify(call.args)}`, outcome.output);
       if (times >= REPEAT_NOTE_AT && (!rt.repeatedCall || times > rt.repeatedCall.times)) rt.repeatedCall = { call, times };

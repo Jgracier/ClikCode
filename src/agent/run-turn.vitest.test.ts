@@ -58,18 +58,24 @@ function harness(script: ScriptEntry[], overrides: Partial<AgentTurnInput> = {},
 
 describe('runAgentLoop', () => {
   describe('a model checking the same thing again and again', () => {
+    it('is not stopped for polling a shell command, which may simply not have changed yet', async () => {
+      const poll = (id: string) => ({ toolCalls: [{ id, name: 'bash', args: { command: 'echo waiting' } }] });
+      const h = harness([...Array.from({ length: 10 }, (_, index) => poll(`p${index}`)), { text: 'done' }]);
+      expect((await runAgentLoop(h.input)).text).toBe('done');
+    });
+
     const read = (id: string) => ({ toolCalls: [{ id, name: 'read_file', args: { path: 'total.txt' } }] });
 
-    it('is told at the third identical result and stopped at the sixth, with what it did kept', async () => {
+    it('is told at the fourth identical result and stopped at the eighth, with what it did kept', async () => {
       await fs.writeFile(path.join(cwd, 'total.txt'), '142\n');
-      const h = harness(Array.from({ length: 8 }, (_, index) => read(`r${index}`)));
+      const h = harness(Array.from({ length: 10 }, (_, index) => read(`r${index}`)));
       const result = await runAgentLoop(h.input);
       expect(result.stopReason).toBe('completed');
-      expect(result.text).toContain('returned exactly the same result 6 times');
-      expect(h.client.requests).toHaveLength(6);
+      expect(result.text).toContain('returned exactly the same result 8 times');
+      expect(h.client.requests).toHaveLength(8);
       const notes = (index: number) => h.client.requests[index].items.filter((item) => item.type === 'text' && item.text.includes('exactly the same result'));
-      expect(notes(2)).toHaveLength(0);
-      expect(notes(3).length).toBeGreaterThan(0);
+      expect(notes(3)).toHaveLength(0);
+      expect(notes(4).length).toBeGreaterThan(0);
     });
 
     it('never counts a read whose result changed, however often it is read', async () => {
