@@ -20,7 +20,14 @@ interface GrepArgs {
   head_limit?: number;
 }
 
-const DEFAULT_HEAD_LIMIT = 200;
+/** Matching lines shown by default. A broad search that reaches 200 lines costs 5-8K tokens a step for every step after it; the closing
+ * note tells the model to narrow the search or raise head_limit, which it does when it needs the rest. File lists and counts are short. */
+const CONTENT_HEAD_LIMIT = 80;
+const LIST_HEAD_LIMIT = 200;
+const defaultLimit = (mode: GrepArgs['output_mode']): number => (mode === 'files' || mode === 'count' ? LIST_HEAD_LIMIT : CONTENT_HEAD_LIMIT);
+/** A matching line longer than this (minified code, a data line) is cut, with how much was left out. */
+const MAX_LINE_CHARS = 300;
+const clipLine = (line: string): string => (line.length > MAX_LINE_CHARS ? `${line.slice(0, MAX_LINE_CHARS)}… [${line.length - MAX_LINE_CHARS} more characters]` : line);
 /** The Node fallback reads a file whole; a larger one is reported as not searched, never skipped in silence. */
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_RG_OUTPUT_CHARS = 4 * 1024 * 1024;
@@ -39,7 +46,7 @@ function hasRipgrep(): Promise<boolean> {
 
 function limitLines(lines: string[], limit: number): string {
   if (!lines.length) return 'No matches.';
-  const shown = lines.slice(0, limit);
+  const shown = lines.slice(0, limit).map(clipLine);
   return [...shown, ...(lines.length > shown.length ? [`… ${lines.length - shown.length} more lines; narrow the search or raise head_limit.`] : [])].join('\n');
 }
 
@@ -81,7 +88,7 @@ async function grepWithRipgrep(args: GrepArgs, root: string, ctx: Pick<ToolConte
       const relativeRoot = path.relative(ctx.cwd, root);
       const shownRoot = relativeRoot === '' ? '' : !relativeRoot.startsWith('..') && !path.isAbsolute(relativeRoot) ? `${relativeRoot}${path.sep}` : prefix;
       const lines = stdout.split(/\r?\n/).filter(Boolean).map((line) => line.startsWith(prefix) ? `${shownRoot}${line.slice(prefix.length)}` : line);
-      const shown = limitLines(lines, args.head_limit ?? DEFAULT_HEAD_LIMIT);
+      const shown = limitLines(lines, args.head_limit ?? defaultLimit(mode));
       resolve({ output: outputCut ? `${shown}\n… the search stopped after ${MAX_RG_OUTPUT_CHARS / (1024 * 1024)} MB of matches; narrow the pattern, the path or glob.` : shown });
     });
   });
@@ -93,7 +100,7 @@ async function grepWithNode(args: GrepArgs, root: string, ctx: Pick<ToolContext,
     return { output: `Invalid regular expression: ${error instanceof Error ? error.message : String(error)}`, isError: true };
   }
   const mode = args.output_mode ?? 'content';
-  const limit = args.head_limit ?? DEFAULT_HEAD_LIMIT;
+  const limit = args.head_limit ?? defaultLimit(mode);
   const context = Math.max(0, Math.min(args.context ?? 0, 10));
   const out: string[] = [];
   const tooBig: string[] = [];
@@ -122,7 +129,7 @@ async function grepWithNode(args: GrepArgs, root: string, ctx: Pick<ToolContext,
       for (let index = Math.max(0, hit - context); index <= Math.min(lines.length - 1, hit + context); index++) {
         if (printed.has(index)) continue;
         printed.add(index);
-        out.push(`${shown}${hits.includes(index) ? ':' : '-'}${index + 1}${hits.includes(index) ? ':' : '-'}${lines[index].slice(0, 500)}`);
+        out.push(`${shown}${hits.includes(index) ? ':' : '-'}${index + 1}${hits.includes(index) ? ':' : '-'}${lines[index]}`);
       }
     }
   }
@@ -144,7 +151,7 @@ export const grepTool = defineTool<GrepArgs>({
       case_insensitive: { type: 'boolean' },
       output_mode: { type: 'string', enum: ['content', 'files', 'count'] },
       context: { type: 'integer', minimum: 0, maximum: 10, description: 'Lines of context around each match (content mode).' },
-      head_limit: { type: 'integer', minimum: 1, maximum: 2000, description: 'Maximum output lines (default 200).' },
+      head_limit: { type: 'integer', minimum: 1, maximum: 2000, description: 'Maximum output lines (default 80 for matching lines, 200 for file lists and counts).' },
     },
   },
   label: (args) => formatToolRow('grep', `${args.pattern}${args.glob ? ` in ${args.glob}` : ''}`, 'search'),

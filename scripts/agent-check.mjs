@@ -14,7 +14,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const cli = join(root, 'dist', 'cli.js');
+const cli = process.env.AGENT_CHECK_CLI ?? join(root, 'dist', 'cli.js');
 const args = process.argv.slice(2);
 const flag = (name) => { const at = args.indexOf(`--${name}`); return at >= 0 ? args[at + 1] : undefined; };
 const harness = flag('harness');
@@ -76,6 +76,19 @@ const TASKS = [
       const run = spawnSync(process.execPath, ['check.js'], { cwd: dir, encoding: 'utf8' });
       return run.status === 0 && read(dir, 'check.js').includes('average([2, 4, 6]) !== 4');
     },
+  },
+  {
+    // The risk of a short search result: the broad term matches far more lines than are shown, and the answer is in a file that sorts last.
+    name: 'search',
+    prompt: 'Somewhere in this project is the time, in milliseconds, that it waits between retry attempts. Find the value and write just the number to answer.txt.',
+    setup: (dir) => {
+      mkdirSync(join(dir, 'src'), { recursive: true });
+      for (let i = 0; i < 40; i += 1) {
+        writeFileSync(join(dir, 'src', `module-${String(i).padStart(2, '0')}.js`), Array.from({ length: 6 }, (_, line) => `// retry note ${i}.${line}: callers may retry this\nexport const LIMIT_${i}_${line} = ${i * 10 + line};`).join('\n') + '\n');
+      }
+      writeFileSync(join(dir, 'src', 'zz-network.js'), '// wait between retry attempts, in milliseconds\nexport const BACKOFF_MS = 7310;\n');
+    },
+    check: (dir) => read(dir, 'answer.txt').trim() === '7310',
   },
   {
     // The risk of a shortened view: a fact given early, then a long run of work, then a question that needs the early fact.
