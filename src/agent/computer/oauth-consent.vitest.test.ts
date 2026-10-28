@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { listTasks } from './work-queue.js';
-import { OPENS_ANOTHER_APP, authorizationUrl, classifyStuck, oauthConnect, type ConsentStop, startFailure, callbackState, GENERIC_ACTIONS, nextPress, readConsent, decideSelectors, providerFor, scopeTicks, scopesTicked, type ScopeBox, stopReason, type Control } from './oauth-consent.js';
+import { OPENS_ANOTHER_APP, authorizationUrl, classifyStuck, oauthConnect, type ConsentStop, startFailure, callbackState, GENERIC_ACTIONS, nextPress, readConsent, decideSelectors, providerFor, scopeTicks, scopesTicked, googleStep, type ScopeBox, stopReason, type Control } from './oauth-consent.js';
 
 const press = (...names: string[]): Control[] => names.map(name => ({ name, leaf: false }));
 const pick = (host: string, controls: Control[], text = '', options: { email?: string; skipAccount?: boolean } = {}): string | undefined => {
@@ -32,6 +32,27 @@ describe('provider table', () => {
     expect(pick(google, press('Go to ClikDeploy (unsafe)', 'Back to safety'))).toBe('Go to ClikDeploy (unsafe)');
     expect(pick(google, press('Cancel', 'Continue'))).toBe('Continue');
     expect(pick(google, press('Cancel', 'Allow'))).toBe('Allow');
+  });
+
+  it('Google: the account chip on the signing-back-in and consent pages is never pressed as an account', () => {
+    const chip = [...press('gracierdigital@gmail.com selected. Switch account', 'Cancel', 'Continue'), { name: 'gracierdigital@gmail.com', leaf: true }];
+    expect(pick('accounts.google.com', chip, '', { email: 'gracierdigital@gmail.com' })).toBe('Continue');
+    const consentChip = press('gracierdigital@gmail.com', 'Cancel', 'Continue');
+    expect(pick('accounts.google.com', consentChip, '', { email: 'gracierdigital@gmail.com', account: false })).toBe('Continue');
+    expect(nextPress('accounts.google.com', [{ name: 'Advanced', leaf: true }], '')?.phase).toBe('notice');
+    expect(nextPress('accounts.google.com', press('Cancel', 'Continue'), '')?.phase).toBe('grant');
+  });
+
+  it('Google: pages are told apart by address path and words', () => {
+    expect(googleStep('https://accounts.google.com/v3/signin/accountchooser?x=1', '')).toBe('chooser');
+    expect(googleStep('https://accounts.google.com/signin/oauth/warning', '')).toBe('warning');
+    expect(googleStep('https://accounts.google.com/signin/oauth/id', '')).toBe('identity');
+    expect(googleStep('https://accounts.google.com/signin/oauth/v3/consent', '')).toBe('consent');
+    expect(googleStep('https://accounts.google.com/v3/signin/challenge/pwd', '')).toBe('challenge');
+    expect(googleStep('https://accounts.google.com/signin/oauth/error', '')).toBe('error');
+    expect(googleStep('https://accounts.google.com/x', 'Google hasn\u2019t verified this app')).toBe('warning');
+    expect(googleStep('https://accounts.google.com/x', 'ClikDeploy wants additional access to your Google Account')).toBe('consent');
+    expect(googleStep('https://example.com/', '')).toBeUndefined();
   });
 
   it('never picks the signed-in or switch-account entries as the account', () => {
