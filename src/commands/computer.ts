@@ -374,9 +374,11 @@ export async function computerEmail(action: 'connect' | 'status' | 'disconnect')
 export async function computerOauthConnect(connector: string): Promise<void> {
   const dir = stateDirectory();
   const { oauthConnect } = await import('../agent/computer/oauth-consent.js');
-  const { openComputerPage } = await import('../agent/computer/browser.js');
+  const { openNewComputerPage, closeOwnedPage } = await import('../agent/computer/browser.js');
   const { listProfiles } = await import('../agent/computer/profiles.js');
   const email = (await listProfiles(dir)).map(profile => profile.fields.sso_email).find(Boolean);
-  const done = await oauthConnect(connector, await openComputerPage(dir, 'oauth'), { email, stateDir: dir, progress: line => line && process.stdout.write(line) }).finally(async () => { await closeComputerPage(dir, 'oauth').catch(quiet('commands/computer')); await releaseComputerBrowser(dir); });
+  // A fresh tab this command owns (never a reused one with an earlier sign-in step in it), closed afterwards.
+  const reopen = async (old: import('playwright-core').Page) => { await closeOwnedPage(dir, old, 'oauth').catch(quiet('commands/computer')); return openNewComputerPage(dir, 'oauth'); };
+  const done = await oauthConnect(connector, await openNewComputerPage(dir, 'oauth'), { email, stateDir: dir, reopen, progress: line => line && process.stdout.write(line) }).finally(async () => { await closeComputerPage(dir, 'oauth').catch(quiet('commands/computer')); await releaseComputerBrowser(dir); });
   return isJsonDefaultMode() ? emitResult({ computer: { oauthConnect: { connector: done.connector, connected: true } } }) : void process.stdout.write(`Connected ${done.connector}: ClikDeploy shows an active connection.\n`);
 }

@@ -13,7 +13,7 @@ import { OPENS_ANOTHER_APP, PRESSABLE, readPageControls } from './page-controls.
 import { saveTask, type TaskReason } from './work-queue.js';
 
 /** One press: a control whose visible name matches `name`, only while the page text matches `when` (if given). */
-export interface ConsentAction { note: string; name: RegExp; when?: RegExp; /** `leaf`: also a plain text element (Google's "Advanced"), not only buttons and links. */ leaf?: boolean }
+export interface ConsentAction { note: string; name: RegExp; when?: RegExp; /** `leaf`: also a plain text element (Google's "Advanced"), not only buttons and links. */ leaf?: boolean; /** A notice to get past (Advanced, Go to (unsafe)), not a grant: scope boxes are not ticked for it. */ notice?: boolean }
 export interface ConsentProvider { id: string; host: RegExp; actions: readonly ConsentAction[] }
 
 /** Names that are never pressed, whatever else matches. */
@@ -21,10 +21,10 @@ const NEVER = /\b(deny|cancel|decline|reject|no thanks|not now|sign out|log ?out
 
 export const CONSENT_PROVIDERS: readonly ConsentProvider[] = [
   { id: 'google', host: /(^|\.)accounts\.google\.com$|(^|\.)google\.com$/i, actions: [
-    { note: 'Continued past the unverified-app notice.', name: /^go to .*\(unsafe\)$/i },
-    { note: 'Opened Advanced.', name: /^advanced$/i, leaf: true },
+    { note: 'Continued past the unverified-app notice.', name: /^go to .*\(unsafe\)$/i, notice: true },
+    { note: 'Opened Advanced.', name: /^advanced$/i, leaf: true, notice: true },
     { note: 'Allowed access.', name: /^(continue|allow|allow all)$/i },
-    { note: 'Acknowledged the notice.', name: /^i understand$/i },
+    { note: 'Acknowledged the notice.', name: /^i understand$/i, notice: true },
   ] },
   { id: 'microsoft', host: /(^|\.)(login\.microsoftonline\.com|login\.live\.com|microsoft\.com)$/i, actions: [
     { note: 'Accepted the permissions.', name: /^accept$/i },
@@ -110,29 +110,48 @@ export const scopesTicked = (boxes: readonly ScopeBox[]): boolean => boxes.filte
  * confirms the account is known), then the profile's email, which is typed by the login action, never here. */
 const SIGN_IN_PROVIDERS = [/^(?:continue|sign ?(?:in|up)|log ?in)\s+(?:in\s+)?(?:with|using|via)\s+google\b/i, /^(?:continue|sign ?(?:in|up)|log ?in)\s+(?:in\s+)?(?:with|using|via)\s+github\b/i];
 
-export interface PressOptions { email?: string; skipAccount?: boolean; appNames?: readonly string[]; redirectHost?: string }
+/** `account: false` says the page is known not to be an account chooser (Google's consent and "signing back in" pages show the account as a
+ * clickable chip that opens the chooser again), so no account is chosen there. */
+export interface PressOptions { email?: string; skipAccount?: boolean; account?: boolean; appNames?: readonly string[]; redirectHost?: string }
+
+/** Which kind of press: `account` (an account tile), `notice` (Advanced, Go to (unsafe), I understand), `grant` (Continue, Allow, Authorize...), `sign-in`. */
+export type PressPhase = 'account' | 'notice' | 'grant' | 'sign-in';
+
+/** Where Google's flow is (the caller has checked the host is Google's), from the address path and the page's own words, never from the order things happened in. */
+export type GoogleStep = 'chooser' | 'warning' | 'identity' | 'consent' | 'challenge' | 'error';
+export function googleStep(url: string, pageText: string): GoogleStep | undefined {
+  let path = '';
+  try { path = new URL(url).pathname; } catch { return undefined; }
+  if (/\/signin\/oauth\/error\b/.test(path)) return 'error';
+  if (/\/signin\/challenge\b|\/challenge\//.test(path)) return 'challenge';
+  if (/\/signin\/oauth\/warning\b/.test(path) || /hasn.t verified this app/i.test(pageText)) return 'warning';
+  if (/\/signin\/oauth\/(?:v\d+\/)?consent\b/.test(path) || /wants (?:additional )?access to your google account/i.test(pageText)) return 'consent';
+  if (/\/signin\/oauth\/id\b/.test(path) || /signing back in to/i.test(pageText)) return 'identity';
+  if (/accountchooser/i.test(path) || /\bchoose an account\b/i.test(pageText)) return 'chooser';
+  return undefined;
+}
 
 /** What to press next on a page, as the index into `controls` and why, or undefined when nothing known is on it.
  * An account naming `email` is chosen first (once per address, which the caller tracks by passing `skipAccount`).
  * `consent` is set when the press grants a generically recognized consent screen. */
-export function nextPress(host: string, controls: readonly Control[], pageText: string, options: PressOptions = {}): { index: number; note: string; consent?: boolean } | undefined {
+export function nextPress(host: string, controls: readonly Control[], pageText: string, options: PressOptions = {}): { index: number; note: string; phase: PressPhase; consent?: boolean } | undefined {
   const email = options.email?.trim().toLowerCase();
-  if (email && !options.skipAccount) {
-    const i = controls.findIndex(c => c.name.toLowerCase().includes(email) && !NOT_CHOOSER.test(c.name));
-    if (i >= 0) return { index: i, note: 'Chose the account.' };
+  if (email && !options.skipAccount && options.account !== false) {
+    const i = controls.findIndex(c => !c.leaf && c.name.toLowerCase().includes(email) && !NOT_CHOOSER.test(c.name));
+    if (i >= 0) return { index: i, note: 'Chose the account.', phase: 'account' };
   }
   if (classifyStuck(pageText)) return undefined;
   const table = [...(providerFor(host)?.actions ?? []), ...GENERIC_ACTIONS];
   for (const action of table) {
     if (action.when && !action.when.test(pageText)) continue;
     const i = controls.findIndex(c => (action.leaf || !c.leaf) && c.name.length <= 80 && !NEVER.test(c.name) && action.name.test(c.name));
-    if (i >= 0) return { index: i, note: action.note, ...(AFFIRMATIVE.test(controls[i]!.name) ? { consent: true } : {}) };
+    if (i >= 0) return { index: i, note: action.note, phase: action.notice ? 'notice' : 'grant', ...(AFFIRMATIVE.test(controls[i]!.name) ? { consent: true } : {}) };
   }
   const read = readConsent(controls, pageText, { ...(options.appNames ? { appNames: options.appNames } : {}), ...(options.redirectHost ? { redirectHost: options.redirectHost } : {}) });
-  if (read.consent && read.index !== undefined) return { index: read.index, note: 'Granted access on the consent screen.', consent: true };
+  if (read.consent && read.index !== undefined) return { index: read.index, note: 'Granted access on the consent screen.', phase: 'grant', consent: true };
   for (const [rank, re] of SIGN_IN_PROVIDERS.entries()) {
     const i = controls.findIndex(c => !c.leaf && re.test(c.name.replace(/\s*last used\s*$/i, '').trim()));
-    if (i >= 0) return { index: i, note: rank === 0 ? 'Signed in with Google.' : 'Signed in with GitHub.' };
+    if (i >= 0) return { index: i, note: rank === 0 ? 'Signed in with Google.' : 'Signed in with GitHub.', phase: 'sign-in' };
   }
   return undefined;
 }
@@ -223,7 +242,7 @@ export function startFailure(text: string): string {
 export interface ConnectStart { url: string; stop: () => void }
 export interface OAuthConsentOptions {
   /** The state directory: where a payment-class stop is recorded in the human work queue (absent: not recorded). */ stateDir?: string;
-  email?: string; /** Treat every page as this provider's host (a test stands a fake vendor in for accounts.google.com). */ providerHost?: string; timeoutMs?: number; signal?: AbortSignal; progress?: (line: string) => void;
+  email?: string; /** Closes the given (stale) tab and opens a fresh one the caller owns and closes later; with it, a Google re-verify or error page is retried once from the authorization URL in the fresh tab. */ reopen?: (old: Page) => Promise<Page>; /** Treat every page as this provider's host (a test stands a fake vendor in for accounts.google.com). */ providerHost?: string; timeoutMs?: number; signal?: AbortSignal; progress?: (line: string) => void;
   /** Starts the connect and returns the authorization URL (default: `clikdeploy integrations connect <id> --no-browser`). */
   start?: (connector: string, signal?: AbortSignal) => Promise<ConnectStart>;
   /** Asks ClikDeploy whether the connector now has an active connection (default: `clikdeploy integrations show`). */
@@ -302,62 +321,76 @@ async function settleSelectors(page: Page): Promise<string | undefined> {
   for (const { selector, option } of plan.choose) {
     const native = page.locator('select:visible');
     const n = await native.count().catch(() => 0);
-    if (selector < n) { await native.nth(selector).selectOption({ label: option }).catch(quiet('agent/computer/oauth-consent')); continue; }
-    const boxes = page.locator('[role=combobox]:visible, button[aria-haspopup=listbox]:visible');
-    await boxes.nth(selector - n).click({ timeout: 2_000 }).catch(quiet('agent/computer/oauth-consent'));
-    await page.getByRole('option', { name: option }).first().click({ timeout: 2_000 }).catch(quiet('agent/computer/oauth-consent'));
+    const chosen = selector < n
+      ? await native.nth(selector).selectOption({ label: option }, { timeout: 3_000 }).then(() => true, () => false)
+      : await clickNode(page.locator('[role=combobox]:visible, button[aria-haspopup=listbox]:visible').nth(selector - n)) && await clickNode(page.getByRole('option', { name: option }).first());
+    if (!chosen) return `The consent page's only choice (${option}) could not be selected. Nothing was pressed.`;
   }
   return undefined;
 }
 
 const BOXES = 'input[type=checkbox], [role=checkbox]';
 
+/** Every visible tick box with its name. Google's boxes are 48px transparent inputs with no label of their own (the words sit in a
+ * sibling), so the name is the text of the widest ancestor that still holds only this one box. */
 async function readScopeBoxes(page: Page): Promise<ScopeBox[]> {
   return page.evaluate((selector) => {
     const doc = (globalThis as unknown as { document: { querySelectorAll(s: string): ArrayLike<Record<string, any>> } }).document;
+    const all = Array.from(doc.querySelectorAll(selector));
     const out: { index: number; name: string; checked: boolean }[] = [];
-    Array.from(doc.querySelectorAll(selector)).forEach((n, index) => {
+    all.forEach((n, index) => {
       const holder = n.closest?.('label') ?? n.parentElement;
       if (!n.getClientRects().length && !holder?.getClientRects().length) return;
-      const text = String(n.getAttribute('aria-label') || n.labels?.[0]?.textContent || holder?.textContent || n.parentElement?.parentElement?.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120);
-      out.push({ index, name: text, checked: n.checked === true || n.getAttribute('aria-checked') === 'true' });
+      let name = String(n.getAttribute('aria-label') || n.labels?.[0]?.textContent || '').replace(/\s+/g, ' ').trim();
+      for (let up = n.parentElement, depth = 0; !name && up && depth < 8; up = up.parentElement, depth++) {
+        if (Array.from(up.querySelectorAll(selector)).length > 1) break;
+        name = String(up.textContent ?? '').replace(/\s+/g, ' ').trim();
+      }
+      out.push({ index, name: name.slice(0, 120), checked: n.checked === true || n.getAttribute('aria-checked') === 'true' });
     });
     return out;
   }, BOXES);
 }
 
-/** Ticks the scope boxes a consent page shows (if it is a recognized consent page), then reads them again and returns why one is still unticked. */
-async function tickScopes(page: Page, text: string, options: { redirectHost?: string }): Promise<{ ticked: number } | { stop: string }> {
-  const boxes = await readScopeBoxes(page).catch(() => [] as ScopeBox[]);
-  const plan = scopeTicks(boxes, text, options);
-  if (!plan.length) return { ticked: 0 };
-  for (const index of plan) {
-    const box = page.locator(BOXES).nth(index);
-    const done = await box.click({ timeout: 2_000, force: true }).then(() => true, () => false);
-    if (!done) await box.evaluate(n => (n as unknown as { click(): void }).click()).catch(quiet('agent/computer/oauth-consent'));
-  }
-  await page.waitForTimeout(300).catch(quiet('agent/computer/oauth-consent'));
-  const after = await readScopeBoxes(page).catch(() => [] as ScopeBox[]);
-  const left = after.filter(b => !b.checked && !NOT_A_SCOPE.test(b.name));
-  // Google's "Select all" ticks the rest itself; a rest that stayed unticked gets its own press.
-  for (const b of left.filter(b => !SELECT_ALL.test(b.name.trim()))) await page.locator(BOXES).nth(b.index).click({ timeout: 2_000, force: true }).catch(quiet('agent/computer/oauth-consent'));
-  const final = left.length ? await readScopeBoxes(page).catch(() => [] as ScopeBox[]) : after;
-  if (!scopesTicked(final)) return { stop: `The consent page has scope checkboxes that would not tick (${final.filter(b => !b.checked).map(b => b.name).slice(0, 6).join(' | ')}). Nothing was pressed.` };
-  return { ticked: plan.length };
+/** One real click on a node: scrolled into view, the node itself, then (if the page ignored it) the same click from inside the page. */
+async function clickNode(node: ReturnType<Page['locator']>, timeout = 3_000): Promise<boolean> {
+  await node.scrollIntoViewIfNeeded({ timeout: 1_500 }).catch(quiet('agent/computer/oauth-consent'));
+  if (await node.click({ timeout }).then(() => true, () => false)) return true;
+  if (await node.click({ timeout: 1_500, force: true }).then(() => true, () => false)) return true;
+  return node.evaluate(n => { (n as unknown as { click(): void }).click(); return true; }).catch(() => false);
 }
 
+/** Ticks the scope boxes a consent page shows (if it is a recognized consent page): one box per round, in view, then the boxes are read again,
+ * because "Select all" ticks the rest itself and a second press on one of those would untick it. Stops with why a box is still unticked. */
+async function tickScopes(page: Page, text: string, options: { redirectHost?: string }): Promise<{ ticked: number } | { stop: string }> {
+  let ticked = 0;
+  let boxes = await readScopeBoxes(page).catch(() => [] as ScopeBox[]);
+  const rounds = boxes.length + 3;
+  for (let round = 0; round < rounds; round++) {
+    const next = scopeTicks(boxes, text, options)[0];
+    if (next === undefined) break;
+    const before = boxes.find(b => b.index === next);
+    if (!(await clickNode(page.locator(BOXES).nth(next)))) return { stop: `A scope checkbox on the consent page could not be pressed (${before?.name || 'unnamed'}). Nothing was pressed.` };
+    ticked++;
+    await page.waitForTimeout(200).catch(quiet('agent/computer/oauth-consent'));
+    boxes = await readScopeBoxes(page).catch(() => [] as ScopeBox[]);
+  }
+  if (boxes.length && !scopesTicked(boxes)) return { stop: `The consent page has scope checkboxes that would not tick (${boxes.filter(b => !b.checked && !NOT_A_SCOPE.test(b.name)).map(b => b.name || 'unnamed').slice(0, 6).join(' | ')}). Nothing was pressed.` };
+  return { ticked };
+}
+
+/** Presses the control by its name. The same words can sit on a link that opens another program (an email address as text): never that one. */
 async function press(page: Page, control: Control): Promise<boolean> {
   const exact = control.name;
   const candidates = control.leaf ? [page.getByText(exact, { exact: true })] : [page.getByRole('button', { name: exact, exact: true }), page.getByRole('link', { name: exact, exact: true }), page.locator(PRESSABLE).filter({ hasText: exact }), page.getByText(exact, { exact: true })];
   for (const base of candidates) {
     const shown = base.filter({ visible: true });
     const count = await shown.count().catch(() => 0);
-    // The same words can sit on a link that opens another program (an email address as text): never that one.
     for (let i = 0; i < Math.min(count, 8); i++) {
       const one = shown.nth(i);
       const away = await one.evaluate((node, otherApp) => new RegExp(otherApp, 'i').test((node as unknown as { closest(s: string): { getAttribute(n: string): string | null } | null }).closest('a[href]')?.getAttribute('href') ?? ''), OPENS_ANOTHER_APP.source).catch(() => false);
       if (away) continue;
-      if (await one.click({ timeout: 3_000 }).then(() => true, () => false)) return true;
+      if (await clickNode(one)) return true;
       break;
     }
   }
@@ -445,17 +478,36 @@ export async function oauthConnect(connector: string, page: Page, options: OAuth
   }
 }
 
-async function driveConsent(connector: string, page: Page, options: OAuthConsentOptions): Promise<{ connector: string; steps: string[] }> {
+/** The most account tiles pressed on one pass through the flow: one press, and one retry if the chooser comes back. */
+const MAX_ACCOUNT_PRESSES = 2;
+
+async function driveConsent(connector: string, firstPage: Page, options: OAuthConsentOptions): Promise<{ connector: string; steps: string[] }> {
   if (!CONNECTOR_ID.test(connector)) throw new Error('oauth_connect needs target: a connector id such as slack or github.');
   const started = await (options.start ?? startViaCli)(connector, options.signal);
   const status = options.status ?? ((id, signal) => connectionState(id, signal));
   const steps: string[] = [];
+  let page = firstPage;
   try {
     let redirectUri: string | undefined;
-    try { redirectUri = new URL(started.url).searchParams.get('redirect_uri') ?? undefined; } catch { redirectUri = undefined; }
-    await page.goto(started.url, { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(quiet('agent/computer/oauth-consent'));
+    let redirectHost: string | undefined;
+    try { const u = new URL(started.url).searchParams.get('redirect_uri'); if (u) { redirectUri = u; redirectHost = new URL(u).host; } } catch { /* not an address: no redirect to match */ }
+    const open = async (): Promise<void> => {
+      try { await page.goto(started.url, { waitUntil: 'domcontentloaded', timeout: 30_000 }); }
+      catch (error) { throw new ConsentStop(`The authorization URL did not open (${scrubSecrets(error instanceof Error ? error.message : String(error)).split('\n')[0]!.slice(0, 160)}).`); }
+    };
+    await open();
     const deadline = Date.now() + (options.timeoutMs ?? 120_000);
-    let idle = 0, stopSeen = 0, chosenOn = '', lastPress = { key: '', at: 0 }, controls: Control[] = [], lastText = '';
+    let idle = 0, stopSeen = 0, accountPresses = 0, restarts = 0, lastPress = { key: '', at: 0 }, controls: Control[] = [], lastText = '';
+    /** Google's transient re-verify (a password challenge) or an error page: the same authorization URL in a fresh tab usually passes. Once. */
+    const restart = async (why: string): Promise<boolean> => {
+      if (restarts >= 1 || !options.reopen) return false;
+      restarts++;
+      page = await options.reopen(page);
+      accountPresses = 0; stopSeen = 0; idle = 0; lastPress = { key: '', at: 0 };
+      steps.push(`Reopened the authorization URL in a fresh tab (${why}).`); options.progress?.(`Reopened the authorization URL in a fresh tab (${why}).\n`);
+      await open();
+      return true;
+    };
     while (Date.now() < deadline) {
       if (options.signal?.aborted) throw new Error('Stopped.');
       if (page.isClosed()) throw new ConsentStop('The browser tab was closed before consent finished.');
@@ -475,22 +527,28 @@ async function driveConsent(connector: string, page: Page, options: OAuthConsent
         }
         throw new ConsentStop(`The callback page was reached but ClikDeploy shows no active connection${last ? ` (${scrubSecrets(last)})` : ''}.`);
       }
+      const host = (() => { try { return new URL(url).hostname; } catch { return ''; } })();
+      const step = providerFor(options.providerHost ?? host)?.id === 'google' ? googleStep(url, text) : undefined;
+      controls = await readControls(page).catch(() => []);
+      if (step === 'challenge' || step === 'error') {
+        if (await restart(step === 'challenge' ? 'Google asked to re-verify' : 'Google showed an error page')) continue;
+        const hasPassword = await page.locator('input[type=password]:visible').count().catch(() => 0) > 0;
+        const why = step === 'challenge' ? stopReason(text, hasPassword, false) ?? 'a Google re-verification' : 'a Google error page';
+        throw new ConsentStop(`Stopped at ${why}${restarts ? ' (also after reopening in a fresh tab)' : ''}. Nothing was typed. ${stuckOn(page, controls, text)}`, classifyStuck(text)?.reason, stopDetail(page, controls, text, hasPassword ? 'password' : undefined));
+      }
       const hasPassword = await page.locator('input[type=password]:visible').count().catch(() => 0) > 0;
       const hasCode = await page.locator('input[autocomplete=one-time-code]:visible').count().catch(() => 0) > 0;
       const why = stopReason(text, hasPassword, hasCode);
-      controls = await readControls(page).catch(() => []);
       if (why) {
         // Two looks in a row, so a page still settling does not stop it.
         if (++stopSeen >= 2) throw new ConsentStop(`Stopped at ${why}. Nothing was typed. ${stuckOn(page, controls, text)}`, classifyStuck(text)?.reason, stopDetail(page, controls, text, hasPassword ? 'password' : hasCode ? 'mfa' : undefined));
       } else {
         stopSeen = 0;
-        const host = (() => { try { return new URL(url).hostname; } catch { return ''; } })();
-        const next = nextPress(options.providerHost ?? host, controls, text, { ...(options.email ? { email: options.email } : {}), skipAccount: chosenOn === url, ...(redirectUri ? { redirectHost: (() => { try { return new URL(redirectUri).host; } catch { return ''; } })() } : {}) });
+        const next = nextPress(options.providerHost ?? host, controls, text, { ...(options.email ? { email: options.email } : {}), account: step === undefined || step === 'chooser', ...(redirectHost ? { redirectHost } : {}) });
         const control = next && controls[next.index];
         if (next && control && !(lastPress.key === `${url}|${control.name}` && Date.now() - lastPress.at < 2_500)) {
-          if (next.note === 'Chose the account.') chosenOn = url;
-          if (next.note !== 'Chose the account.' && next.note !== 'Opened Advanced.' && next.note !== 'Continued past the unverified-app notice.') {
-            const redirectHost = (() => { try { return redirectUri ? new URL(redirectUri).host : undefined; } catch { return undefined; } })();
+          if (next.phase === 'account' && ++accountPresses > MAX_ACCOUNT_PRESSES) throw new ConsentStop(`The account chooser keeps coming back after the account was chosen. ${stuckOn(page, controls, text)}`);
+          if (next.phase === 'grant') {
             const ticks = await tickScopes(page, text, redirectHost ? { redirectHost } : {});
             if ('stop' in ticks) throw new ConsentStop(`${ticks.stop} ${stuckOn(page, controls, text)}`);
             if (ticks.ticked) { steps.push('Ticked the scope checkboxes.'); options.progress?.('Ticked the scope checkboxes.\n'); }
@@ -503,6 +561,8 @@ async function driveConsent(connector: string, page: Page, options: OAuthConsent
             lastPress = { key: `${url}|${control.name}`, at: Date.now() };
             steps.push(next.note); options.progress?.(`${next.note}\n`);
             idle = 0;
+            // A tile press leaves the chooser: wait for that, so a slow page is not pressed twice. A chooser that is still there afterwards gets the retry.
+            if (next.phase === 'account') await page.waitForURL(u => u.href !== url, { timeout: 8_000 }).catch(quiet('agent/computer/oauth-consent'));
           }
         } else {
           // A page whose words are plain (unknown client, no credits) offers nothing to press: stop soon, do not wait out the clock.

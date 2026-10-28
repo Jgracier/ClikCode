@@ -10,10 +10,34 @@ beforeAll(async () => { if (enabled) browser = await chromium.launch({ channel: 
 afterAll(async () => { await browser?.close(); });
 
 /** A vendor with the screens Google shows (chooser, Advanced, Go to (unsafe), Continue) or one that wants a password first. */
-async function fakeWorld(mode: 'consent' | 'login' | 'granular' | 'warning') {
+async function fakeWorld(mode: 'consent' | 'login' | 'granular' | 'warning' | 'google' | 'google-challenge' | 'google-chooser-twice') {
   let connected = false;
+  let authHits = 0, tileHits = 0;
   let mailtoClicks = 0;
   const typed: string[] = [];
+  const googlePage = (url: URL, res: http.ServerResponse): void => {
+    const redirect = url.searchParams.get('redirect_uri') ?? '';
+    const send = (body: string): void => { res.writeHead(200, { 'content-type': 'text/html' }).end(`<body style="margin:0">${body}</body>`); };
+    const chip = '<div role="button" tabindex="0" onclick="location=\'/v3/signin/accountchooser?redirect_uri=' + encodeURIComponent(redirect) + '\'">me@example.com</div>';
+    switch (url.pathname) {
+      case '/v3/signin/challenge/pwd': return send('<h1>Welcome</h1><p>To continue, first verify it\'s you</p><input type="password" id="p"><button>Next</button>');
+      case '/v3/signin/accountchooser': return send(`<h1>Choose an account</h1><p>to continue to ClikDeploy</p>
+        <div role="link" tabindex="0" onclick="location='/hit-tile?redirect_uri=${encodeURIComponent(redirect)}'">Justin Gracier<div>me@example.com</div></div>
+        <div role="link" tabindex="0" onclick="document.title='wrong'">Justin Gracier<div>other@example.com</div></div><div role="link" tabindex="0">Use another account</div>`);
+      case '/hit-tile': tileHits++; return void res.writeHead(302, { location: mode === 'google-chooser-twice' && tileHits === 1 ? `/v3/signin/accountchooser?redirect_uri=${encodeURIComponent(redirect)}` : `/signin/oauth/warning?redirect_uri=${encodeURIComponent(redirect)}` }).end();
+      case '/signin/oauth/warning': return send(`<h1>Google hasn't verified this app</h1><span onclick="document.getElementById('more').hidden=false">Advanced</span><div id="more" hidden><a href="/signin/oauth/id?redirect_uri=${encodeURIComponent(redirect)}">Go to ClikDeploy (unsafe)</a></div><button>Back to safety</button>`);
+      // The signed-in account is a chip that opens the chooser again (and the chooser would then ask for the password): it must never be pressed here.
+      case '/signin/oauth/id': return send(`<h1>You're signing back in to ClikDeploy</h1>${chip}<button onclick="location='/hit-denied'">Cancel</button><button onclick="location='/signin/oauth/v3/consent?redirect_uri=${encodeURIComponent(redirect)}'">Continue</button>`);
+      case '/signin/oauth/v3/consent': {
+        // Google's boxes: 48px transparent inputs over the words, below the fold, with no label of their own.
+        const box = (cls: string, text: string, top: number, onclick = ''): string => `<div style="position:absolute;left:20px;top:${top}px;height:48px"><input type="checkbox" class="${cls}" ${onclick ? `onclick="${onclick}"` : ''} style="position:absolute;opacity:0;width:48px;height:48px;margin:0;left:0;top:0"><span style="margin-left:60px;line-height:48px">${text}</span></div>`;
+        return send(`<div style="height:1400px;position:relative"><h1>ClikDeploy wants additional access to your Google Account</h1>${chip}
+          ${box('all', 'Select all', 900, "for(const c of document.querySelectorAll('.sc'))c.checked=this.checked")}${box('sc', 'See your calendars', 960)}${box('sc', 'Edit your events', 1020)}${box('sc', 'Read your settings', 1080)}
+          <div style="position:absolute;top:1200px"><button onclick="location='/hit-denied'">Cancel</button><button onclick="location='${redirect}?'+(document.querySelectorAll('.sc:checked').length===3?'code=good':'error=access_denied')">Continue</button></div></div>`);
+      }
+      default: return void res.writeHead(404).end();
+    }
+  };
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://x');
     const html = (body: string): void => { res.writeHead(200, { 'content-type': 'text/html' }).end(`<body>${body}</body>`); };
@@ -22,8 +46,14 @@ async function fakeWorld(mode: 'consent' | 'login' | 'granular' | 'warning') {
     if (url.pathname === '/callback') { connected = url.searchParams.get('code') === 'good'; return html(connected ? '<h1>Slack connected</h1><p>You can close this window.</p>' : '<h1>Connection failed</h1>'); }
     if (url.pathname === '/mailto-click') { mailtoClicks++; return void res.writeHead(204).end(); }
     if (url.pathname === '/typed') { typed.push(url.searchParams.get('v') ?? ''); return void res.writeHead(204).end(); }
+    if (mode.startsWith('google') && url.pathname !== '/auth' && url.pathname !== '/callback') return googlePage(url, res);
     if (url.pathname !== '/auth') return void res.writeHead(404).end();
     const redirect = url.searchParams.get('redirect_uri')!, state = url.searchParams.get('state')!;
+    if (mode.startsWith('google')) {
+      authHits++;
+      const here = `/v3/signin/accountchooser?redirect_uri=${encodeURIComponent(redirect)}`;
+      return void res.writeHead(302, { location: mode === 'google-challenge' && authHits === 1 ? '/v3/signin/challenge/pwd' : here }).end();
+    }
     if (mode === 'login') return html('<h1>Sign in</h1><input type="email" value="me@example.com"><input type="password" id="p"><button>Sign in</button>');
     if (mode === 'granular') return html(`<p>ClikDeploy wants access to your Google Account</p><label><input type="checkbox" id="all" onclick="for(const c of document.querySelectorAll('.sc'))c.checked=this.checked">Select all</label>
       <label><input type="checkbox" class="sc">View your activity</label><label><input type="checkbox" class="sc">View your sleep</label>
@@ -99,3 +129,51 @@ it.skipIf(!enabled)('never presses the developer\'s email address on the unverif
     expect(world.mailtoClicks()).toBe(0);
   } finally { world.close(); }
 }, 60_000);
+
+it.skipIf(!enabled)('Google flow: the account chip on later pages is not pressed, below-the-fold unlabelled boxes are ticked, and the connection is confirmed', async () => {
+  const world = await fakeWorld('google');
+  try {
+    const page = await browser!.newPage();
+    const lines: string[] = [];
+    const done = await oauthConnect('slack', page, { email: 'me@example.com', providerHost: 'accounts.google.com', start: world.start, status: world.status, timeoutMs: 50_000, progress: line => lines.push(line) });
+    expect(done.connector).toBe('slack');
+    expect(lines.filter(l => l.includes('Chose the account')).length).toBe(1);
+    expect(lines.join('')).toContain('Ticked the scope checkboxes');
+    expect(await page.locator('body').innerText()).toContain('Slack connected');
+  } finally { world.close(); }
+}, 70_000);
+
+it.skipIf(!enabled)('Google flow: a chooser that comes back is answered once more', async () => {
+  const world = await fakeWorld('google-chooser-twice');
+  try {
+    const page = await browser!.newPage();
+    const lines: string[] = [];
+    await oauthConnect('slack', page, { email: 'me@example.com', providerHost: 'accounts.google.com', start: world.start, status: world.status, timeoutMs: 50_000, progress: line => lines.push(line) });
+    expect(lines.filter(l => l.includes('Chose the account')).length).toBe(2);
+  } finally { world.close(); }
+}, 70_000);
+
+it.skipIf(!enabled)('Google flow: a password challenge is retried once from the authorization URL in a fresh tab, typing nothing', async () => {
+  const world = await fakeWorld('google-challenge');
+  try {
+    const first = await browser!.newPage();
+    const lines: string[] = [];
+    const reopen = async (old: import('playwright-core').Page) => { await old.close(); return browser!.newPage(); };
+    const done = await oauthConnect('slack', first, { email: 'me@example.com', providerHost: 'accounts.google.com', start: world.start, status: world.status, timeoutMs: 50_000, reopen, progress: line => lines.push(line) });
+    expect(done.connector).toBe('slack');
+    expect(first.isClosed()).toBe(true);
+    expect(lines.join('')).toContain('fresh tab');
+  } finally { world.close(); }
+}, 70_000);
+
+it.skipIf(!enabled)('Google flow: a password challenge that comes back after the fresh tab stops, typing nothing', async () => {
+  const world = await fakeWorld('google-challenge');
+  try {
+    const page = await browser!.newPage();
+    // No way to reopen: the first challenge is the answer.
+    const error = await oauthConnect('slack', page, { email: 'me@example.com', providerHost: 'accounts.google.com', start: world.start, status: world.status, timeoutMs: 20_000 }).then(() => undefined, (e: Error) => e);
+    expect(error?.message).toContain('login password');
+    expect(error?.message).toContain('Nothing was typed');
+    expect(await page.locator('#p').inputValue()).toBe('');
+  } finally { world.close(); }
+}, 40_000);

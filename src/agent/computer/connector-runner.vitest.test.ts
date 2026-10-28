@@ -43,6 +43,18 @@ describe('connectors run', () => {
     expect(outcomes[0]!.actions).toContain('allowed access');
   });
 
+  it('--published: connects the named ids straight through the driver, never calling onboarding or the batch', async () => {
+    const c = fakeClient([published('slack')]);
+    c.client.batch = async () => { throw new Error('the batch refuses a published connector'); };
+    const d = fakeDriver([{ ok: true, note: 'consent finished' }, { ok: false, stop: stop({ message: 'Stopped at a captcha' }) }]);
+    const { outcomes } = await runConnectors(c.client, d.driver, { ...quick, ids: ['slack', 'acme'], published: true });
+    expect(d.driven).toEqual(['oauth slack', 'oauth acme']);
+    expect(c.calls).toEqual([]);
+    expect(outcomes.map(o => [o.id, o.status])).toEqual([['slack', 'published'], ['acme', 'error']]);
+    expect(outcomes[1]!.summary).toContain('captcha');
+    await expect(runConnectors(c.client, d.driver, { ...quick, published: true })).rejects.toThrow('--ids');
+  });
+
   it('waits and calls onboard again for a running vendor', async () => {
     const running: OnboardResult = { id: 'acme', state: 'running', stage: 'proof', reason: 'waiting', next: { kind: 'call', task: 'call connector_onboard again in about 20 seconds' } };
     const c = fakeClient([running], { acme: [published('acme')] });
