@@ -28,8 +28,8 @@ import { probeHardware, type HardwareProfile } from './hardware.js';
 import { learnGpuReach, withKnownReach } from './gpu-reach.js';
 import { buildServerArgs, freePort, httpJson, threadPlan, usesMmap, waitForHealth } from './launch.js';
 import {
-  heldByLiveProcess, memoryStopFile, readServerRecord, removeAllOwnLeasesSync, removeLeases, serverDir, sessionHeldElsewhere, startSupervisor, stopServer,
-  sweepOrphan, withStartLock, writeLease, type MemoryEvent, type ServerRecord,
+  heldByLiveProcess, memoryStopFile, readServerRecord, removeAllOwnLeasesSync, removeLeases, removeTurnLeases, serverDir, sessionHeldElsewhere, startSupervisor, stopServer,
+  sweepOrphan, withStartLock, writeLease, writeTurnLease, type MemoryEvent, type ServerRecord,
 } from './lifecycle.js';
 import { footprintKey, latestMeasurement, machineKey, measureServer, readFootprints, readMeasurements, writeMeasurement } from './measure.js';
 import { ensureModelFile, missingBytes } from './models.js';
@@ -59,6 +59,9 @@ interface EnsureLocalModelOptions {
   signal?: AbortSignal;
   /** Set only by a user action that has shown and accepted the download size. */
   allowDownload?: boolean;
+  /** The caller is a process RUNNING a turn on the model (a turn worker): it holds the server for that turn only
+   * (releaseLocalModelTurn), never for the chat it serves, which the window showing the chat holds. */
+  forTurn?: boolean;
 }
 
 export interface LocalModelEndpoint {
@@ -185,6 +188,9 @@ async function takeMemoryStops(): Promise<MemoryEvent[]> {
 
 export async function ensureLocalModel(options: EnsureLocalModelOptions): Promise<LocalModelEndpoint> {
   const progress = options.progress ?? (() => {});
+  // What this caller holds the server with: a turn's lease, or the lease of whoever shows the chat.
+  const take = (modelId: string): Promise<void> => options.forTurn ? writeTurnLease(modelId, options.sessionId) : writeLease(modelId, options.sessionId);
+  const dropOthers = (keep?: string): Promise<void> => options.forTurn ? removeTurnLeases(options.sessionId, keep) : removeLeases(options.sessionId, keep);
   // A pick becomes the default only once it can run here: chosen with
   // consent to download it, or already downloaded. A chat still naming a
   // model whose files were deleted must not make that the default for every
@@ -214,8 +220,8 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
     joinable = await liveServer(restarting.modelId);
   }
   if (joinable && healthy) {
-    if (!await sessionHeldElsewhere(joinable.modelId, options.sessionId)) await writeLease(joinable.modelId, options.sessionId);
-    await removeLeases(options.sessionId, joinable.modelId);
+    if (options.forTurn || !await sessionHeldElsewhere(joinable.modelId, options.sessionId)) await take(joinable.modelId);
+    await dropOthers(joinable.modelId);
     const notice = shrinkNotice(joinable.memoryEvent);
     const speed = (await latestMeasurement(joinable.modelId))?.promptPerSecond;
     return {
@@ -264,7 +270,7 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
     // Another process may have started it while this one waited.
     const started = await liveServer(model.id);
     if (started) {
-      await writeLease(model.id, options.sessionId);
+      await take(model.id);
       return started;
     }
     await sweepOrphan(model.id);
@@ -286,7 +292,7 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
 
     // The lease exists before the supervisor does: it exits as soon as it
     // finds none.
-    await writeLease(model.id, options.sessionId);
+    await take(model.id);
     try {
       const port = await freePort();
       const ramPart = fit.needBytes - fit.gpuBytes;
@@ -324,13 +330,13 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
         (seconds) => progress({ stage: 'start', message: `loading ${model.label}… ${seconds}s` }));
       return started;
     } catch (error) {
-      await removeLeases(options.sessionId);
+      await dropOthers();
       await stopServer(model.id);
       const tail = await logTail(model.id);
       throw new Error(`${model.label} did not start: ${(error as Error).message}${tail ? `\n${tail}` : ''}`);
     }
   });
-  await removeLeases(options.sessionId, model.id);
+  await dropOthers(model.id);
   // One started by another process may still be loading.
   await waitForHealth(record.port, () => pidIsAlive(record.supervisorPid),
     (seconds) => progress({ stage: 'start', message: `loading ${model.label}… ${seconds}s` }));
@@ -354,6 +360,22 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
  * other session holds it. */
 export async function releaseLocalModel(sessionId: string): Promise<void> {
   await removeLeases(sessionId);
+}
+
+/** The turn that held a model is over: its lease goes. The server stops once no one else holds it, so a window still
+ * showing the chat keeps it, and one that left the chat lets it go. */
+export async function releaseLocalModelTurn(sessionId: string): Promise<void> {
+  await removeTurnLeases(sessionId);
+}
+
+/** A model already running for this chat, held for whoever shows it: nothing is started or loaded, so it costs two
+ * file operations. False when none is running (a turn that failed to bring it up leaves nothing to hold). */
+export async function holdRunningLocalModel(sessionId: string, modelId?: string): Promise<boolean> {
+  const record = modelId ? await liveServer(modelId) : (await runningModels())[0];
+  if (!record) return false;
+  await writeLease(record.modelId, sessionId);
+  await removeLeases(sessionId, record.modelId);
+  return true;
 }
 
 let exitHookInstalled = false;

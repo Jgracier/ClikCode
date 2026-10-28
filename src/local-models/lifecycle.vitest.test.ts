@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { heldByLiveProcess, serverDir, sessionHeldElsewhere, writeLease } from './lifecycle';
+import { heldByLiveProcess, removeLeases, removeTurnLeases, serverDir, sessionHeldElsewhere, writeLease, writeTurnLease } from './lifecycle';
 
 const previous = process.env.CLIKCODE_LOCAL_MODELS_HOME;
 beforeEach(() => { process.env.CLIKCODE_LOCAL_MODELS_HOME = mkdtempSync(join(tmpdir(), 'cc-leases-')); });
@@ -30,6 +30,65 @@ describe('whether another process holds a session', () => {
     expect(await sessionHeldElsewhere('qwen3.5-4b', 'abc-123')).toBe(true);
     expect(await sessionHeldElsewhere('gpt-oss-20b', 'abc-123')).toBe(false);
   });
+});
+
+describe('a turn\'s lease', () => {
+  const leases = () => join(serverDir('qwen3.5-4b'), 'leases');
+
+  it('is its own file, kept apart from the lease of whoever shows the chat', async () => {
+    await writeLease('qwen3.5-4b', 'abc-123');
+    await writeTurnLease('qwen3.5-4b', 'abc-123');
+    expect(existsSync(join(leases(), `${process.pid}-abc-123.json`))).toBe(true);
+    expect(existsSync(join(leases(), `${process.pid}-turn-abc-123.json`))).toBe(true);
+    // Letting go of the chat does not let go of the turn, and the turn ending does not let go of the chat.
+    await removeLeases('abc-123');
+    expect(existsSync(join(leases(), `${process.pid}-abc-123.json`))).toBe(false);
+    expect(existsSync(join(leases(), `${process.pid}-turn-abc-123.json`))).toBe(true);
+    await writeLease('qwen3.5-4b', 'abc-123');
+    await removeTurnLeases('abc-123');
+    expect(existsSync(join(leases(), `${process.pid}-turn-abc-123.json`))).toBe(false);
+    expect(existsSync(join(leases(), `${process.pid}-abc-123.json`))).toBe(true);
+  });
+
+  it('holds the model, but is not a window showing the chat', async () => {
+    await writeTurnLease('qwen3.5-4b', 'abc-123');
+    expect(await heldByLiveProcess('qwen3.5-4b')).toBe(true);
+    // Another process running a turn does not make a window think someone shows the chat: it would not take its own hold.
+    mkdirSync(leases(), { recursive: true });
+    writeFileSync(join(leases(), '1-turn-abc-123.json'), '{}');
+    expect(await sessionHeldElsewhere('qwen3.5-4b', 'abc-123')).toBe(false);
+    writeFileSync(join(leases(), '1-abc-123.json'), '{}');
+    expect(await sessionHeldElsewhere('qwen3.5-4b', 'abc-123')).toBe(true);
+  });
+
+  it('keeps a running turn\'s model up when the window leaves the chat, and lets it go when the turn ends', async () => {
+    const { startSupervisor } = await import('./lifecycle');
+    const dir = serverDir('lease-test');
+    // The window shows the chat; a turn is running on the model.
+    await writeLease('lease-test', 's');
+    await writeTurnLease('lease-test', 's');
+    const record = await startSupervisor({
+      modelId: 'lease-test', dir, command: process.execPath, port: 1, alias: 'x', context: 1024,
+      args: ['-e', 'setInterval(() => {}, 1000)'], env: {}, idleMs: 0, pollMs: 100, leaseGraceMs: 400,
+    } as never);
+    const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    try {
+      // The window leaves the chat (found live 2026-10-28: the supervisor stopped the model 22 s after, mid-request).
+      await removeLeases('s');
+      await new Promise((done) => setTimeout(done, 1500));
+      expect(alive(record.supervisorPid)).toBe(true);
+      expect(alive(record.serverPid)).toBe(true);
+      expect(readFileSync(join(dir, 'supervisor.log'), 'utf8')).not.toContain('stopped');
+      // The turn ends with nobody showing the chat: the model goes.
+      await removeTurnLeases('s');
+      for (let waited = 0; waited < 8_000 && alive(record.supervisorPid); waited += 100) await new Promise((done) => setTimeout(done, 100));
+      expect(alive(record.supervisorPid)).toBe(false);
+      expect(readFileSync(join(dir, 'supervisor.log'), 'utf8')).toContain('no live ClikCode process holds a lease');
+    } finally {
+      try { process.kill(record.serverPid, 'SIGKILL'); } catch { /* gone */ }
+      try { process.kill(record.supervisorPid, 'SIGKILL'); } catch { /* gone */ }
+    }
+  }, 20_000);
 });
 
 describe('measured footprints', () => {

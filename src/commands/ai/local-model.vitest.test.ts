@@ -9,6 +9,8 @@ import type { HarnessSession } from '../../session/model';
 const engine = vi.hoisted(() => ({
   ensureLocalModel: vi.fn(),
   releaseLocalModel: vi.fn(async () => undefined),
+  releaseLocalModelTurn: vi.fn(async () => undefined),
+  holdRunningLocalModel: vi.fn(async () => true),
   localModelChoices: vi.fn(),
   prefetchLocalModel: vi.fn(),
 }));
@@ -26,6 +28,8 @@ vi.mock('../../local-models/index', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../local-models/index')>(),
   ensureLocalModel: engine.ensureLocalModel,
   releaseLocalModel: engine.releaseLocalModel,
+  releaseLocalModelTurn: engine.releaseLocalModelTurn,
+  holdRunningLocalModel: engine.holdRunningLocalModel,
   localModelChoices: engine.localModelChoices,
   prefetchLocalModel: engine.prefetchLocalModel,
   releaseLocalModelsOnExit: () => undefined,
@@ -40,7 +44,7 @@ vi.mock('../../runtime/lazy-bridge', async (importOriginal) => {
 });
 
 const {
-  ensureLocalModelForTurn, localModelChosen, localProgressText, reconcileLocalModelLeases, releaseHeldLocalModel, resetLocalModelHeldForTests,
+  holdLocalModelAfterTurn, localModelChosen, localModelTurnHooks, localProgressText, reconcileLocalModelLeases, releaseHeldLocalModel, resetLocalModelHeldForTests,
 } = await import('./local-model');
 const { aiSessionClose, aiSessionCreate, aiSessionSet, applyClikCodeLocalSessionPolicy } = await import('./sessions');
 const { aiSessionCommand } = await import('../../tui/slash/handlers');
@@ -64,6 +68,9 @@ beforeEach(() => {
   engine.ensureLocalModel.mockReset();
   engine.ensureLocalModel.mockResolvedValue({ baseUrl: 'http://127.0.0.1:1/v1', model: 'qwen3.5-4b', contextWindow: 8192 });
   engine.releaseLocalModel.mockClear();
+  engine.releaseLocalModelTurn.mockClear();
+  engine.holdRunningLocalModel.mockReset();
+  engine.holdRunningLocalModel.mockResolvedValue(true);
   files.missingBytes.mockReset();
   files.missingBytes.mockResolvedValue(0);
   vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
@@ -80,14 +87,45 @@ async function stored(value: HarnessSession): Promise<void> {
   await writeState(state);
 }
 
-describe('before a turn', () => {
-  it('brings up the session\'s model from this process, and nothing for any other route', async () => {
-    await ensureLocalModelForTurn(session({ model: 'qwen3.5-9b' }));
-    expect(engine.ensureLocalModel).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'qwen3.5-9b', sessionId: 's1' }));
-    engine.ensureLocalModel.mockClear();
-    await ensureLocalModelForTurn(session({ route: 'gateway' }));
-    await ensureLocalModelForTurn(undefined);
+/** The window showing a chat holds its model once a turn has brought it up. */
+async function windowHolds(value: HarnessSession): Promise<void> {
+  await stored(value);
+  await holdLocalModelAfterTurn(value.id);
+}
+
+describe('a turn on a model on this computer', () => {
+  it('is held by the process running it, for that turn: the lease is the turn\'s and goes with it', async () => {
+    const hooks = localModelTurnHooks('s1');
+    expect(hooks.forTurn).toBe(true);
+    await hooks.release();
+    expect(engine.releaseLocalModelTurn).toHaveBeenCalledWith('s1');
+    // Not the window\'s hold on the chat: that one stays with whoever shows it.
+    expect(engine.releaseLocalModel).not.toHaveBeenCalled();
+  });
+
+  it('asks nothing of the window before it starts: the model is brought up inside the turn', async () => {
+    await stored(session({ model: 'qwen3.5-9b' }));
+    await holdLocalModelAfterTurn('s1');
     expect(engine.ensureLocalModel).not.toHaveBeenCalled();
+  });
+
+  it('is held by the window afterwards, and only when it is running: nothing is started to hold it', async () => {
+    await stored(session({ model: 'qwen3.5-9b' }));
+    await holdLocalModelAfterTurn('s1');
+    expect(engine.holdRunningLocalModel).toHaveBeenCalledWith('s1', 'qwen3.5-9b');
+    engine.holdRunningLocalModel.mockClear();
+    await stored(session({ id: 'g1', route: 'gateway' }));
+    await holdLocalModelAfterTurn('g1');
+    await holdLocalModelAfterTurn('nothing-stored');
+    expect(engine.holdRunningLocalModel).not.toHaveBeenCalled();
+  });
+
+  it('is not held for a turn that failed to bring the model up', async () => {
+    engine.holdRunningLocalModel.mockResolvedValue(false);
+    await stored(session());
+    await holdLocalModelAfterTurn('s1');
+    await releaseHeldLocalModel('s1');
+    expect(engine.releaseLocalModel).not.toHaveBeenCalled();
   });
 
   it('moves only the label of a band already up, and gives it back: the band never drops, its clock never restarts', async () => {
@@ -100,24 +138,20 @@ describe('before a turn', () => {
       stopWaiting: () => { calls.push('stop'); label = undefined; },
       updateWaitingLabel: (text: string) => { calls.push(`label ${text}`); label = text; },
     } as never;
-    engine.ensureLocalModel.mockImplementation(async (options: { progress: (update: unknown) => void }) => {
-      options.progress({ stage: 'download', message: 'downloading model.gguf (200 B)', bytes: 50, totalBytes: 200 });
-      return { baseUrl: 'http://127.0.0.1:1/v1', model: 'qwen3.5-4b', contextWindow: 8192 };
-    });
     try {
-      await ensureLocalModelForTurn(session({ model: 'qwen3.5-4b' }));
+      const hooks = localModelTurnHooks('s1');
+      hooks.progress!({ stage: 'download', message: 'downloading model.gguf (200 B)', bytes: 50, totalBytes: 200 });
+      hooks.done();
     } finally { TERMINAL.active = undefined; }
     expect(calls).toEqual(['label downloading model.gguf (200 B) 25%', 'label thinking']);
   });
 
-  it('sends its progress to the surface that asked (the editor\'s busy line), not to stderr', async () => {
-    engine.ensureLocalModel.mockImplementation(async (options: { progress: (update: unknown) => void }) => {
-      options.progress({ stage: 'download', message: 'downloading model.gguf (200 B)', bytes: 150, totalBytes: 200 });
-      return { baseUrl: 'http://127.0.0.1:1/v1', model: 'qwen3.5-4b', contextWindow: 8192 };
-    });
+  it('shows its progress where the turn is followed (a worker\'s phase line), not on stderr', async () => {
     const shown: string[] = [];
-    await ensureLocalModelForTurn(session({ model: 'qwen3.5-4b' }), (label) => shown.push(label));
-    expect(shown).toEqual(['downloading model.gguf (200 B) 75%']);
+    const hooks = localModelTurnHooks('s1', (label) => shown.push(label));
+    hooks.progress!({ stage: 'start', message: 'loading Qwen3.8 27B… 12s' });
+    hooks.done();
+    expect(shown).toEqual(['loading Qwen3.8 27B… 12s']);
     expect(process.stderr.write).not.toHaveBeenCalled();
   });
 
@@ -134,15 +168,15 @@ describe('letting go', () => {
   it('releases only what this process took', async () => {
     await releaseHeldLocalModel('never-held');
     expect(engine.releaseLocalModel).not.toHaveBeenCalled();
-    await ensureLocalModelForTurn(session());
+    await windowHolds(session());
     await releaseHeldLocalModel('s1');
     await releaseHeldLocalModel('s1');
     expect(engine.releaseLocalModel).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the model only for the conversation the terminal shows, while it is on ClikCode Local', async () => {
-    await ensureLocalModelForTurn(session());
-    await ensureLocalModelForTurn(session({ id: 's2' }));
+    await windowHolds(session());
+    await windowHolds(session({ id: 's2' }));
     await reconcileLocalModelLeases(session({ id: 's2' }));
     expect(engine.releaseLocalModel.mock.calls).toEqual([['s1']]);
     // The shown conversation moved to a vendor harness.
@@ -151,15 +185,13 @@ describe('letting go', () => {
   });
 
   it('releases on close', async () => {
-    await stored(session({ messages: [{ role: 'user', content: 'hi' }] } as Partial<HarnessSession>));
-    await ensureLocalModelForTurn(session());
+    await windowHolds(session({ messages: [{ role: 'user', content: 'hi' }] } as Partial<HarnessSession>));
     await aiSessionClose('s1');
     expect(engine.releaseLocalModel).toHaveBeenCalledWith('s1');
   });
 
   it('releases when /settings route moves the session away', async () => {
-    await stored(session());
-    await ensureLocalModelForTurn(session());
+    await windowHolds(session());
     await aiSessionCommand('s1', '/settings route gateway');
     expect(engine.releaseLocalModel).toHaveBeenCalledWith('s1');
     expect((await readState()).sessions[0]!.route).toBe('gateway');
