@@ -228,6 +228,11 @@ export async function runModelStep(rt: TurnRuntime, modelClient: ModelClient, sy
     model: step.servedModel || rt.servedModel || undefined,
     ms: Date.now() - started, outcome: step.toolCalls.length ? 'tools' : 'text',
     tools: step.toolCalls.length, stop: step.stopReason,
+    // What the step read and how much of it the server already held: where a prompt cache is lost shows here, step by step,
+    // where the invocation log only has a turn's total.
+    ...(step.usage.input !== undefined ? { input: step.usage.input } : {}),
+    ...(step.usage.cached !== undefined ? { cached: step.usage.cached } : {}),
+    ...(step.usage.output !== undefined ? { output: step.usage.output } : {}),
   });
   return { kind: 'step', step, streamedThisStep };
 }
