@@ -160,6 +160,8 @@ export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime
   // which a larger-window model normally gets up front.
   const tools = smallSpecialists.all;
 
+  // With no skill to load, the tool that loads them is only schema the model must read every step.
+  let noSkills = false;
   const [loaded, savedRules, baseSystem, notebooksOnDisk] = await abortable(Promise.all([
     store.load(),
     input.permissionRules ? Promise.resolve(input.permissionRules.current) : loadPermissionRules(cwd),
@@ -167,7 +169,9 @@ export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime
     // tool that loads them is present.
     input.subagent ? input.subagent.system
       : (tools.some((tool) => tool.name === SKILL_TOOL) ? discoverSkills({ cwd, stateDir: input.stateDir, homeDir, turnId }) : Promise.resolve({ skills: [] }))
-        .then((catalog) => buildSystemPrompt({
+        .then((catalog) => {
+          noSkills = catalog.skills.length === 0;
+          return buildSystemPrompt({
           cwd, addDirs, homeDir, userConfigDir: input.userConfigDir ?? input.stateDir,
           skillsSection: [
             skillsPromptSection(catalog.skills, profile),
@@ -175,7 +179,8 @@ export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime
             tools.some((tool) => tool.name === TASK_TOOL_NAME || tool.name === 'agent') ? agentTypesPromptSection(enabledPluginAgents({ stateDir: input.stateDir, home: homeDir }), profile.skillDescriptionChars) : '',
           ].filter(Boolean).join('\n\n'), toolUsageGuidance: profile.toolUsageGuidance,
           ...(input.agentInstructions ? { agentInstructions: input.agentInstructions } : {}),
-        })),
+          });
+        }),
     workspaceHasNotebooks([cwd, ...addDirs]),
   ]), signal);
   const turnRules = input.permissionRules ?? { current: savedRules };
@@ -230,7 +235,7 @@ export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime
     advertised: (current) => {
       const mcpVisible = new Set(exposure.advertised(current).map((tool) => tool.name));
       const listing = rt.contextWindow !== undefined && rt.contextWindow <= 8_192 ? smallSpecialists : specialists;
-      return gateNotebookTool(listing.advertised(current).filter((tool) => tool.name === 'load_tools' || mcpVisible.has(tool.name)), current, notebooksOnDisk);
+      return gateNotebookTool(listing.advertised(current).filter((tool) => (tool.name === 'load_tools' || mcpVisible.has(tool.name)) && !(noSkills && tool.name === SKILL_TOOL)), current, notebooksOnDisk);
     },
     throwIfAborted,
     append: async (...added) => { rt.items.push(...added); await store.append(...added); },

@@ -1,4 +1,5 @@
 import { changed } from './line-diff.test-support.js';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -56,6 +57,20 @@ function harness(script: ScriptEntry[], overrides: Partial<AgentTurnInput> = {},
 }
 
 describe('runAgentLoop', () => {
+  it('offers the skill tool only when there is a skill to load', async () => {
+    // A repository root stops the search for skills there, so the user's own skills above the temp folder are not found.
+    execFileSync('git', ['init', '-q'], { cwd });
+    const none = harness([{ text: 'ok' }]);
+    await runAgentLoop(none.input);
+    expect(none.client.requests[0].tools.map((tool) => tool.name)).not.toContain('skill');
+    const dir = path.join(none.input.cwd, '.clikcode', 'skills', 'release');
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, 'SKILL.md'), '---\nname: release\ndescription: How to cut a release\n---\nRun the release script.\n');
+    const some = harness([{ text: 'ok' }], { cwd: none.input.cwd });
+    await runAgentLoop(some.input);
+    expect(some.client.requests[0].tools.map((tool) => tool.name)).toContain('skill');
+  });
+
   it('starts with discovery for an 8K model and loads coding schemas without losing permissions', async () => {
     const h = harness([
       { toolCalls: [{ id: 'load', name: 'load_tools', args: { tools: ['bash'] } }] },

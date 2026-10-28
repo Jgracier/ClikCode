@@ -15,7 +15,7 @@ export function exposeSpecialists(tools: readonly ToolDefinition[], smallWindow 
   const names = new Set(deferred.map((tool) => tool.name));
   const loader = defineTool<{ tools: string[] }>({
     name: LOAD_TOOLS, class: 'meta',
-    description: `Load specialist tool schemas before using them. All loaded tools retain their normal permissions. Available: ${deferred.map((tool) => smallWindow ? tool.name : `${tool.name}: ${tool.description.split(/\n|\. /)[0]!.slice(0, 100)}`).join('; ')}`,
+    description: `Load specialist tool schemas before using them. All loaded tools retain their normal permissions. Available: ${deferred.map((tool) => smallWindow ? tool.name : `${tool.name}: ${tool.description.split(/\n|\. |, /)[0]!.slice(0, 60)}`).join('; ')}`,
     parameters: { type: 'object', additionalProperties: false, required: ['tools'], properties: { tools: { type: 'array', minItems: 1, items: { type: 'string', enum: [...names] } } } },
     label: (args) => `Load ${args.tools.join(', ')}`,
     run: async (args) => {
