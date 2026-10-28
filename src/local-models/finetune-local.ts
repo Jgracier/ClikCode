@@ -174,6 +174,9 @@ export function trainerConfig(input: Pick<LocalFineTuneInput, 'base' | 'epochs' 
 export function containerScript(tag: string = LLAMA_CPP_TAG): string {
   return [
     'set -e',
+    // The container runs as root, so what it writes is root's: on EVERY exit, a failure included, hand the output and the caches back to the
+    // user (found live: a failed run's scratch and the model cache could not be deleted by the user who ran them).
+    'trap \'chown -R "$HOST_UID:$HOST_GID" /out /cache 2>/dev/null || true\' EXIT',
     'export HF_HOME=/cache/hf PIP_CACHE_DIR=/cache/pip',
     'mkdir -p /out/run',
     'echo "[ft] installing the trainer libraries"',
@@ -189,7 +192,6 @@ export function containerScript(tag: string = LLAMA_CPP_TAG): string {
     'CONVERT="python /tmp/llama.cpp/convert_hf_to_gguf.py /out/run/merged --outfile /out/model.gguf --outtype q8_0"',
     '$CONVERT --no-mtp || $CONVERT',
     'rm -rf /out/run',
-    'chown -R "$HOST_UID:$HOST_GID" /out',
     'echo CLIK_TRAINING_COMPLETE',
   ].join('\n');
 }

@@ -32,7 +32,9 @@ describe('what runs in the container', () => {
     expect(script).toContain('--outtype q8_0');
     // The MTP layer is left out when the architecture allows it (the merged text model has none), else the plain conversion runs.
     expect(lines).toContain('$CONVERT --no-mtp || $CONVERT');
-    expect(at('chown -R')).toBeLessThan(at('CLIK_TRAINING_COMPLETE'));
+    // Ownership goes back to the user on every exit (a trap set before anything can fail), covering the caches as well as the output.
+    expect(lines[1]).toBe('trap \'chown -R "$HOST_UID:$HOST_GID" /out /cache 2>/dev/null || true\' EXIT');
+    expect(lines.filter((line) => line.startsWith('chown'))).toEqual([]);
     expect(lines.at(-1)).toBe('echo CLIK_TRAINING_COMPLETE');
   });
 
