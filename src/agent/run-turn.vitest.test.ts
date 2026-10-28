@@ -1115,3 +1115,18 @@ describe('runAgentLoop', () => {
   });
 });
 
+
+describe('a model that sends far too many calls in one step', () => {
+  it('has the first 24 run and the rest answered as not run, asking for them again', async () => {
+    await fs.writeFile(path.join(cwd, 'f.txt'), 'content\n');
+    const calls = Array.from({ length: 30 }, (_, index) => ({ id: `c${index}`, name: 'read_file', args: { path: 'f.txt', offset: index + 1 } }));
+    const h = harness([{ toolCalls: calls }, { text: 'done' }]);
+    const result = await runAgentLoop(h.input);
+    expect(result.text).toBe('done');
+    const results = h.client.requests[1].items.filter((item) => item.type === 'tool_result');
+    expect(results).toHaveLength(30);
+    const skipped = results.filter((item) => item.type === 'tool_result' && item.output.startsWith('Not run: this step had more than 24 tool calls'));
+    expect(skipped).toHaveLength(6);
+    expect(skipped.every((item) => item.type === 'tool_result' && item.isError)).toBe(true);
+  });
+});

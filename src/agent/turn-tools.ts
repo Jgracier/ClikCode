@@ -217,6 +217,7 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
     if (!tool) {
       return finish({ output: `Unknown tool "${call.name}". Available tools: ${visibleTools(rt.advertised(rt.items), session.plan.active).map((entry) => entry.name).join(', ')}.`, isError: true });
     }
+    if (call.skipped) return finish({ output: call.skipped, isError: true });
     if (call.argumentsError) {
       return finish({ output: `The arguments for ${tool.name} were not a valid JSON object (${call.argumentsError}). Call the tool again with a single JSON object.`, isError: true });
     }
