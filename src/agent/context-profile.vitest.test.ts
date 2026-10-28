@@ -73,3 +73,36 @@ describe('profile tool specs', () => {
     expect(JSON.stringify(PROFILES.minimal.shapeSpecs(specs))).toBe(JSON.stringify(shaped));
   });
 });
+
+describe('the compact profile', () => {
+  const specs = [
+    { name: 'read_file', description: 'Read a file and return its text. Use offset and limit for a large file; never read a binary.', parameters: { type: 'object', additionalProperties: false, required: ['path'], properties: { path: { type: 'string', description: 'The file to read, relative to the working directory or absolute. Absolute paths outside it are refused.' }, offset: { type: 'integer', minimum: 1, description: 'First line.' } } } },
+  ];
+
+  it('keeps what a call must look like and cuts the advice: first sentences, short parameter notes, no closed-object marker', () => {
+    const [shaped] = PROFILES.compact.shapeSpecs(specs);
+    expect(shaped!.description).toBe('Read a file and return its text.');
+    const parameters = shaped!.parameters as { required: string[]; properties: Record<string, { type: string; minimum?: number; description?: string }>; additionalProperties?: boolean };
+    expect(parameters.required).toEqual(['path']);
+    expect(parameters.additionalProperties).toBeUndefined();
+    expect(parameters.properties.path).toEqual({ type: 'string', description: 'The file to read, relative to the working directory or…' });
+    expect(parameters.properties.offset).toEqual({ type: 'integer', minimum: 1, description: 'First line.' });
+  });
+
+  it('is deterministic (the specs are part of the cached prefix), leaves its input alone, and is chosen only by the override', () => {
+    const before = JSON.stringify(specs);
+    expect(JSON.stringify(PROFILES.compact.shapeSpecs(specs))).toBe(JSON.stringify(PROFILES.compact.shapeSpecs(specs)));
+    expect(JSON.stringify(specs)).toBe(before);
+    expect(parseContextProfile('Compact')).toBe('compact');
+    expect(resolveContextProfile({ hints: { hosted: true }, env: { CLIKCODE_CONTEXT_PROFILE: 'compact' } as never }).name).toBe('compact');
+    for (const hints of [{ hosted: true }, { contextWindow: 8192 }, { promptPerSecond: 60 }, {}]) expect(selectContextProfile(hints)).not.toBe('compact');
+  });
+});
+
+describe('the bare profile', () => {
+  it('keeps names, types, required fields and enums, and no notes: what a model that learned the tools still needs to be asked to call them', () => {
+    const [shaped] = PROFILES.bare.shapeSpecs([{ name: 'edit_file', description: 'Replace text in a file. Fails when the old text is not unique, so add context.', parameters: { type: 'object', additionalProperties: false, required: ['path'], properties: { path: { type: 'string', description: 'The file.' }, mode: { type: 'string', enum: ['a', 'b'], description: 'How.' } } } }]);
+    expect(shaped).toEqual({ name: 'edit_file', description: 'Replace text in a file.', parameters: { type: 'object', required: ['path'], properties: { path: { type: 'string' }, mode: { type: 'string', enum: ['a', 'b'] } } } });
+    expect(parseContextProfile('bare')).toBe('bare');
+  });
+});
