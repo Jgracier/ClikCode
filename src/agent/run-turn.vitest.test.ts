@@ -974,11 +974,11 @@ describe('runAgentLoop', () => {
       const h = harness([{ error: gatewayError('CONTEXT_TOO_LARGE') }, { text: 'continued with bounded context' }], { contextWindow: 8192 });
       Object.assign(h.client, { contextHints: { contextWindow: 8192 } });
       const store = new ConversationStore(stateDir, h.input.sessionId);
-      await store.append({ type: 'text', role: 'assistant', text: 'older evidence '.repeat(4000) });
+      await store.append({ type: 'text', role: 'assistant', text: 'older evidence '.repeat(500) });
       expect(await driven(runAgentLoop(h.input))).toMatchObject({ stopReason: 'completed' });
       expect(h.client.requests).toHaveLength(2);
       expect(JSON.stringify(h.client.requests[1].items).length).toBeLessThan(JSON.stringify(h.client.requests[0].items).length);
-      expect((await store.load())[0]).toMatchObject({ text: 'older evidence '.repeat(4000) });
+      expect((await store.load())[0]).toMatchObject({ text: 'older evidence '.repeat(500) });
     });
 
     it('is the answer when the failure is about the account, not the moment', async () => {

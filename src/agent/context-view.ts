@@ -135,6 +135,9 @@ const TAIL_NOTE_ITEM: ConversationItem = { type: 'text', role: 'assistant', text
  * server re-reads about as many tokens as the conversation grew by, not the whole view at every step. */
 const TAIL_STEP_SHARE = 0.5;
 
+/** The share of the budget the user's earlier requests may take ahead of the tail, when they are kept. */
+const PIN_SHARE = 0.25;
+
 /**
  * A view bounded by what the model can read, and stable: the conversation from one cut point to the end, in order.
  *
@@ -148,13 +151,14 @@ const TAIL_STEP_SHARE = 0.5;
  */
 export function stableTail(
   input: { system: string; items: readonly ConversationItem[]; tools: readonly ToolSpec[]; scale: number; maxItems: number },
-  windowBudget: number, readBudget: number,
+  windowBudget: number, readBudget: number, options: { pinRequests?: boolean } = {},
 ): ContextView | undefined {
   const all = groups(input.items);
   const requiredAt = all.findIndex((group) => group.required);
   if (requiredAt < 0) return undefined;
   const empty = estimateRequestTokens('', [], []);
-  const tokens = all.map((group) => Math.ceil((estimateRequestTokens('', group.items, []) - empty) * input.scale));
+  const tokensOf = (items: readonly ConversationItem[]) => Math.ceil((estimateRequestTokens('', items, []) - empty) * input.scale);
+  const tokens = all.map((group) => tokensOf(group.items));
   const before: number[] = [];
   const itemsFrom: number[] = new Array(all.length + 1).fill(0);
   let running = 0;
@@ -162,8 +166,25 @@ export function stableTail(
   for (let index = all.length - 1; index >= 0; index -= 1) itemsFrom[index] = itemsFrom[index + 1]! + all[index]!.items.length;
   const total = running;
   const fixed = Math.ceil(estimateRequestTokens(input.system, [TAIL_NOTE_ITEM], input.tools) * input.scale);
-  const tail = (from: number): number => fixed + total - before[from]!;
-  const fits = (from: number): boolean => tail(from) <= readBudget && itemsFrom[from]! + 1 <= input.maxItems;
+  // The user's own earlier requests (the task and its constraints) stay verbatim ahead of the tail, oldest first, up to a share of
+  // the budget. Which are kept depends only on the cut, so they change when the cut moves and not when the conversation appends.
+  const pinned = (from: number): ConversationItem[] => {
+    if (!options.pinRequests) return [];
+    const out: ConversationItem[] = [];
+    let used = 0;
+    for (const group of all.slice(0, from)) {
+      const first = group.items[0];
+      if (!first || !isUserRequest(first)) continue;
+      const cost = tokensOf([first]);
+      if (used + cost > readBudget * PIN_SHARE) continue;
+      used += cost;
+      out.push(first);
+    }
+    return out;
+  };
+  const pinnedCost = (from: number) => tokensOf(pinned(from));
+  const tail = (from: number): number => fixed + total - before[from]! + (options.pinRequests ? pinnedCost(from) : 0);
+  const fits = (from: number): boolean => tail(from) <= readBudget && itemsFrom[from]! + 1 + pinned(from).length <= input.maxItems;
 
   const step = Math.max(1, Math.floor(readBudget * TAIL_STEP_SHARE));
   let cut = requiredAt;
@@ -179,7 +200,7 @@ export function stableTail(
   // conversation is one request): no note, for there is nothing to say.
   if (cut === 0) return { items: input.items, tools: input.tools, estimatedTokens: Math.ceil(estimateRequestTokens(input.system, input.items, input.tools) * input.scale), omittedGroups: 0 };
   const kept = all.slice(cut).flatMap((group) => group.items);
-  const view = [TAIL_NOTE_ITEM, ...kept];
+  const view = [...pinned(cut), TAIL_NOTE_ITEM, ...kept];
   return { items: view, tools: input.tools, estimatedTokens: Math.ceil(estimateRequestTokens(input.system, view, input.tools) * input.scale), omittedGroups: cut };
 }
 
@@ -201,6 +222,13 @@ export function fitContext(input: {
   // A model that reads slowly is held to what it reads in about two minutes, by a view that moves only forward (stableTail).
   if (input.readBudget && input.readBudget > 0 && initial > input.readBudget) {
     const tail = stableTail({ ...input, scale, maxItems }, budget, input.readBudget);
+    if (tail) return tail;
+  }
+  // Every other route gets the same stable view once the conversation outgrows its window: the relevance fit below picks
+  // different groups at each step, so a server that keeps the prefix it has read re-reads everything each time. The relevance
+  // fit stays as the fallback when no tail can hold the latest request.
+  else if ((initial > budget || input.items.length > maxItems) && budget > 0) {
+    const tail = stableTail({ ...input, scale, maxItems }, budget, budget, { pinRequests: true });
     if (tail) return tail;
   }
 
