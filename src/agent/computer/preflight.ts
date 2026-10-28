@@ -170,7 +170,12 @@ export async function postToClikDeploy(result: PreflightResult, signal?: AbortSi
 
 /** The real run: ClikCode's Chrome, the installed release, ClikDeploy. */
 export async function runPreflightHere(stateDir: string, options: { post?: boolean; signal?: AbortSignal } = {}): Promise<PreflightResult> {
-  const { throwawayComputerPage } = await import('./browser.js');
-  return runPreflight({ stateDir, openPage: () => throwawayComputerPage(stateDir) as unknown as Promise<PreflightPage>,
-    ...(options.post === false ? {} : { post: result => postToClikDeploy(result, options.signal) }) });
+  const { throwawayComputerPage, releaseComputerBrowser } = await import('./browser.js');
+  try {
+    return await runPreflight({ stateDir, openPage: () => throwawayComputerPage(stateDir) as unknown as Promise<PreflightPage>,
+      ...(options.post === false ? {} : { post: result => postToClikDeploy(result, options.signal) }) });
+  } finally {
+    // Let go of the connection to the shared Chrome (it keeps running), or the command line never exits.
+    await bounded(releaseComputerBrowser(stateDir), 5_000);
+  }
 }
