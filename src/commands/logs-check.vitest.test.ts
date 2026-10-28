@@ -50,4 +50,31 @@ describe('logs --check', () => {
     expect(text).toContain('Nothing needs attention.');
     expect(text).toContain('Turns: 1 completed');
   });
+
+  describe('the share of each step the server had already read', () => {
+    const step = (minute: number, input: number, cached: number, pid = 50, session = 'abc') => entry(minute, pid, 'turn.step', { model: 'm1', input, cached, session });
+
+    it('leaves out the first step of a worker, counts the cold ones, and reports nothing wrong for a healthy run', () => {
+      const entries = [step(0, 8000, 0), ...Array.from({ length: 12 }, (_, index) => step(index + 1, 8000 + index * 100, 7800 + index * 100))];
+      const report = healthReport(entries);
+      expect(report.cache).toEqual([{ model: 'm1', steps: 12, input: expect.any(Number), cached: expect.any(Number), share: expect.any(Number), coldSteps: 0 }]);
+      expect(report.cache[0]!.share).toBeGreaterThan(0.95);
+      expect(report.findings).toEqual([]);
+      expect(formatHealth(report)).toContain('Cache: m1 ');
+    });
+
+    it('flags a model whose steps keep being read again from the start', () => {
+      const entries = [step(0, 8000, 0), ...Array.from({ length: 12 }, (_, index) => step(index + 1, 8000, index % 4 === 0 ? 7900 : 500))];
+      const report = healthReport(entries);
+      expect(report.cache[0]).toMatchObject({ steps: 12, coldSteps: 9 });
+      expect(report.findings.some((line) => line.startsWith('m1 had ') && line.includes('re-reading'))).toBe(true);
+    });
+
+    it('ignores steps from servers that report no cached count, and too few steps to judge', () => {
+      const entries = [step(0, 8000, 0), ...Array.from({ length: 3 }, (_, index) => step(index + 1, 8000, 100)), entry(9, 50, 'turn.step', { model: 'm2', input: 9000, session: 'abc' })];
+      const report = healthReport(entries);
+      expect(report.cache.map((row) => row.model)).toEqual(['m1']);
+      expect(report.findings).toEqual([]);
+    });
+  });
 });
