@@ -64,6 +64,8 @@ export interface BrowserDriver {
 
 export interface RunnerOptions {
   ids?: string[]; limit?: number; parallel?: number;
+  /** With `ids`: connect only. Each id is sent straight to the consent driver, never through onboarding (which refuses a connector already published to users and developers). */
+  published?: boolean;
   /** Most actions per vendor (default 12). */ maxSteps?: number;
   /** Most time per vendor in ms (default 300000). */ maxMs?: number;
   dryRun?: boolean;
@@ -378,6 +380,22 @@ async function defaultWrite(path: string, text: string): Promise<void> {
 
 /** One bounded run: one batch of up to `limit` vendors, each worked until finished, handed on, or out of budget. */
 export async function runConnectors(client: DeployClient, driver: BrowserDriver, options: RunnerOptions = {}): Promise<{ outcomes: VendorOutcome[]; skipped: Array<{ id: string; why: string }> }> {
+  if (options.published) {
+    if (!options.ids?.length) throw new Error('--published needs --ids: it connects the named connectors only.');
+    const outcomes: VendorOutcome[] = [];
+    for (const id of options.ids) {
+      const wait = await driver.backoff?.(id);
+      const outcome: VendorOutcome = wait
+        ? { id, status: 'waiting', steps: 0, browserActions: 0, stage: 'connect', summary: `backed off after a captcha until ${wait.toISOString()}`, actions: [], backoffUntil: wait.toISOString() }
+        : await driver.oauthConnect(id).then(done => done.ok
+          ? { id, status: 'published' as const, steps: 1, browserActions: 1, stage: 'connect', summary: say(done.note ?? 'consent finished, ClikDeploy shows an active connection'), actions: ['connect only (published connector): consent driver'] }
+          : { id, status: 'error' as const, steps: 1, browserActions: 1, stage: 'connect', summary: cap(say(done.stop.message), 300), actions: ['connect only (published connector): consent driver'] },
+        (error: unknown) => ({ id, status: 'error' as const, steps: 1, browserActions: 0, stage: 'connect', summary: cap(say(error instanceof Error ? error.message : String(error)), 300), actions: [] }));
+      options.log?.(`${id}: ${outcome.status}${outcome.summary ? ` - ${outcome.summary}` : ''}`);
+      outcomes.push(outcome);
+    }
+    return { outcomes, skipped: [] };
+  }
   const limit = Math.min(Math.max(options.limit ?? options.ids?.length ?? 5, 1), 25);
   const batch = await client.batch({ ...(options.ids?.length ? { ids: options.ids } : { limit }), parallel: Math.min(Math.max(options.parallel ?? 1, 1), 4) });
   options.log?.(`advanced ${batch.results.length} vendors by one step`);

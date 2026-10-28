@@ -94,6 +94,7 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .option('--parallel <n>', 'Vendors worked at once (default 1, at most 4; the browser still takes turns)')
     .option('--max-steps <n>', 'Most actions per vendor (default 12)')
     .option('--max-minutes <n>', 'Most minutes per vendor (default 5)')
+    .option('--published', 'With --ids: connect only. Send each id straight to the consent driver, even when it is already published to users and developers (onboarding refuses those)')
     .option('--dry-run', 'Show the plan per vendor and change nothing')
     .action(async (flags: import('../commands/connectors.js').ConnectorsRunFlags) => (await import('../commands/connectors.js')).connectorsRun(flags));
   connectors.command('resume <id>').description('Carry on with a connector whose keygrab could not finish: reattach to its parked hidden tab, optionally press one thing or go to one address, and continue getting the API key')

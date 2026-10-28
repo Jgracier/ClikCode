@@ -2,7 +2,7 @@ import { stateDirectory } from '../session/store/paths.js';
 import { emitResult } from '../cli/structured-output.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
 
-export interface ConnectorsRunFlags { limit?: string; ids?: string; parallel?: string; dryRun?: boolean; maxSteps?: string; maxMinutes?: string }
+export interface ConnectorsRunFlags { limit?: string; ids?: string; parallel?: string; dryRun?: boolean; maxSteps?: string; maxMinutes?: string; published?: boolean }
 
 const number = (value: string | undefined, name: string, min: number, max: number): number | undefined => {
   if (value === undefined) return undefined;
@@ -16,8 +16,9 @@ export async function connectorsRun(flags: ConnectorsRunFlags): Promise<void> {
   const [{ dryRun, runConnectors }, { liveClient, liveDriver }] = await Promise.all([import('../agent/computer/connector-runner.js'), import('../agent/computer/connector-runner-live.js')]);
   const ids = flags.ids?.split(',').map(s => s.trim()).filter(Boolean);
   if (ids?.some(id => !/^[a-z0-9][a-z0-9-]{0,63}$/.test(id))) throw new Error('--ids are connector ids: lower-case letters, digits and dashes, separated by commas.');
+  if (flags.published && !ids?.length) throw new Error('--published needs --ids: it connects the named connectors only.');
   const limit = number(flags.limit, 'limit', 1, 25), parallel = number(flags.parallel, 'parallel', 1, 4), maxSteps = number(flags.maxSteps, 'max-steps', 1, 50), maxMinutes = number(flags.maxMinutes, 'max-minutes', 1, 60);
-  const options = { ...(ids?.length ? { ids } : {}), ...(limit ? { limit } : {}), ...(parallel ? { parallel } : {}), ...(maxSteps ? { maxSteps } : {}), ...(maxMinutes ? { maxMs: maxMinutes * 60_000 } : {}) };
+  const options = { ...(ids?.length ? { ids } : {}), ...(flags.published ? { published: true } : {}), ...(limit ? { limit } : {}), ...(parallel ? { parallel } : {}), ...(maxSteps ? { maxSteps } : {}), ...(maxMinutes ? { maxMs: maxMinutes * 60_000 } : {}) };
   const client = liveClient();
   const driver = liveDriver({ stateDir: stateDirectory() });
   if (flags.dryRun) {
