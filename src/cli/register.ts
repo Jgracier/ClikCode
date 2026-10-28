@@ -296,6 +296,14 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .option('--amount <usd>', 'Whole dollars, 5-500 (default: your account\'s top-up amount)')
     .option('--auto-topup <on|off>', 'Turn automatic top-up of your saved card on or off, instead of buying')
     .action((options: { amount?: string; autoTopup?: string }) => later(statusCommands, 'aiGatewayCredit')(config, options));
+  gateway.command('finetune <dataset>').description('Fine-tune a model on your data (JSONL or CSV) with ClikDeploy: a GPU (billed), or --hardware cpu: your own connected machine at no charge, else a rented CPU (small models)')
+    .requiredOption('--base <model>', 'The base model, e.g. Qwen/Qwen2.5-0.5B-Instruct')
+    .option('--hardware <gpu|cpu>', 'Where to train (default gpu)')
+    .option('--epochs <count>', 'Passes over the data, 1-10')
+    .option('--name <name>', 'A name for the job')
+    .option('--yes', 'Start at the quoted price; without it the quote is shown and nothing starts')
+    .option('--no-wait', 'Start it and return, instead of following it to its end')
+    .action((dataset: string, options: Record<string, unknown>) => later(() => import('../commands/ai/finetune.js'), 'aiGatewayFineTune')(config, dataset, options));
   gateway.command('login').description('Sign in to ClikDeploy Gateway')
     .option('--github', 'Use GitHub OAuth instead of Google OAuth')
     .action(async (options) => { await later(() => import('../commands/gateway.js'), 'gatewayLogin')(config, { google: !options.github, github: Boolean(options.github) }); });
