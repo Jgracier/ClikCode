@@ -13,7 +13,7 @@ import type { ConversationItem, AgentTurnInput, AgentTurnResult, ModelToolCall }
 import type { SubagentCall, ToolContext, ToolDefinition, ToolRunResult } from './tool-contract.js';
 import { recordUsage } from './usage.js';
 import { createSubagentRunner } from './subagent.js';
-import { STALL_LIMIT } from './stall.js';
+import { REPEAT_CHECKED, REPEAT_NOTE_AT, REPEAT_STOP_AT, STALL_LIMIT } from './stall.js';
 import type { AiHarnessPermissionMode } from '../harness/definition.js';
 import { lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { firstErrorLine } from '../turn/tool-log.js';
@@ -319,6 +319,23 @@ export async function runToolCalls(rt: TurnRuntime, runner: ToolRunner, calls: r
       mayChangeState: toolClass === 'write' || toolClass === 'exec',
     });
     if (stalled) rt.stalledCall ??= call;
+    if (!outcome.isError && REPEAT_CHECKED.has(call.name)) {
+      const times = rt.repeats.record(`${call.name}\0${stableStringify(call.args)}`, outcome.output);
+      if (times >= REPEAT_NOTE_AT && (!rt.repeatedCall || times > rt.repeatedCall.times)) rt.repeatedCall = { call, times };
+    }
+  }
+  const repeated = rt.repeatedCall;
+  rt.repeatedCall = undefined;
+  if (repeated && repeated.times >= REPEAT_STOP_AT) {
+    // Told at every repeat since the third (below), still at it: end here with what was done, rather than spend the rest of the budget.
+    const summary = `Stopped: ${repeated.call.name} has now returned exactly the same result ${repeated.times} times, so repeating it cannot change anything. What is done so far is in place; tell me what to do next if it is not enough.`;
+    input.onResponseDelta?.(`${rt.needsSeparator ? '\n\n' : ''}${summary}`, 'append');
+    rt.segments.push(summary);
+    await rt.append({ type: 'text', role: 'assistant', text: summary });
+    return rt.result({ stopReason: 'completed' });
+  }
+  if (repeated) {
+    await rt.append({ type: 'text', role: 'user', source: 'harness', text: `[harness] ${repeated.call.name}(${JSON.stringify(repeated.call.args).slice(0, 300)}) has now returned exactly the same result ${repeated.times} times. Nothing it checks can change by repeating it. Use the result you have: give your answer now, or do something different.` });
   }
   if (rt.stalledCall) {
     await rt.append({ type: 'text', role: 'user', text: `[harness] The call ${rt.stalledCall.name}(${JSON.stringify(rt.stalledCall.args).slice(0, 400)}) has now failed ${STALL_LIMIT} times in a row with identical arguments and nothing changed in between. Repeating it will not work. Tools are disabled for this reply: explain to the user what you were trying to do, what is failing, and what you need from them.` });

@@ -25,3 +25,24 @@ export class StallGuard {
     return count >= STALL_LIMIT;
   }
 }
+
+/** The same call giving the same output this many times: the model is checking something that cannot change. */
+export const REPEAT_NOTE_AT = 3;
+/** And this many: it is not going to stop on its own, so the turn ends with what was done. */
+export const REPEAT_STOP_AT = 6;
+/** Calls whose identical answers mean no progress. Polling tools (bash_output, wait, monitor) are expected to repeat. */
+export const REPEAT_CHECKED = new Set(['read_file', 'list_dir', 'glob', 'grep', 'bash']);
+
+/** Counts how often each call has returned exactly the same output. A different output (the file changed, the test now passes)
+ * starts the count again, so re-reading after a real change never counts. */
+export class RepeatGuard {
+  private readonly seen = new Map<string, { output: string; count: number }>();
+
+  /** Record a successful call's output; returns how many times in a row this call has now given exactly it. */
+  record(key: string, output: string): number {
+    const before = this.seen.get(key);
+    const count = before && before.output === output ? before.count + 1 : 1;
+    this.seen.set(key, { output, count });
+    return count;
+  }
+}
