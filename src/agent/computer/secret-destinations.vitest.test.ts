@@ -2,7 +2,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import { addDestination, destinationProblem, loadDestinations, normalizeSendTo, removeDestination, sendToDestinations, slotsOf } from './secret-destinations.js';
+import { addDestination, declaredConnectionValues, destinationProblem, loadDestinations, normalizeSendTo, removeDestination, sendToDestinations, slotsOf } from './secret-destinations.js';
 import { forgetSecrets, registerSecret } from './secret-scrubber.js';
 import { forgetCliStdinSupport, versionAtLeast } from './cli-stdin-support.js';
 import { lockCredentialVault, saveNamedSecret } from './credential-vault.js';
@@ -290,6 +290,34 @@ it('connectionValues keeps the read-back: NOT connected when nothing is stored, 
   expect(await problem({ 'x y': 'a' })).toContain('not a plain identifier');
   expect(await problem([1])).toContain('must be a map');
   expect(await problem({ a: 'b' }, 'clikdeploy-secret')).toContain('only goes with clikdeploy-connection');
+});
+
+it('values is the plain name for connectionValues, checked against the connector\'s declared values, with the allowed names and format in the error', async () => {
+  const declared = async (id: string) => id === 'knack' ? { app_id: { label: 'Application ID', description: 'Settings, API & Code' } } : id === 'plain' ? {} : undefined;
+  const plan = normalizeSendTo({ to: 'clikdeploy-connection', with: { integration: 'knack' }, values: { app_id: ' 5f1c2d3e4a ' } })!;
+  expect(plan[0]).toMatchObject({ connectionValues: { app_id: ' 5f1c2d3e4a ' } });
+  expect(plan[0]).not.toHaveProperty('values');
+  expect(await destinationProblem(dir, plan, declared)).toBeUndefined();
+  await fakeConnect(pretty({ status: 'success', data: { success: true } }), shown({ id: 'c1', status: 'active' }));
+  await sendToDestinations(dir, plan, VALUE);
+  expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8')).baseUrlVariables).toEqual({ app_id: '5f1c2d3e4a' });
+  const missing = await destinationProblem(dir, normalizeSendTo({ to: 'clikdeploy-connection', with: { integration: 'knack' } })!, declared);
+  expect(missing).toContain('needs a value for app_id');
+  expect(missing).toContain('Application ID');
+  expect(missing).toContain('letters, digits, dot, dash or underscore');
+  const wrong = await destinationProblem(dir, normalizeSendTo({ to: 'clikdeploy-connection', with: { integration: 'knack' }, values: { subdomain: 'x' } })!, declared);
+  expect(wrong).toContain('does not take');
+  expect(wrong).toContain('app_id');
+  expect(await destinationProblem(dir, normalizeSendTo({ to: 'clikdeploy-connection', with: { integration: 'plain' }, values: { a: 'b' } })!, declared)).toContain('takes no values');
+  // A connector that cannot be looked up is not blocked.
+  expect(await destinationProblem(dir, normalizeSendTo({ to: 'clikdeploy-connection', with: { integration: 'other' } })!, declared)).toBeUndefined();
+});
+
+it('declaredConnectionValues reads the proxy variables of integrations show', async () => {
+  await fake('clikdeploy', `echo '{"status":"success","data":{"id":"kommo","proxy":{"base_url":"https://{subdomain}.kommo.com","variables":{"subdomain":{"label":"Subdomain"}}}}}'`);
+  expect(await declaredConnectionValues('kommo')).toEqual({ subdomain: { label: 'Subdomain' } });
+  await fake('clikdeploy', `echo '{"status":"success","data":{"id":"x"}}'`);
+  expect(await declaredConnectionValues('x')).toBeUndefined();
 });
 
 it('versionAtLeast ignores the build hash and compares numerically', () => {

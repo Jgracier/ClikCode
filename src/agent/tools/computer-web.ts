@@ -34,7 +34,7 @@ import { applyHttpAuth, clearHttpAuth, denyPermissionsFor, runCookies, runPdf, r
 import { approvedUploadPath, isUploadPath } from '../computer/upload-files.js';
 import { bindDownloads, describeDownloads, downloadNotes } from '../computer/downloads.js';
 import { SEND_TO_HELP, SEND_TO_SCHEMA } from './store-secret.js';
-import { destinationProblem, normalizeSendTo, type Destination } from '../computer/secret-destinations.js';
+import { declaredConnectionValues, destinationProblem, normalizeSendTo, type Destination } from '../computer/secret-destinations.js';
 import { captureSecret } from '../computer/secret-capture.js';
 import { emailConnected, waitForEmail } from '../computer/email-api.js';
 import { codeFromMailbox, looksLikeCodeEmail, looksLikeLinkEmail, verificationCode } from '../computer/email-code.js';
@@ -1319,7 +1319,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
     case 'capture_secret': {
       // Before anything is clicked: a key must not be created for a plan that cannot deliver it.
       const plan = normalizeSendTo(args.send_to);
-      const planProblem = plan?.length ? await destinationProblem(ctx.stateDir, plan) : undefined;
+      const planProblem = plan?.length ? await destinationProblem(ctx.stateDir, plan, (id) => declaredConnectionValues(id, ctx.signal)) : undefined;
       if (planProblem) throw new Error(`${planProblem} Nothing was clicked.`);
       const triggerLabel = args.target ? (await controlName(page, args.target)) ?? (REF.test(args.target.trim()) ? undefined : args.target.trim()) : undefined;
       const name = args.secret_name?.trim() || `${new URL(page.url()).hostname.replace(/^www\./, '')}/key`;

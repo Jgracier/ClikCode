@@ -18,7 +18,7 @@ import { scrubSecrets } from './secret-scrubber.js';
 
 /** `connectionValues`: for the two ClikDeploy connection destinations, the per-account values a connector's base URL needs
  * ({app_id: "WJUQDEJ3SG"}); sent to ClikDeploy's connect route as `baseUrlVariables`. Not secrets. */
-export type Destination = { to: string; with?: Record<string, string>; connectionValues?: Record<string, string> | string };
+export type Destination = { to: string; with?: Record<string, string>; connectionValues?: Record<string, string> | string; /** The plain name of `connectionValues`. */ values?: Record<string, string> | string };
 /** `vaultSlots`: slots whose value may be `secret:<saved name>`, read from the vault when it is sent, so the agent
  * never sees it. For a value that is not a secret but looks like one to every filter (an OAuth client id). */
 type Template = { run: string[]; stdin?: string; about?: string; vaultSlots?: string[];
@@ -49,11 +49,16 @@ export const DEFAULT_DESTINATIONS: Readonly<Record<string, Template>> = {
 
 /** A plan in whatever honest shape the agent gave it: a list, one {to, with}, or just a name. */
 export function normalizeSendTo(value: unknown): Destination[] | undefined {
-  if (Array.isArray(value)) return value as Destination[];
+  const plain = (item: Destination): Destination => {
+    if (!item || typeof item !== 'object' || item.values === undefined) return item;
+    const { values, ...rest } = item;
+    return item.connectionValues === undefined ? { ...rest, connectionValues: values } : rest;
+  };
+  if (Array.isArray(value)) return (value as Destination[]).map(plain);
   // A harness whose cached schema lacks a nested argument can hand it over as JSON text.
   if (typeof value === 'string' && /^\s*[[{]/.test(value)) { try { return normalizeSendTo(JSON.parse(value)); } catch { return undefined; } }
   if (typeof value === 'string' && value) return [{ to: value }];
-  if (value && typeof value === 'object') return [value as Destination];
+  if (value && typeof value === 'object') return [plain(value as Destination)];
   return undefined;
 }
 
@@ -65,6 +70,7 @@ const SAFE_VALUE = /^[A-Za-z0-9_][\w.@:/ -]{0,119}$/;
 const VAULT_REF = /^secret:([A-Za-z0-9][\w./-]{0,80})$/;
 const VALUE_NAME = /^[A-Za-z_][\w-]{0,40}$/;
 const VALUE_TEXT = /^[A-Za-z0-9][\w.-]{0,119}$/;
+const VALUE_FORMAT = 'letters, digits, dot, dash or underscore, no spaces, slashes or https://';
 
 /** The connection values as a plain map, or the problem with them. A harness may hand the map over as JSON text. */
 function readConnectionValues(raw: unknown): { values?: Record<string, string>; problem?: string } {
@@ -75,8 +81,8 @@ function readConnectionValues(raw: unknown): { values?: Record<string, string>; 
   const values: Record<string, string> = {};
   for (const [name, value] of Object.entries(map as Record<string, unknown>)) {
     if (!VALUE_NAME.test(name)) return { problem: `connectionValues has a name "${name.slice(0, 41)}" that is not a plain identifier.` };
-    if (typeof value !== 'string' || !VALUE_TEXT.test(value)) return { problem: `connectionValues.${name} must be letters, digits, dot, dash or underscore (no spaces or slashes).` };
-    values[name] = value;
+    if (typeof value !== 'string' || !VALUE_TEXT.test(value.trim())) return { problem: `connectionValues.${name} must be ${VALUE_FORMAT}.` };
+    values[name] = value.trim();
   }
   return { values };
 }
@@ -129,8 +135,25 @@ export async function removeDestination(stateDir: string, name: string): Promise
 export const describeKnown = (all: Readonly<Record<string, Template>>): string =>
   Object.entries(all).map(([name, template]) => `${name}${slotsOf(template).length ? `(${slotsOf(template).join(', ')})` : ''}${template.about ? ` - ${template.about}` : ''}`).join('; ');
 
-/** The first problem with the plan, in words the agent can act on; undefined when it is sound. */
-export async function destinationProblem(stateDir: string, list: readonly unknown[]): Promise<string | undefined> {
+export type DeclaredValues = Record<string, { label?: string; description?: string }>;
+/** The plain per-account values a connector's base URL declares (Knack app_id, Kommo subdomain), or undefined when that cannot be told. */
+export async function declaredConnectionValues(integration: string, signal?: AbortSignal): Promise<DeclaredValues | undefined> {
+  const shown = await runCli('clikdeploy', ['integrations', 'show', integration], { signal, timeoutMs: 30_000, maxChars: 4_000_000 });
+  if (shown.missing) return undefined;
+  const parsed = firstJsonObject<{ status?: string; data?: { proxy?: { variables?: DeclaredValues } } }>(shown.text);
+  const proxy = parsed?.status === 'error' ? undefined : parsed?.data?.proxy;
+  return proxy && typeof proxy === 'object' ? (proxy.variables && typeof proxy.variables === 'object' ? proxy.variables : {}) : undefined;
+}
+
+/** What `values` may hold for a connector, in words: the names, what each is, and the format. */
+function describeDeclared(integration: string, declared: DeclaredValues): string {
+  const names = Object.entries(declared).map(([name, info]) => `${name}${info.label ? ` (${info.label}${info.description ? `: ${info.description}` : ''})` : ''}`);
+  return names.length ? `${integration} takes these values: ${names.join('; ')}. Each is ${VALUE_FORMAT}.` : `${integration} takes no values.`;
+}
+
+/** The first problem with the plan, in words the agent can act on; undefined when it is sound.
+ * With `declared`, the connection values are checked against the connector's own list. */
+export async function destinationProblem(stateDir: string, list: readonly unknown[], declared?: (integration: string) => Promise<DeclaredValues | undefined>): Promise<string | undefined> {
   const all = await loadDestinations(stateDir);
   for (const [index, item] of list.entries()) {
     const at = `send_to[${index}]`;
@@ -142,6 +165,15 @@ export async function destinationProblem(stateDir: string, list: readonly unknow
       if (!takesConnectionValues(template)) return `${at}: connectionValues only goes with clikdeploy-connection or clikdeploy-connection-basic, not "${d.to}".`;
       const read = readConnectionValues(d.connectionValues);
       if (read.problem) return `${at}: ${read.problem}`;
+    }
+    if (declared && takesConnectionValues(template) && typeof d.with?.integration === 'string' && SAFE_VALUE.test(d.with.integration)) {
+      const known = await declared(d.with.integration).catch(() => undefined);
+      if (known) {
+        const given = Object.keys(readConnectionValues(d.connectionValues).values ?? {});
+        const unknown = given.filter(name => !(name in known));
+        const missing = Object.keys(known).filter(name => !given.includes(name));
+        if (unknown.length || missing.length) return `${at}: ${unknown.length ? `values has ${unknown.join(', ')}, which ${d.with.integration} does not take` : `${d.with.integration} needs a value for ${missing.join(', ')}`}. ${describeDeclared(d.with.integration, known)} Example: {"to":"${d.to}","with":{"integration":"${d.with.integration}"},"values":{${Object.keys(known).map(name => `"${name}":"..."`).join(',')}}}`;
+      }
     }
     const saved = template.vaultSlots?.length ? await namedSecretNames(stateDir).catch(() => [] as string[]) : [];
     for (const slot of slotsOf(template)) {
