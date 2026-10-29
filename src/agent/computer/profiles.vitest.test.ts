@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { lockCredentialVault } from './credential-vault.js';
-import { bestProfileFor, defaultProfile, birthdayFor, customFieldFor, describeProfile, listProfiles, normalizePhone, phoneFor, profileKeyFor, readProfileSecret, removeProfile, saveProfile, saveProfileSecret, secretFieldFor } from './profiles.js';
+import { bestProfileFor, defaultProfile, birthdayFor, customFieldFor, describeProfile, listProfiles, normalizePhone, phoneFor, profileEmail, profileKeyFor, readProfileSecret, removeProfile, saveProfile, saveProfileSecret, secretFieldFor } from './profiles.js';
 import { namedSecretNames } from './credential-vault.js';
 
 let stateDir = '';
@@ -204,5 +204,16 @@ describe('defaultProfile: no label never means a second profile', () => {
     expect(all.map(profile => profile.label)).toEqual(['ClikDeploy admin', 'Personal']);
     expect(all.find(profile => profile.label === 'Personal')?.fields).toMatchObject({ email: 'me@example.test', city: 'Calhan' });
     expect(all.find(profile => profile.label === 'ClikDeploy admin')?.fields).toEqual({ email: 'admin@clikdeploy.test' });
+  });
+});
+
+describe('profileEmail: one mailbox, never the first profile by label', () => {
+  it('is the default profile\'s sign-in email even when another profile sorts first, and falls back to any profile that has one', async () => {
+    stateDir = await mkdtemp(join(tmpdir(), 'clikcode-profile-'));
+    expect(await profileEmail(stateDir)).toBeUndefined();
+    await saveProfile(stateDir, { label: 'ClikDeploy admin', fields: { sso_email: 'justin@clikdeploy.com' } });
+    expect(await profileEmail(stateDir)).toBe('justin@clikdeploy.com');
+    await saveProfile(stateDir, { label: 'Personal', fields: { sso_email: 'gracierdigital@gmail.com', given_name: 'Justin', family_name: 'G' } });
+    expect(await profileEmail(stateDir)).toBe('gracierdigital@gmail.com');
   });
 });
