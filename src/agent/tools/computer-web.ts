@@ -35,6 +35,7 @@ import { approvedUploadPath, isUploadPath } from '../computer/upload-files.js';
 import { bindDownloads, describeDownloads, downloadNotes } from '../computer/downloads.js';
 import { SEND_TO_HELP, SEND_TO_SCHEMA } from './store-secret.js';
 import { declaredConnectionValues, destinationProblem, normalizeSendTo, type Destination } from '../computer/secret-destinations.js';
+import { ACTIONABLE, condenseSnapshot } from './snapshot-condense.js';
 import { followPopup, SIGN_IN_CLICK } from '../computer/google-popup.js';
 import { captureSecret } from '../computer/secret-capture.js';
 import { emailConnected, emailStatus, waitForEmail } from '../computer/email-api.js';
@@ -181,10 +182,11 @@ export function arrangeSnapshot(snapshot: string, full = false): string {
     kept.push(line); at++;
   }
   const cap = full ? 40_000 : 14_000;
-  let body = kept.join('\n');
+  let body = full ? kept.join('\n') : condenseSnapshot(kept.join('\n'));
   // A dialog is the thing to act on: the page behind it is a few lines of context, not a second copy of the site.
   if (!full && overlays.length && kept.length > BEHIND_DIALOG_LINES) {
-    body = [...kept.slice(0, BEHIND_DIALOG_LINES), `- (… ${kept.length - BEHIND_DIALOG_LINES} more lines of the page behind the dialog; observe with full: true to see them)`].join('\n');
+    const rows = body.split('\n');
+    body = [...rows.slice(0, BEHIND_DIALOG_LINES), `- (… ${rows.length - BEHIND_DIALOG_LINES} more lines of the page behind the dialog; observe with full: true to see them)`].join('\n');
   }
   if (body.length > cap) {
     const rows = body.split('\n');
@@ -192,7 +194,10 @@ export function arrangeSnapshot(snapshot: string, full = false): string {
     while (head < rows.length && headSize < cap * 0.65) headSize += rows[head++]!.length + 1;
     let tail = rows.length; let tailSize = 0;
     while (tail > head && tailSize < cap * 0.35) tailSize += rows[--tail]!.length + 1;
-    body = [...rows.slice(0, head), `- (… ${tail - head} lines trimmed from the middle of a long page; scroll, or observe with full: true …)`, ...rows.slice(tail)].join('\n');
+    // What is cut from the middle is the text and links; its forms and buttons stay.
+    const middle = rows.slice(head, tail);
+    const controls = middle.filter(row => ACTIONABLE.test(row));
+    body = [...rows.slice(0, head), `- (… ${middle.length - controls.length} lines trimmed from the middle of a long page (text and links only; its forms and buttons are kept); scroll, or observe with full: true …)`, ...controls.slice(0, 120), ...rows.slice(tail)].join('\n');
   }
   return [overlays.length ? `Open now (dialogs and menus):\n${overlays.join('\n')}\n` : '', body, folded ? '- (header, footer and long side menus folded away; observe with full: true to see them)' : ''].filter(Boolean).join('\n');
 }
