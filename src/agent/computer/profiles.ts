@@ -33,6 +33,14 @@ export function defaultProfile<P extends SavedProfile>(profiles: readonly P[]): 
   return [...profiles].sort((a, b) => Number(b.label.toLowerCase() === 'personal') - Number(a.label.toLowerCase() === 'personal') || standard(b) - standard(a) || a.label.localeCompare(b.label))[0];
 }
 
+/** The sign-in email every sign-up uses: the default profile's (Personal), else any other profile's. Never "the first by label",
+ * which put an admin profile such as "ClikDeploy" (justin@clikdeploy.com) ahead of the user's own. */
+export async function profileEmail(stateDir: string): Promise<string | undefined> {
+  const listed = await listProfiles(stateDir);
+  const first = defaultProfile(listed);
+  return (first ? [first, ...listed.filter(profile => profile !== first)] : listed).map(profile => profile.fields.sso_email).find(Boolean);
+}
+
 /** Creates the profile, or (with an id, or a label that exists) merges these fields into it. */
 export async function saveProfile(stateDir: string, input: { id?: string; label?: string; fields: Partial<Record<string, string>>; custom?: Record<string, { label?: string; value: string; match?: string[] }> }): Promise<SavedProfile> {
   const fields: Partial<Record<ProfileKey, string>> = {};

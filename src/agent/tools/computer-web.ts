@@ -15,7 +15,7 @@ import { forgetSavedLogins, savedLoginFields, savedLoginsForSite, saveLoginField
 import { loginValueFor } from '../computer/login-fill.js';
 import { describeRecipe, fillPlaceholders, getRecipe, listRecipes, replayRecipe, saveRecipe } from '../computer/signup-recipes.js';
 import { addSiteNote, readSiteNotes } from '../computer/site-notes.js';
-import { assertCustomKey, bestProfileFor, customFieldFor, defaultProfile, describeProfile, listProfiles, PASSWORD_SECRET, PROFILE_KEYS, phoneFor, birthdayFor, profileKeyFor, readProfileSecret, saveProfile, saveProfileSecret, secretFieldFor, type FieldHint, type ProfileKey } from '../computer/profiles.js';
+import { assertCustomKey, bestProfileFor, customFieldFor, defaultProfile, describeProfile, listProfiles, profileEmail, PASSWORD_SECRET, PROFILE_KEYS, phoneFor, birthdayFor, profileKeyFor, readProfileSecret, saveProfile, saveProfileSecret, secretFieldFor, type FieldHint, type ProfileKey } from '../computer/profiles.js';
 import { holdSignup, pendingSignupPassword, pendingSignupUsername, savedPasswordFor, settleSignup, sitePasswordFor } from '../computer/signup-login.js';
 import { generatePassword } from '../computer/password-policy.js';
 import { generatedFor, readPasswordPolicy, rememberGenerated, retryRejectedPassword } from '../computer/password-retry.js';
@@ -36,7 +36,7 @@ import { bindDownloads, describeDownloads, downloadNotes } from '../computer/dow
 import { SEND_TO_HELP, SEND_TO_SCHEMA } from './store-secret.js';
 import { declaredConnectionValues, destinationProblem, normalizeSendTo, type Destination } from '../computer/secret-destinations.js';
 import { captureSecret } from '../computer/secret-capture.js';
-import { emailConnected, waitForEmail } from '../computer/email-api.js';
+import { emailConnected, emailStatus, waitForEmail } from '../computer/email-api.js';
 import { codeFromMailbox, looksLikeCodeEmail, looksLikeLinkEmail, verificationCode } from '../computer/email-code.js';
 import { connectEmail } from '../computer/email-consent.js';
 import { beginJournal, noteStep, recordVerified } from '../computer/recipe-recorder.js';
@@ -1080,7 +1080,7 @@ export async function withSignInHints(result: ToolRunResult, page: Page, stateDi
   }
   const hints: string[] = [];
   if (/accountchooser/.test(url.pathname)) {
-    const email = (await listProfiles(stateDir)).map(profile => profile.fields.sso_email).find(Boolean);
+    const email = (await profileEmail(stateDir));
     hints.push(email ? `Sign-in account: pick ${email} (the profile's sso_email): click target "${email}".` : 'Several accounts are listed and the profile has no sso_email: pick the one the task is for, and save it with profile fields {sso_email} so the next sign-in needs no choice.');
   } else if (/consent/.test(url.pathname)) {
     const text = await page.evaluate(() => (globalThis as unknown as { document: { body: { innerText: string } } }).document.body.innerText).catch(() => '');
@@ -1118,11 +1118,20 @@ async function withNetworkRetry<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
+const withMailbox = (view: ToolRunResult, line: string): ToolRunResult => ({ ...view, output: `${line}\n\n${view.output}` });
+
+/** The one mailbox emailed codes and links are read from: the connected one (email_connect), else the profile's sign-in email. The same for every tab and chat. */
+async function mailboxAddress(stateDir: string): Promise<string | undefined> {
+  return (await emailStatus(stateDir)).email || await profileEmail(stateDir);
+}
+
+const mailboxLabel = async (stateDir: string, account?: number): Promise<string> => account === undefined ? await mailboxAddress(stateDir) ?? 'Gmail account /u/0' : `Gmail account /u/${account}`;
+
 /** The newest message matching from/subject in the signed-in Gmail, opened; its body. Waits for one that has just been sent. */
 async function openLatestEmail(page: Page, args: WebArgs, stateDir: string): Promise<Locator> {
   if (!args.from && !args.subject) throw new Error(`${args.action} needs from or subject.`);
   // The mailbox is the profile's sign-in account (every sign-up used it), not whichever Gmail happens to be first.
-  const mailbox = args.account ?? (await listProfiles(stateDir)).map(profile => profile.fields.sso_email).find(Boolean) ?? 0;
+  const mailbox = args.account ?? await mailboxAddress(stateDir) ?? 0;
   const query = [args.from ? `from:(${args.from})` : '', args.subject ? `subject:(${args.subject})` : '', 'newer_than:1d'].filter(Boolean).join(' ');
   await withNetworkRetry(() => page.goto(`https://mail.google.com/mail/u/${mailbox}/#search/${encodeURIComponent(query)}`, { waitUntil: 'domcontentloaded', timeout: 30_000 }));
   const row = page.locator('tr.zA').first();
@@ -1220,7 +1229,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       if (op === 'get') return { output: describeRecipe(recipe) };
       // run: the existing steps runner, one page-look after every step. Recipes name controls by text, so nothing depends on a stale ref.
       let ended: Page = page;
-      const mine = (await listProfiles(ctx.stateDir)).map(profile => profile.fields.sso_email).find(Boolean);
+      const mine = (await profileEmail(ctx.stateDir));
       const filled = { ...recipe, steps: recipe.steps.map(step => ({ ...step, ...(step.target ? { target: fillPlaceholders(step.target, { sso_email: mine }) } : {}), ...(step.text ? { text: fillPlaceholders(step.text, { sso_email: mine }) } : {}) })) };
       const replay = await replayRecipe(filled, (steps, guard) => runSteps(page, steps as Step[], ctx, args.tab, args.label, async current => { ended = current; return guard(); }), async () => scrubSecrets(await ended.ariaSnapshot({ mode: 'ai', timeout: 8_000 } as never) as string));
       if (replay.completed) await saveRecipe(ctx.stateDir, { host: recipe.host, loginRoute: recipe.loginRoute, steps: recipe.steps, ...(recipe.keyPage ? { keyPage: recipe.keyPage } : {}), ...(recipe.captureHint ? { captureHint: recipe.captureHint } : {}) }).catch(quiet('agent/tools/computer-web'));
@@ -1255,7 +1264,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
         if (!pick) throw new Error(`The email has no ${wanted ? `link mentioning "${args.link}"` : 'usable link'}. Links found: ${real.slice(0, 5).map(displayUrl).join(', ') || 'none'}.`);
         await page.goto(pick, { waitUntil: 'domcontentloaded', timeout: 30_000 });
         await settle(page);
-        return observeComputerPage(page, ctx.acceptsImages === true);
+        return withMailbox(await observeComputerPage(page, ctx.acceptsImages === true), `Opened the link from the email in ${await mailboxAddress(ctx.stateDir) ?? 'the connected mailbox'}.`);
       }
       const body = await openLatestEmail(page, args, ctx.stateDir);
       const links = await body.locator('a[href]').evaluateAll(nodes => nodes.map(node => ({ href: (node as unknown as { href: string }).href, text: (node as unknown as { textContent: string | null }).textContent ?? '' })));
@@ -1266,16 +1275,16 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       if (!pick) throw new Error(`The email has no ${wanted ? `link mentioning "${args.link}"` : 'usable link'}. Links found: ${real.slice(0, 5).map(link => displayUrl(link.href)).join(', ') || 'none'}.`);
       await page.goto(pick.href, { waitUntil: 'domcontentloaded', timeout: 30_000 });
       await settle(page);
-      return observeComputerPage(page, ctx.acceptsImages === true);
+      return withMailbox(await observeComputerPage(page, ctx.acceptsImages === true), `Opened the link from the email in ${await mailboxLabel(ctx.stateDir, args.account)}.`);
     }
     case 'email_connect': {
       // One consent in this browser stores the mailbox in Secrets Manager; read_email_code and open_email_link then use the Gmail API.
-      const email = (await listProfiles(ctx.stateDir)).map(profile => profile.fields.sso_email).find(Boolean);
+      const email = (await profileEmail(ctx.stateDir));
       const done = await connectEmail(ctx.stateDir, page, { email, progress: line => line && ctx.emitOutput?.(line) });
       return { output: `Mailbox connected${done.email ? `: ${done.email}` : ''}. read_email_code and open_email_link now read mail directly and wait for it to arrive.` };
     }
     case 'oauth_connect': {
-      const email = (await listProfiles(ctx.stateDir)).map(profile => profile.fields.sso_email).find(Boolean);
+      const email = (await profileEmail(ctx.stateDir));
       const done = await oauthConnect(args.target?.trim() ?? '', page, { email, stateDir: ctx.stateDir, signal: ctx.signal, progress: line => line && ctx.emitOutput?.(line) });
       return { output: `Connected ${done.connector}: ClikDeploy shows an active connection. ${done.steps.filter(Boolean).join(' ')}` };
     }
@@ -1285,7 +1294,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
         const mail = await waitForEmail(ctx.stateDir, { from: args.from, subject: args.subject, ...(args.from || args.subject ? {} : { site: page.url() }), spam: true, consume: true, accept: args.from || args.subject ? (m => verificationCode(m.text) !== undefined) : looksLikeCodeEmail, timeoutMs: (args.seconds ?? 90) * 1000, signal: ctx.signal });
         const code = verificationCode(mail.text);
         if (!code) throw new Error(`The email from ${args.from ?? args.subject} has no code in it. It says: "${mail.text.replace(/\s+/g, ' ').slice(0, 160)}".`);
-        return { output: `Code: ${code}. Type it into the page that asked for it.` };
+        return { output: `Code: ${code} (read from ${await mailboxAddress(ctx.stateDir) ?? 'the connected mailbox'}). Type it into the page that asked for it.` };
       }
       // A one-time sign-up or sign-in code is short-lived and meant to be typed, so it is returned as text
       // (an API key never is). The page the code is for is left as it was: Gmail is read in a tab of its own.
@@ -1294,7 +1303,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
         const text = await (await openLatestEmail(mail, args, ctx.stateDir)).innerText();
         const code = verificationCode(text);
         if (!code) throw new Error(`The email from ${args.from ?? args.subject} has no code in it. It says: "${text.replace(/\s+/g, ' ').slice(0, 160)}".`);
-        return { output: `Code: ${code}. Type it into the page that asked for it; it is already waiting in the tab you left.` };
+        return { output: `Code: ${code} (read from ${await mailboxLabel(ctx.stateDir, args.account)}). Type it into the page that asked for it; it is already waiting in the tab you left.` };
       } finally { await mail.close().catch(quiet('agent/tools/computer-web')); }
     }
     case 'login': {
@@ -1325,7 +1334,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       const name = args.secret_name?.trim() || `${new URL(page.url()).hostname.replace(/^www\./, '')}/key`;
       // The clipboard is one thing and a Copy button only works in the focused tab: captures take turns, each in front.
       const { length, shape, via, check, sent } = await inOrder('clipboard', async () => { await page.bringToFront().catch(quiet('agent/tools/computer-web')); return captureSecret({ ...(args.paste ? { paste: true } : {}), stateDir: ctx.stateDir, page, name, signal: ctx.signal,
-        meta: { url: new URL(page.url()).origin, vendor: args.vendor ?? new URL(page.url()).hostname.replace(/^www\./, ''), owner: args.owner ?? (await listProfiles(ctx.stateDir))[0]?.fields.sso_email, ...(args.env ? { env: args.env } : {}) },
+        meta: { url: new URL(page.url()).origin, vendor: args.vendor ?? new URL(page.url()).hostname.replace(/^www\./, ''), owner: args.owner ?? await profileEmail(ctx.stateDir), ...(args.env ? { env: args.env } : {}) },
         ...(plan?.length ? { sendTo: plan } : {}),
         ...(args.target ? { trigger: async () => { await clickOrHint(await locate(page, args.target)); } } : {}),
         ...(args.target ? { readTarget: async () => { const element = await locate(page, args.target); return (await element.inputValue({ timeout: 1_000 }).catch(() => '')) || (await element.innerText({ timeout: 1_000 }).catch(() => '')); } } : {}),

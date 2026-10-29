@@ -95,7 +95,7 @@ export interface LiveKeygrabOptions { stateDir: string; id: string; signal?: Abo
 export async function liveKeygrabPort(options: LiveKeygrabOptions): Promise<KeygrabPort> {
   const { computerWebTool } = await import('../tools/computer-web.js');
   const { computerPage } = await import('./browser.js');
-  const { listProfiles } = await import('./profiles.js');
+  const { profileEmail } = await import('./profiles.js');
   const ctx = { stateDir: options.stateDir, ...(options.signal ? { signal: options.signal } : {}) } as Parameters<typeof computerWebTool.run>[1];
   // A call that never comes back (a sign-in waiting for something that will not happen) must not eat the vendor's whole budget: each call has its own limit.
   const run = async (args: Record<string, unknown>, ms = args.action === 'login' || args.action === 'read_email_code' || args.action === 'open_email_link' ? 120_000 : 60_000): Promise<{ output: string; isError?: boolean }> => {
@@ -143,7 +143,7 @@ export async function liveKeygrabPort(options: LiveKeygrabOptions): Promise<Keyg
     screenshot: async () => {
       try { const p = await page(); if (p.isClosed()) return undefined; const path = join(await shots(), `${options.id}.png`); await p.screenshot({ path, timeout: 10_000 }); return path; } catch { return undefined; }
     },
-    profileEmail: async () => (await listProfiles(options.stateDir)).map(profile => profile.fields.sso_email).find(Boolean),
+    profileEmail: async () => (await profileEmail(options.stateDir)),
   };
 }
 

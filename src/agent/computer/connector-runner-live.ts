@@ -96,8 +96,8 @@ export function liveDriver(options: LiveDriverOptions): BrowserDriver {
     async oauthConnect(id): Promise<DriveOutcome> {
       const { oauthConnect, ConsentStop, pageExcerpt } = await import('./oauth-consent.js');
       const { openNewComputerPage, closeOwnedPage, closeComputerPage, releaseComputerBrowser } = await import('./browser.js');
-      const { listProfiles } = await import('./profiles.js');
-      const email = (await listProfiles(options.stateDir)).map(profile => profile.fields.sso_email).find(Boolean);
+      const { profileEmail } = await import('./profiles.js');
+      const email = (await profileEmail(options.stateDir));
       // A fresh tab this run owns, closed afterwards; the consent driver reopens one if Google asks to re-verify.
       let page = await openNewComputerPage(options.stateDir, 'connectors');
       const reopen = async (old: typeof page): Promise<typeof page> => { await closeOwnedPage(options.stateDir, old, 'connectors').catch(quiet('agent/computer/connector-runner-live')); page = await openNewComputerPage(options.stateDir, 'connectors'); return page; };
