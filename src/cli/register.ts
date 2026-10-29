@@ -19,6 +19,11 @@ const sessionCommands = () => import('../commands/ai/sessions.js');
 const statusCommands = () => import('../commands/ai/status.js');
 const interactiveCommands = () => import('../commands/ai/interactive.js');
 
+/** `name=value` pairs from a repeatable flag. */
+function pairs(list: string[] | undefined, flag: string): Record<string, string> {
+  return Object.fromEntries((list ?? []).map(pair => { const at = pair.indexOf('='); if (at < 1) throw new Error(`${flag} is name=value`); return [pair.slice(0, at), pair.slice(at + 1)]; }));
+}
+
 export function registerClikCodeCommands(program: Command, config: Conf): void {
   // Not a user command: the entry point client.ts's spawnSessionWorker spawns
   // as a fresh, detached process (see worker/client.ts). Hidden rather than
@@ -128,19 +133,23 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .option('--click <target>', 'The button that makes the site show the key')
     .option('--to <destination>', 'Also send it on, for example clikdeploy-secret')
     .option('--with <slot=value...>', 'A value for a slot of the destination, repeatable', (value: string, all: string[] = []) => [...all, value])
+    .option('--value <name=value...>', 'A plain connection value for a clikdeploy-connection destination (name=value or name=secret:<saved name>), repeatable', (value: string, all: string[] = []) => [...all, value])
     .option('--chat <chat>', 'Chat to use when run from outside a ClikCode chat')
-    .action(async (secret: string, options: { click?: string; to?: string; with?: string[]; chat?: string }) => {
+    .action(async (secret: string, options: { click?: string; to?: string; with?: string[]; value?: string[]; chat?: string }) => {
+      const values = pairs(options.value, '--value');
       const params = Object.fromEntries((options.with ?? []).map(pair => { const at = pair.indexOf('='); if (at < 1) throw new Error('--with is slot=value'); return [pair.slice(0, at), pair.slice(at + 1)]; }));
       await (await import('../commands/computer.js')).computerTool('account_use', { action: 'capture_secret', secret_name: secret,
-        ...(options.click ? { target: options.click } : {}), ...(options.to ? { send_to: { to: options.to, ...(Object.keys(params).length ? { with: params } : {}) } } : {}) }, options.chat);
+        ...(options.click ? { target: options.click } : {}), ...(options.to ? { send_to: { to: options.to, ...(Object.keys(params).length ? { with: params } : {}), ...(Object.keys(values).length ? { values } : {}) } } : {}) }, options.chat);
     });
   computer.command('store <secret-name>').description('Send a saved secret on to a destination, for example --to clikdeploy-secret --with key=SALAD_API_KEY')
     .requiredOption('--to <destination>', 'A destination name (see `computer destination list`)')
     .option('--with <slot=value...>', 'A value for a slot of the destination, repeatable', (value: string, all: string[] = []) => [...all, value])
+    .option('--value <name=value...>', 'A plain connection value for a clikdeploy-connection destination (name=value or name=secret:<saved name>), repeatable', (value: string, all: string[] = []) => [...all, value])
     .option('--chat <chat>', 'Chat to use when run from outside a ClikCode chat')
-    .action(async (secret: string, options: { to: string; with?: string[]; chat?: string }) => {
+    .action(async (secret: string, options: { to: string; with?: string[]; value?: string[]; chat?: string }) => {
+      const values = pairs(options.value, '--value');
       const params = Object.fromEntries((options.with ?? []).map(pair => { const at = pair.indexOf('='); if (at < 1) throw new Error('--with is slot=value'); return [pair.slice(0, at), pair.slice(at + 1)]; }));
-      await (await import('../commands/computer.js')).computerTool('account_use', { action: 'send_secret', secret, send_to: [{ to: options.to, ...(Object.keys(params).length ? { with: params } : {}) }] }, options.chat);
+      await (await import('../commands/computer.js')).computerTool('account_use', { action: 'send_secret', secret, send_to: [{ to: options.to, ...(Object.keys(params).length ? { with: params } : {}), ...(Object.keys(values).length ? { values } : {}) }] }, options.chat);
     });
   computer.command('preflight').description('Check this computer can do onboarding work: browser, Google sign-in, Gmail, build id, installed deps link. Prints JSON; exits 1 when anything fails')
     .option('--no-post', 'do not report the result to ClikDeploy\'s connector_preflight tool')

@@ -7,7 +7,7 @@ import { readNamedSecret } from '../computer/credential-vault.js';
 import { declaredAuthKind, declaredConnectionValues, destinationProblem, normalizeSendTo, sendToDestinations, type Destination } from '../computer/secret-destinations.js';
 import { registerSecret, scrubSecrets } from '../computer/secret-scrubber.js';
 
-type Args = { secret: string; to?: string; with?: Record<string, string> | string; send_to?: Destination[] | Destination | string };
+type Args = { secret: string; to?: string; with?: Record<string, string> | string; values?: Record<string, string> | string; connectionValues?: Record<string, string> | string; send_to?: Destination[] | Destination | string };
 
 const DESTINATION = { type: 'object', additionalProperties: false, required: ['to'], properties: { to: { type: 'string' }, with: { type: 'object' }, values: { type: ['object', 'string'], additionalProperties: { type: 'string' }, description: 'Same as connectionValues.' }, connectionValues: { type: ['object', 'string'], additionalProperties: { type: 'string' }, description: 'clikdeploy-connection and clikdeploy-connection-basic only: the per-account values a connector\'s base URL needs, e.g. {"app_id":"WJUQDEJ3SG"} (Algolia), {"cluster":"..."} (Weaviate), {"projectId":"..."} (Sanity). Not secrets.' } } };
 /** One {to, with} or a list of them. */
@@ -22,13 +22,15 @@ export const storeSecretTool = defineTool<Args>({
     secret: { type: 'string', description: 'Name the key was saved under.' },
     to: { type: 'string', description: 'The destination name, e.g. clikdeploy-secret.' },
     with: { type: ['object', 'string'], description: 'Values for the destination\'s slots, e.g. {key:"SALAD_API_KEY"}.' },
+    values: { type: ['object', 'string'], additionalProperties: { type: 'string' }, description: 'With to: the plain connection values for a clikdeploy-connection destination, e.g. {org_api_key:"..."} or {app_id:"secret:<saved name>"}.' },
+    connectionValues: { type: ['object', 'string'], additionalProperties: { type: 'string' }, description: 'Same as values.' },
     send_to: { ...SEND_TO_SCHEMA, description: 'Several destinations at once: a list of {to, with}. For one, use to and with.' },
   } },
   label: (args) => `Send ${args.secret}`,
   async run(args, ctx) {
     try {
       const withSlots = typeof args.with === 'string' ? (() => { try { return JSON.parse(args.with) as Record<string, string>; } catch { return undefined; } })() : args.with;
-      const plan = normalizeSendTo(args.send_to ?? (args.to ? { to: args.to, ...(withSlots ? { with: withSlots } : {}) } : undefined));
+      const plan = normalizeSendTo(args.send_to ?? (args.to ? { to: args.to, ...(withSlots ? { with: withSlots } : {}), ...(args.values ?? args.connectionValues ? { values: args.values ?? args.connectionValues } : {}) } : undefined));
       if (!plan?.length) throw new Error('Say where it goes: to and with, e.g. {"to":"clikdeploy-secret","with":{"key":"SALAD_API_KEY"}}.');
       const problem = await destinationProblem(ctx.stateDir, plan, (id) => declaredConnectionValues(id, ctx.signal), (id) => declaredAuthKind(id, ctx.signal));
       if (problem) throw new Error(problem);

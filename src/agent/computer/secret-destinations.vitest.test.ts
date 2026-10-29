@@ -315,7 +315,7 @@ it('values is the plain name for connectionValues, checked against the connector
 
 it('declaredConnectionValues reads the proxy variables of integrations show', async () => {
   await fake('clikdeploy', `echo '{"status":"success","data":{"id":"kommo","proxy":{"base_url":"https://{subdomain}.kommo.com","variables":{"subdomain":{"label":"Subdomain"}}}}}'`);
-  expect(await declaredConnectionValues('kommo')).toEqual({ subdomain: { label: 'Subdomain' } });
+  expect(await declaredConnectionValues('kommo')).toEqual({ subdomain: { label: 'Subdomain', required: true } });
   await fake('clikdeploy', `echo '{"status":"success","data":{"id":"x"}}'`);
   expect(await declaredConnectionValues('x')).toBeUndefined();
 });
@@ -400,4 +400,59 @@ it('clikdeploy-connection treats a silent failing connect call as a connection w
   const [result] = await sendKey();
   expect(result!.ok).toBe(true);
   expect(result!.message).toContain('connected');
+});
+
+/** A clikdeploy 1.0.36 that records its exact argv and whatever arrives on stdin, then answers like connect_connector. */
+const fakeNewCli = async (): Promise<void> => {
+  await writeFile(join(dir, 'show.out'), shown({ id: 'c1', status: 'active' }));
+  await fake('clikdeploy', `if [ "$1" = --version ]; then echo 1.0.36; exit 0; fi; case "$1" in tools) printf '%s\\n' "$@" > "${dir}/argv"; cat > "${dir}/stdin"; echo '{"status":"success","data":{"success":true}}';; integrations) cat "${dir}/show.out";; esac`);
+};
+
+it('the connect request for a key plus connection values is exactly: argv without secrets, one JSON object on stdin with apiKey and baseUrlVariables (plain, vault ref, several, JSON-escaped key)', async () => {
+  await fakeNewCli();
+  await saveNamedSecret(dir, 'onesignal/org-key', 'org_9f8e7d', { url: 'https://onesignal.com' });
+  const key = 'k"ey\\with\nodd"chars';
+  const plan = normalizeSendTo([{ to: 'clikdeploy-connection', with: { integration: 'onesignal' }, values: { org_api_key: 'secret:onesignal/org-key', region: 'eu-1', app_id: 'WJUQDEJ3SG' } }])!;
+  expect(await destinationProblem(dir, plan)).toBeUndefined();
+  const [result] = await sendToDestinations(dir, plan, key);
+  expect(result).toMatchObject({ ok: true, message: 'connected' });
+  const argv = (await readFile(join(dir, 'argv'), 'utf8')).split('\n').filter(Boolean);
+  expect(argv).toEqual(['tools', 'run', 'connect_connector', '--args-json', '-', '--confirm']);
+  const raw = await readFile(join(dir, 'stdin'), 'utf8');
+  expect(raw).toBe(JSON.stringify({ integrationId: 'onesignal', apiKey: key, baseUrlVariables: { org_api_key: 'org_9f8e7d', region: 'eu-1', app_id: 'WJUQDEJ3SG' } }));
+});
+
+it('send_secret / `computer store` forms: a value named in `with` (--with org_api_key=...) or in `values` both reach baseUrlVariables', () => {
+  const want = { to: 'clikdeploy-connection', with: { integration: 'onesignal' }, connectionValues: { org_api_key: 'abc' } };
+  expect(normalizeSendTo([{ to: 'clikdeploy-connection', with: { integration: 'onesignal', org_api_key: 'abc' } }])).toEqual([want]);
+  expect(normalizeSendTo({ to: 'clikdeploy-connection', with: { integration: 'onesignal' }, values: '{"org_api_key":"abc"}' })).toEqual([{ ...want, connectionValues: '{"org_api_key":"abc"}' }]);
+  expect(normalizeSendTo(JSON.stringify([{ to: 'clikdeploy-connection', with: { integration: 'onesignal' }, values: { org_api_key: 'abc' } }]))).toEqual([want]);
+  // Basic auth keeps its own slots; other destinations are untouched.
+  expect(normalizeSendTo({ to: 'clikdeploy-connection-basic', with: { integration: 'a', username: 'u', cluster: 'c' } })).toEqual([{ to: 'clikdeploy-connection-basic', with: { integration: 'a', username: 'u' }, connectionValues: { cluster: 'c' } }]);
+  expect(normalizeSendTo({ to: 'clikdeploy-secret', with: { key: 'K' } })).toEqual([{ to: 'clikdeploy-secret', with: { key: 'K' } }]);
+});
+
+it('a saved clikdeploy-connection with the JSON inline and an empty stdin (older ClikCode wrote it) still carries the values; it used to die with "Unexpected end of JSON input"', async () => {
+  await fakeNewCli();
+  await addDestination(dir, 'clikdeploy-connection', { run: ['clikdeploy', 'tools', 'run', 'connect_connector', '--args-json', '{"integrationId":"{{integration}}","apiKey":"{{secret|json}}"}', '--confirm'], stdin: '' });
+  await addDestination(dir, 'clikdeploy-connection-basic', { run: ['clikdeploy', 'tools', 'run', 'connect_connector', '--args-json', '{"integrationId":"{{integration}}","username":"{{username}}","password":"{{secret|json}}"}', '--confirm'] });
+  const [one] = await sendToDestinations(dir, [{ to: 'clikdeploy-connection', with: { integration: 'onesignal' }, connectionValues: { org_api_key: 'abc' } }], VALUE);
+  expect(one).toMatchObject({ ok: true, message: 'connected' });
+  expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toEqual({ integrationId: 'onesignal', apiKey: VALUE, baseUrlVariables: { org_api_key: 'abc' } });
+  expect((await readFile(join(dir, 'argv'), 'utf8'))).not.toContain(VALUE); // moved to stdin, off the command line
+  const [two] = await sendToDestinations(dir, [{ to: 'clikdeploy-connection-basic', with: { integration: 'weaviate', username: 'me' }, connectionValues: { cluster: 'abc-1' } }], VALUE);
+  expect(two).toMatchObject({ ok: true });
+  expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toEqual({ integrationId: 'weaviate', username: 'me', password: VALUE, baseUrlVariables: { cluster: 'abc-1' } });
+});
+
+it('a connection value the connect route does not demand (not in the base URL, or has a default, or optional) is not demanded here either', async () => {
+  const show = (proxy: unknown) => pretty({ status: 'success', data: { id: 'x', proxy } });
+  const withShow = async (proxy: unknown) => { await fake('clikdeploy', `cat <<'EOF2'\n${show(proxy)}\nEOF2`); return declaredConnectionValues('x'); };
+  const onesignal = await withShow({ base_url: 'https://api.onesignal.com', variables: { org_api_key: { label: 'Organization API key' } } });
+  expect(onesignal!.org_api_key!.required).toBe(false);
+  expect(await destinationProblem(dir, normalizeSendTo({ to: 'clikdeploy-connection', with: { integration: 'onesignal' } })!, async () => onesignal)).toBeUndefined();
+  expect(await destinationProblem(dir, normalizeSendTo({ to: 'clikdeploy-connection', with: { integration: 'onesignal' }, values: { org_api_key: 'abc' } })!, async () => onesignal)).toBeUndefined();
+  const knack = await withShow({ base_url: 'https://api.knack.com/{app_id}', variables: { app_id: { label: 'App' }, region: { default: 'us' }, opt: { optional: true } } });
+  expect(Object.fromEntries(Object.entries(knack!).map(([k, v]) => [k, v.required]))).toEqual({ app_id: true, region: false, opt: false });
+  expect(await destinationProblem(dir, normalizeSendTo({ to: 'clikdeploy-connection', with: { integration: 'knack' } })!, async () => knack)).toContain('needs a value for app_id');
 });

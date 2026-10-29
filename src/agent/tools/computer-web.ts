@@ -58,7 +58,7 @@ type WebArgs = {
   topic?: string;
   action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'secrets' | 'accounts' | 'profile' | 'open_email_link' | 'read_email_code' | 'email_connect' | 'oauth_connect' | 'notes' | 'recipe' | 'queue' | 'network' | 'read_value' | 'preflight' | 'forget_login' | 'add_login' | 'help' | 'hover' | 'drag' | PageAction | FilesEnvAction;
   tab?: string; at?: 'start' | 'end'; url?: string; host?: string; note?: string; recipe_op?: 'save' | 'get' | 'run' | 'list'; login_route?: string; key_page?: string; capture_hint?: string; target?: string; text?: string; key?: string; direction?: ScrollDirection; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
-  new_account?: boolean; method?: string; secret?: string; to?: string; with?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean; format?: string; options?: string[]; secret?: boolean }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; vendor?: string; owner?: string; env?: string; task?: { vendor: string; kind?: string; status?: string; reason?: string; note?: string; owner?: string; connectors?: string[] }; bodies?: boolean; why_blank?: boolean; tasks?: boolean; task_status?: string; task_reason?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
+  new_account?: boolean; method?: string; secret?: string; to?: string; with?: Record<string, string> | string; values?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean; format?: string; options?: string[]; secret?: boolean }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; vendor?: string; owner?: string; env?: string; task?: { vendor: string; kind?: string; status?: string; reason?: string; note?: string; owner?: string; connectors?: string[] }; bodies?: boolean; why_blank?: boolean; tasks?: boolean; task_status?: string; task_reason?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
 } & PageArgs & FilesEnvArgs;
 
 /** What was opened (host and path only: the rest of a mailed link is its token) and the other links by text. */
@@ -338,6 +338,7 @@ const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: [
     secret: { type: 'string', description: 'send_secret: name a key was saved under (send it again, or somewhere else, without seeing it). With to and with, or send_to.' },
     to: { type: 'string', description: 'send_secret: destination name, e.g. clikdeploy-secret.' },
     with: { type: ['object', 'string'], description: 'send_secret: values for the destination slots, e.g. {key:"SALAD_API_KEY"}.' },
+    values: { type: ['object', 'string'], additionalProperties: { type: 'string' }, description: 'send_secret with to clikdeploy-connection: the plain connection values, e.g. {org_api_key:"..."} or {app_id:"secret:<saved name>"}.' },
     ask: { type: 'boolean', description: 'profile: ask the user now for name, email, phone and address and save them as a profile (also happens when none exists).' },
     from: { type: 'string', description: 'open_email_link, read_email_code: sender (name or address) of the email in the signed-in Gmail.' },
     subject: { type: 'string', description: 'open_email_link, read_email_code: words from the subject.' },
@@ -429,7 +430,7 @@ function runInOrder(args: WebArgs, hostCtx: ToolContext): Promise<ToolRunResult>
     try {
       if (!(await computerEnabled(ctx.stateDir))) throw new Error(COMPUTER_OFF);
       if (!ALL_ACTION_NAMES.includes(String(args.action))) throw new Error(`Unknown action "${String(args.action)}". Actions: ${ACTION_LIST}.`);
-      if (args.action === 'send_secret') return storeSecretTool.run({ secret: args.secret ?? '', ...(args.to ? { to: args.to } : {}), ...(args.with ? { with: args.with } : {}), ...(args.send_to ? { send_to: args.send_to } : {}) }, ctx);
+      if (args.action === 'send_secret') return storeSecretTool.run({ secret: args.secret ?? '', ...(args.to ? { to: args.to } : {}), ...(args.with ? { with: args.with } : {}), ...(args.values ? { values: args.values } : {}), ...(args.send_to ? { send_to: args.send_to } : {}) }, ctx);
       if (args.action === 'accounts') {
         const { allSavedLogins, saveSignInMethod } = await import('../computer/credential-vault.js');
         // Record how a site was signed in to when it went through a provider: accounts + target (the site) + method + fields.email.
