@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { watchConversationList, type ListWatch } from './list-watch';
+import { coalescedListRefresh, watchConversationList, type ListWatch } from './list-watch';
 
 let root: string | undefined;
 let watcher: ListWatch | undefined;
@@ -81,5 +81,36 @@ describe('watchConversationList', () => {
     const stopped = counter.count;
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(counter.count).toBe(stopped);
+  });
+});
+
+describe('conversation list refresh while a turn finishes', () => {
+  it('re-reads after a finish arrives during a slow read, without another event', async () => {
+    let working = true;
+    let displayed = true;
+    let release!: () => void;
+    const read = vi.fn(async () => {
+      const snapshot = working;
+      if (read.mock.calls.length === 1) await new Promise<void>((resolve) => { release = resolve; });
+      displayed = snapshot;
+    });
+    const refresh = coalescedListRefresh(read);
+    const first = refresh();
+    await Promise.resolve();
+    working = false;
+    const last = refresh();
+    refresh();
+    release();
+    await Promise.all([first, last]);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(displayed).toBe(false);
+  });
+
+  it('allows the next refresh after a read fails', async () => {
+    const read = vi.fn().mockRejectedValueOnce(new Error('read failed')).mockResolvedValue(undefined);
+    const refresh = coalescedListRefresh(read);
+    await expect(refresh()).rejects.toThrow('read failed');
+    await refresh();
+    expect(read).toHaveBeenCalledTimes(2);
   });
 });
