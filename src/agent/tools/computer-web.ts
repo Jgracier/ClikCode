@@ -74,8 +74,10 @@ export async function locate(page: Page, target: string | undefined): Promise<Lo
   if (!wanted) throw new Error('Say what to act on: a [ref=…] from the page view, or its visible text.');
   if (REF.test(wanted)) {
     const byRef = page.locator(`aria-ref=${wanted}`);
-    if (await byRef.count()) return byRef;
-    throw new Error(`Nothing on the page has the reference ${wanted}: the page has changed since it was read.`);
+    // A reference from before a reload or a frame change makes Playwright throw ("Invalid frame in aria-ref selector") instead of
+    // counting zero: that is the same fact, said the same way, with the way out.
+    if (await byRef.count().catch(() => 0)) return byRef;
+    throw new Error(`Nothing on the page has the reference ${wanted}: the page has changed since it was read (sign-in pages reload their frames). Observe the page again, or name the control by its visible text ("Password", "Sign in").`);
   }
   // The page first, then each frame in it (a sign-up form or sign-in button inside an iframe, same-origin or not).
   const scopes: Array<Page | Frame> = [page, ...page.frames().filter(frame => frame !== page.mainFrame() && frame.url() && frame.url() !== 'about:blank')];
@@ -399,7 +401,17 @@ export const computerWebTool = defineTool<WebArgs>({
   describe: async (args) => `ClikCode browser: ${args.action}${args.url ? ` ${args.url}` : ''}${args.target ? ` ${args.target}` : ''}${uploadPaths(args).length ? ` (sends ${uploadPaths(args).join(', ')})` : ''}${args.action === 'fill' ? ` (${args.text?.length ?? 0} characters)` : ''}${args.action === 'evaluate' ? ` ${JSON.stringify((args.expression ?? '').replace(/\s+/g, ' ').slice(0, 200))}` : ''}`,
   // One chat's browser calls run in the order they were made. The model can send two at once (a capture and
   // the click that closes the dialog it reads), and a one-time key does not survive that race.
-  run: (args, hostCtx) => inOrder(args.tab ? `${hostCtx.stateDir}#${args.tab}` : hostCtx.stateDir, async (): Promise<ToolRunResult> => {
+  run: (args, hostCtx) => {
+    // `profile` is what callers naturally write for `label` (the profile to use); it used to be ignored without a word.
+    const profileAlias = (args as { profile?: unknown }).profile;
+    if (typeof profileAlias === 'string' && profileAlias && !args.label) args.label = profileAlias;
+    if (args.action === 'handoff') return handoffAction(args, hostCtx).catch((error: unknown) => ({ output: error instanceof Error ? error.message : String(error), isError: true }));
+    return runInOrder(args, hostCtx);
+  },
+});
+
+function runInOrder(args: WebArgs, hostCtx: ToolContext): Promise<ToolRunResult> {
+  return inOrder(args.tab ? `${hostCtx.stateDir}#${args.tab}` : hostCtx.stateDir, async (): Promise<ToolRunResult> => {
     // Unattended: a private prompt about a site (a password, a code, an account choice) is parked in the queue, not shown.
     // The profile prompts are the user's own and are always shown.
     const ctx: ToolContext = await unattendedEnabled(hostCtx.stateDir) && hostCtx.requestPrivateLogin
@@ -545,8 +557,8 @@ export const computerWebTool = defineTool<WebArgs>({
       }
       return { output: error instanceof Error ? error.message : String(error), isError: true };
     }
-  }),
-});
+  });
+}
 
 
 // ── What an agent is given ───────────────────────────────────────────────────
@@ -677,7 +689,7 @@ export function inOrder<T>(key: string, job: () => Promise<T>): Promise<T> {
   return run;
 }
 
-const handoffs = sharedState('handoffs', () => new Map<string, { link: Promise<string>; done: Promise<{ ok: true } | { ok: false; message: string }>; stop: AbortController }>());
+const handoffs = sharedState('handoffs', () => new Map<string, { link: Promise<string>; url?: string; done: Promise<{ ok: true } | { ok: false; message: string }>; stop: AbortController }>());
 
 /** Actions that look at the page or act on it as the agent asked: a box the page raises meanwhile is held for the agent's answer. The others (a sign-in, a key capture) dismiss it. */
 const DIALOG_AWARE: ReadonlySet<string> = new Set(['click', 'fill', 'choose', 'press', 'scroll', 'wait', 'upload', 'steps', 'observe', 'network', 'dialog', 'hover', 'drag', 'back', 'forward', 'reload', 'evaluate', 'screenshot']);
@@ -1302,7 +1314,12 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
     case 'read_email_code': {
       if (await emailConnected(ctx.stateDir)) {
         // The mail arrives when the vendor sends it: wait for it instead of looking once.
-        const mail = await waitForEmail(ctx.stateDir, { from: args.from, subject: args.subject, ...(args.from || args.subject ? {} : { site: page.url() }), spam: true, consume: true, accept: args.from || args.subject ? (m => verificationCode(m.text) !== undefined) : looksLikeCodeEmail, timeoutMs: (args.seconds ?? 90) * 1000, signal: ctx.signal });
+        const mail = await waitForEmail(ctx.stateDir, { from: args.from, subject: args.subject, ...(args.from || args.subject ? {} : { site: page.url() }), spam: true, consume: true, accept: args.from || args.subject ? (m => verificationCode(m.text) !== undefined) : looksLikeCodeEmail, timeoutMs: (args.seconds ?? 90) * 1000, signal: ctx.signal })
+          .catch(async (error: unknown) => {
+            if (!(error instanceof Error) || !/^No email matched/.test(error.message)) throw error;
+            // Say where it looked: the usual cause is that the mail went to another address, not that the filter was wrong.
+            throw new Error(`${error.message} Looked in ${await mailboxAddress(ctx.stateDir) ?? 'the connected mailbox'} (inbox and spam, the last 15 minutes). If the site emailed another address, connect that mailbox (email_connect, with the profile whose sso_email it is). If the sender's name differs, leave from out: the page's site then picks the email.`);
+          });
         const code = verificationCode(mail.text);
         if (!code) throw new Error(`The email from ${args.from ?? args.subject} has no code in it. It says: "${mail.text.replace(/\s+/g, ' ').slice(0, 160)}".`);
         return { output: `Code: ${code} (read from ${await mailboxAddress(ctx.stateDir) ?? 'the connected mailbox'}). Type it into the page that asked for it.` };
@@ -1322,7 +1339,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
         mailCode: since => codeFromMailbox(ctx.stateDir, page.url(), since, ctx.signal),
         ask: async (site, fields, signal) => {
           // The profile's email and password secret answer a sign-in with no saved login; anything else is asked.
-          const fromProfile = await profileLoginAnswers(ctx.stateDir, fields);
+          const fromProfile = await profileLoginAnswers(ctx.stateDir, fields, args.label);
           if (fromProfile) return fromProfile;
           if (!ctx.requestPrivateLogin) throw new LoginError('This chat cannot show private login fields.');
           return ctx.requestPrivateLogin(site, fields, signal);
@@ -1371,32 +1388,45 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       ];
       return { output: lines.join('\n'), ...(sent.some(delivery => !delivery.ok) ? { isError: true } : {}) };
     }
-    case 'handoff': {
-      // The link is returned at once; the handoff runs on, and a second handoff call waits for the user to finish.
-      const handoffKey = args.tab ? `${ctx.stateDir}#${args.tab}` : ctx.stateDir;
-      let running = handoffs.get(handoffKey);
-      if (!running) {
-        const stop = new AbortController();
-        let resolveLink!: (link: string) => void; let failLink!: (error: Error) => void;
-        const link = new Promise<string>((resolve, reject) => { resolveLink = resolve; failLink = reject; });
-        link.catch(quiet('agent/tools/computer-web'));
-        // The phone reaches this computer directly over the user's Tailscale network: no relay, no third party.
-        const host = tailnetAddress();
-        if (!host) throw new Error('A handoff needs this computer and your phone on the same Tailscale network, and this computer is not on one (no Tailscale address). Install Tailscale and sign in on both, or finish this step at the computer.');
-        const done = runTailnetHandoff({ stateDir: ctx.stateDir, host, signal: stop.signal, onLink: resolveLink, ...(args.tab ? { tab: args.tab } : {}) })
-          .then(() => ({ ok: true as const }), (error: unknown) => { failLink(error instanceof Error ? error : new Error(String(error))); return { ok: false as const, message: error instanceof Error ? error.message : String(error) }; })
-          .finally(() => { handoffs.delete(handoffKey); });
-        running = { link, done, stop };
-        handoffs.set(handoffKey, running);
-        const url = await Promise.race([running.link, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('The phone link did not come up.')), 45_000))]);
-        return { output: `Phone link over Tailscale (a live view of the browser for the phone, which must be on the same tailnet; one use, ends after 10 idle minutes): ${url}\nTell the user to open it, finish the browser step (CAPTCHA, MFA, a code) with their own keyboard, and tap Done. Then call handoff again to wait until they are done.` };
-      }
-      const outcome = await Promise.race([running.done, new Promise<'waiting'>(resolve => setTimeout(() => resolve('waiting'), 90_000))]);
-      if (outcome === 'waiting') return { output: 'The user has not finished yet. Call handoff again to keep waiting.' };
-      return outcome.ok ? { output: 'The user finished the browser step. Continue from the current page.' } : { output: outcome.message, isError: true };
-    }
+    case 'handoff': return handoffAction(args, ctx);
     default: throw new Error(`Unknown action "${String(args.action)}". Actions: ${ACTION_LIST}.`);
   }
+}
+
+/**
+ * The phone handoff. It runs OUTSIDE the chat's call queue (inOrder): waiting for the user can take minutes, and every other call of
+ * the chat would otherwise line up behind the wait and time out. The first call returns the link at once; a repeat call waits up to
+ * 90 s for the user and, if they are not done, shows the same link again so it is never lost; `clear: true` takes the tab back.
+ */
+async function handoffAction(args: WebArgs, ctx: ToolContext): Promise<ToolRunResult> {
+  const handoffKey = args.tab ? `${ctx.stateDir}#${args.tab}` : ctx.stateDir;
+  let running = handoffs.get(handoffKey);
+  if (args.clear === true) {
+    if (!running) return { output: 'No handoff is open on this tab.' };
+    running.stop.abort();
+    handoffs.delete(handoffKey);
+    return { output: 'The handoff is closed; the tab is yours again.' };
+  }
+  if (!running) {
+    const stop = new AbortController();
+    let resolveLink!: (link: string) => void; let failLink!: (error: Error) => void;
+    const link = new Promise<string>((resolve, reject) => { resolveLink = resolve; failLink = reject; });
+    link.catch(quiet('agent/tools/computer-web'));
+    // The phone reaches this computer directly over the user's Tailscale network: no relay, no third party.
+    const host = tailnetAddress();
+    if (!host) throw new Error('A handoff needs this computer and your phone on the same Tailscale network, and this computer is not on one (no Tailscale address). Install Tailscale and sign in on both, or finish this step at the computer.');
+    const done = runTailnetHandoff({ stateDir: ctx.stateDir, host, signal: stop.signal, onLink: resolveLink, ...(args.tab ? { tab: args.tab } : {}) })
+      .then(() => ({ ok: true as const }), (error: unknown) => { failLink(error instanceof Error ? error : new Error(String(error))); return { ok: false as const, message: error instanceof Error ? error.message : String(error) }; })
+      .finally(() => { handoffs.delete(handoffKey); });
+    running = { link, done, stop };
+    handoffs.set(handoffKey, running);
+    const url = await Promise.race([running.link, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('The phone link did not come up.')), 45_000))]);
+    running.url = url;
+    return { output: `Phone link over Tailscale (a live view of the browser for the phone, which must be on the same tailnet; one use, ends after 10 idle minutes): ${url}\nTell the user to open it, finish the browser step (CAPTCHA, MFA, a code) with their own keyboard, and tap Done. Then call handoff again to wait until they are done. Other browser calls still work meanwhile; do not act on the page the user is working on.` };
+  }
+  const outcome = await Promise.race([running.done, new Promise<'waiting'>(resolve => setTimeout(() => resolve('waiting'), 90_000))]);
+  if (outcome === 'waiting') return { output: `The user has not finished yet. The link is still ${running.url ?? '(opening)'}; show it to them again. Call handoff again to keep waiting, or handoff with clear: true to take the tab back.` };
+  return outcome.ok ? { output: 'The user finished the browser step. Continue from the current page.' } : { output: outcome.message, isError: true };
 }
 
 /** A native dialog or separate popup window is outside the page, so a click
