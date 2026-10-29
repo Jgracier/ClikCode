@@ -7,11 +7,14 @@ import type { Page } from 'playwright-core';
 export type Found = { value: string; keyName?: string };
 export type Decision = { kind: 'found'; value: string } | { kind: 'none' } | { kind: 'ambiguous' };
 
+/** The longest opaque token taken as a key (a personal access token can be a signed JWT of 1,000 characters or more). */
+export const MAX_KEY_LENGTH = 8000;
+
 /** Field names that mean "this is the credential", not just any token (a CSRF token is not). */
 const STRONG_KEY = /api.?key|secret|access.?token|private.?key|auth.?token|bearer|credential/i;
 const PREFIXED = /^(?:[a-z]{2,12}(?:_[a-z]+)*_[A-Za-z0-9]{12,}|sk-|ghp_|github_pat_|AKIA|AIza|AQ\.|xox[abp]-|eyJ)/;
 /** A word that names the credential, so the value right after it is the credential ("API Key AQ.xxxx"). */
-const LABEL_THEN_VALUE = /\b(?:api[ _-]?key|secret(?:[ _-]?key)?|access[ _-]?token|token|key|credential|password)s?(?:[ \t]*[:=][ \t]*|[ \t]+)([A-Za-z0-9_\-+/=.:~]{16,512})/gi;
+const LABEL_THEN_VALUE = /\b(?:api[ _-]?key|secret(?:[ _-]?key)?|access[ _-]?token|token|key|credential|password)s?(?:[ \t]*[:=][ \t]*|[ \t]+)([A-Za-z0-9_\-+/=.:~]{16,8000})/gi;
 /** A UUID right after a "secret" label ("secret-key=7456…"): all lower-case hex, so it is no mixed-case token, yet it is the credential. */
 const SECRET_UUID = /(\bsecret[ _-]?(?:key|token)?s?(?:[ \t]*[:=][ \t]*|[ \t]+))([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/gi;
 /** Upper and lower case together with a digit, or (no digit) enough randomness that it is not a word. */
@@ -34,14 +37,24 @@ function entropy(text: string): number {
 
 /** Long, unbroken, mixed text with a digit: shaped like a key, not a word, URL or email. */
 export function keyShaped(value: string): boolean {
-  // Keys are rarely over ~130 characters; a longer token is a key only in JWT form (dotted segments).
-  if (value.length < 16 || value.length > 512 || (value.length > 130 && !/^[\w-]+\.[\w-]+\.[\w-]+$/.test(value)) || !/^[A-Za-z0-9_\-+/=.:~]+$/.test(value)) return false;
+  if (value.length < 16 || value.length > MAX_KEY_LENGTH || !/^[A-Za-z0-9_\-+/=.:~]+$/.test(value)) return false;
+  // Keys are rarely over ~130 characters; a longer token must be a JWT (dotted segments) or plainly random, never a word, path or URL.
+  if (value.length > 130 && !/^[\w-]+\.[\w-]+\.[\w-]+$/.test(value) && !(mixedCase(value) && entropy(value) >= 4.2)) return false;
   if (/^https?:|@/.test(value) || /^\d+$/.test(value)) return false;
   // Most keys carry a digit; one without (hf_ + letters) must be prefixed or plainly random.
   if (!/\d/.test(value) && !PREFIXED.test(value) && !(value.length >= 32 && mixedCase(value))) return false;
   // A resource path such as projects/831963658327 names a thing, it is not a credential.
   if (/^[a-z][a-z-]*\/[\w-]+$/.test(value)) return false;
   return entropy(value) >= 3;
+}
+
+/** A long token that a code block, textarea or copy wrapped over several lines or with spaces, put back in one piece; otherwise the text as it was. */
+export function compactToken(text: string): string {
+  const trimmed = text.trim();
+  if (!/\s/.test(trimmed)) return trimmed;
+  const parts = trimmed.split(/\s+/);
+  const joined = parts.join('');
+  return parts.length <= 400 && joined.length >= 100 && joined.length <= MAX_KEY_LENGTH && parts.every(part => /^[A-Za-z0-9_\-+/=.:~]+$/.test(part)) && keyShaped(joined) ? joined : trimmed;
 }
 
 function walk(node: unknown, key: string | undefined, out: Found[], depth = 0): void {
@@ -58,6 +71,8 @@ export function decide(input: { before: ReadonlySet<string>; after: readonly str
   const responseFor = new Map<string, Found>();
   for (const found of input.responses) responseFor.set(found.value, found);
   const candidates = new Set<string>([...input.after.filter(value => !input.before.has(value) && keyShaped(value)), ...responseFor.keys()]);
+  // The lines of a wrapped token are not tokens of their own once the whole token is there.
+  for (const value of [...candidates]) if ([...candidates].some(other => other.length > value.length && other.includes(value))) candidates.delete(value);
   for (const value of candidates) {
     const onPage = input.after.includes(value) && !input.before.has(value);
     const response = responseFor.get(value);
@@ -78,20 +93,29 @@ export function decide(input: { before: ReadonlySet<string>; after: readonly str
 type Snapshot = { tokens: string[]; hint: boolean; labelled: Set<string> };
 
 /** Runs in the page: every input value, copy-button payload and word of visible text. */
-function pageTokens(): Snapshot {
-  const doc = (globalThis as unknown as { document: { body: { innerText: string }; querySelectorAll(selector: string): ArrayLike<{ value?: string; getAttribute(name: string): string | null }> } }).document;
+function pageTokens(withMasked: boolean): Snapshot {
+  const doc = (globalThis as unknown as { document: { body: { innerText: string }; querySelectorAll(selector: string): ArrayLike<{ value?: string; type?: string; getAttribute(name: string): string | null }> } }).document;
   const tokens = new Set<string>();
   for (const word of doc.body.innerText.split(/\s+/)) tokens.add(word.replace(/^[("'`]+|[)"'`,.;]+$/g, ''));
-  for (const element of Array.from(doc.querySelectorAll('input, textarea'))) if (element.value) tokens.add(element.value);
+  // A masked field's value is not shown: it counts only once a Show button has turned it into text (or when the page's current key is wanted).
+  for (const element of Array.from(doc.querySelectorAll('input, textarea'))) if (element.value && (withMasked || element.type !== 'password')) tokens.add(element.value);
+  // A token shown in a code block or textarea may be wrapped over lines: the pieces joined are the token.
+  for (const element of Array.from(doc.querySelectorAll('pre, code, textarea, samp, [class*="token"], [class*="secret"]')) as unknown as { value?: string; textContent: string | null }[]) {
+    const text = (element.value || element.textContent || '').trim();
+    if (text.length >= 100 && text.length <= 16000 && /\s/.test(text)) {
+      const parts = text.split(/\s+/);
+      if (parts.length <= 400 && parts.every(part => /^[A-Za-z0-9_\-+/=.:~]+$/.test(part))) tokens.add(parts.join(''));
+    }
+  }
   for (const element of Array.from(doc.querySelectorAll('[data-clipboard-text], [data-copy], [data-value], [data-key], [data-secret]'))) {
     for (const name of ['data-clipboard-text', 'data-copy', 'data-value', 'data-key', 'data-secret']) { const attribute = element.getAttribute(name); if (attribute) tokens.add(attribute); }
   }
-  return { tokens: [...tokens].filter(token => token.length >= 16 && token.length <= 512), hint: false, labelled: new Set<string>() };
+  return { tokens: [...tokens].filter(token => token.length >= 16 && token.length <= 8000), hint: false, labelled: new Set<string>() };
 }
 
-async function snapshot(page: Page): Promise<Snapshot> {
+async function snapshot(page: Page, withMasked = false): Promise<Snapshot> {
   try {
-    const taken = await page.evaluate(pageTokens);
+    const taken = await page.evaluate(pageTokens, withMasked);
     const text = await page.evaluate(() => (globalThis as unknown as { document: { body: { innerText: string } } }).document.body.innerText);
     return { tokens: taken.tokens, hint: WORTH_SAVING_HINT.test(text), labelled: labelledValues(text) };
   } catch { return { tokens: [], hint: false, labelled: new Set<string>() }; } // A navigation can destroy the document mid-read.
@@ -116,7 +140,7 @@ export async function armFinder(page: Page, existing = false): Promise<Finder> {
   page.on('response', listen);
   return {
     async look() {
-      const now = await snapshot(page);
+      const now = await snapshot(page, existing);
       return decide({ before, after: now.tokens, responses, hint: now.hint, labelled: now.labelled, existing });
     },
     dispose() { page.off('response', listen); },

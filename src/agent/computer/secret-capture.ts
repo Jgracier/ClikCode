@@ -12,7 +12,7 @@ import { copyWithSiteButton, listenForCopies, copiedSince, plausibleCopy, readCl
 import { secretParts, watchDownload } from './download-capture.js';
 import { LoginError } from './login-error.js';
 import { checkKey, type KeyCheck } from './key-check.js';
-import { armFinder, keyShaped } from './secret-finder.js';
+import { armFinder, compactToken, keyShaped } from './secret-finder.js';
 import { sendToDestinations, type Delivery, type Destination } from './secret-destinations.js';
 import { registerSecret } from './secret-scrubber.js';
 
@@ -51,7 +51,7 @@ export async function captureSecret(input: {
     let value: string | undefined;
     let via = 'the page';
     // A target that is itself key-shaped text is the key: nothing needs clicking.
-    const own = input.paste ? undefined : (await input.readTarget?.().catch(quiet('agent/computer/secret-capture')))?.trim();
+    const own = input.paste ? undefined : compactToken((await input.readTarget?.().catch(quiet('agent/computer/secret-capture'))) ?? '');
     if (own && (keyShaped(own) || shortKeyText(own))) { value = own; via = 'the text of the target itself'; }
     else if (input.trigger) { clicked = true; await input.trigger(); }
     let ambiguous = false;
