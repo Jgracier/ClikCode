@@ -16,10 +16,10 @@ const worker = () => {
   const observer = { attachedCount: 0, lastActivityAt: Date.now() };
   const ctx = {
     observer, sessionId: 's1', agentSession: { notifications: [], wakeups: new Map(), shells: new Map() },
-    turnRunning: false, draining: false, vendorBackground: { busy: false }, outOfTurn: { active: false },
+    turnRunning: false, draining: false, vendorBackground: { busy: false }, outOfTurn: { active: false }, submitsInFlight: 0,
     resumeWaiter: { pending: false }, spawnedBuild: 'old-build', retireWhenIdle: false, shutdown,
   } as never;
-  return { ctx: ctx as { observer: typeof observer; vendorBackground: { busy: boolean }; outOfTurn: { active: boolean } }, idle: createIdleControl(ctx), shutdown };
+  return { ctx: ctx as { submitsInFlight: number; observer: typeof observer; vendorBackground: { busy: boolean }; outOfTurn: { active: boolean } }, idle: createIdleControl(ctx), shutdown };
 };
 
 describe('replacing a worker for a newer build', () => {
@@ -62,5 +62,14 @@ describe('replacing a worker for a newer build', () => {
     ctx.observer.attachedCount = 1;
     await vi.advanceTimersByTimeAsync(RETIRE_QUIET_MS * 2);
     expect(shutdown).not.toHaveBeenCalled();
+  });
+
+  it('never goes while a submit it accepted has not been answered: that message is about to be a turn', async () => {
+    const { ctx, idle, shutdown } = worker();
+    ctx.submitsInFlight = 1;
+    idle.leaveIfStaleBuild();
+    await vi.advanceTimersByTimeAsync(RETIRE_QUIET_MS * 2);
+    expect(shutdown).not.toHaveBeenCalled();
+    expect(idle.retireBlocker()).toBe('a turn is running');
   });
 });
