@@ -18,7 +18,8 @@ export class WorkerLink {
   workerTurnRunning = false;
   /** The last turn ended stopped: nothing queued behind it runs until the user acts. */
   stopped = false;
-  turnWaiter: { resolve: () => void; reject: (error: Error) => void; error?: Error } | undefined;
+  /** `taken`: the worker has said it has the submit (a turn started, queued, or failed). Until then it may only be in the socket. */
+  turnWaiter: { resolve: () => void; reject: (error: Error) => void; error?: Error; taken?: boolean } | undefined;
 
   constructor(private readonly host: Pick<BridgeHost, 'channel' | 'prompter' | 'sessionId' | 'closed' | 'shown' | 'enqueue' | 'report' | 'refreshUsage' | 'scheduleDrain'>) {}
 
@@ -40,9 +41,12 @@ export class WorkerLink {
     client.on('close', () => {
       if (this.worker?.client !== client) return;
       const midTurn = this.workerTurnRunning || Boolean(this.turnWaiter);
+      const untaken = this.untakenSubmit();
       this.worker = undefined;
       this.workerTurnRunning = false;
-      if (midTurn) this.failTurn(new Error('session worker connection closed unexpectedly'));
+      // A worker that left before saying it had the message never ran it: it goes to the worker that replaces this one (bridge-turns.ts).
+      if (untaken) this.failTurn(new WorkerRetiring('The worker left before it took the message.'));
+      else if (midTurn) this.failTurn(new Error('session worker connection closed unexpectedly'));
       // The worker left -- retired for a newer build, timed out, or dropped
       // this window for reading too slowly. Attach to it again (or to its
       // replacement): its snapshot says whether a turn still runs, and a
@@ -78,6 +82,7 @@ export class WorkerLink {
   onWorkerEvent(sessionId: string, client: WorkerClient, event: WorkerEvent): void {
     // The prompt was not started: the editor keeps showing it, and the turn is sent again to the worker that replaces this one (bridge-turns.ts).
     if (event.type === 'submit-rejected' && event.retry) { this.failTurn(new WorkerRetiring(event.message)); return; }
+    if (this.turnWaiter && (event.type === 'waiting-start' || event.type === 'submit-queued' || event.type === 'turn-error')) this.turnWaiter.taken = true;
     this.host.channel.send({ type: 'worker', sessionId, event, ...(event.type === 'note' ? { level: noticeLevel(event.message) } : {}) });
     switch (event.type) {
       case 'waiting-start':
@@ -132,12 +137,18 @@ export class WorkerLink {
         return;
       }
       case 'shutdown':
-        // A worker only retires idle; the close that follows reattaches.
-        if (this.workerTurnRunning || this.turnWaiter) this.failTurn(new Error(`session worker exited mid-turn: ${event.reason}`));
+        // A worker retires idle, so a send in flight can meet it: until the worker said it took the message, it is sent again to the replacement.
+        if (this.untakenSubmit()) this.failTurn(new WorkerRetiring(event.reason));
+        else if (this.workerTurnRunning || this.turnWaiter) this.failTurn(new Error(`session worker exited mid-turn: ${event.reason}`));
         return;
       default:
         return;
     }
+  }
+
+  /** A submit was sent and the worker has not said it has it: it may never have been read. */
+  private untakenSubmit(): boolean {
+    return Boolean(this.turnWaiter) && !this.turnWaiter?.taken && !this.workerTurnRunning;
   }
 
   failTurn(error: Error): void {

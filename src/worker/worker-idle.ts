@@ -71,7 +71,8 @@ export function createIdleControl(ctx: WorkerContext) {
    * exactly those two once nothing earlier holds the worker. */
   const heldReason = (scope: 'retire' | 'idle'): string | undefined => {
     const retire = scope === 'retire';
-    if (ctx.turnRunning || (retire && ctx.draining)) return HELD.turn;
+    // A submit accepted and not yet answered is a turn about to start: retiring now would drop it.
+    if (ctx.turnRunning || ctx.submitsInFlight > 0 || (retire && ctx.draining)) return HELD.turn;
     if (ctx.vendorBackground.busy || ctx.outOfTurn.active) return HELD.vendorBackground;
     if (!retire && observer.attachedCount > 0) return `${observer.attachedCount} window(s) attached`;
     if (retire && vendorWorkSince !== undefined) return HELD.vendorWork;
