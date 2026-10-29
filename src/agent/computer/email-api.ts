@@ -127,7 +127,8 @@ async function accessToken(stateDir: string, endpoints: GoogleEndpoints): Promis
   return body.access_token;
 }
 
-export interface FoundEmail { id: string; from: string; subject: string; text: string; links: string[]; receivedAt: number }
+export interface FoundEmail { id: string; from: string; subject: string; text: string; links: string[]; /** The same links with their text, for choosing among them. */ anchors?: MailAnchor[]; receivedAt: number }
+export interface MailAnchor { href: string; text: string; button?: boolean; image?: boolean }
 type Part = { mimeType?: string; body?: { data?: string }; parts?: Part[] };
 const decode = (data?: string): string => (data ? Buffer.from(data, 'base64url').toString('utf8') : '');
 function collect(part: Part | undefined, kind: string, out: string[] = []): string[] {
@@ -141,6 +142,15 @@ function htmlToText(html: string): string {
 }
 function hrefs(html: string): string[] {
   return [...html.matchAll(/href\s*=\s*["']([^"']+)["']/gi)].map(m => m[1]!.replace(/&amp;/g, '&')).filter(href => /^https:/.test(href));
+}
+
+function anchors(html: string): MailAnchor[] {
+  return [...html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi)].flatMap(m => {
+    const href = /href\s*=\s*["']([^"']+)["']/i.exec(m[1]!)?.[1]?.replace(/&amp;/g, '&');
+    if (!href || !/^https:/.test(href)) return [];
+    const text = htmlToText(m[2]!.replace(/<img\b[^>]*alt\s*=\s*["']([^"']*)["'][^>]*>/gi, ' $1 '));
+    return [{ href, text, ...(/button|btn|padding\s*:\s*\d|border-radius|background(?:-color)?\s*:/i.test(m[1]!) ? { button: true } : {}), ...(/<img\b/i.test(m[2]!) && !htmlToText(m[2]!.replace(/<img\b[^>]*>/gi, '')) ? { image: true } : {}) }];
+  });
 }
 
 export class EmailAmbiguous extends Error {}
@@ -196,7 +206,7 @@ export async function waitForEmail(stateDir: string, query: { from?: string; sub
       const header = (name: string): string => message.payload?.headers?.find(h => h.name.toLowerCase() === name)?.value ?? '';
       const html = collect(message.payload, 'text/html').join('\n');
       const plain = collect(message.payload, 'text/plain').join('\n');
-      found.push({ id, from: header('from'), subject: header('subject'), text: plain.trim() || htmlToText(html), links: hrefs(html || plain), receivedAt: Number(message.internalDate ?? 0) });
+      found.push({ id, from: header('from'), subject: header('subject'), text: plain.trim() || htmlToText(html), links: hrefs(html || plain), anchors: anchors(html), receivedAt: Number(message.internalDate ?? 0) });
     }
     found = found.filter(mail => mail.receivedAt >= since && (!query.accept || query.accept(mail)));
     if (query.site) {

@@ -1,4 +1,5 @@
 /** Page-level browser actions in ClikCode's own Chrome profile. */
+import { pickLink, describeLink, type LinkPick } from '../computer/email-links.js';
 import { quiet } from '../../runtime/lifecycle-log.js';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -57,6 +58,10 @@ type WebArgs = {
   new_account?: boolean; method?: string; secret?: string; to?: string; with?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean; format?: string; options?: string[]; secret?: boolean }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; vendor?: string; owner?: string; env?: string; task?: { vendor: string; kind?: string; status?: string; reason?: string; note?: string; owner?: string; connectors?: string[] }; bodies?: boolean; tasks?: boolean; task_status?: string; task_reason?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
 } & PageArgs & FilesEnvArgs;
 
+/** What was opened (host and path only: the rest of a mailed link is its token) and the other links by text. */
+function chosenNote(pick: LinkPick, opened: string): string {
+  return `${opened} Chose ${pick.chosen.text.trim() ? `"${pick.chosen.text.trim().slice(0, 60)}" ` : ''}(${describeLink(pick.chosen)})${pick.others.length ? `; other links: ${pick.others.map(t => `"${t.slice(0, 40)}"`).join(', ')}. Pass link: "words" to open another` : ''}.`;
+}
 export function webAddress(value: string | undefined): string {
   if (!value) throw new Error('Open needs a website URL.');
   const parsed = new URL(value);
@@ -1281,24 +1286,26 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
     case 'open_email_link': {
       if (await emailConnected(ctx.stateDir)) {
         const mail = await waitForEmail(ctx.stateDir, { from: args.from, subject: args.subject, ...(args.from || args.subject ? {} : { site: page.url() }), spam: true, consume: true, accept: args.from || args.subject ? (m => m.links.length > 0) : looksLikeLinkEmail, timeoutMs: (args.seconds ?? 90) * 1000, signal: ctx.signal });
-        const real = mail.links.filter(href => !/unsubscribe|accounts\.google\.com|mail\.google\.com|privacy|terms/i.test(href));
-        const wanted = args.link?.toLowerCase();
-        const pick = wanted ? real.find(href => href.toLowerCase().includes(wanted)) : real[0];
-        if (!pick) throw new Error(`The email has no ${wanted ? `link mentioning "${args.link}"` : 'usable link'}. Links found: ${real.slice(0, 5).map(displayUrl).join(', ') || 'none'}.`);
-        await page.goto(pick, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+        const anchors = mail.anchors?.length ? mail.anchors : mail.links.map(href => ({ href, text: '' }));
+        const pick = pickLink(anchors, args.link);
+        if (!pick) throw new Error(`The email has no ${args.link ? `link mentioning "${args.link}"` : 'usable link'}. Links found: ${anchors.slice(0, 6).map(link => link.text.trim() || displayUrl(link.href)).join(', ') || 'none'}.`);
+        await page.goto(pick.chosen.href, { waitUntil: 'domcontentloaded', timeout: 30_000 });
         await settle(page);
-        return withMailbox(await observeComputerPage(page, ctx.acceptsImages === true), `Opened the link from the email in ${await mailboxAddress(ctx.stateDir) ?? 'the connected mailbox'}.`);
+        return withMailbox(await observeComputerPage(page, ctx.acceptsImages === true), chosenNote(pick, `Opened the link from the email in ${await mailboxAddress(ctx.stateDir) ?? 'the connected mailbox'}.`));
       }
       const body = await openLatestEmail(page, args, ctx.stateDir);
-      const links = await body.locator('a[href]').evaluateAll(nodes => nodes.map(node => ({ href: (node as unknown as { href: string }).href, text: (node as unknown as { textContent: string | null }).textContent ?? '' })));
+      const links = await body.locator('a[href]').evaluateAll(nodes => nodes.map(node => {
+        const el = node as unknown as { href: string; textContent: string | null; className?: string; getAttribute(n: string): string | null; querySelector(s: string): unknown };
+        const text = (el.textContent ?? '').replace(/\s+/g, ' ').trim();
+        return { href: el.href, text: text || (el.querySelector('img') as { alt?: string } | null)?.alt || '', button: /button|btn/i.test(`${el.className ?? ''} ${el.getAttribute('role') ?? ''}`) || /padding|border-radius|background/i.test(el.getAttribute('style') ?? ''), image: !text && !!el.querySelector('img') };
+      }));
       const real = links.map(link => { try { const u = new URL(link.href); return { ...link, href: u.hostname.endsWith('google.com') && u.pathname === '/url' ? u.searchParams.get('q') ?? link.href : link.href }; } catch { return link; } })
-        .filter(link => /^https:/.test(link.href) && !/unsubscribe|accounts\.google\.com|mail\.google\.com|privacy|terms/i.test(link.href));
-      const wanted = args.link?.toLowerCase();
-      const pick = wanted ? real.find(link => `${link.href} ${link.text}`.toLowerCase().includes(wanted)) : real[0];
-      if (!pick) throw new Error(`The email has no ${wanted ? `link mentioning "${args.link}"` : 'usable link'}. Links found: ${real.slice(0, 5).map(link => displayUrl(link.href)).join(', ') || 'none'}.`);
-      await page.goto(pick.href, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+        .filter(link => /^https:/.test(link.href));
+      const pick = pickLink(real, args.link);
+      if (!pick) throw new Error(`The email has no ${args.link ? `link mentioning "${args.link}"` : 'usable link'}. Links found: ${real.slice(0, 6).map(link => link.text || displayUrl(link.href)).join(', ') || 'none'}.`);
+      await page.goto(pick.chosen.href, { waitUntil: 'domcontentloaded', timeout: 30_000 });
       await settle(page);
-      return withMailbox(await observeComputerPage(page, ctx.acceptsImages === true), `Opened the link from the email in ${await mailboxLabel(ctx.stateDir, args.account)}.`);
+      return withMailbox(await observeComputerPage(page, ctx.acceptsImages === true), chosenNote(pick, `Opened the link from the email in ${await mailboxLabel(ctx.stateDir, args.account)}.`));
     }
     case 'email_connect': {
       // One consent in this browser stores the mailbox in Secrets Manager; read_email_code and open_email_link then use the Gmail API.
