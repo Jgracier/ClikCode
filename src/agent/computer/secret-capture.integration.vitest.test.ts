@@ -200,9 +200,11 @@ it.skipIf(!enabled)('takes the secret from a pair of Copy buttons, says where it
   const result = await captureSecret({ stateDir, page: tab, name: 'pair/secret', trigger: () => tap(tab, '#go'), ask: neverAsked });
   expect(result.via).toContain('next to "Secret Key"');
   expect(await readNamedSecret(stateDir, 'pair/secret')).toBe(KEY);
-  // The same value again, under another name, is the first value again.
+  // The same value again, under another name, is success: not stored twice, still sent on.
   const again = await open('/pair');
-  await expect(captureSecret({ stateDir, page: again, name: 'pair/other', trigger: () => tap(again, '#go'), ask: neverAsked })).rejects.toThrow('same value already saved as "pair/secret"');
+  const repeat = await captureSecret({ stateDir, page: again, name: 'pair/other', trigger: () => tap(again, '#go'), ask: neverAsked });
+  expect(repeat.alreadySavedAs).toBe('pair/secret');
+  await expect(readNamedSecret(stateDir, 'pair/other')).rejects.toThrow();
 }, 60_000);
 
 it.skipIf(!enabled)('refuses to save a value its own service rejects when the page already showed it, and saves one it accepts', async () => {

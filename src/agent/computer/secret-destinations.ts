@@ -23,6 +23,8 @@ export type Destination = { to: string; with?: Record<string, string>; connectio
 /** `vaultSlots`: slots whose value may be `secret:<saved name>`, read from the vault when it is sent, so the agent
  * never sees it. For a value that is not a secret but looks like one to every filter (an OAuth client id). */
 type Template = { run: string[]; stdin?: string; about?: string; vaultSlots?: string[];
+  /** Slots that may be left out (they are then empty), such as the blank password of a basic login whose key is the username. */
+  optionalSlots?: string[];
   /** `connection`: success is not the command's word for it. After it runs, ClikDeploy is asked whether `integration` now has an active connection. */
   verify?: 'connection' };
 
@@ -45,6 +47,9 @@ export const DEFAULT_DESTINATIONS: Readonly<Record<string, Template>> = {
   // Some vendors expose a token id as the basic-auth username. It can be read from the vault at send time.
   'clikdeploy-connection-basic': { about: 'connect a username and password to a ClikDeploy connector (integration, username; username may be secret:<saved name>); the result is `connected` or `NOT connected: <reason>`', vaultSlots: ['username'], verify: 'connection',
     run: ['clikdeploy', 'tools', 'run', 'connect_connector', '--args-json', '-', '--confirm'], stdin: JSON_ARGS('"integrationId":"{{integration}}","username":"{{username}}","password":"{{secret|json}}"') },
+  // The vendor gives one key and it is the basic-auth username (BugHerd, HTML/CSS to Image): the password is blank unless one is given.
+  'clikdeploy-connection-basic-key': { about: 'connect a key that is the basic-auth USERNAME to a ClikDeploy connector (integration; password optional, blank by default); the result is `connected` or `NOT connected: <reason>`', optionalSlots: ['password'], verify: 'connection',
+    run: ['clikdeploy', 'tools', 'run', 'connect_connector', '--args-json', '-', '--confirm'], stdin: JSON_ARGS('"integrationId":"{{integration}}","username":"{{secret|json}}","password":"{{password}}"') },
   'github-secret': { about: 'a GitHub repository secret (repo, key)', run: ['gh', 'secret', 'set', '{{key}}', '--repo', '{{repo}}'], stdin: '{{secret}}' },
 };
 
@@ -82,7 +87,8 @@ function readConnectionValues(raw: unknown): { values?: Record<string, string>; 
   const values: Record<string, string> = {};
   for (const [name, value] of Object.entries(map as Record<string, unknown>)) {
     if (!VALUE_NAME.test(name)) return { problem: `connectionValues has a name "${name.slice(0, 41)}" that is not a plain identifier.` };
-    if (typeof value !== 'string' || !VALUE_TEXT.test(value.trim())) return { problem: `connectionValues.${name} must be ${VALUE_FORMAT}.` };
+    if (typeof value === 'string' && VAULT_REF.test(value.trim())) { values[name] = value.trim(); continue; } // read from the vault when sent
+    if (typeof value !== 'string' || !VALUE_TEXT.test(value.trim())) return { problem: `connectionValues.${name} must be ${VALUE_FORMAT}, or secret:<saved name> for a value saved earlier (read_value, capture_secret).` };
     values[name] = value.trim();
   }
   return { values };
@@ -146,6 +152,28 @@ export async function declaredConnectionValues(integration: string, signal?: Abo
   return proxy && typeof proxy === 'object' ? (proxy.variables && typeof proxy.variables === 'object' ? proxy.variables : {}) : undefined;
 }
 
+/** The connection destinations that fit each auth kind a connector declares. */
+const ACCEPTS: Record<string, string[]> = { 'api-key': ['clikdeploy-connection'], basic: ['clikdeploy-connection-basic', 'clikdeploy-connection-basic-key'], custom: [], oauth: ['clikdeploy-connection'] };
+
+/** One message listing the shapes a connector's declared auth accepts. */
+export function describeShapes(integration: string, kind: string): string {
+  const shapes: Record<string, string> = {
+    'api-key': `{"to":"clikdeploy-connection","with":{"integration":"${integration}"}} (the captured key is the API key)`,
+    oauth: `{"to":"clikdeploy-connection","with":{"integration":"${integration}"}} (the captured key is a token; the connector may prefer oauth_connect)`,
+    basic: `{"to":"clikdeploy-connection-basic","with":{"integration":"${integration}","username":"<name or secret:<saved name>>"}} (the captured key is the PASSWORD), or {"to":"clikdeploy-connection-basic-key","with":{"integration":"${integration}"}} (the captured key is the USERNAME; add "password" for a fixed one, else blank)`,
+    custom: 'a custom-auth connector takes named props, which capture_secret cannot send; connect it in ClikDeploy',
+  };
+  return `${integration} declares ${kind} auth. Accepted: ${shapes[kind] ?? `none of the known shapes (auth kind "${kind}")`}.`;
+}
+
+/** The auth kind a connector declares (api-key, basic, custom, oauth), or undefined when it cannot be told. */
+export async function declaredAuthKind(integration: string, signal?: AbortSignal): Promise<string | undefined> {
+  const shown = await runCli('clikdeploy', ['integrations', 'show', integration], { signal, timeoutMs: 30_000, maxChars: 4_000_000 });
+  if (shown.missing) return undefined;
+  const parsed = firstJsonObject<{ status?: string; data?: { auth?: { kind?: string } } }>(shown.text);
+  return parsed?.status === 'error' ? undefined : parsed?.data?.auth?.kind;
+}
+
 /** What `values` may hold for a connector, in words: the names, what each is, and the format. */
 function describeDeclared(integration: string, declared: DeclaredValues): string {
   const names = Object.entries(declared).map(([name, info]) => `${name}${info.label ? ` (${info.label}${info.description ? `: ${info.description}` : ''})` : ''}`);
@@ -154,7 +182,7 @@ function describeDeclared(integration: string, declared: DeclaredValues): string
 
 /** The first problem with the plan, in words the agent can act on; undefined when it is sound.
  * With `declared`, the connection values are checked against the connector's own list. */
-export async function destinationProblem(stateDir: string, list: readonly unknown[], declared?: (integration: string) => Promise<DeclaredValues | undefined>): Promise<string | undefined> {
+export async function destinationProblem(stateDir: string, list: readonly unknown[], declared?: (integration: string) => Promise<DeclaredValues | undefined>, authKind?: (integration: string) => Promise<string | undefined>): Promise<string | undefined> {
   const all = await loadDestinations(stateDir);
   for (const [index, item] of list.entries()) {
     const at = `send_to[${index}]`;
@@ -166,6 +194,16 @@ export async function destinationProblem(stateDir: string, list: readonly unknow
       if (!takesConnectionValues(template)) return `${at}: connectionValues only goes with clikdeploy-connection or clikdeploy-connection-basic, not "${d.to}".`;
       const read = readConnectionValues(d.connectionValues);
       if (read.problem) return `${at}: ${read.problem}`;
+      const refs = Object.entries(read.values ?? {}).flatMap(([name, v]) => { const m = VAULT_REF.exec(v); return m ? [[name, m[1]!] as const] : []; });
+      if (refs.length) {
+        const have = await namedSecretNames(stateDir).catch(() => [] as string[]);
+        const lost = refs.find(([, saved]) => !have.includes(saved));
+        if (lost) return `${at}: values.${lost[0]} names a saved secret "${lost[1]}" that is not in the Secrets Manager.`;
+      }
+    }
+    if (authKind && takesConnectionValues(template) && typeof d.with?.integration === 'string' && SAFE_VALUE.test(d.with.integration)) {
+      const kind = await authKind(d.with.integration).catch(quiet('agent/computer/secret-destinations'));
+      if (kind && kind in ACCEPTS && !ACCEPTS[kind]!.includes(d.to)) return `${at}: ${d.to} does not fit ${d.with.integration}. ${describeShapes(d.with.integration, kind)}`;
     }
     if (declared && takesConnectionValues(template) && typeof d.with?.integration === 'string' && SAFE_VALUE.test(d.with.integration)) {
       const known = await declared(d.with.integration).catch(quiet('agent/computer/secret-destinations'));
@@ -184,6 +222,7 @@ export async function destinationProblem(stateDir: string, list: readonly unknow
         if (!saved.includes(ref[1]!)) return `${at}: with.${slot} names a saved secret "${ref[1]}" that is not in the Secrets Manager.`;
         continue;
       }
+      if (template.optionalSlots?.includes(slot) && (value === undefined || value === '')) continue;
       if (typeof value !== 'string' || !SAFE_VALUE.test(value)) return `${at}: "${d.to}" needs with.${slot} (letters, digits, dot, dash, underscore, slash; not starting with a dash). ${EXAMPLE}`;
     }
   }
@@ -259,6 +298,18 @@ export async function sendToDestinations(stateDir: string, list: readonly Destin
     let stdin = template.stdin !== undefined ? fill(template.stdin, params, value) : undefined;
     const extra = takesConnectionValues(template) ? readConnectionValues(d.connectionValues) : {};
     if (extra.problem) { out.push({ label, ok: false, message: `NOT connected: ${extra.problem}` }); continue; }
+    // A value given as secret:<name> is read from the vault now, so the agent never has to see it.
+    if (extra.values) {
+      let bad: string | undefined;
+      for (const [name, v] of Object.entries(extra.values)) {
+        const ref = VAULT_REF.exec(v);
+        if (!ref) continue;
+        const stored = (await readNamedSecret(stateDir, ref[1]!).catch(() => '')).trim();
+        if (!VALUE_TEXT.test(stored)) { bad = `The saved secret "${ref[1]}" is missing or is not a plain value, so ${name} could not be filled (${VALUE_FORMAT}).`; break; }
+        extra.values[name] = stored;
+      }
+      if (bad) { out.push({ label, ok: false, message: `NOT connected: ${bad}` }); continue; }
+    }
     if (stdin !== undefined && extra.values && Object.keys(extra.values).length) stdin = JSON.stringify({ ...(JSON.parse(stdin) as Record<string, unknown>), baseUrlVariables: extra.values });
     // `--args-json -` reads the JSON from stdin on clikdeploy 1.0.35 and later, so the key is in no command line. The 1.0.34
     // CLI tries to parse "-" as JSON; only for such an old CLI does the JSON go inline in the flag (the version is asked once
@@ -272,6 +323,11 @@ export async function sendToDestinations(stateDir: string, list: readonly Destin
       const said = scrubSecrets(say(result.text)).replace(/\s+/g, ' ').slice(0, 160);
       const state = await connectionState(params.integration, signal);
       const failed = result.code !== 0 || /"status"\s*:\s*"error"/.test(result.text) || /"success"\s*:\s*false/.test(result.text);
+      if (failed && /Provide \{/.test(result.text)) {
+        const kind = await declaredAuthKind(params.integration, signal).catch(quiet('agent/computer/secret-destinations'));
+        out.push({ label, ok: false, message: `NOT connected: ${d.to} sent the wrong shape. ${kind ? describeShapes(params.integration, kind) : `Basic auth takes username and password: use clikdeploy-connection-basic (key = password) or clikdeploy-connection-basic-key (key = username).`}` });
+        continue;
+      }
       const reason = failed ? said || `the connect command failed (exit ${result.code})` : state.reason ? `${state.reason}${said ? `; the command said: ${said}` : ''}` : '';
       out.push(state.connected && !failed ? { label, ok: true, message: 'connected' } : { label, ok: false, message: `NOT connected: ${scrubSecrets(reason || 'no active connection found after connecting')}` });
       continue;

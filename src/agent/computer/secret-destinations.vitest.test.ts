@@ -2,7 +2,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import { addDestination, declaredConnectionValues, destinationProblem, loadDestinations, normalizeSendTo, removeDestination, sendToDestinations, slotsOf } from './secret-destinations.js';
+import { addDestination, declaredAuthKind, declaredConnectionValues, destinationProblem, loadDestinations, normalizeSendTo, removeDestination, sendToDestinations, slotsOf } from './secret-destinations.js';
 import { forgetSecrets, registerSecret } from './secret-scrubber.js';
 import { forgetCliStdinSupport, versionAtLeast } from './cli-stdin-support.js';
 import { lockCredentialVault, saveNamedSecret } from './credential-vault.js';
@@ -19,7 +19,7 @@ const fake = async (name: string, script: string): Promise<void> => { await writ
 
 it('ships a few destinations as plain data, each naming the slots the agent fills', async () => {
   const all = await loadDestinations(dir);
-  expect(Object.keys(all)).toEqual(['clikdeploy-secret', 'clikdeploy-app-secret', 'clikdeploy-compute', 'clikdeploy-connector', 'clikdeploy-connection', 'clikdeploy-connection-basic', 'github-secret']);
+  expect(Object.keys(all)).toEqual(['clikdeploy-secret', 'clikdeploy-app-secret', 'clikdeploy-compute', 'clikdeploy-connector', 'clikdeploy-connection', 'clikdeploy-connection-basic', 'clikdeploy-connection-basic-key', 'github-secret']);
   expect(slotsOf(all['clikdeploy-secret']!)).toEqual(['key']);
   expect(slotsOf(all['clikdeploy-compute']!)).toEqual(['provider', 'field']);
   expect(slotsOf(all['clikdeploy-connector']!)).toEqual(['integration', 'client_id']);
@@ -345,4 +345,37 @@ it('an old CLI (1.0.34) still gets the JSON inline, since it cannot read "-"', a
   const [result] = await sendToDestinations(dir, [{ to: 'clikdeploy-secret', with: { key: 'SALAD_API_KEY' } }], VALUE);
   expect(result).toMatchObject({ ok: true });
   expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toEqual({ key: 'SALAD_API_KEY', value: VALUE });
+});
+
+it('a value may be secret:<saved name>, read from the vault when sent; a missing one is refused before anything runs', async () => {
+  await fakeConnect(pretty({ status: 'success', data: { success: true } }), shown({ id: 'c1', status: 'active' }));
+  await saveNamedSecret(dir, 'knack/app-id', '5f1c2d3e4a', { url: 'https://example.com' });
+  const plan = normalizeSendTo({ to: 'clikdeploy-connection', with: { integration: 'knack' }, values: { app_id: 'secret:knack/app-id' } })!;
+  expect(await destinationProblem(dir, plan)).toBeUndefined();
+  const [result] = await sendToDestinations(dir, plan, VALUE);
+  expect(result).toMatchObject({ ok: true });
+  expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8')).baseUrlVariables).toEqual({ app_id: '5f1c2d3e4a' });
+  const missing = normalizeSendTo({ to: 'clikdeploy-connection', with: { integration: 'knack' }, values: { app_id: 'secret:nope' } })!;
+  expect(await destinationProblem(dir, missing)).toContain('not in the Secrets Manager');
+});
+
+it('basic auth with the key as the username and a blank password, and one error listing the shapes of the declared auth', async () => {
+  await fakeConnect(pretty({ status: 'success', data: { success: true } }), shown({ id: 'c1', status: 'active' }));
+  const plan = [{ to: 'clikdeploy-connection-basic-key', with: { integration: 'bugherd' } }];
+  expect(await destinationProblem(dir, plan)).toBeUndefined();
+  const [result] = await sendToDestinations(dir, plan, VALUE);
+  expect(result).toMatchObject({ ok: true });
+  expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toEqual({ integrationId: 'bugherd', username: VALUE, password: '' });
+  await sendToDestinations(dir, [{ to: 'clikdeploy-connection-basic-key', with: { integration: 'bugherd', password: 'x' } }], VALUE);
+  expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8')).password).toBe('x');
+  // A key sent to a basic connector as an api key: one error naming what fits.
+  const wrong = await destinationProblem(dir, [{ to: 'clikdeploy-connection', with: { integration: 'bugherd' } }], undefined, async () => 'basic');
+  expect(wrong).toContain('clikdeploy-connection-basic-key');
+  expect(wrong).toContain('clikdeploy-connection-basic"');
+  // The server's own vague answer is replaced by the same list.
+  await fakeConnect(pretty({ status: 'error', message: 'Provide { username, password }' }), shown(null));
+  await fake('clikdeploy', `case "$1" in tools) cat "${dir}/connect.out"; exit 1;; integrations) printf '%s' '{"status":"success","data":{"auth":{"kind":"basic"}}}';; esac`);
+  const [failed] = await sendToDestinations(dir, [{ to: 'clikdeploy-connection', with: { integration: 'bugherd' } }], VALUE);
+  expect(failed!.message).toContain('declares basic auth');
+  expect(await declaredAuthKind('bugherd')).toBe('basic');
 });

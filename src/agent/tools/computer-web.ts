@@ -35,7 +35,7 @@ import { applyHttpAuth, clearHttpAuth, denyPermissionsFor, runCookies, runPdf, r
 import { approvedUploadPath, isUploadPath } from '../computer/upload-files.js';
 import { bindDownloads, describeDownloads, downloadNotes } from '../computer/downloads.js';
 import { SEND_TO_HELP, SEND_TO_SCHEMA } from './store-secret.js';
-import { declaredConnectionValues, destinationProblem, normalizeSendTo, type Destination } from '../computer/secret-destinations.js';
+import { declaredAuthKind, declaredConnectionValues, destinationProblem, normalizeSendTo, type Destination } from '../computer/secret-destinations.js';
 import { ACTIONABLE, condenseSnapshot } from './snapshot-condense.js';
 import { followPopup, SIGN_IN_CLICK } from '../computer/google-popup.js';
 import { captureSecret } from '../computer/secret-capture.js';
@@ -1363,12 +1363,12 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
     case 'capture_secret': {
       // Before anything is clicked: a key must not be created for a plan that cannot deliver it.
       const plan = normalizeSendTo(args.send_to);
-      const planProblem = plan?.length ? await destinationProblem(ctx.stateDir, plan, (id) => declaredConnectionValues(id, ctx.signal)) : undefined;
+      const planProblem = plan?.length ? await destinationProblem(ctx.stateDir, plan, (id) => declaredConnectionValues(id, ctx.signal), (id) => declaredAuthKind(id, ctx.signal)) : undefined;
       if (planProblem) throw new Error(`${planProblem} Nothing was clicked.`);
       const triggerLabel = args.target ? (await controlName(page, args.target)) ?? (REF.test(args.target.trim()) ? undefined : args.target.trim()) : undefined;
       const name = args.secret_name?.trim() || `${new URL(page.url()).hostname.replace(/^www\./, '')}/key`;
       // The clipboard is one thing and a Copy button only works in the focused tab: captures take turns, each in front.
-      const { length, shape, via, check, sent } = await inOrder('clipboard', async () => { await page.bringToFront().catch(quiet('agent/tools/computer-web')); return captureSecret({ ...(args.paste ? { paste: true } : {}), stateDir: ctx.stateDir, page, name, signal: ctx.signal,
+      const { length, shape, via, check, sent, alreadySavedAs } = await inOrder('clipboard', async () => { await page.bringToFront().catch(quiet('agent/tools/computer-web')); return captureSecret({ ...(args.paste ? { paste: true } : {}), stateDir: ctx.stateDir, page, name, signal: ctx.signal,
         meta: { url: new URL(page.url()).origin, vendor: args.vendor ?? new URL(page.url()).hostname.replace(/^www\./, ''), owner: args.owner ?? await profileEmail(ctx.stateDir), ...(args.env ? { env: args.env } : {}) },
         ...(plan?.length ? { sendTo: plan } : {}),
         ...(args.target ? { trigger: async () => { await clickOrHint(await locate(page, args.target)); } } : {}),
@@ -1386,7 +1386,8 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
         if (saved) recipeLint = lintRecipe(saved).map(finding => finding.message);
       }
       const lines = [
-        `SAVED "${name}" in ClikCode Secrets Manager (${length} characters, ${shape}, taken from ${via}). You were not shown the key; if that does not match what you expected (an id where a secret should be), delete it and capture again.`,
+        alreadySavedAs ? `ALREADY SAVED as "${alreadySavedAs}" (${length} characters, ${shape}, taken from ${via}): the same value is in ClikCode Secrets Manager, so it was not saved again and carries on to send_to. Use the name "${alreadySavedAs}" for secret: references.`
+          : `SAVED "${name}" in ClikCode Secrets Manager (${length} characters, ${shape}, taken from ${via}). You were not shown the key; if that does not match what you expected (an id where a secret should be), delete it and capture again.`,
         refused ? `NOT VERIFIED: ${check.detail}. It was kept because the site shows a new key only once, and it was NOT sent anywhere. Wait a minute, then send it with send_secret and check the result.`
           : check.verdict === 'works' ? `Checked: ${check.detail}.` : `Not checked: ${check.detail}.`,
         ...(recipeLint.length ? [`Recipe saved (tidied; the recorded steps are kept in the .bak file). Still to fix: ${recipeLint.join('; ')}.`] : []),
