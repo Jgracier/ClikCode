@@ -275,6 +275,24 @@ export async function connectionState(integration: string, signal?: AbortSignal)
   return { connected: false, reason: statuses.length ? `${integration} shows a connection with status "${statuses[0]}", not active` : `ClikDeploy shows no connection for ${integration}` };
 }
 
+/** Wait before the one retry of an empty reply (tests set it to 0). */
+let retryDelayMs = 1_500;
+export function setSendRetryDelay(ms: number): void { retryDelayMs = ms; }
+
+const JSON_FAILURE = /Unexpected end of JSON input|Unexpected token[^\n]*JSON|is not valid JSON|JSON\.parse|non-JSON/i;
+/** The connect call gave back nothing usable: no words at all with a failing exit, a JSON parse failure, or a bad-gateway family status. */
+function emptyReply(result: { code: number | null; text: string }): boolean {
+  const text = result.text.trim();
+  if (!text) return result.code !== 0;
+  if (result.code === 0 && !JSON_FAILURE.test(text)) return false;
+  return JSON_FAILURE.test(text) || /\b(?:HTTP\s*)?50[0-4]\b|bad gateway|service unavailable|gateway time-?out/i.test(text) && !/"status"\s*:\s*"error"/.test(text);
+}
+function describeEmptyReply(result: { code: number | null; text: string }): string {
+  const text = result.text.replace(/\s+/g, ' ').trim();
+  const status = /\b(?:HTTP\s*)?([45]\d\d)\b/.exec(text)?.[1];
+  return `ClikDeploy's connect call returned an empty or non-JSON reply (${status ? `HTTP ${status}` : 'HTTP status not shown by the command'}, exit ${result.code ?? 'none'}${text ? `, it said: "${text.slice(0, 160)}"` : ', it printed nothing'})`;
+}
+
 export async function sendToDestinations(stateDir: string, list: readonly Destination[], value: string, signal?: AbortSignal): Promise<Delivery[]> {
   const all = await loadDestinations(stateDir);
   const out: Delivery[] = [];
@@ -316,12 +334,23 @@ export async function sendToDestinations(stateDir: string, list: readonly Destin
     // per installed binary). For any other program the template's stdin is used as it is.
     const dash = args.indexOf('--args-json');
     if (stdin !== undefined && dash >= 0 && args[dash + 1] === '-' && !(await cliReadsArgsJsonFromStdin(program!, signal))) { args[dash + 1] = stdin; stdin = undefined; }
-    const result = await runCli(program!, args, { ...(stdin !== undefined ? { stdin } : {}), signal, timeoutMs: 90_000 });
+    let result = await runCli(program!, args, { ...(stdin !== undefined ? { stdin } : {}), signal, timeoutMs: 90_000 });
+    // An empty or non-JSON reply (a 502 while the proxy restarts) is retried once; the CLI cannot say more than its own words.
+    if (!result.missing && template.verify === 'connection' && emptyReply(result)) {
+      await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+      result = await runCli(program!, args, { ...(stdin !== undefined ? { stdin } : {}), signal, timeoutMs: 90_000 });
+    }
     if (result.missing) { out.push({ label, ok: false, message: `The ${program} command is not installed on this computer.` }); continue; }
     if (template.verify === 'connection' && params.integration) {
       // One line, whatever the command printed: `connected` only when ClikDeploy itself lists an active connection.
       const said = scrubSecrets(say(result.text)).replace(/\s+/g, ' ').slice(0, 160);
       const state = await connectionState(params.integration, signal);
+      if (emptyReply(result)) {
+        // The reply was empty or not JSON: what happened is asked of ClikDeploy, and the status and a short excerpt are shown.
+        if (state.connected) { out.push({ label, ok: true, message: 'connected (the connect call\'s reply was empty or not JSON, but ClikDeploy lists an active connection)' }); continue; }
+        out.push({ label, ok: false, message: `NOT connected: ${scrubSecrets(describeEmptyReply(result))}${state.reason ? `; ${state.reason}` : ''}. The key is still saved; send it again with send_secret.` });
+        continue;
+      }
       const failed = result.code !== 0 || /"status"\s*:\s*"error"/.test(result.text) || /"success"\s*:\s*false/.test(result.text);
       if (failed && /Provide \{/.test(result.text)) {
         const kind = await declaredAuthKind(params.integration, signal).catch(quiet('agent/computer/secret-destinations'));
