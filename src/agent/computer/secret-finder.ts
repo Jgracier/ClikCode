@@ -3,6 +3,7 @@
  * the page since just before the click. The decision is a score, and it only
  * answers when one candidate clearly leads. Values stay in the worker. */
 import type { Page } from 'playwright-core';
+import { isSecretRef, secretRef } from './secret-scrubber.js';
 
 export type Found = { value: string; keyName?: string };
 export type Decision = { kind: 'found'; value: string } | { kind: 'none' } | { kind: 'ambiguous' };
@@ -157,21 +158,22 @@ export function hideKeyLikeText(text: string): { text: string; hidden: number } 
   const labelled = labelledValues(text);
   const copyHint = WORTH_SAVING_HINT.test(text);
   let hidden = 0;
-  text = text.replace(SECRET_UUID, (match, label?: string) => { hidden++; return typeof label === 'string' ? `${label}[secret hidden]` : '[secret hidden]'; });
+  text = text.replace(SECRET_UUID, (match, label?: string, uuid?: string) => { hidden++; const shown = secretRef(uuid ?? match); return typeof label === 'string' ? `${label}${shown}` : shown; });
   // A long run of digits is an id or a secret (a 39-digit client secret), not a number a person reads: 24 or more digits are hidden.
   const longNumber = (bare: string): boolean => /^\d{24,}$/.test(bare);
-  const randomLooking = (bare: string): boolean => keyShaped(bare) && (mixedCase(bare) || PREFIXED.test(bare) || (bare.length >= 32 && /^[0-9a-f]+$/i.test(bare)));
+  // Also a plain run of letters and digits with the spread of a random string, in any case (an old-style 20-character API key).
+  const randomLooking = (bare: string): boolean => keyShaped(bare) && (mixedCase(bare) || PREFIXED.test(bare) || (bare.length >= 32 && /^[0-9a-f]+$/i.test(bare)) || (/^[A-Za-z0-9]{20,}$/.test(bare) && /\d/.test(bare) && /[A-Za-z]/.test(bare) && entropy(bare) >= 3.6));
   const lines = text.split('\n').map(line => {
     const isUrl = /^\s*- \/url:/.test(line);
-    return line.replace(/[A-Za-z0-9_\-+/=.:~]{24,}/g, token => {
+    return line.replace(/[A-Za-z0-9_\-+/=.:~]{20,}/g, token => {
       const bare = token.replace(/[.,;:)]+$/, '');
-      if (longNumber(bare)) { if (isUrl) return token; hidden++; return '[secret hidden]'; }
+      if (longNumber(bare)) { if (isUrl) return token; hidden++; return secretRef(bare); }
       if (!keyShaped(bare)) return token;
       // A URL line keeps its address, except a value a label or an invitation to copy has marked as a key.
       const marked = (mixedCase(bare) && labelled.has(bare)) || (copyHint && bare.length >= 32);
       if (isUrl ? !marked : !(marked || randomLooking(bare))) return token;
       hidden++;
-      return '[secret hidden]';
+      return secretRef(bare) + token.slice(bare.length);
     });
   });
   // A short credential (a 15-character app key and secret) is too short for the shape rules above, but a
@@ -182,7 +184,7 @@ export function hideKeyLikeText(text: string): { text: string; hidden: number } 
     return line.replace(/(?<![\w-])[A-Za-z0-9_-]{12,23}(?![\w-])/g, token => {
       if (!/\d/.test(token) || !/[A-Za-z]/.test(token) || /^ref=|^f\d*e\d+$/.test(token)) return token;
       hidden++;
-      return '[secret hidden]';
+      return secretRef(token);
     });
   });
   // A text box whose name says key/token/secret, or whose value is shaped like one, shows it as `textbox "API key" [ref=e5]: value`.
@@ -193,9 +195,9 @@ export function hideKeyLikeText(text: string): { text: string; hidden: number } 
     const value = match[2]!.replace(/^"|"$/g, '');
     const named = /(?:^|[^a-z])(?:key|token|secret|credential)s?(?![a-z])/i.test(match[1]!);
     const shaped = value.length >= 12 && /^[A-Za-z0-9_\-+/=.:~]+$/.test(value) && /[A-Za-z]/.test(value) && /\d/.test(value) && !/^https?:|@/.test(value);
-    if (value === '[secret hidden]' || value === '[hidden]' || !(named || shaped)) return line;
+    if (value === '[secret hidden]' || value === '[hidden]' || isSecretRef(value) || !(named || shaped)) return line;
     hidden++;
-    return `${match[1]}: [secret hidden]`;
+    return `${match[1]}: ${secretRef(value)}`;
   });
   return { text: boxed.join('\n'), hidden };
 }

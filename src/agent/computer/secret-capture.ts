@@ -24,6 +24,9 @@ export async function captureSecret(input: {
   trigger?(): Promise<void>;
   /** The text of the target element itself, for when the target IS the key (a field or a line of text) rather than a button that makes one. */
   readTarget?(): Promise<string | undefined>;
+  /** A key the page holds that the agent named without seeing it: a `[secret:ref-N]` placeholder, or the label of a cell or definition ("API key").
+   * Trusted as the key when it answers. Called again with `last` after the page was searched, to take the only key the page holds. */
+  readKnown?(last?: boolean): Promise<{ value: string; from: string } | undefined>;
   /** Take a key the page already shows, instead of one that appears after a click. Default: when there is no click. */
   existing?: boolean;
   ask(name: string, hint: string, signal: AbortSignal): Promise<string | undefined>;
@@ -49,12 +52,15 @@ export async function captureSecret(input: {
   const clipboardBefore = input.trigger ? (await readClipboard(input.page))?.trim() : undefined;
   try {
     let value: string | undefined;
+    let ambiguous = false;
     let via = 'the page';
     // A target that is itself key-shaped text is the key: nothing needs clicking.
-    const own = input.paste ? undefined : compactToken((await input.readTarget?.().catch(quiet('agent/computer/secret-capture'))) ?? '');
-    if (own && (keyShaped(own) || shortKeyText(own))) { value = own; via = 'the text of the target itself'; }
+    const known = input.paste ? undefined : await input.readKnown?.().catch(error => { if (error instanceof LoginError) throw error; return undefined; });
+    if (known) { value = known.value; via = known.from; }
+    const own = input.paste || value ? undefined : compactToken((await input.readTarget?.().catch(quiet('agent/computer/secret-capture'))) ?? '');
+    if (value) { /* named by placeholder or label: nothing to click */ }
+    else if (own && (keyShaped(own) || shortKeyText(own))) { value = own; via = 'the text of the target itself'; }
     else if (input.trigger) { clicked = true; await input.trigger(); }
-    let ambiguous = false;
     let presses = 0; // the site's Copy button is pressed a couple of times at most: a button that copies nothing is not worth 3 s a poll
     for (let poll = 0; poll < (input.paste ? 0 : LOOK_POLLS) && !value; poll++) {
       if (!clicked && stop.signal.aborted) throw new LoginError('Not saved: capture was cancelled.');
@@ -82,6 +88,7 @@ export async function captureSecret(input: {
       if (decision.kind === 'found') { value = decision.value; via = 'text on the page'; }
       else if (decision.kind === 'ambiguous') { ambiguous = true; break; }
     }
+    if (!value && !input.paste && !ambiguous) { const last = await input.readKnown?.(true).catch(quiet('agent/computer/secret-capture')); if (last) { value = last.value; via = last.from; } }
     const found = !!value;
     if (!value && input.paste) {
       value = await input.ask(input.name, `Copy the ${input.name} from the site. Paste it here`, input.signal ? AbortSignal.any([stop.signal, input.signal]) : stop.signal);

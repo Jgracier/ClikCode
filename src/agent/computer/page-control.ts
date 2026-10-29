@@ -9,7 +9,7 @@ import { closeOwnedPage, focusOwnedPage, ownedPages } from './browser.js';
 import { readConsole } from './console-log.js';
 import { hideKeyLikeText } from './secret-finder.js';
 import { scrubSecrets, showsSecret } from './secret-scrubber.js';
-import { keyFieldValues, maskSensitive, SENSITIVE, sensitiveValues } from './sensitive-fields.js';
+import { keyFieldValues, maskSensitive, pageSecrets, SENSITIVE, sensitiveValues } from './sensitive-fields.js';
 
 export const PAGE_ACTIONS = ['back', 'forward', 'reload', 'tabs', 'switch', 'evaluate', 'screenshot', 'console'] as const;
 export type PageAction = typeof PAGE_ACTIONS[number];
@@ -375,7 +375,7 @@ export async function evaluateOnPage(page: Page, args: { expression?: string; ta
   if (CREDENTIAL_SCRIPT.test(code)) throw new Error('evaluate does not read password, one-time-code or card fields, or form data. Fill those fields with fill (no text) and let the page do the rest.');
   const target = args.target?.trim() ? await deps.locate(page, args.target) : undefined;
   if (target && await target.evaluate((node, selector) => (node as unknown as { matches(selector: string): boolean }).matches(selector), SENSITIVE).catch(() => false)) throw new Error('That is a password, one-time-code or card field: its value is never read.');
-  const held = [...await sensitiveValues(page), ...await keyFieldValues(page)];
+  const held = [...await sensitiveValues(page), ...await keyFieldValues(page), ...(await pageSecrets(page)).map(item => item.value)];
   const frames = allFrames(page);
   const shadowed: Frame[] = [];
   for (const frame of frames) if (await frame.evaluate(shadowFields, SENSITIVE).then(count => count > 0, () => false)) shadowed.push(frame);

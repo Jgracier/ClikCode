@@ -9,7 +9,7 @@ import { adoptPage, closeComputerPage, computerPage, openComputerPage, openNewCo
 import { checkKey, clickExtras, clickWith, closeTab, dragStep, fillTarget, hoverStep, PAGE_ACTIONS, PAGE_DESCRIPTION, PAGE_PARAMETERS, pageAction, scrollStep, waitForState, withScreenshot, type PageAction, type PageArgs, type ScrollDirection, type StepExtras } from '../computer/page-control.js';
 import { COMPUTER_OFF, computerEnabled, generatedPasswordsAllowed, unattendedEnabled } from '../computer/settings.js';
 import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
-import { keyFieldValues, maskSensitive, sensitiveValues } from '../computer/sensitive-fields.js';
+import { findLabelledSecret, keyFieldValues, maskSensitive, sensitiveValues } from '../computer/sensitive-fields.js';
 import { storeSecretTool } from './store-secret.js';
 import { sharedState } from '../computer/shared-state.js';
 import { forgetSavedLogins, savedLoginFields, savedLoginsForSite, saveLoginFields } from '../computer/credential-vault.js';
@@ -23,7 +23,7 @@ import { generatedFor, readPasswordPolicy, rememberGenerated, retryRejectedPassw
 import { loginComputerPage, loginOutcomeMessage } from '../computer/login-page.js';
 import { LoginError } from '../computer/login-error.js';
 import { type LoginField } from '../computer/login-fields.js';
-import { registerSecret, scrubSecrets, showsSecret } from '../computer/secret-scrubber.js';
+import { isSecretRef, registerSecret, resolveSecretRef, scrubSecrets, showsSecret } from '../computer/secret-scrubber.js';
 import { profileLoginAnswers } from '../computer/profile-login.js';
 import { Parked, park } from '../computer/parking.js';
 import { hideKeyLikeText } from '../computer/secret-finder.js';
@@ -277,11 +277,11 @@ export async function observeComputerPage(page: Page, acceptsImages: boolean, fu
       const head = arrangeSnapshot(shown, false).split('\n\n')[0]!;
       const open = head.startsWith('Open now') ? `${head}\n\n` : '';
       const body = changed.count ? `Changed on the page (${changed.count} new or changed line${changed.count === 1 ? '' : 's'}; the rest is as before, observe for the whole page):\n${changed.text.slice(0, 8_000)}` : 'Nothing on the page changed (observe for the whole page).';
-      return { output: `Page: ${displayUrl(page.url())}\n\n${open}${body}${hidden ? `\n\n[${hidden} key-like value${hidden === 1 ? '' : 's'} hidden. Use capture_secret to save it without reading it.]` : ''}` };
+      return { output: `Page: ${displayUrl(page.url())}\n\n${open}${body}${hidden ? `\n\n[${hidden} key-like value${hidden === 1 ? '' : 's'} hidden. Use capture_secret to save it without reading it: target = the [secret:ref-N] placeholder, or the label beside it such as "API key".]` : ''}` };
     }
   }
   const snapshot = arrangeSnapshot(shown, full);
-  const output = `Page: ${displayUrl(page.url())}\n\n${snapshot}${hidden ? `\n\n[${hidden} key-like value${hidden === 1 ? '' : 's'} hidden. Use capture_secret to save it without reading it.]` : ''}`;
+  const output = `Page: ${displayUrl(page.url())}\n\n${snapshot}${hidden ? `\n\n[${hidden} key-like value${hidden === 1 ? '' : 's'} hidden. Use capture_secret to save it without reading it: target = the [secret:ref-N] placeholder, or the label beside it such as "API key".]` : ''}`;
   if (!acceptsImages) return { output };
   if (hidden || (await sensitiveValues(page)).length || (await keyFieldValues(page)).length || showsSecret(snapshot) || showsSecret(await page.evaluate(visibleText).catch(() => ''))) return { output: `${output}\n\n[Screenshot withheld: the page holds a typed credential or a saved secret.]` };
   let bytes = await page.screenshot({ type: 'jpeg', quality: 65, animations: 'disabled', timeout: 10_000 });
@@ -1280,7 +1280,7 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       const chosen = chooseValue(label, await labelledCandidates(page, label));
       if (chosen.kind === 'refused') return { output: `Not read: ${chosen.reason}.`, isError: true };
       // A short plain value is returned. An opaque id (it looks like a token to every filter) or any value with secret_name goes to the vault and comes back as a reference for send_to values.
-      if (chosen.kind === 'value' && !args.secret_name) return { output: `${label}: ${chosen.value}${chosen.alternatives ? ` (${chosen.alternatives} other candidate${chosen.alternatives === 1 ? '' : 's'} on the page; use a more exact label if this is not it)` : ''}\nTo send it on: send_to values {"name":"${chosen.value}"}.` };
+      if (chosen.kind === 'value' && !args.secret_name && !/key|secret|token|password|api/i.test(label) && scrubSecrets(chosen.value) === chosen.value) return { output: `${label}: ${chosen.value}${chosen.alternatives ? ` (${chosen.alternatives} other candidate${chosen.alternatives === 1 ? '' : 's'} on the page; use a more exact label if this is not it)` : ''}\nTo send it on: send_to values {"name":"${chosen.value}"}.` };
       const origin = new URL(page.url()).origin;
       const name = args.secret_name?.trim() || `${new URL(page.url()).hostname.replace(/^www\./, '')}/${label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`;
       await saveNamedSecret(ctx.stateDir, name, chosen.value, { url: origin, vendor: args.vendor ?? new URL(page.url()).hostname.replace(/^www\./, ''), owner: args.owner ?? await profileEmail(ctx.stateDir) });
@@ -1384,14 +1384,26 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       const plan = normalizeSendTo(args.send_to);
       const planProblem = plan?.length ? await destinationProblem(ctx.stateDir, plan, (id) => declaredConnectionValues(id, ctx.signal), (id) => declaredAuthKind(id, ctx.signal)) : undefined;
       if (planProblem) throw new Error(`${planProblem} Nothing was clicked.`);
-      const triggerLabel = args.target ? (await controlName(page, args.target)) ?? (REF.test(args.target.trim()) ? undefined : args.target.trim()) : undefined;
+      const placeholder = !!args.target && isSecretRef(args.target);
+      const triggerLabel = args.target && !placeholder ? (await controlName(page, args.target)) ?? (REF.test(args.target.trim()) ? undefined : args.target.trim()) : undefined;
       const name = args.secret_name?.trim() || `${new URL(page.url()).hostname.replace(/^www\./, '')}/key`;
       // The clipboard is one thing and a Copy button only works in the focused tab: captures take turns, each in front.
       const { length, shape, via, check, sent, alreadySavedAs } = await inOrder('clipboard', async () => { await page.bringToFront().catch(quiet('agent/tools/computer-web')); return captureSecret({ ...(args.paste ? { paste: true } : {}), stateDir: ctx.stateDir, page, name, signal: ctx.signal,
         meta: { url: new URL(page.url()).origin, vendor: args.vendor ?? new URL(page.url()).hostname.replace(/^www\./, ''), owner: args.owner ?? await profileEmail(ctx.stateDir), ...(args.env ? { env: args.env } : {}) },
         ...(plan?.length ? { sendTo: plan } : {}),
-        ...(args.target ? { trigger: async () => { await clickOrHint(await locate(page, args.target)); } } : {}),
-        ...(args.target ? { readTarget: async () => { const element = await locate(page, args.target); return (await element.inputValue({ timeout: 1_000 }).catch(() => '')) || (await element.innerText({ timeout: 1_000 }).catch(() => '')); } } : {}),
+        readKnown: async (last) => {
+          const wanted = args.target?.trim();
+          if (wanted && placeholder) {
+            const value = resolveSecretRef(wanted);
+            if (!value) throw new LoginError(`Not saved: ${wanted} is not a placeholder this browser knows (they restart with ClikCode). Observe the page again to get the current ones.`);
+            return { value, from: 'the page value behind the placeholder' };
+          }
+          if (wanted && (REF.test(wanted) || last)) return undefined; // a control is pressed; a missed label is not guessed at
+          const value = await findLabelledSecret(page, wanted);
+          return value ? { value, from: wanted ? `the page's "${wanted}" cell` : 'the only key value the page shows' } : undefined;
+        },
+        ...(args.target && !placeholder ? { trigger: async () => { await clickOrHint(await locate(page, args.target)); } } : {}),
+        ...(args.target && !placeholder ? { readTarget: async () => { const element = await locate(page, args.target); return (await element.inputValue({ timeout: 1_000 }).catch(() => '')) || (await element.innerText({ timeout: 1_000 }).catch(() => '')); } } : {}),
         ask: async (secretName, hint, signal) => {
           if (!ctx.requestPrivateSecret) throw new LoginError('Not saved: this chat cannot show a private prompt, and the key could not be found on its own.');
           return ctx.requestPrivateSecret(secretName, hint, signal);
