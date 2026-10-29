@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest';
-import { decide, hideKeyLikeText, keyShaped, labelledValues } from './secret-finder.js';
+import { compactToken, decide, hideKeyLikeText, keyShaped, labelledValues } from './secret-finder.js';
+import { plausibleCopy } from './clipboard-watch.js';
 
 const KEY = 'salad_live_9f8e7d6c5b4a39281706';
 const none = new Set<string>();
@@ -139,4 +140,21 @@ it('hides the value of a text box that names a key or is shaped like one, and ke
   expect(shown).not.toContain(plain);
   expect(shown).not.toContain(short);
   expect(shown).toContain('Springfield');
+});
+
+
+it('takes long opaque tokens (a signed 1,100-character personal access token), wrapped or not, and still refuses long words', () => {
+  const part = (n: number, seed: number): string => Array.from({ length: n }, (_, i) => 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'[(i * 7 + seed * 13 + (i * i) % 11) % 62]).join('');
+  const jwt = `eyJ${part(60, 1)}.${part(1000, 2)}.${part(50, 3)}`;
+  expect(jwt.length).toBeGreaterThan(1100);
+  expect(keyShaped(jwt)).toBe(true);
+  expect(keyShaped(part(1500, 4))).toBe(true);
+  expect(keyShaped('a'.repeat(900))).toBe(false);
+  expect(keyShaped(`${part(8100, 5)}`)).toBe(false);
+  expect(decide({ before: none, after: [jwt], responses: [], hint: true, existing: true })).toEqual({ kind: 'found', value: jwt });
+  expect(hideKeyLikeText(`Your token ${jwt} copy it`).hidden).toBe(1);
+  expect(compactToken(`${jwt.slice(0, 300)}\n${jwt.slice(300, 700)}\n  ${jwt.slice(700)}\n`)).toBe(jwt);
+  expect(compactToken('this is a sentence of words that has many words in it and is long enough but not a token at all, no')).toContain(' ');
+  expect(plausibleCopy(`${jwt}\n`)).toBe(jwt);
+  expect(plausibleCopy(jwt.slice(0, 600) + '\n' + jwt.slice(600))).toBe(jwt);
 });

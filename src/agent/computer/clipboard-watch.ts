@@ -3,6 +3,7 @@
  * mistaken for the key. */
 import { quiet } from '../../runtime/lifecycle-log.js';
 import type { Page } from 'playwright-core';
+import { compactToken, MAX_KEY_LENGTH } from './secret-finder.js';
 
 type Hooked = { __clikcodeCopied?: string | null; navigator: { clipboard?: { writeText(text: string): Promise<void>; write?(items: unknown[]): Promise<void> } }; document: { getSelection(): { toString(): string } | null; addEventListener(type: string, listener: () => void, capture: boolean): void; execCommand?(command: string, ...rest: unknown[]): boolean } };
 
@@ -44,8 +45,8 @@ function hookCopy(): void {
 
 /** A single line a person could have copied as a key: no spaces inside, bounded. */
 export function plausibleCopy(value: string | null | undefined): string | undefined {
-  const text = value?.trim();
-  if (!text || text.length < 8 || text.length > 4096 || /\s/.test(text)) return undefined;
+  const text = compactToken(value ?? '');
+  if (!text || text.length < 8 || text.length > MAX_KEY_LENGTH || /\s/.test(text)) return undefined;
   return text;
 }
 

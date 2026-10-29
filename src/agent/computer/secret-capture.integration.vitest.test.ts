@@ -10,7 +10,7 @@ import { chromium, type Browser, type Page } from 'playwright-core';
 import { afterAll, afterEach, beforeAll, describe as describe_, expect, it } from 'vitest';
 import type { Destination } from './secret-destinations.js';
 import { lockCredentialVault, readNamedSecret } from './credential-vault.js';
-import { captureSecret } from './secret-capture.js';
+import { captureSecret as capture } from './secret-capture.js';
 import { forgetSecrets, scrubSecrets, showsSecret } from './secret-scrubber.js';
 import { observeComputerPage } from '../tools/computer-web.js';
 
@@ -24,6 +24,9 @@ let work = '';
 let base = '';
 let stateDir = '';
 
+/** A 1,117-character signed token, like the personal access tokens CloudConvert and TidyCal show. */
+const seg = (n: number, seed: number): string => Array.from({ length: n }, (_, i) => 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'[(i * 7 + seed * 13 + (i * i) % 11) % 62]).join('');
+const LONG = `eyJ${seg(60, 1)}.${seg(1000, 2)}.${seg(50, 3)}`;
 const page = (body: string): string => `<!doctype html><title>Keys</title><body>${body}</body>`;
 const create = (id: string, handler: string): string => `<button id="${id}" style="width:200px;height:50px" onclick="${handler}">Create key</button><div id="out"></div>`;
 
@@ -52,6 +55,11 @@ beforeAll(async () => {
     if (path === '/copy-modal') return send(page(create('go', `document.getElementById('out').innerHTML='<p>Save your token</p><code>••••••••••••••••</code> <button id="curl" onclick="navigator.clipboard.writeText(&quot;curl -H wrong https://x&quot;)">Copy cURL</button> <button id="c" onclick="navigator.clipboard.writeText(&quot;${KEY}&quot;)">Copy</button>'`)));
     // An account's current key, already on the page in a masked field, beside an id that is not a key.
     if (path === '/existing') return send(page(`<p>Your API key</p><input type="password" value="${KEY}"><p>Org 3f2a9c1e-7b4d-4e8a-9c21-5d6e7f809a1b</p>`));
+    // Long tokens: in a textarea, wrapped over lines in a code block, and only on a Copy button.
+    if (path === '/long-textarea') return send(page(create('go', `document.getElementById('out').innerHTML='<textarea>${LONG}</textarea>'`)));
+    if (path === '/long-code') return send(page(create('go', `document.getElementById('out').innerHTML='<pre>${(LONG.match(/.{1,76}/g) ?? []).join('\\n')}</pre>'`)));
+    if (path === '/long-copy') return send(page(`<p>Your token</p><button id="copy" style="width:200px;height:50px" onclick="navigator.clipboard.writeText('${LONG}')">Copy</button>`));
+    if (path === '/long-masked') return send(page(`<input id="f" type="password" value="${LONG}"><button id="go" style="width:200px;height:50px" onclick="document.getElementById('f').type='text'">Show</button>`));
     send(page(create('go', "document.getElementById('out').textContent='done'")));
   });
   await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve));
@@ -68,6 +76,8 @@ async function open(path: string): Promise<Page> {
   await tab.goto(`${base}${path}`);
   return tab;
 }
+/** A saved key must name its site: the test site unless a test says otherwise. */
+const captureSecret = (input: Parameters<typeof capture>[0]): ReturnType<typeof capture> => capture({ meta: { url: base }, ...input });
 const neverAsked = (): never => { throw new Error('the person should not have been asked'); };
 async function tap(tab: Page, selector: string): Promise<void> {
   const box = (await tab.locator(selector).boundingBox())!;
@@ -86,6 +96,23 @@ it.skipIf(!enabled)('finds the key from the site\'s response and the new page te
   expect(seen.images).toBeUndefined();
   expect(seen.output).toContain('Screenshot withheld');
   expect(showsSecret(`${await tab.locator('code').innerText()}`)).toBe(true);
+}, 60_000);
+
+for (const [route, how] of [['/long-textarea', 'a textarea'], ['/long-code', 'a code block wrapped over lines'], ['/long-masked', 'a masked field revealed by a button']] as const) {
+  it.skipIf(!enabled)(`captures a ${LONG.length}-character token shown in ${how}`, async () => {
+    stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
+    const tab = await open(route);
+    const result = await captureSecret({ stateDir, page: tab, name: 'long', trigger: () => tap(tab, '#go'), ask: neverAsked });
+    expect(result.found).toBe(true);
+    expect(await readNamedSecret(stateDir, 'long')).toBe(LONG);
+  }, 60_000);
+}
+
+it.skipIf(!enabled)('captures a long token through the site\'s Copy button', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-capture-'));
+  const tab = await open('/long-copy');
+  await captureSecret({ stateDir, page: tab, name: 'long', existing: false, ask: neverAsked });
+  expect(await readNamedSecret(stateDir, 'long')).toBe(LONG);
 }, 60_000);
 
 it.skipIf(!enabled)('finds a key that the page only reveals, with no request', async () => {
