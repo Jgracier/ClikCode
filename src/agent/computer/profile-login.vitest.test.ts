@@ -28,6 +28,18 @@ describe('profileLoginAnswers', () => {
     expect(await profileLoginAnswers(stateDir, [])).toBeUndefined();
   });
 
+  it('a NAMED profile answers before Personal, email and password together (an AWS root account is not the user\'s own email)', async () => {
+    stateDir = await mkdtemp(join(tmpdir(), 'plogin-'));
+    const me = await saveProfile(stateDir, { label: 'Personal', fields: { email: 'me@x.test', sso_email: 'me@x.test' } });
+    const aws = await saveProfile(stateDir, { label: 'AWS', fields: { sso_email: 'root@corp.test' } });
+    await saveProfileSecret(stateDir, me.id, 'password', 'my-pw');
+    await saveProfileSecret(stateDir, aws.id, 'password', 'aws-pw');
+    const both = [field('email'), field('password', 'password')];
+    expect(await profileLoginAnswers(stateDir, both, 'aws')).toEqual({ email: 'root@corp.test', password: 'aws-pw' });
+    expect(await profileLoginAnswers(stateDir, both)).toEqual({ email: 'me@x.test', password: 'my-pw' });
+    expect(await profileLoginAnswers(stateDir, both, 'no such profile')).toEqual({ email: 'me@x.test', password: 'my-pw' });
+  });
+
   it('uses Personal before an admin profile that sorts ahead of it by label', async () => {
     stateDir = await mkdtemp(join(tmpdir(), 'plogin-'));
     const admin = await saveProfile(stateDir, { label: 'ClikDeploy', fields: { email: 'admin@x.test', given_name: 'A' } });
