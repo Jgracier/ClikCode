@@ -24,7 +24,7 @@ import { resolveDefaultSettings } from '../../session/state/settings.js';
 import { writeState } from '../../session/state/write.js';
 import { allLocalHarnesses } from '../../runtime/lazy-bridge.js';
 import { livePendingTurns, liveWorkers } from '../../session/liveness.js';
-import { watchConversationList } from '../../session/list-watch.js';
+import { coalescedListRefresh, watchConversationList } from '../../session/list-watch.js';
 import { conversationRows, type ConversationRow } from '../../session/conversation-rows.js';
 import { SECTION_TITLES } from '../../session/conversation-state.js';
 import { relativeTime } from '../../harness/protocol/format.js';
@@ -271,24 +271,21 @@ export async function interactiveSessionPicker(
   let built: { machine: string; discovering: boolean; slow: boolean; discovered: AdoptableNativeSession[]; revision: number; second: number; options: PickerOption<string>[] } | undefined;
   /** Re-check workers and the turns they are generating, and have the board
    * draw what changed: a spinner starts, or stops when the turn is over. */
-  let activityRefresh: Promise<void> | undefined;
   /** The board's redraw: it draws a changed list without ticking for it. */
   let listChanged: (() => void) | undefined;
   /** The other machines' chats, over the window's one SSH connection to each
    * -- held while the board is up, and kept for the next list after it
    * (remote/connection.ts holdWindowMachines). */
   let remote: MachinesHold | undefined;
-  const refreshActivity = (): void => {
-    if (activityRefresh) return;
-    activityRefresh = (async () => {
-      workers = await liveWorkers();
-      workerIsLive = workers.isLive;
-      pendingById = await livePendingTurns(sessions, workerIsLive, workers.background, workers.runningTurn);
-      fillActivity();
-      listRevision += 1;
-      built = undefined;
-    })().finally(() => { activityRefresh = undefined; listChanged?.(); });
-  };
+  const refreshActivity = coalescedListRefresh(async () => {
+    workers = await liveWorkers();
+    workerIsLive = workers.isLive;
+    pendingById = await livePendingTurns(sessions, workerIsLive, workers.background, workers.runningTurn);
+    fillActivity();
+    listRevision += 1;
+    built = undefined;
+    listChanged?.();
+  });
 
   const histories = new Map<string, PickerOption<string>[]>();
   const buildFresh = (machine = 'local'): PickerOption<string>[] => {
@@ -367,7 +364,9 @@ export async function interactiveSessionPicker(
   // worker directories: re-check then, instead of polling while a row spins,
   // so the spinner stops when the turn is over (session/list-watch.ts; a
   // slow poll where the directories cannot be watched).
-  const listWatch = watchConversationList(refreshActivity);
+  const listWatch = watchConversationList(() => { void refreshActivity().catch(quiet('tui/pickers/session')); });
+  // Cover a finish between the initial snapshot and attaching the watcher.
+  void refreshActivity().catch(quiet('tui/pickers/session'));
   // The user's machines Tailscale knows and that are not added: listed under
   // the added ones, and choosing one adds it . They land
   // when Tailscale answers, in milliseconds, or not at all without it.

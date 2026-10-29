@@ -99,3 +99,23 @@ export function watchConversationList(onChange: () => void, options: ListWatchOp
     },
   };
 }
+
+/** Coalesce changes without dropping one that arrives while a list is being read.
+ * A finish can land during a slow read; it must cause a second read even if no
+ * later filesystem event arrives. Every caller shares the drain promise. */
+export function coalescedListRefresh(refresh: () => Promise<void>): () => Promise<void> {
+  let active: Promise<void> | undefined;
+  let again = false;
+  return () => {
+    again = true;
+    if (!active) {
+      active = Promise.resolve().then(async () => {
+        while (again) {
+          again = false;
+          await refresh();
+        }
+      }).finally(() => { active = undefined; });
+    }
+    return active;
+  };
+}
