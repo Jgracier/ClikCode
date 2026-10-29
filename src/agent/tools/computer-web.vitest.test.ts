@@ -200,6 +200,8 @@ describe('profile ask_fields and custom: an agent asks for the details a task ne
       expect(done.output).toContain('Saved the login');
       expect(asked[0]!.map(field => field.key)).toEqual(['website', 'email', 'password']);
       expect(asked[0]![0]!.current).toBe('https://accounts.google.com/');
+      await computerWebTool.run({ action: 'add_login', url: 'https://accounts.google.com/' } as never, { stateDir, requestPrivateLogin } as never);
+      expect(asked[1]!.map(field => field.key)).toEqual(['email', 'password']);
       expect(done.output).toContain('accounts.google.com');
       expect(done.output).not.toContain('pw-secret-1');
       expect((await savedLoginsForSite(stateDir, 'https://accounts.google.com/')).map(login => login.label)).toEqual(['me@example.com']);
