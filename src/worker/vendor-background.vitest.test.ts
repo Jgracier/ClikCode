@@ -31,6 +31,20 @@ function fakeObserver() {
 describe('a worker running vendor background turns', () => {
   beforeEach(() => { writeGate = undefined; state.sessions = [{ id: 's', messages: [{ role: 'user', content: 'go' }, { role: 'assistant', content: 'STARTED' }] } as HarnessSession]; });
 
+  it('publishes a live turn even when background work has no task counts, then clears it', async () => {
+    const observer = fakeObserver();
+    const runningChanged = vi.fn();
+    const runner = createVendorBackgroundRunner({ sessionId: 's', observer: observer as never, userTurnRunning: () => false, changed: () => undefined, runningChanged });
+    const channel = new BackgroundTurnChannel('acp', 'vendor-turn');
+    runner.handle(channel);
+    expect(runningChanged).toHaveBeenCalledTimes(1);
+    expect(Number.isFinite(Date.parse(runningChanged.mock.calls[0]![0]))).toBe(true);
+    expect(runner.busy).toBe(true);
+    channel.finish('completed');
+    await vi.waitFor(() => expect(runner.busy).toBe(false));
+    expect(runningChanged).toHaveBeenLastCalledWith(undefined);
+  });
+
   it('broadcasts one like a turn, keeps the worker busy, and persists what it did', async () => {
     const observer = fakeObserver();
     const changed = vi.fn();

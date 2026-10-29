@@ -47,7 +47,7 @@ export interface WorkerRuntimeRecord {
    * no turn of its own is generating (or beside one). Rewritten as it changes, so a conversation
    * list keeps the chat among the working ones until that work is done. */
   background?: { agents?: number; terminals?: number; workflows?: number; since: string };
-  /** A turn currently executing in this worker. The transcript journal can
+  /** A user or vendor-background turn currently executing in this worker. The transcript journal can
    * outlive a failed/abandoned request; this is the authoritative live state. */
   runningTurn?: { since: string };
 }

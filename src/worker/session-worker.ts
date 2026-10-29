@@ -149,7 +149,7 @@ export async function runSessionWorker(sessionId: string, options: { warm?: bool
   // turn, saveSuperseded() and userTurnEnded() in the turn's end, and
   // `vendorBackground.busy` in scheduleIdleExit.
   ctx.vendorBackground = createVendorBackgroundRunner({
-    sessionId, observer, userTurnRunning: () => ctx.turnRunning, changed: () => { ctx.idle.vendorUsed(); ctx.idle.scheduleIdleExit(); },
+    sessionId, observer, userTurnRunning: () => ctx.turnRunning, runningChanged: (since) => ctx.onBackgroundTurnRunningChange?.(since), changed: () => { ctx.idle.vendorUsed(); ctx.idle.scheduleIdleExit(); },
   });
   ctx.outOfTurn = createOutOfTurnRelay(ctx);
   // What the vendor was saying on its own is saved, and its live view ended, before its own turn takes the windows.
@@ -258,14 +258,19 @@ export async function runSessionWorker(sessionId: string, options: { warm?: bool
   let awaiting: { title: string; since: string } | undefined;
   let background: WorkerRuntimeRecord['background'];
   let runningTurn: WorkerRuntimeRecord['runningTurn'];
+  let backgroundTurn: WorkerRuntimeRecord['runningTurn'];
   const rewriteRecord = (): Promise<void> => {
     ctx.recordWrite = ctx.recordWrite
-      .then(() => writeWorkerRecord({ ...record, ...(awaiting ? { awaitingApproval: awaiting } : {}), ...(background ? { background } : {}), ...(runningTurn ? { runningTurn } : {}) }, { existing: true }))
+      .then(() => writeWorkerRecord({ ...record, ...(awaiting ? { awaitingApproval: awaiting } : {}), ...(background ? { background } : {}), ...((runningTurn ?? backgroundTurn) ? { runningTurn: runningTurn ?? backgroundTurn } : {}) }, { existing: true }))
       .catch(quiet('worker/session-worker'));
     return ctx.recordWrite;
   };
   ctx.onTurnRunningChange = async (since) => {
     runningTurn = since ? { since } : undefined;
+    await rewriteRecord();
+  };
+  ctx.onBackgroundTurnRunningChange = async (since) => {
+    backgroundTurn = since ? { since } : undefined;
     await rewriteRecord();
   };
   observer.onAwaitingApproval = (awaitingApproval) => { awaiting = awaitingApproval; return rewriteRecord(); };
