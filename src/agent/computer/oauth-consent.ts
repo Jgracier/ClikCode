@@ -275,7 +275,7 @@ export function startViaCli(connector: string, signal?: AbortSignal): Promise<Co
   });
 }
 
-async function readControls(page: Page): Promise<Control[]> {
+export async function readControls(page: Page): Promise<Control[]> {
   return page.evaluate(readPageControls, { pressable: PRESSABLE, otherApp: OPENS_ANOTHER_APP.source, cap: 1500, identifiers: true });
 }
 
@@ -380,7 +380,7 @@ async function tickScopes(page: Page, text: string, options: { redirectHost?: st
 }
 
 /** Presses the control by its name. The same words can sit on a link that opens another program (an email address as text): never that one. */
-async function press(page: Page, control: Control): Promise<boolean> {
+export async function press(page: Page, control: Control): Promise<boolean> {
   const exact = control.name;
   const candidates = control.leaf ? [page.getByText(exact, { exact: true })] : [page.getByRole('button', { name: exact, exact: true }), page.getByRole('link', { name: exact, exact: true }), page.locator(PRESSABLE).filter({ hasText: exact }), page.getByText(exact, { exact: true })];
   for (const base of candidates) {
