@@ -54,6 +54,7 @@ const ACP_SESSION_META = {
     // A background Agent's own lifecycle: its call completes at launch, and
     // these say when it really ends (claude-agent-acp acp-agent.js, `task_*`).
     { type: 'system', subtype: 'task_started' }, { type: 'system', subtype: 'task_progress' }, { type: 'system', subtype: 'task_notification' },
+    { type: 'system', subtype: 'task_updated' },
     // The end of every vendor turn, one the user did not start included: what closes a background turn (vendorTurnEnded).
     { type: 'result' },
   ] },
@@ -629,10 +630,16 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     super(options, 'ACP');
   }
 
+  /** A background count may change between turns, with no live stream to receive it.
+   * Keep its owner informed even then; otherwise the worker's history row keeps the last count. */
+  private reportBackground?: AcpTurnInput['onBackgroundWork'];
+  private backgroundTasks = new Map<string, Json>();
+
   async runTurn(input: AcpTurnInput): Promise<AcpTurnResult> {
     this.assertIdle(`${input.command} ACP`);
     const argv = acpSpawnArgv(input);
     if (!argv) throw new Error(`${input.command} has no ACP adapter`);
+    this.reportBackground = input.onBackgroundWork;
     this.lastCumulativeChunks = input.acp?.cumulativeChunks === true;
     const { failure, fail } = turnFailure();
     const turn: ActiveTurn = {
@@ -691,6 +698,8 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     // Tasks are the process's: they go when it does, not when a turn ends.
     if (!this.live) this.vendorTasks.clear();
     this.work.clear();
+    this.backgroundTasks.clear();
+    this.reportBackground?.(this.work.fullLevel());
     this.heldAgents.settle('tool-done');
   }
 
@@ -748,6 +757,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
 
   protected override finishBackground(ended: BackgroundTurnEnd): void {
     if (this.orphanWatch) { clearTimeout(this.orphanWatch); this.orphanWatch = undefined; }
+    if (ended === 'completed') this.background?.observer.onBackgroundWork?.(this.work.fullLevel());
     super.finishBackground(ended);
   }
 
@@ -1485,8 +1495,17 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     // ACP_SESSION_META) carries the background-task level; the rest and
     // `_claude/rateLimit` are activity only: the structured readings ride
     // session/update's _meta.
-    const message = method === '_claude/sdkMessage' && params.message && typeof params.message === 'object' ? params.message as Json : undefined;
+    let message = method === '_claude/sdkMessage' && params.message && typeof params.message === 'object' ? params.message as Json : undefined;
+    if (message?.type === 'system' && message.subtype === 'task_updated' && ['completed', 'failed', 'killed'].includes(String(message.patch?.status))) {
+      message = { ...message, subtype: 'task_notification', status: message.patch.status };
+    }
     if (message) { this.heldAgentFrame(params, message); this.taskFrame(message); }
+    if (message?.type === 'system' && message.subtype === 'background_tasks_changed' && Array.isArray(message.tasks)) {
+      this.backgroundTasks = new Map(message.tasks.filter((task: Json) => typeof task?.task_id === 'string').map((task: Json) => [task.task_id, task]));
+    } else if (message?.type === 'system' && message.subtype === 'task_notification' && typeof message.task_id === 'string' && this.backgroundTasks.delete(message.task_id)) {
+      // Some SDK versions send only a terminal task_updated patch, with no new full level.
+      this.backgroundWorkChanged(params, backgroundWork({ type: 'system', subtype: 'background_tasks_changed', tasks: [...this.backgroundTasks.values()] })!);
+    }
     if (message?.type === 'result') return this.vendorTurnEnded(params);
     const update = message ? backgroundWork(message) : undefined;
     if (update) return this.backgroundWorkChanged(params, update);
@@ -1524,6 +1543,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     }
     // What a freshly opened run is told is the whole level.
     if (target) target.observer.onBackgroundWork?.(opened ? this.work.fullLevel() : update);
+    else if (ours) this.reportBackground?.(this.work.fullLevel());
     // The level may just have emptied with a tool still unsettled behind it: that tool alone holds the run now.
     this.watchOrphanedTools();
     const run = this.background;
