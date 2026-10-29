@@ -53,7 +53,7 @@ it('hides a labelled key from text the agent reads, and leaves urls, numbers and
   // The random-looking price id goes too: nothing is shown on the chance that it is harmless.
   expect(hidden).toBe(2);
   expect(shown).not.toContain(GOOGLE_STYLE);
-  expect(shown).toContain('API Key [secret hidden]');
+  expect(shown).toMatch(/API Key \[secret:ref-\d+\]/);
   for (const kept of ['https://docs.example.com/guide/AbCdEf1234567890AbCdEf1234567890', '831963658327', '3f2a9c1e-7b4d-4e8a-9c21-5d6e7f809a1b']) expect(shown).toContain(kept);
 });
 
