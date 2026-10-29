@@ -5,7 +5,7 @@ import { afterEach, expect, it } from 'vitest';
 import type { Page } from 'playwright-core';
 import { generatePassword } from './signup-login.js';
 import { lockCredentialVault, saveLoginFields, savedLoginFields, savedLoginsForSite } from './credential-vault.js';
-import { expectSignup, holdSignup, savedPasswordFor, settleSignup, sitePasswordFor } from './signup-login.js';
+import { expectSignup, holdSignup, savedPasswordFor, settleSignup, sitePasswordFor, UNKNOWN_ACCOUNT } from './signup-login.js';
 
 let stateDir = '';
 afterEach(async () => { if (stateDir) { lockCredentialVault(stateDir); await rm(stateDir, { recursive: true, force: true }); stateDir = ''; } });
@@ -102,4 +102,29 @@ it('a password box on a re-entry page gets the site password, never the profile 
   const typed = page('https://mapbox.example.com/verify');
   expectSignup(typed, 'Typed-Zq9');
   expect(await sitePasswordFor(stateDir, typed, undefined)).toBe('Typed-Zq9');
+});
+
+it('keeps a generated password before submit even when the email is not known yet, then attaches the email', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-signup-'));
+  const state = { passwords: 2 };
+  const page = formPage(state);
+  await holdSignup(stateDir, page, 'Call-Rail-Zq9-pass', undefined);
+  const [early] = await savedLoginsForSite(stateDir, 'https://signup.example.com/');
+  expect(early?.label).toBe(UNKNOWN_ACCOUNT);
+  expect((await savedLoginFields(stateDir, 'https://signup.example.com/', early!.id)).password).toBe('Call-Rail-Zq9-pass');
+  // The same form later shows the email: the same entry takes it, no second entry, same password.
+  await holdSignup(stateDir, page, 'Call-Rail-Zq9-pass', 'ops@example.com');
+  const after = await savedLoginsForSite(stateDir, 'https://signup.example.com/');
+  expect(after).toHaveLength(1);
+  expect(after[0]?.label).toBe('ops@example.com');
+  expect((await savedLoginFields(stateDir, 'https://signup.example.com/', after[0]!.id)).password).toBe('Call-Rail-Zq9-pass');
+});
+
+it('a signup whose email nothing recognised still leaves the password in the vault when the page closes', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-signup-'));
+  const page = { isClosed: () => true, url: () => 'https://signup.example.com/form' } as unknown as Page;
+  await holdSignup(stateDir, page, 'Never-Lost-1-Zq9', undefined);
+  expect(await settleSignup(stateDir, page)).toBeUndefined();
+  const [kept] = await savedLoginsForSite(stateDir, 'https://signup.example.com/');
+  expect((await savedLoginFields(stateDir, 'https://signup.example.com/', kept!.id)).password).toBe('Never-Lost-1-Zq9');
 });

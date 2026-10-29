@@ -16,7 +16,7 @@ import { loginValueFor } from '../computer/login-fill.js';
 import { describeRecipe, fillPlaceholders, getRecipe, listRecipes, replayRecipe, saveRecipe } from '../computer/signup-recipes.js';
 import { addSiteNote, readSiteNotes } from '../computer/site-notes.js';
 import { assertCustomKey, bestProfileFor, customFieldFor, defaultProfile, describeProfile, listProfiles, PASSWORD_SECRET, PROFILE_KEYS, phoneFor, birthdayFor, profileKeyFor, readProfileSecret, saveProfile, saveProfileSecret, secretFieldFor, type FieldHint, type ProfileKey } from '../computer/profiles.js';
-import { expectSignup, holdSignup, pendingSignupPassword, pendingSignupUsername, savedPasswordFor, settleSignup, sitePasswordFor } from '../computer/signup-login.js';
+import { holdSignup, pendingSignupPassword, pendingSignupUsername, savedPasswordFor, settleSignup, sitePasswordFor } from '../computer/signup-login.js';
 import { generatePassword } from '../computer/password-policy.js';
 import { generatedFor, readPasswordPolicy, rememberGenerated, retryRejectedPassword } from '../computer/password-retry.js';
 import { loginComputerPage, loginOutcomeMessage } from '../computer/login-page.js';
@@ -912,9 +912,13 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
       const answer = answers[item.field.key] ?? '';
       values.set(item.step, answer);
       // A password typed into a form shows in the page's own text afterwards: hold it back from every view.
-      if (item.field.kind === 'password' && answer) { registerSecret(answer); expectSignup(page, answer); }
+      if (item.field.kind === 'password' && answer) { registerSecret(answer); await holdSignup(ctx.stateDir, page, answer, email).catch(quiet('agent/tools/computer-web')); }
       else if (item.key && answer) learned[item.key] = answer;
     }
+    // The email the person just typed is the account's: attach it to the login kept above (it was kept without one).
+    const typedEmail = ask.map(item => values.get(item.step)).find(value => value && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value));
+    const kept = generated ?? pendingSignupPassword(page);
+    if (kept && !email && typedEmail) await holdSignup(ctx.stateDir, page, kept, typedEmail).catch(quiet('agent/tools/computer-web'));
     if (Object.keys(learned).length && (profile || profiles.length === 0)) await saveProfile(ctx.stateDir, { ...(profile ? { id: profile.id } : {}), fields: learned });
     if (confirmSignIn && !signingUp) {
       const entered: Record<string, string> = {};
