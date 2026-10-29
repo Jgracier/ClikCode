@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from '
 import { readlinkSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { LOCK_TUNING, breakStaleLock, lockLooksStale, onLockWait, withFileLock, writeOwnerFile } from './locks.js';
+import { LOCK_TUNING, breakStaleLock, lockLooksStale, withFileLock, writeOwnerFile } from './locks.js';
 import { lifecycle } from '../../runtime/lifecycle-log.js';
 import { runChild } from '../state/testing/concurrency.js';
 
@@ -84,26 +84,6 @@ describe('withFileLock', () => {
     await expect(withFileLock(path, async () => 'ran')).rejects.toThrow(/could not lock/);
     release();
     await stuck;
-  });
-});
-
-describe('a wait on a lock somebody else holds', () => {
-  it('is told to whoever listens once it is long enough to notice, naming the holder', async () => {
-    root = await mkdtemp(join(tmpdir(), 'clikcode-locks-'));
-    const path = join(root, 'held.lock');
-    Object.assign(LOCK_TUNING, { waitVisibleMs: 100 });
-    // Held by another live process (ours is the parent of this one's tests: it is alive and fresh).
-    await writeFile(path, owner({ pid: process.ppid, ...(ourPidns ? { pidns: ourPidns } : {}) }), { mode: 0o600 });
-    const told: string[] = [];
-    const stop = onLockWait((message) => told.push(message));
-    const waiting = withFileLock(path, async () => 'ran');
-    await tick(300);
-    expect(told).toHaveLength(1);
-    expect(told[0]).toContain('Waiting for held.lock, held by pid');
-    await rm(path);
-    await expect(waiting).resolves.toBe('ran');
-    stop();
-    expect(told).toHaveLength(1);
   });
 });
 

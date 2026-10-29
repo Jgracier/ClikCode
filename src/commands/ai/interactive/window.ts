@@ -29,8 +29,6 @@ import { closeAllWorkerClients } from '../../../worker/turn-bridge.js';
 import { retireStaleWorkers } from '../../../worker/client.js';
 import { replaceCliWithNewBuild } from '../build-replace.js';
 import { conversationCommands } from './board.js';
-import { onLockWait } from '../../../session/store/locks.js';
-import chalk from 'chalk';
 
 /** What the loop reads and writes of the window while it runs, shared with
  * the setup's own timers: the conversation this window is on, and the
@@ -132,16 +130,7 @@ export async function openWindow(config: Conf, startId: string): Promise<ChatWin
   if (terminal) { terminal.render(session, initialAccount); if (selectionNotice) terminal.activity(selectionNotice); }
   else emitHarnessOutput({ status: 'ready', session, account: initialAccount });
   const refreshUsage = createUsageRefresher(config, terminal);
-  // A wait on a lock long enough to notice is told here, with who holds it: this window's send
-  // stands still otherwise, with nothing saying why.
-  // What runs beside the chats, told in this window whichever chat is open: a lock wait on the transcript, a download in the footer.
-  const stopLockNotices = terminal ? ((): (() => void) => {
-    const stops = [
-      onLockWait((message) => { if (TERMINAL.active === terminal) terminal.activity(chalk.yellow(message)); }),
-      followModelDownloads(terminal),
-    ];
-    return () => { for (const stop of stops) stop(); };
-  })() : undefined;
+  const stopLockNotices = terminal ? followModelDownloads(terminal) : undefined;
   refreshUsage(session, state);
   const { beginBuildReplace, releaseWindow } = startBuildWatch(terminal, ref, refreshUsage, stopLockNotices);
   return { config, terminal, rl, ref, session, slashCommandsFor, warmCatalogFor, refreshUsage, beginBuildReplace, releaseWindow };
