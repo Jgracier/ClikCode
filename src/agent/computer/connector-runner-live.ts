@@ -11,15 +11,20 @@ import { scrubSecrets } from './secret-scrubber.js';
 
 export const WORKER = 'cc-runner';
 
+/** An error message in full (every line, whitespace folded), scrubbed of secrets; cut only at a length no real message reaches. */
+export const fullMessage = (text: string): string => scrubSecrets(text.trim().replace(/\s+/g, ' ')).slice(0, 4_000);
+
 /** The `data` of a `clikdeploy tools run` answer, or the error it gave. */
 export function unwrapTool(text: string): unknown {
   const start = text.indexOf('{');
-  if (start < 0) throw new Error(scrubSecrets(text.trim().split('\n').slice(-2).join(' ').slice(0, 200)) || 'ClikDeploy gave no answer');
-  let envelope: { status?: string; message?: string; error?: { message?: string }; data?: { success?: boolean; error?: unknown; data?: unknown } };
+  if (start < 0) throw new Error(fullMessage(text) || 'ClikDeploy gave no answer');
+  let envelope: { status?: string; message?: string; error?: { message?: string; code?: string; hint?: string }; data?: { success?: boolean; error?: unknown; data?: unknown } };
   try { envelope = JSON.parse(text.slice(start)); } catch { throw new Error('ClikDeploy gave an answer that is not JSON'); }
   if (envelope.status === 'error' || envelope.data?.success === false) {
     const said = envelope.error?.message ?? envelope.message ?? (typeof envelope.data?.error === 'string' ? envelope.data.error : (envelope.data?.error as { message?: string } | undefined)?.message);
-    throw new Error(scrubSecrets(String(said ?? 'ClikDeploy refused').split('\n')[0]!).slice(0, 240));
+    const code = envelope.error?.code ? ` [${envelope.error.code}]` : '';
+    const hint = envelope.error?.hint ? ` (${envelope.error.hint})` : '';
+    throw new Error(`${fullMessage(String(said ?? 'ClikDeploy refused'))}${code}${hint}`);
   }
   return envelope.data && 'data' in envelope.data ? envelope.data.data : envelope.data ?? envelope;
 }
