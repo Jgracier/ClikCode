@@ -2,7 +2,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import { addDestination, declaredAuthKind, declaredConnectionValues, destinationProblem, loadDestinations, normalizeSendTo, removeDestination, sendToDestinations, slotsOf } from './secret-destinations.js';
+import { addDestination, declaredAuthKind, declaredConnectionValues, destinationProblem, loadDestinations, normalizeSendTo, removeDestination, sendToDestinations, setSendRetryDelay, slotsOf } from './secret-destinations.js';
 import { forgetSecrets, registerSecret } from './secret-scrubber.js';
 import { forgetCliStdinSupport, versionAtLeast } from './cli-stdin-support.js';
 import { lockCredentialVault, saveNamedSecret } from './credential-vault.js';
@@ -378,4 +378,26 @@ it('basic auth with the key as the username and a blank password, and one error 
   const [failed] = await sendToDestinations(dir, [{ to: 'clikdeploy-connection', with: { integration: 'bugherd' } }], VALUE);
   expect(failed!.message).toContain('declares basic auth');
   expect(await declaredAuthKind('bugherd')).toBe('basic');
+});
+
+it('clikdeploy-connection with an empty reply from the connect route is retried once, then reports status and a short excerpt instead of a JSON parse error', async () => {
+  setSendRetryDelay(0);
+  await fake('clikdeploy', `case "$1" in tools) echo x >> "${dir}/calls"; echo 'Error: 502 Bad Gateway: Unexpected end of JSON input' >&2; exit 1;; integrations) cat "${dir}/show.out";; esac`);
+  await writeFile(join(dir, 'show.out'), shown(null));
+  const [result] = await sendKey();
+  expect(result!.ok).toBe(false);
+  expect(result!.message).toContain('empty or non-JSON reply');
+  expect(result!.message).toContain('HTTP 502');
+  expect(result!.message).toContain('Bad Gateway');
+  expect(result!.message).not.toContain(VALUE);
+  expect((await readFile(join(dir, 'calls'), 'utf8')).trim().split('\n')).toHaveLength(2);
+});
+
+it('clikdeploy-connection treats a silent failing connect call as a connection when ClikDeploy lists one', async () => {
+  setSendRetryDelay(0);
+  await fake('clikdeploy', `case "$1" in tools) exit 1;; integrations) cat "${dir}/show.out";; esac`);
+  await writeFile(join(dir, 'show.out'), shown({ id: 'c1', status: 'active' }));
+  const [result] = await sendKey();
+  expect(result!.ok).toBe(true);
+  expect(result!.message).toContain('connected');
 });
