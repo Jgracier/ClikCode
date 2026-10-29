@@ -240,6 +240,47 @@ describe('a tool the vendor never settled', () => {
   });
 });
 
+describe('a background turn the vendor opened on its own', () => {
+  const result = { notify: { method: '_claude/sdkMessage', params: { message: { type: 'result', subtype: 'success' } } } };
+  const level = (...tasks: Array<Record<string, unknown>>) => ({
+    notify: { method: '_claude/sdkMessage', params: { message: { type: 'system', subtype: 'background_tasks_changed', tasks } } },
+  });
+  const shell = { task_id: 'sh1', task_type: 'local_bash', description: 'npm run dev' };
+
+  it('ends when the vendor reports its turn over, without waiting out the orphan bound', async () => {
+    const turns: VendorBackgroundTurn[] = [];
+    const session = createAcpSession({ backgroundTurns: (turn) => turns.push(turn), orphanedToolMs: 60_000 });
+    try {
+      await session.runTurn(input([[
+        { update: chunk('one') }, { update: tool('t', 'pending') }, { answer: true },
+        { after: 100, ...result },
+      ]]));
+      await vi.waitFor(() => expect(turns).toHaveLength(1), { timeout: 5000, interval: 10 });
+      const seen: HarnessActivityEvent[] = [];
+      turns[0]!.attach({ onActivity: (event) => seen.push(event) });
+      expect(await turns[0]!.finished).toEqual({ text: '', ended: 'completed' });
+      expect(seen).toMatchObject([{ kind: 'tool-done', id: 't' }]);
+    } finally { await session.close(); }
+  });
+
+  it('stays open past a vendor result while the vendor still reports background work', async () => {
+    const turns: VendorBackgroundTurn[] = [];
+    const session = createAcpSession({ backgroundTurns: (turn) => turns.push(turn), orphanedToolMs: 60_000 });
+    try {
+      await session.runTurn(input([[
+        level(shell), { update: chunk('Started it.') }, { update: tool('t', 'pending') }, { answer: true },
+        { after: 100, ...result }, { after: 300, ...level() }, { after: 50, ...result },
+      ]]));
+      await vi.waitFor(() => expect(turns).toHaveLength(1), { timeout: 5000, interval: 10 });
+      let ended = false;
+      void turns[0]!.finished.then(() => { ended = true; });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(ended, 'a result does not cut off a running shell').toBe(false);
+      await turns[0]!.finished;
+    } finally { await session.close(); }
+  });
+});
+
 describe('the background level an ACP agent publishes (claude-agent-acp _claude/sdkMessage)', () => {
   const level = (...tasks: Array<Record<string, unknown>>) => ({
     notify: { method: '_claude/sdkMessage', params: { message: { type: 'system', subtype: 'background_tasks_changed', tasks } } },
