@@ -191,6 +191,23 @@ describe('profile ask_fields and custom: an agent asks for the details a task ne
     });
   });
 
+  it('add_login asks one private form (website, email, password), saves the login, and never echoes the password', async () => {
+    await withState(async (stateDir) => {
+      const { savedLoginsForSite } = await import('../computer/credential-vault.js');
+      const asked: Array<{ key: string; kind: string; current?: string }[]> = [];
+      const requestPrivateLogin = async (_site: string, fields: readonly { key: string; kind: string; current?: string }[]) => { asked.push([...fields]); return { website: 'accounts.google.com', email: 'me@example.com', password: 'pw-secret-1' }; };
+      const done = await computerWebTool.run({ action: 'add_login' } as never, { stateDir, requestPrivateLogin } as never);
+      expect(done.output).toContain('Saved the login');
+      expect(asked[0]!.map(field => field.key)).toEqual(['website', 'email', 'password']);
+      expect(asked[0]![0]!.current).toBe('https://accounts.google.com/');
+      expect(done.output).toContain('accounts.google.com');
+      expect(done.output).not.toContain('pw-secret-1');
+      expect((await savedLoginsForSite(stateDir, 'https://accounts.google.com/')).map(login => login.label)).toEqual(['me@example.com']);
+      const closed = await computerWebTool.run({ action: 'add_login' } as never, { stateDir, requestPrivateLogin: async () => undefined } as never);
+      expect(closed.isError).toBe(true);
+    });
+  });
+
   it('asks once, privately, with what is kept offered back, and saves the answers as a named profile', async () => {
     await withState(async (stateDir) => {
       const asked: Array<{ site: string; fields: Array<{ key: string; label: string; required: boolean; current?: string }> }> = [];
