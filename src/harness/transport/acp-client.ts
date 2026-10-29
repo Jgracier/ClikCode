@@ -54,6 +54,8 @@ const ACP_SESSION_META = {
     // A background Agent's own lifecycle: its call completes at launch, and
     // these say when it really ends (claude-agent-acp acp-agent.js, `task_*`).
     { type: 'system', subtype: 'task_started' }, { type: 'system', subtype: 'task_progress' }, { type: 'system', subtype: 'task_notification' },
+    // The end of every vendor turn, one the user did not start included: what closes a background turn (vendorTurnEnded).
+    { type: 'result' },
   ] },
 } as const;
 
@@ -1485,12 +1487,25 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     // session/update's _meta.
     const message = method === '_claude/sdkMessage' && params.message && typeof params.message === 'object' ? params.message as Json : undefined;
     if (message) { this.heldAgentFrame(params, message); this.taskFrame(message); }
+    if (message?.type === 'result') return this.vendorTurnEnded(params);
     const update = message ? backgroundWork(message) : undefined;
     if (update) return this.backgroundWorkChanged(params, update);
     const target = this.liveTarget(params);
     if (!target) return;
     if (method === '_session/goal') target.observer.onPhase?.('goal updated');
     else if (method === '_session/steering') target.observer.onPhase?.('message taken into the turn');
+  }
+
+  /** The vendor finished a turn of its own (a task's notification, a goal): its `result`. That is the vendor
+   * saying it has nothing more to do, so a background turn it opened ends here -- whatever the work counters
+   * hold. A tool still unsettled has no one left to settle it. Real background work (a level, a held agent)
+   * keeps the run: its own end comes later as a frame of its own. */
+  private vendorTurnEnded(params: Json): void {
+    const run = this.background;
+    if (!run || run.channel.done || this.turn || this.liveTarget(params) !== run) return;
+    if (this.work.level || this.heldAgents.size) return;
+    for (const item of this.work.endAll('tool')) run.observer.onActivity?.({ kind: 'tool-done', label: item.label, id: item.id });
+    this.finishBackground('completed');
   }
 
   /** The vendor's level changed. Remembered whoever is listening; told to
