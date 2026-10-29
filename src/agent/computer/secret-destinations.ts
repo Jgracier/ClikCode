@@ -9,6 +9,7 @@
  * user adds their own with one line (`clikcode computer destination add`), kept in
  * `computer/destinations.json`. The agent cannot add or change one, so what can ever
  * run is decided by the user, not by a page the agent happens to be reading. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { runCli } from './run-cli.js';
@@ -167,7 +168,7 @@ export async function destinationProblem(stateDir: string, list: readonly unknow
       if (read.problem) return `${at}: ${read.problem}`;
     }
     if (declared && takesConnectionValues(template) && typeof d.with?.integration === 'string' && SAFE_VALUE.test(d.with.integration)) {
-      const known = await declared(d.with.integration).catch(() => undefined);
+      const known = await declared(d.with.integration).catch(quiet('agent/computer/secret-destinations'));
       if (known) {
         const given = Object.keys(readConnectionValues(d.connectionValues).values ?? {});
         const unknown = given.filter(name => !(name in known));
