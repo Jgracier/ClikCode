@@ -43,6 +43,9 @@ import { emailConnected, emailStatus, waitForEmail } from '../computer/email-api
 import { codeFromMailbox, looksLikeCodeEmail, looksLikeLinkEmail, verificationCode } from '../computer/email-code.js';
 import { connectEmail } from '../computer/email-consent.js';
 import { beginJournal, noteStep, recordVerified } from '../computer/recipe-recorder.js';
+import { chooseValue, labelledCandidates } from '../computer/read-value.js';
+import { whyBlank } from '../computer/why-blank.js';
+import { saveNamedSecret } from '../computer/credential-vault.js';
 import { lintRecipe } from '../computer/recipe-tools.js';
 import { oauthConnect } from '../computer/oauth-consent.js';
 import { runTailnetHandoff, tailnetAddress } from '../computer/tailnet-handoff.js';
@@ -53,9 +56,9 @@ type Step = { do: 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'u
 type WebArgs = {
   /** help: an action name, or "guide". */
   topic?: string;
-  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'secrets' | 'accounts' | 'profile' | 'open_email_link' | 'read_email_code' | 'email_connect' | 'oauth_connect' | 'notes' | 'recipe' | 'queue' | 'network' | 'preflight' | 'forget_login' | 'add_login' | 'help' | 'hover' | 'drag' | PageAction | FilesEnvAction;
+  action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'secrets' | 'accounts' | 'profile' | 'open_email_link' | 'read_email_code' | 'email_connect' | 'oauth_connect' | 'notes' | 'recipe' | 'queue' | 'network' | 'read_value' | 'preflight' | 'forget_login' | 'add_login' | 'help' | 'hover' | 'drag' | PageAction | FilesEnvAction;
   tab?: string; at?: 'start' | 'end'; url?: string; host?: string; note?: string; recipe_op?: 'save' | 'get' | 'run' | 'list'; login_route?: string; key_page?: string; capture_hint?: string; target?: string; text?: string; key?: string; direction?: ScrollDirection; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
-  new_account?: boolean; method?: string; secret?: string; to?: string; with?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean; format?: string; options?: string[]; secret?: boolean }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; vendor?: string; owner?: string; env?: string; task?: { vendor: string; kind?: string; status?: string; reason?: string; note?: string; owner?: string; connectors?: string[] }; bodies?: boolean; tasks?: boolean; task_status?: string; task_reason?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
+  new_account?: boolean; method?: string; secret?: string; to?: string; with?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean; format?: string; options?: string[]; secret?: boolean }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; vendor?: string; owner?: string; env?: string; task?: { vendor: string; kind?: string; status?: string; reason?: string; note?: string; owner?: string; connectors?: string[] }; bodies?: boolean; why_blank?: boolean; tasks?: boolean; task_status?: string; task_reason?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
 } & PageArgs & FilesEnvArgs;
 
 /** What was opened (host and path only: the rest of a mailed link is its token) and the other links by text. */
@@ -341,13 +344,14 @@ const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: [
     link: { type: 'string', description: 'open_email_link: words or domain of the link to open (default: the first real link in the message).' },
     account: { type: 'integer', description: 'open_email_link, read_email_code: Gmail account number /u/N (default 0).' },
     fields: { type: 'object', additionalProperties: { type: 'string' }, description: `profile: fields to save or correct in the user's autofill profile (${PROFILE_KEYS.join(', ')}). Leave out to list the profiles. Use it when a site wants a different format (phone as +1…, state as an abbreviation).` },
-    label: { type: 'string', description: 'forget_login: only the saved login with this username or email (default: every saved login for the site). profile: which profile (default: the one called Personal, else the one with the most standard fields, else a new one called Personal).' },
+    label: { type: 'string', description: 'read_value: the label the page shows beside the value ("Application ID", "Subdomain", "Workspace ID"). forget_login: only the saved login with this username or email (default: every saved login for the site). profile: which profile (default: the one called Personal, else the one with the most standard fields, else a new one called Personal).' },
     ask_fields: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { key: { type: 'string' }, label: { type: 'string' }, match: { type: 'array', items: { type: 'string' } }, optional: { type: 'boolean' }, format: { type: 'string', description: 'Types itself as the user enters it: date (##/##/####), phone ((###) ###-####), zip, time, or a pattern where # is a digit, A a letter, * either and anything else a literal the box inserts and jumps over.' }, options: { type: 'array', items: { type: 'string' }, description: 'A fixed set of answers shown as a selector (arrow keys in the terminal, radios in VS Code) instead of a text box.' }, secret: { type: 'boolean', description: 'The answer is a secret (a password to use for sign-ups, key "password"; a recovery code): typed hidden, kept in Secrets Manager with the profile, and never shown to you. A later fill of a password box with no text uses it.' } }, required: ['key', 'label'] }, description: 'profile: ask the user, privately and in one prompt, for details a task needs beyond the standard ones, and keep them in a profile (with label, a new one) so every later fill with no text uses them. key is lower_snake_case (app_name, privacy_policy_url); label is what the user is asked; match lists the words a form may label it with (["app name","application name"]); optional fields may be left empty. Details only; a password or code goes in with secret: true.' },
     custom: { type: 'object', additionalProperties: { type: 'object', additionalProperties: false, properties: { label: { type: 'string' }, value: { type: 'string' }, match: { type: 'array', items: { type: 'string' } } }, required: ['value'] }, description: 'profile: save custom details you already know (a redirect address, the app name you chose) into a profile, same shape as ask_fields answers: {key: {label, value, match}}.' },
     vendor: { type: 'string', description: 'capture_secret: the vendor the key is for, recorded with it.' },
     owner: { type: 'string', description: 'capture_secret: the account the key or app belongs to (default: the profile\'s sign-in email).' },
     env: { type: 'string', description: 'capture_secret: production, sandbox or test.' },
     task: { type: 'object', additionalProperties: false, properties: { vendor: { type: 'string' }, kind: { type: 'string', enum: ['oauth-app', 'api-key', 'test-account', 'webhook', 'other'] }, status: { type: 'string', enum: ['queued', 'working', 'done', 'needs-human', 'blocked', 'no-self-serve'] }, reason: { type: 'string', enum: ['captcha', 'sms', 'email', 'payment', 'identity', 'review', 'two-factor', 'no-logo', 'unsupported-protocol', 'other'] }, note: { type: 'string' }, owner: { type: 'string' }, connectors: { type: 'array', items: { type: 'string' } } }, required: ['vendor'], description: 'queue: record or update one vendor task (one per vendor and kind). Set status needs-human with a reason when a person must act (captcha, sms, payment), done when finished, blocked when it cannot be done. Always record the outcome here instead of only saying it.' },
+    why_blank: { type: 'boolean', description: 'observe: for a page stuck on Loading... or blank (a sign-in button that never renders): reload it once and report the failed, blocked and error-status requests (third-party scripts marked), and the console errors. Bounded (seconds, default 12, up to 25). Record the cause instead of retrying.' },
     bodies: { type: 'boolean', description: 'network: also show request and answer bodies (truncated, key-like values hidden). Default: shapes only.' },
     tasks: { type: 'boolean', description: 'queue: list the tasks (filter with task_status, task_reason) with a summary.' },
     task_status: { type: 'string' }, task_reason: { type: 'string' },
@@ -1270,7 +1274,22 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRun
       if (next) return { output: `${said}\n\n${next}` };
       return { output: `${said}\n\n${(await observeComputerPage(page, false, false, undefined, true)).output}` };
     }
-    case 'observe': requestDocumentPages(page, args.pages); return observeComputerPage(page, ctx.acceptsImages === true, args.full === true, args.find);
+    case 'read_value': {
+      const label = (args.label ?? args.target ?? '').trim();
+      if (!label) throw new Error('read_value needs label: the text the page shows beside the value, e.g. "Application ID".');
+      const chosen = chooseValue(label, await labelledCandidates(page, label));
+      if (chosen.kind === 'refused') return { output: `Not read: ${chosen.reason}.`, isError: true };
+      // A short plain value is returned. An opaque id (it looks like a token to every filter) or any value with secret_name goes to the vault and comes back as a reference for send_to values.
+      if (chosen.kind === 'value' && !args.secret_name) return { output: `${label}: ${chosen.value}${chosen.alternatives ? ` (${chosen.alternatives} other candidate${chosen.alternatives === 1 ? '' : 's'} on the page; use a more exact label if this is not it)` : ''}\nTo send it on: send_to values {"name":"${chosen.value}"}.` };
+      const origin = new URL(page.url()).origin;
+      const name = args.secret_name?.trim() || `${new URL(page.url()).hostname.replace(/^www\./, '')}/${label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`;
+      await saveNamedSecret(ctx.stateDir, name, chosen.value, { url: origin, vendor: args.vendor ?? new URL(page.url()).hostname.replace(/^www\./, ''), owner: args.owner ?? await profileEmail(ctx.stateDir) });
+      return { output: `${label}: read (${chosen.value.length} characters) and saved as "${name}"; it is not shown. Pass it on with send_to values {"<name>":"secret:${name}"}, e.g. {"to":"clikdeploy-connection","with":{"integration":"..."},"values":{"app_id":"secret:${name}"}}.` };
+    }
+    case 'observe': {
+      if (args.why_blank) { const why = await whyBlank(page, { seconds: args.seconds }); return { output: `${why}\n\n${(await observeComputerPage(page, ctx.acceptsImages === true)).output}` }; }
+      requestDocumentPages(page, args.pages); return observeComputerPage(page, ctx.acceptsImages === true, args.full === true, args.find);
+    }
     case 'steps':
       const list = typeof args.steps === 'string' ? (() => { try { return JSON.parse(args.steps) as Step[]; } catch { return undefined; } })() : args.steps;
       if (!Array.isArray(list) || !list.length) throw new Error('steps needs a list, e.g. [{"do":"click","target":"e5"}].');
