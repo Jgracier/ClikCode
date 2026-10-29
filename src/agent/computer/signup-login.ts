@@ -17,17 +17,21 @@ export function pendingSignupUsername(page: Page): string | undefined { return p
 
 export function expectSignup(page: Page, password: string): void { pending.set(page, { password }); }
 
-/** A password the tool made up: kept in the vault at once, under the account email it is most likely for, so a signup
- * that is submitted, redirected or abandoned half-way never loses it. settleSignup later corrects the email to the
- * one the form really held. */
+/** What a login is called until the form shows its email: the password is kept at once and this label says the email is not known yet. */
+export const UNKNOWN_ACCOUNT = '(email not captured)';
+
+/** A password the tool made up (or the user typed into a signup form): kept in the vault BEFORE the form is submitted, whether or not the
+ * account email is known yet. A signup that is submitted, redirected, abandoned half-way or whose email box nothing recognised never loses
+ * it: a vault entry labelled UNKNOWN_ACCOUNT holds it until the email is seen (a later call here with the email, or settleSignup). */
 export async function holdSignup(stateDir: string, page: Page, password: string, username: string | undefined): Promise<void> {
-  if (pending.get(page)?.password === password) return; // the same form, filled box by box: already kept
-  const held: Pending = { password, ...(username ? { username } : {}) };
-  if (username) {
-    // A password this replaces is kept as `previous_password`: the account may already have been made with it.
-    const old = await savedPasswordFor(stateDir, page.url(), username, { rejected: true });
-    held.itemId = await saveLoginFields(stateDir, page.url(), { username, password, ...(old && old !== password ? { previous_password: old } : {}) });
-  }
+  const already = pending.get(page);
+  // The same form, filled box by box: already kept, unless the email is known now and the entry still carries the placeholder.
+  if (already?.password === password && already.itemId && (!username || already.username === username)) return;
+  const label = username ?? already?.username ?? UNKNOWN_ACCOUNT;
+  const held: Pending = { password, ...(username ?? already?.username ? { username: (username ?? already?.username)! } : {}) };
+  // A password this replaces is kept as `previous_password`: the account may already have been made with it.
+  const old = await savedPasswordFor(stateDir, page.url(), label, { rejected: true });
+  held.itemId = await saveLoginFields(stateDir, page.url(), { username: label, password, ...(old && old !== password ? { previous_password: old } : {}) }, already?.password === password ? already.itemId : undefined);
   pending.set(page, held);
 }
 
