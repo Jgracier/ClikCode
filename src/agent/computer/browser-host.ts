@@ -22,11 +22,12 @@ export async function runComputerHost(stateDir: string): Promise<void> {
   try {
     context = await launchComputerBrowser(chromium, profile, {
       headless, viewport: null, acceptDownloads: true,
+      // FedCm: Google's sign-in button then uses its popup, not a browser-drawn dialog that no page tool can see or press.
       // Playwright's default --enable-automation and Chrome's port-0 debugging
       // each advertise WebDriver to sites. Keep the private CDP connection, but
       // don't expose that signal to ordinary page JavaScript.
       ignoreDefaultArgs: ['--enable-automation'],
-      args: ['--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0', '--disable-blink-features=AutomationControlled', ...(headless ? ['--window-size=1440,900'] : [])],
+      args: ['--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0', '--disable-blink-features=AutomationControlled', '--disable-features=FedCm', ...(headless ? ['--window-size=1440,900'] : [])],
     }, stateDir);
   } catch (error) {
     // The worker that started this process cannot see its output: leave the reason where it will look.

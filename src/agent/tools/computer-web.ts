@@ -35,6 +35,7 @@ import { approvedUploadPath, isUploadPath } from '../computer/upload-files.js';
 import { bindDownloads, describeDownloads, downloadNotes } from '../computer/downloads.js';
 import { SEND_TO_HELP, SEND_TO_SCHEMA } from './store-secret.js';
 import { declaredConnectionValues, destinationProblem, normalizeSendTo, type Destination } from '../computer/secret-destinations.js';
+import { followPopup, SIGN_IN_CLICK } from '../computer/google-popup.js';
 import { captureSecret } from '../computer/secret-capture.js';
 import { emailConnected, emailStatus, waitForEmail } from '../computer/email-api.js';
 import { codeFromMailbox, looksLikeCodeEmail, looksLikeLinkEmail, verificationCode } from '../computer/email-code.js';
@@ -1012,6 +1013,8 @@ export async function runSteps(page: Page, steps: readonly Step[], ctx: ToolCont
         noteStep(journalKey(ctx.stateDir, tab), before.url, replayable ? step as Parameters<typeof noteStep>[2] : { do: 'click' }, replayable ? before.label : undefined);
       }
       if (typeof done === 'string') notes.push(done); else { notes.push(done.note); halted = true; }
+      // A sign-in button often fetches before it opens its window: give it a moment to show up.
+      if (step.do === 'click' && !popups.length && SIGN_IN_CLICK.test(`${before?.label ?? ''} ${step.target ?? ''}`)) await current.waitForEvent('popup', { timeout: 4_000 }).catch(quiet('agent/tools/computer-web'));
       // A box the step raised holds the page: nothing can be read from it until the agent answers.
       if (step.do === 'press' || step.do === 'choose' || step.do === 'upload') await current.waitForTimeout(150);
       const waiting = pendingDialogNote(current);
@@ -1046,10 +1049,13 @@ export async function runSteps(page: Page, steps: readonly Step[], ctx: ToolCont
     finally { current.off('popup', onPopup); }
     const next = popups.filter(popup => !popup.isClosed()).at(-1);
     if (next) {
-      current = next;
-      adoptPage(ctx.stateDir, current, tab);
+      // Google's account chooser in a popup: the account is chosen and consent pressed, and the page that opened it carries on.
+      const followed = await followPopup(current, next, { email: await profileEmail(ctx.stateDir), signal: ctx.signal }).catch(quiet('agent/tools/computer-web'));
+      if (followed?.note) notes.push(followed.note);
+      const landed = followed?.page ?? next;
+      if (landed !== current) { current = landed; adoptPage(ctx.stateDir, current, tab); }
       await settle(current);
-      notes.push(`A new tab opened and is now the page: ${displayUrl(current.url())}`);
+      if (!followed?.note) notes.push(`A new tab opened and is now the page: ${displayUrl(current.url())}`);
     }
     // A replay looks at the page each step lands on (after any new tab is followed) and stops for a person's page.
     if (guard && !halted && await guard(current).catch(quiet('agent/tools/computer-web'))) halted = true;
