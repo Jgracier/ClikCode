@@ -30,6 +30,8 @@ interface RunnerDependencies {
   userTurnRunning: () => boolean;
   /** Busy state changed: the worker re-evaluates its idle exit. */
   changed: () => void;
+  /** The same live turn state history reads: background runs count even when no task level is reported. */
+  runningChanged?: (since?: string) => Promise<void> | void;
 }
 
 interface VendorBackgroundRunner {
@@ -95,6 +97,7 @@ export function createVendorBackgroundRunner(deps: RunnerDependencies): VendorBa
 
   const run = async (turn: VendorBackgroundTurn): Promise<void> => {
     active = turn;
+    void deps.runningChanged?.(new Date().toISOString());
     lifecycle('worker.background.start', { transport: turn.transport, reason: turn.reason });
     deps.changed();
     const { observer } = deps;
@@ -150,6 +153,7 @@ export function createVendorBackgroundRunner(deps: RunnerDependencies): VendorBa
       observer.endTurn(session);
     } finally {
       active = undefined;
+      void deps.runningChanged?.(undefined);
       deps.changed();
       next();
     }
