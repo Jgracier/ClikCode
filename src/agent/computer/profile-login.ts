@@ -8,14 +8,18 @@ import { registerSecret } from './secret-scrubber.js';
 
 const ACCOUNT_KEYS = new Set(['email', 'username', 'accountId']);
 
-export async function profileLoginAnswers(stateDir: string, fields: readonly LoginField[]): Promise<Record<string, string> | undefined> {
+export async function profileLoginAnswers(stateDir: string, fields: readonly LoginField[], label?: string): Promise<Record<string, string> | undefined> {
   if (!fields.length || fields.some(field => field.transient || field.kind === 'choice')) return undefined;
   // The default profile (Personal) first: listProfiles sorts by label, which would put an admin profile such as "ClikDeploy" ahead of it.
   const listed = await listProfiles(stateDir);
-  const first = defaultProfile(listed);
+  // A profile the caller NAMED (an AWS root account, say) answers before the default one: its email and its password go together,
+  // so a sign-in is never made with one profile's email and another's password.
+  const named = label ? listed.find(profile => profile.label.toLowerCase() === label.trim().toLowerCase()) : undefined;
+  const first = named ?? defaultProfile(listed);
   const profiles = first ? [first, ...listed.filter(profile => profile !== first)] : listed;
   const email = profiles.map(profile => profile.fields.sso_email ?? profile.fields.email).find(Boolean);
-  const holder = profiles.find(profile => profile.secrets?.[PASSWORD_SECRET]);
+  // The password comes from the chosen profile when it has one; only without it does another profile's answer.
+  const holder = (named?.secrets?.[PASSWORD_SECRET] ? named : undefined) ?? profiles.find(profile => profile.secrets?.[PASSWORD_SECRET]);
   const answers: Record<string, string> = {};
   for (const field of fields) {
     if (field.kind === 'password' || field.key === 'password') {
