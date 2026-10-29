@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { senderMatch, disconnectEmail, EMAIL_CLIENT_SECRET, emailConnected, emailStatus, startConsent, waitForEmail, type GoogleEndpoints } from './email-api.js';
 import { saveNamedSecret } from './credential-vault.js';
 import { verificationCode } from '../tools/computer-web.js';
+import { saveProfile } from './profiles.js';
 
 let dir: string;
 let server: http.Server;
@@ -33,6 +34,7 @@ beforeEach(async () => {
       return;
     }
     if (url.pathname === '/gmail/profile') return json({ emailAddress: 'me@example.com' });
+    if (url.pathname === '/gmail-other/profile') return json({ emailAddress: 'other@example.com' });
     if (url.pathname === '/gmail/messages') {
       const q = url.searchParams.get('q') ?? '';
       return json({ messages: messages.filter(m => !q.includes('from:(') || q.includes(m.from)).map(m => ({ id: m.id })) });
@@ -66,6 +68,19 @@ async function connect(): Promise<void> {
 }
 
 describe('mailbox consent', () => {
+  it('does not let a consent for another account replace the connected mailbox that is the profile email', async () => {
+    await saveProfile(dir, { label: 'Personal', fields: { sso_email: 'me@example.com' } });
+    await connect();
+    const other = await startConsent(dir, { endpoints: { ...endpoints, gmail: `${endpoints.gmail}-other` } });
+    const auth = new URL(other.url);
+    const back = new URL(auth.searchParams.get('redirect_uri')!);
+    back.searchParams.set('code', 'good');
+    back.searchParams.set('state', auth.searchParams.get('state')!);
+    await fetch(back);
+    await expect(other.done).rejects.toThrow(/profile email/);
+    expect(await emailStatus(dir)).toMatchObject({ email: 'me@example.com' });
+  });
+
   it('stores the refresh token as a secret after one consent, and says which mailbox, never the token', async () => {
     expect(await emailConnected(dir)).toBe(false);
     await connect();

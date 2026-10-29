@@ -10,6 +10,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import http from 'node:http';
 import { claimMessage, isClaimed } from './email-consumed.js';
 import { vendorOf } from './parking.js';
+import { profileEmail } from './profiles.js';
 import { readNamedSecret, saveNamedSecret, deleteNamedSecret, CredentialError } from './credential-vault.js';
 
 export const EMAIL_TOKEN_SECRET = 'email/gmail';
@@ -99,6 +100,11 @@ async function exchange(stateDir: string, client: Client, code: string, verifier
   if (!body.refresh_token) throw new Error('Google gave no refresh token; remove the app at myaccount.google.com/permissions and connect again.');
   const profile = await (await fetch(`${endpoints.gmail}/profile`, { headers: { authorization: `Bearer ${body.access_token}` }, signal: AbortSignal.timeout(20_000) })).json().catch(() => ({})) as { emailAddress?: string };
   const email = profile.emailAddress ?? '';
+  // The connected mailbox is the profile email (that is where sign-up codes go). Consenting as some other account must not silently
+  // replace it: workers share one mailbox, and the replacement left every later code unreadable.
+  const wanted = (await profileEmail(stateDir).catch(() => undefined))?.trim().toLowerCase();
+  const current = (await stored(stateDir).catch(() => undefined))?.email?.trim().toLowerCase();
+  if (wanted && current === wanted && email.trim().toLowerCase() !== wanted) throw new Error(`The connected mailbox is ${wanted}, the profile email. This consent was for ${email}, so it was not saved. Sign in to ${wanted} in the browser and connect again, or change the profile email first.`);
   await saveNamedSecret(stateDir, EMAIL_TOKEN_SECRET, JSON.stringify({ refreshToken: body.refresh_token, email, connectedAt: new Date().toISOString() } satisfies Stored), { vendor: 'gmail', owner: email, env: 'oauth' });
   cached.set(stateDir, { token: body.access_token, expires: Date.now() + (body.expires_in ?? 3000) * 1000 - 60_000 });
   return email;
