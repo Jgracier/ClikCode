@@ -321,6 +321,41 @@ describe('the background level an ACP agent publishes (claude-agent-acp _claude/
     } finally { await session.close(); }
   });
 
+  it('clears a completed terminal from the reported level when the SDK sends only task_updated', async () => {
+    const turns: VendorBackgroundTurn[] = [];
+    const session = createAcpSession({ backgroundTurns: (turn) => turns.push(turn) });
+    try {
+      await session.runTurn(input([[
+        level(shell), { update: chunk('Started it.') }, { answer: true },
+        { after: 100, notify: { method: '_claude/sdkMessage', params: { message: { type: 'system', subtype: 'task_updated', task_id: 'sh1', patch: { status: 'completed' } } } } },
+      ]]));
+      await vi.waitFor(() => expect(turns).toHaveLength(1));
+      const seen: BackgroundWorkUpdate[] = [];
+      turns[0]!.attach({ onBackgroundWork: (work) => seen.push(work) });
+      await turns[0]!.finished;
+      expect(seen.at(-1)).toEqual({ agents: 0, terminals: 0, workflows: 0 });
+      expect(await session.backgroundWorkRunning()).toBe(false);
+    } finally { await session.close(); }
+  });
+
+  it('does not clear another live terminal when one task completes', async () => {
+    const turns: VendorBackgroundTurn[] = [];
+    const session = createAcpSession({ backgroundTurns: (turn) => turns.push(turn) });
+    try {
+      await session.runTurn(input([[
+        level(shell, { ...shell, task_id: 'sh2' }), { update: chunk('Started them.') }, { answer: true },
+        { after: 100, notify: { method: '_claude/sdkMessage', params: { message: { type: 'system', subtype: 'task_updated', task_id: 'sh1', patch: { status: 'completed' } } } } },
+        { after: 300, ...level() },
+      ]]));
+      await vi.waitFor(() => expect(turns).toHaveLength(1));
+      const seen: BackgroundWorkUpdate[] = [];
+      turns[0]!.attach({ onBackgroundWork: (work) => seen.push(work) });
+      await vi.waitFor(() => expect(seen.some((work) => work.terminals === 1)).toBe(true));
+      expect(await session.backgroundWorkRunning()).toBe(true);
+      await turns[0]!.finished;
+    } finally { await session.close(); }
+  });
+
   it('opens nothing for an empty level after the turn', async () => {
     const turns: VendorBackgroundTurn[] = [];
     const session = createAcpSession({ backgroundTurns: (turn) => turns.push(turn) });
