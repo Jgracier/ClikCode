@@ -28,6 +28,21 @@ describe('the editor and a worker that refuses a prompt because it is being repl
     expect(link.turnWaiter).toBeUndefined();
   });
 
+  it('sends again when the worker left before it said it had the message, but not once it did', () => {
+    const bridge = new IdeBridge({} as Conf, { send: () => undefined });
+    const link = (bridge as unknown as { link: Link }).link;
+    const untaken = vi.fn();
+    link.turnWaiter = { resolve: () => undefined, reject: untaken };
+    link.onWorkerEvent('s1', {}, { type: 'shutdown', reason: 'replaced by a newer ClikCode build' });
+    expect(untaken.mock.calls[0]![0], 'it may never have been read').toBeInstanceOf(WorkerRetiring);
+
+    const taken = vi.fn();
+    link.turnWaiter = { resolve: () => undefined, reject: taken };
+    link.onWorkerEvent('s1', {}, { type: 'turn-error', message: 'x' });
+    link.onWorkerEvent('s1', {}, { type: 'shutdown', reason: 'replaced by a newer ClikCode build' });
+    expect(taken.mock.calls[0]![0], 'it has the message: sending again could run it twice').not.toBeInstanceOf(WorkerRetiring);
+  });
+
   it('still tells the editor about an ordinary rejection', () => {
     const sent: unknown[] = [];
     const bridge = new IdeBridge({} as Conf, { send: (message: unknown) => { sent.push(message); } });
