@@ -71,3 +71,17 @@ it('accepts the slots as JSON text too', async () => {
   const result = await storeSecretTool.run({ secret: 'salad/api-key', to: 'clikdeploy-secret', with: '{"key":"SALAD_API_KEY"}' } as never, ctx());
   expect(result.output).toContain('SENT - clikdeploy-secret (SALAD_API_KEY)');
 });
+
+it('send_secret with top-level to, with and values sends the key and the connection values together (the form that used to ignore values)', async () => {
+  await fake('clikdeploy', `if [ "$1" = --version ]; then echo 1.0.36; exit 0; fi; case "$1" in tools) printf '%s\\n' "$@" > "${dir}/argv"; cat > "${dir}/stdin"; echo '{"status":"success","data":{"success":true}}';; integrations) echo '{"status":"success","data":{"id":"onesignal","connection":{"status":"active"}}}';; esac`);
+  for (const args of [
+    { secret: 'salad/api-key', to: 'clikdeploy-connection', with: { integration: 'onesignal' }, values: { org_api_key: 'abc' } },
+    { secret: 'salad/api-key', to: 'clikdeploy-connection', with: { integration: 'onesignal', org_api_key: 'abc' } },
+    { secret: 'salad/api-key', to: 'clikdeploy-connection', with: { integration: 'onesignal' }, values: '{"org_api_key":"abc"}' },
+  ]) {
+    await rm(join(dir, 'stdin'), { force: true });
+    const result = await storeSecretTool.run(args as never, ctx());
+    expect(result.output).toContain('SENT - clikdeploy-connection (onesignal): connected');
+    expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toEqual({ integrationId: 'onesignal', apiKey: VALUE, baseUrlVariables: { org_api_key: 'abc' } });
+  }
+});

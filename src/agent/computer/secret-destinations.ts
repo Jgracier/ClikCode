@@ -53,12 +53,28 @@ export const DEFAULT_DESTINATIONS: Readonly<Record<string, Template>> = {
   'github-secret': { about: 'a GitHub repository secret (repo, key)', run: ['gh', 'secret', 'set', '{{key}}', '--repo', '{{repo}}'], stdin: '{{secret}}' },
 };
 
+const CONNECTION_TO = new Set(['clikdeploy-connection', 'clikdeploy-connection-basic', 'clikdeploy-connection-basic-key']);
+const CONNECTION_SLOTS = new Set(['integration', 'username', 'password']);
+
 /** A plan in whatever honest shape the agent gave it: a list, one {to, with}, or just a name. */
 export function normalizeSendTo(value: unknown): Destination[] | undefined {
   const plain = (item: Destination): Destination => {
-    if (!item || typeof item !== 'object' || item.values === undefined) return item;
-    const { values, ...rest } = item;
-    return item.connectionValues === undefined ? { ...rest, connectionValues: values } : rest;
+    if (!item || typeof item !== 'object') return item;
+    const { values, ...first } = item;
+    let rest: Destination = first;
+    let connectionValues = rest.connectionValues ?? values;
+    // `with` of a connection destination holds only integration, username and password; any other name there is a connection value
+    // (`--with org_api_key=...` on the command line has no other place to go).
+    if (CONNECTION_TO.has(rest.to) && rest.with && typeof rest.with === 'object') {
+      const slots: Record<string, string> = {}; const extra: Record<string, string> = {};
+      for (const [name, v] of Object.entries(rest.with)) (CONNECTION_SLOTS.has(name) ? slots : extra)[name] = v;
+      if (Object.keys(extra).length) {
+        const given = typeof connectionValues === 'string' ? (() => { try { return JSON.parse(connectionValues as string) as Record<string, string>; } catch { return undefined; } })() : connectionValues;
+        if (given && typeof given === 'object') { connectionValues = { ...extra, ...given }; rest = { ...rest, with: slots }; }
+        else if (connectionValues === undefined) { connectionValues = extra; rest = { ...rest, with: slots }; }
+      }
+    }
+    return connectionValues === undefined ? rest : { ...rest, connectionValues };
   };
   if (Array.isArray(value)) return (value as Destination[]).map(plain);
   // A harness whose cached schema lacks a nested argument can hand it over as JSON text.
@@ -142,14 +158,19 @@ export async function removeDestination(stateDir: string, name: string): Promise
 export const describeKnown = (all: Readonly<Record<string, Template>>): string =>
   Object.entries(all).map(([name, template]) => `${name}${slotsOf(template).length ? `(${slotsOf(template).join(', ')})` : ''}${template.about ? ` - ${template.about}` : ''}`).join('; ');
 
-export type DeclaredValues = Record<string, { label?: string; description?: string }>;
+/** `required`: false for a value the connect call does not need (not in the base URL, or has a default, or the spec says optional). */
+export type DeclaredValues = Record<string, { label?: string; description?: string; required?: boolean; optional?: boolean; default?: string }>;
 /** The plain per-account values a connector's base URL declares (Knack app_id, Kommo subdomain), or undefined when that cannot be told. */
 export async function declaredConnectionValues(integration: string, signal?: AbortSignal): Promise<DeclaredValues | undefined> {
   const shown = await runCli('clikdeploy', ['integrations', 'show', integration], { signal, timeoutMs: 30_000, maxChars: 4_000_000 });
   if (shown.missing) return undefined;
-  const parsed = firstJsonObject<{ status?: string; data?: { proxy?: { variables?: DeclaredValues } } }>(shown.text);
+  const parsed = firstJsonObject<{ status?: string; data?: { proxy?: { base_url?: string; variables?: DeclaredValues } } }>(shown.text);
   const proxy = parsed?.status === 'error' ? undefined : parsed?.data?.proxy;
-  return proxy && typeof proxy === 'object' ? (proxy.variables && typeof proxy.variables === 'object' ? proxy.variables : {}) : undefined;
+  if (!proxy || typeof proxy !== 'object') return undefined;
+  const variables = proxy.variables && typeof proxy.variables === 'object' ? proxy.variables : {};
+  // ClikDeploy's connect route demands a value only for a variable in the base URL that has no default; any other declared value is optional.
+  const template = typeof proxy.base_url === 'string' ? proxy.base_url : '';
+  return Object.fromEntries(Object.entries(variables).map(([name, v]) => [name, { ...v, required: !v.optional && v.default === undefined && template.includes(`{${name}}`) }]));
 }
 
 /** The connection destinations that fit each auth kind a connector declares. */
@@ -210,7 +231,7 @@ export async function destinationProblem(stateDir: string, list: readonly unknow
       if (known) {
         const given = Object.keys(readConnectionValues(d.connectionValues).values ?? {});
         const unknown = given.filter(name => !(name in known));
-        const missing = Object.keys(known).filter(name => !given.includes(name));
+        const missing = Object.entries(known).filter(([name, info]) => info.required !== false && !given.includes(name)).map(([name]) => name);
         if (unknown.length || missing.length) return `${at}: ${unknown.length ? `values has ${unknown.join(', ')}, which ${d.with.integration} does not take` : `${d.with.integration} needs a value for ${missing.join(', ')}`}. ${describeDeclared(d.with.integration, known)} Example: {"to":"${d.to}","with":{"integration":"${d.with.integration}"},"values":{${Object.keys(known).map(name => `"${name}":"..."`).join(',')}}}`;
       }
     }
@@ -328,11 +349,23 @@ export async function sendToDestinations(stateDir: string, list: readonly Destin
       }
       if (bad) { out.push({ label, ok: false, message: `NOT connected: ${bad}` }); continue; }
     }
-    if (stdin !== undefined && extra.values && Object.keys(extra.values).length) stdin = JSON.stringify({ ...(JSON.parse(stdin) as Record<string, unknown>), baseUrlVariables: extra.values });
-    // `--args-json -` reads the JSON from stdin on clikdeploy 1.0.35 and later, so the key is in no command line. The 1.0.34
-    // CLI tries to parse "-" as JSON; only for such an old CLI does the JSON go inline in the flag (the version is asked once
-    // per installed binary). For any other program the template's stdin is used as it is.
+    // The connect request is one JSON object, wherever the template keeps it: on stdin (`--args-json -`) or inline in the flag.
+    // The connection values join it as `baseUrlVariables`, the name the connect tool reads; it is then sent on stdin when the
+    // installed CLI reads it there (the key stays out of the command line) and inline only for a CLI too old for that.
     const dash = args.indexOf('--args-json');
+    if (template.verify === 'connection' && dash >= 0 && args[dash + 1] !== undefined) {
+      const inStdin = args[dash + 1] === '-';
+      const text = inStdin ? stdin ?? '' : args[dash + 1]!;
+      let body: Record<string, unknown>;
+      try { body = JSON.parse(text) as Record<string, unknown>; } catch { out.push({ label, ok: false, message: `NOT connected: the destination "${d.to}" has no JSON in its --args-json (saved destinations: \`clikcode computer destination list\`).` }); continue; }
+      if (extra.values && Object.keys(extra.values).length) body = { ...body, baseUrlVariables: extra.values };
+      const json = JSON.stringify(body);
+      if (await cliReadsArgsJsonFromStdin(program!, signal)) { args[dash + 1] = '-'; stdin = json; } else { args[dash + 1] = json; stdin = undefined; }
+    } else if (stdin !== undefined && extra.values && Object.keys(extra.values).length) {
+      out.push({ label, ok: false, message: `NOT connected: the destination "${d.to}" has no --args-json to carry the values.` }); continue;
+    }
+    if (stdin === '') stdin = undefined;
+    // Any other template: \`--args-json -\` is read from stdin on clikdeploy 1.0.35 and later; for an older CLI the JSON goes inline.
     if (stdin !== undefined && dash >= 0 && args[dash + 1] === '-' && !(await cliReadsArgsJsonFromStdin(program!, signal))) { args[dash + 1] = stdin; stdin = undefined; }
     let result = await runCli(program!, args, { ...(stdin !== undefined ? { stdin } : {}), signal, timeoutMs: 90_000 });
     // An empty or non-JSON reply (a 502 while the proxy restarts) is retried once; the CLI cannot say more than its own words.
