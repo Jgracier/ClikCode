@@ -159,3 +159,26 @@ export async function qualifyVendor(id: string, ports: QualifyPorts): Promise<Qu
     return classify(id, pages);
   } finally { await ports.close(id).catch(() => undefined); }
 }
+
+/** The typed wall (the loop's kinds) for a qualify kind, and the human step a person would take. */
+const QUALIFY_WALL: Partial<Record<QualifyKind, { wall: string; kind: 'captcha' | 'sms' | 'payment' | 'vendor-contact' | 'app-review' | 'decision' | 'retire'; say: string }>> = {
+  captcha: { wall: 'captcha', kind: 'captcha', say: 'the sign-up form has a captcha' },
+  sms: { wall: 'sms', kind: 'sms', say: 'sign-up wants a phone code' },
+  card: { wall: 'card', kind: 'payment', say: 'sign-up asks for a card' },
+  'paid-plan': { wall: 'paid-plan', kind: 'payment', say: 'the API is gated by a paid plan' },
+  sales: { wall: 'sales', kind: 'vendor-contact', say: 'API access is sold through sales' },
+  enterprise: { wall: 'sales', kind: 'vendor-contact', say: 'the API is for enterprise customers' },
+  approval: { wall: 'app-review', kind: 'app-review', say: 'API access needs the vendor\'s approval' },
+  'work-email': { wall: 'work-email', kind: 'decision', say: 'sign-up wants a work email' },
+  'free-mail': { wall: 'free-mail', kind: 'decision', say: 'sign-up rejects free-mail addresses' },
+  'no-api': { wall: 'no-api', kind: 'retire', say: 'the vendor has no public API' },
+  'dead-host': { wall: 'dead-host', kind: 'retire', say: 'the vendor\'s site does not load' },
+};
+export function humanStepForQualify(r: QualifyResult): { kind: 'captcha' | 'sms' | 'payment' | 'vendor-contact' | 'app-review' | 'decision' | 'retire'; url?: string; instructions: string; reasonCode: string } | undefined {
+  const order: QualifyKind[] = ['dead-host', 'no-api', 'captcha', 'sms', 'card', 'paid-plan', 'sales', 'enterprise', 'approval', 'work-email', 'free-mail'];
+  const kind = order.find(k => r.kinds.includes(k));
+  const w = kind ? QUALIFY_WALL[kind] : undefined;
+  if (!kind || !w) return undefined;
+  const e = r.evidence.find(x => x.kind === kind);
+  return { kind: w.kind, ...(e?.url && /^https:/.test(e.url) ? { url: e.url.split('#')[0]!.split('?')[0]! } : {}), instructions: `${w.say} (rendered page says: "${(e?.phrase ?? '').slice(0, 120)}").`, reasonCode: w.wall };
+}

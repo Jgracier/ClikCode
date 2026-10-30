@@ -141,3 +141,13 @@ describe('the phrase lists', () => {
     expect([...SERVER_PHRASES.appReview]).toEqual(listOf('triage', 'appReviewPhrases'));
   });
 });
+
+describe('the human step for a qualify result', () => {
+  it('names the wall the loop reports, strongest first, with the rendered phrase', async () => {
+    const { humanStepForQualify } = await import('./connector-qualify.js');
+    const r = classify('v', [page('signup', 'A card is required to start.', form), page('docs', 'To get API access please contact sales.')]);
+    expect(humanStepForQualify(r)).toMatchObject({ kind: 'payment', reasonCode: 'card', url: 'https://vendor.example/signup' });
+    expect(humanStepForQualify(classify('v', [page('docs', 'We do not offer an API.')]))).toMatchObject({ kind: 'retire', reasonCode: 'no-api' });
+    expect(humanStepForQualify(classify('v', [page('docs', 'Create a key in settings.')]))).toBeUndefined();
+  });
+});

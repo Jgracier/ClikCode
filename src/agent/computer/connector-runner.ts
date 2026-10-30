@@ -61,6 +61,8 @@ export interface BrowserDriver {
   recordBackoff?(id: string): Promise<Date>;
   /** A screen no rule knows: one bounded agent micro-task (the account_use and browser_use tools only) that gets the key or finishes consent and saves a recipe. Absent: the screen is handed on in a note. */
   agentTask?(id: string, stop: StopInfo, budget: { maxCalls: number; maxMs: number }): Promise<DriveOutcome>;
+  /** Reads the vendor's rendered sign-up, pricing and developer pages (no model) and says whether a key needs a person, with the wall as a human step when it does. */
+  qualify?(id: string): Promise<{ lane: 'auto' | 'human' | 'dead'; summary: string; human?: HumanStep }>;
   keygrab(id: string, url: string, budget: { maxMs: number; /** The task's other addresses (homepage, sign-up, docs): where to start if `url` is no web page. */ alternates?: string[] }): Promise<DriveOutcome>;
 }
 
@@ -251,9 +253,9 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
     return out('human', human.instructions ?? human.kind, { humanStep: human, recorded });
   };
   // An unknown screen gets one bounded agent micro-task per vendor; success carries on with the next onboard step.
-  let agentTried = false;
-  const viaAgent = async (stop: StopInfo): Promise<DriveOutcome | undefined> => {
-    if (agentTried || !driver.agentTask || stop.human || humanStepFor(id, stop)) return undefined;
+  let agentTried = false, qualified = false;
+  const viaAgent = async (stop: StopInfo, wholeTask = false): Promise<DriveOutcome | undefined> => {
+    if (agentTried || !driver.agentTask || !wholeTask && (stop.human || humanStepFor(id, stop))) return undefined;
     agentTried = true;
     actions.push('an unrecognized screen: one bounded agent micro-task');
     const done = await gate(() => driver.agentTask!(id, stop, { maxCalls: options.agentCalls ?? 25, maxMs: Math.max(30_000, maxMs - (now() - began)) }));
@@ -289,7 +291,27 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
       switch (plan.do) {
         case 'done': return out(plan.status, result.reason || result.next.task);
         case 'human': return await wall(plan.humanStep, true);
-        case 'handoff': return await handoff(plan.why);
+        case 'handoff': {
+          // A task no rule knows. First read the vendor's rendered pages: a wall they show is reported as the typed wall, with no agent. Otherwise one bounded agent micro-task tries it.
+          if (!qualified && driver.qualify) {
+            qualified = true;
+            const q = await gate(() => driver.qualify!(id)).catch(quiet('agent/computer/connector-runner'));
+            if (q) {
+              actions.push(`qualify: lane ${q.lane} - ${cap(say(q.summary), 160)}`);
+              if (q.lane !== 'auto' && q.human) return await wall(q.human, false);
+            }
+          }
+          const task = result.next.task;
+          const agent = await viaAgent({ kind: 'unknown', message: plan.why, url: siteUrl(task) ?? '', pageText: task, controls: [] }, true);
+          if (agent?.ok) {
+            actions.push(agent.note ?? 'the agent micro-task finished');
+            if (agent.recipe) recipeSaved = true;
+            result = fix(await client.onboard(id));
+            break;
+          }
+          if (agent && !agent.ok && (agent.stop.human || humanStepFor(id, agent.stop))) return await stopped(agent.stop);
+          return await handoff(agent && !agent.ok ? `${plan.why}; ${agent.stop.message}` : plan.why);
+        }
         case 'wait': {
           actions.push(`wait ${plan.ms / 1000}s, call onboard again`);
           await sleep(plan.ms);

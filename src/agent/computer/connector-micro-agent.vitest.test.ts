@@ -122,3 +122,42 @@ describe('the runner hands an unknown screen to the micro-task, once', () => {
     expect(outcomes[0]!.status).toBe('human');
   });
 });
+
+describe('a task no rule knows: read the rendered pages first, then one agent micro-task', () => {
+  const judgement = (id: string): OnboardResult => ({ id, state: 'needs-agent', stage: 'triage', reason: 'discovery could not settle how to connect', next: { kind: 'agent', task: `open https://api.${id}.example and find its developer page. If it has an API key page, get a test key.`, call: { tool: 'connector_onboard', args: { id } } } });
+  const published = (id: string): OnboardResult => ({ id, state: 'published', stage: 'published', reason: 'published', next: { kind: 'none', task: 'nothing' } });
+  const make = (qualify: BrowserDriver['qualify'], agent: DriveOutcome | undefined) => {
+    const reports: unknown[] = [], notes: string[] = [], asked: string[] = [];
+    const client: DeployClient = { waiting: async () => [], batch: async () => ({ results: [judgement('acme')], skipped: [] }), onboard: async () => published('acme'), report: async r => { reports.push(r); }, note: async (_i, t) => { notes.push(t); }, tool: async () => ({}) };
+    const driver: BrowserDriver = {
+      oauthConnect: async () => ({ ok: true }), hasRecipe: async () => false, captureKey: async () => ({ ok: true }), keygrab: async () => ({ ok: true }),
+      ...(qualify ? { qualify } : {}),
+      ...(agent ? { agentTask: async (_id: string, s: StopInfo) => { asked.push(s.pageText); return agent; } } : {}),
+    };
+    return { client, driver, reports, notes, asked };
+  };
+  const quick = { sleep: async () => undefined, writeFile: async () => undefined, handoffDir: async () => '/tmp/h' };
+
+  it('a wall the rendered pages show is reported as that wall and no agent runs', async () => {
+    const m = make(async () => ({ lane: 'human', summary: 'card', human: { kind: 'payment', instructions: 'sign-up asks for a card', reasonCode: 'card' } }), { ok: true });
+    const { outcomes } = await runConnectors(m.client, m.driver, quick);
+    expect(outcomes[0]).toMatchObject({ status: 'human', humanStep: { kind: 'payment' } });
+    expect(m.reports).toHaveLength(1);
+    expect(m.asked).toHaveLength(0);
+  });
+
+  it('an auto lane gives the task to one agent micro-task, and success carries on to the next onboard step', async () => {
+    const m = make(async () => ({ lane: 'auto', summary: 'no wall' }), { ok: true, note: 'agent got the key', recipe: true });
+    const { outcomes } = await runConnectors(m.client, m.driver, quick);
+    expect(m.asked).toHaveLength(1);
+    expect(m.asked[0]).toContain('find its developer page');
+    expect(outcomes[0]).toMatchObject({ status: 'published', recipe: true });
+  });
+
+  it('an agent that cannot do it leaves the hand-off note', async () => {
+    const m = make(undefined, { ok: false, stop: { ...stop, message: 'the agent micro-task did not finish: nothing found' } });
+    const { outcomes } = await runConnectors(m.client, m.driver, quick);
+    expect(outcomes[0]!.status).toBe('handoff');
+    expect(m.notes[0]).toContain('micro-task');
+  });
+});
