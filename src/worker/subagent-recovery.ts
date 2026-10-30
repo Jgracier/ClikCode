@@ -1,5 +1,10 @@
-/** Refresh just a blocked child's native history after its parent changed accounts.
- * Other children may still be running in either profile: never replace their tree. */
+/** Carry just a cut-off Claude agent's own history to the account its conversation moved to, so
+ * the vendor can resume it as it was (SendMessage to its id). Only an optimisation, and only where
+ * it can apply: a Claude agent and a Claude profile on each side. True when the agent's history is
+ * there to resume. Every other cut-off agent -- another harness, or a Claude one whose files cannot
+ * be carried -- is taken up again from its replay (handed-off-work.ts formatEndedWork): the task, its
+ * progress and its saved transcript. Other children may still be running in either profile: never
+ * replace their tree. */
 import { dirname, join, relative } from 'node:path';
 import { stat } from 'node:fs/promises';
 import type { AiHarnessAccount } from '../harness/definition.js';
