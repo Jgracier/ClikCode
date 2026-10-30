@@ -145,7 +145,7 @@ export async function connectorsStatus(flags: { lines?: string }): Promise<void>
   if (isJsonDefaultMode()) return emitResult({ connectors: { status: view } });
   const out = [
     running ? `The loop is running (process ${state!.pid}) until ${state!.until}; updated ${state!.updatedAt}.` : state ? `The loop is not running (last update ${state.updatedAt}).` : 'The loop has not run on this computer.',
-    ...(state ? [`working now: ${state.active.length ? state.active.map(a => `${a.id} (${a.calls} calls, since ${a.since})`).join(', ') : 'nothing'}`, `finished: ${JSON.stringify(state.done)}  walls: ${JSON.stringify(state.walls)}  in cooldown: ${Object.keys(state.cooldown ?? {}).length}`, ...(state.pressure ? [`machine: io full ${state.pressure.io ?? '-'}%, cpu full ${state.pressure.cpu ?? '-'}%${state.pressure.pausedUntil ? `, paused until ${state.pressure.pausedUntil}` : ''}`] : [])] : []),
+    ...(state ? [`${running ? "working now" : "was working on when it stopped (their leases expire by themselves)"}: ${state.active.length ? state.active.map(a => `${a.id} (${a.calls} calls, since ${a.since})`).join(', ') : 'nothing'}`, `finished: ${JSON.stringify(state.done)}  walls: ${JSON.stringify(state.walls)}  in cooldown: ${Object.keys(state.cooldown ?? {}).length}`, ...(state.pressure ? [`machine: io full ${state.pressure.io ?? '-'}%, cpu full ${state.pressure.cpu ?? '-'}%${state.pressure.pausedUntil ? `, paused until ${state.pressure.pausedUntil}` : ''}`] : [])] : []),
     `queue: ${JSON.stringify(queue)}`, `log: ${live.loopLogPath()}`, ...tail.map(l => `  ${l}`),
   ];
   process.stdout.write(`${out.join('\n')}\n`);
