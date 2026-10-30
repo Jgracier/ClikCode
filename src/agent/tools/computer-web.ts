@@ -25,6 +25,7 @@ import { LoginError } from '../computer/login-error.js';
 import { type LoginField } from '../computer/login-fields.js';
 import { isSecretRef, registerSecret, resolveSecretRef, scrubSecrets, showsSecret } from '../computer/secret-scrubber.js';
 import { profileLoginAnswers } from '../computer/profile-login.js';
+import { classifyPasswordPage, readPasswordPageContext } from '../computer/password-page.js';
 import { Parked, park } from '../computer/parking.js';
 import { hideKeyLikeText } from '../computer/secret-finder.js';
 import { answerDialog, bindDialogs, dialogNote, hasPendingDialog, pendingDialogNote, settleWaitingDialog, withDialogNotices, withDialogs } from '../computer/page-dialogs.js';
@@ -882,7 +883,10 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
   // A /login page is a sign-in even when the page has a second password box. Treating that as a signup would skip the
   // confirm prompt and fill the profile email with no chance to change it.
   const loginPage = /\/login\b|signin|identifier/i.test(page.url());
-  const signingUp = !loginPage && (passwordFields.length >= 2 || boxesOnPage >= 2 || passwordFields.some(field => /new-password/i.test(field.hint.autocomplete))
+  // The page's own words decide a page the address and boxes do not (a post-signup "Create your new password"): see classifyPasswordPage.
+  const pageKind = passwordFields.length ? classifyPasswordPage(await readPasswordPageContext(page)) : undefined;
+  const newPasswordPage = pageKind?.kind === 'signup' && await generatedPasswordsAllowed(ctx.stateDir);
+  const signingUp = newPasswordPage || !loginPage && (passwordFields.length >= 2 || boxesOnPage >= 2 || passwordFields.some(field => /new-password/i.test(field.hint.autocomplete))
     || (passwordFields.length > 0 && /sign[-_ ]?up|register|create[-_ ]?account|join|password\/(?:edit|new|reset)|(?:reset|set|new|change)[-_ ]?password/i.test(page.url())));
   // A sign-up gets a password of its own for this site, like a phone's "Strong Password": the one already typed into this
   // form (filled box by box), else the one saved for this site and email, else a new one that fits what the page asks.
@@ -952,7 +956,7 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
     // A sign-in password with no saved login for this site and none in the profile cannot be made up: say so and park
     // it (in the queue, with the reason) rather than failing, so the run goes on to the next site.
     const needPassword = ask.filter(item => item.field.kind === 'password').map(item => item.field);
-    const noPassword = (): Promise<never> => park(ctx.stateDir, page.url(), needPassword, 'no saved login for this site; sign in once with the login action or add one with `clikcode computer secrets --import`');
+    const noPassword = (): Promise<never> => park(ctx.stateDir, page.url(), needPassword, `no saved login for this site; treated as a ${signingUp ? 'new-password page' : 'sign-in page'} (${pageKind?.reason ?? 'no password box'}); sign in once with the login action or add one with \`clikcode computer secrets --import\``);
     if (!ctx.requestPrivateLogin) { if (needPassword.length) return noPassword(); throw new Error('Fill needs text: this chat cannot ask the user privately.'); }
     const answers = await ctx.requestPrivateLogin(origin, ask.map(item => item.field), ctx.signal);
     if (!answers) { if (needPassword.length) return noPassword(); throw new Error('The user did not answer the private prompt, so these fields were left empty.'); }
