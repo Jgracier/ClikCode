@@ -13,7 +13,7 @@ import type { BackgroundTurnChannel, BackgroundTurnEnd, OutOfTurnRelay, VendorBa
 import { commandLine, commandRoots, outputFile, processGroup, processGroupMembers, readProcessGroup, toolCallWork } from './process-group.js';
 import { readFile } from 'node:fs/promises';
 import { redactSecrets } from '../../agent/security.js';
-import type { EndedWork, RunningWork, WorkEndedHandler } from './handoff-work.js';
+import type { EndedWork, RunningWork } from './handoff-work.js';
 import { BackgroundWorkTracker } from './background-work.js';
 import { spawnFailure } from '../../runtime/machine-folder.js';
 
@@ -63,9 +63,10 @@ export interface PersistentSessionOptions {
   /** Receives what the vendor says with no prompt open and no tool running: it
    * goes into the conversation, and nothing is shown as working for it. */
   outOfTurn?: OutOfTurnRelay;
-  /** Told the work that ends after the conversation left this process (retire), and each agent the
-   * account's usage limit cut off. */
-  workEnded?: WorkEndedHandler;
+  /** Told each agent that ends in this process, and, once the conversation has left it (retire),
+   * each command too. Not decided here what an end means: the owner's ledger does
+   * (turn/vendor-process.ts reportEndedWork). */
+  workEnded?: (ended: readonly EndedWork[], via: { retired: boolean }) => void;
   /** SETUP_IDLE_MS, shortened by tests. */
   setupIdleMs?: number;
   /** ABANDONED_WORK_MS, shortened by tests. */
@@ -81,6 +82,8 @@ export interface VendorWorkSession {
   backgroundWorkRunning(): Promise<boolean>;
   /** The conversation is leaving this process with work still running in it (retire). */
   retire(): Promise<boolean>;
+  /** Fails the turn in progress as if the vendor had refused it (false: none is running). */
+  failTurn(error: Error): boolean;
   readonly retiredWork: { agents: number; terminals: number };
 }
 
@@ -123,7 +126,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
   private readonly spawn: PersistentSpawn;
   private readonly onBackgroundTurn?: VendorBackgroundTurnHandler;
   private readonly outOfTurnRelay?: OutOfTurnRelay;
-  private readonly onWorkEnded?: WorkEndedHandler;
+  private readonly onWorkEnded?: PersistentSessionOptions['workEnded'];
   /** The request options of a setup step (SETUP_IDLE_MS). */
   protected readonly setupRequest: { timeoutMs: number; idleReset: true };
   private readonly retiredCeilingMs: number;
@@ -261,7 +264,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
   private retiredEnded(ended: readonly EndedWork[]): void {
     const retirement = this.retirement;
     if (!retirement) return;
-    if (ended.length) { try { this.onWorkEnded?.(ended); } catch { /* fail-open-ok: the owner's bookkeeping */ } }
+    this.reportEnded(ended, true);
     if (!retirement.work.count()) {
       if (retirement.timer) clearTimeout(retirement.timer);
       if (retirement.ceiling) clearTimeout(retirement.ceiling);
@@ -269,18 +272,28 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     }
   }
 
-  /** An agent ended (`task_notification`). Retired: told, whatever its end. Otherwise only an agent
-   * the account's usage limit cut off: its own process can no longer start it again, the conversation's
-   * next account can. */
+  private reportEnded(ended: readonly EndedWork[], retired: boolean): void {
+    if (!ended.length) return;
+    try { this.onWorkEnded?.(ended, { retired }); } catch { /* fail-open-ok: the owner's bookkeeping */ }
+  }
+
+  /** An agent ended. Every end is reported, in or out of the conversation's process: what it means
+   * for the account, and whether the conversation is told, is the ledger's to decide once
+   * (turn/vendor-process.ts), not each transport's. */
   protected agentEnded(ended: EndedWork): void {
     const retirement = this.retirement;
-    if (retirement) {
-      if (retirement.work.end(ended.id)) retirement.work.told([ended]);
-      return;
-    }
-    if (ended.outcome === 'cut-off' && ended.limit) {
-      try { this.onWorkEnded?.([ended]); } catch { /* fail-open-ok: the owner's bookkeeping */ }
-    }
+    if (!retirement) return this.reportEnded([ended], false);
+    // Told through the tracker, which also closes the process once its last work has ended.
+    if (retirement.work.end(ended.id)) retirement.work.told([ended]);
+  }
+
+  /** The turn in progress fails with `error`, as if the vendor had refused it: the turn's own
+   * failover takes over. False when no turn is running. */
+  failTurn(error: Error): boolean {
+    const turn = this.turn;
+    if (!turn || turn.done) return false;
+    turn.fail(error);
+    return true;
   }
 
   /** Forget the vendor work being tracked as still running. */

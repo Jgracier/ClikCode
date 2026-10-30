@@ -53,6 +53,7 @@ interface HeldVendorOptions {
   /** The turn's release handle: ends the turn now, keeps the process. */
   release: { release(onExit: (exit: ReleasedTurnExit) => void): boolean; terminate(): void };
   handler: VendorBackgroundTurnHandler;
+  /** Told each subagent that ends while the conversation is still in this process (the ledger decides what it means). */
   workEnded?(ended: readonly EndedWork[]): void;
   /** Report one stdout line (and its record, when it is one) to a
    * background turn's observer. */
@@ -126,16 +127,21 @@ export function holdVendorProcess(options: HeldVendorOptions): HeldVendor | unde
     if (!ended.length) return;
     try { told?.(ended); } catch { /* fail-open-ok: the owner's bookkeeping */ }
   };
-  /** A retired process's record: a subagent's end is told, with its result or the vendor's reason. */
+  /** A subagent's `task_notification`: told with its result or why it stopped, to whoever answers for
+   * it -- the retirement's owner once the conversation has left this process, else the ledger of the
+   * live one (`workEnded`), which decides what its end means. */
+  const agentEnded = (agent: RunningWork, record: Json): void => {
+    void endedAgentWork(agent, String(record.status ?? 'completed'),
+      typeof record.summary === 'string' ? record.summary : '', typeof record.output_file === 'string' ? record.output_file : undefined)
+      .then((work) => { if (told) tell([work]); else options.workEnded?.([work]); }).catch(quiet('harness/transport/native/held-vendor'));
+  };
+  /** A retired process's record. */
   const retiredRecord = (record: Json): void => {
     if (record.type !== 'system' || record.subtype !== 'task_notification' || typeof record.task_id !== 'string') return;
     const agent = retiredAgents?.get(record.task_id);
     if (!agent) return;
     retiredAgents!.delete(record.task_id);
-    const summary = typeof record.summary === 'string' ? record.summary : '';
-    const file = typeof record.output_file === 'string' ? record.output_file : undefined;
-    void endedAgentWork(agent, String(record.status ?? 'completed'), summary, file)
-      .then((work) => tell([work])).catch(quiet('harness/transport/native/held-vendor'));
+    agentEnded(agent, record);
   };
   const vendor: HeldVendor = {
     get agentWork() { return options.background.agentWork; },
@@ -165,9 +171,7 @@ export function holdVendorProcess(options: HeldVendorOptions): HeldVendor | unde
       }
       if (record?.type === 'system' && record.subtype === 'task_notification' && typeof record.task_id === 'string') {
         const agent = options.background.agents().find((work) => work.id === record.task_id);
-        if (agent) void endedAgentWork(agent, String(record.status ?? 'completed'),
-          typeof record.summary === 'string' ? record.summary : '', typeof record.output_file === 'string' ? record.output_file : undefined)
-          .then((work) => { if (work.outcome === 'cut-off' && work.limit) options.workEnded?.([work]); }).catch(quiet('harness/transport/native/held-vendor'));
+        if (agent && !closing) agentEnded(agent, record);
       }
       if (!channel && !closing && record && opensBackgroundTurn(record) && !options.background.settled) {
         channel = new BackgroundTurnChannel('structured-cli', 'background-work');

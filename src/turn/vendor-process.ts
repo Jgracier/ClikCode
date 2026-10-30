@@ -11,7 +11,9 @@ import type { VendorBackgroundTurn, VendorBackgroundTurnHandler } from '../harne
 import { outOfTurnRecorder } from './out-of-turn-record.js';
 import type { OutOfTurnRelay } from '../harness/transport/background-turn.js';
 import { retiredHeldAgentCount } from '../harness/transport/native/held-vendor.js';
-import type { EndedWork } from '../harness/transport/handoff-work.js';
+import type { EndedFrom, EndedWork } from '../harness/transport/handoff-work.js';
+import { observeAccountHealth, type AccountMoveEffects } from './account-evidence.js';
+import type { AccountFailureKind } from './failover.js';
 
 /** ACP `available_commands_update`, per ClikCode session, for the slash registry. */
 export const nativeAvailableCommands = new Map<string, readonly HarnessAvailableCommand[]>();
@@ -39,21 +41,78 @@ const outOfTurnFor = (sessionId: string): OutOfTurnRelay => {
   return (said) => { const handler = outOfTurnHandlers.get(sessionId); if (handler) handler(said); else void record(said); };
 };
 
-/** Who answers for work a vendor process ran after the conversation left it, and for agents the
- * usage limit cut off (handoff-work.ts), per conversation: the session worker (each becomes a
- * notification turn on the account the conversation is on now). `from` is the process's harness
- * and account. */
-export type WorkEndedHandler = (ended: readonly EndedWork[], from: { harness?: string; accountId?: string }) => void;
+/** Who answers for work a vendor process ran, per conversation: the session worker, which turns each
+ * end the conversation must hear of into a notification on the account the conversation is on now.
+ * `from` is the process's harness and account, and whether the conversation had left it. */
+export type WorkEndedHandler = (ended: readonly EndedWork[], from: EndedFrom) => void;
 const workEndedHandlers = new Map<string, WorkEndedHandler>();
 export function setWorkEndedHandler(sessionId: string, handler: WorkEndedHandler | undefined): void {
   if (handler) workEndedHandlers.set(sessionId, handler);
-  else workEndedHandlers.delete(sessionId);
+  else {
+    // The conversation's worker is going: what it was told of goes with it.
+    workEndedHandlers.delete(sessionId);
+    ledgers.delete(sessionId);
+    ledgerQueue.delete(sessionId);
+  }
 }
-/** Tell `sessionId`'s handler of work that ended outside a persistent child: the agents of a held
- * CLI process a turn did not wait for (turn-steps.ts settleHeldVendor). */
-export function reportEndedWork(sessionId: string, ended: readonly EndedWork[], from: { harness?: string; accountId?: string } = {}): void {
+
+/** What taking a conversation off a spent account touches here: its vendor processes. */
+const accountMoveEffects: AccountMoveEffects = {
+  leave: (sessionId, accountId) => leavePersistentTransport(sessionId, { accountId }),
+  refuseTurn: (sessionId, accountId, error) => {
+    const live = persistentTransports.get(sessionId);
+    return live !== undefined && keyOwner(live.key).accountId === accountId && live.session.failTurn(error);
+  },
+};
+
+/** Evidence from outside a turn about the conversation's account (turn/account-evidence.ts
+ * observeAccountHealth), with the vendor processes this module owns. */
+export function observeSessionAccount(input: Parameters<typeof observeAccountHealth>[0]): Promise<AccountFailureKind> {
+  return observeAccountHealth(input, accountMoveEffects);
+}
+
+/** What the ledger has of a piece of work that ended: the evidence it was last reported with, and
+ * whether the conversation has been told. */
+interface LedgerEntry { failure: string; told: boolean }
+const LEDGER_LIMIT = 500;
+const ledgers = new Map<string, Map<string, LedgerEntry>>();
+/** Reports of one conversation are taken one at a time, in order. */
+const ledgerQueue = new Map<string, Promise<void>>();
+
+/** THE ONE LEDGER OF FINISHED WORK. Every transport reports what ended in its processes here -- a
+ * live ACP or Codex child, a process the conversation left (retired), a held stream-json CLI, an
+ * Amp stream -- as an EndedWork whose `failure` is the structured evidence of why it stopped
+ * (harness/transport/handoff-work.ts). Here, once and the same for all of them:
+ *  1. the evidence goes to the account-health observer: a quota refusal marks the account spent
+ *     (once, however often it is reported) and moves the conversation off it now;
+ *  2. the worker is told, so it hands the cut-off work to the account the conversation is on now:
+ *     always for a process the conversation has left; for one it is still in, only an agent the
+ *     account's usage cut off -- the vendor answers its other ends itself.
+ * A second report of work already in the ledger changes nothing, unless it brings evidence the
+ * first did not. */
+export function reportEndedWork(sessionId: string, ended: readonly EndedWork[], from: EndedFrom = {}): void {
   if (!ended.length) return;
-  try { workEndedHandlers.get(sessionId)?.(ended, from); } catch { /* fail-open-ok: the owner's bookkeeping */ }
+  const run = (ledgerQueue.get(sessionId) ?? Promise.resolve()).then(async () => {
+    const ledger = ledgers.get(sessionId) ?? new Map<string, LedgerEntry>();
+    ledgers.set(sessionId, ledger);
+    const toTell: EndedWork[] = [];
+    for (const work of ended) {
+      const key = `${from.accountId ?? ''}:${work.kind}:${work.id}`;
+      const previous = ledger.get(key);
+      const failure = JSON.stringify(work.failure ?? null);
+      if (previous && previous.failure === failure) continue;
+      const entry: LedgerEntry = { failure, told: previous?.told ?? false };
+      ledger.set(key, entry);
+      if (ledger.size > LEDGER_LIMIT) ledger.delete(ledger.keys().next().value!);
+      const kind = work.failure && from.accountId
+        ? await observeSessionAccount({ sessionId, accountId: from.accountId, evidence: work.failure, source: work.kind, ...(from.harness ? { harness: from.harness } : {}) })
+        : undefined;
+      if (entry.told) continue;
+      if (from.retired || kind === 'quota-exhausted') { entry.told = true; toTell.push(work); }
+    }
+    if (toTell.length) workEndedHandlers.get(sessionId)?.(toTell, from);
+  }).catch(quiet('turn/vendor-process'));
+  ledgerQueue.set(sessionId, run);
 }
 /** The harness and account a child key (vendorChildKey) was made for. */
 function keyOwner(key: string): { harness?: string; accountId?: string } {
@@ -68,8 +127,8 @@ function childOptions(sessionId: string, key: string) {
   return {
     backgroundTurns: (turn: VendorBackgroundTurn) => vendorBackgroundTurnHandlers.get(sessionId)?.(turn),
     outOfTurn: outOfTurnFor(sessionId),
-    workEnded: (ended: readonly EndedWork[]) => {
-      workEndedHandlers.get(sessionId)?.(ended, keyOwner(key));
+    workEnded: (ended: readonly EndedWork[], via: { retired: boolean }) => {
+      reportEndedWork(sessionId, ended, { ...keyOwner(key), retired: via.retired });
       retiredWorkChanged(sessionId);
     },
   };

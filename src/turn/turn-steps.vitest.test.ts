@@ -92,7 +92,7 @@ describe('settleHeldVendor', () => {
     expect(held.wait).not.toHaveBeenCalled();
     expect(held.release).not.toHaveBeenCalled();
     retired!([{ kind: 'agent', outcome: 'finished' }]);
-    expect(held.reported).toHaveBeenCalledWith('s', [{ kind: 'agent', outcome: 'finished' }], { harness: 'claude', accountId: 'a' });
+    expect(held.reported).toHaveBeenCalledWith('s', [{ kind: 'agent', outcome: 'finished' }], { harness: 'claude', accountId: 'a', retired: true });
   });
   it('a failed attempt retires too; with no agent running it is only released, never waited on', async () => {
     held.has.mockReturnValue(true);

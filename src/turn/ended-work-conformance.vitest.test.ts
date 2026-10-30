@@ -87,7 +87,7 @@ afterEach(async () => {
 const count = (name: string): number => logged.filter((event) => event.name === name).length;
 
 /** What every transport owes the conversation once the vendor said A's work ended on its usage limit. */
-async function expectMovedToB(options: { reports?: number } = {}): Promise<void> {
+async function expectMovedToB(options: { reports?: number; task?: boolean } = {}): Promise<void> {
   // The transport told the conversation's ledger of the agent that ended...
   await vi.waitFor(() => expect(told.filter((work) => work.kind === 'agent')).toHaveLength(1), { timeout: 10_000 });
   // ... which marked A spent...
@@ -100,7 +100,8 @@ async function expectMovedToB(options: { reports?: number } = {}): Promise<void>
   await vi.waitFor(() => expect(notices).toHaveLength(1), { timeout: 10_000 });
   // The work is queued to be taken up again, with the task it was given.
   expect(notices[0]).toContain('was cut off');
-  expect(notices[0]).toContain(`Original task:\n${TASK}`);
+  // ... with the task it was given, where the vendor said what it was.
+  expect(notices[0]).toContain(options.task === false ? 'Use the recorded task description' : `Original task:\n${TASK}`);
   expect(count('worker.work-ended')).toBe(1);
   expect(count('worker.switch')).toBe(1);
   expect(logged.find((event) => event.name === 'worker.switch')?.fields).toMatchObject({ from: 'acct-a'.slice(0, 8), to: 'acct-b'.slice(0, 8), why: 'quota-exhausted' });
@@ -251,7 +252,7 @@ describe('Codex app-server', () => {
     const key = vendorChildKey({ command: 'codex' } as AiLocalHarnessDefinition, account('acct-a'), {}, dir);
     const child = persistentTransportFor(SESSION, 'codex-app-server', key);
     await (child.session as ReturnType<typeof createCodexSession>).runTurn({ binary: 'codex', prompt: 'go', cwd: dir, permissionMode: 'ask' } as never);
-    await expectMovedToB();
+    await expectMovedToB({ task: false });
   }, 30_000);
 });
 

@@ -20,6 +20,7 @@ import { countsOf, turnShareOf, turnStopReason, type TurnUsage } from '../protoc
 import { BackgroundTurnChannel } from './background-turn.js';
 import { BackgroundWorkTracker } from './background-work.js';
 import { CANCEL_SETTLE_MS, PersistentSession, runOneTurn, turnFailure, type PersistentSessionOptions, type VendorWorkSession } from './persistent-session.js';
+import type { EndedWork, RunningWork } from './handoff-work.js';
 
 type JsonObject = Record<string, unknown>;
 
@@ -218,6 +219,20 @@ export function codexErrorKind(error: unknown): { errorKind: CodexErrorKind; sta
   }
   if (statusCode === 401 || statusCode === 403 || /unauthori[sz]ed|authenticat|not logged in|log ?in required|api.?key|\b401\b|\b403\b/i.test(text)) return { errorKind: 'auth', statusCode: statusCode ?? 401 };
   return { errorKind: 'other', ...(statusCode ? { statusCode } : {}) };
+}
+
+/** The adapter for a Codex sub-agent thread's final `turn/completed`: a failed turn is the agent cut
+ * off, and its error is the evidence -- `codexErrorInfo` and the HTTP status, read by codexErrorKind. */
+export function codexAgentEnd(agent: { id: string; label: string; prompt?: string }, turn: JsonObject): EndedWork {
+  const work: RunningWork = { id: agent.id, kind: 'agent', label: agent.label, ...(agent.prompt ? { prompt: agent.prompt } : {}) };
+  if (turn.status !== 'failed' && turn.status !== 'interrupted') return { ...work, outcome: 'finished', tail: '' };
+  const error = asRecord(turn.error);
+  const message = typeof error?.message === 'string' ? error.message : '';
+  const { errorKind, statusCode } = codexErrorKind(error ?? {});
+  return {
+    ...work, outcome: 'cut-off', tail: message,
+    failure: { vendorError: true, errorKind, ...(statusCode ? { statusCode } : {}), ...(message ? { text: message } : {}) },
+  };
 }
 
 /** The structured fields of a Codex failure, for the failover classifier:
@@ -494,6 +509,10 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
       this.compactWaiter = undefined;
     }
     return true;
+  }
+
+  protected runningAgents(): RunningWork[] {
+    return this.work.running('agent').map((agent): RunningWork => ({ ...agent, kind: 'agent' }));
   }
 
   protected pendingCount(): number {
@@ -945,8 +964,10 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     } else if (method === 'turn/completed') {
       const known = this.work.end(key);
       if (known) {
-        const failed = ((params.turn as JsonObject | undefined) ?? {}).status === 'failed';
+        const turn = (params.turn as JsonObject | undefined) ?? {};
+        const failed = turn.status === 'failed';
         target?.observer.onActivity?.({ kind: failed ? 'tool-error' : 'tool-done', label: known.label, agent: true, id: key });
+        this.agentEnded(codexAgentEnd(known, turn));
       }
     } else if (target && (method === 'item/started' || method === 'item/completed')) {
       const item = (params.item as JsonObject) ?? {};

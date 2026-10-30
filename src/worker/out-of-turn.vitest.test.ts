@@ -4,7 +4,7 @@ import type { WorkerEvent } from './protocol.js';
 
 const recorded: unknown[] = [];
 vi.mock('../turn/out-of-turn-record.js', () => ({ outOfTurnRecorder: () => async (said: unknown) => { recorded.push(said); } }));
-const { createOutOfTurnRelay, isLimitRefusal } = await import('./out-of-turn.js');
+const { createOutOfTurnRelay } = await import('./out-of-turn.js');
 const { BroadcastObserver } = await import('./broadcast-observer.js');
 
 describe('a vendor speaking with no turn open', () => {
@@ -50,14 +50,5 @@ describe('a vendor speaking with no turn open', () => {
       await vi.advanceTimersByTimeAsync(2_000);
       expect(recorded).toEqual([{ kind: 'message', text: 'Done.', mode: 'replace' }]);
     } finally { vi.useRealTimers(); }
-  });
-});
-
-describe('a spent-limit sentence said with no turn open', () => {
-  it('is told apart from ordinary speech', () => {
-    expect(isLimitRefusal("You've hit your session limit · resets 11:40am (America/Denver)")).toBe(true);
-    expect(isLimitRefusal('The build finished.')).toBe(false);
-    expect(isLimitRefusal('I raised the rate limit in the config and the tests pass.')).toBe(false);
-    expect(isLimitRefusal("You've hit your session limit.\nHere is the plan for the next step in detail.")).toBe(false);
   });
 });

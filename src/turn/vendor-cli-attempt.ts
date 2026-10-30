@@ -156,6 +156,7 @@ export async function runVendorCliAttempt(input: {
   }) : undefined;
   const ampTurn = ampStream && heldInput ? createAmpStreamTurn({
     prompt: turnText, write: (text) => heldInput.write(text),
+    agentEnded: (ended) => reportEndedWork(session.id, [ended], { harness: harness.command, accountId: session.nativeThreadAccountId ?? session.accountId ?? undefined }),
     close: () => { run.liveInput?.setSteerPort(undefined); heldInput.end(); },
   }) : undefined;
   // The vendor's own steering, offered to the broker as it is: Amp once no tool or sub-agent is running

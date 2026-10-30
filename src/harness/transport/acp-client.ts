@@ -41,6 +41,10 @@ const READ_LIKE_TOOL_KINDS: ReadonlySet<string> = new Set(['read', 'search', 'th
 const DETAIL_LINE_CAP = 12;
 /** How long an agent may take to answer before the wait is named. */
 const START_NOTICE_MS = 1_000;
+/** How long a task whose terminal `task_updated` patch came waits for its `task_notification`. The SDK
+ * sends them one behind the other, from one step; a second is long past that, and short against the
+ * work being waited on. */
+const TASK_NOTIFICATION_WAIT_MS = 1_000;
 
 /** The raw SDK frames claude-agent-acp is asked to forward as
  * `_claude/sdkMessage` (`_meta.claudeCode.emitRawSDKMessages`, a type/subtype
@@ -696,7 +700,11 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
 
   protected clearPending(): void {
     // Tasks are the process's: they go when it does, not when a turn ends.
-    if (!this.live) this.vendorTasks.clear();
+    if (!this.live) {
+      this.vendorTasks.clear();
+      for (const timer of this.endingTasks.values()) clearTimeout(timer);
+      this.endingTasks.clear();
+    }
     this.work.clear();
     this.backgroundTasks.clear();
     this.reportBackground?.(this.work.fullLevel());
@@ -1496,10 +1504,11 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     // `_claude/rateLimit` are activity only: the structured readings ride
     // session/update's _meta.
     let message = method === '_claude/sdkMessage' && params.message && typeof params.message === 'object' ? params.message as Json : undefined;
+    const sent = message;
     if (message?.type === 'system' && message.subtype === 'task_updated' && ['completed', 'failed', 'killed'].includes(String(message.patch?.status))) {
       message = { ...message, subtype: 'task_notification', status: message.patch.status };
     }
-    if (message) { this.heldAgentFrame(params, message); this.taskFrame(message); }
+    if (message) { this.heldAgentFrame(params, message); this.taskFrame(sent!, message); }
     if (message?.type === 'system' && message.subtype === 'background_tasks_changed' && Array.isArray(message.tasks)) {
       this.backgroundTasks = new Map(message.tasks.filter((task: Json) => typeof task?.task_id === 'string').map((task: Json) => [task.task_id, task]));
     } else if (message?.type === 'system' && message.subtype === 'task_notification' && typeof message.task_id === 'string' && this.backgroundTasks.delete(message.task_id)) {
@@ -1551,9 +1560,38 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     if (!this.work.level && target === run && this.work.count() === 0 && !this.heldAgents.size) this.finishBackground('completed');
   }
 
-  /** A background task's start or end (handoff-work.ts). An agent's end is told with its result, or,
-   * when it stopped short, the vendor's own reason -- its usage-limit sentence among them. */
-  private taskFrame(message: Json): void {
+  /** Tasks whose terminal `task_updated` patch arrived and whose `task_notification` has not yet,
+   * by task id, each with the timer that ends it from the patch alone. */
+  private readonly endingTasks = new Map<string, NodeJS.Timeout>();
+
+  /** A background task's start or end (handoff-work.ts). An agent's end is told with its result or,
+   * when it stopped short, why -- in the fields of the vendor's own envelope.
+   *
+   * The SDK ends a task with a terminal `task_updated` patch and, right behind it, the
+   * `task_notification` that carries the summary and the transcript (the order of
+   * native/fixtures/claude-background-bash.jsonl). The patch says only the status, so it ends
+   * nothing here: read as the end, it dropped the notification that said the agent died on the usage
+   * limit (2026-10-30). Some SDK versions send the patch alone; a task still open
+   * TASK_NOTIFICATION_WAIT_MS after its patch is ended by the patch. `sent` is the frame as the SDK
+   * sent it, `message` the same as a notification. */
+  private taskFrame(sent: Json, message: Json): void {
+    const id = typeof message.task_id === 'string' ? message.task_id : undefined;
+    if (id && sent.subtype === 'task_updated') {
+      if (this.endingTasks.has(id)) return;
+      const timer = setTimeout(() => { this.endingTasks.delete(id); this.settleTask(message); }, TASK_NOTIFICATION_WAIT_MS);
+      timer.unref?.();
+      this.endingTasks.set(id, timer);
+      return;
+    }
+    if (id) {
+      const waiting = this.endingTasks.get(id);
+      if (waiting) clearTimeout(waiting);
+      this.endingTasks.delete(id);
+    }
+    this.settleTask(message);
+  }
+
+  private settleTask(message: Json): void {
     const ended = this.vendorTasks.frame(message);
     if (!ended || ended.work.kind !== 'agent') return;
     void endedAgentWork(ended.work, ended.status, ended.summary, ended.outputFile)

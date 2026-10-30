@@ -93,9 +93,9 @@ export function createBackgroundWait(options: BackgroundWaitOptions): Background
     settled = true;
     options.onSettled();
   };
-  const track = (id: string, description: string, agent = false): void => {
+  const track = (id: string, description: string, agent = false, task: { prompt?: string; nativeSessionId?: string } = {}): void => {
     if (agent) { agents.add(id); hadAgent = true; }
-    if (notOurs.has(id) || !tasks.start({ id, kind: agent ? 'agent' : 'command', label: description })) return;
+    if (notOurs.has(id) || !tasks.start({ id, kind: agent ? 'agent' : 'command', label: description, ...task })) return;
     options.onTaskStarted?.(id, description);
   };
   return {
@@ -119,7 +119,11 @@ export function createBackgroundWait(options: BackgroundWaitOptions): Background
       const id = typeof value.task_id === 'string' ? value.task_id : undefined;
       if (subtype === 'task_started' && id) {
         if (value.is_backgrounded === true && value.owned_by_subagent !== true) {
-          track(id, typeof value.description === 'string' ? value.description : 'background task', value.task_type === 'local_agent');
+          // The task as the vendor gave it: what taking an agent up again needs (handoff-work.ts VendorTasks).
+          track(id, typeof value.description === 'string' ? value.description : 'background task', value.task_type === 'local_agent', {
+            ...(typeof value.prompt === 'string' && value.prompt ? { prompt: value.prompt } : {}),
+            ...(typeof value.session_id === 'string' ? { nativeSessionId: value.session_id } : {}),
+          });
         } else notOurs.add(id);
         return;
       }

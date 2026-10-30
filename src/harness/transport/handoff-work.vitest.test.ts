@@ -7,24 +7,25 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAcpSession } from './acp-client.js';
-import { agentResult, endedAgentWork, endsWithLimitRefusal, limitSentence, VendorTasks, type EndedWork } from './handoff-work.js';
+import { agentResult, endedAgentWork, VendorTasks, type EndedWork } from './handoff-work.js';
 import { formatEndedWork } from '../../worker/handed-off-work.js';
 
 const LIMIT = "You've hit your session limit · resets 7:50am (America/Denver)";
 
-describe('the vendor saying an account is out', () => {
-  it('is read from an agent that stopped on it', () => {
-    expect(limitSentence(`Agent "Open B5" failed: Agent terminated early due to an API error: ${LIMIT}`)).toBe(LIMIT);
-    expect(limitSentence("You've hit your usage limit. Upgrade to Pro or try again at 10:35 AM.")).toMatch(/^You've hit your usage limit/);
-    expect(limitSentence('Agent "Open B5" failed: the build broke')).toBeUndefined();
+describe('why a Claude agent stopped, as fields', () => {
+  it("reads the error type and status of the vendor's API-error envelope, and its words as detail", async () => {
+    const summary = `Agent "Open B5" failed: Agent terminated early due to an API error: ${LIMIT} (error type rate_limit, HTTP 429, request id req_1, model sent to the API: claude-sonnet-5-5)`;
+    const work = await endedAgentWork({ id: 'a1', kind: 'agent', label: 'Open B5' }, 'failed', summary);
+    expect(work).toMatchObject({ outcome: 'cut-off', failure: { vendorError: true, errorKind: 'rate_limit', statusCode: 429, text: LIMIT } });
   });
 
-  it('ends a reply only in the vendor\'s own form, reset time and all', () => {
-    expect(endsWithLimitRefusal(`Only the games agent is still running.${LIMIT}`)).toBe(LIMIT);
-    expect(endsWithLimitRefusal(`Done.\n\n${LIMIT}${LIMIT}\n`)).toBeDefined();
-    // A model writing about limits, or quoting the refusal before going on, is not refused.
-    expect(endsWithLimitRefusal("I raised the rate limit; you've hit your limit of patience, I know.")).toBeUndefined();
-    expect(endsWithLimitRefusal(`The log said "${LIMIT}" and then the retry worked.`)).toBeUndefined();
+  it("does not take an agent's own report for the vendor refusing", async () => {
+    const work = await endedAgentWork({ id: 'a1', kind: 'agent', label: 'Open B5' }, 'failed', "Agent \"Open B5\" failed: I raised the rate limit and you've hit your limit of patience");
+    expect(work.failure).toMatchObject({ vendorError: false });
+  });
+
+  it('has no failure for an agent that completed', async () => {
+    expect((await endedAgentWork({ id: 'a1', kind: 'agent', label: 'x' }, 'completed', 'Agent "x" completed')).failure).toBeUndefined();
   });
 });
 
@@ -64,8 +65,8 @@ it('recovers a task marked completed when its transcript ends with a quota error
       { type: 'assistant', error: 'rate_limit', isApiErrorMessage: true, message: { model: '<synthetic>', content: [{ type: 'text', text: LIMIT }] } },
     ].map((row) => JSON.stringify(row)).join('\n'));
     const work = await endedAgentWork({ id: 'a1', kind: 'agent', label: 'Migration', prompt: 'Apply and verify' }, 'completed', 'Agent completed', file);
-    expect(work).toMatchObject({ outcome: 'cut-off', limit: LIMIT, outputFile: file, tail: 'Migration applied; next verify the result.' });
-    const prompt = formatEndedWork([work], { harness: 'claude' });
+    expect(work).toMatchObject({ outcome: 'cut-off', failure: { vendorError: true, errorKind: 'rate_limit', text: LIMIT }, outputFile: file, tail: 'Migration applied; next verify the result.' });
+    const prompt = formatEndedWork([work], new Set(['a1']));
     expect(prompt).toContain('Resume the existing native agent "a1"');
     expect(prompt).toContain('SendMessage');
     expect(prompt).toContain('Migration applied; next verify the result.');
@@ -79,7 +80,7 @@ describe('what the conversation\'s account is told', () => {
   it('a result to use, or an agent\'s task to start again', () => {
     const text = formatEndedWork([
       { id: '41', kind: 'command', label: 'npm test', outcome: 'finished', tail: 'Tests 12 passed\n' },
-      { id: 'a1', kind: 'agent', label: 'Open B5', prompt: 'Check the games endpoints', outcome: 'cut-off', tail: LIMIT, limit: LIMIT },
+      { id: 'a1', kind: 'agent', label: 'Open B5', prompt: 'Check the games endpoints', outcome: 'cut-off', tail: LIMIT, failure: { vendorError: true, text: LIMIT } },
     ]);
     expect(text).toContain('[background command 41 finished] npm test\nTests 12 passed');
     expect(text).toContain(`[background agent a1 was cut off: ${LIMIT}] Open B5`);
@@ -145,7 +146,7 @@ describe.skipIf(process.platform !== 'linux')('a process the conversation leaves
       expect(session.retiredWork).toEqual({ agents: 1, terminals: 1 });
       // The agent, cut off by the limit: its task comes with it, to be started again.
       await vi.waitFor(() => expect(ended.some((work) => work.kind === 'agent')).toBe(true), { timeout: 5_000 });
-      expect(ended.find((work) => work.kind === 'agent')).toMatchObject({ id: 'a1', label: 'Open B5', prompt: 'Check the games endpoints', outcome: 'cut-off', limit: LIMIT });
+      expect(ended.find((work) => work.kind === 'agent')).toMatchObject({ id: 'a1', label: 'Open B5', prompt: 'Check the games endpoints', outcome: 'cut-off', failure: { vendorError: true, text: LIMIT } });
       // The command ran on to its end, and its output is told.
       await vi.waitFor(() => expect(ended.some((work) => work.kind === 'command')).toBe(true), { timeout: 10_000 });
       expect(ended.find((work) => work.kind === 'command')).toMatchObject({ label: 'sleep 2; echo all checks passed', outcome: 'finished', outputFile: output });
@@ -157,26 +158,27 @@ describe.skipIf(process.platform !== 'linux')('a process the conversation leaves
     } finally { await session.close(); }
   }, 30_000);
 
-  it('in use, tells only an agent the usage limit cut off, and leaves the rest to the vendor', async () => {
+  it('in use, reports an agent that was cut off with why, and says nothing into the conversation', async () => {
     const ended: EndedWork[] = [];
     const said: string[] = [];
     const { session, turn } = open(join(dir, 'a.output'), { status: 'failed', summary: `Agent terminated early due to an API error: ${LIMIT}` }, ended, said);
     try {
       await turn;
       await vi.waitFor(() => expect(ended).toHaveLength(1), { timeout: 5_000 });
-      expect(ended[0]).toMatchObject({ kind: 'agent', outcome: 'cut-off', limit: LIMIT, prompt: 'Check the games endpoints' });
+      expect(ended[0]).toMatchObject({ kind: 'agent', outcome: 'cut-off', failure: { vendorError: true, text: LIMIT }, prompt: 'Check the games endpoints' });
       // What it says of it is still the conversation's.
       await vi.waitFor(() => expect(said.join('')).toContain('Following up'), { timeout: 5_000 });
     } finally { await session.close(); }
   }, 20_000);
 
-  it('in use, does not tell an agent that finished: the vendor answers it itself', async () => {
+  it('in use, reports an agent that finished as finished: whether anyone is told is the ledger\'s to decide', async () => {
     const ended: EndedWork[] = [];
     const { session, turn } = open(join(dir, 'b.output'), { status: 'completed', summary: 'Agent "Open B5" completed' }, ended, []);
     try {
       await turn;
-      await new Promise((resolve) => setTimeout(resolve, 2_000));
-      expect(ended).toEqual([]);
+      await vi.waitFor(() => expect(ended).toHaveLength(1), { timeout: 5_000 });
+      expect(ended[0]).toMatchObject({ kind: 'agent', outcome: 'finished' });
+      expect(ended[0]!.failure).toBeUndefined();
     } finally { await session.close(); }
   }, 20_000);
 });
