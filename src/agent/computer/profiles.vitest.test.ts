@@ -233,6 +233,16 @@ describe('bestProfileFor: several profiles never mean asking', () => {
     expect(bestProfileFor([site, personal], [], undefined, 'app.hoster.test')?.label).toBe('Hosting');
   });
 
+  it('real profile shapes (AWS, ClikDeploy admin, Personal, Railway): cliengo.com gets Personal; each declared site its own', () => {
+    const aws = { id: 'w', label: 'AWS', fields: { email: 'aws@x.test' }, custom: {} } as never;
+    const all = [aws, admin, personal, railway];
+    for (const host of ['cliengo.com', 'app.cliengo.com', 'www.cliengo.com.ar', 'us.cliengo.io']) expect(bestProfileFor(all, [hint('Email')], undefined, host)?.label).toBe('Personal');
+    expect(bestProfileFor(all, [], undefined, 'console.aws.amazon.com')?.label).toBe('AWS');
+    expect(bestProfileFor(all, [], undefined, 'railway.com')?.label).toBe('Railway');
+    const listed = { id: 'l', label: 'Other', fields: {}, custom: { sites: { label: 'sites', value: 'cliengo.com, foo.test' } } } as never;
+    expect(bestProfileFor([listed, personal], [], undefined, 'app.cliengo.com')?.label).toBe('Other');
+  });
+
   it('an explicit label wins, and a single profile is just that profile', () => {
     expect(bestProfileFor([admin, personal], [hint('email')], 'clikdeploy admin')?.label).toBe('ClikDeploy admin');
     expect(bestProfileFor([admin], [hint('email')])?.label).toBe('ClikDeploy admin');

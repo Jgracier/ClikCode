@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { defineTool } from '../tool-contract.js';
-import { adoptPage, closeComputerPage, computerPage, openComputerPage, openNewComputerPage } from '../computer/browser.js';
+import { adoptPage, closeComputerPage, computerPage, openComputerPage, openNewComputerPage, recoverComputerPage } from '../computer/browser.js';
 import { checkKey, clickExtras, clickWith, closeTab, dragStep, fillTarget, hoverStep, PAGE_ACTIONS, PAGE_DESCRIPTION, PAGE_PARAMETERS, pageAction, scrollStep, waitForState, withScreenshot, type PageAction, type PageArgs, type ScrollDirection, type StepExtras } from '../computer/page-control.js';
 import { COMPUTER_OFF, computerEnabled, generatedPasswordsAllowed, unattendedEnabled } from '../computer/settings.js';
 import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
@@ -14,7 +14,7 @@ import { storeSecretTool } from './store-secret.js';
 import { sharedState } from '../computer/shared-state.js';
 import { forgetSavedLogins, savedLoginFields, savedLoginsForSite, saveLoginFields } from '../computer/credential-vault.js';
 import { loginValueFor } from '../computer/login-fill.js';
-import { FillTimeout, withFillDeadline, type FillClock } from '../computer/fill-deadline.js';
+import { FILL_DEADLINE_MS, FillTimeout, withFillDeadline, type FillClock } from '../computer/fill-deadline.js';
 import { describeRecipe, fillPlaceholders, getRecipe, listRecipes, replayRecipe, saveRecipe } from '../computer/signup-recipes.js';
 import { addSiteNote, readSiteNotes } from '../computer/site-notes.js';
 import { assertCustomKey, bestProfileFor, isUnfillable, customFieldFor, defaultProfile, describeProfile, listProfiles, profileEmail, PASSWORD_SECRET, PROFILE_KEYS, phoneFor, birthdayFor, profileKeyFor, readProfileSecret, saveProfile, saveProfileSecret, secretFieldFor, type FieldHint, type ProfileKey } from '../computer/profiles.js';
@@ -547,7 +547,7 @@ function runInOrder(args: WebArgs, hostCtx: ToolContext): Promise<ToolRunResult>
       ctx.signal?.addEventListener('abort', onAbort, { once: true });
       try {
         if (ctx.signal?.aborted) throw new Error('Stopped.');
-        const done = await Promise.race([stopped, act(page, args, ctx)]);
+        const done = await Promise.race([stopped, args.action === 'fill' ? fillWhole(page, args, ctx) : act(page, args, ctx)]);
         // The page the batch ended on, which is not `page` when a popup took over.
         const ended = await computerPage(ctx.stateDir, args.tab).catch(() => page);
         const withPicture = !done.isError && args.with_screenshot && ctx.acceptsImages === true && args.action !== 'screenshot' && !ended.isClosed() ? await withScreenshot(done, ended) : done;
@@ -807,15 +807,22 @@ async function doStep(page: Page, step: Step, ctx?: ToolContext): Promise<StepOu
 }
 
 /** What a form field is, for matching it to a saved profile and for the private prompt. */
-async function describeField(target: Locator): Promise<{ label: string; password: boolean; hint: FieldHint; placeholder: string; current: string; maxlength: number; readOnly: boolean }> {
+async function describeField(target: Locator): Promise<{ label: string; password: boolean; hint: FieldHint; placeholder: string; current: string; maxlength: number; readOnly: boolean; required: boolean }> {
   return target.evaluate(element => {
-    const el = element as unknown as { type?: string; value?: string; readOnly?: boolean; disabled?: boolean; labels?: ArrayLike<{ textContent: string | null }>; getAttribute(name: string): string | null };
+    const el = element as unknown as { type?: string; required?: boolean; value?: string; readOnly?: boolean; disabled?: boolean; labels?: ArrayLike<{ textContent: string | null }>; getAttribute(name: string): string | null };
     const label = (el.labels?.[0]?.textContent || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('name') || '').trim();
     const type = el.type ?? 'text';
     return { label, password: type === 'password', placeholder: el.getAttribute('placeholder') ?? '', current: type === 'password' ? '' : el.value ?? '', maxlength: Number(el.getAttribute('maxlength')) || 0,
+      required: el.required === true || el.getAttribute('aria-required') === 'true',
       readOnly: el.readOnly === true || el.disabled === true || el.getAttribute('aria-readonly') === 'true',
       hint: { autocomplete: el.getAttribute('autocomplete') ?? '', type, label, text: `${label} ${el.getAttribute('name') ?? ''} ${el.getAttribute('id') ?? ''}` } };
-  }).catch(() => ({ label: '', password: false, hint: { autocomplete: '', type: 'text', text: '' }, placeholder: '', current: '', maxlength: 0, readOnly: false }));
+  }).catch(() => ({ label: '', password: false, hint: { autocomplete: '', type: 'text', text: '' }, placeholder: '', current: '', maxlength: 0, readOnly: false, required: false }));
+}
+
+/** What a fill says about a box it left empty because the profile has no such detail. A required box stops the worker at once. */
+export function requiredNoValue(field: { label: string; step: { target?: unknown }; required: boolean }): string {
+  const name = field.label || String(field.step.target ?? 'a field');
+  return field.required ? `required, no profile value: ${name}` : `${name} left empty: the profile has no such detail.`;
 }
 
 /** Fields that type themselves as they are entered (06/18/1998, (719) 744-3850). */
@@ -845,10 +852,9 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
   const profiles = await listProfiles(ctx.stateDir);
   let profile = profiles.length === 1 ? profiles[0] : undefined;
   if (profiles.length > 1) {
-    // Never ask which profile: choose the one that fits this form best (see bestProfileFor), and keep the choice for this site.
-    const remembered = profileChoice.get(`${ctx.stateDir}|${origin}`);
-    profile = profiles.find(candidate => candidate.id === remembered) ?? bestProfileFor(profiles, fields.map(field => field.hint), label, new URL(page.url()).hostname);
-    if (profile) profileChoice.set(`${ctx.stateDir}|${origin}`, profile.id);
+    // Never ask which profile: choose the one that fits this form best (see bestProfileFor).
+    // Decided afresh each time from the call's label, the site and the default: a remembered choice let one earlier fill pin a site to another profile.
+    profile = bestProfileFor(profiles, fields.map(field => field.hint), label, new URL(page.url()).hostname);
   }
   if (profile && profiles.length > 1) report.push(`Autofill used the profile "${profile.label}".`);
   const values = new Map<Step, string>();
@@ -942,7 +948,7 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
     const asked = field.password ? undefined : customFieldFor(profile, field.hint);
     if (asked) { values.set(field.step, asked.field.value); continue; }
     // A registration, VAT or tax number: the profile has none. Left empty and reported, never filled with something else.
-    if (!field.password && isUnfillable(field.hint)) { skipped.set(field.step, `${field.label || field.step.target} left empty: the profile has no such detail.`); continue; }
+    if (!field.password && isUnfillable(field.hint)) { skipped.set(field.step, requiredNoValue(field)); continue; }
     // A lone one-time-code box is filled from the emailed code when a mailbox is connected: the right sender, once, no agent call.
     if (!field.password && fields.length === 1 && /one-time-code|\b(?:otp|verification|security code|passcode|confirmation code)\b|\bcode\b/i.test(`${field.hint.autocomplete} ${field.label} ${field.placeholder}`) && !/postal|zip|post.?code/i.test(`${field.label} ${field.placeholder} ${field.hint.text}`)) {
       const code = await codeFromMailbox(ctx.stateDir, page.url(), Date.now() - 120_000, ctx.signal);
@@ -1033,12 +1039,13 @@ export async function formProblems(page: Page): Promise<string[]> {
 }
 
 /** Does the steps in order, following a new tab or popup, and returns the page as it ends up. */
-export async function runSteps(page: Page, steps: readonly Step[], ctx: ToolContext, tab?: string, profileLabel?: string, guard?: (page: Page) => Promise<string | undefined>): Promise<ToolRunResult> {
+export async function runSteps(page: Page, steps: readonly Step[], ctx: ToolContext, tab?: string, profileLabel?: string, guard?: (page: Page) => Promise<string | undefined>, wholeFill?: FillClock): Promise<ToolRunResult> {
   const notes: string[] = [];
   let current = page;
   const blankFirst = steps.find(step => step.do === 'fill' && step.text === undefined);
   try {
-    steps = await withFillDeadline(String(blankFirst?.target ?? ''), clock => askForFills(page, steps, ctx, profileLabel, notes, clock));
+    // A single fill is raced as a whole by the caller (fillWhole), whose clock is used here; a batch times only its fill work.
+    steps = wholeFill ? await askForFills(page, steps, ctx, profileLabel, notes, wholeFill) : await withFillDeadline(String(blankFirst?.target ?? ''), clock => askForFills(page, steps, ctx, profileLabel, notes, clock));
   } catch (error) {
     if (!(error instanceof FillTimeout)) throw error;
     // The tab stays usable: the page is described again (briefly) so the next call starts from what it shows now.
@@ -1057,7 +1064,7 @@ export async function runSteps(page: Page, steps: readonly Step[], ctx: ToolCont
     try {
       // Steps are journaled for an automatic recipe (see recipe-recorder.ts); a replay is not journaled again.
       const before = guard ? undefined : { url: current.url(), label: await controlName(current, step.target) };
-      const done = step.do === 'fill' ? await withFillDeadline(String(step.target ?? 'a field'), () => doStep(current, step, ctx), Math.max(30_000, 10_000 + (step.text?.length ?? 0) / 5)) : await doStep(current, step, ctx);
+      const done = step.do === 'fill' && !wholeFill ? await withFillDeadline(String(step.target ?? 'a field'), () => doStep(current, step, ctx), Math.max(30_000, 10_000 + (step.text?.length ?? 0) / 5)) : await doStep(current, step, ctx);
       // A step a recipe cannot replay by control text (right-click, a canvas position, a drag) leaves the journal unsaved rather than wrong.
       if (before && typeof done === 'string') {
         const replayable = PLAIN_STEPS.has(step.do) && !(step.do === 'click' && (clickExtras(step) || step.x !== undefined));
@@ -1230,11 +1237,23 @@ function stepExtras(args: WebArgs): StepExtras {
   return out;
 }
 
-async function act(page: Page, args: WebArgs, ctx: ToolContext): Promise<ToolRunResult> {
+/** A single fill, raced as a whole: reading the fields, the vault and generate-password paths, typing, and settling all count. When the
+ * time is up the work is abandoned (Playwright cannot cancel a pending call), the tab is recovered and the page described afresh. */
+export async function fillWhole(page: Page, args: WebArgs, ctx: ToolContext, run: (clock: FillClock) => Promise<ToolRunResult> = clock => act(page, args, ctx, clock), ms = Math.max(FILL_DEADLINE_MS, 10_000 + (args.text?.length ?? 0) / 5)): Promise<ToolRunResult> {
+  try { return await withFillDeadline(String(args.target ?? 'a field'), run, ms); }
+  catch (error) {
+    if (!(error instanceof FillTimeout)) throw error;
+    const fresh = await recoverComputerPage(ctx.stateDir, page, args.tab).catch(() => page);
+    const view = hasPendingDialog(fresh) ? undefined : await withFillDeadline('page', () => observeComputerPage(fresh, false, false, undefined, true), 8_000).catch(quiet('agent/tools/computer-web'));
+    return { output: `${error.message}${view ? `\n\n${view.output}` : ''}`, isError: true };
+  }
+}
+
+async function act(page: Page, args: WebArgs, ctx: ToolContext, clock?: FillClock): Promise<ToolRunResult> {
   if ((PAGE_ACTIONS as readonly string[]).includes(args.action)) return pageAction(page, args, { stateDir: ctx.stateDir, ...(args.tab ? { tab: args.tab } : {}), acceptsImages: ctx.acceptsImages === true, locate, settle, displayUrl, view: (shown, compact) => observeComputerPage(shown, ctx.acceptsImages === true, false, undefined, compact === true) });
   if (INTERACTIONS.has(args.action)) {
     const one: Step = { do: args.action as Step['do'], ...stepExtras(args), ...(args.at ? { at: args.at } : {}), ...(args.target ? { target: args.target } : {}), ...(args.text !== undefined ? { text: args.text } : {}), ...(args.key ? { key: args.key } : {}), ...(args.direction ? { direction: args.direction } : {}), ...(args.accept_dialog ? { accept_dialog: true } : {}), ...(args.gone ? { gone: true } : {}), ...(args.seconds ? { seconds: args.seconds } : {}) };
-    return runSteps(page, [one], ctx, args.tab, args.label);
+    return runSteps(page, [one], ctx, args.tab, args.label, undefined, clock);
   }
   switch (args.action) {
     case 'open': {

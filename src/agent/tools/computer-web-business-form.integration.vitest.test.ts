@@ -12,7 +12,7 @@ import { saveProfile } from '../computer/profiles.js';
 const enabled = process.env.CLIKCODE_COMPUTER_SMOKE === '1';
 const FORM = `<h1>Your business data</h1><form>
   <label for=a>Business name</label><input id=a name="account[business_name]">
-  <label for=b>Registration number</label><input id=b name="account[registration_number]">
+  <label for=b>Registration number</label><input id=b name="account[registration_number]" required>
   <label for=c>Business phone</label><input id=c name="account[phone]" type=tel>
   <label for=d>Street address</label><input id=d name="account[address]">
   <label for=e>Postal code</label><input id=e name="account[address_postal_code]">
@@ -39,7 +39,7 @@ it.skipIf(!enabled)('fills each business box from its own profile detail and lea
     expect(steps.map(step => step.text)).toEqual(['Acme LLC', '+17195550123', '1 Main St', '80808', 'Calhan', 'CO', 'United States']);
     expect(steps).toHaveLength(7);
     expect(report.join('\n')).toContain('used the profile "Personal"');
-    expect(report.join('\n')).toMatch(/Registration number left empty/);
+    expect(report.join('\n')).toMatch(/required, no profile value: Registration number/);
     expect(report.join('\n')).toMatch(/Email is already filled and read-only/);
     expect(steps.some(step => step.text?.includes('@'))).toBe(false);
   } finally {

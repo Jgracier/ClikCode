@@ -268,6 +268,11 @@ export function profileDeclaresHost(profile: SavedProfile, host: string | undefi
   const bare = host.toLowerCase().replace(/^www\./, '');
   const site = profile.fields.website ? plain(profile.fields.website).replace(/^[a-z]+:\/\//, '').replace(/^www\./, '').split(/[/?#]/)[0] : '';
   if (site && (bare === site || bare.endsWith(`.${site}`))) return true;
+  // A `sites` detail (custom field, comma-separated hosts) declares more sites explicitly.
+  for (const listed of (profile.custom?.sites?.value ?? '').split(/[,\s]+/)) {
+    const named = plain(listed).replace(/^[a-z]+:\/\//, '').replace(/^www\./, '').split(/[/?#]/)[0];
+    if (named && (bare === named || bare.endsWith(`.${named}`))) return true;
+  }
   const hostWords = bare.split('.').slice(0, -1).join('.');
   return plain(profile.label).split(/[^a-z0-9]+/).some(word => word.length >= 3 && !GENERIC_LABEL_WORDS.has(word) && hostWords.split(/[^a-z0-9]+/).includes(word));
 }
