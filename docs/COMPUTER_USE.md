@@ -467,6 +467,16 @@ What the browser tool does so a run does not depend on luck or on the user:
   they would paste.
 - **Emailed codes.** `read_email_code` (from/subject, optional Gmail account) reads the newest message in
   the signed-in Gmail in a tab of its own and returns the one-time code.
+- **Several mailboxes.** Any number of Google accounts can be connected, one secret per address
+  (`email/gmail/<address>`; the old single `email/gmail` record moves to this shape by itself). A consent
+  for another account adds a mailbox and never replaces one. Add one with
+  `clikcode computer email connect --address justin@clikdeploy.com` (or `email_connect` with `address`);
+  that Google account must be signed in in the ClikCode browser, because Google only consents the account
+  it shows. `clikcode computer email status` lists them (the profile email is the default) and
+  `clikcode computer email disconnect --address <email>` forgets one. `read_email_code` and
+  `open_email_link` take an optional `address`; without it the mailbox is the address typed into the page's
+  email box, else one of the site's saved logins, else the default, and the answer names the mailbox it
+  read. If the mail is not in the chosen mailbox after 20 s, the other connected mailboxes are searched too.
 - **Sign-in choices.** The profile's `sso_email` is the account to pick at a Google account chooser, and a
   Google consent screen that asks for calendar, mail, files or contacts is flagged for declining.
 - **Notes per site.** `notes` saves what worked (URL, order of screens, gotchas) for a host and shows it

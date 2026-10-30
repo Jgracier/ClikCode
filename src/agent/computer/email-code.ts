@@ -3,7 +3,7 @@
  * never an email another agent already took, inbox first and then spam, a few passes. When it does not come, the signup is
  * put on hold in the queue (reason email) so the run goes on and a person or a later retry finishes it.
  */
-import { emailConnected, EmailAmbiguous, MARKETING, waitForEmail, type GoogleEndpoints } from './email-api.js';
+import { emailConnected, EmailAmbiguous, MARKETING, findEmail, loginAddresses, type GoogleEndpoints } from './email-api.js';
 import { Parked, vendorOf } from './parking.js';
 import { saveTask } from './work-queue.js';
 
@@ -34,10 +34,12 @@ export type EmailedCode = { code: string } | { hold: string };
 
 export async function emailedCode(stateDir: string, options: { site: string; since: number; signal?: AbortSignal; passes?: number; passMs?: number; pollMs?: number; endpoints?: GoogleEndpoints }): Promise<EmailedCode> {
   const passes = options.passes ?? 3, passMs = options.passMs ?? 30_000;
+  // The mailbox the site's account was made with (its saved login) is read first; the others after it.
+  const hints = await loginAddresses(stateDir, options.site);
   for (let pass = 0; pass < passes; pass++) {
     try {
       // The first pass reads the inbox; later passes also look in spam, where a new sender's first email often lands.
-      const mail = await waitForEmail(stateDir, { site: options.site, since: options.since, timeoutMs: passMs, pollMs: options.pollMs, spam: pass > 0, consume: true, accept: looksLikeCodeEmail, signal: options.signal, endpoints: options.endpoints });
+      const mail = await findEmail(stateDir, { hints, site: options.site, since: options.since, timeoutMs: passMs, pollMs: options.pollMs, spam: pass > 0, consume: true, accept: looksLikeCodeEmail, signal: options.signal, endpoints: options.endpoints });
       return { code: verificationCode(mail.text)! };
     } catch (error) {
       if (error instanceof EmailAmbiguous) return { hold: error.message };

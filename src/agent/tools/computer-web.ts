@@ -41,7 +41,7 @@ import { declaredAuthKind, declaredConnectionValues, destinationProblem, normali
 import { ACTIONABLE, condenseSnapshot } from './snapshot-condense.js';
 import { followPopup, SIGN_IN_CLICK } from '../computer/google-popup.js';
 import { captureSecret } from '../computer/secret-capture.js';
-import { emailConnected, emailStatus, waitForEmail } from '../computer/email-api.js';
+import { emailConnected, emailStatus, findEmail, loginAddresses } from '../computer/email-api.js';
 import { codeFromMailbox, looksLikeCodeEmail, looksLikeLinkEmail, verificationCode } from '../computer/email-code.js';
 import { connectEmail } from '../computer/email-consent.js';
 import { beginJournal, noteStep, recordVerified } from '../computer/recipe-recorder.js';
@@ -60,7 +60,7 @@ type WebArgs = {
   topic?: string;
   action: 'open' | 'close' | 'observe' | 'click' | 'fill' | 'choose' | 'press' | 'scroll' | 'wait' | 'upload' | 'steps' | 'login' | 'handoff' | 'capture_secret' | 'send_secret' | 'secrets' | 'accounts' | 'profile' | 'open_email_link' | 'read_email_code' | 'email_connect' | 'oauth_connect' | 'notes' | 'recipe' | 'queue' | 'network' | 'read_value' | 'preflight' | 'forget_login' | 'add_login' | 'help' | 'hover' | 'drag' | PageAction | FilesEnvAction;
   tab?: string; at?: 'start' | 'end'; url?: string; host?: string; note?: string; recipe_op?: 'save' | 'get' | 'run' | 'list'; login_route?: string; key_page?: string; capture_hint?: string; target?: string; text?: string; key?: string; direction?: ScrollDirection; steps?: Step[] | string; full?: boolean; find?: string; gone?: boolean; seconds?: number; accept_dialog?: boolean;
-  new_account?: boolean; method?: string; secret?: string; to?: string; with?: Record<string, string> | string; values?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean; format?: string; options?: string[]; secret?: boolean }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; vendor?: string; owner?: string; env?: string; task?: { vendor: string; kind?: string; status?: string; reason?: string; note?: string; owner?: string; connectors?: string[] }; bodies?: boolean; why_blank?: boolean; tasks?: boolean; task_status?: string; task_reason?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
+  new_account?: boolean; method?: string; secret?: string; to?: string; with?: Record<string, string> | string; values?: Record<string, string> | string; ask?: boolean; from?: string; subject?: string; link?: string; account?: number; address?: string; fields?: Record<string, string>; ask_fields?: Array<{ key: string; label: string; match?: string[]; optional?: boolean; format?: string; options?: string[]; secret?: boolean }>; custom?: Record<string, { label?: string; value: string; match?: string[] }>; label?: string; secret_name?: string; vendor?: string; owner?: string; env?: string; task?: { vendor: string; kind?: string; status?: string; reason?: string; note?: string; owner?: string; connectors?: string[] }; bodies?: boolean; why_blank?: boolean; tasks?: boolean; task_status?: string; task_reason?: string; paste?: boolean; send_to?: Destination[] | Destination | string;
 } & PageArgs & FilesEnvArgs;
 
 /** What was opened (host and path only: the rest of a mailed link is its token) and the other links by text. */
@@ -346,6 +346,7 @@ const WEB_PARAMETERS = { type: 'object', additionalProperties: true, required: [
     subject: { type: 'string', description: 'open_email_link, read_email_code: words from the subject.' },
     link: { type: 'string', description: 'open_email_link: words or domain of the link to open (default: the first real link in the message).' },
     account: { type: 'integer', description: 'open_email_link, read_email_code: Gmail account number /u/N (default 0).' },
+    address: { type: 'string', description: 'read_email_code, open_email_link: which connected mailbox to read (an email address). Left out, the mailbox of the email the page or the site\'s saved login used is chosen, else the profile email; if the mail is not there after 20 s the other connected mailboxes are tried. email_connect: the Google account to connect (default: the profile email); connecting another account adds a mailbox and replaces none.' },
     fields: { type: 'object', additionalProperties: { type: 'string' }, description: `profile: fields to save or correct in the user's autofill profile (${PROFILE_KEYS.join(', ')}). Leave out to list the profiles. Use it when a site wants a different format (phone as +1…, state as an abbreviation).` },
     label: { type: 'string', description: 'read_value: the label the page shows beside the value ("Application ID", "Subdomain", "Workspace ID"). forget_login: only the saved login with this username or email (default: every saved login for the site). profile: which profile (default: the one called Personal, else the one with the most standard fields, else a new one called Personal).' },
     ask_fields: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { key: { type: 'string' }, label: { type: 'string' }, match: { type: 'array', items: { type: 'string' } }, optional: { type: 'boolean' }, format: { type: 'string', description: 'Types itself as the user enters it: date (##/##/####), phone ((###) ###-####), zip, time, or a pattern where # is a digit, A a letter, * either and anything else a literal the box inserts and jumps over.' }, options: { type: 'array', items: { type: 'string' }, description: 'A fixed set of answers shown as a selector (arrow keys in the terminal, radios in VS Code) instead of a text box.' }, secret: { type: 'boolean', description: 'The answer is a secret (a password to use for sign-ups, key "password"; a recovery code): typed hidden, kept in Secrets Manager with the profile, and never shown to you. A later fill of a password box with no text uses it.' } }, required: ['key', 'label'] }, description: 'profile: ask the user, privately and in one prompt, for details a task needs beyond the standard ones, and keep them in a profile (with label, a new one) so every later fill with no text uses them. key is lower_snake_case (app_name, privacy_policy_url); label is what the user is asked; match lists the words a form may label it with (["app name","application name"]); optional fields may be left empty. Details only; a password or code goes in with secret: true.' },
@@ -1184,12 +1185,18 @@ async function withNetworkRetry<T>(run: () => Promise<T>): Promise<T> {
 
 const withMailbox = (view: ToolRunResult, line: string): ToolRunResult => ({ ...view, output: `${line}\n\n${view.output}` });
 
-/** The one mailbox emailed codes and links are read from: the connected one (email_connect), else the profile's sign-in email. The same for every tab and chat. */
+/** The default mailbox emailed codes and links are read from: the profile's sign-in email when connected, else the first connected one, else the profile email. The same for every tab and chat. */
 async function mailboxAddress(stateDir: string): Promise<string | undefined> {
   return (await emailStatus(stateDir)).email || await profileEmail(stateDir);
 }
 
 const mailboxLabel = async (stateDir: string, account?: number): Promise<string> => account === undefined ? await mailboxAddress(stateDir) ?? 'Gmail account /u/0' : `Gmail account /u/${account}`;
+
+/** The addresses that say which mailbox a page's email goes to, best first: the one typed into the page's email box, then the saved logins of the site. */
+async function mailboxHints(stateDir: string, page: Page): Promise<string[]> {
+  const typed = await page.locator('input[type=email], input[name*=email i], input[id*=email i], input[autocomplete=username], input[autocomplete=email]').evaluateAll(nodes => nodes.map(n => (n as unknown as { value?: string }).value ?? '').filter(v => /^[^\s@]+@[^\s@]+$/.test(v.trim()))).catch(() => [] as string[]);
+  return [...typed.map(v => v.trim()), ...await loginAddresses(stateDir, page.url())];
+}
 
 /** The newest message matching from/subject in the signed-in Gmail, opened; its body. Waits for one that has just been sent. */
 async function openLatestEmail(page: Page, args: WebArgs, stateDir: string): Promise<Locator> {
@@ -1348,13 +1355,13 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext, clock?: FillCloc
     }
     case 'open_email_link': {
       if (await emailConnected(ctx.stateDir)) {
-        const mail = await waitForEmail(ctx.stateDir, { from: args.from, subject: args.subject, ...(args.from || args.subject ? {} : { site: page.url() }), spam: true, consume: true, accept: args.from || args.subject ? (m => m.links.length > 0) : looksLikeLinkEmail, timeoutMs: (args.seconds ?? 90) * 1000, signal: ctx.signal });
+        const mail = await findEmail(ctx.stateDir, { address: args.address, hints: await mailboxHints(ctx.stateDir, page), from: args.from, subject: args.subject, ...(args.from || args.subject ? {} : { site: page.url() }), spam: true, consume: true, accept: args.from || args.subject ? (m => m.links.length > 0) : looksLikeLinkEmail, timeoutMs: (args.seconds ?? 90) * 1000, signal: ctx.signal });
         const anchors = mail.anchors?.length ? mail.anchors : mail.links.map(href => ({ href, text: '' }));
         const pick = pickLink(anchors, args.link);
         if (!pick) throw new Error(`The email has no ${args.link ? `link mentioning "${args.link}"` : 'usable link'}. Links found: ${anchors.slice(0, 6).map(link => link.text.trim() || displayUrl(link.href)).join(', ') || 'none'}.`);
         await page.goto(pick.chosen.href, { waitUntil: 'domcontentloaded', timeout: 30_000 });
         await settle(page);
-        return withMailbox(await observeComputerPage(page, ctx.acceptsImages === true), chosenNote(pick, `Opened the link from the email in ${await mailboxAddress(ctx.stateDir) ?? 'the connected mailbox'}.`));
+        return withMailbox(await observeComputerPage(page, ctx.acceptsImages === true), chosenNote(pick, `Opened the link from the email in ${mail.mailbox}.`));
       }
       const body = await openLatestEmail(page, args, ctx.stateDir);
       const links = await body.locator('a[href]').evaluateAll(nodes => nodes.map(node => {
@@ -1372,9 +1379,9 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext, clock?: FillCloc
     }
     case 'email_connect': {
       // One consent in this browser stores the mailbox in Secrets Manager; read_email_code and open_email_link then use the Gmail API.
-      const email = (await profileEmail(ctx.stateDir));
+      const email = args.address?.trim() || (await profileEmail(ctx.stateDir));
       const done = await connectEmail(ctx.stateDir, page, { email, progress: line => line && ctx.emitOutput?.(line) });
-      return { output: `Mailbox connected${done.email ? `: ${done.email}` : ''}. read_email_code and open_email_link now read mail directly and wait for it to arrive.` };
+      return { output: `Mailbox connected${done.email ? `: ${done.email}` : ''}. Connected mailboxes: ${(await emailStatus(ctx.stateDir)).mailboxes.map(m => m.email).join(', ')}. read_email_code and open_email_link now read mail directly and wait for it to arrive.` };
     }
     case 'oauth_connect': {
       const email = (await profileEmail(ctx.stateDir));
@@ -1384,15 +1391,16 @@ async function act(page: Page, args: WebArgs, ctx: ToolContext, clock?: FillCloc
     case 'read_email_code': {
       if (await emailConnected(ctx.stateDir)) {
         // The mail arrives when the vendor sends it: wait for it instead of looking once.
-        const mail = await waitForEmail(ctx.stateDir, { from: args.from, subject: args.subject, ...(args.from || args.subject ? {} : { site: page.url() }), spam: true, consume: true, accept: args.from || args.subject ? (m => verificationCode(m.text) !== undefined) : looksLikeCodeEmail, timeoutMs: (args.seconds ?? 90) * 1000, signal: ctx.signal })
+        const hints = await mailboxHints(ctx.stateDir, page);
+        const mail = await findEmail(ctx.stateDir, { address: args.address, hints, from: args.from, subject: args.subject, ...(args.from || args.subject ? {} : { site: page.url() }), spam: true, consume: true, accept: args.from || args.subject ? (m => verificationCode(m.text) !== undefined) : looksLikeCodeEmail, timeoutMs: (args.seconds ?? 90) * 1000, signal: ctx.signal })
           .catch(async (error: unknown) => {
             if (!(error instanceof Error) || !/^No email matched/.test(error.message)) throw error;
             // Say where it looked: the usual cause is that the mail went to another address, not that the filter was wrong.
-            throw new Error(`${error.message} Looked in ${await mailboxAddress(ctx.stateDir) ?? 'the connected mailbox'} (inbox and spam, the last 15 minutes). If the site emailed another address, connect that mailbox (email_connect, with the profile whose sso_email it is). If the sender's name differs, leave from out: the page's site then picks the email.`);
+            throw new Error(`${error.message} Looked in ${args.address ?? (await emailStatus(ctx.stateDir)).mailboxes.map(m => m.email).join(', ')} (inbox and spam, the last 15 minutes). If the site emailed another address, connect that mailbox (email_connect with address). If the sender's name differs, leave from out: the page's site then picks the email.`);
           });
         const code = verificationCode(mail.text);
         if (!code) throw new Error(`The email from ${args.from ?? args.subject} has no code in it. It says: "${mail.text.replace(/\s+/g, ' ').slice(0, 160)}".`);
-        return { output: `Code: ${code} (read from ${await mailboxAddress(ctx.stateDir) ?? 'the connected mailbox'}). Type it into the page that asked for it.` };
+        return { output: `Code: ${code} (read from ${mail.mailbox}). Type it into the page that asked for it.` };
       }
       // A one-time sign-up or sign-in code is short-lived and meant to be typed, so it is returned as text
       // (an API key never is). The page the code is for is left as it was: Gmail is read in a tab of its own.

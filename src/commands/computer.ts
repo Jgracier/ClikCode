@@ -349,25 +349,28 @@ export async function computerConnectorProof(id: string): Promise<void> {
   process.stdout.write(`${id}: ${proof.ready ? 'finished' : 'not finished'}${proof.coverage ? ` (${proof.coverage.passing}/${proof.coverage.total} live checks)` : ''}${finished}\n${left ? `Left to do:\n${left}\n` : ''}${proof.next ? `Next: ${proof.next}\n` : ''}`);
 }
 
-/** `clikcode computer email connect|status|disconnect`: the mailbox the browser tool reads emailed codes and links from. */
-export async function computerEmail(action: 'connect' | 'status' | 'disconnect'): Promise<void> {
+/** `clikcode computer email connect|status|disconnect [--address a@b]`: the mailboxes the browser tool reads emailed codes and links from. */
+export async function computerEmail(action: 'connect' | 'status' | 'disconnect', options: { address?: string } = {}): Promise<void> {
   const dir = stateDirectory();
   const { emailStatus, disconnectEmail } = await import('../agent/computer/email-api.js');
+  const address = options.address?.trim() || undefined;
   if (action === 'disconnect') {
-    const removed = await disconnectEmail(dir);
-    return isJsonDefaultMode() ? emitResult({ email: { disconnected: removed } }) : void process.stdout.write(removed ? 'Mailbox disconnected.\n' : 'No mailbox was connected.\n');
+    const status = await emailStatus(dir);
+    if (!address && status.mailboxes.length > 1) throw new Error(`Several mailboxes are connected (${status.mailboxes.map(m => m.email).join(', ')}): name the one to forget with --address.`);
+    const removed = await disconnectEmail(dir, address);
+    return isJsonDefaultMode() ? emitResult({ email: { disconnected: removed, ...(address ? { address } : {}) } }) : void process.stdout.write(removed ? `Mailbox disconnected${address ? `: ${address}` : ''}.\n` : 'No such mailbox was connected.\n');
   }
   if (action === 'connect') {
     const { connectEmail } = await import('../agent/computer/email-consent.js');
     const { openComputerPage } = await import('../agent/computer/browser.js');
     const { profileEmail } = await import('../agent/computer/profiles.js');
-    const email = (await profileEmail(dir));
+    const email = address ?? (await profileEmail(dir));
     const done = await connectEmail(dir, await openComputerPage(dir, 'email'), { email, progress: line => line && process.stdout.write(line) }).finally(async () => { await closeComputerPage(dir, 'email').catch(quiet('commands/computer')); await releaseComputerBrowser(dir); });
     return isJsonDefaultMode() ? emitResult({ email: { connected: true, address: done.email } }) : void process.stdout.write(`Mailbox connected${done.email ? `: ${done.email}` : ''}.\n`);
   }
   const status = await emailStatus(dir);
   if (isJsonDefaultMode()) return emitResult({ email: status });
-  process.stdout.write(status.connected ? `Mailbox connected: ${status.email} (since ${status.connectedAt?.slice(0, 10)}).\n` : 'No mailbox connected. Run `clikcode computer email connect`.\n');
+  process.stdout.write(status.connected ? `${status.mailboxes.map(m => `Mailbox connected: ${m.email}${m.default ? ' (default)' : ''} (since ${m.connectedAt.slice(0, 10)}).`).join('\n')}\n` : 'No mailbox connected. Run `clikcode computer email connect`.\n');
 }
 
 /** `clikcode computer oauth-connect <connector>`: connects a ClikDeploy connector by pressing through the vendor's consent in the ClikCode browser. */
