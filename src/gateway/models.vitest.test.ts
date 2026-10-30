@@ -110,6 +110,21 @@ describe('the Gateway\'s model list', () => {
     expect(fromOpenAIModelList([{ id: 'x', access: 'somewhere' }]).models[0]).toEqual({ id: 'x' });
   });
 
+  it('carries the Gateway\'s uncensored tag into the row, so /model search for "uncensored" finds the model', async () => {
+    const { fromOpenAIModelList } = await import('./models.js');
+    const list = fromOpenAIModelList([
+      { id: 'z-ai/glm-5.3-flash-uncensored', owned_by: 'zhipu', tags: ['uncensored'], pricing: { input_per_mtok: 0.2, output_per_mtok: 0.8 } },
+      { id: 'gpt-5.6-sol', owned_by: 'openai' },
+    ]);
+    const [tagged, ordinary] = list.models;
+    expect(tagged!.tags).toEqual(['uncensored']);
+    expect(gatewayModelDetail(tagged!)).toMatch(/^uncensored/);
+    expect(ordinary!.tags).toBeUndefined();
+    expect(gatewayModelDetail(ordinary!)).not.toMatch(/uncensored/);
+    // A tag the Gateway sends that is not a string is ignored, not crashed on.
+    expect(fromOpenAIModelList([{ id: 'x', tags: [1, null] }]).models[0]).toEqual({ id: 'x' });
+  });
+
   it('keeps a private deployment as its own choice, named by the model it serves', async () => {
     const { fromOpenAIModelList, gatewayModelLabel } = await import('./models.js');
     const model = fromOpenAIModelList([{
