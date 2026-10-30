@@ -11,7 +11,7 @@ import http from 'node:http';
 import { claimMessage, isClaimed } from './email-consumed.js';
 import { vendorOf } from './parking.js';
 import { profileEmail } from './profiles.js';
-import { readNamedSecret, saveNamedSecret, deleteNamedSecret, CredentialError } from './credential-vault.js';
+import { readNamedSecret, saveNamedSecret, deleteNamedSecret, namedSecretNames, savedLoginsForSite, CredentialError } from './credential-vault.js';
 
 export const EMAIL_TOKEN_SECRET = 'email/gmail';
 export const EMAIL_CLIENT_SECRET = 'email/google-client';
@@ -27,6 +27,7 @@ export const GOOGLE: GoogleEndpoints = {
 interface Client { clientId: string; clientSecret: string }
 interface Stored { refreshToken: string; email: string; connectedAt: string }
 const cached = new Map<string, { token: string; expires: number }>();
+// `cacheKey` below keys it by state directory and address.
 
 /** The OAuth client this install asks consent with: the vault, else the environment. */
 export async function emailClient(stateDir: string): Promise<Client> {
@@ -43,18 +44,89 @@ export async function emailClient(stateDir: string): Promise<Client> {
   throw new CredentialError(`No Google OAuth client is set up for email. Save a Desktop-app client as the secrets "${EMAIL_CLIENT_SECRET}-id" and "${EMAIL_CLIENT_SECRET}-secret" (or one JSON secret "${EMAIL_CLIENT_SECRET}") or set CLIKCODE_GOOGLE_CLIENT_ID and CLIKCODE_GOOGLE_CLIENT_SECRET.`);
 }
 
-async function stored(stateDir: string): Promise<Stored | undefined> {
-  try { return JSON.parse(await readNamedSecret(stateDir, EMAIL_TOKEN_SECRET)) as Stored; } catch { return undefined; }
+const norm = (address: string): string => address.trim().toLowerCase();
+const MAILBOX_PREFIX = 'email/gmail/';
+/** The secret one mailbox is kept under: names allow no "@", so the address is spelled safely, and hashed when it would not fit. */
+export function mailboxSecretName(address: string): string {
+  const slug = norm(address).replace(/[^a-z0-9._-]/g, '_');
+  return `${MAILBOX_PREFIX}${slug.length <= 40 ? slug : createHash('sha256').update(norm(address)).digest('hex').slice(0, 40)}`;
 }
-/** Is a mailbox connected, and which one. Never the token. */
-export async function emailStatus(stateDir: string): Promise<{ connected: boolean; email?: string; connectedAt?: string }> {
-  const s = await stored(stateDir);
-  return s ? { connected: true, email: s.email, connectedAt: s.connectedAt } : { connected: false };
+
+async function readStored(stateDir: string, name: string): Promise<Stored | undefined> {
+  try { const s = JSON.parse(await readNamedSecret(stateDir, name)) as Stored; return s.refreshToken && s.email ? s : undefined; } catch { return undefined; }
 }
-export async function emailConnected(stateDir: string): Promise<boolean> { return (await stored(stateDir)) !== undefined; }
-export async function disconnectEmail(stateDir: string): Promise<boolean> {
-  cached.delete(stateDir);
-  return deleteNamedSecret(stateDir, EMAIL_TOKEN_SECRET);
+async function saveStored(stateDir: string, s: Stored): Promise<void> {
+  await saveNamedSecret(stateDir, mailboxSecretName(s.email), JSON.stringify(s), { vendor: 'gmail', owner: s.email, env: 'oauth' });
+}
+
+/** The single-mailbox record of before (`email/gmail`) becomes one entry of the new shape, once. */
+async function migrateLegacy(stateDir: string): Promise<void> {
+  const old = await readStored(stateDir, EMAIL_TOKEN_SECRET);
+  if (!old) return;
+  if (!(await readStored(stateDir, mailboxSecretName(old.email)))) await saveStored(stateDir, old);
+  await deleteNamedSecret(stateDir, EMAIL_TOKEN_SECRET).catch(quiet('agent/computer/email-api'));
+}
+
+/** Every connected mailbox, in a stable order. */
+async function allStored(stateDir: string): Promise<Stored[]> {
+  await migrateLegacy(stateDir);
+  const names = (await namedSecretNames(stateDir).catch(() => [] as string[])).filter(name => name.toLowerCase().startsWith(MAILBOX_PREFIX));
+  const out: Stored[] = [];
+  for (const name of names) { const s = await readStored(stateDir, name); if (s) out.push(s); }
+  return out.sort((a, b) => a.email.localeCompare(b.email));
+}
+
+/** The mailbox used when nothing says otherwise: the profile email when it is connected, else the first. */
+async function defaultStored(stateDir: string, all: Stored[]): Promise<Stored | undefined> {
+  const mine = (await profileEmail(stateDir).catch(quiet('agent/computer/email-api')))?.trim().toLowerCase();
+  return all.find(s => norm(s.email) === mine) ?? all[0];
+}
+
+export interface Mailbox { email: string; connectedAt: string; default: boolean }
+/** Which mailboxes are connected (never a token). `email` / `connectedAt` are those of the default one. */
+export async function emailStatus(stateDir: string): Promise<{ connected: boolean; email?: string; connectedAt?: string; mailboxes: Mailbox[] }> {
+  const all = await allStored(stateDir);
+  const def = await defaultStored(stateDir, all);
+  if (!def) return { connected: false, mailboxes: [] };
+  return { connected: true, email: def.email, connectedAt: def.connectedAt, mailboxes: all.map(s => ({ email: s.email, connectedAt: s.connectedAt, default: s === def })) };
+}
+/** Is any mailbox connected, or this address. */
+export async function emailConnected(stateDir: string, address?: string): Promise<boolean> {
+  const all = await allStored(stateDir);
+  return address ? all.some(s => norm(s.email) === norm(address)) : all.length > 0;
+}
+/** Forgets one mailbox, or with no address every one. True when something was removed. */
+export async function disconnectEmail(stateDir: string, address?: string): Promise<boolean> {
+  const all = await allStored(stateDir);
+  let removed = false;
+  for (const s of all.filter(item => !address || norm(item.email) === norm(address))) {
+    cached.delete(cacheKey(stateDir, s.email));
+    removed = await deleteNamedSecret(stateDir, mailboxSecretName(s.email)) || removed;
+  }
+  return removed;
+}
+const cacheKey = (stateDir: string, address: string): string => `${stateDir}\0${norm(address)}`;
+
+/**
+ * Which mailbox a page's email goes to: the one asked for (error if it is not connected), else the first of `hints`
+ * (the address typed into the page, the saved logins of the site) that is connected, else the default.
+ */
+export async function pickMailbox(stateDir: string, options: { address?: string; hints?: readonly (string | undefined)[] } = {}): Promise<string> {
+  const all = await allStored(stateDir);
+  if (options.address) {
+    const hit = all.find(s => norm(s.email) === norm(options.address!));
+    if (!hit) throw new CredentialError(`${options.address} is not a connected mailbox.${all.length ? ` Connected: ${all.map(s => s.email).join(', ')}.` : ''} Connect it with email_connect (address), or \`clikcode computer email connect --address ${options.address}\`.`);
+    return hit.email;
+  }
+  for (const hint of options.hints ?? []) { const hit = hint && all.find(s => norm(s.email) === norm(hint)); if (hit) return hit.email; }
+  const def = await defaultStored(stateDir, all);
+  if (!def) throw new CredentialError('No mailbox is connected. Run `clikcode computer email connect`, or the browser tool action email_connect.');
+  return def.email;
+}
+
+/** The addresses the saved logins of a site were made with, as hints for pickMailbox. */
+export async function loginAddresses(stateDir: string, site: string): Promise<string[]> {
+  try { return (await savedLoginsForSite(stateDir, site)).filter(login => !login.rejected).map(login => login.label); } catch { return []; }
 }
 
 const b64u = (bytes: Buffer): string => bytes.toString('base64url');
@@ -100,34 +172,31 @@ async function exchange(stateDir: string, client: Client, code: string, verifier
   if (!body.refresh_token) throw new Error('Google gave no refresh token; remove the app at myaccount.google.com/permissions and connect again.');
   const profile = await (await fetch(`${endpoints.gmail}/profile`, { headers: { authorization: `Bearer ${body.access_token}` }, signal: AbortSignal.timeout(20_000) })).json().catch(() => ({})) as { emailAddress?: string };
   const email = profile.emailAddress ?? '';
-  // The connected mailbox is the profile email (that is where sign-up codes go). Consenting as some other account must not silently
-  // replace it: workers share one mailbox, and the replacement left every later code unreadable.
-  const wanted = (await profileEmail(stateDir).catch(quiet('agent/computer/email-api')))?.trim().toLowerCase();
-  const current = (await stored(stateDir).catch(quiet('agent/computer/email-api')))?.email?.trim().toLowerCase();
-  if (wanted && current === wanted && email.trim().toLowerCase() !== wanted) throw new Error(`The connected mailbox is ${wanted}, the profile email. This consent was for ${email}, so it was not saved. Sign in to ${wanted} in the browser and connect again, or change the profile email first.`);
-  await saveNamedSecret(stateDir, EMAIL_TOKEN_SECRET, JSON.stringify({ refreshToken: body.refresh_token, email, connectedAt: new Date().toISOString() } satisfies Stored), { vendor: 'gmail', owner: email, env: 'oauth' });
-  cached.set(stateDir, { token: body.access_token, expires: Date.now() + (body.expires_in ?? 3000) * 1000 - 60_000 });
+  if (!email) throw new Error('Google did not say which account this consent was for, so it was not saved.');
+  // A consent adds its mailbox (or renews that same address); it never replaces another connected mailbox.
+  await saveStored(stateDir, { refreshToken: body.refresh_token, email, connectedAt: new Date().toISOString() });
+  cached.set(cacheKey(stateDir, email), { token: body.access_token, expires: Date.now() + (body.expires_in ?? 3000) * 1000 - 60_000 });
   return email;
 }
 
-async function accessToken(stateDir: string, endpoints: GoogleEndpoints): Promise<string> {
-  const hit = cached.get(stateDir);
+async function accessToken(stateDir: string, endpoints: GoogleEndpoints, address?: string): Promise<string> {
+  const email = await pickMailbox(stateDir, { address });
+  const hit = cached.get(cacheKey(stateDir, email));
   if (hit && hit.expires > Date.now()) return hit.token;
-  const saved = await stored(stateDir);
-  if (!saved) throw new CredentialError('No mailbox is connected. Run `clikcode computer email connect`, or the browser tool action email_connect.');
+  const saved = (await allStored(stateDir)).find(s => norm(s.email) === norm(email))!;
   const client = await emailClient(stateDir);
   const res = await fetch(endpoints.token, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, signal: AbortSignal.timeout(20_000),
     body: new URLSearchParams({ client_id: client.clientId, client_secret: client.clientSecret, refresh_token: saved.refreshToken, grant_type: 'refresh_token' }) });
   const body = await res.json().catch(() => ({})) as { access_token?: string; expires_in?: number; error?: string };
   if (!res.ok || !body.access_token) {
-    if (body.error === 'invalid_grant') throw new CredentialError('Google no longer accepts the saved mailbox consent (an app still in testing mode expires it after 7 days). Reconnect with `clikcode computer email connect`.');
+    if (body.error === 'invalid_grant') throw new CredentialError(`Google no longer accepts the saved consent for ${saved.email} (an app still in testing mode expires it after 7 days). Reconnect with \`clikcode computer email connect --address ${saved.email}\`.`);
     throw new Error(`Google would not refresh the mailbox token (${body.error ?? res.status}).`);
   }
-  cached.set(stateDir, { token: body.access_token, expires: Date.now() + (body.expires_in ?? 3000) * 1000 - 60_000 });
+  cached.set(cacheKey(stateDir, saved.email), { token: body.access_token, expires: Date.now() + (body.expires_in ?? 3000) * 1000 - 60_000 });
   return body.access_token;
 }
 
-export interface FoundEmail { id: string; from: string; subject: string; text: string; links: string[]; /** The same links with their text, for choosing among them. */ anchors?: MailAnchor[]; receivedAt: number }
+export interface FoundEmail { id: string; from: string; subject: string; text: string; links: string[]; /** The same links with their text, for choosing among them. */ anchors?: MailAnchor[]; receivedAt: number; /** The mailbox it was found in. */ mailbox?: string }
 export interface MailAnchor { href: string; text: string; button?: boolean; image?: boolean }
 type Part = { mimeType?: string; body?: { data?: string }; parts?: Part[] };
 const decode = (data?: string): string => (data ? Buffer.from(data, 'base64url').toString('utf8') : '');
@@ -184,15 +253,16 @@ export function senderMatch(mail: Pick<FoundEmail, 'from' | 'subject' | 'text'>,
  * `accept` says whether a message is the wanted one (it has a code); with `consume` the message is then taken for this waiter
  * alone, so a second agent never receives it. Two different senders that both fit are not guessed between: EmailAmbiguous.
  */
-export async function waitForEmail(stateDir: string, query: { from?: string; subject?: string; site?: string; since?: number; timeoutMs?: number; pollMs?: number; spam?: boolean; consume?: boolean; accept?: (mail: FoundEmail) => boolean; endpoints?: GoogleEndpoints; signal?: AbortSignal }): Promise<FoundEmail> {
+export async function waitForEmail(stateDir: string, query: { address?: string; from?: string; subject?: string; site?: string; since?: number; timeoutMs?: number; pollMs?: number; spam?: boolean; consume?: boolean; accept?: (mail: FoundEmail) => boolean; endpoints?: GoogleEndpoints; signal?: AbortSignal }): Promise<FoundEmail> {
   if (!query.from && !query.subject && !query.site) throw new Error('Name the sender (from), words from the subject, or the site the email is for.');
+  const address = await pickMailbox(stateDir, { address: query.address });
   const endpoints = query.endpoints ?? GOOGLE;
   const since = query.since ?? Date.now() - 15 * 60_000;
   const q = [query.from ? `from:(${query.from})` : '', query.subject ? `subject:(${query.subject})` : '', `after:${Math.floor(since / 1000) - 1}`].filter(Boolean).join(' ');
   const deadline = Date.now() + (query.timeoutMs ?? 90_000);
   for (;;) {
     query.signal?.throwIfAborted();
-    const token = await accessToken(stateDir, endpoints);
+    const token = await accessToken(stateDir, endpoints, address);
     const headers = { authorization: `Bearer ${token}` };
     const list = await fetch(`${endpoints.gmail}/messages?${new URLSearchParams({ q, maxResults: query.site ? '20' : '5', ...(query.spam ? { includeSpamTrash: 'true' } : {}) })}`, { headers, signal: AbortSignal.timeout(20_000) });
     if (!list.ok) throw new Error(`Gmail would not list messages (HTTP ${list.status}).`);
@@ -206,7 +276,7 @@ export async function waitForEmail(stateDir: string, query: { from?: string; sub
       const header = (name: string): string => message.payload?.headers?.find(h => h.name.toLowerCase() === name)?.value ?? '';
       const html = collect(message.payload, 'text/html').join('\n');
       const plain = collect(message.payload, 'text/plain').join('\n');
-      found.push({ id, from: header('from'), subject: header('subject'), text: plain.trim() || htmlToText(html), links: hrefs(html || plain), anchors: anchors(html), receivedAt: Number(message.internalDate ?? 0) });
+      found.push({ id, from: header('from'), subject: header('subject'), text: plain.trim() || htmlToText(html), links: hrefs(html || plain), anchors: anchors(html), receivedAt: Number(message.internalDate ?? 0), mailbox: address });
     }
     found = found.filter(mail => mail.receivedAt >= since && (!query.accept || query.accept(mail)));
     if (query.site) {
@@ -227,4 +297,33 @@ export async function waitForEmail(stateDir: string, query: { from?: string; sub
     if (Date.now() >= deadline) throw new Error(`No email matched ${query.site ? `an email for ${vendorOf(query.site)}` : q} within ${Math.round((query.timeoutMs ?? 90_000) / 1000)} seconds.`);
     await new Promise(resolve => setTimeout(resolve, query.pollMs ?? 3_000));
   }
+}
+
+/** How long the chosen mailbox is waited on alone before the other connected mailboxes are tried too. */
+export const OWN_MAILBOX_MS = 20_000;
+
+/**
+ * waitForEmail across mailboxes. The mailbox is the one asked for (`address`), else the first of `hints` that is connected, else the
+ * default. When it has no match after OWN_MAILBOX_MS and other mailboxes are connected (and no address was demanded), they are
+ * searched as well until the deadline. The mail says which mailbox it came from.
+ */
+export async function findEmail(stateDir: string, query: Parameters<typeof waitForEmail>[1] & { hints?: readonly (string | undefined)[]; ownMs?: number }): Promise<FoundEmail & { mailbox: string }> {
+  const chosen = await pickMailbox(stateDir, { address: query.address, hints: query.hints });
+  const others = query.address ? [] : (await allStored(stateDir)).map(s => s.email).filter(email => norm(email) !== norm(chosen));
+  const total = query.timeoutMs ?? 90_000, own = query.ownMs ?? OWN_MAILBOX_MS;
+  const attempt = (address: string, timeoutMs: number, signal?: AbortSignal) => waitForEmail(stateDir, { ...query, address, timeoutMs, signal }) as Promise<FoundEmail & { mailbox: string }>;
+  if (!others.length || total <= own) return attempt(chosen, total, query.signal);
+  try { return await attempt(chosen, own, query.signal); }
+  catch (error) { if (!(error instanceof Error) || !/^No email matched/.test(error.message)) throw error; }
+  const stop = new AbortController();
+  const signal = query.signal ? AbortSignal.any([query.signal, stop.signal]) : stop.signal;
+  try {
+    return await Promise.any([chosen, ...others].map(address => attempt(address, total - own, signal)));
+  } catch (error) {
+    if (query.signal?.aborted) throw error;
+    const inner = error instanceof AggregateError ? error.errors : [error];
+    const other = inner.find(e => e instanceof Error && !/^No email matched/.test(e.message));
+    if (other) throw other;
+    throw new Error(`No email matched ${query.site ? `an email for ${vendorOf(query.site)}` : [query.from, query.subject].filter(Boolean).join(' ')} within ${Math.round(total / 1000)} seconds in ${[chosen, ...others].join(', ')}.`);
+  } finally { stop.abort(); }
 }

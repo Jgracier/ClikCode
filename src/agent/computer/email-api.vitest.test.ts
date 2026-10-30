@@ -68,7 +68,7 @@ async function connect(): Promise<void> {
 }
 
 describe('mailbox consent', () => {
-  it('does not let a consent for another account replace the connected mailbox that is the profile email', async () => {
+  it('adds a mailbox for a consent by another account and keeps the profile email mailbox', async () => {
     await saveProfile(dir, { label: 'Personal', fields: { sso_email: 'me@example.com' } });
     await connect();
     const other = await startConsent(dir, { endpoints: { ...endpoints, gmail: `${endpoints.gmail}-other` } });
@@ -77,8 +77,10 @@ describe('mailbox consent', () => {
     back.searchParams.set('code', 'good');
     back.searchParams.set('state', auth.searchParams.get('state')!);
     await fetch(back);
-    await expect(other.done).rejects.toThrow(/profile email/);
-    expect(await emailStatus(dir)).toMatchObject({ email: 'me@example.com' });
+    expect((await other.done).email).toBe('other@example.com');
+    const status = await emailStatus(dir);
+    expect(status.email).toBe('me@example.com');
+    expect(status.mailboxes.map(m => m.email)).toEqual(['me@example.com', 'other@example.com']);
   });
 
   it('stores the refresh token as a secret after one consent, and says which mailbox, never the token', async () => {
