@@ -294,6 +294,16 @@ export function usageWindowName(minutes: number): string {
   return `${minutes}m`;
 }
 
+/** The length of a window in minutes, from the name usageWindowName gave it ('5h', 'weekly', '90m');
+ * undefined for a name that does not say. */
+export function usageWindowMinutes(name: string): number | undefined {
+  if (name === 'weekly') return 10_080;
+  if (name === 'daily') return 1_440;
+  if (name === 'monthly') return 43_200;
+  const found = /^(\d+)(h|m)$/.exec(name);
+  return found ? Number(found[1]) * (found[2] === 'h' ? 60 : 1) : undefined;
+}
+
 /** Claude Code's `rate_limit_info` -- on its stream-json `rate_limit_event`,
  * and forwarded by claude-agent-acp as `usage_update._meta["_claude/rateLimit"]`:
  * `unifiedWindows.{five_hour,seven_day}` with a 0..1 `utilization`. */

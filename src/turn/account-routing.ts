@@ -6,8 +6,9 @@ import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import { usageExhaustedMessage } from './usage-exhausted.js';
 import chalk from 'chalk';
-import { accountSwitchNotice, accountVerification, verificationNotice, type AccountFailureKind } from './failover.js';
+import { accountSwitchNotice, accountVerification, verificationNotice, type AccountFailureKind, type AccountMoveReason } from './failover.js';
 import { recordQuotaRefusal } from './account-outcome.js';
+import { earlyMoveTarget } from './account-burn.js';
 import { isTurnCancelled, turnCancelledError } from '../agent/cancellation.js';
 import { readState } from '../session/state/read.js';
 import { loadIndex } from '../session/state/index-file.js';
@@ -104,24 +105,32 @@ export function nextUsableFailoverAccount(
     .sort((left, right) => left.rank[0] - right.rank[0] || left.rank[1] - right.rank[1])[0]?.account;
 }
 
-/** The account a turn starts on. A chat leaves its own account before a
- * turn only when the vendor refused that account and nothing since says
- * otherwise -- never on a usage reading alone: readings lag (Claude's /usage
- * said "weekly 100%" after the user reset the limit, and the chat kept
- * leaving an account that worked). If the reading was right, the cost is one
- * refused attempt and the usual failover. With nothing better to move to,
- * the turn goes to the vendor either way. */
+/** The account a turn starts on, and why it moved if it did.
+ *
+ * A chat leaves its own account before a turn when the vendor refused that account and nothing since
+ * says otherwise -- or, earlier, when its usage reading shows that what the turn is about to do will
+ * not fit and another account plainly has the room (account-burn.ts: the rule, the margin measured
+ * from the account's own burn, and why a reading that is not current never moves a chat: readings
+ * lag -- Claude's /usage said "weekly 100%" after the user reset the limit). If a reading was right
+ * and no move was made, the cost is one refused attempt and the usual failover. With nothing better
+ * to move to, the turn goes to the vendor either way. `turns`: how many turns' worth of usage the
+ * turn is about to spend (more than one when it starts agents in parallel). */
 export function initialAccountChoice(
   state: HarnessState,
   current: AiHarnessAccount,
   matchesBackend: (candidate: AiHarnessAccount) => boolean,
   attempted: Map<string, number>,
-): { kind: 'continue' } | { kind: 'switch'; account: AiHarnessAccount } {
-  if (!quotaRefusalHolds(current)) return { kind: 'continue' };
-  const fallback = nextUsableFailoverAccount(state, current, matchesBackend, new Map([...attempted, [current.id, Date.now()]]));
+  options: { now?: number; turns?: number } = {},
+): { kind: 'continue' } | { kind: 'switch'; account: AiHarnessAccount; reason: 'quota-exhausted' | 'low-room' } {
+  const now = options.now ?? Date.now();
+  const refused = quotaRefusalHolds(current, now);
+  const fallback = nextUsableFailoverAccount(state, current, matchesBackend, new Map([...attempted, [current.id, now]]), now);
   if (!fallback) return { kind: 'continue' };
-  attempted.set(current.id, Date.now());
-  return { kind: 'switch', account: fallback };
+  const early = !refused && accountCanTakeTurn(fallback, now)
+    && earlyMoveTarget(current, [fallback], state.invocations, { now, turns: options.turns ?? 1 }) !== undefined;
+  if (!refused && !early) return { kind: 'continue' };
+  attempted.set(current.id, now);
+  return { kind: 'switch', account: fallback, reason: refused ? 'quota-exhausted' : 'low-room' };
 }
 
 /** Report exhaustion only when no account on this backend can still run. */
@@ -289,8 +298,8 @@ export function turnAccounts(input: {
   const recordAccount = turnAccountRecorder(session, persist);
   let switchedFrom: string | undefined;
   /** Why the turn left that account: the failure it met there. */
-  let switchReason: AccountFailureKind = 'quota-exhausted';
-  const switchTo = async (to: AiHarnessAccount, why: AccountFailureKind): Promise<void> => {
+  let switchReason: AccountMoveReason = 'quota-exhausted';
+  const switchTo = async (to: AiHarnessAccount, why: AccountMoveReason): Promise<void> => {
     // The status line says it while it happens, and names the account the
     // turn is on after; the turn's answer keeps it as a line in the
     // conversation (TranscriptMessage.accountSwitch), drawn at its end.
@@ -315,19 +324,19 @@ export function turnAccounts(input: {
     recordAccount,
     switchTo,
     /** Moves off a spent account before the first attempt; true when it did.
-     * `carry` runs first, while the account is still the old one. */
-    async start(carry?: (to: AiHarnessAccount) => Promise<void>): Promise<boolean> {
+     * `carry` runs first, while the account is still the old one. `turns`: see initialAccountChoice. */
+    async start(carry?: (to: AiHarnessAccount) => Promise<void>, turns?: number): Promise<boolean> {
       const view = await storedView(state);
       const current = input.current();
       const stored = view.accounts.find((item) => item.id === current.id) ?? current;
-      const initial = initialAccountChoice(view, stored, matchesBackend, tally.attempted);
+      const initial = initialAccountChoice(view, stored, matchesBackend, tally.attempted, turns === undefined ? {} : { turns });
       if (initial.kind !== 'switch') {
         chosen(state, stored);
         return false;
       }
       const to = chosen(state, initial.account);
       await carry?.(to);
-      await switchTo(to, 'quota-exhausted');
+      await switchTo(to, initial.reason);
       return true;
     },
     /** accountAfterFailure for the current account. */
@@ -336,7 +345,7 @@ export function turnAccounts(input: {
       notice: (message) => prompter?.activity(chalk.yellow(message)),
     }),
     /** What the turn's output says about a move, when there was one. */
-    switched: (): { accountSwitchedFrom?: string; reason?: AccountFailureKind } =>
+    switched: (): { accountSwitchedFrom?: string; reason?: AccountMoveReason } =>
       switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: switchReason } : {},
   };
 }

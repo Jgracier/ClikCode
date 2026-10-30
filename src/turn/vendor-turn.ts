@@ -3,7 +3,7 @@ import { moveThreadToAccount, reconcileNativeThread } from '../session/carry.js'
 import { lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { liveCallsForSwitch } from './live-settings.js';
 import { completeTurnCheckpoint, discardInterruptedTurn } from './turn-journal.js';
-import { closePersistentTransport, closeStandby, leavePersistentTransport } from './vendor-process.js';
+import { closePersistentTransport, closeStandby, leavePersistentTransport, runningAgentCount } from './vendor-process.js';
 import { settleHeldVendor } from './turn-steps.js';
 import type { AccountTurnInput } from './session-turn.js';
 import { runAttempt } from './vendor-attempt.js';
@@ -63,7 +63,8 @@ async function startVendorTurn(ctx: VendorTurnContext): Promise<void> {
     await settleHeldVendor(session.id, prompter, signal, { to: { harness: harness.command, accountId: to.id } });
     await leavePersistentTransport(session.id);
     await moveThreadToAccount(session, harness, ctx.account, to);
-  });
+  // The agents the conversation's process runs spend this account too, beside the turn.
+  }, 1 + await runningAgentCount(session.id));
   if (!settled) await settleHeldVendor(session.id, prompter, signal, { to: here });
   if (moved) await checkpoint.persistNow();
   // Whoever chose this account and whenever, the thread has to be in its
