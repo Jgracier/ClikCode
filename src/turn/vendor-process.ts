@@ -22,7 +22,7 @@ export function sessionNativeCommands(sessionId: string): readonly HarnessAvaila
 interface PersistentTransport { key: string; transport: HarnessTurnTransport; session: CodexSession | AcpSession }
 export const persistentTransports = new Map<string, PersistentTransport>();
 /** Test seam: the transport session factories. */
-const TRANSPORT_SESSIONS = { codex: createCodexSession, acp: createAcpSession };
+export const TRANSPORT_SESSIONS = { codex: createCodexSession, acp: createAcpSession };
 
 /** Who receives the work a persistent vendor does between ClikCode turns
  * (harness/transport/background-turn.ts), per ClikCode session. The session
