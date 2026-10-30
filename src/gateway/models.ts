@@ -124,7 +124,7 @@ export function gatewayPriceLabel(price: GatewayModelPrice): string {
   const pair = (rate: { inMTok: number; outMTok: number }) => `${money(rate.inMTok)}/${money(rate.outMTok)}`;
   const full = pair(price.full);
   const charged = pair(price.charged);
-  if (price.discountPercent <= 0 || charged === full) return `${full} per 1M`;
+  if (price.discountPercent <= 0 || charged === full) return `${charged} per 1M`;
   return `${full} → ${charged} per 1M (${price.discountPercent}% off)`;
 }
 

@@ -233,3 +233,9 @@ describe('models by maker', () => {
     expect(gatewayModelDetail(ordered[1]!)).toBe('running · on your compute, no per-token charge · no tool calls');
   });
 });
+
+
+it('shows the effective rate without a promotion, for both operator cost and retail markup', () => {
+  expect(gatewayPriceLabel({ full: { inMTok: 4, outMTok: 20 }, charged: { inMTok: 1, outMTok: 2 }, discountPercent: 0 })).toBe('$1/$2 per 1M');
+  expect(gatewayPriceLabel({ full: { inMTok: 4, outMTok: 20 }, charged: { inMTok: 5, outMTok: 25 }, discountPercent: 0 })).toBe('$5/$25 per 1M');
+});
