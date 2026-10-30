@@ -7,6 +7,10 @@ import { zonedResetTime } from '../harness/accounts/usage-reading.js';
  *  the whole list failing the same way. */
 export type AccountFailureKind = 'quota-exhausted' | 'temporarily-throttled' | 'authentication-required' | 'native-thread-invalid' | 'request-invalid' | 'account-ineligible' | 'other';
 
+/** Why a conversation moved to another account: a failure of the account, or its usage reading
+ * showing the turn would not fit (account-burn.ts), before any refusal. */
+export type AccountMoveReason = AccountFailureKind | 'low-room';
+
 /** Machine-readable failure signals. Always preferred over wording: a status
  * code or a vendor error type cannot be produced by the model talking about
  * rate limits. */
@@ -269,11 +273,13 @@ export function verificationNotice(verification: { url?: string }): string {
 /** The line a turn that moved accounts keeps: `Switched to work: personal is
  * out of usage`. */
 export function accountSwitchLine(change: { from: string; to: string; reason: string }): string {
-  const why = change.reason === 'quota-exhausted' ? 'is out of usage' : `failed (${accountFailureReason(change.reason as AccountFailureKind)})`;
+  const why = change.reason === 'quota-exhausted' ? 'is out of usage'
+    : change.reason === 'low-room' ? 'was nearly out of usage' : `failed (${accountFailureReason(change.reason as AccountFailureKind)})`;
   return `Switched to ${change.to}: ${change.from} ${why}`;
 }
 
-export function accountSwitchNotice(kind: AccountFailureKind, to: string): string {
+export function accountSwitchNotice(kind: AccountMoveReason, to: string): string {
+  if (kind === 'low-room') return `nearly out of usage, switching to ${to}`;
   return kind === 'quota-exhausted'
     ? `out of usage, switching to ${to}`
     : `${accountFailureReason(kind)}, switching to ${to}`;

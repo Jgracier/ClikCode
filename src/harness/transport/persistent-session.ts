@@ -80,6 +80,8 @@ export interface VendorWorkSession {
   close(): Promise<void>;
   /** Work the vendor is still doing between turns (backgroundWorkRunning). */
   backgroundWorkRunning(): Promise<boolean>;
+  /** The commands and agents it runs in the background now, one each. */
+  runningWork(): Promise<RunningWork[]>;
   /** The conversation is leaving this process with work still running in it (retire). */
   retire(): Promise<boolean>;
   /** Fails the turn in progress as if the vendor had refused it (false: none is running). */

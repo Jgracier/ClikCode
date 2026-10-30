@@ -15,6 +15,7 @@ export interface AccountSwitch { from: string; to: string; reason: string }
 export function accountSwitchNoteText(change: AccountSwitch, usage?: string): string {
   const why = change.reason === 'quota-exhausted'
     ? `${change.from} ran out of usage`
+    : change.reason === 'low-room' ? `${change.from} was nearly out of usage`
     : `${change.from} failed (${accountFailureReason(change.reason as AccountFailureKind)})`;
   return `The account changed: ${why}, so this conversation continues on ${change.to}.`
     + (usage ? ` ${change.to} has ${usage}.` : '')

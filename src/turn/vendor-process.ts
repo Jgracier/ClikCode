@@ -177,6 +177,14 @@ export function persistentTransportFor(sessionId: string, transport: HarnessTurn
   return created;
 }
 
+/** How many background agents the conversation's live process runs now: each is about to spend
+ * what a turn does on the same account, which the next turn's choice of account weighs
+ * (account-burn.ts). */
+export async function runningAgentCount(sessionId: string): Promise<number> {
+  const work = await persistentTransports.get(sessionId)?.session.runningWork().catch(() => []);
+  return (work ?? []).filter((item) => item.kind === 'agent').length;
+}
+
 export function hasPersistentTransport(sessionId: string): boolean {
   return persistentTransports.has(sessionId);
 }

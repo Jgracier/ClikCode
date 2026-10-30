@@ -73,7 +73,7 @@ describe('stored-usage account switch', () => {
     const next = account('next');
     const attempted = new Map<string, number>();
     expect(initialAccountChoice(state([current, next]), current, () => true, attempted))
-      .toEqual({ kind: 'switch', account: next });
+      .toEqual({ kind: 'switch', account: next, reason: 'quota-exhausted' });
     expect([...attempted.keys()]).toEqual(['current']);
   });
 
