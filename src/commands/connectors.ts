@@ -96,3 +96,57 @@ async function reportQualify(client: import('../agent/computer/connector-runner.
   const why = r.evidence.slice(0, 4).map(e => `${e.kind}: "${e.phrase.slice(0, 80)}" (${e.url})`).join(' | ');
   await client.note(r.id, `clikcode connectors qualify: lane ${r.lane}${r.kinds.length ? `, ${r.kinds.join('/')}` : ''}. ${why}`.slice(0, 3900));
 }
+
+export interface ConnectorsLoopFlags { parallel?: string; maxSteps?: string; maxMinutes?: string; maxCalls?: string; maxHours?: string; cooldownHours?: string }
+
+/** `clikcode connectors run --loop`: the daemon. Takes due vendors from the queue until --max-hours, never needing a person. */
+export async function connectorsLoop(flags: ConnectorsLoopFlags): Promise<void> {
+  const [loop, live, runnerLive] = await Promise.all([import('../agent/computer/connector-loop.js'), import('../agent/computer/connector-loop-live.js'), import('../agent/computer/connector-runner-live.js')]);
+  const previous = await live.readLoopState();
+  if (previous && previous.pid !== process.pid && live.alive(previous.pid) && Date.now() - Date.parse(previous.updatedAt) < 10 * 60_000) throw new Error(`The connector loop is already running (process ${previous.pid}). \`clikcode connectors status\` shows it.`);
+  const d = loop.DEFAULT_LIMITS;
+  const limits: import('../agent/computer/connector-loop.js').LoopLimits = {
+    ...d,
+    parallel: number(flags.parallel, 'parallel', 1, 4) ?? d.parallel,
+    maxSteps: number(flags.maxSteps, 'max-steps', 1, 50) ?? d.maxSteps,
+    maxMs: (number(flags.maxMinutes, 'max-minutes', 1, 60) ?? d.maxMs / 60_000) * 60_000,
+    maxCalls: number(flags.maxCalls, 'max-calls', 5, 500) ?? d.maxCalls,
+    maxHoursMs: (number(flags.maxHours, 'max-hours', 1, 168) ?? d.maxHoursMs / 3_600_000) * 3_600_000,
+    cooldownMs: (number(flags.cooldownHours, 'cooldown-hours', 1, 168) ?? d.cooldownMs / 3_600_000) * 3_600_000,
+  };
+  let stop = false;
+  const onSignal = (): void => { if (stop) process.exit(130); stop = true; process.stderr.write('Stopping: finishing the vendors in progress (press again to quit now).\n'); };
+  process.on('SIGINT', onSignal);
+  process.on('SIGTERM', onSignal);
+  await live.rotateLoopLog();
+  const ports = live.livePorts(runnerLive.liveClient(), stateDirectory(), { stopRequested: () => stop });
+  ports.log(`${new Date().toISOString()} loop started: parallel ${limits.parallel}, ${limits.maxSteps} steps, ${limits.maxMs / 60_000} min and ${limits.maxCalls} calls a vendor, ${limits.maxHoursMs / 3_600_000} h`);
+  const summary = await loop.runLoop(ports, limits);
+  ports.log(`${new Date().toISOString()} loop ended: ${JSON.stringify(summary)}`);
+  await (await import('../agent/computer/browser.js')).releaseComputerBrowser(stateDirectory()).catch(() => undefined);
+  if (isJsonDefaultMode()) emitResult({ connectors: { loop: summary } });
+  else process.stdout.write(`Loop ended: ${summary.vendors} vendors, ${JSON.stringify(summary.done)}, walls ${JSON.stringify(summary.walls)}, ${summary.pauses} pauses, ${summary.restarts} browser restarts.\n`);
+  setTimeout(() => process.exit(0), 200).unref();
+}
+
+/** `clikcode connectors status`: whether the loop runs, what it is doing, what it has done, and the queue. */
+export async function connectorsStatus(flags: { lines?: string }): Promise<void> {
+  const live = await import('../agent/computer/connector-loop-live.js');
+  const state = await live.readLoopState();
+  const running = !!state && live.alive(state.pid) && !state.stopping;
+  const tail = await live.tailLog(number(flags.lines, 'lines', 0, 200) ?? 10);
+  let queue: unknown;
+  try {
+    const { liveClient } = await import('../agent/computer/connector-runner-live.js');
+    const data = await Promise.race([liveClient().tool('connector_work_overview', { limit: 1 }), new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timed out')), 25_000))]) as { total?: number; counts?: { byStage?: Record<string, number> } };
+    queue = { total: data.total, byStage: data.counts?.byStage };
+  } catch (error) { queue = { error: (error instanceof Error ? error.message : String(error)).slice(0, 120) }; }
+  const view = { running, ...(state ? { pid: state.pid, startedAt: state.startedAt, until: state.until, updatedAt: state.updatedAt, parallel: state.parallel, active: state.active, finished: state.done, walls: state.walls, cooldown: Object.keys(state.cooldown ?? {}).length, pressure: state.pressure } : {}), queue, log: live.loopLogPath(), recent: tail };
+  if (isJsonDefaultMode()) return emitResult({ connectors: { status: view } });
+  const out = [
+    running ? `The loop is running (process ${state!.pid}) until ${state!.until}; updated ${state!.updatedAt}.` : state ? `The loop is not running (last update ${state.updatedAt}).` : 'The loop has not run on this computer.',
+    ...(state ? [`working now: ${state.active.length ? state.active.map(a => `${a.id} (${a.calls} calls, since ${a.since})`).join(', ') : 'nothing'}`, `finished: ${JSON.stringify(state.done)}  walls: ${JSON.stringify(state.walls)}  in cooldown: ${Object.keys(state.cooldown ?? {}).length}`, ...(state.pressure ? [`machine: io full ${state.pressure.io ?? '-'}%, cpu full ${state.pressure.cpu ?? '-'}%${state.pressure.pausedUntil ? `, paused until ${state.pressure.pausedUntil}` : ''}`] : [])] : []),
+    `queue: ${JSON.stringify(queue)}`, `log: ${live.loopLogPath()}`, ...tail.map(l => `  ${l}`),
+  ];
+  process.stdout.write(`${out.join('\n')}\n`);
+}

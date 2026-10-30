@@ -101,10 +101,23 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .option('--max-minutes <n>', 'Most minutes per vendor (default 5)')
     .option('--published', 'With --ids: connect only. Send each id straight to the consent driver, even when it is already published to users and developers (onboarding refuses those)')
     .option('--dry-run', 'Show the plan per vendor and change nothing')
-    .action(async (flags: import('../commands/connectors.js').ConnectorsRunFlags) => (await import('../commands/connectors.js')).connectorsRun(flags));
+    .option('--loop', 'Run as a daemon that never needs a person: claim due vendors from the queue, each in its own named tab under a step, minute and call budget; report success or a typed wall; cooldown per vendor; pause when the machine stalls. Log: ~/.clikcode/connector-loop.log')
+    .option('--max-calls <n>', 'With --loop: most ClikDeploy calls per vendor (default 60)')
+    .option('--max-hours <n>', 'With --loop: stop starting vendors after this many hours (default 8, at most 168)')
+    .option('--cooldown-hours <n>', 'With --loop: hours before the same vendor is tried again (default 6; a wall holds 24)')
+    .action(async (flags: import('../commands/connectors.js').ConnectorsRunFlags & import('../commands/connectors.js').ConnectorsLoopFlags & { loop?: boolean }) => {
+      const commands = await import('../commands/connectors.js');
+      if (!flags.loop) return commands.connectorsRun(flags);
+      if (flags.ids || flags.dryRun || flags.published || flags.limit) throw new Error('--loop takes its vendors from the queue: leave out --ids, --limit, --published and --dry-run.');
+      return commands.connectorsLoop(flags);
+    });
+  connectors.command('status').description('Whether the connector loop is running, what it is working on, what it finished, the machine pressure, the queue and the last log lines').option('--lines <n>', 'log lines to show (default 10)')
+    .action(async (flags: { lines?: string }) => (await import('../commands/connectors.js')).connectorsStatus(flags));
   connectors.command('qualify').description('Render each vendor\'s sign-up, pricing and developer pages (20 s a page, in its own named tab) and classify walls from the rendered text: JSON {id, lane auto|human|dead, kinds, evidence}')
     .option('--ids <a,b,c>', 'vendors to check').option('--next <n>', 'the next N vendors waiting for an agent').option('--parallel <n>', 'vendors at once, 1-4 (default 1)').option('--report', 'write the verdict into the work item note at ClikDeploy').option('--dump <dir>', 'save each rendered page\'s text there, to see what the verdict was read from')
     .action(async (flags: import('../commands/connectors.js').ConnectorsQualifyFlags) => (await import('../commands/connectors.js')).connectorsQualify(flags));
+  connectors.command('agent-mcp', { hidden: true }).requiredOption('--tab <name>').requiredOption('--max-calls <n>').option('--counter <file>')
+    .action(async (flags: { tab: string; maxCalls: string; counter?: string }) => (await import('../agent/computer/connector-micro-agent-mcp.js')).agentMcpServe({ tab: flags.tab, maxCalls: Number(flags.maxCalls), ...(flags.counter ? { counter: flags.counter } : {}) }));
   connectors.command('resume <id>').description('Carry on with a connector whose keygrab could not finish: reattach to its parked hidden tab, optionally press one thing or go to one address, and continue getting the API key')
     .option('--click <text>', 'Press the control with this visible text first')
     .option('--goto <url>', 'Go to this https address in the parked tab first')

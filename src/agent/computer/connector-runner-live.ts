@@ -81,7 +81,7 @@ function findOnboard(value: unknown): OnboardResult | undefined {
   return undefined;
 }
 
-export interface LiveDriverOptions { stateDir: string; signal?: AbortSignal; screenshotDir?: () => Promise<string> }
+export interface LiveDriverOptions { stateDir: string; signal?: AbortSignal; screenshotDir?: () => Promise<string>; /** The named tab this driver works in (default 'connectors'). The loop gives each vendor its own. */ tab?: string; /** Leave the browser connection open when a job ends: other vendors' tabs share it. */ keepBrowser?: boolean }
 
 /** Page text and the names of what can be pressed, for a stop that has no detail of its own. */
 async function look(page: Page): Promise<{ text: string; controls: string[] }> {
@@ -96,6 +96,7 @@ async function shoot(page: Page | undefined, id: string, dir: () => Promise<stri
 }
 
 export function liveDriver(options: LiveDriverOptions): BrowserDriver {
+  const TAB = options.tab ?? 'connectors';
   const shotDir = options.screenshotDir ?? (() => mkdtemp(join(tmpdir(), 'clikcode-connector-shots-')));
   return {
     async oauthConnect(id): Promise<DriveOutcome> {
@@ -104,8 +105,8 @@ export function liveDriver(options: LiveDriverOptions): BrowserDriver {
       const { profileEmail } = await import('./profiles.js');
       const email = (await profileEmail(options.stateDir));
       // A fresh tab this run owns, closed afterwards; the consent driver reopens one if Google asks to re-verify.
-      let page = await openNewComputerPage(options.stateDir, 'connectors');
-      const reopen = async (old: typeof page): Promise<typeof page> => { await closeOwnedPage(options.stateDir, old, 'connectors').catch(quiet('agent/computer/connector-runner-live')); page = await openNewComputerPage(options.stateDir, 'connectors'); return page; };
+      let page = await openNewComputerPage(options.stateDir, TAB);
+      const reopen = async (old: typeof page): Promise<typeof page> => { await closeOwnedPage(options.stateDir, old, TAB).catch(quiet('agent/computer/connector-runner-live')); page = await openNewComputerPage(options.stateDir, TAB); return page; };
       try {
         const done = await oauthConnect(id, page, { email, stateDir: options.stateDir, reopen, ...(options.signal ? { signal: options.signal } : {}) });
         return { ok: true, note: `consent finished: ${done.steps.length} presses, ClikDeploy shows an active connection` };
@@ -117,10 +118,17 @@ export function liveDriver(options: LiveDriverOptions): BrowserDriver {
         const screenshot = await shoot(page, id, shotDir);
         return { ok: false, stop: { ...seen, message: message.slice(0, 300), ...(screenshot ? { screenshot } : {}) } };
       } finally {
-        await closeComputerPage(options.stateDir, 'connectors').catch(quiet('agent/computer/connector-runner-live'));
-        await releaseComputerBrowser(options.stateDir).catch(quiet('agent/computer/connector-runner-live'));
+        await closeComputerPage(options.stateDir, TAB).catch(quiet('agent/computer/connector-runner-live'));
+        if (!options.keepBrowser) await releaseComputerBrowser(options.stateDir).catch(quiet('agent/computer/connector-runner-live'));
       }
     },
+    // An unknown screen: one bounded headless-agent micro-task (CLIKCODE_MICRO_AGENT=0 turns it off, and the screen is handed on in a note).
+    ...(process.env.CLIKCODE_MICRO_AGENT === '0' ? {} : {
+      async agentTask(id: string, stop: StopInfo, budget: { maxCalls: number; maxMs: number }): Promise<DriveOutcome> {
+        const { runMicroTask, livePorts } = await import('./connector-micro-agent.js');
+        return runMicroTask(id, stop, budget, livePorts(options.stateDir));
+      },
+    }),
     async backoff(id) { return (await import('./keygrab-park.js')).backoffUntil(options.stateDir, id); },
     async recordBackoff(id) { return (await import('./keygrab-park.js')).recordBackoff(options.stateDir, id); },
     async hasRecipe(id, url) {
@@ -129,7 +137,7 @@ export function liveDriver(options: LiveDriverOptions): BrowserDriver {
     },
     async keygrab(id, url, budget): Promise<DriveOutcome> {
       const { liveKeygrab } = await import('./keygrab-live.js');
-      return liveKeygrab({ stateDir: options.stateDir, ...(options.signal ? { signal: options.signal } : {}), screenshotDir: shotDir }, id, url, budget);
+      return liveKeygrab({ stateDir: options.stateDir, ...(options.signal ? { signal: options.signal } : {}), screenshotDir: shotDir, tab: TAB, ...(options.keepBrowser ? { keepBrowser: true } : {}) }, id, url, budget);
     },
     async captureKey(id, url): Promise<DriveOutcome> {
       const { listRecipes } = await import('./signup-recipes.js');
@@ -138,11 +146,11 @@ export function liveDriver(options: LiveDriverOptions): BrowserDriver {
       const { computerWebTool } = await import('../tools/computer-web.js');
       const { detectBlocker } = await import('./signup-recipes.js');
       const ctx = { stateDir: options.stateDir, ...(options.signal ? { signal: options.signal } : {}) } as Parameters<typeof computerWebTool.run>[1];
-      const run = (args: Record<string, unknown>) => computerWebTool.run({ tab: 'connectors', ...args } as never, ctx);
+      const run = (args: Record<string, unknown>) => computerWebTool.run({ tab: TAB, ...args } as never, ctx);
       const stop = async (message: string): Promise<DriveOutcome> => {
         const { computerPage } = await import('./browser.js');
         const { pageExcerpt } = await import('./oauth-consent.js');
-        const page = await computerPage(options.stateDir, 'connectors').catch(quiet('agent/computer/connector-runner-live'));
+        const page = await computerPage(options.stateDir, TAB).catch(quiet('agent/computer/connector-runner-live'));
         const seen = page ? await look(page) : { text: '', controls: [] as string[] };
         const blocker = detectBlocker(seen.text);
         const kind: StopInfo['kind'] = blocker === 'a captcha' ? 'captcha' : blocker === 'an SMS or authenticator code' ? 'mfa' : blocker === 'a payment page' ? 'payment' : 'unknown';
@@ -162,8 +170,8 @@ export function liveDriver(options: LiveDriverOptions): BrowserDriver {
         return { ok: true, note: 'key captured and sent to ClikDeploy; it was not shown' };
       } finally {
         const { closeComputerPage, releaseComputerBrowser } = await import('./browser.js');
-        await closeComputerPage(options.stateDir, 'connectors').catch(quiet('agent/computer/connector-runner-live'));
-        await releaseComputerBrowser(options.stateDir).catch(quiet('agent/computer/connector-runner-live'));
+        await closeComputerPage(options.stateDir, TAB).catch(quiet('agent/computer/connector-runner-live'));
+        if (!options.keepBrowser) await releaseComputerBrowser(options.stateDir).catch(quiet('agent/computer/connector-runner-live'));
       }
     },
   };

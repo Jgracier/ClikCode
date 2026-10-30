@@ -11,7 +11,7 @@ import type { ParkedRecord } from './keygrab-park.js';
 import { OPENS_ANOTHER_APP, PRESSABLE_SITE, withPageControls, type PageControl } from './page-controls.js';
 import { scrubSecrets } from './secret-scrubber.js';
 
-const TAB = 'connectors';
+const DEFAULT_TAB = 'connectors';
 const clean = (text: string): string => scrubSecrets(text).replace(/\s+/g, ' ').trim().slice(0, 300);
 
 type PageView = { text: string; controls: KeyControl[]; fields: string[]; hasPassword: boolean; captchaFrame: boolean };
@@ -90,7 +90,7 @@ export async function lookAt(page: Page): Promise<KeyView> {
   return { url: page.url(), text, controls, fields, hasPassword, ...(seen.captchaFrame ? { captchaFrame: true } : {}) };
 }
 
-export interface LiveKeygrabOptions { stateDir: string; id: string; signal?: AbortSignal; screenshotDir?: () => Promise<string> }
+export interface LiveKeygrabOptions { stateDir: string; id: string; signal?: AbortSignal; screenshotDir?: () => Promise<string>; /** The named tab this run works in (default 'connectors'). */ tab?: string; /** Leave the browser connection open when done: other vendors' tabs share it. */ keepBrowser?: boolean }
 
 export async function liveKeygrabPort(options: LiveKeygrabOptions): Promise<KeygrabPort> {
   const { computerWebTool } = await import('../tools/computer-web.js');
@@ -103,10 +103,10 @@ export async function liveKeygrabPort(options: LiveKeygrabOptions): Promise<Keyg
     const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const late = new Promise<{ output: string; isError: boolean }>(resolve => { timer = setTimeout(() => resolve({ output: `${String(args.action)} did not finish within ${Math.round(ms / 1000)}s`, isError: true }), ms + 2_000); });
-    try { return await Promise.race([computerWebTool.run({ tab: TAB, ...args } as never, { ...ctx, signal }), late]); }
+    try { return await Promise.race([computerWebTool.run({ tab: options.tab ?? DEFAULT_TAB, ...args } as never, { ...ctx, signal }), late]); }
     finally { if (timer) clearTimeout(timer); }
   };
-  const page = (): Promise<Page> => computerPage(options.stateDir, TAB);
+  const page = (): Promise<Page> => computerPage(options.stateDir, options.tab ?? DEFAULT_TAB);
   const shots = options.screenshotDir ?? (() => mkdtemp(join(tmpdir(), 'clikcode-connector-shots-')));
   const failed = (r: { output: string; isError?: boolean }): string | undefined => r.isError ? clean(r.output) : undefined;
   return {
@@ -151,13 +151,14 @@ export interface KeygrabBudget { maxMs: number; alternates?: string[]; maxSteps?
 
 /** The `keygrab` driver method: runs the policy, then says whether a recipe was recorded for the host. A run that cannot finish leaves its
  * hidden tab open on the last page (parked, with a record of the trail) so `clikcode connectors resume <id>` can carry on from there. */
-export async function liveKeygrab(options: { stateDir: string; signal?: AbortSignal; screenshotDir?: () => Promise<string> }, id: string, url: string, budget: KeygrabBudget): Promise<DriveOutcome> {
+export async function liveKeygrab(options: { stateDir: string; signal?: AbortSignal; screenshotDir?: () => Promise<string>; tab?: string; keepBrowser?: boolean }, id: string, url: string, budget: KeygrabBudget): Promise<DriveOutcome> {
   const [{ runKeygrab }, { listRecipes }, browser, recorder, park] = await Promise.all([import('./keygrab.js'), import('./signup-recipes.js'), import('./browser.js'), import('./recipe-recorder.js'), import('./keygrab-park.js')]);
   const { closeComputerPage, releaseComputerBrowser } = browser;
   const stamp = async (): Promise<string> => (await listRecipes(options.stateDir).catch(() => [])).map(r => `${r.host}:${r.loginRoute}:${r.verifiedAt}`).sort().join('|');
   /** The hosts whose recipe changed between two stamps (the key page is often on another host than the vendor's front page). */
   const changed = (a: string, b: string): string[] => b.split('|').filter(x => x && !a.split('|').includes(x)).map(x => x.split(':')[0]!);
   const before = await stamp();
+  const TAB = options.tab ?? DEFAULT_TAB;
   const journalKey = `${options.stateDir}#${TAB}`;
   let parked = false;
   try {
@@ -189,6 +190,6 @@ export async function liveKeygrab(options: { stateDir: string; signal?: AbortSig
     return { ok: false, stop: { ...stop, vendorUrl: url, ...(parked ? { parked: true } : {}) } };
   } finally {
     if (!parked) await closeComputerPage(options.stateDir, TAB).catch(quiet('agent/computer/keygrab-live'));
-    await releaseComputerBrowser(options.stateDir).catch(quiet('agent/computer/keygrab-live'));
+    if (!options.keepBrowser) await releaseComputerBrowser(options.stateDir).catch(quiet('agent/computer/keygrab-live'));
   }
 }

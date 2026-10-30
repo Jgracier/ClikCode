@@ -44,7 +44,7 @@ export interface DeployClient {
   waiting(): Promise<Array<{ id: string; reason: string; task: string }>>;
   batch(input: { ids?: string[]; limit?: number; parallel?: number }): Promise<{ results: OnboardResult[]; skipped: Array<{ id: string; why: string }> }>;
   onboard(id: string): Promise<OnboardResult>;
-  report(input: { id: string; outcome: 'blocked' | 'retry'; reason: string; humanStep?: HumanStep }): Promise<void>;
+  report(input: { id: string; outcome: 'blocked' | 'retry' | 'done'; reason: string; humanStep?: HumanStep }): Promise<void>;
   note(id: string, text: string): Promise<void>;
   tool(name: string, args: Record<string, unknown>): Promise<unknown>;
 }
@@ -59,6 +59,8 @@ export interface BrowserDriver {
   backoff?(id: string): Promise<Date | undefined>;
   /** Starts the vendor's 6 hour back-off (after a captcha); returns when it ends. */
   recordBackoff?(id: string): Promise<Date>;
+  /** A screen no rule knows: one bounded agent micro-task (the account_use and browser_use tools only) that gets the key or finishes consent and saves a recipe. Absent: the screen is handed on in a note. */
+  agentTask?(id: string, stop: StopInfo, budget: { maxCalls: number; maxMs: number }): Promise<DriveOutcome>;
   keygrab(id: string, url: string, budget: { maxMs: number; /** The task's other addresses (homepage, sign-up, docs): where to start if `url` is no web page. */ alternates?: string[] }): Promise<DriveOutcome>;
 }
 
@@ -68,6 +70,7 @@ export interface RunnerOptions {
   published?: boolean;
   /** Most actions per vendor (default 12). */ maxSteps?: number;
   /** Most time per vendor in ms (default 300000). */ maxMs?: number;
+  /** Most tool calls the agent micro-task may make on one unknown screen (default 25). */ agentCalls?: number;
   dryRun?: boolean;
   now?: () => number; sleep?: (ms: number) => Promise<void>;
   /** Where hand-off requests are written (default: a fresh temp directory). */ handoffDir?: () => Promise<string>;
@@ -247,6 +250,16 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
     } catch (error) { recorded = `could not report it (${cap(say(error instanceof Error ? error.message : String(error)), 120)})`; }
     return out('human', human.instructions ?? human.kind, { humanStep: human, recorded });
   };
+  // An unknown screen gets one bounded agent micro-task per vendor; success carries on with the next onboard step.
+  let agentTried = false;
+  const viaAgent = async (stop: StopInfo): Promise<DriveOutcome | undefined> => {
+    if (agentTried || !driver.agentTask || stop.human || humanStepFor(id, stop)) return undefined;
+    agentTried = true;
+    actions.push('an unrecognized screen: one bounded agent micro-task');
+    const done = await gate(() => driver.agentTask!(id, stop, { maxCalls: options.agentCalls ?? 25, maxMs: Math.max(30_000, maxMs - (now() - began)) }));
+    if (done.ok && done.recipe) recipeSaved = true;
+    return done;
+  };
   const stopped = async (stop: StopInfo): Promise<VendorOutcome> => {
     browserActions += stop.actions ?? stop.trail?.length ?? 0;
     if (stop.trail?.length) actions.push(`keygrab did: ${stop.trail.join(' > ')}`);
@@ -287,7 +300,8 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
           const wait = await driver.backoff?.(id);
           if (wait) return out('waiting', `backed off after a captcha until ${wait.toISOString()}; not retried before then`, { backoffUntil: wait.toISOString() });
           actions.push('connect the test account through the consent driver');
-          const done = await gate(() => driver.oauthConnect(id));
+          let done = await gate(() => driver.oauthConnect(id));
+          if (!done.ok) { const again = await viaAgent(done.stop); if (again) done = again; }
           if (!done.ok) return await stopped(done.stop);
           actions.push(done.note ?? 'consent finished, ClikDeploy shows an active connection');
           result = fix(await client.onboard(id));
@@ -308,6 +322,7 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
             // A recipe that no longer fits (the site changed) falls back to the generic policy; a wall stays a wall.
             if (!done.ok && plan.url && !done.stop.human && !humanStepFor(id, done.stop)) done = await generic(plan.url);
           }
+          if (!done.ok) { const again = await viaAgent(done.stop); if (again) done = again; }
           if (!done.ok) return await stopped(done.stop);
           browserActions += done.actions ?? 0;
           actions.push(done.note ?? 'key captured unseen and sent to ClikDeploy');
