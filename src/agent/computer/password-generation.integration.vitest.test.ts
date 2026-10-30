@@ -69,6 +69,7 @@ beforeAll(async () => {
       });
       return;
     }
+    if (area === 'quaderno') return send('<!doctype html><title>Quaderno</title><h1>Create your new password</h1><form><label>Password <input name="pw" type="password"></label><button type="submit">Continue</button></form>');
     if (area === 'signin') return send('<!doctype html><title>Sign in</title><h1>Sign in</h1><form><label>Email <input name="email" type="email" autocomplete="username"></label><label>Password <input name="pw" type="password" autocomplete="current-password"></label></form>');
     send('<!doctype html><title>Welcome</title><h1>Welcome</h1>');
   });
@@ -201,4 +202,25 @@ it.skipIf(!enabled)('a sign-in fill with no saved login and no profile password 
   expect(failure?.message).toContain('no saved login for this site');
   expect(failure?.message).not.toContain('did not provide');
   expect(await listTasks(stateDir, { status: 'needs-human' })).toHaveLength(1);
+}, 60_000);
+
+it.skipIf(!enabled)('a post-signup "Create your new password" page gets a generated password, saved before it is submitted', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-pw-state-')); made.push(stateDir);
+  const tab = await (await browser!.newContext({ ignoreHTTPSErrors: true })).newPage();
+  await tab.goto(`${base}/quaderno/welcome/your-personal-data`);
+  const ctx = { stateDir, acceptsImages: false, requestPrivateLogin: async () => undefined } as unknown as ToolContext;
+  const result = await runSteps(tab, [{ do: 'fill', target: 'Password' }], ctx);
+  const typed = await tab.locator('input[name=pw]').inputValue();
+  expect(typed).toHaveLength(24);
+  expect(result.output).not.toContain(typed);
+  const [login] = await savedLoginsForSite(stateDir, `${base}/`);
+  expect((await savedLoginFields(stateDir, `${base}/`, login!.id)).password).toBe(typed);
+  expect(await listTasks(stateDir, { status: 'needs-human' })).toHaveLength(0);
+}, 60_000);
+
+it.skipIf(!enabled)('the parked note names the kind of page it decided it was', async () => {
+  const asked = { count: 0 };
+  const { run } = await signIn(asked);
+  const failure = await run().then(() => undefined, (error: unknown) => error as Error);
+  expect(failure?.message).toContain('treated as a sign-in page');
 }, 60_000);
