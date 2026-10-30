@@ -62,3 +62,37 @@ export async function connectorsResume(id: string, flags: ConnectorsResumeFlags)
   if (isJsonDefaultMode()) return emitResult({ connectors: { resume: summary } });
   process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
 }
+
+export interface ConnectorsQualifyFlags { ids?: string; next?: string; report?: boolean; parallel?: string; dump?: string }
+
+/** `clikcode connectors qualify`: render each vendor's sign-up, pricing and developer pages and say from the rendered text whether a key needs a person. */
+export async function connectorsQualify(flags: ConnectorsQualifyFlags): Promise<void> {
+  const [{ qualifyVendor }, { qualifyPorts }, { liveClient }] = await Promise.all([import('../agent/computer/connector-qualify.js'), import('../agent/computer/connector-qualify-live.js'), import('../agent/computer/connector-runner-live.js')]);
+  const client = liveClient();
+  let ids = flags.ids?.split(',').map(s => s.trim()).filter(Boolean) ?? [];
+  if (ids.some(id => !/^[a-z0-9][a-z0-9-]{0,63}$/.test(id))) throw new Error('--ids are connector ids: lower-case letters, digits and dashes, separated by commas.');
+  const next = number(flags.next, 'next', 1, 50);
+  if (!ids.length && !next) throw new Error('Give --ids a,b,c or --next N.');
+  if (!ids.length) ids = (await client.waiting()).slice(0, next).map(w => w.id);
+  const parallel = number(flags.parallel, 'parallel', 1, 4) ?? 1;
+  const ports = qualifyPorts(stateDirectory(), client, flags.dump ? { dumpDir: flags.dump } : {});
+  const results: Awaited<ReturnType<typeof qualifyVendor>>[] = [];
+  const queue = [...ids];
+  try {
+    await Promise.all(Array.from({ length: Math.min(parallel, queue.length) }, async () => {
+      for (let id = queue.shift(); id; id = queue.shift()) {
+        const result = await qualifyVendor(id, ports);
+        results.push(result);
+        if (flags.report) await reportQualify(client, result).catch(error => process.stderr.write(`${id}: could not write the note (${(error instanceof Error ? error.message : String(error)).slice(0, 120)})\n`));
+      }
+    }));
+  } finally { await (await import('../agent/computer/browser.js')).releaseComputerBrowser(stateDirectory()).catch(() => undefined); }
+  results.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id));
+  if (isJsonDefaultMode()) return emitResult({ connectors: { qualify: results } });
+  process.stdout.write(`${JSON.stringify(results.length === 1 ? results[0] : results, null, 2)}\n`);
+}
+
+async function reportQualify(client: import('../agent/computer/connector-runner.js').DeployClient, r: { id: string; lane: string; kinds: string[]; evidence: Array<{ kind: string; phrase: string; url: string }> }): Promise<void> {
+  const why = r.evidence.slice(0, 4).map(e => `${e.kind}: "${e.phrase.slice(0, 80)}" (${e.url})`).join(' | ');
+  await client.note(r.id, `clikcode connectors qualify: lane ${r.lane}${r.kinds.length ? `, ${r.kinds.join('/')}` : ''}. ${why}`.slice(0, 3900));
+}
