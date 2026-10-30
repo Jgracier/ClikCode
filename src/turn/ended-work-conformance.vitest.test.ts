@@ -256,6 +256,19 @@ describe('Codex app-server', () => {
   }, 30_000);
 });
 
+describe('direct API (ClikCode\'s own agent on the Gateway)', () => {
+  // A direct turn has no background vendor process: its only work that ends is the turn itself, and
+  // its failure goes through the main-turn path (account-routing.ts accountAfterFailure; its consequences
+  // are tested in agent-turn-account-failure.vitest.test.ts). What the contract asks of this adapter is
+  // the same as of the others: the response's structured status decides, not the words.
+  it('reads the response status as the evidence: spent credit, a spent limit, or a throttle', async () => {
+    const { agentTurnFailureKind } = await import('./failover.js');
+    expect(agentTurnFailureKind({ text: 'Payment required', statusCode: 402 })).toBe('quota-exhausted');
+    expect(agentTurnFailureKind({ text: 'Too many requests', statusCode: 429 })).toBe('quota-exhausted');
+    expect(agentTurnFailureKind({ text: 'Too many requests', statusCode: 429, retryAfter: 30 })).toBe('temporarily-throttled');
+  });
+});
+
 describe('Amp stream-json', () => {
   it('moves a live conversation to B when its sub-agent fails on the usage limit', async () => {
     const owner = { harness: 'amp', accountId: 'acct-a' };
