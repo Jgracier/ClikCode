@@ -125,33 +125,52 @@ export function describeProfile(profile: SavedProfile): string {
 }
 
 /** What a form field asks for: its autocomplete token first, then its words. */
-export type FieldHint = { autocomplete: string; type: string; text: string };
+/** `label` is the field's own visible label (or aria-label, placeholder), judged before the rest of `text` (name, id). */
+export type FieldHint = { autocomplete: string; type: string; text: string; label?: string };
 
 const TOKENS: Record<string, ProfileKey> = {
   'given-name': 'given_name', 'family-name': 'family_name', email: 'email', tel: 'phone', 'tel-national': 'phone', 'street-address': 'address_line1',
   'address-line1': 'address_line1', 'address-line2': 'address_line2', 'address-level2': 'city', 'address-level1': 'state', 'postal-code': 'postal_code',
   country: 'country', 'country-name': 'country', organization: 'organization', 'organization-title': 'job_title', url: 'website', bday: 'birthday', 'bday-day': 'birthday', 'bday-month': 'birthday', 'bday-year': 'birthday',
 };
+/** Lower case with accents removed, so "Contraseña", "Téléphone" and "Straße" are matched by plain letters. */
+const plain = (text: string): string => text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ß/g, 'ss').toLowerCase();
+
+/** Most specific first: "postal code" must not become an address because its name says "address_postal_code", and a business
+ * name must not become a person's name. English, Spanish, Portuguese, French, German and Italian. */
 const WORDS: [RegExp, ProfileKey][] = [
-  [/first.?name|given.?name|forename|\bfname\b/, 'given_name'],
-  [/last.?name|family.?name|surname|\blname\b/, 'family_name'],
-  [/e-?mail/, 'email'],
-  [/phone|mobile|\btel\b|cell/, 'phone'],
-  [/address.?(?:line)?.?2|apt|suite|unit|\bapartment\b/, 'address_line2'],
-  [/address|street/, 'address_line1'],
-  [/\bcity\b|town/, 'city'],
-  [/\bstate\b|province|region(?!al)/, 'state'],
-  [/zip|postal|post.?code/, 'postal_code'],
-  [/country|territory/, 'country'],
-  [/company|organi[sz]ation|employer|business.?name/, 'organization'],
-  [/job.?title|position|\brole\b/, 'job_title'],
-  [/website|\burl\b/, 'website'],
-  [/birth|\bdob\b|\bbday\b|\b(?:dd|mm|yyyy)\b/, 'birthday'],
+  [/e-?mail|correo|courriel|\bmail\b/, 'email'],
+  [/company|organi[sz]ation|organizacao|employer|business.?name|nombre.?de.?(?:la.?)?(?:empresa|compania)|\bempresa\b|razon.?social|ragione.?sociale|\bazienda\b|entreprise|societe|raison.?sociale|firma|unternehmen|\bbetrieb\b|nome.?da.?empresa/, 'organization'],
+  [/zip|postal|post.?code|codigo.?postal|\bcep\b|code.?postal|postleitzahl|\bplz\b|\bcap\b|codice.?postale/, 'postal_code'],
+  [/phone|mobile|\btel\b|\bcell|telefon|telefone|telephone|\bmovil\b|celular|handy|cellulare|\bfono\b/, 'phone'],
+  [/\bcity\b|town|ciudad|cidade|\bville\b|stadt|\bort\b|citta|localidad|municipio|comune/, 'city'],
+  [/\bstate\b|province|region(?!al)|provincia|\bestado\b|\betat\b|bundesland|\bregiao\b|\bregione\b|departamento/, 'state'],
+  [/country|territory|\bpais\b|\bpays\b|\bland\b|\blaender\b|paese|nacion/, 'country'],
+  [/first.?name|given.?name|forename|\bfname\b|\bnombres?\b|\bnome\b|prenom|vorname|\bnom\b(?!.*(?:de|da|empresa|entreprise|societe))/, 'given_name'],
+  [/last.?name|family.?name|surname|\blname\b|apellidos?|sobrenome|cognome|nom.?de.?famille|nachname|familienname/, 'family_name'],
+  [/address.?(?:line)?.?2|\bapt\b|suite|\bunit\b|\bapartment\b|apartamento|\bpiso\b|complement|zusatz|interno/, 'address_line2'],
+  [/address|street|direccion|domicilio|endereco|adresse|strasse|\bcalle\b|\brua\b|indirizzo|\bvia\b|\brue\b/, 'address_line1'],
+  [/job.?title|position|\brole\b|cargo|puesto|\bfonction\b|\bberuf\b|\bruolo\b/, 'job_title'],
+  [/website|\burl\b|sitio.?web|pagina.?web|site.?web|webseite|sito/, 'website'],
+  [/birth|\bdob\b|\bbday\b|\b(?:dd|mm|yyyy)\b|nacimiento|nascimento|naissance|geburt|nascita/, 'birthday'],
 ];
 
-/** A password, code or card field: never filled from a profile. */
+/** A registration, VAT, tax or company number: the profile holds none, so such a box is left empty and reported, never filled with a guess. */
+const UNFILLABLE_KIND = /\b(?:registration|registro|company|business|tax|vat|fiscal|steuer|iva|identification|identificacion|trade|legal)\b/;
+const UNFILLABLE_NUMBER = /\b(?:number|no|nr|num|numero|nummer|id|identifier)\b/;
+const UNFILLABLE_ALONE = /steuernummer|umsatzsteuer|\b(?:vat|ein|cif|nif|cnpj|cpf|siret|siren|abn|duns|rfc|tin|registration|registro)\b/;
+export function isUnfillable(hint: FieldHint): boolean {
+  const text = plain(`${hint.label ?? ''} ${hint.text}`).replace(/[_\-[\].]+/g, ' ');
+  if (/postal|zip|post code|e mail|email|correo|phone|\btel\b|telefon|mobile|movil/.test(text)) return false;
+  return UNFILLABLE_ALONE.test(text) || UNFILLABLE_KIND.test(text) && UNFILLABLE_NUMBER.test(text);
+}
+
+/** A password, code or card field: never filled from a profile. A postal, zip or post code is a place, not a verification code. */
 function isSecretField(hint: FieldHint): boolean {
-  return hint.type === 'password' || /password|passcode|one-time|verification|security.?code|\botp\b|card|cvv|cvc/.test(`${hint.autocomplete} ${hint.text}`.toLowerCase());
+  const text = plain(`${hint.autocomplete} ${hint.text}`);
+  if (hint.type === 'password') return true;
+  if (/password|passcode|one-time|verification|security.?code|\botp\b|\bpin\b|card|cvv|cvc|contrasena|senha|mot.?de.?passe|passwort|kennwort|codigo.?de.?(?:verificacion|seguridad)|verifizierungscode|code.?de.?verification/.test(text)) return !/postal|zip|post.?code|postleitzahl|\bcep\b/.test(text);
+  return false;
 }
 
 const words = (text: string): string => ` ${text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()} `;
@@ -190,10 +209,14 @@ export function secretFieldFor(profile: { secrets?: Record<string, SecretField> 
 
 /** The profile field a form field wants, if any. A password, code or card field is never one. */
 export function profileKeyFor(hint: FieldHint): ProfileKey | undefined {
-  if (isSecretField(hint)) return undefined;
+  if (isSecretField(hint) || isUnfillable(hint)) return undefined;
   for (const token of hint.autocomplete.toLowerCase().split(/\s+/)) if (TOKENS[token]) return TOKENS[token];
-  const text = hint.text.toLowerCase();
-  for (const [pattern, key] of WORDS) if (pattern.test(text)) return key;
+  // The field's own label decides before its name and id do (a "Postal code" box named address[zip] is a postal code, not an address).
+  for (const text of [hint.label, hint.text]) {
+    if (!text?.trim()) continue;
+    const flat = plain(text).replace(/[_\-[\].]+/g, ' ');
+    for (const [pattern, key] of WORDS) if (pattern.test(flat)) return key;
+  }
   return hint.type === 'email' ? 'email' : hint.type === 'tel' ? 'phone' : undefined;
 }
 
@@ -236,25 +259,28 @@ export function birthdayFor(value: string, words = ''): string {
 }
 
 
+/** Words of a profile's label that name no site ("ClikDeploy admin" is ClikDeploy's). */
+const GENERIC_LABEL_WORDS = new Set(['admin', 'personal', 'work', 'main', 'default', 'account', 'profile', 'home', 'business', 'company', 'bot', 'the', 'and', 'for']);
+
+/** True when this profile declares the page's site: its website detail is on the host, or a word of its label (Railway, AWS) is part of it. */
+export function profileDeclaresHost(profile: SavedProfile, host: string | undefined): boolean {
+  if (!host) return false;
+  const bare = host.toLowerCase().replace(/^www\./, '');
+  const site = profile.fields.website ? plain(profile.fields.website).replace(/^[a-z]+:\/\//, '').replace(/^www\./, '').split(/[/?#]/)[0] : '';
+  if (site && (bare === site || bare.endsWith(`.${site}`))) return true;
+  const hostWords = bare.split('.').slice(0, -1).join('.');
+  return plain(profile.label).split(/[^a-z0-9]+/).some(word => word.length >= 3 && !GENERIC_LABEL_WORDS.has(word) && hostWords.split(/[^a-z0-9]+/).includes(word));
+}
+
 /**
- * Which saved profile fills a form when there are several. Nobody is asked: an unattended run cannot answer, and a person who
- * keeps two profiles (a personal one, one for a bot account) meant "the one that fits this form". Score = how many of the form's
- * blank fields the profile can fill (standard or custom detail); ties go to the profile with more saved details. When a profile
- * called Personal exists it is used for every form, unless another profile holds more of the details the agent asked for by name. `label` (the call's `label` argument) wins when it names a profile.
+ * Which saved profile fills a form when there are several. Nobody is asked and nothing is scored: the call's `label` names one, else the
+ * profile that declares the page's site (Railway's on railway.com), else the default profile (Personal, else the one with the most
+ * standard details). A detail another profile holds under a loose word ("email") never pulls a sign-up onto that profile.
  */
-export function bestProfileFor<P extends SavedProfile>(profiles: readonly P[], hints: readonly FieldHint[], label?: string): P | undefined {
+export function bestProfileFor<P extends SavedProfile>(profiles: readonly P[], _hints: readonly FieldHint[], label?: string, host?: string): P | undefined {
   if (profiles.length <= 1) return profiles[0];
   const named = label ? profiles.find(candidate => candidate.label.toLowerCase() === label.trim().toLowerCase()) : undefined;
   if (named) return named;
-  const score = (candidate: P): number => hints.filter(hint => { const key = profileKeyFor(hint); return (key && candidate.fields[key]) || customFieldFor(candidate, hint); }).length;
-  // Standard details (name, email, address) are the user's own: a form that asks for them is filled as Personal, even when another
-  // profile (the admin one, "ClikDeploy") has more of them saved. Another profile wins only on a detail the agent asked for by name.
-  const personalProfile = profiles.find(candidate => candidate.label.toLowerCase() === 'personal');
-  if (personalProfile) {
-    const askedBy = (candidate: P): number => hints.filter(hint => customFieldFor(candidate, hint)).length;
-    const better = profiles.filter(candidate => candidate !== personalProfile && askedBy(candidate) > askedBy(personalProfile));
-    return better.sort((a, b) => askedBy(b) - askedBy(a) || score(b) - score(a))[0] ?? personalProfile;
-  }
-  const size = (candidate: P): number => Object.keys(candidate.fields).length + Object.keys(candidate.custom ?? {}).length;
-  return [...profiles].sort((a, b) => score(b) - score(a) || size(b) - size(a))[0];
+  const def = defaultProfile(profiles);
+  return profiles.find(candidate => candidate !== def && profileDeclaresHost(candidate, host)) ?? def;
 }

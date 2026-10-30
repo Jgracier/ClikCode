@@ -3,9 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { lockCredentialVault } from './credential-vault.js';
-import { bestProfileFor, defaultProfile, birthdayFor, customFieldFor, describeProfile, listProfiles, normalizePhone, phoneFor, profileEmail, profileKeyFor, readProfileSecret, removeProfile, saveProfile, saveProfileSecret, secretFieldFor } from './profiles.js';
+import { isUnfillable, bestProfileFor, defaultProfile, birthdayFor, customFieldFor, describeProfile, listProfiles, normalizePhone, phoneFor, profileEmail, profileKeyFor, readProfileSecret, removeProfile, saveProfile, saveProfileSecret, secretFieldFor } from './profiles.js';
 import { namedSecretNames } from './credential-vault.js';
 
+type ProfileKeyName = NonNullable<ReturnType<typeof profileKeyFor>>;
 let stateDir = '';
 afterEach(async () => { if (stateDir) { lockCredentialVault(stateDir); await rm(stateDir, { recursive: true, force: true }); stateDir = ''; } });
 
@@ -21,6 +22,56 @@ describe('profileKeyFor', () => {
     expect(profileKeyFor({ autocomplete: 'cc-number', type: 'text', text: 'Card number' })).toBeUndefined();
     expect(profileKeyFor({ autocomplete: 'new-password', type: 'password', text: 'Password' })).toBeUndefined();
     expect(profileKeyFor({ autocomplete: '', type: 'text', text: 'Favourite colour' })).toBeUndefined();
+  });
+});
+
+describe('profileKeyFor: the business page of a sign-up', () => {
+  const field = (label: string, name = '', type = 'text') => ({ autocomplete: '', type, label, text: `${label} ${name}` });
+  it('maps each business box to its own detail and never the email', () => {
+    expect(profileKeyFor(field('Business name', 'account[business_name]'))).toBe('organization');
+    expect(profileKeyFor(field('Company name'))).toBe('organization');
+    expect(profileKeyFor(field('Organization'))).toBe('organization');
+    expect(profileKeyFor(field('Business phone', 'account[phone]'))).toBe('phone');
+    expect(profileKeyFor(field('Work phone', 'work_phone', 'tel'))).toBe('phone');
+    expect(profileKeyFor(field('Postal code', 'billing_address_postal_code'))).toBe('postal_code');
+    expect(profileKeyFor(field('Zip', 'address[zip]'))).toBe('postal_code');
+    expect(profileKeyFor(field('Postcode'))).toBe('postal_code');
+    expect(profileKeyFor(field('Country'))).toBe('country');
+    expect(profileKeyFor(field('State / Province'))).toBe('state');
+    expect(profileKeyFor(field('City'))).toBe('city');
+    expect(profileKeyFor(field('Email', 'user[email]', 'email'))).toBe('email');
+    expect(profileKeyFor(field('Correo electrónico'))).toBe('email');
+  });
+
+  it('a registration, VAT, tax or company number has no profile detail', () => {
+    for (const label of ['Registration number', 'VAT number', 'Tax ID', 'Company number', 'Business registration no.', 'Número de registro', 'Steuernummer']) {
+      expect(profileKeyFor(field(label, 'account[registration_number]'))).toBeUndefined();
+      expect(isUnfillable(field(label))).toBe(true);
+    }
+    expect(isUnfillable(field('Business name'))).toBe(false);
+    expect(isUnfillable(field('Business phone number'))).toBe(false);
+  });
+
+  it('a postal code is a place, a verification code is not filled', () => {
+    expect(profileKeyFor(field('Postal code'))).toBe('postal_code');
+    expect(profileKeyFor(field('Verification code'))).toBeUndefined();
+    expect(profileKeyFor(field('Security PIN'))).toBeUndefined();
+    expect(profileKeyFor({ autocomplete: '', type: 'text', text: 'Code OTP' })).toBeUndefined();
+  });
+
+  it('knows Spanish, Portuguese, French, German and Italian labels', () => {
+    const cases: [string, ProfileKeyName][] = [
+      ['Nombre', 'given_name'], ['Apellidos', 'family_name'], ['Teléfono', 'phone'], ['Empresa', 'organization'], ['Nombre de la empresa', 'organization'], ['Código postal', 'postal_code'], ['Ciudad', 'city'], ['País', 'country'], ['Dirección', 'address_line1'], ['Correo electrónico', 'email'],
+      ['Nome', 'given_name'], ['Sobrenome', 'family_name'], ['Telefone', 'phone'], ['Nome da empresa', 'organization'], ['CEP', 'postal_code'], ['Cidade', 'city'], ['Estado', 'state'], ['Endereço', 'address_line1'], ['E-mail', 'email'],
+      ['Prénom', 'given_name'], ['Nom de famille', 'family_name'], ['Téléphone', 'phone'], ['Entreprise', 'organization'], ['Société', 'organization'], ['Code postal', 'postal_code'], ['Ville', 'city'], ['Pays', 'country'], ['Adresse', 'address_line1'], ['Courriel', 'email'],
+      ['Vorname', 'given_name'], ['Nachname', 'family_name'], ['Telefonnummer', 'phone'], ['Unternehmen', 'organization'], ['Firma', 'organization'], ['Postleitzahl', 'postal_code'], ['PLZ', 'postal_code'], ['Stadt', 'city'], ['Bundesland', 'state'], ['Land', 'country'], ['Straße', 'address_line1'], ['E-Mail-Adresse', 'email'],
+      ['Cognome', 'family_name'], ['Telefono', 'phone'], ['Azienda', 'organization'], ['Ragione sociale', 'organization'], ['Codice postale', 'postal_code'], ['Città', 'city'], ['Paese', 'country'], ['Indirizzo', 'address_line1'], ['Indirizzo email', 'email'],
+    ];
+    for (const [label, key] of cases) expect([label, profileKeyFor(field(label))]).toEqual([label, key]);
+  });
+
+  it('never offers a password or code in another language', () => {
+    for (const label of ['Contraseña', 'Confirmar contraseña', 'Senha', 'Mot de passe', 'Passwort', 'Código de verificación']) expect([label, profileKeyFor(field(label))]).toEqual([label, undefined]);
   });
 });
 
@@ -156,27 +207,30 @@ describe('profile secrets', () => {
 
 
 describe('bestProfileFor: several profiles never mean asking', () => {
-  const personal = { id: 'p', label: 'Personal', fields: { given_name: 'J', email: 'a@x.test', phone: '1', address_line1: 'x' }, custom: {} } as never;
-  const admin = { id: 'a', label: 'ClikDeploy admin', fields: { given_name: 'J', email: 'a@x.test' }, custom: {} } as never;
+  const personal = { id: 'p', label: 'Personal', fields: { given_name: 'J', email: 'gracierdigital@gmail.com', phone: '1', address_line1: 'x' }, custom: {} } as never;
+  const admin = { id: 'a', label: 'ClikDeploy admin', fields: { given_name: 'J', email: 'admin@x.test' }, custom: {} } as never;
+  const railway = { id: 'r', label: 'Railway', fields: { given_name: 'J', organization: 'R' }, custom: { railway_email: { label: 'Railway email', value: 'justin@webpro.ai', match: ['email'] } } } as never;
   const hint = (text: string) => ({ text, type: 'text', autocomplete: '' });
 
-  it('takes the profile that can fill the most of the form, then the one with more details, then Personal', () => {
+  it('uses the default profile (Personal) whatever the form asks for', () => {
     expect(bestProfileFor([admin, personal], [hint('email')])?.label).toBe('Personal');
     expect(bestProfileFor([admin, personal], [hint('phone'), hint('street address')])?.label).toBe('Personal');
     expect(bestProfileFor([personal, admin], [])?.label).toBe('Personal');
   });
 
-  it('Personal fills a sign-up even when another profile has more details saved (Postmark got "ClikDeploy")', () => {
-    const big = { id: 'b', label: 'ClikDeploy', fields: { given_name: 'C', email: 'admin@x.test', phone: '1', address_line1: 'x', city: 'y', organization: 'ClikDeploy' }, custom: {} } as never;
-    const small = { id: 'p', label: 'Personal', fields: { given_name: 'J' }, custom: {} } as never;
-    expect(bestProfileFor([big, small], [hint('first name'), hint('email'), hint('company'), hint('city')])?.label).toBe('Personal');
-    expect(bestProfileFor([big, small], [hint('email')], 'ClikDeploy')?.label).toBe('ClikDeploy');
+  it('two profiles with different emails: an Email field gets the default profile\'s, even when the other profile holds a custom "email" detail', () => {
+    const picked = bestProfileFor([railway, personal], [hint('Email')], undefined, 'example-signup.test');
+    expect(picked?.label).toBe('Personal');
+    expect(picked?.fields.email).toBe('gracierdigital@gmail.com');
+    expect(customFieldFor(picked as never, hint('Email'))).toBeUndefined();
   });
 
-  it('a detail the agent asked for by name that only another profile holds still picks that profile', () => {
-    const co = { id: 'c', label: 'Company', fields: {}, custom: { support_email: { label: 'Support email', value: 's@x.test' } } } as never;
-    const me = { id: 'p', label: 'Personal', fields: { email: 'a@x.test' }, custom: {} } as never;
-    expect(bestProfileFor([co, me], [hint('Support email')])?.label).toBe('Company');
+  it('another profile is used only on the site it declares (by its label or its website)', () => {
+    expect(bestProfileFor([railway, personal], [hint('Email')], undefined, 'railway.com')?.label).toBe('Railway');
+    expect(bestProfileFor([railway, personal], [hint('Email')], undefined, 'login.railway.app')?.label).toBe('Railway');
+    expect(bestProfileFor([admin, personal], [hint('Email')], undefined, 'admin.example.com')?.label).toBe('Personal');
+    const site = { id: 's', label: 'Hosting', fields: { website: 'https://www.hoster.test/x' }, custom: {} } as never;
+    expect(bestProfileFor([site, personal], [], undefined, 'app.hoster.test')?.label).toBe('Hosting');
   });
 
   it('an explicit label wins, and a single profile is just that profile', () => {

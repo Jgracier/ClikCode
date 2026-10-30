@@ -14,9 +14,10 @@ import { storeSecretTool } from './store-secret.js';
 import { sharedState } from '../computer/shared-state.js';
 import { forgetSavedLogins, savedLoginFields, savedLoginsForSite, saveLoginFields } from '../computer/credential-vault.js';
 import { loginValueFor } from '../computer/login-fill.js';
+import { FillTimeout, withFillDeadline, type FillClock } from '../computer/fill-deadline.js';
 import { describeRecipe, fillPlaceholders, getRecipe, listRecipes, replayRecipe, saveRecipe } from '../computer/signup-recipes.js';
 import { addSiteNote, readSiteNotes } from '../computer/site-notes.js';
-import { assertCustomKey, bestProfileFor, customFieldFor, defaultProfile, describeProfile, listProfiles, profileEmail, PASSWORD_SECRET, PROFILE_KEYS, phoneFor, birthdayFor, profileKeyFor, readProfileSecret, saveProfile, saveProfileSecret, secretFieldFor, type FieldHint, type ProfileKey } from '../computer/profiles.js';
+import { assertCustomKey, bestProfileFor, isUnfillable, customFieldFor, defaultProfile, describeProfile, listProfiles, profileEmail, PASSWORD_SECRET, PROFILE_KEYS, phoneFor, birthdayFor, profileKeyFor, readProfileSecret, saveProfile, saveProfileSecret, secretFieldFor, type FieldHint, type ProfileKey } from '../computer/profiles.js';
 import { holdSignup, pendingSignupPassword, pendingSignupUsername, savedPasswordFor, settleSignup, sitePasswordFor } from '../computer/signup-login.js';
 import { generatePassword } from '../computer/password-policy.js';
 import { generatedFor, readPasswordPolicy, rememberGenerated, retryRejectedPassword } from '../computer/password-retry.js';
@@ -806,14 +807,15 @@ async function doStep(page: Page, step: Step, ctx?: ToolContext): Promise<StepOu
 }
 
 /** What a form field is, for matching it to a saved profile and for the private prompt. */
-async function describeField(target: Locator): Promise<{ label: string; password: boolean; hint: FieldHint; placeholder: string; current: string; maxlength: number }> {
+async function describeField(target: Locator): Promise<{ label: string; password: boolean; hint: FieldHint; placeholder: string; current: string; maxlength: number; readOnly: boolean }> {
   return target.evaluate(element => {
-    const el = element as unknown as { type?: string; value?: string; labels?: ArrayLike<{ textContent: string | null }>; getAttribute(name: string): string | null };
+    const el = element as unknown as { type?: string; value?: string; readOnly?: boolean; disabled?: boolean; labels?: ArrayLike<{ textContent: string | null }>; getAttribute(name: string): string | null };
     const label = (el.labels?.[0]?.textContent || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('name') || '').trim();
     const type = el.type ?? 'text';
     return { label, password: type === 'password', placeholder: el.getAttribute('placeholder') ?? '', current: type === 'password' ? '' : el.value ?? '', maxlength: Number(el.getAttribute('maxlength')) || 0,
-      hint: { autocomplete: el.getAttribute('autocomplete') ?? '', type, text: `${label} ${el.getAttribute('name') ?? ''} ${el.getAttribute('id') ?? ''}` } };
-  }).catch(() => ({ label: '', password: false, hint: { autocomplete: '', type: 'text', text: '' }, placeholder: '', current: '', maxlength: 0 }));
+      readOnly: el.readOnly === true || el.disabled === true || el.getAttribute('aria-readonly') === 'true',
+      hint: { autocomplete: el.getAttribute('autocomplete') ?? '', type, label, text: `${label} ${el.getAttribute('name') ?? ''} ${el.getAttribute('id') ?? ''}` } };
+  }).catch(() => ({ label: '', password: false, hint: { autocomplete: '', type: 'text', text: '' }, placeholder: '', current: '', maxlength: 0, readOnly: false }));
 }
 
 /** Fields that type themselves as they are entered (06/18/1998, (719) 744-3850). */
@@ -832,9 +834,12 @@ export function splitCodeFields<T extends { password: boolean; maxlength: number
 
 /** Fills that name no text: a saved profile covers what it can (name, address, phone), the user is asked
  * once, privately, for the rest, and what they answer is kept in the profile for next time. */
-export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolContext, label?: string): Promise<Step[]> {
+export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolContext, label?: string, report: string[] = [], clock?: FillClock): Promise<Step[]> {
   const blank = steps.filter(step => step.do === 'fill' && step.text === undefined);
   if (!blank.length) return [...steps];
+  if (clock) clock.field = String(blank[0]!.target ?? 'a field');
+  const prompt = <T>(wait: () => Promise<T>): Promise<T> => clock ? clock.paused(wait) : wait();
+  const skipped = new Map<Step, string>();
   const origin = new URL(page.url()).origin;
   const fields = await Promise.all(blank.map(async step => ({ step, ...await describeField(await locate(page, step.target)) })));
   const profiles = await listProfiles(ctx.stateDir);
@@ -842,9 +847,10 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
   if (profiles.length > 1) {
     // Never ask which profile: choose the one that fits this form best (see bestProfileFor), and keep the choice for this site.
     const remembered = profileChoice.get(`${ctx.stateDir}|${origin}`);
-    profile = profiles.find(candidate => candidate.id === remembered) ?? bestProfileFor(profiles, fields.map(field => field.hint), label);
+    profile = profiles.find(candidate => candidate.id === remembered) ?? bestProfileFor(profiles, fields.map(field => field.hint), label, new URL(page.url()).hostname);
     if (profile) profileChoice.set(`${ctx.stateDir}|${origin}`, profile.id);
   }
+  if (profile && profiles.length > 1) report.push(`Autofill used the profile "${profile.label}".`);
   const values = new Map<Step, string>();
   const ask: { step: Step; key: ProfileKey | undefined; field: LoginField }[] = [];
   // A saved login for this site fills its sign-in fields. Not on a form that creates a password (two password
@@ -866,7 +872,7 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
       if (!account && own) account = accounts.find(candidate => candidate.label.split(' · ').some(value => value.toLowerCase() === own.toLowerCase()));
       if (!account && ctx.requestPrivateLogin) {
         const labels = accounts.map(candidate => candidate.label);
-        const answer = await ctx.requestPrivateLogin(origin, [{ index: -1, key: 'account', label: 'Sign in with which account?', kind: 'choice', required: true, options: [...labels, 'Enter a different one'] }], ctx.signal);
+        const answer = await prompt(() => ctx.requestPrivateLogin!(origin, [{ index: -1, key: 'account', label: 'Sign in with which account?', kind: 'choice', required: true, options: [...labels, 'Enter a different one'] }], ctx.signal));
         account = accounts[labels.indexOf(answer?.account ?? '')];
         if (account) profileChoice.set(`${ctx.stateDir}|login|${origin}`, account.id);
       }
@@ -915,6 +921,9 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
   }
   for (const field of fields) {
     if (values.has(field.step)) continue;
+    if (clock) clock.field = field.label || String(field.step.target);
+    // A box the page already filled and locked (the account's email on a post-signup page) is left alone: nothing to type, nothing to ask.
+    if (field.readOnly) { skipped.set(field.step, `${field.label || field.step.target} is already filled and read-only; left as it is.`); continue; }
     if (field.password && generated) { values.set(field.step, generated); continue; }
     const fromLogin = login ? loginValueFor(login, field) : undefined;
     if (fromLogin && !(confirmSignIn && !signingUp)) { values.set(field.step, fromLogin); continue; }
@@ -932,8 +941,10 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
     // A detail the agent asked for by name ("Support email") is more specific than the standard field its words also suggest.
     const asked = field.password ? undefined : customFieldFor(profile, field.hint);
     if (asked) { values.set(field.step, asked.field.value); continue; }
+    // A registration, VAT or tax number: the profile has none. Left empty and reported, never filled with something else.
+    if (!field.password && isUnfillable(field.hint)) { skipped.set(field.step, `${field.label || field.step.target} left empty: the profile has no such detail.`); continue; }
     // A lone one-time-code box is filled from the emailed code when a mailbox is connected: the right sender, once, no agent call.
-    if (!field.password && fields.length === 1 && /one-time-code|\b(?:otp|verification|security code|passcode|confirmation code)\b|\bcode\b/i.test(`${field.hint.autocomplete} ${field.label} ${field.placeholder}`)) {
+    if (!field.password && fields.length === 1 && /one-time-code|\b(?:otp|verification|security code|passcode|confirmation code)\b|\bcode\b/i.test(`${field.hint.autocomplete} ${field.label} ${field.placeholder}`) && !/postal|zip|post.?code/i.test(`${field.label} ${field.placeholder} ${field.hint.text}`)) {
       const code = await codeFromMailbox(ctx.stateDir, page.url(), Date.now() - 120_000, ctx.signal);
       if (code) { registerSecret(code); values.set(field.step, code); continue; }
     }
@@ -958,7 +969,7 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
     const needPassword = ask.filter(item => item.field.kind === 'password').map(item => item.field);
     const noPassword = (): Promise<never> => park(ctx.stateDir, page.url(), needPassword, `no saved login for this site; treated as a ${signingUp ? 'new-password page' : 'sign-in page'} (${pageKind?.reason ?? 'no password box'}); sign in once with the login action or add one with \`clikcode computer secrets --import\``);
     if (!ctx.requestPrivateLogin) { if (needPassword.length) return noPassword(); throw new Error('Fill needs text: this chat cannot ask the user privately.'); }
-    const answers = await ctx.requestPrivateLogin(origin, ask.map(item => item.field), ctx.signal);
+    const answers = await prompt(() => ctx.requestPrivateLogin!(origin, ask.map(item => item.field), ctx.signal));
     if (!answers) { if (needPassword.length) return noPassword(); throw new Error('The user did not answer the private prompt, so these fields were left empty.'); }
     const learned: Partial<Record<ProfileKey, string>> = {};
     for (const item of ask) {
@@ -985,7 +996,8 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
       if (entered.username && entered.password) await saveLoginFields(ctx.stateDir, page.url(), entered).catch(quiet('agent/tools/computer-web'));
     }
   }
-  return steps.map(step => values.has(step) ? { ...step, text: values.get(step)! } : step);
+  for (const note of skipped.values()) report.push(note);
+  return steps.filter(step => !skipped.has(step)).map(step => values.has(step) ? { ...step, text: values.get(step)! } : step);
 }
 
 /** An error or alert the page is showing right now (a line that names an error, failure or a needed payment), for a failure report. */
@@ -1024,7 +1036,15 @@ export async function formProblems(page: Page): Promise<string[]> {
 export async function runSteps(page: Page, steps: readonly Step[], ctx: ToolContext, tab?: string, profileLabel?: string, guard?: (page: Page) => Promise<string | undefined>): Promise<ToolRunResult> {
   const notes: string[] = [];
   let current = page;
-  steps = await askForFills(page, steps, ctx, profileLabel);
+  const blankFirst = steps.find(step => step.do === 'fill' && step.text === undefined);
+  try {
+    steps = await withFillDeadline(String(blankFirst?.target ?? ''), clock => askForFills(page, steps, ctx, profileLabel, notes, clock));
+  } catch (error) {
+    if (!(error instanceof FillTimeout)) throw error;
+    // The tab stays usable: the page is described again (briefly) so the next call starts from what it shows now.
+    const view = hasPendingDialog(current) ? undefined : await withFillDeadline('page', () => observeComputerPage(current, false, false, undefined, true), 8_000).catch(quiet('agent/tools/computer-web'));
+    return { output: `${[...notes, error.message].join('\n')}${view ? `\n\n${view.output}` : ''}`, isError: true };
+  }
   for (const [index, planned] of steps.entries()) {
     // A later fill of the same batch still carries a generated password the site has since refused: it gets the current one.
     const held = generatedFor(current);
@@ -1037,7 +1057,7 @@ export async function runSteps(page: Page, steps: readonly Step[], ctx: ToolCont
     try {
       // Steps are journaled for an automatic recipe (see recipe-recorder.ts); a replay is not journaled again.
       const before = guard ? undefined : { url: current.url(), label: await controlName(current, step.target) };
-      const done = await doStep(current, step, ctx);
+      const done = step.do === 'fill' ? await withFillDeadline(String(step.target ?? 'a field'), () => doStep(current, step, ctx), Math.max(30_000, 10_000 + (step.text?.length ?? 0) / 5)) : await doStep(current, step, ctx);
       // A step a recipe cannot replay by control text (right-click, a canvas position, a drag) leaves the journal unsaved rather than wrong.
       if (before && typeof done === 'string') {
         const replayable = PLAIN_STEPS.has(step.do) && !(step.do === 'click' && (clickExtras(step) || step.x !== undefined));
