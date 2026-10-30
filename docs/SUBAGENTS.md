@@ -146,6 +146,34 @@ transcript ends `[Request interrupted by user for tool use]`). So:
   says when it was delivered or that it will run as the next message. It cannot
   make a vendor read a message sooner than the vendor allows.
 
+#### When a vendor's agent dies because the account is out
+
+One path for every transport, because the conversation is ClikCode's, not the process's.
+
+1. **The transport reports the end, with why, as fields.** Each transport has a small adapter from its
+   own frames to `FailureEvidence` (`harness/transport/handoff-work.ts`): status code, error type,
+   rate-limit status, whether the text is the vendor's own error, and the words as detail.
+   | Transport | What the adapter reads |
+   |---|---|
+   | Claude over ACP, Claude stream-json | `task_notification`: status, the summary's API-error envelope (`error type rate_limit, HTTP 429`), and the agent's saved transcript flags (`isApiErrorMessage`, `error: 'rate_limit'`). A terminal `task_updated` patch ends nothing by itself: the notification that follows carries the reason. |
+   | Codex app-server | a sub-agent thread's failed `turn/completed` error: `codexErrorInfo` and status (`codexErrorKind`) |
+   | Amp stream-json | `subagent_finished` status and error, or the Task call's failed result |
+   | Direct API | the response status (`agentTurnFailureKind`); it has no background vendor process |
+2. **One ledger** (`turn/vendor-process.ts reportEndedWork`) takes every report, from a live process or one
+   the conversation left, and counts a repeat once.
+3. **One observer** (`turn/account-evidence.ts`) classifies the evidence the same way as a main turn's
+   failure (`classifyAccountFailure` is the only place that reads wording). When it says the account is out of
+   usage: the account is marked spent once, the conversation moves to the next usable account at once (a turn
+   running on the spent account fails over by itself, standby included), and the cut-off work is queued for
+   that account.
+4. **The cut-off work is taken up again from what ClikCode has**: its task, the progress it made and its saved
+   transcript, on every harness. Claude's own resume (`SendMessage` to the agent id) is used only when the
+   agent's history could be carried to the new account.
+
+Before a turn, a conversation also leaves an account whose usage reading shows the turn will not fit
+(`turn/account-burn.ts`): the margin is the account's measured burn per turn, the reading must be current, and
+the new account must have more room by that margin. A stale reading never moves a chat.
+
 ### Steering ClikCode's own loop
 
 A message typed while a call runs is held, acknowledged by ClikCode, and the
