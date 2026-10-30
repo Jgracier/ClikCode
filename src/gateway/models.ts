@@ -33,6 +33,8 @@ export interface GatewayModel {
    * discount in force, and the price charged. Absent when the account is not
    * charged (unlimited) or the Gateway predates prices. */
   price?: GatewayModelPrice;
+  /** What kind of model the Gateway says it is, from `tags` on its list entry (`uncensored`). Searchable in /model: the tag is in the row. */
+  tags?: string[];
   /** Which tier the Gateway serves it from right now. Sent to the super admin
    * only: everyone else sees the model alone. */
   access?: GatewayAccess;
@@ -108,6 +110,7 @@ export function gatewayModelDetail(model: GatewayModel): string {
     ].filter(Boolean).join(' · ');
   }
   return [
+    model.tags?.includes('uncensored') ? 'uncensored' : '',
     model.price ? gatewayPriceLabel(model.price) : '',
     model.vision ? 'images' : '',
     model.reasoning ? 'reasoning' : '',
@@ -244,7 +247,7 @@ export function fromOpenAIModelList(data: readonly unknown[]): GatewayModelList 
     if (!raw || typeof raw !== 'object') continue;
     const entry = raw as {
       id?: unknown; owned_by?: unknown; root?: unknown; type?: unknown; access?: unknown; context_length?: unknown; max_output_tokens?: unknown; tokens_per_second?: unknown;
-      capabilities?: { vision?: unknown; reasoning?: unknown; tools?: unknown }; pricing?: Record<string, unknown>;
+      capabilities?: { vision?: unknown; reasoning?: unknown; tools?: unknown }; pricing?: Record<string, unknown>; tags?: unknown;
       deployment?: { state?: unknown; modelId?: unknown };
     };
     if (typeof entry.id !== 'string' || !entry.id) continue;
@@ -277,6 +280,7 @@ export function fromOpenAIModelList(data: readonly unknown[]): GatewayModelList 
       id: entry.id,
       ...(typeof entry.owned_by === 'string' && entry.owned_by && entry.owned_by !== 'clikdeploy' ? { maker: entry.owned_by } : {}),
       ...(typeof entry.access === 'string' && ACCESS.has(entry.access) ? { access: entry.access as GatewayAccess } : {}),
+      ...(Array.isArray(entry.tags) && entry.tags.some((tag) => typeof tag === 'string') ? { tags: entry.tags.filter((tag): tag is string => typeof tag === 'string') } : {}),
       ...(typeof entry.context_length === 'number' && entry.context_length > 0 ? { contextWindow: entry.context_length } : {}),
       ...(entry.capabilities?.vision === true ? { vision: true } : {}),
       ...(entry.capabilities?.reasoning === true ? { reasoning: true } : {}),
