@@ -562,6 +562,50 @@ A profile can keep secrets next to its details: an optional fallback password fo
 - **The profile answers sign-ins**: `login` with no saved login for a site fills the profile's sign-in email and, if one is set, its optional `password` secret instead of asking. Anything else it is asked (a one-time code, an account choice) is asked as before.
 - **`clikcode computer unattended on`**: a private prompt about a site is never shown. The need is parked in the queue (`needs-human`, with a reason from what was asked: `captcha`, `two-factor`, `sms`, else `other`) and the agent is told to go on to the next vendor. The profile prompts are always shown, because they are the user's own. Clear the queue in batches: `clikcode computer queue --status needs-human`.
 
+## Connector onboarding with nobody there: `connectors run --loop`
+
+`clikcode connectors run` advances one batch and stops. `--loop` is the same work as a daemon that needs no person:
+
+```
+clikcode connectors run --loop --parallel 2 --max-hours 8        # also: --max-steps 12 --max-minutes 5 --max-calls 60 --cooldown-hours 6
+clikcode connectors status                                       # running or not, what it works on, outcomes, machine pressure, queue, last log lines
+clikcode connectors qualify --ids a,b,c | --next N [--report]    # render sign-up, pricing and developer pages, JSON {id, lane, kinds, evidence}
+```
+
+Each pass takes the vendors waiting for an agent from `connector_work_overview`, claims them with `connector_work_claim` (worker label `cc-runner`,
+renewed every 10 minutes with `connector_work_renew`) and works up to `--parallel` of them at once, **each in its own named tab** (`loop-<id>`, the
+agent micro-task in `agent-<id>`; never the default tab). A vendor has a hard budget of steps, minutes **and ClikDeploy calls** (60 by default; the
+call past the budget is refused). On success it reports `connector_work_report` done; on a wall it reports blocked with `wall:<kind>:` and the human
+step. The kinds: `captcha, sms, card, paid-plan, sales, app-review, oauth-app, free-mail, work-email, no-api, dead-host, budget`.
+
+- **Cooldown**: a vendor is not taken again for 6 hours (24 after a wall); the cooldown survives a restart (it is kept in `~/.clikcode/connector-loop.json`).
+- **Back-off**: new vendors are not started while `/proc/pressure/io` or `/proc/pressure/cpu` shows a full stall above 10% (10 s average); the pause doubles from 30 s to 5 min while it lasts.
+- **Hangs**: a vendor that outlives its time budget by 90 s has its tab closed and the browser restarted; a browser that goes away mid-vendor is restarted and the vendor resumed once (ClikDeploy keeps its progress).
+- **Unknown screens** go to one agent micro-task per vendor: a headless `claude -p` with only `browser_use` and `account_use` (served by the hidden `connectors agent-mcp`, one tab, 25 calls, refused after that). It must end with `RESULT: captured | wall <kind> | gave-up`, and saves a recipe on success, so the next vendor on that host needs no agent. `CLIKCODE_MICRO_AGENT=0` turns it off (the screen is handed on in a work note); `CLIKCODE_MICRO_AGENT_MODEL` picks its model.
+- **Log**: one line per vendor in `~/.clikcode/connector-loop.log` (id, outcome, wall, calls, minutes, steps, what was reported).
+
+Run it under systemd (`~/.config/systemd/user/clikcode-connectors.service`, then `systemctl --user enable --now clikcode-connectors`; `loginctl enable-linger $USER` keeps it across logouts):
+
+```
+[Unit]
+Description=ClikCode connector onboarding loop
+After=network-online.target
+[Service]
+ExecStart=%h/.local/bin/clikcode connectors run --loop --parallel 2 --max-hours 24
+Restart=on-failure
+RestartSec=60
+Nice=10
+[Install]
+WantedBy=default.target
+```
+
+or without systemd: `nohup clikcode connectors run --loop --parallel 2 --max-hours 8 >/dev/null 2>&1 &` (stop with `kill -TERM <pid>`: the vendors in progress finish first).
+The browser is the ClikCode browser, so the machine needs a signed-in Google profile (`clikcode computer preflight`).
+
+`connectors qualify` decides from the **rendered** pages (20 s each, in a tab `qualify-<id>`) whether a key needs a person: lane `auto`, `human` or `dead`.
+Its phrase lists copy the server's (`connector-pipeline-front-config.ts`; a test compares them when the ClikDeploy checkout is present), with negation ("no credit card
+required" is not a wall), captcha counted on a form only, and a plan table read for the plan the API stands under. `--dump <dir>` saves the rendered text it read.
+
 ## Onboarding a ClikDeploy connector
 
 The `onboard-connector` skill (`~/.claude/skills/onboard-connector/SKILL.md`) is the whole loop: research the vendor's docs, write the
