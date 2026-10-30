@@ -138,9 +138,6 @@ export interface EndedWork extends RunningWork {
  * already left that process (retired). */
 export interface EndedFrom { harness?: string; accountId?: string; retired?: boolean }
 
-/** Told each piece of work that ended (turn/vendor-process.ts reportEndedWork decides which). */
-export type WorkEndedHandler = (ended: readonly EndedWork[], from?: EndedFrom) => void;
-
 /** A task as tracked: foreground ones too, whose end is still read. */
 type Task = RunningWork & { background: boolean };
 
