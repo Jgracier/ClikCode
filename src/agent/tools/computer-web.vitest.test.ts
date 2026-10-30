@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { approvedFile, inOrder, withSignInHints, verificationCode, arrangeSnapshot, changedLines, collapseOptions, displayUrl, computerWebTool, findInSnapshot } from './computer-web.js';
+import { approvedFile, inOrder, requiredNoValue, withSignInHints, verificationCode, arrangeSnapshot, changedLines, collapseOptions, displayUrl, computerWebTool, findInSnapshot } from './computer-web.js';
 
 describe('arrangeSnapshot', () => {
   const longMiddle = Array.from({ length: 900 }, (_, index) => `    - link "Item number ${index} of the long list" [ref=e${100 + index}]`).join('\n');
@@ -330,5 +330,27 @@ describe('splitCodeFields', () => {
     expect(splitCodeFields(Array.from({ length: 12 }, (_, index) => box(`Digit ${index}`)))).toEqual([]);
     expect(splitCodeFields(Array.from({ length: 5 }, (_, index) => box(`Initial ${index}`)))).toEqual([]);
     expect(splitCodeFields(Array.from({ length: 6 }, (_, index) => box(`Digit ${index}`, { maxlength: 6 })))).toEqual([]);
+  });
+});
+
+describe('requiredNoValue', () => {
+  it('a required box with no profile value says so at once; an optional one is just left empty', () => {
+    expect(requiredNoValue({ label: 'Registration number', step: { target: 'e4' }, required: true })).toBe('required, no profile value: Registration number');
+    expect(requiredNoValue({ label: '', step: { target: 'e4' }, required: true })).toBe('required, no profile value: e4');
+    expect(requiredNoValue({ label: 'VAT', step: { target: 'e5' }, required: false })).toBe('VAT left empty: the profile has no such detail.');
+  });
+});
+
+describe('inOrder across tabs', () => {
+  it('two named tabs of one chat run at the same time; calls on one tab keep their order', async () => {
+    const log: string[] = [];
+    const gate = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+    const a1 = inOrder('state#a', async () => { log.push('a1 start'); await gate(60); log.push('a1 end'); });
+    const a2 = inOrder('state#a', async () => { log.push('a2 start'); });
+    const b1 = inOrder('state#b', async () => { log.push('b1 start'); await gate(10); log.push('b1 end'); });
+    await Promise.all([a1, a2, b1]);
+    expect(log.indexOf('b1 end')).toBeLessThan(log.indexOf('a1 end'));
+    expect(log.indexOf('b1 start')).toBeLessThan(log.indexOf('a1 end'));
+    expect(log.indexOf('a1 end')).toBeLessThan(log.indexOf('a2 start'));
   });
 });
