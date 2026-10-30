@@ -52,7 +52,7 @@ const ACCESS = new Set<string>(['subscription', 'free', 'paid']);
 export function gatewayModelLabel(model: GatewayModel): string {
   if (model.own?.modelId) return `${withoutFreeTag(model.own.modelId)} (Hosted AI)`;
   const name = withoutFreeTag(model.id);
-  return model.access ? `${name} (${model.access})` : name;
+  return model.access && model.access !== 'paid' ? `${name} (${model.access})` : name;
 }
 
 const MAKER_NAMES: Readonly<Record<string, string>> = {
