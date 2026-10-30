@@ -33,16 +33,28 @@ export function evidenceError(evidence: FailureEvidence): Error {
   });
 }
 
-/** What kind of failure this evidence is. The same answer for an ended agent, an ended command, a
- * main turn's error and a vendor's words said out of turn. */
-export function classifyEvidence(evidence: FailureEvidence, extra: { replyErrorPatterns?: readonly { pattern: string; status?: number }[] } = {}): AccountFailureKind {
-  return classifyAccountFailure(evidenceError(evidence), {
+/** The classifier's signals for a piece of evidence. */
+function signalsOf(evidence: FailureEvidence, extra: ClassifyExtra): Parameters<typeof classifyAccountFailure>[1] {
+  return {
     ...(evidence.statusCode !== undefined ? { statusCode: evidence.statusCode } : {}),
     ...(evidence.errorKind ? { errorKind: evidence.errorKind } : {}),
     ...(evidence.rateLimitStatus ? { rateLimitStatus: evidence.rateLimitStatus } : {}),
     ...(evidence.vendorError !== undefined ? { isResultError: evidence.vendorError } : {}),
     ...(extra.replyErrorPatterns ? { replyErrorPatterns: extra.replyErrorPatterns } : {}),
-  });
+  };
+}
+interface ClassifyExtra { replyErrorPatterns?: readonly { pattern: string; status?: number }[] }
+
+/** What kind of failure this evidence is. The same answer for an ended agent, an ended command, a
+ * main turn's error and a vendor's words said out of turn. */
+export function classifyEvidence(evidence: FailureEvidence, extra: ClassifyExtra = {}): AccountFailureKind {
+  return classifyAccountFailure(evidenceError(evidence), signalsOf(evidence, extra));
+}
+
+/** The same for a turn's own failure: the error as the transport raised it (it carries its status,
+ * its streams, its thread state), with the signals the turn read beside it. */
+export function classifyTurnFailure(failure: unknown, evidence: Omit<FailureEvidence, 'text'> = {}, extra: ClassifyExtra = {}): AccountFailureKind {
+  return classifyAccountFailure(failure, signalsOf(evidence, extra));
 }
 
 /** Whether words are the vendor's own refusal. The shapes below are what keeps a model's prose out

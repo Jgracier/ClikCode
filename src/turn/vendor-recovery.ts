@@ -6,7 +6,8 @@ import { closeStandby, leavePersistentTransport, standbyFor } from './vendor-pro
 import { moveThreadToAccount } from '../session/carry.js';
 import { nativeThreadHoldsConversation } from './native-thread-continuity.js';
 import { switchAccountAfterFailure } from './account-switch.js';
-import { classifyAccountFailure, type AccountFailureKind } from './failover.js';
+import type { AccountFailureKind } from './failover.js';
+import { classifyTurnFailure } from './account-evidence.js';
 import { nativeTurnFailure } from '../harness/protocol/turn-result.js';
 import { continueAnswer, editAnswer, retell } from './vendor-thread-takeup.js';
 import { signInForTurn } from './vendor-sign-in.js';
@@ -123,13 +124,12 @@ export async function recoverFromFailure(ctx: VendorTurnContext, observer: Vendo
   // A thrown transport error carries its own stderr/streams.
   const declared = caughtTurnFailure ? undefined : nativeTurnFailure(harness, result);
   const failure = caughtTurnFailure ?? declared!.failure;
-  const failureKind = classifyAccountFailure(failure, {
+  const failureKind = classifyTurnFailure(failure, {
     statusCode: result.statusCode ?? carried.statusCode ?? streamError?.statusCode,
     errorKind: result.errorKind ?? carried.errorKind ?? streamError?.kind,
     ...(result.rateLimitStatus ? { rateLimitStatus: result.rateLimitStatus } : {}),
-    ...(declared ? { isResultError: declared.isResultError } : {}),
-    ...(harness.replyErrorPatterns ? { replyErrorPatterns: harness.replyErrorPatterns } : {}),
-  });
+    ...(declared ? { vendorError: declared.isResultError } : {}),
+  }, harness.replyErrorPatterns ? { replyErrorPatterns: harness.replyErrorPatterns } : {});
   // Every path from here retries or ends the turn: this attempt is over.
   observer.recordUnfinishedAttempt('error');
   lifecycle('worker.turn.attempt-failed', {

@@ -31,7 +31,7 @@ import { BackgroundWorkTracker } from './background-work.js';
 import { backgroundWork, type BackgroundWork } from '../protocol/background-agents.js';
 import { markTurn } from '../../runtime/turn-latency.js';
 import { OTHER_ORG_THINKING_TITLE } from '../protocol/claude-thinking-notice.js';
-import { classifyAccountFailure } from '../../turn/failover.js';
+import { classifyEvidence } from '../../turn/account-evidence.js';
 
 type Json = Record<string, any>;
 
@@ -1407,7 +1407,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
         && /^\/compact(?:\s|$)/.test(active.input.prompt)
         && activity.kind === 'tool-error' && /^Compact conversation$/i.test(activity.label)) {
         const reason = activity.output?.join('\n') ?? '';
-        if (classifyAccountFailure(new Error(reason), { isResultError: true }) === 'quota-exhausted') {
+        if (classifyEvidence({ vendorError: true, text: reason }) === 'quota-exhausted') {
           active.compactionFailure = new Error(reason);
         }
       }

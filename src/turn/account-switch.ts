@@ -8,7 +8,8 @@
  * a standby) is its `carry` step. */
 import type { AiHarnessAccount } from '../harness/definition.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
-import { classifyAccountFailure, type AccountFailureKind } from './failover.js';
+import type { AccountFailureKind } from './failover.js';
+import { classifyTurnFailure } from './account-evidence.js';
 
 /** The two steps of a turn's accounts (account-routing.ts turnAccounts) a switch uses. */
 interface FailoverAccounts {
@@ -33,7 +34,7 @@ export async function switchAccountAfterFailure<T = undefined>(input: {
    * is the milliseconds since the switch began, `chooseMs` its choosing share. */
   carry?: (to: AiHarnessAccount, timing: { switchAt: number; chooseMs: number }) => Promise<CarryReport<T>>;
 }): Promise<{ to: AiHarnessAccount; kind: AccountFailureKind; value: T | undefined }> {
-  const kind = input.kind ?? classifyAccountFailure(input.failure);
+  const kind = input.kind ?? classifyTurnFailure(input.failure);
   const switchAt = Date.now();
   const to = await input.accounts.after(input.failure, kind, input.signal);
   const chooseMs = Date.now() - switchAt;
