@@ -2,19 +2,12 @@
  * streamed to every attached window as it arrives, and kept in the conversation once said. */
 import { quiet } from '../runtime/lifecycle-log.js';
 import { outOfTurnRecorder } from '../turn/out-of-turn-record.js';
-import { classifyAccountFailure } from '../turn/failover.js';
-import { storeQuotaRefusal } from '../turn/account-outcome.js';
-import { leavePersistentTransport } from '../turn/vendor-process.js';
+import { isVendorRefusalSaid } from '../turn/account-evidence.js';
+import { observeSessionAccount } from '../turn/vendor-process.js';
 import { readState } from '../session/state/read.js';
 import type { OutOfTurnRelay } from '../harness/transport/background-turn.js';
 import type { WorkerContext } from './worker-context.js';
 import { thoughtLabel } from '../harness/protocol/activity-events.js';
-
-/** A spent-limit sentence ("You've hit your session limit · resets 11:40am"), the whole of what was said. */
-export function isLimitRefusal(text: string): boolean {
-  const said = text.trim();
-  return said.length > 0 && said.length < 300 && !said.includes('\n') && /\blimit\b/i.test(said) && classifyAccountFailure(new Error(said)) === 'quota-exhausted';
-}
 
 /** Quiet this long after the last chunk and the message is over: it is saved, and the windows'
  * live view of it ends. The vendor sends no end-of-message for text said outside a turn. */
@@ -67,7 +60,7 @@ export function createOutOfTurnRelay(ctx: WorkerContext): OutOfTurn {
     // Read as the message so far: a vendor that sends the sentence in pieces has it shown as it comes,
     // and taken back once it is known for what it is.
     const sofar = said.kind === 'message' && open?.kind === 'message' && said.mode === 'append' ? open.text + said.text : said.text;
-    if (said.kind === 'message' && isLimitRefusal(sofar)) {
+    if (said.kind === 'message' && isVendorRefusalSaid(sofar)) {
       if (open?.kind === 'message') {
         if (timer) clearTimeout(timer);
         timer = undefined;
@@ -82,8 +75,8 @@ export function createOutOfTurnRelay(ctx: WorkerContext): OutOfTurn {
       }
       void (async () => {
         const accountId = (await readState({ transcripts: [] })).sessions.find((item) => item.id === ctx.sessionId)?.nativeThreadAccountId;
-        if (!accountId || !await storeQuotaRefusal(accountId, new Error(sofar))) return;
-        await leavePersistentTransport(ctx.sessionId, { accountId });
+        if (!accountId) return;
+        await observeSessionAccount({ sessionId: ctx.sessionId, accountId, evidence: { vendorError: true, text: sofar }, source: 'out-of-turn' });
       })().catch(quiet('worker/out-of-turn'));
       return;
     }

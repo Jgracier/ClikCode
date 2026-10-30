@@ -54,7 +54,7 @@ export async function settleHeldVendor(
   const leaving = Boolean(options.failed || (options.to && owner && (owner.harness !== options.to.harness || owner.accountId !== options.to.accountId)));
   if (leaving) {
     const from = options.from ?? owner ?? {};
-    const retired = retireHeldVendorProcess(sessionId, (ended) => { reportEndedWork(sessionId, ended, from); retiredWorkChanged(sessionId); });
+    const retired = retireHeldVendorProcess(sessionId, (ended) => { reportEndedWork(sessionId, ended, { ...from, retired: true }); retiredWorkChanged(sessionId); });
     if (retired) { retiredWorkChanged(sessionId); return; }
   }
   if (!options.failed) {

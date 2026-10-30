@@ -9,7 +9,7 @@ import { nativeGeneratedTitle } from '../session/discovery/titles.js';
 import { emitHarnessOutput } from '../harness/output.js';
 import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import { recordQuotaRefusal, recordSuccessfulAccountTurn } from './account-outcome.js';
-import { endsWithLimitRefusal } from '../harness/transport/handoff-work.js';
+import { refusalEndingReply } from './account-evidence.js';
 import { settleHeldVendor } from './turn-steps.js';
 import { completeTurnCheckpoint } from './turn-journal.js';
 import { recordInvocation, showStopReason } from './turn-output.js';
@@ -81,7 +81,7 @@ export async function completeVendorTurn(ctx: VendorTurnContext, observer: Vendo
   // Claude answers a background agent's end with its refusal when the account has just run out, and
   // the prompt still ends as answered. That is the account spent, not served: recorded as a refusal, so
   // the next turn moves on -- recorded as a success it cleared the mark and set the 100% reading aside.
-  const refusal = endsWithLimitRefusal(session.pendingTurn?.response ?? result.text ?? '');
+  const refusal = refusalEndingReply(session.pendingTurn?.response ?? result.text ?? '');
   if (refusal) recordQuotaRefusal(state, ctx.account, new Error(refusal));
   else recordSuccessfulAccountTurn(ctx.account);
   showStopReason(prompter, usage?.stopReason);

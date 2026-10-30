@@ -33,7 +33,7 @@ const vendor = (delayMs: number | null, ignoresEnd = false, asAgent = false, fai
       return { ...record, ...(tasks ? { tasks } : {}), ...(record.subtype === 'task_started' ? { task_type: 'local_agent' } : {}) };
     }
     if (failed && record.type === 'result' && record === records[firstResult - 1]) return { ...record, is_error: true, subtype: 'error_during_execution' };
-    if (quota && record.subtype === 'task_notification') return { ...record, status: 'failed', summary: "You've hit your weekly limit · resets Oct 28, 1am" };
+    if (quota && record.subtype === 'task_notification') return { ...record, status: 'failed', summary: "Agent \"x\" failed: Agent terminated early due to an API error: You've hit your weekly limit · resets Oct 28, 1am (error type rate_limit, HTTP 429, request id req_1)" };
     return record;
   });
   const head = timeline.slice(0, firstResult).map((record) => JSON.stringify(record));
@@ -83,11 +83,11 @@ async function runTurn(sessionId: string, delayMs: number | null, ignoresEnd = f
 }
 
 describe('a Claude turn that leaves background tasks running', () => {
-  it('reports a quota-refused agent while its parent process is still active', async () => {
+  it('reports an agent that stopped on the usage limit, with why as fields, while its parent process is still active', async () => {
     const ended: EndedWork[][] = [];
     await runTurn('held-agent-limit', 100, false, true, false, true, (items) => ended.push([...items]));
     await vi.waitFor(() => expect(ended).toHaveLength(1), { timeout: 5_000 });
-    expect(ended[0]![0]).toMatchObject({ id: taskId, kind: 'agent', outcome: 'cut-off', limit: expect.stringContaining("You've hit your weekly limit") });
+    expect(ended[0]![0]).toMatchObject({ id: taskId, kind: 'agent', outcome: 'cut-off', failure: { vendorError: true, errorKind: 'rate_limit', statusCode: 429, text: "You've hit your weekly limit · resets Oct 28, 1am" } });
     await whenHeldVendorGone('held-agent-limit');
     expect(ended).toHaveLength(1);
   });
