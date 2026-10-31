@@ -15,6 +15,7 @@ import { readFile } from 'node:fs/promises';
 import { redactSecrets } from '../../agent/security.js';
 import type { EndedWork, RunningWork } from './handoff-work.js';
 import { BackgroundWorkTracker } from './background-work.js';
+import { CommandSampler, commandPolicy, killCommand, type CommandPolicy, type CommandStats, type KillReport } from './background-commands.js';
 import { spawnFailure } from '../../runtime/machine-folder.js';
 
 /** How often a retired process's commands are looked at. */
@@ -73,7 +74,17 @@ export interface PersistentSessionOptions {
   retiredCeilingMs?: number;
   /** ORPHANED_TOOL_MS, shortened by tests. */
   orphanedToolMs?: number;
+  /** COMMAND_WATCH_MS, shortened by tests. */
+  commandWatchMs?: number;
+  /** The stale policy for background commands (background-commands.ts); tests set their own. */
+  commandPolicy?: CommandPolicy;
+  /** Signals a process (tests record instead). */
+  killProcess?: (target: number, signal: NodeJS.Signals) => void;
 }
+
+/** How often the commands a vendor left running are looked at: their age, cpu and output for a status line,
+ * and the stale policy that ends the ones that outlived their use. */
+export const COMMAND_WATCH_MS = 60_000;
 
 /** What a persistent session's owner reads of the work its vendor left running (vendor-process.ts). */
 export interface VendorWorkSession {
@@ -87,7 +98,14 @@ export interface VendorWorkSession {
   /** Fails the turn in progress as if the vendor had refused it (false: none is running). */
   failTurn(error: Error): boolean;
   readonly retiredWork: { agents: number; terminals: number };
+  /** The background commands now running, by pid, with age, cpu and last output. */
+  backgroundCommands(): Promise<CommandStats[]>;
+  /** End background commands by pid: the stale ones (`which` 'stale') or every one ('all'). Each is logged. */
+  reapCommands(which: 'stale' | 'all', reason: string, only?: (command: CommandStats) => boolean): Promise<ReapedCommand[]>;
 }
+
+/** A background command this process ended, and how. */
+export interface ReapedCommand { command: CommandStats; reason: string; kill: KillReport }
 
 /** A retired process (retire): its group, and the work in it still running. */
 interface Retirement {
@@ -143,6 +161,13 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
    * the rest are helpers it started lazily (MCP servers). toolCallWork
    * (process-group.ts) tells them apart. */
   private readonly leftRunning = new Set<number>();
+  private readonly sampler = new CommandSampler();
+  private readonly commandWatchMs: number;
+  private readonly policy?: CommandPolicy;
+  private readonly killProcess?: PersistentSessionOptions['killProcess'];
+  private commandTimer?: NodeJS.Timeout;
+  /** The commands last seen, for a change to be told once. */
+  private commandsSeen = '';
 
   constructor(options: PersistentSessionOptions, private readonly label: string) {
     this.spawn = options.spawn ?? ((binary, argv, spawnOptions) => spawnPortable(binary, [...argv], spawnOptions));
@@ -152,6 +177,62 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     this.setupRequest = { timeoutMs: options.setupIdleMs ?? SETUP_IDLE_MS, idleReset: true };
     this.retiredCeilingMs = options.retiredCeilingMs ?? ABANDONED_WORK_MS;
     this.orphanedToolMs = options.orphanedToolMs ?? ORPHANED_TOOL_MS;
+    this.commandWatchMs = options.commandWatchMs ?? COMMAND_WATCH_MS;
+    this.policy = options.commandPolicy;
+    this.killProcess = options.killProcess;
+  }
+
+  /** The commands tool calls left running, by pid, with what each is doing (background-commands.ts). */
+  async backgroundCommands(): Promise<CommandStats[]> {
+    const running = await this.leftCommands();
+    const now = Date.now();
+    const stats = await Promise.all([...running.values()].map((work) => this.sampler.sample(Number(work.id), { label: work.label, ...(work.outputFile ? { outputFile: work.outputFile } : {}) }, now, this.policy ?? commandPolicy())));
+    this.sampler.forget(new Set(stats.map((item) => item.pid)));
+    return stats;
+  }
+
+  /** Ends background commands by pid -- never by pattern -- and says so in the lifecycle log. */
+  async reapCommands(which: 'stale' | 'all', reason: string, only?: (command: CommandStats) => boolean): Promise<ReapedCommand[]> {
+    const vendor = this.live?.pid;
+    const reaped: ReapedCommand[] = [];
+    for (const command of await this.backgroundCommands()) {
+      if (which === 'stale' && !command.stale) continue;
+      if (only && !only(command)) continue;
+      const why = which === 'stale' ? `${reason}: ${command.stale}` : reason;
+      const kill = await killCommand(command.pid, { ...(vendor ? { vendorPgid: vendor } : {}), ...(this.killProcess ? { kill: this.killProcess } : {}) });
+      this.leftRunning.delete(command.pid);
+      lifecycle('background.reap', { transport: this.label, pid: command.pid, pgid: command.pgid, how: kill.how, signalled: kill.signalled.length, label: command.label.slice(0, 200), reason: why, ...(kill.error ? { error: kill.error } : {}) });
+      reaped.push({ command, reason: why, kill });
+    }
+    return reaped;
+  }
+
+  /** What the commands look like now, told to the transport (commandsChanged) when it changed. */
+  protected commandsChanged(_commands: readonly CommandStats[], _reaped: readonly ReapedCommand[]): void {}
+
+  private async watchCommands(): Promise<void> {
+    if (this.isClosed) return;
+    const reaped = await this.reapCommands('stale', 'stale background command');
+    const commands = await this.backgroundCommands();
+    const seen = JSON.stringify(commands.map((item) => [item.pid, Math.round(item.cpuPercent ?? 0), item.lastOutputAt, item.stale]));
+    if (seen !== this.commandsSeen || reaped.length) {
+      this.commandsSeen = seen;
+      this.commandsChanged(commands, reaped);
+    }
+  }
+
+  /** The watch runs while a turn left processes running; it ends itself when there are none. */
+  private armCommandWatch(): void {
+    if (this.commandTimer || this.isClosed || !this.leftRunning.size) return;
+    const tick = (): void => {
+      this.commandTimer = undefined;
+      void this.watchCommands().catch(quiet('harness/transport/persistent-session')).finally(() => {
+        if (!this.isClosed && this.leftRunning.size) { this.commandTimer = setTimeout(tick, this.commandWatchMs); this.commandTimer.unref?.(); }
+        else if (this.commandsSeen) { this.commandsSeen = ''; this.commandsChanged([], []); }
+      });
+    };
+    this.commandTimer = setTimeout(tick, Math.min(this.commandWatchMs, 5_000));
+    this.commandTimer.unref?.();
   }
 
   /** Where what the vendor says out of turn goes: nowhere once retired -- the conversation is
@@ -337,6 +418,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     if (!before || !pid) return;
     const [then, now] = await Promise.all([before, processGroupMembers(pid)]);
     for (const member of now) if (member !== pid && !then.has(member)) this.leftRunning.add(member);
+    this.armCommandWatch();
   }
   /** Ask the vendor to stop `turn`, settling `this.settling` (settleCancel);
    * false when the turn has not reached the point it can be asked. */
@@ -370,6 +452,8 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     // long ago, leaving the group to its work (keepGroup).
     retirement?.peer.keepGroup(false);
     this.isClosed = true;
+    if (this.commandTimer) clearTimeout(this.commandTimer);
+    this.commandTimer = undefined;
     if (this.turn) this.cancelTurn(this.turn);
     this.finishBackground('closed');
     this.clearPending();

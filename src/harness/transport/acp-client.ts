@@ -28,6 +28,7 @@ import { globalMcpServersForAcp } from './acp-mcp-servers.js';
 import { BackgroundAgentRows } from '../events/background-agent-rows.js';
 import { endedAgentWork, VendorTasks, type RunningWork } from './handoff-work.js';
 import { BackgroundWorkTracker } from './background-work.js';
+import type { CommandStats } from './background-commands.js';
 import { backgroundWork, type BackgroundWork } from '../protocol/background-agents.js';
 import { markTurn } from '../../runtime/turn-latency.js';
 import { OTHER_ORG_THINKING_TITLE } from '../protocol/claude-thinking-notice.js';
@@ -761,6 +762,16 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       this.finishBackground('completed');
     }, this.orphanedToolMs);
     this.orphanWatch.unref?.();
+  }
+
+  /** The commands behind the terminals were looked at (persistent-session.ts): the level names them by pid, and the
+   * window that follows the work (the user's turn, else the background turn, else the worker) is told. */
+  protected override commandsChanged(commands: readonly CommandStats[]): void {
+    this.work.setCommands(commands.map(({ outputFile: _file, keep: _keep, ...shown }) => shown));
+    const level = this.work.fullLevel();
+    const listener = this.turn && !this.turn.done ? this.turn.observer.onBackgroundWork : this.background?.observer.onBackgroundWork;
+    if (listener) listener.call(this.turn && !this.turn.done ? this.turn.observer : this.background!.observer, level);
+    else this.reportBackground?.(level);
   }
 
   protected override finishBackground(ended: BackgroundTurnEnd): void {

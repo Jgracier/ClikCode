@@ -61,6 +61,8 @@ export class BackgroundWorkTracker<T extends WorkItem = WorkItem> {
 
   told(ended: readonly EndedWork[]): void { this.onEnded?.(ended); }
   replaceLevel(update: BackgroundWorkUpdate): void { this.level = mergeBackgroundWork(this.level, update); }
+  /** Tell which commands run behind the terminals (their pids and stats); an empty list clears them. */
+  setCommands(commands: BackgroundWork['commands']): void { this.replaceLevel({ commands: commands ?? [] }); }
   /** The level with every kind named (a zero is "none", not unknown). */
   fullLevel(): BackgroundWork & { agents: number; terminals: number; workflows: number } {
     return { ...this.level, agents: this.level?.agents ?? 0, terminals: this.level?.terminals ?? 0, workflows: this.level?.workflows ?? 0 };
