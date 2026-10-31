@@ -16,8 +16,8 @@ export function microPrompt(id: string, stop: StopInfo, maxCalls: number): strin
   const controls = stop.controls.slice(0, 20).map(c => scrubSecrets(c).slice(0, 60)).join(' | ');
   return [
     `You are finishing ClikDeploy connector onboarding for the vendor "${id}". A rule-based runner stopped on a screen it does not know.`,
-    `Goal: ${MICRO_GOAL}.`,
-    `You may use the browser_use and account_use tools ONLY, at most ${maxCalls} calls in total (the tool refuses after that). The tab is fixed for you.`,
+    `Goal: finish the exact assigned platform task shown below. Use signup/key capture only when the task needs a connection. For copy, spec or proof work use connector_task; do not restart signup.`,
+    `You may use browser_use, account_use, and connector_task for the assigned connector ONLY, at most ${maxCalls} calls in total (the tool refuses after that). The tab is fixed for you.`,
     '',
     `The screen it stopped on: ${stop.url || '(address unknown)'}`,
     `Why it stopped: ${scrubSecrets(stop.message).slice(0, 300)}`,
@@ -25,12 +25,13 @@ export function microPrompt(id: string, stop: StopInfo, maxCalls: number): strin
     controls ? `Things on the page you can press: ${controls}` : '',
     '',
     'Rules:',
-    `1. Start with browser_use action open on the address above (or the vendor's developer page), then observe.`,
+    `1. Read the task below. Use connector_task to read the spec, copy task or proof as needed. For credential work, open its vendor address and observe.`,
     `2. To get a key: reach the key page, set the options, then browser_use action capture_secret with target = the final Create button, secret_name "${id}/key", vendor "${id}" and send_to [{ "to": "clikdeploy-connection", "with": { "integration": "${id}" } }]. Never print, type or repeat a key.`,
     '3. When it worked, save what you did with browser_use action recipe, recipe_op save (host, login_route, steps, key_page, capture_hint) so the next run needs no agent.',
     '4. Never solve a captcha, give card details, buy a plan, or enter a phone or authenticator code. If a screen needs one of those, stop.',
     '5. Your last line must be exactly one of:',
     '   RESULT: captured',
+    '   RESULT: completed',
     '   RESULT: wall <captcha|sms|card|paid-plan|sales|app-review|oauth-app|free-mail|work-email|no-api|dead-host> <one sentence>',
     '   RESULT: gave-up <one sentence>',
   ].filter(l => l !== '').join('\n');
@@ -41,10 +42,10 @@ export type MicroResult = { kind: 'captured' } | { kind: 'wall'; wall: string; w
 export function parseMicroResult(text: string): MicroResult {
   const lines = scrubSecrets(text).split('\n').map(l => l.trim()).filter(Boolean);
   for (const line of lines.reverse()) {
-    const m = /^RESULT:\s*(captured|wall|gave-up)\b\s*(.*)$/i.exec(line.replace(/^[`*>\s-]+/, ''));
+    const m = /^RESULT:\s*(captured|completed|wall|gave-up)\b\s*(.*)$/i.exec(line.replace(/^[`*>\s-]+/, ''));
     if (!m) continue;
     const kind = m[1]!.toLowerCase();
-    if (kind === 'captured') return { kind: 'captured' };
+    if (kind === 'captured' || kind === 'completed') return { kind: 'captured' };
     if (kind === 'wall') { const [wall = 'unknown', ...rest] = m[2]!.split(/\s+/); return { kind: 'wall', wall: wall.toLowerCase(), why: rest.join(' ').slice(0, 300) }; }
     return { kind: 'gave-up', why: m[2]!.slice(0, 300) };
   }
@@ -68,7 +69,7 @@ export async function runMicroTask(id: string, stop: StopInfo, budget: { maxCall
   const err = 'error' in ran ? ran.error : undefined;
   const result = ran.timedOut ? { kind: 'gave-up', why: `the agent used its ${Math.round(budget.maxMs / 1000)}s` } as MicroResult : err ? { kind: 'gave-up', why: `the agent could not run: ${err.slice(0, 200)}` } as MicroResult : parseMicroResult(ran.text);
   const after = await ports.recipeStamp().catch(() => '');
-  if (result.kind === 'captured') return { ok: true, note: `an agent micro-task got the key unseen (${ran.calls} tool calls)${after !== before ? ' and saved a recipe' : ''}`, actions: ran.calls, recipe: after !== before };
+  if (result.kind === 'captured') return { ok: true, note: `an agent micro-task finished its assigned task (${ran.calls} tool calls)${after !== before ? ' and saved a recipe' : ''}`, actions: ran.calls, recipe: after !== before };
   if (result.kind === 'wall') {
     const kind = WALL_TO_HUMAN[result.wall];
     if (kind) return { ok: false, stop: { kind: WALL_TO_STOP[result.wall] ?? 'unknown', message: `${result.wall}: ${result.why}`, url: stop.url, pageText: stop.pageText, controls: stop.controls, human: { kind, ...(stop.url ? { url: stop.url } : {}), instructions: `${result.wall}: ${result.why}`.slice(0, 300), reasonCode: result.wall } } };
@@ -98,14 +99,14 @@ export function livePorts(stateDir: string): MicroPorts {
       try {
         const entry = process.env.CLIKCODE_MCP_ENTRY || process.argv[1]!;
         const config = join(dir, 'mcp.json');
-        await writeFile(config, JSON.stringify({ mcpServers: { clikcode: { command: process.execPath, args: [entry, 'connectors', 'agent-mcp', '--tab', options.tab, '--max-calls', String(options.maxCalls), '--counter', counter] } } }));
-        const argv = ['-p', prompt, '--output-format', 'text', '--mcp-config', config, '--strict-mcp-config', '--tools', '', '--allowedTools', 'mcp__clikcode__browser_use', 'mcp__clikcode__account_use', '--permission-mode', 'dontAsk', '--no-session-persistence', ...(process.env.CLIKCODE_MICRO_AGENT_MODEL ? ['--model', process.env.CLIKCODE_MICRO_AGENT_MODEL] : [])];
+        await writeFile(config, JSON.stringify({ mcpServers: { clikcode: { command: process.execPath, args: [entry, 'connectors', 'agent-mcp', '--tab', options.tab, '--max-calls', String(options.maxCalls), '--counter', counter, '--connector', options.tab.replace(/^agent-/, '')] } } }));
+        const argv = ['-p', prompt, '--output-format', 'text', '--mcp-config', config, '--strict-mcp-config', '--tools', '', '--allowedTools', 'mcp__clikcode__browser_use', 'mcp__clikcode__account_use', 'mcp__clikcode__connector_task', '--permission-mode', 'dontAsk', '--no-session-persistence', ...(process.env.CLIKCODE_MICRO_AGENT_MODEL ? ['--model', process.env.CLIKCODE_MICRO_AGENT_MODEL] : [])];
         const final = join(dir, 'final.txt');
         const args = useCodex ? ['exec', '--ephemeral', '--ignore-user-config', '--skip-git-repo-check', '-C', dir, '-s', 'read-only',
           '-c', 'approval_policy="never"', '-c', 'features.shell_tool=false', '-c', 'web_search="disabled"',
           '-c', `mcp_servers.clikcode.command=${JSON.stringify(process.execPath)}`,
-          '-c', `mcp_servers.clikcode.args=${JSON.stringify([entry, 'connectors', 'agent-mcp', '--tab', options.tab, '--max-calls', String(options.maxCalls), '--counter', counter])}`,
-          '-c', 'mcp_servers.clikcode.required=true', '-c', 'mcp_servers.clikcode.enabled_tools=["browser_use","account_use"]',
+          '-c', `mcp_servers.clikcode.args=${JSON.stringify([entry, 'connectors', 'agent-mcp', '--tab', options.tab, '--max-calls', String(options.maxCalls), '--counter', counter, '--connector', options.tab.replace(/^agent-/, '')])}`,
+          '-c', 'mcp_servers.clikcode.required=true', '-c', 'mcp_servers.clikcode.enabled_tools=["browser_use","account_use","connector_task"]',
           '-c', 'mcp_servers.clikcode.default_tools_approval_mode="approve"', '-o', final, prompt] : argv;
         const env = { ...process.env, ...nativeProfileEnvironment(account.nativeProfile) };
         // This is a signed-in native account, never an unrelated API key inherited from the parent.

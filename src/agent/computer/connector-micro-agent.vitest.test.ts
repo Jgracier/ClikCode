@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentMcpHandler } from './connector-micro-agent-mcp.js';
+import { connectorTaskTool, agentMcpHandler } from './connector-micro-agent-mcp.js';
 import { microAccount, microPrompt, microTab, parseMicroResult, runMicroTask, type MicroPorts } from './connector-micro-agent.js';
 import { runConnectors, type BrowserDriver, type DeployClient, type DriveOutcome, type OnboardResult, type StopInfo } from './connector-runner.js';
 import { forgetSecrets, registerSecret } from './secret-scrubber.js';
@@ -17,9 +17,9 @@ describe('agent micro-task', () => {
     const p = microPrompt('acme', { ...stop, pageText: 'token sk_live_topsecretvalue1 here' }, 25);
     forgetSecrets();
     expect(p).toContain('https://vendor.example/settings');
-    expect(p).toContain('get an API key');
+    expect(p).toContain('finish the exact assigned platform task');
     expect(p).toContain('at most 25 calls');
-    expect(p).toContain('browser_use and account_use tools ONLY');
+    expect(p).toContain('connector_task for the assigned connector ONLY');
     expect(p).toContain('Create token | Docs');
     expect(p).not.toContain('topsecretvalue');
   });
@@ -174,4 +174,12 @@ describe('micro-agent account routing', () => {
     const api = { ...account('anthropic', 'CLAUDE_CONFIG_DIR'), authKind: 'api-key' as const };
     expect(microAccount([signedOut, api])).toBeUndefined();
   });
+});
+
+
+it('rejects cross-connector edits and unlisted operations before any platform call', async () => {
+ const tool = connectorTaskTool('assigned');
+ await expect(tool.run({ tool: 'connector_spec_patch', args: { id: 'other' } }, {} as never)).rejects.toThrow('assigned connector');
+ await expect(tool.run({ tool: 'connector_spec_set', args: {} }, {} as never)).rejects.toThrow('not available');
+ expect(parseMicroResult('RESULT: completed')).toEqual({ kind: 'captured' });
 });

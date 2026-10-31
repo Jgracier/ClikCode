@@ -9,14 +9,36 @@ import type { ToolContext, ToolDefinition } from '../tool-contract.js';
 import { scrubSecrets } from './secret-scrubber.js';
 
 type Rpc = { jsonrpc: '2.0'; id?: number | string; method?: string; params?: Record<string, any> };
-export interface AgentMcpOptions { tab: string; maxCalls: number; counter?: string; tools?: readonly ToolDefinition[]; stateDir?: string }
+export interface AgentMcpOptions { tab: string; maxCalls: number; counter?: string; tools?: readonly ToolDefinition[]; stateDir?: string; connector?: string }
+
+export const CONNECTOR_TASK_TOOLS = ['connector_spec_get', 'connector_copy_task', 'connector_copy_apply', 'connector_proof', 'connector_finish', 'connector_seed_plan', 'connector_seed_apply', 'connector_spec_patch', 'connector_enrich'] as const;
+
+/** Each micro-task can edit only its own connector through validated platform tools. No audiences or gate settings surface here. */
+export function connectorTaskTool(id: string): ToolDefinition {
+  return {
+    name: 'connector_task', class: 'write',
+    description: `Read or finish the assigned connector ${id}. The id is fixed by the worker. Read the platform task before making changes; copy_task supplies the wording slots and accepted apply shape. Never invent live proof.`,
+    parameters: { type: 'object', properties: { tool: { type: 'string', enum: [...CONNECTOR_TASK_TOOLS], description: 'The bounded connector operation to call.' }, args: { type: 'object', description: 'Operation arguments; id is supplied by the worker.', additionalProperties: true } }, required: ['tool'] },
+    label: () => `Work on ${id}`,
+    async run(input) {
+      if (!CONNECTOR_TASK_TOOLS.includes(input.tool as typeof CONNECTOR_TASK_TOOLS[number])) throw new Error('This connector operation is not available to the micro-task.');
+      const args = input.args && typeof input.args === 'object' && !Array.isArray(input.args) ? input.args as Record<string, unknown> : {};
+      if (args.id !== undefined && args.id !== id) throw new Error('The micro-task may only work on its assigned connector.');
+      const { liveClient } = await import('./connector-runner-live.js');
+      const result = await liveClient().tool(String(input.tool), { ...args, id });
+      return { output: scrubSecrets(JSON.stringify(result)) };
+    },
+  };
+}
 
 export function agentMcpHandler(options: AgentMcpOptions): (message: Rpc) => Promise<Record<string, unknown> | undefined> {
   let calls = 0;
   const load = async (): Promise<readonly ToolDefinition[]> => {
     if (options.tools) return options.tools;
     const { accountUseTool, browserUseTool } = await import('../tools/computer-web.js');
-    return [browserUseTool, accountUseTool] as unknown as ToolDefinition[];
+    const tools = [browserUseTool, accountUseTool] as unknown as ToolDefinition[];
+    if (options.connector) tools.push(connectorTaskTool(options.connector));
+    return tools;
   };
   return async message => {
     if (message.id === undefined) return undefined;
