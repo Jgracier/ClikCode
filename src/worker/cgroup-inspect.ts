@@ -8,6 +8,10 @@ import { groupPids } from './command-groups.js';
 /** A command whose command line carries this text is never ended for its age (harness/transport/background-commands.ts KEEP_MARK). */
 export const KEEP = 'clikcode:keep';
 
+/** Never ended for its age: the keep mark, or ClikCode's own browser host (an older host still lives in the worker scope that
+ * started it, its group holding xvfb-run, the host and Chrome; ending that group would close the user's signed-in browser). */
+export const isKept = (commandLine: string | undefined): boolean => !!commandLine && (commandLine.includes(KEEP) || /\bcomputer-host\b/.test(commandLine));
+
 export interface CgroupReaders {
   /** Pids in the cgroup itself (not below it). */
   pids(dir: string): number[];
@@ -63,7 +67,7 @@ export function cgroupFacts(dir: string, now: number, read: CgroupReaders = real
     const started = read.startedAt(pid);
     if (started !== undefined && (oldest === undefined || started < oldest)) oldest = started;
     const line = read.commandLine(pid);
-    if (line?.includes(KEEP)) keep = true;
+    if (isKept(line)) keep = true;
     if (line && !command) command = line;
   }
   const cpu = Number(/^usage_usec (\d+)/m.exec(read.file(join(dir, 'cpu.stat')) ?? '')?.[1]);
