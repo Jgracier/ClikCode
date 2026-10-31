@@ -11,7 +11,7 @@ import type { VendorBackgroundTurn, VendorBackgroundTurnHandler } from '../harne
 import { outOfTurnRecorder } from './out-of-turn-record.js';
 import type { OutOfTurnRelay } from '../harness/transport/background-turn.js';
 import { retiredHeldAgentCount } from '../harness/transport/native/held-vendor.js';
-import type { EndedFrom, EndedWork } from '../harness/transport/handoff-work.js';
+import type { EndedFrom, EndedWork, RunningWork } from '../harness/transport/handoff-work.js';
 import { observeAccountHealth, type AccountMoveEffects } from './account-evidence.js';
 import type { AccountFailureKind } from './failover.js';
 import type { CommandStats } from '../harness/transport/background-commands.js';
@@ -250,6 +250,13 @@ export function retiredWorkChanged(sessionId: string): void {
   }
   work.agents += retiredHeldAgentCount(sessionId);
   try { listener(work); } catch { /* fail-open-ok: the owner's bookkeeping */ }
+}
+
+/** The agents this conversation's vendor process is running now (not its commands), for a worker that is about to close it. */
+export async function runningVendorAgents(sessionId: string): Promise<RunningWork[]> {
+  const live = persistentTransports.get(sessionId);
+  if (!live) return [];
+  return (await live.session.runningWork().catch(() => [] as RunningWork[])).filter((work) => work.kind === 'agent');
 }
 
 /** Retire `live` (persistent-session.ts retire) when it still runs work, else close it. */

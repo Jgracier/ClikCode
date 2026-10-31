@@ -3,7 +3,8 @@ import { spawn } from 'node:child_process';
 import { unlink } from 'node:fs/promises';
 import { lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { startsSuccessor } from './idle-decisions.js';
-import { closePersistentTransport } from '../turn/vendor-process.js';
+import { closePersistentTransport, runningVendorAgents } from '../turn/vendor-process.js';
+import { recordInterruptedAgents } from './handed-off-work.js';
 import { disposeSessionState, takeShellNotifications } from '../agent/session-state.js';
 import { existingSessionAgents } from '../agent/background-agents.js';
 import { stateDirectory } from '../session/store/paths.js';
@@ -85,6 +86,9 @@ export function createShutdown(ctx: WorkerContext) {
     disposeSessionState(stateDirectory(), sessionId, `ClikCode's worker for this conversation stopped (${reason})`);
     // Codex app-server and ACP children are spawned detached too, and were
     // orphaned the same way.
+    // Agents the vendor is running die with its process: each is recorded for the next worker, with its task and how to resume it.
+    currentStep = 'interrupted agents';
+    await boundedStep(currentStep, async () => { await recordInterruptedAgents(ctx, await runningVendorAgents(sessionId)); });
     currentStep = 'vendor close';
     await boundedStep(currentStep, () => closePersistentTransport());
     // The lsp tool's language servers live as long as this worker.
