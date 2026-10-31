@@ -22,6 +22,7 @@
  * simply not alive, whenever you ask. So there is nothing to reconcile.
  */
 
+import { describeCommands } from '../harness/protocol/background-agents.js';
 import { quiet } from '../runtime/lifecycle-log.js';
 import type { HarnessSession } from './model.js';
 import { listWorkerRecords, liveOpenConversations, type WorkerRuntimeRecord } from '../worker/registry.js';
@@ -119,6 +120,8 @@ export async function livePendingTurns(
 function backgroundAsTurn(work: NonNullable<WorkerRuntimeRecord['background']>): PendingTurn {
   return {
     prompt: '', startedAt: work.since, updatedAt: new Date().toISOString(), outputStarted: true,
+    // Said as it is: a command all that runs is waited on, not thought about.
+    ...(describeCommands(work.commands ?? []) ? { waitingOn: describeCommands(work.commands ?? [])! } : {}),
     subagents: Array.from({ length: work.agents ?? 0 }, (_, index) => ({ id: `background-${index}`, label: 'background agent', startedAt: work.since })),
   };
 }

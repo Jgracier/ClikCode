@@ -56,6 +56,31 @@ export interface BackgroundWork {
   workflows?: number;
 }
 
+export function formatAge(ms: number): string {
+  const minutes = Math.max(0, Math.floor(ms / 60_000));
+  if (minutes < 1) return `${Math.max(0, Math.floor(ms / 1000))}s`;
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  return hours < 48 ? `${hours}h${minutes % 60 ? ` ${minutes % 60}m` : ''}` : `${Math.floor(hours / 24)}d`;
+}
+
+/** `waiting on background command: <label> · running 32h · cpu 100% · no output` -- what a surface says
+ * while a command is all that is running. More than one: the oldest, and how many. */
+export function describeCommands(commands: readonly BackgroundCommand[], now: number = Date.now()): string | undefined {
+  if (!commands.length) return undefined;
+  const first = [...commands].sort((a, b) => (a.startedAt ?? now) - (b.startedAt ?? now))[0]!;
+  const label = first.label.replace(/\s+/g, ' ').trim();
+  const parts = [
+    `${label.length > 60 ? `${label.slice(0, 59)}…` : label}`,
+    ...(first.startedAt !== undefined ? [`running ${formatAge(now - first.startedAt)}`] : []),
+    ...(first.cpuPercent !== undefined ? [`cpu ${Math.round(first.cpuPercent)}%`] : []),
+    first.lastOutputAt !== undefined ? `output ${formatAge(now - first.lastOutputAt)} ago` : 'no output',
+    ...(first.stale ? ['stale'] : []),
+    ...(commands.length > 1 ? [`+${commands.length - 1} more`] : []),
+  ];
+  return `waiting on background command: ${parts.join(' · ')}`;
+}
+
 /** What one vendor record says: each kind it names, zero included (a level
  * that lists no terminal says there are none). */
 export type BackgroundWorkUpdate = BackgroundWork;

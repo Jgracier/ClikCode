@@ -301,12 +301,16 @@ export async function aiSessionsList(): Promise<void> {
   // expire on their own. This replaced a `status` the worker wrote and a sweep
   // that corrected it -- see session/liveness.ts for why caching it was the
   // bug rather than the sweep being in the wrong place.
-  const { isLive: workerIsLive, isOpen } = await liveWorkers();
+  const { isLive: workerIsLive, isOpen, background } = await liveWorkers();
   // Blank chats are not listed: a launch that was closed without typing is
   // not a conversation anyone can go back to (session/blank.ts).
   // Nor is the copy of a chat that moved to another machine: it is listed there.
   const sessions = state.sessions.filter((session) => !session.movedTo && !isBlankConversation(session))
-    .map((session) => ({ ...session, live: sessionIsLive(session, workerIsLive, isOpen) }));
+    .map((session) => {
+      // What a live worker is waiting on: the background commands by pid, with age, cpu and last output.
+      const commands = background(session.id)?.commands;
+      return { ...session, live: sessionIsLive(session, workerIsLive, isOpen), ...(commands?.length ? { backgroundCommands: commands } : {}) };
+    });
   emitResult({ sessions });
 }
 

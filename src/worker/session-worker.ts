@@ -15,6 +15,7 @@
  * worker-live-commands (what windows send), worker-server (the socket) and
  * worker-shutdown.
  */
+import type { BackgroundCommand } from '../harness/protocol/background-agents.js';
 import { createKeepWarm } from './cache-keepwarm.js';
 import { dropRetiredVendorMcp, homeForOwnState } from '../harness/retired-mcp.js';
 import { lifecycle, quiet } from '../runtime/lifecycle-log.js';
@@ -276,14 +277,18 @@ export async function runSessionWorker(sessionId: string, options: { warm?: bool
   observer.onAwaitingApproval = (awaitingApproval) => { awaiting = awaitingApproval; return rewriteRecord(); };
   // What the vendor process in use says runs, and what processes the conversation left still run
   // (turn/vendor-process.ts retired): both are this conversation's work, and a list shows it working.
-  let liveWork: { agents?: number; terminals?: number; workflows?: number } | undefined;
+  let liveWork: { agents?: number; terminals?: number; workflows?: number; commands?: BackgroundCommand[] } | undefined;
   let leftWork: { agents: number; terminals: number } | undefined;
   const backgroundChanged = (): Promise<void> | undefined => {
     const sum = { agents: (liveWork?.agents ?? 0) + (leftWork?.agents ?? 0), terminals: (liveWork?.terminals ?? 0) + (leftWork?.terminals ?? 0), workflows: liveWork?.workflows ?? 0 };
-    const work = sum.agents || sum.terminals || sum.workflows ? Object.fromEntries(Object.entries(sum).filter(([, count]) => count > 0)) : undefined;
-    const counts = (value: { agents?: number; terminals?: number; workflows?: number } | undefined): string => `${value?.agents ?? 0}/${value?.terminals ?? 0}/${value?.workflows ?? 0}`;
-    if (counts(work) === counts(background)) return undefined;
-    background = work ? { ...work, since: background?.since ?? new Date().toISOString() } : undefined;
+    const counts = Object.fromEntries(Object.entries(sum).filter(([, count]) => count > 0));
+    const commands = sum.terminals && liveWork?.commands?.length ? liveWork.commands : undefined;
+    const work = Object.keys(counts).length ? { ...counts, ...(commands ? { commands } : {}) } : undefined;
+    // What a list shows changes with the counts and with the commands' pids, cpu and staleness.
+    const signature = (value: { agents?: number; terminals?: number; workflows?: number; commands?: BackgroundCommand[] } | undefined): string =>
+      `${value?.agents ?? 0}/${value?.terminals ?? 0}/${value?.workflows ?? 0}/${(value?.commands ?? []).map((item) => `${item.pid}:${Math.round(item.cpuPercent ?? 0)}:${item.lastOutputAt ?? ''}:${item.stale ?? ''}`).join(',')}`;
+    if (signature(work) === signature(background)) return undefined;
+    background = work ? { ...work, since: background?.since ?? new Date().toISOString() } as NonNullable<WorkerRuntimeRecord['background']> : undefined;
     return rewriteRecord();
   };
   observer.onBackgroundWork = (work) => { liveWork = work; return backgroundChanged(); };

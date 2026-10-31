@@ -7,6 +7,7 @@
 import type { FileDiff } from '../../agent/line-diff.js';
 import type { HarnessActivityEvent } from '../prompter.js';
 import { compactCount, formatElapsed } from './format.js';
+import { describeCommands, type BackgroundCommand } from './background-agents.js';
 import type { TurnUsage } from './turn-usage.js';
 import { SHIMMER_WIDTH } from './timings.js';
 import { STOPPED } from './wording.js';
@@ -176,12 +177,15 @@ export type StatusTone = 'thinking' | 'tool' | 'asking';
  * longer phrase. */
 export function turnStatus(state: {
   phase?: string; toolPhase?: string; thought?: string; asking?: boolean; writing?: boolean;
+  /** Background commands are all that runs (waitingOnCommands): said in place of 'thinking'. */
+  waitingOn?: string;
 }): { label: string; tone: StatusTone } {
   if (state.asking) return { label: 'waiting for you', tone: 'asking' };
   if (state.toolPhase) return { label: state.toolPhase, tone: 'tool' };
   const heading = reasoningHeading(state.thought);
   const phase = state.phase?.replace(/(…|\.\.\.)$/, '').trim();
   const thinking = !phase || /^thinking$/i.test(phase);
+  if (state.waitingOn && !heading && !state.writing && (thinking || /^background work$/i.test(phase ?? ''))) return { label: state.waitingOn, tone: 'thinking' };
   const label = heading ?? (!thinking ? phase! : state.writing ? 'writing' : 'thinking');
   return { label, tone: 'thinking' };
 }
@@ -297,4 +301,11 @@ export function turnSummary(state: {
 export function backgroundTerminalsLabel(count: number | undefined): string | undefined {
   const terminals = count && count > 0 ? Math.floor(count) : 0;
   return terminals ? `${plural(terminals, 'background terminal')} running` : undefined;
+}
+
+/** What a turn that has nothing of its own to do says while background commands are all it waits on, by pid, with
+ * their age, cpu and silence (`waiting on background command: <label> · running 32h · cpu 100% · no output`): the
+ * generic 'thinking' says the model is working, and it is not. Used as turnStatus's `waitingOn`. */
+export function waitingOnCommands(commands: readonly BackgroundCommand[] | undefined, now: number = Date.now()): string | undefined {
+  return commands?.length ? describeCommands(commands, now) : undefined;
 }
