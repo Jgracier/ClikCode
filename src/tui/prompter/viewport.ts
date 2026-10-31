@@ -26,7 +26,7 @@ export function onResize(this: TerminalHarnessPrompter): void {
     // debounced into ONE repaint: the clear and the phone's mouse sequence go
     // out once, inside that frame (redrawPreamble), and nothing is drawn full
     // at an intermediate size first -- that was a second blank of the screen
-    // 120ms before the settled one. A frame asked for meanwhile (a keystroke's
+    // just before the settled one. A frame asked for meanwhile (a keystroke's
     // echo, a streaming row) is an ordinary diff and is not held back.
     this.requestRedraw('resize');
     // No height probe here: it jumps the cursor to the bottom-right corner

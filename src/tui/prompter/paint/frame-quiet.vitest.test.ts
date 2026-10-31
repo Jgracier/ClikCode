@@ -1,4 +1,5 @@
 /** A frame that changes a row does not blink the caret, and a resize burst blanks the screen once. */
+import { RESIZE_SETTLE_MS } from '../state.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TerminalHarnessPrompter } from '../../prompter.js';
 import type { HarnessSession } from '../../../session/model.js';
@@ -92,10 +93,27 @@ describe('frames', () => {
     expect(echo).toContain('typing');
     expect(echo).not.toContain('[2J');
     written.length = 0;
-    vi.advanceTimersByTime(200);
+    vi.advanceTimersByTime(RESIZE_SETTLE_MS + 80);
     const settled = written.join('');
     expect(settled.match(/\u001b\[2J/g)).toHaveLength(1);
     expect(settled.match(/\?1000h/g)).toHaveLength(1);
     expect(settled).toContain('typing');
+  });
+
+  it('a keyboard opening (54 rows, then 32 about 200 ms later) is one redraw, not two', () => {
+    vi.useFakeTimers();
+    const prompter = open();
+    prompter.render(session());
+    written.length = 0;
+    Object.assign(process.stdout, { rows: 54 });
+    prompter.onResize();
+    vi.advanceTimersByTime(200);
+    expect(written.join('')).toBe('');
+    Object.assign(process.stdout, { rows: 32 });
+    prompter.onResize();
+    vi.advanceTimersByTime(RESIZE_SETTLE_MS + 80);
+    const settled = written.join('');
+    expect(settled.match(/\u001b\[2J/g)).toHaveLength(1);
+    expect(settled.match(/\?1000h/g)).toHaveLength(1);
   });
 });
