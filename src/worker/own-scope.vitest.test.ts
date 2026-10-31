@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { adoptArgs, AGENT_SLICE, agentSliceDirectory, ceilingUpdate, installSystemdRunShim, scopeUnitName, sliceArgs, systemdRunArgs, userManagerLaunch, userManagerOwns } from './own-scope.js';
+import { adoptArgs, AGENT_SLICE, agentSliceDirectory, ceilingUpdate, installSystemdRunShim, scopeUnitName, sliceArgs, systemdRunArgs, userManagerLaunch, workerLimits, userManagerOwns } from './own-scope.js';
 
 describe('own scope', () => {
   it('names a valid, per-process unit from any session id', () => {
@@ -18,10 +18,20 @@ describe('own scope', () => {
     expect(args[args.indexOf('StartTransientUnit') + 2]).toBe('u.scope');
   });
 
-  it('gives a worker no memory ceiling of its own: the resource guard answers a ballooning one', () => {
-    const args = adoptArgs('u.scope', 99);
-    expect(args).not.toContain('MemoryHigh');
+  it('bounds a worker scope by a wide soft memory line and a task count, never a hard kill line', () => {
+    const args = adoptArgs('u.scope', 99, workerLimits(1000, {}));
+    const prop = (name: string) => args.slice(args.indexOf(name), args.indexOf(name) + 3);
+    expect(prop('MemoryHigh')).toEqual(['MemoryHigh', 't', '500']);
+    expect(prop('TasksMax')).toEqual(['TasksMax', 't', '16384']);
     expect(args).not.toContain('MemoryMax');
+    expect(args[args.indexOf('u.scope') + 2]).toBe('7');
+  });
+
+  it('reads the worker limits from the environment, and can drop the memory line', () => {
+    expect(workerLimits(1000, { CLIKCODE_WORKER_MEMORY_HIGH_SHARE: '0.25', CLIKCODE_WORKER_TASKS_MAX: '500' })).toEqual({ memoryHigh: 250, tasksMax: 500 });
+    const off = adoptArgs('u.scope', 99, workerLimits(1000, { CLIKCODE_WORKER_MEMORY_HIGH_SHARE: '0' }));
+    expect(off).not.toContain('MemoryHigh');
+    expect(off[off.indexOf('u.scope') + 2]).toBe('6');
   });
 
   it('moves only processes the user manager owns', () => {
@@ -44,7 +54,6 @@ describe('own scope', () => {
   it('keeps the worker when one process in its scope is killed at the ceiling', () => {
     const args = adoptArgs('u.scope', 99);
     expect(args.slice(args.indexOf('OOMPolicy'), args.indexOf('OOMPolicy') + 3)).toEqual(['OOMPolicy', 's', 'continue']);
-    expect(args[args.indexOf('u.scope') + 2]).toBe('5');
   });
 
   it('caps a running slice only while it has no cap and is under that cap', () => {
