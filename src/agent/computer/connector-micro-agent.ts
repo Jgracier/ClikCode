@@ -106,7 +106,7 @@ export function livePorts(stateDir: string): MicroPorts {
           '-c', `mcp_servers.clikcode.command=${JSON.stringify(process.execPath)}`,
           '-c', `mcp_servers.clikcode.args=${JSON.stringify([entry, 'connectors', 'agent-mcp', '--tab', options.tab, '--max-calls', String(options.maxCalls), '--counter', counter])}`,
           '-c', 'mcp_servers.clikcode.required=true', '-c', 'mcp_servers.clikcode.enabled_tools=["browser_use","account_use"]',
-          '-c', 'mcp_servers.clikcode.default_tools_approval_mode="auto"', '-o', final, prompt] : argv;
+          '-c', 'mcp_servers.clikcode.default_tools_approval_mode="approve"', '-o', final, prompt] : argv;
         const env = { ...process.env, ...nativeProfileEnvironment(account.nativeProfile) };
         // This is a signed-in native account, never an unrelated API key inherited from the parent.
         delete env.OPENAI_API_KEY;
