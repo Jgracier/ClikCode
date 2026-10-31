@@ -5,7 +5,7 @@ import { existingSessionAgents } from '../agent/background-agents.js';
 import { idleDecision, vendorIdleDecision } from './idle-decisions.js';
 import { hasHeldVendorProcess, whenHeldVendorGone } from '../harness/transport/native/held-vendor.js';
 import { ABANDONED_WORK_MS } from '../harness/transport/persistent-session.js';
-import { closePersistentTransport, hasPersistentTransport, persistentWorkRunning } from '../turn/vendor-process.js';
+import { closePersistentTransport, hasPersistentTransport, persistentWorkRunning, reapPersistentCommands } from '../turn/vendor-process.js';
 import { runningShellCount } from '../agent/session-state.js';
 import { stopBackgroundShell } from '../agent/tools/bash.js';
 import { currentWorkerBuild } from './registry.js';
@@ -94,8 +94,25 @@ export function createIdleControl(ctx: WorkerContext) {
    * what this process loaded: leave now so the next open gets a fresh
    * worker. An attached window is left alone -- its own attach asks for
    * retirement; killing under a live prompt is worse. */
+  /** A newer build wants this worker and nothing but the vendor's background work holds it (no turn, queue or
+   * notification): the commands that have outlived their use (background-commands.ts staleVerdict) are ended
+   * first, by pid, so the replacement is not held for hours by work nobody wants (2026-10-30: a command spinning
+   * for 32 h held 'replacing for the newer build once it is quiet'). Healthy work is left running and still holds.
+   * The vendor reports each command's end, which is the idle edge that retires the worker. */
+  let reapingForRetire = false;
+  const reapStaleForRetire = (): void => {
+    const held = retireBlocker();
+    const background = held === HELD.vendorBackground || held === HELD.vendorWork || held === HELD.shell;
+    const wanted = ctx.retireWhenIdle || Boolean(ctx.spawnedBuild && currentWorkerBuild() && currentWorkerBuild() !== ctx.spawnedBuild);
+    if (reapingForRetire || !wanted || !background || ctx.turnRunning || ctx.submitsInFlight > 0) return;
+    reapingForRetire = true;
+    void reapPersistentCommands(sessionId, 'stale', 'replacing for the newer build')
+      .then((reaped) => { if (reaped.length) { const timer = setTimeout(() => scheduleIdleExit(), 3_000); timer.unref(); } })
+      .catch(quiet('worker/worker-idle')).finally(() => { reapingForRetire = false; });
+  };
   const leaveIfStaleBuild = (): void => {
-    if (!ctx.spawnedBuild || observer.attachedCount > 0 || retireBlocker()) return;
+    if (!ctx.spawnedBuild || observer.attachedCount > 0) return;
+    if (retireBlocker()) { reapStaleForRetire(); return; }
     const live = currentWorkerBuild();
     if (!live || live === ctx.spawnedBuild) return;
     retireIfFree();
@@ -148,6 +165,7 @@ export function createIdleControl(ctx: WorkerContext) {
     // A newer build asked for this worker while it was busy: the moment it is
     // not, it goes, and the next window to need one starts that build.
     if (ctx.retireWhenIdle && !retireBlocker()) retireIfFree();
+    else if (ctx.retireWhenIdle) reapStaleForRetire();
     else leaveIfStaleBuild();
     // A vendor kept running for its own background work (held-vendor.ts):
     // idling out would close it and stop that work unreported. It is

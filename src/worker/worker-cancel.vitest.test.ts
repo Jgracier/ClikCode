@@ -18,7 +18,11 @@ vi.mock('../turn/turn-journal.js', () => ({
 }));
 vi.mock('../agent/mcp/manager.js', () => ({ releaseMcp: vi.fn(async () => undefined), prepareMcp: vi.fn() }));
 vi.mock('../harness/transport/native/held-vendor.js', () => ({ hasHeldVendorProcess: () => false, stopHeldVendorProcess: vi.fn(async () => undefined) }));
-vi.mock('../turn/vendor-process.js', () => ({ persistentWorkRunning: async () => false, closePersistentTransport: vi.fn(async () => undefined) }));
+const vendor = vi.hoisted(() => ({ running: false, reaped: [] as Array<{ command: { pid: number; label: string }; reason: string; kill: { how: string } }>, calls: [] as string[] }));
+vi.mock('../turn/vendor-process.js', () => ({
+  persistentWorkRunning: async () => vendor.running, closePersistentTransport: vi.fn(async () => { vendor.calls.push('close'); }),
+  reapPersistentCommands: vi.fn(async (_id: string, which: string, reason: string) => { vendor.calls.push(`reap:${which}:${reason}`); return vendor.reaped; }),
+}));
 const logged = vi.hoisted(() => [] as Array<[string, Record<string, unknown>]>);
 vi.mock('../runtime/lifecycle-log.js', async (original) => ({ ...(await original<object>()), lifecycle: (event: string, fields: Record<string, unknown> = {}) => { logged.push([event, fields]); } }));
 vi.mock('./consume-queued.js', () => ({ consumeQueuedTurn: vi.fn(async () => undefined) }));
@@ -73,7 +77,7 @@ const waitForTurnEnd = (types: () => string[]): Promise<void> => vi.waitFor(() =
   expect(types().filter((type) => type === 'waiting-stop')).toHaveLength(1);
 }, { timeout: 5_000 });
 
-beforeEach(() => { turn.run = undefined; turn.signals = []; });
+beforeEach(() => { turn.run = undefined; turn.signals = []; vendor.running = false; vendor.reaped = []; vendor.calls = []; });
 
 describe('a Stop before the turn has started', () => {
   it('aborts the turn the moment it starts, and ends it cancelled with the draft restored', async () => {
@@ -321,5 +325,27 @@ describe('a prompt that reaches a worker that is being replaced', () => {
     await waitForTurnEnd(types);
     expect(turn.signals).toHaveLength(1);
     expect(ctx.shuttingDown).toBe(false);
+  });
+});
+
+describe('a Stop while only vendor background work runs', () => {
+  it('ends the background commands by pid before closing the vendor, and says which', async () => {
+    vendor.running = true;
+    vendor.reaped = [{ command: { pid: 3555608, label: 'node scripts/pre-push-related.mjs --all' }, reason: 'stopped by the user', kill: { how: 'group' } }];
+    const { send, alice } = build();
+    await send({ type: 'cancel', restoreDraft: false });
+    expect(vendor.calls).toEqual(['reap:all:stopped by the user', 'close']);
+    expect(logged).toContainEqual(['worker.cancel', expect.objectContaining({ stopped: 'vendor background work', killed: '3555608 (group) node scripts/pre-push-related.mjs --all' })]);
+    const said = alice.events.map((event) => JSON.stringify(event)).join('\n');
+    expect(said).toContain('Stopped 1 background command and their process groups: 3555608 \\"node scripts/pre-push-related.mjs --all\\"');
+    expect(alice.events.some((event) => event.type === 'stop-done')).toBe(true);
+  });
+
+  it('says nothing about commands when none ran', async () => {
+    vendor.running = true;
+    const { send, alice } = build();
+    await send({ type: 'cancel', restoreDraft: false });
+    expect(logged.at(-1)).toEqual(['worker.cancel', expect.objectContaining({ killed: 'no commands' })]);
+    expect(alice.events.map((event) => JSON.stringify(event)).join('')).not.toContain('Stopped ');
   });
 });

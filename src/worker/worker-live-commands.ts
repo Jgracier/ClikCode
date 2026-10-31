@@ -9,7 +9,7 @@ import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import { consumeSessionTurn, enqueueSessionTurn } from '../turn/checkpoint.js';
 import { deliverTyped } from '../turn/send-mode.js';
-import { closePersistentTransport, persistentWorkRunning } from '../turn/vendor-process.js';
+import { closePersistentTransport, persistentWorkRunning, reapPersistentCommands } from '../turn/vendor-process.js';
 import { hasHeldVendorProcess, stopHeldVendorProcess } from '../harness/transport/native/held-vendor.js';
 import { sendEvent } from './broadcast-observer.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
@@ -34,6 +34,12 @@ function stopHoldsForAgents(command: { origin?: CancelOrigin }): boolean {
 function subAgentStopNote(labels: readonly string[]): string {
   const named = labels.slice(0, 4).map((label) => `"${label.slice(0, 50)}"`).join(', ') + (labels.length > 4 ? ` and ${labels.length - 4} more` : '');
   return `Stop held: ${labels.length} sub-agent${labels.length === 1 ? ' is' : 's are'} running (${named}), and stopping the turn would end ${labels.length === 1 ? 'it' : 'them'}. Press Esc or Ctrl+C again to stop anyway; otherwise nothing was interrupted. Messages you type still steer.`;
+}
+
+/** What a Stop that ended background commands says: each by pid. */
+export function stoppedCommandsNote(commands: readonly { pid: number; label: string }[]): string {
+  const named = commands.slice(0, 4).map((item) => `${item.pid} "${item.label.replace(/\s+/g, ' ').trim().slice(0, 60)}"`).join(', ') + (commands.length > 4 ? ` and ${commands.length - 4} more` : '');
+  return `Stopped ${commands.length} background command${commands.length === 1 ? '' : 's'} and their process groups: ${named}.`;
 }
 
 export function createLiveCommands(ctx: WorkerContext) {
@@ -181,9 +187,15 @@ export function createLiveCommands(ctx: WorkerContext) {
       return;
     }
     if (ctx.vendorBackground.busy || await persistentWorkRunning(sessionId)) {
-      lifecycle('worker.cancel', { ...originFields(command), stopped: 'vendor background work' });
       announceStopping(undefined);
-      try { await Promise.all([closePersistentTransport(sessionId), stopHeldVendorProcess(sessionId)]); } finally { if (!ctx.turnRunning) ctx.stopAnnounced = false; observer.broadcast({ type: 'stop-done' }); }
+      try {
+        // The background commands go by pid, with their process groups: closing the vendor alone left a spinning
+        // command running for hours (2026-10-30). What was ended is logged and said.
+        const reaped = await reapPersistentCommands(sessionId, 'all', 'stopped by the user').catch(() => []);
+        lifecycle('worker.cancel', { ...originFields(command), stopped: 'vendor background work', killed: reaped.map(({ command: item, kill }) => `${item.pid} (${kill.how}) ${item.label}`.slice(0, 200)).join(' | ') || 'no commands' });
+        if (reaped.length) note(stoppedCommandsNote(reaped.map(({ command: item }) => item)));
+        await Promise.all([closePersistentTransport(sessionId), stopHeldVendorProcess(sessionId)]);
+      } finally { if (!ctx.turnRunning) ctx.stopAnnounced = false; observer.broadcast({ type: 'stop-done' }); }
       return;
     }
     // Else a turn parked for the reset, if there is one. Said out loud
