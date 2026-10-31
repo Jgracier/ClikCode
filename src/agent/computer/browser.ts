@@ -1,13 +1,14 @@
 /** One persistent Chrome profile shared by ClikCode's terminal and editor workers. */
-import { quiet } from '../../runtime/lifecycle-log.js';
-import { accessSync, constants as fsConstants } from 'node:fs';
+import { lifecycle, quiet } from '../../runtime/lifecycle-log.js';
+import { accessSync, constants as fsConstants, existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { setTimeout as pause } from 'node:timers/promises';
 import type { Browser, BrowserContext, Page } from 'playwright-core';
 import { computerHostFile, computerProfile } from './browser-host.js';
 import { hostStatusFile, installingMessage, liveHostStatus, readHostStatus } from './browser-launch.js';
+import { BROWSER_HOST_UNIT, browserHostLaunch } from './browser-host-scope.js';
 import { sharedState } from './shared-state.js';
 import { watchDownloads } from './downloads.js';
 import { watchDialogs } from './page-dialogs.js';
@@ -77,12 +78,21 @@ async function startHost(stateDir: string): Promise<Connected> {
       const entry = process.env.CLIKCODE_BROWSER_HOST_ENTRY || process.argv[1];
       if (!entry) throw new Error('ClikCode could not start its browser host.');
       const hostArgs = [process.execPath, entry, 'computer-host', stateDir];
-      const [command, ...argv] = hiddenDisplayCommand(hostArgs);
+      const plain = hiddenDisplayCommand(hostArgs);
+      // In a systemd unit of its own, with limits: it belongs to no worker, so it outlives this one and the next adopts it.
+      const own = browserHostLaunch(plain, { platform: process.platform, env: process.env, cgroup: await fs.readFile('/proc/self/cgroup', 'utf8').catch(() => ''), uid: process.getuid?.() ?? 0, cwd: process.cwd(), busExists: existsSync });
       await fs.unlink(hostStatusFile(stateDir)).catch(quiet('agent/computer/browser'));
-      const child = spawn(command!, argv, { detached: true, stdio: 'ignore', windowsHide: true });
+      const launch = (argv: readonly string[], env?: NodeJS.ProcessEnv): ChildProcess => {
+        const [command, ...rest] = argv;
+        const started = spawn(command!, rest, { detached: true, stdio: 'ignore', windowsHide: true, ...(env ? { env } : {}) });
+        started.once('error', error => { startupError = error; });
+        started.unref();
+        return started;
+      };
       let startupError: Error | undefined;
-      child.once('error', error => { startupError = error; });
-      child.unref();
+      let child = launch(own?.argv ?? plain, own?.env);
+      let scoped = own !== undefined;
+      lifecycle('browser.host.start', { scoped, unit: scoped ? BROWSER_HOST_UNIT : undefined });
       for (let attempt = 0; attempt < 100; attempt++) {
         const result = await connect(stateDir);
         if (result) return result;
@@ -90,7 +100,14 @@ async function startHost(stateDir: string): Promise<Connected> {
         const status = await readHostStatus(stateDir);
         if (status?.state === 'installing') throw new Error(installingMessage(status));
         if (status?.state === 'failed' && status.text) throw new Error(status.text);
-        if (startupError || child.exitCode !== null) break;
+        // systemd-run could not make the unit (a name still in use, no user manager): start the host plainly, once.
+        const exited = child.exitCode !== null && (child.exitCode !== 0 || !own?.detachesAtOnce);
+        if (scoped && (startupError || exited) && !status) {
+          lifecycle('browser.host.unscoped', { code: child.exitCode ?? undefined });
+          scoped = false;
+          startupError = undefined;
+          child = launch(plain);
+        } else if (startupError || (child.exitCode !== null && !(scoped && own?.detachesAtOnce && child.exitCode === 0))) break;
         await pause(200);
       }
       const last = await readHostStatus(stateDir);
