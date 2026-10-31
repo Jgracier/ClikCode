@@ -876,7 +876,9 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
   // account; the same email with a new password replaces that account.
   let confirmSignIn = false;
   if (fields.filter(field => field.password).length <= 1) {
-    const accounts = (await savedLoginsForSite(ctx.stateDir, page.url()).catch(() => [])).filter(account => !account.rejected);
+    let accounts = (await savedLoginsForSite(ctx.stateDir, page.url()).catch(() => [])).filter(account => !account.rejected);
+    // An incomplete capture must not hide the saved credential that can finish this password page.
+    if (fields.some(field => field.password) && accounts.some(account => account.usable)) accounts = accounts.filter(account => account.usable);
     const accountField = fields.some(field => loginValueFor({ username: 'x', password: 'x' }, field));
     // Google's first page is only the email box. That is still a sign-in, and the email has to be asked.
     const signIn = accountField && (fields.filter(field => field.password).length === 1 || /signin|identifier|\/login\b/i.test(page.url()));
@@ -893,8 +895,8 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
       }
       if (account) login = await savedLoginFields(ctx.stateDir, page.url(), account.id).catch(quiet('agent/tools/computer-web'));
     }
-    // A sign-in shows what it would fill, to edit or leave alone, instead of typing it unseen.
-    if (signIn) confirmSignIn = true;
+    // Interactive sign-in retains its edit prompt; unattended sign-in uses the saved credential.
+    if (signIn) confirmSignIn = !await unattendedEnabled(ctx.stateDir);
   }
   // A signup form (two password boxes, a new-password box, or a sign-up page): one strong password for the whole form
   // (see below), kept in Secrets Manager with the login, never shown.

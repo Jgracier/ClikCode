@@ -104,7 +104,10 @@ export async function loginComputerPage(input: {
   const startUrl = input.page.url();
   const origin = checkedOrigin(startUrl);
   let lastSubmit = Date.now() - 120_000;
-  const accounts = await savedLoginsForSite(input.stateDir, startUrl);
+  const storedAccounts = await savedLoginsForSite(input.stateDir, startUrl);
+  const usableAccounts = storedAccounts.filter(account => account.usable && !account.rejected);
+  // Empty captures cannot force an account picker when a usable saved login exists.
+  const accounts = usableAccounts.length ? usableAccounts : storedAccounts;
   // One saved account is simply used. Several (or one the site refused last
   // time) are put to the user as an arrow-key picker, with a way to add another.
   let id: string | undefined;
