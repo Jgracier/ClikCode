@@ -2,6 +2,9 @@
  * browser_use and account_use tools ONLY, served by `clikcode connectors agent-mcp`, which counts every call and refuses past the budget.
  * The prompt is the screen as the runner saw it plus one goal. On success the agent has captured the key (unseen) and saved a recipe, so
  * the next vendor on that host needs no agent. */
+import type { AiHarnessAccount } from '../../harness/definition.js';
+import { accountCanTakeTurn } from '../../harness/accounts/usage-reading.js';
+import { nativeProfileEnvironment } from '../../harness/transport/profile-environment.js';
 import { quiet } from '../../runtime/lifecycle-log.js';
 import { scrubSecrets } from './secret-scrubber.js';
 import type { DriveOutcome, HumanStep, StopInfo } from './connector-runner.js';
@@ -74,11 +77,22 @@ export async function runMicroTask(id: string, stop: StopInfo, budget: { maxCall
   return { ok: false, stop: { ...stop, message: `the agent micro-task did not finish (${ran.calls} calls): ${why}`.slice(0, 300) } };
 }
 
+/** Use a saved, usable native profile. A limit on Claude must not strand the line when Codex is available. */
+export function microAccount(accounts: readonly AiHarnessAccount[]): AiHarnessAccount | undefined {
+  const usable = accounts.filter((account) => accountCanTakeTurn(account) && account.authKind === 'vendor-cli');
+  return usable.find((account) => account.provider === 'anthropic' && account.nativeProfile?.env === 'CLAUDE_CONFIG_DIR')
+    ?? usable.find((account) => account.provider === 'openai' && account.nativeProfile?.env === 'CODEX_HOME');
+}
+
 export function livePorts(stateDir: string): MicroPorts {
   return {
     async recipeStamp() { const { listRecipes } = await import('./signup-recipes.js'); return (await listRecipes(stateDir)).map(r => `${r.host}:${r.loginRoute}:${r.verifiedAt}`).sort().join('|'); },
     async run(prompt, options) {
       const [{ mkdtemp, writeFile, readFile, rm }, { tmpdir }, { join }, { spawn }] = await Promise.all([import('node:fs/promises'), import('node:os'), import('node:path'), import('node:child_process')]);
+      const { readState } = await import('../../session/state/read.js');
+      const account = microAccount((await readState({ transcripts: [] })).accounts);
+      if (!account) throw new Error('No saved Claude or Codex account currently has usage available.');
+      const useCodex = account.provider === 'openai';
       const dir = await mkdtemp(join(tmpdir(), 'clikcode-micro-'));
       const counter = join(dir, 'calls');
       try {
@@ -86,14 +100,27 @@ export function livePorts(stateDir: string): MicroPorts {
         const config = join(dir, 'mcp.json');
         await writeFile(config, JSON.stringify({ mcpServers: { clikcode: { command: process.execPath, args: [entry, 'connectors', 'agent-mcp', '--tab', options.tab, '--max-calls', String(options.maxCalls), '--counter', counter] } } }));
         const argv = ['-p', prompt, '--output-format', 'text', '--mcp-config', config, '--strict-mcp-config', '--tools', '', '--allowedTools', 'mcp__clikcode__browser_use', 'mcp__clikcode__account_use', '--permission-mode', 'dontAsk', '--no-session-persistence', ...(process.env.CLIKCODE_MICRO_AGENT_MODEL ? ['--model', process.env.CLIKCODE_MICRO_AGENT_MODEL] : [])];
-        const child = spawn('claude', argv, { stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
+        const final = join(dir, 'final.txt');
+        const args = useCodex ? ['exec', '--ephemeral', '--ignore-user-config', '--skip-git-repo-check', '-C', dir, '-s', 'read-only',
+          '-c', 'approval_policy="never"', '-c', 'features.shell_tool=false', '-c', 'web_search="disabled"',
+          '-c', `mcp_servers.clikcode.command=${JSON.stringify(process.execPath)}`,
+          '-c', `mcp_servers.clikcode.args=${JSON.stringify([entry, 'connectors', 'agent-mcp', '--tab', options.tab, '--max-calls', String(options.maxCalls), '--counter', counter])}`,
+          '-c', 'mcp_servers.clikcode.required=true', '-c', 'mcp_servers.clikcode.enabled_tools=["browser_use","account_use"]',
+          '-c', 'mcp_servers.clikcode.default_tools_approval_mode="auto"', '-o', final, prompt] : argv;
+        const env = { ...process.env, ...nativeProfileEnvironment(account.nativeProfile) };
+        // This is a signed-in native account, never an unrelated API key inherited from the parent.
+        delete env.OPENAI_API_KEY;
+        delete env.ANTHROPIC_API_KEY;
+        const child = spawn(useCodex ? 'codex' : 'claude', args, { env, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
         let text = '', timedOut = false;
         child.stdout!.on('data', c => { text = (text + String(c)).slice(-20_000); });
         child.stderr!.on('data', quiet('agent/computer/connector-micro-agent'));
         const kill = (): void => { try { process.kill(-child.pid!, 'SIGKILL'); } catch { child.kill('SIGKILL'); } };
         const timer = setTimeout(() => { timedOut = true; kill(); }, options.maxMs);
-        await new Promise<void>(resolve => { child.once('close', () => resolve()); child.once('error', () => resolve()); });
+        const code = await new Promise<number | null>(resolve => { child.once('close', code => resolve(code)); child.once('error', () => resolve(-1)); });
         clearTimeout(timer);
+        if (code !== 0 && !timedOut) throw new Error(`${useCodex ? 'Codex' : 'Claude'} micro-task could not complete (exit ${code}); retry after account availability changes.`);
+        if (useCodex) text = await readFile(final, 'utf8').catch(() => '');
         const calls = Number(await readFile(counter, 'utf8').catch(() => '0')) || 0;
         return { text, timedOut, calls };
       } finally { await rm(dir, { recursive: true, force: true }).catch(quiet('agent/computer/connector-micro-agent')); }
