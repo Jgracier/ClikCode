@@ -16,7 +16,7 @@ export function microPrompt(id: string, stop: StopInfo, maxCalls: number): strin
   const controls = stop.controls.slice(0, 20).map(c => scrubSecrets(c).slice(0, 60)).join(' | ');
   return [
     `You are finishing ClikDeploy connector onboarding for the vendor "${id}". A rule-based runner stopped on a screen it does not know.`,
-    `Goal: finish the exact assigned platform task shown below. Use signup/key capture only when the task needs a connection. For copy, spec or proof work use connector_task; do not restart signup.`,
+    `Goal: finish the exact assigned platform task shown below. Use signup/key capture only when the task needs a connection. For copy, spec or proof work use connector_task; do not restart signup. Research official documentation in the browser, use connector_build for a published API reference, and write connector_spec_put only when the full API has been documented. A spec must keep the assigned id.`,
     `You may use browser_use, account_use, and connector_task for the assigned connector ONLY, at most ${maxCalls} calls in total (the tool refuses after that). The tab is fixed for you.`,
     '',
     `The screen it stopped on: ${stop.url || '(address unknown)'}`,
