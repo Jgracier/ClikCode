@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import { unwrapTool } from './connector-runner-live.js';
+import { findOnboard, unwrapTool } from './connector-runner-live.js';
 import { forgetSecrets, registerSecret } from './secret-scrubber.js';
 
 afterEach(() => forgetSecrets());
@@ -19,4 +19,11 @@ it('a non-JSON failure keeps all its lines, and a secret in either is hidden', (
   let message = '';
   try { unwrapTool('line one\nline two sk_live_abcdef123456\nline three\nline four'); } catch (error) { message = (error as Error).message; }
   expect(message).toBe('line one line two [secret hidden] line three line four');
+});
+
+
+it('accepts terminal platform replies without next instead of retrying a released lease', () => {
+ const result = findOnboard({ data: { id: 'systemeio', state: 'attention', stage: 'finish', reason: 'no docs' } });
+ expect(result).toMatchObject({ id: 'systemeio', state: 'attention', next: { kind: 'none' } });
+ expect(findOnboard({ id: 'working', state: 'needs-agent' })).toBeUndefined();
 });

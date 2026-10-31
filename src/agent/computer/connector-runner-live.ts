@@ -73,10 +73,15 @@ export function liveClient(signal?: AbortSignal): DeployClient {
   };
 }
 
-function findOnboard(value: unknown): OnboardResult | undefined {
+export function findOnboard(value: unknown): OnboardResult | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const r = value as Record<string, unknown>;
-  if (typeof r.id === 'string' && typeof r.state === 'string' && r.next) return r as unknown as OnboardResult;
+  if (typeof r.id === 'string' && typeof r.state === 'string') {
+    if (r.next) return r as unknown as OnboardResult;
+    if (['attention', 'published', 'complete', 'blocked'].includes(r.state)) {
+      return { ...r, next: { kind: 'none', task: 'The platform has reached a terminal state.' } } as unknown as OnboardResult;
+    }
+  }
   for (const child of Object.values(r)) { const found = findOnboard(child); if (found) return found; }
   return undefined;
 }
