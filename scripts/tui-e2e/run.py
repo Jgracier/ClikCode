@@ -1190,6 +1190,26 @@ SCENARIOS = {
     # repainted as the board -- its headings as the board draws them, its
     # list fitted to the new height -- not in the slash palette's style
     # ("── Recent", indented rows) the repaint used to fall back to.
+    # The phone's keyboard opening: 54 rows, then 32 about 200 ms later (measured: 303 such pairs in one day's log, and a
+    # quarter of a second more in the rest). Each size that outlasts the settle window was its own clear and redraw -- the
+    # footer under the composer flashing off and on. Once with a plain chat, once on the board with a chat working.
+    'resize-keyboard-open-clears-once': {
+        'cols': 70, 'rows': 62,
+        'turns': [{'blocks': ['First chat answered.']}],
+        'steps': [('type', 'hello'), ('wait_for', 'First chat answered.', 30), ('settle', 2),
+                  ('resize_burst', 0.2, (54, 32)), ('settle', 1), ('snap', 'open'),
+                  ('resize_burst', 0.25, (54, 62)), ('settle', 1), ('snap', 'closed')],
+        'watch': [], 'snap_contains': {'open': ['Grok Build'], 'closed': ['Grok Build']},
+    },
+    'resize-keyboard-open-on-working-board': {
+        'cols': 70, 'rows': 62,
+        'turns': [{'blocks': ['First chat answered.']}, {'intro': 'Starting the long build.', 'hold_ms': 40000, 'blocks': ['The build passed.']}],
+        'steps': [('type', 'hello'), ('wait_for', 'First chat answered.', 30), ('settle', 2),
+                  ('type', 'run the long build'), ('wait_for', 'Starting the long build.', 30), ('settle', 1),
+                  ('keys', '\x1b[D'), ('wait_for', 'Working', 10), ('settle', 2),
+                  ('resize_burst', 0.2, (54, 32)), ('settle', 1), ('snap', 'open')],
+        'watch': [], 'snap_contains': {'open': ['Working', 'Grok Build']},
+    },
     'board-resize-keeps-board': {
         'cols': 70, 'rows': 63,
         'turns': [{'blocks': ['First chat answered.']}],
@@ -3241,11 +3261,14 @@ def run(name, spec, entry, keep):
             # Keyboard close on the phone changes the reported height several
             # times before settling. Keep the real PTY and emulator in lockstep.
             before = len(raw)
-            for lines in (63, 40, 32):
+            # ('resize_burst', gap, (heights...)): defaults are the slide (63, 40, 32, 50 ms apart); the keyboard OPENING
+            # reports 54 and then 32 about 200 ms later, which is the gap a shorter settle window split into two redraws.
+            gap = step[1] if len(step) > 1 else 0.05
+            for lines in (step[2] if len(step) > 2 else (63, 40, 32)):
                 fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', lines, 70, 0, 0))
                 screen.resize(lines=lines, columns=70)
-                pump(0.05)
-            pump(0.5)
+                pump(gap)
+            pump(0.8)
             # The scroll fix for a phone with its keyboard hidden: after a
             # resize, all four mouse modes, then hide, clear and home, then
             # the rows -- as Claude Code sends it there. Without the clear,
