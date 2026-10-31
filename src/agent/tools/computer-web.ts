@@ -5,8 +5,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { defineTool } from '../tool-contract.js';
-import { adoptPage, closeComputerPage, computerPage, openComputerPage, openNewComputerPage, recoverComputerPage } from '../computer/browser.js';
-import { checkKey, clickExtras, clickWith, closeTab, dragStep, fillTarget, hoverStep, PAGE_ACTIONS, PAGE_DESCRIPTION, PAGE_PARAMETERS, pageAction, scrollStep, waitForState, withScreenshot, type PageAction, type PageArgs, type ScrollDirection, type StepExtras } from '../computer/page-control.js';
+import { adoptPage, allTabs, closeComputerPage, computerPage, openComputerPage, openNewComputerPage, recoverComputerPage } from '../computer/browser.js';
+import { checkKey, clickExtras, clickWith, closeTab, dragStep, fillTarget, hoverStep, listTabs, PAGE_ACTIONS, PAGE_DESCRIPTION, PAGE_PARAMETERS, pageAction, scrollStep, waitForState, withScreenshot, type PageAction, type PageArgs, type ScrollDirection, type StepExtras } from '../computer/page-control.js';
 import { COMPUTER_OFF, computerEnabled, generatedPasswordsAllowed, unattendedEnabled } from '../computer/settings.js';
 import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
 import { findLabelledSecret, keyFieldValues, maskSensitive, sensitiveValues } from '../computer/sensitive-fields.js';
@@ -501,6 +501,14 @@ function runInOrder(args: WebArgs, hostCtx: ToolContext): Promise<ToolRunResult>
           return { output: `Saved. ${describeProfile(await saveProfile(ctx.stateDir, { ...(args.label ? { label: args.label } : defaultProfile(all) ? { id: defaultProfile(all)!.id } : {}), fields: answers }))}` };
         }
         return { output: all.map(describeProfile).join('\n') };
+      }
+      // Lists every worker's tabs, so it needs no tab of this chat's own.
+      if (args.action === 'tabs') return { output: await listTabs({ stateDir: ctx.stateDir, ...(args.tab ? { tab: args.tab } : {}), displayUrl }) };
+      if (args.action === 'close' && args.tab && args.index === undefined) {
+        // A named tab is closed whoever holds it (a worker that ended left it), and each close is logged.
+        const before = ((await allTabs(ctx.stateDir).catch(() => undefined)) ?? []).filter(view => view.tab === args.tab).length;
+        await closeComputerPage(ctx.stateDir, args.tab);
+        return { output: before > 1 ? `Closed ${before} tabs named "${args.tab}".` : `Closed the tab named "${args.tab}".` };
       }
       if (args.action === 'close' && (args.index !== undefined)) { await computerPage(ctx.stateDir, args.tab); return { output: await closeTab(args, { stateDir: ctx.stateDir, ...(args.tab ? { tab: args.tab } : {}) }) }; }
       if (args.action === 'close') { await closeComputerPage(ctx.stateDir, args.tab); return { output: 'This chat\'s tab is closed.' }; }

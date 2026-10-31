@@ -5,6 +5,7 @@ import path from 'node:path';
 import { leaveDialogsToWorkers } from './page-dialogs.js';
 import { hostStatusFile, launchComputerBrowser, shouldRunHeadless, writeHostStatus } from './browser-launch.js';
 import { headlessSetting } from './settings.js';
+import { restoreTabs, startBrowserJanitor, takeRecycle } from './browser-janitor.js';
 
 export function computerProfile(stateDir: string): string { return path.join(stateDir, 'computer', 'chrome'); }
 export function computerHostFile(stateDir: string): string { return path.join(stateDir, 'computer', 'host.json'); }
@@ -41,9 +42,22 @@ export async function runComputerHost(stateDir: string): Promise<void> {
   try {
     await fs.writeFile(hostFile, record, { mode: 0o600 });
     const stop = (): void => { void context.close().catch(quiet('agent/computer/browser-host')); };
+    // Tabs a recycle saved come back, then the janitor closes tabs nobody holds and recycles an oversized browser.
+    await restoreTabs(stateDir, await takeRecycle(stateDir), {
+      async openPage(url) {
+        const page = await context.newPage();
+        const session = await context.newCDPSession(page);
+        try {
+          await page.goto(url, { timeout: 15_000, waitUntil: 'domcontentloaded' }).catch(quiet('agent/computer/browser-host'));
+          return ((await session.send('Target.getTargetInfo')) as { targetInfo: { targetId: string } }).targetInfo.targetId;
+        } finally { await session.detach().catch(quiet('agent/computer/browser-host')); }
+      },
+    }).catch(quiet('agent/computer/browser-host'));
+    const stopJanitor = startBrowserJanitor({ stateDir, hostPid: process.pid, recycle: async () => { stop(); } });
     process.once('SIGTERM', stop);
     process.once('SIGINT', stop);
     await new Promise<void>(resolve => (context as unknown as { once(event: 'close', callback: () => void): void }).once('close', resolve));
+    stopJanitor();
     process.off('SIGTERM', stop);
     process.off('SIGINT', stop);
   } finally {
