@@ -87,14 +87,14 @@ export const DEFAULT_LIMITS: LoopLimits = {
   renewMs: 10 * 60_000, tickMs: 15_000, idleMs: 60_000, pauseBaseMs: 30_000, pauseMaxMs: 5 * 60_000, pressureLimit: 10, graceMs: 90_000,
 };
 
-export interface WorkContext { tab: string; budget: CallBudget; limits: LoopLimits; deadline: number }
-export interface LoopReport { outcome: 'done' | 'blocked' | 'retry'; reason: string; humanStep?: VendorOutcome['humanStep'] }
+export interface WorkContext { tab: string; budget: CallBudget; limits: LoopLimits; deadline: number; signal?: AbortSignal }
+export interface LoopReport { outcome: 'done' | 'blocked' | 'retry'; reason: string; retryAfterMs?: number; humanStep?: VendorOutcome['humanStep'] }
 export interface LoopState {
   pid: number; startedAt: string; until: string; parallel: number; updatedAt: string; stopping?: boolean;
   active: Array<{ id: string; tab: string; since: string; calls: number }>;
   done: Record<string, number>; walls: Record<string, number>;
   cooldown: Record<string, string>;
-  pressure?: { io?: number; cpu?: number; stalled: boolean; pausedUntil?: string };
+  pressure?: { io?: number; cpu?: number; memory?: number; stalled: boolean; pausedUntil?: string };
 }
 export interface LoopPorts {
   /** Claims up to `n` due vendors that are not in `exclude`. */
@@ -103,10 +103,8 @@ export interface LoopPorts {
   /** Works one vendor in its own tab to a finished outcome. */
   work(id: string, ctx: WorkContext): Promise<VendorOutcome>;
   report(id: string, report: LoopReport): Promise<void>;
-  pressure(): Promise<{ stalled: boolean; io?: number; cpu?: number }>;
+  pressure(): Promise<{ stalled: boolean; io?: number; cpu?: number; memory?: number }>;
   closeTab(id: string): Promise<void>;
-  /** Restarts the shared browser; vendors working at that moment fail and are resumed once. */
-  restartBrowser(): Promise<void>;
   log(line: string): void;
   saveState(state: LoopState): Promise<void>;
   loadCooldown?(): Promise<Record<string, string> | undefined>;
@@ -127,12 +125,7 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
   cooldown.restore(await ports.loadCooldown?.().catch(() => undefined));
   const active = new Map<string, { job: Promise<void>; since: number; lastRenew: number; budget: CallBudget; tab: string }>();
   const summary: LoopSummary = { vendors: 0, done: {}, walls: {}, pauses: 0, restarts: 0, renewals: 0 };
-  let stalls = 0, pausedUntil: number | undefined, last: { stalled: boolean; io?: number; cpu?: number } = { stalled: false };
-  let restarting: Promise<void> | undefined;
-  const restart = (): Promise<void> => {
-    if (!restarting) { summary.restarts++; restarting = ports.restartBrowser().catch(() => undefined).finally(() => { restarting = undefined; }); }
-    return restarting;
-  };
+  let stalls = 0, pausedUntil: number | undefined, last: { stalled: boolean; io?: number; cpu?: number; memory?: number } = { stalled: false };
   const save = (stopping: boolean): Promise<void> => ports.saveState({
     pid: ports.pid ?? process.pid, startedAt: new Date(started).toISOString(), until: new Date(endAt).toISOString(), parallel: limits.parallel, updatedAt: new Date(now()).toISOString(), ...(stopping ? { stopping: true } : {}),
     active: [...active].map(([id, a]) => ({ id, tab: a.tab, since: new Date(a.since).toISOString(), calls: a.budget.used })),
@@ -151,7 +144,7 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
     let report: LoopReport | undefined;
     if (outcome.status === 'published') report = { outcome: 'done', reason: reason || 'published' };
     else if (outcome.status === 'human' && wall && !/already holds/.test(outcome.recorded ?? '')) report = { outcome: 'blocked', reason: `wall:${wall}: ${reason}`.padEnd(10, '.').slice(0, 480), ...(outcome.humanStep ? { humanStep: outcome.humanStep } : {}) };
-    else if (outcome.status === 'budget' || outcome.status === 'error' || outcome.status === 'handoff') report = { outcome: 'retry', reason: `${wall === 'budget' ? 'wall:budget' : outcome.status}: ${reason}`.padEnd(10, '.').slice(0, 480) };
+    else if (outcome.status === 'budget' || outcome.status === 'error' || outcome.status === 'handoff') report = { outcome: 'retry', retryAfterMs: limits.cooldownMs, reason: `${wall === 'budget' ? 'wall:budget' : outcome.status}: ${reason}`.padEnd(10, '.').slice(0, 480) };
     let reported = report ? report.outcome : 'none';
     if (report) await ports.report(id, report).catch(error => { reported = `${report!.outcome}-failed(${scrubSecrets(error instanceof Error ? error.message : String(error)).slice(0, 80)})`; });
     ports.log(`${new Date(now()).toISOString()} id=${id} outcome=${outcome.status} wall=${wall ?? '-'} calls=${budget.used} minutes=${minutes.toFixed(1)} steps=${outcome.steps} reported=${reported}${outcome.recipe ? ' recipe=yes' : ''} ${JSON.stringify(reason.slice(0, 160))}`);
@@ -164,7 +157,8 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
     const budget = new CallBudget(limits.maxCalls);
     const tab = tabName(id);
     const job = (async (): Promise<void> => {
-      const ctx: WorkContext = { tab, budget, limits, deadline: began + limits.maxMs };
+      const abort = new AbortController();
+      const ctx: WorkContext = { signal: abort.signal, tab, budget, limits, deadline: began + limits.maxMs };
       const hard = new Promise<'timeout'>(resolve => { void sleep(limits.maxMs + limits.graceMs).then(() => resolve('timeout')); });
       const run = async (): Promise<VendorOutcome> => {
         try { return await ports.work(id, ctx); } catch (error) {
@@ -180,19 +174,20 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
         if (raced !== 'timeout' && 'failed' in raced) {
           const message = raced.failed instanceof Error ? raced.failed.message : String(raced.failed);
           if (BROWSER_HANG.test(message) && now() < ctx.deadline) {
-            ports.log(`${new Date(now()).toISOString()} id=${id} browser trouble (${scrubSecrets(message).slice(0, 80)}); restarting the browser and resuming`);
+            ports.log(`${new Date(now()).toISOString()} id=${id} browser trouble (${scrubSecrets(message).slice(0, 80)}); closing this task’s tabs and resuming`);
             await ports.closeTab(id).catch(() => undefined);
-            await restart();
+            await ports.closeTab(id).catch(() => undefined);
             raced = await Promise.race([run().catch((e: unknown) => ({ failed: e })), hard]);
           }
         }
         if (raced === 'timeout') {
+          abort.abort(new Error('Connector task deadline expired'));
           await ports.closeTab(id).catch(() => undefined);
-          await restart();
-          outcome = { id, status: 'budget', steps: 0, browserActions: 0, stage: '', summary: `hard time limit of ${Math.round((limits.maxMs + limits.graceMs) / 1000)}s: the browser did not answer; the tab and the browser were restarted`, actions: [] };
+          await ports.closeTab(id).catch(() => undefined);
+          outcome = { id, status: 'budget', steps: 0, browserActions: 0, stage: '', summary: `hard time limit of ${Math.round((limits.maxMs + limits.graceMs) / 1000)}s: the browser did not answer; the task was cancelled and its own tabs were closed`, actions: [] };
         } else if ('failed' in raced) {
           const message = scrubSecrets(raced.failed instanceof Error ? raced.failed.message : String(raced.failed));
-          if (BROWSER_HANG.test(message)) await restart();
+          if (BROWSER_HANG.test(message)) await ports.closeTab(id).catch(() => undefined);
           outcome = { id, status: 'error', steps: 0, browserActions: 0, stage: '', summary: message.slice(0, 300), actions: [] };
         } else outcome = raced;
       } finally { await ports.closeTab(id).catch(() => undefined); }
@@ -216,7 +211,7 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
           const pause = Math.min(limits.pauseBaseMs * 2 ** (stalls - 1), limits.pauseMaxMs);
           pausedUntil = t + pause;
           summary.pauses++;
-          ports.log(`${new Date(t).toISOString()} machine stalled (io full ${last.io ?? '-'}%, cpu full ${last.cpu ?? '-'}%): no new vendors for ${Math.round(pause / 1000)}s`);
+          ports.log(`${new Date(t).toISOString()} machine stalled (io full ${last.io ?? '-'}%, cpu full ${last.cpu ?? '-'}%, memory full ${last.memory ?? '-'}%): no new vendors for ${Math.round(pause / 1000)}s`);
           waitMs = Math.min(pause, limits.tickMs);
         } else {
           stalls = 0; pausedUntil = undefined;

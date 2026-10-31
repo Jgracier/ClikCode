@@ -580,8 +580,8 @@ step. The kinds: `captcha, sms, card, paid-plan, sales, app-review, oauth-app, f
 
 - **Cooldown**: a vendor is not taken again for 6 hours (24 after a wall); the cooldown survives a restart (it is kept in `~/.clikcode/connector-loop.json`).
 - **Back-off**: new vendors are not started while `/proc/pressure/io` or `/proc/pressure/cpu` shows a full stall above 10% (10 s average); the pause doubles from 30 s to 5 min while it lasts.
-- **Hangs**: a vendor that outlives its time budget by 90 s has its tab closed and the browser restarted; a browser that goes away mid-vendor is restarted and the vendor resumed once (ClikDeploy keeps its progress).
-- **Unknown screens** go to one agent micro-task per vendor: a headless `claude -p` with only `browser_use` and `account_use` (served by the hidden `connectors agent-mcp`, one tab, 25 calls, refused after that). It must end with `RESULT: captured | wall <kind> | gave-up`, and saves a recipe on success, so the next vendor on that host needs no agent. `CLIKCODE_MICRO_AGENT=0` turns it off (the screen is handed on in a work note); `CLIKCODE_MICRO_AGENT_MODEL` picks its model.
+- **Hangs**: a vendor that outlives its time budget by 90 s is cancelled and only its own tabs are closed. A lost tab is reopened once within its budget. This recovery never restarts the shared browser or closes another worker’s tabs.
+- **Unknown screens** go to one agent micro-task per vendor: an available saved account through its native headless harness with `browser_use`, `account_use` and the assigned connector’s `connector_task` (served by the hidden `connectors agent-mcp`, one tab, 25 calls, refused after that). It must end with `RESULT: completed | captured | wall <kind> | gave-up`, and saves a recipe on success, so the next vendor on that host needs no agent. `CLIKCODE_MICRO_AGENT=0` turns it off (the screen is handed on in a work note); `CLIKCODE_MICRO_AGENT_MODEL` picks its model.
 - **Log**: one line per vendor in `~/.clikcode/connector-loop.log` (id, outcome, wall, calls, minutes, steps, what was reported).
 
 Run it under systemd (`~/.config/systemd/user/clikcode-connectors.service`, then `systemctl --user enable --now clikcode-connectors`; `loginctl enable-linger $USER` keeps it across logouts):
@@ -685,3 +685,10 @@ With a mailbox connected, a one-time-code box that `login` or `fill` (no text) m
 5. The inbox is read first, then spam, over three passes of 30 seconds. If nothing comes, the signup is recorded in the queue as `needs-human` with reason `email` and the step stops, so the run goes on to the next vendor; `clikcode computer queue --reason email` lists them.
 
 `read_email_code` and `open_email_link` with no `from` or `subject` use the same rules for the page they are on. With `from` or `subject` they read the newest matching message, as before. With no mailbox connected nothing changes: the code is asked for privately.
+
+
+### Resuming connector work
+
+The loop paginates the server queue, skips its durable `nextAttemptAt` deadlines and includes the previous worker’s scratchpad with the task. Retry timing is shared with other workers and the feeder. Micro-task tool calls count against the vendor’s total call budget, including failed agent attempts. `connector_task` can describe the exact allowed operation schema, write progress notes, inspect proof and carry out scoped spec/copy/test work; it always supplies the assigned id and worker identity.
+
+Before a credential task opens signup, the runner tries its saved `<id>/key`. A signed `amazonaws-*` definition on an HTTPS AWS-owned origin may reuse `aws/clikdeploy-connector-key`, with region supplied only when declared. Values pass directly from the vault to the verified connection destination and never enter agent context. The runner checks memory PSI for its own cgroup and ancestors alongside host CPU and I/O pressure before starting more work.

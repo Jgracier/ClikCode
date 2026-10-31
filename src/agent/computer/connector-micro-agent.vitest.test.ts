@@ -183,3 +183,18 @@ it('rejects cross-connector edits and unlisted operations before any platform ca
  await expect(tool.run({ tool: 'connector_spec_set', args: {} }, {} as never)).rejects.toThrow('not available');
  expect(parseMicroResult('RESULT: completed')).toEqual({ kind: 'captured' });
 });
+
+it('describes allowed operations and saves notes with the assigned id and worker, never another connector', async () => {
+  const calls: unknown[] = [];
+  const tool = connectorTaskTool('acme', { describe: async name => ({ name, inputSchema: { type: 'object' } }), call: async (name, args) => { calls.push([name, args]); return { saved: true }; } });
+  const description = await tool.run({ tool: 'describe', args: { tool: 'connector_spec_patch' } } as never, {} as never);
+  expect(description.output).toContain('inputSchema');
+  await tool.run({ tool: 'connector_work_note', args: { text: 'Saved the official reference', worker: 'another-worker' } } as never, {} as never);
+  expect(calls).toEqual([['connector_work_note', { text: 'Saved the official reference', id: 'acme', worker: 'cc-runner' }]]);
+  await expect(tool.run({ tool: 'describe', args: { tool: 'delete_app' } } as never, {} as never)).rejects.toThrow('not available');
+});
+
+it('retains calls consumed before a native agent exits with an error', async () => {
+  const failed: MicroPorts = { recipeStamp: async () => '', run: async () => ({ text: '', timedOut: false, calls: 7, error: 'native account unavailable' }) };
+  expect(await runMicroTask('acme', stop, { maxCalls: 25, maxMs: 1000 }, failed)).toMatchObject({ ok: false, agentCalls: 7 });
+});

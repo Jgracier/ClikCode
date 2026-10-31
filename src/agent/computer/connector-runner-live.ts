@@ -55,6 +55,7 @@ export function liveClient(signal?: AbortSignal): DeployClient {
     }
   };
   return {
+    withSignal: signal => liveClient(signal),
     async waiting() {
       const data = await call('connector_pipeline_status', {}) as { status?: { needsAgent?: Array<{ id: string; reason: string; task: string }> } };
       return data.status?.needsAgent ?? [];
@@ -104,6 +105,7 @@ export function liveDriver(options: LiveDriverOptions): BrowserDriver {
   const TAB = options.tab ?? 'connectors';
   const shotDir = options.screenshotDir ?? (() => mkdtemp(join(tmpdir(), 'clikcode-connector-shots-')));
   return {
+    reuseCredential: id => import('./connector-credential-reuse.js').then(m => m.reuseConnectorCredential(id, options.stateDir, options.signal)),
     async oauthConnect(id): Promise<DriveOutcome> {
       const { oauthConnect, ConsentStop, pageExcerpt } = await import('./oauth-consent.js');
       const { openNewComputerPage, closeOwnedPage, closeComputerPage, releaseComputerBrowser } = await import('./browser.js');

@@ -36,20 +36,22 @@ export interface StopInfo {
   /** The vendor address keygrab started from. */ vendorUrl?: string;
   /** keygrab signed in to the vendor during the run. */ signedIn?: boolean;
 }
-export type DriveOutcome = { ok: true; note?: string; actions?: number; /** A recipe was recorded for the next run. */ recipe?: boolean } | { ok: false; stop: StopInfo };
+export type DriveOutcome = ({ ok: true; note?: string; actions?: number; /** A recipe was recorded for the next run. */ recipe?: boolean } | { ok: false; stop: StopInfo }) & { agentCalls?: number };
 
 /** ClikDeploy as the runner sees it. */
 export interface DeployClient {
+  withSignal?(signal: AbortSignal): DeployClient;
   /** Read-only: the vendors waiting for an agent and the task each one has. */
   waiting(): Promise<Array<{ id: string; reason: string; task: string }>>;
   batch(input: { ids?: string[]; limit?: number; parallel?: number }): Promise<{ results: OnboardResult[]; skipped: Array<{ id: string; why: string }> }>;
   onboard(id: string): Promise<OnboardResult>;
-  report(input: { id: string; outcome: 'blocked' | 'retry' | 'done'; reason: string; humanStep?: HumanStep }): Promise<void>;
+  report(input: { id: string; outcome: 'blocked' | 'retry' | 'done'; reason: string; retryAfterMs?: number; humanStep?: HumanStep }): Promise<void>;
   note(id: string, text: string): Promise<void>;
   tool(name: string, args: Record<string, unknown>): Promise<unknown>;
 }
 /** The browser as the runner sees it. */
 export interface BrowserDriver {
+  reuseCredential?(id: string): Promise<boolean | { problem: string }>;
   oauthConnect(id: string): Promise<DriveOutcome>;
   /** Whether a saved recipe could capture a key for this connector (the address is a hint taken from the task). */
   hasRecipe(id: string, url?: string): Promise<boolean>;
@@ -276,6 +278,7 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
     return { ...out2, ...(resume ? { resume } : {}), ...(until ? { backoffUntil: until.toISOString() } : {}) };
   };
 
+  let reusedCredential = false;
   for (;;) {
     if (steps >= maxSteps) return out('budget', `step budget of ${maxSteps} used; ${result.stage} is where it stands`);
     if (now() - began > maxMs) return out('budget', `time budget of ${Math.round(maxMs / 1000)}s used; ${result.stage} is where it stands`);
@@ -288,12 +291,26 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
     const plan = planFor(result, recipe);
     steps++;
     try {
+      if (!reusedCredential && driver.reuseCredential && (plan.do === 'capture' || plan.do === 'oauth' || /^(auth|connect|credential)$/.test(result.stage))) {
+        reusedCredential = true;
+        const saved = await driver.reuseCredential(id);
+        if (saved && typeof saved === 'object') {
+          const repaired = await viaAgent({ kind: 'unknown', message: saved.problem, url: siteUrl(result.next.task) ?? '', pageText: `A credential is already saved. Diagnose its connection and definition with connector_task; do not create another account or key. ${saved.problem}`, controls: [] }, true);
+          if (repaired?.ok) { result = fix(await client.onboard(id)); continue; }
+          return await handoff(`The saved credential could not connect: ${saved.problem}`);
+        }
+        if (saved) {
+          actions.push('connected the saved credential without opening signup');
+          result = fix(await client.onboard(id));
+          continue;
+        }
+      }
       switch (plan.do) {
         case 'done': return out(plan.status, result.reason || result.next.task);
         case 'human': return await wall(plan.humanStep, true);
         case 'handoff': {
           // A task no rule knows. First read the vendor's rendered pages: a wall they show is reported as the typed wall, with no agent. Otherwise one bounded agent micro-task tries it.
-          if (!qualified && driver.qualify) {
+          if (!qualified && driver.qualify && !/connector_copy_task|copy[- ]review|wording/i.test(result.next.task)) {
             qualified = true;
             const q = await gate(() => driver.qualify!(id)).catch(quiet('agent/computer/connector-runner'));
             if (q) {

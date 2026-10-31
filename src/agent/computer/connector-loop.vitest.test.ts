@@ -19,7 +19,6 @@ function fakes(queue: string[], work: (id: string, ctx: WorkContext) => Promise<
     report: async (id, r) => { reports.push([id, r]); },
     pressure: async () => ({ stalled: false }),
     closeTab: async id => { closed.push(id); },
-    restartBrowser: async () => { restarts++; },
     saveState: async s => { states.push(s); },
     ...over,
   };
@@ -45,12 +44,12 @@ describe('budget', () => {
     expect(f.log.join('\n')).toMatch(/id=a outcome=budget wall=budget calls=5/);
   });
 
-  it('a vendor past its hard time limit is cut off: tab closed, browser restarted, reported as a budget stop', async () => {
+  it('a vendor past its hard time limit is cut off: tab closed, only the task cancelled, reported as a budget stop', async () => {
     const f = fakes(['slow'], () => new Promise<VendorOutcome>(() => undefined));
     const sum = await runLoop(f.ports, limits({ maxMs: 30, graceMs: 20, maxHoursMs: 200 }));
     expect(sum.walls.budget).toBe(1);
     expect(f.closed).toContain('slow');
-    expect(f.restarts()).toBe(1);
+    expect(f.restarts()).toBe(0);
     expect(f.reports[0]![1].outcome).toBe('retry');
   });
 });
@@ -138,13 +137,13 @@ describe('lease renewal', () => {
 });
 
 describe('hung browser', () => {
-  it('restarts the browser and resumes the vendor once when the browser went away, then reports its outcome', async () => {
+  it('closes only the failing task tabs and resumes the vendor once when the browser went away, then reports its outcome', async () => {
     let tries = 0;
     const f = fakes(['a'], async id => { if (++tries === 1) throw new Error('browserContext.newPage: Target page, context or browser has been closed'); return outcome(id); });
     const sum = await runLoop(f.ports, limits());
     expect(tries).toBe(2);
-    expect(f.restarts()).toBe(1);
-    expect(sum.restarts).toBe(1);
+    expect(f.restarts()).toBe(0);
+    expect(sum.restarts).toBe(0);
     expect(f.reports[0]![1].outcome).toBe('done');
   });
 

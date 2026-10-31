@@ -8,6 +8,7 @@ import type { DeployClient, HumanStep, OnboardResult } from './connector-runner.
 import { runVendor } from './connector-runner.js';
 import { budgeted, stalledBy, tabName, type LoopPorts, type LoopState, type WorkContext } from './connector-loop.js';
 import { liveDriver, WORKER } from './connector-runner-live.js';
+import { memoryPressure } from './connector-resource-pressure.js';
 import { microTab } from './connector-micro-agent.js';
 
 export const loopDir = (): string => join(homedir(), '.clikcode');
@@ -21,7 +22,7 @@ export const alive = (pid: number | undefined): boolean => { if (!pid) return fa
 
 /** The queue rows worth claiming: waiting for an agent, with no other worker's live lease. */
 export function claimable(rows: Array<Record<string, unknown>>, exclude: ReadonlySet<string>, nowMs: number, n: number): string[] {
-  return rows.filter(r => typeof r.id === 'string' && r.stage === 'needs-agent' && !exclude.has(r.id as string)
+  return rows.filter(r => typeof r.id === 'string' && r.stage === 'needs-agent' && !exclude.has(r.id as string) && !(typeof r.nextAttemptAt === 'string' && Date.parse(r.nextAttemptAt) > nowMs)
     && !(typeof r.leaseUntil === 'string' && Date.parse(r.leaseUntil) > nowMs && r.leaseHolder && !String(r.leaseHolder).includes(WORKER))).map(r => r.id as string).slice(0, Math.max(n, 0) * 4);
 }
 
@@ -33,6 +34,8 @@ export function claimedTask(claim: { id?: string; lane?: string; task?: string; 
 
 export function livePorts(client: DeployClient, stateDir: string, extra: { stopRequested: () => boolean }): LoopPorts {
   const tasks = new Map<string, OnboardResult>();
+  const notes = new Map<string, string>();
+  let queueCursor: string | undefined;
   const append = async (line: string): Promise<void> => { await mkdir(loopDir(), { recursive: true }); await appendFile(loopLogPath(), `${line}\n`, { mode: 0o600 }); };
   return {
     pid: process.pid,
@@ -41,41 +44,58 @@ export function livePorts(client: DeployClient, stateDir: string, extra: { stopR
     stopRequested: extra.stopRequested,
     log: line => { void append(line).catch(quiet('agent/computer/connector-loop-live')); },
     async next(n, exclude) {
-      const data = await client.tool('connector_work_overview', { stage: 'needs-agent', limit: 100 }) as { rows?: Array<Record<string, unknown>> };
       const got: Array<{ id: string }> = [];
+      for (let page = 0; page < 5 && got.length < n; page++) {
+      const data = await client.tool('connector_work_overview', { stage: 'needs-agent', limit: 100, ...(queueCursor ? { cursor: queueCursor } : {}) }) as { rows?: Array<Record<string, unknown>>; nextCursor?: string | null };
+      queueCursor = data.nextCursor ?? undefined;
       for (const id of claimable(data.rows ?? [], exclude, Date.now(), n)) {
         if (got.length >= n) break;
-        const claim = await client.tool('connector_work_claim', { id, stage: 'needs-agent', worker: WORKER }).catch(() => null) as { id?: string; lane?: string; task?: string; reason?: string } | null;
+        const claim = await client.tool('connector_work_claim', { id, stage: 'needs-agent', worker: WORKER }).catch(() => null) as { id?: string; lane?: string; task?: string; reason?: string; scratchpad?: { text: string } } | null;
         if (claim && claim.id === id) {
           const task = claimedTask(claim);
           if (task) tasks.set(id, task);
+          if (claim.scratchpad?.text) notes.set(id, claim.scratchpad.text);
           got.push({ id });
         }
+      }
+      if (!queueCursor) break;
       }
       return got;
     },
     async renew(id) { await client.tool('connector_work_renew', { id, worker: WORKER }); },
     async work(id, ctx: WorkContext) {
-      const counted = budgeted(client, ctx.budget);
-      const driver = liveDriver({ stateDir, tab: ctx.tab, keepBrowser: true });
+      const counted = budgeted(ctx.signal && client.withSignal ? client.withSignal(ctx.signal) : client, ctx.budget);
+      const driver = liveDriver({ stateDir, tab: ctx.tab, keepBrowser: true, signal: ctx.signal });
+      const micro = driver.agentTask;
+      if (micro) driver.agentTask = async (id, stop, budget) => {
+        const remaining = Math.max(0, ctx.budget.max - ctx.budget.used);
+        if (!remaining) throw new Error('The vendor call budget is exhausted.');
+        const result = await micro(id, stop, { ...budget, maxCalls: Math.min(budget.maxCalls, remaining) });
+        for (let n = 0; n < (result.agentCalls ?? 0); n++) ctx.budget.spend();
+        return result;
+      };
       const first = tasks.get(id) ?? await counted.onboard(id);
       tasks.delete(id);
+      const saved = notes.get(id);
+      notes.delete(id);
+      if (saved && first.next.kind === 'agent') first.next.task += `\nSaved progress from the previous worker (verify before continuing):\n${saved}`;
       const { limits } = ctx;
       return runVendor(first, counted, driver, { maxSteps: limits.maxSteps, maxMs: Math.max(30_000, ctx.deadline - Date.now()), agentCalls: 25, log: line => void append(`${new Date().toISOString()} id=${id} ${line}`).catch(quiet('agent/computer/connector-loop-live')) }, job => job());
     },
     async report(id, report) {
-      await client.report({ id, outcome: report.outcome, reason: report.reason, ...(report.humanStep ? { humanStep: report.humanStep as HumanStep } : {}) });
+      await client.report({ id, outcome: report.outcome, reason: report.reason, ...(report.retryAfterMs ? { retryAfterMs: report.retryAfterMs } : {}), ...(report.humanStep ? { humanStep: report.humanStep as HumanStep } : {}) });
     },
     async pressure() {
       const read = (name: string): Promise<string | undefined> => readFile(`/proc/pressure/${name}`, 'utf8').catch(() => undefined);
-      return stalledBy(await read('io'), await read('cpu'), 10);
+      const pressure = stalledBy(await read('io'), await read('cpu'), 10);
+      const memory = await memoryPressure();
+      return { ...pressure, memory, stalled: pressure.stalled || (memory ?? 0) > 10 };
     },
     async closeTab(id) {
       const { closeComputerPage } = await import('./browser.js');
       await closeComputerPage(stateDir, tabName(id)).catch(quiet('agent/computer/connector-loop-live'));
       await closeComputerPage(stateDir, microTab(id)).catch(quiet('agent/computer/connector-loop-live'));
     },
-    async restartBrowser() { await (await import('./browser.js')).closeComputerBrowser(stateDir); },
     async saveState(state) {
       await mkdir(loopDir(), { recursive: true });
       const tmp = `${loopStatePath()}.${process.pid}.tmp`;

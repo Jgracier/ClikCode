@@ -25,7 +25,7 @@ export function microPrompt(id: string, stop: StopInfo, maxCalls: number): strin
     controls ? `Things on the page you can press: ${controls}` : '',
     '',
     'Rules:',
-    `1. Read the task below. Use connector_task to read the spec, copy task or proof as needed. For credential work, open its vendor address and observe.`,
+    `1. Read the task and saved progress below. For unfamiliar operations use connector_task tool=describe with args.tool to get the exact schema. Save useful progress with connector_work_note before stopping. Use connector_task to read the spec, copy task or proof as needed. For credential work, open its vendor address and observe.`,
     `2. To get a key: reach the key page, set the options, then browser_use action capture_secret with target = the final Create button, secret_name "${id}/key", vendor "${id}" and send_to [{ "to": "clikdeploy-connection", "with": { "integration": "${id}" } }]. Never print, type or repeat a key.`,
     '3. When it worked, save what you did with browser_use action recipe, recipe_op save (host, login_route, steps, key_page, capture_hint) so the next run needs no agent.',
     '4. Never solve a captcha, give card details, buy a plan, or enter a phone or authenticator code. If a screen needs one of those, stop.',
@@ -57,7 +57,7 @@ const WALL_TO_STOP: Record<string, StopInfo['kind']> = { captcha: 'captcha', sms
 
 export interface MicroPorts {
   /** Runs the agent to its end or the deadline; its final text. */
-  run(prompt: string, options: { tab: string; maxCalls: number; maxMs: number }): Promise<{ text: string; timedOut: boolean; calls: number }>;
+  run(prompt: string, options: { tab: string; maxCalls: number; maxMs: number }): Promise<{ text: string; timedOut: boolean; calls: number; error?: string }>;
   /** A stamp of the saved recipes, to see whether one was recorded. */
   recipeStamp(): Promise<string>;
 }
@@ -69,13 +69,13 @@ export async function runMicroTask(id: string, stop: StopInfo, budget: { maxCall
   const err = 'error' in ran ? ran.error : undefined;
   const result = ran.timedOut ? { kind: 'gave-up', why: `the agent used its ${Math.round(budget.maxMs / 1000)}s` } as MicroResult : err ? { kind: 'gave-up', why: `the agent could not run: ${err.slice(0, 200)}` } as MicroResult : parseMicroResult(ran.text);
   const after = await ports.recipeStamp().catch(() => '');
-  if (result.kind === 'captured') return { ok: true, note: `an agent micro-task finished its assigned task (${ran.calls} tool calls)${after !== before ? ' and saved a recipe' : ''}`, actions: ran.calls, recipe: after !== before };
+  if (result.kind === 'captured') return { ok: true, agentCalls: ran.calls, note: `an agent micro-task finished its assigned task (${ran.calls} tool calls)${after !== before ? ' and saved a recipe' : ''}`, actions: ran.calls, recipe: after !== before };
   if (result.kind === 'wall') {
     const kind = WALL_TO_HUMAN[result.wall];
-    if (kind) return { ok: false, stop: { kind: WALL_TO_STOP[result.wall] ?? 'unknown', message: `${result.wall}: ${result.why}`, url: stop.url, pageText: stop.pageText, controls: stop.controls, human: { kind, ...(stop.url ? { url: stop.url } : {}), instructions: `${result.wall}: ${result.why}`.slice(0, 300), reasonCode: result.wall } } };
+    if (kind) return { ok: false, agentCalls: ran.calls, stop: { kind: WALL_TO_STOP[result.wall] ?? 'unknown', message: `${result.wall}: ${result.why}`, url: stop.url, pageText: stop.pageText, controls: stop.controls, human: { kind, ...(stop.url ? { url: stop.url } : {}), instructions: `${result.wall}: ${result.why}`.slice(0, 300), reasonCode: result.wall } } };
   }
   const why = result.kind === 'gave-up' ? result.why : 'the agent reported a wall it could not name';
-  return { ok: false, stop: { ...stop, message: `the agent micro-task did not finish (${ran.calls} calls): ${why}`.slice(0, 300) } };
+  return { ok: false, agentCalls: ran.calls, stop: { ...stop, message: `the agent micro-task did not finish (${ran.calls} calls): ${why}`.slice(0, 300) } };
 }
 
 /** Use a saved, usable native profile. A limit on Claude must not strand the line when Codex is available. */
@@ -120,10 +120,9 @@ export function livePorts(stateDir: string): MicroPorts {
         const timer = setTimeout(() => { timedOut = true; kill(); }, options.maxMs);
         const code = await new Promise<number | null>(resolve => { child.once('close', code => resolve(code)); child.once('error', () => resolve(-1)); });
         clearTimeout(timer);
-        if (code !== 0 && !timedOut) throw new Error(`${useCodex ? 'Codex' : 'Claude'} micro-task could not complete (exit ${code}); retry after account availability changes.`);
         if (useCodex) text = await readFile(final, 'utf8').catch(() => '');
         const calls = Number(await readFile(counter, 'utf8').catch(() => '0')) || 0;
-        return { text, timedOut, calls };
+        return { text, timedOut, calls, ...(code !== 0 && !timedOut ? { error: `${useCodex ? 'Codex' : 'Claude'} micro-task could not complete (exit ${code}); retry after account availability changes.` } : {}) };
       } finally { await rm(dir, { recursive: true, force: true }).catch(quiet('agent/computer/connector-micro-agent')); }
     },
   };
