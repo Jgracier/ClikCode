@@ -43,15 +43,35 @@ export function scopeUnitName(sessionId: string, pid: number): string {
   return `clikcode-worker-${sessionId.replace(/[^A-Za-z0-9_.-]/g, '_')}-${pid}.scope`;
 }
 
-/** No memory ceiling of its own: one throttled the whole conversation -- its
- * vendor too -- silently. A conversation that balloons is answered by
- * worker/resource-guard.ts instead (MEASURED 2026-10-12: one worker reached
- * 32.1G and every other chat's vendor took six minutes to start a turn). */
-export function adoptArgs(unit: string, pid: number): string[] {
+/** What bounds one worker's scope: a soft memory line and a task count.
+ *
+ * Both are wide. MEASURED 2026-10-31: one worker scope held 16.6 GB and 3,217 tasks with no limit at all, long after the
+ * conversation that owned it had moved to a newer worker, and the slice's warnings ("agents are using 21.2 of 23.6 GB") and
+ * disk stalls came from it. MemoryHigh is the line past which the kernel makes the scope reclaim before it grows: half of RAM,
+ * so one worker cannot take the machine, yet far above what a conversation needs (an earlier version with a tight line throttled
+ * the whole conversation, vendor included, 2026-10-12, which is why it is not tight). No MemoryMax: a hard kill of the scope
+ * would end the worker; worker/resource-guard.ts stops the one large command instead. TasksMax is the fork-bomb brake.
+ * CLIKCODE_WORKER_MEMORY_HIGH_SHARE (0-1; 0 turns it off) and CLIKCODE_WORKER_TASKS_MAX change them. */
+export interface WorkerLimits { memoryHigh?: number; tasksMax: number }
+
+export function workerLimits(ramBytes: number = totalmem(), env: NodeJS.ProcessEnv = process.env): WorkerLimits {
+  const share = env.CLIKCODE_WORKER_MEMORY_HIGH_SHARE === undefined ? 0.5 : Number(env.CLIKCODE_WORKER_MEMORY_HIGH_SHARE);
+  const tasks = Number(env.CLIKCODE_WORKER_TASKS_MAX);
+  return {
+    ...(Number.isFinite(share) && share > 0 && share <= 1 ? { memoryHigh: Math.floor(ramBytes * share) } : {}),
+    tasksMax: Number.isInteger(tasks) && tasks > 0 ? tasks : 16_384,
+  };
+}
+
+export function adoptArgs(unit: string, pid: number, limits: WorkerLimits = workerLimits()): string[] {
+  const limitProps = [
+    ...(limits.memoryHigh !== undefined ? ['MemoryHigh', 't', String(limits.memoryHigh)] : []),
+    'TasksMax', 't', String(limits.tasksMax),
+  ];
   return [
     '--user', 'call', 'org.freedesktop.systemd1', '/org/freedesktop/systemd1',
     'org.freedesktop.systemd1.Manager', 'StartTransientUnit', 'ssa(sv)a(sa(sv))',
-    unit, 'fail', '5',
+    unit, 'fail', String(5 + limitProps.length / 3),
     'PIDs', 'au', '1', String(pid),
     'Slice', 's', AGENT_SLICE,
     'CollectMode', 's', 'inactive-or-failed',
@@ -61,6 +81,7 @@ export function adoptArgs(unit: string, pid: number): string[] {
     // when the kernel kills any one process in it at the slice's ceiling.
     // The test run that hit the ceiling is what should die, alone.
     'OOMPolicy', 's', 'continue',
+    ...limitProps,
     '0',
   ];
 }

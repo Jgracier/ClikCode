@@ -36,6 +36,7 @@ import { createResumeWaiter } from './resume-wait.js';
 import { installSystemdRunShim, separateFromForeground } from './own-scope.js';
 import { startResourceGuard } from './resource-guard.js';
 import { createCommandSweep } from './command-groups.js';
+import { enforceInSlice } from './command-lifetime.js';
 import { useConversationTmp } from './conversation-tmp.js';
 import { startDiskWatch } from './disk-watch.js';
 import { startIoGuard } from './io-guard.js';
@@ -64,6 +65,7 @@ import { createResourceNoteDelivery } from './resource-note-delivery.js';
  * out: its conversation comes to a worker the moment it ends. */
 /** A command is in a group of its own within this long of starting. */
 const COMMAND_SWEEP_MS = 1_000;
+const COMMAND_LIFETIME_CHECK_MS = 60_000;
 
 /** How long a starting worker waits for a scripted turn or command that holds
  * its conversation before it gives up (such a turn can run for minutes). */
@@ -226,6 +228,11 @@ export async function runSessionWorker(sessionId: string, options: { warm?: bool
     // exactly a command (worker/command-groups.ts).
     const commands = placement?.divided ? createCommandSweep(placement.scopeDir) : undefined;
     if (commands) setInterval(() => { try { commands.sweep(); } catch { /* fail-open-ok: next sweep */ } }, COMMAND_SWEEP_MS).unref();
+    // A command past its lifetime dies in its own cgroup, whether or not anything still tracks it (worker/command-lifetime.ts).
+    if (commands && placement?.scopeDir) {
+      const scopeDir = placement.scopeDir;
+      setInterval(() => { try { enforceInSlice(placement.sliceDir, { scopeDir, labels: commands.labels }, { deliver: deliverNote }); } catch { /* fail-open-ok: next pass */ } }, COMMAND_LIFETIME_CHECK_MS).unref();
+    }
     startResourceGuard({
       sessionId,
       ...(placement?.divided ? { sliceDir: placement.sliceDir, remembered: { scopeDir: placement.scopeDir, labels: commands!.labels } } : {}),
