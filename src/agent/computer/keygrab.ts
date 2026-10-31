@@ -243,18 +243,19 @@ export async function runKeygrab(port: KeygrabPort, options: KeygrabOptions): Pr
   const providerScreens = async (): Promise<void> => {
     const email = await port.profileEmail().catch(quiet('agent/computer/keygrab'));
     let idle = 0, chosen = false;
+    const loginTried = new Set<string>();
     for (let round = 0; round < 10; round++) {
       await sleep(600);
       const v = await look();
       const host = hostOf(v.url);
       if (!HOSTS_OF_SIGN_IN.test(host)) return;
       if (v.hasPassword) {
-        if (/github\.com$/i.test(host)) {
-          const done = await act('sign in to GitHub with the saved login', () => port.login());
-          if (!done.ok) throw await stop('password', `GitHub needs a sign-in the runner cannot do: ${done.message}`, { kind: 'worker-setup', url: 'https://github.com/login', reasonCode: 'sign-in-needed', instructions: 'Sign the ClikCode browser in to GitHub once (saved login), then run the connectors again.' }, v);
-          continue;
-        }
-        throw await stop('password', 'Google asks for a password: the ClikCode browser is signed out of Google', { kind: 'worker-setup', url: 'https://accounts.google.com/', reasonCode: 'sign-in-needed', instructions: 'Sign the ClikCode browser in to Google once, then run the connectors again.' }, v);
+        const provider = /github\.com$/i.test(host) ? 'GitHub' : 'Google';
+        if (loginTried.has(host)) throw await stop('password', `${provider} still asks for a password after the saved login attempt`, { kind: 'worker-setup', url: `https://${host}/`, reasonCode: 'sign-in-needed', instructions: `The saved ${provider} login did not complete sign-in; check its saved account or verification requirement.` }, v);
+        loginTried.add(host);
+        const done = await act(`sign in to ${provider} with the saved login`, () => port.login());
+        if (!done.ok) throw await stop('password', `${provider} needs a sign-in the runner cannot do: ${done.message}`, { kind: 'worker-setup', url: `https://${host}/`, reasonCode: 'sign-in-needed', instructions: `The saved ${provider} login could not complete sign-in; check its saved account or verification requirement.` }, v);
+        continue;
       }
       const controls: Control[] = v.controls.map(c => ({ name: c.name, leaf: c.leaf === true }));
       const next = nextPress(host, controls, v.text, { ...(email ? { email } : {}), skipAccount: chosen });
