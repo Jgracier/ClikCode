@@ -147,7 +147,7 @@ it.skipIf(!enabled)('uses the one saved account without asking, and replaces its
   received = [];
   const fixed = await signIn({ account: NEW_ACCOUNT, username: 'one@example.com', password: 'correct-new' });
   expect(fixed).toMatchObject({ outcome: 'signed_in', asked: [['account'], ['username', 'password']] });
-  expect(await savedLoginsForSite(stateDir, `${base}/`)).toEqual([{ id, label: 'one@example.com', rejected: false }]);
+  expect(await savedLoginsForSite(stateDir, `${base}/`)).toEqual([{ id, label: 'one@example.com', rejected: false, usable: true }]);
   expect((await savedLoginFields(stateDir, `${base}/`, id)).password).toBe('correct-new');
 }, 60_000);
 
@@ -186,3 +186,13 @@ it.skipIf(!enabled)('marks a saved login rejected when the refusal comes on anot
   expect(again.asked.flat()).toContain('password');
   expect(again.outcome).toBe('signed_in');
 }, 60_000);
+
+it.skipIf(!enabled)('uses a complete saved login without asking about an incomplete capture', async () => {
+  stateDir = await mkdtemp(join(tmpdir(), 'clikcode-login-real-'));
+  await saveLoginFields(stateDir, base, { username: 'ready@example.com', password: 'correct-ready' });
+  await saveLoginFields(stateDir, base, { username: 'incomplete@example.com' });
+  const result = await signIn({});
+  expect(result).toMatchObject({ outcome: 'signed_in', asked: [], at: '/home' });
+  expect(received).toEqual(['/signin/identifier=ready@example.com', '/signin/pwd=correct-ready']);
+  await result.page.context().close();
+});

@@ -11,7 +11,7 @@ it('generates a local key automatically, stores only encrypted records, and keep
   dir = await mkdtemp(join(tmpdir(), 'clikcode-vault-'));
   const secret = 'website-only-secret';
   const id = await saveLoginFields(dir, 'https://signin.aws.amazon.com/login', { accountId: 'account-123', username: 'private@example.com', password: secret });
-  expect(await savedLoginsForSite(dir, 'https://signin.aws.amazon.com/elsewhere')).toEqual([{ id, label: 'account-123 · private@example.com', rejected: false }]);
+  expect(await savedLoginsForSite(dir, 'https://signin.aws.amazon.com/elsewhere')).toEqual([{ id, label: 'account-123 · private@example.com', rejected: false, usable: true }]);
   expect(await savedLoginsForSite(dir, 'https://other.example/login')).toEqual([]);
   const vaultDir = join(dir, 'computer', 'vault');
   const items = await readdir(join(vaultDir, 'items'));
