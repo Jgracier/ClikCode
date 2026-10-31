@@ -30,12 +30,29 @@
  *    end-of-turn record; a count that is zero is left out of it. */
 import { asRecord, type JsonRecord } from './json-lines.js';
 
+/** A background command by its pid, as a surface says what it is waiting on (transport/background-commands.ts).
+ * Times are epoch ms. */
+export interface BackgroundCommand {
+  pid: number;
+  pgid?: number;
+  label: string;
+  startedAt?: number;
+  /** Cpu use over the last look, percent of one core. */
+  cpuPercent?: number;
+  /** When its output file last changed; absent: it has written nothing. */
+  lastOutputAt?: number;
+  /** Why it is stale (it has outlived its use), when it is. */
+  stale?: string;
+}
+
 /** The background work a surface shows. A kind that is zero is absent. */
 export interface BackgroundWork {
   agents?: number;
   /** Named live agents when the vendor publishes its full task list. */
   agentTasks?: Array<{ id: string; label: string }>;
   terminals?: number;
+  /** The terminals' commands by pid, when they could be read: what a status line names. */
+  commands?: BackgroundCommand[];
   workflows?: number;
 }
 
@@ -60,6 +77,8 @@ export function mergeBackgroundWork(current: BackgroundWork | undefined, update:
     const tasks = update.agentTasks ?? (update.agents === undefined || update.agents === current?.agents ? current?.agentTasks : undefined);
     if (tasks?.length) merged.agentTasks = tasks.slice(0, merged.agents);
   }
+  const commands = update.commands !== undefined ? update.commands : current?.commands;
+  if (merged.terminals && commands?.length) merged.commands = commands;
   return Object.keys(merged).length ? merged : undefined;
 }
 

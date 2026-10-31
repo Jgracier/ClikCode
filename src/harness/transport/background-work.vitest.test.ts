@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAcpSession } from './acp-client.js';
+import { BackgroundWorkTracker } from './background-work.js';
 import { processGroupMembers, toolCallWork, type GroupProcess } from './process-group.js';
 
 describe.skipIf(process.platform === 'win32')('a vendor\'s process group', () => {
@@ -140,4 +141,19 @@ describe.skipIf(process.platform === 'win32')('work an ACP vendor leaves running
       expect(await settled(session)).toBe(false);
     } finally { await session.close(); }
   }, 20_000);
+});
+
+describe('a level with the commands behind its terminals', () => {
+  it('keeps them across level updates while a terminal runs, and drops them with the last terminal', () => {
+    const tracker = new BackgroundWorkTracker();
+    tracker.replaceLevel({ terminals: 1 });
+    tracker.setCommands([{ pid: 7, label: 'node x.js', startedAt: 1, cpuPercent: 100 }]);
+    expect(tracker.fullLevel().commands).toEqual([{ pid: 7, label: 'node x.js', startedAt: 1, cpuPercent: 100 }]);
+    // The vendor's next count changes nothing about which commands run.
+    tracker.replaceLevel({ terminals: 1, agents: 0 });
+    expect(tracker.fullLevel().commands).toHaveLength(1);
+    tracker.replaceLevel({ terminals: 0 });
+    expect(tracker.level).toBeUndefined();
+    expect(tracker.fullLevel().commands).toBeUndefined();
+  });
 });

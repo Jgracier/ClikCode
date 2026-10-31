@@ -14,6 +14,8 @@ import { retiredHeldAgentCount } from '../harness/transport/native/held-vendor.j
 import type { EndedFrom, EndedWork } from '../harness/transport/handoff-work.js';
 import { observeAccountHealth, type AccountMoveEffects } from './account-evidence.js';
 import type { AccountFailureKind } from './failover.js';
+import type { CommandStats } from '../harness/transport/background-commands.js';
+import type { ReapedCommand } from '../harness/transport/persistent-session.js';
 
 /** ACP `available_commands_update`, per ClikCode session, for the slash registry. */
 export const nativeAvailableCommands = new Map<string, readonly HarnessAvailableCommand[]>();
@@ -183,6 +185,22 @@ export function persistentTransportFor(sessionId: string, transport: HarnessTurn
 export async function runningAgentCount(sessionId: string): Promise<number> {
   const work = await persistentTransports.get(sessionId)?.session.runningWork().catch(() => []);
   return (work ?? []).filter((item) => item.kind === 'agent').length;
+}
+
+/** The background commands this conversation's vendor is running, by pid (age, cpu, last output). */
+export async function persistentBackgroundCommands(sessionId: string): Promise<CommandStats[]> {
+  const live = await persistentTransports.get(sessionId)?.session.backgroundCommands?.().catch(() => [] as CommandStats[]);
+  const left: CommandStats[] = [];
+  for (const retired of retiredTransports.get(sessionId) ?? []) left.push(...await retired.session.backgroundCommands?.().catch(() => [] as CommandStats[]) ?? []);
+  return [...live ?? [], ...left];
+}
+
+/** End the conversation's background commands by pid (the stale ones, or all); what was ended is returned and logged. */
+export async function reapPersistentCommands(sessionId: string, which: 'stale' | 'all', reason: string): Promise<ReapedCommand[]> {
+  const sessions = [persistentTransports.get(sessionId), ...retiredTransports.get(sessionId) ?? []];
+  const reaped: ReapedCommand[] = [];
+  for (const transport of sessions) reaped.push(...await transport?.session.reapCommands?.(which, reason).catch(() => [] as ReapedCommand[]) ?? []);
+  return reaped;
 }
 
 export function hasPersistentTransport(sessionId: string): boolean {
