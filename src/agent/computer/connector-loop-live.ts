@@ -4,7 +4,7 @@ import { appendFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/pr
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { quiet } from '../../runtime/lifecycle-log.js';
-import type { DeployClient, HumanStep } from './connector-runner.js';
+import type { DeployClient, HumanStep, OnboardResult } from './connector-runner.js';
 import { runVendor } from './connector-runner.js';
 import { budgeted, stalledBy, tabName, type LoopPorts, type LoopState, type WorkContext } from './connector-loop.js';
 import { liveDriver, WORKER } from './connector-runner-live.js';
@@ -25,7 +25,14 @@ export function claimable(rows: Array<Record<string, unknown>>, exclude: Readonl
     && !(typeof r.leaseUntil === 'string' && Date.parse(r.leaseUntil) > nowMs && r.leaseHolder && !String(r.leaseHolder).includes(WORKER))).map(r => r.id as string).slice(0, Math.max(n, 0) * 4);
 }
 
+/** A feeder's docs task is already qualified work; onboarding again first used to replace it with a signup task. */
+export function claimedTask(claim: { id?: string; lane?: string; task?: string; reason?: string } | null): OnboardResult | undefined {
+  if (!claim?.id || claim.lane !== 'needs-spec' || !claim.task?.startsWith('docs-to-spec:')) return undefined;
+  return { id: claim.id, state: 'needs-agent', stage: 'needs-agent', reason: claim.reason ?? 'Read official API documentation', next: { kind: 'agent', task: claim.task } };
+}
+
 export function livePorts(client: DeployClient, stateDir: string, extra: { stopRequested: () => boolean }): LoopPorts {
+  const tasks = new Map<string, OnboardResult>();
   const append = async (line: string): Promise<void> => { await mkdir(loopDir(), { recursive: true }); await appendFile(loopLogPath(), `${line}\n`, { mode: 0o600 }); };
   return {
     pid: process.pid,
@@ -38,8 +45,12 @@ export function livePorts(client: DeployClient, stateDir: string, extra: { stopR
       const got: Array<{ id: string }> = [];
       for (const id of claimable(data.rows ?? [], exclude, Date.now(), n)) {
         if (got.length >= n) break;
-        const claim = await client.tool('connector_work_claim', { id, stage: 'needs-agent', worker: WORKER }).catch(() => null) as { id?: string } | null;
-        if (claim && claim.id === id) got.push({ id });
+        const claim = await client.tool('connector_work_claim', { id, stage: 'needs-agent', worker: WORKER }).catch(() => null) as { id?: string; lane?: string; task?: string; reason?: string } | null;
+        if (claim && claim.id === id) {
+          const task = claimedTask(claim);
+          if (task) tasks.set(id, task);
+          got.push({ id });
+        }
       }
       return got;
     },
@@ -47,7 +58,8 @@ export function livePorts(client: DeployClient, stateDir: string, extra: { stopR
     async work(id, ctx: WorkContext) {
       const counted = budgeted(client, ctx.budget);
       const driver = liveDriver({ stateDir, tab: ctx.tab, keepBrowser: true });
-      const first = await counted.onboard(id);
+      const first = tasks.get(id) ?? await counted.onboard(id);
+      tasks.delete(id);
       const { limits } = ctx;
       return runVendor(first, counted, driver, { maxSteps: limits.maxSteps, maxMs: Math.max(30_000, ctx.deadline - Date.now()), agentCalls: 25, log: line => void append(`${new Date().toISOString()} id=${id} ${line}`).catch(quiet('agent/computer/connector-loop-live')) }, job => job());
     },
