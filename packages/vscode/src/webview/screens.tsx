@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ChatModel } from '../model';
 import type { ListedConversation } from '../webview-protocol';
 import type { ListedMachine } from '../remote-directory';
-import { discoveredMeta, machineMeta, offersUpdate } from './machine-text';
+import { discoveredMeta, machineMeta, offersUpdate, otherMachineSections } from './machine-text';
 import { listen, request } from './bus';
 import { useNow } from './clock';
 import { conversationState, SECTION_TITLES, type ConversationSection } from '../../../../src/session/conversation-state';
@@ -121,6 +121,8 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
   const [showMachines, setShowMachines] = useState(props.initialScreen === 'machines');
   const [machines, setMachines] = useState<ListedMachine[]>();
   const [remoteRows, setRemoteRows] = useState<ListedConversation[]>();
+  /** Every other added machine's chats, by machine: the list shows them under their machines' names, so a chat that moved is still in it. */
+  const [otherRows, setOtherRows] = useState<Record<string, ListedConversation[]>>({});
   const rows = machineId === 'local' ? localRows : remoteRows;
   const [search, setSearch] = useState('');
   const [renaming, setRenaming] = useState<string>();
@@ -134,7 +136,17 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
     let active = true;
     if (machineId !== 'local') setRemoteRows(undefined);
     const refresh = (): void => {
-      void request<ListedMachine[]>({ method: 'machines', discover: true }).then((next) => { if (active) setMachines(next); }, (error: Error) => { if (active) props.onError(error.message); });
+      void request<ListedMachine[]>({ method: 'machines', discover: true }).then((next) => {
+        if (!active) return;
+        setMachines(next);
+        for (const other of next) {
+          if (other.id === 'local' || other.id === machineId || other.id.startsWith('tailscale:')) continue;
+          void request<ListedConversation[]>({ method: 'machineConversations', machineId: other.id }).then(
+            (chats) => { if (active) setOtherRows((held) => ({ ...held, [other.id]: chats })); },
+            () => undefined, // fail-open-ok: a machine that does not answer keeps the rows it had; its own page says why.
+          );
+        }
+      }, (error: Error) => { if (active) props.onError(error.message); });
       if (machineId !== 'local') void request<ListedConversation[]>({ method: 'machineConversations', machineId }).then(
         (next) => { if (active) setRemoteRows(next); }, (error: Error) => { if (active) props.onError(error.message); },
       );
@@ -144,12 +156,12 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
     return () => { active = false; stop(); };
   }, [machineId]);
 
-  const open = (row: ListedConversation): void => {
-    lastHistoryChat.set(machineId, row.id);
+  const open = (row: ListedConversation, onMachine: string = machineId): void => {
+    lastHistoryChat.set(onMachine, row.id);
     props.onClose();
-    if (machineId !== 'local') {
-      void request({ method: 'openOnMachine', machineId, mode: 'resume', sessionId: row.id }).catch((failure: Error) => props.onError(failure.message));
-    } else if (!row.current || props.model.sessionId !== row.id) void request({ method: 'openOnMachine', machineId, mode: 'resume', sessionId: row.id }).catch((failure: Error) => props.onError(failure.message));
+    if (onMachine !== 'local') {
+      void request({ method: 'openOnMachine', machineId: onMachine, mode: 'resume', sessionId: row.id }).catch((failure: Error) => props.onError(failure.message));
+    } else if (!row.current || props.model.sessionId !== row.id) void request({ method: 'openOnMachine', machineId: onMachine, mode: 'resume', sessionId: row.id }).catch((failure: Error) => props.onError(failure.message));
   };
   const act = (row: ListedConversation, action: 'rename' | 'delete', name?: string): void => {
     setConfirming(undefined);
@@ -206,8 +218,33 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
         });
       }
     }
+    // The other machines, a section each under its name in its hue (the chat that moved is here, not gone). Their rows open on
+    // their own machine and carry no rename or delete: those are that machine's.
+    const matchesQuery = (row: ListedConversation): boolean => !row.movedTo && !(row.current && !row.messages)
+      && (!query || `${row.title} ${row.preview ?? ''} ${row.provider ?? ''}`.toLowerCase().includes(query));
+    const others = otherMachineSections(machines ?? [], machineId, (id) => (id === 'local' ? localRows : otherRows[id]), matchesQuery);
+    for (const section of others) {
+      result.push({ key: `m:${section.machineId}`, heading: true, render: () => <span class={`machine-name ${section.hue}`}>{section.title}{section.offline ? ' · offline, as last seen' : ''}</span> });
+      for (const row of section.rows) {
+        const state = rowState(row, now);
+        result.push({
+          key: `${section.machineId}:${row.id}`,
+          onSelect: () => open(row, section.machineId),
+          render: () => (
+            <div class={`conversation other-machine ${section.hue}${section.offline ? ' offline' : ''}`} title={row.preview}>
+              <ConversationMark row={row} state={state} />
+              <div class="conversation-main">
+                <div class="conversation-title">{row.title}</div>
+                {row.preview ? <div class="conversation-preview">{row.preview}</div> : null}
+              </div>
+              <span class="conversation-meta">{state.text}</span>
+            </div>
+          ),
+        });
+      }
+    }
     return result;
-  }, [rows, query, renaming, confirming, second]);
+  }, [rows, query, renaming, confirming, second, machines, otherRows, localRows]);
 
   const showChats = (id: string): void => { lastHistoryMachine = id; setMachineId(id); setShowMachines(false); setSearch(''); };
   // A machine from the tailnet is added first (which user, then the install); its chats are listed then.

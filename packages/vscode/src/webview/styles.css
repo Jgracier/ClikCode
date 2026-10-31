@@ -642,3 +642,11 @@ body.vscode-high-contrast .keylist-row.active { outline: 1px dashed var(--vscode
 .hosted-where button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; text-align: left; padding: 8px 12px; }
 .hosted-where .where-label { font-weight: 600; }
 .hosted-where .where-detail { font-size: .88em; opacity: .85; }
+
+/* Another machine's chats in the history list: its name and its rows in one of three hues, never the green, yellow or red a turn's state uses. */
+.machine-hue-0 { --machine-hue: var(--vscode-charts-blue, #3794ff); }
+.machine-hue-1 { --machine-hue: var(--vscode-charts-purple, #b180d7); }
+.machine-hue-2 { --machine-hue: var(--vscode-terminal-ansiCyan, #11a8cd); }
+.machine-name { color: var(--machine-hue); font-weight: 600; }
+.history-menu .conversation.other-machine .conversation-title { color: var(--machine-hue); }
+.history-menu .conversation.other-machine.offline { opacity: 0.6; }
