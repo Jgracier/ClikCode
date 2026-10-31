@@ -20,6 +20,9 @@ import type { BackgroundTurnOutcome, VendorBackgroundTurn } from '../harness/tra
 import type { BroadcastObserver } from './broadcast-observer.js';
 import { TurnRecorder } from '../session/turn-changes.js';
 import { stateDirectory } from '../session/store/paths.js';
+import { refusalEndingReply } from '../turn/account-evidence.js';
+import { quotaRetryHint } from '../turn/failover.js';
+import { observeSessionAccount } from '../turn/vendor-process.js';
 
 const BACKGROUND_TURN_LABEL = 'background work';
 
@@ -32,6 +35,22 @@ interface RunnerDependencies {
   changed: () => void;
   /** The same live turn state history reads: background runs count even when no task level is reported. */
   runningChanged?: (since?: string) => Promise<void> | void;
+  /** A retry was parked on the session for after a usage reset (`resumeAt`): the worker's waiter looks at it. */
+  resumeParked?: () => void;
+}
+
+/** What is sent, once the limit resets, for a notification the usage limit left unanswered. */
+export const NOTIFICATION_RETRY_PROMPT = 'A background task finished while your usage limit was reached, so its notification went unanswered. Check what the finished background tasks reported and carry on from there.';
+
+/** A background turn that ended on the vendor's usage-limit refusal ("You've hit your session limit · resets 6:50pm
+ * (America/Denver)"): the model's words before it, the refusal on its own, and when the limit lifts. The refusal rides
+ * the end of the turn's text because the vendor streams it as a message, so it is cut off the prose it followed
+ * (2026-10-30: "...for real.You've hit your session limit" in one assistant message). */
+export function splitRefusal(text: string, now: number = Date.now()): { prose: string; refusal: string; resetsAt?: string } | undefined {
+  const refusal = refusalEndingReply(text);
+  if (!refusal) return undefined;
+  const resetsAt = quotaRetryHint(new Error(refusal), now);
+  return { prose: text.trimEnd().slice(0, text.trimEnd().length - refusal.length).trimEnd(), refusal, ...(resetsAt ? { resetsAt } : {}) };
 }
 
 interface VendorBackgroundRunner {
@@ -76,18 +95,26 @@ export function createVendorBackgroundRunner(deps: RunnerDependencies): VendorBa
   /** Every background save, in order; a user turn waits for it (settled). */
   let saving: Promise<unknown> = Promise.resolve();
 
-  const persist = (records: readonly string[]): Promise<HarnessSession | undefined> => {
+  const persist = (records: readonly string[], change?: (session: HarnessSession, now: string) => void): Promise<HarnessSession | undefined> => {
     const write = saving.then(async () => {
       const state = await readState({ transcripts: [deps.sessionId] });
       const session = state.sessions.find((item) => item.id === deps.sessionId);
       if (!session) return undefined;
       const now = new Date().toISOString();
       for (const record of records) appendBackgroundRecord(session, record, now);
+      change?.(session, now);
       await writeState(state);
       return session;
     });
     saving = write.catch(quiet('worker/vendor-background'));
     return write;
+  };
+
+  /** The account that ran out is marked, so the next turn moves on (as for a refusal said out of turn). */
+  const markAccountSpent = async (refusal: string): Promise<void> => {
+    const accountId = (await readState({ transcripts: [] })).sessions.find((item) => item.id === deps.sessionId)?.nativeThreadAccountId;
+    if (!accountId) return;
+    await observeSessionAccount({ sessionId: deps.sessionId, accountId, evidence: { vendorError: true, text: refusal }, source: 'background-turn' });
   };
 
   const saveSuperseded = (): Promise<HarnessSession | undefined> => {
@@ -135,17 +162,34 @@ export function createVendorBackgroundRunner(deps: RunnerDependencies): VendorBa
     try {
       const outcome = await turn.finished;
       lifecycle('worker.background.end', { ended: outcome.ended });
-      const record = backgroundTurnRecord(outcome, finished);
+      // The usage limit ends the turn's text: its own row, and the notification it left unanswered is retried after the reset.
+      const refused = splitRefusal(outcome.text);
+      const prose = refused ? backgroundTurnRecord({ ...outcome, text: refused.prose }, finished) : backgroundTurnRecord(outcome, finished);
+      const refusalRow = refused ? `${refused.refusal}${refused.resetsAt ? ' The notification will be retried after the reset.' : ''}` : undefined;
+      const record = prose ?? refusalRow;
+      if (refused) {
+        lifecycle('worker.background.refused', { refusal: refused.refusal.slice(0, 200), ...(refused.resetsAt ? { resetsAt: refused.resetsAt } : {}) });
+        if (owned()) observer.response(refused.prose, 'replace');
+      }
       // Only background work that left something in the conversation is a
       // turn there to undo.
       if (record) await recorder.finish(stateDirectory(), deps.sessionId).catch(quiet('worker/vendor-background'));
+      const records = [...(prose ? [prose] : []), ...(refusalRow ? [refusalRow] : [])];
+      const park = refused?.resetsAt ? (session: HarnessSession, now: string): void => {
+        // One parked turn at a time: a wait already on the session is kept, and sends for both.
+        session.resumeAt ??= { at: refused.resetsAt!, prompt: NOTIFICATION_RETRY_PROMPT, setAt: now };
+      } : undefined;
       if (!owned()) {
         // A user turn superseded this one: it owns the windows' waiting line,
         // and the conversation until it is saved.
-        if (record) superseded.push(record);
+        superseded.push(...records);
+        if (park) void persist([], park).then(() => deps.resumeParked?.()).catch(quiet('worker/vendor-background'));
+        if (refused) void markAccountSpent(refused.refusal);
         return;
       }
-      const session = record ? await persist([record]).catch(quiet('worker/vendor-background')) : undefined;
+      const session = records.length || park ? await persist(records, park).catch(quiet('worker/vendor-background')) : undefined;
+      if (park) deps.resumeParked?.();
+      if (refused) void markAccountSpent(refused.refusal);
       // Still this turn's to end: a user turn may have started (and even
       // finished) while that was saved -- and the waiting-stop belongs to
       // whatever turn is showing now, not to this one.

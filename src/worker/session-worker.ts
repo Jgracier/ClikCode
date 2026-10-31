@@ -150,7 +150,7 @@ export async function runSessionWorker(sessionId: string, options: { warm?: bool
   // turn, saveSuperseded() and userTurnEnded() in the turn's end, and
   // `vendorBackground.busy` in scheduleIdleExit.
   ctx.vendorBackground = createVendorBackgroundRunner({
-    sessionId, observer, userTurnRunning: () => ctx.turnRunning, runningChanged: (since) => ctx.onBackgroundTurnRunningChange?.(since), changed: () => { ctx.idle.vendorUsed(); ctx.idle.scheduleIdleExit(); },
+    sessionId, observer, userTurnRunning: () => ctx.turnRunning, runningChanged: (since) => ctx.onBackgroundTurnRunningChange?.(since), resumeParked: () => { void ctx.resumeWaiter.check(); }, changed: () => { ctx.idle.vendorUsed(); ctx.idle.scheduleIdleExit(); },
   });
   ctx.outOfTurn = createOutOfTurnRelay(ctx);
   // What the vendor was saying on its own is saved, and its live view ended, before its own turn takes the windows.

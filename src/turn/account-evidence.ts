@@ -135,7 +135,7 @@ async function moveOff(sessionId: string, from: AiHarnessAccount['id'], harness:
  * conversation is moved off it now -- not at its next turn. Anything else is left to the
  * vendor and to the turn that meets it. Returns what the evidence was. */
 export async function observeAccountHealth(
-  input: { sessionId: string; accountId: string; evidence: FailureEvidence; source: 'agent' | 'command' | 'out-of-turn'; harness?: string },
+  input: { sessionId: string; accountId: string; evidence: FailureEvidence; source: 'agent' | 'command' | 'out-of-turn' | 'background-turn'; harness?: string },
   effects: AccountMoveEffects,
 ): Promise<AccountFailureKind> {
   const kind = classifyEvidence(input.evidence);
