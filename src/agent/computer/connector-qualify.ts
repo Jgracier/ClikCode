@@ -61,7 +61,8 @@ export function classify(id: string, pages: RenderedPage[]): QualifyResult {
   const loaded = pages.filter(p => !p.error && (p.status === undefined || p.status < 400) && p.text.trim().length > 0);
   if (pages.length && !loaded.some(p => p.role === 'home' || p.role === 'signup' || p.role === 'docs' || p.role === 'pricing')) {
     const first = pages.find(p => p.error) ?? pages[0]!;
-    add('dead-host', first.error ?? `status ${first.status ?? 'none'}`, first.url);
+    if (/ERR_NAME_NOT_RESOLVED|ENOTFOUND|NXDOMAIN/i.test(first.error ?? '')) add('dead-host', first.error!, first.url);
+    else hints.push(`Qualification unavailable: ${first.error ?? `HTTP ${first.status ?? 'unknown'}`} at ${first.url}. Research a working vendor page before signup.`);
   }
   for (const page of loaded) {
     const text = norm(page.text);

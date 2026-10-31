@@ -81,6 +81,15 @@ describe('qualify classification', () => {
     expect(dead).toMatchObject({ lane: 'dead', kinds: ['dead-host'] });
   });
 
+  it('keeps missing API root routes, permission pages and temporary failures out of the dead-host lane', () => {
+    for (const status of [403, 404, 503]) {
+      const result = classify('googleapis-service', [page('home', '', { url: 'https://service.googleapis.com/', status })]);
+      expect(result).toMatchObject({ lane: 'auto', kinds: [] });
+      expect(result.hints?.[0]).toContain('Qualification unavailable');
+    }
+    expect(classify('v', [page('home', '', { error: 'navigation timed out' })]).kinds).toEqual([]);
+  });
+
   it('a card wall with prices and no free plan adds paid-plan', () => {
     const r = classify('v', [page('signup', 'A card is required to start the trial.', form), page('pricing', 'Pro $40 / person / mo\nTeam $425 / mo')]);
     expect(r.kinds).toEqual(['card', 'paid-plan']);
