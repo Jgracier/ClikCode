@@ -100,7 +100,12 @@ describe('the Gateway\'s model list', () => {
   it('shows a model by its price only: which provider serves it is the Gateway\'s decision', () => {
     expect(gatewayModelDetail(LIST.models[1] as never)).toBe('');
     expect(gatewayModelDetail({ ...LIST.models[1], price: { full: { inMTok: 4, outMTok: 20 }, discountPercent: 0, charged: { inMTok: 4, outMTok: 20 } } } as never))
-      .toBe('$4/$20 per 1M');
+      .toBe('$4/$20');
+  });
+
+  it('leaves capability and speed off a row: the tag and the price are what fit a phone', () => {
+    const row = { id: 'x', tags: ['uncensored'], vision: true, reasoning: true, tokensPerSecond: 90, price: { full: { inMTok: 1, outMTok: 2 }, discountPercent: 0, charged: { inMTok: 1, outMTok: 2 } } };
+    expect(gatewayModelDetail(row as never)).toBe('uncensored · $1/$2');
   });
 
   it('names the tier serving a model beside it, where the Gateway says which (the super admin\'s list)', async () => {
@@ -162,7 +167,7 @@ describe('a Gateway model\'s price', () => {
     expect(gatewayModelDetail({
       id: 'gpt-5.6-sol',
       price: { full: { inMTok: 4, outMTok: 20 }, discountPercent: 25, charged: { inMTok: 3, outMTok: 15 } },
-    })).toBe('$4/$20 → $3/$15 per 1M (25% off)');
+    })).toBe('$4/$20 → $3/$15 (25% off)');
   });
 });
 
