@@ -155,7 +155,7 @@ export async function qualifyVendor(id: string, ports: QualifyPorts): Promise<Qu
     if (found.signup) await visit('signup', found.signup);
     await visit('pricing', known.pricingUrl ?? found.pricing);
     await visit('docs', known.docsUrl ?? found.docs);
-    if (!pages.length) return { id, lane: 'dead', kinds: ['dead-host'], evidence: [{ kind: 'dead-host', phrase: 'ClikDeploy knows no address for this vendor', url: '' }], pages: [] };
+    if (!pages.length) return { id, lane: 'auto', kinds: [], evidence: [], hints: ['Qualification unavailable: no website address was found. Research the vendor before attempting signup.'], pages: [] };
     return classify(id, pages);
   } finally { await ports.close(id).catch(() => undefined); }
 }

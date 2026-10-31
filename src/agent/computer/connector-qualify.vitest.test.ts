@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { apiPlan, classify, hits, pickLinks, qualifyVendor, type PageRole, type QualifyPorts, type RenderedPage } from './connector-qualify.js';
 import { SERVER_PHRASES } from './connector-qualify-phrases.js';
 import { addressesFrom } from './connector-qualify-live.js';
@@ -100,6 +100,17 @@ describe('qualify classification', () => {
 });
 
 describe('qualify flow', () => {
+  it('keeps missing discovery data in autonomous research instead of inventing a dead vendor wall', async () => {
+    const render = vi.fn(), close = vi.fn(async () => {});
+    const result = await qualifyVendor('unresearched', { discover: async () => ({}), render, close });
+    expect(result).toMatchObject({ lane: 'auto', kinds: [], evidence: [], pages: [] });
+    expect(result.hints?.[0]).toContain('Qualification unavailable');
+    expect(render).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledWith('unresearched');
+    const { humanStepForQualify } = await import('./connector-qualify.js');
+    expect(humanStepForQualify(result)).toBeUndefined();
+  });
+
   const ports = (pages: Record<string, RenderedPage>, log: string[]): QualifyPorts => ({
     discover: async () => ({ homepage: 'https://vendor.example/', signupUrl: 'https://vendor.example/signup' }),
     render: async (_id, role, url) => { log.push(`render ${role} ${url}`); return pages[url] ?? { role, url, text: '', hasForm: false, hasEmailField: false, captchaWidget: false, error: 'not found' }; },
