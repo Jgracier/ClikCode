@@ -3,6 +3,7 @@
  * is read here -- each side answers for its own machine -- so the terminal and
  * the editor share it. */
 import type { AiHarnessPermissionMode } from '../harness/definition.js';
+import { lifecycle } from '../runtime/lifecycle-log.js';
 import type { ChatMovedTo, HarnessSession, TranscriptMessage } from './model.js';
 
 /** What a machine already holds of a chat (`chat-have`): the copy that moved
@@ -137,25 +138,47 @@ export interface MoveOutcome {
  * the same (by hash). Anything else -- an older target, nothing held, a copy
  * that differs or changed meanwhile -- sends the whole chat, as before. */
 export async function moveChat(source: MoveEnd, target: MoveEnd, sessionId: string): Promise<MoveOutcome> {
+  // Each step is timed and a failure names its step, so a move that stalled or half-finished says where (the log had nothing).
+  const startedAt = Date.now();
+  const steps: Record<string, number> = {};
+  let step = 'chat-have';
+  const timed = async <T,>(name: string, work: () => Promise<T>): Promise<T> => {
+    step = name;
+    const began = Date.now();
+    try { return await work(); } finally { steps[name] = (steps[name] ?? 0) + Date.now() - began; }
+  };
+  try {
+    const outcome = await moveChatSteps(source, target, sessionId, timed);
+    lifecycle('remote.move', { session: sessionId, from: source.name, to: target.name, ms: Date.now() - startedAt, steps, sent: outcome.sent, reused: outcome.reused });
+    return outcome;
+  } catch (error) {
+    lifecycle('remote.move.failed', { session: sessionId, from: source.name, to: target.name, step, ms: Date.now() - startedAt, steps, error: String((error as Error)?.message ?? error).slice(0, 200) });
+    throw error;
+  }
+}
+
+async function moveChatSteps(
+  source: MoveEnd, target: MoveEnd, sessionId: string, timed: <T>(name: string, work: () => Promise<T>) => Promise<T>,
+): Promise<MoveOutcome> {
   const names = { source: source.name, target: target.name };
   // What the target holds already (a chat moving back): only the rest is sent.
   // A target that cannot say, or holds nothing, gets the whole chat.
   const have = (target.revision ?? 0) >= CHAT_HAVE_REVISION
-    ? await target.call<ChatHave | null>({ type: 'chat-have', sessionId }).catch(() => null)
+    ? await timed('chat-have', () => target.call<ChatHave | null>({ type: 'chat-have', sessionId })).catch(() => null)
     : null;
   // Packed only for a target that can open it; an older source answers unpacked, which any target reads.
   const pack = (target.revision ?? 0) >= CHAT_HAVE_REVISION;
-  let chat = await source.call<ChatExport | PackedChat>({ type: 'export-chat', sessionId, ...(validHave(have) ? { since: have } : {}), ...(pack ? { pack } : {}) });
+  let chat = await timed('export', () => source.call<ChatExport | PackedChat>({ type: 'export-chat', sessionId, ...(validHave(have) ? { since: have } : {}), ...(pack ? { pack } : {}) }));
   let imported: ImportResult;
   try {
-    imported = await target.call<ImportResult>({ type: 'import-chat', chat, names });
+    imported = await timed('import', () => target.call<ImportResult>({ type: 'import-chat', chat, names }));
   } catch (error) {
     // Its copy changed since it said: all of it, then.
     if (!chat.base || !String((error as Error)?.message ?? error).includes(STALE_BASE)) throw error;
-    chat = await source.call<ChatExport | PackedChat>({ type: 'export-chat', sessionId, ...(pack ? { pack } : {}) });
-    imported = await target.call<ImportResult>({ type: 'import-chat', chat, names });
+    chat = await timed('export', () => source.call<ChatExport | PackedChat>({ type: 'export-chat', sessionId, ...(pack ? { pack } : {}) }));
+    imported = await timed('import', () => target.call<ImportResult>({ type: 'import-chat', chat, names }));
   }
-  await markMovedWithRetry(source, chat.sessionId, { machine: target.name, installationId: imported.installationId, sessionId: imported.sessionId }, target.name);
+  await timed('mark-moved', () => markMovedWithRetry(source, chat.sessionId, { machine: target.name, installationId: imported.installationId, sessionId: imported.sessionId }, target.name));
   return {
     moved: true, sessionId: imported.sessionId, folder: imported.folder, changes: imported.changes,
     reused: chat.base?.messages ?? 0, sent: 'packed' in chat ? chat.count : chat.messages.length,

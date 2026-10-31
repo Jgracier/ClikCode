@@ -18,7 +18,7 @@
  * One thing is changed there, by the machine's own policy: a ClikCode on
  * another commit than this build is updated to it in the background
  * (updates.ts), and the connection made again once it is. */
-import { quiet } from '../runtime/lifecycle-log.js';
+import { lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import type { ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
@@ -153,8 +153,13 @@ export class RemoteLink {
     if (stdin && !stdin.destroyed) stdin.write(`${JSON.stringify(message)}\n`);
   }
 
+  /** When the connection being made began: how long a host takes to say it is ready is the number that says the link is slow. */
+  private connectedAt = 0;
+
   private connect(): void {
     const machine = this.view.machine;
+    this.connectedAt = Date.now();
+    lifecycle('remote.connect', { machine: machine.name, attempt: this.attempt });
     let child: ChildProcess;
     try {
       child = this.options.spawn ? this.options.spawn(machine.sshTarget, bridgeScript()) : startBridge(machine.sshTarget, this.options.self);
@@ -198,6 +203,7 @@ export class RemoteLink {
   }
 
   private lost(error: string): void {
+    lifecycle('remote.lost', { machine: this.view.machine.name, attempt: this.attempt, ms: this.connectedAt ? Date.now() - this.connectedAt : 0, error: error.slice(0, 200) });
     this.set({ state: 'offline', error });
     if (this.stopped) return;
     if (!this.wanted()) { this.parked = true; return; }
@@ -249,6 +255,7 @@ export class RemoteLink {
       // Current now: an old failure no longer says anything.
       if (!outdated) delete machine.updateError;
       this.revision = event.revision ?? 1;
+      lifecycle('remote.ready', { machine: machine.name, ms: Date.now() - this.connectedAt, revision: this.revision, outdated, ...(event.commit ? { commit: event.commit.slice(0, 8) } : {}) });
       this.set({ state: 'connected', needsUpdate: outdated, error: undefined, ...(outdated ? {} : { updateError: undefined }) });
       this.send({ type: 'chat-attach', chat: CHAT });
       if (outdated && this.updatesAllowed()) this.autoUpdate(localCommit);
