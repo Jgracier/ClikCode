@@ -37,9 +37,9 @@ export const ACTIONS: readonly ActionSpec[] = [
   a('back', 'browser', 'Go', 'Go back one page in the tab\'s history.', []),
   a('forward', 'browser', 'Go', 'Go forward one page in the tab\'s history.', []),
   a('reload', 'browser', 'Go', 'Reload the page.', []),
-  a('tabs', 'browser', 'Go', 'List the tabs this chat opened (a chat only sees and changes its own).', []),
+  a('tabs', 'browser', 'Go', 'List this chat\'s tabs, then every tab in the shared browser with its owner, age and idle time. Tabs idle 20 minutes, or whose worker ended, are closed by themselves.', []),
   a('switch', 'browser', 'Go', 'Make another of your tabs the current one: its number from tabs (index), or words of its title or address (text).', ['index', 'text'], { index: 1 }),
-  a('close', 'browser', 'Go', 'Close this chat\'s tab, or just one of them with index.', ['index']),
+  a('close', 'browser', 'Go', 'Close this chat\'s tab, or just one of them with index. With tab: "<name>" it closes the tab of that name whoever opened it (see tabs).', ['index']),
   // ── browser_use: act ──
   a('click', 'browser', 'Act', 'Click an element. button: right or middle; count: 2 double-clicks; modifiers hold keys (["Shift"]); x and y click a point of the visible page (a canvas); accept_dialog: true answers yes to a confirm box the click raises.', ['target', 'button', 'count', 'modifiers', 'x', 'y', 'at', 'accept_dialog'], { target: 'e12' }),
   a('fill', 'browser', 'Act', 'Put text in a field, rich-text editor, date or time box, or dropdown (target + text). Leave text out for what only the user knows (name, email, phone, a password): it is filled from their saved profile or login, or they are asked privately, and you are not shown it.', ['target', 'text'], { target: 'e4', text: 'My key' }),

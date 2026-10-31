@@ -106,6 +106,8 @@ export async function runSessionWorker(sessionId: string, options: { warm?: bool
   // Before any vendor process exists, so all of the agent's work is born
   // outside the window that spawned this worker (own-scope.ts).
   const placement = await separateFromForeground(sessionId);
+  // Names this worker's owner on every tab it holds in the shared Chrome (agent/computer/tab-registry.ts).
+  process.env.CLIKCODE_SESSION_ID = sessionId;
   if (process.platform === 'linux' && process.env.CLIKCODE_OWN_SCOPE !== '0') installSystemdRunShim();
   // Temp files on disk, not in RAM-backed /tmp, for everything the agent runs.
   useConversationTmp(sessionId);

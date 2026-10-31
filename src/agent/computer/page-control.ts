@@ -5,7 +5,8 @@ import { quiet } from '../../runtime/lifecycle-log.js';
 import type { Frame, Locator, Page } from 'playwright-core';
 import type { ToolRunResult } from '../tool-contract.js';
 import { MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
-import { closeOwnedPage, focusOwnedPage, ownedPages } from './browser.js';
+import { allTabs, closeOwnedPage, focusOwnedPage, ownedPages } from './browser.js';
+import { describeTabs } from './tab-registry.js';
 import { readConsole } from './console-log.js';
 import { hideKeyLikeText } from './secret-finder.js';
 import { scrubSecrets, showsSecret } from './secret-scrubber.js';
@@ -446,9 +447,15 @@ async function tabLine(page: Page, index: number, current: boolean, deps: Pick<P
 export async function listTabs(deps: Pick<PageDeps, 'stateDir' | 'tab' | 'displayUrl'>): Promise<string> {
   const { pages, current } = ownedPages(deps.stateDir, deps.tab);
   const open = pages.filter(page => !page.isClosed());
-  if (!open.length) return 'This chat has no open tab.';
-  return `Tabs this chat opened (* is the one in front; pass index to switch or close):\n${(await Promise.all(open.map((page, index) => tabLine(page, index, page === current, deps)))).join('\n')}`;
+  const own = open.length
+    ? `Tabs this chat opened (* is the one in front; pass index to switch or close):\n${(await Promise.all(open.map((page, index) => tabLine(page, index, page === current, deps)))).join('\n')}`
+    : 'This chat has no open tab.';
+  // Every worker's tabs, with owner, age and idle time: a tab left by a worker that ended can be seen, and closed by its name.
+  const everyone = await allTabs(deps.stateDir).catch(() => undefined);
+  return everyone?.length ? `${own}\n\n${describeTabs(everyone.map(view => ({ ...view, ...(view.url ? { url: displayTabUrl(view.url, deps) } : {}) })))}` : own;
 }
+
+const displayTabUrl = (url: string, deps: Pick<PageDeps, 'displayUrl'>): string => scrubSecrets(deps.displayUrl(url));
 
 /** The own tab `index` (0-based, as listed) or the one whose title or address contains `text`. Never another chat's tab. */
 export async function pickTab(args: TabArgs, deps: Pick<PageDeps, 'stateDir' | 'tab'>): Promise<Page> {

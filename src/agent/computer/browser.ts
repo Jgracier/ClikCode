@@ -12,6 +12,7 @@ import { sharedState } from './shared-state.js';
 import { watchDownloads } from './downloads.js';
 import { watchDialogs } from './page-dialogs.js';
 import { watchConsole } from './console-log.js';
+import { allTabs, closeTabsByLabel, closeTabsOfOwner, readTabRecords, sweepTabs, writeTabRecord, type TabRecord } from './tab-registry.js';
 
 type Connected = { browser: Browser; context: BrowserContext };
 const running = sharedState('browser-running', () => new Map<string, Promise<Connected>>());
@@ -156,6 +157,72 @@ export function adoptPage(stateDir: string, page: Page, tab?: string): void {
   owned.set(key, [...(owned.get(key) ?? []).filter(old => old !== page), page]);
   chosen.delete(key);
   watchConsole(page);
+  holdTab(stateDir, page, tab);
+}
+
+// ── who holds each tab: written down so any chat can list it and the sweep can close what no one holds (tab-registry.ts) ──
+
+interface Held { id: Promise<string | undefined>; tab?: string; openedAt: number; lastUsedAt: number; written: number; parked: boolean }
+const held = sharedState('browser-held', () => new WeakMap<Page, Held>());
+const WRITE_EVERY_MS = 5_000;
+const SWEEP_EVERY_MS = 60_000;
+const lastSweep = sharedState('browser-last-sweep', () => new Map<string, number>());
+
+const ownerLabel = (): string => `worker ${process.pid}${process.env.CLIKCODE_SESSION_ID ? ` (session ${process.env.CLIKCODE_SESSION_ID.slice(0, 8)})` : ''}`;
+
+/** The browser's own id for a page, or undefined when it cannot say. */
+export function targetIdOf(page: Page): Promise<string | undefined> {
+  return (async () => {
+    const session = await page.context().newCDPSession(page);
+    try { return ((await session.send('Target.getTargetInfo')) as { targetInfo: { targetId: string } }).targetInfo.targetId; }
+    finally { await session.detach().catch(quiet('agent/computer/browser')); }
+  })().catch(() => undefined);
+}
+
+async function flushHeld(stateDir: string, page: Page, entry: Held, force: boolean): Promise<void> {
+  const now = Date.now();
+  if (!force && now - entry.written < WRITE_EVERY_MS) return;
+  entry.written = now;
+  const id = await entry.id;
+  if (!id) return;
+  const record: TabRecord = {
+    id, ...(entry.tab ? { tab: entry.tab } : {}), ownerPid: entry.parked ? 0 : process.pid, owner: entry.parked ? `parked by ${ownerLabel()}` : ownerLabel(),
+    openedAt: entry.openedAt, lastUsedAt: entry.lastUsedAt, ...(page.isClosed() ? {} : { url: page.url() }), ...(entry.parked ? { parked: true } : {}),
+  };
+  await writeTabRecord(stateDir, record);
+}
+
+function holdTab(stateDir: string, page: Page, tab?: string): void {
+  const now = Date.now();
+  const entry = held.get(page) ?? { id: targetIdOf(page), openedAt: now, lastUsedAt: now, written: 0, parked: false };
+  entry.lastUsedAt = now;
+  entry.parked = false;
+  if (tab) entry.tab = tab; else delete entry.tab;
+  held.set(page, entry);
+  void flushHeld(stateDir, page, entry, true).catch(quiet('agent/computer/browser'));
+}
+
+/** This chat used `page` just now. Also closes tabs no one holds, at most once a minute. */
+function touchTab(stateDir: string, page: Page): void {
+  const entry = held.get(page);
+  if (entry) { entry.lastUsedAt = Date.now(); void flushHeld(stateDir, page, entry, false).catch(quiet('agent/computer/browser')); }
+  const now = Date.now();
+  if (now - (lastSweep.get(stateDir) ?? 0) < SWEEP_EVERY_MS) return;
+  lastSweep.set(stateDir, now);
+  void sweepTabs(stateDir).catch(quiet('agent/computer/browser'));
+}
+
+/** A tab the host reopened after a recycle for this label, taken over by the worker that names it. */
+async function claimRestored(stateDir: string, context: BrowserContext, tab: string | undefined): Promise<Page | undefined> {
+  if (!tab) return undefined;
+  const record = (await readTabRecords(stateDir)).find(item => item.restoreFor === tab && item.ownerPid === 0);
+  if (!record) return undefined;
+  for (const page of context.pages()) {
+    if (page.isClosed() || await targetIdOf(page) !== record.id) continue;
+    adoptPage(stateDir, page, tab);
+    return page;
+  }
+  return undefined;
 }
 
 /** Every tab this chat holds, in the order they were opened, and the one in front. Never another chat's tab. */
@@ -185,6 +252,7 @@ export async function openNewComputerPage(stateDir: string, tab?: string): Promi
   const { context } = await browserFor(stateDir, true);
   const page = await context.newPage();
   adoptPage(stateDir, page, tab);
+  touchTab(stateDir, page);
   return page;
 }
 
@@ -212,16 +280,18 @@ export async function recoverComputerPage(stateDir: string, page: Page, tab?: st
 /** This chat's tab, opened in the shared Chrome the first time it is needed. */
 export async function openComputerPage(stateDir: string, tab?: string): Promise<Page> {
   const { context } = await browserFor(stateDir, true);
-  const existing = mine(stateDir, tab);
-  if (existing) return existing;
+  const existing = mine(stateDir, tab) ?? await claimRestored(stateDir, context, tab);
+  if (existing) { touchTab(stateDir, existing); return existing; }
   const page = await context.newPage();
   adoptPage(stateDir, page, tab);
+  touchTab(stateDir, page);
   return page;
 }
 
 export async function computerPage(stateDir: string, tab?: string): Promise<Page> {
-  await browserFor(stateDir, false);
-  const page = mine(stateDir, tab);
+  const { context } = await browserFor(stateDir, false);
+  const page = mine(stateDir, tab) ?? await claimRestored(stateDir, context, tab);
+  if (page) touchTab(stateDir, page);
   if (!page) throw new Error('This chat has no open tab. Open a URL with browser_use first.');
   return page;
 }
@@ -258,14 +328,32 @@ export async function allComputerPages(stateDir: string): Promise<Page[]> {
   return context.pages().filter(page => !page.isClosed());
 }
 
-/** Close this chat's tab only: the Chrome and every other chat's tab stay as they are. */
+/** Close this chat's tab only: the Chrome and every other chat's tab stay as they are. A named tab is closed whoever
+ * holds it (another worker's, one left by a worker that ended): the name is how an agent says which. */
 export async function closeComputerPage(stateDir: string, tab?: string): Promise<void> {
   const key = ownerKey(stateDir, tab);
   const pages = owned.get(key) ?? [];
   owned.delete(key);
   chosen.delete(key);
   for (const page of pages) await page.close().catch(quiet('agent/computer/browser'));
+  if (tab) await closeTabsByLabel(stateDir, tab).catch(quiet('agent/computer/browser'));
 }
+
+/** Every tab this process holds, default and named (its worker is stopping). */
+export async function closeAllOwnedPages(stateDir: string): Promise<void> {
+  const all = owned as Map<string, Page[]>;
+  for (const key of [...all.keys()]) {
+    if (key !== stateDir && !key.startsWith(`${stateDir}\u0000`)) continue;
+    const pages = all.get(key) ?? [];
+    all.delete(key);
+    chosen.delete(key);
+    for (const page of pages) await page.close().catch(quiet('agent/computer/browser'));
+  }
+  await closeTabsOfOwner(stateDir, process.pid).catch(quiet('agent/computer/browser'));
+}
+
+/** Every tab in the shared Chrome with its owner, age and idle time (not only this chat's), for `browser_use tabs`. */
+export { allTabs };
 
 /** Keep a tab open for a later command (a keygrab that could not finish): mark it, and stop owning it so closing this process's connection or opening the next vendor leaves it alone. */
 export async function parkComputerPage(stateDir: string, tab: string, marker: string): Promise<boolean> {
@@ -273,6 +361,8 @@ export async function parkComputerPage(stateDir: string, tab: string, marker: st
   if (!page) return false;
   const marked = await page.evaluate(name => { (globalThis as unknown as { name: string }).name = name; return true; }, marker).catch(() => false);
   owned.delete(ownerKey(stateDir, tab));
+  const entry = held.get(page);
+  if (entry) { entry.parked = true; entry.lastUsedAt = Date.now(); await flushHeld(stateDir, page, entry, true).catch(quiet('agent/computer/browser')); }
   return marked;
 }
 

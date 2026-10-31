@@ -8,7 +8,7 @@ import { disposeSessionState, takeShellNotifications } from '../agent/session-st
 import { existingSessionAgents } from '../agent/background-agents.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { shutdownLanguageServers } from '../agent/lsp/servers.js';
-import { closeComputerPage } from '../agent/computer/browser.js';
+import { closeAllOwnedPages } from '../agent/computer/browser.js';
 import { sendEvent } from './broadcast-observer.js';
 import { removeWorkerRecord } from './registry.js';
 import type { WorkerContext } from './worker-context.js';
@@ -90,8 +90,8 @@ export function createShutdown(ctx: WorkerContext) {
     // The lsp tool's language servers live as long as this worker.
     currentStep = 'language servers';
     await boundedStep(currentStep, () => shutdownLanguageServers());
-    // The tab this chat opened in the shared Chrome goes with it, so tabs do not pile up (Chrome and other chats' tabs stay).
-    await Promise.race([closeComputerPage(stateDirectory()).catch(quiet('worker/worker-shutdown')), new Promise<void>((resolve) => { setTimeout(resolve, 3_000).unref(); })]);
+    // Every tab this worker opened in the shared Chrome (its own and the named ones sub-agents opened) goes with it, so tabs do not pile up (Chrome and other workers' tabs stay).
+    await Promise.race([closeAllOwnedPages(stateDirectory()).catch(quiet('worker/worker-shutdown')), new Promise<void>((resolve) => { setTimeout(resolve, 3_000).unref(); })]);
     currentStep = 'window flush';
     const flushed: Promise<void>[] = [];
     for (const connection of connections.keys()) {
