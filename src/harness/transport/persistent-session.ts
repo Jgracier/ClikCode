@@ -210,9 +210,15 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
   /** What the commands look like now, told to the transport (commandsChanged) when it changed. */
   protected commandsChanged(_commands: readonly CommandStats[], _reaped: readonly ReapedCommand[]): void {}
 
-  private async watchCommands(): Promise<void> {
+  /** Whether the sub-agent that started `command` has ended, so nothing is left to want it (the transport
+   * knows its owners; none by default). A command that asked to be kept is not asked about. */
+  protected ownerEnded(_command: CommandStats): boolean { return false; }
+
+  /** Look at the commands now: those whose owner ended and the stale ones are ended, the rest told. */
+  protected async watchCommands(): Promise<void> {
     if (this.isClosed) return;
-    const reaped = await this.reapCommands('stale', 'stale background command');
+    const orphaned = await this.reapCommands('all', 'the sub-agent that started it ended', (command) => !command.keep && this.ownerEnded(command));
+    const reaped = [...orphaned, ...await this.reapCommands('stale', 'stale background command')];
     const commands = await this.backgroundCommands();
     const seen = JSON.stringify(commands.map((item) => [item.pid, Math.round(item.cpuPercent ?? 0), item.lastOutputAt, item.stale]));
     if (seen !== this.commandsSeen || reaped.length) {
@@ -222,7 +228,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
   }
 
   /** The watch runs while a turn left processes running; it ends itself when there are none. */
-  private armCommandWatch(): void {
+  private armCommandWatch(firstMs: number = Math.min(this.commandWatchMs, 5_000)): void {
     if (this.commandTimer || this.isClosed || !this.leftRunning.size) return;
     const tick = (): void => {
       this.commandTimer = undefined;
@@ -231,7 +237,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
         else if (this.commandsSeen) { this.commandsSeen = ''; this.commandsChanged([], []); }
       });
     };
-    this.commandTimer = setTimeout(tick, Math.min(this.commandWatchMs, 5_000));
+    this.commandTimer = setTimeout(tick, firstMs);
     this.commandTimer.unref?.();
   }
 
@@ -418,7 +424,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     if (!before || !pid) return;
     const [then, now] = await Promise.all([before, processGroupMembers(pid)]);
     for (const member of now) if (member !== pid && !then.has(member)) this.leftRunning.add(member);
-    this.armCommandWatch();
+    this.armCommandWatch(Math.min(this.commandWatchMs, 1_000));
   }
   /** Ask the vendor to stop `turn`, settling `this.settling` (settleCancel);
    * false when the turn has not reached the point it can be asked. */
