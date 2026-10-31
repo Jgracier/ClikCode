@@ -426,9 +426,9 @@ export const computerWebTool = defineTool<WebArgs>({
 function runInOrder(args: WebArgs, hostCtx: ToolContext): Promise<ToolRunResult> {
   return inOrder(args.tab ? `${hostCtx.stateDir}#${args.tab}` : hostCtx.stateDir, async (): Promise<ToolRunResult> => {
     // Unattended: a private prompt about a site (a password, a code, an account choice) is parked in the queue, not shown.
-    // The profile prompts are the user's own and are always shown.
+    // Missing profile details follow the same rule: no private dialog can suspend an unattended worker.
     const ctx: ToolContext = await unattendedEnabled(hostCtx.stateDir) && hostCtx.requestPrivateLogin
-      ? { ...hostCtx, requestPrivateLogin: (site, fields, signal) => site === 'https://profile.clikcode' ? hostCtx.requestPrivateLogin!(site, fields, signal) : park(hostCtx.stateDir, site, fields) }
+      ? { ...hostCtx, requestPrivateLogin: (site, fields) => park(hostCtx.stateDir, site, fields) }
       : hostCtx;
     try {
       if (!(await computerEnabled(ctx.stateDir))) throw new Error(COMPUTER_OFF);

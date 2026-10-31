@@ -236,6 +236,21 @@ describe('profile ask_fields and custom: an agent asks for the details a task ne
     });
   });
 
+  it('parks missing profile fields in unattended mode without opening a private prompt', async () => {
+    await withState(async (stateDir) => {
+      const { setUnattended } = await import('../computer/settings.js');
+      const { listTasks } = await import('../computer/work-queue.js');
+      await setUnattended(stateDir, true);
+      let prompts = 0;
+      const result = await computerWebTool.run({ action: 'profile', label: 'Missing company details', ask_fields: [{ key: 'registration_number', label: 'Company registration number' }] } as never,
+        { stateDir, requestPrivateLogin: async () => { prompts++; throw new Error('Unexpected private prompt'); } } as never);
+      expect(prompts).toBe(0);
+      expect(result.isError).toBe(true);
+      expect(result.output).toContain('Do not ask the user');
+      expect(await listTasks(stateDir)).toEqual(expect.arrayContaining([expect.objectContaining({ status: 'needs-human' })]));
+    });
+  });
+
   it('saves details the agent already knows with custom, and says why a secret or a bad name is refused', async () => {
     await withState(async (stateDir) => {
       const ctx = { stateDir } as never;
