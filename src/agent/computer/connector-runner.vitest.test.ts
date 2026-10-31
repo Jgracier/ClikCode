@@ -33,6 +33,30 @@ function fakeDriver(outcomes: DriveOutcome[], recipe = false) {
 const quick = { sleep: async () => undefined, writeFile: async () => undefined, handoffDir: async () => '/tmp/handoffs' };
 
 describe('connectors run', () => {
+  it('continues from completed spec work into distinct copy work within one vendor run', async () => {
+    const task = (stage: string, text: string): OnboardResult => ({ id: 'acme', state: 'needs-agent', stage, reason: 'judgement required', next: { kind: 'agent', task: text } });
+    const spec = task('spec', 'Read the official docs and repair the spec');
+    const copy = task('copy', 'Review the action descriptions');
+    const c = fakeClient([spec], { acme: [copy, published('acme')] });
+    const d = fakeDriver([]);
+    const tasks: string[] = [];
+    d.driver.agentTask = async (_id, stop) => { tasks.push(stop.pageText ?? ''); return { ok: true }; };
+    const { outcomes } = await runConnectors(c.client, d.driver, quick);
+    expect(tasks).toEqual([spec.next.task, copy.next.task]);
+    expect(outcomes[0]!.status).toBe('published');
+  });
+
+  it('does not retry agent work when onboarding returns the unchanged task', async () => {
+    const task: OnboardResult = { id: 'acme', state: 'needs-agent', stage: 'spec', reason: 'judgement required', next: { kind: 'agent', task: 'Repair the spec' } };
+    const c = fakeClient([task], { acme: [task] });
+    const d = fakeDriver([]);
+    let attempts = 0;
+    d.driver.agentTask = async () => { attempts++; return { ok: true }; };
+    const { outcomes } = await runConnectors(c.client, d.driver, quick);
+    expect(attempts).toBe(1);
+    expect(outcomes[0]!.status).toBe('handoff');
+  });
+
   it('presses the consent screens through the driver, then asks ClikDeploy again until published', async () => {
     const c = fakeClient([oauthTask('slack')], { slack: [published('slack')] });
     const d = fakeDriver([{ ok: true, note: 'allowed access' }]);

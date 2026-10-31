@@ -254,11 +254,14 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
     } catch (error) { recorded = `could not report it (${cap(say(error instanceof Error ? error.message : String(error)), 120)})`; }
     return out('human', human.instructions ?? human.kind, { humanStep: human, recorded });
   };
-  // An unknown screen gets one bounded agent micro-task per vendor; success carries on with the next onboard step.
-  let agentTried = false, qualified = false;
+  // Each distinct onboarding task gets one bounded agent attempt. A completed task may
+  // advance to another task within the vendor budget; an unchanged task never retries.
+  const agentTasksTried = new Set<string>();
+  let qualified = false;
   const viaAgent = async (stop: StopInfo, wholeTask = false): Promise<DriveOutcome | undefined> => {
-    if (agentTried || !driver.agentTask || !wholeTask && (stop.human || humanStepFor(id, stop))) return undefined;
-    agentTried = true;
+    const taskKey = JSON.stringify([result.stage, result.next.kind, result.next.task]);
+    if (agentTasksTried.has(taskKey) || !driver.agentTask || !wholeTask && (stop.human || humanStepFor(id, stop))) return undefined;
+    agentTasksTried.add(taskKey);
     actions.push('an unrecognized screen: one bounded agent micro-task');
     const done = await gate(() => driver.agentTask!(id, stop, { maxCalls: options.agentCalls ?? 25, maxMs: Math.max(30_000, maxMs - (now() - began)) }));
     if (done.ok && done.recipe) recipeSaved = true;
