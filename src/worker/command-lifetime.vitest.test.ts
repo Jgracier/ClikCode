@@ -52,6 +52,15 @@ describe('command lifetime', () => {
     expect(killed).toEqual([]);
   });
 
+  it('never ends the browser host an older worker started, however long it has run', () => {
+    const scope = join(root, 'clikcode-worker-old-1.scope');
+    group(scope, 'cmd-30', [30, 31, 32]);
+    const procs = { 30: { agoH: 60, cmd: '/bin/sh /usr/bin/xvfb-run -a node cli.js computer-host /state' }, 31: { agoH: 60, cmd: 'node cli.js computer-host /state' }, 32: { agoH: 60, cmd: 'Xvfb :99' } };
+    const killed: string[] = [];
+    enforceCommandLifetimes(scope, { now, read: fake(procs), kill: (dir) => { killed.push(dir); return true; } });
+    expect(killed).toEqual([]);
+  });
+
   it('does not touch a young command, an empty group, or what is not a command group', () => {
     const scope = join(root, 's');
     group(scope, 'cmd-3', []);

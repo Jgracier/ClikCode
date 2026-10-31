@@ -73,7 +73,10 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
       if (!result) throw new Error('usage: clikcode search <words>');
       emitHarnessOutput(searchResultsPayload(result));
     });
-  program.command('doctor').description('Inspect installed harness versions and centralized capabilities').action(later(accountCommands, 'aiDoctor'));
+  const doctor = program.command('doctor').description('Inspect installed harness versions and centralized capabilities').action(later(accountCommands, 'aiDoctor'));
+  doctor.command('scopes').description('List every ClikCode cgroup (session, memory, tasks, cpu, age, owner), flagging commands past their 2 h lifetime and scopes whose worker ended')
+    .option('--reap', 'end only the flagged cgroups, after printing them')
+    .action(async (options: { reap?: boolean }) => (await import('../commands/doctor-scopes.js')).aiDoctorScopes(options));
   const computer = program.command('computer').description('Control the local browser and request a private login in any ClikCode chat');
   computer.command('status').description('Show whether computer use is on').action(async () => (await import('../commands/computer.js')).computerStatus());
   computer.command('on').description('Make computer use available for new turns').action(async () => (await import('../commands/computer.js')).computerSetEnabled(true));
