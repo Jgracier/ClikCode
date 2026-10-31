@@ -174,7 +174,7 @@ export async function declaredConnectionValues(integration: string, signal?: Abo
 }
 
 /** The connection destinations that fit each auth kind a connector declares. */
-const ACCEPTS: Record<string, string[]> = { 'api-key': ['clikdeploy-connection'], basic: ['clikdeploy-connection-basic', 'clikdeploy-connection-basic-key'], custom: [], oauth: ['clikdeploy-connection'] };
+const ACCEPTS: Record<string, string[]> = { 'api-key': ['clikdeploy-connection'], basic: ['clikdeploy-connection-basic', 'clikdeploy-connection-basic-key'], custom: [], 'aws-sigv4': ['clikdeploy-connection'], oauth: ['clikdeploy-connection'] };
 
 /** One message listing the shapes a connector's declared auth accepts. */
 export function describeShapes(integration: string, kind: string): string {
@@ -182,6 +182,7 @@ export function describeShapes(integration: string, kind: string): string {
     'api-key': `{"to":"clikdeploy-connection","with":{"integration":"${integration}"}} (the captured key is the API key)`,
     oauth: `{"to":"clikdeploy-connection","with":{"integration":"${integration}"}} (the captured key is a token; the connector may prefer oauth_connect)`,
     basic: `{"to":"clikdeploy-connection-basic","with":{"integration":"${integration}","username":"<name or secret:<saved name>>"}} (the captured key is the PASSWORD), or {"to":"clikdeploy-connection-basic-key","with":{"integration":"${integration}"}} (the captured key is the USERNAME; add "password" for a fixed one, else blank)`,
+    'aws-sigv4': `a saved accessKeyId/secretAccessKey pair, optionally sessionToken, packed as JSON and sent through clikdeploy-connection for ${integration}`,
     custom: 'a custom-auth connector takes named props, which capture_secret cannot send; connect it in ClikDeploy',
   };
   return `${integration} declares ${kind} auth. Accepted: ${shapes[kind] ?? `none of the known shapes (auth kind "${kind}")`}.`;
@@ -192,7 +193,12 @@ export async function declaredAuthKind(integration: string, signal?: AbortSignal
   const shown = await runCli('clikdeploy', ['integrations', 'show', integration], { signal, timeoutMs: 30_000, maxChars: 4_000_000 });
   if (shown.missing) return undefined;
   const parsed = firstJsonObject<{ status?: string; data?: { auth?: { kind?: string } } }>(shown.text);
-  return parsed?.status === 'error' ? undefined : parsed?.data?.auth?.kind;
+  const kind = parsed?.status === 'error' ? undefined : parsed?.data?.auth?.kind;
+  if (kind !== 'custom' || !integration.startsWith('amazonaws-')) return kind;
+  // The public catalogue omits signing metadata: read the stored definition for this special shape.
+  const stored = await runCli('clikdeploy', ['tools', 'run', 'connector_spec_get', '--args-json', JSON.stringify({ id: integration })], { signal, timeoutMs: 20_000, maxChars: 4_000_000 });
+  const spec = firstJsonObject<{ data?: { data?: { spec?: { auth?: { signing?: { scheme?: string } } } } } }>(stored.text)?.data?.data?.spec;
+  return spec?.auth?.signing?.scheme === 'aws-sigv4' ? 'aws-sigv4' : kind;
 }
 
 /** What `values` may hold for a connector, in words: the names, what each is, and the format. */

@@ -617,3 +617,4 @@ With a mailbox connected, a one-time-code box that `login` or `fill` (no text) m
 5. The inbox is read first, then spam, over three passes of 30 seconds. If nothing comes, the signup is recorded in the queue as `needs-human` with reason `email` and the step stops, so the run goes on to the next vendor; `clikcode computer queue --reason email` lists them.
 
 `read_email_code` and `open_email_link` with no `from` or `subject` use the same rules for the page they are on. With `from` or `subject` they read the newest matching message, as before. With no mailbox connected nothing changes: the code is asked for privately.
+
