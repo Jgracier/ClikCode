@@ -55,6 +55,25 @@ describe('keygrab sign-in order', () => {
     expect(site.captures).toEqual([undefined]);
   });
 
+  it('uses the saved Google login at a password screen before declaring a sign-in wall', async () => {
+    const site = fakeSite({
+      'https://vendor.example/': { text: 'Welcome', controls: ['Continue with Google'], on: { 'Continue with Google': 'https://accounts.google.com/password' } },
+      'https://accounts.google.com/password': { text: 'Enter your password', password: true, fields: ['Password'] },
+      'https://vendor.example/keys': keysPage, 'https://vendor.example/keys/new': newKey, 'https://vendor.example/keys/made': madeKey,
+    }, 'https://vendor.example/', { login: { ok: true, to: 'https://vendor.example/keys' } });
+    expect(await run(site)).toMatchObject({ ok: true, route: 'google' });
+    expect(site.log.filter(item => item === 'login')).toHaveLength(1);
+  });
+
+  it('does not repeat a saved provider login that returns to the same password screen', async () => {
+    const site = fakeSite({
+      'https://vendor.example/': { text: 'Welcome', controls: ['Continue with Google'], on: { 'Continue with Google': 'https://accounts.google.com/password' } },
+      'https://accounts.google.com/password': { text: 'Enter your password', password: true, fields: ['Password'] },
+    }, 'https://vendor.example/', { login: { ok: true, to: 'https://accounts.google.com/password' } });
+    expect(await run(site)).toMatchObject({ ok: false, stop: { kind: 'password' } });
+    expect(site.log.filter(item => item === 'login')).toHaveLength(1);
+  });
+
   it('uses GitHub when Google is not offered, signing in to GitHub with the saved login', async () => {
     const pages: Record<string, Page> = {
       'https://github.com/login/oauth/authorize': { text: 'Authorize Acme', controls: ['Authorize acme-app'], on: { 'Authorize acme-app': 'https://vendor.example/developers' } },
