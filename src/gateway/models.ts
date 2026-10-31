@@ -109,23 +109,23 @@ export function gatewayModelDetail(model: GatewayModel): string {
       model.own.tools ? '' : 'no tool calls',
     ].filter(Boolean).join(' · ');
   }
+  // A phone row has room for little: the tag and the price. What a model can do (images, reasoning,
+  // speed) is not what picks it, so it is left off rather than cut off.
   return [
     model.tags?.includes('uncensored') ? 'uncensored' : '',
-    model.price ? gatewayPriceLabel(model.price) : '',
-    model.vision ? 'images' : '',
-    model.reasoning ? 'reasoning' : '',
-    model.tokensPerSecond ? `${Math.round(model.tokensPerSecond)} tok/s` : '',
+    model.price ? gatewayPriceLabel(model.price, false) : '',
   ].filter(Boolean).join(' · ');
 }
 
 /** `$4/$20 per 1M`, or with a discount `$4/$20 → $3/$15 per 1M (25% off)`: input/output. */
-export function gatewayPriceLabel(price: GatewayModelPrice): string {
+export function gatewayPriceLabel(price: GatewayModelPrice, unit = true): string {
   const money = (n: number) => `$${Number(n.toFixed(n < 1 ? 3 : 2))}`;
   const pair = (rate: { inMTok: number; outMTok: number }) => `${money(rate.inMTok)}/${money(rate.outMTok)}`;
   const full = pair(price.full);
   const charged = pair(price.charged);
-  if (price.discountPercent <= 0 || charged === full) return `${charged} per 1M`;
-  return `${full} → ${charged} per 1M (${price.discountPercent}% off)`;
+  const per = unit ? ' per 1M' : '';
+  if (price.discountPercent <= 0 || charged === full) return `${charged}${per}`;
+  return `${full} → ${charged}${per} (${price.discountPercent}% off)`;
 }
 
 const TTL_MS = 60_000;

@@ -283,7 +283,7 @@ async function gatewayModelPicker(rl: HarnessPrompter, id: string, current: stri
   }
   const options = (): PickerOption<GatewayChoice>[] => gatewayPickerRows(list!, agents, current, currentAgent);
   for (;;) {
-    const selected = await chooseOption(rl, 'Choose an agent or ClikDeploy Gateway model', options(), undefined, { refreshedOptions: options, refresh: fresh });
+    const selected = await chooseOption(rl, 'Choose an agent or ClikDeploy Gateway model (price per 1M tokens, in/out)', options(), undefined, { refreshedOptions: options, refresh: fresh });
     if (!selected) return;
     if (selected.kind === 'subscriptions') {
       // The super admin's switch: flipped, then the list as the Gateway serves it in the new position.
