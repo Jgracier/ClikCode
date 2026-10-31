@@ -170,19 +170,17 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
       let outcome: VendorOutcome;
       try {
         let raced = await Promise.race([run().catch((e: unknown) => ({ failed: e })), hard]);
-        // A browser that hung or went away: restart it and resume this vendor once (the server keeps its progress), if time remains.
+        // Close only this task’s tabs and resume once if time remains; other tasks share the browser host.
         if (raced !== 'timeout' && 'failed' in raced) {
           const message = raced.failed instanceof Error ? raced.failed.message : String(raced.failed);
           if (BROWSER_HANG.test(message) && now() < ctx.deadline) {
             ports.log(`${new Date(now()).toISOString()} id=${id} browser trouble (${scrubSecrets(message).slice(0, 80)}); closing this task’s tabs and resuming`);
-            await ports.closeTab(id).catch(() => undefined);
             await ports.closeTab(id).catch(() => undefined);
             raced = await Promise.race([run().catch((e: unknown) => ({ failed: e })), hard]);
           }
         }
         if (raced === 'timeout') {
           abort.abort(new Error('Connector task deadline expired'));
-          await ports.closeTab(id).catch(() => undefined);
           await ports.closeTab(id).catch(() => undefined);
           outcome = { id, status: 'budget', steps: 0, browserActions: 0, stage: '', summary: `hard time limit of ${Math.round((limits.maxMs + limits.graceMs) / 1000)}s: the browser did not answer; the task was cancelled and its own tabs were closed`, actions: [] };
         } else if ('failed' in raced) {

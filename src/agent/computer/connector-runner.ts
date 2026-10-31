@@ -151,7 +151,7 @@ export function planFor(result: OnboardResult, recipe: boolean): Plan {
   const next = result.next;
   if (result.state === 'published' || result.state === 'complete') return { do: 'done', status: 'published' };
   if (result.state === 'attention') return { do: 'done', status: 'blocked' };
-  if (!next || next.kind === 'none') return { do: 'done', status: result.state === 'blocked' ? 'blocked' : 'published' };
+  if (!next || next.kind === 'none') return result.state === 'blocked' ? { do: 'done', status: 'blocked' } : { do: 'handoff', why: 'onboarding supplied no next step without confirming completion' };
   if (next.kind === 'agent' && (isSpecFix(next.task) || isSpecFix(result.reason))) return { do: 'specfix', why: 'the auth probe ended path-wrong or in the wrong place: a spec fix', ...(blockedCall(next) ? { call: blockedCall(next)! } : {}) };
   if (next.kind === 'call') return { do: 'wait', ms: waitMs(next.task) };
   if (next.kind === 'human') return { do: 'human', humanStep: next.humanStep };

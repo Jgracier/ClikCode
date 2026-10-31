@@ -301,6 +301,9 @@ describe('hand-off files', () => {
 });
 
 describe('planFor', () => {
+  it('never reports completion from a missing next step on unfinished work', () => {
+    expect(planFor({ id: 'x', state: 'in-progress', stage: 'tests', reason: 'still running', next: { kind: 'none', task: 'wait' } }, false)).toMatchObject({ do: 'handoff' });
+  });
   it('treats a terminal blocked result as done', () => {
     expect(planFor({ id: 'x', state: 'blocked', stage: 'discover', reason: 'gone', next: { kind: 'none', task: 'nothing' } }, false)).toEqual({ do: 'done', status: 'blocked' });
   });
