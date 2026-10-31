@@ -37,7 +37,7 @@ import { holdWindowMachines, type MachinesHold } from '../../remote/connection.j
 import { readMachines } from '../../remote/machines.js';
 import { discoverMachines, notYetAdded, readTailscaleStatus, type DiscoveredMachine } from '../../remote/tailscale.js';
 import { addDiscoveredMachine, remoteHostOf } from './remote.js';
-import { isRemoteRowValue, localMachineName, remoteConversationOption, parseRemoteRowValue, updateText } from '../../remote/board-rows.js';
+import { isRemoteRowValue, localMachineName, otherMachineRows, remoteConversationOption, parseRemoteRowValue, updateText } from '../../remote/board-rows.js';
 
 type AdoptableNativeSession = {
   harness: AiLocalHarnessDefinition;
@@ -315,6 +315,9 @@ export async function interactiveSessionPicker(
       option.actions = [...historyAction, ...MANAGE_ACTIONS];
       option.deleteAction = { label: 'Delete', value: 'delete' };
     }
+    // Other machines' chats, a section each in that machine's colour, below this machine's own: a chat moved to another machine is
+    // still in the list, and the ones that were always there are told apart from these by it.
+    options.push(...otherMachineRows(remote?.views() ?? [], now));
     // Chats another CLI started, in a section of their own at the bottom,
     // newest first: they are something to adopt, not what this list is
     // mostly for, and interleaved by recency they buried ClikCode's own. One

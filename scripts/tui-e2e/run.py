@@ -816,7 +816,7 @@ SCENARIOS = {
             ('keys', 'model grok-4-fast'), ('settle', 1), ('keys', '\r'), ('wait_for', 'grok-4-fast', 30), ('settle', 1), ('snap', 'model'),
             # Left: the chats of the machine this chat is on, devbox -- it is listed there.
             ('keys', '\x1b[D'), ('wait_for', 'hello there', 20), ('settle', 1), ('snap', 'board'),
-            # Left again: the machines; this one's chats do not list it: it is live on devbox only.
+            # Left again: the machines, then this machine's own list: the chat that moved is live on devbox, and it is listed there, under devbox's heading, not gone.
             ('keys', '\x1b[D'), ('wait_for', 'devbox  · connected', 20), ('settle', 1),
             ('keys', '\x1b[A'), ('keys', '\x1b[C'), ('wait_for', '← machines', 20), ('settle', 1), ('snap', 'here'),
             # devbox lists it, and it opens there, live: the answer comes from devbox, and nothing moves.
@@ -842,12 +842,12 @@ SCENARIOS = {
             'menu-machine': ['/machine', 'the machine this chat runs on'],
             'model': ['devbox  •', 'grok-4-fast'],
             'board': ['hello there'],
-            'here': ['No conversations yet'],
+            'here': ['devbox', 'hello there'],
             'there': ['hello there'],
             'live': ['devbox  •', 'grok-4-fast', 'and again', 'third time', 'Third answer on devbox.'],
         },
         'snap_lacks': {'moved': ['is not signed in', 'Moving to devbox', 'Moved to'], 'answered': ['moved from', 'clikcode_resource_note'],
-                       'board': ['moved to'], 'here': ['hello there', 'moved to'], 'live': ['goes on here', 'read-only']},
+                       'board': ['moved to'], 'here': ['No conversations yet', 'moved to'], 'live': ['goes on here', 'read-only']},
         'never': ['ENOENT', 'This conversation moved from', 'clikcode_resource_note', 'Connection to devbox', 'Moved to devbox', 'Moving to devbox'],
     },
     # A chat on another machine over a slow link (devbox's every byte back
