@@ -14,9 +14,24 @@ import { nativeProfileEnvironment } from '../harness/transport/profile-environme
 import { claudeSessionStore } from '../session/discovery/vendors/claude-store.js';
 import { placeArtifact } from '../session/carry-artifact.js';
 
+/** Where Claude saved this agent's own history (`agent-<id>.jsonl` under its conversation), or undefined where there is none to
+ * resume: not a Claude conversation, no such file, or an id that is not a plain agent id. */
+export async function locateAgentTranscript(work: Pick<EndedWork, 'id' | 'nativeSessionId'>, session: HarnessSession, account: AiHarnessAccount | undefined): Promise<string | undefined> {
+  if (session.nativeHarness !== 'claude' || !account || !session.nativeSessionId || !session.workspace || !/^[\w-]+$/.test(work.id)) return undefined;
+  const environment = nativeProfileEnvironment(account.nativeProfile);
+  const root = claudeSessionStore.root(environment);
+  if (!root) return undefined;
+  const parent = await claudeSessionStore.locate!(root, work.nativeSessionId ?? session.nativeSessionId, session.workspace, environment);
+  if (!parent) return undefined;
+  const file = join(parent.path.slice(0, -'.jsonl'.length), 'subagents', `agent-${work.id}.jsonl`);
+  return await stat(file).then((entry) => entry.isFile(), () => false) ? file : undefined;
+}
+
 export async function carryBlockedSubagent(
   work: EndedWork, session: HarnessSession, source: AiHarnessAccount | undefined, target: AiHarnessAccount | undefined,
 ): Promise<boolean> {
+  // The same account: nothing to carry, and the agent resumes as it was when its history is there.
+  if (source && target && source.id === target.id) return (await locateAgentTranscript(work, session, source)) !== undefined;
   if (session.nativeHarness !== 'claude' || !source || !target || source.id === target.id
     || !session.nativeSessionId || !session.workspace || !/^[\w-]+$/.test(work.id)) return false;
   const from = nativeProfileEnvironment(source.nativeProfile);

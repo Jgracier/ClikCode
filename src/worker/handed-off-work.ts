@@ -7,11 +7,11 @@
  * By the time this runs the ledger has already read the evidence: an account the work's end showed
  * spent is marked, and the conversation is on the next one, so this turn runs there. */
 import { diagnostic, lifecycle } from '../runtime/lifecycle-log.js';
-import type { EndedWork } from '../harness/transport/handoff-work.js';
+import type { EndedWork, RunningWork } from '../harness/transport/handoff-work.js';
 import type { WorkEndedHandler } from '../turn/vendor-process.js';
 import type { WorkerContext } from './worker-context.js';
 import { readState } from '../session/state/read.js';
-import { carryBlockedSubagent } from './subagent-recovery.js';
+import { carryBlockedSubagent, locateAgentTranscript } from './subagent-recovery.js';
 
 /** What the model is told of `ended`. `native`: the ids of the agents whose own history was carried to
  * the conversation's account, which can be resumed by the vendor as they were. Every other agent that
@@ -65,4 +65,26 @@ export function createWorkEndedHandler(ctx: WorkerContext): WorkEndedHandler {
     })().catch((error: unknown) => diagnostic('worker.work-ended-undelivered', error instanceof Error ? error.message : String(error)))
       .finally(() => ctx.idle.scheduleIdleExit());
   };
+}
+
+/** Agents the vendor was running when its process went with them (the worker is closing it for a newer build, an idle exit or a
+ * stop): each is told to the next worker as a durable notification of its own -- its id, task, last saved transcript and, where
+ * Claude kept its history, the instruction to resume that agent with SendMessage instead of starting it over. Awaited, so it is
+ * on disk before the worker exits. Returns how many were recorded. */
+export async function recordInterruptedAgents(ctx: WorkerContext, agents: readonly RunningWork[]): Promise<number> {
+  const running = agents.filter((work) => work.kind === 'agent');
+  if (!running.length) return 0;
+  const state = await readState({ transcripts: [] });
+  const session = state.sessions.find((entry) => entry.id === ctx.sessionId);
+  const account = state.accounts.find((entry) => entry.id === session?.accountId);
+  const ended: EndedWork[] = [];
+  const native = new Set<string>();
+  for (const work of running) {
+    const file = session ? await locateAgentTranscript(work, session, account).catch(() => undefined) : undefined;
+    if (file) native.add(work.id);
+    ended.push({ ...work, outcome: 'cut-off', tail: 'ClikCode closed the process running it before it finished.', ...(file ? { outputFile: file } : {}) });
+  }
+  lifecycle('worker.agents.interrupted', { count: ended.length, resumable: native.size, agents: ended.map((work) => work.id).join(',') });
+  await ctx.io.recordNotificationText(formatEndedWork(ended, native), true);
+  return ended.length;
 }

@@ -349,6 +349,18 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     retirement.work.told(retirement.work.endAll('agent').map((work): EndedWork => ({ ...work, outcome: 'cut-off', tail: 'The process running it ended before it finished.' })));
   }
 
+  /** The child is going while it runs agents (it crashed, was killed, or was replaced for a different model or setting): they go with
+   * it, and the conversation is told each was cut off, with its task, so it can resume them -- as it is for a process the
+   * conversation left (retire). Not a stop the person asked for (Esc), which means "stop", and not a deliberate close, which the
+   * worker answers itself (worker/handed-off-work.ts recordInterruptedAgents). */
+  private reportInterruptedAgents(cause?: unknown): void {
+    if (this.isClosed || this.retirement || (cause !== undefined && isTurnCancelled(cause))) return;
+    const agents = this.runningAgents();
+    if (!agents.length) return;
+    lifecycle('vendor.agents.interrupted', { transport: this.label, agents: agents.map((work) => work.id).join(',') });
+    this.reportEnded(agents.map((work): EndedWork => ({ ...work, outcome: 'cut-off', tail: 'The process running it ended before it finished.' })), true);
+  }
+
   /** Retired: work that ended is told, and the process is closed once nothing is left. */
   private retiredEnded(ended: readonly EndedWork[]): void {
     const retirement = this.retirement;
@@ -560,6 +572,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
   protected dropLive(error: Error): void {
     const live = this.live;
     if (!live) return;
+    this.reportInterruptedAgents(error);
     this.live = undefined;
     this.dropped.add(live);
     this.finishBackground('closed');
@@ -612,6 +625,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
         onClose: (error) => {
           this.retiredVendorGone();
           if (this.live === live) {
+            this.reportInterruptedAgents(error);
             this.live = undefined;
             this.finishBackground('closed');
             this.clearPending();

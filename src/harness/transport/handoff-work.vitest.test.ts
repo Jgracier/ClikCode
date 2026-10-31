@@ -181,4 +181,33 @@ describe.skipIf(process.platform !== 'linux')('a process the conversation leaves
       expect(ended[0]!.failure).toBeUndefined();
     } finally { await session.close(); }
   }, 20_000);
+
+  it('a child that dies with an agent running reports it cut off, with its task, as work the conversation must take up again', async () => {
+    const ended: EndedWork[] = [];
+    const via: { retired: boolean }[] = [];
+    const session = createAcpSession({ workEnded: (work, how) => { ended.push(...work); via.push(how); }, outOfTurn: () => undefined });
+    try {
+      await session.runTurn({
+        binary: process.execPath, command: 'fake', argv: ['-e', `${agent(join(dir, 'c.output'), { status: 'completed', summary: 'never' })}\nsetTimeout(() => process.exit(1), 900);`],
+        cwd: process.cwd(), prompt: 'start the checks', environment: {}, permissionMode: 'ask',
+      });
+      await vi.waitFor(() => expect(ended.some((work) => work.kind === 'agent')).toBe(true), { timeout: 5_000 });
+      expect(ended.find((work) => work.kind === 'agent')).toMatchObject({ id: 'a1', label: 'Open B5', prompt: 'Check the games endpoints', outcome: 'cut-off' });
+      // Told as work to take up again, not left to the vendor to answer.
+      expect(via[0]).toEqual({ retired: true });
+    } finally { await session.close(); }
+  }, 20_000);
+
+  it('a deliberate close reports nothing here: the worker records interrupted agents itself, awaited', async () => {
+    const ended: EndedWork[] = [];
+    const session = createAcpSession({ workEnded: (work) => { ended.push(...work); }, outOfTurn: () => undefined });
+    await session.runTurn({
+      binary: process.execPath, command: 'fake', argv: ['-e', agent(join(dir, 'd.output'), { status: 'completed', summary: 'never' })],
+      cwd: process.cwd(), prompt: 'start the checks', environment: {}, permissionMode: 'ask',
+    });
+    expect((await session.runningWork()).some((work) => work.kind === 'agent')).toBe(true);
+    await session.close();
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(ended.filter((work) => work.kind === 'agent' && work.outcome === 'cut-off')).toEqual([]);
+  }, 20_000);
 });
