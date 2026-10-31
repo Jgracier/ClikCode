@@ -8,7 +8,7 @@ vi.mock('../session/state/read.js', () => ({ readState: async () => state }));
 let writeGate: Promise<void> | undefined;
 vi.mock('../session/state/write.js', () => ({ writeState: async () => { await writeGate; } }));
 
-const { backgroundTurnRecord, createVendorBackgroundRunner } = await import('./vendor-background.js');
+const { backgroundTurnRecord, createVendorBackgroundRunner, splitRefusal, NOTIFICATION_RETRY_PROMPT } = await import('./vendor-background.js');
 
 function fakeObserver() {
   const frames: string[] = [];
@@ -152,5 +152,53 @@ describe('a worker running vendor background turns', () => {
     expect(backgroundTurnRecord({ text: '', ended: 'completed' }, ['tool', 'tool'])).toBeUndefined();
     expect(backgroundTurnRecord({ text: '', ended: 'completed' }, ['failed tool'])).toBeUndefined();
     expect(backgroundTurnRecord({ text: '', ended: 'closed' }, ['sleep 30'])).toBeUndefined();
+  });
+});
+
+describe('a background turn that ends on the vendor\'s usage-limit refusal', () => {
+  const REFUSAL = 'You\'ve hit your session limit · resets 6:50pm (America/Denver)';
+  beforeEach(() => { writeGate = undefined; state.sessions = [{ id: 's', messages: [{ role: 'user', content: 'go' }, { role: 'assistant', content: 'STARTED' }] } as HarnessSession]; });
+
+  it('cuts the refusal off the prose it followed, with the reset time', () => {
+    const split = splitRefusal(`That was a real failure, not a flake.${REFUSAL}`, Date.parse('2026-10-30T20:00:00Z'));
+    expect(split).toMatchObject({ prose: 'That was a real failure, not a flake.', refusal: REFUSAL });
+    expect(split?.resetsAt).toBe('2026-10-31T00:50:00.000Z');
+    expect(splitRefusal('I raised the session limit to 5 for real.')).toBeUndefined();
+    expect(splitRefusal(REFUSAL)?.prose).toBe('');
+  });
+
+  it('records the refusal as its own row, never on the previous text, and parks a retry for after the reset', async () => {
+    const observer = fakeObserver();
+    const resumeParked = vi.fn();
+    const runner = createVendorBackgroundRunner({ sessionId: 's', observer: observer as never, userTurnRunning: () => false, changed: () => undefined, resumeParked });
+    const channel = new BackgroundTurnChannel('acp', 'vendor-turn');
+    channel.observer.onResponseDelta?.(`The agent failed for real.${REFUSAL}`);
+    runner.handle(channel);
+    channel.finish('completed');
+    await vi.waitFor(() => expect(runner.busy).toBe(false));
+    const messages = state.sessions[0]!.messages!;
+    expect(messages.map((message) => message.content)).toEqual([
+      'go', 'STARTED', 'The agent failed for real.', `${REFUSAL} The notification will be retried after the reset.`,
+    ]);
+    const parked = state.sessions[0]!.resumeAt!;
+    expect(parked.prompt).toBe(NOTIFICATION_RETRY_PROMPT);
+    expect(Date.parse(parked.at)).toBeGreaterThan(Date.now());
+    expect(resumeParked).toHaveBeenCalled();
+    // The live view drops the refusal from the prose it was streamed after.
+    expect(observer.frames).toContain('delta The agent failed for real.');
+  });
+
+  it('keeps a wait already parked, and still records the refusal as its own row', async () => {
+    const observer = fakeObserver();
+    const keep = { at: '2099-01-01T00:00:00.000Z', prompt: 'earlier', setAt: '2026-10-30T00:00:00.000Z' };
+    state.sessions[0]!.resumeAt = keep;
+    const runner = createVendorBackgroundRunner({ sessionId: 's', observer: observer as never, userTurnRunning: () => false, changed: () => undefined });
+    const channel = new BackgroundTurnChannel('acp', 'vendor-turn');
+    channel.observer.onResponseDelta?.(REFUSAL);
+    runner.handle(channel);
+    channel.finish('completed');
+    await vi.waitFor(() => expect(runner.busy).toBe(false));
+    expect(state.sessions[0]!.resumeAt).toEqual(keep);
+    expect(state.sessions[0]!.messages!.at(-1)!.content).toContain('The notification will be retried after the reset.');
   });
 });
