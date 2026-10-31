@@ -639,6 +639,10 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
    * Keep its owner informed even then; otherwise the worker's history row keeps the last count. */
   private reportBackground?: AcpTurnInput['onBackgroundWork'];
   private backgroundTasks = new Map<string, Json>();
+  /** Background shells a sub-agent started (`owned_by_subagent`, or a `parent_task_id`), by task id, with the
+   * agent task that owns it when the wire says which. The shell outlives the agent unless it is ended
+   * (ownerEnded): nothing else wants it. */
+  private readonly ownedCommandTasks = new Map<string, string | undefined>();
 
   async runTurn(input: AcpTurnInput): Promise<AcpTurnResult> {
     this.assertIdle(`${input.command} ACP`);
@@ -1519,7 +1523,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     if (message?.type === 'system' && message.subtype === 'task_updated' && ['completed', 'failed', 'killed'].includes(String(message.patch?.status))) {
       message = { ...message, subtype: 'task_notification', status: message.patch.status };
     }
-    if (message) { this.heldAgentFrame(params, message); this.taskFrame(sent!, message); }
+    if (message) { this.heldAgentFrame(params, message); this.taskFrame(sent!, message); this.noteOwnedCommands(message); }
     if (message?.type === 'system' && message.subtype === 'background_tasks_changed' && Array.isArray(message.tasks)) {
       this.backgroundTasks = new Map(message.tasks.filter((task: Json) => typeof task?.task_id === 'string').map((task: Json) => [task.task_id, task]));
     } else if (message?.type === 'system' && message.subtype === 'task_notification' && typeof message.task_id === 'string' && this.backgroundTasks.delete(message.task_id)) {
@@ -1533,6 +1537,33 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     if (!target) return;
     if (method === '_session/goal') target.observer.onPhase?.('goal updated');
     else if (method === '_session/steering') target.observer.onPhase?.('message taken into the turn');
+  }
+
+  /** Which background shells a sub-agent started, from the frames that say so; a sub-agent's end is a reason to look. */
+  private noteOwnedCommands(message: Json): void {
+    if (message.type !== 'system') return;
+    const owner = (value: unknown): string | undefined => (typeof value === 'string' && value ? value : undefined);
+    if (message.subtype === 'task_started' && message.task_type === 'local_bash' && message.owned_by_subagent === true && typeof message.task_id === 'string') {
+      this.ownedCommandTasks.set(message.task_id, owner(message.parent_task_id));
+    } else if (message.subtype === 'background_tasks_changed' && Array.isArray(message.tasks)) {
+      for (const task of message.tasks) if (task?.task_type === 'local_bash' && typeof task.task_id === 'string' && owner(task.parent_task_id)) this.ownedCommandTasks.set(task.task_id, owner(task.parent_task_id));
+    } else if (message.subtype === 'task_notification' && typeof message.task_id === 'string') {
+      // Its own end settles it; an agent's end puts its shells in question, once the level has dropped it.
+      if (!this.ownedCommandTasks.delete(message.task_id) && this.ownedCommandTasks.size) setTimeout(() => void this.watchCommands().catch(quiet('harness/transport/acp-client')), 0).unref?.();
+    }
+  }
+
+  /** A sub-agent that started the shell is gone: the agent task that owns it is no longer running and, when the wire
+   * names no owner, no agent is (a foreground sub-agent runs inside the user's turn). */
+  protected override ownerEnded(command: CommandStats): boolean {
+    for (const [taskId, owner] of this.ownedCommandTasks) {
+      if (!command.outputFile?.includes(taskId)) continue;
+      const running = (task: Json | undefined): boolean => task?.task_type === 'local_agent' && task.ambient !== true;
+      const alive = owner ? running(this.backgroundTasks.get(owner))
+        : Boolean(this.turn && !this.turn.done) || this.heldAgents.size > 0 || [...this.backgroundTasks.values()].some(running);
+      if (!alive) return true;
+    }
+    return false;
   }
 
   /** The vendor finished a turn of its own (a task's notification, a goal): its `result`. That is the vendor
