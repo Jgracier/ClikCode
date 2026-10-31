@@ -4,8 +4,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('./registry.js', () => ({ currentWorkerBuild: () => 'new-build' }));
+const vendor = vi.hoisted(() => ({ reap: undefined as undefined | (() => unknown[]), calls: [] as string[] }));
 vi.mock('../turn/vendor-process.js', () => ({
   closePersistentTransport: async () => undefined, hasPersistentTransport: () => false, persistentWorkRunning: async () => false,
+  reapPersistentCommands: async (_id: string, which: string, reason: string) => { vendor.calls.push(`${which}:${reason}`); return vendor.reap?.() ?? []; },
 }));
 // The real quiet period (vitest.setup.ts makes it 0 for every other test).
 process.env.CLIKCODE_WORKER_RETIRE_QUIET_MS = '30000';
@@ -71,5 +73,39 @@ describe('replacing a worker for a newer build', () => {
     await vi.advanceTimersByTimeAsync(RETIRE_QUIET_MS * 2);
     expect(shutdown).not.toHaveBeenCalled();
     expect(idle.retireBlocker()).toBe('a turn is running');
+  });
+});
+
+describe('replacing a worker whose only holder is background work that outlived its use', () => {
+  beforeEach(() => { vi.useFakeTimers(); vendor.reap = undefined; vendor.calls = []; });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('ends the stale commands first, then goes once the vendor reports its work over', async () => {
+    const { ctx, idle, shutdown } = worker();
+    ctx.vendorBackground.busy = true;
+    // The command is stale: reaping it ends the vendor's background turn (its task notification).
+    vendor.reap = () => { ctx.vendorBackground.busy = false; return [{ command: { pid: 1 } }]; };
+    idle.leaveIfStaleBuild();
+    await vi.advanceTimersByTimeAsync(RETIRE_QUIET_MS + 5_000);
+    expect(vendor.calls).toEqual(['stale:replacing for the newer build']);
+    expect(shutdown).toHaveBeenCalledWith('replaced by a newer ClikCode build');
+  });
+
+  it('leaves healthy work running and holds on it (nothing reaped, nothing replaced)', async () => {
+    const { ctx, idle, shutdown } = worker();
+    ctx.vendorBackground.busy = true;
+    idle.leaveIfStaleBuild();
+    await vi.advanceTimersByTimeAsync(RETIRE_QUIET_MS * 2);
+    expect(vendor.calls).toEqual(['stale:replacing for the newer build']);
+    expect(shutdown).not.toHaveBeenCalled();
+  });
+
+  it('never reaps for a turn: a running turn holds the worker and nothing is ended', async () => {
+    const { ctx, idle } = worker();
+    (ctx as { turnRunning?: boolean }).turnRunning = true;
+    ctx.vendorBackground.busy = true;
+    idle.leaveIfStaleBuild();
+    await vi.advanceTimersByTimeAsync(RETIRE_QUIET_MS * 2);
+    expect(vendor.calls).toEqual([]);
   });
 });
