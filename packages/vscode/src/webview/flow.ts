@@ -2,6 +2,7 @@
  * (the terminal's too) applied to the chat model, with the few choices only
  * a webview makes -- which colour class a status wears. Pure, and free of
  * anything that styles a terminal, so the page bundles it. */
+import { describeCommands } from '../../../../src/harness/protocol/background-agents';
 import { answerWriting, backgroundTerminalsLabel, decisionRow, endsWithSummary, exploreRuns, explores, exploreSummary, liveTokenTarget, smoothTokens, tensedLabel, tokenMeterLabel, turnStatus, turnSummary, type Decision, type StatusTone } from '../../../../src/harness/protocol/turn-flow';
 import { shimmerCycleMs, SPIN_MS } from '../../../../src/harness/protocol/timings';
 import { TOOL_CATEGORY } from '../../../../src/harness/protocol/tool-category';
@@ -101,7 +102,8 @@ export function workingIndicator(live: Pick<LiveTurn, 'background'> | undefined)
   const work = live?.background;
   const workflows = work?.workflows ?? 0;
   return [workflows ? turnSummary({ ms: 0, pendingWorkflows: workflows }) : undefined,
-    backgroundTerminalsLabel(work?.terminals)].filter(Boolean).join(' · ') || undefined;
+    // Named by pid when the worker could read them (age, cpu, silence): what is waited on, not a bare count.
+    describeCommands(work?.commands ?? []) ?? backgroundTerminalsLabel(work?.terminals)].filter(Boolean).join(' · ') || undefined;
 }
 
 /** The line a finished turn ends on, the same live and on reopen, or nothing.

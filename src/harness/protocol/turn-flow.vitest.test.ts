@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   activityResult, answerWriting, decisionRow, isApprovalWaitPhase, endsWithSummary, estimateTokens, liveTokenTarget, smoothTokens, tokenMeterLabel, exploreRuns, exploreSummary, pastePlaceholder, reasoningBody, reasoningHeading, shimmerLevels, tensedLabel, turnStatus, turnSummary,
-  backgroundTerminalsLabel,
+  backgroundTerminalsLabel, waitingOnCommands,
 } from './turn-flow.js';
 
 describe('how a turn reads', () => {
@@ -171,5 +171,19 @@ describe('a list call is an explore-group member (standard section 6)', () => {
     expect(groups).toHaveLength(1);
     expect(groups[0]!.explore).toBe(true);
     expect(groups[0]!.rows).toHaveLength(4);
+  });
+});
+
+describe('a turn that waits on background commands only', () => {
+  it('says what it waits on in place of thinking, and nothing of the kind once it is doing something', () => {
+    const waitingOn = waitingOnCommands([{ pid: 9, label: 'node x.mjs', startedAt: Date.now() - 32 * 3_600_000, cpuPercent: 100 }]);
+    expect(waitingOn).toBe('waiting on background command: node x.mjs · running 32h · cpu 100% · no output');
+    expect(turnStatus({ phase: 'thinking', waitingOn }).label).toBe(waitingOn);
+    expect(turnStatus({ phase: 'background work', waitingOn }).label).toBe(waitingOn);
+    expect(turnStatus({ phase: 'thinking' }).label).toBe('thinking');
+    expect(turnStatus({ phase: 'thinking', waitingOn, writing: true }).label).toBe('writing');
+    expect(turnStatus({ phase: 'thinking', waitingOn, toolPhase: 'Running tests' }).label).toBe('Running tests');
+    expect(turnStatus({ phase: 'thinking', waitingOn, asking: true }).label).toBe('waiting for you');
+    expect(waitingOnCommands([])).toBeUndefined();
   });
 });

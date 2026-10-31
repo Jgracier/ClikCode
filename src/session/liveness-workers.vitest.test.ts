@@ -76,6 +76,18 @@ describe('a chat whose turn is over but whose background work runs', () => {
     expect(pending.has('waiting')).toBe(false);
   });
 
+  it('says what it waits on when the worker names the background commands, by pid', async () => {
+    root = await mkdtemp(join(tmpdir(), 'clikcode-live-commands-'));
+    process.env.CLIKCODE_HOME = root;
+    await ensureWorkersDirectory();
+    const record = { sessionId: 'spinning', pid: process.pid, socketPath: join(root, 's.sock'), token: 't', installationId: 'install', build: 'test', startedAt: new Date().toISOString() };
+    await writeWorkerRecord({ ...record, background: { terminals: 1, since: '2026-10-17T10:00:00.000Z', commands: [{ pid: 3555608, label: 'node scripts/pre-push-related.mjs', startedAt: Date.now() - 32 * 3_600_000, cpuPercent: 100 }] } });
+    const workers = await liveWorkers();
+    expect(workers.background('spinning')?.commands?.[0]?.pid).toBe(3555608);
+    const pending = await livePendingTurns([{ id: 'spinning', status: 'active' } as HarnessSession], workers.isLive, workers.background, workers.runningTurn);
+    expect(pending.get('spinning')?.waitingOn).toBe('waiting on background command: node scripts/pre-push-related.mjs · running 32h · cpu 100% · no output');
+  });
+
   it('does not treat a stale pending journal as a live turn without the worker turn marker', async () => {
     root = await mkdtemp(join(tmpdir(), 'clikcode-idle-worker-'));
     process.env.CLIKCODE_HOME = root;

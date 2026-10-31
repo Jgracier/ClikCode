@@ -10,7 +10,7 @@ import { harnessSupportsEffort, localHarnessForCommand } from '../../runtime/laz
 import { nativeModelLabel } from '../../harness/accounts/model-catalog.js';
 import { localModelLabel } from '../../local-models/catalog.js';
 import { turnElapsedMs, waitingSpinnerGlyph } from '../../harness/protocol/activity-view.js';
-import { answerWriting, turnStatus } from '../../harness/protocol/turn-flow.js';
+import { answerWriting, turnStatus, waitingOnCommands } from '../../harness/protocol/turn-flow.js';
 import { paintStatus } from '../render/status-line.js';
 import { PAINT_COALESCE_MS } from '../../harness/protocol/timings.js';
 import { formatElapsed } from '../../harness/protocol/format.js';
@@ -72,6 +72,8 @@ export function waitingLine(this: TerminalHarnessPrompter, turn: WaitingTurn, wi
     ...(this.thought && !turn.cancelled ? { thought: this.thought.text } : {}),
     asking: Boolean(this.pendingApproval),
     writing: answerWriting({ writingAt: turn.writingAt, callAt: turn.callAt }),
+    // Only background commands running: say what is waited on, not 'thinking'.
+    ...(!turn.cancelled && !tool && !this.thought && waitingOnCommands(this.backgroundWork?.commands) ? { waitingOn: waitingOnCommands(this.backgroundWork?.commands)! } : {}),
   });
   // An approval or a sign-in: the wait is on the user.
   const asking = this.waitingOnUser();

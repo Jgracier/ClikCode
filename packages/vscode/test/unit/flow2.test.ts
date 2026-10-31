@@ -554,6 +554,12 @@ describe('background work by kind: workflows on the end line, terminals on the w
     expect(workingIndicator(undefined)).toBeUndefined();
   });
 
+  it('names the command by pid data when the worker read it, in place of the bare count', () => {
+    const commands = [{ pid: 3555608, label: 'node scripts/pre-push-related.mjs', startedAt: Date.now() - 32 * 3_600_000, cpuPercent: 100 }];
+    const live = run([worker({ type: 'background', pending: 0, work: { terminals: 1, commands } as never })], begin()).live!;
+    expect(workingIndicator(live)).toBe('waiting on background command: node scripts/pre-push-related.mjs · running 32h · cpu 100% · no output');
+  });
+
   it('a window joining mid-turn takes every kind from the snapshot, and the later event replaces it', () => {
     const joined = applyEvent(begin(), worker({ type: 'snapshot', session: session(), live: { text: 'abc', waitingLabel: 'thinking', pendingBackground: 1, background: { agents: 1, terminals: 2 } } }));
     expect(workingIndicator(joined.live)).toBe('2 background terminals running');
