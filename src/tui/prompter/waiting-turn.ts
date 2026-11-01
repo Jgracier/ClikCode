@@ -27,7 +27,10 @@ export function editTurnDraft(this: TerminalHarnessPrompter, turn: WaitingTurn, 
   if (!edited.changed) return;
   turn.draft = edited.value;
   turn.cursor = edited.cursor;
+  // Drawn now. Streaming text, spinners and tool rows share one paint every PAINT_COALESCE_MS (they arrive in bursts); a typed character
+  // is not one of them -- waiting for that timer put every keystroke 33 ms behind during a turn (3 ms at an idle prompt).
   this.updateWaiting();
+  this.flushPaint();
 }
 
 /** User messages still waiting, oldest first. A command and a background
