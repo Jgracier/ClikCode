@@ -137,6 +137,13 @@ export async function queueAttachment(session: HarnessSession, path: string): Pr
  * both are understood. The text is left exactly as typed. */
 export async function embeddedImagePaths(text: string, workspace: string): Promise<string[]> {
   const found: string[] = [];
+  for (const { path } of await embeddedImageReferences(text, workspace)) if (!found.includes(path)) found.push(path);
+  return found;
+}
+
+/** The same images, each with the words it was written as -- what a chat on another machine rewrites to the path the image has there. */
+export async function embeddedImageReferences(text: string, workspace: string): Promise<Array<{ token: string; path: string }>> {
+  const found: Array<{ token: string; path: string }> = [];
   for (const [token] of text.matchAll(/"[^"\n]+"|'[^'\n]+'|(?:\\.|[^\s])+/g)) {
     const bare = token.replace(/[,;:!?)\]}>]+$/, '').replace(/\.$/, '');
     const decoded = decodeAttachmentPath(bare);
@@ -144,7 +151,7 @@ export async function embeddedImagePaths(text: string, workspace: string): Promi
     const expanded = expandHomePath(decoded);
     const path = isAbsolute(expanded) ? resolve(expanded) : resolve(workspace, expanded);
     try {
-      if ((await stat(path)).isFile() && !found.includes(path)) found.push(path);
+      if ((await stat(path)).isFile()) found.push({ token: bare, path });
     } catch { /* fail-open-ok: a word ending in .png that is not a file is just a word. */ }
   }
   return found;

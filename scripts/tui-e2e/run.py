@@ -889,6 +889,25 @@ SCENARIOS = {
         'snap_lacks': {'taken': ['Never gets here.', 'Worked for'], 'after': ['Never gets here.']},
         'never': ['ENOENT', 'Connection to devbox'],
     },
+    # A screenshot named in a message typed in a chat on another machine is a file on THIS computer (Termius uploads it here and types
+    # its path). It is copied to devbox, and devbox's agent is told the path it has there -- never this computer's.
+    'remote-chat-screenshot': {
+        'setup': (lambda base: (lambda context: (base(context), open(os.path.join(context['root'], 'work', 'shot.png'), 'wb').write(b'\x89PNG\r\n\x1a\nfake'))))(remote_move()),
+        'startup': 4, 'no_dup_check': 'the transcript is drawn again on the other machine',
+        'turns': [{'blocks': ['First answer here.']}],
+        'steps': [
+            ('type', 'hello there'), ('wait_for', 'First answer here.', 30), ('settle', 1),
+            ('type', '/machine'), ('wait_for', 'Move this chat to', 20), ('settle', 1),
+            ('keys', '\x1b[B'), ('keys', '\r'), ('wait_for', 'devbox  •', 60), ('settle', 2),
+            ('type', 'what is wrong in ./shot.png please'), ('wait_for', 'Image attachments are not available', 60), ('settle', 1),
+            # The image was copied to devbox once. devbox's fake Grok refuses images, which it could only do having found the file THERE:
+            # without the copy the path means nothing on devbox, and the message would have gone to the agent as plain words.
+            ('expect_file_count', 'remote/ssh.log', 'mktemp -d', 1),
+        ],
+        'watch': [],
+        'final_contains': ['Image attachments are not available for Grok Build'],
+        'never': ['ENOENT', 'Could not copy the image', 'Connection to devbox', 'Answered on devbox.'],
+    },
     # A chat on another machine over a slow link (devbox's every byte back
     # 2.5 s late): a message typed there is drawn at once, with the turn's
     # wait, as a chat here draws one -- not when the machine's turn-start
