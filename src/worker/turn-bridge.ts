@@ -11,7 +11,7 @@
  * single-process model. rl cannot tell the difference (see turn/observer.ts
  * for why that is true by construction, not by care taken here).
  */
-import { backgroundWorkOf, type BackgroundWork } from '../harness/protocol/background-agents.js';
+import { backgroundWorkOf } from '../harness/protocol/background-agents.js';
 import type { HarnessQuestionResult } from '../harness/events/question.js';
 import { REVEAL_MAX_HOLD_MS } from '../harness/protocol/reveal-pace.js';
 import { diagnostic, lifecycle, quiet } from '../runtime/lifecycle-log.js';
@@ -22,13 +22,9 @@ import { WorkerClient } from './client.js';
 import { workersDirectory } from './registry.js';
 import { watchConversationList } from '../session/list-watch.js';
 import { stateDirectory } from '../session/store/paths.js';
-import { cancelOrigin, isTranscriptActivity, type CancelOrigin, type LiveActivity, type LiveThought, type WorkerEvent } from './protocol.js';
-import type { PlanEntry } from '../tui/render/plan-block.js';
+import { cancelOrigin, isTranscriptActivity, type CancelOrigin, type WorkerEvent } from './protocol.js';
 import type { HarnessSession, TurnMark } from '../session/model.js';
-import type { TurnUsage } from '../harness/protocol/turn-usage.js';
-import { joinedAnswerText } from '../turn/live-answer.js';
-import { upsertMark } from '../turn/turn-marks.js';
-import { drawJoinedTurn } from './joined-turn.js';
+import { applyLiveEvent, drawJoinedTurn, newLiveTurnState, type LiveTurnState } from './joined-turn.js';
 import { withSignIn } from '../commands/account.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
@@ -71,27 +67,7 @@ const pendingTakeBacks = new Map<string, (outcome: TakeBackOutcome) => void>();
  * it) and with what prompt, and a wake-up for a window sitting at its
  * prompt. The turn listener below comes and goes with each turn; this does
  * not, so nothing the worker starts on its own is missed. */
-interface WorkerTracker {
-  running: boolean;
-  prompt?: string;
-  /** The running turn as far as it has got -- text, tool rows, plan -- so a
-   * window that joins it, or comes back to it, draws all of it (showLive). */
-  liveText: string;
-  activities: LiveActivity[];
-  plan: readonly PlanEntry[];
-  /** The rest of what an attached window has drawn (LiveTurn): the turn's
-   * settled thoughts, notices and decisions, the thought being had, the
-   * phase and the usage so far. */
-  marks: TurnMark[];
-  /** Marks learned of without the worker's numbering (joined-turn.ts). */
-  unsequenced: string[];
-  thought?: LiveThought;
-  phase?: string;
-  usage?: TurnUsage;
-  /** What the vendor says runs in the background, by kind (a level). */
-  background?: BackgroundWork;
-  /** The followed turn is the vendor's own background work (waiting-start `vendorWork`). */
-  vendorWork?: boolean;
+interface WorkerTracker extends LiveTurnState {
   wake?: (reason: 'turn' | 'queue') => void;
   /** Counts queue-changed events, so a change that lands between the loop
    * reading the queue and its prompt opening is not missed (workerQueueMark). */
@@ -107,41 +83,17 @@ const trackers = new WeakMap<WorkerClient, WorkerTracker>();
 const connecting = new Map<string, Promise<WorkerClient | undefined>>();
 
 function track(sessionId: string, client: WorkerClient): void {
-  const tracker: WorkerTracker = { running: false, liveText: '', activities: [], plan: [], marks: [], unsequenced: [], driving: false, unanswered: [], queueVersion: 0 };
+  const tracker: WorkerTracker = { ...newLiveTurnState(), driving: false, unanswered: [], queueVersion: 0 };
   trackers.set(client, tracker);
-  // A worker older than this client names no prompt and sends text only; it
-  // still says a turn is live, and that is what matters most here.
-  const joinLive = (live: NonNullable<Extract<WorkerEvent, { type: 'snapshot' }>['live']>, session: HarnessSession): void => {
-    // The journal is written on a debounce and can lag the live text: the
-    // longer copy stands, the same whichever arrived first (live-answer.ts).
-    const journal = session.pendingTurn;
-    const sameTurn = journal && (live.prompt === undefined || journal.prompt.trim() === live.prompt.trim());
-    Object.assign(tracker, {
-      running: true, prompt: live.prompt ?? tracker.prompt,
-      liveText: joinedAnswerText(sameTurn ? journal.response : undefined, live.text),
-      ...(live.activities ? { activities: [...live.activities] } : {}), ...(live.plan ? { plan: live.plan } : {}),
-      // The snapshot is the whole truth about these: what it lacks, the turn
-      // has not got.
-      marks: live.marks ? [...live.marks] : [], unsequenced: [], thought: live.thought, phase: live.phase, usage: live.usage,
-      background: backgroundWorkOf(live), vendorWork: live.vendorWork === true,
-    });
-  };
   const initial = client.initialEvent;
-  if (initial?.type === 'snapshot') {
-    if (initial.live) joinLive(initial.live, initial.session);
-    tracker.background = initial.background ?? backgroundWorkOf(initial.live);
-  }
+  if (initial?.type === 'snapshot') applyLiveEvent(tracker, initial);
   // Registered before any turn's own listener (driveWorkerTurn), so that one
   // always sees this record already up to date with the event it is handling.
   client.on('event', (event: WorkerEvent) => {
+    applyLiveEvent(tracker, event);
     if (event.type === 'waiting-start') {
-      Object.assign(tracker, {
-        running: true, prompt: event.prompt, liveText: '', activities: [], plan: [], marks: [], unsequenced: [],
-        thought: undefined, phase: undefined, usage: undefined, background: tracker.background, vendorWork: event.vendorWork === true,
-      });
       tracker.wake?.('turn');
     } else if (event.type === 'waiting-stop') {
-      tracker.running = false;
       tracker.unanswered = [];
     } else if (event.type === 'approval-request' || event.type === 'question-request' || event.type === 'sign-in-request') {
       if (!tracker.driving) tracker.unanswered.push(event);
@@ -152,30 +104,6 @@ function track(sessionId: string, client: WorkerClient): void {
       const unseen = !tracker.driving && tracker.unanswered.some((held) => 'id' in held && held.id === event.id);
       tracker.unanswered = tracker.unanswered.filter((held) => !('id' in held && held.id === event.id));
       if (unseen) recordDecision(tracker, event);
-    } else if (event.type === 'snapshot') {
-      if (event.live) joinLive(event.live, event.session);
-      // A snapshot without `live` says nothing is running: it holds the finished turn (the worker sends
-      // `live` for as long as a turn's record is unfinished). Left running until waiting-stop, this
-      // window's prompt would follow the same turn again and draw it a second time.
-      else tracker.running = false;
-      tracker.background = event.background ?? backgroundWorkOf(event.live);
-    } else if (event.type === 'delta') {
-      tracker.liveText = event.mode === 'replace' ? event.text : tracker.liveText + event.text;
-    } else if (event.type === 'activity') {
-      if (tracker.running && isTranscriptActivity(event.event)) tracker.activities.push({ event: event.event, responseOffset: tracker.liveText.length });
-    } else if (event.type === 'plan') {
-      if (tracker.running) tracker.plan = event.entries;
-    } else if (event.type === 'note') {
-      // A notice of the turn, where the worker placed it.
-      if (tracker.running && event.seq !== undefined) {
-        tracker.marks = upsertMark(tracker.marks, { kind: 'notice', id: `notice:${event.seq}`, seq: event.seq, responseOffset: event.responseOffset ?? tracker.liveText.length, message: event.message });
-      }
-    } else if (event.type === 'phase') {
-      if (tracker.running) tracker.phase = event.message;
-    } else if (event.type === 'usage') {
-      if (tracker.running) tracker.usage = event.usage;
-    } else if (event.type === 'background') {
-      if (tracker.running) tracker.background = backgroundWorkOf({ background: event.work, pendingBackground: event.pending });
     } else if (event.type === 'out-of-turn') {
       // Said with no turn open: an idle prompt reads the conversation again to show it.
       tracker.queueVersion++;
