@@ -78,11 +78,36 @@ export function claimOf(sessionId: string, messages: Messages, gen?: string): He
 /** A message as the client is sent it, by how many messages come after it (0: the newest). */
 export type MessageShape = (message: Messages[number], after: number) => Messages[number];
 
+/** How the running turn is sent to a client, where it is not the conversation's messages: the journal in the session
+ * (`pendingTurn`) and the calls a worker's snapshot says the turn has made (`live.activities`). The same tool calls are in
+ * all three -- 1.3 MB for a turn with eight sub-agents, against 0.3 KB for a chat with nothing running. */
+export interface TurnShape {
+  pendingTurn?: (turn: NonNullable<HarnessSession['pendingTurn']>) => NonNullable<HarnessSession['pendingTurn']>;
+  liveActivities?: <A>(activities: A[]) => A[];
+}
+
 /** The bridge's half: what the client holds of the chat, and the events cut to what it lacks. */
 export class SessionDeltaSender {
   private held: HeldChat | undefined;
 
-  constructor(private readonly shape: MessageShape = (message) => message) {}
+  constructor(private readonly shape: MessageShape = (message) => message, private readonly turn: TurnShape = {}) {}
+
+  /** `event` with the running turn in it cut as `turn` says. */
+  private dressed(event: IdeEvent): IdeEvent {
+    const session = sessionOf(event);
+    if (!session) return event;
+    const live = event.type === 'worker' && event.event.type === 'snapshot' ? event.event.live : undefined;
+    // Nothing running to cut: the event as it is.
+    if (!(session.pendingTurn && this.turn.pendingTurn) && !(live?.activities && this.turn.liveActivities)) return event;
+    const pendingTurn = session.pendingTurn && this.turn.pendingTurn ? this.turn.pendingTurn(session.pendingTurn) : session.pendingTurn;
+    const next = pendingTurn === session.pendingTurn ? session : { ...session, pendingTurn };
+    const dressedSession = withSession(event, next, (event as { messagesFrom?: number }).messagesFrom);
+    if (dressedSession.type === 'worker' && dressedSession.event.type === 'snapshot' && dressedSession.event.live?.activities && this.turn.liveActivities) {
+      const live = dressedSession.event.live;
+      return { ...dressedSession, event: { ...dressedSession.event, live: { ...live, activities: this.turn.liveActivities(live.activities!) } } };
+    }
+    return dressedSession;
+  }
 
   /** The client holds nothing (an `open`): the next event is whole. */
   reset(): void { this.held = undefined; }
@@ -99,7 +124,9 @@ export class SessionDeltaSender {
   /** `event` as this client needs it: whole the first time and after any
    * change that was not an append, its new messages only otherwise. Events
    * that carry no conversation pass as they are. */
-  slim(event: IdeEvent): IdeEvent {
+  slim(event: IdeEvent): IdeEvent { return this.dressed(this.slimmed(event)); }
+
+  private slimmed(event: IdeEvent): IdeEvent {
     const session = sessionOf(event);
     if (!session) return event;
     const messages = session.messages;

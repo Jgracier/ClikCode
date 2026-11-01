@@ -210,3 +210,28 @@ describe('coming back to a chat', () => {
     expect(from(again.slim(session(chat([...messages, big(80)]))))).toBe(80);
   });
 });
+
+describe('a running turn sent to a viewer', () => {
+  it('cuts the calls of the journal and of the worker\'s snapshot down, newest whole, the same number of them', async () => {
+    const { wireCalls, wireMessage, wireTurn, WHOLE_CALLS, PREVIEW_CALLS } = await import('./session-wire.js');
+    const call = (index: number) => ({ responseOffset: index, event: { kind: 'tool-done', label: `Bash(${index})`, id: `c${index}`, call: { name: 'Bash', input: { command: 'x'.repeat(4000) } }, output: Array.from({ length: 60 }, (_, line) => `line ${line}`) } });
+    const calls = Array.from({ length: 80 }, (_, index) => call(index));
+    const turn = { prompt: 'go', startedAt: 't', updatedAt: 't', outputStarted: true, response: 'so far', activities: calls };
+    const base = chat(said(4), { pendingTurn: turn } as Partial<HarnessSession>);
+    const snapshotEvent = { type: 'worker', sessionId: 's1', event: { type: 'snapshot', session: base, live: { text: 'so far', waitingLabel: 'x', activities: calls } } } as unknown as IdeEvent;
+    const sender = new SessionDeltaSender(wireMessage, { pendingTurn: wireTurn, liveActivities: wireCalls });
+    const sent = sender.slim(snapshotEvent) as unknown as { event: { session: HarnessSession; live: { activities: typeof calls } } };
+    for (const list of [sent.event.session.pendingTurn!.activities as unknown as typeof calls, sent.event.live.activities]) {
+      expect(list).toHaveLength(80);
+      expect(list.map((item) => item.event.id)).toEqual(calls.map((item) => item.event.id));
+      expect(list[80 - WHOLE_CALLS]).toEqual(calls[80 - WHOLE_CALLS]);
+      expect(list[80 - WHOLE_CALLS - 1]!.event.output!.length).toBeLessThan(60);
+      expect(list[80 - WHOLE_CALLS - 1]!.event).not.toHaveProperty('call');
+      expect(list[80 - PREVIEW_CALLS - 1]!.event.output ?? []).toEqual([]);
+    }
+    expect(JSON.stringify(sent).length).toBeLessThan(JSON.stringify(snapshotEvent).length / 4);
+    // The machine's own events are not touched, and a session with nothing running passes as it was.
+    expect(snapshotEvent).toBeDefined();
+    expect(new SessionDeltaSender(wireMessage, { pendingTurn: wireTurn, liveActivities: wireCalls }).slim(session(chat(said(2)))).type).toBe('session');
+  });
+});
