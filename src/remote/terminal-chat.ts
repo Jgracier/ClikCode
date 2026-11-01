@@ -10,6 +10,7 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { HarnessSession } from '../session/model.js';
 import type { IdeEvent, IdeFeature, IdeHostEvent, IdeHostRequest, IdeRequest, IdeSlashCommand, IdeUiResult } from '../ide/protocol.js';
 import { SessionDeltaReceiver } from '../ide/session-delta.js';
+import { readChatCache, writeChatCache } from './chat-cache.js';
 import type { PaletteEntry } from '../tui/command-palette.js';
 import type { TerminalHarnessPrompter } from '../tui/prompter.js';
 import { interactiveSessionPicker } from '../tui/pickers/session.js';
@@ -126,6 +127,17 @@ export class TerminalBridge {
   }
 
   async connected(): Promise<void> { return this.ready; }
+  /** The chat kept from last time as held: the next `open` of it says so. */
+  preload(sessionId: string, messages: NonNullable<HarnessSession['messages']>, gen?: string): void { this.delta.preload(sessionId, messages, gen); }
+  /** The conversation as held now, to keep for next time. */
+  held(): ReturnType<SessionDeltaReceiver['current']> { return this.delta.current(); }
+  /** `open` of `sessionId`, saying what is already held of it. */
+  async resume(sessionId: string): Promise<{ sessionId?: string } | undefined> {
+    const held = this.delta.claim(sessionId);
+    const opened = await this.request<{ sessionId?: string; gen?: string } | undefined>({ ...remoteResume(sessionId), ...(held ? { held } : {}) });
+    this.delta.generation(sessionId, opened?.gen);
+    return opened;
+  }
   private send(message: IdeHostRequest): void {
     if (this.stopped || this.child.stdin.destroyed) throw new Error('Remote connection closed');
     this.child.stdin.write(`${JSON.stringify(message)}\n`);
@@ -319,6 +331,14 @@ export async function runRemoteChat(
       // fail-open-ok: the machine did not list its commands now; the menu keeps what it had (or /machine alone).
       () => { if (!commands.length) commands.push(...remotePalette([])); },
     );
+    /** The conversation as held, kept for the next open of this chat (chat-cache.ts); a burst of events is one write. */
+    let keeper: NodeJS.Timeout | undefined;
+    const keep = (): void => {
+      keeper = undefined;
+      const held = bridge.held();
+      if (held?.messages.length) void writeChatCache(machine.id, held.sessionId, held.messages, held.gen);
+    };
+    const keepSoon = (): void => { keeper ??= setTimeout(keep, 2_000); };
     const sessionChanged = (next: HarnessSession): void => {
       const key = [next.id, next.route, next.nativeHarness, next.provider, next.model, next.accountId, next.effort, next.permissionMode, next.gatewayAgentId].join('|');
       if (commandsFor !== undefined && key !== commandsFor) void refreshCommands();
@@ -343,7 +363,7 @@ export async function runRemoteChat(
     bridge.onEvent = (event) => {
       switch (event.type) {
         // While a message drawn early waits for its turn, the chat is drawn as a turn's (run-turn.ts renders so too).
-        case 'session': session = event.session; account = event.account; sessionChanged(session); terminal.render(session, account, { running: running || early !== undefined }); return;
+        case 'session': session = event.session; account = event.account; sessionChanged(session); keepSoon(); terminal.render(session, account, { running: running || early !== undefined }); return;
         case 'turn-start':
           // The message drawn on Enter: this turn carries it on (startWaiting takes over turnStarting's).
           early = undefined;
@@ -437,7 +457,9 @@ export async function runRemoteChat(
       await bridge.connected();
       const selection: RemoteChatSelection = choice;
       // Intent only: the chat is in one of the remote's own folders (session/attach.ts).
-      const opened = await bridge.request<{ sessionId?: string } | undefined>(selection.chatId ? remoteResume(selection.chatId) : { type: 'open', mode: 'new', features: REMOTE_FEATURES });
+      const kept = selection.chatId ? await readChatCache(machine.id, selection.chatId) : undefined;
+      if (kept && selection.chatId) bridge.preload(selection.chatId, kept.messages, kept.gen);
+      const opened = await (selection.chatId ? bridge.resume(selection.chatId) : bridge.request<{ sessionId?: string } | undefined>({ type: 'open', mode: 'new', features: REMOTE_FEATURES }));
       // A new chat there is that chat from here on: a rejoin resumes it.
       if (!selection.chatId && opened?.sessionId) choice = { ...selection, chatId: opened.sessionId };
       // After the open, whose chat clears the rows before it. Updated from here only by the
@@ -551,7 +573,7 @@ export async function runRemoteChat(
       // for Enter on the new connection.
       if (sending !== undefined) draft = sending;
       continue;
-    } finally { promptController.abort(); for (const screen of signIns.values()) screen.stop(); bridge.close(); terminal.remoteMachineName = undefined; }
+    } finally { if (keeper) clearTimeout(keeper); keep(); promptController.abort(); for (const screen of signIns.values()) screen.stop(); bridge.close(); terminal.remoteMachineName = undefined; }
   }
   return undefined;
 }

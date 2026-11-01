@@ -22,6 +22,8 @@ export const SSH_OPTIONS: readonly string[] = [
   // A dropped network is noticed within a minute, not at TCP's leisure.
   '-o', 'ServerAliveInterval=15',
   '-o', 'ServerAliveCountMax=3',
+  // Chats are text: a conversation opened over a slow link is a third the bytes.
+  '-o', 'Compression=yes',
 ];
 
 export interface SshResult { code: number; stdout: string; stderr: string }

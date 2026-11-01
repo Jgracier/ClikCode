@@ -138,3 +138,75 @@ describe('the bridge sends it so to an editor that asks', () => {
     expect(carried(sent[1]!).messages).toHaveLength(52);
   });
 });
+
+describe('coming back to a chat', () => {
+  const longChat = (count: number): Message[] => said(count);
+
+  it('sends only what follows the copy a client kept, when it is the start of the chat', () => {
+    const kept = longChat(100);
+    const receiver = new SessionDeltaReceiver();
+    receiver.preload('s1', kept);
+    const sender = new SessionDeltaSender();
+    sender.adopt(receiver.claim('s1')!);
+    const event = sender.slim(session(chat(longChat(104))));
+    expect(from(event)).toBe(100);
+    expect(carried(event).messages).toEqual(said(4, 100));
+    expect(carried(receiver.expand(event)).messages).toEqual(longChat(104));
+  });
+
+  it('sends the chat whole when the copy is not the start of it, or is more than there is', () => {
+    const receiver = new SessionDeltaReceiver();
+    receiver.preload('s1', longChat(50));
+    const claim = receiver.claim('s1')!;
+    const edited = longChat(60);
+    edited[49] = { role: 'assistant', content: 'rewritten' } as Message;
+    const sender = new SessionDeltaSender();
+    sender.adopt(claim);
+    expect(from(sender.slim(session(chat(edited))))).toBeUndefined();
+    sender.adopt(claim);
+    expect(from(sender.slim(session(chat(longChat(10)))))).toBeUndefined();
+    sender.adopt(claim);
+    expect(from(sender.slim(session(chat(longChat(60), { id: 's2' }))))).toBeUndefined();
+  });
+
+  it('holds nothing of a chat it was never sent, and a whole answer replaces what was kept', () => {
+    const receiver = new SessionDeltaReceiver();
+    expect(receiver.claim('s1')).toBeUndefined();
+    receiver.preload('s1', longChat(5), 'gen-a');
+    expect(receiver.claim('s1')?.gen).toBe('gen-a');
+    receiver.expand(session(chat(longChat(8))));
+    expect(receiver.claim('s1')?.count).toBe(8);
+    expect(receiver.claim('s1')?.gen).toBeUndefined();
+    receiver.generation('s1', 'gen-b');
+    expect(receiver.claim('s1')?.gen).toBe('gen-b');
+  });
+
+  it('cuts the older messages\' tool calls down, keeps their count, and reads the same either way', async () => {
+    const { wireMessage, WHOLE_MESSAGES, PREVIEW_MESSAGES } = await import('./session-wire.js');
+    const call = (index: number) => ({ responseOffset: 0, event: { kind: 'tool-done', label: `Bash(${index})`, id: `c${index}`, call: { name: 'Bash', input: { command: 'x'.repeat(5000) } }, output: Array.from({ length: 60 }, (_, line) => `line ${line}`) } });
+    const big = (index: number): Message => ({ role: 'assistant', content: `reply ${index}`, activities: [call(index), call(index + 1)] }) as unknown as Message;
+    const messages = Array.from({ length: 80 }, (_, index) => big(index));
+    const sent = new SessionDeltaSender(wireMessage).slim(session(chat(messages)));
+    const got = carried(sent).messages!;
+    expect(got[79]).toEqual(messages[79]);
+    expect(got[80 - WHOLE_MESSAGES]).toEqual(messages[80 - WHOLE_MESSAGES]);
+    const preview = got[80 - WHOLE_MESSAGES - 1]!.activities![0]!.event;
+    expect(preview.call).toBeUndefined();
+    expect(preview.output!.length).toBeLessThan(60);
+    expect(preview.output!.length).toBeGreaterThan(0);
+    const bare = got[80 - PREVIEW_MESSAGES - 1]!.activities![0]!.event;
+    expect(bare.output ?? []).toEqual([]);
+    expect(bare.label).toBe('Bash(31)');
+    for (const [index, message] of got.entries()) {
+      expect(message.content).toBe(messages[index]!.content);
+      expect(message.activities).toHaveLength(2);
+    }
+    expect(JSON.stringify(sent).length).toBeLessThan(JSON.stringify(session(chat(messages))).length / 3);
+    // What the client holds claims the same as the machine's own messages: it adopts.
+    const receiver = new SessionDeltaReceiver();
+    receiver.expand(sent);
+    const again = new SessionDeltaSender(wireMessage);
+    again.adopt(receiver.claim('s1')!);
+    expect(from(again.slim(session(chat([...messages, big(80)]))))).toBe(80);
+  });
+});

@@ -43,6 +43,8 @@ import { IDE_PROTOCOL } from './protocol-version.js';
 import { watchForNewerBuild } from './bridge-retire.js';
 import { sessionEvent } from './session-event.js';
 import { SessionDeltaSender } from './session-delta.js';
+import { wireMessage } from './session-wire.js';
+import { loadChatLog } from '../session/store/chat-log.js';
 import { searchScreen } from './bridge-slash-host.js';
 import type { MentionScreen } from '../tui/slash/search-browse.js';
 import { BridgeTurns } from './bridge-turns.js';
@@ -96,7 +98,7 @@ export class IdeBridge {
   /** What the editor said it handles, with its last `open`. */
   private features: ReadonlySet<IdeFeature> = new Set();
   /** What the editor holds of the conversation (the `session-delta` feature). */
-  private readonly delta = new SessionDeltaSender();
+  private readonly delta = new SessionDeltaSender(wireMessage);
   /** The editor shows this chat (its `visible`): only then is usage polled. */
   private shown = true;
   /** /search waiting on the editor's next key. */
@@ -222,12 +224,17 @@ export class IdeBridge {
         return;
       case 'open':
         this.features = new Set(request.features ?? []);
-        // Opened (again): the conversation is sent whole.
+        // Opened (again): the conversation is sent whole -- or only what follows what the client kept of it.
         this.delta.reset();
         this.enqueue(async () => {
           try {
+            // The client's copy is the start of the chat only if its log was not rewritten since (a new generation).
+            if (request.held && request.sessionId && request.held.sessionId === request.sessionId && this.features.has('session-delta')
+              && request.held.gen && (await loadChatLog(request.sessionId).catch(() => undefined))?.gen === request.held.gen) this.delta.adopt(request.held);
             await this.open(request.workspace ?? '', request.mode, request.sessionId);
-            this.channel.send({ type: 'result', requestId: request.requestId, ok: true, data: { sessionId: this.sessionId } });
+            // `gen`: what a viewer keeps with its copy to say next time which log it is the start of.
+            const gen = this.sessionId ? (await loadChatLog(this.sessionId).catch(() => undefined))?.gen : undefined;
+            this.channel.send({ type: 'result', requestId: request.requestId, ok: true, data: { sessionId: this.sessionId, ...(gen ? { gen } : {}) } });
           } catch (error) {
             this.channel.send({ type: 'result', requestId: request.requestId, ok: false, error: messageOf(error) });
             return;

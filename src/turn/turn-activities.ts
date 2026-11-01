@@ -117,6 +117,14 @@ function shrink(activity: TurnActivity, bare: boolean): TurnActivity {
   return { ...activity, event: diff?.length ? { ...event, diff: boundDiff(diff, DIFF_PREVIEW_LINES, DIFF_PREVIEW_FILES) } : event };
 }
 
+/** A call as a viewer on another machine is sent it: no `call` (never drawn),
+ * and its detail cut to what the row shows (`bare`: the row alone). The same
+ * number of calls, in the same order, so a message reads the same (ide/session-delta.ts). */
+export function viewedActivity(activity: TurnActivity, bare: boolean): TurnActivity {
+  const { call: _call, ...event } = shrink(activity, bare).event;
+  return { ...activity, event };
+}
+
 const sizes = new WeakMap<TurnActivity, number>();
 function sizeOf(activity: TurnActivity): number {
   let size = sizes.get(activity);
