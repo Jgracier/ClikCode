@@ -14,7 +14,7 @@ import { ChatKeeper, readChatCache } from './chat-cache.js';
 import { decodeWireLine } from '../ide/wire-gzip.js';
 import { applyLiveEvent, drawJoinedTurn, newLiveTurnState, recordDecision } from '../worker/joined-turn.js';
 import type { HarnessQuestionResult } from '../harness/events/question.js';
-import { isTranscriptActivity } from '../worker/protocol.js';
+import { isTranscriptActivity, type WorkerEvent } from '../worker/protocol.js';
 import { backgroundWorkOf } from '../harness/protocol/background-agents.js';
 import type { PaletteEntry } from '../tui/command-palette.js';
 import type { TerminalHarnessPrompter } from '../tui/prompter.js';
@@ -404,10 +404,21 @@ export async function runRemoteChat(
       if (commandsFor !== undefined && key !== commandsFor) void refreshCommands();
       commandsFor = key;
     };
-    const queued = (text: string): Promise<LiveTurnInputResult> => {
-      const id = randomUUID();
-      bridge.post({ type: 'send', text, id });
-      return Promise.resolve({ disposition: 'queued', submission: { id, text, submittedAt: new Date().toISOString() } });
+    /** Messages typed while the turn runs, sent and not yet answered: the worker says what became of each (`submission`) -- steered
+     * into the turn, queued behind it, or a command of ClikCode's own -- and the row says that, not what was hoped. A row that
+     * claimed "queued" for a message that was steered showed it twice: the host recorded the steer, this window kept its own row. */
+    const submissions = new Map<string, { text: string; resolve: (answer: Extract<WorkerEvent, { type: 'submission' }>) => void; reject: (error: Error) => void }>();
+    const queued = async (text: string, windowId?: string): Promise<LiveTurnInputResult> => {
+      // The id the window gave the message, so its row and the machine's record of it are one thing.
+      const id = windowId ?? randomUUID();
+      const submission = { id, text, submittedAt: new Date().toISOString() };
+      const answered = new Promise<Extract<WorkerEvent, { type: 'submission' }>>((resolve, reject) => { submissions.set(id, { text, resolve, reject }); });
+      try {
+        bridge.post({ type: 'send', text, id });
+        const answer = await answered;
+        if (answer.disposition === 'error') throw new Error(answer.message ?? 'message not sent');
+        return { disposition: answer.disposition, submission, ...(answer.commandOutcome ? { commandOutcome: answer.commandOutcome } : {}) };
+      } finally { submissions.delete(id); }
     };
     /** `label`: what the worker says the turn is doing. A turn that is the vendor's own background work
      * (live.vendorWork) is not the model thinking, and said so: this window joining it must not draw it as
@@ -425,6 +436,10 @@ export async function runRemoteChat(
         // While a message drawn early waits for its turn, the chat is drawn as a turn's (run-turn.ts renders so too).
         case 'session': session = event.session; account = event.account; sessionChanged(session); keeper.soon(); terminal.render(session, account, { running: running || early !== undefined }); return;
         case 'turn-start':
+          // A message typed as the last turn ended finds no turn to steer into: it became this one. Nothing will answer it as a steer.
+          for (const [id, pending] of submissions) {
+            if (pending.text === event.prompt) pending.resolve({ type: 'submission', id, disposition: 'queued' });
+          }
           applyLiveEvent(liveTurn, { type: 'waiting-start', message: '', ...(event.prompt !== undefined ? { prompt: event.prompt } : {}) });
           // The message drawn on Enter: this turn carries it on (startWaiting takes over turnStarting's).
           early = undefined;
@@ -493,6 +508,7 @@ export async function runRemoteChat(
             openPrompts.get(worker.id)?.abort();
             openPrompts.delete(worker.id);
           }
+          else if (worker.type === 'submission') submissions.get(worker.id)?.resolve(worker);
           else if (worker.type === 'steerable') terminal.setSteerable(worker.value);
           else if (worker.type === 'stopping') terminal.turnStopping(worker.restoreDraft === true);
           else if (worker.type === 'stop-done') terminal.stopSettled();
@@ -557,6 +573,8 @@ export async function runRemoteChat(
       finishTurn?.();
       for (const completion of completions.values()) completion.reject(error);
       completions.clear();
+      for (const pending of submissions.values()) pending.reject(error);
+      submissions.clear();
     };
     try {
       await bridge.connected();

@@ -56,7 +56,7 @@ export class BridgeTurns {
           // ClikCode's own command: applied now if it is a pure setting,
           // otherwise run when the turn ends -- never sent to the model.
           const result = await commandDuringTurn(sessionId, line);
-          if (id) this.host.channel.send({ type: 'worker', sessionId, event: { type: 'submission', id, disposition: result.disposition === 'queued' ? 'queued' : 'steered' } });
+          if (id) this.host.channel.send({ type: 'worker', sessionId, event: { type: 'submission', id, disposition: result.disposition, ...(result.commandOutcome ? { commandOutcome: result.commandOutcome } : {}) } });
           await this.host.emitSession();
           complete();
           return;
