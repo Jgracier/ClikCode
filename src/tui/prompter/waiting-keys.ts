@@ -28,6 +28,7 @@ export function onWaitingKey(this: TerminalHarnessPrompter, key: string): void {
     turn.draft = '/';
     turn.cursor = 1;
     this.updateWaiting();
+    this.flushPaint();
     return;
   }
   // Before approvals and before the draft: a turn running is when someone
@@ -132,6 +133,7 @@ export function onWaitingKey(this: TerminalHarnessPrompter, key: string): void {
       turn.draft = continued.value;
       turn.cursor = continued.cursor;
       this.updateWaiting();
+      this.flushPaint();
       return;
     }
     if (!turn.submit) return;
