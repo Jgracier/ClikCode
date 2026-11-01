@@ -23,8 +23,9 @@ import { BOARD_LINE, BOARD_OWNS } from '../commands/ai/interactive/board.js';
 import { remoteTerminalScript } from './install.js';
 import { startBridge } from './peer.js';
 import { readMachines, updatePolicy, type RemoteMachine } from './machines.js';
+import { remoteRowValue } from './board-rows.js';
 import { autoUpdates, localBuildCommit, pinnedUpdateLine } from './updates.js';
-import { needsUpdate, reconnectWindowMachine, tapWindowMachine, type LinkTap, type LinkTapHandlers } from './connection.js';
+import { needsUpdate, reachWindowMachine, reconnectWindowMachine, tapWindowMachine, type LinkTap, type LinkTapHandlers } from './connection.js';
 import { sshArgv } from './ssh.js';
 import { failureText } from '../harness/protocol/stderr-line.js';
 import type { LiveTurnInputResult } from '../turn/live-input.js';
@@ -65,7 +66,8 @@ const REQUEST_TIMEOUT_MS = 60_000;
 const STDERR_KEEP = 16_000;
 
 /** One chat channel into a machine's ClikCode (its multiplexed bridge, over ssh): a chat on the window's connection to that machine
- * when it has one (`link`: no new ssh, no new process there -- the host is already running), else over an ssh of its own. */
+ * (`link`: no new ssh, no new process there -- the host is already running), or, where there is no window connection to use (a
+ * test, a caller that names its own `start`), over an ssh of its own. */
 export class TerminalBridge {
   private child: ChildProcessWithoutNullStreams | undefined;
   private tap: LinkTap | undefined;
@@ -123,7 +125,10 @@ export class TerminalBridge {
         event: chatEvent,
         ended: (failure, retiring) => { if (retiring) this.retiring = true; ended(failure); },
       });
-      if (this.tap) {
+      if (link) {
+        // On the window's connection or not at all: one that dropped since it was asked is a connection that ended (the chat is opened
+        // again once it is back), not a reason to start an ssh of its own at a machine that may be down.
+        if (!this.tap) { ended(new Error(`The connection to ${target} is not up`)); return; }
         this.outdated = this.tap.outdated;
         this.revision = this.tap.revision;
         return;
@@ -300,9 +305,11 @@ export function outdatedNotice(machine: Pick<RemoteMachine, 'name' | 'updates' |
  * the same chat resumed, with nothing said: what was being typed stays in the
  * composer (prompt-input.ts keeps an interrupted prompt's draft). Any other
  * close of a connection that had been working is a drop, as in VS Code: said
- * with its cause, then connected to again with a growing pause and the same
- * chat resumed, the line that was in flight back in the composer. Only a
- * machine that stays unreachable through REJOIN_PAUSES_MS ends the chat. */
+ * with its cause, then connected to again and the same chat resumed, the line
+ * that was in flight back in the composer. The window's connection to the
+ * machine retries on its own schedule (connection.ts) and the chat waits for it
+ * (REACH_MS); only an ssh of its own (`start` named) has pauses of its own,
+ * REJOIN_PAUSES_MS. A chat that cannot be opened at all is RemoteUnavailable. */
 /** How a chat on another machine was left: a local chat to show (its id),
  * nothing (back to the one it was opened from), or the window closing (/exit). */
 export type RemoteChatEnd = string | { exit: true } | undefined;
@@ -310,10 +317,20 @@ export type RemoteChatEnd = string | { exit: true } | undefined;
 /** The pauses before each reconnect after a drop (the board's, connection.ts, is the same shape). */
 export const REJOIN_PAUSES_MS: readonly number[] = [1_000, 2_000, 5_000, 10_000, 30_000];
 
+/** How long opening a chat waits for the window's connection to its machine. */
+const REACH_MS = 20_000;
+
+/** A chat on another machine could not be opened: it never showed. Said with its reason, and the list it was picked from comes back
+ * (loop.ts) -- not another chat in its place. */
+export class RemoteUnavailable extends Error {
+  constructor(message: string, options?: { cause?: unknown }) { super(message, options); this.name = 'RemoteUnavailable'; }
+}
+
 export async function runRemoteChat(
   terminal: TerminalHarnessPrompter, localId: string, first: RemoteChatSelection, firstDraft?: string,
   startBridge?: RemoteBridgeStarter,
   pauses: readonly number[] = REJOIN_PAUSES_MS,
+  reachMs = REACH_MS,
 ): Promise<RemoteChatEnd> {
   let choice: RemoteChatSelection | undefined = first;
   let draft = firstDraft;
@@ -325,6 +342,13 @@ export async function runRemoteChat(
     const machine = (await readMachines()).find((item) => item.id === choice!.machineId && item.ready);
     if (!machine) throw new Error('That remote machine is no longer added. Add it again with /machine.');
     terminal.remoteMachineName = machine.name;
+    // The window's connection to the machine is the one that knows whether it can be reached, and it retries on its own schedule: a
+    // chat asks it, and says so if that takes a moment, instead of starting an ssh of its own at a machine that may be down.
+    if (!startBridge) {
+      const saying = setTimeout(() => terminal.activity(`Connecting to ${machine.name}…`), 700);
+      const reached = await reachWindowMachine(machine.id, reachMs).finally(() => clearTimeout(saying));
+      if (!reached.ok) { terminal.remoteMachineName = undefined; throw new RemoteUnavailable(`${machine.name} cannot be reached: ${reached.reason}`); }
+    }
     // On the window's connection to the machine when it has one (no ssh, no process started there); else over an ssh of its own.
     const bridge = new TerminalBridge(machine.sshTarget, startBridge, undefined, startBridge ? undefined : (chat, handlers) => tapWindowMachine(machine.id, chat, handlers));
     let session: HarnessSession | undefined;
@@ -597,7 +621,7 @@ export async function runRemoteChat(
         leftTurn = false;
         if (line === BOARD_LINE) {
           // The list is this machine's, wherever the chat is: it holds every machine's chats.
-          const picked = await interactiveSessionPicker(terminal, localId, commands);
+          const picked: Awaited<ReturnType<typeof interactiveSessionPicker>> = await interactiveSessionPicker(terminal, localId, commands, choice?.chatId ? { initial: remoteRowValue(machine.id, choice.chatId) } : undefined);
           if (!picked) continue;
           if ('remote' in picked) { choice = picked.remote; draft = picked.draft; break; }
           if ('id' in picked) return picked.id;
@@ -646,12 +670,19 @@ export async function runRemoteChat(
     } catch (error) {
       const cause = bridge.dropped;
       const lost = !bridge.retiring && cause !== undefined && (bridge.wasReady || rejoining);
-      if (!bridge.retiring && !lost) throw error;
+      // Never showed: the list it was picked from comes back with why, not another chat.
+      if (!bridge.retiring && !lost) throw bridge.wasReady || rejoining ? error : new RemoteUnavailable(`${machine.name}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
       if (lost) {
-        if (drops >= pauses.length) throw cause;
-        terminal.activity(chalk.yellow(`Connection to ${machine.name} lost: ${cause.message}\nReconnecting${drops ? ` (try ${drops + 1} of ${pauses.length + 1})` : ''}.`));
-        await new Promise<void>((resolve) => { setTimeout(resolve, pauses[drops]).unref?.(); });
-        drops += 1;
+        if (startBridge) {
+          // An ssh of its own (no window connection to retry for it): its own pauses.
+          if (drops >= pauses.length) throw cause;
+          terminal.activity(chalk.yellow(`Connection to ${machine.name} lost: ${cause.message}\nReconnecting${drops ? ` (try ${drops + 1} of ${pauses.length + 1})` : ''}.`));
+          await new Promise<void>((resolve) => { setTimeout(resolve, pauses[drops]).unref?.(); });
+          drops += 1;
+        } else {
+          // The window's connection retries on its own schedule; the next pass waits for it (reach) and gives up if it stays down.
+          terminal.activity(chalk.yellow(`Connection to ${machine.name} lost: ${cause.message}\nReconnecting.`));
+        }
       }
       rejoining = true;
       // A newer build there: the window's connection to it goes to that build too.

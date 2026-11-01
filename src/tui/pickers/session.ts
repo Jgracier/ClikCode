@@ -183,7 +183,7 @@ function takeOpenOnMachine(): string | undefined { const machine = openOnMachine
 export async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string): Promise<{ id: string } | { new: true } | undefined>;
 export async function interactiveSessionPicker(
   rl: HarnessPrompter, currentId: string, boardCommands: readonly PickerOption<string>[] | undefined,
-  hooks?: { onSessionsSettled?: () => boolean },
+  hooks?: { onSessionsSettled?: () => boolean; initial?: string },
 ): Promise<{ id: string; draft?: string } | { new: true } | { compose: string } | { command: string } | { notice: string } | { remote: { machineId: string; chatId: string }; draft?: string } | undefined>;
 export async function interactiveSessionPicker(
   rl: HarnessPrompter, currentId: string,
@@ -194,7 +194,7 @@ export async function interactiveSessionPicker(
    * list is idle. A true return leaves the board up until the process exits.
    * `machine`: the machine of the chat it is opened from (a chat on another
    * machine), whose chats it opens on; else the one last browsed. */
-  hooks?: { onSessionsSettled?: () => boolean },
+  hooks?: { onSessionsSettled?: () => boolean; initial?: string },
 ): Promise<{ id: string; draft?: string } | { new: true } | { compose: string } | { command: string } | { notice: string } | { remote: { machineId: string; chatId: string }; draft?: string } | undefined> {
   const onBoard = Boolean(boardCommands && rl.board);
   // Titles, previews and dates live on the index. The transcript is read
@@ -437,7 +437,9 @@ export async function interactiveSessionPicker(
       // The row for the conversation this window is in: its root, since the row
       // stands for the whole conversation and names its latest chat.
       const currentRoot = current ? conversationIdFor(current) : undefined;
-      const initial = buildOptions().find((option) => {
+      // A chat on another machine that the window is in names its own row (hooks.initial), not this machine's chat it was started from.
+      const options = buildOptions();
+      const initial = hooks?.initial && options.some((option) => option.value === hooks.initial) ? hooks.initial : options.find((option) => {
         const listed = sessions.find((session) => session.id === option.value);
         return listed !== undefined && conversationIdFor(listed) === currentRoot;
       })?.value;
