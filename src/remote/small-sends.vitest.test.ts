@@ -16,6 +16,7 @@ import { listWorkerRecords } from '../worker/registry.js';
 import { remoteResume, TerminalBridge } from './terminal-chat.js';
 import { spawnSsh } from './ssh.js';
 import { bridgeScript } from './install.js';
+import { decodeWireLine } from '../ide/wire-gzip.js';
 
 const REPO = resolve(__dirname, '..', '..');
 const FAKES = join(REPO, 'scripts', 'tui-e2e');
@@ -64,17 +65,24 @@ afterAll(async () => {
   process.env.HOME = savedEnv.HOME;
 });
 
-/** A bridge on prod whose every byte back is counted. */
-function counted(): { bridge: TerminalBridge; bytes: () => number; events: IdeEvent[] } {
+/** A bridge on prod whose every byte back is counted: `bytes` as the lines read (a long line gzipped on the wire, wire-gzip.ts, counted whole), `wire` as sent. */
+function counted(): { bridge: TerminalBridge; bytes: () => number; wire: () => number; events: IdeEvent[] } {
   let bytes = 0;
+  let wire = 0;
+  let pending = '';
   const bridge = new TerminalBridge('prod', (target) => {
     const child = spawnSsh(target, bridgeScript());
-    child.stdout.on('data', (chunk: Buffer) => { bytes += chunk.length; });
+    child.stdout.on('data', (chunk: Buffer) => {
+      wire += chunk.length;
+      const lines = `${pending}${chunk.toString('utf8')}`.split('\n');
+      pending = lines.pop() ?? '';
+      for (const line of lines) bytes += decodeWireLine(line).length + 1;
+    });
     return child;
   });
   const events: IdeEvent[] = [];
   bridge.onEvent = (event) => { events.push(event); };
-  return { bridge, bytes: () => bytes, events };
+  return { bridge, bytes: () => bytes, wire: () => wire, events };
 }
 
 /** One prompt, until the bridge says it is done: the bytes it cost. */
@@ -125,8 +133,10 @@ describe.skipIf(!built)('a chat on another machine, over the real bridge', () =>
     const chat = counted();
     await chat.bridge.connected();
     const beforeOpen = chat.bytes();
+    const wireBefore = chat.wire();
     await chat.bridge.request(remoteResume('big-1'));
     const opened = chat.bytes() - beforeOpen;
+    const openedOnWire = chat.wire() - wireBefore;
     expect(shown(chat.events)?.messages).toHaveLength(202);
     const turns: number[] = [];
     for (const text of ['second', 'third', 'fourth']) turns.push(await prompt(chat, text));
@@ -139,6 +149,8 @@ describe.skipIf(!built)('a chat on another machine, over the real bridge', () =>
     console.log(`transcript ${transcript} B; open ${opened} B; per turn: whole events ${oldTurn} B, small ${turns.join(' / ')} B`);
     // Opening sends it whole; a turn without the feature sends it whole several times over.
     expect(opened).toBeGreaterThan(transcript);
+    // ... and a conversation that long goes over the wire gzipped.
+    expect(openedOnWire).toBeLessThan(opened / 3);
     expect(oldTurn).toBeGreaterThan(2 * transcript);
     // A turn with it: a few KB, whatever the chat's length.
     for (const bytes of turns) expect(bytes).toBeLessThan(40_000);

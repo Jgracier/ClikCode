@@ -8,6 +8,7 @@ import { errorText, userError } from '../../../src/harness/protocol/errors';
 import * as vscode from 'vscode';
 import type { BridgeEndpoint } from './bridge-client';
 import { SessionDeltaReceiver } from '../../../src/ide/session-delta';
+import { ChatKeeper, readChatCache } from '../../../src/remote/chat-cache';
 import { LocalChatMachine, openRequest, RemoteChatMachine, type ChatMachine } from './chat-machine';
 import { machineUpdateOf, remoteDirectory } from './remote-directory';
 import type { LinkChannel } from '../../../src/remote/connection';
@@ -517,7 +518,7 @@ export class ClikCodeController implements vscode.Disposable {
       const neverStored = !sessionToResume && Boolean(this.model.sessionId) && !this.model.messages.length && !this.model.running && !this.model.pendingPrompt;
       const resume = neverStored ? undefined : sessionToResume ?? this.model.sessionId ?? (this.first?.mode === 'resume' ? this.first.sessionId : undefined);
       const mode = modeOverride ?? (neverStored ? 'new' : resume ? 'resume' : this.first?.mode ?? settings.get<'continue' | 'new'>('startWith') ?? 'continue');
-      await bridge.call(openRequest(machine, mode, resume, IDE_FEATURES));
+      await this.openChat(bridge, machine, mode, resume);
     } catch (error) {
       if (this.bridge !== bridge) return; // replaced, or refused as incompatible (already reported)
       const message = errorText(error);
@@ -550,6 +551,21 @@ export class ClikCodeController implements vscode.Disposable {
 
   /** The conversation as the bridge last sent it (the `session-delta` feature). */
   private readonly delta = new SessionDeltaReceiver();
+  /** What a chat on another machine was last sent, kept for its next open: coming back is only what follows (remote/chat-cache.ts). */
+  private readonly keeper = new ChatKeeper(() => this.machine.id, () => this.delta.current());
+
+  /** `open` on `machine`: a chat resumed on another machine says what is kept of it, and is sent only what follows. */
+  private async openChat(bridge: BridgeEndpoint, machine: ChatMachine, mode: 'new' | 'continue' | 'resume', sessionId: string | undefined): Promise<void> {
+    const request = openRequest(machine, mode, sessionId, IDE_FEATURES);
+    if (machine.kind !== 'remote' || mode !== 'resume' || !sessionId) { await bridge.call(request); return; }
+    if (this.delta.claim(sessionId) === undefined) {
+      const kept = await readChatCache(machine.id, sessionId);
+      if (kept) this.delta.preload(sessionId, kept.messages, kept.gen);
+    }
+    const held = this.delta.claim(sessionId);
+    const opened = await bridge.call<{ gen?: string } | undefined>(held ? { ...request, held } : request);
+    this.delta.generation(sessionId, opened?.gen);
+  }
 
   /** Link sign-ins whose link this chat already opened. */
   private readonly openedSignIns = new Set<string>();
@@ -564,6 +580,7 @@ export class ClikCodeController implements vscode.Disposable {
     if (sent.type === 'retiring') return;
     // Whole again: after the first, the bridge sends only the messages this chat lacks (session-delta.ts).
     const event = this.delta.expand(sent);
+    if (event.type === 'session' && this.machine.kind === 'remote') this.keeper.soon();
     this.setModel(applyEvent(this.model, event));
     // A copy that moved: the live chat opens in its place.
     if (event.type === 'session' && this.model.movedTo) void this.openLive().catch((error: unknown) => this.fail(errorText(error)));
@@ -793,7 +810,7 @@ export class ClikCodeController implements vscode.Disposable {
     const bridge = this.bridge;
     if (!bridge?.running) return;
     try {
-      await bridge.call(openRequest(this.machine, mode, sessionId, IDE_FEATURES));
+      await this.openChat(bridge, this.machine, mode, sessionId);
     } catch (error) {
       this.note(errorText(error), 'error');
     }
@@ -1202,6 +1219,7 @@ export class ClikCodeController implements vscode.Disposable {
   dispose(): void {
     this.remoteWatchRelease?.();
     if (this.parkTimer) clearTimeout(this.parkTimer);
+    if (this.machine.kind === 'remote') this.keeper.now();
     this.disposed = true;
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     if (this.postTimer) clearTimeout(this.postTimer);
