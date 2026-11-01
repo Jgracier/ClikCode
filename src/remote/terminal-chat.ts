@@ -11,6 +11,7 @@ import type { HarnessSession } from '../session/model.js';
 import type { IdeEvent, IdeFeature, IdeHostEvent, IdeHostRequest, IdeRequest, IdeSlashCommand, IdeUiResult } from '../ide/protocol.js';
 import { SessionDeltaReceiver } from '../ide/session-delta.js';
 import { ChatKeeper, readChatCache } from './chat-cache.js';
+import { RemoteImages } from './attach.js';
 import { decodeWireLine } from '../ide/wire-gzip.js';
 import { applyLiveEvent, drawJoinedTurn, newLiveTurnState, recordDecision } from '../worker/joined-turn.js';
 import type { HarnessQuestionResult } from '../harness/events/question.js';
@@ -354,6 +355,8 @@ export async function runRemoteChat(
     }
     // On the window's connection to the machine when it has one (no ssh, no process started there); else over an ssh of its own.
     const bridge = new TerminalBridge(machine.sshTarget, startBridge, undefined, startBridge ? undefined : (chat, handlers) => tapWindowMachine(machine.id, chat, handlers));
+    // Images typed into a message here, copied to this machine for the chat to read; taken off again when the chat is left.
+    const images = new RemoteImages(machine.sshTarget);
     let session: HarnessSession | undefined;
     let account: string | undefined;
     let running = false;
@@ -417,9 +420,14 @@ export async function runRemoteChat(
       const submission = { id, text, submittedAt: new Date().toISOString() };
       const answered = new Promise<Extract<WorkerEvent, { type: 'submission' }>>((resolve, reject) => { submissions.set(id, { text, resolve, reject }); });
       try {
+        // Images it names are files on this computer: copied to the machine first. Refused, its words go back to the composer.
+        const wire = await images.forMachine(text).catch((error: unknown) => {
+          terminal.activity(chalk.yellow(`Could not copy the image to ${machine.name}: ${error instanceof Error ? error.message : String(error)}`));
+          throw error;
+        });
         // The mode this window has chosen, read as the message is sent: the machine's setting is not the user's choice here.
         const mode = await readState({ transcripts: [] }).then((state) => sendModeOf(state.globalSettings), () => undefined);
-        bridge.post({ type: 'send', text, id, ...(mode ? { mode } : {}) });
+        bridge.post({ type: 'send', text: wire, id, ...(mode ? { mode } : {}) });
         const answer = await answered;
         if (answer.disposition === 'error') throw new Error(answer.message ?? 'message not sent');
         return { disposition: answer.disposition, submission, ...(answer.commandOutcome ? { commandOutcome: answer.commandOutcome } : {}) };
@@ -723,7 +731,17 @@ export async function runRemoteChat(
         // A message (not a command) is drawn now, with the turn's wait, as a
         // chat here draws one: the machine's answer is a round trip away.
         if (!/^[/!]/.test(line)) { early = line; terminal.submitted(line); terminal.turnStarting(); }
-        try { bridge.post({ type: 'send', text: pinnedUpdateLine(line, localBuildCommit()), id }); } catch (error) { dropEarly(); throw error; }
+        // Images the message names are files on this computer: copied to the machine the chat runs on first (remote/attach.ts).
+        let wire: string;
+        try { wire = await images.forMachine(line); } catch (error) {
+          dropEarly();
+          completions.delete(id);
+          sending = undefined;
+          terminal.activity(chalk.yellow(`Could not copy the image to ${machine.name}: ${error instanceof Error ? error.message : String(error)}`));
+          terminal.restoreDraft(line);
+          continue;
+        }
+        try { bridge.post({ type: 'send', text: pinnedUpdateLine(wire, localBuildCommit()), id }); } catch (error) { dropEarly(); throw error; }
         await complete;
         sending = undefined;
         // /update ran there: the window's connection there (the board's) goes to the build it installed.
@@ -756,7 +774,7 @@ export async function runRemoteChat(
       // for Enter on the new connection.
       if (sending !== undefined) draft = sending;
       continue;
-    } finally { keeper.now(); promptController.abort(); for (const screen of signIns.values()) screen.stop(); bridge.close(); terminal.remoteMachineName = undefined; }
+    } finally { keeper.now(); void images.release(); promptController.abort(); for (const screen of signIns.values()) screen.stop(); bridge.close(); terminal.remoteMachineName = undefined; }
   }
   return undefined;
 }

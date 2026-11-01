@@ -11,6 +11,16 @@ import { BOARD_LINE } from '../commands/ai/interactive/board.js';
 
 const boardPicker = vi.hoisted(() => vi.fn());
 vi.mock('../tui/pickers/session.js', () => ({ interactiveSessionPicker: boardPicker }));
+// The copy of an image to the machine: ssh in life, a fixed place there here (or a refusal, when a test says so).
+const copying = vi.hoisted(() => ({ fail: undefined as string | undefined, uploads: [] as string[] }));
+vi.mock('./image.js', () => ({
+  uploadRemoteImage: async (_target: string, name: string) => {
+    if (copying.fail) throw new Error(copying.fail);
+    copying.uploads.push(name);
+    return '/tmp/clikcode-image.TEST0001/image.png';
+  },
+  removeRemoteImage: async () => undefined,
+}));
 
 describe('remote chat open request', () => {
   it('resumes by id and names no folder of this machine', () => {
@@ -481,6 +491,71 @@ describe('a message typed in a chat on another machine', () => {
     registerBuildReplacer(undefined);
     bridge.drop();
     await outcome;
+  }, 20_000);
+
+  it('a screenshot named in a message is copied to the machine and the message goes with its path there; refused, nothing is sent and the words come back', async () => {
+    const { mkdtemp, rm, writeFile } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const folder = await mkdtemp(join(tmpdir(), 'cc-shot-'));
+    const shot = join(folder, 'Screenshot.png');
+    const other = join(folder, 'Other.png');
+    await writeFile(shot, Buffer.alloc(8, 1));
+    await writeFile(other, Buffer.alloc(8, 2));
+    try {
+      const { bridge, calls, prompts, outcome } = await start();
+      calls.length = 0;
+      copying.uploads.length = 0;
+      prompts[0]!.answer(`what is wrong here ${shot}`);
+      await until(() => bridge.requests.some((request) => request.type === 'send' && request.text?.includes('what is wrong here')));
+      const sent = bridge.requests.find((request) => request.type === 'send')!;
+      // The machine is told the path it has, never this computer's.
+      expect(sent.text).toContain('what is wrong here /tmp/clikcode-image.TEST0001/image.png');
+      expect(sent.text).not.toContain(folder);
+      expect(copying.uploads).toEqual(['Screenshot.png']);
+      await until(() => prompts.length === 2);
+
+      // The copy fails: nothing is sent, it is said, and what was typed is back in the composer.
+      copying.fail = 'no route to devbox';
+      const before = bridge.requests.filter((request) => request.type === 'send').length;
+      prompts[1]!.answer(`and this ${other}`);
+      await until(() => named(calls, 'restoreDraft').length === 1);
+      expect(named(calls, 'restoreDraft')[0]![1]).toBe(`and this ${other}`);
+      expect(bridge.requests.filter((request) => request.type === 'send')).toHaveLength(before);
+      await until(() => prompts.length === 3);
+      copying.fail = undefined;
+      bridge.drop();
+      await outcome;
+    } finally { copying.fail = undefined; await rm(folder, { recursive: true, force: true }); }
+  }, 20_000);
+
+  it('a screenshot in a message typed while the turn runs is copied too, and a refused copy fails that message', async () => {
+    const { mkdtemp, rm, writeFile } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const folder = await mkdtemp(join(tmpdir(), 'cc-shot-'));
+    const shot = join(folder, 'Mid.png');
+    const other = join(folder, 'Later.png');
+    await writeFile(shot, Buffer.alloc(8, 1));
+    await writeFile(other, Buffer.alloc(8, 2));
+    const base = { id: 'c1', route: 'local', accountId: null, provider: 'claude', model: 'm', effort: 'high', name: 'Remote chat', createdAt: '', updatedAt: '', status: 'active', messages: [] };
+    try {
+      const { bridge, calls, outcome } = await start();
+      calls.length = 0;
+      bridge.say({ type: 'worker', sessionId: 'c1', event: { type: 'snapshot', session: base, live: { text: '', waitingLabel: 'x', prompt: 'go' } } });
+      await until(() => named(calls, 'startWaiting').length === 1);
+      const submit = named(calls, 'startWaiting')[0]![3] as (text: string, id?: string) => Promise<unknown>;
+      const accepted = submit(`also ${shot}`, 'img-1');
+      await until(() => bridge.requests.some((request) => (request as { id?: string }).id === 'img-1'));
+      expect(bridge.requests.find((request) => (request as { id?: string }).id === 'img-1')!.text).toBe('also /tmp/clikcode-image.TEST0001/image.png');
+      bridge.say({ type: 'worker', sessionId: 'c1', event: { type: 'submission', id: 'img-1', disposition: 'queued' } });
+      await accepted;
+      copying.fail = 'no route to devbox';
+      await expect(submit(`again ${other}`, 'img-2')).rejects.toThrow('no route to devbox');
+      expect(bridge.requests.some((request) => (request as { id?: string }).id === 'img-2')).toBe(false);
+      bridge.drop();
+      await outcome;
+    } finally { copying.fail = undefined; await rm(folder, { recursive: true, force: true }); }
   }, 20_000);
 
   it('shows the whole conversation from a bridge that sends only what changed', async () => {
