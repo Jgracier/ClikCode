@@ -171,7 +171,9 @@ const MANAGE_ACTIONS = [
   { label: 'Fork', value: 'fork' },
   { label: 'Archive', value: 'archive' },
 ] as const;
-let lastBoardMachine = 'local';
+/** A machine just added: the board opens once on its chats. Otherwise it opens on this machine's list, which holds every machine's. */
+let openOnMachine: string | undefined;
+function takeOpenOnMachine(): string | undefined { const machine = openOnMachine; openOnMachine = undefined; return machine; }
 
 /** One list for finding a conversation and managing it.
  *
@@ -181,7 +183,7 @@ let lastBoardMachine = 'local';
 export async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string): Promise<{ id: string } | { new: true } | undefined>;
 export async function interactiveSessionPicker(
   rl: HarnessPrompter, currentId: string, boardCommands: readonly PickerOption<string>[] | undefined,
-  hooks?: { onSessionsSettled?: () => boolean; machine?: string },
+  hooks?: { onSessionsSettled?: () => boolean },
 ): Promise<{ id: string; draft?: string } | { new: true } | { compose: string } | { command: string } | { notice: string } | { remote: { machineId: string; chatId: string }; draft?: string } | undefined>;
 export async function interactiveSessionPicker(
   rl: HarnessPrompter, currentId: string,
@@ -192,7 +194,7 @@ export async function interactiveSessionPicker(
    * list is idle. A true return leaves the board up until the process exits.
    * `machine`: the machine of the chat it is opened from (a chat on another
    * machine), whose chats it opens on; else the one last browsed. */
-  hooks?: { onSessionsSettled?: () => boolean; machine?: string },
+  hooks?: { onSessionsSettled?: () => boolean },
 ): Promise<{ id: string; draft?: string } | { new: true } | { compose: string } | { command: string } | { notice: string } | { remote: { machineId: string; chatId: string }; draft?: string } | undefined> {
   const onBoard = Boolean(boardCommands && rl.board);
   // Titles, previews and dates live on the index. The transcript is read
@@ -455,8 +457,7 @@ export async function interactiveSessionPicker(
           })),
         ],
         addable: (machineId) => machineId.startsWith('tailscale:'),
-        initialMachine: ((machine) => (remote?.views().some((view) => view.machine.id === machine) ? machine : 'local'))(hooks?.machine ?? lastBoardMachine),
-        onMachineSelected: (machineId) => { lastBoardMachine = machineId; },
+        initialMachine: ((machine) => (machine && remote?.views().some((view) => view.machine.id === machine) ? machine : 'local'))(takeOpenOnMachine()),
         listChanged: (redraw) => { listChanged = redraw; },
         ...(initial ? { initial } : {}),
         ...(hooks?.onSessionsSettled ? { onSessionsSettled: hooks.onSessionsSettled } : {}),
@@ -492,7 +493,7 @@ export async function interactiveSessionPicker(
   if (addingMachine) {
     const added = await addDiscoveredMachine(remoteHostOf(rl), addingMachine);
     if (!added.id) return undefined;
-    lastBoardMachine = added.id;
+    openOnMachine = added.id;
     return interactiveSessionPicker(rl, currentId, boardCommands, hooks);
   }
   // Delete and archive always return to the list. If the open chat was the
