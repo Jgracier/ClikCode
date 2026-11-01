@@ -11,6 +11,7 @@ import type { HarnessSession } from '../session/model.js';
 import type { IdeEvent, IdeFeature, IdeHostEvent, IdeHostRequest, IdeRequest, IdeSlashCommand, IdeUiResult } from '../ide/protocol.js';
 import { SessionDeltaReceiver } from '../ide/session-delta.js';
 import { readChatCache, writeChatCache } from './chat-cache.js';
+import { decodeWireLine } from '../ide/wire-gzip.js';
 import type { PaletteEntry } from '../tui/command-palette.js';
 import type { TerminalHarnessPrompter } from '../tui/prompter.js';
 import { interactiveSessionPicker } from '../tui/pickers/session.js';
@@ -93,7 +94,7 @@ export class TerminalBridge {
       const lines = createInterface({ input: this.child.stdout, crlfDelay: Infinity });
       lines.on('line', (line) => {
         let message: IdeHostEvent;
-        try { message = JSON.parse(line) as IdeHostEvent; } catch { return; }
+        try { message = JSON.parse(decodeWireLine(line)) as IdeHostEvent; } catch { return; }
         if (message.type === 'host-ready') {
           this.outdated = needsUpdate(message);
           this.revision = message.revision ?? 1;

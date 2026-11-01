@@ -3,6 +3,7 @@ import { createInterface } from 'node:readline';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 // Whichever way this machine reaches another, that one can reach it back (remote/peer.ts).
 import { startBridge } from '../../../src/remote/peer';
+import { decodeWireLine } from '../../../src/ide/wire-gzip';
 import type { IdeEvent, IdeHostEvent, IdeHostRequest, IdeRequest } from './protocol';
 import type { Runtime } from './runtime';
 import { MultiplexBridge } from './bridge-client';
@@ -15,7 +16,7 @@ export class SshBridgeClient extends MultiplexBridge {
     const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
     lines.on('line', (line) => {
       try {
-        const event = JSON.parse(line) as IdeEvent | IdeHostEvent;
+        const event = JSON.parse(decodeWireLine(line)) as IdeEvent | IdeHostEvent;
         // As BridgeClient: a `result` settles its call() here too (a one-chat bridge adopted by the pool).
         if (event && typeof event.type === 'string') this.receive(event as IdeEvent);
       } catch { this.emit('log', 'Remote ClikCode sent an invalid bridge message.'); }

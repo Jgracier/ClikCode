@@ -17,6 +17,7 @@
  * client connects again, which starts the new build's relay and bridge. */
 import { fork } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { encodeWireLine, WIRE_GZIP_ENV } from './wire-gzip.js';
 
 export async function runStdioBridge(): Promise<void> {
   const entry = process.argv[1];
@@ -27,8 +28,9 @@ export async function runStdioBridge(): Promise<void> {
     execArgv: process.execArgv,
   });
   child.stdout?.on('data', (chunk: Buffer) => process.stderr.write(chunk));
+  const gzip = process.env[WIRE_GZIP_ENV] === '1';
   child.on('message', (message) => {
-    process.stdout.write(`${JSON.stringify(message)}\n`);
+    process.stdout.write(`${encodeWireLine(JSON.stringify(message), gzip)}\n`);
   });
   const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
   lines.on('line', (line) => {

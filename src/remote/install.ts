@@ -27,6 +27,7 @@
  * this machine for /update of a Remote-installed ClikCode (runManagedUpdate
  * with localRunner; remote/self-update.ts). Every step is one command; its
  * script quotes every value it did not write itself (shell.ts). */
+import { WIRE_GZIP_ENV } from '../ide/wire-gzip.js';
 import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
 import { runSsh, sshFailure, sshFailureMessage, type SshResult } from './ssh.js';
@@ -413,7 +414,7 @@ export function verifyScript(): string {
 /** What starts the board's connection on the other machine: its own
  * bridge, multiplexed, over this SSH session's stdin/stdout. */
 export function bridgeScript(): string {
-  return [withOwnNode, `CLIKCODE_IDE_MULTIPLEX=1 exec ${BIN_LINK} ide-bridge --stdio`].join('\n');
+  return [withOwnNode, `CLIKCODE_IDE_MULTIPLEX=1 ${WIRE_GZIP_ENV}=1 exec ${BIN_LINK} ide-bridge --stdio`].join('\n');
 }
 
 /** Run a vendor's interactive sign-in on the machine that owns the chat. */
