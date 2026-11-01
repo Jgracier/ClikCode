@@ -39,7 +39,7 @@ export const SLASH_PALETTE_PINNED: readonly string[] = [
  * tables are typed `Record<SlashHandlerKey, …>` and a missing or extra handler
  * is a compile error as well as a parity-test failure. */
 export const SLASH_HANDLER_KEYS = [
-  'help', 'status', 'new', 'redraw', 'exit', 'compact', 'context', 'export', 'history', 'hindsight', 'copy', 'select', 'changes',
+  'help', 'status', 'new', 'redraw', 'exit', 'restart', 'compact', 'context', 'export', 'history', 'hindsight', 'copy', 'select', 'changes',
   'review', 'init', 'memory', 'diff', 'cwd', 'add-dir', 'mention',
   'provider', 'accounts', 'machine', 'login', 'logout', 'gateway',
   'model', 'hostedModels', 'effort', 'fast', 'permissions', 'sandbox', 'computer', 'send', 'options', 'capabilities', 'settings',
@@ -161,7 +161,7 @@ function entry(
 
 /** Commands about the terminal itself -- its mouse, its screen, leaving it.
  * An editor client neither lists nor runs them. */
-export const TERMINAL_ONLY_COMMANDS: ReadonlySet<string> = new Set(['select', 'redraw', 'exit']);
+export const TERMINAL_ONLY_COMMANDS: ReadonlySet<string> = new Set(['select', 'redraw', 'exit', 'restart']);
 
 export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('new', 'Conversation', 'start a fresh conversation (the current one stays resumable)', { aliases: ['clear', 'reset'], argHint: '[first message]' }),
@@ -174,6 +174,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('select', 'Conversation', "hand the mouse to the terminal's own selection (drag-to-copy works without it)"),
   entry('redraw', 'Conversation', 'repaint the screen'),
   entry('exit', 'Conversation', 'save and leave', { aliases: ['quit'] }),
+  entry('restart', 'Info', 'switch this window to the newest installed ClikCode; the chat stays and what is running keeps running'),
 
   entry('review', 'Workspace', 'review uncommitted changes (the provider\'s own /review where it has one)', { argHint: '[focus]', availability: ownOrNative('review') }),
   entry('init', 'Workspace', "create or improve the agent instructions file (the provider's own /init where it has one)", { availability: ownOrNative('init') }),

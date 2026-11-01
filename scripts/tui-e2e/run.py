@@ -316,6 +316,24 @@ SCENARIOS = {
         'raw_never': ['the turn has finished'],
         'no_clear_after_type': True,
     },
+    # A window that is never idle never swaps builds by itself. /restart typed mid-turn does it at once: the window comes back on the
+    # same chat and follows the turn that was running, which finishes.
+    'restart-mid-turn': {
+        'rebuild_entry': True,
+        # Longer than the scenario: the turn is still running at the end, so the window can only have been replaced by the command.
+        'turns': [{'intro': 'Working on the long job.', 'hold_ms': 60000, 'blocks': ['The long job finished.']}],
+        'steps': [
+            ('type', 'start the long job'), ('wait_for', 'Working on the long job.', 30),
+            ('touch_entry',), ('settle', 2),
+            ('type', '/restart'), ('settle', 8),
+            # A new process resumed the chat while the turn runs, and follows it.
+            ('expect_file_count', 'state/logs/lifecycle.log', '"argv":"sessions resume', 1),
+        ],
+        'watch': [],
+        'no_clear_after_type': True,
+        'final_contains': ['› start the long job', 'Working on the long job.'],
+        'never': ['no window to restart', 'newest ClikCode', 'The long job finished.'],
+    },
     'rebuild-after-turn-keeps-answer': {
         'rebuild_entry': True,
         'turns': [{'blocks': ['Answer stays visible after the tool.', 'The final answer is ready.']}],

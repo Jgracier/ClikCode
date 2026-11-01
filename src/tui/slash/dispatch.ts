@@ -9,6 +9,7 @@
  *
  * `!<command>` lines are not routed here: each client runs them its own way
  * (runShellLine, in tui/slash/handlers.ts). */
+import { replaceWindowBuild } from '../../commands/ai/interactive/build-replace.js';
 import { quiet } from '../../runtime/lifecycle-log.js';
 import { existsSync } from 'node:fs';
 import type Conf from 'conf';
@@ -247,6 +248,12 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
   };
   const handlers: Record<InteractiveSlashHandlerKey, () => Promise<InteractiveSlashOutcome | void>> = {
     exit: async () => { await aiSessionLeave(id); return { exit: true }; },
+    restart: async () => {
+      const leaving = replaceWindowBuild();
+      if (!leaving) return { notice: 'This window already runs the newest ClikCode.' };
+      await leaving;
+      return { exit: true };
+    },
     new: async () => ({ id: await newConversation(id), ...(args ? { prompt: args, echo: true } : {}) }),
     redraw: () => host.redraw(id),
     provider: async () => ({ id: await interactiveEnginePicker(host.config, rl, id) ?? id }),

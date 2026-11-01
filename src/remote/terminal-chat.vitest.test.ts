@@ -439,6 +439,50 @@ describe('a message typed in a chat on another machine', () => {
     await outcome;
   }, 20_000);
 
+  it('/restart in a chat on another machine is this window\'s: it leaves for the newest build and sends nothing to the machine', async () => {
+    const { registerBuildReplacer } = await import('../commands/ai/interactive/build-replace.js');
+    const machine = newMachineRecord({ name: 'devbox', sshTarget: 'devbox', ready: true });
+    await updateMachines(() => [machine]);
+    const { terminal, prompts, said } = fakeTerminal();
+    const bridge = new FakeRemoteBridge();
+    registerBuildReplacer(() => undefined);
+    const running = runRemoteChat(terminal, 'local-1', { machineId: machine.id, chatId: 'c1' }, undefined, () => bridge as unknown as ChildProcessWithoutNullStreams, []);
+    await until(() => prompts.length === 1);
+    // Already the newest: said, and the chat goes on.
+    prompts[0]!.answer('/restart');
+    await until(() => prompts.length === 2);
+    expect(said.some((line) => line.includes('already runs the newest'))).toBe(true);
+    // A newer build is there: the window leaves for it.
+    registerBuildReplacer(() => Promise.resolve());
+    prompts[1]!.answer('/restart');
+    expect(await running).toEqual({ exit: true });
+    expect(bridge.requests.some((request) => request.text?.includes('/restart'))).toBe(false);
+    registerBuildReplacer(undefined);
+  });
+
+  it('/restart and /send typed while the turn runs are this window\'s, done here, and never sent to the machine', async () => {
+    const { registerBuildReplacer } = await import('../commands/ai/interactive/build-replace.js');
+    const base = { id: 'c1', route: 'local', accountId: null, provider: 'claude', model: 'm', effort: 'high', name: 'Remote chat', createdAt: '', updatedAt: '', status: 'active', messages: [] };
+    const { bridge, calls, outcome } = await start();
+    calls.length = 0;
+    bridge.say({ type: 'worker', sessionId: 'c1', event: { type: 'snapshot', session: base, live: { text: '', waitingLabel: 'x', prompt: 'go' } } });
+    await until(() => named(calls, 'startWaiting').length === 1);
+    const command = named(calls, 'startWaiting')[0]![4] as (text: string, id?: string) => Promise<{ disposition: string; commandOutcome?: string }>;
+    let left = 0;
+    registerBuildReplacer(() => { left += 1; return new Promise(() => undefined); });
+    expect(await command('/restart', 'r-1')).toMatchObject({ disposition: 'command', commandOutcome: 'applied' });
+    expect(left).toBe(1);
+    expect(bridge.requests.some((request) => request.text?.includes('/restart'))).toBe(false);
+    // Anything else typed as a command is the machine\'s to apply: sent, and answered by its submission.
+    const model = command('/model opus', 'r-2');
+    await until(() => bridge.requests.some((request) => (request as { id?: string }).id === 'r-2'));
+    bridge.say({ type: 'worker', sessionId: 'c1', event: { type: 'submission', id: 'r-2', disposition: 'command', commandOutcome: 'applied' } });
+    expect(await model).toMatchObject({ disposition: 'command' });
+    registerBuildReplacer(undefined);
+    bridge.drop();
+    await outcome;
+  }, 20_000);
+
   it('shows the whole conversation from a bridge that sends only what changed', async () => {
     const { bridge, calls, outcome } = await start();
     const base = { id: 'c1', route: 'local', accountId: null, provider: 'claude', model: 'm', effort: 'high', name: 'Remote chat', createdAt: '', updatedAt: '', status: 'active' };

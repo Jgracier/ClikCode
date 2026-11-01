@@ -21,6 +21,7 @@ import type { TerminalHarnessPrompter } from '../tui/prompter.js';
 import { interactiveSessionPicker } from '../tui/pickers/session.js';
 import { BOARD_LINE, BOARD_OWNS } from '../commands/ai/interactive/board.js';
 import { remoteTerminalScript } from './install.js';
+import { replaceWindowBuild } from '../commands/ai/interactive/build-replace.js';
 import { startBridge } from './peer.js';
 import { readMachines, updatePolicy, type RemoteMachine } from './machines.js';
 import { readState } from '../session/state/read.js';
@@ -424,6 +425,21 @@ export async function runRemoteChat(
         return { disposition: answer.disposition, submission, ...(answer.commandOutcome ? { commandOutcome: answer.commandOutcome } : {}) };
       } finally { submissions.delete(id); }
     };
+    /** A command typed while the turn runs. `/restart` and `/send` are this window's -- its build, its choice of steer or queue -- so
+     * they are done here, at once, and never sent to the machine the chat is on; anything else is that machine's to apply. */
+    const windowCommandOrQueued = async (text: string, windowId?: string): Promise<LiveTurnInputResult> => {
+      const own = resolveSlashCommand(parseSlashInput(text)?.head ?? '')?.name;
+      if (own !== 'restart' && own !== 'send') return queued(text, windowId);
+      const submission = { id: windowId ?? randomUUID(), text, submittedAt: new Date().toISOString() };
+      if (own === 'restart') {
+        const leaving = replaceWindowBuild();
+        if (leaving) void leaving; else terminal.activity('This window already runs the newest ClikCode.');
+      } else {
+        const { aiSessionCommand } = await import('../tui/slash/handlers.js');
+        await aiSessionCommand(localId, text).catch((error: unknown) => terminal.activity(error instanceof Error ? error.message : String(error)));
+      }
+      return { disposition: 'command', submission, commandOutcome: 'applied' };
+    };
     /** Esc on a message waiting behind or into the turn: the worker owns the queue and says whether it was still the user's to take
      * (`unqueued`). Without this the window had no take-back, and Esc went on to stop the whole turn -- the message typed stayed
      * queued there while its row vanished here. */
@@ -442,7 +458,7 @@ export async function runRemoteChat(
       turnEnd = new Promise<void>((resolve) => { finishTurn = resolve; });
       if (prompt !== undefined) terminal.submitted(prompt);
       terminal.startWaiting(label, (restoreDraft) => bridge.post({ type: 'cancel', restoreDraft }),
-        queued, queued, () => { leftTurn = true; waitingInput = false; finishTurn?.(); terminal.stopWaiting(); },
+        queued, windowCommandOrQueued, () => { leftTurn = true; waitingInput = false; finishTurn?.(); terminal.stopWaiting(); },
         // Esc on a waiting message takes that message back, and does not stop the turn; "Enter again" offers it to the running turn now.
         takeBack, () => bridge.post({ type: 'send-queued' }));
     };
@@ -679,6 +695,13 @@ export async function runRemoteChat(
         }
         if (own && TERMINAL_ONLY_COMMANDS.has(own)) {
           if (own === 'exit') return { exit: true };
+          if (own === 'restart') {
+            // This window's own build, not the machine's: the window comes back on this machine's chat; this one is picked again from the list.
+            const leaving = replaceWindowBuild();
+            if (!leaving) { terminal.activity('This window already runs the newest ClikCode.'); continue; }
+            await leaving;
+            return { exit: true };
+          }
           if (own === 'redraw' && session) { terminal.render(session, account); continue; }
           const { aiSessionCommand } = await import('../tui/slash/handlers.js');
           await aiSessionCommand(localId, line).catch((error: unknown) => terminal.activity(error instanceof Error ? error.message : String(error)));

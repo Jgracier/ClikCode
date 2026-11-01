@@ -35,6 +35,8 @@ import { routeSlashInput, slashRouteAppliesDuringTurn, type SlashRouteContext } 
 import { aiSessionCommand } from './handlers.js';
 import { sessionHarness, slashRouteContextFor } from './context.js';
 import { isShellCommandLine } from '../../commands/ai/shell-run.js';
+import { replaceWindowBuild } from '../../commands/ai/interactive/build-replace.js';
+import { emitHarnessOutput } from '../../harness/output.js';
 
 /** Whether this line is ClikCode's own command, or words for the model.
  *
@@ -79,6 +81,14 @@ export async function commandDuringTurn(sessionId: string, line: string): Promis
   const route = routeSlashInput(line, slashRouteContextFor(
     session, sessionHarness(session), (path) => existsSync(expandHomePath(path)),
   ));
+  // This window's own word, for now: a window busy for hours is exactly the one that needs it, and waiting for the turn to end would
+  // be waiting for what it is asking to get past. What is running keeps running (the new process follows it).
+  if (route.kind === 'command' && route.entry.name === 'restart') {
+    const leaving = replaceWindowBuild();
+    if (!leaving) emitHarnessOutput({ panel: 'restart', text: 'This window already runs the newest ClikCode.' });
+    else void leaving;
+    return { disposition: 'command', submission, commandOutcome: 'applied' };
+  }
   if (slashRouteAppliesDuringTurn(route, session)) {
     // Straight through to the same handler the composer would reach between
     // turns. It reads state itself, so nothing here writes first.
