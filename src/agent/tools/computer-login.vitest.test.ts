@@ -227,6 +227,7 @@ it('offers the picker again after the site refuses a saved password, so a new on
   const ctx = { stateDir, requestPrivateLogin: async (_s: string, fields: { key: keyof typeof answers; kind: string }[]) => { asked.push(fields); return Object.fromEntries(fields.map(field => [field.key, answers[field.key]])); } } as ToolContext;
   expect((await computerWebTool.run({ action: 'login' }, ctx)).isError).toBeUndefined();
   expect(asked[0]![0]!.kind).toBe('choice');
+  expect((asked[0]![0] as { label?: string }).label).toBe('The saved password for one@example.com was refused last time. Enter a new one');
   expect(await savedLoginsForSite(stateDir, GOOGLE)).toEqual([{ id, label: 'one@example.com', rejected: false, usable: true }]);
   expect((await savedLoginFields(stateDir, GOOGLE, id)).password).toBe('pw-fixed');
 });
