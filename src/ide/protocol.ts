@@ -58,7 +58,9 @@ export type IdeRequest =
    * machine running the bridge: a client on another machine names none (or
    * one that machine listed), and the bridge takes its own -- a resumed chat
    * keeps its saved workspace, a new one starts in this machine's home. */
-  | { type: 'open'; requestId: string; workspace?: string; mode: 'new' | 'continue' | 'resume'; sessionId?: string; features?: readonly IdeFeature[] }
+  | { type: 'open'; requestId: string; workspace?: string; mode: 'new' | 'continue' | 'resume'; sessionId?: string; features?: readonly IdeFeature[];
+    /** What the client kept of this chat from last time (`session-delta`): the reply is only what follows it, when it is the start of the chat. */
+    held?: import('./session-delta.js').HeldChat }
   /** A composer line, exactly as typed: conversation, `/command`, or `!shell`.
    * During a turn it steers (or queues); `id` comes back on the worker's
    * `submission` event. */
