@@ -39,7 +39,7 @@ import { showMention, mentionKey, endMention, jumpToMention } from './prompter/m
 import { showTransientNotice, clearTransientNotice, panel, panelKey } from './prompter/notices.js';
 import { answerApproval, restoreTellingDraft, approval, withdrawApproval, askQuestions, questionKey, presentNextApproval, settleApprovals } from './prompter/approvals.js';
 import { activity, setPlan, settlePlan, activityEvent, settleThought, markDrawn, joinMark, joinThought, settleDecision, ofThisTurn, settleSavedStops } from './prompter/activity-state.js';
-import { editTurnDraft, waitingUserMessages, enterAgainReady, turnHasAnswer, takeBackWaiting, submitWaiting, waitingLabel, updateWaitingLabel, joinedWaiting, startWaiting, turnStarting, toolStatus, turnWaits, waitingOnUser, scheduleWaitingTick, stepTokens, setTurnUsage, setBackgroundWork, pauseClock, resumeClock, flushWaitingSubmissions, leaveTurn, turnStopped, turnStopping, stopSettled, onWaitingEnded, stopWaiting, vendorAnswered, phase } from './prompter/waiting-turn.js';
+import { editTurnDraft, waitingUserMessages, enterAgainReady, turnHasAnswer, takeBackWaiting, submitWaiting, waitingLabel, updateWaitingLabel, joinedWaiting, startWaiting, turnStarting, adoptSubmission, toolStatus, turnWaits, waitingOnUser, scheduleWaitingTick, stepTokens, setTurnUsage, setBackgroundWork, pauseClock, resumeClock, flushWaitingSubmissions, leaveTurn, turnStopped, turnStopping, stopSettled, onWaitingEnded, stopWaiting, vendorAnswered, phase } from './prompter/waiting-turn.js';
 import { statusText, waitingLine, escStops, updateWaiting, schedulePaint, flushPaint, paintWaiting, repaint } from './prompter/waiting-band.js';
 import { onWaitingKey } from './prompter/waiting-keys.js';
 import { openSubView, closeSubView, subViewKey, paintSubView, type SubView } from './prompter/subagent-host.js';
@@ -717,6 +717,7 @@ const methods = {
   signInScreen,
   startWaiting,
   turnStarting,
+  adoptSubmission,
   toolStatus,
   turnWaits,
   waitingOnUser,

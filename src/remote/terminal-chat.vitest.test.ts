@@ -38,7 +38,7 @@ class FakeRemoteBridge extends EventEmitter {
   readonly stdin = new PassThrough();
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
-  readonly requests: Array<{ type: string; mode?: string; sessionId?: string; text?: string; query?: string }> = [];
+  readonly requests: Array<{ type: string; mode?: string; sessionId?: string; text?: string; query?: string; action?: string; parentId?: string; requestId?: string }> = [];
   private chat = '';
   /** How a `send` is answered: done at once unless a test says otherwise. */
   onSend: (request: { id: string; text: string }) => void = (request) => this.say({ type: 'send-complete', id: request.id });
@@ -55,6 +55,11 @@ class FakeRemoteBridge extends EventEmitter {
         this.say({ type: 'result', requestId: request.requestId, ok: true, data: { sessionId } });
       }
       if (request.type === 'send') this.onSend(request);
+      if (request.type === 'subagent') {
+        const answered = request.action === 'read' ? { rows: [{ kind: 'prompt', text: 'Find why the deploy stalls' }, { kind: 'text', text: `read ${request.parentId}` }], steer: 'relay' } : undefined;
+        if (request.parentId === 'refused') this.say({ type: 'result', requestId: request.requestId, ok: false, error: 'Not sent: the sub-agent has finished.' });
+        else this.say({ type: 'result', requestId: request.requestId, ok: true, ...(answered ? { data: answered } : {}) });
+      }
       if (request.type === 'query' && request.query === 'slash-commands') {
         this.say({ type: 'result', requestId: request.requestId, ok: true, data: [
           { command: '/model', description: 'choose the model', argHint: '[model]', group: 'Provider', argValues: [{ value: 'opus' }, { value: 'sonnet' }] },
@@ -76,6 +81,8 @@ class FakeRemoteBridge extends EventEmitter {
 /** A terminal whose prompt is answered by the test; everything else is noted. */
 const fakeTerminal = () => {
   const said: string[] = [];
+  /** What the chat set on the terminal (its sub-agent reader and sender), by name. */
+  const assigned: Record<string, unknown> = {};
   /** Every other call, by name, with its arguments. */
   const calls: Array<[string, ...unknown[]]> = [];
   const prompts: Array<{ answer: (line: string) => void; items: Array<{ value: string; argValues?: () => unknown }>; options: Record<string, unknown> }> = [];
@@ -89,6 +96,7 @@ const fakeTerminal = () => {
           prompts.push({ answer: resolve, items, options });
         });
       }
+      if (String(key) in assigned && assigned[String(key)] !== undefined) return assigned[String(key)];
       if (key === 'activity') return (line: string) => said.push(line);
       // An approval stays open until its signal aborts (answered in another window), then ends undecided.
       if (key === 'approval') {
@@ -101,9 +109,9 @@ const fakeTerminal = () => {
       if (key === 'then') return undefined;
       return (...args: unknown[]) => { calls.push([String(key), ...args]); };
     },
-    set: () => true,
+    set: (_target, key, value) => { assigned[String(key)] = value; return true; },
   }) as unknown as TerminalHarnessPrompter;
-  return { terminal, said, prompts, calls };
+  return { terminal, said, prompts, calls, assigned };
 };
 
 const until = async (check: () => boolean, ms = 5_000): Promise<void> => {
@@ -256,7 +264,8 @@ describe('a message typed in a chat on another machine', () => {
     calls.length = 0;
     prompts[0]!.answer('never ran');
     await until(() => prompts.length === 2);
-    const order = calls.map((call) => `${call[0]}${call[1] === undefined ? '' : ` ${String(call[1])}`}`);
+    // (turnStarting is given the way to step away from the turn; only that it was drawn matters here.)
+    const order = calls.map((call) => (call[0] === 'turnStarting' ? 'turnStarting' : `${call[0]}${call[1] === undefined ? '' : ` ${String(call[1])}`}`));
     expect(order).toEqual(expect.arrayContaining(['submitted never ran', 'turnStarting', 'restoreDraft never ran', 'submitted', 'stopWaiting']));
     expect(order.indexOf('submitted')).toBeGreaterThan(order.indexOf('restoreDraft never ran'));
     bridge.drop();
@@ -556,6 +565,78 @@ describe('a message typed in a chat on another machine', () => {
       bridge.drop();
       await outcome;
     } finally { copying.fail = undefined; await rm(folder, { recursive: true, force: true }); }
+  }, 20_000);
+
+  it('a sub-agent opened in a chat on another machine is read there, and a message to it goes there', async () => {
+    const { bridge, assigned, outcome } = await start();
+    const read = assigned.subAgentRead as (parentId: string) => Promise<unknown[]>;
+    const steer = assigned.subAgentSteer as (ref: { id: string; agentId?: string }, text: string) => Promise<string | undefined>;
+    expect(read, 'without it the view reads this computer\'s disk for a transcript that is on the other machine').toBeTypeOf('function');
+    expect(await read('a1')).toEqual([{ kind: 'prompt', text: 'Find why the deploy stalls' }, { kind: 'text', text: 'read a1' }]);
+    expect(bridge.requests.find((request) => request.type === 'subagent')).toMatchObject({ action: 'read', parentId: 'a1' });
+    // Sent: nothing to say. Refused: the machine's reason, for the view to show.
+    expect(await steer({ id: 'a1', agentId: 'x9' }, 'also check the retry')).toBeUndefined();
+    expect(bridge.requests.filter((request) => request.type === 'subagent').at(-1)).toMatchObject({ action: 'steer', parentId: 'a1', text: 'also check the retry' });
+    expect(await steer({ id: 'refused' }, 'hello')).toBe('Not sent: the sub-agent has finished.');
+    bridge.drop();
+    await outcome;
+  }, 20_000);
+
+  it('Left while a turn this window started runs steps away from it at once: the prompt comes back, the turn goes on there', async () => {
+    const { bridge, calls, prompts, outcome } = await start();
+    // The machine runs the turn: its send is not done until the turn ends, which here is never.
+    bridge.onSend = () => undefined;
+    calls.length = 0;
+    prompts[0]!.answer('start the long job');
+    await until(() => bridge.requests.some((request) => request.type === 'send'));
+    bridge.say({ type: 'turn-start', prompt: 'start the long job' });
+    await until(() => named(calls, 'startWaiting').length === 1);
+    const leave = named(calls, 'startWaiting')[0]![5] as () => void;
+    leave();
+    // Without the wait being let go of, the loop sat at the turn's end and no prompt was ever asked for again.
+    await until(() => prompts.length === 2);
+    expect(bridge.requests.some((request) => request.type === 'cancel')).toBe(false);
+    bridge.drop();
+    await outcome;
+  }, 20_000);
+
+  it('Left before the machine has started the turn steps away too', async () => {
+    const { bridge, calls, prompts, outcome } = await start();
+    bridge.onSend = () => undefined;
+    calls.length = 0;
+    prompts[0]!.answer('start the long job');
+    await until(() => named(calls, 'turnStarting').length === 1);
+    // The turn is queued behind other work there and has not begun: Left is still Left.
+    (named(calls, 'turnStarting')[0]![1] as () => void)();
+    await until(() => prompts.length === 2);
+    bridge.drop();
+    await outcome;
+  }, 20_000);
+
+  it('a message the machine steered into a turn this window was not following is a waiting message here, not gone', async () => {
+    const { bridge, calls, prompts, outcome } = await start();
+    calls.length = 0;
+    prompts[0]!.answer('also check the retry');
+    await until(() => bridge.requests.some((request) => request.type === 'send'));
+    const id = (bridge.requests.find((request) => request.type === 'send') as { id?: string }).id!;
+    // The machine's send is "done" at once -- the message went into a running turn -- and the answer of the worker follows.
+    await until(() => prompts.length === 2);
+    bridge.say({ type: 'worker', sessionId: 'c1', event: { type: 'submission', id, disposition: 'steered' } });
+    await until(() => named(calls, 'adoptSubmission').length === 1);
+    expect(named(calls, 'adoptSubmission')[0]!.slice(1)).toEqual([id, 'also check the retry', 'steered']);
+    // The turn it went into is followed.
+    expect(named(calls, 'startWaiting').length).toBeGreaterThan(0);
+    bridge.drop();
+    await outcome;
+  }, 20_000);
+
+  it('a turn another window started on the chat is followed from its start', async () => {
+    const { bridge, calls, outcome } = await start();
+    calls.length = 0;
+    bridge.say({ type: 'worker', sessionId: 'c1', event: { type: 'waiting-start', message: 'thinking', prompt: 'from the other window' } });
+    await until(() => named(calls, 'startWaiting').length === 1);
+    bridge.drop();
+    await outcome;
   }, 20_000);
 
   it('shows the whole conversation from a bridge that sends only what changed', async () => {

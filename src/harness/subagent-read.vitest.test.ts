@@ -56,3 +56,13 @@ describe('liveSubAgentRows', () => {
     expect((rows[0] as { event: { kind: string } }).event.kind).toBe('tool-done');
   });
 });
+
+describe('what a Claude sub-agent thought', () => {
+  it('is kept whole on its row, not only that it thought', () => {
+    const line = JSON.stringify({ type: 'assistant', message: { id: 'm1', content: [{ type: 'thinking', thinking: 'The retry lives in the client, so the fix is there.' }, { type: 'tool_use', id: 'u1', name: 'Bash', input: { command: 'ls' } }] } });
+    const rows = claudeTranscriptRows(line);
+    expect(rows[0]).toMatchObject({ kind: 'activity', thought: 'The retry lives in the client, so the fix is there.' });
+    expect(rows[1]).toMatchObject({ kind: 'activity' });
+    expect(rows[1]).not.toHaveProperty('thought');
+  });
+});

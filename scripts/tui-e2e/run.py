@@ -908,6 +908,24 @@ SCENARIOS = {
         'final_contains': ['Image attachments are not available for Grok Build'],
         'never': ['ENOENT', 'Could not copy the image', 'Connection to devbox', 'Answered on devbox.'],
     },
+    # Left while a turn THIS window started runs on another machine: the list comes up at once and the turn goes on there. The chat's loop
+    # used to wait for the machine to finish the turn, so Left dropped the turn's screen and nothing answered the keys.
+    'remote-chat-left-in-turn': {
+        'setup': remote_move(remote_env={'FAKE_TURNS': json.dumps([
+            {'thought': {'text': 'Pondering the request slowly.', 'ms': 30000}, 'blocks': ['Never gets here.']}])}),
+        'startup': 4, 'no_dup_check': 'the transcript is drawn again on the other machine',
+        'turns': [{'blocks': ['First answer here.']}],
+        'steps': [
+            ('type', 'hello there'), ('wait_for', 'First answer here.', 30), ('settle', 1),
+            ('type', '/machine'), ('wait_for', 'Move this chat to', 20), ('settle', 1),
+            ('keys', '\x1b[B'), ('keys', '\r'), ('wait_for', 'devbox  •', 60), ('settle', 2),
+            ('type', 'start the long job'), ('wait_for', 'Pondering', 30), ('settle', 1),
+            ('keys', '\x1b[D'), ('wait_for', 'enter open', 10), ('settle', 1), ('snap', 'list'),
+        ],
+        'watch': [],
+        'snap_contains': {'list': ['Working', 'enter open']},
+        'never': ['ENOENT', 'Connection to devbox'],
+    },
     # A chat on another machine over a slow link (devbox's every byte back
     # 2.5 s late): a message typed there is drawn at once, with the turn's
     # wait, as a chat here draws one -- not when the machine's turn-start

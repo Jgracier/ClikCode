@@ -281,9 +281,22 @@ export function startWaiting(
  * a node process loading. The message and the spinner are drawn now;
  * startWaiting then takes over the same clock and draft, and an interrupt
  * pressed meanwhile. */
-export function turnStarting(this: TerminalHarnessPrompter): void {
-  this.startWaiting('thinking');
+export function turnStarting(this: TerminalHarnessPrompter, onLeave?: () => void): void {
+  // `onLeave`: Left steps away from a turn that has not begun yet too -- the turn goes on there, and the window is not held at it.
+  this.startWaiting('thinking', undefined, undefined, undefined, onLeave);
   if (this.turn) this.turn.early = {};
+}
+
+/** A message this window typed that the machine took into a turn this window was not following (it steered it in, or queued it behind
+ * the running one): its row, as a message typed during a turn has, under the id the window gave it. */
+export function adoptSubmission(this: TerminalHarnessPrompter, id: string, text: string, disposition: 'steered' | 'queued'): void {
+  if (this.waitingSubmissions.some((item) => item.id === id)) return;
+  const sequence = ++this.timelineSequence;
+  this.waitingSubmissions.push({
+    localId: ++this.waitingSubmissionId, id, text, responseOffset: this.liveResponse.length, sequence, state: disposition,
+    ...(disposition === 'steered' ? { ack: { sequence: ++this.timelineSequence, responseOffset: this.liveResponse.length } } : {}),
+  });
+  this.updateWaiting();
 }
 
 /** What the status line says about the newest open call, if any is open. */
