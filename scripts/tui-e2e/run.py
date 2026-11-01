@@ -807,14 +807,14 @@ SCENARIOS = {
             ('keys', '\x1b[B'), ('keys', '\r'), ('wait_for', 'devbox  •', 60), ('settle', 2), ('snap', 'moved'),
             ('type', 'where are you now'), ('wait_for', 'Answered on devbox.', 60), ('settle', 1), ('snap', 'answered'),
             ('type', 'and again'), ('wait_for', 'Second answer on devbox.', 60), ('settle', 1), ('snap', 'again'),
-            # Two bridges there so far: the window's (both boards, the list and the move) and the moved chat's own.
-            ('expect_file_count', 'remote/ssh.log', 'ide-bridge --stdio', 2),
+            # One bridge there: the window's, for both boards, the list, the move and the moved chat -- a chat opens on that connection, not on an ssh of its own.
+            ('expect_file_count', 'remote/ssh.log', 'ide-bridge --stdio', 1),
             # Its slash menu is devbox's: `/` shows it, with /machine; a command chosen runs there.
             ('keys', '/'), ('wait_for', '/model', 10), ('settle', 1), ('snap', 'menu'),
             ('keys', 'mach'), ('wait_for', '/machine', 10), ('settle', 0.5), ('snap', 'menu-machine'),
             ('keys', '\x7f\x7f\x7f\x7f'), ('settle', 0.5),
             ('keys', 'model grok-4-fast'), ('settle', 1), ('keys', '\r'), ('wait_for', 'grok-4-fast', 30), ('settle', 1), ('snap', 'model'),
-            # Left: the chats of the machine this chat is on, devbox -- it is listed there.
+            # Left: this machine's list, which holds every machine's chats -- the chat on devbox is in it.
             ('keys', '\x1b[D'), ('wait_for', 'hello there', 20), ('settle', 1), ('snap', 'board'),
             # Left again: the machines, then this machine's own list: the chat that moved is live on devbox, and it is listed there, under devbox's heading, not gone.
             ('keys', '\x1b[D'), ('wait_for', 'devbox  · connected', 20), ('settle', 1),
@@ -829,8 +829,8 @@ SCENARIOS = {
             ('expect_file_count', 'remote-prompts.log', 'Earlier in this chat', 1),
             ('expect_file_count', 'remote-prompts.log', '"and again"', 1),
             ('expect_file_count', 'remote-prompts.log', '"third time"', 1),
-            # One more: the chat's own again, opened from devbox's list (the board's lists went over the window's).
-            ('expect_file_count', 'remote/ssh.log', 'ide-bridge --stdio', 3),
+            # Still the one: opening the chat again, from devbox's list, was a message on the window's connection.
+            ('expect_file_count', 'remote/ssh.log', 'ide-bridge --stdio', 1),
         ],
         'watch': [],
         'snap_contains': {
