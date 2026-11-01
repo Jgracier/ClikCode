@@ -23,8 +23,8 @@ import { workersDirectory } from './registry.js';
 import { watchConversationList } from '../session/list-watch.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { cancelOrigin, isTranscriptActivity, type CancelOrigin, type WorkerEvent } from './protocol.js';
-import type { HarnessSession, TurnMark } from '../session/model.js';
-import { applyLiveEvent, drawJoinedTurn, newLiveTurnState, type LiveTurnState } from './joined-turn.js';
+import type { HarnessSession } from '../session/model.js';
+import { applyLiveEvent, drawJoinedTurn, newLiveTurnState, recordDecision, type LiveTurnState } from './joined-turn.js';
 import { withSignIn } from '../commands/account.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
@@ -274,19 +274,6 @@ export async function workerQueueMark(sessionId: string): Promise<number> {
 }
 const UNATTACHED = -1;
 
-/** The settled row of a request another window decided, kept for any window
- * that draws this turn later. The worker's number for it is not in the
- * event, so it is kept unsequenced and read in arrival order. */
-function recordDecision(tracker: WorkerTracker, event: Extract<WorkerEvent, { type: 'request-closed' }>): TurnMark | undefined {
-  if (!tracker.running || !event.outcome || !event.label) return undefined;
-  const id = `outcome:${event.id}`;
-  const existing = tracker.marks.find((mark) => mark.id === id);
-  if (existing) return undefined;
-  const mark: TurnMark = { kind: 'outcome', id, seq: 0, responseOffset: tracker.liveText.length, outcome: event.outcome, label: event.label, ...(event.callId ? { callId: event.callId } : {}) };
-  tracker.marks = [...tracker.marks, mark];
-  tracker.unsequenced.push(id);
-  return mark;
-}
 
 /** Draws the running turn as far as it has got. Safe to repeat: the text is
  * replaced, an activity the window already shows is skipped by its index,

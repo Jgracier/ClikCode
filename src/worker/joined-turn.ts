@@ -123,6 +123,20 @@ export function applyLiveEvent(state: LiveTurnState, event: WorkerEvent): void {
   }
 }
 
+/** The settled row of a request another window decided, kept for any window
+ * that draws this turn later. The worker's number for it is not in the
+ * event, so it is kept unsequenced and read in arrival order. */
+export function recordDecision(tracker: LiveTurnState, event: Extract<WorkerEvent, { type: 'request-closed' }>): TurnMark | undefined {
+  if (!tracker.running || !event.outcome || !event.label) return undefined;
+  const id = `outcome:${event.id}`;
+  const existing = tracker.marks.find((mark) => mark.id === id);
+  if (existing) return undefined;
+  const mark: TurnMark = { kind: 'outcome', id, seq: 0, responseOffset: tracker.liveText.length, outcome: event.outcome, label: event.label, ...(event.callId ? { callId: event.callId } : {}) };
+  tracker.marks = [...tracker.marks, mark];
+  tracker.unsequenced.push(id);
+  return mark;
+}
+
 /** The part of the terminal prompter a joined turn is drawn through. */
 export interface JoinedTurnSurface {
   response(text: string, mode: 'replace'): void;
