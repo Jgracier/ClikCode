@@ -22,18 +22,16 @@ describe('the board spinner', () => {
       setSelecting: () => undefined,
       select: async () => undefined,
     };
-    const chosen: string[] = [];
     const opened = runConversationBoard(host as never, {
       conversations: (machine) => [{ label: machine === 'remote' ? 'Remote chat' : 'Local chat', value: `${machine}:chat` }],
       machines: () => [{ label: 'This machine', value: 'local' }, { label: 'MacBook', value: 'remote' }],
-      commands: [], onMachineSelected: (machine) => chosen.push(machine),
+      commands: [],
     });
     expect(painted.at(-1)?.labels).toEqual(['   Local chat']);
     keyHandler?.('\u001b[D');
     expect(painted.at(-1)).toMatchObject({ labels: ['This machine', 'MacBook'], selected: 0, title: 'Machines' });
     keyHandler?.('\u001b[B');
     keyHandler?.('\u001b[C');
-    expect(chosen).toEqual(['remote']);
     expect(painted.at(-1)?.labels).toEqual(['   Remote chat']);
     keyHandler?.('\u001b[C');
     expect(await opened).toEqual({ open: 'remote:chat' });

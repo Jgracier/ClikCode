@@ -15,7 +15,6 @@ type Section = ConversationSection;
 /** The terminal board's sections, in its order and words (session/conversation-state.ts). */
 const SECTIONS = (['working', 'active', 'past'] as const).map((section): [Section, string] => [section, SECTION_TITLES[section]]);
 const ACTIVE_WITHIN_MS = 24 * 60 * 60 * 1000;
-let lastHistoryMachine = 'local';
 const lastHistoryChat = new Map<string, string>();
 
 /** The row's section as ClikCode decided it; a bridge from before `section`
@@ -117,7 +116,7 @@ export function ConversationMark({ row, state }: { row: ListedConversation; stat
  * delete are on each row; the rest (fork, archive) are slash commands. */
 export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onError: (message: string) => void; initialScreen?: 'chats' | 'machines' }): JSX.Element {
   const { rows: localRows, load } = useConversations(props.onError, undefined, 'local');
-  const [machineId, setMachineId] = useState(props.model.machineId ?? (props.initialScreen === 'machines' ? 'local' : lastHistoryMachine));
+  const [machineId, setMachineId] = useState('local');
   const [showMachines, setShowMachines] = useState(props.initialScreen === 'machines');
   const [machines, setMachines] = useState<ListedMachine[]>();
   const [remoteRows, setRemoteRows] = useState<ListedConversation[]>();
@@ -229,7 +228,7 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
     return result;
   }, [rows, query, renaming, confirming, second, machines, otherRows, localRows]);
 
-  const showChats = (id: string): void => { lastHistoryMachine = id; setMachineId(id); setShowMachines(false); setSearch(''); };
+  const showChats = (id: string): void => { setMachineId(id); setShowMachines(false); setSearch(''); };
   // A machine from the tailnet is added first (which user, then the install); its chats are listed then.
   const [adding, setAdding] = useState<string>();
   const add = (machine: ListedMachine): void => {

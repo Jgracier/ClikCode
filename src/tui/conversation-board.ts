@@ -185,7 +185,6 @@ export interface ConversationBoardSettings {
   /** When present, Left from chats opens this machine list. */
   machines?: () => readonly PickerOption<string>[];
   initialMachine?: string;
-  onMachineSelected?: (machineId: string) => void;
   /** A machine row that is one to add (from the tailnet), not chats to list:
    * choosing it closes the board with `{ addMachine }`. */
   addable?: (machineId: string) => boolean;
@@ -366,7 +365,6 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
           }
           if (chosen) {
             machine = chosen.value;
-            settings.onMachineSelected?.(machine);
             level = 'chats';
             state.selected = chatSelections.get(machine) ?? boardStartRow(settings.conversations(machine));
           }

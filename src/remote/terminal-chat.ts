@@ -504,8 +504,8 @@ export async function runRemoteChat(
         let line = leftTurn ? BOARD_LINE : (await terminal.question('› ', commands, { rightArrowPalette: true, leftArrowCommand: BOARD_LINE, signal: promptController.signal })).trim();
         leftTurn = false;
         if (line === BOARD_LINE) {
-          // Left from a chat on another machine: that machine's chats first.
-          const picked = await interactiveSessionPicker(terminal, localId, commands, { machine: machine.id });
+          // The list is this machine's, wherever the chat is: it holds every machine's chats.
+          const picked = await interactiveSessionPicker(terminal, localId, commands);
           if (!picked) continue;
           if ('remote' in picked) { choice = picked.remote; draft = picked.draft; break; }
           if ('id' in picked) return picked.id;
