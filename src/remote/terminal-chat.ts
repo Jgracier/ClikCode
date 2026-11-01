@@ -355,6 +355,10 @@ export async function runRemoteChat(
     }
     // On the window's connection to the machine when it has one (no ssh, no process started there); else over an ssh of its own.
     const bridge = new TerminalBridge(machine.sshTarget, startBridge, undefined, startBridge ? undefined : (chat, handlers) => tapWindowMachine(machine.id, chat, handlers));
+    // A sub-agent opened in this window is read from the machine its chat runs on: its transcript is there, not on this computer's disk.
+    terminal.subAgentRead = (parentId) => bridge.request<{ rows?: import('../harness/subagent-read.js').SubAgentRow[] } | undefined>({ type: 'subagent', parentId, action: 'read' }).then((data) => data?.rows ?? []);
+    terminal.subAgentSteer = (ref, text) => bridge.request({ type: 'subagent', parentId: ref.id, action: 'steer', text, ...(ref.agentId ? { agentId: ref.agentId } : {}) })
+      .then(() => undefined, (error: unknown) => (error instanceof Error ? error.message : String(error)));
     // Images typed into a message here, copied to this machine for the chat to read; taken off again when the chat is left.
     const images = new RemoteImages(machine.sshTarget);
     let session: HarnessSession | undefined;
@@ -390,6 +394,8 @@ export async function runRemoteChat(
     /** Approvals and questions this window has open, closed by `request-closed`. */
     const openPrompts = new Map<string, AbortController>();
     const completions = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
+    /** Messages typed here (not commands), by the id this window gave them, until the machine says what became of each. */
+    const typed = new Map<string, string>();
     const promptController = new AbortController();
     const signIns = new Map<string, SignInScreen>();
     /** Sign-ins with a question of the vendor's own open on their screen: the card's key row waits for it. */
@@ -460,13 +466,17 @@ export async function runRemoteChat(
     /** `label`: what the worker says the turn is doing. A turn that is the vendor's own background work
      * (live.vendorWork) is not the model thinking, and said so: this window joining it must not draw it as
      * "thinking" with a clock that runs for as long as the vendor holds the work. */
+    /** Left with nothing typed: this window steps away from the turn, which goes on there. Whatever this window was waiting on -- the
+     * turn it was following, or the answer to a message it just sent -- is let go of, so the prompt (and the list) come back at once. */
+    let wakeLeave: (() => void) | undefined;
+    const leave = (): void => { leftTurn = true; waitingInput = false; finishTurn?.(); terminal.stopWaiting(); wakeLeave?.(); };
     const beginWaiting = (prompt?: string, label = 'thinking'): void => {
       if (waitingInput) return;
       waitingInput = true;
       turnEnd = new Promise<void>((resolve) => { finishTurn = resolve; });
       if (prompt !== undefined) terminal.submitted(prompt);
       terminal.startWaiting(label, (restoreDraft) => bridge.post({ type: 'cancel', restoreDraft }),
-        queued, windowCommandOrQueued, () => { leftTurn = true; waitingInput = false; finishTurn?.(); terminal.stopWaiting(); },
+        queued, windowCommandOrQueued, leave,
         // Esc on a waiting message takes that message back, and does not stop the turn; "Enter again" offers it to the running turn now.
         takeBack, () => bridge.post({ type: 'send-queued' }));
     };
@@ -479,6 +489,7 @@ export async function runRemoteChat(
           for (const [id, pending] of submissions) {
             if (pending.text === event.prompt) pending.resolve({ type: 'submission', id, disposition: 'queued' });
           }
+          for (const [id, text] of typed) if (text === event.prompt) typed.delete(id);
           applyLiveEvent(liveTurn, { type: 'waiting-start', message: '', ...(event.prompt !== undefined ? { prompt: event.prompt } : {}) });
           // The message drawn on Enter: this turn carries it on (startWaiting takes over turnStarting's).
           early = undefined;
@@ -547,7 +558,23 @@ export async function runRemoteChat(
             openPrompts.get(worker.id)?.abort();
             openPrompts.delete(worker.id);
           }
-          else if (worker.type === 'submission') submissions.get(worker.id)?.resolve(worker);
+          else if (worker.type === 'submission') {
+            submissions.get(worker.id)?.resolve(worker);
+            // A message sent from the idle prompt that the machine took into a turn this window was not following (another window's, the
+            // vendor's own background work): it is not a turn of its own, so the echo drawn for it goes, and it is a waiting message --
+            // steered or queued -- as one typed during a turn is. Left alone it vanished, and showed only when the chat was opened again.
+            const text = typed.get(worker.id);
+            if (text !== undefined && (worker.disposition === 'steered' || worker.disposition === 'queued')) {
+              typed.delete(worker.id);
+              dropEarly();
+              running = true;
+              beginWaiting(liveTurn.prompt);
+              terminal.adoptSubmission(worker.id, text, worker.disposition);
+            }
+          }
+          else if (worker.type === 'submit-queued') dropEarly();
+          // A turn another window (or the vendor) started on this chat: followed as one this window began, not seen only once it ends.
+          else if (worker.type === 'waiting-start') { running = true; beginWaiting(worker.prompt, worker.vendorWork ? worker.message : undefined); }
           else if (worker.type === 'unqueued') takeBacks.get(worker.id)?.(worker.outcome);
           else if (worker.type === 'steerable') terminal.setSteerable(worker.value);
           else if (worker.type === 'stopping') terminal.turnStopping(worker.restoreDraft === true);
@@ -730,7 +757,7 @@ export async function runRemoteChat(
         sending = line;
         // A message (not a command) is drawn now, with the turn's wait, as a
         // chat here draws one: the machine's answer is a round trip away.
-        if (!/^[/!]/.test(line)) { early = line; terminal.submitted(line); terminal.turnStarting(); }
+        if (!/^[/!]/.test(line)) { early = line; typed.set(id, line); terminal.submitted(line); terminal.turnStarting(leave); }
         // Images the message names are files on this computer: copied to the machine the chat runs on first (remote/attach.ts).
         let wire: string;
         try { wire = await images.forMachine(line); } catch (error) {
@@ -742,7 +769,11 @@ export async function runRemoteChat(
           continue;
         }
         try { bridge.post({ type: 'send', text: pinnedUpdateLine(wire, localBuildCommit()), id }); } catch (error) { dropEarly(); throw error; }
-        await complete;
+        // Until the machine says it is done -- which for a turn this message starts is when that turn ends -- or the user steps away from it
+        // (Left): waiting on `complete` alone held the loop at the turn, so Left dropped the turn's screen and nothing answered the keys.
+        const stepped = new Promise<void>((resolve) => { wakeLeave = resolve; });
+        await Promise.race([complete, stepped]);
+        wakeLeave = undefined;
         sending = undefined;
         // /update ran there: the window's connection there (the board's) goes to the build it installed.
         if (parseSlashInput(line)?.head === 'update') reconnectWindowMachine(machine.id);
@@ -774,7 +805,7 @@ export async function runRemoteChat(
       // for Enter on the new connection.
       if (sending !== undefined) draft = sending;
       continue;
-    } finally { keeper.now(); void images.release(); promptController.abort(); for (const screen of signIns.values()) screen.stop(); bridge.close(); terminal.remoteMachineName = undefined; }
+    } finally { terminal.subAgentRead = undefined; terminal.subAgentSteer = undefined; keeper.now(); void images.release(); promptController.abort(); for (const screen of signIns.values()) screen.stop(); bridge.close(); terminal.remoteMachineName = undefined; }
   }
   return undefined;
 }

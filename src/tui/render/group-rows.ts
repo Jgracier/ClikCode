@@ -42,6 +42,12 @@ export class GroupExpansion {
     return now;
   }
 
+  /** Minimises the group, if it was open. */
+  close(id: string): void {
+    const state = this.groups.get(id);
+    if (state) state.open = false;
+  }
+
   clear(): void { this.groups.clear(); }
 }
 

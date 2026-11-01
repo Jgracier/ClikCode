@@ -58,8 +58,10 @@ export function openSubView(this: TerminalHarnessPrompter): boolean {
   const siblings = subAgentRefs(events, command, modes);
   // A harness that publishes nothing of its sub-agents has nothing to open (docs/SUBAGENTS.md).
   const readable = siblings.filter((ref) => ref.read !== 'none');
+  // Only one the reader has opened -- is "on". Right with none open is the command menu: falling back to whichever agent was running
+  // made Right open a sub-agent whenever one ran, and again after leaving its view.
   const expanded = readable.filter((ref) => this.groupExpansion.isOpen(`call:${ref.id}`));
-  const ref = expanded.at(-1) ?? readable.filter((item) => item.status === 'running').at(-1);
+  const ref = expanded.at(-1);
   const state = ref ? subAgentViewOpen(siblings, ref.id) : undefined;
   if (!state) return false;
   this.subView = { state, rows: [] };
@@ -75,6 +77,9 @@ export function closeSubView(this: TerminalHarnessPrompter): void {
   const view = this.subView;
   if (!view) return;
   if (view.timer) clearInterval(view.timer);
+  // Leaving the view leaves the agent: its row is put away, so Right is the command menu again unless the reader opens one.
+  const open = view.state.siblings[view.state.index];
+  if (open) this.groupExpansion.close(`call:${open.id}`);
   this.subView = undefined;
   if (this.turn) {
     this.requestRedraw('repair');

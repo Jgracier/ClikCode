@@ -18,7 +18,8 @@ import { normalizeActivityEvent } from './protocol/activity-normalize.js';
 export type SubAgentRow =
   | { kind: 'prompt'; text: string }
   | { kind: 'text'; text: string }
-  | { kind: 'activity'; event: HarnessActivityEvent };
+  /** `thought`: what the model thought, whole -- the call's own row says only that it did. */
+  | { kind: 'activity'; event: HarnessActivityEvent; thought?: string };
 
 type Json = Record<string, unknown>;
 const record = (value: unknown): Json | undefined => (value && typeof value === 'object' && !Array.isArray(value) ? value as Json : undefined);
@@ -35,7 +36,7 @@ class Rows {
     const last = this.rows[this.rows.length - 1];
     if (last?.kind === 'text') last.text += text; else this.rows.push({ kind: 'text', text });
   }
-  activity(event: HarnessActivityEvent): void {
+  activity(event: HarnessActivityEvent, thought?: string): void {
     const normalized = normalizeActivityEvent(event);
     const index = normalized.id ? this.at.get(normalized.id) : undefined;
     if (index !== undefined) {
@@ -44,7 +45,7 @@ class Rows {
       return;
     }
     if (normalized.id) this.at.set(normalized.id, this.rows.length);
-    this.rows.push({ kind: 'activity', event: normalized });
+    this.rows.push({ kind: 'activity', event: normalized, ...(thought ? { thought } : {}) });
   }
 }
 
@@ -84,7 +85,7 @@ export function claudeTranscriptRows(jsonl: string): SubAgentRow[] {
       for (const part of content) {
         const block = record(part);
         if (block?.type === 'text' && typeof block.text === 'string') rows.text(block.text);
-        else if (block?.type === 'thinking' && typeof block.thinking === 'string' && block.thinking.trim()) rows.activity({ kind: 'thinking', label: thoughtLabel(block.thinking), id: `thinking:${String(message?.id ?? rows.rows.length)}:${rows.rows.length}` });
+        else if (block?.type === 'thinking' && typeof block.thinking === 'string' && block.thinking.trim()) rows.activity({ kind: 'thinking', label: thoughtLabel(block.thinking), id: `thinking:${String(message?.id ?? rows.rows.length)}:${rows.rows.length}` }, block.thinking.trim());
         else if (block?.type === 'tool_use') {
           const name = String(block.name ?? 'tool');
           rows.activity({ kind: 'tool-start', ...toolFacts(name, record(block.input), ''), call: toolCall(name, record(block.input)), ...(typeof block.id === 'string' ? { id: block.id } : {}) });

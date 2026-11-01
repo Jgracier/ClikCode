@@ -76,3 +76,55 @@ describe('subAgentViewLines', () => {
     expect(lines.join('\n')).not.toContain('\u001b]52');
   });
 });
+
+describe('what a sub-agent did, shown under each call', () => {
+  const call = (id: string, command: string, output: string[], kind: 'tool-start' | 'tool-done' = 'tool-done'): SubAgentRow => ({
+    kind: 'activity',
+    event: { kind, label: `$ ${command}`, id, category: 'run', call: { name: 'Bash', input: { command } }, ...(output.length ? { output } : {}) } as never,
+  });
+  const thought: SubAgentRow = { kind: 'activity', event: { kind: 'thinking', label: 'Weighing the retry', id: 't1' } as never, thought: 'The retry lives in the client, so the fix belongs there and not in the caller.' };
+  const rows: SubAgentRow[] = [
+    { kind: 'prompt', text: 'Find why the deploy stalls' },
+    call('old1', 'grep -rn "stall" src/deploy', ['src/deploy/a.ts:12: stall'], 'tool-done'),
+    call('old2', 'cat src/deploy/a.ts', ['line one']),
+    call('old3', 'git log --oneline -5', ['abc123 fix']),
+    call('old4', 'ls -la', ['total 0']),
+    thought,
+    call('new1', 'pnpm vitest run src/deploy --reporter=dot', ['PASS 12 tests', 'FAIL 1 test: retries once']),
+    call('run1', 'tail -f /var/log/deploy.log', ['starting…'], 'tool-start'),
+  ];
+  const state = subAgentViewOpen(refs, 'a1')!;
+  const shown = (detail: 'recent' | 'all' | 'lines'): string[] => subAgentViewLines({ ...state, detail }, { vendor: 'Claude Code', mainStatus: 'main: running', rows, width: 100 }).map(strip);
+
+  it('opens the newest calls with the whole command and what came back, the thought whole, and the one still running', () => {
+    const text = shown('recent').join('\n');
+    expect(text).toContain('pnpm vitest run src/deploy --reporter=dot');
+    expect(text).toContain('FAIL 1 test: retries once');
+    expect(text).toContain('The retry lives in the client');
+    expect(text).toContain('tail -f /var/log/deploy.log');
+    // The oldest are one line each: their output is not under them.
+    expect(text).not.toContain('src/deploy/a.ts:12: stall');
+  });
+
+  it('all opens every call, lines opens none, and Tab goes round them', () => {
+    expect(shown('all').join('\n')).toContain('src/deploy/a.ts:12: stall');
+    const lines = shown('lines').join('\n');
+    expect(lines).not.toContain('FAIL 1 test: retries once');
+    expect(lines).not.toContain('The retry lives in the client');
+    let next = state;
+    const seen: string[] = [];
+    for (let step = 0; step < 3; step += 1) {
+      next = (subAgentViewKey(next, '\t', 'V') as { state: typeof state }).state;
+      seen.push(next.detail);
+    }
+    expect(seen).toEqual(['all', 'lines', 'recent']);
+    // Typing a Tab does not put one in the draft.
+    expect(next.draft).toBe('');
+  });
+
+  it('says in its last line how much is open', () => {
+    expect(shown('recent').at(-1)).toContain('tab: recent calls open');
+    expect(shown('all').at(-1)).toContain('tab: all calls open');
+    expect(shown('lines').at(-1)).toContain('tab: one line each');
+  });
+});

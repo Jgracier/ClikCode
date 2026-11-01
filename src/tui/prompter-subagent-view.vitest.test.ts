@@ -22,7 +22,7 @@ function follow(harness = 'claude') {
   (rl as unknown as { currentSession: unknown }).currentSession = { id: 's', nativeHarness: harness, workspace: '/w', messages: [], route: 'local' };
   const cancel = vi.fn();
   const leave = vi.fn();
-  rl.startWaiting('thinking', cancel, async () => ({ kind: 'sent' }) as never, undefined, leave);
+  rl.startWaiting('thinking', cancel, async () => ({ kind: 'sent' }) as never, async () => ({ kind: 'command' }) as never, leave);
   const key = (k: string): void => (rl as unknown as { onWaitingKey(k: string): void }).onWaitingKey(k);
   rl.activityEvent({ kind: 'tool-start', label: 'Agent explore', agent: true, id: 'a1' });
   rl.activityEvent({ kind: 'tool-start', label: '$ ls', id: 'c1', parentId: 'a1' });
@@ -33,12 +33,16 @@ const open = (rl: TerminalHarnessPrompter, id: string): void => { (rl.groupExpan
 const screen = (): string => written.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '');
 
 describe('sub-agent view in the terminal', () => {
-  it('Right opens the latest running agent; an expanded agent takes precedence', async () => {
+  it('Right opens a sub-agent only when one is open to read; with none it is the command menu, and not again once the view is left', async () => {
     const { rl, key } = follow();
     try {
+      // Agents are running, none opened: Right is the command menu, as when no agent runs.
       key('\u001b[C');
-      expect(rl.subView?.state.siblings[rl.subView.state.index]?.id).toBe('a2');
-      rl.closeSubView();
+      expect(rl.subView).toBeUndefined();
+      expect(rl.turn?.draft).toBe('/');
+      rl.turn!.draft = '';
+      rl.turn!.cursor = 0;
+      // One opened (a tap, Ctrl+O) is the one "on": Right goes into it.
       open(rl, 'a1');
       key('\u001b[C');
       expect(rl.subView?.state.siblings.map((s) => s.id)).toEqual(['a1', 'a2']);
@@ -46,6 +50,13 @@ describe('sub-agent view in the terminal', () => {
       await new Promise((resolve) => setTimeout(resolve, 150));
       expect(screen()).toContain('main > ');
       expect(screen()).toContain('main: running');
+      // Left puts it away: Right is the command menu again, not the same agent coming back.
+      key('\u001b[D');
+      expect(rl.subView).toBeUndefined();
+      expect(rl.groupExpansion.isOpen('call:a1')).toBe(false);
+      key('\u001b[C');
+      expect(rl.subView).toBeUndefined();
+      expect(rl.turn?.draft).toBe('/');
     } finally { rl.closeSubView(); rl.close(); }
   });
 

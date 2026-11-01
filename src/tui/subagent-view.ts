@@ -15,6 +15,7 @@ import { subAgentRef, subAgentSteerBlock, type SubAgentModes, type SubAgentRef }
 import { LOOK } from '../harness/protocol/look.js';
 import { look } from '../harness/protocol/tool-category-style.js';
 import type { SubAgentRow } from '../harness/subagent-read.js';
+import { itemDetailRows } from './render/group-rows.js';
 import { sanitizeTerminalText } from './render/text.js';
 import { visibleSlice } from './render/width.js';
 
@@ -27,7 +28,15 @@ export interface SubAgentViewState {
   cursor: number;
   /** The animation step; the ring spins while the sub-agent runs. */
   frame: number;
+  /** How much of each call is shown: `recent` -- the newest few with their command, arguments, outcome and output, and whatever is
+   * running; `all` of them so; `lines` -- one line a call. Tab goes round them. */
+  detail: SubAgentDetail;
 }
+
+export type SubAgentDetail = 'recent' | 'all' | 'lines';
+const DETAILS: readonly SubAgentDetail[] = ['recent', 'all', 'lines'];
+/** The calls `recent` opens, counted from the newest. */
+export const RECENT_CALLS = 4;
 
 type SubAgentViewEffect =
   | { type: 'none' }
@@ -54,7 +63,7 @@ export function subAgentRefs(events: readonly HarnessActivityEvent[], harness: s
 
 export function subAgentViewOpen(siblings: readonly SubAgentRef[], id: string): SubAgentViewState | undefined {
   const index = siblings.findIndex((ref) => ref.id === id);
-  return index < 0 ? undefined : { siblings, index, draft: '', cursor: 0, frame: 0 };
+  return index < 0 ? undefined : { siblings, index, draft: '', cursor: 0, frame: 0, detail: 'recent' };
 }
 
 const current = (state: SubAgentViewState): SubAgentRef => state.siblings[state.index]!;
@@ -64,6 +73,8 @@ export function subAgentViewKey(state: SubAgentViewState, key: string, vendor: s
   const writable = subAgentSteerBlock(ref, vendor) === undefined;
   const empty = state.draft === '';
   if (key === '\u001b' || key === '\u0003' || (key === '\u001b[D' && empty)) return { type: 'back' };
+  // Tab: more of what each call did, or less.
+  if (key === '\t') return { type: 'state', state: { ...state, detail: DETAILS[(DETAILS.indexOf(state.detail) + 1) % DETAILS.length]! } };
   if (empty && (key === '\u001b[A' || key === '\u001b[B')) {
     const next = state.index + (key === '\u001b[A' ? -1 : 1);
     if (next < 0 || next >= state.siblings.length) return { type: 'none' };
@@ -115,6 +126,7 @@ export function subAgentViewLines(state: SubAgentViewState, host: SubAgentViewHo
   const width = Math.max(10, host.width);
   const fit = (line: string): string => visibleSlice(line, width);
   const lines: string[] = [fit(subAgentHeader(ref, state.frame)), ''];
+  const calls = host.rows.filter((row) => row.kind === 'activity');
   const siblings = state.siblings.length > 1 ? ` (${state.index + 1}/${state.siblings.length})` : '';
   for (const row of host.rows) {
     if (row.kind === 'prompt') {
@@ -123,13 +135,23 @@ export function subAgentViewLines(state: SubAgentViewState, host: SubAgentViewHo
     } else if (row.kind === 'text') {
       for (const line of sanitizeTerminalText(row.text).split('\n')) lines.push(fit(line));
       lines.push('');
-    } else for (const line of renderActivityLine(row.event)) lines.push(fit(line));
+    } else {
+      for (const line of renderActivityLine(row.event)) lines.push(fit(line));
+      // What the call was and what came of it, under its row: the whole command, its arguments, how it ended, its output -- or the
+      // thought, whole. One line a call showed that a command ran and nothing of what it was.
+      const index = calls.indexOf(row);
+      const open = state.detail === 'all' || (state.detail === 'recent' && (index >= calls.length - RECENT_CALLS || row.event.kind === 'tool-start'));
+      if (open) {
+        const entry = { anchor: 0, lines: [], event: row.event, ...(row.thought ? { thought: { durationMs: 0, text: row.thought } } : {}) };
+        for (const detail of itemDetailRows(entry as never, Math.max(1, width - 6))) lines.push(fit(`    ${detail}`));
+      }
+    }
   }
   if (host.notice) lines.push(fit(look.paint.neutral(host.notice)));
   const block = subAgentSteerBlock(ref, host.vendor);
   // The screen belongs to this sub-agent: rows above its own are not the main chat's.
   if (host.height) lines.push(...Array.from({ length: Math.max(0, host.height - lines.length - 3) }, () => ''));
   lines.push('', fit(block ? look.paint.neutral(block) : `› ${state.draft}`));
-  lines.push(fit(look.paint.neutral(`${host.mainStatus}${siblings}  ·  ←/esc back${state.siblings.length > 1 ? '  ↑↓ sub-agents' : ''}`)));
+  lines.push(fit(look.paint.neutral(`${host.mainStatus}${siblings}  ·  ←/esc back${state.siblings.length > 1 ? '  ↑↓ sub-agents' : ''}  ·  tab: ${state.detail === 'recent' ? 'recent calls open' : state.detail === 'all' ? 'all calls open' : 'one line each'}`)));
   return lines;
 }
