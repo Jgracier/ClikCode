@@ -76,3 +76,19 @@ describe('composer subagents', () => {
     expect(liveAgentRows(started, () => undefined, 0, 80, 5, { agents: 1, agentTasks: [{ id: 'a', label: 'Review auth' }] })).toHaveLength(1);
   });
 });
+
+describe('the live group set off on screen', () => {
+  const group = ['  ⠋  Agent A', '  ⠋  Agent B'];
+  it('has a blank above, and one below when words follow it', async () => {
+    const { spacedLiveGroup } = await import('./live-agents.js');
+    expect(spacedLiveGroup(group, 10, false)).toEqual(['', ...group]);
+    expect(spacedLiveGroup(group, 10, true)).toEqual(['', ...group, '']);
+  });
+  it('is drawn bare where the room cannot hold the blanks too, and is nothing when there are no agents', async () => {
+    const { spacedLiveGroup } = await import('./live-agents.js');
+    expect(spacedLiveGroup(group, 3, false)).toEqual(['', ...group]);
+    expect(spacedLiveGroup(group, 3, true)).toEqual(group);
+    expect(spacedLiveGroup(group, 2, false)).toEqual(group);
+    expect(spacedLiveGroup([], 10, true)).toEqual([]);
+  });
+});

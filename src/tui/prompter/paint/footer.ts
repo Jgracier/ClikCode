@@ -10,7 +10,7 @@ import { composerUsageLabel, paintTitleRule, paintUsageRule } from '../../render
 import type { TerminalHarnessPrompter } from '../../prompter.js';
 import type { HarnessSession } from '../../../session/model.js';
 import { frameBands } from './bands.js';
-import { liveAgentRows } from '../../render/live-agents.js';
+import { liveAgentRows, spacedLiveGroup } from '../../render/live-agents.js';
 import { waitingSpinnerGlyph } from '../../../harness/protocol/activity-view.js';
 
 
@@ -57,16 +57,6 @@ export function buildFooter(this: TerminalHarnessPrompter, input: FooterInput): 
   const aboveApproval = footer.length;
   const midRows = signInRows.length ? ['', ...signInRows] : [];
   footer.push(...approvalRows, ...midRows);
-  // Running subagents have one fixed home. Their completed rows enter the
-  // transcript; while open they never compete with the streaming answer.
-  if (this.surface === 'conversation' && (turn || this.backgroundWork?.agents) && !approvalRows.length) {
-    const reserved = (this.turn && waitingRows >= 2 ? 1 : 0) + (this.turn ? 1 : 0)
-      + 1 + composerRows.rows.length + 2; // blank, status, usage, composer, title, meta
-    footer.push(...liveAgentRows(
-      this.turn ? this.activityEntries : [], (id) => this.liveChildren.latest(id), this.reducedMotion ? 0 : this.waitingFrame,
-      Math.max(1, inner), Math.max(1, targetHeight - footer.length - reserved), this.backgroundWork,
-    ));
-  }
   // The generating band: a blank above the status where the height has the
   // row for it. The status itself is always drawn while a turn runs. The
   // blank row is also where the newest words of the reasoning are drawn, and
@@ -79,7 +69,24 @@ export function buildFooter(this: TerminalHarnessPrompter, input: FooterInput): 
   const statusRow = statusText !== undefined
     ? `  ${indicatorFits ? `${statusText}${indicatorLine}` : visibleSlice(statusText, Math.max(1, inner))}` : undefined;
   const upper = thoughtRow ?? (!indicatorFits && indicatorText !== undefined ? `  ${chalk.dim(visibleSlice(indicatorText, Math.max(1, inner)))}` : '');
+  // Running subagents have one fixed home. Their completed rows enter the
+  // transcript; while open they never compete with the streaming answer. They are a group of their
+  // own: a blank row sets them off from the answer above, and from the line under them when that line
+  // has words (the newest thought, the background-terminals count) -- stacked with no rows between,
+  // the answer, the agents, the count and the status ran together as one block. Where the terminal
+  // has no room for the blanks the group is drawn without them (spacedLiveGroup).
   const statusBlank = waitingRows >= 2 && turn ? upper : undefined;
+  if (this.surface === 'conversation' && (turn || this.backgroundWork?.agents) && !approvalRows.length) {
+    const reserved = (this.turn && waitingRows >= 2 ? 1 : 0) + (this.turn ? 1 : 0)
+      + 1 + composerRows.rows.length + 2; // blank, status, usage, composer, title, meta
+    const room = targetHeight - footer.length - reserved;
+    const underBlank = statusBlank !== undefined && statusBlank !== '';
+    const group = liveAgentRows(
+      this.turn ? this.activityEntries : [], (id) => this.liveChildren.latest(id), this.reducedMotion ? 0 : this.waitingFrame,
+      Math.max(1, inner), Math.max(1, room), this.backgroundWork,
+    );
+    footer.push(...spacedLiveGroup(group, room, underBlank));
+  }
   if (statusBlank !== undefined) footer.push(statusBlank);
   if (statusRow !== undefined) footer.push(statusRow);
   // Usage lives on the upper composer border, mirroring the title on the
