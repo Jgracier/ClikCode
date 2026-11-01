@@ -99,6 +99,20 @@ export interface LinkChannel {
   close(): void;
 }
 
+/** A whole chat's stream on a machine's connection (`RemoteLink.tap`): its events as the bridge sent them, until the chat or the connection ends. */
+export interface LinkTapHandlers {
+  event(event: IdeEvent): void;
+  /** The connection ended (`retiring`: for a newer build there, and it is made again at once). */
+  ended(error: Error, retiring: boolean): void;
+}
+export interface LinkTap {
+  readonly revision: number;
+  readonly outdated: boolean;
+  post(request: IdeRequest): void;
+  /** This chat leaves the connection; the connection stays. */
+  detach(): void;
+}
+
 interface OpenChannel {
   ready: () => void;
   failed: (error: Error) => void;
@@ -131,6 +145,7 @@ export class RemoteLink {
   /** What the bridge there said in its host-ready (1 when it did not say). */
   private revision = 1;
   private readonly channels = new Map<string, OpenChannel>();
+  private readonly taps = new Map<string, LinkTapHandlers>();
 
   constructor(machine: RemoteMachine, private readonly changed: () => void, private readonly options: LinkOptions = {}) {
     this.view = {
@@ -186,6 +201,7 @@ export class RemoteLink {
       if (this.child === child) this.child = undefined;
       this.dropChannels(new Error(`The connection to ${machine.name} ended`));
       const retired = this.retiring;
+      this.dropTaps(new Error(`The connection to ${machine.name} ended`), retired || this.reconnecting);
       this.retiring = false;
       if (this.stopped) return;
       if (this.reconnecting || retired) {
@@ -263,6 +279,7 @@ export class RemoteLink {
       return;
     }
     if (event.type === 'host-retiring') { this.retiring = true; return; }
+    if (event.type === 'chat' && this.taps.has(event.chat)) { this.taps.get(event.chat)!.event(event.event); return; }
     if (event.type === 'chat' && this.channels.has(event.chat)) { this.onChannelEvent(this.channels.get(event.chat)!, event.event); return; }
     if (event.type !== 'chat' || event.chat !== CHAT) return;
     const inner = event.event;
@@ -298,6 +315,29 @@ export class RemoteLink {
       channel.failed(error);
       for (const waiter of channel.pending.values()) waiter.reject(error);
     }
+  }
+
+  private dropTaps(error: Error, retiring: boolean): void {
+    const open = [...this.taps.values()];
+    this.taps.clear();
+    for (const handlers of open) handlers.ended(error, retiring);
+  }
+
+  /** A chat of its own on this connection, whose events all come to `handlers`: opening it is a message on a connection already
+   * up, not an ssh and a process started there. Undefined while the machine is not connected. */
+  tap(chat: string, handlers: LinkTapHandlers): LinkTap | undefined {
+    if (this.view.state !== 'connected' || !this.child) return undefined;
+    this.taps.set(chat, handlers);
+    this.send({ type: 'chat-attach', chat });
+    return {
+      revision: this.revision,
+      outdated: Boolean(this.view.needsUpdate),
+      post: (request) => {
+        if (!this.taps.has(chat)) throw new Error(`The connection to ${this.view.machine.name} ended`);
+        this.send({ type: 'chat', chat, request });
+      },
+      detach: () => { this.taps.delete(chat); },
+    };
   }
 
   /** A chat channel on this connection, once the ClikCode there has it open;
@@ -584,6 +624,11 @@ export class RemoteMachines {
     return link.channel();
   }
 
+  /** A chat on the connection to a machine: undefined while it is not connected. */
+  tap(machineId: string, chat: string, handlers: LinkTapHandlers): LinkTap | undefined {
+    return this.links.find((link) => link.view.machine.id === machineId)?.tap(chat, handlers);
+  }
+
   /** Connects to a machine again: its ClikCode was just updated. */
   reconnect(machineId: string): void {
     this.links.find((link) => link.view.machine.id === machineId)?.reconnect();
@@ -606,6 +651,11 @@ let windowMachines: RemoteMachines | undefined;
 export function holdWindowMachines(use: { autoUpdate?: boolean } = {}, options: LinkOptions = {}): Promise<MachinesHold> {
   windowMachines ??= new RemoteMachines(options, true);
   return windowMachines.hold(use);
+}
+
+/** A chat on the window's connection to a machine, when it has one that is up (`RemoteLink.tap`); undefined otherwise. */
+export function tapWindowMachine(machineId: string, chat: string, handlers: LinkTapHandlers): LinkTap | undefined {
+  return windowMachines?.tap(machineId, chat, handlers);
 }
 
 /** Connects again to a machine whose ClikCode was just installed or updated

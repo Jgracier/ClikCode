@@ -133,6 +133,9 @@ export async function openWindow(config: Conf, startId: string): Promise<ChatWin
   const stopLockNotices = terminal ? followModelDownloads(terminal) : undefined;
   refreshUsage(session, state);
   const { beginBuildReplace, releaseWindow } = startBuildWatch(terminal, ref, refreshUsage, stopLockNotices);
+  // The connection to each other machine is made while the composer is up, so the first chat or list on one finds it open:
+  // no ssh and no process started there at that moment (remote/connection.ts). Nothing is updated by this; it only connects.
+  if (terminal) void import('../../../remote/connection.js').then((remote) => remote.holdWindowMachines()).then((held) => held.release()).catch(quiet('commands/ai/interactive/window'));
   return { config, terminal, rl, ref, session, slashCommandsFor, warmCatalogFor, refreshUsage, beginBuildReplace, releaseWindow };
 }
 

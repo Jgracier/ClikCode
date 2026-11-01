@@ -24,7 +24,7 @@ import { remoteTerminalScript } from './install.js';
 import { startBridge } from './peer.js';
 import { readMachines, updatePolicy, type RemoteMachine } from './machines.js';
 import { autoUpdates, localBuildCommit, pinnedUpdateLine } from './updates.js';
-import { needsUpdate, reconnectWindowMachine } from './connection.js';
+import { needsUpdate, reconnectWindowMachine, tapWindowMachine, type LinkTap, type LinkTapHandlers } from './connection.js';
 import { sshArgv } from './ssh.js';
 import { failureText } from '../harness/protocol/stderr-line.js';
 import type { LiveTurnInputResult } from '../turn/live-input.js';
@@ -64,9 +64,11 @@ const REQUEST_TIMEOUT_MS = 60_000;
 /** How much of the bridge's stderr is held for the reason it closed: the end, where the cause is. */
 const STDERR_KEEP = 16_000;
 
-/** One chat channel into a machine's ClikCode (its multiplexed bridge, over ssh). */
+/** One chat channel into a machine's ClikCode (its multiplexed bridge, over ssh): a chat on the window's connection to that machine
+ * when it has one (`link`: no new ssh, no new process there -- the host is already running), else over an ssh of its own. */
 export class TerminalBridge {
-  private readonly child: ChildProcessWithoutNullStreams;
+  private child: ChildProcessWithoutNullStreams | undefined;
+  private tap: LinkTap | undefined;
   private readonly chat = randomUUID();
   private readonly pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
   private ready: Promise<void>;
@@ -89,13 +91,48 @@ export class TerminalBridge {
   private readonly delta = new SessionDeltaReceiver();
   onClose: (error: Error) => void = () => undefined;
 
-  constructor(private readonly target: string, start: RemoteBridgeStarter = sshBridge, private readonly requestTimeoutMs = REQUEST_TIMEOUT_MS) {
-    this.child = start(target);
-    this.child.stderr.on('data', (chunk: Buffer) => { this.error = `${this.error}${chunk.toString('utf8')}`.slice(-STDERR_KEEP); });
-    this.child.stdin.on('error', () => undefined);
+  constructor(
+    private readonly target: string, start: RemoteBridgeStarter = sshBridge, private readonly requestTimeoutMs = REQUEST_TIMEOUT_MS,
+    link?: (chat: string, handlers: LinkTapHandlers) => LinkTap | undefined,
+  ) {
     this.ready = new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error(`No answer from ${target}`)), 30_000);
-      const lines = createInterface({ input: this.child.stdout, crlfDelay: Infinity });
+      /** The chat's own events, wherever they came by. */
+      const chatEvent = (sent: IdeEvent): void => {
+        const event = this.delta.expand(sent);
+        if (event.type === 'ready') { this.wasReady = true; clearTimeout(timer); resolve(); }
+        if (event.type === 'result') {
+          const waiter = this.pending.get(event.requestId);
+          if (waiter) {
+            this.pending.delete(event.requestId);
+            event.ok ? waiter.resolve(event.data) : waiter.reject(new Error(event.error ?? 'Remote request failed'));
+          }
+        }
+        this.onEvent(event);
+      };
+      /** The way to the chat is gone. */
+      const ended = (failure: Error): void => {
+        this.stopped = true;
+        clearTimeout(timer);
+        reject(failure);
+        for (const waiter of this.pending.values()) waiter.reject(failure);
+        this.pending.clear();
+        if (!this.closing) { this.dropped = failure; this.onClose(failure); }
+      };
+      this.tap = link?.(this.chat, {
+        event: chatEvent,
+        ended: (failure, retiring) => { if (retiring) this.retiring = true; ended(failure); },
+      });
+      if (this.tap) {
+        this.outdated = this.tap.outdated;
+        this.revision = this.tap.revision;
+        return;
+      }
+      const child = start(target);
+      this.child = child;
+      child.stderr.on('data', (chunk: Buffer) => { this.error = `${this.error}${chunk.toString('utf8')}`.slice(-STDERR_KEEP); });
+      child.stdin.on('error', () => undefined);
+      const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
       lines.on('line', (line) => {
         let message: IdeHostEvent;
         try { message = JSON.parse(decodeWireLine(line)) as IdeHostEvent; } catch { return; }
@@ -107,27 +144,10 @@ export class TerminalBridge {
         }
         if (message.type === 'host-retiring') { this.retiring = true; return; }
         if (message.type !== 'chat' || message.chat !== this.chat) return;
-        const event = this.delta.expand(message.event);
-        if (event.type === 'ready') { this.wasReady = true; clearTimeout(timer); resolve(); }
-        if (event.type === 'result') {
-          const waiter = this.pending.get(event.requestId);
-          if (waiter) {
-            this.pending.delete(event.requestId);
-            event.ok ? waiter.resolve(event.data) : waiter.reject(new Error(event.error ?? 'Remote request failed'));
-          }
-        }
-        this.onEvent(event);
+        chatEvent(message.event);
       });
-      this.child.once('close', () => {
-        this.stopped = true;
-        clearTimeout(timer);
-        const failure = new Error(failureText(this.error) || `Connection to ${target} closed`);
-        reject(failure);
-        for (const waiter of this.pending.values()) waiter.reject(failure);
-        this.pending.clear();
-        if (!this.closing) { this.dropped = failure; this.onClose(failure); }
-      });
-      this.child.once('error', (error) => { this.error = error.message; });
+      child.once('close', () => ended(new Error(failureText(this.error) || `Connection to ${target} closed`)));
+      child.once('error', (error) => { this.error = error.message; });
     });
   }
 
@@ -144,7 +164,12 @@ export class TerminalBridge {
     return opened;
   }
   private send(message: IdeHostRequest): void {
-    if (this.stopped || this.child.stdin.destroyed) throw new Error('Remote connection closed');
+    if (this.stopped) throw new Error('Remote connection closed');
+    if (this.tap) {
+      if (message.type === 'chat') this.tap.post(message.request);
+      return;
+    }
+    if (!this.child || this.child.stdin.destroyed) throw new Error('Remote connection closed');
     this.child.stdin.write(`${JSON.stringify(message)}\n`);
   }
   post(request: IdeRequest): void { this.send({ type: 'chat', chat: this.chat, request }); }
@@ -165,8 +190,15 @@ export class TerminalBridge {
     if (this.stopped) return;
     this.closing = true;
     this.post({ type: 'close' });
-    this.child.stdin.end();
-    setTimeout(() => { if (!this.stopped) this.child.kill(); }, 3_000).unref();
+    if (this.tap) {
+      // The connection stays for the next chat: only this chat leaves it.
+      this.tap.detach();
+      this.stopped = true;
+      return;
+    }
+    const child = this.child!;
+    child.stdin.end();
+    setTimeout(() => { if (!this.stopped) child.kill(); }, 3_000).unref();
   }
 }
 
@@ -280,7 +312,7 @@ export const REJOIN_PAUSES_MS: readonly number[] = [1_000, 2_000, 5_000, 10_000,
 
 export async function runRemoteChat(
   terminal: TerminalHarnessPrompter, localId: string, first: RemoteChatSelection, firstDraft?: string,
-  startBridge: RemoteBridgeStarter = sshBridge,
+  startBridge?: RemoteBridgeStarter,
   pauses: readonly number[] = REJOIN_PAUSES_MS,
 ): Promise<RemoteChatEnd> {
   let choice: RemoteChatSelection | undefined = first;
@@ -293,7 +325,8 @@ export async function runRemoteChat(
     const machine = (await readMachines()).find((item) => item.id === choice!.machineId && item.ready);
     if (!machine) throw new Error('That remote machine is no longer added. Add it again with /machine.');
     terminal.remoteMachineName = machine.name;
-    const bridge = new TerminalBridge(machine.sshTarget, startBridge);
+    // On the window's connection to the machine when it has one (no ssh, no process started there); else over an ssh of its own.
+    const bridge = new TerminalBridge(machine.sshTarget, startBridge, undefined, startBridge ? undefined : (chat, handlers) => tapWindowMachine(machine.id, chat, handlers));
     let session: HarnessSession | undefined;
     let account: string | undefined;
     let running = false;
