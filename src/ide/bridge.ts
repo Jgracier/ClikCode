@@ -43,7 +43,7 @@ import { IDE_PROTOCOL } from './protocol-version.js';
 import { watchForNewerBuild } from './bridge-retire.js';
 import { sessionEvent } from './session-event.js';
 import { SessionDeltaSender } from './session-delta.js';
-import { wireMessage } from './session-wire.js';
+import { wireCalls, wireMessage, wireTurn } from './session-wire.js';
 import { loadChatLog } from '../session/store/chat-log.js';
 import { searchScreen } from './bridge-slash-host.js';
 import type { MentionScreen } from '../tui/slash/search-browse.js';
@@ -98,7 +98,7 @@ export class IdeBridge {
   /** What the editor said it handles, with its last `open`. */
   private features: ReadonlySet<IdeFeature> = new Set();
   /** What the editor holds of the conversation (the `session-delta` feature). */
-  private readonly delta = new SessionDeltaSender(wireMessage);
+  private readonly delta = new SessionDeltaSender(wireMessage, { pendingTurn: wireTurn, liveActivities: wireCalls });
   /** The editor shows this chat (its `visible`): only then is usage polled. */
   private shown = true;
   /** /search waiting on the editor's next key. */
