@@ -12,6 +12,9 @@ import type { IdeEvent, IdeFeature, IdeHostEvent, IdeHostRequest, IdeRequest, Id
 import { SessionDeltaReceiver } from '../ide/session-delta.js';
 import { ChatKeeper, readChatCache } from './chat-cache.js';
 import { decodeWireLine } from '../ide/wire-gzip.js';
+import { applyLiveEvent, drawJoinedTurn, newLiveTurnState } from '../worker/joined-turn.js';
+import { isTranscriptActivity } from '../worker/protocol.js';
+import { backgroundWorkOf } from '../harness/protocol/background-agents.js';
 import type { PaletteEntry } from '../tui/command-palette.js';
 import type { TerminalHarnessPrompter } from '../tui/prompter.js';
 import { interactiveSessionPicker } from '../tui/pickers/session.js';
@@ -318,6 +321,8 @@ export async function runRemoteChat(
       if (!running && terminal.turn) terminal.stopWaiting();
       flushHeld();
     };
+    /** The running turn as far as it has got (applyLiveEvent). */
+    const liveTurn = newLiveTurnState();
     const completions = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
     const promptController = new AbortController();
     const signIns = new Map<string, SignInScreen>();
@@ -360,6 +365,7 @@ export async function runRemoteChat(
         // While a message drawn early waits for its turn, the chat is drawn as a turn's (run-turn.ts renders so too).
         case 'session': session = event.session; account = event.account; sessionChanged(session); keeper.soon(); terminal.render(session, account, { running: running || early !== undefined }); return;
         case 'turn-start':
+          applyLiveEvent(liveTurn, { type: 'waiting-start', message: '', ...(event.prompt !== undefined ? { prompt: event.prompt } : {}) });
           // The message drawn on Enter: this turn carries it on (startWaiting takes over turnStarting's).
           early = undefined;
           running = true;
@@ -368,15 +374,31 @@ export async function runRemoteChat(
           return;
         case 'worker': {
           const worker = event.event;
+          // The turn as far as it has got, kept from the worker's events as the local follower keeps it (worker/joined-turn.ts).
+          applyLiveEvent(liveTurn, worker);
           if (worker.type === 'snapshot') {
             session = worker.session; account = worker.account;
             sessionChanged(session);
             running = Boolean(worker.live);
             terminal.render(session, account, worker.live ? { running: true, prompt: worker.live.prompt } : { running: early !== undefined });
-            if (worker.live) beginWaiting(worker.live.prompt, worker.live.vendorWork ? worker.live.waitingLabel : undefined);
+            if (worker.live) {
+              beginWaiting(worker.live.prompt, worker.live.vendorWork ? worker.live.waitingLabel : undefined);
+              // Joining or coming back to a turn that is running: its real start, so the timer does not begin again, and everything
+              // it has done so far -- its tool calls and sub-agents, plan, thoughts, usage -- not just the words.
+              const startedAt = Date.parse(worker.session.pendingTurn?.startedAt ?? '');
+              terminal.joinedWaiting(Number.isNaN(startedAt) ? undefined : startedAt);
+              drawJoinedTurn(terminal, liveTurn);
+              terminal.setBackgroundWork?.(worker.background ?? backgroundWorkOf(worker.live));
+            }
           }
           else if (worker.type === 'delta') terminal.response(worker.text, worker.mode);
-          else if (worker.type === 'activity') terminal.activityEvent(worker.event);
+          else if (worker.type === 'activity') {
+            // Numbered as the state (updated first) recorded it, so a snapshot that lists it again is not a second row.
+            const index = liveTurn.running && isTranscriptActivity(worker.event) ? liveTurn.activities.length - 1 : -1;
+            const recorded = liveTurn.activities[index];
+            terminal.activityEvent(worker.event, recorded ? { index, responseOffset: recorded.responseOffset } : undefined);
+          }
+          else if (worker.type === 'background') terminal.setBackgroundWork?.(backgroundWorkOf({ background: worker.work, pendingBackground: worker.pending }));
           else if (worker.type === 'note') terminal.activity(worker.message, worker.seq === undefined ? undefined : `notice:${worker.seq}`);
           else if (worker.type === 'phase') terminal.phase(worker.message);
           else if (worker.type === 'plan') terminal.setPlan(worker.entries);

@@ -271,6 +271,27 @@ describe('a message typed in a chat on another machine', () => {
     expect(await joined({ waitingLabel: 'background work', vendorWork: true })).toBe('background work');
   }, 30_000);
 
+  it('coming back to a running turn draws what it has done so far -- its calls, sub-agents, text and real start -- and a call after is not drawn twice', async () => {
+    const started = '2026-11-01T01:30:00.000Z';
+    const base = { id: 'c1', route: 'local', accountId: null, provider: 'claude', model: 'm', effort: 'high', name: 'Remote chat', createdAt: '', updatedAt: '', status: 'active', messages: [], pendingTurn: { prompt: 'go', startedAt: started, updatedAt: started, outputStarted: true, response: 'so far' } };
+    const call = (id: string, parentId?: string) => ({ responseOffset: 3, event: { kind: 'tool-done', label: `Task ${id}`, id, ...(parentId ? { parentId } : {}) } });
+    const { bridge, calls, outcome } = await start();
+    calls.length = 0;
+    bridge.say({ type: 'worker', sessionId: 'c1', event: { type: 'snapshot', session: base, live: { text: 'so far, and more', waitingLabel: 'x', prompt: 'go', activities: [call('a'), call('b'), call('b1', 'b')], pendingBackground: 2 } } });
+    await until(() => named(calls, 'activityEvent').length >= 3);
+    expect(named(calls, 'response').map((call) => call[1])).toContain('so far, and more');
+    expect(named(calls, 'activityEvent').map((call) => (call[1] as { id: string }).id)).toEqual(['a', 'b', 'b1']);
+    expect(named(calls, 'joinedWaiting')[0]![1]).toBe(Date.parse(started));
+    expect(named(calls, 'setBackgroundWork').length).toBeGreaterThan(0);
+    // The next call is numbered after those, and a repeated snapshot draws the same rows again by index, not new ones.
+    calls.length = 0;
+    bridge.say({ type: 'worker', sessionId: 'c1', event: { type: 'activity', event: { kind: 'tool-start', label: 'Task c', id: 'c' } } });
+    await until(() => named(calls, 'activityEvent').length === 1);
+    expect(named(calls, 'activityEvent')[0]![2]).toMatchObject({ index: 3 });
+    bridge.drop();
+    expect(await outcome).toBe('Connection to devbox closed');
+  }, 20_000);
+
   it('shows the whole conversation from a bridge that sends only what changed', async () => {
     const { bridge, calls, outcome } = await start();
     const base = { id: 'c1', route: 'local', accountId: null, provider: 'claude', model: 'm', effort: 'high', name: 'Remote chat', createdAt: '', updatedAt: '', status: 'active' };
