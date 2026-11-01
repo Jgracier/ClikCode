@@ -1,19 +1,16 @@
 /** The other machines' chats as conversation-board rows.
  *
  * The same words as this machine's rows (conversationState: working,
- * stalled, needs you, back at, or when it last changed), under a section per
- * machine below this machine's own. A chat that needs the user, on any
- * machine, is pinned in "Needs you" at the top. An offline machine keeps the
- * rows it had last time, dimmed, and its heading says since when.
- *
- * Rows are values, rebuilt only when something changed, and a machine's
- * rows stay in its own section -- one machine's list changing never moves
- * another's, or this machine's. */
+ * stalled, needs you, back at, or when it last changed), in the same
+ * sections, ordered among this machine's own by when each last changed. A
+ * chat that needs the user, on any machine, is first in its section. An
+ * offline machine keeps the rows it had last time, dimmed. */
 import chalk from 'chalk';
 import { hostname } from 'node:os';
 import type { PickerOption } from '../harness/prompter.js';
 import type { IdeConversation } from '../ide/protocol.js';
-import { conversationState } from '../session/conversation-state.js';
+import { conversationState, SECTION_TITLES, type ConversationSection } from '../session/conversation-state.js';
+import { recencySection } from '../session/conversation-rows.js';
 import type { MachineView } from './connection.js';
 
 export const REMOTE_VALUE_PREFIX = 'remote:';
@@ -69,25 +66,44 @@ export function machineHue(machineId: string): (text: string) => string {
   return MACHINE_HUES[sum % MACHINE_HUES.length]!;
 }
 
+/** A row with what orders it among the others: the section it is in, whether it needs the user, and when it last changed. */
+export interface RankedRow { option: PickerOption<string>; section: ConversationSection; needsYou: boolean; updatedAtMs: number }
+
 /**
- * Every other machine's chats, for the main conversation list: a section per machine, headed by its name in its hue, its rows
- * in the same hue, so a chat that lives elsewhere is told apart at a glance and a chat moved there is still in the list. An
- * offline machine keeps the rows it had last time, dimmed, and its heading says so. A machine with no chats adds nothing.
- * Pure.
+ * Every other machine's chats, ranked to sit among this machine's own in the main conversation list: the same sections
+ * (Working, Recent, Older) by the same rules, in the machine's colour with its name on the row, so a chat that lives elsewhere
+ * is told apart at a glance and a chat moved there is still where its last turn put it. An offline machine keeps the rows it
+ * had last time, dimmed. Pure.
  */
-export function otherMachineRows(views: readonly MachineView[], now: number): PickerOption<string>[] {
-  const rows: PickerOption<string>[] = [];
+export function otherMachineRows(views: readonly MachineView[], now: number): RankedRow[] {
+  const rows: RankedRow[] = [];
   for (const view of views) {
-    if (!view.chats.length) continue;
     const hue = machineHue(view.machine.id);
     const offline = view.state === 'offline';
-    const group = `${hue(view.machine.name)}${offline ? chalk.dim(' · offline, as last seen') : ''}`;
     for (const chat of view.chats) {
       const row = remoteConversationOption(view, chat, now);
-      rows.push({ ...row, label: offline ? row.label : hue(row.label), group });
+      const updatedAtMs = Date.parse(chat.updatedAt);
+      const section: ConversationSection = row.activity === 'working' ? 'working' : recencySection(Number.isFinite(updatedAtMs) ? updatedAtMs : undefined, now);
+      const where = offline ? chalk.dim(`${view.machine.name} · offline`) : hue(view.machine.name);
+      rows.push({
+        option: { ...row, label: offline ? row.label : hue(row.label), detail: `· ${where} ${row.detail ?? ''}`.trimEnd() },
+        section, needsYou: row.activity === 'needs-you' || chat.needsYou === true, updatedAtMs: Number.isFinite(updatedAtMs) ? updatedAtMs : 0,
+      });
     }
   }
   return rows;
+}
+
+const SECTION_ORDER: Readonly<Record<ConversationSection, number>> = { working: 0, active: 1, past: 2 };
+
+/** This machine's rows and the others' in one list, ordered as conversationRows orders one machine's: section, then the ones that need the user, then newest first. Each row gets its section's title. */
+export function mergeMachineRows(own: readonly RankedRow[], others: readonly RankedRow[]): PickerOption<string>[] {
+  return [...own, ...others]
+    .map((row, index) => ({ row, index }))
+    // Stable for equal times: this machine's own rows (first in) keep their order.
+    .sort((left, right) => SECTION_ORDER[left.row.section] - SECTION_ORDER[right.row.section]
+      || Number(right.row.needsYou) - Number(left.row.needsYou) || right.row.updatedAtMs - left.row.updatedAtMs || left.index - right.index)
+    .map(({ row }) => ({ ...row.option, group: SECTION_TITLES[row.section] }));
 }
 
 export function updateText(view: Pick<MachineView, 'needsUpdate' | 'updating' | 'updateError'>): string {

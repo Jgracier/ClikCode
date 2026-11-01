@@ -175,24 +175,32 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
   const second = listSecond(rows, now);
   const listRows = useMemo((): ListRow[] => {
     const matching = historyRows(rows ?? [], query);
-    // Within a section one that needs you comes first, as on the terminal's
-    // board; ClikCode's order otherwise (the sort is stable).
-    const needsYouFirst = (left: ListedConversation, right: ListedConversation): number => Number(rowState(right, now).kind === 'needs-you') - Number(rowState(left, now).kind === 'needs-you');
-    const sections: Array<[string, ListedConversation[]]> = SECTIONS.map(([section, title]) => [title, matching.filter((row) => conversationSection(row) === section).sort(needsYouFirst)]);
+    // The other machines' chats sit among these by when each last changed, in that machine's hue with its name on the row (the chat
+    // that moved is here, not gone). Their rows open on their own machine and carry no rename or delete: those are that machine's.
+    const matchesQuery = (row: ListedConversation): boolean => !row.movedTo && !(row.current && !row.messages)
+      && (!query || `${row.title} ${row.preview ?? ''} ${row.provider ?? ''}`.toLowerCase().includes(query));
+    type Item = { row: ListedConversation; there?: { machineId: string; name: string; hue: string; offline: boolean } };
+    const here: Item[] = matching.map((row) => ({ row }));
+    const elsewhere: Item[] = otherMachineSections(machines ?? [], machineId, (id) => (id === 'local' ? localRows : otherRows[id]), matchesQuery)
+      .flatMap((section) => section.rows.map((row): Item => ({ row, there: { machineId: section.machineId, name: section.title, hue: section.hue, offline: section.offline } })));
+    const at = (item: Item): number => { const time = Date.parse(item.row.updatedAt); return Number.isNaN(time) ? 0 : time; };
     const result: ListRow[] = [];
-    for (const [title, items] of sections) {
+    for (const [section, title] of SECTIONS) {
+      const items = [...here, ...elsewhere].filter((item) => conversationSection(item.row) === section)
+        // As on the terminal's board: one that needs you first, then newest first (equal times keep ClikCode's order: the sort is stable).
+        .sort((left, right) => Number(rowState(right.row, now).kind === 'needs-you') - Number(rowState(left.row, now).kind === 'needs-you') || at(right) - at(left));
       if (!items.length) continue;
       result.push({ key: `h:${title}`, heading: true, render: () => <>{title}</> });
-      for (const row of items) {
+      for (const { row, there } of items) {
         const state = rowState(row, now);
         result.push({
-          key: row.id,
-          onSelect: () => (renaming === row.id ? undefined : open(row)),
+          key: there ? `${there.machineId}:${row.id}` : row.id,
+          onSelect: () => (there ? open(row, there.machineId) : renaming === row.id ? undefined : open(row)),
           render: () => (
-            <div class={`conversation${row.current ? ' current' : ''}`} title={row.preview}>
+            <div class={`conversation${there ? ` other-machine ${there.hue}${there.offline ? ' offline' : ''}` : row.current ? ' current' : ''}`} title={row.preview}>
               <ConversationMark row={row} state={state} />
               <div class="conversation-main">
-                {renaming === row.id ? (
+                {!there && renaming === row.id ? (
                   <form data-row-action onSubmit={(event) => {
                     event.preventDefault();
                     const value = ((event.currentTarget as HTMLFormElement).elements.namedItem('name') as HTMLInputElement).value;
@@ -203,41 +211,16 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
                       onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); setRenaming(undefined); } }} />
                   </form>
                 ) : <div class="conversation-title">{row.title}</div>}
-                {row.preview && renaming !== row.id ? <div class="conversation-preview">{row.preview}</div> : null}
+                {row.preview && (there || renaming !== row.id) ? <div class="conversation-preview">{row.preview}</div> : null}
               </div>
-              <span class="conversation-meta">{state.text}</span>
-              {machineId === 'local' ? <div class="row-actions" data-row-action>
+              <span class="conversation-meta">{there ? <><span class={`machine-name ${there.hue}`}>{there.name}{there.offline ? ' · offline' : ''}</span> · </> : null}{state.text}</span>
+              {!there && machineId === 'local' ? <div class="row-actions" data-row-action>
                 <IconButton icon="link-external" label="Open in new tab" onClick={() => { props.onClose(); void request({ method: 'openInTab', sessionId: row.id }); }} />
                 <IconButton icon="edit" label="Rename" onClick={() => setRenaming(row.id)} />
                 {confirming === row.id
                   ? <button type="button" class="danger small" onClick={() => act(row, 'delete')}>Delete</button>
                   : <IconButton icon="trash" label="Delete" onClick={() => setConfirming(row.id)} />}
               </div> : null}
-            </div>
-          ),
-        });
-      }
-    }
-    // The other machines, a section each under its name in its hue (the chat that moved is here, not gone). Their rows open on
-    // their own machine and carry no rename or delete: those are that machine's.
-    const matchesQuery = (row: ListedConversation): boolean => !row.movedTo && !(row.current && !row.messages)
-      && (!query || `${row.title} ${row.preview ?? ''} ${row.provider ?? ''}`.toLowerCase().includes(query));
-    const others = otherMachineSections(machines ?? [], machineId, (id) => (id === 'local' ? localRows : otherRows[id]), matchesQuery);
-    for (const section of others) {
-      result.push({ key: `m:${section.machineId}`, heading: true, render: () => <span class={`machine-name ${section.hue}`}>{section.title}{section.offline ? ' · offline, as last seen' : ''}</span> });
-      for (const row of section.rows) {
-        const state = rowState(row, now);
-        result.push({
-          key: `${section.machineId}:${row.id}`,
-          onSelect: () => open(row, section.machineId),
-          render: () => (
-            <div class={`conversation other-machine ${section.hue}${section.offline ? ' offline' : ''}`} title={row.preview}>
-              <ConversationMark row={row} state={state} />
-              <div class="conversation-main">
-                <div class="conversation-title">{row.title}</div>
-                {row.preview ? <div class="conversation-preview">{row.preview}</div> : null}
-              </div>
-              <span class="conversation-meta">{state.text}</span>
             </div>
           ),
         });

@@ -37,7 +37,7 @@ import { holdWindowMachines, type MachinesHold } from '../../remote/connection.j
 import { readMachines } from '../../remote/machines.js';
 import { discoverMachines, notYetAdded, readTailscaleStatus, type DiscoveredMachine } from '../../remote/tailscale.js';
 import { addDiscoveredMachine, remoteHostOf } from './remote.js';
-import { isRemoteRowValue, localMachineName, otherMachineRows, remoteConversationOption, parseRemoteRowValue, updateText } from '../../remote/board-rows.js';
+import { isRemoteRowValue, localMachineName, mergeMachineRows, otherMachineRows, remoteConversationOption, parseRemoteRowValue, updateText } from '../../remote/board-rows.js';
 
 type AdoptableNativeSession = {
   harness: AiLocalHarnessDefinition;
@@ -299,7 +299,7 @@ export async function interactiveSessionPicker(
     const now = Date.now();
     // ClikCode's own conversations, in conversationRows' sections and order:
     // Working, Recent, Older; one that needs the user first in each.
-    const options: PickerOption<string>[] = rows.map((row) => {
+    const own: PickerOption<string>[] = rows.map((row) => {
       // Right on a row goes into the conversation, running agents or not:
       // they are shown there, live. An inner "Agents" list of static rows,
       // each only opening that same conversation, stood between the user and
@@ -308,16 +308,19 @@ export async function interactiveSessionPicker(
       option.group = SECTION_TITLES[row.section];
       return option;
     });
-    for (const option of options) {
+    for (const option of own) {
       const historyAction = option.alternates?.length ? [{ label: 'Branches', value: 'history' }] : [];
       if (option.alternates?.length) histories.set(option.value, [...option.alternates]);
       delete option.alternates;
       option.actions = [...historyAction, ...MANAGE_ACTIONS];
       option.deleteAction = { label: 'Delete', value: 'delete' };
     }
-    // Other machines' chats, a section each in that machine's colour, below this machine's own: a chat moved to another machine is
-    // still in the list, and the ones that were always there are told apart from these by it.
-    options.push(...otherMachineRows(remote?.views() ?? [], now));
+    // Other machines' chats among these, by when each last changed, in that machine's colour with its name on the row: a chat moved
+    // to another machine is still in the list, told apart from the ones that were always here.
+    const options = mergeMachineRows(
+      own.map((option, index) => ({ option, section: rows[index]!.section, needsYou: rows[index]!.needsYou, updatedAtMs: rows[index]!.updatedAtMs })),
+      otherMachineRows(remote?.views() ?? [], now),
+    );
     // Chats another CLI started, in a section of their own at the bottom,
     // newest first: they are something to adopt, not what this list is
     // mostly for, and interleaved by recency they buried ClikCode's own. One
