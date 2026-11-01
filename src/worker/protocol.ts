@@ -264,7 +264,9 @@ export type WorkerEvent =
    * not the client's guess. The client used to assume "queued" for every one
    * and never learn otherwise, so a message steered straight into the answer
    * said "queued for next turn" for the rest of the turn. */
-  | { type: 'submission'; id: string; disposition: 'steered' | 'queued' | 'error'; message?: string;
+  | { type: 'submission'; id: string; disposition: 'steered' | 'queued' | 'command' | 'error'; message?: string;
+    /** For a `command` (ClikCode's own line, never the model's): at once (`applied`) or at the turn boundary (`later`). */
+    commandOutcome?: 'applied' | 'later';
     /** Where a steered message was placed (its acknowledgement's order). */
     seq?: number; responseOffset?: number }
   /** The worker is exiting (idle timeout, explicit stop, an unrecoverable

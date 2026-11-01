@@ -337,6 +337,55 @@ describe('a message typed in a chat on another machine', () => {
     expect(await outcome).toBe('Connection to devbox closed');
   }, 20_000);
 
+  it('a message typed while the turn runs is sent under the window\'s own id and shown as what the machine says became of it', async () => {
+    const base = { id: 'c1', route: 'local', accountId: null, provider: 'claude', model: 'm', effort: 'high', name: 'Remote chat', createdAt: '', updatedAt: '', status: 'active', messages: [] };
+    const { bridge, calls, outcome } = await start();
+    calls.length = 0;
+    bridge.say({ type: 'worker', sessionId: 'c1', event: { type: 'snapshot', session: base, live: { text: '', waitingLabel: 'x', prompt: 'go' } } });
+    await until(() => named(calls, 'startWaiting').length === 1);
+    const submit = named(calls, 'startWaiting')[0]![3] as (text: string, id?: string) => Promise<{ disposition: string; commandOutcome?: string; submission: { id: string } }>;
+    const sent = (id: string) => bridge.requests.find((request) => (request as { id?: string }).id === id);
+
+    // Steered into the turn: the row says steered, not the "queued" this window hoped for -- the machine records the steer under the same id.
+    const steered = submit('also dictation', 'win-1');
+    await until(() => sent('win-1') !== undefined);
+    expect(sent('win-1')).toMatchObject({ type: 'send', text: 'also dictation' });
+    bridge.say({ type: 'worker', sessionId: 'c1', event: { type: 'submission', id: 'win-1', disposition: 'steered' } });
+    expect(await steered).toMatchObject({ disposition: 'steered', submission: { id: 'win-1' } });
+
+    // Queued behind the turn.
+    const waiting = submit('later please', 'win-2');
+    await until(() => sent('win-2') !== undefined);
+    bridge.say({ type: 'worker', sessionId: 'c1', event: { type: 'submission', id: 'win-2', disposition: 'queued' } });
+    expect((await waiting).disposition).toBe('queued');
+
+    // ClikCode's own command, applied at once.
+    const command = submit('/model sonnet', 'win-3');
+    await until(() => sent('win-3') !== undefined);
+    bridge.say({ type: 'worker', sessionId: 'c1', event: { type: 'submission', id: 'win-3', disposition: 'command', commandOutcome: 'applied' } });
+    expect(await command).toMatchObject({ disposition: 'command', commandOutcome: 'applied' });
+
+    // Refused: an error, so the words come back to the composer.
+    const refused = submit('nope', 'win-4');
+    await until(() => sent('win-4') !== undefined);
+    bridge.say({ type: 'worker', sessionId: 'c1', event: { type: 'submission', id: 'win-4', disposition: 'error', message: 'The turn is finishing' } });
+    await expect(refused).rejects.toThrow('The turn is finishing');
+
+    // One typed as the last turn ended found nothing to steer into: it became the next turn.
+    const raced = submit('just in time', 'win-5');
+    await until(() => sent('win-5') !== undefined);
+    bridge.say({ type: 'turn-start', prompt: 'just in time' });
+    expect((await raced).disposition).toBe('queued');
+
+    // A connection that ends with a message unanswered fails it, rather than leaving its row waiting.
+    const lost = submit('into the void', 'win-6');
+    await until(() => sent('win-6') !== undefined);
+    const failed = lost.then(() => 'answered', (error: Error) => error.message);
+    bridge.drop();
+    expect(await failed).toContain('devbox');
+    await outcome;
+  }, 30_000);
+
   it('shows the whole conversation from a bridge that sends only what changed', async () => {
     const { bridge, calls, outcome } = await start();
     const base = { id: 'c1', route: 'local', accountId: null, provider: 'claude', model: 'm', effort: 'high', name: 'Remote chat', createdAt: '', updatedAt: '', status: 'active' };
