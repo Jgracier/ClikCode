@@ -53,3 +53,28 @@ async function prune(): Promise<void> {
   aged.sort((a, b) => b.at - a.at);
   await Promise.all(aged.slice(KEEP_CHATS).map(({ name }) => unlink(join(directory(), name)).catch(() => undefined)));
 }
+
+/** Keeps what a client holds of the chats it shows (the terminal's, VS Code's) for the next open of each: a burst of changes is one write. */
+export class ChatKeeper {
+  private timer: NodeJS.Timeout | undefined;
+
+  constructor(
+    private readonly machineId: () => string,
+    private readonly held: () => { sessionId: string; messages: Messages; gen?: string } | undefined,
+    private readonly pauseMs = 2_000,
+  ) {}
+
+  /** Something changed: kept shortly. */
+  soon(): void {
+    this.timer ??= setTimeout(() => this.now(), this.pauseMs);
+    this.timer.unref?.();
+  }
+
+  /** Kept now (the chat is leaving). */
+  now(): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = undefined;
+    const held = this.held();
+    if (held?.messages.length) void writeChatCache(this.machineId(), held.sessionId, held.messages, held.gen);
+  }
+}

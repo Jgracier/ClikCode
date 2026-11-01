@@ -10,7 +10,7 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { HarnessSession } from '../session/model.js';
 import type { IdeEvent, IdeFeature, IdeHostEvent, IdeHostRequest, IdeRequest, IdeSlashCommand, IdeUiResult } from '../ide/protocol.js';
 import { SessionDeltaReceiver } from '../ide/session-delta.js';
-import { readChatCache, writeChatCache } from './chat-cache.js';
+import { ChatKeeper, readChatCache } from './chat-cache.js';
 import { decodeWireLine } from '../ide/wire-gzip.js';
 import type { PaletteEntry } from '../tui/command-palette.js';
 import type { TerminalHarnessPrompter } from '../tui/prompter.js';
@@ -332,14 +332,8 @@ export async function runRemoteChat(
       // fail-open-ok: the machine did not list its commands now; the menu keeps what it had (or /machine alone).
       () => { if (!commands.length) commands.push(...remotePalette([])); },
     );
-    /** The conversation as held, kept for the next open of this chat (chat-cache.ts); a burst of events is one write. */
-    let keeper: NodeJS.Timeout | undefined;
-    const keep = (): void => {
-      keeper = undefined;
-      const held = bridge.held();
-      if (held?.messages.length) void writeChatCache(machine.id, held.sessionId, held.messages, held.gen);
-    };
-    const keepSoon = (): void => { keeper ??= setTimeout(keep, 2_000); };
+    /** The conversation as held, kept for the next open of this chat (chat-cache.ts). */
+    const keeper = new ChatKeeper(() => machine.id, () => bridge.held());
     const sessionChanged = (next: HarnessSession): void => {
       const key = [next.id, next.route, next.nativeHarness, next.provider, next.model, next.accountId, next.effort, next.permissionMode, next.gatewayAgentId].join('|');
       if (commandsFor !== undefined && key !== commandsFor) void refreshCommands();
@@ -364,7 +358,7 @@ export async function runRemoteChat(
     bridge.onEvent = (event) => {
       switch (event.type) {
         // While a message drawn early waits for its turn, the chat is drawn as a turn's (run-turn.ts renders so too).
-        case 'session': session = event.session; account = event.account; sessionChanged(session); keepSoon(); terminal.render(session, account, { running: running || early !== undefined }); return;
+        case 'session': session = event.session; account = event.account; sessionChanged(session); keeper.soon(); terminal.render(session, account, { running: running || early !== undefined }); return;
         case 'turn-start':
           // The message drawn on Enter: this turn carries it on (startWaiting takes over turnStarting's).
           early = undefined;
@@ -574,7 +568,7 @@ export async function runRemoteChat(
       // for Enter on the new connection.
       if (sending !== undefined) draft = sending;
       continue;
-    } finally { if (keeper) clearTimeout(keeper); keep(); promptController.abort(); for (const screen of signIns.values()) screen.stop(); bridge.close(); terminal.remoteMachineName = undefined; }
+    } finally { keeper.now(); promptController.abort(); for (const screen of signIns.values()) screen.stop(); bridge.close(); terminal.remoteMachineName = undefined; }
   }
   return undefined;
 }
