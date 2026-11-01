@@ -2,7 +2,7 @@
  * state file the way the terminal's pickers do, and the bridge answers the
  * revision-2 requests without disturbing a running turn. */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type Conf from 'conf';
@@ -230,6 +230,26 @@ describe('the bridge\'s revision-2 requests', () => {
     bridge.handle({ type: 'choose', requestId: 'c', choice: { kind: 'send', mode: 'queue' } });
     expect(await result('c')).toMatchObject({ ok: true });
     expect(duringTurn).toHaveBeenCalledWith('s1', '/send queue');
+  });
+
+  it('answers this computer\'s send mode and sets it with no chat open: an editor choosing its own for a chat on another machine', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'clikcode-ide-send-'));
+    const before = process.env.CLIKCODE_HOME;
+    process.env.CLIKCODE_HOME = root;
+    try {
+      const { bridge, result } = bridgeFor();
+      bridge.handle({ type: 'query', requestId: 'q1', query: 'send-mode' });
+      expect(await result('q1')).toMatchObject({ ok: true, data: 'steer' });
+      bridge.handle({ type: 'choose', requestId: 'c1', choice: { kind: 'send', mode: 'queue' } });
+      expect(await result('c1')).toMatchObject({ ok: true });
+      // No chat was open: nothing went through one.
+      expect(duringTurn).not.toHaveBeenCalledWith(expect.anything(), '/send queue');
+      bridge.handle({ type: 'query', requestId: 'q2', query: 'send-mode' });
+      expect(await result('q2')).toMatchObject({ ok: true, data: 'queue' });
+    } finally {
+      if (before === undefined) delete process.env.CLIKCODE_HOME; else process.env.CLIKCODE_HOME = before;
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('says nothing in the chat about a rename made in the conversations list', async () => {

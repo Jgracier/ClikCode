@@ -1,5 +1,6 @@
 /** The editor's screens as data (queries.ts). Answered straight away, not
  * behind the work queue: a list must open while a turn is running. */
+import { sendModeOf } from '../turn/send-mode.js';
 import { readState } from '../session/state/read.js';
 import { sessionHarness, slashExtrasFor } from '../tui/slash/context.js';
 import { slashPalette, TERMINAL_ONLY_COMMANDS } from '../tui/slash/registry.js';
@@ -43,6 +44,8 @@ export async function answerQuery(host: BridgeHost, requestId: string, query: Id
         return;
       case 'accounts': answer(await accountList(state, session, Boolean(options.network))); return;
       case 'chat-settings': answer(session ? await chatSettings(state, session) : {}); return;
+      // This machine's choice of what a message typed mid-turn does, with no chat open: an editor showing a chat on another machine asks its own.
+      case 'send-mode': answer(sendModeOf(state.globalSettings)); return;
       case 'gateway': answer(await gatewayStatus(host.config)); return;
       case 'hosted': answer(await hostedList(options.search ?? '')); return;
       case 'hosted-plan':

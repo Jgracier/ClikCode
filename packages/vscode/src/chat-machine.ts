@@ -152,8 +152,22 @@ export class LocalChatMachine implements ChatMachine {
 
   async conversations(own?: () => Promise<BridgeEndpoint | undefined>): Promise<IdeConversation[]> {
     if (own) return (await (await own())?.call<IdeConversation[]>({ type: 'query', query: 'conversations' })) ?? [];
-    // The chat is on another machine: a channel into the window's ClikCode
-    // (the process other local chats share, started for this if none) asks.
+    return this.asking((bridge) => bridge.call<IdeConversation[]>({ type: 'query', query: 'conversations' }));
+  }
+
+  /** This computer's choice of what a message typed mid-turn does -- the editor's own, for a chat on another machine, where the
+   * machine there has a setting of its own that is not the user's. */
+  sendMode(): Promise<'steer' | 'queue'> {
+    return this.asking((bridge) => bridge.call<'steer' | 'queue'>({ type: 'query', query: 'send-mode' }));
+  }
+
+  setSendMode(mode: 'steer' | 'queue'): Promise<void> {
+    return this.asking((bridge) => bridge.call({ type: 'choose', choice: { kind: 'send', mode } })).then(() => undefined);
+  }
+
+  /** A channel into the window's ClikCode on this computer (the process other local chats share, started for this if none), for
+   * something asked of this computer while a chat on another machine is shown. */
+  private async asking<T>(ask: (bridge: BridgeEndpoint) => Promise<T>): Promise<T> {
     const runtime = await resolveRuntime({ path: settings().get<string>('path'), nodePath: settings().get<string>('nodePath') });
     const bridge = bridgePool.connect(runtime, undefined);
     try {
@@ -162,7 +176,7 @@ export class LocalChatMachine implements ChatMachine {
         bridge.on('event', (event) => { if (event.type === 'ready') { clearTimeout(timeout); resolve(); } });
         bridge.once('exit', () => { clearTimeout(timeout); reject(new Error('Local ClikCode stopped.')); });
       });
-      return await bridge.call<IdeConversation[]>({ type: 'query', query: 'conversations' });
+      return await ask(bridge);
     } finally { bridge.dispose(); }
   }
 
