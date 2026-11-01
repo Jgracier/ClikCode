@@ -11,6 +11,12 @@ import { BOARD_LINE } from '../commands/ai/interactive/board.js';
 
 const boardPicker = vi.hoisted(() => vi.fn());
 vi.mock('../tui/pickers/session.js', () => ({ interactiveSessionPicker: boardPicker }));
+// The clipboard of this computer: a spy, so /copy on another machine can be seen to land here.
+const clipboard = vi.hoisted(() => ({ copied: [] as string[] }));
+vi.mock('../session/attachments.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../session/attachments.js')>()),
+  copyToClipboard: async (text: string) => { clipboard.copied.push(text); return 'binary' as const; },
+}));
 // The copy of an image to the machine: ssh in life, a fixed place there here (or a refusal, when a test says so).
 const copying = vi.hoisted(() => ({ fail: undefined as string | undefined, uploads: [] as string[] }));
 vi.mock('./image.js', () => ({
@@ -25,7 +31,7 @@ vi.mock('./image.js', () => ({
 describe('remote chat open request', () => {
   it('resumes by id and names no folder of this machine', () => {
     const request = remoteResume('chat-1');
-    expect(request).toEqual({ type: 'open', mode: 'resume', sessionId: 'chat-1', features: ['session-delta'] });
+    expect(request).toEqual({ type: 'open', mode: 'resume', sessionId: 'chat-1', features: ['session-delta', 'copy'] });
     expect('workspace' in request).toBe(false);
     expect(JSON.stringify(request)).not.toContain(process.cwd());
   });
@@ -637,6 +643,77 @@ describe('a message typed in a chat on another machine', () => {
     await until(() => named(calls, 'startWaiting').length === 1);
     bridge.drop();
     await outcome;
+  }, 20_000);
+
+  it('a command\'s text result is drawn here, a confirmation-only one is not, and a file it wrote is said to be on the machine', async () => {
+    const { bridge, calls, said, outcome } = await start();
+    calls.length = 0;
+    bridge.say({ type: 'output', payload: { panel: 'status', text: 'ClikCode\n  chat      Demo\n  project   ~' } });
+    await until(() => named(calls, 'panel').length === 1);
+    expect(named(calls, 'panel')[0]!.slice(1)).toEqual(['ClikCode', '  chat      Demo\n  project   ~']);
+    // "Conversation renamed" says what the title on the rule already says.
+    bridge.say({ type: 'output', payload: { panel: 'session-renamed', text: 'Conversation renamed to X' } });
+    bridge.say({ type: 'open-file', path: '/Users/chronos/export.md' });
+    await until(() => said.some((line) => line.includes('/Users/chronos/export.md')));
+    expect(said.find((line) => line.includes('export.md'))).toContain('On devbox');
+    expect(named(calls, 'panel')).toHaveLength(1);
+    bridge.drop();
+    await outcome;
+  }, 20_000);
+
+  it('/copy on another machine is asked for, and lands on this computer\'s clipboard', async () => {
+    const { bridge, outcome } = await start();
+    expect(bridge.requests.find((request) => request.type === 'open')).toMatchObject({ features: expect.arrayContaining(['copy']) });
+    clipboard.copied.length = 0;
+    bridge.say({ type: 'copy', text: 'the last answer' });
+    await until(() => clipboard.copied.length === 1);
+    expect(clipboard.copied).toEqual(['the last answer']);
+    bridge.drop();
+    await outcome;
+  }, 20_000);
+
+  it('a chat closed on the machine (deleted, archived there) brings up the list, not a prompt to a chat that is gone', async () => {
+    boardPicker.mockReset().mockResolvedValueOnce(undefined);
+    const { bridge, prompts, outcome } = await start();
+    bridge.say({ type: 'closed', sessionId: 'c1' });
+    await until(() => boardPicker.mock.calls.length === 1);
+    await until(() => prompts.length === 2);
+    bridge.drop();
+    await outcome;
+  }, 20_000);
+
+  it('a turn another window starts takes over the idle prompt, keeping its place, and the prompt comes back when the turn ends', async () => {
+    const { bridge, calls, prompts, outcome } = await start();
+    calls.length = 0;
+    // Idle at the prompt: another window starts a turn on the chat. Two things reading the keyboard was what this was.
+    bridge.say({ type: 'worker', sessionId: 'c1', event: { type: 'waiting-start', message: 'thinking', prompt: 'from the other window' } });
+    await until(() => named(calls, 'startWaiting').length === 1);
+    expect(prompts).toHaveLength(1);
+    bridge.say({ type: 'worker', sessionId: 'c1', event: { type: 'waiting-stop' } });
+    await until(() => prompts.length === 2);
+    bridge.drop();
+    await outcome;
+  }, 20_000);
+
+  it('/new, /fork and /resume switch the chat the machine shows: a reconnect opens that one, not the one first picked', async () => {
+    const machine = newMachineRecord({ name: 'devbox', sshTarget: 'devbox', ready: true });
+    await updateMachines(() => [machine]);
+    const bridges: FakeRemoteBridge[] = [];
+    const { terminal, prompts } = fakeTerminal();
+    const running = runRemoteChat(terminal, 'local-1', { machineId: machine.id, chatId: 'c1' }, undefined, () => {
+      const bridge = new FakeRemoteBridge();
+      bridges.push(bridge);
+      return bridge as unknown as ChildProcessWithoutNullStreams;
+    }, [0]);
+    const outcome = running.then(() => 'returned', (error: Error) => error.message);
+    await until(() => prompts.length === 1);
+    const base = { id: 'c2', route: 'local', accountId: null, provider: 'claude', model: 'm', effort: 'high', name: 'Forked', createdAt: '', updatedAt: '', status: 'active', messages: [] };
+    bridges[0]!.say({ type: 'session', session: base });
+    bridges[0]!.retire();
+    await until(() => bridges.length === 2 && prompts.length === 2);
+    expect(bridges[1]!.requests[0]).toMatchObject({ type: 'open', mode: 'resume', sessionId: 'c2' });
+    prompts[1]!.answer('/exit');
+    expect(await outcome).toBe('returned');
   }, 20_000);
 
   it('shows the whole conversation from a bridge that sends only what changed', async () => {

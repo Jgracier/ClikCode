@@ -12,6 +12,8 @@ import type { IdeEvent, IdeFeature, IdeHostEvent, IdeHostRequest, IdeRequest, Id
 import { SessionDeltaReceiver } from '../ide/session-delta.js';
 import { ChatKeeper, readChatCache } from './chat-cache.js';
 import { RemoteImages } from './attach.js';
+import { drawHarnessOutput } from '../harness/output.js';
+import { copyToClipboard } from '../session/attachments.js';
 import { decodeWireLine } from '../ide/wire-gzip.js';
 import { applyLiveEvent, drawJoinedTurn, newLiveTurnState, recordDecision } from '../worker/joined-turn.js';
 import type { HarnessQuestionResult } from '../harness/events/question.js';
@@ -57,7 +59,7 @@ export function remoteResume(chatId: string): RemoteOpen {
 
 /** What this terminal handles beyond the base protocol: the conversation
  * whole on opening, and only what changed after (ide/session-delta.ts). */
-const REMOTE_FEATURES: readonly IdeFeature[] = ['session-delta'];
+const REMOTE_FEATURES: readonly IdeFeature[] = ['session-delta', 'copy'];
 
 /** Starts the machine's bridge (`ide-bridge --stdio` over ssh); a test's own. */
 export type RemoteBridgeStarter = (target: string) => ChildProcessWithoutNullStreams;
@@ -366,6 +368,10 @@ export async function runRemoteChat(
     let running = false;
     let waitingInput = false;
     let leftTurn = false;
+    /** What the idle prompt is waiting on can be cut short -- a turn another window starts, a chat closed there -- keeping what was typed. */
+    let wakePrompt: (() => void) | undefined;
+    /** The chat shown is the one the machine says (/new, /fork, /resume, /redo switch it): rejoining after a drop opens that, not the one first picked. */
+    const followChat = (id: string): void => { if (choice && choice.chatId !== id) choice = { ...choice, chatId: id }; };
     let finishTurn: (() => void) | undefined;
     let turnEnd: Promise<void> | undefined;
     let lastError: Error | undefined;
@@ -483,7 +489,7 @@ export async function runRemoteChat(
     bridge.onEvent = (event) => {
       switch (event.type) {
         // While a message drawn early waits for its turn, the chat is drawn as a turn's (run-turn.ts renders so too).
-        case 'session': session = event.session; account = event.account; sessionChanged(session); keeper.soon(); terminal.render(session, account, { running: running || early !== undefined }); return;
+        case 'session': session = event.session; account = event.account; followChat(session.id); sessionChanged(session); keeper.soon(); terminal.render(session, account, { running: running || early !== undefined }); return;
         case 'turn-start':
           // A message typed as the last turn ended finds no turn to steer into: it became this one. Nothing will answer it as a steer.
           for (const [id, pending] of submissions) {
@@ -502,7 +508,7 @@ export async function runRemoteChat(
           // The turn as far as it has got, kept from the worker's events as the local follower keeps it (worker/joined-turn.ts).
           applyLiveEvent(liveTurn, worker);
           if (worker.type === 'snapshot') {
-            session = worker.session; account = worker.account;
+            session = worker.session; account = worker.account; followChat(session.id);
             sessionChanged(session);
             running = Boolean(worker.live);
             if (worker.stopped) terminal.turnStopped();
@@ -574,7 +580,7 @@ export async function runRemoteChat(
           }
           else if (worker.type === 'submit-queued') dropEarly();
           // A turn another window (or the vendor) started on this chat: followed as one this window began, not seen only once it ends.
-          else if (worker.type === 'waiting-start') { running = true; beginWaiting(worker.prompt, worker.vendorWork ? worker.message : undefined); }
+          else if (worker.type === 'waiting-start') { running = true; wakePrompt?.(); beginWaiting(worker.prompt, worker.vendorWork ? worker.message : undefined); }
           else if (worker.type === 'unqueued') takeBacks.get(worker.id)?.(worker.outcome);
           else if (worker.type === 'steerable') terminal.setSteerable(worker.value);
           else if (worker.type === 'stopping') terminal.turnStopping(worker.restoreDraft === true);
@@ -623,6 +629,14 @@ export async function runRemoteChat(
           terminal.activity(event.message);
           return;
         case 'panel': terminal.panel(event.title, event.body); return;
+        // A command's text result (/status, /usage, /help, /history ...): drawn as a chat here draws it. Dropped, most commands showed nothing.
+        case 'output': drawHarnessOutput(terminal, event.payload); return;
+        // The machine wrote a file for the user (/export, /memory edit): it is there, not here, and is said so.
+        case 'open-file': terminal.activity(`On ${machine.name}: ${event.path}`); return;
+        // /copy: the clipboard is this computer's, where the user is -- the machine's would fill a clipboard nobody is at.
+        case 'copy':
+          void copyToClipboard(event.text).then(() => terminal.activity('Copied to the clipboard.'), (error: unknown) => terminal.activity(error instanceof Error ? error.message : String(error)));
+          return;
         case 'restore-draft': terminal.restoreDraft(event.text); return;
         case 'send-complete': if (completions.has(event.id)) dropEarly(); completions.get(event.id)?.resolve(); completions.delete(event.id); return;
         // Its last lines (an /update's steps) are drawn before the wait ends.
@@ -631,7 +645,8 @@ export async function runRemoteChat(
           if (early !== undefined) { if (event.label) terminal.updateWaitingLabel(event.label); return; }
           if (event.label) terminal.startWaiting(event.label); else if (!running) { terminal.flushPaint(); terminal.stopWaiting(); }
           return;
-        case 'closed': terminal.activity('This conversation closed on the remote machine.'); return;
+        // Deleted or archived there: this chat is gone, so the list is what is left to show -- not a prompt to a chat that no longer exists.
+        case 'closed': terminal.activity('This conversation closed on the remote machine.'); leftTurn = true; wakePrompt?.(); return;
       }
     };
     bridge.onClose = (error) => {
@@ -704,7 +719,19 @@ export async function runRemoteChat(
       };
       for (;;) {
         if (waitingInput) await turnEnd;
-        let line = leftTurn ? BOARD_LINE : (await terminal.question('› ', commands, { rightArrowPalette: true, leftArrowCommand: BOARD_LINE, signal: promptController.signal })).trim();
+        let line: string;
+        if (leftTurn) line = BOARD_LINE;
+        else {
+          const wake = new AbortController();
+          wakePrompt = () => wake.abort();
+          try {
+            line = (await terminal.question('› ', commands, { rightArrowPalette: true, leftArrowCommand: BOARD_LINE, signal: AbortSignal.any([promptController.signal, wake.signal]) })).trim();
+          } catch (error) {
+            // Cut short, not closed: go round again -- to the turn that began, or the list -- with the draft kept.
+            if (wake.signal.aborted && !promptController.signal.aborted && (error as { code?: string }).code === 'ERR_PROMPT_INTERRUPTED') continue;
+            throw error;
+          } finally { wakePrompt = undefined; }
+        }
         leftTurn = false;
         if (line === BOARD_LINE) {
           // The list is this machine's, wherever the chat is: it holds every machine's chats.
@@ -768,7 +795,9 @@ export async function runRemoteChat(
           terminal.restoreDraft(line);
           continue;
         }
-        try { bridge.post({ type: 'send', text: pinnedUpdateLine(wire, localBuildCommit()), id }); } catch (error) { dropEarly(); throw error; }
+        // The window's own choice of steer or queue, for the case that the machine meets a turn running (another window's) when this arrives.
+        const mode = await readState({ transcripts: [] }).then((state) => sendModeOf(state.globalSettings), () => undefined);
+        try { bridge.post({ type: 'send', text: pinnedUpdateLine(wire, localBuildCommit()), id, ...(mode ? { mode } : {}) }); } catch (error) { dropEarly(); throw error; }
         // Until the machine says it is done -- which for a turn this message starts is when that turn ends -- or the user steps away from it
         // (Left): waiting on `complete` alone held the loop at the turn, so Left dropped the turn's screen and nothing answered the keys.
         const stepped = new Promise<void>((resolve) => { wakeLeave = resolve; });
@@ -779,7 +808,7 @@ export async function runRemoteChat(
         if (parseSlashInput(line)?.head === 'update') reconnectWindowMachine(machine.id);
         if (lastError) { terminal.activity(lastError.message); lastError = undefined; }
         // A command may have changed what is offered (an account, a provider, a custom command, an /update).
-        if (line.startsWith('/')) await refreshCommands();
+        if (line.startsWith('/')) void refreshCommands();
       }
     } catch (error) {
       const cause = bridge.dropped;
