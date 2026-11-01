@@ -871,12 +871,15 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
   // A saved login for this site fills its sign-in fields. Not on a form that creates a password (two password
   // boxes): that is a signup, and the saved login belongs to the account that already exists.
   let login: Record<string, string> | undefined;
+  let siteHasLogin = false;
   // An autofill of a sign-in form asks, with the saved values shown. Several accounts are a choice, and the chosen one
   // fills the page. One account is shown so its email or password can be changed. A different email is stored as a new
   // account; the same email with a new password replaces that account.
   let confirmSignIn = false;
   if (fields.filter(field => field.password).length <= 1) {
-    let accounts = (await savedLoginsForSite(ctx.stateDir, page.url()).catch(() => [])).filter(account => !account.rejected);
+    const everyLogin = await savedLoginsForSite(ctx.stateDir, page.url()).catch(() => []);
+    siteHasLogin = everyLogin.length > 0;
+    let accounts = everyLogin.filter(account => !account.rejected);
     // An incomplete capture must not hide the saved credential that can finish this password page.
     if (fields.some(field => field.password) && accounts.some(account => account.usable)) accounts = accounts.filter(account => account.usable);
     const accountField = fields.some(field => loginValueFor({ username: 'x', password: 'x' }, field));
@@ -984,7 +987,7 @@ export async function askForFills(page: Page, steps: readonly Step[], ctx: ToolC
     // A sign-in password with no saved login for this site and none in the profile cannot be made up: say so and park
     // it (in the queue, with the reason) rather than failing, so the run goes on to the next site.
     const needPassword = ask.filter(item => item.field.kind === 'password').map(item => item.field);
-    const noPassword = (): Promise<never> => park(ctx.stateDir, page.url(), needPassword, `no saved login for this site; treated as a ${signingUp ? 'new-password page' : 'sign-in page'} (${pageKind?.reason ?? 'no password box'}); sign in once with the login action or add one with \`clikcode computer secrets --import\``);
+    const noPassword = (): Promise<never> => park(ctx.stateDir, page.url(), needPassword, `${siteHasLogin ? 'the saved password for this site was refused earlier' : 'no saved login for this site'}; treated as a ${signingUp ? 'new-password page' : 'sign-in page'} (${pageKind?.reason ?? 'no password box'}); ${siteHasLogin ? 'enter the current password with the add_login action' : 'sign in once with the login action or add one with `clikcode computer secrets --import`'}`);
     if (!ctx.requestPrivateLogin) { if (needPassword.length) return noPassword(); throw new Error('Fill needs text: this chat cannot ask the user privately.'); }
     const answers = await prompt(() => ctx.requestPrivateLogin!(origin, ask.map(item => item.field), ctx.signal));
     if (!answers) { if (needPassword.length) return noPassword(); throw new Error('The user did not answer the private prompt, so these fields were left empty.'); }

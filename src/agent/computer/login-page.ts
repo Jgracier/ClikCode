@@ -172,7 +172,9 @@ export async function loginComputerPage(input: {
       if (input.newAccount) id = undefined;
       else if (accounts.length > 1 || accounts[0]?.rejected) {
         const labels = uniqueLabels(accounts.map(account => account.label));
-        const answers = await input.ask(origin, [{ index: -1, key: 'account', label: 'Choose an account', kind: 'choice', required: true, options: [...labels, NEW_ACCOUNT] }], input.signal);
+        const refusedOnly = accounts.length === 1 && accounts[0]?.rejected;
+        const question = refusedOnly ? `The saved password for ${labels[0]} was refused last time. Enter a new one` : 'Choose an account';
+        const answers = await input.ask(origin, [{ index: -1, key: 'account', label: question, kind: 'choice', required: true, options: [...labels, NEW_ACCOUNT] }], input.signal);
         if (!answers || input.signal?.aborted) throw new LoginError('Private login cancelled.');
         id = accounts[labels.indexOf(answers.account!)]?.id;
       } else id = accounts[0]?.id;
@@ -214,7 +216,13 @@ export async function loginComputerPage(input: {
     await (await loginScope(input.page)).locator('input:visible').nth(fields.at(-1)!.index).press('Enter');
     submitted = true;
     lastSubmit = Date.now();
-    if (fields.some(field => field.kind === 'password')) { submittedPassword = true; if (saved.password && !supplied.password) sentSaved = true; }
+    if (fields.some(field => field.kind === 'password')) {
+      submittedPassword = true;
+      // A refusal counts against the saved password only when this whole submission came from the saved login: a form that also
+      // needed something typed fresh (an account id, a different kind of sign-in) says nothing about the password it was sent with.
+      const allSaved = fields.every(field => field.transient || field.kind === 'password' || (saved[field.key] !== undefined && supplied[field.key] === undefined));
+      if (saved.password && !supplied.password && allSaved) sentSaved = true;
+    }
     if (fields.some(field => field.transient)) codeAttempts++;
     // Nothing changed after the saved password was sent and the password box is still there: the site said no in place.
     if (!await progress(input.page, before, input.signal, () => pressSubmit(input.page))) return sentSaved && (await visible(input.page)).some(field => field.kind === 'password') ? refused() : 'unverified';
