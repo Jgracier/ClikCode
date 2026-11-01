@@ -540,7 +540,13 @@ export async function runRemoteChat(
       // Intent only: the chat is in one of the remote's own folders (session/attach.ts).
       const kept = selection.chatId ? await readChatCache(machine.id, selection.chatId) : undefined;
       if (kept && selection.chatId) bridge.preload(selection.chatId, kept.messages, kept.gen);
-      const opened = await (selection.chatId ? bridge.resume(selection.chatId) : bridge.request<{ sessionId?: string } | undefined>({ type: 'open', mode: 'new', features: REMOTE_FEATURES }));
+      // Nothing is painted until the open is in: the history, then the turn that is running (its calls, sub-agents, timer) arrive a
+      // moment apart, and each paint of one moved the rows already there -- the jump on entering a chat. Held, it paints once, whole.
+      terminal.holdPaints();
+      let opened: { sessionId?: string } | undefined;
+      try {
+        opened = await (selection.chatId ? bridge.resume(selection.chatId) : bridge.request<{ sessionId?: string } | undefined>({ type: 'open', mode: 'new', features: REMOTE_FEATURES }));
+      } finally { terminal.releasePaints(); }
       // A new chat there is that chat from here on: a rejoin resumes it.
       if (!selection.chatId && opened?.sessionId) choice = { ...selection, chatId: opened.sessionId };
       // After the open, whose chat clears the rows before it. Updated from here only by the
