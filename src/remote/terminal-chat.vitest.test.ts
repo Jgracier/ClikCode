@@ -411,6 +411,34 @@ describe('a message typed in a chat on another machine', () => {
     await outcome;
   }, 20_000);
 
+  it('Esc on a message waiting in the turn takes that message back from the worker, and does not stop the turn', async () => {
+    const base = { id: 'c1', route: 'local', accountId: null, provider: 'claude', model: 'm', effort: 'high', name: 'Remote chat', createdAt: '', updatedAt: '', status: 'active', messages: [] };
+    const { bridge, calls, outcome } = await start();
+    calls.length = 0;
+    bridge.say({ type: 'worker', sessionId: 'c1', event: { type: 'snapshot', session: base, live: { text: '', waitingLabel: 'x', prompt: 'go' } } });
+    await until(() => named(calls, 'startWaiting').length === 1);
+    // startWaiting(label, onCancel, onSubmit, onCommand, onLeave, onTakeBack, onSendWaiting)
+    const [, , , , , takeBack, sendNow] = named(calls, 'startWaiting')[0]!.slice(1) as [unknown, unknown, unknown, unknown, unknown, ((id: string) => Promise<string>) | undefined, (() => void) | undefined];
+    expect(takeBack, 'without it Esc has nothing to take back and stops the turn').toBeTypeOf('function');
+    expect(sendNow).toBeTypeOf('function');
+    const taken = takeBack!('win-9');
+    await until(() => bridge.requests.some((request) => request.type === 'unqueue'));
+    expect(bridge.requests.find((request) => request.type === 'unqueue')).toMatchObject({ type: 'unqueue', id: 'win-9' });
+    // The turn was not cancelled by it.
+    expect(bridge.requests.some((request) => request.type === 'cancel')).toBe(false);
+    bridge.say({ type: 'worker', sessionId: 'c1', event: { type: 'unqueued', id: 'win-9', outcome: 'removed' } });
+    expect(await taken).toBe('removed');
+    // Enter again, nothing typed: the waiting message is offered to the running turn now.
+    sendNow!();
+    await until(() => bridge.requests.some((request) => request.type === 'send-queued'));
+    // A connection that ends with a take-back unanswered is an error, not a message left hidden.
+    const lost = takeBack!('win-10');
+    await until(() => bridge.requests.filter((request) => request.type === 'unqueue').length === 2);
+    bridge.drop();
+    expect(await lost).toBe('error');
+    await outcome;
+  }, 20_000);
+
   it('shows the whole conversation from a bridge that sends only what changed', async () => {
     const { bridge, calls, outcome } = await start();
     const base = { id: 'c1', route: 'local', accountId: null, provider: 'claude', model: 'm', effort: 'high', name: 'Remote chat', createdAt: '', updatedAt: '', status: 'active' };

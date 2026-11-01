@@ -30,7 +30,7 @@ import { autoUpdates, localBuildCommit, pinnedUpdateLine } from './updates.js';
 import { needsUpdate, reachWindowMachine, reconnectWindowMachine, tapWindowMachine, type LinkTap, type LinkTapHandlers } from './connection.js';
 import { sshArgv } from './ssh.js';
 import { failureText } from '../harness/protocol/stderr-line.js';
-import type { LiveTurnInputResult } from '../turn/live-input.js';
+import type { LiveTurnInputResult, TakeBackOutcome } from '../turn/live-input.js';
 import type { SignInScreen } from '../gateway/login/vendor-sign-in.js';
 import { parseSlashInput, resolveSlashCommand, TERMINAL_ONLY_COMMANDS } from '../tui/slash/registry.js';
 import { chatHasContent } from '../session/move-chat.js';
@@ -424,6 +424,15 @@ export async function runRemoteChat(
         return { disposition: answer.disposition, submission, ...(answer.commandOutcome ? { commandOutcome: answer.commandOutcome } : {}) };
       } finally { submissions.delete(id); }
     };
+    /** Esc on a message waiting behind or into the turn: the worker owns the queue and says whether it was still the user's to take
+     * (`unqueued`). Without this the window had no take-back, and Esc went on to stop the whole turn -- the message typed stayed
+     * queued there while its row vanished here. */
+    const takeBacks = new Map<string, (outcome: TakeBackOutcome) => void>();
+    const takeBack = (id: string): Promise<TakeBackOutcome> => {
+      const answered = new Promise<TakeBackOutcome>((resolve) => { takeBacks.set(id, resolve); });
+      try { bridge.post({ type: 'unqueue', id }); } catch { takeBacks.delete(id); return Promise.resolve('error'); }
+      return answered.finally(() => takeBacks.delete(id));
+    };
     /** `label`: what the worker says the turn is doing. A turn that is the vendor's own background work
      * (live.vendorWork) is not the model thinking, and said so: this window joining it must not draw it as
      * "thinking" with a clock that runs for as long as the vendor holds the work. */
@@ -433,7 +442,9 @@ export async function runRemoteChat(
       turnEnd = new Promise<void>((resolve) => { finishTurn = resolve; });
       if (prompt !== undefined) terminal.submitted(prompt);
       terminal.startWaiting(label, (restoreDraft) => bridge.post({ type: 'cancel', restoreDraft }),
-        queued, queued, () => { leftTurn = true; waitingInput = false; finishTurn?.(); terminal.stopWaiting(); });
+        queued, queued, () => { leftTurn = true; waitingInput = false; finishTurn?.(); terminal.stopWaiting(); },
+        // Esc on a waiting message takes that message back, and does not stop the turn; "Enter again" offers it to the running turn now.
+        takeBack, () => bridge.post({ type: 'send-queued' }));
     };
     bridge.onEvent = (event) => {
       switch (event.type) {
@@ -513,6 +524,7 @@ export async function runRemoteChat(
             openPrompts.delete(worker.id);
           }
           else if (worker.type === 'submission') submissions.get(worker.id)?.resolve(worker);
+          else if (worker.type === 'unqueued') takeBacks.get(worker.id)?.(worker.outcome);
           else if (worker.type === 'steerable') terminal.setSteerable(worker.value);
           else if (worker.type === 'stopping') terminal.turnStopping(worker.restoreDraft === true);
           else if (worker.type === 'stop-done') terminal.stopSettled();
@@ -579,6 +591,8 @@ export async function runRemoteChat(
       completions.clear();
       for (const pending of submissions.values()) pending.reject(error);
       submissions.clear();
+      for (const resolve of takeBacks.values()) resolve('error');
+      takeBacks.clear();
     };
     try {
       await bridge.connected();
