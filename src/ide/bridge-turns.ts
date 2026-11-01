@@ -43,7 +43,7 @@ export class BridgeTurns {
 
   noteCancel(): void { this.cancelEpoch++; }
 
-  async send(text: string, id?: string): Promise<void> {
+  async send(text: string, id?: string, mode?: 'steer' | 'queue'): Promise<void> {
     const line = text.trim();
     const complete = (): void => { if (id) this.host.channel.send({ type: 'send-complete', id }); };
     if (!line) { complete(); return; }
@@ -61,7 +61,7 @@ export class BridgeTurns {
           complete();
           return;
         }
-        this.host.link.worker.client.send({ type: 'steer', text: line, ...(id ? { id } : {}) });
+        this.host.link.worker.client.send({ type: 'steer', text: line, ...(id ? { id } : {}), ...(mode ? { mode } : {}) });
         complete();
         return;
       }

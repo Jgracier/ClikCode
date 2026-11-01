@@ -23,6 +23,8 @@ import { BOARD_LINE, BOARD_OWNS } from '../commands/ai/interactive/board.js';
 import { remoteTerminalScript } from './install.js';
 import { startBridge } from './peer.js';
 import { readMachines, updatePolicy, type RemoteMachine } from './machines.js';
+import { readState } from '../session/state/read.js';
+import { sendModeOf } from '../turn/send-mode.js';
 import { remoteRowValue } from './board-rows.js';
 import { autoUpdates, localBuildCommit, pinnedUpdateLine } from './updates.js';
 import { needsUpdate, reachWindowMachine, reconnectWindowMachine, tapWindowMachine, type LinkTap, type LinkTapHandlers } from './connection.js';
@@ -414,7 +416,9 @@ export async function runRemoteChat(
       const submission = { id, text, submittedAt: new Date().toISOString() };
       const answered = new Promise<Extract<WorkerEvent, { type: 'submission' }>>((resolve, reject) => { submissions.set(id, { text, resolve, reject }); });
       try {
-        bridge.post({ type: 'send', text, id });
+        // The mode this window has chosen, read as the message is sent: the machine's setting is not the user's choice here.
+        const mode = await readState({ transcripts: [] }).then((state) => sendModeOf(state.globalSettings), () => undefined);
+        bridge.post({ type: 'send', text, id, ...(mode ? { mode } : {}) });
         const answer = await answered;
         if (answer.disposition === 'error') throw new Error(answer.message ?? 'message not sent');
         return { disposition: answer.disposition, submission, ...(answer.commandOutcome ? { commandOutcome: answer.commandOutcome } : {}) };
@@ -653,6 +657,12 @@ export async function runRemoteChat(
         // the terminal"). /exit closes this window; /redraw draws the chat again;
         // /select hands this terminal's mouse back.
         const own = resolveSlashCommand(parseSlashInput(line)?.head ?? '')?.name;
+        // `/send` is how this window sends what is typed mid-turn, whichever machine the chat is on: it sets this window's choice.
+        if (own === 'send') {
+          const { aiSessionCommand } = await import('../tui/slash/handlers.js');
+          await aiSessionCommand(localId, line).catch((error: unknown) => terminal.activity(error instanceof Error ? error.message : String(error)));
+          continue;
+        }
         if (own && TERMINAL_ONLY_COMMANDS.has(own)) {
           if (own === 'exit') return { exit: true };
           if (own === 'redraw' && session) { terminal.render(session, account); continue; }

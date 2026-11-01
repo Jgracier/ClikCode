@@ -57,7 +57,7 @@ export type ClientCommand =
        * plumbing behind it -- worker-turn.ts, TurnRunOptions.automatic, turn-journal.ts, checkpoint.ts -- goes with it in one change. */ automatic?: string }
   /** A message typed while a turn runs. `id` is echoed back on the
    * `submission` event that says what actually happened to it. */
-  | { type: 'steer'; text: string; id?: string }
+  | { type: 'steer'; text: string; id?: string; mode?: 'steer' | 'queue' }
   /** A message typed into a sub-agent's own view. `parentId` is the sub-agent
    * row's call id; `label` and `agentId` are the row's (the client has it).
    * What happens depends on the harness's declared `subagents.steer`

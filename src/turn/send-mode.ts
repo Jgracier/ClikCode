@@ -33,6 +33,12 @@ export function parseSendMode(word: string): SendMode {
   throw new Error('usage: /send [steer|queue]');
 }
 
+/** The settings a typed message is delivered by: the mode the window that typed it named (a chat on another machine carries the
+ * user's choice with it), else the setting of the machine the worker runs on. */
+export function typedSettings(mode: SendMode | undefined, machine: { sendMode?: unknown } | undefined): { sendMode?: unknown } | undefined {
+  return mode ? { sendMode: mode } : machine;
+}
+
 /** The worker's delivery of a message typed mid-turn: the turn's broker,
  * told by the user's setting whether it is to be steered in. */
 export function deliverTyped(

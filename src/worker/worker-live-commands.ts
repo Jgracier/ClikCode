@@ -8,7 +8,7 @@ import { lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import { consumeSessionTurn, enqueueSessionTurn } from '../turn/checkpoint.js';
-import { deliverTyped } from '../turn/send-mode.js';
+import { deliverTyped, typedSettings } from '../turn/send-mode.js';
 import { closePersistentTransport, persistentWorkRunning, reapPersistentCommands } from '../turn/vendor-process.js';
 import { hasHeldVendorProcess, stopHeldVendorProcess } from '../harness/transport/native/held-vendor.js';
 import { sendEvent } from './broadcast-observer.js';
@@ -231,10 +231,10 @@ export function createLiveCommands(ctx: WorkerContext) {
     const liveInput = ctx.activeLiveInput;
     const handled = (async () => {
       try {
-        // `/send queue` is the user's global choice, read as the message
-        // arrives so a change mid-turn applies to the next one typed.
-        const settings = await readState({ transcripts: [] }).then((state) => state.globalSettings, () => undefined);
-        const result = await deliverTyped(liveInput, command.text, command.id, settings);
+        // `/send queue` is the user's choice, read as the message arrives so a change mid-turn applies to the next one typed. The
+        // window that typed it says its own (`mode`), which a chat on another machine needs: the setting here is this machine's.
+        const machine = command.mode ? undefined : await readState({ transcripts: [] }).then((state) => state.globalSettings, () => undefined);
+        const result = await deliverTyped(liveInput, command.text, command.id, typedSettings(command.mode, machine));
         answer(result.disposition === 'steered' ? 'steered' : 'queued');
         // Every window shows the queue, not only the one that typed it.
         if (result.disposition !== 'steered') broadcastQueueChanged();

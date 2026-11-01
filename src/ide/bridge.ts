@@ -243,7 +243,7 @@ export class IdeBridge {
         });
         return;
       case 'send':
-        this.track(this.turns.send(request.text, request.id));
+        this.track(this.turns.send(request.text, request.id, request.mode));
         return;
       case 'cancel':
         this.turns.noteCancel();
