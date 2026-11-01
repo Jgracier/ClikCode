@@ -450,14 +450,22 @@ export class IdeBridge {
   private async open(workspace: string, mode: 'new' | 'continue' | 'resume', ref?: string): Promise<void> {
     // A folder this machine does not have is its home instead, said as a notice (session/attach.ts).
     const notices: string[] = [];
-    const id = await openConversation(workspace, mode, ref, { sameWorkspace: true, pin: true, notice: (message) => notices.push(message) });
-    const { session } = await this.current(id);
+    // Where the time of an open goes, one event: a chat with work running is slower to open, and this says which step.
+    const began = Date.now();
+    const steps: Record<string, number> = {};
+    const timed = async <T>(name: string, work: () => Promise<T>): Promise<T> => {
+      const at = Date.now();
+      try { return await work(); } finally { steps[name] = Date.now() - at; }
+    };
+    const id = await timed('openMs', () => openConversation(workspace, mode, ref, { sameWorkspace: true, pin: true, notice: (message) => notices.push(message) }));
+    const { session } = await timed('currentMs', () => this.current(id));
     // As a terminal does on open: a conversation with no provider gets the one
     // the user is signed in to, without asking; with none, the first message
     // or /provider asks.
     if (!session.nativeHarness && !isClikCodeAgent(session)) await autoSelectSessionHarness(id).catch(() => false);
-    await resolveSessionModel(id);
-    await this.switchTo(id);
+    await timed('modelMs', () => resolveSessionModel(id));
+    await timed('switchMs', () => this.switchTo(id, steps));
+    lifecycle('bridge.open', { ms: Date.now() - began, ...steps, messages: session.messages?.length ?? 0, running: this.link.worker !== undefined });
     for (const message of notices) this.channel.send({ type: 'notice', message, level: 'warning' });
     void this.synchronizeOpened(id);
   }
@@ -472,7 +480,11 @@ export class IdeBridge {
     if (this.sessionId === id) await this.emitSession();
   }
 
-  private async switchTo(id: string): Promise<void> {
+  private async switchTo(id: string, steps: Record<string, number> = {}): Promise<void> {
+    const timed = async <T>(name: string, work: () => Promise<T>): Promise<T> => {
+      const at = Date.now();
+      try { return await work(); } finally { steps[name] = Date.now() - at; }
+    };
     const previous = this.sessionId;
     if (previous && previous !== id) {
       if (this.link.worker?.sessionId === previous) this.link.worker.client.send({ type: 'release' });
@@ -484,14 +496,16 @@ export class IdeBridge {
     setLifecycleSession(id);
     lifecycle('bridge.conversation');
     this.preparedRoute = undefined;
-    await claimConversation(id);
-    await this.emitSession();
+    await timed('claimMs', () => claimConversation(id));
+    await timed('emitMs', () => this.emitSession());
     // Follow a turn another client has running here, and have a worker that
     // is already up paint what it has streamed; nothing is started for a
     // conversation that has none yet.
-    const record = await readWorkerRecord(id).catch(quiet('ide/bridge'));
-    if (record && await workerIsReachable(record.socketPath)) await this.link.workerFor(id).catch(quiet('ide/bridge'));
-    await this.prepareRoute();
+    await timed('workerMs', async () => {
+      const record = await readWorkerRecord(id).catch(quiet('ide/bridge'));
+      if (record && await workerIsReachable(record.socketPath)) await this.link.workerFor(id).catch(quiet('ide/bridge'));
+    });
+    await timed('routeMs', () => this.prepareRoute());
     void this.refreshUsage().catch(quiet('ide/bridge'));
   }
 
