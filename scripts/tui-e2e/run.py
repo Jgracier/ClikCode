@@ -850,6 +850,27 @@ SCENARIOS = {
                        'board': ['moved to'], 'here': ['No conversations yet', 'moved to'], 'live': ['goes on here', 'read-only']},
         'never': ['ENOENT', 'This conversation moved from', 'clikcode_resource_note', 'Connection to devbox', 'Moved to devbox', 'Moving to devbox'],
     },
+    # Esc on a turn on another machine that has not answered yet: the message comes back into the composer of the window that pressed
+    # it, as it does for a chat here -- and the next message is the only one the agent is told after it.
+    'remote-chat-esc-takes-back': {
+        'setup': remote_move(remote_env={'FAKE_TURNS': json.dumps([
+            {'thought': {'text': 'Pondering the request slowly.', 'ms': 20000}, 'blocks': ['Never gets here.']},
+            {'blocks': ['Second answer after the take-back.']}])}),
+        'startup': 4, 'no_dup_check': 'the transcript is drawn again on the other machine',
+        'turns': [{'blocks': ['First answer here.']}],
+        'steps': [
+            ('type', 'hello there'), ('wait_for', 'First answer here.', 30), ('settle', 1),
+            ('type', '/machine'), ('wait_for', 'Move this chat to', 20), ('settle', 1),
+            ('keys', '\x1b[B'), ('keys', '\r'), ('wait_for', 'devbox  •', 60), ('settle', 2),
+            ('type', 'take this back'), ('wait_for', 'Pondering', 30), ('settle', 1),
+            ('keys', '\x1b'), ('settle', 4), ('snap', 'taken'),
+            ('keys', '\x15'), ('type', 'second prompt'), ('wait_for', 'Second answer after the take-back.', 40), ('settle', 1), ('snap', 'after'),
+        ],
+        'watch': [],
+        'snap_contains': {'taken': ['› take this back'], 'after': ['second prompt', 'Second answer after the take-back.']},
+        'snap_lacks': {'taken': ['Never gets here.', 'Worked for'], 'after': ['Never gets here.']},
+        'never': ['ENOENT', 'Connection to devbox'],
+    },
     # A chat on another machine over a slow link (devbox's every byte back
     # 2.5 s late): a message typed there is drawn at once, with the turn's
     # wait, as a chat here draws one -- not when the machine's turn-start
