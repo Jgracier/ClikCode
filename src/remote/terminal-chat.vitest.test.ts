@@ -79,6 +79,14 @@ const fakeTerminal = () => {
         });
       }
       if (key === 'activity') return (line: string) => said.push(line);
+      // An approval stays open until its signal aborts (answered in another window), then ends undecided.
+      if (key === 'approval') {
+        return (...args: unknown[]) => {
+          const signal = args[4] as AbortSignal | undefined;
+          calls.push(['approval', ...args]);
+          return new Promise<boolean>((resolve) => signal?.addEventListener('abort', () => resolve(false), { once: true }));
+        };
+      }
       if (key === 'then') return undefined;
       return (...args: unknown[]) => { calls.push([String(key), ...args]); };
     },
@@ -288,6 +296,40 @@ describe('a message typed in a chat on another machine', () => {
     bridge.say({ type: 'worker', sessionId: 'c1', event: { type: 'activity', event: { kind: 'tool-start', label: 'Task c', id: 'c' } } });
     await until(() => named(calls, 'activityEvent').length === 1);
     expect(named(calls, 'activityEvent')[0]![2]).toMatchObject({ index: 3 });
+    bridge.drop();
+    expect(await outcome).toBe('Connection to devbox closed');
+  }, 20_000);
+
+  it('an approval answered in another window closes here, drawn as that window\'s decision, and nothing is sent back', async () => {
+    const { bridge, calls, outcome } = await start();
+    calls.length = 0;
+    const base = { id: 'c1', route: 'local', accountId: null, provider: 'claude', model: 'm', effort: 'high', name: 'Remote chat', createdAt: '', updatedAt: '', status: 'active', messages: [] };
+    bridge.say({ type: 'worker', sessionId: 'c1', event: { type: 'snapshot', session: base, live: { text: '', waitingLabel: 'x', prompt: 'go' } } });
+    bridge.say({ type: 'worker', sessionId: 'c1', event: { type: 'approval-request', id: 'ask-1', title: 'Run it?', detail: 'rm', preview: [], rule: 'r' } });
+    await until(() => named(calls, 'approval').length === 1);
+    const signal = named(calls, 'approval')[0]![5] as AbortSignal;
+    expect(signal.aborted).toBe(false);
+    bridge.say({ type: 'worker', sessionId: 'c1', event: { type: 'request-closed', id: 'ask-1', outcome: 'approved', label: 'Ran rm' } });
+    await until(() => signal.aborted);
+    await until(() => named(calls, 'joinMark').length === 1);
+    expect((named(calls, 'joinMark')[0]![1] as { id: string }).id).toBe('outcome:ask-1');
+    expect(bridge.requests.some((request) => (request as { type: string }).type === 'approval-response')).toBe(false);
+    bridge.drop();
+    expect(await outcome).toBe('Connection to devbox closed');
+  }, 20_000);
+
+  it('draws a stop as the local window does: stopping, settled, and a turn another window stopped ends as stopped', async () => {
+    const { bridge, calls, outcome } = await start();
+    calls.length = 0;
+    const base = { id: 'c1', route: 'local', accountId: null, provider: 'claude', model: 'm', effort: 'high', name: 'Remote chat', createdAt: '', updatedAt: '', status: 'active', messages: [] };
+    bridge.say({ type: 'worker', sessionId: 'c1', event: { type: 'snapshot', session: base, live: { text: '', waitingLabel: 'x', prompt: 'go', steerable: true } } });
+    bridge.say({ type: 'worker', sessionId: 'c1', event: { type: 'stopping', restoreDraft: true } });
+    bridge.say({ type: 'worker', sessionId: 'c1', event: { type: 'stop-done' } });
+    bridge.say({ type: 'worker', sessionId: 'c1', event: { type: 'waiting-stop', stopped: true } });
+    await until(() => named(calls, 'turnStopped').length === 1);
+    expect(named(calls, 'setSteerable')[0]![1]).toBe(true);
+    expect(named(calls, 'turnStopping')[0]![1]).toBe(true);
+    expect(named(calls, 'stopSettled')).toHaveLength(1);
     bridge.drop();
     expect(await outcome).toBe('Connection to devbox closed');
   }, 20_000);

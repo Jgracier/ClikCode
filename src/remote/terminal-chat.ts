@@ -12,7 +12,8 @@ import type { IdeEvent, IdeFeature, IdeHostEvent, IdeHostRequest, IdeRequest, Id
 import { SessionDeltaReceiver } from '../ide/session-delta.js';
 import { ChatKeeper, readChatCache } from './chat-cache.js';
 import { decodeWireLine } from '../ide/wire-gzip.js';
-import { applyLiveEvent, drawJoinedTurn, newLiveTurnState } from '../worker/joined-turn.js';
+import { applyLiveEvent, drawJoinedTurn, newLiveTurnState, recordDecision } from '../worker/joined-turn.js';
+import type { HarnessQuestionResult } from '../harness/events/question.js';
 import { isTranscriptActivity } from '../worker/protocol.js';
 import { backgroundWorkOf } from '../harness/protocol/background-agents.js';
 import type { PaletteEntry } from '../tui/command-palette.js';
@@ -323,6 +324,8 @@ export async function runRemoteChat(
     };
     /** The running turn as far as it has got (applyLiveEvent). */
     const liveTurn = newLiveTurnState();
+    /** Approvals and questions this window has open, closed by `request-closed`. */
+    const openPrompts = new Map<string, AbortController>();
     const completions = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
     const promptController = new AbortController();
     const signIns = new Map<string, SignInScreen>();
@@ -380,6 +383,7 @@ export async function runRemoteChat(
             session = worker.session; account = worker.account;
             sessionChanged(session);
             running = Boolean(worker.live);
+            if (worker.stopped) terminal.turnStopped();
             terminal.render(session, account, worker.live ? { running: true, prompt: worker.live.prompt } : { running: early !== undefined });
             if (worker.live) {
               beginWaiting(worker.live.prompt, worker.live.vendorWork ? worker.live.waitingLabel : undefined);
@@ -389,6 +393,7 @@ export async function runRemoteChat(
               terminal.joinedWaiting(Number.isNaN(startedAt) ? undefined : startedAt);
               drawJoinedTurn(terminal, liveTurn);
               terminal.setBackgroundWork?.(worker.background ?? backgroundWorkOf(worker.live));
+              terminal.setSteerable(Boolean(worker.live.steerable));
             }
           }
           else if (worker.type === 'delta') terminal.response(worker.text, worker.mode);
@@ -404,10 +409,36 @@ export async function runRemoteChat(
           else if (worker.type === 'plan') terminal.setPlan(worker.entries);
           else if (worker.type === 'usage') terminal.setTurnUsage(worker.usage);
           else if (worker.type === 'restore-draft') terminal.restoreDraft(worker.text);
-          else if (worker.type === 'waiting-stop') { running = false; waitingInput = false; terminal.stopWaiting(); finishTurn?.(); }
+          else if (worker.type === 'waiting-stop') { if (worker.stopped) terminal.turnStopped(); running = false; waitingInput = false; terminal.stopWaiting(); finishTurn?.(); }
           else if (worker.type === 'turn-error') lastError = new Error(worker.message);
-          else if (worker.type === 'approval-request') void terminal.approval(worker.title, worker.detail, worker.preview, worker.rule, undefined, worker.callId).then((approved) => bridge.post({ type: 'approval-response', id: worker.id, approved }));
-          else if (worker.type === 'question-request') void terminal.askQuestions(worker.request).then((result) => bridge.post({ type: 'question-response', id: worker.id, result }));
+          else if (worker.type === 'approval-request') {
+            const closing = new AbortController();
+            openPrompts.set(worker.id, closing);
+            void terminal.approval(worker.title, worker.detail, worker.preview, worker.rule, closing.signal, worker.callId).then((approved) => {
+              openPrompts.delete(worker.id);
+              // Decided here: the row is drawn by this window, not again from a snapshot.
+              if (!closing.signal.aborted) { terminal.markDrawn?.(`outcome:${worker.id}`); bridge.post({ type: 'approval-response', id: worker.id, approved }); }
+            });
+          } else if (worker.type === 'question-request') {
+            const closing = new AbortController();
+            openPrompts.set(worker.id, closing);
+            void terminal.askQuestions(worker.request, closing.signal).catch((): HarnessQuestionResult => ({ kind: 'cancelled' })).then((result) => {
+              openPrompts.delete(worker.id);
+              if (!closing.signal.aborted) { terminal.markDrawn?.(`outcome:${worker.id}`); bridge.post({ type: 'question-response', id: worker.id, result }); }
+            });
+          } else if (worker.type === 'request-closed') {
+            // Answered in another window, withdrawn by the vendor, or the turn ended. Still open here means this window did not answer
+            // it: it draws the decision as the one that did, where the worker placed it.
+            if (openPrompts.has(worker.id)) {
+              const decided = recordDecision(liveTurn, worker);
+              if (decided) terminal.joinMark(decided);
+            }
+            openPrompts.get(worker.id)?.abort();
+            openPrompts.delete(worker.id);
+          }
+          else if (worker.type === 'steerable') terminal.setSteerable(worker.value);
+          else if (worker.type === 'stopping') terminal.turnStopping(worker.restoreDraft === true);
+          else if (worker.type === 'stop-done') terminal.stopSettled();
           return;
         }
         case 'ui-request': {
