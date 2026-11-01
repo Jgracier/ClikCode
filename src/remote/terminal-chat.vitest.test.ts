@@ -5,6 +5,7 @@ import { createInterface } from 'node:readline';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { remotePalette, remoteResume, runRemoteChat } from './terminal-chat.js';
 import { newMachineRecord, updateMachines } from './machines.js';
+import { remoteRowValue } from './board-rows.js';
 import type { TerminalHarnessPrompter } from '../tui/prompter.js';
 import { BOARD_LINE } from '../commands/ai/interactive/board.js';
 
@@ -149,6 +150,8 @@ describe('a chat on another machine\'s slash menu', () => {
     prompts[0]!.answer(BOARD_LINE);
     await until(() => prompts.length === 2);
     expect(boardPicker.mock.calls[0]![2].map((item: { value: string }) => item.value)).toEqual(prompts[0]!.items.map((item) => item.value));
+    // Left on a chat of another machine opens the list on that chat's row, not on the chat this window was started from.
+    expect(boardPicker.mock.calls[0]![3]).toEqual({ initial: remoteRowValue(machine.id, 'c1') });
     expect(bridge.requests.filter((request) => request.type === 'open')).toEqual([
       expect.objectContaining({ mode: 'resume', sessionId: 'c1' }), expect.objectContaining({ mode: 'new' }),
     ]);

@@ -629,6 +629,24 @@ export class RemoteMachines {
     return this.links.find((link) => link.view.machine.id === machineId)?.tap(chat, handlers);
   }
 
+  /** Whether a chat can be opened on a machine now, from its connection -- the one place that knows: connected is yes at once; one
+   * offline is tried at once (not after its pause) and one connecting is waited for, for at most `ms`. Otherwise why not, in the
+   * connection's own words. */
+  async reach(machineId: string, ms: number): Promise<{ ok: true } | { ok: false; reason: string }> {
+    const link = this.links.find((item) => item.view.machine.id === machineId);
+    if (!link) return { ok: false, reason: 'it is no longer added' };
+    link.wake();
+    if (link.view.state === 'connecting') {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => { stop(); resolve(); }, ms);
+        timer.unref();
+        const stop = this.onChange(() => { if (link.view.state !== 'connecting') { clearTimeout(timer); stop(); resolve(); } });
+      });
+    }
+    if (link.view.state === 'connected') return { ok: true };
+    return { ok: false, reason: link.view.state === 'connecting' ? `no answer within ${Math.round(ms / 1000)}s` : (link.view.error ?? 'not connected') };
+  }
+
   /** Connects to a machine again: its ClikCode was just updated. */
   reconnect(machineId: string): void {
     this.links.find((link) => link.view.machine.id === machineId)?.reconnect();
@@ -651,6 +669,12 @@ let windowMachines: RemoteMachines | undefined;
 export function holdWindowMachines(use: { autoUpdate?: boolean } = {}, options: LinkOptions = {}): Promise<MachinesHold> {
   windowMachines ??= new RemoteMachines(options, true);
   return windowMachines.hold(use);
+}
+
+/** Whether a chat can be opened on a machine now (`RemoteMachines.reach`), connecting the window to its machines if it is not yet. */
+export async function reachWindowMachine(machineId: string, ms: number): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const held = await holdWindowMachines();
+  try { return await windowMachines!.reach(machineId, ms); } finally { held.release(); }
 }
 
 /** A chat on the window's connection to a machine, when it has one that is up (`RemoteLink.tap`); undefined otherwise. */

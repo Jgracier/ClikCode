@@ -28,7 +28,7 @@ import { turnFailureEffect } from './turn-failure.js';
 import { runTimedTurn } from './run-turn.js';
 import { createSlashHost, openConversationPicker, runShellInChat } from './slash-host.js';
 import type { ChatWindow } from './window.js';
-import { runRemoteChat, type RemoteChatSelection } from '../../../remote/terminal-chat.js';
+import { RemoteUnavailable, runRemoteChat, type RemoteChatSelection } from '../../../remote/terminal-chat.js';
 import { openedChat } from '../../../remote/move-terminal.js';
 
 /** What one read of the next line came to: another pass, the end of the loop, or a line to run. */
@@ -352,6 +352,12 @@ export class ChatLoop {
       const end = await runRemoteChat(terminal, this.id, selection, draft);
       if (typeof end === 'object') { this.leaving = true; return; }
       if (end) this.id = end;
+    } catch (error) {
+      // It never showed: back to the list it was picked from, with why -- not into some other chat.
+      if (!(error instanceof RemoteUnavailable)) throw error;
+      this.notice = error.message;
+      this.openBoard = true;
+      return;
     } finally {
       await claimConversation(this.id).catch(quiet('commands/ai/interactive/loop'));
     }
