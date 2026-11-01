@@ -261,5 +261,6 @@ export const conversationHandlers = {
   context: async ({ session }) => emitHarnessOutput({ panel: 'context', text: contextUsageText(session), usage: session.lastUsage ?? null }),
   capabilities: async ({ session }) => emitHarnessOutput({ panel: 'capabilities', text: capabilitiesText(session) }),
   redraw: async () => emitHarnessOutput({ panel: 'redraw', text: 'Nothing to repaint outside the interactive session.' }),
+  restart: async () => emitHarnessOutput({ panel: 'restart', text: 'There is no window to restart outside the interactive session.' }),
   exit: async ({ id }) => aiSessionLeave(id),
 } satisfies Partial<Record<SlashHandlerKey, HeadlessSlashHandler>>;

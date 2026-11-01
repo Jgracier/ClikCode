@@ -1,4 +1,5 @@
 /** Opening a window: the terminal, the attached and claimed conversation, its first frame, the usage tick and the newer-build watch. */
+import { registerBuildReplacer, shouldTellStale } from './build-replace.js';
 import { quiet } from '../../../runtime/lifecycle-log.js';
 import { currentWorkerBuild } from '../../../worker/registry.js';
 import { isClikCodeAgent, isGatewayService } from '../../../session/route.js';
@@ -188,6 +189,7 @@ function startBuildWatch(
   let usageInterval: ReturnType<typeof setInterval> | undefined;
   /** Let go on both ways out: leaving, and handing over to a newer build. */
   const releaseWindow = async (): Promise<void> => {
+    registerBuildReplacer(undefined);
     if (usageInterval) clearInterval(usageInterval);
     stopLockNotices?.();
     await closeAllWorkerClients().catch(quiet('commands/ai/interactive/window'));
@@ -216,16 +218,27 @@ function startBuildWatch(
       },
     });
   };
+  registerBuildReplacer(beginBuildReplace);
+  /** When a newer build was first seen and this window could not take it: said once if it stays that way. */
+  let waitingSince: number | undefined;
+  let toldWaiting = false;
   const noteNewerBuild = (): void => {
     if (!newerBuild()) return;
     if (!updateSeen) {
       updateSeen = true;
+      waitingSince = Date.now();
       // Unattached workers notice the rebuild themselves. A worker a window
       // keeps attached -- one never idle enough to re-exec (a draft, a
       // picker) -- is reached only by this ask.
       void retireStaleWorkers().catch(quiet('commands/ai/interactive/window'));
     }
-    if (terminal?.idleForBuildReplace()) void beginBuildReplace();
+    if (terminal?.idleForBuildReplace()) { void beginBuildReplace(); return; }
+    // A window that is never idle -- a turn or agents running for hours -- never swaps by itself, and said nothing of it: it ran an old
+    // build all day. Said once, after a while, with the way out.
+    if (terminal && shouldTellStale(waitingSince, toldWaiting, Date.now())) {
+      toldWaiting = true;
+      terminal.activity('A newer ClikCode is installed and this window is still on the old one (it was never idle). /restart switches to it; the chat stays and what is running keeps running.');
+    }
   };
   // Without this tick, usage only ever refreshed at session-open and right after
   // each submitted message -- fine for a quick back-and-forth, but a long

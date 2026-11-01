@@ -77,3 +77,36 @@ describe('applying a command while a turn streams', () => {
     expect(applies('//status')).toBe(false);
   });
 });
+
+describe('/restart typed while a turn streams', () => {
+  it('switches the window at once, and is not left queued behind the turn it is trying to get past', async () => {
+    const { mkdtemp, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { writeState } = await import('../../session/state/write.js');
+    const { readState } = await import('../../session/state/read.js');
+    const { commandDuringTurn } = await import('./queue.js');
+    const { registerBuildReplacer } = await import('../../commands/ai/interactive/build-replace.js');
+    const root = await mkdtemp(join(tmpdir(), 'cc-restart-'));
+    const before = process.env.CLIKCODE_HOME;
+    process.env.CLIKCODE_HOME = root;
+    try {
+      const now = new Date().toISOString();
+      await writeState({
+        sessions: [{ id: 's1', conversationId: 's1', route: 'local', accountId: null, provider: null, model: null, effort: 'high', permissionMode: 'ask', createdAt: now, updatedAt: now, status: 'active', name: 'Chat', messages: [] } as never],
+        accounts: [], invocations: [], providerSettings: {}, globalSettings: { effort: 'medium', permissionMode: 'ask' },
+      } as never);
+      let left = 0;
+      registerBuildReplacer(() => { left += 1; return new Promise(() => undefined); });
+      const result = await commandDuringTurn('s1', '/restart');
+      expect(left).toBe(1);
+      expect(result).toMatchObject({ disposition: 'command', commandOutcome: 'applied' });
+      const session = (await readState({ transcripts: ['s1'] })).sessions.find((item) => item.id === 's1');
+      expect(session?.queuedTurns ?? []).toEqual([]);
+    } finally {
+      registerBuildReplacer(undefined);
+      if (before === undefined) delete process.env.CLIKCODE_HOME; else process.env.CLIKCODE_HOME = before;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
