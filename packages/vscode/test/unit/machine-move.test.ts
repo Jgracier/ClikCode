@@ -18,6 +18,8 @@ const world = vi.hoisted(() => ({
   reach: true,
   /** The revision every fake bridge says it is. */
   revision: 4,
+  /** This computer's steer-or-queue choice, and what was set on it. */
+  localSend: 'steer' as 'steer' | 'queue',
 }));
 
 vi.mock('vscode', () => {
@@ -75,6 +77,8 @@ vi.mock('../../src/chat-machine', () => {
     reachable = async () => true;
     workspaceForOpen = () => '/work';
     connect = connect('local');
+    sendMode = async () => world.localSend;
+    setSendMode = async (mode: 'steer' | 'queue') => { world.localSend = mode; };
     releaseImage = async () => undefined;
     dispose = () => undefined;
   }
@@ -123,7 +127,8 @@ class FakeBridge extends BridgeEndpoint {
       const id = request.sessionId ?? (this.machine === 'local' ? 's1' : 'new-there');
       setTimeout(() => this.receive({ type: 'session', session: session(id, this.chat.messages, this.chat.movedTo ? { movedTo: this.chat.movedTo } : {}) as never }), 0);
       answer({ sessionId: id });
-    } else if (request.type === 'export-chat') answer({ version: 1, sessionId: 's1', conversationId: 's1', createdAt: '', messages: [], settings: {}, source: {} });
+    } else if (request.type === 'query' && (request as { query?: string }).query === 'chat-settings') answer({ send: 'steer' });
+    else if (request.type === 'export-chat') answer({ version: 1, sessionId: 's1', conversationId: 's1', createdAt: '', messages: [], settings: {}, source: {} });
     else if (request.type === 'import-chat') answer({ sessionId: 's1', folder: '/root', changes: this.chat.changes ?? [], installationId: 'prod-install' });
     else if ('requestId' in request) answer();
     return true;
@@ -141,7 +146,7 @@ const until = async (check: () => boolean, ms = 3_000): Promise<void> => {
 };
 
 const controllers: ClikCodeController[] = [];
-afterEach(() => { for (const controller of controllers.splice(0)) controller.dispose(); world.bridges = []; world.warnings = []; world.answer = undefined; world.notes = []; world.channel = undefined; world.held = 0; world.reach = true; world.revision = 4; });
+afterEach(() => { for (const controller of controllers.splice(0)) controller.dispose(); world.bridges = []; world.warnings = []; world.answer = undefined; world.notes = []; world.channel = undefined; world.held = 0; world.reach = true; world.revision = 4; world.localSend = 'steer'; });
 
 const startChat = async (local: { messages: number; movedTo?: unknown }, remote: { messages: number; changes?: string[] } = { messages: 2 }) => {
   world.next = { local: () => new FakeBridge('local', local), m1: () => new FakeBridge('m1', remote) };
@@ -157,6 +162,42 @@ const requestsOf = (machine: string) => world.bridges.filter((bridge) => bridge.
 const said = (controller: ClikCodeController): string[] => [...world.warnings, ...world.notes, ...((controller.state as { notes?: Array<{ text: string }> }).notes ?? []).map((note) => note.text)];
 
 type ChatModelLike = { messages: unknown[]; sessionId?: string; machine?: string };
+
+describe('steer or queue for a chat on another machine', () => {
+  const remoteChat = async () => {
+    const controller = await startChat({ messages: 2 });
+    await controller.moveToMachine('m1');
+    await until(() => controller.state.connection === 'ready' && controller.state.machine === 'prod');
+    return controller;
+  };
+  const sentOn = (machine: string) => world.bridges.filter((bridge) => bridge.machine === machine).flatMap((bridge) => bridge.requests).filter((request) => request.type === 'send');
+
+  it('is this computer\'s choice, shown and sent with each message -- not the setting of the machine the chat is on', async () => {
+    world.localSend = 'queue';
+    const controller = await remoteChat();
+    // The machine there says steer; the composer says what this computer chose.
+    await until(() => controller.state.chatSettings?.send === 'queue');
+    await (controller as unknown as { send(text: string, id: string): Promise<void> }).send('after this turn', 'm-1');
+    expect(sentOn('m1')).toEqual([expect.objectContaining({ text: 'after this turn', id: 'm-1', mode: 'queue' })]);
+  });
+
+  it('is set on this computer when chosen in the composer, and never sent to the machine the chat is on', async () => {
+    const controller = await remoteChat();
+    await (controller as unknown as { handle(request: unknown): Promise<unknown> }).handle({ method: 'choose', choice: { kind: 'send', mode: 'queue' } });
+    expect(world.localSend).toBe('queue');
+    expect(world.bridges.filter((bridge) => bridge.machine === 'm1').flatMap((bridge) => bridge.requests).some((request) => request.type === 'choose')).toBe(false);
+    await until(() => controller.state.chatSettings?.send === 'queue');
+    await (controller as unknown as { send(text: string, id: string): Promise<void> }).send('later', 'm-2');
+    expect(sentOn('m1')).toEqual([expect.objectContaining({ id: 'm-2', mode: 'queue' })]);
+  });
+
+  it('names no mode for a chat on this computer: the setting here is already the choice', async () => {
+    const controller = await startChat({ messages: 2 });
+    await (controller as unknown as { send(text: string, id: string): Promise<void> }).send('hello', 'l-1');
+    expect(sentOn('local')).toEqual([expect.not.objectContaining({ mode: expect.anything() })]);
+    expect(sentOn('local')).toHaveLength(1);
+  });
+});
 
 describe('the machine chip', () => {
   it('moves this chat to the machine chosen, and shows it there: one import, nothing asked or said', async () => {

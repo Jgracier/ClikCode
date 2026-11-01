@@ -338,15 +338,25 @@ export class ClikCodeController implements vscode.Disposable {
     }, 120);
   }
 
+  /** This computer's steer-or-queue choice, kept for sending to a chat on another machine; the last one read when it cannot be read now. */
+  private localSend: 'steer' | 'queue' = 'steer';
+  private async readLocalSend(): Promise<'steer' | 'queue'> {
+    this.localSend = await this.local.sendMode().catch(() => this.localSend);
+    return this.localSend;
+  }
+
   private async readStructured(onlyAccount: boolean): Promise<void> {
     const bridge = this.bridge;
     if (!bridge?.running) return;
     const sessionId = this.model.sessionId;
     const read = this.structuredRead.begin();
-    const [settings, providers, accounts] = await Promise.all([
+    // A chat on another machine is sent under this computer's choice of steer or queue, which is what the composer then says. Read with
+    // the rest, not before them.
+    const [settings, providers, accounts, send] = await Promise.all([
       onlyAccount ? Promise.resolve(this.model.chatSettings) : bridge.call<IdeChatSettings>({ type: 'query', query: 'chat-settings' }, TIMEOUT.structured).catch((error: unknown) => this.readFailed('chat settings', error)),
       onlyAccount ? Promise.resolve(undefined) : bridge.call<IdeProvider[]>({ type: 'query', query: 'providers' }, TIMEOUT.structured).catch((error: unknown) => this.readFailed('providers', error)),
       bridge.call<IdeAccounts>({ type: 'query', query: 'accounts' }, TIMEOUT.structured).catch((error: unknown) => this.readFailed('accounts', error)),
+      this.machine.kind === 'remote' && !onlyAccount ? this.readLocalSend() : Promise.resolve(undefined),
     ]);
     if (this.model.sessionId !== sessionId) return;
     if (settings && accounts) this.readWarned = false;
@@ -357,7 +367,7 @@ export class ClikCodeController implements vscode.Disposable {
     const currentAccount = accounts?.accounts.find((account) => account.current);
     this.setModel({
       ...this.model,
-      ...(settings ? { chatSettings: settings } : {}),
+      ...(settings ? { chatSettings: send ? { ...settings, send } : settings } : {}),
       ...(provider ? { provider } : {}),
       ...(accounts && this.structuredRead.current(read) ? { currentAccount } : {}),
     });
@@ -755,7 +765,7 @@ export class ClikCodeController implements vscode.Disposable {
     if (epoch !== this.prepareEpoch) return;
     for (const [path, image] of this.images) if (text.includes(path)) image.sent = true;
     if ((during || this.model.running) && !/^[/!]/.test(text.trim())) this.setModel(typedDuringTurn(this.model, id, text.trim()));
-    if (!bridge.send({ type: 'send', text, id })) {
+    if (!bridge.send({ type: 'send', text, id, ...(this.machine.kind === 'remote' ? { mode: this.localSend } : {}) })) {
       this.setModel(rejectedPrompt(this.model));
       if (ordinary) this.post({ type: 'setDraft', text });
       this.note('ClikCode is not connected; your message was not sent.', 'error');
@@ -1128,6 +1138,14 @@ export class ClikCodeController implements vscode.Disposable {
         const attention = conversationAttention(row.id, others);
         return attention ? { ...row, attention } : row;
       });
+    }
+    // Steer or queue is the user's, set on this computer even for a chat on another machine: that machine's setting is not theirs.
+    if (request.choice.kind === 'send' && this.machine.kind === 'remote') {
+      await this.local.setSendMode(request.choice.mode);
+      this.localSend = request.choice.mode;
+      this.refreshedFor = '';
+      this.refreshStructured(false);
+      return undefined;
     }
     // A choice can take a sign-in or an install: no short deadline.
     const result = await bridge.call({ type: 'choose', choice: request.choice }, TIMEOUT.choose);

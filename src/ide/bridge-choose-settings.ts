@@ -2,6 +2,8 @@
  * permissions, account, fast, plan, send. */
 import { planModeOnChat, setAgentPlanMode } from '../agent/plan-mode-setting.js';
 import { selectGatewayAgent } from '../commands/ai/sessions.js';
+import { aiSettingsSetGlobal } from '../commands/ai/settings.js';
+import { parseSendMode } from '../turn/send-mode.js';
 import type { IdeChoice } from './protocol.js';
 import { sessionHarnessDefinition } from './queries.js';
 import type { ChooseContext } from './bridge-choose.js';
@@ -28,7 +30,13 @@ export async function chooseSetting(cx: ChooseContext, choice: IdeChoice): Promi
     case 'effort': await setting(`/effort ${choice.value}`); done(); return true;
     case 'permissions': await setting(`/permissions ${choice.value}`); done(); return true;
     case 'account': await setting(`/accounts use ${choice.accountId}`); done(); return true;
-    case 'send': await setting(`/send ${choice.mode}`); done(); return true;
+    // Global, not this chat's. With a chat open it goes through the chat as every setting does; with none -- an editor setting its own
+    // for a chat on another machine, asked of this computer's ClikCode -- it is the global setting alone.
+    case 'send':
+      if (host.sessionId) await setting(`/send ${choice.mode}`);
+      else await aiSettingsSetGlobal('send', parseSendMode(choice.mode), false);
+      done();
+      return true;
     case 'fast': await setting(`/fast ${choice.on ? 'on' : 'off'}`); done(); return true;
     case 'plan': {
       const { session } = await host.current();

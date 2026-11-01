@@ -144,7 +144,7 @@ export interface IdeSlashCommand {
 
 // ---- revision 2: structured data for the editor's screens -----------------
 
-export type IdeQueryName = 'slash-commands' | 'providers' | 'models' | 'conversations' | 'accounts' | 'chat-settings' | 'gateway' | 'hosted' | 'hosted-plan';
+export type IdeQueryName = 'slash-commands' | 'providers' | 'models' | 'conversations' | 'accounts' | 'chat-settings' | 'send-mode' | 'gateway' | 'hosted' | 'hosted-plan';
 
 /** One thing a conversation can run on: a vendor harness, ClikDeploy
  * Gateway, or ClikCode Local. `id` is what `choose` takes back. */
