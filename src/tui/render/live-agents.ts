@@ -28,3 +28,13 @@ export function liveAgentRows(
   else if (hidden) rows[0] = visibleSlice(`${chalk.dim(`+${hidden} more · `)}${rows[0]}`, width);
   return rows;
 }
+
+/** The running sub-agents as a group of their own on screen: a blank row above, setting them off from the answer, and one below when
+ * a line of words follows them (the newest thought, the background-terminals count) -- stacked with no rows between, the answer, the
+ * agents, the count and the status ran together as one block. Where `room` rows cannot hold the group with its blanks, the group is
+ * drawn without them: a terminal that short keeps the agents, never a taller footer. */
+export function spacedLiveGroup(group: readonly string[], room: number, wordsBelow: boolean): string[] {
+  if (!group.length) return [];
+  if (group.length + 1 + (wordsBelow ? 1 : 0) > room) return [...group];
+  return ['', ...group, ...(wordsBelow ? [''] : [])];
+}
