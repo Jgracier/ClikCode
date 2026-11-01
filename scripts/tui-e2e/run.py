@@ -926,6 +926,26 @@ SCENARIOS = {
         'snap_contains': {'list': ['Working', 'enter open']},
         'never': ['ENOENT', 'Connection to devbox'],
     },
+    # How smoothly a stream reaches the screen: the same 80 words, one every 60 ms, in a chat here and in one on another machine. Measured by
+    # frames (scripts/tui-e2e/stream-feel.py), not asserted.
+    'stream-feel-local': {
+        'env': {'FAKE_DELAY_MS': '60'},
+        'turns': [{'blocks': ['w01 w02 w03 w04 w05 w06 w07 w08 w09 w10 w11 w12 w13 w14 w15 w16 w17 w18 w19 w20 w21 w22 w23 w24 w25 w26 w27 w28 w29 w30 w31 w32 w33 w34 w35 w36 w37 w38 w39 w40 w41 w42 w43 w44 w45 w46 w47 w48 w49 w50 w51 w52 w53 w54 w55 w56 w57 w58 w59 w60 w61 w62 w63 w64 w65 w66 w67 w68 w69 w70 w71 w72 w73 w74 w75 w76 w77 w78 w79 w80']}],
+        'steps': [('type', 'stream it'), ('wait_for', 'w80', 40), ('settle', 2)],
+        'watch': [], 'no_clear_after_type': True,
+    },
+    'stream-feel-remote': {
+        'setup': remote_move(remote_env={'FAKE_DELAY_MS': '60', 'FAKE_TURNS': json.dumps([{'blocks': ['w01 w02 w03 w04 w05 w06 w07 w08 w09 w10 w11 w12 w13 w14 w15 w16 w17 w18 w19 w20 w21 w22 w23 w24 w25 w26 w27 w28 w29 w30 w31 w32 w33 w34 w35 w36 w37 w38 w39 w40 w41 w42 w43 w44 w45 w46 w47 w48 w49 w50 w51 w52 w53 w54 w55 w56 w57 w58 w59 w60 w61 w62 w63 w64 w65 w66 w67 w68 w69 w70 w71 w72 w73 w74 w75 w76 w77 w78 w79 w80']}])}),
+        'startup': 4, 'no_dup_check': 'the transcript is drawn again on the other machine',
+        'turns': [{'blocks': ['First answer here.']}],
+        'steps': [
+            ('type', 'hello there'), ('wait_for', 'First answer here.', 30), ('settle', 1),
+            ('type', '/machine'), ('wait_for', 'Move this chat to', 20), ('settle', 1),
+            ('keys', '\x1b[B'), ('keys', '\r'), ('wait_for', 'devbox  •', 60), ('settle', 2),
+            ('type', 'stream it'), ('wait_for', 'w80', 60), ('settle', 2),
+        ],
+        'watch': [],
+    },
     # A chat on another machine over a slow link (devbox's every byte back
     # 2.5 s late): a message typed there is drawn at once, with the turn's
     # wait, as a chat here draws one -- not when the machine's turn-start
