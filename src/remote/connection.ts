@@ -25,6 +25,7 @@ import { createInterface } from 'node:readline';
 import { listedChats, type IdeConversation, type IdeEvent, type IdeHostEvent, type IdeHostRequest, type IdeRequest } from '../ide/protocol.js';
 import { IDE_PROTOCOL } from '../ide/protocol-version.js';
 import { bridgeScript } from './install.js';
+import { decodeWireLine } from '../ide/wire-gzip.js';
 import { autoUpdates, localBuildCommit, type AutoUpdates } from './updates.js';
 import { readMachines, updateMachine, type RemoteMachine } from './machines.js';
 import { startBridge, type PeerMachine } from './peer.js';
@@ -175,7 +176,7 @@ export class RemoteLink {
     const lines = createInterface({ input: child.stdout!, crlfDelay: Infinity });
     lines.on('line', (line) => {
       let event: IdeHostEvent;
-      try { event = JSON.parse(line) as IdeHostEvent; } catch { return; }
+      try { event = JSON.parse(decodeWireLine(line)) as IdeHostEvent; } catch { return; }
       this.onEvent(event);
     });
     this.readyTimer = setTimeout(() => { stderr += '\nno answer from ClikCode there'; child.kill('SIGTERM'); }, READY_TIMEOUT_MS);
