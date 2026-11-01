@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { LiveTurnInputBroker } from './live-input.js';
-import { deliverTyped, parseSendMode, sendModeOf } from './send-mode.js';
+import { deliverTyped, parseSendMode, sendModeOf, typedSettings } from './send-mode.js';
 import { fakeLedger } from './test-support/live-ledger.js';
 
 describe('/send: how a message typed mid-turn is delivered', () => {
@@ -43,5 +43,24 @@ describe('/send: how a message typed mid-turn is delivered', () => {
     const result = await deliverTyped(broker, 'into the turn please', 'd', {});
     expect(result.disposition).toBe('queued');
     expect(broker.steerable).toBe(false);
+  });
+});
+
+describe('which mode a typed message is delivered by', () => {
+  it('is the one its window named, else the setting of the machine the worker is on', async () => {
+    // A chat on another machine: the user chose queue here; the machine there has never been told, and steers.
+    expect(sendModeOf(typedSettings('queue', { sendMode: 'steer' }))).toBe('queue');
+    expect(sendModeOf(typedSettings('steer', { sendMode: 'queue' }))).toBe('steer');
+    expect(sendModeOf(typedSettings(undefined, { sendMode: 'queue' }))).toBe('queue');
+    expect(sendModeOf(typedSettings(undefined, undefined))).toBe('steer');
+    const broker = new LiveTurnInputBroker();
+    const { ledger, queue } = fakeLedger();
+    const offer = vi.fn(async () => true);
+    broker.bindLedger(ledger);
+    broker.setSteerPort({ offer });
+    const result = await deliverTyped(broker, 'after', 'e', typedSettings('queue', { sendMode: 'steer' }));
+    expect(result.disposition).toBe('queued');
+    expect(offer).not.toHaveBeenCalled();
+    expect(queue).toHaveLength(1);
   });
 });

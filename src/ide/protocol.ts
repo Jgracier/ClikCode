@@ -64,7 +64,9 @@ export type IdeRequest =
   /** A composer line, exactly as typed: conversation, `/command`, or `!shell`.
    * During a turn it steers (or queues); `id` comes back on the worker's
    * `submission` event. */
-  | { type: 'send'; text: string; id?: string }
+  | { type: 'send'; text: string; id?: string;
+    /** What a message typed while a turn runs does, as the window that typed it has chosen (`/send`): into the turn, or behind it. Absent: the setting of the machine the chat is on. */
+    mode?: 'steer' | 'queue' }
   | { type: 'cancel'; restoreDraft: boolean; trigger?: 'editor-stop' | 'programmatic' }
   /** Enter again: the oldest queued user message goes into the running turn. */
   | { type: 'send-queued' }

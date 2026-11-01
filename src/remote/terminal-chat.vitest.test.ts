@@ -349,7 +349,8 @@ describe('a message typed in a chat on another machine', () => {
     // Steered into the turn: the row says steered, not the "queued" this window hoped for -- the machine records the steer under the same id.
     const steered = submit('also dictation', 'win-1');
     await until(() => sent('win-1') !== undefined);
-    expect(sent('win-1')).toMatchObject({ type: 'send', text: 'also dictation' });
+    // Under this window's choice (steer unless it chose queue), not whatever the machine there has set.
+    expect(sent('win-1')).toMatchObject({ type: 'send', text: 'also dictation', mode: 'steer' });
     bridge.say({ type: 'worker', sessionId: 'c1', event: { type: 'submission', id: 'win-1', disposition: 'steered' } });
     expect(await steered).toMatchObject({ disposition: 'steered', submission: { id: 'win-1' } });
 
@@ -385,6 +386,30 @@ describe('a message typed in a chat on another machine', () => {
     expect(await failed).toContain('devbox');
     await outcome;
   }, 30_000);
+
+  it('/send is this window\'s own choice, run here and never sent to the machine; the next mid-turn message carries it', async () => {
+    const base = { id: 'c1', route: 'local', accountId: null, provider: 'claude', model: 'm', effort: 'high', name: 'Remote chat', createdAt: '', updatedAt: '', status: 'active', messages: [] };
+    // The window's own chat, which the setting is changed through.
+    const { writeState } = await import('../session/state/write.js');
+    const now = new Date().toISOString();
+    await writeState({
+      sessions: [{ id: 'local-1', conversationId: 'local-1', route: 'local', accountId: null, provider: null, model: null, effort: 'high', permissionMode: 'ask', createdAt: now, updatedAt: now, status: 'active', name: 'Here', messages: [] } as never],
+      accounts: [], invocations: [], providerSettings: {}, globalSettings: { effort: 'medium', permissionMode: 'ask' },
+    } as never);
+    const { bridge, calls, prompts, outcome } = await start();
+    prompts[0]!.answer('/send queue');
+    await until(() => prompts.length === 2);
+    expect(bridge.requests.some((request) => request.text?.includes('/send'))).toBe(false);
+    calls.length = 0;
+    bridge.say({ type: 'worker', sessionId: 'c1', event: { type: 'snapshot', session: base, live: { text: '', waitingLabel: 'x', prompt: 'go' } } });
+    await until(() => named(calls, 'startWaiting').length === 1);
+    const submit = named(calls, 'startWaiting')[0]![3] as (text: string, id?: string) => Promise<unknown>;
+    void submit('after this turn', 'win-q').catch(() => undefined);
+    await until(() => bridge.requests.some((request) => (request as { id?: string }).id === 'win-q'));
+    expect(bridge.requests.find((request) => (request as { id?: string }).id === 'win-q')).toMatchObject({ type: 'send', mode: 'queue' });
+    bridge.drop();
+    await outcome;
+  }, 20_000);
 
   it('shows the whole conversation from a bridge that sends only what changed', async () => {
     const { bridge, calls, outcome } = await start();
