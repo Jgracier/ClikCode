@@ -172,37 +172,33 @@ export function panelParts(text: string): { title: string; body: string } {
   return { title: title.replace(/\u001b\[[0-9;]*m/g, '').trim(), body: rest.join('\n').replace(/^\n+/, '') };
 }
 
+/** What a command's output is on a terminal UI: nothing may be written at the composer cursor, so it is the prompter's panel, a repaint of the
+ * status line, or -- for a panel that only confirms what was just done, whose result is already on screen -- nothing. One rule for a chat
+ * here and for one on another machine (whose host sends the same payload as an `output` event). */
+export function drawHarnessOutput(terminal: { panel(title: string, body: string): void; render(session: HarnessSession, account?: string): void }, payload: Record<string, unknown>): void {
+  // State-changing commands are reflected by the persistent status line. Raw
+  // panels here would be written into the composer and corrupt the TUI.
+  if (payload.panel === 'settings' && payload.session) {
+    terminal.render(payload.session as HarnessSession, typeof payload.account === 'string' ? payload.account : undefined);
+    return;
+  }
+  if (payload.panel === 'provider-selected' || (payload.panel === 'accounts' && payload.selected) || payload.status === 'connected') return;
+  // A panel that only CONFIRMS something just done is noise: "Conversation
+  // renamed to X · esc to close" asked for a keypress to be told what the
+  // title on the rule already says. Done means done -- the result is on
+  // screen (the title, the status line, the chat moved to), or the action
+  // has nothing to show and silence is its success. Only the TUI drops
+  // them; a headless caller still gets the payload, which is its answer.
+  if (typeof payload.panel === 'string' && (CONFIRMATION_PANELS.has(payload.panel) || payload.changed === true)) return;
+  const text = renderPanelText(payload);
+  // No panel and no text: nothing in it is for a person to read.
+  if (text !== undefined) { const { title, body } = panelParts(text); terminal.panel(title, body); }
+}
+
 export function emitHarnessOutput(payload: Record<string, unknown>): void {
   if (isJsonDefaultMode()) return emitResult(payload);
-  // In the TUI nothing may be written at the composer cursor: every human
-  // rendering below goes through the prompter's panel instead of raw stdout.
-  const write = (text: string): void => {
-    if (!TERMINAL.active) { output.write(text); return; }
-    const { title, body } = panelParts(text);
-    TERMINAL.active.panel(title, body);
-  };
-  if (TERMINAL.active) {
-    // State-changing commands are reflected by the persistent status line. Raw
-    // panels here would be written into the composer and corrupt the TUI.
-    if (payload.panel === 'settings' && payload.session) {
-      TERMINAL.active.render(
-        payload.session as HarnessSession,
-        typeof payload.account === 'string' ? payload.account : undefined,
-      );
-      return;
-    }
-    if (payload.panel === 'provider-selected' || (payload.panel === 'accounts' && payload.selected) || payload.status === 'connected') return;
-    // A panel that only CONFIRMS something just done is noise: "Conversation
-    // renamed to X · esc to close" asked for a keypress to be told what the
-    // title on the rule already says. Done means done -- the result is on
-    // screen (the title, the status line, the chat moved to), or the action
-    // has nothing to show and silence is its success. Only the TUI drops
-    // them; a headless caller still gets the payload, which is its answer.
-    if (typeof payload.panel === 'string' && (CONFIRMATION_PANELS.has(payload.panel) || payload.changed === true)) return;
-  }
+  if (TERMINAL.active) { drawHarnessOutput(TERMINAL.active, payload); return; }
   const text = renderPanelText(payload);
-  if (text !== undefined) { write(text); return; }
-  // No panel and no text: nothing in it is for a person to read.
-  if (TERMINAL.active) return;
+  if (text !== undefined) { output.write(text); return; }
   emitResult(payload);
 }
