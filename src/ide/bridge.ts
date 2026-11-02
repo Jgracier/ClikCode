@@ -11,6 +11,7 @@
  * One conversation at a time, like a terminal: `open` switches, and a slash
  * command that moves the conversation (/new, /fork, /resume) switches too.
  */
+import { activityDetails } from './activity-details.js';
 import { stripVTControlCharacters } from 'node:util';
 import { panelParts, renderPanelText } from '../harness/output.js';
 import { lifecycle, setLifecycleSession, quiet } from '../runtime/lifecycle-log.js';
@@ -63,7 +64,7 @@ const USAGE_REFRESH_MS = 15_000;
  * re-reads the account every refresh), so they never count as something
  * happening when the bridge waits to be quiet (bridge-retire.ts). One still
  * being answered holds it all the same. */
-const READ_ONLY_REQUESTS: ReadonlySet<IdeRequest['type']> = new Set(['query', 'visible', 'watch-conversations']);
+const READ_ONLY_REQUESTS: ReadonlySet<IdeRequest['type']> = new Set(['query', 'visible', 'watch-conversations', 'activity-details']);
 /** What the bridge sends by itself, on its own timers and watches: not activity either. */
 const HOUSEKEEPING_EVENTS: ReadonlySet<IdeEvent['type']> = new Set(['usage', 'conversations-changed', 'result']);
 
@@ -194,6 +195,15 @@ export class IdeBridge {
     if (request.type !== 'query') lifecycle('bridge.request', { type: request.type, ...(request.type === 'choose' ? { kind: request.choice.kind } : {}) });
     if (!READ_ONLY_REQUESTS.has(request.type)) this.lastActivityAt = Date.now();
     switch (request.type) {
+      case 'activity-details':
+        this.track((async () => {
+          try {
+            const { session } = await this.current(this.requireSession());
+            const data = activityDetails(session, request.ids, request);
+            this.channel.send({ type: 'result', requestId: request.requestId, ok: true, data });
+          } catch (error) { this.channel.send({ type: 'result', requestId: request.requestId, ok: false, error: messageOf(error) }); }
+        })(), false);
+        return;
       case 'subagent':
         this.track((async () => {
           try {
@@ -230,10 +240,10 @@ export class IdeBridge {
           try {
             // The client's copy is the start of the chat only if its log was not rewritten since (a new generation).
             if (request.held && request.sessionId && request.held.sessionId === request.sessionId && this.features.has('session-delta')
-              && request.held.gen && (await loadChatLog(request.sessionId).catch(() => undefined))?.gen === request.held.gen) this.delta.adopt(request.held);
+              && request.held.gen && (await loadChatLog(request.sessionId).catch(quiet('ide/bridge')))?.gen === request.held.gen) this.delta.adopt(request.held);
             await this.open(request.workspace ?? '', request.mode, request.sessionId);
             // `gen`: what a viewer keeps with its copy to say next time which log it is the start of.
-            const gen = this.sessionId ? (await loadChatLog(this.sessionId).catch(() => undefined))?.gen : undefined;
+            const gen = this.sessionId ? (await loadChatLog(this.sessionId).catch(quiet('ide/bridge')))?.gen : undefined;
             this.channel.send({ type: 'result', requestId: request.requestId, ok: true, data: { sessionId: this.sessionId, ...(gen ? { gen } : {}) } });
           } catch (error) {
             this.channel.send({ type: 'result', requestId: request.requestId, ok: false, error: messageOf(error) });

@@ -122,7 +122,7 @@ function shrink(activity: TurnActivity, bare: boolean): TurnActivity {
  * number of calls, in the same order, so a message reads the same (ide/session-delta.ts). */
 export function viewedActivity(activity: TurnActivity, bare: boolean): TurnActivity {
   const { call: _call, ...event } = shrink(activity, bare).event;
-  return { ...activity, event };
+  return { ...activity, event: { ...event, detailOmitted: true } };
 }
 
 const sizes = new WeakMap<TurnActivity, number>();

@@ -227,4 +227,17 @@ describe('tags and taps of expandable rows', () => {
     expect(toggleLatestGroup.call(h as never)).toBe(true);
     expect(k.p.groupExpansion.isOpen('call:9')).toBe(true);
   });
+  it('fetches omitted remote detail on expansion, scoped to the message', async () => {
+    const preview = event('9', 'tool-done', '$ task', { detailOmitted: true });
+    const { h } = host([preview]);
+    const full = { ...preview, detailOmitted: false, call: { name: 'bash', input: { command: 'pwd' } }, output: ['full result'] };
+    const read = vi.fn(async () => [full]);
+    const session = { id: 's', messages: [{ role: 'assistant', content: '', activities: [{ event: preview, responseOffset: 0 }] }] };
+    Object.assign(h, { activityDetails: read, activityEntries: [], currentSession: session });
+    expect(toggleLatestGroup.call(h as never)).toBe(true);
+    await vi.waitFor(() => expect(session.messages[0]!.activities[0]!.event).toMatchObject({ output: ['full result'], detailOmitted: false }));
+    expect(read).toHaveBeenCalledWith(['9'], 0);
+    expect(h.emitted.requestReseed).toHaveBeenCalled();
+  });
+
 });

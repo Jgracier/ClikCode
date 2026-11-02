@@ -11,6 +11,8 @@ import type { HarnessSession } from '../session/model.js';
 export type ToolCategory = 'read' | 'edit' | 'run' | 'search' | 'fetch';
 
 export interface HarnessActivityEvent {
+  /** Wire preview: fetch the owner's detail when expanded. */
+  detailOmitted?: boolean;
   kind: 'thinking' | 'tool-start' | 'tool-done' | 'tool-error';
   label: string;
   /** Absent whenever the evidence does not settle it. A tool nobody has

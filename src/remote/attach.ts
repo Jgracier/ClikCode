@@ -1,3 +1,4 @@
+import { quiet } from '../runtime/lifecycle-log.js';
 /** Images named in a message typed in a chat on another machine, put on that machine.
  *
  * A screenshot dropped into the terminal (Termius uploads the file to the machine the terminal is on and types its path) is a path
@@ -39,10 +40,16 @@ export class RemoteImages {
     return sent;
   }
 
-  /** The copies are taken off the machine when the chat there is left. */
+  /** Once submitted, only the receiving host owns these files. It retains
+   * them before dispatch; leaving this view cannot delete an agent's inputs. */
+  handoff(text: string): void {
+    for (const [here, there] of this.copied) if (text.includes(there)) this.copied.delete(here);
+  }
+
+  /** Remove only staging files never handed to the receiving host. */
   async release(): Promise<void> {
     const paths = [...this.copied.values()];
     this.copied.clear();
-    await Promise.all(paths.map((path) => this.remove(this.target, path).catch(() => undefined)));
+    await Promise.all(paths.map((path) => this.remove(this.target, path).catch(quiet('remote/attach'))));
   }
 }

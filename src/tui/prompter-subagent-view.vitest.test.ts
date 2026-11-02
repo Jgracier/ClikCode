@@ -121,3 +121,15 @@ describe('sub-agent view in the terminal', () => {
     } finally { rl.closeSubView(); rl.close(); }
   });
 });
+
+it('keeps the main turn alive and reports a rejected remote subagent read', async () => {
+  const { rl, key, cancel } = follow();
+  rl.subAgentRead = async () => { throw new Error('remote read disconnected'); };
+  try {
+    open(rl, 'a1'); key('\u001b[C');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(rl.subView?.readError).toBe('remote read disconnected');
+    expect(rl.turn).toBeDefined();
+    expect(cancel).not.toHaveBeenCalled();
+  } finally { rl.closeSubView(); rl.close(); }
+});

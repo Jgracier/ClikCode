@@ -38,6 +38,7 @@
  *      the editor lacks (`messagesFrom`, session-delta.ts). An older bridge
  *      ignores the feature and sends every event whole, which any editor reads
  *   8  `subagent`: read recorded child messages/tools and send supported steering
+ *  10  `activity-details`: retrieve shortened call detail on expansion
  *   9  Hosted AI: `query hosted` / `hosted-plan` and `choose hosted` (hosted-models/): models that run on
  *      this computer or on ClikDeploy, in one list
  *
@@ -47,7 +48,7 @@
  */
 export const IDE_PROTOCOL = {
   version: 1,
-  revision: 9,
+  revision: 10,
   oldestSupported: 1,
   oldestRevision: 2,
 } as const;

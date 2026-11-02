@@ -236,6 +236,29 @@ describe('a message typed in a chat on another machine', () => {
   };
   const named = (calls: Array<[string, ...unknown[]]>, name: string) => calls.filter((call) => call[0] === name);
 
+  it('reports an unsaid remote failure once and does not repeat one already displayed', async () => {
+    const { bridge, said, outcome } = await start();
+    bridge.say({ type: 'worker', sessionId: 'c1', event: { type: 'turn-error', message: 'already displayed', said: true } });
+    bridge.say({ type: 'worker', sessionId: 'c1', event: { type: 'turn-error', message: 'new failure' } });
+    await until(() => said.includes('new failure'));
+    expect(said.filter((message) => message === 'new failure')).toHaveLength(1);
+    expect(said).not.toContain('already displayed');
+    bridge.drop(); await outcome;
+  });
+
+  it('acknowledges a new turn by submission id when the host rewrites attachment paths', async () => {
+    const { bridge, calls, outcome } = await start();
+    bridge.onSend = () => undefined;
+    bridge.say({ type: 'turn-start', prompt: 'running' });
+    await until(() => named(calls, 'startWaiting').length > 0);
+    const submit = named(calls, 'startWaiting')[0]![3] as (text: string, id: string) => Promise<{ disposition: string }>;
+    const pending = submit('look /local/shot.png', 'image-id');
+    await until(() => bridge.requests.some((request) => request.id === 'image-id'));
+    bridge.say({ type: 'turn-start', prompt: 'look /retained/image.png', submissionId: 'image-id' });
+    expect((await pending).disposition).toBe('queued');
+    bridge.drop(); await outcome;
+  });
+
   it('is drawn on Enter with the turn\'s wait, before the machine answers; its turn-start carries it on', async () => {
     const { bridge, prompts, calls, outcome } = await start();
     let sent: { id: string; text: string } | undefined;
@@ -599,6 +622,7 @@ describe('a message typed in a chat on another machine', () => {
     await until(() => named(calls, 'startWaiting').length === 1);
     const leave = named(calls, 'startWaiting')[0]![5] as () => void;
     leave();
+    expect(named(calls, 'leaveTurn')).toHaveLength(1);
     // Without the wait being let go of, the loop sat at the turn's end and no prompt was ever asked for again.
     await until(() => prompts.length === 2);
     expect(bridge.requests.some((request) => request.type === 'cancel')).toBe(false);

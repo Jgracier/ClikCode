@@ -17,6 +17,7 @@ import { look } from '../harness/protocol/tool-category-style.js';
 import type { SubAgentRow } from '../harness/subagent-read.js';
 import { itemDetailRows } from './render/group-rows.js';
 import { sanitizeTerminalText } from './render/text.js';
+import { messageRows } from './render/message-blocks.js';
 import { visibleSlice } from './render/width.js';
 
 export interface SubAgentViewState {
@@ -133,7 +134,7 @@ export function subAgentViewLines(state: SubAgentViewState, host: SubAgentViewHo
       for (const line of sanitizeTerminalText(row.text).split('\n')) lines.push(fit(`${look.paint.neutral('›')} ${line}`));
       lines.push('');
     } else if (row.kind === 'text') {
-      for (const line of sanitizeTerminalText(row.text).split('\n')) lines.push(fit(line));
+      lines.push(...messageRows(row.text, '', width));
       lines.push('');
     } else {
       for (const line of renderActivityLine(row.event)) lines.push(fit(line));

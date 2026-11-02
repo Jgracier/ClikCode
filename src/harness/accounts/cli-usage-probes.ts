@@ -164,7 +164,12 @@ export function antigravityQuotaReading(models: unknown): UsageReading | undefin
 
 async function antigravityAccessToken(environment: Environment): Promise<string | undefined> {
   const file = join(environment.HOME ?? homedir(), '.gemini', 'antigravity-cli', 'antigravity-oauth-token');
-  const token = (JSON.parse(await readFile(file, 'utf8')) as Json).token as Json | undefined;
+  const raw = await readFile(file, 'utf8');
+  let data: Json;
+  try { data = JSON.parse(raw) as Json; } catch {
+    throw new Error(`Antigravity credentials are invalid JSON; sign in to this account again. Usage cannot be read safely. File: ${file}`);
+  }
+  const token = data.token as Json | undefined;
   const fresh = typeof token?.expiry === 'string' && Date.parse(token.expiry) > Date.now() + 60_000;
   return fresh && typeof token?.access_token === 'string' ? token.access_token : undefined;
 }
@@ -175,7 +180,10 @@ async function antigravityAccessToken(environment: Environment): Promise<string 
  * renews it: `agy models` does, as it lists. */
 export async function antigravityUsageReading(environment: Environment): Promise<UsageReading | undefined> {
   try {
-    let token = await antigravityAccessToken(environment).catch(quiet('harness/accounts/cli-usage-probes'));
+    let token = await antigravityAccessToken(environment).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return undefined;
+      throw error;
+    });
     if (!token) {
       const harness = localHarnessForCommand('antigravity');
       if (harness) await captureNativeHarnessOutput(harness, ['models'], environment).catch(() => '');
@@ -203,8 +211,9 @@ export async function antigravityUsageReading(environment: Environment): Promise
     if (typeof project !== 'string') return undefined;
     const reading = antigravityQuotaReading((await ask('fetchAvailableModels', { project }))?.models);
     return reading && typeof tier === 'string' ? { ...reading, plan: { name: tier } } : reading;
-  } catch {
-    return undefined; // fail-open-ok: no figure beats a wrong one
+  } catch (error) {
+    quiet('harness/accounts/antigravity-usage')(error);
+    return undefined;
   }
 }
 
