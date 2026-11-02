@@ -1,3 +1,4 @@
+import { quiet } from '../../runtime/lifecycle-log.js';
 /** Opening and minimising a group, in place, from a tap or from Ctrl+O.
  *
  * The group's rows grow where they are (render/group-rows.ts reads the
@@ -69,6 +70,31 @@ function rewriteInPlace(p: TerminalHarnessPrompter, group: string, item: string,
   p.emitted.requestReseed();
 }
 
+/** Only an explicit open reads full detail. No payload cost on chat open. */
+function loadDetail(p: TerminalHarnessPrompter, group: string): void {
+  const items = p.callGroups.get(group)?.items ?? [];
+  const ids = items.flatMap(({ entry }) => entry.event?.detailOmitted && entry.event.id ? [entry.event.id] : []);
+  if (!ids.length || !p.activityDetails) return;
+  const session = p.currentSession;
+  const reader = p.activityDetails;
+  const anchor = items[0]?.entry.anchor ?? p.activityAnchor;
+  void reader(ids, anchor).then((events) => {
+    if (p.currentSession?.id !== session?.id || p.activityDetails !== reader) return;
+    const full = new Map(events.map((event) => [event.id, event]));
+    const merge = (event: import('../../harness/prompter.js').HarnessActivityEvent) => {
+      const detail = full.get(event.id);
+      return detail && event.detailOmitted ? { ...event, call: detail.call, output: detail.output, outputHead: detail.outputHead, outputTail: detail.outputTail, outputOmitted: detail.outputOmitted, diff: detail.diff, detailOmitted: false } : event;
+    };
+    for (const { entry } of items) if (entry.event) entry.event = merge(entry.event);
+    for (const entry of [...p.activityEntries, ...p.childEntries]) if (entry.anchor === anchor && entry.event) entry.event = merge(entry.event);
+    for (const message of (p.currentSession?.messages ?? []).slice(anchor, anchor + 1)) {
+      if (message.activities) message.activities = message.activities.map((item) => item && typeof item === 'object' && 'event' in item ? { ...item, event: merge(item.event) } : item);
+    }
+    p.emitted.requestReseed();
+    p.redrawSelection();
+  }).catch((error: unknown) => { quiet('tui/prompter/group-actions')(error); p.activity('Could not load the full tool detail. Try expanding it again.'); });
+}
+
 /** A tap on conversation line `line`: on a group's header it opens or
  * minimises the group; on an item's row (or its detail) it opens or
  * minimises the item. True when the tap meant one of these. */
@@ -87,6 +113,7 @@ export function tapGroupRow(this: TerminalHarnessPrompter, line: number): boolea
   }
   if (tag.item) this.groupExpansion.toggleItem(tag.group, tag.item);
   else this.groupExpansion.toggleGroup(tag.group);
+  if (opening) loadDetail(this, tag.group);
   this.redrawSelection();
   return true;
 }
@@ -110,6 +137,7 @@ export function toggleLatestGroup(this: TerminalHarnessPrompter): boolean {
     }, opening);
   }
   this.groupExpansion.toggleGroup(latest.id);
+  if (opening) loadDetail(this, latest.id);
   this.redrawSelection();
   return true;
 }

@@ -15,7 +15,7 @@ import type { SubAgentModes } from '../../harness/protocol/activity-normalize.js
 import type { TerminalHarnessPrompter } from '../prompter.js';
 import { isClikCodeAgent } from '../../session/route.js';
 
-export interface SubView { state: SubAgentViewState; rows: SubAgentRow[]; notice?: string; timer?: NodeJS.Timeout; reading?: boolean }
+export interface SubView { state: SubAgentViewState; rows: SubAgentRow[]; notice?: string; readError?: string; timer?: NodeJS.Timeout; reading?: boolean }
 
 function harnessOf(p: TerminalHarnessPrompter): { command: string; vendor: string; modes: SubAgentModes } {
   const command = p.currentSession?.nativeHarness;
@@ -32,6 +32,7 @@ async function readRows(p: TerminalHarnessPrompter, view: SubView): Promise<SubA
   const recorded = await p.subAgentRead?.(ref.id);
   if (recorded?.length) return recorded;
   const frames = liveSubAgentRows(p.childEntries.flatMap((entry) => (entry.event ? [entry.event] : [])), ref.id);
+  if (p.remoteMachineName) return frames;
   const session = p.currentSession;
   if (ref.read !== 'transcript' || ref.harness !== 'claude' || !session?.nativeSessionId) return frames;
   const found = await readClaudeSubagent(session.workspace ?? '', session.nativeSessionId, ref.id).catch(quiet('tui/prompter/subagent-host'));
@@ -46,7 +47,14 @@ function refresh(p: TerminalHarnessPrompter): void {
   void readRows(p, view).then((rows) => {
     if (p.subView !== view || view.state.index !== index) return;
     view.rows = rows;
+    view.readError = undefined;
     p.paint(p.composer.text, p.composer.options, p.composer.selected, p.composer.prompt, p.composer.cursor, p.composer.palette);
+  }).catch((error: unknown) => {
+    quiet('tui/prompter/subagent-host')(error);
+    if (p.subView === view) {
+      view.readError = error instanceof Error ? error.message : String(error);
+      if (p.turn) p.paintWaiting(p.turn);
+    }
   }).finally(() => { view.reading = false; });
 }
 
@@ -120,7 +128,7 @@ export function paintSubView(this: TerminalHarnessPrompter): void {
   const width = Math.max(12, output.columns || 100);
   const height = Math.max(4, this.viewportRows());
   const mainStatus = `main: running ${formatElapsed(turnElapsedMs(turn.clock, Date.now()))}`;
-  const lines = subAgentViewLines(view.state, { vendor, mainStatus, rows: view.rows, ...(view.notice ? { notice: view.notice } : {}), width: width - 1, height });
+  const lines = subAgentViewLines(view.state, { vendor, mainStatus, rows: view.rows, ...((view.readError ?? view.notice) ? { notice: view.readError ?? view.notice } : {}), width: width - 1, height });
   const shown = lines.slice(-height);
   const composerRow = shown.length - 2;
   const writable = shown[composerRow]?.startsWith('› ') ?? false;

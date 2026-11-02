@@ -1,3 +1,4 @@
+import { retainUploadedImages } from '../session/retained-images.js';
 /** Running lines and turns for the open conversation: what is sent at once or
  * queued, the queue's drain, one turn through the worker, and how a failed
  * turn is recovered (another account, another provider, a wait for the reset). */
@@ -38,16 +39,19 @@ export class BridgeTurns {
   private submitEpoch: number | undefined;
   /** Whether the line being executed reached its turn (turn-start was sent). */
   private turnStarted = false;
+  /** The window's identity for the send currently entering a new turn. */
+  private submissionId?: string;
 
   constructor(private readonly host: BridgeHost) {}
 
   noteCancel(): void { this.cancelEpoch++; }
 
   async send(text: string, id?: string, mode?: 'steer' | 'queue'): Promise<void> {
-    const line = text.trim();
+    let line = text.trim();
     const complete = (): void => { if (id) this.host.channel.send({ type: 'send-complete', id }); };
     if (!line) { complete(); return; }
     try {
+      if (this.host.sessionId) line = await retainUploadedImages(line, this.host.sessionId);
       if (this.host.link.workerTurnRunning && this.host.link.worker) {
         const sessionId = this.host.link.worker.sessionId;
         const { session } = await this.host.current(sessionId);
@@ -66,6 +70,7 @@ export class BridgeTurns {
         return;
       }
     } catch (error) {
+      this.host.channel.send({ type: 'restore-draft', text: line });
       this.host.report(error);
       complete();
       return;
@@ -75,9 +80,12 @@ export class BridgeTurns {
     this.host.enqueue(async () => {
       try {
         this.submitEpoch = typedAt;
+        this.submissionId = id;
         await this.host.execute(line, {});
+        this.submissionId = undefined;
         await this.host.drainQueue();
       } finally {
+        this.submissionId = undefined;
         complete();
       }
     });
@@ -187,7 +195,7 @@ export class BridgeTurns {
       return;
     }
     this.turnStarted = true;
-    this.host.channel.send({ type: 'turn-start', sessionId: targetId, ...(turn.echo ? { prompt } : {}), ...(turn.queuedTurnId ? { queuedTurnId: turn.queuedTurnId } : {}) });
+    this.host.channel.send({ type: 'turn-start', sessionId: targetId, ...(this.submissionId ? { submissionId: this.submissionId } : {}), ...(turn.echo ? { prompt } : {}), ...(turn.queuedTurnId ? { queuedTurnId: turn.queuedTurnId } : {}) });
     // A worker being replaced for a newer build refuses the prompt (nothing was started): it goes to the worker that replaces it. The old one is
     // let go first, and the delay lets it finish exiting so the next attach starts a new worker instead of finding it.
     let current = client;

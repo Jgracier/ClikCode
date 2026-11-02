@@ -16,13 +16,19 @@ export async function uploadRemoteImage(target: string, name: string, bytes: Buf
   ].join('\n');
   return new Promise<string>((resolve, reject) => {
     const child = spawnSsh(target, script);
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM');
+      reject(new Error('Image upload timed out; no message was sent.'));
+    }, 60_000);
+    timer.unref?.();
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8'); });
     child.stderr.on('data', (chunk: Buffer) => { stderr = `${stderr}${chunk.toString('utf8')}`.slice(-16_000); });
     child.stdin.on('error', () => undefined);
-    child.once('error', reject);
+    child.once('error', (error) => { clearTimeout(timer); reject(error); });
     child.once('close', (code) => {
+      clearTimeout(timer);
       const path = stdout.trim();
       if (code !== 0 || !/^\/[^\n]*\/clikcode-image\.[^/]+\/image\.(?:png|jpe?g|gif|webp)$/.test(path)) {
         reject(new Error(failureText(stderr) || 'Could not save the image on the remote machine.'));

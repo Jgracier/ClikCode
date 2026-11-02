@@ -1,6 +1,8 @@
 /** The terminal as a client of a chat owned by another machine. The same
  * multiplexed bridge that VS Code uses carries its session and worker events;
  * only the screen and keyboard stay on this machine. */
+import { remoteDeadline } from './deadline.js';
+import { RevealEvents } from '../worker/reveal-events.js';
 import { quiet } from '../runtime/lifecycle-log.js';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -374,7 +376,6 @@ export async function runRemoteChat(
     const followChat = (id: string): void => { if (choice && choice.chatId !== id) choice = { ...choice, chatId: id }; };
     let finishTurn: (() => void) | undefined;
     let turnEnd: Promise<void> | undefined;
-    let lastError: Error | undefined;
     /** A line sent and not yet answered. */
     let sending: string | undefined;
     /** A message drawn the moment Enter sent it, as a chat here draws one
@@ -440,7 +441,8 @@ export async function runRemoteChat(
         // The mode this window has chosen, read as the message is sent: the machine's setting is not the user's choice here.
         const mode = await readState({ transcripts: [] }).then((state) => sendModeOf(state.globalSettings), () => undefined);
         bridge.post({ type: 'send', text: wire, id, ...(mode ? { mode } : {}) });
-        const answer = await answered;
+        images.handoff(wire);
+        const answer = await remoteDeadline(answered, 'Delivery was not confirmed. The message may already be queued; reopen the chat before resending.');
         if (answer.disposition === 'error') throw new Error(answer.message ?? 'message not sent');
         return { disposition: answer.disposition, submission, ...(answer.commandOutcome ? { commandOutcome: answer.commandOutcome } : {}) };
       } finally { submissions.delete(id); }
@@ -467,7 +469,10 @@ export async function runRemoteChat(
     const takeBack = (id: string): Promise<TakeBackOutcome> => {
       const answered = new Promise<TakeBackOutcome>((resolve) => { takeBacks.set(id, resolve); });
       try { bridge.post({ type: 'unqueue', id }); } catch { takeBacks.delete(id); return Promise.resolve('error'); }
-      return answered.finally(() => takeBacks.delete(id));
+      return remoteDeadline(answered, 'Take-back was not confirmed; the message may still be queued.').catch((error: unknown): TakeBackOutcome => {
+        terminal.activity(error instanceof Error ? error.message : String(error));
+        return 'error';
+      }).finally(() => takeBacks.delete(id));
     };
     /** `label`: what the worker says the turn is doing. A turn that is the vendor's own background work
      * (live.vendorWork) is not the model thinking, and said so: this window joining it must not draw it as
@@ -475,7 +480,7 @@ export async function runRemoteChat(
     /** Left with nothing typed: this window steps away from the turn, which goes on there. Whatever this window was waiting on -- the
      * turn it was following, or the answer to a message it just sent -- is let go of, so the prompt (and the list) come back at once. */
     let wakeLeave: (() => void) | undefined;
-    const leave = (): void => { leftTurn = true; waitingInput = false; finishTurn?.(); terminal.stopWaiting(); wakeLeave?.(); };
+    const leave = (): void => { leftTurn = true; waitingInput = false; finishTurn?.(); terminal.leaveTurn(); wakeLeave?.(); };
     const beginWaiting = (prompt?: string, label = 'thinking'): void => {
       if (waitingInput) return;
       waitingInput = true;
@@ -486,16 +491,16 @@ export async function runRemoteChat(
         // Esc on a waiting message takes that message back, and does not stop the turn; "Enter again" offers it to the running turn now.
         takeBack, () => bridge.post({ type: 'send-queued' }));
     };
-    bridge.onEvent = (event) => {
+    const handleEvent = (event: IdeEvent) => {
       switch (event.type) {
         // While a message drawn early waits for its turn, the chat is drawn as a turn's (run-turn.ts renders so too).
         case 'session': session = event.session; account = event.account; followChat(session.id); sessionChanged(session); keeper.soon(); terminal.render(session, account, { running: running || early !== undefined }); return;
         case 'turn-start':
           // A message typed as the last turn ended finds no turn to steer into: it became this one. Nothing will answer it as a steer.
           for (const [id, pending] of submissions) {
-            if (pending.text === event.prompt) pending.resolve({ type: 'submission', id, disposition: 'queued' });
+            if (event.submissionId ? id === event.submissionId : pending.text === event.prompt) pending.resolve({ type: 'submission', id, disposition: 'queued' });
           }
-          for (const [id, text] of typed) if (text === event.prompt) typed.delete(id);
+          for (const [id, text] of typed) if (event.submissionId ? id === event.submissionId : text === event.prompt) typed.delete(id);
           applyLiveEvent(liveTurn, { type: 'waiting-start', message: '', ...(event.prompt !== undefined ? { prompt: event.prompt } : {}) });
           // The message drawn on Enter: this turn carries it on (startWaiting takes over turnStarting's).
           early = undefined;
@@ -538,7 +543,7 @@ export async function runRemoteChat(
           else if (worker.type === 'usage') terminal.setTurnUsage(worker.usage);
           else if (worker.type === 'restore-draft') terminal.restoreDraft(worker.text);
           else if (worker.type === 'waiting-stop') { if (worker.stopped) terminal.turnStopped(); running = false; waitingInput = false; terminal.stopWaiting(); finishTurn?.(); }
-          else if (worker.type === 'turn-error') lastError = new Error(worker.message);
+          else if (worker.type === 'turn-error' && !worker.said) terminal.activity(worker.message);
           else if (worker.type === 'approval-request') {
             const closing = new AbortController();
             openPrompts.set(worker.id, closing);
@@ -649,6 +654,10 @@ export async function runRemoteChat(
         case 'closed': terminal.activity('This conversation closed on the remote machine.'); leftTurn = true; wakePrompt?.(); return;
       }
     };
+    const delivery = new RevealEvents<IdeEvent>(terminal.reveal, handleEvent, (event) =>
+      event.type === 'session' || event.type === 'send-complete' || (event.type === 'worker'
+        && ((event.event.type === 'snapshot' && !event.event.live) || event.event.type === 'waiting-stop')));
+    bridge.onEvent = (event) => delivery.push(event);
     bridge.onClose = (error) => {
       dropEarly();
       promptController.abort();
@@ -662,6 +671,8 @@ export async function runRemoteChat(
     };
     try {
       await bridge.connected();
+      terminal.activityDetails = bridge.revision >= 10 ? (ids, messageIndex) => bridge.request({ type: 'activity-details', ids, messageIndex }) : undefined;
+
       const selection: RemoteChatSelection = choice;
       // Intent only: the chat is in one of the remote's own folders (session/attach.ts).
       const kept = selection.chatId ? await readChatCache(machine.id, selection.chatId) : undefined;
@@ -797,7 +808,7 @@ export async function runRemoteChat(
         }
         // The window's own choice of steer or queue, for the case that the machine meets a turn running (another window's) when this arrives.
         const mode = await readState({ transcripts: [] }).then((state) => sendModeOf(state.globalSettings), () => undefined);
-        try { bridge.post({ type: 'send', text: pinnedUpdateLine(wire, localBuildCommit()), id, ...(mode ? { mode } : {}) }); } catch (error) { dropEarly(); throw error; }
+        try { bridge.post({ type: 'send', text: pinnedUpdateLine(wire, localBuildCommit()), id, ...(mode ? { mode } : {}) }); images.handoff(wire); } catch (error) { dropEarly(); throw error; }
         // Until the machine says it is done -- which for a turn this message starts is when that turn ends -- or the user steps away from it
         // (Left): waiting on `complete` alone held the loop at the turn, so Left dropped the turn's screen and nothing answered the keys.
         const stepped = new Promise<void>((resolve) => { wakeLeave = resolve; });
@@ -806,7 +817,6 @@ export async function runRemoteChat(
         sending = undefined;
         // /update ran there: the window's connection there (the board's) goes to the build it installed.
         if (parseSlashInput(line)?.head === 'update') reconnectWindowMachine(machine.id);
-        if (lastError) { terminal.activity(lastError.message); lastError = undefined; }
         // A command may have changed what is offered (an account, a provider, a custom command, an /update).
         if (line.startsWith('/')) void refreshCommands();
       }
@@ -834,7 +844,7 @@ export async function runRemoteChat(
       // for Enter on the new connection.
       if (sending !== undefined) draft = sending;
       continue;
-    } finally { terminal.subAgentRead = undefined; terminal.subAgentSteer = undefined; keeper.now(); void images.release(); promptController.abort(); for (const screen of signIns.values()) screen.stop(); bridge.close(); terminal.remoteMachineName = undefined; }
+    } finally { delivery.dispose(); terminal.activityDetails = undefined; terminal.subAgentRead = undefined; terminal.subAgentSteer = undefined; keeper.now(); void images.release(); promptController.abort(); for (const screen of signIns.values()) screen.stop(); bridge.close(); terminal.remoteMachineName = undefined; }
   }
   return undefined;
 }

@@ -13,7 +13,7 @@
  */
 import { backgroundWorkOf } from '../harness/protocol/background-agents.js';
 import type { HarnessQuestionResult } from '../harness/events/question.js';
-import { REVEAL_MAX_HOLD_MS } from '../harness/protocol/reveal-pace.js';
+import { RevealEvents } from './reveal-events.js';
 import { diagnostic, lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { randomUUID } from 'node:crypto';
 import { commandDuringTurn } from '../tui/slash/queue.js';
@@ -339,6 +339,7 @@ async function driveWorkerTurn(
         if (settled) return;
         settled = true;
         lifecycle('window.follow.end', { why });
+        delivery.dispose();
         client.off('event', onEvent);
         client.off('close', onClose);
         fn();
@@ -498,26 +499,9 @@ async function driveWorkerTurn(
             return;
         }
       };
-      // A turn that ends while its answer is still being revealed (a model that hands over its whole answer
-      // at once) waits for the reveal: its end, and anything after, is held and delivered in order.
-      let held: WorkerEvent[] | undefined;
-      const release = (): void => {
-        const events = held ?? [];
-        held = undefined;
-        for (const event of events) handle(event);
-      };
-      const onEvent = (event: WorkerEvent): void => {
-        if (held) { held.push(event); return; }
-        const ends = (event.type === 'snapshot' && !event.live) || event.type === 'waiting-stop';
-        if (ends && !settled && rl.reveal.pending) {
-          held = [event];
-          const stop = rl.reveal.whenRevealed(() => { clearTimeout(cap); release(); });
-          const cap = setTimeout(() => { stop(); rl.reveal.flush(); release(); }, REVEAL_MAX_HOLD_MS);
-          cap.unref?.();
-          return;
-        }
-        handle(event);
-      };
+      const delivery = new RevealEvents<WorkerEvent>(rl.reveal, handle,
+        (event) => (event.type === 'snapshot' && !event.live) || event.type === 'waiting-stop');
+      const onEvent = (event: WorkerEvent): void => delivery.push(event);
       const onClose = (): void => {
         if (settled) return;
         // The worker is gone mid-turn (killed, crashed): nothing more of

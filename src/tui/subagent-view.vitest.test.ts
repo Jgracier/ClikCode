@@ -61,7 +61,7 @@ describe('subAgentViewLines', () => {
     expect(lines[0]).toMatch(/^main > .+ Agent explore$/);
     expect(lines).toContain('› Find the parser');
     expect(lines.some((l) => l.includes('$ ls'))).toBe(true);
-    expect(lines).toContain('Found it.');
+    expect(lines.map((line) => line.trim())).toContain('Found it.');
     expect(lines.at(-2)).toBe('› ');
     expect(lines.at(-1)).toContain('main: running 3m');
     expect(lines.at(-1)).toContain('(1/2)');

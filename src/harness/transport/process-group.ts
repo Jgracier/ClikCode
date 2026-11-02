@@ -15,7 +15,7 @@
  * none. */
 import { quiet } from '../../runtime/lifecycle-log.js';
 import { execFile } from 'node:child_process';
-import { readdir, readFile, readlink } from 'node:fs/promises';
+import { readdir, readFile, readlink, stat } from 'node:fs/promises';
 import { basename } from 'node:path';
 
 /** One live (not zombie) member of a process group. */
@@ -164,10 +164,20 @@ export function processAlive(pid: number): boolean {
 export async function processesWithEnvironment(name: string, value: string, platform: NodeJS.Platform = process.platform): Promise<number[]> {
   if (platform !== 'linux') return [];
   const needle = `\0${name}=${value}\0`;
+  const uid = process.getuid?.();
   const entries = await readdir('/proc').catch(() => [] as string[]);
   const found: number[] = [];
   await Promise.all(entries.filter((entry) => /^\d+$/.test(entry) && Number(entry) !== process.pid).map(async (entry) => {
-    const environment = await readFile(`/proc/${entry}/environ`, 'latin1').catch(quiet('harness/transport/process-group'));
+    // Only our user's descendants can carry this launch token. Avoid opening
+    // every other user's environment on every process sweep.
+    if (uid !== undefined && uid !== 0) {
+      const owner = await stat(`/proc/${entry}`).catch(quiet('harness/transport/process-group'));
+      if (!owner || owner.uid !== uid) return;
+    }
+    const environment = await readFile(`/proc/${entry}/environ`, 'latin1').catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'EACCES' && error.code !== 'EPERM') quiet('harness/transport/process-group')(error);
+      return undefined;
+    });
     if (environment && `\0${environment}`.includes(needle)) found.push(Number(entry));
   }));
   return found;

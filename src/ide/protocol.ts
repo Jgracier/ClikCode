@@ -52,6 +52,7 @@ export type IdeUiResult =
   | { text: string };
 
 export type IdeRequest =
+  | { type: 'activity-details'; requestId: string; ids: string[]; messageIndex?: number; userIndex?: number }
   | { type: 'subagent'; requestId: string; parentId: string; action: 'read' | 'steer'; text?: string; agentId?: string }
   /** Show a conversation: `resume` an id, `continue` the workspace's latest,
    * or start a `new` one in `workspace`. `workspace` is a folder of the
@@ -323,7 +324,7 @@ export type IdeEvent =
   /** This client submitted a turn; `prompt` is what to show as the user's
    * message until the worker's snapshot carries it (absent for synthetic
    * prompts such as /review). */
-  | { type: 'turn-start'; sessionId: string; prompt?: string; queuedTurnId?: string }
+  | { type: 'turn-start'; sessionId: string; prompt?: string; queuedTurnId?: string; submissionId?: string }
   /** The requested line has finished, including any turn or picker it opened. */
   | { type: 'send-complete'; id: string }
   /** Work outside a turn the user is waiting on (a picker's lookups, a local

@@ -58,6 +58,7 @@ export type ToWebview =
   | { type: 'probe'; id: string; action: 'query' | 'click' | 'type' | 'key' | 'paste'; selector: string; text?: string };
 
 export type WebviewRequest =
+  | { method: 'activity-details'; ids: string[]; userIndex?: number }
   | { method: 'subagent'; parentId: string; action: 'read' | 'steer'; text?: string; agentId?: string }
   | { method: 'machines'; discover?: boolean }
   | { method: 'machineConversations'; machineId: string }

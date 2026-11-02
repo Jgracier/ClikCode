@@ -1,6 +1,6 @@
 /** A turn's tool calls, thoughts and decisions as rows. */
 import type { JSX } from 'preact';
-import { useState } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
 import { activityOutcome, commandOutputPreview, diffPreview, diffTotals, DIFF_PREVIEW_LINES, LIVE_OUTPUT_LINES, liveWaitKind, outputPreview, previewLinesFor, toolUses } from '../../../../src/harness/protocol/activity-view';
 import { activityResult, decisionRow, exploreRuns, exploreSummary, reasoningBody, reasoningHeading, tensedLabel, thoughtRow } from '../../../../src/harness/protocol/turn-flow';
 import { LOOK } from './look';
@@ -8,7 +8,7 @@ import { useNow } from './clock';
 import { formatElapsed } from '../../../../src/harness/protocol/format';
 import { liveChildren, type Activity, type DecisionEntry, type LiveChild, type ThoughtEntry } from '../model';
 import type { FileDiff } from '../protocol';
-import { post } from './bus';
+import { post, request } from './bus';
 import { SubagentBody, SubagentPanel } from './subagent-panel';
 import { pathIn, relative } from './format';
 import { Icon, Spinner } from './ui';
@@ -164,10 +164,28 @@ export function AgentLine({ activity, workspace }: { activity: Activity; workspa
   );
 }
 
-export function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; workspace?: string; userIndex?: number }): JSX.Element {
-  const id = rowId(activity);
+export function ActivityRow({ activity: original, workspace, userIndex }: { activity: Activity; workspace?: string; userIndex?: number }): JSX.Element {
+  const [detail, setDetail] = useState<Partial<Activity>>();
+  const [detailError, setDetailError] = useState('');
+  const activity = { ...original, ...detail };
+  const id = rowId(original);
   const [open, setOpenState] = useState(openRows.has(id));
-  const setOpen = (value: boolean): void => { if (value) openRows.add(id); else openRows.delete(id); setOpenState(value); };
+  const setOpen = (value: boolean): void => {
+    if (value) openRows.add(id); else openRows.delete(id);
+    setOpenState(value);
+  };
+  useEffect(() => {
+    if (!open || !original.detailOmitted || !original.id || detail) return;
+    let current = true;
+    void request<Activity[]>({ method: 'activity-details', ids: [original.id], userIndex }).then((events) => {
+      if (!current) return;
+      const full = events.find((event) => event.id === original.id);
+      if (!full) throw new Error('Full detail is no longer available from the owner.');
+      setDetail({ call: full.call, output: full.output, outputHead: full.outputHead, outputTail: full.outputTail, outputOmitted: full.outputOmitted, diff: full.diff, detailOmitted: false });
+      setDetailError('');
+    }).catch((error: unknown) => { if (current) setDetailError(error instanceof Error ? error.message : String(error)); });
+    return () => { current = false; };
+  }, [open, original.id, original.detailOmitted]);
   const status = activity.kind === 'tool-start' ? 'running' : activity.stopped ? 'stopped' : activity.kind === 'tool-error' ? 'error' : 'done';
   // What the terminal shows under a settled call: an edit's change, a
   // command's or search's last lines, a fetch's first -- a read's row says
@@ -177,7 +195,7 @@ export function ActivityRow({ activity, workspace, userIndex }: { activity: Acti
   const ends = activity.category === 'run' && status !== 'running' ? commandOutputPreview(activity) : undefined;
   const preview = !ends && activity.output?.length && budget > 0 ? outputPreview(activity, budget) : undefined;
   const more = activityMore(activity);
-  const hasMore = Boolean(more.task || more.command || more.args.length || (activity.output?.length && (ends ? ends.hidden > 0 : !preview || preview.hidden > 0))
+  const hasMore = Boolean(activity.detailOmitted || more.task || more.command || more.args.length || (activity.output?.length && (ends ? ends.hidden > 0 : !preview || preview.hidden > 0))
     || (activity.diff && diffPreview(activity.diff, DIFF_PREVIEW_LINES).hiddenLines) || activity.children?.length);
   // Its own live children directly under it (those that began after more
   // text was written are drawn lower, by the turn: turnMarks).
@@ -222,6 +240,7 @@ export function ActivityRow({ activity, workspace, userIndex }: { activity: Acti
           </button>
         ) : null}
       </div>
+      {open && detailError ? <div class="muted">{detailError}</div> : null}
       {beside.map((entry) => <ChildLine key={entry.child.key} live={entry} />)}
       {/* A harness that sent no child calls, only what it is doing now. */}
       {status === 'running' && activity.child && !activity.children?.length ? <div class="activity-child" title={activity.child}><ActivityGlyph status="done" /><span>{activity.child}</span>{activity.childTools ? <span class="muted">{toolUses(activity.childTools)}</span> : null}</div> : null}

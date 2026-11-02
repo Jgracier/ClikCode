@@ -69,3 +69,12 @@ describe('images named in a message sent to another machine', () => {
     expect(removed).toHaveLength(2);
   });
 });
+
+it('leaving the viewer cleans only uploads that were never handed to the host', async () => {
+  const { images, removed } = world();
+  const sent = await images.forMachine(await shot('sent.png'));
+  await images.forMachine(await shot('unsent.png'));
+  images.handoff(sent);
+  await images.release();
+  expect(removed).toEqual(['/tmp/clikcode-image.AB2/image.png']);
+});
