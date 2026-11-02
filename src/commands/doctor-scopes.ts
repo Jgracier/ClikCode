@@ -1,7 +1,6 @@
-/** `clikcode doctor scopes [--reap]`: every ClikCode cgroup with its session, memory, tasks, cpu, age and owner; flags what has
- * outlived its use; `--reap` ends only the flagged cgroups, after printing them. */
+/** `clikcode doctor scopes [--reap]`: every ClikCode cgroup with its session, memory, tasks, cpu, age and owner; flags the ones no live
+ * worker owns; `--reap` ends only the flagged cgroups, after printing them. Nothing here ends a command for how long it has run. */
 import { readState } from '../session/state/read.js';
-import { commandMaxMs } from '../worker/command-lifetime.js';
 import { AGENT_SLICE } from '../worker/own-scope.js';
 import { reap, reapTargets, renderScopeReport, scanSlice } from '../worker/scope-report.js';
 
@@ -14,7 +13,7 @@ export async function aiDoctorScopes(options: { reap?: boolean }): Promise<void>
   const names = new Map<string, string>();
   try { for (const session of (await readState({ transcripts: [] })).sessions) if (session.name) names.set(session.id, session.name); } catch { /* names are a nicety */ }
   const rows = await scanSlice(agentSliceFor(process.getuid?.() ?? 0), { names });
-  process.stdout.write(`${renderScopeReport(rows, commandMaxMs())}\n`);
+  process.stdout.write(`${renderScopeReport(rows)}\n`);
   const targets = reapTargets(rows);
   if (!targets.length) { process.stdout.write('\nNothing is flagged.\n'); return; }
   process.stdout.write(`\nFlagged (${targets.length}):\n${targets.map((target) => `  ${target.label}: ${target.why}`).join('\n')}\n`);

@@ -8,7 +8,6 @@ import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { cgroupFacts, isKept, killCgroup, realReaders, type CgroupFacts, type CgroupReaders } from './cgroup-inspect.js';
 import { COMMAND_GROUP } from './command-groups.js';
-import { commandMaxMs, hours } from './command-lifetime.js';
 
 export type ScopeKind = 'worker' | 'browser-host' | 'other';
 
@@ -17,8 +16,6 @@ export interface CommandRow {
   dir: string;
   facts: CgroupFacts;
   cpuPercent?: number;
-  /** Why it is flagged, or undefined. */
-  flag?: 'over its lifetime' | 'hot past its lifetime';
 }
 
 export interface ScopeRow {
@@ -55,15 +52,12 @@ export function listDirectories(dir: string): string[] {
 
 export interface ScanOptions {
   now?: number;
-  maxMs?: number;
   read?: CgroupReaders;
   list?: (dir: string) => string[];
   /** Waits between the two cpu samples. */
   pause?: () => Promise<void>;
   /** A chat's name by session id. */
   names?: ReadonlyMap<string, string>;
-  /** A command group counts as hot above this share of one core. */
-  hotPercent?: number;
 }
 
 function withTree(dir: string, read: CgroupReaders, list: (dir: string) => string[], now: number): CgroupFacts {
@@ -79,8 +73,6 @@ function withTree(dir: string, read: CgroupReaders, list: (dir: string) => strin
 export async function scanSlice(sliceDir: string, options: ScanOptions = {}): Promise<ScopeRow[]> {
   const read = options.read ?? realReaders;
   const list = options.list ?? listDirectories;
-  const maxMs = options.maxMs ?? commandMaxMs();
-  const hot = options.hotPercent ?? 50;
   const take = (now: number): ScopeRow[] => list(sliceDir).filter((name) => /\.(?:scope|service)$/.test(name)).map((unit): ScopeRow => {
     const dir = join(sliceDir, unit);
     const parsed = parseScopeName(unit);
@@ -112,29 +104,24 @@ export async function scanSlice(sliceDir: string, options: ScanOptions = {}): Pr
       commands: row.commands.map((command) => {
         const earlier = before?.commands.find((item) => item.group === command.group);
         const cpu = earlier ? percent(earlier.facts, command.facts) : undefined;
-        const over = !command.facts.keep && command.facts.ageMs !== undefined && command.facts.ageMs >= maxMs;
-        const flag = over ? ((cpu ?? 0) > hot ? 'hot past its lifetime' as const : 'over its lifetime' as const) : undefined;
-        return { ...command, ...(cpu !== undefined ? { cpuPercent: cpu } : {}), ...(flag ? { flag } : {}) };
+        return { ...command, ...(cpu !== undefined ? { cpuPercent: cpu } : {}) };
       }),
     };
   });
 }
 
+/** Hours for a long age, minutes for a short one. */
+export const hours = (ms: number): string => (ms >= 3_600_000 ? `${(ms / 3_600_000).toFixed(ms >= 36_000_000 ? 0 : 1)} h` : `${Math.round(ms / 60_000)} min`);
 const gb = (bytes: number | undefined): string => (bytes === undefined ? '-' : bytes >= 2 ** 30 ? `${(bytes / 2 ** 30).toFixed(1)}G` : `${Math.round(bytes / 2 ** 20)}M`);
 const cpu = (value: number | undefined): string => (value === undefined ? '-' : `${Math.round(value)}%`);
 
-/** The cgroups `--reap` would end: flagged commands, and a whole scope whose worker has ended and whose oldest process is past
- * the lifetime (a younger orphan may be background work left running on purpose; it is listed, not ended). Never what is kept. */
-export function reapTargets(rows: readonly ScopeRow[], maxMs: number = commandMaxMs()): { dir: string; why: string; label: string }[] {
-  const targets: { dir: string; why: string; label: string }[] = [];
-  for (const row of rows) {
-    if (row.orphaned && !row.facts.keep && (row.facts.ageMs ?? 0) >= maxMs) { targets.push({ dir: row.dir, why: 'its worker ended and it has run past the lifetime', label: row.unit }); continue; }
-    for (const command of row.commands) if (command.flag) targets.push({ dir: command.dir, why: command.flag, label: `${row.unit}/${command.group}` });
-  }
-  return targets;
+/** The cgroups `--reap` would end: a whole scope whose worker has ended (nothing owns it any more) and that is not marked to be kept. Only
+ * what the operator asks for: no command is ended for how long it has run. */
+export function reapTargets(rows: readonly ScopeRow[]): { dir: string; why: string; label: string }[] {
+  return rows.filter((row) => row.orphaned && !row.facts.keep).map((row) => ({ dir: row.dir, why: 'its worker ended', label: row.unit }));
 }
 
-export function renderScopeReport(rows: readonly ScopeRow[], maxMs: number = commandMaxMs()): string {
+export function renderScopeReport(rows: readonly ScopeRow[]): string {
   if (!rows.length) return 'No ClikCode scope is running.';
   const lines: string[] = [];
   for (const row of [...rows].sort((a, b) => (b.facts.memoryBytes ?? 0) - (a.facts.memoryBytes ?? 0))) {
@@ -143,7 +130,7 @@ export function renderScopeReport(rows: readonly ScopeRow[], maxMs: number = com
     lines.push(`  ${who ? `${who} · ` : ''}mem ${gb(row.facts.memoryBytes)} · tasks ${row.facts.tasks ?? row.facts.pids} · cpu ${cpu(row.cpuPercent)} · age ${row.facts.ageMs !== undefined ? hours(row.facts.ageMs) : '-'}`);
     for (const command of [...row.commands].sort((a, b) => (b.facts.ageMs ?? 0) - (a.facts.ageMs ?? 0)).slice(0, 8)) {
       const text = (command.facts.command ?? '').replace(/\s+/g, ' ').slice(0, 70);
-      lines.push(`  ${command.flag ? '! ' : '  '}${command.group} · age ${command.facts.ageMs !== undefined ? hours(command.facts.ageMs) : '-'} · cpu ${cpu(command.cpuPercent)} · mem ${gb(command.facts.memoryBytes)} · ${command.facts.keep ? 'keep · ' : ''}${text}${command.flag ? `  [${command.flag}, limit ${hours(maxMs)}]` : ''}`);
+      lines.push(`    ${command.group} · age ${command.facts.ageMs !== undefined ? hours(command.facts.ageMs) : '-'} · cpu ${cpu(command.cpuPercent)} · mem ${gb(command.facts.memoryBytes)} · ${command.facts.keep ? 'keep · ' : ''}${text}`);
     }
     if (row.commands.length > 8) lines.push(`    ... and ${row.commands.length - 8} more commands`);
   }

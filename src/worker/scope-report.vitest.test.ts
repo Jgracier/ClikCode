@@ -51,40 +51,41 @@ describe('scope report', () => {
     expect(parseScopeName('run-r1.scope').kind).toBe('other');
   });
 
-  it('lists scopes with memory, tasks, age and owner, flags the 59 h loop, spares the keep-marked one, and finds an orphan', async () => {
+  it('lists scopes with memory, tasks, age and owner, shows the 59 h loop and the keep-marked one without ending or flagging either, and finds an orphan', async () => {
     await build();
-    const rows = await scanSlice(slice, { now, maxMs: 2 * H, read, names: new Map([['abc', 'Fix the deploy']]), pause: async () => { tick = 1; } });
+    const rows = await scanSlice(slice, { now, read, names: new Map([['abc', 'Fix the deploy']]), pause: async () => { tick = 1; } });
     const old = rows.find((row) => row.unit.includes('abc'))!;
     expect(old.owner).toBe('Fix the deploy');
     expect(old.workerAlive).toBe(true);
     expect(old.facts.memoryBytes).toBeGreaterThan(16 * 2 ** 30);
     expect(old.facts.tasks).toBe(3217);
-    expect(old.commands.map((c) => [c.group, c.flag])).toEqual([['cmd-50', 'over its lifetime'], ['cmd-60', undefined], ['cmd-90', undefined]]);
+    expect(old.commands.map((c) => c.group)).toEqual(['cmd-50', 'cmd-60', 'cmd-90']);
     expect(old.commands.find((c) => c.group === 'cmd-50')!.facts.ageMs).toBe(59 * H + 1_000);
     const orphan = rows.find((row) => row.unit.includes('gone'))!;
     expect(orphan.orphaned).toBe(true);
     expect(rows.find((row) => row.unit.includes('def'))!.orphaned).toBe(false);
     expect(rows.find((row) => row.unit.includes('browser'))!.kind).toBe('browser-host');
-    const text = renderScopeReport(rows, 2 * H);
+    const text = renderScopeReport(rows);
     expect(text).toContain('ORPHANED');
-    expect(text).toMatch(/! cmd-50 · age 59 h/);
+    expect(text).toMatch(/cmd-50 · age 59 h/);
+    expect(text).not.toMatch(/! cmd-|limit|lifetime/);
     expect(text).toContain('worker 1556452 alive');
   });
 
-  it('flags a loop as hot when its cgroup used a core between the two samples', async () => {
+  it('reports a loop\'s cpu between the two samples, and does not flag it: nothing ends a command for how long it has run', async () => {
     await build();
     writeFileSync(join(slice, 'clikcode-worker-abc-1556452.scope', 'cmd-50', 'cpu.stat'), cpuFile());
     tick = 0;
     const rows = await scanSlice(slice, {
-      now, maxMs: 2 * H, read: { ...read, file: (path) => (path.endsWith('cmd-50/cpu.stat') ? cpuFile() : read.file(path)) },
+      now, read: { ...read, file: (path) => (path.endsWith('cmd-50/cpu.stat') ? cpuFile() : read.file(path)) },
       pause: async () => { tick = 1; },
     });
     const command = rows.find((row) => row.unit.includes('abc'))!.commands.find((c) => c.group === 'cmd-50')!;
     expect(Math.round(command.cpuPercent!)).toBe(99);
-    expect(command.flag).toBe('hot past its lifetime');
+    expect(reapTargets(rows).map((t) => t.label)).not.toContain('clikcode-worker-abc-1556452.scope/cmd-50');
   });
 
-  it('lists an orphan younger than the lifetime without ending it, and never a scope holding the browser host', async () => {
+  it('never offers a scope holding the browser host, whatever its age', async () => {
     await build();
     const saved = procs[77];
     procs[77] = { agoH: 1, cmd: 'vendor-child' };
@@ -92,21 +93,20 @@ describe('scope report', () => {
     const host = join(slice, 'clikcode-worker-host-5.scope');
     cgroup(host, { 'cgroup.procs': '78' });
     try {
-      const rows = await scanSlice(slice, { now, maxMs: 2 * H, read, pause: async () => undefined });
+      const rows = await scanSlice(slice, { now, read, pause: async () => undefined });
       expect(rows.find((row) => row.unit.includes('gone'))!.orphaned).toBe(true);
-      const labels = reapTargets(rows, 2 * H).map((t) => t.label);
-      expect(labels).not.toContain('clikcode-worker-gone-999.scope');
+      const labels = reapTargets(rows).map((t) => t.label);
       expect(labels.filter((l) => l.includes('host-5'))).toEqual([]);
     } finally { procs[77] = saved!; delete procs[78]; }
   });
 
-  it('reaps only what is flagged', async () => {
+  it('reaps only the scopes no live worker owns, and only when asked', async () => {
     await build();
-    const rows = await scanSlice(slice, { now, maxMs: 2 * H, read, pause: async () => undefined });
-    const targets = reapTargets(rows, 2 * H);
-    expect(targets.map((t) => t.label).sort()).toEqual(['clikcode-worker-abc-1556452.scope/cmd-50', 'clikcode-worker-gone-999.scope']);
+    const rows = await scanSlice(slice, { now, read, pause: async () => undefined });
+    const targets = reapTargets(rows);
+    expect(targets.map((t) => t.label)).toEqual(['clikcode-worker-gone-999.scope']);
     const killed: string[] = [];
-    expect(reap(targets, (dir) => { killed.push(dir); return true; })).toHaveLength(2);
+    expect(reap(targets, (dir) => { killed.push(dir); return true; })).toHaveLength(1);
     expect(killed).not.toContain(join(slice, 'clikcode-worker-def-3357142.scope'));
   });
 });
