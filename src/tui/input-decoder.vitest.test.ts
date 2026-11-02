@@ -91,3 +91,45 @@ describe('keys typed between one reader and the next', () => {
     }
   });
 });
+
+describe('typed text survives however the link chunks it', () => {
+  const typed = (chunks: readonly string[]): string => {
+    const decoder = new TerminalInputDecoder();
+    let draft = { value: '', cursor: 0 };
+    const keys = chunks.flatMap((chunk) => decoder.push(Buffer.from(chunk)));
+    for (const key of [...keys, ...decoder.flush()]) draft = editWaitingComposer(draft.value, draft.cursor, key);
+    return draft.value;
+  };
+  const sentence = 'keyboard and the arrows is too sensitive and often twice at the same time';
+  const words = sentence.split(' ');
+
+  it('is the same for one byte at a time, word then space, word plus space, and one chunk', () => {
+    expect(typed([...sentence])).toBe(sentence);
+    expect(typed(words.flatMap((word, index) => (index ? [' ', word] : [word])))).toBe(sentence);
+    expect(typed(words.map((word, index) => (index < words.length - 1 ? `${word} ` : word)))).toBe(sentence);
+    expect(typed([sentence])).toBe(sentence);
+  });
+
+  it('applies a DEL inside a chunk to the character before it, and nothing else', () => {
+    // An autocorrect replacement: the word is typed, then deleted and retyped with the space.
+    expect(typed(words.flatMap((word, index) => (index < words.length - 1 ? [word, `${'\u007f'.repeat(word.length)}${word} `] : [word])))).toBe(sentence);
+    expect(typed(['keyboar', '\u007fd and'])).toBe('keyboad and');
+    expect(typed(['ab\u007fc d'])).toBe('ac d');
+  });
+
+  it('keeps every character when a terminal report is cut anywhere inside the words', () => {
+    const reports = ['\u001b[I', '\u001b[<35;10;20M', '\u001b[?1;2c', '\u001b[12;40R', '\u001b]11;rgb:0000/0000/0000\u0007', '\u001b]11;rgb:0000/0000/0000\u001b\\', '\u001bP>|xterm(1)\u001b\\'];
+    for (const report of reports) {
+      const whole = `keyboard${report} and the arrows`;
+      for (let cut = 0; cut <= whole.length; cut += 1) expect(typed([whole.slice(0, cut), whole.slice(cut)]), `${JSON.stringify(report)} cut at ${cut}`).toBe('keyboard and the arrows');
+    }
+  });
+
+  it('reads an OSC reply as one key, and `Esc ]` with nothing to end it as typed Alt+] followed by text', () => {
+    const decoder = new TerminalInputDecoder();
+    expect(decoder.push('\u001b]11;rgb:0/0/0')).toEqual([]);
+    expect(decoder.push('\u0007x')).toEqual(['\u001b]11;rgb:0/0/0\u0007', 'x']);
+    expect(decoder.push('\u001b]hello')).toEqual([]);
+    expect(decoder.flush()).toEqual(['\u001b]', 'h', 'e', 'l', 'l', 'o']);
+  });
+});

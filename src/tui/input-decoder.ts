@@ -7,7 +7,7 @@ import { NEWLINE_KEY, PASTE_END, PASTE_START } from './keys.js';
 import { stdin as input, stdout as output } from 'node:process';
 import { StringDecoder } from 'node:string_decoder';
 import { nextCharacterIndex } from './render/width.js';
-import { logCursorEvent } from './cursor-log.js';
+import { logCursorEvent, traceRawInput } from './cursor-log.js';
 import { LEGACY_MOUSE_PREFIX, setTerminalRawMode } from './modes.js';
 
 /** A key's meaning while a turn runs. Esc takes a waiting message back, and
@@ -17,6 +17,9 @@ import { LEGACY_MOUSE_PREFIX, setTerminalRawMode } from './modes.js';
 type WaitingInputAction = 'take-back' | 'stop';
 
 const ESCAPE_SEQUENCE_TIMEOUT_MS = 120;
+
+/** An OSC reply longer than this without a terminator is not one. */
+const MAX_OSC_LENGTH = 4096;
 
 /** A bracketed paste is held until its end fence, however slowly the link
  * delivers it: flushing early submitted the first half as a message. This is
@@ -203,6 +206,26 @@ export class TerminalInputDecoder {
         this.pending = this.pending.slice(3);
         continue;
       }
+      // OSC: `ESC ] ... BEL` or `... ESC \\`. A terminal's answer to a colour
+      // query arrives this way. Read as Alt+] it left its body ("11;rgb:...")
+      // in the draft as typed text. One key, dropped by the listener. While
+      // its terminator has not come it waits; at the flush it was Alt+] and
+      // whatever followed was typed, so no typed text is ever swallowed.
+      if (prefix === ']') {
+        const bell = this.pending.indexOf('\u0007', 2);
+        const stop = this.pending.indexOf('\u001b\\', 2);
+        const close = bell === -1 ? stop : stop === -1 ? bell : Math.min(bell, stop);
+        if (close === -1) {
+          if (!flush && this.pending.length < MAX_OSC_LENGTH) break;
+          keys.push(this.pending.slice(0, 2));
+          this.pending = this.pending.slice(2);
+          continue;
+        }
+        const length = close + (this.pending[close] === '\u0007' ? 1 : 2);
+        keys.push(this.pending.slice(0, length));
+        this.pending = this.pending.slice(length);
+        continue;
+      }
       if (prefix === '\r' || prefix === '\n' || prefix === '\u007f' || prefix === '\b') {
         // Alt+Enter inserts a newline and Alt+Backspace deletes a word. Both
         // arrive as ESC plus a control byte in one chunk.
@@ -295,6 +318,7 @@ function listenForTerminalKeys(onKey: (key: string) => void): () => void {
     }
   };
   const onData = (chunk: Buffer | string): void => {
+    traceRawInput(chunk);
     if (flushTimer) clearTimeout(flushTimer);
     deliver(decoder.push(chunk));
     const delay = decoder.flushDelayMs();

@@ -51,3 +51,25 @@ export function logCursorEvent(line: string): void {
     appendFileSync(join(dir, 'cursor.log'), `[${new Date().toISOString()}] pid ${process.pid} ${line}\n`, { encoding: 'utf8', mode: 0o600 });
   } catch { /* fail-open-ok: diagnostics must never break the UI */ }
 }
+
+/** Opt-in (CLIKCODE_INPUT_TRACE=1): every chunk stdin delivers, as JSON text with its arrival time, in
+ * ~/.clikcode/input-trace.log. It holds what was typed, so it is off unless asked for, bounded, and the
+ * only way to see which bytes a phone keyboard really sent when a message arrives with a letter missing:
+ * the decoder and the draft are tested against every chunking, so the bytes are the open question. */
+const TRACE_LIMIT_BYTES = 256 * 1024;
+let traceBytes = 0;
+let traceLast = 0;
+
+export function traceRawInput(chunk: Buffer | string): void {
+  if (process.env.CLIKCODE_INPUT_TRACE !== '1' || traceBytes >= TRACE_LIMIT_BYTES) return;
+  try {
+    const now = Date.now();
+    const text = typeof chunk === 'string' ? chunk : chunk.toString();
+    const line = `${new Date(now).toISOString()} +${traceLast ? now - traceLast : 0}ms ${JSON.stringify(text)}\n`;
+    traceLast = now;
+    traceBytes += line.length;
+    const dir = stateDirectory();
+    mkdirSync(dir, { recursive: true });
+    appendFileSync(join(dir, 'input-trace.log'), line, { encoding: 'utf8', mode: 0o600 });
+  } catch { /* fail-open-ok: diagnostics must never break the UI */ }
+}
