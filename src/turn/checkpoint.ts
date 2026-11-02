@@ -1,6 +1,7 @@
 /** Durable, provider-neutral representation of a turn that has started but
  * has not reached a successful provider completion yet. */
 
+import { withoutRecapLine } from '../harness/protocol/recap-line.js';
 import { resetUserWait, userWaitedMs } from './user-wait.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { commandIsReadOnly } from '../agent/command-classifier.js';
@@ -242,7 +243,12 @@ export function updatePendingResponse(
   if (!pending || (!text && mode === 'append')) return;
   if (mode === 'replace' && (pending.response ?? '') !== text) remapPendingOffsets(pending, pending.response ?? '', text);
   if (!text) delete pending.response;
-  else pending.response = mode === 'replace' ? text : `${pending.response ?? ''}${text}`;
+  else {
+    const before = pending.response ?? '';
+    const next = withoutRecapLine(mode === 'replace' ? text : `${before}${text}`);
+    if (next !== (mode === 'replace' ? text : `${before}${text}`) && mode === 'append') remapPendingOffsets(pending, `${before}${text}`, next);
+    if (next) pending.response = next; else delete pending.response;
+  }
   pending.outputStarted = Boolean(text || pending.activities?.length);
   pending.updatedAt = now;
 }
@@ -392,7 +398,7 @@ export function finishPendingTurn(session: HarnessSession, response: string | un
   if (response?.trim() || session.pendingTurn.response?.trim()) {
     const pending = session.pendingTurn;
     const streamed = pending.response ?? '';
-    const final = durableAnswer(streamed, response ?? '');
+    const final = withoutRecapLine(durableAnswer(streamed, response ?? ''));
     if (streamed !== final) remapPendingOffsets(pending, streamed, final);
     pending.response = final;
     pending.outputStarted = true;

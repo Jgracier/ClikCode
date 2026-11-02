@@ -177,7 +177,13 @@ createdAt: now, updatedAt: now, status: 'active', workspace: '/w',
     // The newest keeps its call and output; older ones say what ran, in words.
     expect((fitted.record.turns[19]!.parts.at(-1) as { call: typeof call }).call.output).toHaveLength(1);
     expect(fitted.record.turns[0]!.tools).toEqual([]);
-    expect(fitted.record.turns[0]!.parts.at(-1)).toMatchObject({ type: 'text', text: expect.stringContaining('[Did: $ npm test]') });
+    // What ran is told on the user side, never as the assistant's own words.
+    const older = fitted.record.turns[0]!;
+    expect(older.user).toContain('the assistant ran $ npm test');
+    for (const turn of fitted.record.turns) {
+      for (const part of turn.parts) if (part.type === 'text') expect(part.text).not.toContain('[Did:');
+    }
+    expect(older.parts.at(-1)).toMatchObject({ type: 'text' });
   });
 
   it('writes the fitted record into the vendor thread', async () => {

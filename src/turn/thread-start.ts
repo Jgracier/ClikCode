@@ -99,18 +99,19 @@ function writtenBytes(turn: CanonicalTurn): number {
 /** Calls named in an older turn's summary line, at most. */
 const BRIEF_CALLS = 12;
 
-/** An older turn as its words and one line saying what its calls did
- * ("Did: $ npm test · Edit src/a.ts"), with no call records: the detail of
- * old work is what a model needs least, and in a long chat it was nearly all
- * the bytes -- 5 MB of tool output and arguments in one 256-turn
- * conversation, against 0.8 MB of words. */
+/** An older turn as its words, with what its calls did told on the USER side
+ * of the same turn ("ClikCode note: ... ran: $ npm test; Edit src/a.ts"), and
+ * no call records: the detail of old work is what a model needs least, and in
+ * a long chat it was nearly all the bytes -- 5 MB of tool output and
+ * arguments in one 256-turn conversation, against 0.8 MB of words. It was
+ * once a `[Did: ...]` line at the end of the assistant's words; models took it
+ * for their own style and wrote it under their answers (recap-line.ts). */
 function briefTurn(turn: CanonicalTurn): CanonicalTurn {
   const labels = [...new Set(turn.tools.map((call) => call.label))];
-  const did = labels.length
-    ? `[Did: ${labels.slice(0, BRIEF_CALLS).join(' · ')}${labels.length > BRIEF_CALLS ? ` · and ${labels.length - BRIEF_CALLS} more` : ''}]`
+  const ran = labels.length
+    ? `\n\n(ClikCode note, not the user's words: answering this, the assistant ran ${labels.slice(0, BRIEF_CALLS).join('; ')}${labels.length > BRIEF_CALLS ? `; and ${labels.length - BRIEF_CALLS} more` : ''}.)`
     : '';
-  const text = [turn.assistant, did].filter(Boolean).join('\n\n');
-  return { ...turn, parts: text ? [{ type: 'text', text }] : [], tools: [] };
+  return { ...turn, user: `${turn.user}${ran}`, parts: turn.assistant ? [{ type: 'text', text: turn.assistant }] : [], tools: [] };
 }
 
 /** Share of a fitted thread's budget the outline of left-out requests may take. */
