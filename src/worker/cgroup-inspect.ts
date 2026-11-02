@@ -1,5 +1,5 @@
 /** Reading and ending a cgroup of ClikCode's: who is in it, how long the oldest process has lived, how much cpu it used.
- * Shared by the per-command lifetime limit (command-lifetime.ts) and `clikcode doctor`. All reads go through /proc and the
+ * Shared by `clikcode doctor` and the command groups. All reads go through /proc and the
  * cgroup files, injectable so a test can use a directory of files. */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
