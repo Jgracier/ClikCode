@@ -188,6 +188,19 @@ describe('durable turn checkpoints', () => {
     expect(target.messages).toHaveLength(2);
   });
 
+  it('drops a recap line a model wrote under its answer, from what is saved', () => {
+    const target = session();
+    beginPendingTurn(target, 'Did you ship [Did: x]?', '2026-01-02T00:00:00.000Z');
+    updatePendingResponse(target, 'Shipped.\n\n[Did: $ npm test', 'append', '2026-01-02T00:00:01.000Z');
+    updatePendingResponse(target, ' · and 5 more]\n', 'append', '2026-01-02T00:00:02.000Z');
+    expect(target.pendingTurn?.response).toBe('Shipped.');
+    finishPendingTurn(target, 'Shipped.\n\n[Did: $ npm test · and 5 more]', '2026-01-02T00:00:03.000Z');
+    const [user, answer] = target.messages!.slice(-2);
+    // The user's own words are kept as written.
+    expect(user!.content).toBe('Did you ship [Did: x]?');
+    expect(answer!.content).toBe('Shipped.');
+  });
+
   it('counts a turn\'s time without what it waited on the user, as both live clocks do', async () => {
     const { setUserWaiting } = await import('./user-wait.js');
     const target = session();

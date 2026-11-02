@@ -14,6 +14,7 @@ import type { HarnessState } from '../session/model.js';
 import type { DurableTurnCheckpoint } from './turn-journal.js';
 import type { TurnObserver } from './observer.js';
 import { markTurn } from '../runtime/turn-latency.js';
+import { withoutRecapLine } from '../harness/protocol/recap-line.js';
 
 type Invocation = HarnessState['invocations'][number];
 
@@ -82,9 +83,21 @@ function showActivity(prompter: TurnObserver | undefined, event: HarnessActivity
 export function turnSink(checkpoint: Pick<DurableTurnCheckpoint, 'response' | 'activity'>, prompter: TurnObserver | undefined, options: {
   keep?: (visible: string, mode: 'append' | 'replace') => boolean;
 } = {}) {
+  // What the screen holds, to tell when a recap line the model wrote under its
+  // answer (recap-line.ts) must come off it as the checkpoint drops it.
+  let shown = '';
   return {
     response(text: string, mode: 'append' | 'replace' = 'append'): void {
       if (!text || (options.keep && !options.keep(text, mode))) return;
+      const whole = mode === 'replace' ? text : `${shown}${text}`;
+      const clean = withoutRecapLine(whole);
+      shown = clean;
+      if (clean !== whole) {
+        markTurn('first-event');
+        checkpoint.response(text, mode);
+        prompter?.response(clean, 'replace');
+        return;
+      }
       // Once per turn each: after the first, a Set lookup and no I/O.
       markTurn('first-event');
       if (text.trim()) markTurn('first-text');
