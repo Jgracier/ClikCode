@@ -20,6 +20,17 @@ describe('extractLoginUrl', () => {
     expect(extractLoginUrl(CLAUDE_LOGIN)).toBe(AUTH_URL);
   });
 
+  it('reassembles wrapped Google OAuth query parameters without losing bytes', () => {
+    const url = 'https://accounts.google.com/o/oauth2/v2/auth?client_id=1071006060591-example.apps.googleusercontent.com&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A9000%2Fcallback&scope=email%20profile&state=state-example';
+    const wrapped = url.match(/.{1,80}/g)!.join('\r\n    ');
+    expect(extractLoginUrl(`Sign in:\n    ${wrapped}\nPaste the authorization code below`)).toBe(url);
+    expect(extractLoginUrl(url.match(/.{1,80}/g)!.map((row) => `│ ${row} │`).join('\n'))).toBe(url);
+  });
+
+  it('does not publish a Google URL truncated at the client id', () => {
+    expect(extractLoginUrl('https://accounts.google.com/o/oauth2/v2/auth?client_id=1071006060591-tmhssin2h21l')).toBeUndefined();
+  });
+
   it('ignores a documentation link with no auth in it', () => {
     expect(extractLoginUrl('Welcome! Docs at https://example.com/getting-started')).toBeUndefined();
   });

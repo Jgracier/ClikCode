@@ -29,7 +29,7 @@ import { delimiter, join } from 'node:path';
 import { spawnPortable as spawn, terminatePortable } from '../../harness/transport/spawn.js';
 import { runInPty, SIGN_IN_COLUMNS, SIGN_IN_ROWS } from './pty.js';
 import { Screen, type ScreenState } from './screen.js';
-import { extractLoginUrl, stripAnsi } from './url.js';
+import { completeLoginUrl, extractLoginUrl, stripAnsi } from './url.js';
 
 export interface LoginLink { url: string; code?: string }
 
@@ -87,7 +87,9 @@ export function extractLoginCode(text: string, url?: string): string | undefined
 /** Which link to show: the one the vendor tried to open where a browser is
  * local, the printed one where it is not. */
 export function chooseLoginLink(input: { printed?: string; opened?: string; local: boolean }): string | undefined {
-  return input.local ? input.opened ?? input.printed : input.printed ?? input.opened;
+  const opened = input.opened && completeLoginUrl(input.opened) ? input.opened : undefined;
+  const printed = input.printed && completeLoginUrl(input.printed) ? input.printed : undefined;
+  return input.local ? opened ?? printed : printed ?? opened;
 }
 
 /** Something the vendor's screen is waiting on. */
@@ -644,7 +646,8 @@ export async function runVendorSignIn(input: {
     const replies = terminalReplies(chunk, screen.state());
     if (replies) write(replies);
     changed = true;
-    publishLink();
+    // A stream chunk can end halfway through an OAuth URL. Publish after
+    // the terminal drawing settles, alongside prompt parsing.
     schedule();
   };
 
