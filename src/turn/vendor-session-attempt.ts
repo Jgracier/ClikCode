@@ -115,10 +115,18 @@ export async function runVendorSessionAttempt(input: {
         // with every tool, which is what the user turned plan mode on against.
         if (session.planMode && harness.acp?.planModeId) throw error;
         // A thread the CLI starts belongs to the CLI from now on -- unless
-        // both share one store, when this turn alone takes the CLI.
+        // both share one store, when this turn alone takes the CLI. A catalog
+        // may opt into pinning a shared-store fallback when ACP's model list
+        // is known to be incomplete; repeated negotiation cannot add support.
         const pinned = cliThreadTransport(harness);
-        if (pinned) {
-          session.nativeTransport = pinned;
+        const fallbackTransport = pinned ?? (harness.acp?.pinCliFallback && harness.turn
+          ? harness.turn.output === 'text' ? 'text-cli' : 'structured-cli'
+          : undefined);
+        if (fallbackTransport) {
+          session.nativeTransport = fallbackTransport;
+          // The fallback has now claimed this shared thread; it is no longer
+          // just a reserved id awaiting its first transport.
+          delete session.nativeSessionPreallocated;
           await checkpoint.persistNow();
         }
         lifecycle('vendor.acp-fallback', { harness: harness.command, reason: unsupported.message.slice(0, 300) });

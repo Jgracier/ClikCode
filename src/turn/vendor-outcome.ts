@@ -82,8 +82,8 @@ export async function completeVendorTurn(ctx: VendorTurnContext, observer: Vendo
   // the prompt still ends as answered. That is the account spent, not served: recorded as a refusal, so
   // the next turn moves on -- recorded as a success it cleared the mark and set the 100% reading aside.
   const refusal = refusalEndingReply(session.pendingTurn?.response ?? result.text ?? '');
-  if (refusal) recordQuotaRefusal(state, ctx.account, new Error(refusal));
-  else recordSuccessfulAccountTurn(ctx.account);
+  if (refusal) recordQuotaRefusal(state, ctx.account, new Error(refusal), Date.now(), ctx.model ?? undefined);
+  else recordSuccessfulAccountTurn(ctx.account, ctx.model ?? undefined);
   showStopReason(prompter, usage?.stopReason);
   const completedText = await completeTurnCheckpoint(session, ctx.checkpoint, result.text, {
     ...(harness.titleSource === 'vendor'

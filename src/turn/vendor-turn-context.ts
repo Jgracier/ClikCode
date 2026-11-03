@@ -100,6 +100,7 @@ export async function createVendorTurnContext(input: AccountTurnInput): Promise<
   const checkpoint = await startTurnCheckpoint(state, session, text, run);
   const accounts = turnAccounts({
     state, session, prompter, matchesBackend: (item) => turnBackendForAccount(item) === 'vendor',
+    model: model ?? undefined,
     persist: () => checkpoint.persistNow(), current: () => context.account, adopt: (to) => { context.account = to; },
     beforeSwitch: () => leavePersistentTransport(session.id),
   });

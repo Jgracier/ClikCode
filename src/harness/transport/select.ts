@@ -25,7 +25,14 @@ export function sessionTurnTransport(
   harness: AiLocalHarnessDefinition,
   session: Pick<HarnessSession, 'nativeSessionId' | 'nativeSessionPreallocated' | 'nativeTransport'>,
 ): HarnessTurnTransport {
-  if (session.nativeSessionId && !session.nativeSessionPreallocated && !harness.acp?.sharedSessions) {
+  // A shared store normally lets either transport continue the thread. An
+  // explicit pin is different: ACP has already rejected this conversation's
+  // chosen model, so opening ACP again would repeat the same failed setup on
+  // every turn. The catalog opts in only where fallback history is shared.
+  const pinnedSharedFallback = Boolean(harness.acp?.pinCliFallback
+    && (session.nativeTransport === 'structured-cli' || session.nativeTransport === 'text-cli'));
+  if ((session.nativeSessionId && !session.nativeSessionPreallocated
+      && (!harness.acp?.sharedSessions || harness.acp.pinCliFallback)) || pinnedSharedFallback) {
     if (session.nativeTransport === 'acp' && harness.acp) return 'acp';
     if ((session.nativeTransport === 'structured-cli' || session.nativeTransport === 'text-cli') && harness.turn) return session.nativeTransport;
   }

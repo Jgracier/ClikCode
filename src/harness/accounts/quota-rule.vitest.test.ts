@@ -14,6 +14,20 @@ const reading = (at: string, windows: Array<{ name: string; usedPct: number; res
   ({ at, label: 'x', windows }) as AiHarnessAccount['usage'];
 
 describe('can an account take a turn now', () => {
+  it('holds Antigravity quota refusals to the refused model family', async () => {
+    const { recordQuotaRefusal, recordSuccessfulAccountTurn } = await import('../../turn/account-outcome.js');
+    const agy = account({ provider: 'antigravity' });
+    const state = { accounts: [agy], sessions: [], invocations: [] } as unknown as HarnessState;
+    recordQuotaRefusal(state, agy, new Error('usage limit reached, resets in 2 hours'), now, 'claude-sonnet-4-6');
+    expect(accountCanTakeTurn(agy, now, 'claude-opus-4-6')).toBe(false);
+    expect(accountCanTakeTurn(agy, now, 'gemini-3.8-flash')).toBe(true);
+    expect(accountCanTakeTurn(agy, now, 'gpt-oss-120b-medium')).toBe(true);
+    recordSuccessfulAccountTurn(agy, 'gemini-3.8-flash');
+    expect(accountCanTakeTurn(agy, now, 'claude-sonnet-4-6')).toBe(false);
+    recordSuccessfulAccountTurn(agy, 'claude-sonnet-4-6');
+    expect(accountCanTakeTurn(agy, now, 'claude-sonnet-4-6')).toBe(true);
+  });
+
   it('lets back an account marked exhausted whose spent window reset hours ago', () => {
     // The user's justin@webpro.ai: refused, read once, never again.
     const webpro = account({

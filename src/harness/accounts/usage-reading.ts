@@ -215,15 +215,46 @@ function quotaMarkExpiresAt(account: AiHarnessAccount): number | undefined {
  *    published after it shows no window spent. Only a window that can stop
  *    the account speaks to a refusal: an advisory one (Antigravity's pools,
  *    Cline's credits) does not say the account has room. */
-export function accountQuotaSpent(account: AiHarnessAccount, now: number = Date.now()): boolean {
+export function accountQuotaSpent(account: AiHarnessAccount, now: number = Date.now(), model?: string): boolean {
   return vendorWindows(account).some((window) => windowSpent(window) && (window.resetsAt === undefined || Date.parse(window.resetsAt) > now))
-    || quotaRefusalHolds(account, now);
+    || quotaRefusalHolds(account, now, model);
+}
+
+/** Normalize the independently metered Antigravity model families. */
+export function quotaScopeForModel(account: AiHarnessAccount, model: string | undefined): string | undefined {
+  if (account.provider !== 'antigravity' || !model) return undefined;
+  const id = model.toLowerCase();
+  const family = /claude|anthropic/.test(id) ? 'claude'
+    : /gemini|google/.test(id) ? 'gemini'
+      : /gpt-oss|openai/.test(id) ? 'gpt-oss' : undefined;
+  if (!family) return undefined;
+  // Some Antigravity models share one vendor pool and reset instant. Its
+  // usage response names every family in that pool (for example Claude and
+  // GPT-OSS); preserve that grouping when recording a model refusal.
+  const pool = vendorWindows(account).find((window) => window.name.toLowerCase()
+    .split(/[\/,+\s]+/).includes(family));
+  if (pool) return pool.name.toLowerCase().split(/[\/,+\s]+/).filter(Boolean).sort().join('+');
+  return family;
+}
+
+function scopedQuotaHolds(account: AiHarnessAccount, scope: string, now: number): boolean {
+  const mark = account.quotaScopes?.[scope];
+  if (!mark) return false;
+  const until = Date.parse(mark.retryAt ?? '');
+  return !Number.isFinite(until) || until > now;
+}
+
+export function modelQuotaRefusalHolds(account: AiHarnessAccount, now: number, model?: string): boolean {
+  const scope = quotaScopeForModel(account, model);
+  return Boolean(scope && scopedQuotaHolds(account, scope, now));
 }
 
 /** The refusal half of accountQuotaSpent: the vendor refused this account
  * and nothing since says otherwise. What moves a chat off its own account
  * before a turn -- a reading alone does not (account-routing.ts). */
-export function quotaRefusalHolds(account: AiHarnessAccount, now: number = Date.now()): boolean {
+export function quotaRefusalHolds(account: AiHarnessAccount, now: number = Date.now(), model?: string): boolean {
+  const scope = quotaScopeForModel(account, model);
+  if (scope && scopedQuotaHolds(account, scope, now)) return true;
   const expires = quotaMarkExpiresAt(account);
   if (expires === undefined || expires <= now) return false;
   const readAt = Date.parse(account.usage?.at ?? '');
@@ -240,8 +271,11 @@ export function quotaRefusalHolds(account: AiHarnessAccount, now: number = Date.
  * verification, and not out of quota by the rule above. Every "has usage"
  * decision -- failover, Resume in, the preferred account, the pickers, the
  * status labels -- asks this, so none of them can disagree about an account. */
-export function accountCanTakeTurn(account: AiHarnessAccount, now: number = Date.now()): boolean {
-  return account.status === 'ready' && !account.verification && !accountQuotaSpent(account, now);
+export function accountCanTakeTurn(account: AiHarnessAccount, now: number = Date.now(), model?: string): boolean {
+  const scope = quotaScopeForModel(account, model);
+  return account.status === 'ready' && !account.verification
+    && !(scope ? scopedQuotaHolds(account, scope, now) : false)
+    && !accountQuotaSpent(account, now);
 }
 
 /** Record a quota refusal. `retryAt` is the vendor's own reset hint, when the
