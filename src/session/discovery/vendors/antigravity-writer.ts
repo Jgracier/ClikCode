@@ -45,7 +45,7 @@ export function antigravityConversationsRoot(environment: NativeSessionEnvironme
 }
 
 /** agy builds whose conversation layout this writer was verified against. */
-const ANTIGRAVITY_WRITER_TESTED_VERSIONS = ['1.2.16'] as const;
+const ANTIGRAVITY_WRITER_TESTED_VERSIONS = ['1.2.16', '1.4.12'] as const;
 
 // ---- protobuf, encode only ------------------------------------------------
 
