@@ -213,6 +213,7 @@ async function catalogFingerprint(harness: AiLocalHarnessDefinition, account?: A
     transport: harness.transport,
     acp: harness.acp && { binary: harness.acp.binary, argv: harness.acp.argv, listsModels: harness.acp.listsModels },
     modelDiscoveryArgv: harness.modelDiscoveryArgv,
+    liveModelList: listsModelsLive(harness),
   });
   // Not the account's own model list: discovery writes its answer there
   // (syncAccountModels), so a fingerprint holding it invalidated its own
