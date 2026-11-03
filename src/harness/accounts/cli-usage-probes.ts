@@ -34,6 +34,13 @@ import { planIsFree } from './free-plan.js';
 type Json = Record<string, any>;
 type Environment = Readonly<Record<string, string>>;
 
+class AntigravityInvalidCredentialError extends Error {
+  constructor(file: string) {
+    super(`Antigravity credentials are invalid JSON; sign in to this account again. Usage cannot be read safely. File: ${file}`);
+    this.name = 'AntigravityInvalidCredentialError';
+  }
+}
+
 const stripAnsi = (text: string): string => text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
 
 function catalogBinary(command: string, fallback: string): string {
@@ -167,7 +174,7 @@ async function antigravityAccessToken(environment: Environment): Promise<string 
   const raw = await readFile(file, 'utf8');
   let data: Json;
   try { data = JSON.parse(raw) as Json; } catch {
-    throw new Error(`Antigravity credentials are invalid JSON; sign in to this account again. Usage cannot be read safely. File: ${file}`);
+    throw new AntigravityInvalidCredentialError(file);
   }
   const token = data.token as Json | undefined;
   const fresh = typeof token?.expiry === 'string' && Date.parse(token.expiry) > Date.now() + 60_000;
@@ -212,6 +219,10 @@ export async function antigravityUsageReading(environment: Environment): Promise
     const reading = antigravityQuotaReading((await ask('fetchAvailableModels', { project }))?.models);
     return reading && typeof tier === 'string' ? { ...reading, plan: { name: tier } } : reading;
   } catch (error) {
+    // A malformed saved OAuth file is direct evidence that this profile cannot
+    // authenticate. Return the same account-level signal as a vendor 401 so
+    // account-usage marks it needs_login and stops probing it on every refresh.
+    if (error instanceof AntigravityInvalidCredentialError) return { windows: [], account: 'signed-out' };
     quiet('harness/accounts/antigravity-usage')(error);
     return undefined;
   }
