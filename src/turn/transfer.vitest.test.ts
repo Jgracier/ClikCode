@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import type { HarnessSession, TranscriptMessage } from '../session/model.js';
 import { canonicalRecord } from '../session/canonical.js';
 import { failoverPromptRequest, LEGACY_INTERRUPTED_TURN_REQUEST, normalizeImportedTranscript } from './failover-prompt.js';
-import { extractiveSummary, targetContextWindow, transferBudget, transferPrompt, TRANSFER_MAX_BYTES, TRANSFER_MIN_BYTES } from './transfer.js';
+import { extractiveSummary, targetContextWindow, transferBudget, transferPrompt, TRANSFER_MAX_BYTES, TRANSFER_UNKNOWN_WINDOW_BYTES } from './transfer.js';
 
 const now = '2026-10-04T00:00:00.000Z';
 const KB = 1024;
@@ -21,7 +21,7 @@ createdAt: now, updatedAt: now, status: 'active', workspace: '/w', messages, ...
 
 describe('transferBudget', () => {
   it('is half the receiving window (as a written thread gets), between 48 KB and 1 MB', () => {
-    expect(transferBudget({})).toBe(TRANSFER_MIN_BYTES);
+    expect(transferBudget({})).toBe(TRANSFER_UNKNOWN_WINDOW_BYTES);
     expect(transferBudget({ contextWindow: 8_000 })).toBe(48 * KB);
     expect(transferBudget({ contextWindow: 32_000 })).toBe(64_000);
     expect(transferBudget({ contextWindow: 128_000 })).toBe(256_000);
@@ -32,7 +32,7 @@ describe('transferBudget', () => {
 
   it('fits argv when the prompt travels as an argument', () => {
     expect(transferBudget({ contextWindow: 1_000_000, argvLimit: 96 * KB })).toBe(92 * KB);
-    expect(transferBudget({ argvLimit: 96 * KB })).toBe(48 * KB);
+    expect(transferBudget({ argvLimit: 96 * KB })).toBe(92 * KB);
   });
 });
 
@@ -54,6 +54,14 @@ describe('targetContextWindow', () => {
     await writeFile(file, JSON.stringify({ openai: { models: { 'gpt-5': { limit: { context: 400_000 } } } } }));
     expect(await targetContextWindow([], 'codex', 'gpt-5', [join(dir, 'missing.json'), file])).toBe(400_000);
     expect(await targetContextWindow([], 'opencode', 'openai/gpt-5', [file])).toBe(400_000);
+  });
+
+  it("finds a catalog model under a vendor's variant suffix", async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'transfer-'));
+    const file = join(dir, 'models.json');
+    await writeFile(file, JSON.stringify({ anthropic: { models: { 'claude-opus-4-6': { limit: { context: 200_000 } } } } }));
+    expect(await targetContextWindow([], 'antigravity', 'claude-opus-4-6-thinking', [file])).toBe(200_000);
+    expect(await targetContextWindow([], 'antigravity', 'claude-opus-4-6-high', [file])).toBe(200_000);
   });
 });
 
@@ -149,5 +157,19 @@ describe('a handoff never leaves the rest of the conversation out of reach', () 
     const now = transferPrompt(record, 'go on', { maxBytes: transferBudget({ contextWindow: 258_400 }) });
     expect(Buffer.byteLength(now, 'utf8')).toBeGreaterThan(Buffer.byteLength(old, 'utf8') * 1.5);
     expect(Buffer.byteLength(now, 'utf8')).toBeLessThanOrEqual(transferBudget({ contextWindow: 258_400 }));
+  });
+});
+
+describe('a conversation far longer than its budget', () => {
+  it('counts the oldest requests instead of listing past its own share, so the frame stays under the budget', () => {
+    const messages: TranscriptMessage[] = [];
+    for (let index = 0; index < 4_000; index += 1) {
+      messages.push({ role: 'user', content: `request number ${index} asking for something fairly specific here`, at: now } as TranscriptMessage);
+      messages.push({ role: 'assistant', content: `answer ${index}`, at: now } as TranscriptMessage);
+    }
+    const prompt = transferPrompt(canonicalRecord(session(messages)), 'now what', { maxBytes: 92 * KB, recordPath: '/r/record.md' });
+    expect(Buffer.byteLength(prompt, 'utf8')).toBeLessThanOrEqual(92 * KB);
+    expect(prompt).toMatch(/earlier requests? not listed/);
+    expect(prompt).toContain('request number 3999');
   });
 });

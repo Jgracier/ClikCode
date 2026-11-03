@@ -27,6 +27,12 @@ import { escapeFailoverContent, FAILOVER_PREAMBLE } from './failover-prompt.js';
 
 /** Smallest budget: what every handoff had before it was sized to a model. */
 export const TRANSFER_MIN_BYTES = 48 * 1024;
+/** The budget when nothing has reported the model's window: the same
+ * assumption a written thread makes (thread-start.ts NATIVE_DEFAULT_BYTES),
+ * not the minimum. An unknown window is not a small one -- a vendor whose
+ * models no catalog lists (Antigravity's `claude-opus-4-6-thinking`) was
+ * handed 48 KB of a 1,260-turn chat on every account failover. */
+export const TRANSFER_UNKNOWN_WINDOW_BYTES = 400 * 1024;
 /** Largest budget. A hard ceiling for a very large window, not a target: the
  * window decides. It was 200 KB (a fifth of the window), and a 1,000-turn
  * conversation moved to Codex arrived as 90-200 KB of it. */
@@ -46,14 +52,15 @@ const bytes = (text: string): number => Buffer.byteLength(text, 'utf8');
 /** How many bytes a transfer may take.
  *
  * - `contextWindow` (tokens), when known: TRANSFER_WINDOW_SHARE of it,
- *   between TRANSFER_MIN_BYTES and TRANSFER_MAX_BYTES. Unknown: the minimum.
+ *   between TRANSFER_MIN_BYTES and TRANSFER_MAX_BYTES. Unknown: the default
+ *   above (still held to `argvLimit` for a harness that takes it in argv).
  * - `argvLimit`: the harness takes its prompt as a command-line argument
  *   (maxPromptArgvBytes, 96 KB: Linux caps one argument at 128 KiB), so the
  *   whole prompt has to fit there or the turn fails before it starts. */
 export function transferBudget(input: { contextWindow?: number; argvLimit?: number }): number {
   const fromWindow = input.contextWindow && input.contextWindow > 0
     ? Math.floor(input.contextWindow * TRANSFER_WINDOW_SHARE * BYTES_PER_TOKEN)
-    : TRANSFER_MIN_BYTES;
+    : TRANSFER_UNKNOWN_WINDOW_BYTES;
   const sized = Math.min(TRANSFER_MAX_BYTES, Math.max(TRANSFER_MIN_BYTES, fromWindow));
   return input.argvLimit ? Math.min(sized, Math.max(8 * 1024, input.argvLimit - ARGV_HEADROOM_BYTES)) : sized;
 }
@@ -76,13 +83,16 @@ export async function targetContextWindow(
     .sort((left, right) => Date.parse(right.lastUsage?.at ?? '') - Date.parse(left.lastUsage?.at ?? ''))[0];
   if (reported) return reported.lastUsage!.contextWindow;
   const bare = model.replace(/\[.*\]$/, '').split('/').at(-1)!;
+  // A variant a vendor spells with a suffix (`-thinking`, an effort level) is the
+  // same model, with the same window, as the catalog's plain id.
+  const plain = bare.replace(/-(?:thinking|minimal|low|medium|high|xhigh|max)$/i, '');
   for (const file of catalogFiles) {
     const text = await readFile(file, 'utf8').catch(() => '');
     if (!text) continue;
     try {
       const catalog = JSON.parse(text) as Record<string, { models?: Record<string, { limit?: { context?: unknown } }> }>;
       for (const provider of Object.values(catalog)) {
-        const context = (provider?.models?.[model] ?? provider?.models?.[bare])?.limit?.context;
+        const context = (provider?.models?.[model] ?? provider?.models?.[bare] ?? provider?.models?.[plain])?.limit?.context;
         if (typeof context === 'number' && context > 0) return context;
       }
     } catch { /* fail-open-ok: an unreadable catalog only means the minimum budget */ }
@@ -260,9 +270,16 @@ export function transferPrompt(record: CanonicalRecord, request: string, options
   const asked = turns.filter((turn) => turn.user.trim());
   if (asked.length) {
     const share = Math.floor(room * 0.25);
-    const per = Math.max(60, Math.min(600, Math.floor(share / asked.length) - 12));
+    const per = Math.max(24, Math.min(600, Math.floor(share / asked.length) - 12));
     const lines = asked.map((turn) => `${turn.index + 1}. ${escapeFailoverContent(clipLine(turn.user, per))}${turn.attachments.length ? ` [attached: ${escapeFailoverContent(turn.attachments.join(', '))}]` : ''}`);
-    add(`<requests>\n${lines.join('\n')}\n</requests>`);
+    // Clipped as far as they go, the lines can still outgrow their share (3,000
+    // turns at 60 bytes): the oldest are then counted instead, so the frame
+    // never exceeds the budget -- an argv-bound prompt over its limit fails the turn.
+    let skipped = 0;
+    let listed = lines.reduce((sum, line) => sum + bytes(line) + 1, 0);
+    while (listed > share && skipped < lines.length - 1) { listed -= bytes(lines[skipped]!) + 1; skipped += 1; }
+    const lead = skipped ? `(${skipped} earlier request${skipped === 1 ? '' : 's'} not listed: they are in the file named above)\n` : '';
+    add(`<requests>\n${lead}${lines.slice(skipped).join('\n')}\n</requests>`);
   }
 
   // 2. What was done: every turn's calls, newest in full, older counted.
