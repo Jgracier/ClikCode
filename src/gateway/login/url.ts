@@ -48,12 +48,41 @@ export function stripAnsi(text: string): string {
 export function extractLoginUrl(text: string): string | undefined {
   // A link drawn inside a box (Cline's) ends at the border: box-drawing
   // and block characters are never part of a URL.
-  const urls = stripAnsi(text).match(/https:\/\/[^\s"'<>)\]\u2500-\u259f]+/g) ?? [];
+  const urls = joinWrappedLoginUrls(stripAnsi(text)).match(/https:\/\/[^\s"'<>)\]\u2500-\u259f]+/g) ?? [];
   const isAuth = (url: string): boolean =>
     /\b(?:oauth2?|auth|authorize|authorise|login|sign-?in|device|activate)\b|user_code=|_device\b/i.test(url);
   // The longest match wins among equals: an authorisation URL carries its
   // query string, and a truncated prefix of one is not a working link.
-  return urls.filter(isAuth).sort((left, right) => right.length - left.length)[0];
+  return urls.filter((url) => isAuth(url) && completeLoginUrl(url)).sort((left, right) => right.length - left.length)[0];
+}
+
+/** TUI renderers wrap long links into indented rows. Join only URL-only
+ * continuation rows, never prose or another URL. Preserve query bytes. */
+function joinWrappedLoginUrls(text: string): string {
+  const lines = text.split(/\r?\n/).map((line) => line.replace(/[ \t]*[│┃║][ \t]*$/, '').trimEnd());
+  const joined: string[] = [];
+  for (const line of lines) {
+    const continuation = line.replace(/^[ \t│┃║]+/, '').trimEnd();
+    const previous = joined.at(-1);
+    if (/^[ \t│┃║]+/.test(line) && previous && /https:\/\/[^\s]+$/.test(previous) && !continuation.startsWith('https://')
+      && /^[A-Za-z0-9_%~.!$&()*+,;=:@/?#-]+$/.test(continuation)) {
+      joined[joined.length - 1] = previous + continuation;
+    } else joined.push(line);
+  }
+  return joined.join('\n');
+}
+
+/** Never open a partial Google authorization request from a terminal row
+ * or stream chunk. Device-code and other vendors' links remain unchanged. */
+export function completeLoginUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (url.hostname !== 'accounts.google.com') return true;
+    if (!/^\/o\/oauth2(?:\/v2)?\/auth$/.test(url.pathname)) return true;
+    return ['client_id', 'response_type', 'redirect_uri', 'scope'].every((key) => Boolean(url.searchParams.get(key)))
+      && url.searchParams.get('response_type') === 'code'
+      && url.searchParams.get('client_id')!.endsWith('.apps.googleusercontent.com');
+  } catch { return false; }
 }
 
 /** Is a browser on THIS machine any use? Over SSH it is not: opening one on

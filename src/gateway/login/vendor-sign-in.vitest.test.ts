@@ -205,6 +205,15 @@ describe.skipIf(process.platform === 'win32')('running a sign-in', () => {
     expect(screen.links).toEqual([{ url: 'https://accounts.example/oauth2/device?user_code=AB12-CD34', code: 'AB12-CD34' }]);
   });
 
+  it('publishes the whole wrapped Google link, never its first terminal row', async () => {
+    const url = 'https://accounts.google.com/o/oauth2/v2/auth?client_id=1071006060591-example.apps.googleusercontent.com&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A9000%2Fcallback&scope=email%20profile&state=example';
+    const rows = url.match(/.{1,80}/g)!;
+    const vendor = await script(rows.map((row) => `printf '    %s\\n' '${row}'; sleep 0.1`).join('\n') + '\nsleep 0.6\necho done\n');
+    const screen = ui();
+    await runVendorSignIn({ binary: vendor, args: [], env: {}, displayName: 'Example', local: false, ui: screen.value });
+    expect(screen.links).toEqual([{ url }]);
+  });
+
   it('where a browser is local, the link the vendor tried to open', async () => {
     const vendor = await script('echo "  https://accounts.example/oauth2/device?user_code=AB12-CD34"\nxdg-open "https://accounts.example/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A1455"\nsleep 1\n');
     const screen = ui();
