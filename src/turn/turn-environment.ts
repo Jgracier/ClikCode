@@ -1,7 +1,7 @@
 /** Environment supplied to a vendor turn. */
 import { homedir } from 'node:os';
-import { existsSync, lstatSync, readdirSync, symlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, lstatSync, mkdirSync, readdirSync, renameSync, symlinkSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { AiHarnessAccount, AiHarnessPermissionMode, AiLocalHarnessDefinition } from '../harness/definition.js';
 import { nativeAccountEnvironment } from '../harness/transport/profile-environment.js';
 import { homeRedirectEnvironment } from '../runtime/lazy-bridge.js';
@@ -30,6 +30,15 @@ export function turnEnvironment(
 
 const linked = new Set<string>();
 
+/** The user's own tools keep their sign-in and state in these folders of the real home, and read
+ * them through `~`. The ClikDeploy CLI keeps its sign-in in `~/.config/clikdeploy/auth.json` and
+ * `~/.clikdeploy/api-key` and has no variable for either, so under a redirected HOME an agent that ran
+ * `clikdeploy` was signed out ("auth_required"), and
+ * `~/.clikcode` was a stale copy of ClikCode's state (an Antigravity turn read a 433-byte index from
+ * 2026-10-06 and a one-account list, 2026-11-03). Everything else under `.config` and the other dot
+ * folders stays the vendor's own: they hold each account's sign-in, which is what the redirect isolates. */
+const USER_TOOL_DIRECTORIES = ['.clikdeploy', '.clikcode', '.config/clikdeploy'] as const;
+
 /** A profile that is the vendor's HOME holds its config and sign-in (dot entries), not the user's
  * files: the user's own top-level folders -- projects, Documents -- are links to the real ones.
  * Without them an agent told to work in `~/projects/x` made a second copy inside the profile
@@ -50,6 +59,19 @@ export function linkUserDirectories(profileHome: string, realHome: string): void
       if (!lstatSync(real).isDirectory()) continue;
       if (lstatSync(join(profileHome, name), { throwIfNoEntry: false })) continue;
       symlinkSync(real, join(profileHome, name));
+    } catch { failed = true; }
+  }
+  for (const name of USER_TOOL_DIRECTORIES) {
+    const real = join(realHome, name);
+    const mine = join(profileHome, name);
+    try {
+      if (!lstatSync(real, { throwIfNoEntry: false })?.isDirectory()) continue;
+      const have = lstatSync(mine, { throwIfNoEntry: false });
+      if (have?.isSymbolicLink()) continue;
+      mkdirSync(dirname(mine), { recursive: true });
+      // A copy the profile grew on its own is set aside, not deleted: it may be all there is of a nested run.
+      if (have) renameSync(mine, `${mine}.before-link`);
+      symlinkSync(real, mine);
     } catch { failed = true; }
   }
   if (!failed) linked.add(profileHome);
