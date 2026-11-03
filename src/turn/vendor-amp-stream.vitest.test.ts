@@ -32,7 +32,8 @@ it('pipes Amp input, waits out a tool for a live steer, and journals its acknowl
   broker.bindLedger(ledger);
   let typed: Promise<LiveTurnInputResult> | undefined;
   const stop = new AbortController();
-  const timer = setTimeout(() => stop.abort(), 3000);
+  // Only a guard against a hang: starting the fake Amp took over 3 s on a busy machine.
+  const timer = setTimeout(() => stop.abort(), 20_000);
   try {
     const result = await runVendorCliAttempt({ harness, session, turnText: 'first prompt', model: null, environment: {}, images: [], signal: stop.signal,
       run: { liveInput: broker }, checkpoint: { touch: () => undefined, persistNow: async () => undefined } as never,
@@ -48,4 +49,4 @@ it('pipes Amp input, waits out a tool for a live steer, and journals its acknowl
     expect(steered).toEqual([expect.objectContaining({ id: 'steer1', text: 'change answer' })]);
     expect(queue).toEqual([]);
   } finally { clearTimeout(timer); stop.abort(); }
-});
+}, 30_000);

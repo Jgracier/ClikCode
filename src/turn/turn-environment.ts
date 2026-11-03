@@ -30,6 +30,11 @@ export function turnEnvironment(
 
 const linked = new Set<string>();
 
+/** `path`, or `path-<time>` when something is already there: an earlier set-aside copy must not make the next one fail. */
+function freeName(path: string): string {
+  return lstatSync(path, { throwIfNoEntry: false }) ? `${path}-${Date.now()}` : path;
+}
+
 /** The user's own tools keep their sign-in and state in these folders of the real home, and read
  * them through `~`. The ClikDeploy CLI keeps its sign-in in `~/.config/clikdeploy/auth.json` and
  * `~/.clikdeploy/api-key` and has no variable for either, so under a redirected HOME an agent that ran
@@ -70,7 +75,7 @@ export function linkUserDirectories(profileHome: string, realHome: string): void
       if (have?.isSymbolicLink()) continue;
       mkdirSync(dirname(mine), { recursive: true });
       // A copy the profile grew on its own is set aside, not deleted: it may be all there is of a nested run.
-      if (have) renameSync(mine, `${mine}.before-link`);
+      if (have) renameSync(mine, freeName(`${mine}.before-link`));
       symlinkSync(real, mine);
     } catch { failed = true; }
   }

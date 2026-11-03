@@ -59,4 +59,18 @@ describe('a profile that is the vendor\'s HOME', () => {
       expect(readlinkSync(join(profile, '.clikdeploy'))).toBe(join(real, '.clikdeploy'));
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
+  it('still links when an earlier stale copy was already set aside', () => {
+    const root = mkdtempSync(join(tmpdir(), 'clikcode-links-twice-'));
+    try {
+      const real = join(root, 'home'); const profile = join(root, 'profile');
+      mkdirSync(join(real, '.clikcode'), { recursive: true });
+      // Not empty: a directory can be renamed onto an empty one, so only a full one makes the old code fail.
+      mkdirSync(join(profile, '.clikcode.before-link'), { recursive: true });
+      writeFileSync(join(profile, '.clikcode.before-link', 'older.json'), '{}');
+      mkdirSync(join(profile, '.clikcode'), { recursive: true });
+      linkUserDirectories(profile, real);
+      expect(readlinkSync(join(profile, '.clikcode'))).toBe(join(real, '.clikcode'));
+      expect(lstatSync(join(profile, '.clikcode.before-link', 'older.json')).isFile()).toBe(true);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
 });
