@@ -177,7 +177,12 @@ export function grokThreadFiles(record: CanonicalRecord, options: GrokThreadOpti
   };
 }
 
-/** Verified against Grok Build 1.0.46 (2026-10-04, vendor-sandbox, grok-4.7):
+/** Also verified on 1.0.70 (2026-11-03, vendor-sandbox): a thread written here and one Grok made
+ *  itself both answered the codeword over ACP `session/load` + `session/prompt`, and `grok -p --resume`
+ *  recalled it from the written one. Grok 1.0.70 keeps a session_search.sqlite index beside the sessions;
+ *  a directory it never indexed still resumes.
+ *
+ * Verified against Grok Build 1.0.46 (2026-10-04, vendor-sandbox, grok-4.7):
  *  the golden conversation written here, resumed the way ClikCode resumes
  *  it -- ACP `session/load` + `session/prompt` -- answered "Codeword:
  *  PELICAN-73 / notes.txt: launch window: Thursday / Change in src/app.ts:
@@ -186,8 +191,8 @@ export function grokThreadFiles(record: CanonicalRecord, options: GrokThreadOpti
  *  `grok -p --resume <id>` on another written thread answered "The codeword
  *  you gave me is OSPREY-58. notes.txt says the launch window is Thursday." */
 const grokThreadWriter: NativeThreadWriter = {
-  testedVersions: ['1.0.46'],
-  versionOk: testedVersion(['1.0.46']),
+  testedVersions: ['1.0.46', '1.0.70'],
+  versionOk: testedVersion(['1.0.46', '1.0.70']),
   async write(record, context) {
     if (!record.turns.length) return undefined;
     const group = grokWorkspaceDirectoryName(context.workspace);

@@ -78,12 +78,14 @@ describe('a setting a ClikCode command owns is not also a raw vendor row', () =>
     // option), so each publishes an effort selector, folded like the rest.
     // 84 -> 87: Qwen (ACP reasoning_effort) gained an effort selector, and dcode (`-y`) and Devin (its ACP
     // session modes) a permission selector, each folded like the rest; Amp's `--mode` agent-tier row is
-    // vendor-specific and stays (214 -> 215). Antigravity stays without one: its effort is in the model id.
+    // vendor-specific and stays (214 -> 215). Antigravity had none (its effort is in the model id) until its ACP session published one.
+    // 88 -> 89: Antigravity's ACP session publishes `thought_level`, so it has an effort selector now
+    // (folded like the rest; its model ids still carry an effort of their own).
     // 87 -> 88, 215 -> 217: Kimi gains a `plan` option (folded) and an ACP effort selector; Continue's
     // `--readonly` is its plan switch (vendor-specific id, stays).
     const all = harnesses.flatMap((h) => optionsOf(h));
     const kept = harnesses.flatMap((h) => vendorFacingOptions(optionsOf(h)));
-    expect(all.length - kept.length, 'the duplicate count changed; re-check the registry').toBe(88);
+    expect(all.length - kept.length, 'the duplicate count changed; re-check the registry').toBe(89);
     expect(kept.length).toBe(217);
     const emptied = harnesses.filter((h) => optionsOf(h).length > 0 && vendorFacingOptions(optionsOf(h)).length === 0);
     // These ACP-only agents expose no vendor-specific option yet. Their
