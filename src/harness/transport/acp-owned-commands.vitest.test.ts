@@ -62,7 +62,8 @@ describe.skipIf(process.platform !== 'linux')('a command a sub-agent started', (
       await new Promise((resolve) => setTimeout(resolve, 2_500));
       expect(processAlive(pid)).toBe(true);
     } finally { await session.reapCommands('all', 'test cleanup'); await session.close(); }
-  });
+    // Finding the command can take up to 5 s and the wait 2.5 s more: past vitest's default 5 s on a busy machine.
+  }, 20_000);
 
   it('survives its sub-agent when it carries the keep mark', async () => {
     const { session, pid } = await run('sleep 73; true # clikcode:keep', true);
