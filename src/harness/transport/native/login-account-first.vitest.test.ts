@@ -49,6 +49,35 @@ describe('accountFirst', () => {
     expect(own.seen).toEqual(['ask Or paste a Cline CLI API key · Enter for other sign-ins', 'link https://example/device']);
   });
 
+  it('keeps the composer key entry and skips the duplicate vendor key route', async () => {
+    const own = screen();
+    const done = await accountFirst('Vendor', [], own, async (ui) => {
+      expect(await ui.choose('Sign in', ['Use an API key', 'Sign in with Google'])).toBe(1);
+    }, offer());
+    expect(done).toBeUndefined();
+    expect(own.seen).not.toContain('choose Sign in');
+  });
+
+  it('maps remaining sign-in choices back to vendor indices and preserves provider setup', async () => {
+    const own = screen();
+    const choose = vi.fn(async () => 1);
+    await accountFirst('Vendor', [], { ...own, choose }, async (ui) => {
+      expect(await ui.choose('Sign in', ['API key', 'Google', 'GitHub'], 2)).toBe(2);
+      expect(choose).toHaveBeenLastCalledWith('Sign in', ['Google', 'GitHub'], 1);
+      await ui.choose('Provider', ['Bring your own provider', 'Custom API key provider']);
+      expect(choose).toHaveBeenLastCalledWith('Provider', ['Bring your own provider', 'Custom API key provider'], undefined);
+    }, offer());
+  });
+
+  it('skips a manually-enter-key menu and enters a key-only vendor directly', async () => {
+    const own = screen();
+    await accountFirst('Vendor', [], own, async ui => {
+      expect(await ui.choose('Login', ['Browser', 'Manually enter API Key'])).toBe(0);
+      expect(await ui.choose('Login', ['Use your API key'])).toBe(0);
+    }, offer());
+    expect(own.seen.filter(line => line.startsWith('choose'))).toEqual([]);
+  });
+
   it('a pasted key stops the browser sign-in and is returned', async () => {
     const { run } = vendor(60_000);
     expect(await accountFirst('Cline CLI', ['Sign in with Cline'], screen({ 'Or paste': ' sk-or-v1-x ' }), run, offer())).toEqual({ key: 'sk-or-v1-x' });

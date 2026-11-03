@@ -157,6 +157,18 @@ export async function accountFirst(
     choose: async (title, choices, selected) => {
       const at = left.length ? optionFor(choices, left[0]!) : -1;
       if (at >= 0) { left.shift(); return at; }
+      // The composer already accepts this key. Do not expose the vendor's
+      // second route to the same credential field. Keep provider/configuration
+      // choices intact, and map the remaining rows back to vendor indices.
+      const remaining = choices.map((label, index) => ({ label, index })).filter(({ label }) =>
+        !/^(?:(?:use|(?:manually\s+)?enter|paste|sign in with|login with)\s+)?(?:(?:an?|your(?: own)?)\s+)?api[ -]?key(?:\s*\([^)]*\))?$/i.test(label.trim()));
+      if (remaining.length < choices.length) {
+        if (!remaining.length) return 0; // The sole vendor field replaces the composer field.
+        if (remaining.length === 1) return remaining[0]!.index;
+        const picked = await screen.choose(title, remaining.map(({ label }) => label),
+          selected === undefined ? undefined : remaining.findIndex(({ index }) => index === selected));
+        return picked === undefined ? undefined : remaining[picked]?.index;
+      }
       return screen.choose(title, choices, selected);
     },
     ask: async (prompt, secret, optional) => {

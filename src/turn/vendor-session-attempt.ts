@@ -105,7 +105,7 @@ export async function runVendorSessionAttempt(input: {
         // CLI would only be refused it too (Kiro). It is this account's, so
         // failover moves the turn to one whose plan has it (Grok 4.7 is not
         // on Grok's free plan) instead of ending it.
-        if (unsupported.acpUnsupportedModel && harness.freePlan?.listed) throw Object.assign(unsupported, { errorKind: 'model_not_on_plan' });
+        if (unsupported.acpUnsupportedModel && harness.freePlan?.listed && harness.command !== 'antigravity') throw Object.assign(unsupported, { errorKind: 'model_not_on_plan' });
         // An ACP session id is not guaranteed to identify the same vendor
         // thread in the one-shot CLI. Only a new chat can safely switch
         // transports for this turn -- unless the two share one store.
@@ -196,7 +196,8 @@ function acpLaunchInput(input: {
       }),
     } : {}),
     modelProviderSeparator: harness.modelProviderSeparator,
-    plansListModels: Boolean(harness.freePlan?.listed),
+    // Antigravity's ACP list omits native Claude/GPT models; it is not a plan inventory.
+    plansListModels: Boolean(harness.freePlan?.listed && harness.command !== 'antigravity'),
     // Claude Code's quota, carried by the turn itself: published like a
     // stream reading, so the composer and the account picker see it.
     onQuotaReading: (reading) => { void recordDerivedUsage(session, reading).catch(quiet('turn/vendor-session-attempt')); },
