@@ -24,12 +24,13 @@ describe('harness turn transports', () => {
     expect(harnessTurnTransport(agy)).toBe('acp');
     expect(agy.acp?.argv).toEqual(['acp']);
     expect(agy.acp?.inheritCliOptions).toBe(false);
-    expect(agy.acp?.liveModelList).toBe(true);
+    expect(agy.acp?.liveModelList).toBe(false);
     expect(agy.acp?.effortConfigId).toBe('thought_level');
     expect(agy.planMode).toBeUndefined();
     expect(agy.parser).toBe('antigravity');
     expect(agy.acp?.sharedSessions).toBe(true);
-    expect(sessionTurnTransport(agy, { nativeSessionId: 'native-thread', nativeTransport: 'structured-cli' })).toBe('acp');
+    expect(agy.acp?.pinCliFallback).toBe(true);
+    expect(sessionTurnTransport(agy, { nativeSessionId: 'native-thread', nativeTransport: 'structured-cli' })).toBe('structured-cli');
     expect(agy.loginArgv).toEqual([]);
     expect(agy.authFiles).toContainEqual({ path: '~/.gemini/antigravity-cli/antigravity-oauth-token', jsonFields: ['token.access_token', 'token.refresh_token'] });
   });

@@ -34,6 +34,7 @@ export async function sendDirectApiTurn(input: AccountTurnInput): Promise<'switc
   let seenAccountId: string | null | undefined = account.id;
   const accounts = turnAccounts({
     state, session, prompter, matchesBackend: (item) => Boolean(model && matchesDirectTurnModel(item, model)),
+    model,
     persist: () => checkpoint.persistNow(), current: () => account, adopt: (to) => { account = to; },
   });
   const sink = turnSink(checkpoint, prompter);

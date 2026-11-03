@@ -1,6 +1,6 @@
 /** Select a usable account for a turn or a failover. */
 import { quiet } from '../runtime/lifecycle-log.js';
-import { USAGE_RECHECK_MS, accountCanTakeTurn, quotaRefusalHolds, usageReadingIsCurrent, vendorWindows } from '../harness/accounts/usage-reading.js';
+import { USAGE_RECHECK_MS, accountCanTakeTurn, modelQuotaRefusalHolds, quotaRefusalHolds, usageReadingIsCurrent, vendorWindows } from '../harness/accounts/usage-reading.js';
 import { isDirectModelProvider } from '../runtime/lazy-bridge.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
@@ -37,9 +37,9 @@ export function matchesVendorTurn(account: AiHarnessAccount): boolean {
  * refusal named has passed: its stored windows can still show room. */
 export function providerHasAccountForTurn(
   state: HarnessState, provider: string, matchesTransport: (candidate: AiHarnessAccount) => boolean, now: number = Date.now(),
-  attempted?: ReadonlyMap<string, number>,
+  attempted?: ReadonlyMap<string, number>, model?: string,
 ): boolean {
-  return state.accounts.some((candidate) => candidate.provider === provider && matchesTransport(candidate) && accountCanTakeTurn(candidate, now)
+  return state.accounts.some((candidate) => candidate.provider === provider && matchesTransport(candidate) && accountCanTakeTurn(candidate, now, model)
     && !(attempted?.has(candidate.id) && !resetPassedSince(candidate, attempted.get(candidate.id)!, now)));
 }
 
@@ -90,11 +90,13 @@ export function nextUsableFailoverAccount(
   /** Accounts this turn already tried, and when. */
   attempted: ReadonlyMap<string, number>,
   now: number = Date.now(),
+  model?: string,
 ): AiHarnessAccount | undefined {
-  const usable = (candidate: AiHarnessAccount): boolean => accountCanTakeTurn(candidate, now)
+  const usable = (candidate: AiHarnessAccount): boolean => accountCanTakeTurn(candidate, now, model)
     && (!attempted.has(candidate.id) || resetPassedSince(candidate, attempted.get(candidate.id)!, now));
   const unconfirmed = (candidate: AiHarnessAccount): boolean => !attempted.has(candidate.id)
-    && candidate.status === 'ready' && !candidate.verification && now - confirmedAt(candidate) >= USAGE_RECHECK_MS;
+    && candidate.status === 'ready' && !candidate.verification && !modelQuotaRefusalHolds(candidate, now, model)
+    && now - confirmedAt(candidate) >= USAGE_RECHECK_MS;
   const rank = (account: AiHarnessAccount): [tier: number, order: number] => usable(account)
     ? [0, -(reportedRoom(account, now) ?? -1)]
     : [1, confirmedAt(account)];
@@ -120,13 +122,13 @@ export function initialAccountChoice(
   current: AiHarnessAccount,
   matchesBackend: (candidate: AiHarnessAccount) => boolean,
   attempted: Map<string, number>,
-  options: { now?: number; turns?: number } = {},
+  options: { now?: number; turns?: number; model?: string } = {},
 ): { kind: 'continue' } | { kind: 'switch'; account: AiHarnessAccount; reason: 'quota-exhausted' | 'low-room' } {
   const now = options.now ?? Date.now();
-  const refused = quotaRefusalHolds(current, now);
-  const fallback = nextUsableFailoverAccount(state, current, matchesBackend, new Map([...attempted, [current.id, now]]), now);
+  const refused = quotaRefusalHolds(current, now, options.model);
+  const fallback = nextUsableFailoverAccount(state, current, matchesBackend, new Map([...attempted, [current.id, now]]), now, options.model);
   if (!fallback) return { kind: 'continue' };
-  const early = !refused && accountCanTakeTurn(fallback, now)
+  const early = !refused && accountCanTakeTurn(fallback, now, options.model)
     && earlyMoveTarget(current, [fallback], state.invocations, { now, turns: options.turns ?? 1 }) !== undefined;
   if (!refused && !early) return { kind: 'continue' };
   attempted.set(current.id, now);
@@ -144,10 +146,11 @@ export function terminalFailoverError(input: {
   /** Accounts this turn already tried, and when. The one that just refused
    * is not "an account that can still run" while its stored windows lag. */
   attempted?: ReadonlyMap<string, number>;
+  model?: string;
 }): unknown {
-  const { state, current, matchesBackend, exhaustedAny, lastFailure, lastOtherFailure, attempted } = input;
+  const { state, current, matchesBackend, exhaustedAny, lastFailure, lastOtherFailure, attempted, model } = input;
   if (!exhaustedAny) return lastFailure;
-  if (providerHasAccountForTurn(state, current.provider, matchesBackend, Date.now(), attempted)) return lastOtherFailure ?? lastFailure;
+  if (providerHasAccountForTurn(state, current.provider, matchesBackend, Date.now(), attempted, model)) return lastOtherFailure ?? lastFailure;
   return new Error(usageExhaustedMessage());
 }
 
@@ -218,6 +221,7 @@ export async function accountAfterFailure(input: {
   /** Saves what this step recorded on the account. */
   persist: () => Promise<void>;
   notice?: (message: string) => void;
+  model?: string;
 }): Promise<AiHarnessAccount> {
   const { state, account, failure, kind, tally } = input;
   // Stopped, not failed: whatever the attempt died of, it died because it was
@@ -233,7 +237,7 @@ export async function accountAfterFailure(input: {
   // Tried before the refusal is recorded, so the reset it names is after.
   tally.attempted.set(account.id, Date.now());
   if (kind === 'quota-exhausted') {
-    recordQuotaRefusal(state, account, failure);
+    recordQuotaRefusal(state, account, failure, Date.now(), input.model);
     tally.exhaustedAny = true;
   } else tally.lastOtherFailure = failure;
   const verification = kind === 'account-ineligible' ? accountVerification(failure) : undefined;
@@ -244,12 +248,13 @@ export async function accountAfterFailure(input: {
   await input.persist();
   // Chosen from the accounts as stored after the refusal is saved.
   const view = await storedView(state, account);
-  const fallback = nextUsableFailoverAccount(view, account, input.matchesBackend, tally.attempted);
+  const fallback = nextUsableFailoverAccount(view, account, input.matchesBackend, tally.attempted, Date.now(), input.model);
   if (fallback) return chosen(state, fallback);
   throw terminalFailoverError({
     state, current: account, matchesBackend: input.matchesBackend,
     exhaustedAny: tally.exhaustedAny, lastFailure: failure, lastOtherFailure: tally.lastOtherFailure,
     attempted: tally.attempted,
+    model: input.model,
   });
 }
 
@@ -292,6 +297,7 @@ export function turnAccounts(input: {
   adopt: (account: AiHarnessAccount) => void;
   /** Runs before the account changes (a vendor closes its live process). */
   beforeSwitch?: () => Promise<void>;
+  model?: string;
 }) {
   const { state, session, prompter, matchesBackend, persist } = input;
   const tally: FailoverTally = { attempted: new Map(), exhaustedAny: false };
@@ -329,7 +335,7 @@ export function turnAccounts(input: {
       const view = await storedView(state);
       const current = input.current();
       const stored = view.accounts.find((item) => item.id === current.id) ?? current;
-      const initial = initialAccountChoice(view, stored, matchesBackend, tally.attempted, turns === undefined ? {} : { turns });
+      const initial = initialAccountChoice(view, stored, matchesBackend, tally.attempted, { ...(turns === undefined ? {} : { turns }), ...(input.model ? { model: input.model } : {}) });
       if (initial.kind !== 'switch') {
         chosen(state, stored);
         return false;
@@ -343,6 +349,7 @@ export function turnAccounts(input: {
     after: (failure: unknown, kind: AccountFailureKind, signal?: AbortSignal): Promise<AiHarnessAccount> => accountAfterFailure({
       state, account: input.current(), failure, kind, signal, matchesBackend, tally, persist,
       notice: (message) => prompter?.activity(chalk.yellow(message)),
+      model: input.model,
     }),
     /** What the turn's output says about a move, when there was one. */
     switched: (): { accountSwitchedFrom?: string; reason?: AccountMoveReason } =>

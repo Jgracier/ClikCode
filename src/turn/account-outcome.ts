@@ -1,5 +1,5 @@
 /** What a turn's outcome records on its account. */
-import { clearQuotaMark, markQuotaExhausted, vendorWindows, windowKey, windowSpent } from '../harness/accounts/usage-reading.js';
+import { clearQuotaMark, markQuotaExhausted, quotaScopeForModel, vendorWindows, windowKey, windowSpent } from '../harness/accounts/usage-reading.js';
 import { quotaRetryHint, quotaRollingWindowMs } from './failover.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessState } from '../session/model.js';
@@ -7,11 +7,16 @@ import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 
 /** A turn the vendor allowed. */
-export function recordSuccessfulAccountTurn(account: AiHarnessAccount): void {
+export function recordSuccessfulAccountTurn(account: AiHarnessAccount, model?: string): void {
   // The vendor served this turn: any window its reading calls spent is not.
   const spent = vendorWindows(account).filter(windowSpent).map(windowKey);
   if (spent.length) account.disprovenWindows = [...new Set([...account.disprovenWindows ?? [], ...spent])];
   clearQuotaMark(account);
+  const scope = quotaScopeForModel(account, model);
+  if (scope && account.quotaScopes?.[scope]) {
+    delete account.quotaScopes[scope];
+    if (!Object.keys(account.quotaScopes).length) account.quotaScopes = undefined;
+  }
   account.verification = undefined;
 }
 
@@ -33,7 +38,7 @@ function noteFreePlan(account: AiHarnessAccount, failure: unknown): void {
  * rolling window's length the refusal named. With none of those, the mark
  * uses the default (see quotaMarkExpiresAt) and the account is tried again
  * on a later turn. */
-export function recordQuotaRefusal(state: HarnessState, account: AiHarnessAccount, failure: unknown, now = Date.now()): void {
+export function recordQuotaRefusal(state: HarnessState, account: AiHarnessAccount, failure: unknown, now = Date.now(), model?: string): void {
   // A refusal makes the vendor's readings credible again.
   account.disprovenWindows = undefined;
   noteFreePlan(account, failure);
@@ -44,7 +49,12 @@ export function recordQuotaRefusal(state: HarnessState, account: AiHarnessAccoun
   const spentReset = vendorWindows(account)
     .filter((window) => windowSpent(window) && window.resetsAt !== undefined && Date.parse(window.resetsAt) > now)
     .map((window) => window.resetsAt!).sort().at(-1);
-  markQuotaExhausted(account, now, exact ?? spentReset ?? named);
+  const retryAt = exact ?? spentReset ?? named;
+  const scope = quotaScopeForModel(account, model);
+  if (scope) {
+    account.quotaScopes ??= {};
+    account.quotaScopes[scope] = { exhaustedAt: new Date(now).toISOString(), ...(retryAt ? { retryAt } : {}) };
+  } else markQuotaExhausted(account, now, retryAt);
 }
 
 /** A refusal that came outside any turn (a background agent's end, a vendor

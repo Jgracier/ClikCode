@@ -35,6 +35,10 @@ export interface AiHarnessAccount {
    * hint when the refusal carried one, else a default window. See
    * quotaMarkExpiresAt in usage-reading.ts. */
   quotaRetryAt?: string;
+  /** Antigravity serves independent model-family quota pools on one login.
+   * Refusals here are keyed by family so one exhausted pool cannot disable
+   * other models on the same account. */
+  quotaScopes?: Record<string, { exhaustedAt: string; retryAt?: string }>;
   /** Spent windows (`name@resetsAt`) the vendor served a turn through anyway:
    * its reading for them is wrong -- Claude's /usage kept "weekly 100%" after
    * the user reset the limit -- so they are not believed until a refusal or
