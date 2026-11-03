@@ -44,7 +44,7 @@
 import { quiet } from '../../../runtime/lifecycle-log.js';
 import { jsonPartText, sqliteOpenings } from './sqlite-openings.js';
 import { removeSqliteSession, carrySqliteSession, progressQuery, type SqliteCarrySpec } from './sqlite-carry.js';
-import { absolutePath, shellQuote, testedVersion } from './thread-writer-files.js';
+import { absolutePath, shellQuote, testedVersion, unrecordedReadNote } from './thread-writer-files.js';
 import { randomBytes } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
@@ -216,7 +216,7 @@ function outputText(call: CanonicalToolCall): string {
   const omitted = call.outputOmitted ? `[${call.outputOmitted} lines omitted]` : '';
   const body = [...(omitted && call.outputTail ? [omitted] : []), ...lines, ...(omitted && !call.outputTail ? [omitted] : [])].join('\n');
   const exit = call.exitCode !== undefined && call.exitCode !== 0 ? `${body ? '\n' : ''}Process exited with code ${call.exitCode}` : '';
-  return `${body}${exit}`;
+  return `${body}${exit}` || (unrecordedReadNote(call) ?? '');
 }
 
 /** A call OpenCode has no tool for, told as text. */
