@@ -107,9 +107,10 @@ async function reportedNativeUsageReading(
     return reusable.label === undefined ? undefined : { windows: reusable.windows ?? [], label: reusable.label };
   }
   // A probe spawns the vendor CLI, and a CLI run while signed out can start a
-  // login or onboarding (Kiro's session list did). Only an account that is
-  // signed in is asked; anything else keeps what it last had.
-  if (!account || account.status !== 'ready') {
+  // login or onboarding (Kiro's session list did). A verification-held
+  // account cannot use its quota yet either; polling its broken token only
+  // repeats failures and must not replace the vendor's verification state.
+  if (!account || account.status !== 'ready' || account.verification) {
     return entry?.label === undefined ? undefined : { windows: entry.windows ?? [], label: entry.label };
   }
   account.usageCheckedAt = new Date().toISOString();

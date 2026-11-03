@@ -12,8 +12,8 @@ it('does not start vendor renewal commands when the saved credential is corrupt'
   try {
     await mkdir(directory, { recursive: true });
     await writeFile(join(directory, 'antigravity-oauth-token'), '{"token":{}}trailing data');
-    expect(await antigravityUsageReading({ HOME: home })).toBeUndefined();
+    expect(await antigravityUsageReading({ HOME: home })).toEqual({ windows: [], account: 'signed-out' });
     expect(mocks.capture).not.toHaveBeenCalled();
-    expect(mocks.log.mock.calls[0]?.[0]?.message).toContain('sign in to this account again');
+    expect(mocks.log).not.toHaveBeenCalled();
   } finally { await rm(home, { recursive: true, force: true }); }
 });

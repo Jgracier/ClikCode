@@ -69,6 +69,8 @@ describe('usage on a passive paint', () => {
   it('never spawns a probe for an account that is not signed in, nor for no account', async () => {
     const signedOut = { accounts: [{ ...account, status: 'needs-login' }], sessions: [], invocations: [] } as unknown as HarnessState;
     expect(await nativeUsageReading({ id: 's', nativeHarness: 'grok', accountId: 'a' } as HarnessSession, signedOut, { network: true })).toBeUndefined();
+    const verificationHeld = { accounts: [{ ...account, provider: 'xai', verification: { at: new Date().toISOString() } }], sessions: [], invocations: [] } as unknown as HarnessState;
+    expect(await nativeUsageReading({ id: 's', nativeHarness: 'grok', accountId: 'a' } as HarnessSession, verificationHeld, { network: true })).toBeUndefined();
     expect(await nativeUsageReading({ id: 's', nativeHarness: 'grok' } as HarnessSession, stateWith(), { network: true })).toBeUndefined();
     expect(grok).not.toHaveBeenCalled();
   });
