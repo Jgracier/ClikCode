@@ -58,7 +58,7 @@ export class IdePrompter implements HarnessPrompter {
 
   /** A vendor sign-in in the panel: a card with its link and code (which
    * the extension opens on the editor's machine) and Cancel; a code or key
-   * asked in an input sheet; a choice in a pick list. `busy` says it too,
+   * entered on that same card; a choice in a pick list. `busy` says it too,
    * for an extension from before the card. */
   signInScreen(name: string): SignInScreen {
     const id = randomUUID();
@@ -74,9 +74,10 @@ export class IdePrompter implements HarnessPrompter {
       signal: controller.signal,
       show: (link) => { card = { ...card, url: link.url, ...(link.code ? { code: link.code } : {}) }; sendCard(); },
       ask: async (prompt, secret, _optional, alongside) => {
-        // A key offered beside the browser sign-in: a row on its card, as the
-        // terminal's hint line under the link. A sheet greyed the card out.
-        if (alongside) {
+        // Both the optional key offer and the vendor's actual credential
+        // question use the same card. A second sheet hid that card and left
+        // two competing places to paste the key.
+        if (alongside || secret) {
           card = { ...card, ask: { prompt, ...(secret ? { secret: true } : {}) } };
           sendCard();
           return new Promise<string>((resolve) => {

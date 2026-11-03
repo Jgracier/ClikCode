@@ -102,6 +102,21 @@ describe('IdePrompter', () => {
     screen.stop();
   });
 
+  it('replaces the optional key offer with the vendor key prompt on the same card', async () => {
+    const { prompter, events } = harness();
+    const screen = prompter.signInScreen('Vendor');
+    void screen.ask('Or paste your Vendor API key', true, true, true);
+    const answer = screen.ask('Enter your API key', true);
+    expect(events.some((event) => event.type === 'ui-request')).toBe(false);
+    const cards = events.filter((event) => event.type === 'sign-in-link');
+    const card = cards.at(-1)!;
+    expect(card).toMatchObject({ ask: { prompt: 'Enter your API key', secret: true } });
+    expect(new Set(cards.map((event) => event.id)).size).toBe(1);
+    prompter.answerSignIn(card.id, 'fixture-key');
+    expect(await answer).toBe('fixture-key');
+    screen.stop();
+  });
+
   it('carries row actions and delete actions to the editor', () => {
     expect(pickItems([{ label: 'r', value: 1, group: 'G', argHint: '<x>', deleteAction: { label: 'Remove', value: 'remove' } }]))
       .toEqual([{ label: 'r', group: 'G', argHint: '<x>', deleteAction: { label: 'Remove', value: 'remove' } }]);
