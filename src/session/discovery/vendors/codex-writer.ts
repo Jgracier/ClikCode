@@ -45,7 +45,7 @@ import type { CanonicalRecord, CanonicalToolCall, CanonicalTurn } from '../../ca
 import { atomicWriteFile } from '../../store/files.js';
 import type { NativeThreadWriteContext, NativeThreadWriter, NativeThreadWritten } from '../stores.js';
 import { reconcileCodexThreadRow } from './codex-store.js';
-import { absolutePath, shellQuote, testedVersion } from './thread-writer-files.js';
+import { absolutePath, shellQuote, testedVersion, unrecordedReadNote } from './thread-writer-files.js';
 
 /** Builds whose rollout layout this writer was checked against, live. */
 const CODEX_WRITER_TESTED_VERSIONS = ['codex-cli 0.155.1', 'codex-cli 0.162.1'] as const;
@@ -184,7 +184,7 @@ function outputText(call: CanonicalToolCall): string {
   const omitted = call.outputOmitted ? `[${call.outputOmitted} lines omitted]` : '';
   const body = [...(omitted && call.outputTail ? [omitted] : []), ...lines, ...(omitted && !call.outputTail ? [omitted] : [])].join('\n');
   const exit = call.exitCode !== undefined && call.exitCode !== 0 ? `${body ? '\n' : ''}Process exited with code ${call.exitCode}` : '';
-  return `${body}${exit}` || (call.status === 'failed' ? 'failed' : '');
+  return `${body}${exit}` || (call.status === 'failed' ? 'failed' : unrecordedReadNote(call) ?? '');
 }
 
 /** Codex's code-mode script result: a header part, then the output part. */

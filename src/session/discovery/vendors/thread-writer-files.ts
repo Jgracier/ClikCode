@@ -159,6 +159,17 @@ function diffText(call: CanonicalToolCall): string {
   }).join('\n');
 }
 
+/** A read whose contents were never recorded. Some vendors (Antigravity over
+ * ACP) send a read's update with the path and nothing else; the model had the
+ * file, the record did not keep it. A result saying "no output" would tell the
+ * next model the file was empty, so it is told the truth instead. A command
+ * with no output is a different case: silence is its real result. */
+export function unrecordedReadNote(call: CanonicalToolCall): string | undefined {
+  if (call.category !== 'read' || call.status === 'unfinished' || call.status === 'failed') return undefined;
+  if (call.output?.length || call.diff?.length) return undefined;
+  return `(the contents of ${call.target ?? 'this file'} were read in the earlier conversation but not recorded here; read it again if you need them)`;
+}
+
 /** What a call returned, as the text of its result. */
 export function callResultText(call: CanonicalToolCall): string {
   const lines: string[] = [];
@@ -172,7 +183,7 @@ export function callResultText(call: CanonicalToolCall): string {
   if (call.exitCode !== undefined && call.exitCode !== 0) lines.push(`(exit code ${call.exitCode})`);
   if (call.status === 'unfinished') lines.push('(this call did not finish; no result was recorded)');
   else if (call.status === 'failed' && (call.exitCode === undefined || call.exitCode === 0)) lines.push('(failed)');
-  else if (!lines.length) lines.push('(done)');
+  else if (!lines.length) lines.push(unrecordedReadNote(call) ?? '(done)');
   return lines.join('\n');
 }
 

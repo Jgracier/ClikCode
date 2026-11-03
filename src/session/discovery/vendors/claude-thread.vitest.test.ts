@@ -221,4 +221,15 @@ describe('toolCalls: text', () => {
       [{ type: 'text', text: '[Edit {"file_path":"/w/a.py","old_string":"x","new_string":"y"} (failed)]\nThe call failed.' }],
     ]);
   });
+  it('tells a read whose contents were not recorded, not that it returned nothing', () => {
+    // Antigravity over ACP sends a read's update with the path and no content: the
+    // model had the file, the record did not keep it. "(no output)" would tell the
+    // next model the file was empty. A command that printed nothing is still "(no output)".
+    const record = recordOf([turn(0, 'look', [{ type: 'tool', call: call({ name: 'read_file', category: 'read', label: 'Read a.ts', target: 'a.ts', input: { path: 'a.ts' } }) }, { type: 'tool', call: call({ name: 'shell', category: 'run', label: '$ true', input: { command: 'true' } }) }, { type: 'text', text: 'done' }])]);
+    const text = JSON.stringify(claudeThreadRecords(record, { sessionId: 's', cwd, model: null, version: '2.1.288', uuid: counter() }));
+    expect(text).toContain('not recorded here');
+    expect(text).toContain('a.ts');
+    expect(text).toContain('(no output)');
+    expect(text.match(/\(no output\)/g)).toHaveLength(1);
+  });
 });

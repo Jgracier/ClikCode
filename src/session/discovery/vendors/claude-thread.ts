@@ -25,7 +25,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { withProviderNote, type CanonicalRecord, type CanonicalToolCall, type CanonicalTurn } from '../../canonical.js';
-import { absolutePath, shellQuote } from './thread-writer-files.js';
+import { absolutePath, shellQuote, unrecordedReadNote } from './thread-writer-files.js';
 
 /** The harness command whose calls are already Claude Code's own. */
 const CLAUDE_ORIGIN = 'claude';
@@ -279,7 +279,7 @@ function resultContent(call: CanonicalToolCall, use: ClaudeToolUse, primary: boo
     content = failed ? 'The call failed.'
       : use.name === 'Edit' && path ? `The file ${path} has been updated successfully.`
         : use.name === 'Write' && path ? `File created successfully at: ${path}`
-          : '(no output)';
+          : unrecordedReadNote(call) ?? '(no output)';
   }
   return { content, isError: failed };
 }
