@@ -1,8 +1,8 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { authEvidencePresent, authFilesStamp, expandAuthPath, harnessCanLogout, removableAuthFiles, removeAuthFiles } from './auth-files';
+import { authEvidencePresent, authFilesStamp, expandAuthPath, prepareAuthFilesForLogin, harnessCanLogout, removableAuthFiles, removeAuthFiles } from './auth-files';
 import type { AiLocalHarnessDefinition } from '../definition';
 import { AI_LOCAL_HARNESSES } from '@clikcode/router/ai-local-harness';
 
@@ -14,6 +14,40 @@ describe('vendor credential files', () => {
   let root: string;
   beforeEach(async () => { root = await mkdtemp(join(tmpdir(), 'auth-files-')); });
   afterEach(async () => { await rm(root, { recursive: true, force: true }); });
+
+  it('requires complete, parseable Antigravity credentials before reporting signed in', async () => {
+    const agy = AI_LOCAL_HARNESSES.find((entry) => entry.command === 'antigravity')!;
+    const directory = join(root, '.gemini', 'antigravity-cli');
+    await mkdir(directory, { recursive: true });
+    const file = join(directory, 'antigravity-oauth-token');
+    const valid = JSON.stringify({ token: { access_token: 'access', refresh_token: 'refresh' } });
+    for (const invalid of [valid + 'trailing data', '{', '{}', '{"token":{}}', '{"token":{"access_token":"access"}}']) {
+      await writeFile(file, invalid);
+      expect(await authEvidencePresent(agy, { HOME: root }, {})).toBe(false);
+    }
+    await writeFile(file, valid);
+    expect(await authEvidencePresent(agy, { HOME: root }, {})).toBe(true);
+    expect(await readFile(file, 'utf8')).toBe(valid);
+  });
+
+  it('preserves corrupt credentials before explicit reauthentication and leaves valid credentials alone', async () => {
+    const vendor = harness({ authFiles: [{ path: '~/auth.json', jsonFields: ['token.access_token'] }] });
+    const file = join(root, 'auth.json');
+    const corrupt = '{"token":{"access_token":"old"}}trailing bytes';
+    await writeFile(file, corrupt);
+    expect(await authEvidencePresent(vendor, { HOME: root }, {})).toBe(false);
+    expect(await readFile(file, 'utf8')).toBe(corrupt);
+    await prepareAuthFilesForLogin(vendor, { HOME: root }, {});
+    const [backup] = await readdir(root);
+    expect(backup).toMatch(/^auth.json\.invalid-.*\.bak$/);
+    expect(await readFile(join(root, backup!), 'utf8')).toBe(corrupt);
+    await prepareAuthFilesForLogin(vendor, { HOME: root }, {});
+    const valid = '{"token":{"access_token":"new"}}';
+    await writeFile(file, valid);
+    await prepareAuthFilesForLogin(vendor, { HOME: root }, {});
+    expect(await readFile(file, 'utf8')).toBe(valid);
+    expect(await readdir(root)).toHaveLength(2);
+  });
 
   it('expands ~ and ${VAR:-default} against the profile environment', () => {
     expect(expandAuthPath('~/.grok/auth.json', {}, '/home/u')).toBe('/home/u/.grok/auth.json');

@@ -162,7 +162,7 @@ describe('local harness catalog', () => {
   it('drives one Plan mode through each harness’s own planning flag', () => {
     const expected: Record<string, string[]> = {
       copilot: ['--plan'], cline: ['--plan'], command: ['--plan'], droid: ['--use-spec'], auggie: ['--ask'],
-      cn: ['--readonly'], kimi: ['--plan'], cursor: ['--mode', 'plan'], antigravity: ['--mode', 'plan'],
+      cn: ['--readonly'], kimi: ['--plan'], cursor: ['--mode', 'plan'],
     };
     const planned = AI_LOCAL_HARNESSES.filter((harness) => harness.planMode);
     expect(planned.map((harness) => harness.command).sort()).toEqual(Object.keys(expected).sort());
@@ -449,6 +449,8 @@ describe('local harness catalog', () => {
 
   it('builds the ACP spawn contract from declarations only', () => {
     // Droid's `exec --output-format acp` validates but ignores -m/-r/--auto: its session is set over the protocol.
+    expect(harnessAcpLaunch(localHarnessForCommand('antigravity')!, { model: 'chosen-model', effort: 'high', permissionMode: 'ask' }))
+      .toMatchObject({ binary: 'agy', argv: ['acp'], optionArgv: [] });
     expect(harnessAcpLaunch(localHarnessForCommand('droid')!, { model: 'gpt-5', effort: 'high', permissionMode: 'auto' }))
       .toEqual({ binary: 'droid', argv: ['exec', '--output-format', 'acp'], modeArgv: ['exec', '--output-format', 'acp'], optionArgv: [], optionPlacement: 'before', env: {} });
     expect(harnessAcpLaunch(localHarnessForCommand('copilot')!, { model: 'gpt-5', effort: 'high', permissionMode: 'bypass' }))
