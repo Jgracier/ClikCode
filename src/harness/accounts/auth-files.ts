@@ -6,7 +6,8 @@
  * (`authFiles`) and which environment variables sign it in by themselves
  * (`authEnv`); this reads those, so ClikCode knows before a turn fails. */
 
-import { readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
@@ -50,10 +51,40 @@ async function present(entry: AuthFile, environment: Environment): Promise<boole
 async function presentAt(path: string, entry: AuthFile): Promise<boolean> {
   try {
     if (path.endsWith('/')) return (await readdir(path)).length > 0;
+    if (entry.jsonFields) {
+      const data: unknown = JSON.parse(await readFile(path, 'utf8'));
+      return entry.jsonFields.every((field) => {
+        const value = field.split('.').reduce<unknown>((value, key) =>
+          value !== null && typeof value === 'object' ? (value as Record<string, unknown>)[key] : undefined, data);
+        return typeof value === 'string' && value.trim().length > 0;
+      });
+    }
     if (entry.contains === undefined) return (await stat(path)).size > 0;
     return (await readFile(path, 'utf8')).includes(entry.contains);
   } catch {
     return false;
+  }
+}
+
+/** Only during an explicitly requested sign-in: let the vendor start even
+ * when an old JSON credential is corrupt. Preserve it for recovery instead
+ * of deleting it or guessing which trailing bytes were intended. */
+export async function prepareAuthFilesForLogin(
+  harness: Pick<AiLocalHarnessDefinition, 'authFiles'>,
+  profileEnvironment: Readonly<Record<string, string>>,
+  processEnvironment: Environment = process.env,
+): Promise<void> {
+  const environment = { ...processEnvironment, ...profileEnvironment };
+  for (const entry of harness.authFiles ?? []) {
+    if (!entry.jsonFields) continue;
+    for (const path of await expandAuthPaths(entry.path, environment)) {
+      if (await presentAt(path, entry)) continue;
+      try { await stat(path); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw error;
+      }
+      await rename(path, `${path}.invalid-${randomUUID()}.bak`);
+    }
   }
 }
 

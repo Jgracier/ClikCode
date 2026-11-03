@@ -420,7 +420,7 @@ const PROOFS: Readonly<Record<string, readonly string[]>> = {
   aider: ['aider'],
   goose: ['acp-plain', 'acp-usage-update'],
   amp: ['claude-stream-json'],
-  antigravity: ['antigravity'],
+  antigravity: ['acp-plain', 'acp-usage-quota'],
   pi: ['pi-json'],
   droid: ['acp-plain'],
   kiro: ['acp-plain', 'acp-usage-kiro'],

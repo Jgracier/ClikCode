@@ -19,6 +19,20 @@ describe('harness turn transports', () => {
     expect(harnessTurnTransport(catalog('aider'))).toBe('text-cli');
   });
 
+  it('uses Antigravity ACP without print-mode flags and retains its native fallback parser', () => {
+    const agy = catalog('antigravity');
+    expect(harnessTurnTransport(agy)).toBe('acp');
+    expect(agy.acp?.argv).toEqual(['acp']);
+    expect(agy.acp?.inheritCliOptions).toBe(false);
+    expect(agy.acp?.liveModelList).toBe(true);
+    expect(agy.acp?.effortConfigId).toBe('thought_level');
+    expect(agy.planMode).toBeUndefined();
+    expect(agy.parser).toBe('antigravity');
+    expect(sessionTurnTransport(agy, { nativeSessionId: 'native-thread', nativeTransport: 'structured-cli' })).toBe('structured-cli');
+    expect(agy.loginArgv).toEqual([]);
+    expect(agy.authFiles).toContainEqual({ path: '~/.gemini/antigravity-cli/antigravity-oauth-token', jsonFields: ['token.access_token', 'token.refresh_token'] });
+  });
+
   it('uses ACP for every catalog entry that declares it', () => {
     for (const candidate of AI_LOCAL_HARNESSES.filter((item) => item.acp)) {
       expect(harnessTurnTransport(candidate as AiLocalHarnessDefinition), candidate.command).toBe('acp');

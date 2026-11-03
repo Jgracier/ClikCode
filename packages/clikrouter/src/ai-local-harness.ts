@@ -970,68 +970,16 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // Input closes after the main reply and background agents settle; the final
   // result follows EOF. It shares Claude-shaped output, not Claude's lifecycle.
   { command: 'amp', keyIdentityArgv: ['usage'], quotaProbe: true, subagents: { read: 'frames', steer: 'none' }, capabilities: { childActivity: true, thinking: true, plan: true, usage: true, toolOutput: true, backgroundAgents: true, backgroundTerminals: false, workflows: false }, provider: 'amp', displayName: 'Amp', tier: 'more', transport: 'structured-cli', integration: 'structured', parser: 'claude-stream-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'amp', npmPackage: '@ampcode/cli', authFiles: [{ path: '${XDG_DATA_HOME:-~/.local/share}/amp/secrets.json', contains: 'apiKey@' }], authEnv: ['AMP_API_KEY'], loginArgv: ['login'], versionArgv: ['version'], turn: { startArgv: ['--execute', '--stream-json', '--stream-json-input', '--no-archive-after-execute'], resumeArgv: ['threads', 'continue'], resumeIdSuffix: ['--execute', '--stream-json', '--stream-json-input', '--no-archive-after-execute'], promptInput: 'stdin', stdinFormat: 'amp-json', stdinArgv: [], output: 'json-lines', responseFields: ['result'], mcpConfigArgv: ['--mcp-config'] }, session: { resumeIdPrefix: ['threads', 'continue'] } },
-  // Verified against Antigravity's own official headless-mode docs
-  // (antigravity.google/docs/cli/headless/): -p/--print for a single
-  // non-interactive prompt, --model <slug>, --continue/-c for the most
-  // recent conversation, --conversation <id> to resume a specific one, and
-  // --output-format text|json|stream-json -- these are the real, documented
-  // flags, not guessed. No loginArgv: the same doc states headless mode
-  // "uses your cached credentials -- authenticate once with an interactive
-  // agy session first," meaning there's no scriptable login command, only
-  // an interactive one -- loginArgv: [] here is the same pattern already
-  // used for Gemini CLI for exactly this reason: it still routes through
-  // ClikCode's suspend/resume handoff into agy's own interactive session
-  // rather than being skipped entirely for lacking a real login argv.
-  // Genuinely NOT verified: the JSON field names inside a stream-json
-  // event carrying the final response text, and whether a conversation id
-  // reliably comes back in that output at all -- Antigravity's own issue
-  // tracker (google-antigravity/antigravity-cli#7) was, as of this
-  // research, still requesting that a per-conversation id be emitted at
-  // all, meaning --conversation-based resume may not work reliably yet.
-  // responseFields here matches the same best-effort convention already
-  // used for other harnesses with an unconfirmed inner schema (Pi, Kilo
-  // Code) rather than a fabricated certainty.
-  // loginArgv runs a minimal real print-mode turn rather than launching agy
-  // bare: bare agy needs its own bubbletea TUI, which requires a real
-  // /dev/tty and never returns on its own once open (confirmed live: a
-  // proper login flow, but the wrong shape for a broker that hands off and
-  // gets control back automatically). --print, by contrast, opens the same
-  // OAuth browser flow when unauthenticated and returns control the moment
-  // that completes -- confirmed live: it triggered the real browser OAuth
-  // prompt with no TTY at all in a plain piped shell, not just under a
-  // pty. The one real cost: unlike Claude/Codex's dedicated login
-  // subcommands, this is a genuine (trivial) turn, not a free auth-only
-  // call, since agy has no login-only command in its own CLI surface.
-  // profileEnv: 'HOME' -- confirmed live: agy resolves its entire config
-  // Effort is NOT an independent dimension here, which is why this entry
-  // declares no effortValues and no effortArgvPrefix even though `agy --help`
-  // lists --effort. Antigravity encodes effort in the MODEL ID -- its own
-  // `agy models` prints gemini-3.8-flash-high / -medium / -low,
-  // gemini-3.1-pro-high / -low, gpt-oss-120b-medium -- and the CLI rejects any
-  // combination that is not consistent with that. Verified live against agy
-  // 1.2.7 on a real authenticated account:
-  //   --model claude-opus-4-6-thinking --effort medium
-  //     -> "--effort is not supported for model claude-opus-4-6-thinking"
-  //   --model gpt-oss-120b-medium --effort high
-  //     -> "--model gpt-oss-120b-medium conflicts with --effort=high"
-  //   --model claude-opus-4-6-thinking (no --effort)
-  //     -> SUCCESS
-  // Declaring the flag made ClikCode send it on every turn, so EVERY
-  // antigravity turn failed on every account -- and because the failure
-  // looked like the account's fault, failover then walked the whole account
-  // list failing identically. Choosing effort means choosing the model.
-  // tree (~/.gemini/antigravity-cli/, credentials included) from $HOME, the
-  // same way it would with a real home directory, so redirecting HOME per
-  // account is a real isolation mechanism here, not a guess -- verified
-  // `agy models` runs cleanly under a freshly isolated HOME. This is what
-  // makes "add a new/different account" actually work: a fresh, empty HOME
-  // (keyring cut off by profileExtraEnv) has no credential to reuse.
-  // Sign-in is bare `agy` (1.2.17): its "Select login method" screen, then a
-  // Google link and a code field. `agy -p /help` used to be the login, but a
-  // turn now runs signed out ("You are not logged into Antigravity", answered
-  // anyway), so it signed nothing in. The token file it writes ends the
-  // sign-in; the first-run screens are answered (data sharing unticked).
-  { command: 'antigravity', quotaProbe: true, subagents: { read: 'none', steer: 'none' }, capabilities: { childActivity: false, thinking: false, plan: false, usage: true, toolOutput: false, backgroundAgents: false, backgroundTerminals: false, workflows: false }, freePlan: { listed: true }, provider: 'antigravity', displayName: 'Antigravity CLI', planMode: { option: 'mode', value: 'plan' }, tier: 'primary', transport: 'structured-cli', integration: 'structured', parser: 'antigravity', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, profileEnvPassthrough: HOME_REDIRECT_ENV_PASSTHROUGH, profileExtraEnv: { DBUS_SESSION_BUS_ADDRESS: 'unix:path=/nonexistent', XDG_RUNTIME_DIR: '{profile}/runtime' }, apiKeySettings: { path: '~/.gemini/antigravity-cli/settings.json', set: { modelProvider: 'gemini' } }, localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'agy', installer: HARNESS_INSTALLERS.antigravity, loginArgv: [], loginSteps: [{ when: 'Choose your color scheme', send: '{enter}' }, { when: 'Terms of Service & Data Use', send: '{enter}{down}{right}{enter}' }, { when: 'Do you trust the contents of this project', send: '{enter}' }, { when: 'Select login method', send: '{enter}' }, { when: 'paste the authorization code below', ask: { prompt: 'Paste the code from the Google page' } }], authFiles: [{ path: '~/.gemini/antigravity-cli/antigravity-oauth-token' }], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--dangerously-skip-permissions'] } }, profileEnv: 'HOME', turn: { startArgv: ['--output-format', 'stream-json'], promptArgvPrefix: ['-p'], resumeIdPrefix: ['--conversation'], output: 'json-lines', responseFields: ['text', 'result', 'response'] }, session: { resumeIdPrefix: ['--conversation'] } },
+  // agy 1.4.12 exposes ACP through `agy acp`. Its subcommand accepts
+  // permission flags but not the print-mode --model/--mode switches; model
+  // and mode selection use the session protocol. Keep the native parser
+  // for existing CLI threads and image fallback. CLI/ACP session identity
+  // sharing is not assumed. Bare agy remains the interactive OAuth login;
+  // print mode can answer signed out and cannot establish authentication.
+  // Each account redirects HOME and disables keyring reuse. ACP publishes
+  // its own model IDs and thought_level options; CLI IDs encode effort.
+  // No independent CLI --effort flag is sent.
+  { command: 'antigravity', quotaProbe: true, subagents: { read: 'none', steer: 'none' }, capabilities: { childActivity: false, thinking: true, plan: false, usage: true, toolOutput: true, backgroundAgents: false, backgroundTerminals: false, workflows: false }, freePlan: { listed: true }, provider: 'antigravity', displayName: 'Antigravity CLI', tier: 'primary', transport: 'acp', acp: { argv: ['acp'], inheritCliOptions: false, listsModels: true, liveModelList: true, effortConfigId: 'thought_level', permissionArgv: { bypass: ['--dangerously-skip-permissions'] } }, integration: 'structured', parser: 'antigravity', effortValues: ['low', 'medium', 'high'], memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, profileEnvPassthrough: HOME_REDIRECT_ENV_PASSTHROUGH, profileExtraEnv: { DBUS_SESSION_BUS_ADDRESS: 'unix:path=/nonexistent', XDG_RUNTIME_DIR: '{profile}/runtime' }, apiKeySettings: { path: '~/.gemini/antigravity-cli/settings.json', set: { modelProvider: 'gemini' } }, localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'agy', installer: HARNESS_INSTALLERS.antigravity, loginArgv: [], loginSteps: [{ when: 'Choose your color scheme', send: '{enter}' }, { when: 'Terms of Service & Data Use', send: '{enter}{down}{right}{enter}' }, { when: 'Do you trust the contents of this project', send: '{enter}' }, { when: 'Select login method', send: '{enter}' }, { when: 'paste the authorization code below', ask: { prompt: 'Paste the code from the Google page' } }], authFiles: [{ path: '~/.gemini/antigravity-cli/antigravity-oauth-token', jsonFields: ['token.access_token', 'token.refresh_token'] }], modelArgvPrefix: ['--model'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--dangerously-skip-permissions'] } }, profileEnv: 'HOME', turn: { startArgv: ['--output-format', 'stream-json'], promptArgvPrefix: ['-p'], resumeIdPrefix: ['--conversation'], output: 'json-lines', responseFields: ['text', 'result', 'response'] }, session: { resumeIdPrefix: ['--conversation'] } },
   // Pi signs in only inside its own session (`/login`); `pi auth` just prints
   // or checks credentials. The steps type /login, its method/provider menus
   // and key field are read on ClikCode's screen, and Ctrl+D leaves once it
@@ -1908,7 +1856,13 @@ export function modelSelectorArgv(harness: AiLocalHarnessDefinition, model: stri
  * the text in the file, for a credential kept inside a shared config
  * (Continue's config.yaml, Vibe's .env); `removeLine` lets logout delete just
  * the lines holding it, for a one-key-per-line file like `.env`. */
-export interface AiHarnessAuthFile { path: string; contains?: string; removeLine?: boolean }
+export interface AiHarnessAuthFile {
+  path: string;
+  contains?: string;
+  removeLine?: boolean;
+  /** A JSON credential must parse and contain these nonempty string paths. */
+  jsonFields?: readonly string[];
+}
 
 /** A reply that is a failed call. `pattern` is matched against the whole
  * trimmed reply; the status is the first capture group, else `status`. */

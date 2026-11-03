@@ -14,7 +14,7 @@ import { loginPortForwardHint } from '../../../gateway/login/link-info.js';
 import { NativeHarnessSpec } from './binary.js';
 import { captureNativeHarnessOutput } from './command.js';
 import { ensureNativeHarness } from './inspect.js';
-import { authFilePresent, authFilesStamp, expandAuthPath } from '../../accounts/auth-files.js';
+import { authFilePresent, authFilesStamp, expandAuthPath, prepareAuthFilesForLogin } from '../../accounts/auth-files.js';
 import { keyVariables, writeProfileKey } from '../../accounts/profile-key.js';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
@@ -78,6 +78,7 @@ async function loginNativeHarnessInner(spec: NativeHarnessSpec, envOverrides: Re
     }
     // Over once the vendor writes its credential: several go on into their
     // own app afterwards (Droid, Vibe), and only the file says it worked.
+    await prepareAuthFilesForLogin(spec, envOverrides);
     const before = spec.authFiles?.length ? await authFilesStamp(spec, envOverrides) : undefined;
     const run = (ui: SignInUi) => runVendorSignIn({
       ...(before !== undefined ? { signedIn: async () => (await authFilesStamp(spec, envOverrides)) !== before && authFilePresent(spec, envOverrides) } : {}),

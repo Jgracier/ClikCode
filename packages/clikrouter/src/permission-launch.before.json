@@ -75,7 +75,18 @@
  },
  "antigravity": {
   "ask": {
-   "acp": null,
+   "acp": {
+    "binary": "agy",
+    "argv": [
+     "acp"
+    ],
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before",
+    "env": {}
+   },
    "turn": [
     "--output-format",
     "stream-json",
@@ -84,7 +95,18 @@
    ]
   },
   "auto": {
-   "acp": null,
+   "acp": {
+    "binary": "agy",
+    "argv": [
+     "acp"
+    ],
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [],
+    "optionPlacement": "before",
+    "env": {}
+   },
    "turn": [
     "--output-format",
     "stream-json",
@@ -93,7 +115,21 @@
    ]
   },
   "bypass": {
-   "acp": null,
+   "acp": {
+    "binary": "agy",
+    "argv": [
+     "--dangerously-skip-permissions",
+     "acp"
+    ],
+    "modeArgv": [
+     "acp"
+    ],
+    "optionArgv": [
+     "--dangerously-skip-permissions"
+    ],
+    "optionPlacement": "before",
+    "env": {}
+   },
    "turn": [
     "--output-format",
     "stream-json",
