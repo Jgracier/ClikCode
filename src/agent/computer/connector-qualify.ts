@@ -3,7 +3,7 @@
 import { EXTRA_PHRASES, ENTERPRISE_API, GATED_BY_PLAN, INTEGRATE_UPGRADE, NEGATION_AFTER, NEGATION_BEFORE, PLAN_HEADING, SERVER_PHRASES, SLACK_ONBOARDING } from './connector-qualify-phrases.js';
 
 export type QualifyKind = 'captcha' | 'sms' | 'card' | 'paid-plan' | 'sales' | 'enterprise' | 'work-email' | 'free-mail' | 'slack-only' | 'approval' | 'no-api' | 'dead-host';
-export type Lane = 'auto' | 'human' | 'dead';
+export type Lane = 'auto' | 'human' | 'dead' | 'research';
 export type PageRole = 'home' | 'signup' | 'pricing' | 'docs';
 export interface RenderedPage {
   role: PageRole; url: string; status?: number; text: string;
@@ -110,7 +110,7 @@ export function classify(id: string, pages: RenderedPage[]): QualifyResult {
   const priced = loaded.find(p => p.role === 'pricing' && /[$€£]\s?\d/.test(p.text) && !/\bfree (?:plan|forever|tier)\b|\bforever free\b|use free plan|[$€£]\s?0\b/i.test(p.text));
   if (priced && evidence.some(e => e.kind === 'card')) add('paid-plan', 'a card is asked for, and the pricing page has prices and no free plan', priced.url);
   const kinds = [...new Set(evidence.map(e => e.kind))];
-  const lane: Lane = kinds.includes('dead-host') || kinds.includes('no-api') ? 'dead' : kinds.length ? 'human' : 'auto';
+  const lane: Lane = kinds.includes('dead-host') || kinds.includes('no-api') ? 'dead' : kinds.length ? 'human' : loaded.some(p => (p.role === 'signup' || p.role === 'home') && p.hasForm) ? 'auto' : 'research';
   return { id, lane, kinds, evidence, ...(hints.length ? { hints: [...new Set(hints)] } : {}), pages: pages.map(p => ({ role: p.role, url: p.url, ok: !p.error && (p.status === undefined || p.status < 400) && p.text.trim().length > 0, ...(p.error ? { error: p.error.slice(0, 120) } : {}) })) };
 }
 
@@ -156,7 +156,7 @@ export async function qualifyVendor(id: string, ports: QualifyPorts): Promise<Qu
     if (found.signup) await visit('signup', found.signup);
     await visit('pricing', known.pricingUrl ?? found.pricing);
     await visit('docs', known.docsUrl ?? found.docs);
-    if (!pages.length) return { id, lane: 'auto', kinds: [], evidence: [], hints: ['Qualification unavailable: no website address was found. Research the vendor before attempting signup.'], pages: [] };
+    if (!pages.length) return { id, lane: 'research', kinds: [], evidence: [], hints: ['Qualification unavailable: no website address was found. Research the vendor before attempting signup.'], pages: [] };
     return classify(id, pages);
   } finally { await ports.close(id).catch(() => undefined); }
 }

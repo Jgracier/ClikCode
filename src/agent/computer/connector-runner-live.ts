@@ -141,7 +141,7 @@ export function liveDriver(options: LiveDriverOptions): BrowserDriver {
       const [{ qualifyVendor, humanStepForQualify }, { qualifyPorts }] = await Promise.all([import('./connector-qualify.js'), import('./connector-qualify-live.js')]);
       const result = await qualifyVendor(id, qualifyPorts(options.stateDir, liveClient(options.signal)));
       const human = result.lane === 'auto' ? undefined : humanStepForQualify(result);
-      return { lane: result.lane, summary: `${result.kinds.join(', ') || 'no wall'}${result.evidence[0] ? ` (${result.evidence[0].phrase.slice(0, 80)})` : ''}`, ...(human ? { human } : {}) };
+      return { lane: result.lane, summary: `${result.kinds.join(', ') || (result.lane === 'research' ? result.hints?.join('; ') || 'no usable signup form was observed' : 'no wall observed on signup')}${result.evidence[0] ? ` (${result.evidence[0].phrase.slice(0, 80)})` : ''}`, ...(human ? { human } : {}) };
     },
     async backoff(id) { return (await import('./keygrab-park.js')).backoffUntil(options.stateDir, id); },
     async recordBackoff(id) { return (await import('./keygrab-park.js')).recordBackoff(options.stateDir, id); },

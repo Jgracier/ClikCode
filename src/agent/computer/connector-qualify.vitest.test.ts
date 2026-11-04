@@ -84,7 +84,7 @@ describe('qualify classification', () => {
   it('keeps missing API root routes, permission pages and temporary failures out of the dead-host lane', () => {
     for (const status of [403, 404, 503]) {
       const result = classify('googleapis-service', [page('home', '', { url: 'https://service.googleapis.com/', status })]);
-      expect(result).toMatchObject({ lane: 'auto', kinds: [] });
+      expect(result).toMatchObject({ lane: 'research', kinds: [] });
       expect(result.hints?.[0]).toContain('Qualification unavailable');
     }
     expect(classify('v', [page('home', '', { error: 'navigation timed out' })]).kinds).toEqual([]);
@@ -112,7 +112,7 @@ describe('qualify flow', () => {
   it('keeps missing discovery data in autonomous research instead of inventing a dead vendor wall', async () => {
     const render = vi.fn(), close = vi.fn(async () => {});
     const result = await qualifyVendor('unresearched', { discover: async () => ({}), render, close });
-    expect(result).toMatchObject({ lane: 'auto', kinds: [], evidence: [], pages: [] });
+    expect(result).toMatchObject({ lane: 'research', kinds: [], evidence: [], pages: [] });
     expect(result.hints?.[0]).toContain('Qualification unavailable');
     expect(render).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalledWith('unresearched');
@@ -133,6 +133,11 @@ describe('qualify flow', () => {
     expect(r.lane).toBe('auto');
     expect(log.filter(l => l.startsWith('render')).map(l => l.split(' ')[1])).toEqual(['home', 'signup', 'pricing', 'docs']);
     expect(log.at(-1)).toBe('close v');
+  });
+
+  it('does not approve credential acquisition when a signup page has no form', () => {
+    expect(classify('v', [page('home', 'Welcome'), page('signup', 'Join us soon')]).lane).toBe('research');
+    expect(classify('v', [page('signup', 'Create account', form)]).lane).toBe('auto');
   });
 
   it('picks links by their words', () => {

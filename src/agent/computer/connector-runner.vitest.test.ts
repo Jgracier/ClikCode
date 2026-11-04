@@ -33,6 +33,44 @@ function fakeDriver(outcomes: DriveOutcome[], recipe = false) {
 const quick = { sleep: async () => undefined, writeFile: async () => undefined, handoffDir: async () => '/tmp/handoffs' };
 
 describe('connectors run', () => {
+  it('checks rendered walls before OAuth and key capture, while letting docs work proceed', async () => {
+    for (const task of [oauthTask('oauth-wall'), keyAt('key-wall')]) {
+      const c = fakeClient([task]);
+      const d = fakeDriver([]);
+      d.driver.qualify = async () => ({ lane: 'human', summary: 'captcha on signup', human: { kind: 'captcha', url: 'https://vendor.example/signup', instructions: 'Solve the captcha' } });
+      const { outcomes } = await runConnectors(c.client, d.driver, quick);
+      expect(outcomes[0]?.status).toBe('human');
+      expect(d.driven).toEqual([]);
+    }
+    const docs: OnboardResult = { id: 'docs', state: 'needs-agent', stage: 'spec', reason: 'reference needed', next: { kind: 'agent', task: 'docs-to-spec: read the vendor documentation' } };
+    const c = fakeClient([docs], { docs: [published('docs')] });
+    const d = fakeDriver([]);
+    d.driver.qualify = async () => { throw new Error('docs work must bypass signup qualification'); };
+    d.driver.agentTask = async () => ({ ok: true });
+    expect((await runConnectors(c.client, d.driver, quick)).outcomes[0]?.status).toBe('published');
+  });
+
+  it('uses an existing credential before signup qualification', async () => {
+    const c = fakeClient([oauthTask('saved')], { saved: [published('saved')] });
+    const d = fakeDriver([]);
+    d.driver.reuseCredential = async () => true;
+    d.driver.qualify = async () => { throw new Error('signup must stay closed'); };
+    expect((await runConnectors(c.client, d.driver, quick)).outcomes[0]?.status).toBe('published');
+    expect(d.driven).toEqual([]);
+  });
+
+  it('sends inconclusive rendered qualification to one bounded research task', async () => {
+    const c = fakeClient([oauthTask('research')], { research: [published('research')] });
+    const d = fakeDriver([]);
+    d.driver.qualify = async () => ({ lane: 'research', summary: 'the signup form could not be found' });
+    let attempts = 0;
+    d.driver.agentTask = async () => { attempts++; return { ok: true }; };
+    const { outcomes } = await runConnectors(c.client, d.driver, quick);
+    expect(outcomes[0]?.status).toBe('published');
+    expect(attempts).toBe(1);
+    expect(d.driven).toEqual([]);
+  });
+
   it('continues from completed spec work into distinct copy work within one vendor run', async () => {
     const task = (stage: string, text: string): OnboardResult => ({ id: 'acme', state: 'needs-agent', stage, reason: 'judgement required', next: { kind: 'agent', task: text } });
     const spec = task('spec', 'Read the official docs and repair the spec');

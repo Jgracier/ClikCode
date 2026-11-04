@@ -64,7 +64,7 @@ export interface BrowserDriver {
   /** A screen no rule knows: one bounded agent micro-task (the account_use and browser_use tools only) that gets the key or finishes consent and saves a recipe. Absent: the screen is handed on in a note. */
   agentTask?(id: string, stop: StopInfo, budget: { maxCalls: number; maxMs: number }): Promise<DriveOutcome>;
   /** Reads the vendor's rendered sign-up, pricing and developer pages (no model) and says whether a key needs a person, with the wall as a human step when it does. */
-  qualify?(id: string): Promise<{ lane: 'auto' | 'human' | 'dead'; summary: string; human?: HumanStep }>;
+  qualify?(id: string): Promise<{ lane: 'auto' | 'human' | 'dead' | 'research'; summary: string; human?: HumanStep }>;
   keygrab(id: string, url: string, budget: { maxMs: number; /** The task's other addresses (homepage, sign-up, docs): where to start if `url` is no web page. */ alternates?: string[] }): Promise<DriveOutcome>;
 }
 
@@ -308,19 +308,33 @@ export async function runVendor(first: OnboardResult, client: DeployClient, driv
           continue;
         }
       }
+      // Qualify acquisition only, after saved credentials have had their chance.
+      // Documentation, copy and proof work do not need a new vendor account.
+      const acquisition = plan.do === 'capture' || plan.do === 'oauth' || plan.do === 'handoff' && /^(auth|connect|credential|triage)$/.test(result.stage) && !/docs-to-spec|connector_copy_task|copy[- :]+review|wording|connector_spec|connector_build|proof/i.test(result.next.task);
+      if (!qualified && driver.qualify && acquisition) {
+        const q = await gate(() => driver.qualify!(id)).catch(() => ({ lane: 'research' as const, summary: 'rendered qualification could not complete' }));
+        actions.push(`qualify: lane ${q.lane} - ${cap(say(q.summary), 160)}`);
+        if (q.lane === 'research') {
+          const task = result.next.task;
+          const agent = await viaAgent({ kind: 'unknown', message: `Find the official signup path and determine whether this credential task can proceed: ${q.summary}`, url: siteUrl(task) ?? '', pageText: task, controls: [] }, true);
+          if (agent?.ok) {
+            actions.push(agent.note ?? 'the agent researched the signup path');
+            result = fix(await client.onboard(id));
+            continue;
+          }
+          if (agent && !agent.ok && (agent.stop.human || humanStepFor(id, agent.stop))) return await stopped(agent.stop);
+          return await handoff(`Qualification is inconclusive: ${q.summary}`);
+        }
+        if (q.lane !== 'auto') {
+          if (q.human) return await wall(q.human, false);
+          return await handoff(`Qualification needs evidence: ${q.summary}`);
+        }
+        qualified = true;
+      }
       switch (plan.do) {
         case 'done': return out(plan.status, result.reason || result.next.task);
         case 'human': return await wall(plan.humanStep, true);
         case 'handoff': {
-          // A task no rule knows. First read the vendor's rendered pages: a wall they show is reported as the typed wall, with no agent. Otherwise one bounded agent micro-task tries it.
-          if (!qualified && driver.qualify && !/connector_copy_task|copy[- ]review|wording/i.test(result.next.task)) {
-            qualified = true;
-            const q = await gate(() => driver.qualify!(id)).catch(quiet('agent/computer/connector-runner'));
-            if (q) {
-              actions.push(`qualify: lane ${q.lane} - ${cap(say(q.summary), 160)}`);
-              if (q.lane !== 'auto' && q.human) return await wall(q.human, false);
-            }
-          }
           const task = result.next.task;
           const agent = await viaAgent({ kind: 'unknown', message: plan.why, url: siteUrl(task) ?? '', pageText: task, controls: [] }, true);
           if (agent?.ok) {
