@@ -19,7 +19,7 @@ const fake = async (name: string, script: string): Promise<void> => { await writ
 
 it('ships a few destinations as plain data, each naming the slots the agent fills', async () => {
   const all = await loadDestinations(dir);
-  expect(Object.keys(all)).toEqual(['clikdeploy-secret', 'clikdeploy-app-secret', 'clikdeploy-compute', 'clikdeploy-connector', 'clikdeploy-connection', 'clikdeploy-connection-basic', 'clikdeploy-connection-basic-key', 'github-secret']);
+  expect(Object.keys(all)).toEqual(['clikdeploy-secret', 'clikdeploy-app-secret', 'clikdeploy-compute', 'clikdeploy-connector', 'clikdeploy-usage-reader', 'clikdeploy-connection', 'clikdeploy-connection-basic', 'clikdeploy-connection-basic-key', 'github-secret']);
   expect(slotsOf(all['clikdeploy-secret']!)).toEqual(['key']);
   expect(slotsOf(all['clikdeploy-compute']!)).toEqual(['provider', 'field']);
   expect(slotsOf(all['clikdeploy-connector']!)).toEqual(['integration', 'client_id']);
@@ -61,6 +61,16 @@ it('fills the key in JSON-escaped, and the slots from the agent, then relays the
   expect(argv.join(' ')).not.toContain(json);
   const sent = JSON.parse(await readFile(join(dir, 'stdin'), 'utf8')) as { provider: string; credentials: Record<string, string> };
   expect(sent).toEqual({ provider: 'GCP', credentials: { serviceAccountJson: json } });
+});
+
+it('files a usage key under its provider: the key JSON-escaped in the tool arguments, the label optional', async () => {
+  await fake('clikdeploy', `printf '%s\\n' "$@" > "${dir}/argv"; ${recordArgsJson()}; echo '{"status":"success","data":{"success":true}}'`);
+  const secret = 'sk-ant-admin01-a"b\\c_d-0123456789';
+  const [result] = await sendToDestinations(dir, [{ to: 'clikdeploy-usage-reader', with: { provider: 'anthropic' } }], secret);
+  expect(result).toMatchObject({ ok: true });
+  const argv = (await readFile(join(dir, 'argv'), 'utf8')).split('\n');
+  expect(argv.slice(0, 3)).toEqual(['tools', 'run', 'admin_ai_manage']);
+  expect(JSON.parse(await readFile(join(dir, 'stdin'), 'utf8'))).toEqual({ action: 'add_usage_reader', provider: 'anthropic', secret, label: '' });
 });
 
 it('registers a connector\'s OAuth app: the client id from the agent, the secret JSON-escaped, no code or password asked', async () => {

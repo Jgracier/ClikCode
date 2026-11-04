@@ -42,6 +42,10 @@ export const DEFAULT_DESTINATIONS: Readonly<Record<string, Template>> = {
   // API key (the CLI's own sign-in): no code and no password, as long as the connector has no client stored.
   'clikdeploy-connector': { about: "a ClikDeploy connector's OAuth app (integration, client_id); the key is its client secret; client_id may be secret:<saved name>", vaultSlots: ['client_id'],
     run: ['clikdeploy', 'tools', 'run', 'admin_platform_save_connector_credentials', '--args-json', '-', '--confirm'], stdin: JSON_ARGS('"integrationId":"{{integration}}","clientId":"{{client_id}}","clientSecret":"{{secret|json}}"') },
+  // A provider organization's usage key (an Anthropic Admin key). It never serves a call; ClikDeploy tests it with the vendor
+  // before saving and refuses it with the vendor's reason. The admin's own API key is enough: no password.
+  'clikdeploy-usage-reader': { about: 'file the usage key of an AI provider organization in ClikDeploy (provider, e.g. anthropic; label optional); ClikDeploy tests it with the vendor and saves nothing if the vendor refuses it', optionalSlots: ['label'],
+    run: ['clikdeploy', 'tools', 'run', 'admin_ai_manage', '--args-json', '-', '--confirm'], stdin: JSON_ARGS('"action":"add_usage_reader","provider":"{{provider}}","secret":"{{secret|json}}","label":"{{label}}"') },
   'clikdeploy-connection': { about: 'connect an API key to a ClikDeploy connector (integration) for the signed-in account; the result is `connected` or `NOT connected: <reason>`, read back from ClikDeploy', verify: 'connection',
     run: ['clikdeploy', 'tools', 'run', 'connect_connector', '--args-json', '-', '--confirm'], stdin: JSON_ARGS('"integrationId":"{{integration}}","apiKey":"{{secret|json}}"') },
   // Some vendors expose a token id as the basic-auth username. It can be read from the vault at send time.
