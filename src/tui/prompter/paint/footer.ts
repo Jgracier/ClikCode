@@ -1,4 +1,5 @@
 /** The footer of a frame: notice, palette, panel, plan, approval, status, composer and rules, fitted under an approval. */
+import { inlineHistoryMode } from '../../inline.js';
 import chalk from 'chalk';
 import type { PaletteEntry } from '../../command-palette.js';
 import { terminalCellWidth, visibleSlice } from '../../render/width.js';
@@ -45,6 +46,9 @@ export function buildFooter(this: TerminalHarnessPrompter, input: FooterInput): 
     ? `  ${chalk.cyan(waitingSpinnerGlyph(this.reducedMotion ? 0 : Math.floor(Date.now() / 160)))} ${chalk.dim(visibleSlice(transfer, Math.max(1, inner - 3)))}`
     : '';
   if (!turn) footer.push('', ...(hasBandBlank(targetHeight) && !approvalRows.length ? [transferRow] : []));
+  // Inline-history mode keeps no spare row for the status: the block hangs under the conversation, and a row
+  // held back for a status that is not there is only a gap between the last answer and the composer.
+  if (!turn && !transferRow && footer.length === 2 && inlineHistoryMode()) footer.pop();
   // Rows drawn over the chat, just above the footer: a notice, then an open list.
   const pickerRows: string[] = noticeShown.map((row) => `  ${chalk.yellow(row)}`);
   if (paletteCapacity) {
