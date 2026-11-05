@@ -8,6 +8,7 @@ import type { PaletteEntry } from './command-palette.js';
 import { stdin as input, stdout as output } from 'node:process';
 import { createStreamingBlockParser } from './render/markdown.js';
 import { ResponseReveal } from './render/response-reveal.js';
+import { CLEAR_SCREEN_AND_SCROLLBACK, inlineHistoryMode } from './inline.js';
 import { ENTER_ALTERNATE_SCREEN, installTerminalRestoreSignals, REEXEC_TERMINAL_ENV, restoreTerminal, terminalModes, terminalPrepare } from './restore.js';
 import type { FocusState } from './terminal-signals.js';
 import { sessionTranscriptMessages, settledTranscriptMessages } from '../turn/checkpoint.js';
@@ -45,7 +46,7 @@ import { onWaitingKey } from './prompter/waiting-keys.js';
 import { openSubView, closeSubView, subViewKey, paintSubView, type SubView } from './prompter/subagent-host.js';
 import { viewportRows, onResize, repaintAfterResize, rewrapIfWidthChanged, clearTranscript } from './prompter/viewport.js';
 import { signInScreen } from './prompter/sign-in.js';
-import { renderFrame, flushFrame, flushAlternateFrame } from './prompter/frame-flush.js';
+import { renderFrame, flushFrame, flushAlternateFrame, flushInlineFrame } from './prompter/frame-flush.js';
 import { clearInteractiveFrame, select, board, pickerHost } from './prompter/picker-host.js';
 import { question } from './prompter/prompt-input.js';
 import { paint } from './prompter/paint/frame.js';
@@ -364,8 +365,15 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // makes SGR reporting a transition rather than a no-op, and a client
       // deciding how to route touches has something to notice.
       logProcessWarnings();
-      if (!inheritedScreen) output.write(ENTER_ALTERNATE_SCREEN);
-      terminalModes.alternateScreen = true;
+      if (inlineHistoryMode()) {
+        // The shell's own screen stays. Screen and saved lines are cleared once,
+        // here, and the first frame starts on the LAST row so the composer sits
+        // at the bottom edge with the conversation printed above it.
+        output.write(`${CLEAR_SCREEN_AND_SCROLLBACK}\u001b[${Math.max(1, output.rows || 24)};1H`);
+      } else {
+        if (!inheritedScreen) output.write(ENTER_ALTERNATE_SCREEN);
+        terminalModes.alternateScreen = true;
+      }
       // Asked for: bracketed paste, because pasted text must not be read as
       // keystrokes; the mouse, because that is how the transcript is read
       // back; and focus reports, because a turn that ends or an approval
@@ -761,6 +769,7 @@ const methods = {
   renderFrame,
   flushFrame,
   flushAlternateFrame,
+  flushInlineFrame,
   showMention,
   mentionKey,
   endMention,

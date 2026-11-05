@@ -1,6 +1,7 @@
 /** The viewport: its row budget, resize handling and rewrap, and clearing the kept transcript. */
 import { lifecycle } from '../../runtime/lifecycle-log.js';
 import { stdout as output } from 'node:process';
+import { inlineBlock, inlineHistoryMode } from '../inline.js';
 import { terminalModes } from '../restore.js';
 import { logCursorEvent } from '../cursor-log.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
@@ -75,6 +76,8 @@ export function clearTranscript(this: TerminalHarnessPrompter): void {
   this.lastFinishedRow = undefined;
   this.secondLastFinishedRow = undefined;
   this.alternateScrollback = 0;
+  // Inline: the terminal's own scrollback holds the old conversation too.
+  if (inlineHistoryMode()) inlineBlock.clearNext = true;
   this.messageLines.clear();
   this.lineTags.clear();
   this.callGroups.clear();

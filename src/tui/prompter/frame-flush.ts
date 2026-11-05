@@ -7,6 +7,7 @@ import { terminalModes } from '../restore.js';
 import { highlightWords } from '../render/search-focus.js';
 import { highlightSelectionAt, scrollShift, shiftedRow } from '../render/selection.js';
 import { logCursorEvent } from '../cursor-log.js';
+import { eraseInlineBlock, inlineBlock, inlineHistoryMode, CLEAR_SCREEN_AND_SCROLLBACK } from '../inline.js';
 import { redrawPreamble, takeQueuedModes } from '../modes.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
 import { ALTERNATE_TRANSCRIPT_ROWS } from './state.js';
@@ -67,6 +68,7 @@ export function flushFrame(this: TerminalHarnessPrompter): void {
     this.secondLastFinishedRow = finished.length > 1 ? finished[finished.length - 2] : this.lastFinishedRow;
     this.lastFinishedRow = finished[finished.length - 1];
   }
+  if (inlineHistoryMode()) { this.flushInlineFrame(finished, pending); return; }
   this.flushAlternateFrame(finished, pending);
 }
 
@@ -268,6 +270,75 @@ export function flushAlternateFrame(
   this.frameInFlight = true;
   terminalModes.painted = true;
   logCursorEvent(`alternate frame: height=${height} rows=${updates.length}/${rows.length} composer=${composerRow} col=${pending.cursorColumn}`);
+  output.write(frame, () => {
+    this.frameInFlight = false;
+    if (this.pendingLive && !this.closed && !this.suspended) this.flushFrame();
+  });
+}
+
+/** Append-only frame for inline-history mode. Finished rows are printed once,
+ * above the block, and become the terminal's own scrollback; the block
+ * (composer, status, any open list) is erased and redrawn with relative motion
+ * only, so a resize or a keyboard change cannot leave it anywhere the next
+ * frame cannot find. */
+export function flushInlineFrame(
+  this: TerminalHarnessPrompter,
+  finished: readonly string[],
+  pending: { live: string[]; cursorRow: number; cursorColumn: number; hideCursor: boolean },
+): void {
+  // Line numbers for the rows kept, as the alternate frame does; nothing is drawn from them.
+  if (finished.length) {
+    this.alternateTranscript.push(...finished);
+    const excess = this.alternateTranscript.length - ALTERNATE_TRANSCRIPT_ROWS;
+    if (excess > 0) { this.alternateTranscript.splice(0, excess); this.alternateTrimmed += excess; }
+  }
+  const height = this.viewportRows();
+  let live = pending.live;
+  let cursorRow = pending.cursorRow;
+  // An open list covers the rows just above the footer: in this mode it is
+  // part of the block, which grows for it and shrinks when it closes.
+  const overlay = this.pickerOverlay;
+  const chrome = this.chromeRows;
+  if (overlay.length && chrome > 0 && live.length >= chrome) {
+    const limit = Math.max(1, (output.columns || 100) - 1);
+    const at = live.length - chrome;
+    live = [...live.slice(0, at), ...overlay.map((row) => safeRow(row, limit)), ...live.slice(at)];
+    if (cursorRow >= at) cursorRow += overlay.length;
+  }
+  // A block taller than the screen would make the walk back up clamp at the top edge.
+  if (live.length > height) {
+    cursorRow -= live.length - height;
+    live = live.slice(-height);
+  }
+  const lastRow = Math.max(0, live.length - 1);
+  cursorRow = Math.max(0, Math.min(cursorRow, lastRow));
+  this.frameLayout = { live: [...live], tags: (pending as { tags?: Array<string | undefined> }).tags?.slice(-height) ?? [] };
+  const clear = inlineBlock.clearNext;
+  inlineBlock.clearNext = false;
+  const showCursor = !pending.hideCursor;
+  const signature = JSON.stringify([live, cursorRow, pending.cursorColumn, showCursor]);
+  const modes = takeQueuedModes();
+  const signals = this.pendingSignals;
+  this.pendingSignals = '';
+  if (!clear && !finished.length && !modes && !signals && signature === inlineBlock.last) return;
+  let lead: string;
+  if (clear) { lead = CLEAR_SCREEN_AND_SCROLLBACK; inlineBlock.rows = 0; inlineBlock.cursorRow = 0; }
+  else lead = eraseInlineBlock();
+  const body = [...finished, ...live];
+  const text = body.map((row, index) => `${row}\u001b[K${index < body.length - 1 ? '\r\n' : ''}`).join('');
+  // The cursor is on the block's last row; walk up to the composer's.
+  const back = lastRow - cursorRow;
+  const park = `${back ? `\u001b[${back}A` : ''}\u001b[${Math.max(1, pending.cursorColumn)}G`;
+  inlineBlock.rows = live.length;
+  inlineBlock.cursorRow = cursorRow;
+  inlineBlock.last = signature;
+  this.pendingRedraw = undefined;
+  this.lastPark = park;
+  this.cursorShown = showCursor;
+  const frame = `\u001b[?2026h${modes}${signals}\u001b[?25l\u001b[?7l${lead}${text}${park}${showCursor ? '\u001b[?25h' : ''}\u001b[?2026l`;
+  this.frameInFlight = true;
+  terminalModes.painted = true;
+  logCursorEvent(`inline frame: block=${live.length} finished=${finished.length} composer=${cursorRow} col=${pending.cursorColumn}`);
   output.write(frame, () => {
     this.frameInFlight = false;
     if (this.pendingLive && !this.closed && !this.suspended) this.flushFrame();

@@ -7,6 +7,7 @@
 
 import { writeSync } from 'node:fs';
 import { stdin as input, stdout as output } from 'node:process';
+import { inlineHistoryMode } from './inline.js';
 import { FOCUS_REPORTING_OFF, POP_TITLE, PUSH_TITLE, progressSequence } from './terminal-signals.js';
 
 /** An in-place build reload inherits the current terminal screen and title. */
@@ -40,7 +41,7 @@ export const terminalModes: {
 
 /** Take the alternate screen if this UI is not on it already. */
 export function enterAlternateScreen(): void {
-  if (terminalModes.alternateScreen) return;
+  if (terminalModes.alternateScreen || inlineHistoryMode()) return;
   output.write(ENTER_ALTERNATE_SCREEN);
   terminalModes.alternateScreen = true;
 }

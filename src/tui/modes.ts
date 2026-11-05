@@ -6,6 +6,7 @@ import { stdin as input } from 'node:process';
 import { MOUSE_MODES_OFF, signalsTeardown, terminalModes, terminalTeardown } from './restore.js';
 import { FOCUS_REPORTING_ON } from './terminal-signals.js';
 import { logCursorEvent } from './cursor-log.js';
+import { inlineHistoryMode } from './inline.js';
 
 /** Bracketed paste. Without it the terminal hands pasted text over as ordinary
  * keystrokes, so every newline inside a paste reads as Enter -- which submitted
@@ -29,7 +30,7 @@ const ENABLE_BRACKETED_PASTE = '\u001b[?2004h';
  * own selection gesture, hence the usual "hold Shift while selecting" advice.
  *
  * `?1006h` is the SGR encoding; the wheel arrives as button 64 and 65. */
-const ENABLE_MOUSE_TRACKING = '\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006h';
+const MOUSE_TRACKING_ON = '\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006h';
 
 /** The opening form, used once when the program takes the screen. The `?1006l`
  * before `?1006h` is deliberate and comes from the bare script that receives
@@ -40,7 +41,11 @@ const ENABLE_MOUSE_TRACKING = '\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?10
  * It exists as a named constant so that every enable site is greppable through
  * one name. Spelled out inline, this one escaped the first pass at gating the
  * modes behind SELECTION_MODE, and /select did nothing as a result. */
-const OPENING_MOUSE_TRACKING = '\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006l\u001b[?1006h';
+const OPENING_MOUSE_TRACKING_ON = '\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006l\u001b[?1006h';
+
+/** Inline-history mode never asks for the mouse: the client scrolls its own scrollback. */
+const ENABLE_MOUSE_TRACKING = (): string => (inlineHistoryMode() ? '' : MOUSE_TRACKING_ON);
+const OPENING_MOUSE_TRACKING = (): string => (inlineHistoryMode() ? '' : OPENING_MOUSE_TRACKING_ON);
 
 /** Selection mode: the mouse handed back to the terminal.
  *
@@ -71,7 +76,7 @@ export const SELECTION_MODE = { active: false };
 export function sessionModesOn(opening = false): string {
   terminalModes.bracketedPaste = true;
   terminalModes.wheelReporting = !SELECTION_MODE.active;
-  const mouse = SELECTION_MODE.active ? '' : opening ? OPENING_MOUSE_TRACKING : ENABLE_MOUSE_TRACKING;
+  const mouse = SELECTION_MODE.active ? '' : opening ? OPENING_MOUSE_TRACKING() : ENABLE_MOUSE_TRACKING();
   return `${ENABLE_BRACKETED_PASTE}${mouse}${FOCUS_REPORTING_ON}`;
 }
 
@@ -106,7 +111,7 @@ export function redrawPreamble(redraw: Redraw | undefined): string {
   // parked absolutely at the end of the frame, and hiding and showing it on
   // every spinner tick made the caret blink under the user's typing.
   const hide = '\u001b[?25l\u001b[?7l';
-  if (redraw === 'resize') return `${SELECTION_MODE.active ? '' : ENABLE_MOUSE_TRACKING}${hide}\u001b[2J\u001b[H`;
+  if (redraw === 'resize') return `${SELECTION_MODE.active ? '' : ENABLE_MOUSE_TRACKING()}${hide}\u001b[2J\u001b[H`;
   if (redraw === 'repair') return `${hide}\u001b[2J\u001b[H`;
   return '\u001b[?7l';
 }
@@ -193,7 +198,7 @@ export function enterInputModes(): string {
   let sequence = '';
   if (!terminalModes.bracketedPaste) { sequence += ENABLE_BRACKETED_PASTE; terminalModes.bracketedPaste = true; }
   if (!terminalModes.wheelReporting && !SELECTION_MODE.active) {
-    sequence += ENABLE_MOUSE_TRACKING;
+    sequence += ENABLE_MOUSE_TRACKING();
     terminalModes.wheelReporting = true;
   }
   if (!terminalModes.kittyKeyboard && kittyKeyboardSafe()) {
@@ -234,7 +239,8 @@ export function setSelectionMode(active: boolean): string {
     terminalModes.wheelReporting = false;
     return 'Selection mode on — select and copy with your terminal as usual. Swipe-scrolling is off until you run /select again.';
   }
-  queuedModes += ENABLE_MOUSE_TRACKING;
-  terminalModes.wheelReporting = true;
+  queuedModes += ENABLE_MOUSE_TRACKING();
+  terminalModes.wheelReporting = !inlineHistoryMode();
+  if (inlineHistoryMode()) return 'Selection mode off.';
   return 'Selection mode off — swipe-scrolling is back.';
 }
