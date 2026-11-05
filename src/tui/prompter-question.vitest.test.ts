@@ -134,3 +134,41 @@ describe('a harness question in the terminal', () => {
     } finally { rl.close(); }
   });
 });
+
+describe('the call that asked a question', () => {
+  beforeEach(silentTty);
+  afterEach(() => { vi.useRealTimers(); Object.assign(process.stdout, { isTTY: realTty }); process.stdout.write = realWrite; });
+
+  it('is settled by the answer, so it no longer holds the rows after it in the live region', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const { rl, key } = open();
+    try {
+      const p = rl as unknown as { activityEvent(e: object): void; activityEntries: Array<{ event?: { id?: string; kind: string }; decision?: unknown }> };
+      p.activityEvent({ kind: 'tool-start', id: 't1', label: 'AskUserQuestion', category: 'run' });
+      const answered = rl.askQuestions({ title: 'Claude asks', questions: [{ id: 'a', prompt: 'Which?', options: [{ label: 'One' }] }] });
+      vi.setSystemTime(Date.now() + 1000);
+      key('1');
+      await answered;
+      const call = p.activityEntries.find((entry) => entry.event?.id === 't1');
+      expect(call?.decision).toMatchObject({ kind: 'answered' });
+      // Not a second row beside it.
+      expect(p.activityEntries).toHaveLength(1);
+    } finally { rl.close(); }
+  });
+
+  it('is settled by a declined question too, and an unrelated running call is left alone', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const { rl, key } = open();
+    try {
+      const p = rl as unknown as { activityEvent(e: object): void; activityEntries: Array<{ event?: { id?: string }; decision?: { kind: string } }> };
+      p.activityEvent({ kind: 'tool-start', id: 'sh', label: '$ npm test', category: 'run' });
+      p.activityEvent({ kind: 'tool-start', id: 'q', label: 'AskUserQuestion', category: 'run' });
+      void rl.askQuestions({ title: 'Claude asks', questions: [{ id: 'a', prompt: 'Which?', options: [{ label: 'One' }] }] });
+      vi.setSystemTime(Date.now() + 1000);
+      key('\u001b');
+      await Promise.resolve();
+      expect(p.activityEntries.find((entry) => entry.event?.id === 'q')?.decision?.kind).toBe('declined');
+      expect(p.activityEntries.find((entry) => entry.event?.id === 'sh')?.decision).toBeUndefined();
+    } finally { rl.close(); }
+  });
+});

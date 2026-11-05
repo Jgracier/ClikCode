@@ -62,7 +62,11 @@ export function approval(this: TerminalHarnessPrompter, title: string, detail?: 
 /** Closes a prompt nobody answered: on screen it is answered `no` (which
  * brings up the next); queued it is simply dropped. */
 export function withdrawApproval(this: TerminalHarnessPrompter, request: ApprovalRequest): void {
-  if (this.pendingApproval === request) { this.answerApproval(this.pendingApproval, false, { kind: 'declined', label: request.title }); return; }
+  if (this.pendingApproval === request) {
+    const asking = request.question ? { ...this.pendingApproval, callId: request.callId ?? this.openQuestionCall() } : this.pendingApproval;
+    this.answerApproval(asking, false, { kind: 'declined', label: request.title });
+    return;
+  }
   const at = this.approvalQueue.indexOf(request);
   if (at < 0) return;
   this.approvalQueue.splice(at, 1);
@@ -125,6 +129,18 @@ export function askQuestions(this: TerminalHarnessPrompter, request: HarnessQues
   });
 }
 
+/** The call of this turn that is asking the question now on screen: the newest call still running whose
+ * name is an ask tool. Vendors do not name it in the question, so it is found by what it is. */
+const ASK_CALL = /\b(?:ask[\s_-]*user|ask[\s_-]*question|user[\s_-]*question|request[\s_-]*user[\s_-]*input|user[\s_-]*input|elicit\w*|question)/i;
+export function openQuestionCall(this: TerminalHarnessPrompter): string | undefined {
+  for (let index = this.activityEntries.length - 1; index >= 0; index--) {
+    const entry = this.activityEntries[index]!;
+    if (entry.anchor < this.activityAnchor || entry.event?.kind !== 'tool-start' || entry.event.id === undefined || entry.decision) continue;
+    if (ASK_CALL.test(entry.event.label)) return entry.event.id;
+  }
+  return undefined;
+}
+
 /** The question on screen takes a key. */
 export function questionKey(this: TerminalHarnessPrompter, turn: WaitingTurn, pending: NonNullable<TerminalHarnessPrompter['pendingApproval']>, key: string): void {
   const state = pending.question!.state;
@@ -134,7 +150,10 @@ export function questionKey(this: TerminalHarnessPrompter, turn: WaitingTurn, pe
     pending.question!.done(values);
     const { question } = state;
     const label = question.header ?? question.prompt;
-    this.answerApproval(pending, values !== undefined, values === undefined ? { kind: 'declined', label }
+    // The vendor's own call that asked it (AskUserQuestion, request_user_input) is settled with the
+    // answer: left open until the vendor reports it, it gated the answered row and every row and
+    // paragraph after it in the live region, and the conversation stopped scrolling past it.
+    this.answerApproval({ ...pending, callId: pending.callId ?? this.openQuestionCall() }, values !== undefined, values === undefined ? { kind: 'declined', label }
       : { kind: 'answered', label, ...(values.length && !question.secret ? { values } : {}) });
   };
   const typeIn = (): void => {
