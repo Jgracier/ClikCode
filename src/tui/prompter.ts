@@ -38,7 +38,7 @@ import { retakeScreen, retakeTerminalSignals, takeTerminalTitle, terminalSignals
 import { scrollTranscript, drainScroll, queueScroll, drainAtBatchEnd, scheduleScrollPaint, handleScrollKey, handleSelection, lineAtScreenRow, selectionText, followSelectionEdge, stepSelectionScroll, stopSelectionScroll, redrawSelection, noteReadingDirection, forgetScreenPosition } from './prompter/scroll-selection.js';
 import { showMention, mentionKey, endMention, jumpToMention } from './prompter/mention.js';
 import { showTransientNotice, clearTransientNotice, panel, panelKey } from './prompter/notices.js';
-import { answerApproval, restoreTellingDraft, approval, withdrawApproval, askQuestions, questionKey, presentNextApproval, settleApprovals } from './prompter/approvals.js';
+import { answerApproval, restoreTellingDraft, approval, withdrawApproval, askQuestions, questionKey, openQuestionCall, presentNextApproval, settleApprovals } from './prompter/approvals.js';
 import { activity, setPlan, settlePlan, activityEvent, settleThought, markDrawn, joinMark, joinThought, settleDecision, ofThisTurn, settleSavedStops } from './prompter/activity-state.js';
 import { editTurnDraft, waitingUserMessages, enterAgainReady, turnHasAnswer, takeBackWaiting, submitWaiting, waitingLabel, updateWaitingLabel, joinedWaiting, startWaiting, turnStarting, adoptSubmission, toolStatus, turnWaits, waitingOnUser, scheduleWaitingTick, stepTokens, setTurnUsage, setBackgroundWork, pauseClock, resumeClock, flushWaitingSubmissions, leaveTurn, turnStopped, turnStopping, stopSettled, onWaitingEnded, stopWaiting, vendorAnswered, phase } from './prompter/waiting-turn.js';
 import { statusText, waitingLine, escStops, updateWaiting, schedulePaint, flushPaint, paintWaiting, repaint } from './prompter/waiting-band.js';
@@ -756,6 +756,7 @@ const methods = {
   withdrawApproval,
   askQuestions,
   questionKey,
+  openQuestionCall,
   presentNextApproval,
   settleApprovals,
   statusText,
