@@ -247,3 +247,52 @@ describe('inline block stays on the bottom rows', () => {
     expect(term.screen().filter((r) => r.startsWith('message'))).toEqual([message(1)]);
   });
 });
+
+describe('the phone board', () => {
+  const ROWS = 40;
+  let screen: TestScreen;
+  const draw = (surface: string, rows: string[], cursorRow = rows.length - 1): void => {
+    writes.length = 0;
+    (host as { surface: string }).surface = surface;
+    flushInlineFrame.call(host as never, [], { live: rows, cursorRow, cursorColumn: 3, hideCursor: false });
+    screen.write(writes.join(''));
+  };
+  const board = (n: number): string[] => [rule, ...Array.from({ length: n }, (_, i) => `  convo ${i}`), '  hint', rule, '> ', rule, '  claude'];
+
+  beforeEach(() => {
+    writes = [];
+    vi.stubEnv('CLIKDEPLOY_CLIENT', 'mobile');
+    Object.defineProperty(stdout, 'columns', { value: COLS, configurable: true });
+    vi.spyOn(stdout, 'write').mockImplementation(((chunk: string, cb?: () => void) => { writes.push(String(chunk)); cb?.(); return true; }) as never);
+    eraseInlineBlock();
+    inlineBlock.clearNext = false;
+    host = { alternateTranscript: [], alternateTrimmed: 0, viewportRows: () => ROWS, pickerOverlay: [], chromeRows: 0, pendingSignals: '', frameInFlight: false, closed: false, suspended: false, flushFrame: () => {}, surface: 'conversation' };
+    screen = new TestScreen(ROWS, COLS);
+  });
+  afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); eraseInlineBlock(); });
+
+  it('draws the open board from the top row, and the chat from the bottom row once it closes', () => {
+    inlineBlock.clearNext = true;
+    draw('conversation', live('hi'));
+    expect(screen.screen()[ROWS - 1]).toContain('claude');
+    inlineBlock.clearNext = true;
+    draw('history', board(10));
+    const open = screen.screen();
+    expect(open[0]).toBe(rule);
+    expect(open[1]).toContain('convo 0');
+    expect(open[board(10).length - 1]).toContain('claude');
+    expect(open.slice(board(10).length).every((row) => row === '')).toBe(true);
+    // the list shrinking and growing while it is open stays on the top rows
+    draw('history', board(4));
+    expect(screen.screen()[0]).toBe(rule);
+    expect(screen.screen()[board(4).length - 1]).toContain('claude');
+    expect(screen.screen().slice(board(4).length).every((row) => row === '')).toBe(true);
+    draw('history', board(12));
+    expect(screen.screen()[0]).toBe(rule);
+    inlineBlock.clearNext = true;
+    draw('conversation', live('hi'));
+    const closed = screen.screen();
+    expect(closed[ROWS - 1]).toContain('claude');
+    expect(closed.join('')).not.toContain('convo');
+  });
+});
