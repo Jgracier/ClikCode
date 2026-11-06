@@ -250,6 +250,7 @@ describe('inline block stays on the bottom rows', () => {
 
 describe('the phone board', () => {
   const ROWS = 40;
+  const BUDGET = 22; // floor(40 * 0.55)
   let screen: TestScreen;
   const draw = (surface: string, rows: string[], cursorRow = rows.length - 1): void => {
     writes.length = 0;
@@ -257,7 +258,13 @@ describe('the phone board', () => {
     flushInlineFrame.call(host as never, [], { live: rows, cursorRow, cursorColumn: 3, hideCursor: false });
     screen.write(writes.join(''));
   };
-  const board = (n: number): string[] => [rule, ...Array.from({ length: n }, (_, i) => `  convo ${i}`), '  hint', rule, '> ', rule, '  claude'];
+  const footer = [rule, '> ', rule, '  claude'];
+  /** The open board as the prompter hands it over: the list is the overlay, the composer block the live rows. */
+  const board = (n: number): string[] => {
+    (host as { pickerOverlay: string[]; chromeRows: number }).pickerOverlay = [rule, ...Array.from({ length: n }, (_, i) => `  convo ${i}`), '  hint'];
+    (host as { chromeRows: number }).chromeRows = footer.length;
+    return footer;
+  };
 
   beforeEach(() => {
     writes = [];
@@ -276,20 +283,24 @@ describe('the phone board', () => {
     draw('conversation', live('hi'));
     expect(screen.screen()[ROWS - 1]).toContain('claude');
     inlineBlock.clearNext = true;
-    draw('history', board(10));
+    draw('history', board(10), 1);
     const open = screen.screen();
     expect(open[0]).toBe(rule);
     expect(open[1]).toContain('convo 0');
-    expect(open[board(10).length - 1]).toContain('claude');
-    expect(open.slice(board(10).length).every((row) => row === '')).toBe(true);
-    // the list shrinking and growing while it is open stays on the top rows
-    draw('history', board(4));
-    expect(screen.screen()[0]).toBe(rule);
-    expect(screen.screen()[board(4).length - 1]).toContain('claude');
-    expect(screen.screen().slice(board(4).length).every((row) => row === '')).toBe(true);
-    draw('history', board(12));
-    expect(screen.screen()[0]).toBe(rule);
+    // a block of the visible budget: the composer block ends on its last row, whatever the list holds
+    expect(open[BUDGET - 1]).toContain('claude');
+    expect(open.slice(BUDGET).every((row) => row === '')).toBe(true);
+    for (const n of [4, 12, 2, 10]) {
+      draw('history', board(n), 1);
+      const now = screen.screen();
+      expect(now[0]).toBe(rule);
+      expect(now[BUDGET - 1]).toContain('claude');
+      expect(now[BUDGET - 3]).toBe('>');
+      expect(now.slice(BUDGET).every((row) => row === '')).toBe(true);
+    }
     inlineBlock.clearNext = true;
+    (host as { pickerOverlay: string[]; chromeRows: number }).pickerOverlay = [];
+    (host as { chromeRows: number }).chromeRows = 0;
     draw('conversation', live('hi'));
     const closed = screen.screen();
     expect(closed[ROWS - 1]).toContain('claude');

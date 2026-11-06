@@ -192,10 +192,10 @@ describe('when the board can hand the terminal to a new build', () => {
 
 describe('the board on the phone terminal', () => {
   // The phone slides the terminal up by the keyboard (up to 43% of the screen) without resizing it: a taller page loses its top rows.
-  it('takes at most the half of the screen the keyboard leaves visible', () => {
+  it('takes at most the share of the screen the keyboard leaves visible (57% of it)', () => {
     const phone = { CLIKDEPLOY_CLIENT: 'mobile' };
-    expect(boardCapacity(58, false, phone) + 6).toBeLessThanOrEqual(29);
-    expect(boardCapacity(58, true, phone) + 7).toBeLessThanOrEqual(29);
+    expect(boardCapacity(58, false, phone) + 6).toBeLessThanOrEqual(33);
+    expect(boardCapacity(58, true, phone) + 7).toBeLessThanOrEqual(33);
   });
 
   it('takes the whole page anywhere else', () => {

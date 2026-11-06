@@ -34,11 +34,14 @@ export function inlineHistoryMode(env: NodeJS.ProcessEnv = process.env, columns:
 
 export const phoneClient = (env: NodeJS.ProcessEnv = process.env): boolean => env.CLIKDEPLOY_CLIENT === 'mobile';
 
+/** The share of the screen the phone's keyboard leaves visible, less a margin (the keyboard covers up to 43%). */
+const PHONE_PAGE_SHARE = 0.55;
+
 /** The rows a full-page surface (the conversation board) may take of a screen `rows` tall. The ClikDeploy phone
  * terminal never resizes for its keyboard: it slides the whole terminal up by the keyboard's height, which is up to
- * 43% of the screen, so a page taller than the other half has its top cut off above the screen. */
+ * 43% of the screen, so a page taller than the rest has its top cut off above the screen. */
 export function pageRows(rows: number, env: NodeJS.ProcessEnv = process.env): number {
-  return phoneClient(env) ? Math.floor(rows / 2) : rows;
+  return phoneClient(env) ? Math.floor(rows * PHONE_PAGE_SHARE) : rows;
 }
 
 /** Screen and saved lines, then home: replacing the conversation must leave none
