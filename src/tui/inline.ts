@@ -32,6 +32,13 @@ export function inlineHistoryMode(env: NodeJS.ProcessEnv = process.env, columns:
   return false;
 }
 
+/** The rows a full-page surface (the conversation board) may take of a screen `rows` tall. The ClikDeploy phone
+ * terminal never resizes for its keyboard: it slides the whole terminal up by the keyboard's height, which is up to
+ * 43% of the screen, so a page taller than the other half has its top cut off above the screen. */
+export function pageRows(rows: number, env: NodeJS.ProcessEnv = process.env): number {
+  return env.CLIKDEPLOY_CLIENT === 'mobile' ? Math.floor(rows / 2) : rows;
+}
+
 /** Screen and saved lines, then home: replacing the conversation must leave none
  * of the previous one in a scrollback the client keeps. */
 export const CLEAR_SCREEN_AND_SCROLLBACK = '\u001b[2J\u001b[3J\u001b[H';

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PickerOption } from '../harness/prompter';
-import { boardHint, boardKey, boardRows, boardSessionsSettled, boardSettlePending, boardStartRow, type BoardState } from './conversation-board';
+import { boardCapacity, boardHint, boardKey, boardRows, boardSessionsSettled, boardSettlePending, boardStartRow, type BoardState } from './conversation-board';
 
 const UP = '\u001b[A';
 const DOWN = '\u001b[B';
@@ -187,5 +187,18 @@ describe('when the board can hand the terminal to a new build', () => {
   it('waits for new work that starts after a finish', () => {
     expect(boardSettlePending({ sawWorking: false, anyWorking: true, pending: true })).toBe(false);
     expect(boardSessionsSettled({ sawWorking: false, anyWorking: true, ...quiet, pending: true })).toBe(false);
+  });
+});
+
+describe('the board on the phone terminal', () => {
+  // The phone slides the terminal up by the keyboard (up to 43% of the screen) without resizing it: a taller page loses its top rows.
+  it('takes at most the half of the screen the keyboard leaves visible', () => {
+    const phone = { CLIKDEPLOY_CLIENT: 'mobile' };
+    expect(boardCapacity(58, false, phone) + 6).toBeLessThanOrEqual(29);
+    expect(boardCapacity(58, true, phone) + 7).toBeLessThanOrEqual(29);
+  });
+
+  it('takes the whole page anywhere else', () => {
+    expect(boardCapacity(58, false, {})).toBe(52);
   });
 });
