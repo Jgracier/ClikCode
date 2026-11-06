@@ -8,6 +8,7 @@ import { highlightWords } from '../render/search-focus.js';
 import { highlightSelectionAt, scrollShift, shiftedRow } from '../render/selection.js';
 import { logCursorEvent } from '../cursor-log.js';
 import { eraseInlineBlock, inlineBlock, inlineHistoryMode, CLEAR_SCREEN_AND_SCROLLBACK } from '../inline.js';
+import { asciiMode, foldAscii } from '../glyphs.js';
 import { redrawPreamble, takeQueuedModes } from '../modes.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
 import { ALTERNATE_TRANSCRIPT_ROWS } from './state.js';
@@ -16,7 +17,8 @@ import { anchoredScrollback } from './group-actions.js';
 /** A row as the terminal may be given it: only SGR escapes, one line, no hyperlink left open, and
  * never the last column. The one place a row is made safe. */
 function safeRow(row: string, limit: number): string {
-  return closeOpenHyperlink(visibleSlice(sanitizeTerminalText(row, { keepSgr: true, singleLine: true }), limit));
+  const clean = sanitizeTerminalText(row, { keepSgr: true, singleLine: true });
+  return closeOpenHyperlink(visibleSlice(asciiMode() ? foldAscii(clean) : clean, limit));
 }
 
 /** One frame: `finished` rows are retired into the transcript, and the live
@@ -321,17 +323,48 @@ export function flushInlineFrame(
   const signals = this.pendingSignals;
   this.pendingSignals = '';
   if (!clear && !finished.length && !modes && !signals && signature === inlineBlock.last) return;
-  let lead: string;
-  if (clear) { lead = CLEAR_SCREEN_AND_SCROLLBACK; inlineBlock.rows = 0; inlineBlock.cursorRow = 0; }
-  else lead = eraseInlineBlock();
-  const body = [...finished, ...live];
-  const text = body.map((row, index) => `${row}\u001b[K${index < body.length - 1 ? '\r\n' : ''}`).join('');
-  // The cursor is on the block's last row; walk up to the composer's.
-  const back = lastRow - cursorRow;
-  const park = `${back ? `\u001b[${back}A` : ''}\u001b[${Math.max(1, pending.cursorColumn)}G`;
+  const previous = inlineBlock.liveRows;
+  const columns = output.columns || 100;
+  // Unchanged rows are never sent again: with the block already drawn, at the same width, and
+  // nothing retired above it, only the rows that differ are rewritten, reached by relative motion.
+  const diff = !clear && !finished.length && inlineBlock.rows > 0 && previous.length === inlineBlock.rows && inlineBlock.columns === columns;
+  let lead = '';
+  let text = '';
+  let park: string;
+  if (diff) {
+    let at = inlineBlock.cursorRow;
+    const move = (to: number): string => {
+      const step = to - at;
+      at = to;
+      return step < 0 ? `\u001b[${-step}A` : step > 0 ? `\u001b[${step}B` : '';
+    };
+    const common = Math.min(previous.length, live.length);
+    for (let index = 0; index < common; index += 1) {
+      if (previous[index] !== live[index]) text += `${move(index)}\r${live[index]}\u001b[K`;
+    }
+    if (live.length > previous.length) {
+      // New rows below: the newline scrolls the screen when the block is at its bottom edge.
+      text += move(previous.length - 1);
+      for (let index = previous.length; index < live.length; index += 1) text += `\r\n${live[index]}\u001b[K`;
+      at = live.length - 1;
+    } else if (live.length < previous.length) {
+      text += `${move(live.length)}\r\u001b[J`;
+    }
+    park = `${move(cursorRow)}\u001b[${Math.max(1, pending.cursorColumn)}G`;
+  } else {
+    if (clear) { lead = CLEAR_SCREEN_AND_SCROLLBACK; inlineBlock.rows = 0; inlineBlock.cursorRow = 0; }
+    else lead = eraseInlineBlock();
+    const body = [...finished, ...live];
+    text = body.map((row, index) => `${row}\u001b[K${index < body.length - 1 ? '\r\n' : ''}`).join('');
+    // The cursor is on the block's last row; walk up to the composer's.
+    const back = lastRow - cursorRow;
+    park = `${back ? `\u001b[${back}A` : ''}\u001b[${Math.max(1, pending.cursorColumn)}G`;
+  }
   inlineBlock.rows = live.length;
   inlineBlock.cursorRow = cursorRow;
   inlineBlock.last = signature;
+  inlineBlock.liveRows = [...live];
+  inlineBlock.columns = columns;
   this.pendingRedraw = undefined;
   this.lastPark = park;
   this.cursorShown = showCursor;

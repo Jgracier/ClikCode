@@ -67,6 +67,21 @@ export function handleCommandError(error: unknown): void {
  * Build the root program: name/description/version, the three global options,
  * and the process-level error safety net.
  */
+/** The CLIKCODE_* variables that choose how the terminal UI draws; one table, shown in --help. */
+const TERMINAL_ENVIRONMENT_HELP = `
+Terminal environment:
+  CLIKCODE_INLINE=1|0         Force inline-history mode (scrollback, no alternate screen or mouse) on or off.
+                              Unset: inline in tmux/screen, TERM=dumb|linux, over ssh when narrower than
+                              100 columns or from an unknown terminal, and for CLIKDEPLOY_CLIENT=mobile;
+                              full-screen in iTerm, Terminal, WezTerm, ghostty, kitty, VS Code and Alacritty.
+  CLIKDEPLOY_CLIENT=mobile    The ClikDeploy phone terminal: inline mode.
+  CLIKCODE_ASCII=1|0          Force ASCII rules, box drawing and spinner on or off. Unset: on when the locale
+                              (LC_ALL, LC_CTYPE, LANG) is not UTF-8 or TERM=linux.
+  CLIKCODE_TUI=classic        Line-oriented output instead of the live terminal UI.
+  CLIKCODE_SCREEN_READER=1    Append-only output for screen readers.
+  CLIKCODE_REDUCED_MOTION=1   Still spinner, slower refresh (NO_MOTION also works).
+`;
+
 export function buildBaseProgram(): Command {
   const program = new Command();
   // Every process says what it is, when it started and how it ended
@@ -108,6 +123,7 @@ export function buildBaseProgram(): Command {
     .name('clikcode')
     .description('The terminal harness for all your AI coding providers')
     .version(CLIKCODE_VERSION)
+    .addHelpText('after', TERMINAL_ENVIRONMENT_HELP)
     .option('--json', 'Write results as JSON, one record per line (the default when output is not a terminal)')
     .option('--human', 'Write results as readable text (the default in a terminal)')
     .option(
