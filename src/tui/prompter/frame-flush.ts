@@ -7,7 +7,7 @@ import { terminalModes } from '../restore.js';
 import { highlightWords } from '../render/search-focus.js';
 import { highlightSelectionAt, scrollShift, shiftedRow } from '../render/selection.js';
 import { logCursorEvent } from '../cursor-log.js';
-import { eraseInlineBlock, inlineBlock, inlineHistoryMode, phoneClient, CLEAR_SCREEN_AND_SCROLLBACK } from '../inline.js';
+import { eraseInlineBlock, inlineBlock, inlineHistoryMode, pageRows, phoneClient, CLEAR_SCREEN_AND_SCROLLBACK } from '../inline.js';
 import { asciiMode, foldAscii } from '../glyphs.js';
 import { redrawPreamble, takeQueuedModes } from '../modes.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
@@ -301,11 +301,19 @@ export function flushInlineFrame(
   // part of the block, which grows for it and shrinks when it closes.
   const overlay = this.pickerOverlay;
   const chrome = this.chromeRows;
+  const phoneBoard = this.surface === 'history' && phoneClient();
   if (overlay.length && chrome > 0 && live.length >= chrome) {
     const limit = Math.max(1, (output.columns || 100) - 1);
     const at = live.length - chrome;
     live = [...live.slice(0, at), ...overlay.map((row) => safeRow(row, limit)), ...live.slice(at)];
     if (cursorRow >= at) cursorRow += overlay.length;
+    if (phoneBoard) {
+      // The phone's board is a block of fixed height (the rows its keyboard leaves visible): the list on top, the
+      // composer on the last row, blank rows between when the list is short. It ends where the keyboard begins.
+      const pad = Math.max(0, pageRows(height) - live.length);
+      live.splice(at + overlay.length, 0, ...Array<string>(pad).fill(''));
+      cursorRow += pad;
+    }
   }
   // A block taller than the screen would make the walk back up clamp at the top edge.
   if (live.length > height) {
@@ -391,7 +399,7 @@ export function flushInlineFrame(
     else lead = eraseInlineBlock();
     const body = [...finished, ...live];
     if (clear) {
-      if (this.surface === 'history' && phoneClient()) {
+      if (phoneBoard) {
         // The phone's board is drawn from the top row: its keyboard slides the terminal up, and a page that ends
         // within the rows the keyboard leaves visible needs no slide, so none of it is cut off.
         nextPad = 0;
