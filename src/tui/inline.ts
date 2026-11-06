@@ -3,12 +3,33 @@
  * cursor motion, at the bottom. No alternate screen and no mouse reporting, so
  * a touch scrolls the client's own scrollback.
  *
- * Chosen by the client that wants it: the ClikDeploy phone terminal sets
- * CLIKDEPLOY_CLIENT=mobile in the pty. CLIKCODE_INLINE=1 / 0 forces it on / off. */
-export function inlineHistoryMode(env: NodeJS.ProcessEnv = process.env): boolean {
+ * Which mode runs, first match wins:
+ *   1. CLIKCODE_INLINE=1 / 0 forces inline / full-screen.
+ *   2. CLIKDEPLOY_CLIENT=mobile (the ClikDeploy phone terminal) is inline.
+ *   3. tmux / screen (TMUX or STY set, TERM starting with screen or tmux) is inline: a
+ *      multiplexer swallows the mouse and alternate screen whatever sits behind it.
+ *   4. TERM=dumb or linux (the console has no reliable alternate screen or mouse) is inline.
+ *   5. A known good local terminal (TERM_PROGRAM iTerm.app, Apple_Terminal, WezTerm, ghostty,
+ *      kitty, vscode, Alacritty; or the matching TERM) is full-screen, even over ssh.
+ *   6. Over ssh (SSH_CONNECTION or SSH_TTY): inline when narrower than 100 columns or
+ *      TERM_PROGRAM is unknown (the local terminal is not known to be a good one).
+ *   7. Otherwise full-screen.
+ * `columns` is the terminal width, when known. */
+const GOOD_TERMINAL_PROGRAMS = new Set(['iterm.app', 'apple_terminal', 'wezterm', 'ghostty', 'kitty', 'vscode', 'alacritty']);
+const GOOD_TERMS = new Set(['xterm-kitty', 'alacritty', 'xterm-ghostty', 'wezterm']);
+
+export function inlineHistoryMode(env: NodeJS.ProcessEnv = process.env, columns: number | undefined = process.stdout.columns): boolean {
   if (env.CLIKCODE_INLINE === '1') return true;
   if (env.CLIKCODE_INLINE === '0') return false;
-  return env.CLIKDEPLOY_CLIENT === 'mobile';
+  if (env.CLIKDEPLOY_CLIENT === 'mobile') return true;
+  const term = (env.TERM ?? '').toLowerCase();
+  if (env.TMUX || env.STY || term.startsWith('screen') || term.startsWith('tmux')) return true;
+  if (term === 'dumb' || term === 'linux') return true;
+  const program = (env.TERM_PROGRAM ?? '').toLowerCase();
+  const good = GOOD_TERMINAL_PROGRAMS.has(program) || GOOD_TERMS.has(term);
+  if (good) return false;
+  if (env.SSH_CONNECTION || env.SSH_TTY) return (columns ?? 0) < 100 || !program;
+  return false;
 }
 
 /** Screen and saved lines, then home: replacing the conversation must leave none
@@ -17,7 +38,7 @@ export const CLEAR_SCREEN_AND_SCROLLBACK = '\u001b[2J\u001b[3J\u001b[H';
 
 /** Where the last inline frame left the cursor: the rows of the live block it
  * drew and the row within it the cursor is parked on. */
-export const inlineBlock = { rows: 0, cursorRow: 0, clearNext: false, last: '' };
+export const inlineBlock = { rows: 0, cursorRow: 0, clearNext: false, last: '', liveRows: [] as string[], columns: 0 };
 
 /** Cursor-relative erase of the live block, leaving the cursor at column one of
  * its first row. Empty when nothing is drawn. */
@@ -28,5 +49,6 @@ export function eraseInlineBlock(): string {
   inlineBlock.rows = 0;
   inlineBlock.cursorRow = 0;
   inlineBlock.last = '';
+  inlineBlock.liveRows = [];
   return out;
 }
