@@ -25,6 +25,7 @@ import type { PickerOption } from '../harness/prompter.js';
 import { takeTerminalKeys } from './input-decoder.js';
 import { keyHintFor } from '../harness/protocol/wording.js';
 import { reducedMotion } from './capabilities.js';
+import { pageRows } from './inline.js';
 import { pickerDeletesSelection } from './command-palette.js';
 import { asideOpener, confirmRowDelete, redrawOnRefresh, type OptionPickerHost } from './option-picker.js';
 import { conversationLabel } from './pickers/conversation-activity.js';
@@ -240,6 +241,10 @@ const spins = (row: PickerOption<string>): boolean => row.activity === 'working'
  * block beneath (usage rule, input, title rule, provider line, spacing). */
 const BOARD_CHROME_ROWS = 6;
 
+/** The list's rows on a screen `rows` tall (`machines`: the titled list has one extra overlay row). */
+export const boardCapacity = (rows: number, machines = false, env: NodeJS.ProcessEnv = process.env): number =>
+  Math.max(5, pageRows(rows, env) - BOARD_CHROME_ROWS - (machines ? 1 : 0));
+
 export function runConversationBoard(host: OptionPickerHost, settings: ConversationBoardSettings): Promise<BoardResult | undefined> {
   return new Promise((resolve) => {
     host.setSelecting(true);
@@ -313,7 +318,7 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
       // whatever height the screen is when it is painted.
       // A titled machine list has one extra overlay row. Reserve its space
       // so the title does not disappear above the top of the screen.
-      const capacity = (): number => Math.max(5, (output.rows ?? 24) - BOARD_CHROME_ROWS - (level === 'machines' ? 1 : 0));
+      const capacity = (): number => boardCapacity(output.rows ?? 24, level === 'machines');
       // Nothing to list yet: said, rather than a bare hint line.
       const empty = !showing.length && !boardShowsCommands(state) && !state.finding;
       host.paint(level === 'machines' ? '' : state.draft, empty ? [{ label: level === 'machines' ? 'No machines yet' : 'No conversations yet', value: '' }] : showing.map((row) => ({
