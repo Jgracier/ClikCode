@@ -7,7 +7,7 @@ import { terminalModes } from '../restore.js';
 import { highlightWords } from '../render/search-focus.js';
 import { highlightSelectionAt, scrollShift, shiftedRow } from '../render/selection.js';
 import { logCursorEvent } from '../cursor-log.js';
-import { eraseInlineBlock, inlineBlock, inlineHistoryMode, CLEAR_SCREEN_AND_SCROLLBACK } from '../inline.js';
+import { eraseInlineBlock, inlineBlock, inlineHistoryMode, phoneClient, CLEAR_SCREEN_AND_SCROLLBACK } from '../inline.js';
 import { asciiMode, foldAscii } from '../glyphs.js';
 import { redrawPreamble, takeQueuedModes } from '../modes.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
@@ -391,10 +391,17 @@ export function flushInlineFrame(
     else lead = eraseInlineBlock();
     const body = [...finished, ...live];
     if (clear) {
-      // The one absolute move: start low enough that what is printed ends on the last row.
-      nextPad = Math.max(0, height - body.length);
-      if (nextPad > 0) lead += `\u001b[${nextPad + 1};1H`;
-      nextTop = height - live.length;
+      if (this.surface === 'history' && phoneClient()) {
+        // The phone's board is drawn from the top row: its keyboard slides the terminal up, and a page that ends
+        // within the rows the keyboard leaves visible needs no slide, so none of it is cut off.
+        nextPad = 0;
+        nextTop = undefined;
+      } else {
+        // The one absolute move: start low enough that what is printed ends on the last row.
+        nextPad = Math.max(0, height - body.length);
+        if (nextPad > 0) lead += `\u001b[${nextPad + 1};1H`;
+        nextTop = height - live.length;
+      }
     } else if (oldTop !== undefined) {
       // The cursor is on the old block's first row; the rows printed from there should end on the last.
       const shift = height - oldTop - body.length;

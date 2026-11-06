@@ -21,7 +21,7 @@ const GOOD_TERMS = new Set(['xterm-kitty', 'alacritty', 'xterm-ghostty', 'wezter
 export function inlineHistoryMode(env: NodeJS.ProcessEnv = process.env, columns: number | undefined = process.stdout.columns): boolean {
   if (env.CLIKCODE_INLINE === '1') return true;
   if (env.CLIKCODE_INLINE === '0') return false;
-  if (env.CLIKDEPLOY_CLIENT === 'mobile') return true;
+  if (phoneClient(env)) return true;
   const term = (env.TERM ?? '').toLowerCase();
   if (env.TMUX || env.STY || term.startsWith('screen') || term.startsWith('tmux')) return true;
   if (term === 'dumb' || term === 'linux') return true;
@@ -32,11 +32,13 @@ export function inlineHistoryMode(env: NodeJS.ProcessEnv = process.env, columns:
   return false;
 }
 
+export const phoneClient = (env: NodeJS.ProcessEnv = process.env): boolean => env.CLIKDEPLOY_CLIENT === 'mobile';
+
 /** The rows a full-page surface (the conversation board) may take of a screen `rows` tall. The ClikDeploy phone
  * terminal never resizes for its keyboard: it slides the whole terminal up by the keyboard's height, which is up to
  * 43% of the screen, so a page taller than the other half has its top cut off above the screen. */
 export function pageRows(rows: number, env: NodeJS.ProcessEnv = process.env): number {
-  return env.CLIKDEPLOY_CLIENT === 'mobile' ? Math.floor(rows / 2) : rows;
+  return phoneClient(env) ? Math.floor(rows / 2) : rows;
 }
 
 /** Screen and saved lines, then home: replacing the conversation must leave none
