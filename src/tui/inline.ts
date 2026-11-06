@@ -38,7 +38,13 @@ export const CLEAR_SCREEN_AND_SCROLLBACK = '\u001b[2J\u001b[3J\u001b[H';
 
 /** Where the last inline frame left the cursor: the rows of the live block it
  * drew and the row within it the cursor is parked on. */
-export const inlineBlock = { rows: 0, cursorRow: 0, clearNext: false, last: '', liveRows: [] as string[], columns: 0 };
+export const inlineBlock = {
+  rows: 0, cursorRow: 0, clearNext: false, last: '', liveRows: [] as string[], columns: 0,
+  /** Bottom anchoring: the screen row the block starts on and the screen height it was
+   * drawn for, while the block ends on the last row (undefined when its place is unknown),
+   * and the blank rows above the conversation that have not yet been filled. */
+  top: undefined as number | undefined, height: 0, pad: 0,
+};
 
 /** Cursor-relative erase of the live block, leaving the cursor at column one of
  * its first row. Empty when nothing is drawn. */
@@ -50,5 +56,6 @@ export function eraseInlineBlock(): string {
   inlineBlock.cursorRow = 0;
   inlineBlock.last = '';
   inlineBlock.liveRows = [];
+  inlineBlock.top = undefined;
   return out;
 }

@@ -3,6 +3,7 @@ import { stdout } from 'node:process';
 import { flushInlineFrame } from './prompter/frame-flush.js';
 import { eraseInlineBlock, inlineBlock, inlineHistoryMode } from './inline.js';
 import { asciiMode, foldAscii } from './glyphs.js';
+import { TestScreen } from './inline-screen.vitest-helper.js';
 
 const COLS = 100;
 const rule = '─'.repeat(COLS - 1);
@@ -147,5 +148,102 @@ describe('ascii fallback', () => {
     sent.push(...(self.pendingLive as { live: string[] }).live);
     expect(sent[0]).toMatch(/^-+$/);
     vi.unstubAllEnvs();
+  });
+});
+
+describe('inline block stays on the bottom rows', () => {
+  const ROWS = 40;
+  let term: TestScreen;
+  beforeEach(() => {
+    writes = [];
+    Object.defineProperty(stdout, 'columns', { value: COLS, configurable: true });
+    vi.spyOn(stdout, 'write').mockImplementation(((chunk: string, cb?: () => void) => { writes.push(String(chunk)); cb?.(); return true; }) as never);
+    eraseInlineBlock();
+    inlineBlock.clearNext = true;
+    term = new TestScreen(ROWS, COLS);
+    host = {
+      alternateTranscript: [], alternateTrimmed: 0, viewportRows: () => ROWS, pickerOverlay: [], chromeRows: 0,
+      pendingSignals: '', frameInFlight: false, closed: false, suspended: false, flushFrame: () => {},
+    };
+  });
+  afterEach(() => { vi.restoreAllMocks(); eraseInlineBlock(); });
+  function paint(text: string, finished: string[] = [], rows = live(text)): void {
+    term.write(frame(text, finished, rows));
+  }
+  const composerRow = (): number => term.screen().findIndex((r) => r.startsWith('>'));
+  const message = (n: number): string => `message ${n}`;
+  const lastRow = ROWS - 1;
+
+  it('starts with the status rows on the last rows of the screen', () => {
+    paint('');
+    expect(composerRow()).toBe(lastRow - 2);
+    expect(term.screen()[lastRow]).toContain('claude');
+    expect(term.scrollback.filter((r) => r)).toEqual([]);
+    expect(term.scrollback.length).toBe(0);
+  });
+
+  it('keeps the composer at the bottom as a conversation of 3 then 100 messages grows', () => {
+    paint('');
+    for (let n = 1; n <= 3; n += 1) paint('', [message(n), '']);
+    expect(composerRow()).toBe(lastRow - 2);
+    const shown = term.screen().filter((r) => r.startsWith('message'));
+    expect(shown).toEqual([message(1), message(2), message(3)]);
+    expect(term.scrollback.length).toBe(0);
+    for (let n = 4; n <= 100; n += 1) paint('', [message(n), '']);
+    expect(composerRow()).toBe(lastRow - 2);
+    const all = [...term.scrollback, ...term.screen()].filter((r) => r.startsWith('message'));
+    expect(all).toEqual(Array.from({ length: 100 }, (_, i) => message(i + 1)));
+    // No blank row was pushed into the saved lines ahead of the first message.
+    expect(term.scrollback[0]).toBe(message(1));
+  });
+
+  it('keeps it at the bottom when the block grows and shrinks', () => {
+    paint('');
+    paint('', [message(1), '']);
+    paint('hi', [], [...live('hi'), '  extra 1', '  extra 2']);
+    expect(term.screen()[lastRow]).toBe('  extra 2');
+    expect(term.scrollback.length).toBe(0);
+    paint('hi');
+    expect(term.screen()[lastRow]).toContain('claude');
+    expect(composerRow()).toBe(lastRow - 2);
+    expect(term.screen().filter((r) => r.startsWith('message'))).toEqual([message(1)]);
+    expect(term.scrollback.length).toBe(0);
+  });
+
+  it('reprints a replaced conversation at the bottom, and a long one from the top', () => {
+    paint('');
+    paint('', [message(1), '']);
+    inlineBlock.clearNext = true;
+    paint('', [message(7), '']);
+    expect(composerRow()).toBe(lastRow - 2);
+    expect(term.screen().filter((r) => r.startsWith('message'))).toEqual([message(7)]);
+    expect(term.scrollback.length).toBe(0);
+    inlineBlock.clearNext = true;
+    paint('', Array.from({ length: 60 }, (_, i) => message(i)));
+    expect(composerRow()).toBe(lastRow - 2);
+    expect(term.scrollback[0]).toBe(message(0));
+  });
+
+  it('follows a shorter screen and a taller one', () => {
+    paint('');
+    paint('', [message(1), '']);
+    term.resize(30);
+    (host as { viewportRows: () => number }).viewportRows = () => 30;
+    paint('x');
+    expect(composerRow()).toBe(30 - 3);
+    term.resize(40);
+    (host as { viewportRows: () => number }).viewportRows = () => 40;
+    paint('xy');
+    expect(composerRow()).toBe(lastRow - 2);
+    expect(term.screen().filter((r) => r.startsWith('message'))).toEqual([message(1)]);
+  });
+
+  it('after a width change repaints the block in place at the bottom', () => {
+    paint('');
+    paint('', [message(1), '']);
+    Object.defineProperty(stdout, 'columns', { value: COLS - 10, configurable: true });
+    paint('w');
+    expect(composerRow()).toBe(lastRow - 2);
+    expect(term.screen().filter((r) => r.startsWith('message'))).toEqual([message(1)]);
   });
 });
