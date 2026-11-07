@@ -43,7 +43,7 @@ export function repaintAfterResize(this: TerminalHarnessPrompter): void {
     this.resizePaintTimer = undefined;
     lifecycle('window.resize', { cols: output.columns, rows: output.rows });
     if (this.closed || this.suspended) return;
-    this.rewrapIfWidthChanged();
+    this.reseedIfScreenChanged();
     // Whole: the preamble this frame carries clears the screen, once.
     this.forgetScreenPosition();
     this.repaint();
@@ -55,11 +55,20 @@ export function repaintAfterResize(this: TerminalHarnessPrompter): void {
  * than the screen: it wraps (or, with autowrap off, loses its tail) and
  * every row below it lands one out. So the transcript is not re-clipped
  * row by row but written again from its source -- the session's messages
- * and this turn's state -- exactly as opening the conversation writes it. */
-export function rewrapIfWidthChanged(this: TerminalHarnessPrompter): void {
+ * and this turn's state -- exactly as opening the conversation writes it.
+ *
+ * Inline, a change of height is the same: the terminal moves its own rows when
+ * it resizes (pulls saved lines back, adds blank rows at the bottom, drops the
+ * rows below the cursor), and which of those it does is not something to
+ * depend on. The one answer is to write the conversation again, anchored to
+ * the new last row. The alternate screen draws every row at an address
+ * already, so only a change of width needs it there. */
+export function reseedIfScreenChanged(this: TerminalHarnessPrompter): void {
   const columns = output.columns || 0;
-  if (columns === this.transcriptColumns) return;
+  const rows = inlineHistoryMode() ? output.rows || 0 : 0;
+  if (columns === this.transcriptColumns && rows === this.transcriptRows) return;
   this.transcriptColumns = columns;
+  this.transcriptRows = rows;
   this.emitted.requestReseed();
 }
 

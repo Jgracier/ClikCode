@@ -1,7 +1,7 @@
 /** Taking the terminal, handing it over and giving it back: the screen, title and signal re-takes, Ctrl+Z, suspend/resume and close. */
 import { lifecycle } from '../../runtime/lifecycle-log.js';
 import { stdin as input, stdout as output } from 'node:process';
-import { eraseInlineBlock } from '../inline.js';
+import { eraseInlineBlock, inlineHistoryMode } from '../inline.js';
 import { enterAlternateScreen, giveBackTerminal, pushShellTitle, restoreTerminal, terminalModes } from '../restore.js';
 import { notifySequence, progressSequence, shouldNotify, titleSequence, windowTitle } from '../terminal-signals.js';
 import { KEEP_STDIN_FLOWING } from '../input-decoder.js';
@@ -15,7 +15,10 @@ export function retakeScreen(this: TerminalHarnessPrompter): void {
   setTerminalRawMode(true);
   this.suspended = false;
   enterAlternateScreen();
-  this.rewrapIfWidthChanged();
+  // Inline, whoever had the screen drew on it and left the cursor wherever they stopped: nothing of what was there is
+  // known, so the conversation is written again.
+  if (inlineHistoryMode()) this.emitted.requestReseed();
+  this.reseedIfScreenChanged();
   this.forgetScreenPosition();
   this.retakeTerminalSignals();
 }

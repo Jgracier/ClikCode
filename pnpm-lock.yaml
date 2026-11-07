@@ -30,6 +30,9 @@ importers:
       '@types/node':
         specifier: 26.1.2
         version: 26.1.2
+      '@xterm/headless':
+        specifier: 6.0.0
+        version: 6.0.0
       chalk:
         specifier: ^6.0.0
         version: 6.0.0
@@ -1098,6 +1101,9 @@ packages:
 
   '@workflow/serde@4.1.0':
     resolution: {integrity: sha512-pav4F2BoirECWR7Nf1TKt+2eETcBj7jj4cBefQ8VXQCA6NPkaKeLfj/zMgi+3zYV5ZIBT4GuUiphsj0/b9hPQQ==}
+
+  '@xterm/headless@6.0.0':
+    resolution: {integrity: sha512-5Yj1QINYCyzrZtf8OFIHi47iQtI+0qYFPHmouEfG8dHNxbZ9Tb9YGSuLcsEwj9Z+OL75GJqPyJbyoFer80a2Hw==}
 
   agent-base@7.1.4:
     resolution: {integrity: sha512-MnA+YT8fwfJPgBx3m60MNqakm30XOkyIoH1y6huTQvC0PwZG7ki8NacLBcrPbNoo8vEZy7Jpuk7+jMO+CUovTQ==}
@@ -3518,6 +3524,8 @@ snapshots:
       - supports-color
 
   '@workflow/serde@4.1.0': {}
+
+  '@xterm/headless@6.0.0': {}
 
   agent-base@7.1.4: {}
 

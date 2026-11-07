@@ -45,6 +45,7 @@
     "@clikcode/router": "workspace:*",
     "@types/cross-spawn": "6.0.6",
     "@types/node": "26.1.2",
+    "@xterm/headless": "6.0.0",
     "chalk": "^6.0.0",
     "commander": "^15.0.0",
     "conf": "^15.1.0",

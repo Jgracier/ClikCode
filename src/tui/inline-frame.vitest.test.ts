@@ -78,10 +78,12 @@ describe('inline frame writer', () => {
     expect(grown).toContain('extra');
     expect(grown).not.toContain('─');
     expect(grown).not.toMatch(/\u001b\[\d+;\d+H/);
+    // A block that shrinks keeps its height: the saved lines cannot give a row back, so the rows it no longer needs stay
+    // blank at its top. Nothing is inserted above the conversation and nothing is erased below the block.
     const shrunk = frame('x');
-    expect(shrunk).toContain('\u001b[J');
-    expect(shrunk).not.toContain('─');
-    expect(inlineBlock.rows).toBe(6);
+    expect(shrunk).not.toMatch(/\u001b\[\d*[LJ]/);
+    expect(inlineBlock.rows).toBe(7);
+    expect(inlineBlock.liveRows[0]).toBe('');
   });
 
   it('prints finished rows once, above a repainted block', () => {
@@ -249,18 +251,44 @@ describe('inline block stays on the bottom rows', () => {
     expect(frameBytes).toContain(message(1999));
   });
 
-  it('follows a shorter screen and a taller one', () => {
+  it('follows a shorter screen and a taller one: the settled resize writes the conversation again, anchored to the new last row', () => {
     paint('');
     paint('', [message(1), '']);
     term.resize(30);
     (host as { viewportRows: () => number }).viewportRows = () => 30;
-    paint('x');
+    inlineBlock.clearNext = true;
+    paint('x', [message(1), '']);
     expect(composerRow()).toBe(30 - 3);
     term.resize(40);
     (host as { viewportRows: () => number }).viewportRows = () => 40;
-    paint('xy');
+    inlineBlock.clearNext = true;
+    paint('xy', [message(1), '']);
     expect(composerRow()).toBe(lastRow - 2);
     expect(term.screen().filter((r) => r.startsWith('message'))).toEqual([message(1)]);
+  });
+
+  // The rows of the conversation in the saved lines and on the screen, in order: every message once, no blank row between them.
+  const history = (): string[] => [...term.scrollback, ...term.screen()].filter((row, index, all) => row !== '' || (all.slice(index).some((r) => r !== '') && all.slice(0, index).some((r) => r !== '')));
+
+  it('a block that grows and shrinks under a conversation longer than the screen never puts a blank row into it', () => {
+    paint('');
+    for (let n = 1; n <= 100; n += 1) paint('', [message(n)]);
+    // A turn begins (two rows more) and ends (two fewer), five times over.
+    for (let turn = 0; turn < 5; turn += 1) {
+      paint('', [], [...live(''), '  esc stop', '  working']);
+      paint('');
+    }
+    expect(composerRow()).toBe(lastRow - 2);
+    expect(history().filter((row) => row.startsWith('message'))).toEqual(Array.from({ length: 100 }, (_, i) => message(i + 1)));
+    // Between the first message and the block there is nothing but messages (the block's own blank rows aside).
+    const rows = history();
+    const first = rows.indexOf(message(1));
+    const last = rows.indexOf(message(100));
+    expect(rows.slice(first, last + 1).every((row) => row.startsWith('message'))).toBe(true);
+    // The rows the block gave up are used again by the next row retired above it, not by a scroll.
+    paint('', [message(101)]);
+    expect(history().filter((row) => row.startsWith('message')).at(-1)).toBe(message(101));
+    expect(composerRow()).toBe(lastRow - 2);
   });
 
   it('after a width change repaints the block in place at the bottom', () => {
