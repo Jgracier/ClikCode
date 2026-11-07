@@ -10,7 +10,8 @@
  *   {k:'end'}          write {k:'snaps', snaps} and exit
  * and on stdout {k:'reply', d} for every answer the terminal gives. Terminal variants (argv[2]):
  *   xterm        as it is
- *   xterm-no3j   a terminal that ignores CSI 3J (the saved lines survive a clear) and DEC 2026, as tmux/screen often do */
+ *   xterm-no3j   a terminal that ignores CSI 3J (the saved lines survive a clear) and DEC 2026, as tmux/screen often do
+ *   xterm-mute   a terminal that never answers a cursor position request (CSI 6n): the program's defined failure is exercised */
 import { createInterface } from 'node:readline';
 import xterm from '@xterm/headless';
 
@@ -46,6 +47,7 @@ lineReader.on('line', (line) => chain(async () => {
     bytes += data.length;
     historyRows += (data.toString('latin1').replace(ESCAPES, '').match(/\bH\d{3}\b/g) ?? []).length;
     if (variant === 'xterm-no3j') data = Buffer.from(data.toString('latin1').replaceAll('\u001b[3J', '').replaceAll('\u001b[?2026h', '').replaceAll('\u001b[?2026l', ''), 'latin1');
+    if (variant === 'xterm-mute') data = Buffer.from(data.toString('latin1').replaceAll('\u001b[6n', ''), 'latin1');
     await write(data);
   } else if (event.k === 'snap') {
     const normal = term.buffer.normal;

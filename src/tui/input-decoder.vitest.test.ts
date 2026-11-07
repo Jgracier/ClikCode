@@ -2,7 +2,7 @@ import { stdin, stdout } from 'node:process';
 import { describe, expect, it, vi } from 'vitest';
 import { KEEP_STDIN_FLOWING, TerminalInputDecoder, askCursorRow, takeTerminalKeys, waitingEnterAction } from './input-decoder';
 import { editWaitingComposer } from './composer-edit';
-import { onPhoneVisibleRows, pageRows, setPhoneVisibleRows } from './inline';
+import { terminalFacts } from './probe';
 
 describe('terminal input decoding', () => {
   it('buffers fragmented Termius escape sequences and UTF-8 characters', () => {
@@ -93,23 +93,22 @@ describe('keys typed between one reader and the next', () => {
   });
 });
 
-describe('the phone reporting its visible rows', () => {
-  it('is read by the board and never reaches a reader as a key, however the link chunks it', () => {
+describe('private-mode reports are the terminal talking, never typing', () => {
+  it('drops an old phone page\'s ?9701 size report and a DECRQM answer, however the link chunks them, and records the sync answer', () => {
     stdin.on('data', KEEP_STDIN_FLOWING);
     const keys: string[] = [];
-    let changes = 0;
-    const stopRows = onPhoneVisibleRows(() => { changes += 1; });
     const stop = takeTerminalKeys((key) => keys.push(key));
     try {
       stdin.emit('data', Buffer.from('a\u001b[?97'));
-      stdin.emit('data', Buffer.from('01;31tb\u001b[?9701;31t'));
-      expect(keys).toEqual(['a', 'b']);
-      expect(changes).toBe(1);
-      expect(pageRows(58, { CLIKDEPLOY_CLIENT: 'mobile' })).toBe(31);
+      stdin.emit('data', Buffer.from('01;31tb\u001b[?9701;31t\u001b[?2026;2$yc\u001bP>|xterm.js(5)\u001b\\\u001b[?62;4c'));
+      expect(keys).toEqual(['a', 'b', 'c']);
+      expect(terminalFacts.syncOutput).toBe(true);
+      expect(terminalFacts.name).toBe('xterm.js(5)');
+      stdin.emit('data', Buffer.from('\u001b[?2026;0$y'));
+      expect(terminalFacts.syncOutput).toBe(false);
     } finally {
       stop();
-      stopRows();
-      setPhoneVisibleRows(undefined);
+      terminalFacts.syncOutput = undefined; terminalFacts.name = undefined; terminalFacts.answered = false;
       stdin.off('data', KEEP_STDIN_FLOWING);
       stdin.pause();
     }

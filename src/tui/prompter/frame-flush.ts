@@ -7,9 +7,10 @@ import { terminalModes } from '../restore.js';
 import { highlightWords } from '../render/search-focus.js';
 import { highlightSelectionAt, scrollShift, shiftedRow } from '../render/selection.js';
 import { logCursorEvent } from '../cursor-log.js';
-import { eraseInlineBlock, inlineBlock, inlineHistoryMode, pageRows, phoneClient, CLEAR_SCREEN_AND_SCROLLBACK } from '../inline.js';
+import { eraseInlineBlock, inlineBlock, inlineHistoryMode, CLEAR_SCREEN_AND_SCROLLBACK } from '../inline.js';
 import { asciiMode, foldAscii } from '../glyphs.js';
-import { phoneSignals, redrawPreamble, takeQueuedModes } from '../modes.js';
+import { syncBegin, syncEnd } from '../probe.js';
+import { redrawPreamble, takeQueuedModes } from '../modes.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
 import { ALTERNATE_TRANSCRIPT_ROWS } from './state.js';
 import { anchoredScrollback } from './group-actions.js';
@@ -266,7 +267,7 @@ export function flushAlternateFrame(
   // One synchronized update (DEC 2026): a terminal that supports it shows
   // the frame whole or not at all, never half-drawn; one that does not
   // ignores the two sequences. restoreTerminal closes it on any exit.
-  const frame = `\u001b[?2026h${modes}${signals}${hideFirst}${draw}${park}${cursor}\u001b[?2026l`;
+  const frame = `${syncBegin()}${modes}${signals}${hideFirst}${draw}${park}${cursor}${syncEnd()}`;
   this.lastPark = park;
   this.cursorShown = showCursor;
   this.frameInFlight = true;
@@ -301,23 +302,13 @@ export function flushInlineFrame(
   // part of the block, which grows for it and shrinks when it closes.
   const overlay = this.pickerOverlay;
   const chrome = this.chromeRows;
-  const phoneBoard = this.surface === 'history' && phoneClient();
   if (overlay.length && chrome > 0 && live.length >= chrome) {
     const limit = Math.max(1, (output.columns || 100) - 1);
     const at = live.length - chrome;
     live = [...live.slice(0, at), ...overlay.map((row) => safeRow(row, limit)), ...live.slice(at)];
     if (cursorRow >= at) cursorRow += overlay.length;
-    if (phoneBoard) {
-      // The phone's board is a block of fixed height (the rows its keyboard leaves visible): the list on top, the
-      // composer on the last row, blank rows between when the list is short. It ends where the keyboard begins.
-      const pad = Math.max(0, pageRows(height) - live.length);
-      live.splice(at + overlay.length, 0, ...Array<string>(pad).fill(''));
-      cursorRow += pad;
-    }
   }
-  // The phone's open board is a page drawn from the top row, as tall as the rows its keyboard leaves visible: when that
-  // number changes the page is drawn again from the top.
-  const clear = inlineBlock.clearNext || (phoneBoard && inlineBlock.rows > 0 && live.length !== inlineBlock.rows);
+  const clear = inlineBlock.clearNext;
   inlineBlock.clearNext = false;
   // THE ANCHORING RULE. The block ends on the last row of the screen, and everything above it is the conversation, in
   // order, with no row of it ever blank, repeated or lost. Two things change the rows available to the conversation:
@@ -363,10 +354,12 @@ export function flushInlineFrame(
   this.frameLayout = { live: [...live], tags: (pending as { tags?: Array<string | undefined> }).tags?.slice(-height) ?? [] };
   const showCursor = !pending.hideCursor;
   const signature = JSON.stringify([live, cursorRow, pending.cursorColumn, showCursor]);
-  const modes = `${takeQueuedModes()}${clear ? phoneSignals() : ''}`;
+  const modes = takeQueuedModes();
   const signals = this.pendingSignals;
   this.pendingSignals = '';
-  if (!clear && !finished.length && !modes && !signals && signature === inlineBlock.last) {
+  const lost = anchored && inlineBlock.lost;
+  inlineBlock.lost = false;
+  if (!clear && !lost && !finished.length && !modes && !signals && signature === inlineBlock.last) {
     if (found === undefined) return;
     // The terminal left the block where it belongs, or as high as the blank rows it added below allow: nothing to write.
     const gap = height - found - inlineBlock.rows;
@@ -381,7 +374,7 @@ export function flushInlineFrame(
   const columns = output.columns || 100;
   // Unchanged rows are never sent again: with the block already drawn, at the same width, and
   // nothing retired above it, only the rows that differ are rewritten, reached by relative motion.
-  const diff = anchored && found === undefined && !finished.length && previous.length === inlineBlock.rows && inlineBlock.columns === columns;
+  const diff = anchored && !lost && found === undefined && !finished.length && previous.length === inlineBlock.rows && inlineBlock.columns === columns;
   let lead = '';
   let text = '';
   let park: string;
@@ -417,20 +410,17 @@ export function flushInlineFrame(
     } else nextSlack = inlineBlock.slack;
     park = `${move(cursorRow)}\u001b[${Math.max(1, pending.cursorColumn)}G`;
   } else {
-    const oldTop = anchored ? found ?? inlineBlock.height - inlineBlock.rows - inlineBlock.slack : undefined;
+    // Lost: the terminal did not say where its cursor is after the resize, so no row is computed from a position that was
+    // never learned. The block is erased from the cursor and drawn there; `pad` and `slack` are unknown, so zero.
+    const oldTop = lost ? undefined : anchored ? found ?? inlineBlock.height - inlineBlock.rows - inlineBlock.slack : undefined;
+    if (lost) { nextPad = 0; nextSlack = 0; }
     if (clear) { lead = CLEAR_SCREEN_AND_SCROLLBACK; inlineBlock.rows = 0; inlineBlock.cursorRow = 0; }
     else lead = eraseInlineBlock();
     const body = [...finished, ...live];
     if (clear) {
-      if (phoneBoard) {
-        // The phone's board is drawn from the top row: its keyboard slides the terminal up, and a page that ends
-        // within the rows the keyboard leaves visible needs no slide, so none of it is cut off.
-        nextPad = 0;
-      } else {
-        // The one absolute move: start low enough that what is printed ends on the last row.
-        nextPad = Math.max(0, height - body.length);
-        if (nextPad > 0) lead += `\u001b[${nextPad + 1};1H`;
-      }
+      // The one absolute move: start low enough that what is printed ends on the last row.
+      nextPad = Math.max(0, height - body.length);
+      if (nextPad > 0) lead += `\u001b[${nextPad + 1};1H`;
     } else if (oldTop !== undefined) {
       // The cursor is on the old block's first row. What is printed from there ends on the last row, runs past it, or
       // stops short of it.
@@ -462,7 +452,7 @@ export function flushInlineFrame(
   }
   inlineBlock.pad = nextPad;
   inlineBlock.slack = nextSlack;
-  if (!anchored || found !== undefined) inlineBlock.height = height;
+  if (!anchored || found !== undefined || lost) inlineBlock.height = height;
   inlineBlock.rows = live.length;
   inlineBlock.cursorRow = cursorRow;
   inlineBlock.last = signature;
@@ -471,7 +461,7 @@ export function flushInlineFrame(
   this.pendingRedraw = undefined;
   this.lastPark = park;
   this.cursorShown = showCursor;
-  const frame = `\u001b[?2026h${modes}${signals}\u001b[?25l\u001b[?7l${lead}${text}${park}${showCursor ? '\u001b[?25h' : ''}\u001b[?2026l`;
+  const frame = `${syncBegin()}${modes}${signals}\u001b[?25l\u001b[?7l${lead}${text}${park}${showCursor ? '\u001b[?25h' : ''}${syncEnd()}`;
   this.frameInFlight = true;
   terminalModes.painted = true;
   logCursorEvent(`inline frame: block=${live.length} finished=${finished.length} composer=${cursorRow} col=${pending.cursorColumn}`);

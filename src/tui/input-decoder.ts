@@ -8,7 +8,7 @@ import { stdin as input, stdout as output } from 'node:process';
 import { StringDecoder } from 'node:string_decoder';
 import { nextCharacterIndex } from './render/width.js';
 import { logCursorEvent, traceRawInput } from './cursor-log.js';
-import { setPhoneVisibleRows } from './inline.js';
+import { noteProbeReply } from './probe.js';
 import { LEGACY_MOUSE_PREFIX, setTerminalRawMode } from './modes.js';
 
 /** A key's meaning while a turn runs. Esc takes a waiting message back, and
@@ -46,11 +46,12 @@ export function waitingEnterAction(draft: string, waiting: boolean, canSend: boo
 /** `CSI I` / `CSI O`: the window gained or lost focus. Never a keystroke. */
 const FOCUS_EVENT = /^\u001b\[[IO]$/;
 
-/** `CSI ? 9701 ; rows t`: the phone reporting how many rows it shows above its keyboard. Never a keystroke. */
-const VISIBLE_ROWS_REPORT = /^\u001b\[\?9701;(\d+)t$/;
-
 /** `CSI ? ... c`: the terminal answering Primary DA. Never a keystroke. */
 const DEVICE_ATTRIBUTES_REPLY = /^\u001b\[\?[0-9;]*c$/;
+
+/** A private-mode report no one here asked for -- `CSI ? Pn $ y` (DECRQM), `CSI ? Pn ; Pn t` (a client's size report such
+ * as the old phone page's `?9701;rows t`), `CSI ? Pn ; ... R` -- is a terminal talking, never typing. */
+const PRIVATE_REPORT = /^\u001b\[\?\d+(?:;\d+)*(?:\$y|t)$/;
 
 /** Readers attached now (listenForTerminalKeys), and what the terminal sent
  * while there were none: kept for the next one. */
@@ -259,7 +260,7 @@ const cursorReports = new Set<(row: number) => void>();
 
 /** Asks the terminal for its cursor's row (`CSI 6 n`, which moves nothing) and hands it to `done`, counted from zero; or
  * `undefined` when nothing answers in time. */
-export function askCursorRow(done: (row: number | undefined) => void, timeoutMs = 500): void {
+export function askCursorRow(done: (row: number | undefined) => void, timeoutMs = 300): void {
   const finish = (row: number | undefined): void => {
     if (!cursorReports.delete(listener)) return;
     clearTimeout(timer);
@@ -341,12 +342,8 @@ function listenForTerminalKeys(onKey: (key: string) => void): () => void {
         for (const listener of [...focusListeners]) listener(key === '\u001b[I');
         continue;
       }
-      const visible = VISIBLE_ROWS_REPORT.exec(key);
-      if (visible) {
-        setPhoneVisibleRows(Number(visible[1]));
-        continue;
-      }
       if (key.startsWith('\u001b]')) continue;
+      if (noteProbeReply(key) || PRIVATE_REPORT.test(key)) continue;
       // Answers to the questions the opening handshake asks: Primary DA comes
       // back as `CSI ? ... c`, XTVERSION as a DCS string. Neither is a key,
       // and a terminal that answers must not be able to type into the draft.
