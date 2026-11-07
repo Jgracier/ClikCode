@@ -283,7 +283,15 @@ export function onTerminalFocus(listener: (focused: boolean) => void): () => voi
   return () => { focusListeners.delete(listener); };
 }
 
+/** The keyboard has one owner: the reader attached last (a picker, the board,
+ * a palette over a running turn). Keys go to it alone, so an overlay consumes
+ * Esc and the turn's own handler under it never sees it. This is the single
+ * routing rule; no handler checks whether something else is open. */
+const keyOwners: object[] = [];
+
 function listenForTerminalKeys(onKey: (key: string) => void): () => void {
+  const owner = {};
+  keyOwners.push(owner);
   const decoder = new TerminalInputDecoder();
   let flushTimer: NodeJS.Timeout | undefined;
   const deliver = (keys: readonly string[]): void => {
@@ -327,6 +335,7 @@ function listenForTerminalKeys(onKey: (key: string) => void): () => void {
     }
   };
   const onData = (chunk: Buffer | string): void => {
+    if (keyOwners.at(-1) !== owner) { if (flushTimer) clearTimeout(flushTimer); flushTimer = undefined; decoder.flush(); return; }
     traceRawInput(chunk);
     if (flushTimer) clearTimeout(flushTimer);
     deliver(decoder.push(chunk));
@@ -357,6 +366,8 @@ function listenForTerminalKeys(onKey: (key: string) => void): () => void {
   return () => {
     if (!attached) return;
     attached = false;
+    const at = keyOwners.indexOf(owner);
+    if (at >= 0) keyOwners.splice(at, 1);
     readers -= 1;
     if (flushTimer) clearTimeout(flushTimer);
     flushTimer = undefined;

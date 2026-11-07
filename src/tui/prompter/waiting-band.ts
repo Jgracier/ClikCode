@@ -103,7 +103,7 @@ export function waitingLine(this: TerminalHarnessPrompter, turn: WaitingTurn, wi
 export function escStops(this: TerminalHarnessPrompter): boolean {
   const turn = this.turn;
   return Boolean(turn && (turn.submit || turn.early) && !turn.cancelled && !this.pendingApproval && !this.signingIn
-    && !this.scrolledBack && !(turn.takeBack && this.waitingUserMessages().length));
+    && !this.scrolledBack && !this.waitingPalette(turn).length && !(turn.takeBack && this.waitingUserMessages().length));
 }
 
 export function updateWaiting(this: TerminalHarnessPrompter): void {
@@ -149,6 +149,13 @@ export function flushPaint(this: TerminalHarnessPrompter): void {
  * there), so there is no selection to move and Enter runs what was typed.
  * Without this a command was invisible AND unavailable while an answer
  * streamed; `/model` went to the model as the word "/model". */
+export function waitingPalette(this: TerminalHarnessPrompter, turn: WaitingTurn) {
+  const found = turn.command ? commandPaletteMatches(turn.draft, this.paletteCommands) : [];
+  // Commands while nothing has been typed past the name; the argument's
+  // own values once it has. A bare hint row is not worth the space mid-turn.
+  return !turn.draft.includes(' ') || found[0]?.completes ? found : [];
+}
+
 export function paintWaiting(this: TerminalHarnessPrompter, turn: WaitingTurn): void {
   const asking = this.pendingApproval?.question?.state;
   if (asking?.typing && asking.question.secret && asking.question.maskInput !== false) {
@@ -159,17 +166,14 @@ export function paintWaiting(this: TerminalHarnessPrompter, turn: WaitingTurn): 
     this.paint(this.signInInput.secret ? '•'.repeat(turn.draft.length) : turn.draft, [], 0, '› ', turn.cursor);
     return;
   }
-  const found = turn.command ? commandPaletteMatches(turn.draft, this.paletteCommands) : [];
-  // Commands while nothing has been typed past the name; the argument's
-  // own values once it has. A bare hint row is not worth the space mid-turn.
-  const matches = !turn.draft.includes(' ') || found[0]?.completes ? found : [];
+  const matches = this.waitingPalette(turn);
   if (!matches.length) {
     this.paint(turn.draft, [], 0, '› ', turn.cursor);
     return;
   }
   this.paint(turn.draft, matches, 0, '› ', turn.cursor, {
     capacity: Math.min(matches.length, 8) + 2,
-    hint: `${keyHint('apply')} · ${keyHint('stop')}`,
+    hint: `${keyHint('apply')} · ${keyHintFor('esc', 'close')} · ${keyHint('stop')}`,
   });
 }
 
