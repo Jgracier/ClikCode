@@ -291,6 +291,85 @@ describe('inline block stays on the bottom rows', () => {
     expect(composerRow()).toBe(lastRow - 2);
   });
 
+  // The screen changing height under the program, and the program asked where its cursor is (anchorBlock): the block is put
+  // back to end on the last row, and what that costs is the block and not the conversation. How a terminal grows differs:
+  // tmux pulls saved lines back in whatever the cursor does; xterm.js (a phone's web terminal) only with the cursor on the
+  // last row, so with the composer's cursor above the footer it adds blank rows at the bottom instead.
+  describe.each([{ terminal: 'xterm.js', pulls: false }, { terminal: 'tmux', pulls: true }])('a change of height in $terminal', ({ pulls }) => {
+    const toggle = (height: number): string => {
+      term.resize(height, pulls);
+      (host as { viewportRows: () => number }).viewportRows = () => height;
+      inlineBlock.found = term.y - inlineBlock.cursorRow;
+      const bytes = frame('', [], live(''));
+      term.write(bytes);
+      return bytes;
+    };
+    const shown = (): string[] => [...term.scrollback, ...term.screen()].filter((row) => row.startsWith('message'));
+    const blockAt = (): number => term.screen().findLastIndex((row) => row.startsWith('>'));
+    /** The block ends on the last row, or on the last row the blank rows added below it leave. */
+    const blockRows = (height: number, floats: number): void => {
+      expect(term.screen()[height - 1 - floats]).toContain('claude');
+      expect(blockAt()).toBe(height - 3 - floats);
+      expect(term.y).toBe(blockAt());
+      expect(term.screen().slice(height - floats).every((row) => row === '')).toBe(true);
+    };
+    const noBlankInSavedLines = (): void => expect(term.scrollback.filter((row) => row === '')).toEqual([]);
+
+    it('over 500 messages writes the block only and not one message, and puts no blank row into the saved lines', () => {
+      paint('');
+      for (let n = 1; n <= 500; n += 1) paint('', [message(n)]);
+      const expected = Array.from({ length: 500 }, (_, i) => message(i + 1));
+      let was = ROWS;
+      let floats = 0;
+      for (const next of [67, 40, 67, 40, 25, 67, 40, 30]) {
+        const bytes = toggle(next);
+        // Grown without pulling, the block stays where it was, the blank rows below it; a shrink takes those rows first.
+        floats = pulls ? 0 : Math.max(0, floats + next - was);
+        blockRows(next, floats);
+        was = next;
+        expect(shown()).toEqual(expected);
+        expect(bytes).not.toContain('message');
+        expect(Buffer.byteLength(bytes)).toBeLessThan(1000);
+        expect(term.scrollback[0]).toBe(message(1));
+        noBlankInSavedLines();
+      }
+    });
+
+    it('over 500 messages the next row retired lands directly above the block, whatever the blank rows below it', () => {
+      paint('');
+      for (let n = 1; n <= 500; n += 1) paint('', [message(n)]);
+      toggle(67);
+      paint('', [message(501)]);
+      expect(shown().at(-1)).toBe(message(501));
+      expect(term.screen()[blockAt() - 4]).toBe(message(501));
+      noBlankInSavedLines();
+      toggle(40);
+      blockRows(40, 0);
+      expect(shown()).toEqual(Array.from({ length: 501 }, (_, i) => message(i + 1)));
+    });
+
+    it('over a short conversation opens and closes blank rows at the top of the screen, never in the saved lines', () => {
+      paint('');
+      for (let n = 1; n <= 5; n += 1) paint('', [message(n)]);
+      for (const next of [67, 40, 12, 67, 40]) {
+        const bytes = toggle(next);
+        blockRows(next, 0);
+        expect(shown()).toEqual([1, 2, 3, 4, 5].map(message));
+        noBlankInSavedLines();
+        expect(bytes).not.toContain('message');
+        expect(Buffer.byteLength(bytes)).toBeLessThan(1000);
+      }
+    });
+
+    it('that leaves the block where it belongs writes nothing', () => {
+      paint('');
+      for (let n = 1; n <= 100; n += 1) paint('', [message(n)]);
+      term.resize(ROWS, pulls);
+      inlineBlock.found = term.y - inlineBlock.cursorRow;
+      expect(frame('', [], live(''))).toBe('');
+    });
+  });
+
   it('after a width change repaints the block in place at the bottom', () => {
     paint('');
     paint('', [message(1), '']);

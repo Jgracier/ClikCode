@@ -22,8 +22,11 @@ def marker_block(first, last, extra=''):
 WIDE = ' 日本語 🎉 ok'
 
 # Each scenario: start size, turns the fake vendor plays, and steps. Steps:
-#   ('type', text) types text and Enter   ('keys', bytes)   ('wait', text, seconds)   ('settle', seconds)
+#   ('type', text) types text and Enter   ('rapid', n, text) does that n times, one turn each   ('keys', bytes)   ('wait', text, seconds)   ('settle', seconds)
 #   ('resize', cols, rows)   ('burst', [(cols, rows), ...], gap)   ('check', label, {opts}, markers (first, last) or None)
+# What a change of height alone may cost: the live block's rows, no more, and not one row of the conversation.
+BOUNDED = {'maxBytes': 3000, 'maxHistoryRows': 0, 'measure': True, 'sameAs': 'start 35', 'turns': True}
+
 SCENARIOS = {
     # A conversation longer than the screen, the screen growing and shrinking the way a phone's keyboard does it.
     'rows-grow-shrink': dict(size=(69, 35), turns=[{'blocks': [marker_block(1, 70)]}], steps=[
@@ -35,6 +38,19 @@ SCENARIOS = {
         ('resize', 69, 20), ('settle', SETTLE), ('check', 'shrink 20', {}, (1, 70)),
         ('resize', 69, 67), ('settle', SETTLE), ('check', 'grow 67 from 20', {}, (1, 70)),
     ]),
+    # A phone's keyboard, again and again, over a long conversation (500 messages): a height change re-anchors the live
+    # block only. What it writes is bounded by the block (not by the conversation) and none of it is a history row.
+    'toggle-500': dict(size=(69, 35), turns=[{'blocks': [marker_block(first, first + 9)]} for first in range(1, 501, 10)], steps=[
+        ('rapid', 51, 'go'), ('wait', 'H500', 60), ('settle', 2), ('check', 'start 35', {'turns': True}, (1, 500)),
+    ] + [step for n in range(4) for step in (
+        ('resize', 69, 67), ('settle', SETTLE), ('check', f'keyboard hides {n + 1}: 35 to 67', BOUNDED, (1, 500)),
+        ('resize', 69, 35), ('settle', SETTLE), ('check', f'keyboard shows {n + 1}: 67 to 35', BOUNDED, (1, 500)))]),
+    # The same over a conversation that fits on one screen: the blank rows above it are the screen's, the toggle writes the block only.
+    'toggle-short': dict(size=(69, 35), turns=[{'blocks': [marker_block(1, 12)]}], steps=[
+        ('type', 'go'), ('wait', 'H012', 40), ('settle', 1.5), ('check', 'start 35', {}, (1, 12)),
+    ] + [step for n in range(3) for step in (
+        ('resize', 69, 67), ('settle', SETTLE), ('check', f'keyboard hides {n + 1}: 35 to 67', BOUNDED, (1, 12)),
+        ('resize', 69, 35), ('settle', SETTLE), ('check', f'keyboard shows {n + 1}: 67 to 35', BOUNDED, (1, 12)))]),
     # A conversation shorter than the screen: the blank rows above it are the screen's, never scrollback.
     'short-grow-shrink': dict(size=(69, 35), turns=[{'blocks': [marker_block(1, 6)]}], steps=[
         ('type', 'go'), ('wait', 'H006', 40), ('settle', 1.5), ('check', 'start 35', {}, (1, 6)),
@@ -121,10 +137,27 @@ def child_env(root, mode, turns, extra):
     env.update(extra)
     return env, node
 
+class Emulator:
+    """A live terminal (emulate.mjs) fed every byte the program writes; what it answers (a cursor position report) goes back to the pty."""
+    def __init__(self, variant, size):
+        self.proc = subprocess.Popen(['node', os.path.join(HERE, 'emulate.mjs'), variant], stdin=subprocess.PIPE, stdout=subprocess.PIPE, cwd=REPO)
+        self.out = self.proc.stdout.fileno()
+        os.set_blocking(self.out, False)
+        self.buffer = b''
+        self.snaps = None
+        self.send({'k': 'init', 'c': size[0], 'r': size[1]})
+    def send(self, event): self.proc.stdin.write((json.dumps(event) + '\n').encode()); self.proc.stdin.flush()
+    def events(self):
+        try: chunk = os.read(self.out, 1 << 22)
+        except BlockingIOError: chunk = b''
+        self.buffer += chunk
+        *done, self.buffer = self.buffer.split(b'\n')
+        return [json.loads(line) for line in done if line]
+
 class Pty:
-    """The program in a pty; every byte and every resize goes to the event log."""
-    def __init__(self, root, env, node, size, log):
-        self.log = log
+    """The program in a pty; every byte and every resize goes to the emulator, and its answers come back."""
+    def __init__(self, root, env, node, size, emulator):
+        self.emulator = emulator
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             os.chdir(os.path.join(root, 'work'))
@@ -133,16 +166,21 @@ class Pty:
         self.text = ''
     def size(self, cols, rows):
         fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
-        self.log.write(json.dumps({'k': 'resize', 'c': cols, 'r': rows}) + '\n')
+        self.emulator.send({'k': 'resize', 'c': cols, 'r': rows})
+    def drain(self):
+        for event in self.emulator.events():
+            if event['k'] == 'reply': os.write(self.fd, base64.b64decode(event['d']))
+            else: self.emulator.snaps = event['snaps']
     def pump(self, seconds, until=None):
         end = time.time() + seconds
         while time.time() < end:
-            ready, _, _ = select.select([self.fd], [], [], 0.05)
-            if not ready: continue
+            ready, _, _ = select.select([self.fd, self.emulator.out], [], [], 0.02)
+            self.drain()
+            if self.fd not in ready: continue
             try: chunk = os.read(self.fd, 65536)
             except OSError: return False
             if not chunk: return False
-            self.log.write(json.dumps({'k': 'out', 'd': base64.b64encode(chunk).decode()}) + '\n')
+            self.emulator.send({'k': 'out', 'd': base64.b64encode(chunk).decode()})
             self.text = (self.text + chunk.decode('utf8', 'replace'))[-20000:]
             if until and until in self.text: return True
         return until is None
@@ -151,34 +189,42 @@ class Pty:
 def run_xterm(name, spec, mode, variant, keep):
     root = tempfile.mkdtemp(prefix=f'resize-matrix-{name}-')
     env, node = child_env(root, mode, spec['turns'], spec.get('env', {}))
-    path = os.path.join(root, 'events.jsonl')
     checks = []
-    with open(path, 'w') as log:
-        term = Pty(root, env, node, spec['size'], log)
-        term.pump(4)
-        for step in spec['steps']:
-            op = step[0]
-            if op == 'type': term.send(step[1]); term.pump(0.2); term.send('\r'); term.pump(0.3)
-            elif op == 'keys': term.send(step[1]); term.pump(0.3)
-            elif op == 'wait': term.pump(step[2], until=step[1])
-            elif op == 'settle': term.pump(step[1])
-            elif op == 'resize': term.size(step[1], step[2]); term.pump(0.05)
-            elif op == 'burst':
-                for cols, rows in step[1]: term.size(cols, rows); term.pump(step[2])
-            elif op == 'suspend':
-                term.send('\x1a'); term.pump(1.0)
-                try: os.waitpid(term.pid, os.WUNTRACED | os.WNOHANG)
-                except ChildProcessError: pass
-                term.size(step[1], step[2]); term.pump(0.2)
-                os.killpg(os.getpgid(term.pid), signal.SIGCONT) if False else os.kill(term.pid, signal.SIGCONT); term.pump(0.5)
-            elif op == 'check':
-                term.pump(0.3)
-                log.write(json.dumps({'k': 'snap', 'label': step[1]}) + '\n'); checks.append((step[1], step[2], step[3]))
-        for _ in range(2): term.send('\x03'); term.pump(0.4)
-        try: os.kill(term.pid, signal.SIGKILL); os.waitpid(term.pid, 0)
-        except (ProcessLookupError, ChildProcessError): pass
+    emulator = Emulator(variant, spec['size'])
+    term = Pty(root, env, node, spec['size'], emulator)
+    term.pump(4)
+    for step in spec['steps']:
+        op = step[0]
+        if op == 'type': term.send(step[1]); term.pump(0.2); term.send('\r'); term.pump(0.3)
+        elif op == 'rapid':
+            for _ in range(step[1]): term.send(step[2]); term.pump(0.1); term.send('\r'); term.pump(0.9)
+        elif op == 'keys': term.send(step[1]); term.pump(0.3)
+        elif op == 'wait': term.pump(step[2], until=step[1])
+        elif op == 'settle': term.pump(step[1])
+        elif op == 'resize': term.size(step[1], step[2]); term.pump(0.05)
+        elif op == 'burst':
+            for cols, rows in step[1]: term.size(cols, rows); term.pump(step[2])
+        elif op == 'suspend':
+            term.send('\x1a'); term.pump(1.0)
+            try: os.waitpid(term.pid, os.WUNTRACED | os.WNOHANG)
+            except ChildProcessError: pass
+            term.size(step[1], step[2]); term.pump(0.2)
+            os.kill(term.pid, signal.SIGCONT); term.pump(0.5)
+        elif op == 'check':
+            term.pump(0.3)
+            emulator.send({'k': 'snap', 'label': step[1]}); checks.append((step[1], step[2], step[3]))
+    for _ in range(2): term.send('\x03'); term.pump(0.4)
+    try: os.kill(term.pid, signal.SIGKILL); os.waitpid(term.pid, 0)
+    except (ProcessLookupError, ChildProcessError): pass
+    emulator.send({'k': 'end'})
+    end = time.time() + 20
+    while emulator.snaps is None and time.time() < end:
+        select.select([emulator.out], [], [], 0.1)
+        for event in emulator.events():
+            if event['k'] == 'snaps': emulator.snaps = event['snaps']
+    emulator.proc.wait(timeout=10)
     snaps_path = os.path.join(root, 'snaps.json')
-    subprocess.run(['node', os.path.join(HERE, 'emulate.mjs'), path, snaps_path, variant], check=True, cwd=REPO)
+    json.dump(emulator.snaps, open(snaps_path, 'w'))
     return root, snaps_path, checks
 
 def run_tmux(name, spec, mode, keep):
@@ -204,6 +250,8 @@ def run_tmux(name, spec, mode, keep):
     for step in spec['steps']:
         op = step[0]
         if op == 'type': tm('send-keys', '-l', step[1]); time.sleep(0.2); tm('send-keys', 'Enter'); time.sleep(0.3)
+        elif op == 'rapid':
+            for _ in range(step[1]): tm('send-keys', '-l', step[2]); time.sleep(0.1); tm('send-keys', 'Enter'); time.sleep(0.9)
         elif op == 'keys': tm('send-keys', '-l', step[1]); time.sleep(0.3)
         elif op == 'wait': wait(step[1], step[2])
         elif op == 'settle': time.sleep(step[1])
@@ -226,9 +274,9 @@ def run_tmux(name, spec, mode, keep):
     snaps_path = os.path.join(root, 'snaps.json'); json.dump(snaps, open(snaps_path, 'w'))
     return root, snaps_path, checks
 
-def judge(snaps_path, checks, mode):
+def judge(snaps_path, checks, mode, emulator):
     snaps = json.load(open(snaps_path))
-    for snap, (label, opts, markers) in zip(snaps, checks): snap['opts'] = opts; snap['expectMarkers'] = markers
+    for snap, (label, opts, markers) in zip(snaps, checks): snap['opts'] = opts; snap['expectMarkers'] = markers; snap['pulls'] = emulator == 'tmux'
     json.dump(snaps, open(snaps_path, 'w'))
     out = subprocess.run(['node', os.path.join(HERE, 'check.mjs'), snaps_path, mode], capture_output=True, text=True, cwd=REPO)
     if out.returncode: print(out.stderr); raise SystemExit(2)
@@ -249,11 +297,13 @@ def main():
         if args.only and args.only != name: continue
         if args.emu == 'tmux': root, snaps_path, checks = run_tmux(name, spec, args.mode, args.keep)
         else: root, snaps_path, checks = run_xterm(name, spec, args.mode, args.emu, args.keep)
-        verdicts, snaps = judge(snaps_path, checks, 'full' if args.mode == 'full' else 'inline')
+        verdicts, snaps = judge(snaps_path, checks, 'full' if args.mode == 'full' else 'inline', args.emu)
         bad = [v for v in verdicts if v['problems']]
         total += len(verdicts); failures += len(bad)
         print(f"{'FAIL' if bad else 'ok  '} {name} [{args.emu}/{args.mode}] {len(verdicts) - len(bad)}/{len(verdicts)} snapshots ({root})")
         for verdict, snap in zip(verdicts, snaps):
+            if verdict['floats'] and not verdict['problems']: print(f"    {verdict['label']}: the block stands {verdict['floats']} row(s) above the last (blank rows the terminal added below it)")
+            if snap.get('opts', {}).get('measure') and 'bytes' in snap: print(f"    {verdict['label']}: {snap['bytes']} bytes, {snap['historyRows']} history rows written")
             for problem in verdict['problems']: print(f"  - {verdict['label']} {verdict['size']}: {problem}")
             if verdict['problems'] and args.show: show(snap)
         if not args.keep and not bad: shutil.rmtree(root, ignore_errors=True)

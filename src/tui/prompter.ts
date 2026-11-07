@@ -44,7 +44,7 @@ import { editTurnDraft, waitingUserMessages, enterAgainReady, turnHasAnswer, tak
 import { statusText, waitingLine, escStops, updateWaiting, schedulePaint, flushPaint, paintWaiting, waitingPalette, repaint } from './prompter/waiting-band.js';
 import { onWaitingKey } from './prompter/waiting-keys.js';
 import { openSubView, closeSubView, subViewKey, paintSubView, type SubView } from './prompter/subagent-host.js';
-import { viewportRows, onResize, repaintAfterResize, reseedIfScreenChanged, clearTranscript } from './prompter/viewport.js';
+import { viewportRows, onResize, repaintAfterResize, rewrapIfWidthChanged, anchorBlock, clearTranscript } from './prompter/viewport.js';
 import { signInScreen } from './prompter/sign-in.js';
 import { renderFrame, flushFrame, flushAlternateFrame, flushInlineFrame } from './prompter/frame-flush.js';
 import { clearInteractiveFrame, select, board, pickerHost } from './prompter/picker-host.js';
@@ -172,8 +172,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** The width the transcript's rows were wrapped at. A resize to another
    * width wraps the whole conversation again (see rewrapTranscript). */
   transcriptColumns = output.columns || 0;
-  /** The height it was laid out for, inline only (see reseedIfScreenChanged). */
-  transcriptRows = inlineHistoryMode() ? output.rows || 0 : 0;
   usageLabel?: string;
   /** The owner of a conversation reached over SSH, shown in the status line. */
   remoteMachineName?: string;
@@ -710,7 +708,8 @@ const methods = {
   restoreTellingDraft,
   viewportRows,
   repaintAfterResize,
-  reseedIfScreenChanged,
+  rewrapIfWidthChanged,
+  anchorBlock,
   clearTranscript,
   activity,
   setPlan,

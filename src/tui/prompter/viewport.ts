@@ -6,6 +6,7 @@ import { terminalModes } from '../restore.js';
 import { logCursorEvent } from '../cursor-log.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
 import { RESIZE_SETTLE_MS } from './state.js';
+import { askCursorRow } from '../input-decoder.js';
 
 /** Never taller than the screen actually is: a live region that overflows
  * makes the walk back up to the composer clamp at the top edge, which is
@@ -43,10 +44,11 @@ export function repaintAfterResize(this: TerminalHarnessPrompter): void {
     this.resizePaintTimer = undefined;
     lifecycle('window.resize', { cols: output.columns, rows: output.rows });
     if (this.closed || this.suspended) return;
-    this.reseedIfScreenChanged();
+    const rewritten = this.rewrapIfWidthChanged();
     // Whole: the preamble this frame carries clears the screen, once.
     this.forgetScreenPosition();
-    this.repaint();
+    if (inlineHistoryMode() && !rewritten) this.anchorBlock();
+    else this.repaint();
   }, RESIZE_SETTLE_MS);
   this.resizePaintTimer.unref();
 }
@@ -56,20 +58,39 @@ export function repaintAfterResize(this: TerminalHarnessPrompter): void {
  * every row below it lands one out. So the transcript is not re-clipped
  * row by row but written again from its source -- the session's messages
  * and this turn's state -- exactly as opening the conversation writes it.
- *
- * Inline, a change of height is the same: the terminal moves its own rows when
- * it resizes (pulls saved lines back, adds blank rows at the bottom, drops the
- * rows below the cursor), and which of those it does is not something to
- * depend on. The one answer is to write the conversation again, anchored to
- * the new last row. The alternate screen draws every row at an address
- * already, so only a change of width needs it there. */
-export function reseedIfScreenChanged(this: TerminalHarnessPrompter): void {
+ * Only a change of width does this: a change of height leaves every retired
+ * row as it was (see anchorBlock). Returns whether the conversation is
+ * being written again. */
+export function rewrapIfWidthChanged(this: TerminalHarnessPrompter): boolean {
   const columns = output.columns || 0;
-  const rows = inlineHistoryMode() ? output.rows || 0 : 0;
-  if (columns === this.transcriptColumns && rows === this.transcriptRows) return;
+  if (columns === this.transcriptColumns) return false;
   this.transcriptColumns = columns;
-  this.transcriptRows = rows;
   this.emitted.requestReseed();
+  return true;
+}
+
+/** A settled change of height, inline: the terminal moved its own rows when it resized (pulled saved lines back, added
+ * blank rows at the bottom, dropped the rows below the cursor, pushed the top ones into the saved lines), and what it
+ * did differs from one terminal to the next. So the screen is asked where its cursor is, and the live block (composer,
+ * status, an open list) is put back to end on the last row: erased where it is and drawn again, a few rows. The
+ * conversation above it is never touched, unless the block no longer fits the screen. (See flushInlineFrame for what is
+ * done with the answer.) */
+export function anchorBlock(this: TerminalHarnessPrompter): void {
+  if (!inlineBlock.rows) { this.repaint(); return; }
+  inlineBlock.measuring = true;
+  const done = (row: number | undefined): void => {
+    inlineBlock.measuring = false;
+    if (row !== undefined) {
+      inlineBlock.found = row - inlineBlock.cursorRow;
+      // The block is taller than the screen now: its top rows went into the saved lines, where nothing can take them out
+      // again. The one case where the conversation is written again for a change of height.
+      // (The board is the whole screen and holds no conversation: it is drawn again alone.)
+      if (inlineBlock.found < 0) { if (this.surface === 'history') inlineBlock.clearNext = true; else this.emitted.requestReseed(); }
+    }
+    if (this.closed || this.suspended) return;
+    this.repaint();
+  };
+  askCursorRow(done);
 }
 
 /** Empty the transcript before the conversation is written again. What is

@@ -15,11 +15,23 @@ export class TestScreen {
     this.rows.shift();
     this.rows.push(this.blank());
   }
-  resize(height: number): void {
-    while (this.rows.length > height) { this.scrollback.push(this.rows.shift()!.join('').trimEnd()); this.y = Math.max(0, this.y - 1); }
-    while (this.rows.length < height) this.rows.push(this.blank());
+  /** What a terminal does with its own screen when the window changes height. A shorter one drops the rows below the
+   * cursor first, whatever they hold, and then pushes the top rows into the saved lines. A taller one pulls saved lines
+   * back in above the screen and, once there are none, adds blank rows at the bottom. xterm.js pulls only while the
+   * cursor is on the last row (`pullsAnywhere` false): a program whose cursor is parked on its composer, with its
+   * footer below, gets blank rows added below instead. tmux pulls whatever the cursor does (`pullsAnywhere` true). */
+  resize(height: number, pullsAnywhere = false): void {
+    const cursorOnLastRow = this.y === this.rows.length - 1;
+    while (this.rows.length > height) {
+      if (this.y < this.rows.length - 1) this.rows.pop();
+      else { this.scrollback.push(this.rows.shift()!.join('').trimEnd()); this.y -= 1; }
+    }
+    while (this.rows.length < height) {
+      const pulled = pullsAnywhere || cursorOnLastRow ? this.scrollback.pop() : undefined;
+      if (pulled === undefined) this.rows.push(this.blank());
+      else { this.rows.unshift([...pulled.padEnd(this.width)]); this.y += 1; }
+    }
     (this as { height: number }).height = height;
-    this.y = Math.min(this.y, height - 1);
   }
   write(data: string): void {
     // eslint-disable-next-line no-control-regex
