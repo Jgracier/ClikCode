@@ -8,6 +8,7 @@ import { stdin as input, stdout as output } from 'node:process';
 import { StringDecoder } from 'node:string_decoder';
 import { nextCharacterIndex } from './render/width.js';
 import { logCursorEvent, traceRawInput } from './cursor-log.js';
+import { setPhoneVisibleRows } from './inline.js';
 import { LEGACY_MOUSE_PREFIX, setTerminalRawMode } from './modes.js';
 
 /** A key's meaning while a turn runs. Esc takes a waiting message back, and
@@ -44,6 +45,9 @@ export function waitingEnterAction(draft: string, waiting: boolean, canSend: boo
 
 /** `CSI I` / `CSI O`: the window gained or lost focus. Never a keystroke. */
 const FOCUS_EVENT = /^\u001b\[[IO]$/;
+
+/** `CSI ? 9701 ; rows t`: the phone reporting how many rows it shows above its keyboard. Never a keystroke. */
+const VISIBLE_ROWS_REPORT = /^\u001b\[\?9701;(\d+)t$/;
 
 /** `CSI ? ... c`: the terminal answering Primary DA. Never a keystroke. */
 const DEVICE_ATTRIBUTES_REPLY = /^\u001b\[\?[0-9;]*c$/;
@@ -307,6 +311,11 @@ function listenForTerminalKeys(onKey: (key: string) => void): () => void {
       // enabled for what they announce, not to be read.
       if (FOCUS_EVENT.test(key)) {
         for (const listener of [...focusListeners]) listener(key === '\u001b[I');
+        continue;
+      }
+      const visible = VISIBLE_ROWS_REPORT.exec(key);
+      if (visible) {
+        setPhoneVisibleRows(Number(visible[1]));
         continue;
       }
       if (key.startsWith('\u001b]')) continue;

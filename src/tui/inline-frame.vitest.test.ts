@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stdout } from 'node:process';
 import { flushInlineFrame } from './prompter/frame-flush.js';
-import { eraseInlineBlock, inlineBlock, inlineHistoryMode } from './inline.js';
+import { eraseInlineBlock, inlineBlock, inlineHistoryMode, setPhoneVisibleRows } from './inline.js';
 import { asciiMode, foldAscii } from './glyphs.js';
 import { TestScreen } from './inline-screen.vitest-helper.js';
 
@@ -250,7 +250,7 @@ describe('inline block stays on the bottom rows', () => {
 
 describe('the phone board', () => {
   const ROWS = 40;
-  const BUDGET = 22; // floor(40 * 0.55)
+  const BUDGET = 22; // the rows the phone reports above its keyboard
   let screen: TestScreen;
   const draw = (surface: string, rows: string[], cursorRow = rows.length - 1): void => {
     writes.length = 0;
@@ -273,10 +273,11 @@ describe('the phone board', () => {
     vi.spyOn(stdout, 'write').mockImplementation(((chunk: string, cb?: () => void) => { writes.push(String(chunk)); cb?.(); return true; }) as never);
     eraseInlineBlock();
     inlineBlock.clearNext = false;
+    setPhoneVisibleRows(BUDGET);
     host = { alternateTranscript: [], alternateTrimmed: 0, viewportRows: () => ROWS, pickerOverlay: [], chromeRows: 0, pendingSignals: '', frameInFlight: false, closed: false, suspended: false, flushFrame: () => {}, surface: 'conversation' };
     screen = new TestScreen(ROWS, COLS);
   });
-  afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); eraseInlineBlock(); });
+  afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); eraseInlineBlock(); setPhoneVisibleRows(undefined); });
 
   it('draws the open board from the top row, and the chat from the bottom row once it closes', () => {
     inlineBlock.clearNext = true;
@@ -305,5 +306,19 @@ describe('the phone board', () => {
     const closed = screen.screen();
     expect(closed[ROWS - 1]).toContain('claude');
     expect(closed.join('')).not.toContain('convo');
+  });
+
+  it('ends the open board on the last row the phone reports, as the keyboard comes and goes', () => {
+    inlineBlock.clearNext = true;
+    draw('history', board(10), 1);
+    for (const visible of [ROWS, 22, 14, ROWS, 30]) {
+      setPhoneVisibleRows(visible);
+      // the board lists what fits above its composer block (capacity), as the real board does
+      draw('history', board(Math.min(10, visible - 6)), 1);
+      const now = screen.screen();
+      expect(now[visible - 1], `visible ${visible}`).toContain('claude');
+      expect(now[visible - 3]).toBe('>');
+      expect(now.slice(visible).every((row) => row === '')).toBe(true);
+    }
   });
 });

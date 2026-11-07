@@ -2,6 +2,7 @@ import { stdin } from 'node:process';
 import { describe, expect, it } from 'vitest';
 import { KEEP_STDIN_FLOWING, TerminalInputDecoder, takeTerminalKeys, waitingEnterAction } from './input-decoder';
 import { editWaitingComposer } from './composer-edit';
+import { onPhoneVisibleRows, pageRows, setPhoneVisibleRows } from './inline';
 
 describe('terminal input decoding', () => {
   it('buffers fragmented Termius escape sequences and UTF-8 characters', () => {
@@ -86,6 +87,29 @@ describe('keys typed between one reader and the next', () => {
       stopThird();
       expect(third).toEqual(['x']);
     } finally {
+      stdin.off('data', KEEP_STDIN_FLOWING);
+      stdin.pause();
+    }
+  });
+});
+
+describe('the phone reporting its visible rows', () => {
+  it('is read by the board and never reaches a reader as a key, however the link chunks it', () => {
+    stdin.on('data', KEEP_STDIN_FLOWING);
+    const keys: string[] = [];
+    let changes = 0;
+    const stopRows = onPhoneVisibleRows(() => { changes += 1; });
+    const stop = takeTerminalKeys((key) => keys.push(key));
+    try {
+      stdin.emit('data', Buffer.from('a\u001b[?97'));
+      stdin.emit('data', Buffer.from('01;31tb\u001b[?9701;31t'));
+      expect(keys).toEqual(['a', 'b']);
+      expect(changes).toBe(1);
+      expect(pageRows(58, { CLIKDEPLOY_CLIENT: 'mobile' })).toBe(31);
+    } finally {
+      stop();
+      stopRows();
+      setPhoneVisibleRows(undefined);
       stdin.off('data', KEEP_STDIN_FLOWING);
       stdin.pause();
     }

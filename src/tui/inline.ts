@@ -34,14 +34,27 @@ export function inlineHistoryMode(env: NodeJS.ProcessEnv = process.env, columns:
 
 export const phoneClient = (env: NodeJS.ProcessEnv = process.env): boolean => env.CLIKDEPLOY_CLIENT === 'mobile';
 
-/** The share of the screen the phone's keyboard leaves visible, less a margin (the keyboard covers up to 43%). */
-const PHONE_PAGE_SHARE = 0.55;
+/** The rows of the phone's screen above its keyboard, as the phone last reported them (`CSI ?9701;<rows>t`); undefined until it has.
+ * The phone terminal never resizes for its keyboard: the keyboard covers the bottom of a full-height screen. */
+let phoneVisibleRows: number | undefined;
+const visibleRowsListeners = new Set<() => void>();
 
-/** The rows a full-page surface (the conversation board) may take of a screen `rows` tall. The ClikDeploy phone
- * terminal never resizes for its keyboard: it slides the whole terminal up by the keyboard's height, which is up to
- * 43% of the screen, so a page taller than the rest has its top cut off above the screen. */
+export function setPhoneVisibleRows(rows: number | undefined): void {
+  if (rows === phoneVisibleRows) return;
+  phoneVisibleRows = rows;
+  for (const listener of [...visibleRowsListeners]) listener();
+}
+
+/** Called when the phone reports a different number of visible rows. */
+export function onPhoneVisibleRows(listener: () => void): () => void {
+  visibleRowsListeners.add(listener);
+  return () => { visibleRowsListeners.delete(listener); };
+}
+
+/** The rows a full-page surface (the conversation board) may take of a screen `rows` tall: all of them, except on the phone, where
+ * the keyboard covers the bottom of the screen and the page ends where it begins, its last line (the composer) just above it. */
 export function pageRows(rows: number, env: NodeJS.ProcessEnv = process.env): number {
-  return phoneClient(env) ? Math.floor(rows * PHONE_PAGE_SHARE) : rows;
+  return phoneClient(env) && phoneVisibleRows !== undefined ? Math.max(1, Math.min(rows, phoneVisibleRows)) : rows;
 }
 
 /** Screen and saved lines, then home: replacing the conversation must leave none
