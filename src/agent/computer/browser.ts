@@ -33,13 +33,41 @@ async function connect(stateDir: string): Promise<Connected | undefined> {
   } catch { return undefined; }
 }
 
+/** The parent of a process, from /proc; 0 when it cannot be read. */
+export async function parentPid(pid: number): Promise<number> {
+  try { return Number((await fs.readFile(`/proc/${pid}/stat`, 'utf8')).replace(/^.*\)\s+\S+\s+/, '').split(' ')[0]) || 0; } catch { return 0; }
+}
+
+/** Whether the live process holding the profile lock is the child of the running ClikCode host (recorded in host.json): that Chrome is ours, only slow to answer. */
+export async function chromeIsHostChild(stateDir: string, chromePid: number): Promise<boolean> {
+  try {
+    const host = Number((JSON.parse(await fs.readFile(computerHostFile(stateDir), 'utf8')) as { pid?: unknown }).pid);
+    if (!Number.isInteger(host) || host < 2) return false;
+    process.kill(host, 0);
+    return (await parentPid(chromePid)) === host;
+  } catch { return false; }
+}
+
+/** The message for a browser that is running and ours but did not answer in time: retry later, it is not blocked. */
+export const BROWSER_BUSY = 'ClikCode browser is busy and did not answer in time (the machine is stalled). Retry shortly; nothing is blocking it.';
+
+async function ownChromeAlive(stateDir: string): Promise<boolean> {
+  try {
+    const lock = await fs.readlink(path.join(computerProfile(stateDir), 'SingletonLock'));
+    const pid = Number(lock.match(/-(\d+)$/)?.[1]);
+    if (!pid) return false;
+    process.kill(pid, 0);
+    return await chromeIsHostChild(stateDir, pid);
+  } catch { return false; }
+}
+
 async function externalChromeRunning(stateDir: string): Promise<boolean> {
   try {
     const lock = await fs.readlink(path.join(computerProfile(stateDir), 'SingletonLock'));
     const pid = Number(lock.match(/-(\d+)$/)?.[1]);
     if (!pid) return false;
     process.kill(pid, 0);
-    return true;
+    return !(await chromeIsHostChild(stateDir, pid));
   } catch { return false; }
 }
 
@@ -75,6 +103,15 @@ async function startHost(stateDir: string): Promise<Connected> {
         if (later) return later;
       }
       if (await externalChromeRunning(stateDir)) throw new Error('ClikCode Chrome is open outside ClikCode. Finish that browser step, close its window, and retry.');
+      // Our own host's Chrome is alive but slow to answer (a stalled disk): wait for it, never start a second host over its profile.
+      if (await ownChromeAlive(stateDir)) {
+        for (let again = 0; again < 8; again++) {
+          await pause(5_000);
+          const later = await connect(stateDir);
+          if (later) return later;
+        }
+        throw new Error(BROWSER_BUSY);
+      }
       const entry = process.env.CLIKCODE_BROWSER_HOST_ENTRY || process.argv[1];
       if (!entry) throw new Error('ClikCode could not start its browser host.');
       const hostArgs = [process.execPath, entry, 'computer-host', stateDir];
