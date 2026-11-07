@@ -4,7 +4,7 @@
 import { kittyKeyboardSafe, POP_KITTY_KEYBOARD, PUSH_KITTY_KEYBOARD } from './keys.js';
 import { stdin as input } from 'node:process';
 import { MOUSE_MODES_OFF, signalsTeardown, terminalModes, terminalTeardown } from './restore.js';
-import { FOCUS_REPORTING_ON, VISIBLE_ROWS_REPORTING_ON } from './terminal-signals.js';
+import { FOCUS_REPORTING_ON, FULL_PAGE_OFF, FULL_PAGE_ON, VISIBLE_ROWS_REPORTING_ON } from './terminal-signals.js';
 import { logCursorEvent } from './cursor-log.js';
 import { inlineHistoryMode, phoneClient } from './inline.js';
 
@@ -120,8 +120,17 @@ export function redrawPreamble(redraw: Redraw | undefined): string {
  * them first, inside its synchronized update, never interleaved with one
  * already on its way. */
 let queuedModes = '';
-export function queueMode(sequence: string): void {
-  queuedModes += sequence;
+
+/** The phone page learns a program's private modes only from its output, and a page that was reloaded (the app came back, an update)
+ * was never told: it neither reports the visible rows nor knows a board is open. The inline repaint that follows a resize or a
+ * switch is what a reloaded page always gets, so it carries both again. The page ignores what it already knows. */
+let fullPageOpen = false;
+export const phoneSignals = (): string => (phoneClient() ? `${VISIBLE_ROWS_REPORTING_ON}${fullPageOpen ? FULL_PAGE_ON : ''}` : '');
+
+/** The full-page surface (the conversation board) opens or closes: the next frame says so. */
+export function setFullPage(open: boolean): void {
+  fullPageOpen = open;
+  queuedModes += open ? FULL_PAGE_ON : FULL_PAGE_OFF;
 }
 export function takeQueuedModes(): string {
   const taken = queuedModes;

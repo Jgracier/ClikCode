@@ -48,6 +48,17 @@ describe('inline frame writer', () => {
     expect(writes).toHaveLength(1);
   });
 
+  it('a cleared repaint on the phone asks again for the visible-rows reports, so a page that was reloaded learns them', () => {
+    vi.stubEnv('CLIKDEPLOY_CLIENT', 'mobile');
+    frame('hi');
+    inlineBlock.clearNext = true;
+    expect(frame('hi')).toContain('\u001b[?9701h');
+    expect(frame('hi again')).not.toContain('?9701');
+    vi.unstubAllEnvs();
+    inlineBlock.clearNext = true;
+    expect(frame('plain')).not.toContain('?9701');
+  });
+
   it('writes nothing for an unchanged frame', () => {
     frame('hi');
     expect(frame('hi')).toBe('');

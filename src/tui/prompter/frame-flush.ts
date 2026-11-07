@@ -9,7 +9,7 @@ import { highlightSelectionAt, scrollShift, shiftedRow } from '../render/selecti
 import { logCursorEvent } from '../cursor-log.js';
 import { eraseInlineBlock, inlineBlock, inlineHistoryMode, pageRows, phoneClient, CLEAR_SCREEN_AND_SCROLLBACK } from '../inline.js';
 import { asciiMode, foldAscii } from '../glyphs.js';
-import { redrawPreamble, takeQueuedModes } from '../modes.js';
+import { phoneSignals, redrawPreamble, takeQueuedModes } from '../modes.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
 import { ALTERNATE_TRANSCRIPT_ROWS } from './state.js';
 import { anchoredScrollback } from './group-actions.js';
@@ -327,7 +327,7 @@ export function flushInlineFrame(
   inlineBlock.clearNext = false;
   const showCursor = !pending.hideCursor;
   const signature = JSON.stringify([live, cursorRow, pending.cursorColumn, showCursor]);
-  const modes = takeQueuedModes();
+  const modes = `${takeQueuedModes()}${clear ? phoneSignals() : ''}`;
   const signals = this.pendingSignals;
   this.pendingSignals = '';
   if (!clear && !finished.length && !modes && !signals && signature === inlineBlock.last) return;

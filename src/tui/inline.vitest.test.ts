@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { eraseInlineBlock, inlineBlock, inlineHistoryMode } from './inline.js';
-import { sessionModesOn, redrawPreamble } from './modes.js';
+import { sessionModesOn, redrawPreamble, phoneSignals, setFullPage, takeQueuedModes } from './modes.js';
 
 describe('inline-history mode', () => {
   afterEach(() => { vi.unstubAllEnvs(); inlineBlock.rows = 0; inlineBlock.cursorRow = 0; });
@@ -18,6 +18,19 @@ describe('inline-history mode', () => {
     expect(on).toContain('?2004h');
     expect(on).not.toMatch(/\?100[0236]h/);
     expect(redrawPreamble('resize')).not.toMatch(/\?100[0236]h/);
+  });
+
+  it('tells a page that was reloaded about the phone modes: every cleared inline repaint carries them again', () => {
+    vi.stubEnv('CLIKDEPLOY_CLIENT', 'mobile');
+    expect(phoneSignals()).toBe('\u001b[?9701h');
+    setFullPage(true);
+    expect(takeQueuedModes()).toBe('\u001b[?9702h');
+    expect(phoneSignals()).toBe('\u001b[?9701h\u001b[?9702h');
+    setFullPage(false);
+    expect(takeQueuedModes()).toBe('\u001b[?9702l');
+    expect(phoneSignals()).toBe('\u001b[?9701h');
+    vi.stubEnv('CLIKDEPLOY_CLIENT', '');
+    expect(phoneSignals()).toBe('');
   });
 
   it('keeps the mouse outside inline mode', () => {
