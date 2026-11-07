@@ -315,6 +315,27 @@ export function flushInlineFrame(
       cursorRow += pad;
     }
   }
+  // The phone's open board is a page drawn from the top row, as tall as the rows its keyboard leaves visible: when that
+  // number changes the page is drawn again from the top.
+  const clear = inlineBlock.clearNext || (phoneBoard && inlineBlock.rows > 0 && live.length !== inlineBlock.rows);
+  inlineBlock.clearNext = false;
+  // THE ANCHORING RULE. The block ends on the last row of the screen, and everything above it is the conversation, in
+  // order, with no row of it ever blank, repeated or lost. Two things change the rows available to the conversation:
+  //  - the block itself growing or shrinking. Growing scrolls the top row into the terminal's scrollback (or, while the
+  //    conversation is shorter than the screen, deletes a blank row above it: `pad`). Shrinking cannot pull a row back
+  //    out of the scrollback, so the block keeps its height: the rows it no longer needs stay blank at its top (the
+  //    spacer) until a retired row or a growing block uses them. History is never moved, never given blank rows.
+  //  - the terminal changing size. What a terminal does with its screen then (pull rows from scrollback, add blank
+  //    rows at the bottom, drop the rows below the cursor) differs from one to the next, so none of it is trusted: the
+  //    settled resize writes the conversation again from the model (a clear), and this function draws it anchored.
+  const anchored = !clear && inlineBlock.rows > 0;
+  if (anchored) {
+    const spacer = Math.max(0, inlineBlock.rows - finished.length - live.length);
+    if (spacer) {
+      live = [...Array<string>(spacer).fill(''), ...live];
+      cursorRow += spacer;
+    }
+  }
   // A block taller than the screen would make the walk back up clamp at the top edge.
   if (live.length > height) {
     cursorRow -= live.length - height;
@@ -323,8 +344,6 @@ export function flushInlineFrame(
   const lastRow = Math.max(0, live.length - 1);
   cursorRow = Math.max(0, Math.min(cursorRow, lastRow));
   this.frameLayout = { live: [...live], tags: (pending as { tags?: Array<string | undefined> }).tags?.slice(-height) ?? [] };
-  const clear = inlineBlock.clearNext;
-  inlineBlock.clearNext = false;
   const showCursor = !pending.hideCursor;
   const signature = JSON.stringify([live, cursorRow, pending.cursorColumn, showCursor]);
   const modes = `${takeQueuedModes()}${clear ? phoneSignals() : ''}`;
@@ -333,28 +352,12 @@ export function flushInlineFrame(
   if (!clear && !finished.length && !modes && !signals && signature === inlineBlock.last) return;
   const previous = inlineBlock.liveRows;
   const columns = output.columns || 100;
-  // The block lives on the bottom rows of the screen. Blank rows above the conversation
-  // (a short conversation) are real screen rows, never scrollback: rows are taken from
-  // them with delete-lines at the top edge as the conversation grows, and given back with
-  // insert-lines when the block shrinks, so the composer does not leave the bottom.
-  let grew = false;
-  if (inlineBlock.top !== undefined && inlineBlock.height !== height) {
-    if (height < inlineBlock.height) {
-      const lost = inlineBlock.height - height;
-      inlineBlock.top = Math.max(0, inlineBlock.top - lost);
-      inlineBlock.pad = Math.max(0, inlineBlock.pad - lost);
-    } else if (inlineBlock.pad === 0) inlineBlock.top = undefined;
-    else grew = true;
-    inlineBlock.height = height;
-  }
-  const anchored = !clear && inlineBlock.top !== undefined && inlineBlock.rows > 0;
   // Unchanged rows are never sent again: with the block already drawn, at the same width, and
   // nothing retired above it, only the rows that differ are rewritten, reached by relative motion.
-  const diff = !clear && !grew && !finished.length && inlineBlock.rows > 0 && previous.length === inlineBlock.rows && inlineBlock.columns === columns;
+  const diff = anchored && !finished.length && previous.length === inlineBlock.rows && inlineBlock.columns === columns;
   let lead = '';
   let text = '';
   let park: string;
-  let nextTop: number | undefined;
   let nextPad = inlineBlock.pad;
   if (diff) {
     let at = inlineBlock.cursorRow;
@@ -363,11 +366,10 @@ export function flushInlineFrame(
       at = to;
       return step < 0 ? `\u001b[${-step}A` : step > 0 ? `\u001b[${step}B` : '';
     };
-    const top = anchored ? inlineBlock.top! : undefined;
-    if (top !== undefined) nextTop = height - live.length;
-    if (top !== undefined && live.length > previous.length && nextPad > 0) {
+    if (live.length > previous.length && nextPad > 0) {
       // Growing from the bottom edge: pull the blank rows above the conversation out first,
       // so nothing blank scrolls into the saved lines. The cursor ends on the block's new top.
+      const top = height - previous.length;
       const take = Math.min(live.length - previous.length, nextPad);
       text += `${top + at > 0 ? `\u001b[${top + at}A` : ''}\u001b[${take}M`;
       at = -(top - take);
@@ -382,19 +384,10 @@ export function flushInlineFrame(
       text += move(previous.length - 1);
       for (let index = previous.length; index < live.length; index += 1) text += `\r\n${live[index]}\u001b[K`;
       at = live.length - 1;
-    } else if (live.length < previous.length) {
-      text += `${move(live.length)}\r\u001b[J`;
-      if (top !== undefined) {
-        // Shrinking: the conversation moves down with the block, blank rows open above it.
-        const give = previous.length - live.length;
-        text += `${top + live.length > 0 ? `\u001b[${top + live.length}A` : ''}\u001b[${give}L`;
-        at = -(height - live.length);
-        nextPad += give;
-      }
     }
     park = `${move(cursorRow)}\u001b[${Math.max(1, pending.cursorColumn)}G`;
   } else {
-    const oldTop = anchored ? inlineBlock.top! : undefined;
+    const oldTop = anchored ? height - inlineBlock.rows : undefined;
     if (clear) { lead = CLEAR_SCREEN_AND_SCROLLBACK; inlineBlock.rows = 0; inlineBlock.cursorRow = 0; }
     else lead = eraseInlineBlock();
     const body = [...finished, ...live];
@@ -403,33 +396,28 @@ export function flushInlineFrame(
         // The phone's board is drawn from the top row: its keyboard slides the terminal up, and a page that ends
         // within the rows the keyboard leaves visible needs no slide, so none of it is cut off.
         nextPad = 0;
-        nextTop = undefined;
       } else {
         // The one absolute move: start low enough that what is printed ends on the last row.
         nextPad = Math.max(0, height - body.length);
         if (nextPad > 0) lead += `\u001b[${nextPad + 1};1H`;
-        nextTop = height - live.length;
       }
     } else if (oldTop !== undefined) {
-      // The cursor is on the old block's first row; the rows printed from there should end on the last.
-      const shift = height - oldTop - body.length;
-      const amount = shift < 0 ? Math.min(-shift, nextPad) : shift;
+      // The cursor is on the old block's first row. What is printed from there ends on the last row or runs past it,
+      // and every row it runs past would scroll one into the saved lines: the blank rows above the conversation go first.
+      const amount = Math.min(Math.max(0, oldTop + body.length - height), nextPad);
       if (amount > 0) {
-        lead += `${oldTop > 0 ? `\u001b[${oldTop}A` : ''}\u001b[${amount}${shift < 0 ? 'M' : 'L'}`;
-        const to = oldTop + (shift < 0 ? -amount : amount);
+        lead += `${oldTop > 0 ? `\u001b[${oldTop}A` : ''}\u001b[${amount}M`;
+        const to = oldTop - amount;
         if (to > 0) lead += `\u001b[${to}B`;
-        nextPad += shift < 0 ? -amount : amount;
+        nextPad -= amount;
       }
-      nextTop = height - live.length;
     }
     text = body.map((row, index) => `${row}\u001b[K${index < body.length - 1 ? '\r\n' : ''}`).join('');
     // The cursor is on the block's last row; walk up to the composer's.
     const back = lastRow - cursorRow;
     park = `${back ? `\u001b[${back}A` : ''}\u001b[${Math.max(1, pending.cursorColumn)}G`;
   }
-  inlineBlock.top = nextTop;
   inlineBlock.pad = nextPad;
-  inlineBlock.height = height;
   inlineBlock.rows = live.length;
   inlineBlock.cursorRow = cursorRow;
   inlineBlock.last = signature;
