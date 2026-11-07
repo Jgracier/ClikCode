@@ -6,8 +6,7 @@ import { runOptionPicker, type OptionPickerHost } from '../option-picker.js';
 import { runConversationBoard, type BoardResult, type ConversationBoardSettings } from '../conversation-board.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
 import { EMPTY_COMPOSER } from './state.js';
-import { queueMode } from '../modes.js';
-import { FULL_PAGE_OFF, FULL_PAGE_ON } from '../terminal-signals.js';
+import { setFullPage } from '../modes.js';
 
 /** The list is gone: draw the conversation again, composer included, before the choice is applied.
  * Blanking the screen here left the composer unseen for as long as that took (a provider switch
@@ -45,10 +44,10 @@ export function board(this: TerminalHarnessPrompter, settings: ConversationBoard
   if (inlineHistoryMode()) inlineBlock.clearNext = true;
   // Held since the turn was left (leaveTurn): the board's first frame replaces the chat.
   this.paintsHeld = false;
-  queueMode(FULL_PAGE_ON);
+  setFullPage(true);
   return runConversationBoard(this.pickerHost(), settings).finally(() => {
     this.surface = 'conversation';
-    queueMode(FULL_PAGE_OFF);
+    setFullPage(false);
     if (inlineHistoryMode()) this.emitted.requestReseed();
     lifecycle('window.board.close');
   });
