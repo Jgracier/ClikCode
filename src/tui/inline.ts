@@ -67,6 +67,14 @@ export const inlineBlock = {
   rows: 0, cursorRow: 0, clearNext: false, last: '', liveRows: [] as string[], columns: 0,
   /** The blank rows above the conversation (a conversation shorter than the screen) that retired rows have not yet used. */
   pad: 0,
+  /** The blank rows below the block that a terminal added when its screen grew and that nothing could take: the block is
+   * that many rows above the last, until output fills them. */
+  slack: 0,
+  /** The screen height the block was last placed for: it ended on the last row of a screen this tall. */
+  height: 0,
+  /** After a settled change of height, the screen row the terminal's cursor report puts the block's first row on (undefined
+   * when nothing was asked); the next frame consumes it. `measuring` holds frames back while the question is out. */
+  found: undefined as number | undefined, measuring: false,
 };
 
 /** Cursor-relative erase of the live block, leaving the cursor at column one of
@@ -80,5 +88,6 @@ export function eraseInlineBlock(): string {
   inlineBlock.last = '';
   inlineBlock.liveRows = [];
   inlineBlock.pad = 0;
+  inlineBlock.slack = 0;
   return out;
 }

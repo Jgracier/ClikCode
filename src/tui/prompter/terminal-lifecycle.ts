@@ -18,7 +18,7 @@ export function retakeScreen(this: TerminalHarnessPrompter): void {
   // Inline, whoever had the screen drew on it and left the cursor wherever they stopped: nothing of what was there is
   // known, so the conversation is written again.
   if (inlineHistoryMode()) this.emitted.requestReseed();
-  this.reseedIfScreenChanged();
+  this.rewrapIfWidthChanged();
   this.forgetScreenPosition();
   this.retakeTerminalSignals();
 }

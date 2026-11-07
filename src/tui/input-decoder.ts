@@ -252,7 +252,24 @@ export class TerminalInputDecoder {
 }
 
 /** `ESC [ row ; column R` is the terminal answering DSR, never a keystroke. */
-const CURSOR_POSITION_REPORT = /^\u001b\[\d+;\d+R$/;
+const CURSOR_POSITION_REPORT = /^\u001b\[(\d+);\d+R$/;
+
+/** Who is waiting for the terminal to say where its cursor is. */
+const cursorReports = new Set<(row: number) => void>();
+
+/** Asks the terminal for its cursor's row (`CSI 6 n`, which moves nothing) and hands it to `done`, counted from zero; or
+ * `undefined` when nothing answers in time. */
+export function askCursorRow(done: (row: number | undefined) => void, timeoutMs = 500): void {
+  const finish = (row: number | undefined): void => {
+    if (!cursorReports.delete(listener)) return;
+    clearTimeout(timer);
+    done(row);
+  };
+  const listener = (row: number): void => finish(row);
+  const timer = setTimeout(() => finish(undefined), timeoutMs);
+  cursorReports.add(listener);
+  output.write('\u001b[6n');
+}
 
 /** A read from the terminal is one batch of keys, and the end of it is
  * announced so a listener can draw once for the whole chunk.
@@ -311,10 +328,13 @@ function listenForTerminalKeys(onKey: (key: string) => void): () => void {
       if (key.startsWith('\u001b') || key.charCodeAt(0) < 0x20 || key === '\u007f') {
         logCursorEvent(`input ${JSON.stringify(key)} screen=${output.columns ?? '?'}x${output.rows ?? '?'}`);
       }
-      // A DSR reply is the terminal talking back, not the user typing.
-      // Nothing here asks for one any more, but a terminal may volunteer it
-      // and it must never be typed into the draft.
-      if (CURSOR_POSITION_REPORT.test(key)) continue;
+      // A DSR reply is the terminal talking back, not the user typing: whoever
+      // asked (askCursorRow) gets it, and one nobody asked for is dropped.
+      const report = CURSOR_POSITION_REPORT.exec(key);
+      if (report) {
+        for (const listener of [...cursorReports]) listener(Number(report[1]) - 1);
+        continue;
+      }
       // Focus in/out and OSC replies (theme notifications), likewise:
       // enabled for what they announce, not to be read.
       if (FOCUS_EVENT.test(key)) {

@@ -1,6 +1,6 @@
-import { stdin } from 'node:process';
-import { describe, expect, it } from 'vitest';
-import { KEEP_STDIN_FLOWING, TerminalInputDecoder, takeTerminalKeys, waitingEnterAction } from './input-decoder';
+import { stdin, stdout } from 'node:process';
+import { describe, expect, it, vi } from 'vitest';
+import { KEEP_STDIN_FLOWING, TerminalInputDecoder, askCursorRow, takeTerminalKeys, waitingEnterAction } from './input-decoder';
 import { editWaitingComposer } from './composer-edit';
 import { onPhoneVisibleRows, pageRows, setPhoneVisibleRows } from './inline';
 
@@ -155,5 +155,36 @@ describe('typed text survives however the link chunks it', () => {
     expect(decoder.push('\u0007x')).toEqual(['\u001b]11;rgb:0/0/0\u0007', 'x']);
     expect(decoder.push('\u001b]hello')).toEqual([]);
     expect(decoder.flush()).toEqual(['\u001b]', 'h', 'e', 'l', 'l', 'o']);
+  });
+});
+
+describe('asking the terminal where its cursor is', () => {
+  it('writes the query, hands the row to whoever asked and never to a reader as a key; a report nobody asked for is dropped', () => {
+    const write = vi.spyOn(stdout, 'write').mockImplementation((() => true) as never);
+    stdin.on('data', KEEP_STDIN_FLOWING);
+    const keys: string[] = [];
+    const stop = takeTerminalKeys((key) => keys.push(key));
+    try {
+      const rows: Array<number | undefined> = [];
+      askCursorRow((row) => rows.push(row));
+      expect(write).toHaveBeenCalledWith('\u001b[6n');
+      stdin.emit('data', Buffer.from('\u001b[34;5R'));
+      stdin.emit('data', Buffer.from('\u001b[3;9R'));
+      expect(rows).toEqual([33]);
+      expect(keys).toEqual([]);
+    } finally {
+      stop();
+      stdin.off('data', KEEP_STDIN_FLOWING);
+      stdin.pause();
+      write.mockRestore();
+    }
+  });
+
+  it('gives up with undefined when nothing answers', async () => {
+    const write = vi.spyOn(stdout, 'write').mockImplementation((() => true) as never);
+    try {
+      const row = await new Promise<number | undefined>((resolve) => askCursorRow(resolve, 10));
+      expect(row).toBeUndefined();
+    } finally { write.mockRestore(); }
   });
 });

@@ -60,7 +60,7 @@ export function renderFrame(
 }
 
 export function flushFrame(this: TerminalHarnessPrompter): void {
-  if (this.closed || this.suspended) return;
+  if (this.closed || this.suspended || inlineBlock.measuring) return;
   const pending = this.pendingLive;
   if (!pending) return;
   this.pendingLive = undefined;
@@ -325,10 +325,27 @@ export function flushInlineFrame(
   //    conversation is shorter than the screen, deletes a blank row above it: `pad`). Shrinking cannot pull a row back
   //    out of the scrollback, so the block keeps its height: the rows it no longer needs stay blank at its top (the
   //    spacer) until a retired row or a growing block uses them. History is never moved, never given blank rows.
-  //  - the terminal changing size. What a terminal does with its screen then (pull rows from scrollback, add blank
-  //    rows at the bottom, drop the rows below the cursor) differs from one to the next, so none of it is trusted: the
-  //    settled resize writes the conversation again from the model (a clear), and this function draws it anchored.
+  //  - the terminal changing height. What a terminal does with its own screen then (pull saved lines back, add blank rows
+  //    at the bottom, drop the rows below the cursor, push the top rows into the saved lines) differs from one to the
+  //    next, so it is asked, not assumed: `found` is the row its cursor report puts the block's first row on. The block
+  //    alone is erased and drawn again, to end on the last row. A conversation is never written for a change of height
+  //    (a change of width is the one that does: rows are wrapped for a width, see rewrapIfWidthChanged). Rows the block
+  //    now stands too low for are made by delete-lines at the top (the blank rows above a short conversation go first,
+  //    so none is scrolled into the saved lines); rows it stands too high for are made by insert-lines there, when the
+  //    saved lines hold nothing of the conversation. When they do, nothing can give the screen those rows back (a
+  //    terminal that does not pull them in itself has left blank rows below the block), and a blank row opened above
+  //    them would go into the saved lines at the next shrink: the block stays as high as those rows allow (`slack`)
+  //    until output fills them.
   const anchored = !clear && inlineBlock.rows > 0;
+  const found = anchored ? inlineBlock.found : undefined;
+  inlineBlock.found = undefined;
+  // Rows the terminal pushed into the saved lines (positive) or pulled back out of them (negative): the top of the screen
+  // goes first, and the top of the screen is the blank rows above a short conversation.
+  const moved = found === undefined ? 0 : inlineBlock.height - inlineBlock.rows - inlineBlock.slack - found;
+  const blanksOnly = moved > 0 && moved <= inlineBlock.pad;
+  // Whether the saved lines hold nothing of the conversation: a conversation shorter than the screen has blank rows above
+  // it, and a terminal that pulled saved lines back and still has room left had no more to pull.
+  const onScreen = inlineBlock.pad > 0 || moved < 0;
   if (anchored) {
     const spacer = Math.max(0, inlineBlock.rows - finished.length - live.length);
     if (spacer) {
@@ -349,16 +366,27 @@ export function flushInlineFrame(
   const modes = `${takeQueuedModes()}${clear ? phoneSignals() : ''}`;
   const signals = this.pendingSignals;
   this.pendingSignals = '';
-  if (!clear && !finished.length && !modes && !signals && signature === inlineBlock.last) return;
+  if (!clear && !finished.length && !modes && !signals && signature === inlineBlock.last) {
+    if (found === undefined) return;
+    // The terminal left the block where it belongs, or as high as the blank rows it added below allow: nothing to write.
+    const gap = height - found - inlineBlock.rows;
+    if (!blanksOnly && (gap === 0 || (gap > 0 && !onScreen))) {
+      inlineBlock.height = height;
+      inlineBlock.slack = Math.max(0, gap);
+      inlineBlock.pad = Math.max(0, inlineBlock.pad - Math.max(0, moved));
+      return;
+    }
+  }
   const previous = inlineBlock.liveRows;
   const columns = output.columns || 100;
   // Unchanged rows are never sent again: with the block already drawn, at the same width, and
   // nothing retired above it, only the rows that differ are rewritten, reached by relative motion.
-  const diff = anchored && !finished.length && previous.length === inlineBlock.rows && inlineBlock.columns === columns;
+  const diff = anchored && found === undefined && !finished.length && previous.length === inlineBlock.rows && inlineBlock.columns === columns;
   let lead = '';
   let text = '';
   let park: string;
-  let nextPad = inlineBlock.pad;
+  let nextPad = Math.max(0, inlineBlock.pad - Math.max(0, moved));
+  let nextSlack = 0;
   if (diff) {
     let at = inlineBlock.cursorRow;
     const move = (to: number): string => {
@@ -369,7 +397,7 @@ export function flushInlineFrame(
     if (live.length > previous.length && nextPad > 0) {
       // Growing from the bottom edge: pull the blank rows above the conversation out first,
       // so nothing blank scrolls into the saved lines. The cursor ends on the block's new top.
-      const top = height - previous.length;
+      const top = height - previous.length - inlineBlock.slack;
       const take = Math.min(live.length - previous.length, nextPad);
       text += `${top + at > 0 ? `\u001b[${top + at}A` : ''}\u001b[${take}M`;
       at = -(top - take);
@@ -384,10 +412,12 @@ export function flushInlineFrame(
       text += move(previous.length - 1);
       for (let index = previous.length; index < live.length; index += 1) text += `\r\n${live[index]}\u001b[K`;
       at = live.length - 1;
-    }
+      // The new rows go into the blank rows below the block before any of them scrolls.
+      nextSlack = Math.max(0, inlineBlock.slack - (live.length - previous.length));
+    } else nextSlack = inlineBlock.slack;
     park = `${move(cursorRow)}\u001b[${Math.max(1, pending.cursorColumn)}G`;
   } else {
-    const oldTop = anchored ? height - inlineBlock.rows : undefined;
+    const oldTop = anchored ? found ?? inlineBlock.height - inlineBlock.rows - inlineBlock.slack : undefined;
     if (clear) { lead = CLEAR_SCREEN_AND_SCROLLBACK; inlineBlock.rows = 0; inlineBlock.cursorRow = 0; }
     else lead = eraseInlineBlock();
     const body = [...finished, ...live];
@@ -402,8 +432,9 @@ export function flushInlineFrame(
         if (nextPad > 0) lead += `\u001b[${nextPad + 1};1H`;
       }
     } else if (oldTop !== undefined) {
-      // The cursor is on the old block's first row. What is printed from there ends on the last row or runs past it,
-      // and every row it runs past would scroll one into the saved lines: the blank rows above the conversation go first.
+      // The cursor is on the old block's first row. What is printed from there ends on the last row, runs past it, or
+      // stops short of it.
+      // Past it: every row it runs past would scroll one into the saved lines, so the blank rows above the conversation go first.
       const amount = Math.min(Math.max(0, oldTop + body.length - height), nextPad);
       if (amount > 0) {
         lead += `${oldTop > 0 ? `\u001b[${oldTop}A` : ''}\u001b[${amount}M`;
@@ -411,6 +442,18 @@ export function flushInlineFrame(
         if (to > 0) lead += `\u001b[${to}B`;
         nextPad -= amount;
       }
+      // Short of it: the terminal added blank rows below the block. If it has nothing of the conversation in the saved lines
+      // the screen is pushed down by as many, and the blank rows that open at its top are the new blank rows above the
+      // conversation. Otherwise the block stays where it is, as high as those rows allow, until output fills them: there
+      // is no way to give the screen the saved lines back, and a blank row opened above them would be pushed into the
+      // saved lines by the next shrink, one more blank band in the conversation each time the screen changes.
+      const gap = height - oldTop - body.length;
+      if (gap > 0 && onScreen) {
+        lead += `\u001b[1;1H\u001b[${gap}L\u001b[${oldTop + gap + 1};1H`;
+        nextPad += gap;
+      } else if (gap > 0) nextSlack = gap;
+      // Blank rows the terminal pushed into the saved lines were all it had there: none of the conversation, so they go.
+      if (blanksOnly) lead += '\u001b[3J';
     }
     text = body.map((row, index) => `${row}\u001b[K${index < body.length - 1 ? '\r\n' : ''}`).join('');
     // The cursor is on the block's last row; walk up to the composer's.
@@ -418,6 +461,8 @@ export function flushInlineFrame(
     park = `${back ? `\u001b[${back}A` : ''}\u001b[${Math.max(1, pending.cursorColumn)}G`;
   }
   inlineBlock.pad = nextPad;
+  inlineBlock.slack = nextSlack;
+  if (!anchored || found !== undefined) inlineBlock.height = height;
   inlineBlock.rows = live.length;
   inlineBlock.cursorRow = cursorRow;
   inlineBlock.last = signature;

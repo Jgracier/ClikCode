@@ -9,7 +9,19 @@ const MARKER = /\bH(\d{3})\b/;
 const RULE = /^\s*─{10,}\s*$/;
 const STATUS = /Grok Build|•.*•/;
 
-export function judge(snap) {
+/** The conversation as the snapshot shows it: from its first row to the row above the live block, blank rows above the first row (the screen's own) left out. */
+function conversation(snap) {
+  const all = [...snap.scrollback, ...snap.screen].map((row) => row.text);
+  const first = all.findIndex((row) => row.trim() !== '');
+  const status = all.findLastIndex((row) => STATUS.test(row));
+  const rule = all.findLastIndex((row, index) => index < status && RULE.test(row));
+  const block = rule > 0 ? all.findLastIndex((row, index) => index < rule && RULE.test(row)) : -1;
+  let end = block > 0 ? block : all.length;
+  while (end > first && all[end - 1].trim() === '') end -= 1;
+  return all.slice(Math.max(0, first), end);
+}
+
+export function judge(snap, start) {
   const problems = [];
   const text = (row) => row.text;
   const screen = snap.screen.map(text);
@@ -20,7 +32,10 @@ export function judge(snap) {
   if (snap.alt !== (mode === 'full')) problems.push(`alternate screen is ${snap.alt ? 'up' : 'down'} in ${mode} mode`);
   // The composer and status are the last rows of the screen: a rule, the composer, a rule, the status line.
   if (!opts.noBlock) {
-    const last = screen.length - 1;
+    // xterm.js adds blank rows below the block when the screen grows with the cursor above its footer, instead of pulling saved lines back
+    // (see the report of the toggle scenarios): once there are saved lines to pull, the block stands as high as those rows allow.
+    let last = screen.length - 1;
+    if (snap.pulls === false && scroll.length > 0) while (last > 0 && blank(screen[last])) last -= 1;
     if (blank(screen[last] ?? '') || !STATUS.test(screen[last] ?? '')) {
       const at = screen.findLastIndex((row) => STATUS.test(row));
       problems.push(`status line is not the last screen row (it is row ${at + 1} of ${screen.length}; the last is ${JSON.stringify(screen[last])})`);
@@ -49,7 +64,7 @@ export function judge(snap) {
   while (lastContent > 0 && blank(all[lastContent - 1])) lastContent -= 1;
   lastContent -= 1;
   // Trailing blanks after the last content are a block that is not at the bottom (reported above), not a gap.
-  if (!opts.board && worst >= 2 && worstAt <= lastContent) problems.push(`a run of ${worst} blank rows inside the conversation (ending at row ${worstAt + 1} of ${all.length}, ${worstAt < scroll.length ? 'in scrollback' : 'on screen'})`);
+  if (!opts.board && !opts.turns && worst >= 2 && worstAt <= lastContent) problems.push(`a run of ${worst} blank rows inside the conversation (ending at row ${worstAt + 1} of ${all.length}, ${worstAt < scroll.length ? 'in scrollback' : 'on screen'})`);
   // History markers: each once, in order, none missing, for the ones the scenario has had printed.
   if (!opts.noHistory && snap.expectMarkers && mode === 'full') {
     // Full-screen: the viewport shows the newest rows, the older ones are scrolled back. The newest is shown, and what is shown has no hole.
@@ -68,6 +83,16 @@ export function judge(snap) {
     const ordered = seen.every((value, index) => index === 0 || value >= seen[index - 1]);
     if (!ordered) problems.push('history rows out of order');
   }
+  // The conversation is what it was: every row, blank rows between turns included, in place.
+  if (mode !== 'full' && opts.sameAs && start && start !== snap) {
+    const was = conversation(start);
+    const now = conversation(snap);
+    const at = was.findIndex((row, index) => row !== now[index]);
+    if (at >= 0 || was.length !== now.length) problems.push(`the conversation is not what it was at "${opts.sameAs}": ${was.length} rows then, ${now.length} now, first difference at row ${at + 1} (${JSON.stringify(was[at])} then, ${JSON.stringify(now[at])} now)`);
+  }
+  // What the program wrote since the last snapshot (a change of height alone, inline: the alternate screen draws its own rows): bounded by the live block, no history row among it.
+  if (mode !== 'full' && opts.maxBytes !== undefined && snap.bytes !== undefined && snap.bytes > opts.maxBytes) problems.push(`${snap.bytes} bytes written, more than ${opts.maxBytes}`);
+  if (mode !== 'full' && opts.maxHistoryRows !== undefined && snap.historyRows !== undefined && snap.historyRows > opts.maxHistoryRows) problems.push(`${snap.historyRows} history row(s) written again`);
   // Nothing wrapped: every row is drawn to fit the width.
   if (!opts.allowWrap) {
     const wrapped = [...snap.scrollback, ...snap.screen].filter((row) => row.wrapped).length;
@@ -76,5 +101,5 @@ export function judge(snap) {
   return problems;
 }
 
-const verdicts = snaps.map((snap) => ({ label: snap.label, size: `${snap.cols}x${snap.rows}`, problems: judge(snap) }));
+const verdicts = snaps.map((snap) => ({ label: snap.label, floats: snap.pulls === false && snap.scrollback.length > 0 ? snap.screen.length - 1 - snap.screen.findLastIndex((row) => row.text.trim() !== '') : 0, size: `${snap.cols}x${snap.rows}`, problems: judge(snap, snaps.find((other) => other.label === snap.opts?.sameAs)) }));
 console.log(JSON.stringify(verdicts));
