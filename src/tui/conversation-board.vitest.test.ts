@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { setPhoneVisibleRows } from './inline';
 import type { PickerOption } from '../harness/prompter';
 import { boardCapacity, boardHint, boardKey, boardRows, boardSessionsSettled, boardSettlePending, boardStartRow, type BoardState } from './conversation-board';
 
@@ -191,14 +192,26 @@ describe('when the board can hand the terminal to a new build', () => {
 });
 
 describe('the board on the phone terminal', () => {
-  // The phone slides the terminal up by the keyboard (up to 43% of the screen) without resizing it: a taller page loses its top rows.
-  it('takes at most the share of the screen the keyboard leaves visible (57% of it)', () => {
-    const phone = { CLIKDEPLOY_CLIENT: 'mobile' };
-    expect(boardCapacity(58, false, phone) + 6).toBeLessThanOrEqual(33);
-    expect(boardCapacity(58, true, phone) + 7).toBeLessThanOrEqual(33);
+  const phone = { CLIKDEPLOY_CLIENT: 'mobile' };
+  afterEach(() => setPhoneVisibleRows(undefined));
+
+  // The phone does not resize for its keyboard: it reports the rows above it, and the page ends on the last of them.
+  it('takes exactly the rows the phone reports above its keyboard', () => {
+    setPhoneVisibleRows(33);
+    expect(boardCapacity(58, false, phone) + 6).toBe(33);
+    expect(boardCapacity(58, true, phone) + 7).toBe(33);
+    setPhoneVisibleRows(50);
+    expect(boardCapacity(58, false, phone) + 6).toBe(50);
+  });
+
+  it('takes the whole page when the phone shows every row, and until it has reported', () => {
+    expect(boardCapacity(58, false, phone)).toBe(52);
+    setPhoneVisibleRows(80);
+    expect(boardCapacity(58, false, phone)).toBe(52);
   });
 
   it('takes the whole page anywhere else', () => {
+    setPhoneVisibleRows(33);
     expect(boardCapacity(58, false, {})).toBe(52);
   });
 });

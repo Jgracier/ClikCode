@@ -15,6 +15,16 @@ export const POP_TITLE = '\u001b[23;0t';
 export const FOCUS_REPORTING_ON = '\u001b[?1004h';
 export const FOCUS_REPORTING_OFF = '\u001b[?1004l';
 
+/** `CSI ?9701h`: the terminal reports how many rows the person can see, `CSI ?9701;<rows>t`, whenever that changes. The ClikDeploy
+ * phone terminal never resizes for its keyboard: the keyboard covers the bottom of a full-height screen, so the rows above it are the
+ * rows a full-page surface may use. Asked for like focus reports; a terminal that does not know the mode ignores it. */
+export const VISIBLE_ROWS_REPORTING_ON = '\u001b[?9701h';
+export const VISIBLE_ROWS_REPORTING_OFF = '\u001b[?9701l';
+
+/** `CSI ?9702h` / `l`: a full-page surface (the conversation board) is open / closed. A client that rides a keyboard reads it. */
+export const FULL_PAGE_ON = '\u001b[?9702h';
+export const FULL_PAGE_OFF = '\u001b[?9702l';
+
 /** Unfocused at least this long before a notification is worth sending:
  * a glance at another window is not looking away (Grok's rule). */
 export const NOTIFY_AFTER_UNFOCUSED_MS = 3000;

@@ -25,7 +25,7 @@ import type { PickerOption } from '../harness/prompter.js';
 import { takeTerminalKeys } from './input-decoder.js';
 import { keyHintFor } from '../harness/protocol/wording.js';
 import { reducedMotion } from './capabilities.js';
-import { pageRows } from './inline.js';
+import { onPhoneVisibleRows, pageRows } from './inline.js';
 import { pickerDeletesSelection } from './command-palette.js';
 import { asideOpener, confirmRowDelete, redrawOnRefresh, type OptionPickerHost } from './option-picker.js';
 import { conversationLabel } from './pickers/conversation-activity.js';
@@ -255,6 +255,7 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
     const chatSelections = new Map<string, number>();
     let finished = false;
     let stopInput: () => void = () => {};
+    let stopVisibleRows: () => void = () => {};
     const rows = (): readonly PickerOption<string>[] => level === 'machines'
       ? settings.machines?.() ?? []
       : boardRows(state, settings.conversations(machine), settings.commands);
@@ -329,7 +330,7 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
         { capacity, headings: true, title: level === 'machines' ? 'Machines' : undefined, hideChatTitle: true,
           hint: level === 'machines' ? '↑↓ choose · → chats · ← back' : boardHint(state, showing, Boolean(settings.machines)) });
     };
-    const drawKey = (): string => `${level}\u0000${machine}\u0000${machineSelected}\u0000${state.draft}\u0000${state.selected}\u0000${state.finding ?? ''}\u0000${state.query ?? ''}\u0000${frame}\u0000${output.rows}`;
+    const drawKey = (): string => `${level}\u0000${machine}\u0000${machineSelected}\u0000${state.draft}\u0000${state.selected}\u0000${state.finding ?? ''}\u0000${state.query ?? ''}\u0000${frame}\u0000${output.rows}\u0000${pageRows(output.rows ?? 24)}`;
     /** A redraw for something outside the board: only if what it shows moved. */
     const redraw = (): void => {
       if (finished || aside) return;
@@ -342,6 +343,7 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
       stopSpin();
       host.setSelecting(false);
       stopInput();
+      stopVisibleRows();
       // The next paint is the conversation chosen (or the one left, on Esc), drawn with its
       // composer in one change; clearing the board first drew the conversation being left, bare.
       // Adding a machine is not that: its questions and steps are drawn on the chat.
@@ -415,6 +417,7 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
     };
     listen();
     redrawOnRefresh(settings.refresh, redraw);
+    stopVisibleRows = onPhoneVisibleRows(redraw);
     settings.listChanged?.(redraw);
   });
 }

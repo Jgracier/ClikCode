@@ -4,9 +4,9 @@
 import { kittyKeyboardSafe, POP_KITTY_KEYBOARD, PUSH_KITTY_KEYBOARD } from './keys.js';
 import { stdin as input } from 'node:process';
 import { MOUSE_MODES_OFF, signalsTeardown, terminalModes, terminalTeardown } from './restore.js';
-import { FOCUS_REPORTING_ON } from './terminal-signals.js';
+import { FOCUS_REPORTING_ON, VISIBLE_ROWS_REPORTING_ON } from './terminal-signals.js';
 import { logCursorEvent } from './cursor-log.js';
-import { inlineHistoryMode } from './inline.js';
+import { inlineHistoryMode, phoneClient } from './inline.js';
 
 /** Bracketed paste. Without it the terminal hands pasted text over as ordinary
  * keystrokes, so every newline inside a paste reads as Enter -- which submitted
@@ -77,7 +77,7 @@ export function sessionModesOn(opening = false): string {
   terminalModes.bracketedPaste = true;
   terminalModes.wheelReporting = !SELECTION_MODE.active;
   const mouse = SELECTION_MODE.active ? '' : opening ? OPENING_MOUSE_TRACKING() : ENABLE_MOUSE_TRACKING();
-  return `${ENABLE_BRACKETED_PASTE}${mouse}${FOCUS_REPORTING_ON}`;
+  return `${ENABLE_BRACKETED_PASTE}${mouse}${FOCUS_REPORTING_ON}${phoneClient() ? VISIBLE_ROWS_REPORTING_ON : ''}`;
 }
 
 /** Every session mode off, and the title and progress handed back, for
@@ -120,6 +120,9 @@ export function redrawPreamble(redraw: Redraw | undefined): string {
  * them first, inside its synchronized update, never interleaved with one
  * already on its way. */
 let queuedModes = '';
+export function queueMode(sequence: string): void {
+  queuedModes += sequence;
+}
 export function takeQueuedModes(): string {
   const taken = queuedModes;
   queuedModes = '';
