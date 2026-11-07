@@ -25,6 +25,22 @@ function fakes(queue: string[], work: (id: string, ctx: WorkContext) => Promise<
   return { ports, log, reports, renewed, closed, excludes, states, restarts: () => restarts };
 }
 
+describe('browser faults', () => {
+  it('a vendor whose browser would not open is retried in minutes, not shelved with the long cooldown', async () => {
+    const f = fakes(['a'], async id => outcome(id, { status: 'handoff', summary: 'the agent micro-task did not finish (5 calls): Browser was blocked ("ClikCode Chrome is open outside ClikCode")' }));
+    await runLoop(f.ports, limits({ cooldownMs: 6 * 3_600_000 }));
+    expect(f.reports[0]![1]).toMatchObject({ outcome: 'retry', retryAfterMs: 5 * 60_000 });
+    const last = f.states.at(-1)!.cooldown.a;
+    if (last) expect(Date.parse(last)).toBeLessThan(Date.now() + 10 * 60_000);
+  });
+
+  it('an ordinary unfinished handoff still takes the long cooldown', async () => {
+    const f = fakes(['a'], async id => outcome(id, { status: 'handoff', summary: 'the agent micro-task did not finish (9 calls): no key page found' }));
+    await runLoop(f.ports, limits({ cooldownMs: 6 * 3_600_000 }));
+    expect(f.reports[0]![1]).toMatchObject({ outcome: 'retry', retryAfterMs: 6 * 3_600_000 });
+  });
+});
+
 describe('budget', () => {
   it('counts every ClikDeploy call and refuses the one past the budget', async () => {
     const client = { waiting: async () => [], batch: async () => ({ results: [], skipped: [] }), onboard: async () => ({}) as never, report: async () => undefined, note: async () => undefined, tool: async () => ({}) } as DeployClient;

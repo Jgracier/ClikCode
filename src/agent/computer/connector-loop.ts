@@ -88,6 +88,10 @@ export const DEFAULT_LIMITS: LoopLimits = {
 };
 
 export interface WorkContext { tab: string; budget: CallBudget; limits: LoopLimits; deadline: number; signal?: AbortSignal }
+/** A browser that did not open is a fault of ours, not a verdict on the vendor: try the vendor again in minutes, not hours. */
+const BROWSER_DOWN = /ClikCode browser is busy|Chrome is open outside ClikCode|browser (is|was) (blocked|unavailable)/i;
+const BROWSER_RETRY_MS = 5 * 60_000;
+
 export interface LoopReport { outcome: 'done' | 'blocked' | 'retry'; reason: string; retryAfterMs?: number; humanStep?: VendorOutcome['humanStep'] }
 export interface LoopState {
   pid: number; startedAt: string; until: string; parallel: number; updatedAt: string; stopping?: boolean;
@@ -139,12 +143,13 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
     const kind = outcome.status === 'published' ? 'published' : wall ? 'wall' : outcome.status;
     summary.done[kind] = (summary.done[kind] ?? 0) + 1;
     if (wall) summary.walls[wall] = (summary.walls[wall] ?? 0) + 1;
-    cooldown.mark(id, wall && wall !== 'budget' ? limits.wallCooldownMs : limits.cooldownMs);
+    const browserDown = !wall && outcome.status !== 'published' && BROWSER_DOWN.test(outcome.summary);
+    cooldown.mark(id, browserDown ? BROWSER_RETRY_MS : wall && wall !== 'budget' ? limits.wallCooldownMs : limits.cooldownMs);
     const reason = scrubSecrets(outcome.summary).replace(/\s+/g, ' ').slice(0, 400);
     let report: LoopReport | undefined;
     if (outcome.status === 'published') report = { outcome: 'done', reason: reason || 'published' };
     else if (outcome.status === 'human' && wall && !/already holds/.test(outcome.recorded ?? '')) report = { outcome: 'blocked', reason: `wall:${wall}: ${reason}`.padEnd(10, '.').slice(0, 480), ...(outcome.humanStep ? { humanStep: outcome.humanStep } : {}) };
-    else if (outcome.status === 'budget' || outcome.status === 'error' || outcome.status === 'handoff') report = { outcome: 'retry', retryAfterMs: limits.cooldownMs, reason: `${wall === 'budget' ? 'wall:budget' : outcome.status}: ${reason}`.padEnd(10, '.').slice(0, 480) };
+    else if (outcome.status === 'budget' || outcome.status === 'error' || outcome.status === 'handoff') report = { outcome: 'retry', retryAfterMs: browserDown ? BROWSER_RETRY_MS : limits.cooldownMs, reason: `${wall === 'budget' ? 'wall:budget' : outcome.status}: ${reason}`.padEnd(10, '.').slice(0, 480) };
     let reported = report ? report.outcome : 'none';
     if (report) await ports.report(id, report).catch(error => { reported = `${report!.outcome}-failed(${scrubSecrets(error instanceof Error ? error.message : String(error)).slice(0, 80)})`; });
     ports.log(`${new Date(now()).toISOString()} id=${id} outcome=${outcome.status} wall=${wall ?? '-'} calls=${budget.used} minutes=${minutes.toFixed(1)} steps=${outcome.steps} reported=${reported}${outcome.recipe ? ' recipe=yes' : ''} ${JSON.stringify(reason.slice(0, 160))}`);
