@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stdout } from 'node:process';
 import { flushInlineFrame } from './prompter/frame-flush.js';
-import { eraseInlineBlock, inlineBlock, inlineHistoryMode, setPhoneVisibleRows } from './inline.js';
+import { eraseInlineBlock, inlineBlock, inlineHistoryMode } from './inline.js';
 import { asciiMode, foldAscii } from './glyphs.js';
 import { TestScreen } from './inline-screen.vitest-helper.js';
 
@@ -48,17 +48,6 @@ describe('inline frame writer', () => {
     expect(writes).toHaveLength(1);
   });
 
-  it('a cleared repaint on the phone asks again for the visible-rows reports, so a page that was reloaded learns them', () => {
-    vi.stubEnv('CLIKDEPLOY_CLIENT', 'mobile');
-    frame('hi');
-    inlineBlock.clearNext = true;
-    expect(frame('hi')).toContain('\u001b[?9701h');
-    expect(frame('hi again')).not.toContain('?9701');
-    vi.unstubAllEnvs();
-    inlineBlock.clearNext = true;
-    expect(frame('plain')).not.toContain('?9701');
-  });
-
   it('writes nothing for an unchanged frame', () => {
     frame('hi');
     expect(frame('hi')).toBe('');
@@ -101,7 +90,7 @@ describe('inline frame writer', () => {
 });
 
 describe('mode selection', () => {
-  const cases: Array<[string, NodeJS.ProcessEnv, number, boolean]> = [
+  const cases: Array<[string, NodeJS.ProcessEnv, number, boolean, boolean?]> = [
     ['plain xterm', { TERM: 'xterm-256color' }, 120, false],
     ['empty env', {}, 120, false],
     ['iTerm', { TERM: 'xterm-256color', TERM_PROGRAM: 'iTerm.app' }, 120, false],
@@ -111,23 +100,25 @@ describe('mode selection', () => {
     ['kitty', { TERM: 'xterm-kitty' }, 120, false],
     ['vscode', { TERM_PROGRAM: 'vscode' }, 120, false],
     ['alacritty', { TERM: 'alacritty' }, 120, false],
-    ['tmux', { TMUX: '/tmp/tmux-1/default,1,0', TERM: 'xterm-256color', TERM_PROGRAM: 'iTerm.app' }, 200, true],
+    ['tmux, mouse off (the default)', { TMUX: '/tmp/tmux-1/default,1,0', TERM: 'screen-256color', TERM_PROGRAM: 'iTerm.app' }, 200, true, false],
+    ['tmux, mouse on, a good terminal behind it', { TMUX: '/tmp/tmux-1/default,1,0', TERM: 'tmux-256color', TERM_PROGRAM: 'iTerm.app' }, 200, false, true],
+    ['tmux, mouse on, plain local terminal', { TMUX: 'x', TERM: 'tmux-256color' }, 200, false, true],
+    ['tmux, mouse on, over ssh', { TMUX: 'x', TERM: 'tmux-256color', SSH_TTY: '/dev/pts/1' }, 200, true, true],
     ['screen STY', { STY: '1.pts-0' }, 200, true],
-    ['TERM=screen', { TERM: 'screen-256color' }, 200, true],
-    ['TERM=tmux', { TERM: 'tmux-256color' }, 200, true],
+    ['TERM=screen outside tmux', { TERM: 'screen-256color' }, 200, true],
+    ['TERM=tmux outside tmux', { TERM: 'tmux-256color' }, 200, true],
     ['dumb', { TERM: 'dumb' }, 200, true],
     ['linux console', { TERM: 'linux' }, 200, true],
-    ['ssh narrow', { TERM: 'xterm-256color', SSH_CONNECTION: 'a b c d', TERM_PROGRAM: 'Foo' }, 80, true],
+    ['ssh narrow, unknown program', { TERM: 'xterm-256color', SSH_CONNECTION: 'a b c d', TERM_PROGRAM: 'Foo' }, 80, true],
+    ['ssh wide, known-unknown program: the width says nothing', { TERM: 'xterm-256color', SSH_CONNECTION: 'a b c d', TERM_PROGRAM: 'Foo' }, 300, true],
     ['ssh wide unknown program', { TERM: 'xterm-256color', SSH_TTY: '/dev/pts/1' }, 200, true],
     ['ssh wide known program', { TERM: 'xterm-256color', SSH_TTY: '/dev/pts/1', TERM_PROGRAM: 'WezTerm' }, 200, false],
-    ['ssh wide, unknown width', { SSH_TTY: '/dev/pts/1' }, 0, true],
-    ['mobile', { CLIKDEPLOY_CLIENT: 'mobile', TERM_PROGRAM: 'iTerm.app' }, 120, true],
+    ['the phone terminal is a client like any other: no special case', { CLIKDEPLOY_CLIENT: 'mobile', TERM: 'xterm-256color' }, 120, false],
     ['force off beats tmux', { CLIKCODE_INLINE: '0', TMUX: 'x' }, 80, false],
-    ['force off beats mobile', { CLIKCODE_INLINE: '0', CLIKDEPLOY_CLIENT: 'mobile' }, 80, false],
     ['force on beats iTerm', { CLIKCODE_INLINE: '1', TERM_PROGRAM: 'iTerm.app' }, 200, true],
   ];
-  it.each(cases)('%s', (_name, env, columns, expected) => {
-    expect(inlineHistoryMode(env, columns)).toBe(expected);
+  it.each(cases)('%s', (_name, env, _columns, expected, mouse) => {
+    expect(inlineHistoryMode(env, () => mouse ?? false)).toBe(expected);
   });
 });
 
@@ -361,6 +352,38 @@ describe('inline block stays on the bottom rows', () => {
       }
     });
 
+    it('a cursor report that never came back repaints the block from the tracked position: no history row, no absolute move, no 3J, no guessed re-anchor', () => {
+      paint('');
+      for (let n = 1; n <= 5; n += 1) paint('', [message(n)]);
+      for (const next of [67, 40, 12]) {
+        term.resize(next, pulls);
+        (host as { viewportRows: () => number }).viewportRows = () => next;
+        inlineBlock.lost = true;
+        const bytes = frame('', [], live(''));
+        term.write(bytes);
+        expect(bytes).not.toContain('message');
+        expect(bytes).not.toMatch(/\u001b\[\d*;\d*H|\u001b\[\d*[LM]|\u001b\[3J|\u001b\[2J/);
+        expect(term.screen().filter((row) => row.startsWith('>'))).toHaveLength(1);
+        expect(term.screen().filter((row) => row.includes('claude'))).toHaveLength(1);
+        expect(shown()).toEqual([1, 2, 3, 4, 5].map(message));
+        expect(inlineBlock.lost).toBe(false);
+      }
+    });
+
+    it('drops blank rows a shrinking screen pushed into the saved lines (3J) only on a measured position, only over blanks', () => {
+      paint('');
+      for (let n = 1; n <= 5; n += 1) paint('', [message(n)]);
+      const shrink = (measured: boolean): string => {
+        term.resize(12, pulls);
+        (host as { viewportRows: () => number }).viewportRows = () => 12;
+        if (measured) inlineBlock.found = term.y - inlineBlock.cursorRow; else inlineBlock.lost = true;
+        const bytes = frame('', [], live(''));
+        term.write(bytes);
+        return bytes;
+      };
+      expect(shrink(false)).not.toContain('\u001b[3J');
+    });
+
     it('that leaves the block where it belongs writes nothing', () => {
       paint('');
       for (let n = 1; n <= 100; n += 1) paint('', [message(n)]);
@@ -377,80 +400,5 @@ describe('inline block stays on the bottom rows', () => {
     paint('w');
     expect(composerRow()).toBe(lastRow - 2);
     expect(term.screen().filter((r) => r.startsWith('message'))).toEqual([message(1)]);
-  });
-});
-
-describe('the phone board', () => {
-  const ROWS = 40;
-  const BUDGET = 22; // the rows the phone reports above its keyboard
-  let screen: TestScreen;
-  const draw = (surface: string, rows: string[], cursorRow = rows.length - 1): void => {
-    writes.length = 0;
-    (host as { surface: string }).surface = surface;
-    flushInlineFrame.call(host as never, [], { live: rows, cursorRow, cursorColumn: 3, hideCursor: false });
-    screen.write(writes.join(''));
-  };
-  const footer = [rule, '> ', rule, '  claude'];
-  /** The open board as the prompter hands it over: the list is the overlay, the composer block the live rows. */
-  const board = (n: number): string[] => {
-    (host as { pickerOverlay: string[]; chromeRows: number }).pickerOverlay = [rule, ...Array.from({ length: n }, (_, i) => `  convo ${i}`), '  hint'];
-    (host as { chromeRows: number }).chromeRows = footer.length;
-    return footer;
-  };
-
-  beforeEach(() => {
-    writes = [];
-    vi.stubEnv('CLIKDEPLOY_CLIENT', 'mobile');
-    Object.defineProperty(stdout, 'columns', { value: COLS, configurable: true });
-    vi.spyOn(stdout, 'write').mockImplementation(((chunk: string, cb?: () => void) => { writes.push(String(chunk)); cb?.(); return true; }) as never);
-    eraseInlineBlock();
-    inlineBlock.clearNext = false;
-    setPhoneVisibleRows(BUDGET);
-    host = { alternateTranscript: [], alternateTrimmed: 0, viewportRows: () => ROWS, pickerOverlay: [], chromeRows: 0, pendingSignals: '', frameInFlight: false, closed: false, suspended: false, flushFrame: () => {}, surface: 'conversation' };
-    screen = new TestScreen(ROWS, COLS);
-  });
-  afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); eraseInlineBlock(); setPhoneVisibleRows(undefined); });
-
-  it('draws the open board from the top row, and the chat from the bottom row once it closes', () => {
-    inlineBlock.clearNext = true;
-    draw('conversation', live('hi'));
-    expect(screen.screen()[ROWS - 1]).toContain('claude');
-    inlineBlock.clearNext = true;
-    draw('history', board(10), 1);
-    const open = screen.screen();
-    expect(open[0]).toBe(rule);
-    expect(open[1]).toContain('convo 0');
-    // a block of the visible budget: the composer block ends on its last row, whatever the list holds
-    expect(open[BUDGET - 1]).toContain('claude');
-    expect(open.slice(BUDGET).every((row) => row === '')).toBe(true);
-    for (const n of [4, 12, 2, 10]) {
-      draw('history', board(n), 1);
-      const now = screen.screen();
-      expect(now[0]).toBe(rule);
-      expect(now[BUDGET - 1]).toContain('claude');
-      expect(now[BUDGET - 3]).toBe('>');
-      expect(now.slice(BUDGET).every((row) => row === '')).toBe(true);
-    }
-    inlineBlock.clearNext = true;
-    (host as { pickerOverlay: string[]; chromeRows: number }).pickerOverlay = [];
-    (host as { chromeRows: number }).chromeRows = 0;
-    draw('conversation', live('hi'));
-    const closed = screen.screen();
-    expect(closed[ROWS - 1]).toContain('claude');
-    expect(closed.join('')).not.toContain('convo');
-  });
-
-  it('ends the open board on the last row the phone reports, as the keyboard comes and goes', () => {
-    inlineBlock.clearNext = true;
-    draw('history', board(10), 1);
-    for (const visible of [ROWS, 22, 14, ROWS, 30]) {
-      setPhoneVisibleRows(visible);
-      // the board lists what fits above its composer block (capacity), as the real board does
-      draw('history', board(Math.min(10, visible - 6)), 1);
-      const now = screen.screen();
-      expect(now[visible - 1], `visible ${visible}`).toContain('claude');
-      expect(now[visible - 3]).toBe('>');
-      expect(now.slice(visible).every((row) => row === '')).toBe(true);
-    }
   });
 });

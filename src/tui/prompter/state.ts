@@ -8,16 +8,13 @@ import type { TurnUsage } from '../../harness/protocol/turn-usage.js';
 
 export const EXIT_CONFIRM_MS = 2000;
 
-/** How long a resize burst is given to finish before the settled redraw: the
- * redraw waits this long after the LAST size change, and only then clears the
- * screen and draws once (onResize draws nothing itself). A phone's keyboard
- * reports its sizes in two kinds of gap: tens of milliseconds apart while it
- * slides, and then 170-250 ms before the last one (54 rows, then 32). Measured
- * over a day of a real phone's log: 328 gaps of 120-250 ms and 56 of 250-400.
- * A window shorter than that gap redraws -- and clears -- twice, which is the
- * footer flashing under the composer. Longer than the kept gaps, shorter than
- * a person notices a screen that has not yet caught up. */
-export const RESIZE_SETTLE_MS = 350;
+/** How long a resize burst is given to finish before the settled redraw: the redraw waits this long after the LAST size
+ * change, and only then clears (or re-anchors) and draws once (onResize draws nothing itself). It only has to span the
+ * gap between the sizes of one gesture: a dragged window sends them a few milliseconds apart, and the phone resizes its
+ * pty once per keyboard change (it used to send two, 170-250 ms apart, which needed 350 ms). A keystroke typed during
+ * the wait is not held back, so this is not echo latency; what a resize costs the person is this plus the cursor
+ * report's round trip (askCursorRow). */
+export const RESIZE_SETTLE_MS = 100;
 
 /** The least a pending scroll moves in one frame, so a drain always finishes.
  * Claude Code's value. */

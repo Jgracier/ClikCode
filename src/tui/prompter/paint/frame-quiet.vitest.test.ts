@@ -100,14 +100,14 @@ describe('frames', () => {
     expect(settled).toContain('typing');
   });
 
-  it('a keyboard opening (54 rows, then 32 about 200 ms later) is one redraw, not two', () => {
+  it('two sizes inside one settle window (54 rows, then 32) are one redraw, not two', () => {
     vi.useFakeTimers();
     const prompter = open();
     prompter.render(session());
     written.length = 0;
     Object.assign(process.stdout, { rows: 54 });
     prompter.onResize();
-    vi.advanceTimersByTime(200);
+    vi.advanceTimersByTime(RESIZE_SETTLE_MS / 2);
     expect(written.join('')).toBe('');
     Object.assign(process.stdout, { rows: 32 });
     prompter.onResize();

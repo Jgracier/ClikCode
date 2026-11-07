@@ -6,7 +6,7 @@ into scrollback, no history lost or repeated, no row wider than the screen. No r
 (../fake-grok.mjs) plays the turns, in a throwaway HOME.
 
     node scripts/build.mjs
-    python3 scripts/tui-e2e/resize-matrix/matrix.py [--only NAME] [--emu xterm|xterm-no3j|tmux] [--mode inline|full|auto] [--keep]
+    python3 scripts/tui-e2e/resize-matrix/matrix.py [--only NAME] [--emu xterm|xterm-no3j|xterm-mute|tmux] [--mode inline|full|auto] [--keep]
 
 Exit status 0 when every checked snapshot holds every invariant."""
 import argparse, base64, fcntl, json, os, pty, select, shutil, signal, struct, subprocess, sys, tempfile, termios, time
@@ -14,7 +14,7 @@ import argparse, base64, fcntl, json, os, pty, select, shutil, signal, struct, s
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 HERE = os.path.dirname(os.path.abspath(__file__))
 ENTRY = os.environ.get('MATRIX_ENTRY', os.path.join(REPO, 'dist/index.js'))  # the build under test
-SETTLE = 1.2  # RESIZE_SETTLE_MS is 350
+SETTLE = 1.2  # RESIZE_SETTLE_MS is 100; a cursor report that is never answered times out after 300 ms (xterm-mute)
 
 def marker_block(first, last, extra=''):
     return '\n'.join(f'- H{n:03d} marker line{extra}' for n in range(first, last + 1))

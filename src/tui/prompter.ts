@@ -32,6 +32,7 @@ import type { Selection } from './render/selection.js';
 import { reducedMotion } from './capabilities.js';
 import { KEEP_STDIN_FLOWING, onTerminalFocus } from './input-decoder.js';
 import { sessionModesOn, setTerminalRawMode, type Redraw } from './modes.js';
+import { probeTerminal } from './probe.js';
 import { PlanEntry } from './render/plan-block.js';
 import { type ComposerFrame, EMPTY_COMPOSER, type WaitingTurn } from './prompter/state.js';
 import { retakeScreen, retakeTerminalSignals, takeTerminalTitle, terminalSignals, notifyIfAway, suspendToShell, onContinue, close, suspend, resume } from './prompter/terminal-lifecycle.js';
@@ -385,6 +386,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // Selection mode means the user asked for the mouse back; taking the
       // screen must not quietly take it again.
       output.write(sessionModesOn(true));
+      // Asked, not believed; never waited for (see probe.ts for the fallback when nothing answers).
+      void probeTerminal();
     }
     // The shell's own title is saved, to be put back on the way out; this
     // UI sets its own while it runs (syncTerminalSignals).

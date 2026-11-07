@@ -1,3 +1,5 @@
+import { spawnSync } from 'node:child_process';
+
 /** Inline-history mode: the conversation is printed once into the terminal's own
  * scrollback and only the composer and status block is redrawn, with relative
  * cursor motion, at the bottom. No alternate screen and no mouse reporting, so
@@ -5,56 +7,42 @@
  *
  * Which mode runs, first match wins:
  *   1. CLIKCODE_INLINE=1 / 0 forces inline / full-screen.
- *   2. CLIKDEPLOY_CLIENT=mobile (the ClikDeploy phone terminal) is inline.
- *   3. tmux / screen (TMUX or STY set, TERM starting with screen or tmux) is inline: a
- *      multiplexer swallows the mouse and alternate screen whatever sits behind it.
- *   4. TERM=dumb or linux (the console has no reliable alternate screen or mouse) is inline.
- *   5. A known good local terminal (TERM_PROGRAM iTerm.app, Apple_Terminal, WezTerm, ghostty,
+ *   2. GNU screen (STY set, or TERM screen* outside tmux) is inline: screen ships with `altscreen off`, so it
+ *      swallows the alternate screen. tmux does not: it keeps the alternate screen, and what it does not do is pass
+ *      the mouse to the program unless its `mouse` option is on, and full-screen scrolls by wheel. So inside tmux
+ *      the mode follows that option (asked once, `tmux show-options -gv mouse`): mouse on, the rules below; off, inline.
+ *   3. TERM=dumb or linux (the console has no reliable alternate screen or mouse) is inline.
+ *   4. A known good local terminal (TERM_PROGRAM iTerm.app, Apple_Terminal, WezTerm, ghostty,
  *      kitty, vscode, Alacritty; or the matching TERM) is full-screen, even over ssh.
- *   6. Over ssh (SSH_CONNECTION or SSH_TTY): inline when narrower than 100 columns or
- *      TERM_PROGRAM is unknown (the local terminal is not known to be a good one).
- *   7. Otherwise full-screen.
- * `columns` is the terminal width, when known. */
+ *   5. Over ssh (SSH_CONNECTION or SSH_TTY) from a terminal not known to be a good one: inline. ssh does not carry
+ *      TERM_PROGRAM, so this is every ssh session whose TERM does not name a good terminal. The width of the window says
+ *      nothing about it (a wide window over ssh scrolls as badly as a narrow one), so it is not read.
+ *   6. Otherwise full-screen. */
 const GOOD_TERMINAL_PROGRAMS = new Set(['iterm.app', 'apple_terminal', 'wezterm', 'ghostty', 'kitty', 'vscode', 'alacritty']);
 const GOOD_TERMS = new Set(['xterm-kitty', 'alacritty', 'xterm-ghostty', 'wezterm']);
 
-export function inlineHistoryMode(env: NodeJS.ProcessEnv = process.env, columns: number | undefined = process.stdout.columns): boolean {
+/** Whether the tmux this runs in forwards the mouse to programs (its `mouse` option), asked once per process. */
+let tmuxMouse: boolean | undefined;
+export function tmuxForwardsMouse(): boolean {
+  if (tmuxMouse === undefined) {
+    try {
+      tmuxMouse = spawnSync('tmux', ['show-options', '-gv', 'mouse'], { encoding: 'utf8', timeout: 500 }).stdout.trim() === 'on';
+    } catch { tmuxMouse = false; }
+  }
+  return tmuxMouse;
+}
+
+export function inlineHistoryMode(env: NodeJS.ProcessEnv = process.env, tmuxMouseOn: () => boolean = tmuxForwardsMouse): boolean {
   if (env.CLIKCODE_INLINE === '1') return true;
   if (env.CLIKCODE_INLINE === '0') return false;
-  if (phoneClient(env)) return true;
   const term = (env.TERM ?? '').toLowerCase();
-  if (env.TMUX || env.STY || term.startsWith('screen') || term.startsWith('tmux')) return true;
+  if (env.TMUX) { if (!tmuxMouseOn()) return true; }
+  else if (env.STY || term.startsWith('screen') || term.startsWith('tmux')) return true;
   if (term === 'dumb' || term === 'linux') return true;
   const program = (env.TERM_PROGRAM ?? '').toLowerCase();
   const good = GOOD_TERMINAL_PROGRAMS.has(program) || GOOD_TERMS.has(term);
   if (good) return false;
-  if (env.SSH_CONNECTION || env.SSH_TTY) return (columns ?? 0) < 100 || !program;
-  return false;
-}
-
-export const phoneClient = (env: NodeJS.ProcessEnv = process.env): boolean => env.CLIKDEPLOY_CLIENT === 'mobile';
-
-/** The rows of the phone's screen above its keyboard, as the phone last reported them (`CSI ?9701;<rows>t`); undefined until it has.
- * The phone terminal never resizes for its keyboard: the keyboard covers the bottom of a full-height screen. */
-let phoneVisibleRows: number | undefined;
-const visibleRowsListeners = new Set<() => void>();
-
-export function setPhoneVisibleRows(rows: number | undefined): void {
-  if (rows === phoneVisibleRows) return;
-  phoneVisibleRows = rows;
-  for (const listener of [...visibleRowsListeners]) listener();
-}
-
-/** Called when the phone reports a different number of visible rows. */
-export function onPhoneVisibleRows(listener: () => void): () => void {
-  visibleRowsListeners.add(listener);
-  return () => { visibleRowsListeners.delete(listener); };
-}
-
-/** The rows a full-page surface (the conversation board) may take of a screen `rows` tall: all of them, except on the phone, where
- * the keyboard covers the bottom of the screen and the page ends where it begins, its last line (the composer) just above it. */
-export function pageRows(rows: number, env: NodeJS.ProcessEnv = process.env): number {
-  return phoneClient(env) && phoneVisibleRows !== undefined ? Math.max(1, Math.min(rows, phoneVisibleRows)) : rows;
+  return Boolean(env.SSH_CONNECTION || env.SSH_TTY);
 }
 
 /** Screen and saved lines, then home: replacing the conversation must leave none
@@ -75,6 +63,9 @@ export const inlineBlock = {
   /** After a settled change of height, the screen row the terminal's cursor report puts the block's first row on (undefined
    * when nothing was asked); the next frame consumes it. `measuring` holds frames back while the question is out. */
   found: undefined as number | undefined, measuring: false,
+  /** The cursor report never came back after a change of height: where the block stands is unknown, so the next frame
+   * erases and draws it from the cursor, with no vertical re-anchoring guessed (see anchorBlock). */
+  lost: false,
 };
 
 /** Cursor-relative erase of the live block, leaving the cursor at column one of

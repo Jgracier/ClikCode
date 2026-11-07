@@ -78,9 +78,15 @@ export function rewrapIfWidthChanged(this: TerminalHarnessPrompter): boolean {
 export function anchorBlock(this: TerminalHarnessPrompter): void {
   if (!inlineBlock.rows) { this.repaint(); return; }
   inlineBlock.measuring = true;
+  const asked = Date.now();
   const done = (row: number | undefined): void => {
     inlineBlock.measuring = false;
-    if (row !== undefined) {
+    logCursorEvent(`resize cursor report ${row === undefined ? 'timed out' : `answered row ${row}`} after ${Date.now() - asked} ms`);
+    // No answer is a defined failure, not a guess: the position the terminal moved the block to is unknown, so the next
+    // frame erases the block from the cursor and draws it there (see `lost` in flushInlineFrame). A late answer is
+    // dropped by the decoder (nobody is waiting for it).
+    if (row === undefined) inlineBlock.lost = true;
+    else {
       inlineBlock.found = row - inlineBlock.cursorRow;
       // The block is taller than the screen now: its top rows went into the saved lines, where nothing can take them out
       // again. The one case where the conversation is written again for a change of height.

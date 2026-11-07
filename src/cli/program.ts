@@ -71,10 +71,9 @@ export function handleCommandError(error: unknown): void {
 const TERMINAL_ENVIRONMENT_HELP = `
 Terminal environment:
   CLIKCODE_INLINE=1|0         Force inline-history mode (scrollback, no alternate screen or mouse) on or off.
-                              Unset: inline in tmux/screen, TERM=dumb|linux, over ssh when narrower than
-                              100 columns or from an unknown terminal, and for CLIKDEPLOY_CLIENT=mobile;
+                              Unset: inline in GNU screen, in tmux unless its "mouse" option is on,
+                              TERM=dumb|linux, and over ssh from a terminal not known to be a good one;
                               full-screen in iTerm, Terminal, WezTerm, ghostty, kitty, VS Code and Alacritty.
-  CLIKDEPLOY_CLIENT=mobile    The ClikDeploy phone terminal: inline mode.
   CLIKCODE_ASCII=1|0          Force ASCII rules, box drawing and spinner on or off. Unset: on when the locale
                               (LC_ALL, LC_CTYPE, LANG) is not UTF-8 or TERM=linux.
   CLIKCODE_TUI=classic        Line-oriented output instead of the live terminal UI.

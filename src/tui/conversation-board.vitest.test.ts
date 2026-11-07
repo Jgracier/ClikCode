@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { setPhoneVisibleRows } from './inline';
 import type { PickerOption } from '../harness/prompter';
 import { boardCapacity, boardHint, boardKey, boardRows, boardSessionsSettled, boardSettlePending, boardStartRow, type BoardState } from './conversation-board';
 
@@ -191,27 +190,11 @@ describe('when the board can hand the terminal to a new build', () => {
   });
 });
 
-describe('the board on the phone terminal', () => {
-  const phone = { CLIKDEPLOY_CLIENT: 'mobile' };
-  afterEach(() => setPhoneVisibleRows(undefined));
-
-  // The phone does not resize for its keyboard: it reports the rows above it, and the page ends on the last of them.
-  it('takes exactly the rows the phone reports above its keyboard', () => {
-    setPhoneVisibleRows(33);
-    expect(boardCapacity(58, false, phone) + 6).toBe(33);
-    expect(boardCapacity(58, true, phone) + 7).toBe(33);
-    setPhoneVisibleRows(50);
-    expect(boardCapacity(58, false, phone) + 6).toBe(50);
-  });
-
-  it('takes the whole page when the phone shows every row, and until it has reported', () => {
-    expect(boardCapacity(58, false, phone)).toBe(52);
-    setPhoneVisibleRows(80);
-    expect(boardCapacity(58, false, phone)).toBe(52);
-  });
-
-  it('takes the whole page anywhere else', () => {
-    setPhoneVisibleRows(33);
-    expect(boardCapacity(58, false, {})).toBe(52);
+describe('the board takes the screen it is given', () => {
+  // The phone resizes its pty to the rows above its keyboard, so output.rows is already the visible page.
+  it('lists what fits in the rows of the screen, whoever the client is', () => {
+    expect(boardCapacity(58, false) + 6).toBe(58);
+    expect(boardCapacity(58, true) + 7).toBe(58);
+    expect(boardCapacity(33, false) + 6).toBe(33);
   });
 });
