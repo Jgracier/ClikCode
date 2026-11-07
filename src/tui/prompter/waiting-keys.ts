@@ -42,6 +42,15 @@ export function onWaitingKey(this: TerminalHarnessPrompter, key: string): void {
     this.scrollTranscript(-Number.MAX_SAFE_INTEGER);
     return;
   }
+  // The command menu is an overlay: Esc closes it (and the slash line with
+  // it) and goes no further. Only with nothing open does Esc reach the turn.
+  if (!this.pendingApproval && !this.signInInput && key === '\u001b' && this.waitingPalette(turn).length) {
+    turn.draft = '';
+    turn.cursor = 0;
+    this.updateWaiting();
+    this.flushPaint();
+    return;
+  }
   if (this.pendingApproval?.question) {
     this.questionKey(turn, this.pendingApproval, key);
     return;
