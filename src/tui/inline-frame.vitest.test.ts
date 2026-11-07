@@ -224,6 +224,20 @@ describe('inline block stays on the bottom rows', () => {
     expect(term.scrollback[0]).toBe(message(0));
   });
 
+  it('writes a whole conversation again (clear screen and scrollback, every row, the live block) as ONE write inside ONE synchronized update', () => {
+    paint('');
+    writes.length = 0;
+    inlineBlock.clearNext = true;
+    paint('', Array.from({ length: 2000 }, (_, i) => message(i)));
+    expect(writes).toHaveLength(1);
+    const frameBytes = writes[0]!;
+    expect(frameBytes.startsWith('\u001b[?2026h')).toBe(true);
+    expect(frameBytes.endsWith('\u001b[?2026l')).toBe(true);
+    expect(frameBytes.match(/\u001b\[\?2026[hl]/g)).toHaveLength(2); // none between: a client that holds the picture until the end holds ALL of it
+    expect(frameBytes).toContain('\u001b[3J');
+    expect(frameBytes).toContain(message(1999));
+  });
+
   it('follows a shorter screen and a taller one', () => {
     paint('');
     paint('', [message(1), '']);
