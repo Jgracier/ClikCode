@@ -9,6 +9,7 @@ import { runChild } from './testing/concurrency.js';
 import { listStoredSessionIds } from '../store/records.js';
 import { STORED_BLANK_GRACE_MS, discardIfBlank } from '../blank.js';
 import { openConversation } from '../attach.js';
+import { deleteConversations } from './deletions.js';
 
 const now = () => new Date().toISOString();
 const message = (content: string, role: 'user' | 'assistant' = 'user') => ({ role, content });
@@ -76,7 +77,7 @@ describe('a chat deleted by one process', () => {
 
     const deleter = await readState();
     const stale = await readState();
-    deleter.sessions = deleter.sessions.filter((item) => item.id !== 'x');
+    deleteConversations(deleter, ['x']);
     await writeState(deleter);
 
     const kept = stale.sessions.find((item) => item.id === 'x')!;

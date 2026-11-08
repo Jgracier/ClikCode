@@ -28,6 +28,7 @@ import { isTurnCancelled } from '../agent/cancellation.js';
 import { isUsageExhaustedMessage, type ResumeAt } from '../turn/usage-exhausted.js';
 import { carryOnAfterExhaustion, type ExhaustionRetryGuard, type ResumedIn } from '../tui/pickers/resume-in.js';
 import type { HarnessPrompter } from '../harness/prompter.js';
+import { deleteConversations } from './state/deletions.js';
 
 /** Reopened, a closed or archived chat is active again. */
 export function activateSession(session: HarnessSession): boolean {
@@ -91,7 +92,7 @@ export async function openConversation(
   // until something happens in it, and earlier ones left behind go now --
   // but not one another process stored and is about to use.
   const { isLive, isOpen } = await liveWorkers();
-  state.sessions = state.sessions.filter((item) => !blankChatSweepable(item, isLive, Date.now(), isOpen));
+  deleteConversations(state, state.sessions.filter((item) => blankChatSweepable(item, isLive, Date.now(), isOpen)).map((item) => item.id));
   const fresh = launchSession(state, workspace);
   state.sessions.push(fresh);
   // Pinned before it is written: a sibling chat's write must not drop it (ephemeral.ts pinDraft).

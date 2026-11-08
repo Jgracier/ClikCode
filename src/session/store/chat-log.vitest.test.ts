@@ -11,6 +11,7 @@ import { runChild } from '../state/testing/concurrency.js';
 import { chatLogStats, parseChatLog } from './chat-log.js';
 import { MIGRATION_FAULTS, readSessionTranscript } from './transcripts.js';
 import { listStoredSessionIds } from './records.js';
+import { deleteConversations } from '../state/deletions.js';
 
 /** The message log and its migration from `<id>.json` (store/transcripts.ts). */
 
@@ -316,7 +317,7 @@ describe('forks', () => {
     expect(await readFile(path('child.json'), 'utf8')).toBe(childText);
     // The parent is deleted: the child gets its own whole copy first.
     const deleting = await readState();
-    deleting.sessions = deleting.sessions.filter((item) => item.id !== 'parent');
+    deleteConversations(deleting, ['parent']);
     await writeState(deleting);
     expect(await exists('parent.json')).toBe(false);
     expect(await exists('parent.jsonl')).toBe(false);

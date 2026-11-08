@@ -9,6 +9,7 @@ import { lifecycle } from '../../runtime/lifecycle-log.js';
 import { withStateLock } from '../store/locks.js';
 import { forgetSessionArtifacts } from '../store/forget.js';
 import { deleteSessionTranscript, readSessionTranscript, writeOwnTranscript, writeSessionTranscript } from '../store/transcripts.js';
+import { clearDeletions, pendingDeletions } from './deletions.js';
 import { HarnessStateVersionError, indexStructureChanged, loadIndex, storeIndex, type StateIndex } from './index-file.js';
 import { capInvocations } from './invocations.js';
 import { BaselinedState, DRAFT_BASELINE, STATE_BASELINE, StateBaselineData, baselineOf, baselineSession, indexFromWorking, mergedIndex, rememberBaseline } from './merge.js';
@@ -39,6 +40,8 @@ export async function writeState(state: HarnessState): Promise<void> {
   const baseline = (state as BaselinedState)[STATE_BASELINE];
   let written: StateBaselineData | undefined;
   const deleted: string[] = [];
+  // Deleted on purpose through this state (deleteConversations): the only deletions this write makes.
+  const pending = new Set(pendingDeletions(state));
   const deferred: string[] = [];
   await withStateLock(async (held) => {
     // Where a slow write spends its time (state.write.slow): every window waits while it holds the lock.
@@ -60,10 +63,12 @@ export async function writeState(state: HarnessState): Promise<void> {
     clock.snapshot = Date.now() - clock.start - clock.index;
     const sessions = [...(state.sessions ?? [])];
     const diskIds = new Set((disk?.sessions ?? []).map((session) => session.id));
+    // Only what was stored is deleted; a draft this process dropped was never anywhere.
+    const removed = new Set([...pending].filter((id) => baseline?.sessions.has(id) || diskIds.has(id)));
     // A draft is not a conversation. It stays off disk until it is used, or
     // until a worker in another process has to read it (force). One already
-    // on disk stays until this process drops it from its working copy, which
-    // is how an empty chat an older build stored gets removed.
+    // on disk stays until a caller deletes it (deleteConversations), which is
+    // how an empty chat an older build stored gets removed.
     const writing = new Set(sessions.map((session) => session.id));
     for (const session of ephemeralSessions()) {
       if (!writing.has(session.id) && !draftPinned(session.id)) dropEphemeral(session.id);
@@ -75,7 +80,8 @@ export async function writeState(state: HarnessState): Promise<void> {
     const persisted = sessions.filter((session) => !isBlankConversation(session) || diskIds.has(session.id) || sessionForceStored(session.id));
     const persistedState = { ...state, sessions: persisted };
     const drafts = (state as BaselinedState)[DRAFT_BASELINE];
-    const next = baseline && disk ? mergedIndex(baseline, persistedState, disk, drafts) : indexFromWorking(persistedState, disk);
+    const next = baseline && disk ? mergedIndex(baseline, persistedState, disk, drafts, removed) : indexFromWorking(persistedState, disk, removed);
+    const tombstoned = new Set(Object.keys(disk?.deletedSessions ?? {}));
     next.version = HARNESS_STATE_VERSION;
     capInvocations(next);
 
@@ -83,9 +89,10 @@ export async function writeState(state: HarnessState): Promise<void> {
     for (const session of persisted) {
       const transcript = taken.sessions.get(session.id)!.transcript;
       const before = baseline?.sessions.get(session.id);
-      // Stored when this copy read it and gone now: deleted elsewhere. The
-      // index merge drops it (mergeById); its transcript stays gone too.
-      if (before && disk && !diskIds.has(session.id)) continue;
+      // Deleted elsewhere, on purpose (a tombstone): the index merge drops it, and its transcript
+      // stays gone too. A row merely missing from the index is not that: it is put back, and its
+      // transcript stored like any other.
+      if (before && tombstoned.has(session.id)) continue;
       const draft = diskIds.has(session.id) ? drafts?.get(session.id) : undefined;
       let changed: boolean;
       // baselineOf shares an unchanged transcript with the baseline.
@@ -93,6 +100,8 @@ export async function writeState(state: HarnessState): Promise<void> {
       // A draft stored elsewhere since this copy read it: only a transcript
       // this process changed is its to write; the stored one is newer.
       else if (draft) changed = !sameData(draft.transcript, transcript);
+      // Not opened by this copy: nothing of it to store (and a conversation whose log is lost is not read here).
+      else if (transcript.messages === undefined && transcript.pendingTurn === undefined) changed = false;
       // New here: compare with what is actually stored so nothing is
       // written needlessly or lost.
       else changed = !sameData(await readSessionTranscript(session.id), transcript);
@@ -133,10 +142,9 @@ export async function writeState(state: HarnessState): Promise<void> {
     const total = Date.now() - clock.start;
     if (total >= 300) lifecycle('state.write.slow', { ms: total, indexMs: clock.index, snapshotMs: clock.snapshot, transcriptsMs: clock.transcripts, storeMs: clock.store, wrote: clock.wrote, loaded: clock.loaded, sessions: persisted.length, ...(clock.store > 100 && disk ? { changed: indexChanges(disk, next) } : {}) });
 
-    // 3. Deliberate deletions last, children materialized before the parent goes.
-    const remaining = new Set(next.sessions.map((session) => session.id));
-    for (const id of baseline?.sessions.keys() ?? []) {
-      if (remaining.has(id)) continue;
+    // 3. Deliberate deletions last, children materialized before the parent goes. Only what a caller
+    // deleted: a conversation absent from the state, or from the index, is not a deletion.
+    for (const id of removed) {
       await deleteSessionTranscript(held, id);
       deleted.push(id);
     }
@@ -161,6 +169,7 @@ export async function writeState(state: HarnessState): Promise<void> {
   // deferred transcripts: those move the baseline forward only as far as they
   // actually write.
   rememberBaseline(state, written);
+  clearDeletions(state, pending);
   for (const id of deferred) await writeDeferredTranscript(state, id);
   // What else the deleted chats left (agent history, checkpoints):
   // outside the lock, since a checkpoint directory can be large.

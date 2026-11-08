@@ -18,8 +18,10 @@ import { ensurePrivateDirectory } from '../store/files.js';
 import { forgetSessionArtifacts, removeStrandedFiles, sessionIdsWithArtifacts } from '../store/forget.js';
 import { safeRecordFileName, stateDirectory } from '../store/paths.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
+import { loadIndex } from './index-file.js';
 import { readState } from './read.js';
 import { writeState } from './write.js';
+import { deleteConversations } from './deletions.js';
 
 const HOUR_MS = 60 * 60_000;
 const SWEEP_EVERY_MS = 24 * HOUR_MS;
@@ -54,9 +56,9 @@ export async function sweepState(now = Date.now()): Promise<SweepReport> {
   let changed = false;
   // Empty chats left on disk (with or without a transcript file), under the
   // same rule as every other blank sweep: never one something may be using.
-  const kept = state.sessions.filter((session) => !sessionFromIndex(session) || !blankChatSweepable(session, workerIsLive, now, isOpen));
-  report.blank = state.sessions.length - kept.length;
-  if (report.blank) { state.sessions = kept; changed = true; }
+  const blank = state.sessions.filter((session) => sessionFromIndex(session) && blankChatSweepable(session, workerIsLive, now, isOpen)).map((session) => session.id);
+  report.blank = blank.length;
+  if (report.blank) { deleteConversations(state, blank); changed = true; }
   for (const session of state.sessions) {
     if (!staleTurn(session, workerIsLive, isOpen, now)) continue;
     session.messages = sessionTranscriptMessages(session);
@@ -66,12 +68,16 @@ export async function sweepState(now = Date.now()): Promise<SweepReport> {
   }
   if (changed) await writeState(state);
 
-  // Every name a live chat's artifacts can have (the stores encode ids).
-  const names = new Set(state.sessions.flatMap((session) => [session.id, safeRecordFileName(session.id), session.id.replace(/[^A-Za-z0-9._-]/g, '_')]));
+  // Artifacts of conversations that were deleted (a tombstone in the index), under every name the
+  // stores give their ids. A chat merely missing from the index is not deleted: its checkpoints and
+  // tool output are the one copy there is, and stay.
+  const names = (id: string): string[] => [id, safeRecordFileName(id), id.replace(/[^A-Za-z0-9._-]/g, '_')];
+  const deleted = new Set(Object.keys((await loadIndex())?.deletedSessions ?? {}).flatMap(names));
+  const listed = new Set(state.sessions.flatMap((session) => names(session.id)));
   const root = stateDirectory();
   for (const id of await sessionIdsWithArtifacts()) {
     if (report.orphans >= MAX_ORPHANS) break;
-    if (names.has(id)) continue;
+    if (listed.has(id) || !deleted.has(id)) continue;
     const places = [join(root, 'sessions', id), join(root, 'checkpoints', id), join(root, 'turn-changes', `${id}.json`)];
     if (!(await Promise.all(places.map((path) => oldEnough(path, now)))).every(Boolean)) continue;
     await forgetSessionArtifacts(id);

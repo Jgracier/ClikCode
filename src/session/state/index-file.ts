@@ -23,6 +23,9 @@ export interface StateIndex {
   devicePublicKey?: Record<string, unknown>;
   accounts: AiHarnessAccount[];
   sessions: SessionMeta[];
+  /** Conversations deleted on purpose, by id, with when (deletions.ts). A conversation is
+   * never taken to be deleted for being absent from this list. */
+  deletedSessions?: Record<string, string>;
   /** Every invocation on record. Stored in invocations.jsonl, not in index.json. */
   invocations: Invocation[];
   invocationRollups: Record<string, InvocationRollup>;
