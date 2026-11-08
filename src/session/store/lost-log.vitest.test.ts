@@ -100,3 +100,19 @@ describe('a conversation that never had a log', () => {
     expect((await stat(join(root, 'sessions', 'made.logged'))).size).toBe(0);
   });
 });
+
+describe('a search over every conversation', () => {
+  it('skips one whose log is gone instead of failing', async () => {
+    root = await mkdtemp(join(tmpdir(), 'clikcode-lost-'));
+    process.env.CLIKCODE_HOME = root;
+    const state = await readState();
+    state.sessions.push(chat('gone', said(8)), chat('fine', said(4)));
+    await writeState(state);
+    await unlink(join(root, 'sessions', 'gone.jsonl'));
+    resetHarnessStateCaches();
+    const { sessionDoc, resetCorpusCache } = await import('../../search/corpus.js');
+    resetCorpusCache();
+    expect(await sessionDoc('gone')).toBeUndefined();
+    expect((await sessionDoc('fine'))?.messages).toHaveLength(4);
+  });
+});
