@@ -7,7 +7,7 @@ import { terminalModes } from '../restore.js';
 import { highlightWords } from '../render/search-focus.js';
 import { highlightSelectionAt, scrollShift, shiftedRow } from '../render/selection.js';
 import { logCursorEvent } from '../cursor-log.js';
-import { eraseInlineBlock, inlineBlock, inlineHistoryMode, CLEAR_SCREEN_AND_SCROLLBACK } from '../inline.js';
+import { eraseInlineBlock, inlineBlock, inlineHistoryMode, CLEAR_SCREEN, CLEAR_SCREEN_AND_SCROLLBACK } from '../inline.js';
 import { asciiMode, foldAscii } from '../glyphs.js';
 import { syncBegin, syncEnd } from '../probe.js';
 import { redrawPreamble, takeQueuedModes } from '../modes.js';
@@ -289,26 +289,40 @@ export function flushInlineFrame(
   finished: readonly string[],
   pending: { live: string[]; cursorRow: number; cursorColumn: number; hideCursor: boolean },
 ): void {
+  const height = this.viewportRows();
+  // A modal surface: an open list (the board, the palette, a picker) is the whole visible screen, not a block under the
+  // conversation. It is drawn from the top row at output.rows; when it closes the conversation block is anchored again.
+  const overlay = this.pickerOverlay;
+  const chrome = this.chromeRows;
+  const page = chrome > 0 && pending.live.length >= chrome && (this.surface === 'history' || overlay.length > 0);
+  if (page && !inlineBlock.page) {
+    // The conversation's rows on the visible screen are about to be cleared (not the saved lines): keep them to write again.
+    const above = Math.max(0, inlineBlock.height - inlineBlock.rows - inlineBlock.slack - inlineBlock.pad);
+    inlineBlock.tail = inlineBlock.rows > 0 && above > 0 ? this.alternateTranscript.slice(-above) : [];
+  }
   // Line numbers for the rows kept, as the alternate frame does; nothing is drawn from them.
   if (finished.length) {
     this.alternateTranscript.push(...finished);
     const excess = this.alternateTranscript.length - ALTERNATE_TRANSCRIPT_ROWS;
     if (excess > 0) { this.alternateTranscript.splice(0, excess); this.alternateTrimmed += excess; }
   }
-  const height = this.viewportRows();
   let live = pending.live;
   let cursorRow = pending.cursorRow;
-  // An open list covers the rows just above the footer: in this mode it is
-  // part of the block, which grows for it and shrinks when it closes.
-  const overlay = this.pickerOverlay;
-  const chrome = this.chromeRows;
+  if (page) { flushInlinePage.call(this, finished, pending, height); return; }
   if (overlay.length && chrome > 0 && live.length >= chrome) {
     const limit = Math.max(1, (output.columns || 100) - 1);
     const at = live.length - chrome;
     live = [...live.slice(0, at), ...overlay.map((row) => safeRow(row, limit)), ...live.slice(at)];
     if (cursorRow >= at) cursorRow += overlay.length;
   }
-  const clear = inlineBlock.clearNext;
+  // The surface closed: the screen is cleared (not the saved lines) and the conversation written again with the block, ending
+  // on the last row. A conversation about to be written whole (clearNext) needs none of the kept rows.
+  const leaving = inlineBlock.page;
+  const keptTail = leaving && !inlineBlock.clearNext ? inlineBlock.tail : [];
+  inlineBlock.page = false;
+  inlineBlock.tail = [];
+  const wipe = inlineBlock.clearNext;
+  const clear = wipe || leaving;
   inlineBlock.clearNext = false;
   // THE ANCHORING RULE. The block ends on the last row of the screen, and everything above it is the conversation, in
   // order, with no row of it ever blank, repeated or lost. Two things change the rows available to the conversation:
@@ -414,9 +428,9 @@ export function flushInlineFrame(
     // never learned. The block is erased from the cursor and drawn there; `pad` and `slack` are unknown, so zero.
     const oldTop = lost ? undefined : anchored ? found ?? inlineBlock.height - inlineBlock.rows - inlineBlock.slack : undefined;
     if (lost) { nextPad = 0; nextSlack = 0; }
-    if (clear) { lead = CLEAR_SCREEN_AND_SCROLLBACK; inlineBlock.rows = 0; inlineBlock.cursorRow = 0; }
+    if (clear) { lead = wipe ? CLEAR_SCREEN_AND_SCROLLBACK : CLEAR_SCREEN; inlineBlock.rows = 0; inlineBlock.cursorRow = 0; }
     else lead = eraseInlineBlock();
-    const body = [...finished, ...live];
+    const body = [...keptTail, ...finished, ...live];
     if (clear) {
       // The one absolute move: start low enough that what is printed ends on the last row.
       nextPad = Math.max(0, height - body.length);
@@ -465,6 +479,67 @@ export function flushInlineFrame(
   this.frameInFlight = true;
   terminalModes.painted = true;
   logCursorEvent(`inline frame: block=${live.length} finished=${finished.length} composer=${cursorRow} col=${pending.cursorColumn}`);
+  output.write(frame, () => {
+    this.frameInFlight = false;
+    if (this.pendingLive && !this.closed && !this.suspended) this.flushFrame();
+  });
+}
+
+/** A modal surface, drawn as the whole visible screen: the list from the top row, blank rows below a short one, the composer
+ * and status on the last rows. Opening it clears the visible screen only, so the conversation's saved lines stay for when
+ * it closes; the rows the conversation retires meanwhile are kept (inlineBlock.tail) and written when it does. A change of
+ * size is the terminal's own business with its saved lines (a smaller screen pushes the top rows of this page into them),
+ * so it clears them too, and the conversation is written whole when the surface closes. */
+function flushInlinePage(
+  this: TerminalHarnessPrompter,
+  finished: readonly string[],
+  pending: { live: string[]; cursorRow: number; cursorColumn: number; hideCursor: boolean },
+  height: number,
+): void {
+  const limit = Math.max(1, (output.columns || 100) - 1);
+  const columns = output.columns || 100;
+  const at = pending.live.length - this.chromeRows;
+  const footer = pending.live.slice(at);
+  const list = this.pickerOverlay.map((row) => safeRow(row, limit));
+  const rows = [...list.slice(Math.max(0, list.length + footer.length - height)), ...footer];
+  const blank = Math.max(0, height - rows.length);
+  rows.splice(rows.length - footer.length, 0, ...Array<string>(blank).fill(''));
+  const cursorRow = Math.max(0, Math.min(rows.length - 1, rows.length - footer.length + Math.max(0, pending.cursorRow - at)));
+  const resized = inlineBlock.page && (inlineBlock.height !== height || inlineBlock.columns !== columns);
+  const fresh = !inlineBlock.page || resized || inlineBlock.clearNext;
+  const showCursor = !pending.hideCursor;
+  const signature = JSON.stringify([rows, cursorRow, pending.cursorColumn, showCursor]);
+  const modes = takeQueuedModes();
+  const signals = this.pendingSignals;
+  this.pendingSignals = '';
+  inlineBlock.tail.push(...finished);
+  if (resized || inlineBlock.clearNext) this.emitted.requestReseed();
+  if (!fresh && !modes && !signals && signature === inlineBlock.last) return;
+  const previous = fresh ? [] : inlineBlock.liveRows;
+  let text = '';
+  for (const [index, row] of rows.entries()) if (previous[index] !== row) text += `\u001b[${index + 1};1H${row}\u001b[K`;
+  const lead = resized || inlineBlock.clearNext ? CLEAR_SCREEN_AND_SCROLLBACK : fresh ? CLEAR_SCREEN : '';
+  const park = `\u001b[${cursorRow + 1};${Math.max(1, pending.cursorColumn)}H`;
+  this.frameLayout = { live: [...rows], tags: [] };
+  inlineBlock.clearNext = false;
+  inlineBlock.page = true;
+  inlineBlock.rows = rows.length;
+  inlineBlock.cursorRow = cursorRow;
+  inlineBlock.last = signature;
+  inlineBlock.liveRows = [...rows];
+  inlineBlock.columns = columns;
+  inlineBlock.height = height;
+  inlineBlock.pad = 0;
+  inlineBlock.slack = 0;
+  inlineBlock.found = undefined;
+  inlineBlock.lost = false;
+  this.pendingRedraw = undefined;
+  this.lastPark = park;
+  this.cursorShown = showCursor;
+  const frame = `${syncBegin()}${modes}${signals}\u001b[?25l\u001b[?7l${lead}${text}${park}${showCursor ? '\u001b[?25h' : ''}${syncEnd()}`;
+  this.frameInFlight = true;
+  terminalModes.painted = true;
+  logCursorEvent(`inline page: rows=${rows.length} list=${list.length} composer=${cursorRow}`);
   output.write(frame, () => {
     this.frameInFlight = false;
     if (this.pendingLive && !this.closed && !this.suspended) this.flushFrame();

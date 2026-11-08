@@ -76,7 +76,8 @@ export function rewrapIfWidthChanged(this: TerminalHarnessPrompter): boolean {
  * conversation above it is never touched, unless the block no longer fits the screen. (See flushInlineFrame for what is
  * done with the answer.) */
 export function anchorBlock(this: TerminalHarnessPrompter): void {
-  if (!inlineBlock.rows) { this.repaint(); return; }
+  // A modal surface is drawn from the top row at the new size: nothing is measured (see flushInlinePage).
+  if (!inlineBlock.rows || inlineBlock.page) { this.repaint(); return; }
   inlineBlock.measuring = true;
   const asked = Date.now();
   const done = (row: number | undefined): void => {
@@ -90,8 +91,7 @@ export function anchorBlock(this: TerminalHarnessPrompter): void {
       inlineBlock.found = row - inlineBlock.cursorRow;
       // The block is taller than the screen now: its top rows went into the saved lines, where nothing can take them out
       // again. The one case where the conversation is written again for a change of height.
-      // (The board is the whole screen and holds no conversation: it is drawn again alone.)
-      if (inlineBlock.found < 0) { if (this.surface === 'history') inlineBlock.clearNext = true; else this.emitted.requestReseed(); }
+      if (inlineBlock.found < 0) this.emitted.requestReseed();
     }
     if (this.closed || this.suspended) return;
     this.repaint();

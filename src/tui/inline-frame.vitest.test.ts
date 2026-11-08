@@ -402,3 +402,81 @@ describe('inline block stays on the bottom rows', () => {
     expect(term.screen().filter((r) => r.startsWith('message'))).toEqual([message(1)]);
   });
 });
+
+/** A modal surface (the board, the palette, a picker) is the whole visible screen: opening it clears the screen and not the
+ * saved lines, it is drawn from the top row at the screen's height, and closing it writes the conversation's rows again. */
+describe('a modal surface is the whole visible screen', () => {
+  const ROWS = 30;
+  let term: TestScreen;
+  let reseeds: number;
+  const footer = [rule, '> ', rule, '  claude  •  opus  •  ~/projects'];
+  const list = ['Recent', '  first chat', '  second chat'];
+  const message = (n: number): string => `message ${n}`;
+  const paint = (rows: string[], overlay: string[] = [], finished: string[] = []): void => {
+    host.pickerOverlay = overlay;
+    host.chromeRows = footer.length;
+    host.surface = overlay.length ? 'history' : 'conversation';
+    writes.length = 0;
+    flushInlineFrame.call(host as never, finished, { live: rows, cursorRow: rows.length - 3, cursorColumn: 3, hideCursor: false });
+    term.write(writes.join(''));
+  };
+  const withChat = (n: number): string[] => [...Array.from({ length: n }, (_, i) => `live ${i}`), ...footer];
+  beforeEach(() => {
+    writes = []; reseeds = 0;
+    Object.defineProperty(stdout, 'columns', { value: COLS, configurable: true });
+    vi.spyOn(stdout, 'write').mockImplementation(((chunk: string, cb?: () => void) => { writes.push(String(chunk)); cb?.(); return true; }) as never);
+    eraseInlineBlock();
+    Object.assign(inlineBlock, { clearNext: true, page: false, tail: [], height: 0 });
+    term = new TestScreen(ROWS, COLS);
+    host = {
+      alternateTranscript: [], alternateTrimmed: 0, viewportRows: () => term.height, pickerOverlay: [], chromeRows: 0, surface: 'conversation',
+      emitted: { requestReseed: () => { reseeds += 1; } },
+      pendingSignals: '', frameInFlight: false, closed: false, suspended: false, flushFrame: () => {},
+    };
+    paint(footer, [], []);
+    for (let n = 1; n <= 60; n += 1) paint(footer, [], [message(n)]);
+  });
+  afterEach(() => { vi.restoreAllMocks(); eraseInlineBlock(); Object.assign(inlineBlock, { page: false, tail: [] }); });
+
+  it('opens over the whole screen from the first row, leaving the saved lines alone and no row of the conversation beside it', () => {
+    const before = [...term.scrollback];
+    paint(withChat(4), list);
+    expect(term.screen()[0]).toBe('Recent');
+    expect(term.screen()[ROWS - 3]).toBe('>');
+    expect(term.screen()[ROWS - 1]).toContain('claude');
+    expect(term.screen().some((row) => row.startsWith('message') || row.startsWith('live'))).toBe(false);
+    expect(term.scrollback).toEqual(before);
+    expect(term.scrollback.length).toBeGreaterThan(20);
+  });
+
+  it('closes by writing the conversation again, ending on the last row, with nothing of the surface left', () => {
+    const was = [...term.scrollback, ...term.screen()];
+    paint(withChat(4), list);
+    paint(footer, [], [message(61)]);
+    paint(footer);
+    const now = [...term.scrollback, ...term.screen()].filter((row) => row.startsWith('message'));
+    expect(now).toEqual(Array.from({ length: 61 }, (_, i) => message(i + 1)));
+    expect(term.screen().some((row) => row.includes('Recent') || row.includes('first chat'))).toBe(false);
+    expect(term.screen()[ROWS - 3]).toBe('>');
+    expect(was.filter((row) => row.startsWith('message')).length).toBe(60);
+    expect(reseeds).toBe(0);
+  });
+
+  it('draws again from the top at a new height, and has the conversation written whole when it closes', () => {
+    paint(withChat(4), list);
+    term.resize(ROWS + 20);
+    paint(withChat(4), list);
+    expect(term.screen()[0]).toBe('Recent');
+    expect(term.screen()[ROWS + 20 - 1]).toContain('claude');
+    expect(term.screen().some((row) => row.startsWith('message'))).toBe(false);
+    expect(reseeds).toBe(1);
+  });
+
+  it('draws only the rows that changed while it stays open', () => {
+    paint(withChat(4), list);
+    paint(withChat(4), [...list, '  third chat']);
+    expect(writes.join('')).not.toContain('first chat');
+    expect(writes.join('')).toContain('third chat');
+    expect(writes.join('')).not.toContain('\u001b[2J');
+  });
+});

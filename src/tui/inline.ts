@@ -49,6 +49,11 @@ export function inlineHistoryMode(env: NodeJS.ProcessEnv = process.env, tmuxMous
  * of the previous one in a scrollback the client keeps. */
 export const CLEAR_SCREEN_AND_SCROLLBACK = '\u001b[2J\u001b[3J\u001b[H';
 
+/** The visible screen only, then home: the saved lines are the conversation and stay. Not `ESC[2J`: tmux (scroll-on-clear)
+ * copies a screen that is cleared whole, from its first row, into its history. Row one is erased by itself and the rest from
+ * row two on, which no terminal keeps. */
+export const CLEAR_SCREEN = '\u001b[H\u001b[K\u001b[2;1H\u001b[J\u001b[H';
+
 /** Where the last inline frame left the cursor: the rows of the live block it
  * drew and the row within it the cursor is parked on. */
 export const inlineBlock = {
@@ -66,6 +71,10 @@ export const inlineBlock = {
   /** The cursor report never came back after a change of height: where the block stands is unknown, so the next frame
    * erases and draws it from the cursor, with no vertical re-anchoring guessed (see anchorBlock). */
   lost: false,
+  /** A modal surface (the board, the palette, a picker) is on screen: it is the whole visible screen, drawn from its top
+   * row, and the conversation is not (see flushInlineFrame). `tail` is what the conversation had on the visible rows when
+   * the surface opened, plus every row it retired since: they are written again, ahead of the block, when it closes. */
+  page: false, tail: [] as string[],
 };
 
 /** Cursor-relative erase of the live block, leaving the cursor at column one of

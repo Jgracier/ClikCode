@@ -49,6 +49,19 @@ export function judge(snap, start) {
     const composerRow = screen.findLastIndex((row) => /^\s*›/.test(row));
     if (composerRow >= 0 && snap.cursor.y !== composerRow && !opts.cursorAnywhere) problems.push(`cursor is on row ${snap.cursor.y + 1}, the composer is on row ${composerRow + 1}`);
   }
+  // A modal surface (the board, the palette) is the whole visible screen: no row of the conversation shares it, the list starts
+  // on the first row, the composer and status are the last rows, and the saved lines still hold the conversation (the same ones
+  // as before it opened, unless the screen changed size, which the terminal answers with its own saved lines).
+  if (opts.surface === 'page') {
+    if (!snap.alt) {
+      const chat = screen.findIndex((row) => MARKER.test(row));
+      if (chat >= 0) problems.push(`a row of the conversation shares the screen with the surface (row ${chat + 1}: ${JSON.stringify(screen[chat])})`);
+      if (blank(screen[0] ?? '')) problems.push('the surface does not start on the first row');
+      if (!STATUS.test(screen[screen.length - 1] ?? '')) problems.push(`the status line is not the last row (${JSON.stringify(screen[screen.length - 1])})`);
+      if (!screen.some((row) => /^\s*›/.test(row))) problems.push('no composer on the surface');
+      if (opts.keeps && start && scroll.length !== start.scrollback.length) problems.push(`the saved lines hold ${scroll.length} rows, ${start.scrollback.length} before the surface opened`);
+    }
+  }
   // Blank rows: only above the first content row, and only on the screen (never pushed into scrollback).
   const firstContent = all.findIndex((row) => !blank(row));
   if (firstContent > 0 && firstContent <= scroll.length) problems.push(`${firstContent} blank row(s) at the top of the scrollback`);
@@ -101,5 +114,5 @@ export function judge(snap, start) {
   return problems;
 }
 
-const verdicts = snaps.map((snap) => ({ label: snap.label, floats: snap.pulls === false && snap.scrollback.length > 0 ? snap.screen.length - 1 - snap.screen.findLastIndex((row) => row.text.trim() !== '') : 0, size: `${snap.cols}x${snap.rows}`, problems: judge(snap, snaps.find((other) => other.label === snap.opts?.sameAs)) }));
+const verdicts = snaps.map((snap) => ({ label: snap.label, floats: snap.pulls === false && snap.scrollback.length > 0 ? snap.screen.length - 1 - snap.screen.findLastIndex((row) => row.text.trim() !== '') : 0, size: `${snap.cols}x${snap.rows}`, problems: judge(snap, snaps.find((other) => other.label === (snap.opts?.sameAs ?? snap.opts?.keeps))) }));
 console.log(JSON.stringify(verdicts));
