@@ -13,6 +13,8 @@ import argparse, base64, fcntl, json, os, pty, select, shutil, signal, struct, s
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(HERE))
+from state_guard import refuse_real_state
 ENTRY = os.environ.get('MATRIX_ENTRY', os.path.join(REPO, 'dist/index.js'))  # the build under test
 SETTLE = 1.2  # RESIZE_SETTLE_MS is 100; a cursor report that is never answered times out after 300 ms (xterm-mute)
 
@@ -129,7 +131,7 @@ def child_env(root, mode, turns, extra):
     for tool in ('node', 'npm', 'npx'):
         found = os.path.join(os.path.dirname(node), tool)
         if os.path.exists(found): os.symlink(found, os.path.join(nodebin, tool))
-    env = {'PATH': f'{fakebin}:{nodebin}:/usr/bin:/bin', 'HOME': home, 'CLIKCODE_HOME': state, 'TERM': 'xterm-256color', 'LANG': 'C.UTF-8',
+    env = {'PATH': f'{fakebin}:{nodebin}:/usr/bin:/bin', 'HOME': refuse_real_state(home), 'CLIKCODE_HOME': refuse_real_state(state), 'TERM': 'xterm-256color', 'LANG': 'C.UTF-8',
            'FAKE_TURNS': json.dumps(turns), 'FAKE_STATE': os.path.join(root, 'ctr'), 'FAKE_FAMILY': 'claude', 'FAKE_LOG': os.path.join(root, 'argv.log'), 'FAKE_DELAY_MS': '8'}
     if mode == 'inline': env['CLIKCODE_INLINE'] = '1'
     elif mode == 'full': env['CLIKCODE_INLINE'] = '0'
