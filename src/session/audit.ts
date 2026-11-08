@@ -8,6 +8,7 @@
  * turns. Where the store holds fewer turns than a piece of evidence that agrees with it up to the
  * store's newest turn, it is behind by the turns after that. */
 
+import { quiet } from '../runtime/lifecycle-log.js';
 import { open, readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { HarnessSession, TranscriptMessage } from './model.js';
@@ -217,7 +218,7 @@ async function gather(session: HarnessSession, store: readonly TranscriptMessage
     if (name.startsWith(`${session.id}.`)) files.push({ path: join(records, 'older', name), source: 'older-record' });
   }
   for (const file of files) {
-    const info = await stat(file.path).catch(() => undefined);
+    const info = await stat(file.path).catch(quiet('session/audit'));
     if (!info) continue;
     out.push({ source: file.source, path: file.path, at: info.mtime.toISOString(), messages: parseRecordMarkdown(await readFile(file.path, 'utf8')), named: true });
   }
@@ -231,7 +232,7 @@ async function gather(session: HarnessSession, store: readonly TranscriptMessage
     // A branch of a conversation (a fork, a folded copy) shares its opening request with the whole line it
     // branched from: it is told by the threads it names, not by how its first request reads.
     if (!wanted && !branch && thread.source === 'claude-thread' && firstKey.length >= 24) {
-      const opens = await firstRequest(thread.path).catch(() => undefined);
+      const opens = await firstRequest(thread.path).catch(quiet('session/audit'));
       wanted = Boolean(opens && opens.length >= 24 && (opens.includes(firstKey.slice(0, 80)) || firstKey.includes(opens.slice(0, 80))));
     }
     if (!wanted) continue;
@@ -321,7 +322,7 @@ export async function planRepair(id: string): Promise<RepairPlan> {
   const session = (index?.sessions as HarnessSession[] | undefined)?.find((item) => item.id === id);
   if (!session) throw new Error(`conversation ${id} is not in the index; repair rebuilds the log of a listed conversation`);
   const store = await storeOf(id);
-  const info = await stat(sessionLogPath(id)).catch(() => undefined);
+  const info = await stat(sessionLogPath(id)).catch(quiet('session/audit'));
   const pieces = (await gather(session, store ?? [], await threadIndex())).filter((piece) => piece.named);
   const unaligned: RepairPlan['unaligned'] = [];
   const usable: Piece[] = [];
