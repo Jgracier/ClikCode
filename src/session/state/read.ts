@@ -7,7 +7,7 @@ import { ephemeralSessions } from '../ephemeral.js';
 import { markFromIndex, markTranscriptLoaded, sessionFromIndex, transcriptWasLoaded } from '../list-facts.js';
 import { cloneData } from '../store/data.js';
 import { withStateLock } from '../store/locks.js';
-import { readSessionTranscript } from '../store/transcripts.js';
+import { ConversationLogMissingError, readSessionTranscript } from '../store/transcripts.js';
 import { StateIndex, loadIndex, storeIndex } from './index-file.js';
 import { InvocationRollup, STATE_ROLLUPS } from './invocations.js';
 import { BaselinedState, DRAFT_BASELINE, STATE_BASELINE, baselineOf, rememberBaseline } from './merge.js';
@@ -19,7 +19,14 @@ import { HARNESS_DEFAULT_SETTINGS, normalizedConversation, normalizedPermissionM
 async function assembleState(index: StateIndex, secrets: HarnessSecrets, transcripts: 'all' | ReadonlySet<string>): Promise<HarnessState> {
   const sessions = await Promise.all(index.sessions.map(async (meta): Promise<HarnessSession> => {
     const load = transcripts === 'all' || transcripts.has(meta.id);
-    const transcript = load ? await readSessionTranscript(meta.id) : undefined;
+    // A conversation whose log is gone stops whoever asks for it by name. A listing of
+    // every chat leaves it unopened (as if not asked for) rather than refuse them all.
+    const transcript = load
+      ? await readSessionTranscript(meta.id).catch((error: unknown) => {
+        if (transcripts === 'all' && error instanceof ConversationLogMissingError) return undefined;
+        throw error;
+      })
+      : undefined;
     const session: HarnessSession = {
       ...cloneData(meta as HarnessSession),
       ...(transcript ?? {}),
@@ -27,7 +34,7 @@ async function assembleState(index: StateIndex, secrets: HarnessSecrets, transcr
     // After the object exists: a spread would drop these, and a later write
     // tells "not opened" from "opened and empty" by them.
     markFromIndex(session);
-    if (load) markTranscriptLoaded(session);
+    if (transcript) markTranscriptLoaded(session);
     return session;
   }));
   const state = {
