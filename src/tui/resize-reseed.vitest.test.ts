@@ -47,16 +47,20 @@ describe('what a settled resize owes the transcript', () => {
     expect(repainted).toBe(1);
   });
 
-  it('a block taller than the screen now is the one height change that writes the conversation again (the board draws itself alone)', () => {
+  it('a block taller than the screen now is the one height change that writes the conversation again', () => {
     asked.answer = 10; // the cursor is on screen row 11, the composer is the block's row 39: the block starts above the screen
     Object.assign(inlineBlock, { rows: 40, cursorRow: 38 });
-    anchorBlock.call(Object.assign(host, { surface: 'conversation' }) as never);
+    anchorBlock.call(host as never);
     expect(requested).toBe(1);
     expect(inlineBlock.clearNext).toBe(false);
-    anchorBlock.call(Object.assign(host, { surface: 'history' }) as never);
-    expect(requested).toBe(1);
-    expect(inlineBlock.clearNext).toBe(true);
-    inlineBlock.clearNext = false;
+  });
+
+  it('a modal surface is drawn again from its top row: no cursor report is asked for', () => {
+    Object.assign(inlineBlock, { page: true });
+    anchorBlock.call(host as never);
+    expect(asked.count).toBe(0);
+    expect(repainted).toBe(1);
+    Object.assign(inlineBlock, { page: false });
   });
 
   it('a terminal that does not answer is left as it is: the frame is drawn like any other', () => {

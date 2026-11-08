@@ -1,5 +1,4 @@
 /** The picker host: how option pickers, the conversation board and slash palettes borrow the prompter's frame. */
-import { inlineBlock, inlineHistoryMode } from '../inline.js';
 import { lifecycle } from '../../runtime/lifecycle-log.js';
 import type { PickerOption, PickerSettings } from '../../harness/prompter.js';
 import { runOptionPicker, type OptionPickerHost } from '../option-picker.js';
@@ -38,14 +37,10 @@ export function select<T>(
 export function board(this: TerminalHarnessPrompter, settings: ConversationBoardSettings): Promise<BoardResult | undefined> {
   lifecycle('window.board.open');
   this.surface = 'history';
-  // Inline: the board is the whole screen while it is open (a block as tall as the screen drawn under the
-  // conversation would push it into the scrollback), and the conversation is written again when it closes.
-  if (inlineHistoryMode()) inlineBlock.clearNext = true;
   // Held since the turn was left (leaveTurn): the board's first frame replaces the chat.
   this.paintsHeld = false;
   return runConversationBoard(this.pickerHost(), settings).finally(() => {
     this.surface = 'conversation';
-    if (inlineHistoryMode()) this.emitted.requestReseed();
     lifecycle('window.board.close');
   });
 }

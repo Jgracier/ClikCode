@@ -29,6 +29,9 @@ WIDE = ' 日本語 🎉 ok'
 # What a change of height alone may cost: the live block's rows, no more, and not one row of the conversation.
 BOUNDED = {'maxBytes': 3000, 'maxHistoryRows': 0, 'measure': True, 'sameAs': 'start 35', 'turns': True}
 
+BOARD = {'noBlock': True, 'noHistory': True, 'board': True, 'surface': 'page', 'keeps': 'start'}
+BOARD_RESIZED = {**BOARD, 'keeps': None}
+
 SCENARIOS = {
     # A conversation longer than the screen, the screen growing and shrinking the way a phone's keyboard does it.
     'rows-grow-shrink': dict(size=(69, 35), turns=[{'blocks': [marker_block(1, 70)]}], steps=[
@@ -101,18 +104,38 @@ SCENARIOS = {
     # The palette open (a list in the live block) while the screen changes.
     'palette': dict(size=(69, 35), turns=[{'blocks': [marker_block(1, 60)]}], steps=[
         ('type', 'go'), ('wait', 'H060', 40), ('settle', 1.5),
-        ('keys', '/'), ('settle', 0.8), ('check', 'palette open', {'noBlock': True, 'covered': True}, (1, 60)),
-        ('resize', 69, 67), ('settle', SETTLE), ('check', 'palette grow', {'noBlock': True, 'covered': True}, (1, 60)),
-        ('resize', 69, 35), ('settle', SETTLE), ('check', 'palette shrink', {'noBlock': True, 'covered': True}, (1, 60)),
+        ('check', 'start', {}, (1, 60)),
+        ('keys', '/'), ('settle', 0.8), ('check', 'palette open', BOARD, None),
+        ('resize', 69, 67), ('settle', SETTLE), ('check', 'palette grow', BOARD_RESIZED, None),
+        ('resize', 69, 35), ('settle', SETTLE), ('check', 'palette shrink', BOARD_RESIZED, None),
         ('keys', '\x7f'), ('settle', 1), ('check', 'palette closed', {}, (1, 60)),
         ('resize', 69, 50), ('settle', SETTLE), ('check', 'closed, 50', {}, (1, 60)),
     ]),
     # The conversation board (left arrow on an empty composer).
     'board': dict(size=(69, 35), turns=[{'blocks': [marker_block(1, 60)]}], steps=[
         ('type', 'go'), ('wait', 'H060', 40), ('settle', 1.5),
-        ('keys', '\x1b[D'), ('settle', 2), ('check', 'board open', {'noBlock': True, 'noHistory': True, 'board': True}, None),
-        ('resize', 69, 67), ('settle', SETTLE), ('check', 'board grow', {'noBlock': True, 'noHistory': True, 'board': True}, None),
-        ('resize', 69, 35), ('settle', SETTLE), ('check', 'board shrink', {'noBlock': True, 'noHistory': True, 'board': True}, None),
+        ('check', 'start', {}, (1, 60)),
+        ('keys', '\x1b[D'), ('settle', 2), ('check', 'board open', BOARD, None),
+        ('resize', 69, 67), ('settle', SETTLE), ('check', 'board grow', BOARD_RESIZED, None),
+        ('resize', 69, 35), ('settle', SETTLE), ('check', 'board shrink', BOARD_RESIZED, None),
+    ]),
+    # The board over a long conversation and 70 earlier ones: a surface of its own (the whole visible screen, no chat above or
+    # below it), the scrollback kept while it is open, the conversation exactly as it was when it closes.
+    'board-long': dict(size=(69, 35), seed=70, turns=[{'blocks': [marker_block(1, 80)]}], steps=[
+        ('type', 'go'), ('wait', 'H080', 40), ('settle', 1.5), ('check', 'start', {}, (1, 80)),
+        ('keys', '\x1b[D'), ('settle', 2), ('check', 'board open', BOARD, (1, 80)),
+        ('keys', '\x1b'), ('settle', 2), ('check', 'board closed', {'sameAs': 'start'}, (1, 80)),
+        ('keys', '\x1b[D'), ('settle', 2), ('check', 'board open again', BOARD, (1, 80)),
+        ('resize', 69, 67), ('settle', SETTLE), ('check', 'board grow', BOARD_RESIZED, (1, 80)),
+        ('resize', 69, 35), ('settle', SETTLE), ('check', 'board shrink', BOARD_RESIZED, (1, 80)),
+        ('keys', '\x1b'), ('settle', 2), ('check', 'closed after resize', {'sameAs': 'start'}, (1, 80)),
+    ]),
+    # The same while a turn is running: its frames keep arriving under the board.
+    'board-turn': dict(size=(69, 35), seed=70, turns=[{'blocks': [marker_block(1, 80)], 'hold_ms': 25000}], steps=[
+        ('type', 'go'), ('wait', 'H080', 40), ('settle', 1.5), ('check', 'start', {'turns': True}, (1, 80)),
+        ('keys', '\x1b[D'), ('settle', 2), ('check', 'board open', BOARD, (1, 80)),
+        ('resize', 69, 67), ('settle', SETTLE), ('check', 'board grow', BOARD_RESIZED, (1, 80)),
+        ('resize', 69, 35), ('settle', SETTLE), ('check', 'board shrink', BOARD_RESIZED, (1, 80)),
     ]),
     # Ctrl+Z to the shell and back, the screen another size on the way back.
     'suspend': dict(size=(69, 35), turns=[{'blocks': [marker_block(1, 60)]}], steps=[
@@ -138,6 +161,35 @@ def child_env(root, mode, turns, extra):
     else: env.update({'SSH_CONNECTION': '127.0.0.1 1 127.0.0.1 22'})  # what an SSH client gives: no TERM_PROGRAM, no CLIKDEPLOY_CLIENT
     env.update(extra)
     return env, node
+
+def seed_conversations(root, count, env, node):
+    """`count` earlier conversations in the throwaway HOME's index, so the board has a long list to show. The program is run once
+    first (it signs the fake vendor in on its first turn), then the earlier conversations are added to the index it wrote."""
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.chdir(os.path.join(root, 'work')); os.execve(node, ['node', ENTRY], env)
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', 35, 69, 0, 0))
+    def pump(seconds):
+        end = time.time() + seconds
+        while time.time() < end:
+            if select.select([fd], [], [], 0.05)[0]:
+                try: os.read(fd, 65536)
+                except OSError: return
+    pump(4); os.write(fd, b'hi'); pump(0.3); os.write(fd, b'\r'); pump(6)
+    try: os.kill(pid, signal.SIGKILL); os.waitpid(pid, 0)
+    except (ProcessLookupError, ChildProcessError): pass
+    path = os.path.join(root, 'state', 'index.json')
+    index = json.load(open(path))
+    template = index['sessions'][0]
+    now = time.time()
+    for n in range(count):
+        stamp = time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime(now - 3600 * (n + 1) * 2))
+        sid = f'00000000-0000-4000-8000-{n:012d}'
+        index['sessions'].append({**template, 'id': sid, 'conversationId': sid, 'createdAt': stamp, 'updatedAt': stamp, 'listPreview': f'older question number {n}',
+                                  'name': f'Conversation {n:02d} about something', 'nativeSessionId': None})
+    json.dump(index, open(path, 'w'))
+    shutil.rmtree(os.path.join(root, 'ctr'), ignore_errors=True)
+    if os.path.exists(os.path.join(root, 'ctr')): os.remove(os.path.join(root, 'ctr'))
 
 class Emulator:
     """A live terminal (emulate.mjs) fed every byte the program writes; what it answers (a cursor position report) goes back to the pty."""
@@ -191,6 +243,7 @@ class Pty:
 def run_xterm(name, spec, mode, variant, keep):
     root = tempfile.mkdtemp(prefix=f'resize-matrix-{name}-')
     env, node = child_env(root, mode, spec['turns'], spec.get('env', {}))
+    if spec.get('seed'): seed_conversations(root, spec['seed'], env, node)
     checks = []
     emulator = Emulator(variant, spec['size'])
     term = Pty(root, env, node, spec['size'], emulator)
@@ -232,6 +285,7 @@ def run_xterm(name, spec, mode, variant, keep):
 def run_tmux(name, spec, mode, keep):
     root = tempfile.mkdtemp(prefix=f'resize-matrix-{name}-')
     env, node = child_env(root, mode, spec['turns'], spec.get('env', {}))
+    if spec.get('seed'): seed_conversations(root, spec['seed'], env, node)
     sock = f'rm-{os.getpid()}'
     tm = lambda *a: subprocess.run(['tmux', '-L', sock, *a], capture_output=True, text=True)
     conf = os.path.join(root, 'tmux.conf'); open(conf, 'w').write('set -g history-limit 100000\nset -g status off\n')
