@@ -7,6 +7,7 @@
  * file in ClikCode's state directory is read by any agent's file tools or
  * grep. Written fresh at each handoff from the stored conversation, in full
  * (every request and every answer), never trimmed to fit a window. */
+import { quiet } from '../runtime/lifecycle-log.js';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { HarnessSession } from './model.js';
@@ -44,7 +45,7 @@ export function recordTurns(markdown: string): number {
  * (records/older/<id>.<time>.md) instead, never replaced: an undo makes the conversation shorter
  * on purpose, and then the longer one is simply the one before. */
 async function setAsideLongerRecord(path: string, id: string, turns: number): Promise<void> {
-  const existing = await readFile(path, 'utf8').catch(() => undefined);
+  const existing = await readFile(path, 'utf8').catch(quiet('session/full-record'));
   if (existing === undefined || recordTurns(existing) <= turns) return;
   const older = join(dirname(path), 'older');
   await mkdir(older, { recursive: true, mode: 0o700 });
