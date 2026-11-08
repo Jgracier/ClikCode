@@ -12,7 +12,8 @@ import { completeVendorTurn, settleAttempt } from './vendor-outcome.js';
 import { recoverFromFailure } from './vendor-recovery.js';
 import { takeUp } from './vendor-thread-takeup.js';
 import { forgetNativeThread, restoreNativeThread } from '../session/native-thread.js';
-import { nativeThreadHoldsConversation } from './native-thread-continuity.js';
+import { nativeThreadCoverage, nativeThreadHoldsConversation } from './native-thread-continuity.js';
+import { StoreBehindError } from '../session/store-evidence.js';
 import { returnPrompt } from './thread-return.js';
 import { targetContextWindow, transferBudget } from './transfer.js';
 import { modelsDevFiles } from '../harness/accounts/goose-discovery.js';
@@ -38,6 +39,22 @@ async function settleThread(ctx: VendorTurnContext): Promise<void> {
     await closePersistentTransport(session.id);
     forgetNativeThread(session);
     broken = true;
+  }
+  // A thread that holds the conversation can still be a different length from it. One that was asked
+  // something the record does not hold means the record fell behind: nothing may continue from either.
+  // One the record has gone on past is replaced by the record, taken up whole, never resumed as current.
+  if (session.nativeSessionId && !broken) {
+    const coverage = await nativeThreadCoverage(session, harness, ctx.account);
+    if (coverage.kind === 'ahead') {
+      throw new StoreBehindError(session.id, `its ${harness.displayName} thread was asked "${coverage.request.slice(0, 80)}" after the conversation was last written, and the stored conversation does not hold that request`);
+    }
+    if (coverage.kind === 'behind') {
+      lifecycle('thread.behind-record', { harness: harness.command, missed: coverage.missed, thread: session.nativeSessionId });
+      ctx.prompter?.activity(`${harness.displayName}'s thread is ${coverage.missed} turn${coverage.missed === 1 ? '' : 's'} behind this conversation; taking the whole conversation up in a new thread.`);
+      await closePersistentTransport(session.id);
+      forgetNativeThread(session);
+      broken = true;
+    }
   }
   if (outcome === 'carried' || outcome === 'forgotten' || session.nativeThreadAccountId !== held || broken) await ctx.checkpoint.persistNow();
 }
@@ -80,6 +97,7 @@ async function startVendorTurn(ctx: VendorTurnContext): Promise<void> {
     if (missed.length) {
       const recordPath = await writeFullRecord({ ...session, pendingTurn: undefined }, stateDirectory());
       ctx.turnText = returnPrompt(session, ctx.baseMessages, returningThrough, ctx.turnText, budget, recordPath);
+      ctx.prompter?.activity(`${harness.displayName} was away from this conversation for ${missed.length} message${missed.length === 1 ? '' : 's'}; they are sent with this request.`);
     }
   }
   // A fresh native thread (no nativeSessionId yet) with prior ClikCode

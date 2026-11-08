@@ -5,7 +5,7 @@ import type { AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessSession } from '../session/model.js';
 import { canonicalRecord } from '../session/canonical.js';
 import type { NativeThreadWriteContext, NativeThreadWriter } from '../session/discovery/stores.js';
-import { fitRecord, nativeThreadBudget, startConversationThread, type ThreadStartInput } from './thread-start.js';
+import { carriedLine, fitRecord, nativeThreadBudget, startConversationThread, type ThreadStartInput } from './thread-start.js';
 import { failoverPromptRequest } from './failover-prompt.js';
 
 const harness = { command: 'fake', provider: 'fake', displayName: 'Fake' } as AiLocalHarnessDefinition;
@@ -39,7 +39,7 @@ describe('startConversationThread', () => {
   it('writes the native thread and sends only the request when a writer takes this build', async () => {
     const { writer, seen } = fakeWriter();
     const start = await startConversationThread(input({ writer }));
-    expect(start).toEqual({ kind: 'native', written: { nativeId: 'native-1' }, prompt: 'now run the tests', omitted: 0 });
+    expect(start).toEqual({ kind: 'native', written: { nativeId: 'native-1' }, prompt: 'now run the tests', omitted: 0, summarised: 0 });
     // Written in the taking-over account's profile, for this workspace and model.
     expect(seen).toEqual([{ harness, workspace: '/w', environment: { HOME: '/profiles/fake-2' }, model: 'm1', version: '1.2.3' }]);
   });
@@ -164,7 +164,7 @@ createdAt: now, updatedAt: now, status: 'active', workspace: '/w',
   });
 
   it('writes the whole record when it fits, and the newest turn even when it alone does not', () => {
-    expect(fitRecord(long, 10_000_000)).toEqual({ record: long, omitted: 0 });
+    expect(fitRecord(long, 10_000_000)).toEqual({ record: long, omitted: 0, summarised: 0 });
     expect(fitRecord(long, 1).record.turns).toHaveLength(1);
   });
 
@@ -201,5 +201,41 @@ describe("a writer's version gate", () => {
     expect(testedVersion(['1.74.1'])({ version: '1.74.3' })).toBe(true);
     expect(testedVersion(['1.74.1'], { exact: true })({ version: '1.74.3' })).toBe(false);
     expect(testedVersion(['1.74.1'], { exact: true })({ version: '1.74.1' })).toBe(true);
+  });
+});
+
+// Whatever of the conversation does not arrive whole is said in the chat.
+describe('what a person is told was carried', () => {
+  const call = { name: 'Bash', label: '$ npm test', status: 'done' as const, files: [], output: ['x'.repeat(2_000)] };
+  const heavy = (() => {
+    const base = canonicalRecord({
+      id: 's3', route: 'local', accountId: null, provider: 'anthropic', model: 'opus', nativeHarness: 'claude', effort: 'high',
+      createdAt: now, updatedAt: now, status: 'active', workspace: '/w',
+      messages: Array.from({ length: 20 }, (_, index) => [
+        { role: 'user' as const, content: `request ${index}` }, { role: 'assistant' as const, content: 'x'.repeat(1000) },
+      ]).flat(),
+    } as HarnessSession);
+    return { ...base, turns: base.turns.map((turn) => ({ ...turn, parts: [...turn.parts, { type: 'tool' as const, call }], tools: [call] })) };
+  })();
+
+  it('counts the turns kept as words only (summarised) and the turns left out', () => {
+    const fitted = fitRecord(heavy, 26_000);
+    expect(fitted.omitted).toBe(0);
+    expect(fitted.summarised).toBeGreaterThan(0);
+    expect(fitted.summarised).toBeLessThan(20);
+    const tight = fitRecord(heavy, 5_000);
+    expect(tight.omitted).toBeGreaterThan(0);
+    expect(tight.omitted + tight.record.turns.length).toBe(20);
+  });
+
+  it('says "carried N of M turns, K summarised" when anything was left out or shortened, and nothing when all arrived whole', () => {
+    const native = (omitted: number, summarised: number) => ({ kind: 'native' as const, written: { nativeId: 'n' }, prompt: 'p', omitted, summarised });
+    expect(carriedLine(757, native(145, 30), 'Claude Code', '/state/records/c.md'))
+      .toBe('Carried 612 of 757 turns to Claude Code, 30 summarised; the 145 earliest are left out to fit its window. The whole conversation is saved at /state/records/c.md.');
+    expect(carriedLine(20, native(0, 4), 'Codex')).toBe('Carried 20 of 20 turns to Codex, 4 summarised.');
+    expect(carriedLine(20, native(0, 0), 'Codex')).toBeUndefined();
+    expect(carriedLine(0, native(0, 0), 'Codex')).toBeUndefined();
+    // A retelling is never the whole conversation as the provider's own thread.
+    expect(carriedLine(9, { kind: 'transfer', prompt: 'p', budget: 1 }, 'Grok')).toMatch(/^Carried 9 of 9 turns to Grok, 9 summarised/);
   });
 });

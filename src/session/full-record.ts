@@ -7,8 +7,8 @@
  * file in ClikCode's state directory is read by any agent's file tools or
  * grep. Written fresh at each handoff from the stored conversation, in full
  * (every request and every answer), never trimmed to fit a window. */
-import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import type { HarnessSession } from './model.js';
 
 export function fullRecordPath(stateDir: string, sessionId: string): string {
@@ -24,11 +24,31 @@ export async function writeFullRecord(session: HarnessSession, stateDir: string)
     const { transcriptMarkdown } = await import('../tui/slash/export-transcript.js');
     const path = fullRecordPath(stateDir, session.id);
     await mkdir(join(stateDir, 'records'), { recursive: true, mode: 0o700 });
-    await writeFile(path, transcriptMarkdown(session), { encoding: 'utf8', mode: 0o600 });
+    const markdown = transcriptMarkdown(session);
+    await setAsideLongerRecord(path, session.id, recordTurns(markdown));
+    await writeFile(path, markdown, { encoding: 'utf8', mode: 0o600 });
     return path;
   } catch {
     return undefined;
   }
+}
+
+/** How many requests a record holds: one `## You` heading each. */
+export function recordTurns(markdown: string): number {
+  return (markdown.match(/^## You$/gm) ?? []).length;
+}
+
+/** The record is the one copy of the conversation outside its log and the index, which is what
+ * lets a log that fell behind be found out and rebuilt. A handoff from a conversation that has
+ * fallen behind would write that shorter conversation over it. A longer record is moved aside
+ * (records/older/<id>.<time>.md) instead, never replaced: an undo makes the conversation shorter
+ * on purpose, and then the longer one is simply the one before. */
+async function setAsideLongerRecord(path: string, id: string, turns: number): Promise<void> {
+  const existing = await readFile(path, 'utf8').catch(() => undefined);
+  if (existing === undefined || recordTurns(existing) <= turns) return;
+  const older = join(dirname(path), 'older');
+  await mkdir(older, { recursive: true, mode: 0o700 });
+  await rename(path, join(older, `${id}.${new Date().toISOString().replace(/[:.]/g, '-')}.md`));
 }
 
 /** The line that tells the receiving provider where the rest is. */
