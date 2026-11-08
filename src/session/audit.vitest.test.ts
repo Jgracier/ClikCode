@@ -117,6 +117,28 @@ describe('sessions audit and repair, on a store that fell behind its record', ()
     expect((await auditConversations()).find((item) => item.id === 'c')!.status).toBe('ok');
   });
 
+  it('a window that read the old copy and finishes a turn after the repair adds only that turn', async () => {
+    await behind();
+    // A window or worker read the conversation while it was still behind.
+    const stale = await readState({ transcripts: ['c'] });
+    const mine = stale.sessions.find((item) => item.id === 'c')!;
+    expect(users(mine.messages!)).toBe(10);
+
+    await applyRepair(await planRepair('c'));
+
+    mine.messages = [...mine.messages!, { role: 'user', content: ask(61) }, { role: 'assistant', content: 'done 61' }];
+    await writeState(stale);
+
+    resetHarnessStateCaches();
+    resetChatLogCache();
+    const stored = (await readSessionTranscript('c')).messages!;
+    expect(users(stored)).toBe(61);
+    // The repaired history is whole and nothing in it is written twice.
+    expect(stored.filter((message) => message.content === ask(5))).toHaveLength(1);
+    expect(stored.filter((message) => message.content === ask(61))).toHaveLength(1);
+    expect(stored.at(-1)).toMatchObject({ role: 'assistant', content: 'done 61' });
+  });
+
   it('rebuilds a conversation whose log is gone, from its record, and says so beforehand', async () => {
     await behind();
     await unlink(join(root, 'sessions', 'c.jsonl'));
