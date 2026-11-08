@@ -8,6 +8,7 @@ import { writeState } from './write.js';
 import { resetHarnessStateCaches } from './index-file.js';
 import { sweepState } from './sweep.js';
 import type { HarnessSession } from '../model.js';
+import { deleteConversations } from './deletions.js';
 
 const previousHome = process.env.CLIKCODE_HOME;
 let root = '';
@@ -45,7 +46,7 @@ describe('deleting a conversation', () => {
     await writeState(state);
     const gone = await artifacts('gone');
     const kept = await artifacts('kept');
-    state.sessions = state.sessions.filter((session) => session.id !== 'gone');
+    deleteConversations(state, ['gone']);
     await writeState(state);
     for (const path of [...gone, join(root, 'sessions', 'gone.json')]) expect(existsSync(path)).toBe(false);
     for (const path of kept) expect(existsSync(path)).toBe(true);
@@ -63,10 +64,16 @@ describe('the housekeeping sweep', () => {
       chat('crashed', { pendingTurn: { prompt: 'do it', startedAt: old, updatedAt: old, outputStarted: true, response: 'half done' } }),
       chat('recent-turn', { pendingTurn: { prompt: 'now', startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), outputStarted: false } }),
       chat('adopted', { messages: undefined, nativeSessionId: 'vendor-thread', name: 'Adopted' }),
+      chat('orphan'),
     );
+    await writeState(state);
+    // Deleted on purpose; a crashed process left its artifacts behind.
+    deleteConversations(state, ['orphan']);
     await writeState(state);
     const live = await artifacts('live', 2 * DAY);
     const orphan = await artifacts('orphan', 2 * DAY);
+    // Not listed, but never deleted: the index lost it. Its artifacts are the only copy.
+    const unlisted = await artifacts('unlisted', 2 * DAY);
     const fresh = await artifacts('just-created', 0);
     await writeFile(join(root, 'index.json.123.abc.tmp'), 'x');
     await utimes(join(root, 'index.json.123.abc.tmp'), new Date(Date.now() - DAY), new Date(Date.now() - DAY));
@@ -74,7 +81,7 @@ describe('the housekeeping sweep', () => {
     const report = await sweepState();
     expect(report).toMatchObject({ orphans: 1, stranded: 1, settled: 1 });
     for (const path of orphan) expect(existsSync(path)).toBe(false);
-    for (const path of [...live, ...fresh]) expect(existsSync(path)).toBe(true);
+    for (const path of [...live, ...fresh, ...unlisted]) expect(existsSync(path)).toBe(true);
 
     resetHarnessStateCaches();
     const after = await readState();

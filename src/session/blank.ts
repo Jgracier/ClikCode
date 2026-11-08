@@ -23,6 +23,7 @@ import type { HarnessSession } from './model.js';
 import { isBlankConversation } from './options.js';
 import { readState } from './state/read.js';
 import { writeState } from './state/write.js';
+import { deleteConversations } from './state/deletions.js';
 
 /** How long an empty chat on disk is left alone after it was stored. Another
  * process stores one on purpose -- for its turn's worker to read, or for a
@@ -66,6 +67,6 @@ export async function discardIfBlank(id: string): Promise<void> {
   if (!session) return;
   const { isLive, isOpen } = await liveWorkers();
   if (!blankChatSweepable(session, isLive, Date.now(), isOpen)) return;
-  state.sessions = state.sessions.filter((item) => item.id !== id);
+  deleteConversations(state, [id]);
   await writeState(state);
 }

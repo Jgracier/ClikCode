@@ -23,6 +23,7 @@ import { warmSessionWorker } from '../../../worker/client.js';
 import { shouldWarmVendorChat } from '../../../worker/warm-policy.js';
 import { shownSettingsKey } from '../../../worker/protocol.js';
 import { liveSettingsOf } from '../../../turn/live-settings.js';
+import { conversationWasDeleted } from '../../../session/state/deletions.js';
 import { BOARD_LINE, DELETED_ELSEWHERE, joinedTurn } from './board.js';
 import { turnFailureEffect } from './turn-failure.js';
 import { runTimedTurn } from './run-turn.js';
@@ -142,6 +143,10 @@ export class ChatLoop {
     const latestState = await readState({ transcripts: [this.id] });
     const latest = latestState.sessions.find((item) => item.id === this.id);
     if (!latest) {
+      // Missing from the index but never deleted: the index lost it. Said as that, not as a deletion.
+      if (!await conversationWasDeleted(this.id)) {
+        throw new Error(`Conversation ${this.id} is no longer listed in ClikCode's index, but was not deleted. Nothing was removed: run \`clikcode sessions audit\` and \`clikcode sessions repair ${this.id}\`.`);
+      }
       // Deleted while open (another window's board, `clikcode sessions`):
       // this window carries on in a fresh conversation set up the same
       // way, and says so. Leaving ClikCode is never the answer to that.

@@ -6,7 +6,9 @@ import { randomUUID } from 'node:crypto';
 import type { AiHarnessAccount } from '../../harness/definition.js';
 import type { HarnessDefaultSettings, HarnessSession, HarnessState } from '../model.js';
 import { cloneData, hidden, mergeFields, sameData } from '../store/data.js';
+import { lifecycle } from '../../runtime/lifecycle-log.js';
 import { transcriptOf, type SessionTranscript } from '../store/transcripts.js';
+import { nextTombstones } from './deletions.js';
 import type { StateIndex } from './index-file.js';
 import type { Invocation } from './invocations.js';
 import { HARNESS_STATE_VERSION } from './paths.js';
@@ -40,10 +42,6 @@ function mergeAccount(baseline: AiHarnessAccount | undefined, working: AiHarness
 function mergeById<T extends Identified>(
   baseline: readonly T[], working: readonly T[], disk: readonly T[],
   mergeRecordFields: (baseline: T | undefined, working: T, disk: T | undefined) => T = (_before, after) => after,
-  /** Records this writer read as drafts (not on disk then). One that is on
-   * disk now was stored by someone else meanwhile: it merges against the
-   * draft as read, like any record, instead of replacing what was stored. */
-  drafts?: ReadonlyMap<string, T>,
 ): T[] {
   const before = new Map(baseline.map((item) => [item.id, item]));
   const workingIds = new Set(working.map((item) => item.id));
@@ -53,9 +51,36 @@ function mergeById<T extends Identified>(
     // Present in the baseline and gone from disk: deleted elsewhere. A stale
     // copy changing a field of it must not bring it back.
     if (before.has(item.id) && !merged.has(item.id)) continue;
-    const previous = before.get(item.id) ?? (merged.has(item.id) ? drafts?.get(item.id) : undefined);
+    const previous = before.get(item.id);
     if (previous === undefined) merged.set(item.id, item);
     else if (!sameData(previous, item)) merged.set(item.id, mergeRecordFields(previous, item, merged.get(item.id)));
+  }
+  return [...merged.values()];
+}
+
+/** The conversation rows, merged. The one rule that differs from mergeById: a row is removed
+ * only for a deliberate deletion -- `removed`, by this writer, or a tombstone another writer
+ * left (deletions.ts) -- never for being absent. A row this copy read that is not on disk and
+ * has no tombstone was lost from the index, not deleted; this copy holds it, so it is put back. */
+function mergeSessionRows(
+  baseline: readonly SessionMeta[], working: readonly SessionMeta[], disk: readonly SessionMeta[],
+  drafts: ReadonlyMap<string, SessionMeta> | undefined, removed: ReadonlySet<string>, tombstoned: ReadonlySet<string>,
+): SessionMeta[] {
+  const before = new Map(baseline.map((item) => [item.id, item]));
+  const merged = new Map(disk.map((item) => [item.id, item]));
+  for (const id of removed) merged.delete(id);
+  for (const item of working) {
+    if (removed.has(item.id)) continue;
+    const known = before.has(item.id);
+    if (known && tombstoned.has(item.id)) { merged.delete(item.id); continue; }
+    if (known && !merged.has(item.id)) {
+      lifecycle('state.index-row-restored', { session: item.id });
+      merged.set(item.id, item);
+      continue;
+    }
+    const previous = before.get(item.id) ?? (merged.has(item.id) ? drafts?.get(item.id) : undefined);
+    if (previous === undefined) merged.set(item.id, item);
+    else if (!sameData(previous, item)) merged.set(item.id, mergeSessionMeta(previous, item, merged.get(item.id)));
   }
   return [...merged.values()];
 }
@@ -235,13 +260,22 @@ export function rememberBaseline(state: HarnessState, baseline: StateBaselineDat
   return hidden(state, STATE_BASELINE, baseline);
 }
 
-export function indexFromWorking(state: HarnessState, disk: StateIndex | undefined): StateIndex {
+/** The index for a state that was not read from disk (no baseline to diff against). It stands for
+ * what it holds and takes nothing away: a conversation or account on disk that it does not list
+ * is kept, since a state built from scratch does not know what else is stored. */
+export function indexFromWorking(state: HarnessState, disk: StateIndex | undefined, removed: ReadonlySet<string> = new Set()): StateIndex {
+  const sessions = (state.sessions ?? []).map((session) => splitSession(session).meta);
+  const accounts = state.accounts ?? [];
+  const listed = new Set(sessions.map((session) => session.id));
+  const known = new Set(accounts.map((account) => account.id));
+  const deletedSessions = nextTombstones(disk?.deletedSessions, removed, listed);
   return {
     version: HARNESS_STATE_VERSION,
     installationId: state.installationId || disk?.installationId || randomUUID(),
     ...(state.devicePublicKey && Object.keys(state.devicePublicKey).length ? { devicePublicKey: state.devicePublicKey } : {}),
-    accounts: state.accounts ?? [],
-    sessions: (state.sessions ?? []).map((session) => splitSession(session).meta),
+    accounts: [...(disk?.accounts ?? []).filter((account) => !known.has(account.id)), ...accounts],
+    sessions: [...(disk?.sessions ?? []).filter((session) => !listed.has(session.id) && !removed.has(session.id)), ...sessions],
+    ...(deletedSessions ? { deletedSessions } : {}),
     invocations: state.invocations ?? [],
     // Rollups are derived on disk under the lock and never come from a snapshot.
     invocationRollups: disk?.invocationRollups ?? {},
@@ -251,10 +285,16 @@ export function indexFromWorking(state: HarnessState, disk: StateIndex | undefin
   };
 }
 
-export function mergedIndex(baseline: StateBaselineData, state: HarnessState, disk: StateIndex, drafts?: ReadonlyMap<string, BaselineSession>): StateIndex {
+export function mergedIndex(baseline: StateBaselineData, state: HarnessState, disk: StateIndex, drafts?: ReadonlyMap<string, BaselineSession>, removed: ReadonlySet<string> = new Set()): StateIndex {
   const changed = <T>(before: T, after: T, onDisk: T): T => (!sameData(before, after) ? after : onDisk);
   const devicePublicKey = changed(baseline.devicePublicKey, state.devicePublicKey, disk.devicePublicKey);
-  const { devicePublicKey: _previousKey, ...rest } = disk;
+  const { devicePublicKey: _previousKey, deletedSessions: stored, ...rest } = disk;
+  const sessions = mergeSessionRows(
+    [...baseline.sessions.values()].map((entry) => entry.meta),
+    (state.sessions ?? []).map((session) => splitSession(session).meta),
+    disk.sessions ?? [], drafts && new Map([...drafts].map(([id, entry]) => [id, entry.meta])), removed, new Set(Object.keys(stored ?? {})),
+  );
+  const deletedSessions = nextTombstones(stored, removed, new Set(sessions.map((session) => session.id)));
   return {
     ...rest,
     // Never stamp this writer's version over what is on disk.
@@ -262,12 +302,8 @@ export function mergedIndex(baseline: StateBaselineData, state: HarnessState, di
     installationId: disk.installationId || state.installationId,
     ...(devicePublicKey && Object.keys(devicePublicKey).length ? { devicePublicKey } : {}),
     accounts: mergeById(baseline.accounts, state.accounts ?? [], disk.accounts ?? [], mergeAccount),
-    sessions: mergeById(
-      [...baseline.sessions.values()].map((entry) => entry.meta),
-      (state.sessions ?? []).map((session) => splitSession(session).meta),
-      disk.sessions ?? [], mergeSessionMeta,
-      drafts && new Map([...drafts].map(([id, entry]) => [id, entry.meta])),
-    ),
+    sessions,
+    ...(deletedSessions ? { deletedSessions } : {}),
     invocations: mergeById(baseline.invocations, state.invocations ?? [], disk.invocations ?? []),
     globalSettings: mergeRecord(baseline.globalSettings, state.globalSettings, disk.globalSettings),
     providerSettings: mergeRecord(baseline.providerSettings, state.providerSettings, disk.providerSettings),

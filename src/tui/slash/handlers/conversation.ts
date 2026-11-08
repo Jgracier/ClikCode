@@ -38,6 +38,7 @@ import { redoFrom } from '../../../session/redo.js';
 import { readTurnChanges, turnChangesAgo, turnChangesDiff, turnChangesList } from '../../../session/turn-changes.js';
 import { stateDirectory } from '../../../session/store/paths.js';
 import { type HeadlessSlashHandler, sendSessionTurn } from './shared.js';
+import { deleteConversations } from '../../../session/state/deletions.js';
 
 /** What /copy copies: the conversation's last answer. */
 export function lastAnswer(session: HarnessSession): string {
@@ -151,7 +152,7 @@ export const conversationHandlers = {
   },
   delete: async ({ id, state, words }) => {
     if (words[0]?.toLowerCase() !== 'confirm') throw new Error('Use /delete confirm to permanently delete this ClikCode conversation. Provider-owned history is not deleted.');
-    state.sessions = state.sessions.filter((item) => item.id !== id);
+    deleteConversations(state, [id]);
     await writeState(state);
     return emitHarnessOutput({ panel: 'session-deleted', text: 'Conversation deleted from ClikCode.' });
   },

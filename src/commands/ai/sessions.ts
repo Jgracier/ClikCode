@@ -31,6 +31,7 @@ import { isAiHarnessRoute, isClikCodeAgent, ROUTE_CHOICES_TEXT } from '../../ses
 import { parseSandboxMode } from '../../agent/sandbox.js';
 import { leaveProvider, parkNativeThread } from '../../session/native-thread.js';
 import { forceStoreSession } from '../../session/ephemeral.js';
+import { deleteConversations } from '../../session/state/deletions.js';
 
 const CLIKCODE_LOCAL_FIXED_FIELDS = 'ClikCode Local runs ClikCode\'s own agent on a model this machine serves; account, provider, effort, and native sessions cannot be set per session (a model can, from ClikCode Local\'s catalog).';
 
@@ -381,7 +382,7 @@ async function endSession(id: string, intent: 'close' | 'leave'): Promise<void> 
   }
   // Never started: not kept, by the same rule /resume hides it by.
   if (isBlankConversation(session)) {
-    state.sessions = state.sessions.filter((item) => item.id !== id);
+    deleteConversations(state, [id]);
     await writeState(state);
     return announce();
   }
