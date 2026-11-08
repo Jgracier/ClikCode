@@ -117,6 +117,32 @@ describe('sessions audit and repair, on a store that fell behind its record', ()
     expect((await auditConversations()).find((item) => item.id === 'c')!.status).toBe('ok');
   });
 
+  it('leaves no vendor thread to resume against the repaired conversation, so the next turn takes it up afresh', async () => {
+    const state = await readState();
+    state.sessions.push(chat('c', turns(1, 60)));
+    await writeState(state);
+    await writeFullRecord(chat('c', turns(1, 60)), stateDirectory());
+    await writeChatLog('c', { messages: turns(1, 10) });
+    resetHarnessStateCaches();
+    resetChatLogCache();
+    // The row names a vendor thread (resumed against the old store) and one parked for a return.
+    const held = await readState({ transcripts: ['c'] });
+    const row = held.sessions.find((item) => item.id === 'c')!;
+    Object.assign(row, {
+      nativeHarness: 'claude', nativeSessionId: 'thread-1', nativeThreadAccountId: 'acct',
+      nativeThreads: { codex: { id: 'thread-0', through: 4, anchor: 'x' } },
+    });
+    await writeState(held);
+
+    await applyRepair(await planRepair('c'));
+
+    resetHarnessStateCaches();
+    const after = (await readState()).sessions.find((item) => item.id === 'c')!;
+    expect(after.nativeSessionId).toBeUndefined();
+    expect(after.nativeThreads).toBeUndefined();
+    expect(after.ownedThreads).toContain('claude:thread-1');
+  });
+
   it('a window that read the old copy and finishes a turn after the repair adds only that turn', async () => {
     await behind();
     // A window or worker read the conversation while it was still behind.

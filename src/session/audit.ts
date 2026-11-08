@@ -18,6 +18,7 @@ import { readSessionTranscript, ConversationLogMissingError, replaceTranscriptFr
 import { sessionLogPath, stateDirectory } from './store/paths.js';
 import { readClaudeFsTranscript } from './discovery/vendors/claude.js';
 import { readCodexFsTranscript } from './discovery/vendors/codex.js';
+import { forgetNativeThread } from './native-thread.js';
 import { readState } from './state/read.js';
 import { writeState } from './state/write.js';
 
@@ -349,8 +350,16 @@ export async function applyRepair(plan: RepairPlan): Promise<{ backup: string; b
   if (!plan.steps.length) throw new Error(`nothing in the evidence extends conversation ${plan.id}; nothing was changed`);
   const backup = join(stateDirectory(), 'repair-backups', plan.id, new Date().toISOString().replace(/[:.]/g, '-'));
   const { backedUp } = await replaceTranscriptFromEvidence(plan.id, plan.messages as TranscriptMessage[], backup);
-  // The index row's count follows the log it now describes.
+  // The index row's count follows the log it now describes. And no vendor thread is resumed against it:
+  // each was written or resumed against the store as it stood, so it has a hole where the repair filled
+  // one (native-thread.ts: a thread is a copy of the record). The next turn takes the whole repaired
+  // conversation up afresh.
   const state = await readState({ transcripts: [plan.id] });
+  const row = state.sessions.find((item) => item.id === plan.id);
+  if (row) {
+    forgetNativeThread(row);
+    delete row.nativeThreads;
+  }
   await writeState(state);
   return { backup, backedUp };
 }
