@@ -8,7 +8,7 @@ export const thisComputer: HostedAdapter = {
 
   async list(query) {
     const needle = query.trim().toLowerCase();
-    const choices = await localModelChoices();
+    const choices = await localModelChoices(needle || undefined);
     return choices
       .filter((choice) => !needle || `${choice.label} ${choice.id}`.toLowerCase().includes(needle))
       .map((choice): HostedRow => ({

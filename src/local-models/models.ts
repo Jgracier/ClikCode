@@ -10,17 +10,40 @@
 import { quiet } from '../runtime/lifecycle-log.js';
 import { copyFile, link, mkdir, readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
-import type { CatalogFile } from './catalog.js';
+import { basename, dirname, join } from 'node:path';
+import type { CatalogFile, CatalogModel } from './catalog.js';
 import { checkDiskSpace, downloadVerified, formatBytes, isDownloaded, sha256File } from './download.js';
 import { modelsDir } from './paths.js';
 
+/** A model stored as several GGUF parts (`…-00001-of-00003.gguf`): Hugging Face caps one file at 50 GB, so large models are published
+ * split. Only a model discovered on this machine is (the published catalog's schema names one file); `weights` is then the first part,
+ * with `sizeBytes` the whole model's, which is what fitting and speed read, and every part is here with its own size and hash. */
+export type LocalModel = CatalogModel & { weightParts?: CatalogFile[] };
+
+/** The files a model's weights are: its parts in order, or the one file. llama.cpp is given the first and finds the rest beside it. */
+export function weightFiles(model: CatalogModel): CatalogFile[] {
+  const parts = (model as LocalModel).weightParts;
+  return parts?.length ? parts : [model.weights];
+}
+
+/** A file name a repo may carry: one folder at most, and no segment that is `.` or `..`, so it can never point outside the store. */
+export function safeRepoPath(file: string): boolean {
+  const segments = file.split('/');
+  return segments.length <= 2 && segments.every((segment) => /^[\w.+-]+$/.test(segment) && !/^\.+$/.test(segment));
+}
+
 export function modelFilePath(file: CatalogFile): string {
-  return join(modelsDir(), file.repo.replace('/', '--'), file.revision.slice(0, 12), file.file);
+  if (!safeRepoPath(file.file)) throw new Error(`refusing an unsafe model file name: ${file.file}`);
+  return join(modelsDir(), file.repo.replace('/', '--'), file.revision.slice(0, 12), ...file.file.split('/'));
+}
+
+/** A Hub URL for a repo file, its path encoded segment by segment (an encoded `/` is not a folder to the Hub). */
+export function hubFileUrl(repo: string, revision: string, file: string): string {
+  return `https://huggingface.co/${repo}/resolve/${revision}/${file.split('/').map(encodeURIComponent).join('/')}`;
 }
 
 function huggingFaceUrl(file: CatalogFile): string {
-  return `https://huggingface.co/${file.repo}/resolve/${file.revision}/${encodeURIComponent(file.file)}`;
+  return hubFileUrl(file.repo, file.revision, file.file);
 }
 
 function adoptionDirs(): string[] {
@@ -42,7 +65,7 @@ interface FileProgress { message: string; bytes?: number; totalBytes?: number }
 
 async function adopt(file: CatalogFile, destination: string, onProgress: (progress: FileProgress) => void): Promise<boolean> {
   for (const directory of adoptionDirs()) {
-    for (const candidate of await findBySizeAndName(directory, file.file, file.sizeBytes, 4)) {
+    for (const candidate of await findBySizeAndName(directory, basename(file.file), file.sizeBytes, 4)) {
       onProgress({ message: `checking ${candidate}…`, bytes: 0, totalBytes: file.sizeBytes });
       const hash = await sha256File(candidate, (bytes) => onProgress({ message: `checking ${candidate}…`, bytes, totalBytes: file.sizeBytes }));
       if (hash !== file.sha256) continue;
@@ -70,6 +93,17 @@ export async function ensureModelFile(file: CatalogFile, onProgress: (progress: 
     ...(signal ? { signal } : {}),
   });
   return destination;
+}
+
+/** The local path llama.cpp is given for a model's weights -- its first part -- fetching every part that is missing. */
+export async function ensureModelWeights(model: CatalogModel, onProgress: (progress: FileProgress) => void, signal?: AbortSignal): Promise<string> {
+  const files = weightFiles(model);
+  const paths: string[] = [];
+  for (const [index, file] of files.entries()) {
+    paths.push(await ensureModelFile(file, files.length > 1
+      ? (progress) => onProgress({ ...progress, message: `${progress.message} (part ${index + 1} of ${files.length})` }) : onProgress, signal));
+  }
+  return paths[0]!;
 }
 
 /** Bytes still to fetch for these files (0 when all are present). */

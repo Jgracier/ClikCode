@@ -6,7 +6,7 @@ import { backgroundDownloadsAllowed, reportDownloadOutcome, startModelDownload }
 import { putOnAgentRoute } from '../../pickers/conversation.js';
 import { localModelChoices } from '../../../local-models/index.js';
 import { resolveLocalModelId, catalogModel } from '../../../local-models/catalog.js';
-import { missingBytes } from '../../../local-models/models.js';
+import { missingBytes, weightFiles } from '../../../local-models/models.js';
 import { formatBytes } from '../../../local-models/download.js';
 import type { HarnessSession } from '../../../session/model.js';
 import { harnessSupportsEffort, harnessSupportsModelSelection, localHarnessForCommand, modelIdFromDisplay } from '../../../runtime/lazy-bridge.js';
@@ -87,7 +87,7 @@ async function localModelCommand(session: HarnessSession, value: string): Promis
   const explicitDownload = value.startsWith('--download ');
   const model = resolveLocalModelId(explicitDownload ? value.slice('--download '.length) : value);
   const entry = catalogModel(model)!;
-  const bytes = await missingBytes([entry.weights]);
+  const bytes = await missingBytes(weightFiles(entry));
   if (bytes && !explicitDownload) {
     if (!TERMINAL.active?.select) {
       throw new Error(`${entry.label} needs a ${formatBytes(bytes)} download. Run /model --download ${model} to authorize it.`);
