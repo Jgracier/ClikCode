@@ -14,6 +14,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { release } from 'node:os';
 import { join } from 'node:path';
 import type { GpuBackend, HardwareProfile } from './hardware.js';
 import { downloadVerified, formatBytes, type DownloadProgress } from './download.js';
@@ -38,7 +39,13 @@ export interface RuntimeBuild {
   companion?: RuntimeAsset;
   /** CUDA builds only: the oldest driver whose CUDA version runs them. */
   minDriverMajor?: number;
+  /** macOS builds only: the oldest Darwin release (`os.release()`) they load on. llama.cpp builds its macOS binaries for
+   * macOS 13.3 (minos in LC_BUILD_VERSION); on older systems dyld refuses them (a missing Accelerate symbol), so a model
+   * downloaded there would never start. Darwin 22.4 is macOS 13.3. */
+  minDarwin?: readonly [number, number];
 }
+
+const MACOS_13_3 = [22, 4] as const;
 
 function asset(name: string, sizeBytes: number, sha256: string): RuntimeAsset {
   return { name, sizeBytes, sha256 };
@@ -64,9 +71,9 @@ export const RUNTIME_BUILDS: readonly RuntimeBuild[] = [
   { key: 'linux-arm64-cuda13', platform: 'linux', arch: 'arm64', backend: 'cuda', minDriverMajor: 580,
     asset: asset('llama-b11194-bin-ubuntu-cuda-13.4-arm64.tar.gz', 147_066_552, '3eecee705f32e964afb5a25b13d42af81385f9209c404479eb15deb3e567e957'),
     companion: asset('cudart-llama-b11194-bin-ubuntu-cuda-13.4-arm64.tar.gz', 552_521_399, '8096d68b54c2d5043337e6a99bd446df495f0d409202a92ca70ddee8fa29d2ce') },
-  { key: 'darwin-arm64-metal', platform: 'darwin', arch: 'arm64', backend: 'metal',
+  { key: 'darwin-arm64-metal', platform: 'darwin', arch: 'arm64', backend: 'metal', minDarwin: MACOS_13_3,
     asset: asset('llama-b11194-bin-macos-arm64.tar.gz', 11_767_333, 'cc5d31e048c1c440149a0aaf25a6e387823511c0f23561ec534a4ec07c14e9e1') },
-  { key: 'darwin-x64-cpu', platform: 'darwin', arch: 'x64', backend: 'cpu',
+  { key: 'darwin-x64-cpu', platform: 'darwin', arch: 'x64', backend: 'cpu', minDarwin: MACOS_13_3,
     asset: asset('llama-b11194-bin-macos-x64.tar.gz', 11_250_068, 'fe9b6c1a2856647303b31401b89e9aab320416706c358c3ce4beb71d21b1f37a') },
   { key: 'win32-x64-cpu', platform: 'win32', arch: 'x64', backend: 'cpu',
     asset: asset('llama-b11194-bin-win-cpu-x64.zip', 18_579_455, 'a508189eb974891c6d665b00d7e1eb5f38adc98345ef1f4815d158dabe188edb') },
@@ -84,6 +91,30 @@ export const RUNTIME_BUILDS: readonly RuntimeBuild[] = [
     asset: asset('llama-b11194-bin-win-cpu-arm64.zip', 12_051_155, 'ce9602bae7616831ec3863df7d509fb160183c4a784f98345086723b353d9beb') },
 ];
 
+function osAtLeast(osRelease: string, minimum: readonly [number, number] | undefined): boolean {
+  if (!minimum) return true;
+  const [major = 0, minor = 0] = osRelease.split('.').map(Number);
+  return major > minimum[0] || (major === minimum[0] && minor >= minimum[1]);
+}
+
+/** Why no runtime build is offered for this machine: an operating system older than every build for it, or none at all. */
+export function noRuntimeReason(hardware: Pick<HardwareProfile, 'platform' | 'arch'>, osRelease: string = release()): string {
+  const builds = RUNTIME_BUILDS.filter((build) => build.platform === hardware.platform && build.arch === hardware.arch);
+  const minimum = builds.find((build) => build.minDarwin)?.minDarwin;
+  if (hardware.platform === 'darwin' && minimum && !osAtLeast(osRelease, minimum)) {
+    return `Models on this computer need macOS 13.3 or later; this Mac runs ${macosName(osRelease)}. Hosted AI on ClikDeploy still works.`;
+  }
+  return `llama.cpp publishes no build for ${hardware.platform} ${hardware.arch}.`;
+}
+
+/** The macOS version a Darwin release belongs to, for a message (Darwin 19 is 10.15; from Darwin 20, macOS = major − 9). */
+function macosName(osRelease: string): string {
+  const major = Number(osRelease.split('.')[0]);
+  if (major === 19) return 'macOS 10.15';
+  if (major === 25) return 'macOS 26';
+  return major >= 20 ? `macOS ${major - 9}` : 'an older macOS';
+}
+
 function driverMajor(version: string | undefined): number {
   return Number(/^(\d+)/.exec(version ?? '')?.[1] ?? 0);
 }
@@ -92,8 +123,11 @@ function driverMajor(version: string | undefined): number {
  * backend with no build here (or, for CUDA, a driver too old for every
  * CUDA build) falls back to the CPU build, which always exists for the
  * platforms ClikCode runs on. */
-export function selectRuntimeBuild(hardware: Pick<HardwareProfile, 'platform' | 'arch'>, gpu: GpuBudget | undefined): RuntimeBuild | undefined {
-  const builds = RUNTIME_BUILDS.filter((build) => build.platform === hardware.platform && build.arch === hardware.arch);
+export function selectRuntimeBuild(
+  hardware: Pick<HardwareProfile, 'platform' | 'arch'>, gpu: GpuBudget | undefined, osRelease: string = release(),
+): RuntimeBuild | undefined {
+  const builds = RUNTIME_BUILDS.filter((build) => build.platform === hardware.platform && build.arch === hardware.arch
+    && osAtLeast(osRelease, build.minDarwin));
   if (gpu) {
     const driver = Math.min(...gpu.devices.map((device) => driverMajor(device.driverVersion)));
     const match = builds.find((build) => build.backend === gpu.backend && (build.minDriverMajor === undefined || driver >= build.minDriverMajor));
