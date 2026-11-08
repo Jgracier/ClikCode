@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, readdir, unlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { HarnessSession, TranscriptMessage } from './model.js';
@@ -134,5 +134,29 @@ describe('sessions audit and repair, on a store that fell behind its record', ()
     state.sessions.push(chat('alone', turns(1, 6)));
     await writeState(state);
     await expect(applyRepair(await planRepair('alone'))).rejects.toThrow(/nothing in the evidence extends/);
+  });
+
+  async function claudeThread(id: string, from: number, to: number): Promise<void> {
+    const dir = join(root, 'profiles', 'claude', 'p1', 'projects', '-w');
+    await mkdir(dir, { recursive: true });
+    const lines = turns(from, to).map((message, index) => JSON.stringify(message.role === 'user'
+      ? { type: 'user', uuid: `u${index}`, timestamp: stamp, message: { role: 'user', content: message.content } }
+      : { type: 'assistant', uuid: `a${index}`, timestamp: stamp, message: { role: 'assistant', content: [{ type: 'text', text: message.content }] } }));
+    await writeFile(join(dir, `${id}.jsonl`), lines.join('\n'));
+  }
+
+  it('takes a thread that merely opens with the same request for advice, and one the row names for evidence', async () => {
+    const state = await readState();
+    state.sessions.push(chat('x', turns(1, 10)));
+    await writeState(state);
+    await claudeThread('thread-1', 1, 40);
+    expect(await auditConversations(['x'])).toMatchObject([{ status: 'possibly-behind', behindBy: 0, possiblyBehindBy: 30 }]);
+    // Named by the conversation's own row: it is its thread.
+    const named = await readState({ transcripts: ['x'] });
+    Object.assign(named.sessions.find((item) => item.id === 'x')!, { nativeHarness: 'claude', nativeSessionId: 'thread-1' });
+    await writeState(named);
+    expect(await auditConversations(['x'])).toMatchObject([{ status: 'behind', behindBy: 30 }]);
+    const plan = await planRepair('x');
+    expect(plan).toMatchObject({ to: { userTurns: 40 }, steps: [{ source: 'claude-thread' }] });
   });
 });
