@@ -2,7 +2,7 @@
  * makes to the answer written so far. */
 import { writeFullRecord } from '../session/full-record.js';
 import { stateDirectory } from '../session/store/paths.js';
-import { startConversationThread } from './thread-start.js';
+import { carriedLine, startConversationThread } from './thread-start.js';
 import { targetContextWindow } from './transfer.js';
 import { canonicalRecord } from '../session/canonical.js';
 import { nativeSessionStore } from '../session/discovery/registry.js';
@@ -70,6 +70,9 @@ export async function takeUp(
     ...(recordPath ? { record: recordPath } : {}),
     ...(start.kind === 'transfer' ? { budget: start.budget, bytes: Buffer.byteLength(start.prompt, 'utf8'), contextWindow } : { omitted: start.omitted, contextWindow }),
   });
+  // Whatever of the conversation did not arrive whole is said in the chat, not only to the model.
+  const carried = carriedLine(record.turns.length, start, harness.displayName, recordPath);
+  if (carried) ctx.prompter?.activity(carried);
   if (start.kind === 'native') {
     session.nativeSessionId = start.written.nativeId;
     session.nativeThreadAccountId = ctx.account.id;

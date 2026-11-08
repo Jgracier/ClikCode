@@ -19,6 +19,7 @@ import { turnBackendForAccount } from './account-routing.js';
 import { runAgentTurn } from './agent-turn.js';
 import { sendDirectApiTurn } from './direct-turn.js';
 import { sendVendorTurn } from './vendor-turn.js';
+import { checkStoreAgainstIndex } from '../session/store-evidence.js';
 import { isTurnCancelled } from '../agent/cancellation.js';
 import { isQueuedTurnAlreadyRun } from './turn-journal.js';
 import { TurnRecorder } from '../session/turn-changes.js';
@@ -89,6 +90,8 @@ export async function runSessionTurn(
   const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
+  // A record that holds fewer messages than its index row last counted fell behind: never continued from.
+  checkStoreAgainstIndex(session);
   // One live copy: a chat that went on on another machine is read-only here (session/move.ts).
   const moved = movedChatMessage(session);
   if (moved) throw new Error(moved);

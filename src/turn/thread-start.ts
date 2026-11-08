@@ -41,7 +41,7 @@ export function keepsNoHistory(harness: AiLocalHarnessDefinition, model: string 
 
 type ThreadStart =
   /** Resume `written.nativeId`; send `prompt` (the request itself). */
-  | { kind: 'native'; written: NativeThreadWritten; prompt: string; omitted: number }
+  | { kind: 'native'; written: NativeThreadWritten; prompt: string; omitted: number; summarised: number }
   /** A fresh thread; send `prompt` (the transfer, ending in the request). */
   | { kind: 'transfer'; prompt: string; budget: number };
 
@@ -144,7 +144,7 @@ function requestsOutline(turns: readonly CanonicalTurn[], maxBytes: number): str
  * not fit, and the first kept turn then says what was left out: a line for
  * each request, and the file that holds the whole conversation. ClikCode's
  * record keeps every turn; nothing is deleted by being left out here. */
-export function fitRecord(record: CanonicalRecord, maxBytes: number, options: { recordPath?: string } = {}): { record: CanonicalRecord; omitted: number } {
+export function fitRecord(record: CanonicalRecord, maxBytes: number, options: { recordPath?: string } = {}): { record: CanonicalRecord; omitted: number; summarised: number } {
   const turns = record.turns;
   const brief = turns.map(briefTurn);
   /** The newest turns that fit `room`: how many of the oldest are out, and the rest. */
@@ -166,18 +166,21 @@ export function fitRecord(record: CanonicalRecord, maxBytes: number, options: { 
     return { first, kept };
   };
   let { first, kept } = select(maxBytes);
-  if (first === 0 && kept.every((turn, index) => turn === turns[index])) return { record, omitted: 0 };
-  if (first === 0) return { record: { ...record, turns: kept }, omitted: 0 };
+  /** Kept turns that went in as their words and a line of what their calls did. */
+  const summarisedIn = (): number => kept.filter((turn, index) => turn !== turns[first + index] && turns[first + index]!.tools.length > 0).length;
+  if (first === 0 && kept.every((turn, index) => turn === turns[index])) return { record, omitted: 0, summarised: 0 };
+  if (first === 0) return { record: { ...record, turns: kept }, omitted: 0, summarised: summarisedIn() };
   // Something is left out, so the note that says what comes out of the same
   // budget as the turns: fitted again with its room held back, never on top.
   const outlineRoom = Math.floor(maxBytes * OUTLINE_SHARE);
   ({ first, kept } = select(Math.max(0, maxBytes - outlineRoom - NOTE_FIXED_BYTES)));
+  const summarised = summarisedIn();
   const outline = requestsOutline(turns.slice(0, first), outlineRoom);
   const note = `[ClikCode: the ${first} earlier turn${first === 1 ? ' is' : 's are'} left out to fit this model.${options.recordPath ? ` ${fullRecordNote(options.recordPath)}` : ''}${outline ? `\nWhat was asked in them, oldest first:\n${outline}` : ''}]\n\n`;
-  return { record: { ...record, turns: [{ ...kept[0]!, user: `${note}${kept[0]!.user}` }, ...kept.slice(1)] }, omitted: first };
+  return { record: { ...record, turns: [{ ...kept[0]!, user: `${note}${kept[0]!.user}` }, ...kept.slice(1)] }, omitted: first, summarised };
 }
 
-async function written(input: ThreadStartInput): Promise<{ written: NativeThreadWritten; omitted: number } | undefined> {
+async function written(input: ThreadStartInput): Promise<{ written: NativeThreadWritten; omitted: number; summarised: number } | undefined> {
   const writer = input.writer;
   if (!writer || !input.record.turns.length) return undefined;
   if (keepsNoHistory(input.harness, input.model)) {
@@ -198,7 +201,7 @@ async function written(input: ThreadStartInput): Promise<{ written: NativeThread
     const fitted = fitRecord(input.record, nativeThreadBudget(input.contextWindow), input.recordPath ? { recordPath: input.recordPath } : {});
     const result = await writer.write(fitted.record, context);
     if (!result?.nativeId) input.onFallback?.(`${input.harness.command} thread writer declined`);
-    return result?.nativeId ? { written: result, omitted: fitted.omitted } : undefined;
+    return result?.nativeId ? { written: result, omitted: fitted.omitted, summarised: fitted.summarised } : undefined;
   } catch (error) {
     // fail-open-ok: a transfer always works; a writer is an improvement on it.
     input.onFallback?.(`${input.harness.command} thread writer failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -220,4 +223,19 @@ export async function startConversationThread(input: ThreadStartInput): Promise<
       ...(input.recordPath ? { recordPath: input.recordPath } : {}),
     }),
   };
+}
+
+/** What a person is told when a conversation is taken up by a provider and anything of it did not
+ * go in whole: how many turns arrived, and how. Undefined when all of it went in as it was. */
+export function carriedLine(turns: number, start: ThreadStart, provider: string, recordPath?: string): string | undefined {
+  if (!turns) return undefined;
+  const where = recordPath ? ` The whole conversation is saved at ${recordPath}.` : '';
+  if (start.kind === 'transfer') {
+    return `Carried ${turns} of ${turns} turns to ${provider}, ${turns} summarised: ${provider} could not be given the conversation as its own thread, so it was retold.${where}`;
+  }
+  if (!start.omitted && !start.summarised) return undefined;
+  const parts = [`Carried ${turns - start.omitted} of ${turns} turns to ${provider}`];
+  if (start.summarised) parts.push(`${start.summarised} summarised`);
+  const left = start.omitted ? `; the ${start.omitted} earliest ${start.omitted === 1 ? 'is' : 'are'} left out to fit its window` : '';
+  return `${parts.join(', ')}${left}.${where}`;
 }

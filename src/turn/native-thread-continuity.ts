@@ -7,6 +7,7 @@ import { open, stat } from 'node:fs/promises';
 import { locateNativeSessionFile } from '../session/discovery/registry.js';
 import { nativeProfileEnvironment } from '../harness/transport/profile-environment.js';
 import { ParentChainIndex } from './parent-chain.js';
+import { threadCoverage, type ThreadCoverage } from '../session/store-evidence.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessSession } from '../session/model.js';
 
@@ -85,4 +86,54 @@ export async function nativeThreadHoldsConversation(
     checked.delete(file.path);
     return false;
   });
+}
+
+/** The newest request a Claude thread was asked, with when, read from the end of its file: the thread's
+ * own account of how far it got, which ClikCode's record of the conversation cannot vouch for. */
+export async function newestClaudeRequest(path: string): Promise<{ text: string; at?: string } | undefined> {
+  const { size } = await stat(path);
+  // The newest request is near the end; a longer tail only when the end is all tool traffic.
+  for (const window of [256 * 1024, 4 * 1024 * 1024, 64 * 1024 * 1024]) {
+    const length = Math.min(size, window);
+    const bytes = Buffer.alloc(length);
+    const handle = await open(path, 'r');
+    try { await handle.read(bytes, 0, length, size - length); } finally { await handle.close(); }
+    const lines = bytes.toString('utf8').split('\n');
+    // The first line of a tail may be cut in two.
+    if (length < size) lines.shift();
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const found = claudeRequestIn(lines[index]!);
+      if (found) return found;
+    }
+    if (length >= size) return undefined;
+  }
+  return undefined;
+}
+
+/** A line of a Claude thread that is a request someone typed: a user entry with text, not a tool's result,
+ * a sub-agent's, a compaction's or a note the harness wrote. */
+function claudeRequestIn(line: string): { text: string; at?: string } | undefined {
+  if (!line.includes('"type":"user"')) return undefined;
+  let entry: { type?: string; isSidechain?: boolean; isMeta?: boolean; isCompactSummary?: boolean; timestamp?: string; message?: { content?: unknown } };
+  try { entry = JSON.parse(line); } catch { return undefined; }
+  if (entry.type !== 'user' || entry.isSidechain || entry.isMeta || entry.isCompactSummary) return undefined;
+  const content = entry.message?.content;
+  const text = typeof content === 'string' ? content
+    : Array.isArray(content) ? content.map((block) => (block && typeof block === 'object' && (block as { type?: string }).type === 'text' ? String((block as { text?: unknown }).text ?? '') : '')).join('\n') : '';
+  if (!text.trim() || /^\s*<(command-|local-command|system-reminder)/.test(text)) return undefined;
+  return { text, ...(entry.timestamp ? { at: entry.timestamp } : {}) };
+}
+
+/** Where the thread the conversation is about to resume stands in it: `unknown` for any vendor
+ * whose thread is not read here (only Claude's is), or one that cannot be found. */
+export async function nativeThreadCoverage(
+  session: HarnessSession, harness: AiLocalHarnessDefinition, account: AiHarnessAccount,
+): Promise<ThreadCoverage> {
+  if (!session.nativeSessionId || session.nativeSessionPreallocated || harness.command !== 'claude' || !session.workspace) return { kind: 'unknown' };
+  const file = await locateNativeSessionFile(
+    harness, session.nativeSessionId, session.workspace, nativeProfileEnvironment(account.nativeProfile),
+  ).catch(quiet('turn/native-thread-continuity'));
+  if (!file?.path.endsWith('.jsonl')) return { kind: 'unknown' };
+  const request = await newestClaudeRequest(file.path).catch(quiet('turn/native-thread-continuity'));
+  return threadCoverage(request, session.messages ?? [], session.updatedAt);
 }

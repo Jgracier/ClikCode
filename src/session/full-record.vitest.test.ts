@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { HarnessSession } from './model.js';
-import { fullRecordNote, fullRecordPath, writeFullRecord } from './full-record.js';
+import { fullRecordNote, fullRecordPath, recordTurns, writeFullRecord } from './full-record.js';
 
 const now = '2026-10-21T00:00:00.000Z';
 let dir: string | undefined;
@@ -38,6 +38,21 @@ describe('the file that holds a whole conversation', () => {
     const text = await readFile(fullRecordPath(dir, 'conv-1'), 'utf8');
     expect(text.match(/request number 1\b/g)).toHaveLength(1);
     expect(text).toContain('request number 5');
+  });
+
+  it('is never replaced by a shorter conversation: the longer one is set aside, so a record that fell behind cannot overwrite the evidence', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'cc-record-'));
+    await writeFullRecord(chat(300), dir);
+    await writeFullRecord(chat(139), dir);
+    expect(await readFile(fullRecordPath(dir, 'conv-1'), 'utf8')).not.toContain('request number 140');
+    const [kept] = await readdir(join(dir, 'records', 'older'));
+    expect(kept).toMatch(/^conv-1\..+\.md$/);
+    const text = await readFile(join(dir, 'records', 'older', kept!), 'utf8');
+    expect(text).toContain('request number 300');
+    expect(recordTurns(text)).toBe(300);
+    // A longer or equal one simply replaces, as before.
+    await writeFullRecord(chat(139), dir);
+    expect(await readdir(join(dir, 'records', 'older'))).toHaveLength(1);
   });
 
   it('is undefined, not an error, where it cannot be written', async () => {
