@@ -2,13 +2,32 @@
  * a filename. Relocatable for tests and portable installs. */
 
 import { createHash } from 'node:crypto';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { homedir, userInfo } from 'node:os';
+import { join, resolve } from 'node:path';
 
 /** Root of all local ClikCode state. Relocatable for tests and portable installs. */
 export function stateDirectory(): string {
-  return process.env.CLIKCODE_HOME?.trim()
-    || join(homedir(), '.clikcode');
+  const dir = process.env.CLIKCODE_HOME?.trim() || join(homedir(), '.clikcode');
+  assertNotRealStateUnderTest(dir);
+  return dir;
+}
+
+/** The user's own state directory, by the account database and not by $HOME
+ * (which a test or a harness points elsewhere). */
+function realStateDirectory(): string | undefined {
+  try { return resolve(userInfo().homedir, '.clikcode'); } catch { return undefined; }
+}
+
+/** ClikCode deletes whatever its index no longer lists, so a test run that
+ * reaches the real ~/.clikcode once erased every saved conversation and
+ * account. A test process (vitest sets VITEST) never gets that directory: it
+ * is refused here, by every reader and writer, however the home was lost. */
+export function assertNotRealStateUnderTest(dir: string): void {
+  if (!process.env.VITEST) return;
+  const real = realStateDirectory();
+  if (real && resolve(dir) === real) {
+    throw new Error(`A test reached the real ClikCode state (${real}). Tests must run against a throwaway CLIKCODE_HOME (vitest.setup.ts sets one).`);
+  }
 }
 
 export function sessionsDirectory(): string {

@@ -28,6 +28,9 @@ import argparse, fcntl, hashlib, json, os, pty, re, select, shutil, signal, stru
 
 import pyte
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from state_guard import refuse_real_state
+
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 COLS, ROWS = 100, 50
 
@@ -3085,7 +3088,7 @@ def run(name, spec, entry, keep):
     env = {
         'PATH': ':'.join([fakebin, os.path.join(npm_prefix, 'bin'), nodebin, '/usr/bin', '/bin']),
         'npm_config_prefix': npm_prefix,
-        'HOME': home, 'CLIKCODE_HOME': state, 'TERM': 'xterm-256color', 'LANG': 'C.UTF-8',
+        'HOME': refuse_real_state(home), 'CLIKCODE_HOME': refuse_real_state(state), 'TERM': 'xterm-256color', 'LANG': 'C.UTF-8',
         'FAKE_TURNS': json.dumps(spec['turns']), 'FAKE_STATE': os.path.join(root, 'turn-counter'),
         'FAKE_FAMILY': spec.get('family', 'claude'), 'FAKE_LOG': os.path.join(root, 'argv.log'),
         **spec.get('env', {}),
