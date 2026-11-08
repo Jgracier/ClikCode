@@ -208,3 +208,13 @@ describe('sessions audit and repair, on a store that fell behind its record', ()
     expect(plan).toMatchObject({ to: { userTurns: 40 }, steps: [{ source: 'claude-thread' }] });
   });
 });
+
+describe('injected requests are no evidence', () => {
+  it('a thread whose extra user turns are harness notes is not ahead of the store', () => {
+    const store: TranscriptMessage[] = [{ role: 'user', content: 'please deploy the website to production today' }, { role: 'assistant', content: 'done' }];
+    const notes = ['<local-command-caveat>Caveat: generated while running local commands', '<command-name>/model</command-name> model', '[Request interrupted by user for tool use]', '<task-notification> agent finished its long running job', '[ClikCode: the following turns ran on Codex (gpt-6-sol)] hi there', '<clikcode_resource_note> Disk I/O is stalling the machine']
+      .map((content) => ({ role: 'user' as const, content }));
+    const evidence = [{ role: 'user' as const, content: 'please deploy the website to production today' }, ...notes, ...notes, ...notes];
+    expect(layAgainst(store, evidence)).toEqual({ agrees: true, missing: 0 });
+  });
+});

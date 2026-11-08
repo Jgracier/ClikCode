@@ -35,6 +35,13 @@ export function requestKey(text: string): string {
   return stripResourceNotes(text).replace(/\s+/g, ' ').trim();
 }
 
+/** Text the harness or the app put in front of a model that the user never typed: command echoes, system
+ * reminders, background-agent notices, interruption markers, handover notes. It is no part of the
+ * conversation, so it is never evidence of one. */
+export function isInjectedRequest(text: string): boolean {
+  return /^\s*(<(command-|local-command|system-reminder|task-notification|subagent_notification|clikcode_)|\[(Request interrupted|ClikCode[:\]]))/.test(text);
+}
+
 /** A request must be this long before it is evidence: "yes" aligns with anything. */
 const MIN_ALIGNED = 24;
 const HEAD = 80;
@@ -54,6 +61,7 @@ export function threadCoverage(
   request: { text: string; at?: string } | undefined, messages: readonly TranscriptMessage[], updatedAt: string | undefined,
 ): ThreadCoverage {
   if (!request) return { kind: 'unknown' };
+  if (isInjectedRequest(request.text)) return { kind: 'unknown' };
   const asked = requestKey(request.text);
   if (asked.length < MIN_ALIGNED) return { kind: 'unknown' };
   const users: string[] = [];
