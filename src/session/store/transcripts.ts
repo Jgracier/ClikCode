@@ -86,7 +86,7 @@ import { dirname } from 'node:path';
 import type { HarnessSession } from '../model.js';
 import { lifecycle, quiet } from '../../runtime/lifecycle-log.js';
 import {
-  appendChatLog, chatLogText, loadChatLog, loadPendingFile, parseChatLog, removeChatLog, removePendingFile, storePendingFile, writeChatLog,
+  appendChatLog, chatLogText, hadLog, loadChatLog, loadPendingFile, markLogged, unmarkLogged, parseChatLog, removeChatLog, removePendingFile, storePendingFile, writeChatLog,
   type ChatLog, type LegacyBase, type LogRecord, type PendingTurn, type TranscriptMessage,
 } from './chat-log.js';
 import { cloneData, sameData } from './data.js';
@@ -107,6 +107,33 @@ export function transcriptOf(session: HarnessSession): SessionTranscript {
     ...(session.messages !== undefined ? { messages: session.messages } : {}),
     ...(session.pendingTurn !== undefined ? { pendingTurn: session.pendingTurn } : {}),
   };
+}
+
+/** The conversation's stored history is gone: its log existed once (a mark beside it says so) and does
+ * not now. `<id>.json`, if it is still there, is how an older build stored the chat, and holds nothing
+ * newer than the day the log took over -- rebuilding from it silently put a conversation back to that
+ * day with the rest unrecoverable. Nothing is rebuilt: the read or write stops, and says so. */
+export class ConversationLogMissingError extends Error {
+  constructor(readonly sessionId: string) {
+    super(`The stored history of conversation ${sessionId} is missing. ClikCode will not rebuild it from an older copy. `
+      + `Run \`clikcode sessions audit\` to see what survives, then \`clikcode sessions repair ${sessionId}\`.`);
+    this.name = 'ConversationLogMissingError';
+  }
+}
+
+/** The log of `id`, marked as having existed. */
+async function openLog(id: string): Promise<ChatLog | undefined> {
+  const log = await loadChatLog(id);
+  if (log) await markLogged(id);
+  return log;
+}
+
+/** For a read or write that found no log: stops when there was one. */
+async function refuseLostLog(id: string): Promise<void> {
+  if (await hadLog(id)) {
+    lifecycle('store.log-missing', { session: id });
+    throw new ConversationLogMissingError(id);
+  }
 }
 
 function withSessionLock<T>(id: string, run: () => Promise<T>): Promise<T> {
@@ -300,8 +327,9 @@ async function streamedTurn(id: string, pending: PendingTurn | undefined): Promi
  * `messages` is the cached history, frozen: callers must not change it in
  * place (replace the array instead). `pendingTurn` is the caller's own copy. */
 export async function readSessionTranscript(id: string): Promise<SessionTranscript> {
-  const log = await loadChatLog(id);
+  const log = await openLog(id);
   if (!log) {
+    await refuseLostLog(id);
     const legacy = await readLegacyTranscript(id);
     if (!legacy) return {};
     return {
@@ -319,8 +347,11 @@ export async function readSessionTranscript(id: string): Promise<SessionTranscri
 
 /** Just the running turn's journal, as readSessionTranscript would return it (not a copy: do not change it). */
 export async function readStoredPendingTurn(id: string): Promise<PendingTurn | undefined> {
-  const log = await loadChatLog(id);
-  if (!log) return (await readLegacyTranscript(id))?.pendingTurn;
+  const log = await openLog(id);
+  if (!log) {
+    await refuseLostLog(id);
+    return (await readLegacyTranscript(id))?.pendingTurn;
+  }
   return streamedTurn(id, logView(log, await legacyIntake(id, log)).pending);
 }
 
@@ -428,7 +459,7 @@ async function migrate(id: string): Promise<ChatLog | undefined> {
   }
   fault('placed');
   await syncDirectory(dirname(path));
-  const log = await loadChatLog(id);
+  const log = await openLog(id);
   if (!log) throw new Error(`the history of conversation ${id} vanished as it was moved`);
   // The history just read is exactly the log's: a writer holding it appends straight on.
   if (messages && log.messages.length === messages.length) positions.set(messages, { gen: log.gen, end: messages.length });
@@ -478,12 +509,14 @@ async function commit(id: string, log: ChatLog, record: LogRecord): Promise<void
 /** Persists `next` as one conversation's transcript. Under that
  * conversation's lock; see WRITING in the module header. */
 async function storeTranscript(id: string, next: SessionTranscript, base: SessionTranscript | undefined): Promise<void> {
-  let log = await loadChatLog(id) ?? await migrate(id);
+  let log = await openLog(id);
+  if (!log) await refuseLostLog(id);
+  log ??= await migrate(id);
   if (!log) {
     // A conversation new to disk. Nothing in it: nothing to store.
     if (next.messages === undefined && next.pendingTurn === undefined) return;
     await writeChatLog(id, { ...(next.messages ? { messages: next.messages } : {}), ...(next.pendingTurn ? { pending: next.pendingTurn } : {}) });
-    const born = await loadChatLog(id);
+    const born = await openLog(id);
     if (born && next.messages) positions.set(next.messages, { gen: born.gen, end: next.messages.length });
     const stub = await writeStub(id);
     if (born && stub) await commit(id, born, { legacy: { file: stub, ...EMPTY_BASE, at: born.messages.length } });
@@ -568,7 +601,7 @@ export function writeOwnTranscript(
 async function storeStreamedTurn(id: string, next: SessionTranscript, base: SessionTranscript): Promise<boolean> {
   const turn = next.pendingTurn;
   if (!turn || next.messages !== base.messages || turn.startedAt !== base.pendingTurn?.startedAt) return false;
-  const log = await loadChatLog(id);
+  const log = await openLog(id);
   if (!log || log.foreign || !log.pending || log.pending.startedAt !== turn.startedAt || log.pending.prompt !== turn.prompt) return false;
   await storePendingFile(id, turn);
   return true;
@@ -583,5 +616,6 @@ export async function deleteSessionTranscript(_held: StateLockHeld, id: string):
     await removeChatLog(id);
     await removePendingFile(id);
     await removeLegacyFiles(id);
+    await unmarkLogged(id);
   });
 }

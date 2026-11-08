@@ -34,7 +34,7 @@ import { open, readFile, stat, unlink } from 'node:fs/promises';
 import type { HarnessSession } from '../model.js';
 import { lifecycle, quiet } from '../../runtime/lifecycle-log.js';
 import { atomicWriteFile } from './files.js';
-import { sessionLogPath, sessionPendingPath } from './paths.js';
+import { sessionLoggedPath, sessionLogPath, sessionPendingPath } from './paths.js';
 
 export type TranscriptMessage = NonNullable<HarnessSession['messages']>[number];
 export type PendingTurn = NonNullable<HarnessSession['pendingTurn']>;
@@ -87,6 +87,7 @@ const cache = new Map<string, ChatLog>();
 export function resetChatLogCache(): void {
   cache.clear();
   pendingCache.clear();
+  logged.clear();
 }
 
 function deepFreeze(value: unknown): void {
@@ -312,6 +313,44 @@ export async function loadPendingFile(id: string): Promise<PendingTurn | undefin
 export async function removePendingFile(id: string): Promise<void> {
   const path = sessionPendingPath(id);
   pendingCache.delete(path);
+  await unlink(path).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== 'ENOENT') throw error;
+  });
+}
+
+/** Conversations known to have had a log, by path: what is asked of the disk once. */
+const logged = new Set<string>();
+
+/** Records that `id` has a log, durably, beside it (sessionLoggedPath). Called
+ * wherever a log is found, so a log this build did not make is marked the
+ * first time it is seen; made after the log, never before, so a crash between
+ * leaves a log without its mark (marked next time), never a mark without a log. */
+export async function markLogged(id: string): Promise<void> {
+  const path = sessionLoggedPath(id);
+  if (logged.has(path)) return;
+  try {
+    await (await open(path, 'wx', 0o600)).close();
+  } catch (error) {
+    // EEXIST: already marked. Anything else (a read-only disk) leaves this one unmarked until it can be.
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return;
+  }
+  logged.add(path);
+}
+
+/** Whether `id` has ever had a log. A conversation that has, and has none now, lost
+ * it: its history is not to be rebuilt from `<id>.json`, which is older. */
+export async function hadLog(id: string): Promise<boolean> {
+  const path = sessionLoggedPath(id);
+  if (logged.has(path)) return true;
+  if (!await stat(path).then(() => true, () => false)) return false;
+  logged.add(path);
+  return true;
+}
+
+/** Forgets that `id` had a log: the conversation is being deleted. */
+export async function unmarkLogged(id: string): Promise<void> {
+  const path = sessionLoggedPath(id);
+  logged.delete(path);
   await unlink(path).catch((error: NodeJS.ErrnoException) => {
     if (error.code !== 'ENOENT') throw error;
   });

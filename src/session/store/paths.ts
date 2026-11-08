@@ -59,6 +59,15 @@ export function sessionLogPath(id: string): string {
   return join(sessionsDirectory(), `${safeRecordFileName(id)}.jsonl`);
 }
 
+/** Proof that `id` has had a message log (chat-log.ts markLogged): an empty file
+ * made once the log exists, and removed only when the conversation is deleted.
+ * It outlives the log and the index, so a log that is gone is told from a
+ * conversation that never had one -- which alone may be read from `<id>.json`.
+ * Not `.json`, `.jsonl`, `.turn` or `.pending`: no build lists or sweeps it. */
+export function sessionLoggedPath(id: string): string {
+  return join(sessionsDirectory(), `${safeRecordFileName(id)}.logged`);
+}
+
 /** The running turn's journal while its answer streams (chat-log.ts). */
 export function sessionPendingPath(id: string): string {
   return join(sessionsDirectory(), `${safeRecordFileName(id)}.pending`);
