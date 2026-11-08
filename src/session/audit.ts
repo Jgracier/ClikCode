@@ -32,16 +32,21 @@ export interface EvidenceSource {
   beyondStore: number;
   /** The source agrees with the store up to the store's newest request. False: it cannot be laid against it. */
   aligned: boolean;
+  /** Named by the conversation (its record, a thread its row lists). Otherwise it was found by opening with the same request,
+   * which a branch of the conversation, or another conversation begun the same way, also does: advice, never proof. */
+  named: boolean;
 }
 
 export interface AuditEntry {
   id: string;
   name: string | undefined;
-  status: 'ok' | 'behind' | 'log-missing';
+  status: 'ok' | 'behind' | 'possibly-behind' | 'log-missing';
   store: { messages: number; userTurns: number } | null;
   indexCount: number | undefined;
-  /** The most turns the evidence says the conversation has that the store lacks. */
+  /** The most turns that named evidence says the conversation has and the store lacks. */
   behindBy: number;
+  /** The same by threads that only open with the same request. */
+  possiblyBehindBy: number;
   evidence: EvidenceSource[];
 }
 
@@ -250,30 +255,32 @@ async function storeOf(id: string): Promise<readonly TranscriptMessage[] | null>
 }
 
 /** Fewer requests than this that a piece of evidence has and the store lacks are not reported. */
-const MIN_BEHIND = 3;
+const MIN_BEHIND = 5;
 
 async function auditOne(session: HarnessSession, threads: ThreadFile[]): Promise<AuditEntry> {
   const store = await storeOf(session.id);
   const have = store ?? [];
   const evidence: EvidenceSource[] = [];
   let behindBy = 0;
+  let possiblyBehindBy = 0;
   const counted = session.listMessageCount;
   if (counted !== undefined && have.length < counted) {
-    evidence.push({ source: 'index', path: 'index.json', userTurns: Math.ceil(counted / 2), at: session.updatedAt, beyondStore: Math.ceil((counted - have.length) / 2), aligned: true });
+    evidence.push({ source: 'index', path: 'index.json', userTurns: Math.ceil(counted / 2), at: session.updatedAt, beyondStore: Math.ceil((counted - have.length) / 2), aligned: true, named: true });
     behindBy = Math.max(behindBy, Math.ceil((counted - have.length) / 2));
   }
   for (const piece of await gather(session, have, threads)) {
     const laid = layAgainst(have, piece.messages);
-    // One or two requests more than the store is what an undo leaves in a thread it no longer uses.
+    // One or two requests more than the store is what an undo, or a vendor's own preamble, leaves in a thread.
     const beyondStore = laid.missing >= MIN_BEHIND ? laid.missing : 0;
-    evidence.push({ source: piece.source, path: piece.path, userTurns: userTurnsOf(piece.messages), at: piece.at, beyondStore, aligned: laid.agrees });
-    behindBy = Math.max(behindBy, beyondStore);
+    evidence.push({ source: piece.source, path: piece.path, userTurns: userTurnsOf(piece.messages), at: piece.at, beyondStore, aligned: laid.agrees, named: piece.named });
+    if (piece.named) behindBy = Math.max(behindBy, beyondStore);
+    else possiblyBehindBy = Math.max(possiblyBehindBy, beyondStore);
   }
   return {
     id: session.id, name: session.name,
-    status: store === null ? 'log-missing' : behindBy > 0 ? 'behind' : 'ok',
+    status: store === null ? 'log-missing' : behindBy > 0 ? 'behind' : possiblyBehindBy > 0 ? 'possibly-behind' : 'ok',
     store: store === null ? null : { messages: have.length, userTurns: userTurnsOf(have) },
-    indexCount: counted, behindBy, evidence,
+    indexCount: counted, behindBy, possiblyBehindBy, evidence,
   };
 }
 

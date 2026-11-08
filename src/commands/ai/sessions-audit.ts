@@ -15,7 +15,7 @@ async function resolveId(reference: string): Promise<string> {
 
 /** Evidence by how much it adds, the first few: a long conversation can have a dozen threads. */
 function shortened(entry: AuditEntry): Omit<AuditEntry, 'evidence'> & { evidence: AuditEntry['evidence']; moreEvidence?: number } {
-  const ranked = [...entry.evidence].sort((a, b) => b.beyondStore - a.beyondStore || b.userTurns - a.userTurns);
+  const ranked = [...entry.evidence].sort((a, b) => Number(b.named) - Number(a.named) || b.beyondStore - a.beyondStore || b.userTurns - a.userTurns);
   return { ...entry, evidence: ranked.slice(0, EVIDENCE_SHOWN), ...(ranked.length > EVIDENCE_SHOWN ? { moreEvidence: ranked.length - EVIDENCE_SHOWN } : {}) };
 }
 const EVIDENCE_SHOWN = 6;
@@ -27,6 +27,7 @@ export async function aiSessionsAudit(options: { all?: boolean; id?: string } = 
   emitResult({
     checked: entries.length,
     behind: flagged.filter((entry) => entry.status === 'behind').length,
+    possiblyBehind: flagged.filter((entry) => entry.status === 'possibly-behind').length,
     logMissing: flagged.filter((entry) => entry.status === 'log-missing').length,
     note: 'Nothing was changed. `clikcode sessions repair <id>` shows what a rebuild would do; add --apply to do it.',
     conversations: (options.all || options.id ? entries : flagged).map(shortened),
