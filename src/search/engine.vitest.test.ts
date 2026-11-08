@@ -10,6 +10,7 @@ import { conversationView, corpusBuilds, resetCorpusCache, sessionDoc } from './
 import { parseQuery, parseSince, recencyBoost, searchConversations, titleMatch } from './engine.js';
 import { hitSnippets, mentionCount, snippet } from './format.js';
 import { maskSecrets } from './secrets.js';
+import { deleteConversations } from '../session/state/deletions.js';
 
 const NOW = Date.parse('2026-10-04T12:00:00Z');
 const daysAgo = (days: number): string => new Date(NOW - days * 86_400_000).toISOString();
@@ -35,7 +36,7 @@ beforeEach(async () => {
   resetCorpusCache();
   resetHarnessStateCaches();
   const state = await readState();
-  state.sessions = [];
+  deleteConversations(state, state.sessions.map((session) => session.id));
   await writeState(state);
 });
 

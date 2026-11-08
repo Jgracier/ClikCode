@@ -9,6 +9,7 @@ import { stateDirectory } from '../session/store/paths.js';
 import { workersDirectory, writeWorkerRecord } from '../worker/registry.js';
 import { resetCorpusCache } from './corpus.js';
 import { conversationTool } from './tools.js';
+import { deleteConversations } from '../session/state/deletions.js';
 
 const NOW = Date.now();
 const minutesAgo = (minutes: number): string => new Date(NOW - minutes * 60_000).toISOString();
@@ -38,7 +39,7 @@ beforeEach(async () => {
   resetCorpusCache();
   resetHarnessStateCaches();
   const state = await readState();
-  state.sessions = [];
+  deleteConversations(state, state.sessions.map((session) => session.id));
   await writeState(state);
   const messages: TranscriptMessage[] = [];
   for (let index = 0; index < 20; index += 1) {

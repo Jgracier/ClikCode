@@ -344,6 +344,12 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .action((dataset: string, options: Record<string, unknown>) => later(() => import('../commands/ai/finetune-local.js'), 'aiLocalFineTune')(dataset, options));
   const sessions = program.command('sessions').alias('session').description('Create and resume persistent coding sessions');
   sessions.command('list').alias('ls').description('List saved sessions').action(later(sessionCommands, 'aiSessionsList'));
+  sessions.command('audit').description('Check every conversation against the evidence of how long it was (its index row, its saved records, the vendor threads that carried it); changes nothing')
+    .option('--all', 'List every conversation, not only those whose store is behind').option('--id <id>', 'Only this conversation')
+    .action((options) => later(() => import('../commands/ai/sessions-audit.js'), 'aiSessionsAudit')(options));
+  sessions.command('repair <id>').description('Rebuild a conversation\'s log from the newest evidence (vendor threads, saved records). A dry run unless --apply; --apply copies every file the conversation has to repair-backups/ first')
+    .option('--apply', 'Write the rebuilt log')
+    .action((id, options) => later(() => import('../commands/ai/sessions-audit.js'), 'aiSessionsRepair')(id, options));
   sessions.command('show <id>').description('Show a saved session').action(later(sessionCommands, 'aiSessionShow'));
   // `send --chat <chat>`, under its older name.
   sessions.command('send <chat> <prompt...>').alias('chat').description('Send a turn through a saved chat (its id or the start of it, its name, or last)')

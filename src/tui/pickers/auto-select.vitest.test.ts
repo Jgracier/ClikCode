@@ -8,6 +8,7 @@ import type { HarnessSession } from '../../session/model.js';
 import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
 import { allLocalHarnesses, harnessCanRunTurns, harnessTierRank } from '../../runtime/lazy-bridge.js';
+import { deleteConversations } from '../../session/state/deletions.js';
 
 const vendor = vi.hoisted(() => ({ installed: new Set<string>(), selected: [] as string[] }));
 vi.mock('../../harness/transport/native/inspect.js', async (original) => ({
@@ -32,7 +33,8 @@ beforeEach(async () => {
   vendor.selected = [];
   const state = await readState({ transcripts: [] });
   state.accounts = [];
-  state.sessions = [];
+  deleteConversations(state, state.sessions.map((session) => session.id));
+  await writeState(state);
   const now = new Date().toISOString();
   state.sessions.push({
     id: 's1', conversationId: 's1', route: 'local', accountId: null, provider: null, model: null,
