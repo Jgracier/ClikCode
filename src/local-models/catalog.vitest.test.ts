@@ -4,7 +4,7 @@ import { catalogModels } from './catalog-source';
 import type { CatalogModel } from './catalog';
 import type { HardwareProfile } from './hardware';
 import { buildServerArgs, threadPlan, usesMmap } from './launch';
-import { selectRuntimeBuild } from './runtime';
+import { selectRuntimeBuild, noRuntimeReason } from './runtime';
 
 const GIB = 1024 ** 3;
 const LOCAL_MODEL_CATALOG = catalogModels();
@@ -157,8 +157,21 @@ describe('runtime build', () => {
   });
 
   it('uses Metal on Apple Silicon and the CPU build where a backend has none', () => {
-    expect(selectRuntimeBuild({ platform: 'darwin', arch: 'arm64' }, undefined)?.key).toBe('darwin-arm64-metal');
+    expect(selectRuntimeBuild({ platform: 'darwin', arch: 'arm64' }, undefined, '24.6.0')?.key).toBe('darwin-arm64-metal');
     const rocm = { backend: 'rocm' as const, bytes: 10 * GIB, unified: false, fitTargetMib: 1024, devices: [] };
     expect(selectRuntimeBuild({ platform: 'linux', arch: 'arm64' }, rocm)?.key).toBe('linux-arm64-cpu');
+  });
+
+  // llama.cpp's macOS binaries are built for macOS 13.3: on an older Mac they never load (seen on a 10.15 iMac:
+  // dyld cannot find _cblas_sgemm$NEWLAPACK$ILP64 in Accelerate), so nothing is offered and the reason names the version.
+  it('offers no macOS build below macOS 13.3, and says why', () => {
+    const intelMac = { platform: 'darwin' as const, arch: 'x64' };
+    expect(selectRuntimeBuild(intelMac, undefined, '22.4.0')?.key).toBe('darwin-x64-cpu');
+    expect(selectRuntimeBuild(intelMac, undefined, '22.3.0')).toBeUndefined();
+    expect(selectRuntimeBuild(intelMac, undefined, '19.6.0')).toBeUndefined();
+    expect(selectRuntimeBuild({ platform: 'darwin', arch: 'arm64' }, undefined, '21.6.0')).toBeUndefined();
+    expect(noRuntimeReason(intelMac, '19.6.0')).toBe('Models on this computer need macOS 13.3 or later; this Mac runs macOS 10.15. Hosted AI on ClikDeploy still works.');
+    expect(noRuntimeReason(intelMac, '21.6.0')).toContain('this Mac runs macOS 12.');
+    expect(noRuntimeReason({ platform: 'freebsd', arch: 'x64' }, '14.0')).toBe('llama.cpp publishes no build for freebsd x64.');
   });
 });

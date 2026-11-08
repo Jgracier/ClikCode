@@ -34,7 +34,7 @@ import {
 import { footprintKey, latestMeasurement, machineKey, measureServer, readFootprints, readMeasurements, writeMeasurement } from './measure.js';
 import { ensureModelFile, missingBytes } from './models.js';
 import { footprintsFile, preferencesFile, serversDir } from './paths.js';
-import { ensureRuntime, selectRuntimeBuild, type RuntimeBuild } from './runtime.js';
+import { ensureRuntime, noRuntimeReason, selectRuntimeBuild, type RuntimeBuild } from './runtime.js';
 import { pidIsAlive } from '../session/store/locks.js';
 import { shrinkNotice, shrinkSteps, stopNotice } from './memory-steps.js';
 
@@ -112,7 +112,7 @@ async function viewMachine(probed?: HardwareProfile): Promise<MachineView> {
   const hardware = probed ?? await withKnownReach(await probeHardware());
   const budget = memoryBudget(hardware);
   const build = selectRuntimeBuild(hardware, budget.gpu);
-  if (!build) throw new Error(`llama.cpp publishes no build for ${hardware.platform} ${hardware.arch}.`);
+  if (!build) throw new Error(noRuntimeReason(hardware));
   // The GPU budget only counts if the runtime drives that GPU.
   const effective = budget.gpu && build.backend !== budget.gpu.backend ? { ...budget, gpu: undefined } : budget;
   const machine = machineKey(hardware, build.key);
