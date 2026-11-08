@@ -37,6 +37,32 @@ describe('returning to a vendor thread', () => {
     expect(prompt).toContain('<current_request>\nthird request\n</current_request>');
   });
 
+  it('delivers every turn missed on each return of a longer journey (Claude, Codex, Claude, Codex, Claude)', () => {
+    const session = chat();
+    const turn = (n: number) => session.messages!.push({ role: 'user', content: `request ${n}` }, { role: 'assistant', content: `answer ${n}` });
+    const go = (harness: string, provider: string) => { session.nativeHarness = harness; session.provider = provider; };
+    leaveProvider(session); go('codex', 'openai'); turn(2); turn(3);
+    leaveProvider(session); go('claude', 'anthropic');
+    // Back on Claude: its thread holds turn 1; it is sent 2 and 3 and nothing else.
+    let through = restoreNativeThread(session, 'claude');
+    expect(through).toBe(2);
+    let prompt = returnPrompt(session, session.messages!, through!, 'request 4', 48 * 1024);
+    expect(prompt).toContain('request 2');
+    expect(prompt).toContain('answer 3');
+    // The thread now holds 2 and 3 and 4; Claude answers 4 itself, then leaves again.
+    session.nativeSessionId = 'claude-thread';
+    turn(4);
+    leaveProvider(session); go('codex', 'openai'); turn(5); turn(6);
+    leaveProvider(session); go('claude', 'anthropic');
+    through = restoreNativeThread(session, 'claude');
+    expect(through).toBe(8);
+    prompt = returnPrompt(session, session.messages!, through!, 'request 7', 48 * 1024);
+    expect(prompt).toContain('request 5');
+    expect(prompt).toContain('answer 6');
+    expect(prompt).not.toContain('request 4');
+    expect(prompt).not.toContain('request 2');
+  });
+
   it('does not restore after an earlier message changes', () => {
     const session = chat();
     leaveProvider(session);

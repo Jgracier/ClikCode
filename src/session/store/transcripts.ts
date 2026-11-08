@@ -81,8 +81,8 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
-import { copyFile, link, open, readFile, rename, stat, unlink } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { copyFile, link, open, readdir, readFile, rename, stat, unlink } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import type { HarnessSession } from '../model.js';
 import { lifecycle, quiet } from '../../runtime/lifecycle-log.js';
 import {
@@ -92,7 +92,7 @@ import {
 import { cloneData, sameData } from './data.js';
 import { ensurePrivateDirectory } from './files.js';
 import { withFileLock, type StateLockHeld } from './locks.js';
-import { sessionFilePath, sessionLegacyBackupPath, sessionLockPath, sessionLogPath } from './paths.js';
+import { safeRecordFileName, sessionFilePath, sessionLegacyBackupPath, sessionLockPath, sessionLogPath, sessionsDirectory } from './paths.js';
 import { continuesTurn, fileIdentity, giveLegacyChildrenTheirCopy, loadLegacyFile, readLegacyTranscript, removeLegacyFiles, type LegacyTranscript, type SessionFile } from './records.js';
 
 
@@ -617,5 +617,34 @@ export async function deleteSessionTranscript(_held: StateLockHeld, id: string):
     await removePendingFile(id);
     await removeLegacyFiles(id);
     await unmarkLogged(id);
+  });
+}
+
+/** Writes `messages` as the whole of a conversation's log, for `clikcode sessions repair`: the one
+ * place a log is rebuilt from outside evidence rather than appended to. Under the conversation's
+ * lock, after every file the conversation has is copied into `backupDir` -- nothing is lost by it.
+ * What an older `<id>.json` holds is recorded as taken in, so a later write does not mix it back. */
+export async function replaceTranscriptFromEvidence(id: string, messages: readonly TranscriptMessage[], backupDir: string): Promise<{ backedUp: string[] }> {
+  return withSessionLock(id, async () => {
+    await ensurePrivateDirectory(backupDir);
+    const own = safeRecordFileName(id);
+    const backedUp: string[] = [];
+    for (const name of await readdir(sessionsDirectory())) {
+      if (!name.startsWith(`${own}.`) || name.endsWith('.lock') || name.endsWith('.tmp')) continue;
+      await copyFile(join(sessionsDirectory(), name), join(backupDir, name));
+      backedUp.push(name);
+    }
+    const log = await loadChatLog(id);
+    const { identity, legacy, steady } = await readLegacySteady(id);
+    let taken: LegacyBase | undefined;
+    if (legacy && steady && identity !== null) {
+      const old = legacy.messages ?? [];
+      taken = { file: identity, count: old.length, digest: messagesDigest(old), pending: pendingDigest(legacy.pendingTurn), at: messages.length };
+    } else if (log?.legacy) taken = { ...log.legacy, at: Math.min(log.legacy.at, messages.length) };
+    await writeChatLog(id, {
+      messages: [...messages], ...(log?.pending ? { pending: log.pending } : {}), ...(taken ? { legacy: taken } : {}),
+    });
+    await markLogged(id);
+    return { backedUp };
   });
 }
