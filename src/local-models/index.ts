@@ -32,7 +32,7 @@ import {
   sweepOrphan, withStartLock, writeLease, writeTurnLease, type MemoryEvent, type ServerRecord,
 } from './lifecycle.js';
 import { footprintKey, latestMeasurement, machineKey, measureServer, readFootprints, readMeasurements, writeMeasurement } from './measure.js';
-import { ensureModelFile, missingBytes } from './models.js';
+import { ensureModelFile, ensureModelWeights, missingBytes, weightFiles } from './models.js';
 import { footprintsFile, preferencesFile, serversDir } from './paths.js';
 import { ensureRuntime, noRuntimeReason, selectRuntimeBuild, type RuntimeBuild } from './runtime.js';
 import { pidIsAlive } from '../session/store/locks.js';
@@ -83,7 +83,7 @@ const IDLE_MS = 15 * 60_000;
 /** The model's weights are on this machine (a deleted model's are not). */
 async function downloaded(modelId: string): Promise<boolean> {
   const model = catalogModel(modelId);
-  return Boolean(model) && await missingBytes([model!.weights]) === 0;
+  return Boolean(model) && await missingBytes(weightFiles(model!)) === 0;
 }
 
 async function readPreference(): Promise<string | undefined> {
@@ -133,7 +133,7 @@ export async function prefetchLocalModel(
   const view = await viewMachine(await learnGpuReach(await probeHardware(), (update) => progress({ stage: 'runtime', ...update })));
   const choice = chooseModel(rankModels(allLocalModels(), view.hardware, view.budget, view.measurements, view.footprints), modelId);
   await ensureRuntime(view.build, (update) => progress({ stage: 'runtime', ...update }));
-  await ensureModelFile(choice.row.model.weights, (update) => progress({ stage: 'download', ...update }), signal);
+  await ensureModelWeights(choice.row.model, (update) => progress({ stage: 'download', ...update }), signal);
 }
 
 /** A running server for this model, if there is one: its process is
@@ -255,7 +255,7 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
   const view = await viewMachine(await learnGpuReach(await probeHardware(), (update) => progress({ stage: 'runtime', ...update })));
   const stops = await takeMemoryStops();
   const ranked = rankModels(allLocalModels(), view.hardware, view.budget, view.measurements, view.footprints);
-  const eligible = pick ? ranked : (await Promise.all(ranked.map(async (row) => ({ row, bytes: await missingBytes([row.model.weights]) }))))
+  const eligible = pick ? ranked : (await Promise.all(ranked.map(async (row) => ({ row, bytes: await missingBytes(weightFiles(row.model)) }))))
     .filter(({ bytes }) => bytes === 0).map(({ row }) => row);
   let choice: ReturnType<typeof chooseModel>;
   try { choice = chooseModel(eligible, pick); } catch (error) {
@@ -282,11 +282,11 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
     if (!fit.fits) throw new Error(`${model.label} would exceed the memory this machine can spare: ${fit.reason}.`);
     startedFit = fit;
 
-    if (!options.allowDownload && await missingBytes([model.weights, ...(vision && model.projector ? [model.projector] : [])])) {
+    if (!options.allowDownload && await missingBytes([...weightFiles(model), ...(vision && model.projector ? [model.projector] : [])])) {
       throw new Error(`${model.label} is not downloaded. Open /model and confirm its download first.`);
     }
     const runtime = await ensureRuntime(view.build, (update) => progress({ stage: 'runtime', ...update }));
-    const modelPath = await ensureModelFile(model.weights, (update) => progress({ stage: 'download', ...update }), options.signal);
+    const modelPath = await ensureModelWeights(model, (update) => progress({ stage: 'download', ...update }), options.signal);
     const projectorPath = options.vision && model.projector
       ? await ensureModelFile(model.projector, (update) => progress({ stage: 'download', ...update }), options.signal) : undefined;
 
@@ -413,16 +413,17 @@ function placementLabel(row: RankedModel, view: MachineView): string {
 
 /** Pinned catalog and remote-header rows, filtered to models that fit memory.
  * First-reply and deep-conversation speed decide recommendation and order. */
-export async function localModelChoices(): Promise<LocalModelChoice[]> {
+export async function localModelChoices(query?: string): Promise<LocalModelChoice[]> {
   const initial = await viewMachine();
   // What the machine could hold, not what is free this moment: the candidates found for it stay good as memory comes and goes.
   // Models already known are registered at once; a refresh that is due runs in the background (discover.ts).
-  await discoverHuggingFaceModels(weightCapacityBytes(initial.hardware));
+  // What the user typed is looked up on Hugging Face too, in the background like the rest; the list shows it once it is found.
+  await discoverHuggingFaceModels(weightCapacityBytes(initial.hardware), query ? { query } : {});
   const view = await viewMachine();
   const rows: LocalModelChoice[] = [];
   for (const row of rankModels(allLocalModels(), view.hardware, view.budget, view.measurements, view.footprints)) {
     if (!row.fit.fits) continue;
-    const downloadBytes = await missingBytes([row.model.weights]);
+    const downloadBytes = await missingBytes(weightFiles(row.model));
     const basis = row.fit.placement === 'cpu' ? 'estimated at 80% context' : 'short-context estimate; deep GPU speed unverified';
     const speed = row.measured?.promptPerSecond
       ? `${basis}: ${Math.round(row.speed.promptPerSecond)} tok/s reading, ${Math.round(row.speed.generatePerSecond)} writing (calibrated after a short run)${row.measured.toolCalls ? '' : ', no tool calls'}`

@@ -15,7 +15,10 @@ try {
   const saved = JSON.parse(readFileSync(discoveredModelsFile(), 'utf8')) as { models?: CatalogModel[] };
   if (Array.isArray(saved.models)) remoteModels = saved.models.filter((model) =>
     model.discovered && model.id?.startsWith('hf:') && model.weights?.sha256?.match(/^[0-9a-f]{64}$/)
-    && model.weights?.revision?.match(/^[0-9a-f]{40}$/) && model.weights.sizeBytes > 0);
+    && model.weights?.revision?.match(/^[0-9a-f]{40}$/) && model.weights.sizeBytes > 0
+    // A split model's parts are each pinned like a single file, all at the model's revision.
+    && ((model as { weightParts?: CatalogModel['weights'][] }).weightParts ?? []).every((part) => part.sha256?.match(/^[0-9a-f]{64}$/)
+      && part.revision === model.weights.revision && part.repo === model.weights.repo && part.sizeBytes > 0));
 } catch { /* A first run has no cache. */ }
 /** Models fine-tuned on this computer (tuned.ts). Read on every call, so one registered while ClikCode runs is found without a restart. */
 export const TUNED_ID_PREFIX = 'tuned:';
