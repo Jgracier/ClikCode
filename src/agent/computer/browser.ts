@@ -61,6 +61,31 @@ async function ownChromeAlive(stateDir: string): Promise<boolean> {
   } catch { return false; }
 }
 
+/** Whether Chrome holding ClikCode's own profile was left behind by a host that died: its parent is init or the user's systemd manager, so no window or command still owns it. A Chrome a person opened has a live parent (their shell or ClikCode) and is never this. */
+export async function chromeIsOrphan(chromePid: number): Promise<boolean> {
+  const parent = await parentPid(chromePid);
+  if (parent === 1) return true;
+  if (parent < 2) return false;
+  try { return (await fs.readFile(`/proc/${parent}/comm`, 'utf8')).trim() === 'systemd'; } catch { return false; }
+}
+
+/** Ends an orphaned Chrome on ClikCode's profile and clears its lock, so a new host can start. True when the profile is free afterwards. */
+async function reclaimOrphanChrome(stateDir: string): Promise<boolean> {
+  const profile = computerProfile(stateDir);
+  let pid = 0;
+  try { pid = Number((await fs.readlink(path.join(profile, 'SingletonLock'))).match(/-(\d+)$/)?.[1]); } catch { return true; }
+  if (!pid || !(await chromeIsOrphan(pid))) return false;
+  lifecycle('browser.chrome.orphan_reclaimed', { pid });
+  try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ }
+  for (let wait = 0; wait < 20; wait++) {
+    try { process.kill(pid, 0); } catch { break; }
+    await pause(250);
+  }
+  try { process.kill(pid, 'SIGKILL'); } catch { /* exited on SIGTERM */ }
+  await Promise.all(['SingletonLock', 'SingletonSocket', 'SingletonCookie'].map(name => fs.unlink(path.join(profile, name)).catch(quiet('agent/computer/browser'))));
+  return true;
+}
+
 async function externalChromeRunning(stateDir: string): Promise<boolean> {
   try {
     const lock = await fs.readlink(path.join(computerProfile(stateDir), 'SingletonLock'));
@@ -102,7 +127,8 @@ async function startHost(stateDir: string): Promise<Connected> {
         const later = await connect(stateDir);
         if (later) return later;
       }
-      if (await externalChromeRunning(stateDir)) throw new Error('ClikCode Chrome is open outside ClikCode. Finish that browser step, close its window, and retry.');
+      // A host that died leaves its Chrome behind on our profile, reparented to init or systemd: that is ours, not a person's window, so end it and start fresh.
+      if (await externalChromeRunning(stateDir) && !(await reclaimOrphanChrome(stateDir))) throw new Error('ClikCode Chrome is open outside ClikCode. Finish that browser step, close its window, and retry.');
       // Our own host's Chrome is alive but slow to answer (a stalled disk): wait for it, never start a second host over its profile.
       if (await ownChromeAlive(stateDir)) {
         for (let again = 0; again < 8; again++) {
