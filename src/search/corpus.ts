@@ -15,7 +15,7 @@
 import type { TranscriptMessage } from '../session/model.js';
 import type { ConversationGroup } from './conversations.js';
 import { sessionFilePath } from '../session/store/paths.js';
-import { readSessionTranscript, transcriptIdentity } from '../session/store/transcripts.js';
+import { ConversationLogMissingError, readSessionTranscript, transcriptIdentity } from '../session/store/transcripts.js';
 import { readTurnActivities } from '../turn/turn-activities.js';
 
 export interface MessageDoc {
@@ -90,7 +90,15 @@ export async function sessionDoc(id: string): Promise<SessionDoc | undefined> {
     cache.delete(path);
     return undefined;
   }
-  const transcript = await readSessionTranscript(id);
+  // A conversation whose log is gone has nothing to search; the listing and the audit say so.
+  const transcript = await readSessionTranscript(id).catch((error: unknown) => {
+    if (error instanceof ConversationLogMissingError) return undefined;
+    throw error;
+  });
+  if (!transcript) {
+    cache.delete(path);
+    return undefined;
+  }
   STATS.builds += 1;
   const doc: SessionDoc = { id, messages: (transcript.messages ?? []).map(messageDoc) };
   cache.set(path, { key, doc });
