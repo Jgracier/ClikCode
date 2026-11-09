@@ -11,6 +11,7 @@
  * and on stdout {k:'reply', d} for every answer the terminal gives. Terminal variants (argv[2]):
  *   xterm        as it is
  *   xterm-no3j   a terminal that ignores CSI 3J (the saved lines survive a clear) and DEC 2026, as tmux/screen often do
+ *   xterm-nopull a client that does not pull saved lines back when the window grows: the content stays top-aligned, blank rows appear below
  *   xterm-mute   a terminal that never answers a cursor position request (CSI 6n): the program's defined failure is exercised */
 import { createInterface } from 'node:readline';
 import xterm from '@xterm/headless';
@@ -20,6 +21,7 @@ let term;
 const snaps = [];
 let bytes = 0;
 let historyRows = 0;
+const stash = [];
 const write = (data) => new Promise((resolve) => term.write(data, resolve));
 
 function lines(buffer, from, to) {
@@ -41,10 +43,20 @@ lineReader.on('line', (line) => chain(async () => {
   if (event.k === 'init') {
     term = new xterm.Terminal({ cols: event.c, rows: event.r, scrollback: 100000, allowProposedApi: true });
     term.onData((data) => process.stdout.write(`${JSON.stringify({ k: 'reply', d: Buffer.from(data).toString('base64') })}\n`));
-  } else if (event.k === 'resize') term.resize(event.c, event.r);
-  else if (event.k === 'out') {
+  } else if (event.k === 'resize') {
+    if (variant === 'xterm-nopull' && event.r > term.rows) {
+      // A client that keeps its content top-aligned when the window grows and adds blank rows below it: the saved lines stay
+      // where they are (kept here, ahead of the terminal's own) and are not pulled back in.
+      const normal = term.buffer.normal;
+      stash.push(...lines(normal, 0, normal.baseY));
+      term.options.scrollback = 0;
+      term.options.scrollback = 100000;
+    }
+    term.resize(event.c, event.r);
+  } else if (event.k === 'out') {
     let data = Buffer.from(event.d, 'base64');
     bytes += data.length;
+    if (variant === 'xterm-nopull' && data.includes('\u001b[3J')) stash.length = 0;
     historyRows += (data.toString('latin1').replace(ESCAPES, '').match(/\bH\d{3}\b/g) ?? []).length;
     if (variant === 'xterm-no3j') data = Buffer.from(data.toString('latin1').replaceAll('\u001b[3J', '').replaceAll('\u001b[?2026h', '').replaceAll('\u001b[?2026l', ''), 'latin1');
     if (variant === 'xterm-mute') data = Buffer.from(data.toString('latin1').replaceAll('\u001b[6n', ''), 'latin1');
@@ -54,7 +66,7 @@ lineReader.on('line', (line) => chain(async () => {
     const active = term.buffer.active;
     snaps.push({
       label: event.label, cols: term.cols, rows: term.rows, alt: active.type === 'alternate', bytes, historyRows,
-      scrollback: lines(normal, 0, normal.baseY), screen: lines(active, active.baseY, active.baseY + term.rows),
+      scrollback: [...stash, ...lines(normal, 0, normal.baseY)], screen: lines(active, active.baseY, active.baseY + term.rows),
       cursor: { x: active.cursorX, y: active.cursorY },
     });
     bytes = 0;
