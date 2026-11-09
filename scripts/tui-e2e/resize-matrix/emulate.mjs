@@ -11,6 +11,10 @@
  * and on stdout {k:'reply', d} for every answer the terminal gives. Terminal variants (argv[2]):
  *   xterm        as it is
  *   xterm-no3j   a terminal that ignores CSI 3J (the saved lines survive a clear) and DEC 2026, as tmux/screen often do
+
+ *   xterm-keepback a client that never erases anything from the main screen's history: CSI 3J is ignored AND so is CSI 2J while the main screen
+ *                  is up (what a client that keeps a copy of every cleared screen does). A page that drew on the main screen after a clear
+ *                  would leave rows of the conversation directly above it, wherever the viewport is scrolled to.
  *   xterm-nopull a client that does not pull saved lines back when the window grows: the content stays top-aligned, blank rows appear below
  *   xterm-mute   a terminal that never answers a cursor position request (CSI 6n): the program's defined failure is exercised */
 import { createInterface } from 'node:readline';
@@ -58,6 +62,17 @@ lineReader.on('line', (line) => chain(async () => {
     bytes += data.length;
     if (variant === 'xterm-nopull' && data.includes('\u001b[3J')) stash.length = 0;
     historyRows += (data.toString('latin1').replace(ESCAPES, '').match(/\bH\d{3}\b/g) ?? []).length;
+    if (variant === 'xterm-keepback') {
+      // Row-wise: 2J is kept only while the alternate screen is up (the alternate screen has no history to keep).
+      const parts = data.toString('latin1').replaceAll('\u001b[3J', '').split(/(\u001b\[\?1049[hl])/);
+      let alt = term.buffer.active.type === 'alternate';
+      let out = '';
+      for (const part of parts) {
+        if (part === '\u001b[?1049h') alt = true; else if (part === '\u001b[?1049l') alt = false;
+        out += alt || part.startsWith('\u001b[?1049') ? part : part.replaceAll('\u001b[2J', '');
+      }
+      data = Buffer.from(out.replaceAll('\u001b[?2026h', '').replaceAll('\u001b[?2026l', ''), 'latin1');
+    }
     if (variant === 'xterm-no3j') data = Buffer.from(data.toString('latin1').replaceAll('\u001b[3J', '').replaceAll('\u001b[?2026h', '').replaceAll('\u001b[?2026l', ''), 'latin1');
     if (variant === 'xterm-mute') data = Buffer.from(data.toString('latin1').replaceAll('\u001b[6n', ''), 'latin1');
     await write(data);
@@ -67,6 +82,7 @@ lineReader.on('line', (line) => chain(async () => {
     snaps.push({
       label: event.label, cols: term.cols, rows: term.rows, alt: active.type === 'alternate', bytes, historyRows,
       scrollback: [...stash, ...lines(normal, 0, normal.baseY)], screen: lines(active, active.baseY, active.baseY + term.rows),
+      mainScreen: lines(normal, normal.baseY, normal.baseY + term.rows),
       cursor: { x: active.cursorX, y: active.cursorY },
     });
     bytes = 0;

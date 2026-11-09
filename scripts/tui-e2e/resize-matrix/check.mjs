@@ -29,7 +29,9 @@ export function judge(snap, start) {
   const all = [...scroll, ...screen];
   const blank = (row) => row.trim() === '';
   const opts = snap.opts ?? {};
-  if (snap.alt !== (mode === 'full')) problems.push(`alternate screen is ${snap.alt ? 'up' : 'down'} in ${mode} mode`);
+  // A modal surface is drawn on the alternate screen, in inline mode too; everything else, inline, is on the main screen.
+  const wantAlt = mode === 'full' || (opts.surface === 'page' && mode !== 'full');
+  if (snap.alt !== wantAlt) problems.push(`alternate screen is ${snap.alt ? 'up' : 'down'} in ${mode} mode${opts.surface === 'page' ? ' with a surface open' : ''}`);
   // The composer and status are the last rows of the screen: a rule, the composer, a rule, the status line.
   if (!opts.noBlock) {
     // The block owns its own rows and nothing else: whatever the terminal does when the screen changes height (pull saved
@@ -50,17 +52,21 @@ export function judge(snap, start) {
     const composerRow = screen.findLastIndex((row) => /^\s*›/.test(row));
     if (composerRow >= 0 && snap.cursor.y !== composerRow && !opts.cursorAnywhere) problems.push(`cursor is on row ${snap.cursor.y + 1}, the composer is on row ${composerRow + 1}`);
   }
-  // A modal surface (the board, the palette) is the whole visible screen: no row of the conversation shares it, the list starts
-  // on the first row, the composer and status are the last rows, and the saved lines still hold the conversation (the same ones
-  // as before it opened, unless the screen changed size, which the terminal answers with its own saved lines).
-  if (opts.surface === 'page') {
-    if (!snap.alt) {
-      const chat = screen.findIndex((row) => MARKER.test(row));
-      if (chat >= 0) problems.push(`a row of the conversation shares the screen with the surface (row ${chat + 1}: ${JSON.stringify(screen[chat])})`);
-      if (blank(screen[0] ?? '')) problems.push('the surface does not start on the first row');
-      if (!STATUS.test(screen[screen.length - 1] ?? '')) problems.push(`the status line is not the last row (${JSON.stringify(screen[screen.length - 1])})`);
-      if (!screen.some((row) => /^\s*›/.test(row))) problems.push('no composer on the surface');
-      if (opts.keeps && start && scroll.length !== start.scrollback.length) problems.push(`the saved lines hold ${scroll.length} rows, ${start.scrollback.length} before the surface opened`);
+  // A modal surface (the board, the palette) is drawn on the alternate screen: it is the whole screen, no row of the conversation
+  // shares it and no saved line exists behind it; the list starts on the first row, the composer and status are the last rows.
+  // The main screen is not touched while it is up: its saved lines and visible rows are byte-for-byte what they were before it
+  // opened (`keeps`), unless the screen changed size, which the client answers with its own rows.
+  if (opts.surface === 'page' && mode !== 'full') {
+    const chat = screen.findIndex((row) => MARKER.test(row));
+    if (chat >= 0) problems.push(`a row of the conversation shares the screen with the surface (row ${chat + 1}: ${JSON.stringify(screen[chat])})`);
+    if (blank(screen[0] ?? '')) problems.push('the surface does not start on the first row');
+    if (!STATUS.test(screen[screen.length - 1] ?? '')) problems.push(`the status line is not the last row (${JSON.stringify(screen[screen.length - 1])})`);
+    if (!screen.some((row) => /^\s*›/.test(row))) problems.push('no composer on the surface');
+    if (opts.keeps && start && snap.mainScreen && start.mainScreen) {
+      const was = [...start.scrollback, ...start.mainScreen].map(text);
+      const now = [...snap.scrollback, ...snap.mainScreen].map(text);
+      const at = was.findIndex((row, index) => row !== now[index]);
+      if (at >= 0 || was.length !== now.length) problems.push(`the main screen changed while the surface was open: ${was.length} rows (saved lines and screen) then, ${now.length} now, first difference at row ${at + 1} (${JSON.stringify(was[at])} then, ${JSON.stringify(now[at])} now)`);
     }
   }
   // Blank rows: only above the first content row, and only on the screen (never pushed into scrollback).

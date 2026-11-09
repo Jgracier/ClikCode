@@ -7,7 +7,7 @@
 
 import { writeSync } from 'node:fs';
 import { stdin as input, stdout as output } from 'node:process';
-import { inlineHistoryMode } from './inline.js';
+import { inlineBlock, inlineHistoryMode, LEAVE_PAGE_SCREEN, restoreMainBlock } from './inline.js';
 import { FOCUS_REPORTING_OFF, POP_TITLE, PUSH_TITLE, progressSequence } from './terminal-signals.js';
 
 /** An in-place build reload inherits the current terminal screen and title. */
@@ -44,6 +44,18 @@ export function enterAlternateScreen(): void {
   if (terminalModes.alternateScreen || inlineHistoryMode()) return;
   output.write(ENTER_ALTERNATE_SCREEN);
   terminalModes.alternateScreen = true;
+}
+
+/** An open page (inline mode draws one on the alternate screen) is closed before the terminal goes to someone else or is
+ * erased: the main screen's block state comes back, so what is erased next is the block and not the page. What to write. */
+export function leavePage(): string {
+  if (!inlineBlock.page) return '';
+  restoreMainBlock();
+  inlineBlock.tail = [];
+  inlineBlock.resized = false;
+  inlineBlock.wipe = false;
+  terminalModes.alternateScreen = false;
+  return LEAVE_PAGE_SCREEN;
 }
 
 /** Save the shell's title, once per taking of the terminal; whether this call

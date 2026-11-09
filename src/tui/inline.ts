@@ -72,11 +72,27 @@ export const inlineBlock = {
   /** The cursor report never came back after a change of height: the block is erased and drawn again relative to where
    * it was last left (see anchorBlock). */
   lost: false,
-  /** A modal surface (the board, the palette, a picker) is on screen: it is the whole visible screen, drawn from its top
-   * row, and the conversation is not (see flushInlineFrame). `tail` is what the conversation had on the visible rows when
-   * the surface opened, plus every row it retired since: they are written again, ahead of the block, when it closes. */
-  page: false, tail: [] as string[],
+  /** A modal surface (the board, the palette, a picker) is on screen: it is drawn on the ALTERNATE screen (`?1049h`), from its
+   * top row, so no saved lines exist behind it in any client and the main screen (the conversation and its live block) is not
+   * touched; closing it (`?1049l`) shows that screen again as it was. `main` is the block's state on the main screen, kept while
+   * the page is up and put back when it closes. `tail` is every row the conversation retired meanwhile: written above the block
+   * once the page is gone. `resized`: the size changed while it was up, so the main screen is measured again on close.
+   * `wipe`: the conversation was rewritten (a new width) while it was up, so the main screen is cleared and it is written whole. */
+  page: false, tail: [] as string[], resized: false, wipe: false,
+  main: undefined as undefined | { rows: number; cursorRow: number; last: string; liveRows: string[]; pad: number; top: number; height: number; columns: number },
 };
+
+/** The alternate screen a page is drawn on, and its way back. */
+export const ENTER_PAGE_SCREEN = `\u001b[?1049h${CLEAR_SCREEN}`;
+export const LEAVE_PAGE_SCREEN = '\u001b[?1049l';
+
+/** The main screen's block state, put back as the page closes. */
+export function restoreMainBlock(): void {
+  const main = inlineBlock.main;
+  inlineBlock.main = undefined;
+  inlineBlock.page = false;
+  if (main) Object.assign(inlineBlock, main, { found: undefined, lost: false });
+}
 
 /** Cursor-relative erase of the live block, leaving the cursor at column one of
  * its first row. Empty when nothing is drawn. */
