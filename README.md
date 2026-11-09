@@ -413,7 +413,7 @@ and `--debug` adds the stack and HTTP detail when something fails.
 Most of the time you will not type any of those. You will be in a session,
 where everything is a slash away.
 
-Pressing `/` opens a searchable list of ClikCode's 49 commands. Twelve are pinned
+Pressing `/` opens a searchable list of ClikCode's 50 commands. Twelve are pinned
 at the top, in the order people reach for them: resume a conversation, pick a
 tool, an account on it, then its model, a private model, the machine it runs on,
 start over, change what needs your approval, then settings, sessions, status and
@@ -428,6 +428,7 @@ conversation board — so it pins eleven; typed, `/resume` still works.)
 | `/model [name]` | choose or set a model |
 | `/hosted ai` | search Hugging Face and run a hosted AI model on ClikDeploy compute |
 | `/machine` | the machine this chat runs on: move it, add one, or update or remove one |
+| `/restart` | switch this window to the newest installed ClikCode; the chat stays and what is running keeps running |
 | `/new [first message]` | start a fresh conversation (the current one stays resumable) |
 | `/permissions [ask\|bypass\|auto]` (also `/permission`) | approval behavior |
 | `/settings` | configure this workspace (below) |

@@ -39,7 +39,11 @@ export function requestKey(text: string): string {
  * reminders, background-agent notices, interruption markers, handover notes. It is no part of the
  * conversation, so it is never evidence of one. */
 export function isInjectedRequest(text: string): boolean {
-  return /^\s*(<(command-|local-command|system-reminder|task-notification|subagent_notification|clikcode_)|\[(Request interrupted|ClikCode[:\]]))/.test(text);
+  // A resource note goes in front of the user's own request: `<clikcode_resource_note>` starts with `<clikcode_`, but what
+  // follows it is a real request, so it is judged with the notes cut away. A note with nothing after it is injected.
+  const request = stripResourceNotes(text);
+  if (!request.trim()) return true;
+  return /^\s*(<(command-|local-command|system-reminder|task-notification|subagent_notification|clikcode_)|\[(Request interrupted|ClikCode[:\]]))/.test(request);
 }
 
 /** A request must be this long before it is evidence: "yes" aligns with anything. */

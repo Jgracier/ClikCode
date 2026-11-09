@@ -118,7 +118,7 @@ export async function saveRecycle(stateDir: string, tabs: readonly SavedTab[], n
 export async function takeRecycle(stateDir: string, now: number = Date.now()): Promise<SavedTab[]> {
   try {
     const saved = JSON.parse(await fs.readFile(recycleFile(stateDir), 'utf8')) as { at?: number; tabs?: SavedTab[] };
-    await fs.unlink(recycleFile(stateDir)).catch(() => undefined);
+    await fs.unlink(recycleFile(stateDir)).catch(quiet('agent/computer/browser-janitor'));
     if (typeof saved.at !== 'number' || now - saved.at > RESTORE_WITHIN_MS) return [];
     return (saved.tabs ?? []).filter(tab => typeof tab.tab === 'string' && /^https?:/i.test(tab.url));
   } catch { return []; }

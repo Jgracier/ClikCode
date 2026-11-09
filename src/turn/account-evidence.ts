@@ -14,7 +14,7 @@
  *
  * A turn in progress records its own refusal on its own copy of the state (account-routing.ts
  * accountAfterFailure); it classifies through here, and records there. */
-import { lifecycle } from '../runtime/lifecycle-log.js';
+import { lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { quotaRefusalHolds } from '../harness/accounts/usage-reading.js';
 import type { FailureEvidence } from '../harness/transport/handoff-work.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
@@ -101,7 +101,7 @@ export interface AccountMoveEffects {
 const observing = new Map<string, Promise<unknown>>();
 function oneAtATime<T>(accountId: string, step: () => Promise<T>): Promise<T> {
   const run = (observing.get(accountId) ?? Promise.resolve()).then(step);
-  observing.set(accountId, run.catch(() => undefined));
+  observing.set(accountId, run.catch(quiet('turn/account-evidence')));
   return run;
 }
 

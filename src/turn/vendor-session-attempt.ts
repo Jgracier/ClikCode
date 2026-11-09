@@ -18,7 +18,7 @@ import { readAcpUsageFile } from '../harness/transport/acp-usage-file.js';
 import { turnShareOf } from '../harness/protocol/turn-usage.js';
 import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import { codexRateLimitsReading } from '../harness/accounts/usage-probes.js';
-import { harnessAcpLaunch, localHarnessCapabilityManifest } from '../runtime/lazy-bridge.js';
+import { harnessAcpLaunch, localHarnessCapabilityManifest, promptExceedsArgvLimit } from '../runtime/lazy-bridge.js';
 import { closePersistentTransport, openStandby, persistentTransportFor, vendorChildKey } from './vendor-process.js';
 import { isTurnCancelled } from '../agent/cancellation.js';
 import { recordLiveModelCatalog } from '../harness/accounts/model-catalog.js';
@@ -88,9 +88,22 @@ export async function runVendorSessionAttempt(input: {
       const usageBefore = usageFile && session.nativeSessionId
         ? await readAcpUsageFile(usageFile, session.nativeSessionId, environment) ?? {}
         : {};
+      // An effort the agent's ACP does not offer is worth a CLI fallback only when the CLI can take the prompt: one past
+      // its argv limit (a carried-over conversation) it refuses before starting, so the turn stays on ACP at the agent's
+      // own effort instead.
+      const runAcp = async (): Promise<NativeTurnResult> => {
+        try {
+          return persistent ? await (persistent.session as AcpSession).runTurn(acpInput) : await runAcpTurn(acpInput);
+        } catch (error) {
+          if (!(error as { acpUnsupportedEffort?: boolean }).acpUnsupportedEffort || !promptExceedsArgvLimit(harness, turnText)) throw error;
+          lifecycle('vendor.acp-effort-default', { harness: harness.command, effort: effort ?? null, reason: 'prompt past the CLI argv limit' });
+          const atDefault = { ...acpInput, effort: undefined };
+          return persistent ? await (persistent.session as AcpSession).runTurn(atDefault) : await runAcpTurn(atDefault);
+        }
+      };
       try {
         try {
-          result = persistent ? await (persistent.session as AcpSession).runTurn(acpInput) : await runAcpTurn(acpInput);
+          result = await runAcp();
         } finally {
           // A message offered to the turn as it ended is in it or still queued by now:
           // settled before the journal is completed, so it is one or the other, never both.
@@ -101,6 +114,7 @@ export async function runVendorSessionAttempt(input: {
       } catch (error) {
         const unsupported = error as Error & { acpUnsupportedImages?: boolean; acpUnsupportedModel?: boolean; acpUnsupportedEffort?: boolean };
         if (!(unsupported.acpUnsupportedImages || unsupported.acpUnsupportedModel || unsupported.acpUnsupportedEffort) || !harness.turn) throw error;
+
         // A model the plan's own list leaves out is the plan's refusal; the
         // CLI would only be refused it too (Kiro). It is this account's, so
         // failover moves the turn to one whose plan has it (Grok 4.7 is not

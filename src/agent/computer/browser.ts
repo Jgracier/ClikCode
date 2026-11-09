@@ -256,7 +256,7 @@ export function targetIdOf(page: Page): Promise<string | undefined> {
     const session = await page.context().newCDPSession(page);
     try { return ((await session.send('Target.getTargetInfo')) as { targetInfo: { targetId: string } }).targetInfo.targetId; }
     finally { await session.detach().catch(quiet('agent/computer/browser')); }
-  })().catch(() => undefined);
+  })().catch(quiet('agent/computer/browser'));
 }
 
 async function flushHeld(stateDir: string, page: Page, entry: Held, force: boolean): Promise<void> {

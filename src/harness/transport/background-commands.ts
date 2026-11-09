@@ -100,7 +100,7 @@ export class CommandSampler {
       else if (stats.startedAt !== undefined && now > stats.startedAt) stats.cpuPercent = Math.max(0, (times.cpuTicks / TICKS_PER_SECOND) / ((now - stats.startedAt) / 1000) * 100);
     }
     if (output) {
-      const info = await stat(output).catch(() => undefined);
+      const info = await stat(output).catch(quiet('harness/transport/background-commands'));
       if (info && info.size > 0) stats.lastOutputAt = info.mtimeMs;
     }
     if (text.includes(KEEP_MARK)) stats.keep = true;
@@ -119,7 +119,7 @@ async function descendants(pid: number): Promise<number[]> {
   const children = new Map<number, number[]>();
   const entries = await readdir('/proc').catch(() => [] as string[]);
   await Promise.all(entries.filter((name) => /^\d+$/.test(name)).map(async (name) => {
-    const text = await readFile(`/proc/${name}/stat`, 'utf8').catch(() => undefined);
+    const text = await readFile(`/proc/${name}/stat`, 'utf8').catch(quiet('harness/transport/background-commands'));
     if (!text) return;
     const parent = Number(text.slice(text.lastIndexOf(')') + 2).split(' ')[1]);
     if (Number.isFinite(parent)) children.set(parent, [...children.get(parent) ?? [], Number(name)]);
