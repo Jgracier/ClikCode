@@ -32,10 +32,8 @@ export function judge(snap, start) {
   if (snap.alt !== (mode === 'full')) problems.push(`alternate screen is ${snap.alt ? 'up' : 'down'} in ${mode} mode`);
   // The composer and status are the last rows of the screen: a rule, the composer, a rule, the status line.
   if (!opts.noBlock) {
-    // xterm.js adds blank rows below the block when the screen grows with the cursor above its footer, instead of pulling saved lines back
-    // (see the report of the toggle scenarios): once there are saved lines to pull, the block stands as high as those rows allow.
+    // Whatever the terminal does when the screen grows (pulls saved lines back, or adds blank rows below), the block ends on the last row.
     let last = screen.length - 1;
-    if (snap.pulls === false && scroll.length > 0) while (last > 0 && blank(screen[last])) last -= 1;
     if (blank(screen[last] ?? '') || !STATUS.test(screen[last] ?? '')) {
       const at = screen.findLastIndex((row) => STATUS.test(row));
       problems.push(`status line is not the last screen row (it is row ${at + 1} of ${screen.length}; the last is ${JSON.stringify(screen[last])})`);
@@ -114,5 +112,5 @@ export function judge(snap, start) {
   return problems;
 }
 
-const verdicts = snaps.map((snap) => ({ label: snap.label, floats: snap.pulls === false && snap.scrollback.length > 0 ? snap.screen.length - 1 - snap.screen.findLastIndex((row) => row.text.trim() !== '') : 0, size: `${snap.cols}x${snap.rows}`, problems: judge(snap, snaps.find((other) => other.label === (snap.opts?.sameAs ?? snap.opts?.keeps))) }));
+const verdicts = snaps.map((snap) => ({ label: snap.label, size: `${snap.cols}x${snap.rows}`, problems: judge(snap, snaps.find((other) => other.label === (snap.opts?.sameAs ?? snap.opts?.keeps))) }));
 console.log(JSON.stringify(verdicts));

@@ -358,7 +358,7 @@ def main():
         total += len(verdicts); failures += len(bad)
         print(f"{'FAIL' if bad else 'ok  '} {name} [{args.emu}/{args.mode}] {len(verdicts) - len(bad)}/{len(verdicts)} snapshots ({root})")
         for verdict, snap in zip(verdicts, snaps):
-            if verdict['floats'] and not verdict['problems']: print(f"    {verdict['label']}: the block stands {verdict['floats']} row(s) above the last (blank rows the terminal added below it)")
+            pass
             if snap.get('opts', {}).get('measure') and 'bytes' in snap: print(f"    {verdict['label']}: {snap['bytes']} bytes, {snap['historyRows']} history rows written")
             for problem in verdict['problems']: print(f"  - {verdict['label']} {verdict['size']}: {problem}")
             if verdict['problems'] and args.show: show(snap)
