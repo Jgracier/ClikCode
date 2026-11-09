@@ -308,7 +308,8 @@ describe.skipIf(!hasSandbox || outsideIsWritable)('the sandbox in a turn', () =>
   });
 });
 
-describe('linked agent worktree under the real bwrap sandbox', () => {
+// Like the two real-sandbox suites above: where bwrap cannot run (a container without user namespaces), there is nothing to test.
+describe.skipIf(!hasSandbox || outsideIsWritable)('linked agent worktree under the real bwrap sandbox', () => {
   const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
   const sandboxed = (cwd: string, command: string) => {
     const wrapped = sandboxCommand('workspace', { file: '/bin/bash', args: ['-c', command] }, { cwd, addDirs: [], homeDir: homedir() });
