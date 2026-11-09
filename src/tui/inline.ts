@@ -60,6 +60,10 @@ export const inlineBlock = {
   rows: 0, cursorRow: 0, clearNext: false, last: '', liveRows: [] as string[], columns: 0,
   /** The blank rows above the conversation (a conversation shorter than the screen) that retired rows have not yet used. */
   pad: 0,
+  /** The blank rows above the conversation stand over saved lines that hold part of it (a terminal that did not pull them
+   * back when its screen grew, and the block was pushed down instead): a shrink pushes them into the saved lines, which
+   * are not the blank rows of a short conversation and must never be cleared as if they were. */
+  padOverSaved: false,
   /** The blank rows below the block that a terminal added when its screen grew and that nothing could take: the block is
    * that many rows above the last, until output fills them. */
   slack: 0,
@@ -88,6 +92,7 @@ export function eraseInlineBlock(): string {
   inlineBlock.last = '';
   inlineBlock.liveRows = [];
   inlineBlock.pad = 0;
+  inlineBlock.padOverSaved = false;
   inlineBlock.slack = 0;
   return out;
 }

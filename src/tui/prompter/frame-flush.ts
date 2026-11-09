@@ -347,10 +347,8 @@ export function flushInlineFrame(
   // Rows the terminal pushed into the saved lines (positive) or pulled back out of them (negative): the top of the screen
   // goes first, and the top of the screen is the blank rows above a short conversation.
   const moved = found === undefined ? 0 : inlineBlock.height - inlineBlock.rows - inlineBlock.slack - found;
-  const blanksOnly = moved > 0 && moved <= inlineBlock.pad;
-  // Whether the saved lines hold nothing of the conversation: a conversation shorter than the screen has blank rows above
-  // it, and a terminal that pulled saved lines back and still has room left had no more to pull.
-  const onScreen = inlineBlock.pad > 0 || moved < 0;
+  const overSaved = inlineBlock.padOverSaved;
+  const blanksOnly = moved > 0 && moved <= inlineBlock.pad && !overSaved;
   if (anchored) {
     const spacer = Math.max(0, inlineBlock.rows - finished.length - live.length);
     if (spacer) {
@@ -377,10 +375,10 @@ export function flushInlineFrame(
     if (found === undefined) return;
     // The terminal left the block where it belongs, or as high as the blank rows it added below allow: nothing to write.
     const gap = height - found - inlineBlock.rows;
-    if (!blanksOnly && (gap === 0 || (gap > 0 && !onScreen))) {
+    if (!blanksOnly && gap === 0) {
       inlineBlock.height = height;
-      inlineBlock.slack = Math.max(0, gap);
       inlineBlock.pad = Math.max(0, inlineBlock.pad - Math.max(0, moved));
+      if (inlineBlock.pad === 0) inlineBlock.padOverSaved = false;
       return;
     }
   }
@@ -394,6 +392,7 @@ export function flushInlineFrame(
   let park: string;
   let nextPad = Math.max(0, inlineBlock.pad - Math.max(0, moved));
   let nextSlack = 0;
+  let padOverSaved = overSaved;
   if (diff) {
     let at = inlineBlock.cursorRow;
     const move = (to: number): string => {
@@ -446,16 +445,19 @@ export function flushInlineFrame(
         if (to > 0) lead += `\u001b[${to}B`;
         nextPad -= amount;
       }
-      // Short of it: the terminal added blank rows below the block. If it has nothing of the conversation in the saved lines
-      // the screen is pushed down by as many, and the blank rows that open at its top are the new blank rows above the
-      // conversation. Otherwise the block stays where it is, as high as those rows allow, until output fills them: there
-      // is no way to give the screen the saved lines back, and a blank row opened above them would be pushed into the
-      // saved lines by the next shrink, one more blank band in the conversation each time the screen changes.
+      // Short of it: the terminal added blank rows below the block (whether it also pulled saved lines back is its own
+      // business: the cursor report says where the block is now). The screen is pushed down by as many rows, inserted at
+      // its top, so the block, and the conversation with it, end on the last row and the blank rows open at the top. The
+      // rows pushed off the bottom are the blank ones the terminal added. Valid in every terminal, and nothing is
+      // written again.
       const gap = height - oldTop - body.length;
-      if (gap > 0 && onScreen) {
+      if (gap > 0) {
         lead += `\u001b[1;1H\u001b[${gap}L\u001b[${oldTop + gap + 1};1H`;
+        // With no blank rows over the conversation before, the saved lines may hold part of it (a terminal that did not pull
+        // them back): the blank rows now above it are over them, and a shrink must not clear them as if they were all blank.
+        if (nextPad === 0) padOverSaved = true;
         nextPad += gap;
-      } else if (gap > 0) nextSlack = gap;
+      }
       // Blank rows the terminal pushed into the saved lines were all it had there: none of the conversation, so they go.
       if (blanksOnly) lead += '\u001b[3J';
     }
@@ -465,6 +467,7 @@ export function flushInlineFrame(
     park = `${back ? `\u001b[${back}A` : ''}\u001b[${Math.max(1, pending.cursorColumn)}G`;
   }
   inlineBlock.pad = nextPad;
+  inlineBlock.padOverSaved = nextPad > 0 && padOverSaved && !clear && !lost;
   inlineBlock.slack = nextSlack;
   if (!anchored || found !== undefined || lost) inlineBlock.height = height;
   inlineBlock.rows = live.length;

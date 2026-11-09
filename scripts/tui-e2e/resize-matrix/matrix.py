@@ -332,7 +332,7 @@ def run_tmux(name, spec, mode, keep):
 
 def judge(snaps_path, checks, mode, emulator):
     snaps = json.load(open(snaps_path))
-    for snap, (label, opts, markers) in zip(snaps, checks): snap['opts'] = opts; snap['expectMarkers'] = markers; snap['pulls'] = emulator == 'tmux'
+    for snap, (label, opts, markers) in zip(snaps, checks): snap['opts'] = opts; snap['expectMarkers'] = markers; snap['pulls'] = emulator == 'tmux'; snap['mute'] = emulator == 'xterm-mute'
     json.dump(snaps, open(snaps_path, 'w'))
     out = subprocess.run(['node', os.path.join(HERE, 'check.mjs'), snaps_path, mode], capture_output=True, text=True, cwd=REPO)
     if out.returncode: print(out.stderr); raise SystemExit(2)
