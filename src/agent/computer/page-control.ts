@@ -451,7 +451,7 @@ export async function listTabs(deps: Pick<PageDeps, 'stateDir' | 'tab' | 'displa
     ? `Tabs this chat opened (* is the one in front; pass index to switch or close):\n${(await Promise.all(open.map((page, index) => tabLine(page, index, page === current, deps)))).join('\n')}`
     : 'This chat has no open tab.';
   // Every worker's tabs, with owner, age and idle time: a tab left by a worker that ended can be seen, and closed by its name.
-  const everyone = await allTabs(deps.stateDir).catch(() => undefined);
+  const everyone = await allTabs(deps.stateDir).catch(quiet('agent/computer/page-control'));
   return everyone?.length ? `${own}\n\n${describeTabs(everyone.map(view => ({ ...view, ...(view.url ? { url: displayTabUrl(view.url, deps) } : {}) })))}` : own;
 }
 

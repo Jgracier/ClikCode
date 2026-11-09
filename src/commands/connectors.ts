@@ -1,3 +1,4 @@
+import { quiet } from '../runtime/lifecycle-log.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { emitResult } from '../cli/structured-output.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
@@ -86,7 +87,7 @@ export async function connectorsQualify(flags: ConnectorsQualifyFlags): Promise<
         if (flags.report) await reportQualify(client, result).catch(error => process.stderr.write(`${id}: could not write the note (${(error instanceof Error ? error.message : String(error)).slice(0, 120)})\n`));
       }
     }));
-  } finally { await (await import('../agent/computer/browser.js')).releaseComputerBrowser(stateDirectory()).catch(() => undefined); }
+  } finally { await (await import('../agent/computer/browser.js')).releaseComputerBrowser(stateDirectory()).catch(quiet('commands/connectors')); }
   results.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id));
   if (isJsonDefaultMode()) return emitResult({ connectors: { qualify: results } });
   process.stdout.write(`${JSON.stringify(results.length === 1 ? results[0] : results, null, 2)}\n`);
@@ -123,7 +124,7 @@ export async function connectorsLoop(flags: ConnectorsLoopFlags): Promise<void> 
   ports.log(`${new Date().toISOString()} loop started: parallel ${limits.parallel}, ${limits.maxSteps} steps, ${limits.maxMs / 60_000} min and ${limits.maxCalls} calls a vendor, ${limits.maxHoursMs / 3_600_000} h`);
   const summary = await loop.runLoop(ports, limits);
   ports.log(`${new Date().toISOString()} loop ended: ${JSON.stringify(summary)}`);
-  await (await import('../agent/computer/browser.js')).releaseComputerBrowser(stateDirectory()).catch(() => undefined);
+  await (await import('../agent/computer/browser.js')).releaseComputerBrowser(stateDirectory()).catch(quiet('commands/connectors'));
   if (isJsonDefaultMode()) emitResult({ connectors: { loop: summary } });
   else process.stdout.write(`Loop ended: ${summary.vendors} vendors, ${JSON.stringify(summary.done)}, walls ${JSON.stringify(summary.walls)}, ${summary.pauses} pauses, ${summary.restarts} browser restarts.\n`);
   setTimeout(() => process.exit(0), 200).unref();

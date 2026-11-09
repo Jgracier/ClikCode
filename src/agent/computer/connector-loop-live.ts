@@ -86,7 +86,7 @@ export function livePorts(client: DeployClient, stateDir: string, extra: { stopR
       await client.report({ id, outcome: report.outcome, reason: report.reason, ...(report.retryAfterMs ? { retryAfterMs: report.retryAfterMs } : {}), ...(report.humanStep ? { humanStep: report.humanStep as HumanStep } : {}) });
     },
     async pressure() {
-      const read = (name: string): Promise<string | undefined> => readFile(`/proc/pressure/${name}`, 'utf8').catch(() => undefined);
+      const read = (name: string): Promise<string | undefined> => readFile(`/proc/pressure/${name}`, 'utf8').catch(quiet('agent/computer/connector-loop-live'));
       const pressure = stalledBy(await read('io'), await read('cpu'), 10);
       const memory = await memoryPressure();
       return { ...pressure, memory, stalled: pressure.stalled || (memory ?? 0) > 10 };
@@ -108,7 +108,7 @@ export function livePorts(client: DeployClient, stateDir: string, extra: { stopR
 
 /** Keeps the log from growing without bound: past 5 MB it becomes `.1`. */
 export async function rotateLoopLog(): Promise<void> {
-  const size = (await stat(loopLogPath()).catch(() => undefined))?.size ?? 0;
+  const size = (await stat(loopLogPath()).catch(quiet('agent/computer/connector-loop-live')))?.size ?? 0;
   if (size > 5_000_000) await rename(loopLogPath(), `${loopLogPath()}.1`).catch(quiet('agent/computer/connector-loop-live'));
 }
 

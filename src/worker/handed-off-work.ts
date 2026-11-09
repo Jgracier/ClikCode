@@ -6,7 +6,7 @@
  *
  * By the time this runs the ledger has already read the evidence: an account the work's end showed
  * spent is marked, and the conversation is on the next one, so this turn runs there. */
-import { diagnostic, lifecycle } from '../runtime/lifecycle-log.js';
+import { diagnostic, lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import type { EndedWork, RunningWork } from '../harness/transport/handoff-work.js';
 import type { WorkEndedHandler } from '../turn/vendor-process.js';
 import type { WorkerContext } from './worker-context.js';
@@ -80,7 +80,7 @@ export async function recordInterruptedAgents(ctx: WorkerContext, agents: readon
   const ended: EndedWork[] = [];
   const native = new Set<string>();
   for (const work of running) {
-    const file = session ? await locateAgentTranscript(work, session, account).catch(() => undefined) : undefined;
+    const file = session ? await locateAgentTranscript(work, session, account).catch(quiet('worker/handed-off-work')) : undefined;
     if (file) native.add(work.id);
     ended.push({ ...work, outcome: 'cut-off', tail: 'ClikCode closed the process running it before it finished.', ...(file ? { outputFile: file } : {}) });
   }

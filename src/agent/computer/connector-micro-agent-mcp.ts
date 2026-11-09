@@ -1,6 +1,7 @@
 /** `clikcode connectors agent-mcp`: the MCP server the headless micro-task agent is given. It serves browser_use and account_use only, runs them
  * in this process in the one tab it was started with (the agent cannot name another, so it never touches the default tab), and counts calls:
  * past the budget a call is refused with the instruction to give a RESULT line. The count is written to a file for the caller's log. */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { createInterface } from 'node:readline';
 import { writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -69,7 +70,7 @@ export function agentMcpHandler(options: AgentMcpOptions): (message: Rpc) => Pro
         if (!tool) return { jsonrpc: '2.0', id: message.id, error: { code: -32602, message: `Unknown tool "${name}".` } };
         if (calls >= options.maxCalls) return reply({ content: [{ type: 'text', text: `Call budget of ${options.maxCalls} used. Stop now and end with your RESULT line.` }], isError: true });
         calls++;
-        if (options.counter) await writeFile(options.counter, String(calls)).catch(() => undefined);
+        if (options.counter) await writeFile(options.counter, String(calls)).catch(quiet('agent/computer/connector-micro-agent-mcp'));
         try {
           // The tab is ours, whatever the agent passes.
           const args = { ...(message.params?.arguments ?? {}), tab: options.tab } as Record<string, unknown>;
@@ -100,6 +101,6 @@ export async function agentMcpServe(options: AgentMcpOptions): Promise<void> {
   await new Promise<void>(resolve => lines.once('close', resolve));
   await Promise.allSettled([...pending]);
   const { closeComputerPage, releaseComputerBrowser } = await import('./browser.js');
-  await closeComputerPage(options.stateDir ?? stateDirectory(), options.tab).catch(() => undefined);
-  await releaseComputerBrowser(options.stateDir ?? stateDirectory()).catch(() => undefined);
+  await closeComputerPage(options.stateDir ?? stateDirectory(), options.tab).catch(quiet('agent/computer/connector-micro-agent-mcp'));
+  await releaseComputerBrowser(options.stateDir ?? stateDirectory()).catch(quiet('agent/computer/connector-micro-agent-mcp'));
 }

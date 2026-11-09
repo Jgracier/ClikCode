@@ -1,5 +1,6 @@
 /** `clikcode connectors qualify`: decide from the RENDERED sign-up, pricing and developer pages whether a vendor's API key can be got with no person
  * (lane auto), needs one (human) or cannot be had (dead). Pure classification here; the browser and ClikDeploy are ports (connector-qualify-live.ts). */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { EXTRA_PHRASES, ENTERPRISE_API, GATED_BY_PLAN, INTEGRATE_UPGRADE, NEGATION_AFTER, NEGATION_BEFORE, PLAN_HEADING, SERVER_PHRASES, SLACK_ONBOARDING } from './connector-qualify-phrases.js';
 
 export type QualifyKind = 'captcha' | 'sms' | 'card' | 'paid-plan' | 'sales' | 'enterprise' | 'work-email' | 'free-mail' | 'slack-only' | 'approval' | 'no-api' | 'dead-host';
@@ -158,7 +159,7 @@ export async function qualifyVendor(id: string, ports: QualifyPorts): Promise<Qu
     await visit('docs', known.docsUrl ?? found.docs);
     if (!pages.length) return { id, lane: 'research', kinds: [], evidence: [], hints: ['Qualification unavailable: no website address was found. Research the vendor before attempting signup.'], pages: [] };
     return classify(id, pages);
-  } finally { await ports.close(id).catch(() => undefined); }
+  } finally { await ports.close(id).catch(quiet('agent/computer/connector-qualify')); }
 }
 
 /** The typed wall (the loop's kinds) for a qualify kind, and the human step a person would take. */

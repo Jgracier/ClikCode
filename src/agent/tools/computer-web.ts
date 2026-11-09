@@ -506,7 +506,7 @@ function runInOrder(args: WebArgs, hostCtx: ToolContext): Promise<ToolRunResult>
       if (args.action === 'tabs') return { output: await listTabs({ stateDir: ctx.stateDir, ...(args.tab ? { tab: args.tab } : {}), displayUrl }) };
       if (args.action === 'close' && args.tab && args.index === undefined) {
         // A named tab is closed whoever holds it (a worker that ended left it), and each close is logged.
-        const before = ((await allTabs(ctx.stateDir).catch(() => undefined)) ?? []).filter(view => view.tab === args.tab).length;
+        const before = ((await allTabs(ctx.stateDir).catch(quiet('agent/tools/computer-web'))) ?? []).filter(view => view.tab === args.tab).length;
         await closeComputerPage(ctx.stateDir, args.tab);
         return { output: before > 1 ? `Closed ${before} tabs named "${args.tab}".` : `Closed the tab named "${args.tab}".` };
       }

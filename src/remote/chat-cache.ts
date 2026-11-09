@@ -5,6 +5,7 @@
  * to a machine, is what changed since, not the chat again. One file per chat,
  * gzipped; the newest KEEP_CHATS are kept. A file that cannot be read is a chat
  * held of nothing: the open sends it whole, as before. */
+import { quiet } from '../runtime/lifecycle-log.js';
 import { createHash } from 'node:crypto';
 import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -51,7 +52,7 @@ async function prune(): Promise<void> {
   if (names.length <= KEEP_CHATS) return;
   const aged = await Promise.all(names.map(async (name) => ({ name, at: (await stat(join(directory(), name))).mtimeMs })));
   aged.sort((a, b) => b.at - a.at);
-  await Promise.all(aged.slice(KEEP_CHATS).map(({ name }) => unlink(join(directory(), name)).catch(() => undefined)));
+  await Promise.all(aged.slice(KEEP_CHATS).map(({ name }) => unlink(join(directory(), name)).catch(quiet('remote/chat-cache'))));
 }
 
 /** Keeps what a client holds of the chats it shows (the terminal's, VS Code's) for the next open of each: a burst of changes is one write. */

@@ -63,7 +63,7 @@ export async function writeTabRecord(stateDir: string, record: TabRecord): Promi
 }
 
 export async function removeTabRecord(stateDir: string, id: string): Promise<void> {
-  await fs.unlink(tabFile(stateDir, id)).catch(() => undefined);
+  await fs.unlink(tabFile(stateDir, id)).catch(quiet('agent/computer/tab-registry'));
 }
 
 export async function readTabRecords(stateDir: string): Promise<TabRecord[]> {

@@ -1,6 +1,7 @@
 /** `clikcode connectors run --loop`: connector onboarding that never needs a person. This file is the control: what to take, how many at once, the
  * hard budgets, the cooldown, the back-off when the machine stalls, lease renewal, browser recovery and the typed wall report. Every outside thing
  * (ClikDeploy's queue, the browser, /proc, the clock, the log) is a port, so the control is tested with fakes (connector-loop.vitest.test.ts). */
+import { quiet } from '../../runtime/lifecycle-log.js';
 import { scrubSecrets } from './secret-scrubber.js';
 import type { DeployClient, VendorOutcome } from './connector-runner.js';
 
@@ -126,7 +127,7 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
   const started = now();
   const endAt = started + limits.maxHoursMs;
   const cooldown = new Cooldown(limits.cooldownMs, now);
-  cooldown.restore(await ports.loadCooldown?.().catch(() => undefined));
+  cooldown.restore(await ports.loadCooldown?.().catch(quiet('agent/computer/connector-loop')));
   const active = new Map<string, { job: Promise<void>; since: number; lastRenew: number; budget: CallBudget; tab: string }>();
   const summary: LoopSummary = { vendors: 0, done: {}, walls: {}, pauses: 0, restarts: 0, renewals: 0 };
   let stalls = 0, pausedUntil: number | undefined, last: { stalled: boolean; io?: number; cpu?: number; memory?: number } = { stalled: false };
@@ -135,7 +136,7 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
     active: [...active].map(([id, a]) => ({ id, tab: a.tab, since: new Date(a.since).toISOString(), calls: a.budget.used })),
     done: summary.done, walls: summary.walls, cooldown: cooldown.snapshot(),
     pressure: { ...last, ...(pausedUntil && pausedUntil > now() ? { pausedUntil: new Date(pausedUntil).toISOString() } : {}) },
-  }).catch(() => undefined);
+  }).catch(quiet('agent/computer/connector-loop'));
 
   const finish = async (id: string, outcome: VendorOutcome, began: number, budget: CallBudget): Promise<void> => {
     const wall = wallOf(outcome);
@@ -180,22 +181,22 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
           const message = raced.failed instanceof Error ? raced.failed.message : String(raced.failed);
           if (BROWSER_HANG.test(message) && now() < ctx.deadline) {
             ports.log(`${new Date(now()).toISOString()} id=${id} browser trouble (${scrubSecrets(message).slice(0, 80)}); closing this task’s tabs and resuming`);
-            await ports.closeTab(id).catch(() => undefined);
+            await ports.closeTab(id).catch(quiet('agent/computer/connector-loop'));
             raced = await Promise.race([run().catch((e: unknown) => ({ failed: e })), hard]);
           }
         }
         if (raced === 'timeout') {
           abort.abort(new Error('Connector task deadline expired'));
-          await ports.closeTab(id).catch(() => undefined);
+          await ports.closeTab(id).catch(quiet('agent/computer/connector-loop'));
           outcome = { id, status: 'budget', steps: 0, browserActions: 0, stage: '', summary: `hard time limit of ${Math.round((limits.maxMs + limits.graceMs) / 1000)}s: the browser did not answer; the task was cancelled and its own tabs were closed`, actions: [] };
         } else if ('failed' in raced) {
           const message = scrubSecrets(raced.failed instanceof Error ? raced.failed.message : String(raced.failed));
-          if (BROWSER_HANG.test(message)) await ports.closeTab(id).catch(() => undefined);
+          if (BROWSER_HANG.test(message)) await ports.closeTab(id).catch(quiet('agent/computer/connector-loop'));
           outcome = { id, status: 'error', steps: 0, browserActions: 0, stage: '', summary: message.slice(0, 300), actions: [] };
         } else outcome = raced;
-      } finally { await ports.closeTab(id).catch(() => undefined); }
+      } finally { await ports.closeTab(id).catch(quiet('agent/computer/connector-loop')); }
       await finish(id, outcome, began, budget);
-    })().catch(() => undefined).finally(() => { active.delete(id); });
+    })().catch(quiet('agent/computer/connector-loop')).finally(() => { active.delete(id); });
     active.set(id, { job, since: began, lastRenew: began, budget, tab });
   };
 
