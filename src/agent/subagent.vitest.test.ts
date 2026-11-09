@@ -147,6 +147,75 @@ describe('task sub-agents', () => {
     expect(parentSaw).toBe(true);
   });
 
+  /** Every tool_call is answered by its tool_result before any later message, as the provider API requires. */
+  function expectValidSequence(requests: readonly ModelStepRequest[]): void {
+    for (const request of requests) {
+      const open = new Set<string>();
+      for (const item of request.items) {
+        if (item.type === 'tool_call') open.add(item.id);
+        else if (item.type === 'tool_result') open.delete(item.id);
+        else if (item.type === 'text' && item.role === 'user') expect([...open]).toEqual([]);
+      }
+    }
+  }
+
+  it('answers a steer at once while a foreground sub-agent runs, without stopping it, and delivers its result after', async () => {
+    let steer: ((text: string) => Promise<boolean>) | undefined;
+    let releaseChild: () => void = () => undefined;
+    const childGate = new Promise<void>((resolve) => { releaseChild = resolve; });
+    let childFinished = false;
+    let childFinishedAtAnswer: boolean | undefined;
+    let childSignalAborted: boolean | undefined;
+    const client = new RoutedModelClient({
+      [PARENT_PROMPT]: { script: [
+        { toolCalls: [{ id: 'fg-1', name: 'agent', args: { prompt: 'Work for a long while' } }] },
+        // The answer to the steer: the sub-agent is still blocked.
+        { before: () => { childFinishedAtAnswer = childFinished; releaseChild(); }, text: 'Answering you now.' },
+        { text: 'The sub-agent is done too.' },
+      ] },
+      'Work for a long while': { script: [
+        { before: async () => { void steer!('what time is it?'); await childGate; }, toolCalls: [{ id: 'k-1', name: 'read_file', args: { path: 'a.txt' } }] },
+        { before: () => { childFinished = true; }, text: 'Long work finished.' },
+      ] },
+    });
+    const { input } = turn(client, { onSteerReady: (port) => { if (port) steer = (text) => port.offer(text, { id: 't', text, submittedAt: '' }); } });
+    const result = await runAgentLoop(input);
+    expect(result).toMatchObject({ stopReason: 'completed' });
+
+    // (1) the parent answered the steer before the sub-agent was done.
+    expect(childFinishedAtAnswer).toBe(false);
+    const parent = client.requests(PARENT_PROMPT);
+    expect(parent[1].items.some((item) => item.type === 'text' && item.role === 'user' && item.text.includes('what time is it?'))).toBe(true);
+    expect(toolResults(parent[1])[0]).toMatch(/NOT stopped.*background agent agent_1/s);
+    // (2) it was not aborted or restarted, and its result reached the conversation afterwards.
+    expect(client.requests('Work for a long while')).toHaveLength(2);
+    expect(childSignalAborted).toBeUndefined();
+    const agents = sessionAgents(sessionState(stateDir, input.sessionId), stateDir);
+    expect(agents.list()).toMatchObject([{ id: 'agent_1', status: 'finished' }]);
+    const delivered = parent.at(-1)!.items.filter((item) => item.type === 'text' && item.role === 'user').map((item) => (item as { text: string }).text).join('\n');
+    expect(delivered).toMatch(/\[background agent agent_1 finished\][^]*Long work finished\./);
+    // (3) no tool_call without its tool_result, ever.
+    expectValidSequence(parent);
+    expectValidSequence(client.requests('Work for a long while'));
+  });
+
+  it('a foreground sub-agent with no steer returns its answer inline, as before', async () => {
+    const client = new RoutedModelClient({
+      [PARENT_PROMPT]: { script: [
+        { toolCalls: [{ id: 'fg-2', name: 'agent', args: { prompt: 'Quick job' } }] },
+        { text: 'Done.' },
+      ] },
+      'Quick job': { script: [{ text: 'Quick result.' }] },
+    });
+    const { input } = turn(client);
+    await runAgentLoop(input);
+    const parent = client.requests(PARENT_PROMPT);
+    expect(toolResults(parent[1])[0]).toContain('Quick result.');
+    expect(toolResults(parent[1])[0]).not.toContain('Returned early');
+    expect(sessionAgents(sessionState(stateDir, input.sessionId), stateDir).list()).toEqual([]);
+    expectValidSequence(parent);
+  });
+
   it('keeps an interrupted coding agent\'s edit and undo checkpoint', async () => {
     const controller = new AbortController();
     const client = new RoutedModelClient({
