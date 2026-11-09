@@ -88,6 +88,47 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
   });
   const runSubagent = innerSubagent;
 
+  /** A sub-agent the model waits on. It is steerable while its call is open (turn-runtime.ts), and a message the user types
+   * must not wait for it: the call returns at once, the agent carries on as a background agent (its own abort, no longer the
+   * turn's; agent_send / agent_wait reach it) and its result arrives later as a notification, as for `background: true`. */
+  const foregroundSubagent = (callId: string, request: SubagentCall, run: NonNullable<typeof runSubagent>): Promise<ToolRunResult> => {
+    const hand = (handler?: (text: string) => Promise<void>): void => { if (handler) rt.foregroundSteers.set(callId, handler); else rt.foregroundSteers.delete(callId); };
+    const agents = rt.backgroundAgents;
+    if (request.background || !agents) return run({ ...request, callId, ...(request.background ? {} : signal ? { signal } : {}), ...(request.background ? {} : { onSteerReady: hand }) });
+    const own = new AbortController();
+    const relay = (): void => own.abort();
+    if (signal?.aborted) own.abort(); else signal?.addEventListener('abort', relay, { once: true });
+    let current: ((text: string) => Promise<void>) | undefined;
+    let promoted: ((handler?: (text: string) => Promise<void>) => void) | undefined;
+    let over = false;
+    const running = run({
+      ...request, callId, signal: own.signal,
+      onSteerReady: (handler) => { current = handler; if (promoted) promoted(handler); else hand(handler); },
+    });
+    const alert = steerAlert(rt);
+    return new Promise<ToolRunResult>((resolve, reject) => {
+      const detach = (): void => { alert.signal.removeEventListener('abort', promote); alert.dispose(); };
+      function promote(): void {
+        if (over) return;
+        detach();
+        hand(undefined);
+        signal?.removeEventListener('abort', relay);
+        const label = request.description?.trim() || request.prompt.split('\n')[0]!.slice(0, 80);
+        const id = agents!.start(label, (ready) => { promoted = ready; ready(current); return running; });
+        resolve({
+          output: `[Returned early because the user sent a message; read it before anything else. The sub-agent is NOT stopped: it carries on as background agent ${id}, and its result arrives as a message when it finishes. agent_send("${id}", ...) gives it instructions, agent_wait("${id}") gets its result.]`,
+          continuesAs: id,
+        });
+      }
+      running.then(
+        (result) => { over = true; detach(); signal?.removeEventListener('abort', relay); resolve(result); },
+        (error: unknown) => { over = true; detach(); signal?.removeEventListener('abort', relay); reject(error); },
+      );
+      if (alert.signal.aborted) queueMicrotask(promote);
+      else alert.signal.addEventListener('abort', promote, { once: true });
+    });
+  };
+
   const toolContext = (callId: string, toolName: string, emitOutput: (chunk: string) => void): ToolContext => ({
     cwd, addDirs,
     // A coding child shares its parent's background shell lifecycle. A shell
@@ -105,11 +146,7 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
     ...(rt.stepAcceptsImages ? { acceptsImages: true } : {}),
     ...(input.onPlan ? { onPlan: input.onPlan } : {}), ...(input.net ? { net: input.net } : {}),
     ...(sandboxNow(input) === 'workspace' ? { sandbox: 'workspace' as const } : {}),
-    ...(runSubagent ? { runSubagent: (request: SubagentCall) => runSubagent({
-      ...request, callId, ...(request.background ? {} : signal ? { signal } : {}),
-      // A foreground sub-agent is steerable while its call is open (turn-runtime.ts).
-      ...(request.background ? {} : { onSteerReady: (handler?: (text: string) => Promise<void>) => { if (handler) rt.foregroundSteers.set(callId, handler); else rt.foregroundSteers.delete(callId); } }),
-    }) } : {}),
+    ...(runSubagent ? { runSubagent: (request: SubagentCall) => foregroundSubagent(callId, request, runSubagent) } : {}),
     ...(rt.backgroundAgents ? { agents: rt.backgroundAgents } : {}),
   });
 
