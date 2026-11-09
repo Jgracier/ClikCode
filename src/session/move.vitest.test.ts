@@ -26,6 +26,15 @@ vi.mock('../worker/client.js', () => ({
   runningWorker: async () => false,
 }));
 
+// The receiving machine's facts are the test's own, not the machine running it: a move plan notes a vendor CLI that is
+// "not installed there" and a bypass mode a root user cannot have, and the publish container has no claude and runs as root.
+vi.mock('../harness/transport/native/inspect.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../harness/transport/native/inspect.js')>(),
+  inspectNativeHarnessForPicker: (async () => ({ installed: true })) as never,
+}));
+beforeEach(() => { vi.spyOn(process, 'getuid').mockReturnValue(1000); });
+afterEach(() => { vi.restoreAllMocks(); });
+
 const now = '2026-10-21T00:00:00.000Z';
 const names = { source: 'linux', target: 'clikdeploy-prod' };
 

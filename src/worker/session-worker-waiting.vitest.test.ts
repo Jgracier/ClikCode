@@ -704,10 +704,17 @@ describe('a message typed as the turn ends', () => {
         expect(answer.disposition).toBe('steered');
       }
       client.off('event', record);
-      // The next round starts from an empty queue: the worker sends a message that was
-      // typed as the turn ended as a turn of its own, answered here, and is done.
+      // The next round starts from an empty queue. A message that was queued while the turn was ending is sent by the worker as a
+      // turn of its own, answered here, and is done. One that landed after the turn had ended is not: a window at its prompt sends
+      // that, and this client has none, so it stays queued -- waiting out the full deadline for it cost every such round 10 s, and
+      // 24 rounds past 120 s whenever the steer lands late. So wait the whole deadline only for a turn the worker started.
+      let started = false;
+      const mark = (event: WorkerEvent): void => { if (event.type === 'waiting-start') started = true; };
+      client.on('event', mark);
       const drainDeadline = Date.now() + 10_000;
-      while (((await storedSession(session.id)).queuedTurns?.length ?? 0) > 0 && Date.now() < drainDeadline) await new Promise((resolve) => setTimeout(resolve, 20));
+      const noTurnBy = Date.now() + 1_500;
+      while (((await storedSession(session.id)).queuedTurns?.length ?? 0) > 0 && Date.now() < drainDeadline && (started || Date.now() < noTurnBy)) await new Promise((resolve) => setTimeout(resolve, 20));
+      client.off('event', mark);
       await new Promise((resolve) => setTimeout(resolve, 150));
       gateway!.autoAnswer = undefined;
       const state = await readState();
