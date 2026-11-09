@@ -1,9 +1,9 @@
 # Publishing ClikCode and the VS Code extension
 
 Both artifacts of this repository are published by **ClikDeploy**, automatically. Nobody runs
-`npm publish`, `vsce publish` or `ovsx publish` by hand in the normal flow, and the GitHub workflow
-(`.github/workflows/test.yml`) only tests: a second publisher would race ClikDeploy for version
-numbers.
+`npm publish`, `vsce publish` or `ovsx publish` by hand in the normal flow, and this repository has no
+GitHub workflow: ClikDeploy runs the whole test gate before it publishes, and a second publisher would
+race it for version numbers.
 
 | Artifact | Where | Id |
 | --- | --- | --- |
