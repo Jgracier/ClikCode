@@ -226,7 +226,9 @@ describe('inline block stays on the bottom rows', () => {
     for (let n = 2; n <= 90; n += 1) paint('', [message(n)]);
     expect(term.scrollback[0]).toBe(message(1));
     expect([...term.scrollback, ...term.screen()].filter((r) => r.startsWith('message'))).toHaveLength(90);
-    expect(term.scrollback.filter((r) => r === '')).toEqual([]);
+    // The only blank row in the saved lines is the one the conversation itself retired after message 1.
+    expect(term.scrollback.filter((r) => r === '')).toHaveLength(1);
+    expect(term.scrollback[1]).toBe('');
   });
 
   it('reprints a replaced conversation at the bottom, and a long one from the top', () => {
