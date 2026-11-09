@@ -332,8 +332,8 @@ export function flushInlineFrame(
   // there, by relative motion. A client that pulls keeps the composer at the bottom; one that does not shows blank rows
   // below the composer until output fills them, and the history stays directly above the block either way.
   // The one exception is the start (and a replaced conversation): the block is drawn on the last rows, with blank rows above
-  // a short conversation (`pad`), which growth takes back by delete-lines before anything scrolls into the saved lines. `pad`
-  // is only true while the block ends on the last row, and a resize or a shrinking block ends it.
+  // a short conversation (`pad`, at the top of the screen), which anything that would scroll the screen takes back by
+  // delete-lines first, so none is pushed into the saved lines. A resize forgets them: the terminal has moved its own rows.
   const anchored = !clear && inlineBlock.rows > 0;
   const found = anchored ? inlineBlock.found : undefined;
   inlineBlock.found = undefined;
@@ -372,12 +372,11 @@ export function flushInlineFrame(
       at = to;
       return step < 0 ? `\u001b[${-step}A` : step > 0 ? `\u001b[${step}B` : '';
     };
-    // The blank rows above the conversation stand only while the block ends on the last row.
-    if (live.length < previous.length) nextPad = 0;
-    if (live.length > previous.length && nextPad > 0) {
-      // Growing from the bottom edge: pull the blank rows above the conversation out first,
-      // so nothing blank scrolls into the saved lines. The cursor ends on the block's new top.
-      const take = Math.min(live.length - previous.length, nextPad);
+    // Growing past the last row: the rows it runs past would scroll the screen, so the blank rows above the conversation go
+    // first and nothing blank scrolls into the saved lines. The cursor ends on the block's new top.
+    const scrolls = Math.max(0, top + live.length - height);
+    if (live.length > previous.length && scrolls > 0 && nextPad > 0) {
+      const take = Math.min(scrolls, nextPad);
       text += `${top + at > 0 ? `\u001b[${top + at}A` : ''}\u001b[${take}M`;
       at = -(top - take);
       top -= take;
@@ -427,11 +426,8 @@ export function flushInlineFrame(
         top -= amount;
       }
     }
-    // Where the block's first row is now, and whether it ends on the last row (the blank rows above are only true then).
-    const end = top + body.length;
-    const first = top + body.length - live.length;
-    top = end >= height ? height - live.length : first;
-    if (end < height) nextPad = 0;
+    // Where the block's first row is now: where it was drawn, or the rows it ends on when printing scrolled the screen.
+    top = Math.min(top + body.length - live.length, height - live.length);
     text = body.map((row, index) => `${row}\u001b[K${index < body.length - 1 ? '\r\n' : ''}`).join('');
     // The cursor is on the block's last row; walk up to the composer's.
     const back = lastRow - cursorRow;

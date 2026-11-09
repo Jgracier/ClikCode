@@ -32,14 +32,14 @@ export function judge(snap, start) {
   if (snap.alt !== (mode === 'full')) problems.push(`alternate screen is ${snap.alt ? 'up' : 'down'} in ${mode} mode`);
   // The composer and status are the last rows of the screen: a rule, the composer, a rule, the status line.
   if (!opts.noBlock) {
-    // Whatever the terminal does when the screen grows (pulls saved lines back, or adds blank rows below), the block ends on the last row.
+    // The block owns its own rows and nothing else: whatever the terminal does when the screen changes height (pull saved
+    // lines back or not, add blank rows below or not), the block is whole, the status line is its last row and only blank
+    // rows are below it. A client that does not pull shows blank space below the composer; that is the client's.
     let last = screen.length - 1;
-    // A terminal that never answers the cursor report leaves the program no way to know where its block stands after a growth: it
-    // is erased and drawn where it is, as high as the rows the terminal added below allow (the defined failure).
-    if (snap.mute && scroll.length > 0) while (last > 0 && blank(screen[last])) last -= 1;
+    while (last > 0 && blank(screen[last])) last -= 1;
     if (blank(screen[last] ?? '') || !STATUS.test(screen[last] ?? '')) {
       const at = screen.findLastIndex((row) => STATUS.test(row));
-      problems.push(`status line is not the last screen row (it is row ${at + 1} of ${screen.length}; the last is ${JSON.stringify(screen[last])})`);
+      problems.push(`status line is not the last non-blank screen row (it is row ${at + 1} of ${screen.length}; the last is ${JSON.stringify(screen[last])})`);
     }
     else if (!RULE.test(screen[last - 1] ?? '') && !/^\s*›/.test(screen[last - 1] ?? '') && !RULE.test(screen[last - 2] ?? '')) problems.push('composer rules do not sit above the status line');
     const statuses = all.filter((row) => STATUS.test(row) && !MARKER.test(row)).length;
@@ -65,7 +65,7 @@ export function judge(snap, start) {
   }
   // Blank rows: only above the first content row, and only on the screen (never pushed into scrollback).
   const firstContent = all.findIndex((row) => !blank(row));
-  if (firstContent > 0 && firstContent <= scroll.length && !(snap.pulls === false && firstContent <= (snap.grown ?? 0))) problems.push(`${firstContent} blank row(s) at the top of the scrollback`);
+  if (firstContent > 0 && firstContent <= scroll.length) problems.push(`${firstContent} blank row(s) at the top of the scrollback`);
   let run = 0;
   let worst = 0;
   let worstAt = -1;
@@ -78,11 +78,7 @@ export function judge(snap, start) {
   while (lastContent > 0 && blank(all[lastContent - 1])) lastContent -= 1;
   lastContent -= 1;
   // Trailing blanks after the last content are a block that is not at the bottom (reported above), not a gap.
-  // A terminal that does not pull saved lines back when its screen grows leaves blank rows below the content; the block is moved
-  // to the last row by inserting them at the top of the screen instead, so a blank band, no taller than the screen has grown
-  // in all, stands over the saved lines (and a shrink pushes it into them).
-  const band = snap.pulls === false && worst <= (snap.grown ?? 0);
-  if (!opts.board && !opts.turns && worst >= 2 && worstAt <= lastContent && !band) problems.push(`a run of ${worst} blank rows inside the conversation (ending at row ${worstAt + 1} of ${all.length}, ${worstAt < scroll.length ? 'in scrollback' : 'on screen'})`);
+  if (!opts.board && !opts.turns && worst >= 2 && worstAt <= lastContent) problems.push(`a run of ${worst} blank rows inside the conversation (ending at row ${worstAt + 1} of ${all.length}, ${worstAt < scroll.length ? 'in scrollback' : 'on screen'})`);
   // History markers: each once, in order, none missing, for the ones the scenario has had printed.
   if (!opts.noHistory && snap.expectMarkers && mode === 'full') {
     // Full-screen: the viewport shows the newest rows, the older ones are scrolled back. The newest is shown, and what is shown has no hole.
@@ -103,9 +99,8 @@ export function judge(snap, start) {
   }
   // The conversation is what it was: every row, blank rows between turns included, in place.
   if (mode !== 'full' && opts.sameAs && start && start !== snap) {
-    const bandless = (rows) => (snap.pulls === false && snap.grown ? rows.filter((row) => row.trim() !== '') : rows);
-    const was = bandless(conversation(start));
-    const now = bandless(conversation(snap));
+    const was = conversation(start);
+    const now = conversation(snap);
     const at = was.findIndex((row, index) => row !== now[index]);
     if (at >= 0 || was.length !== now.length) problems.push(`the conversation is not what it was at "${opts.sameAs}": ${was.length} rows then, ${now.length} now, first difference at row ${at + 1} (${JSON.stringify(was[at])} then, ${JSON.stringify(now[at])} now)`);
   }
@@ -120,7 +115,5 @@ export function judge(snap, start) {
   return problems;
 }
 
-let grown = 0;
-snaps.forEach((snap, index) => { if (index > 0) grown += Math.max(0, snap.rows - snaps[index - 1].rows); snap.grown = grown; });
 const verdicts = snaps.map((snap) => ({ label: snap.label, size: `${snap.cols}x${snap.rows}`, problems: judge(snap, snaps.find((other) => other.label === (snap.opts?.sameAs ?? snap.opts?.keeps))) }));
 console.log(JSON.stringify(verdicts));

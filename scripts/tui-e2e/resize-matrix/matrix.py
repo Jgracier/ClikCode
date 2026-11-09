@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Resize / terminal-behaviour matrix for the TUI: the real program in a real pty (or in tmux), its output played into a
 real terminal emulator (@xterm/headless, or tmux's own screen), judged after every settle against the layout invariants
-in check.mjs: the composer and status are the last rows, no stale block, no blank run inside the conversation or pushed
-into scrollback, no history lost or repeated, no row wider than the screen. No real vendor is ever run: a fake one
+in check.mjs: the composer and status are the last rows, no stale block, no blank row made by the program (inside the conversation or pushed
+into scrollback), no history lost or repeated, no row wider than the screen. No real vendor is ever run: a fake one
 (../fake-grok.mjs) plays the turns, in a throwaway HOME.
 
     node scripts/build.mjs
@@ -16,7 +16,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 from state_guard import refuse_real_state
 ENTRY = os.environ.get('MATRIX_ENTRY', os.path.join(REPO, 'dist/index.js'))  # the build under test
-SETTLE = 1.2  # RESIZE_SETTLE_MS is 100; a cursor report that is never answered times out after 300 ms (xterm-mute)
+SETTLE = 1.2  # RESIZE_SETTLE_MS is 100; a cursor report that is never answered times out after 120 ms (xterm-mute)
 
 def marker_block(first, last, extra=''):
     return '\n'.join(f'- H{n:03d} marker line{extra}' for n in range(first, last + 1))
@@ -76,6 +76,23 @@ SCENARIOS = {
         ('burst', [(69, 60), (69, 52), (69, 44), (69, 38), (69, 35)], 0.05), ('settle', SETTLE), ('check', 'burst down', {}, (1, 80)),
         ('burst', [(69, 40), (69, 48), (69, 56), (69, 64), (69, 67)], 0.05), ('settle', SETTLE), ('check', 'burst up', {}, (1, 80)),
     ]),
+    # A phone's keyboard cycles 57 -> 35 -> 57, as single sizes and as the burst a client sends while it moves, three times over,
+    # with a conversation longer than the screen and with one that fits. Whatever the client does with its own rows, the
+    # program makes no blank row and loses no history row, and the block is whole with the composer visible.
+    'cycles-long': dict(size=(69, 57), turns=[{'blocks': [marker_block(1, 120)]}], steps=[
+        ('type', 'go'), ('wait', 'H120', 40), ('settle', 1.5), ('check', 'start 57', {'sameAs': 'start 57'}, (1, 120)),
+    ] + [step for n in range(3) for step in (
+        ('burst', [(69, 50), (69, 44), (69, 38), (69, 35)], 0.05), ('settle', SETTLE), ('check', f'cycle {n + 1} burst down', {'sameAs': 'start 57'}, (1, 120)),
+        ('burst', [(69, 38), (69, 44), (69, 50), (69, 57)], 0.05), ('settle', SETTLE), ('check', f'cycle {n + 1} burst up', {'sameAs': 'start 57'}, (1, 120)),
+        ('resize', 69, 35), ('settle', SETTLE), ('check', f'cycle {n + 1} 35', {'sameAs': 'start 57'}, (1, 120)),
+        ('resize', 69, 57), ('settle', SETTLE), ('check', f'cycle {n + 1} 57', {'sameAs': 'start 57'}, (1, 120)))]),
+    'cycles-short': dict(size=(69, 57), turns=[{'blocks': [marker_block(1, 8)]}], steps=[
+        ('type', 'go'), ('wait', 'H008', 40), ('settle', 1.5), ('check', 'start 57', {}, (1, 8)),
+    ] + [step for n in range(3) for step in (
+        ('burst', [(69, 50), (69, 44), (69, 38), (69, 35)], 0.05), ('settle', SETTLE), ('check', f'cycle {n + 1} burst down', {}, (1, 8)),
+        ('burst', [(69, 38), (69, 44), (69, 50), (69, 57)], 0.05), ('settle', SETTLE), ('check', f'cycle {n + 1} burst up', {}, (1, 8)),
+        ('resize', 69, 35), ('settle', SETTLE), ('check', f'cycle {n + 1} 35', {}, (1, 8)),
+        ('resize', 69, 57), ('settle', SETTLE), ('check', f'cycle {n + 1} 57', {}, (1, 8)))]),
     # Columns: wrapped again, both ways; wide characters and emoji in the history.
     'columns': dict(size=(69, 35), turns=[{'blocks': [marker_block(1, 60, WIDE)]}], steps=[
         ('type', 'go'), ('wait', 'H060', 40), ('settle', 1.5), ('check', 'start 69', {}, (1, 60)),
