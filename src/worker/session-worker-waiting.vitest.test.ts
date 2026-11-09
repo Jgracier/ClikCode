@@ -668,6 +668,10 @@ describe('a message typed as the turn ends', () => {
     const session = await gatewaySession();
     const client = await attach(session.id);
     let lost = 0;
+    // Whether the worker has a turn open, from the events it sends: a turn starts at waiting-start and ends at waiting-stop.
+    let running = false;
+    const workerRunning = (): boolean => running;
+    client.on('event', (event: WorkerEvent) => { if (event.type === 'waiting-start') running = true; else if (event.type === 'waiting-stop') running = false; });
     for (let round = 0; round < 24; round++) {
       const all: WorkerEvent[] = [];
       const record = (event: WorkerEvent): void => { all.push(event); };
@@ -704,18 +708,16 @@ describe('a message typed as the turn ends', () => {
         expect(answer.disposition).toBe('steered');
       }
       client.off('event', record);
-      // The next round starts from an empty queue. A message that was queued while the turn was ending is sent by the worker as a
-      // turn of its own, answered here, and is done. One that landed after the turn had ended is not: a window at its prompt sends
-      // that, and this client has none, so it stays queued -- waiting out the full deadline for it cost every such round 10 s, and
-      // 24 rounds past 120 s whenever the steer lands late. So wait the whole deadline only for a turn the worker started.
-      let started = false;
-      const mark = (event: WorkerEvent): void => { if (event.type === 'waiting-start') started = true; };
-      client.on('event', mark);
-      const drainDeadline = Date.now() + 10_000;
+      // The next round starts from an empty queue and an idle worker. A message queued while the turn was ending is sent by the worker
+      // as a turn of its own, answered here; wait for that turn to END, not a fixed while: on a slow machine it was still running when
+      // the next round submitted, which queued behind it and never reached the model. One that landed after the turn had ended is
+      // not sent by the worker (a window at its prompt does that, and this client has none), so it stays queued -- waiting the whole
+      // deadline for it cost every such round 10 s. So wait for a turn only once the worker has started one.
+      const settleBy = Date.now() + 10_000;
       const noTurnBy = Date.now() + 1_500;
-      while (((await storedSession(session.id)).queuedTurns?.length ?? 0) > 0 && Date.now() < drainDeadline && (started || Date.now() < noTurnBy)) await new Promise((resolve) => setTimeout(resolve, 20));
-      client.off('event', mark);
+      while (((await storedSession(session.id)).queuedTurns?.length ?? 0) > 0 && Date.now() < settleBy && (workerRunning() || Date.now() < noTurnBy)) await new Promise((resolve) => setTimeout(resolve, 20));
       await new Promise((resolve) => setTimeout(resolve, 150));
+      while (workerRunning() && Date.now() < settleBy) await new Promise((resolve) => setTimeout(resolve, 20));
       gateway!.autoAnswer = undefined;
       const state = await readState();
       const found = state.sessions.find((item) => item.id === session.id)!;

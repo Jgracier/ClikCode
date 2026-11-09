@@ -210,3 +210,26 @@ describe('a turn that ends with an offer unanswered', () => {
     expect(queue.map((item) => item.id)).toEqual(['a']);
   });
 });
+
+describe('a message the turn took as it ended', () => {
+  it('counts as taken when the port goes away in the same tick the vendor answers, and is not sent again', async () => {
+    const { broker, queue, steered } = bound();
+    // The vendor echoes the message and ends the turn in one read: the turn clears its port, then the offer settles.
+    const port: SteerPort = { offer: async () => { await Promise.resolve(); broker.setSteerPort(undefined); return true; } };
+    broker.setSteerPort(port);
+    const result = await broker.submit('use postgres', 'm1', { steer: true });
+    expect(result.disposition).toBe('steered');
+    expect(steered.map((item) => item.id)).toEqual(['m1']);
+    expect(queue).toEqual([]);
+  });
+
+  it('still leaves a message queued when the port goes away and the offer never settles', async () => {
+    const { broker, queue, steered } = bound();
+    const port: SteerPort = { offer: () => { setTimeout(() => broker.setSteerPort(undefined), 5); return new Promise<boolean>(() => undefined); } };
+    broker.setSteerPort(port);
+    const result = await broker.submit('use postgres', 'm1', { steer: true });
+    expect(result.disposition).toBe('queued');
+    expect(steered).toEqual([]);
+    expect(queue.map((item) => item.id)).toEqual(['m1']);
+  });
+});
