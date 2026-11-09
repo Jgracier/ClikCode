@@ -10,6 +10,7 @@ import { spawnSync } from 'node:child_process';
 import { accessSync, constants, existsSync, realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { stateDirectory } from '../session/store/paths.js';
 
 export type SandboxMode = 'off' | 'workspace';
 
@@ -30,7 +31,7 @@ export function parseSandboxMode(value: string): SandboxMode | undefined {
 /** One line for /sandbox and its confirmation. */
 export function sandboxModeText(mode: SandboxMode): string {
   return mode === 'workspace'
-    ? 'Sandbox on · shell commands write only the workspace, the temp dir and tool caches; they read everything and keep the network'
+    ? 'Sandbox on · shell commands write only the workspace, the temp dir and tool caches; they read everything except ClikCode\'s stored sign-ins and secrets, and keep the network'
     : 'Sandbox off · shell commands run with your full permissions';
 }
 
@@ -73,6 +74,17 @@ export function sandboxWritableDirs(input: WritableInput): string[] {
   return [...new Set(dirs.map((dir) => path.resolve(dir)))];
 }
 
+/** What a sandboxed command must never read: ClikCode's own stored sign-ins and secrets. A shell command a model runs can be steered by
+ * text it read (a web page, an email, a repo), and with the network open anything it can read it can send. ClikCode's own tools read these
+ * outside the sandbox, so hiding them costs a command nothing it should need. */
+export interface HiddenPaths { dirs: string[]; files: string[] }
+export function sandboxHiddenPaths(stateDir: string): HiddenPaths {
+  return {
+    dirs: ['profiles', 'computer', 'mcp-oauth'].map((name) => path.join(stateDir, name)),
+    files: ['api-key', 'secrets.json'].map((name) => path.join(stateDir, name)),
+  };
+}
+
 interface Invocation { file: string; args: string[] }
 
 /** The system's ssh drop-in directory. The sandbox's user namespace maps only the caller's own uid, so every
@@ -92,7 +104,7 @@ function maskedDirs(request: WrapRequest): string[] {
  * error), a private /dev and /proc. `masked` directories are replaced by an
  * empty private one: see SSH_CONFIG_DROPINS. No --new-session and no pid namespace:
  * the command stays in the process group a timeout or cancel signals. */
-export function bwrapInvocation(command: Invocation, writable: readonly string[], cwd: string, masked: readonly string[] = [], readOnly: readonly string[] = []): Invocation {
+export function bwrapInvocation(command: Invocation, writable: readonly string[], cwd: string, masked: readonly string[] = [], readOnly: readonly string[] = [], hidden: HiddenPaths = { dirs: [], files: [] }): Invocation {
   return {
     file: 'bwrap',
     args: [
@@ -100,6 +112,9 @@ export function bwrapInvocation(command: Invocation, writable: readonly string[]
       ...masked.flatMap((dir) => ['--tmpfs', dir]),
       ...writable.flatMap((dir) => ['--bind-try', dir, dir]),
       ...readOnly.flatMap((entry) => ['--ro-bind-try', entry, entry]),
+      // Last, so a writable or read-only bind above can never put a secret back in view.
+      ...hidden.dirs.flatMap((dir) => ['--tmpfs', dir]),
+      ...hidden.files.flatMap((file) => ['--ro-bind', '/dev/null', file]),
       '--die-with-parent', '--chdir', cwd, '--', command.file, ...command.args,
     ],
   };
@@ -108,15 +123,18 @@ export function bwrapInvocation(command: Invocation, writable: readonly string[]
 /** Seatbelt: everything allowed but file writes, which go only to the
  * writable dirs and /dev (null, tty, fds). Paths travel as -D parameters, so
  * none has to be quoted into the profile text. */
-export function seatbeltProfile(writableCount: number): string {
+export function seatbeltProfile(writableCount: number, hiddenDirs = 0, hiddenFiles = 0): string {
   const allowed = Array.from({ length: writableCount }, (_, index) => ` (subpath (param "W${index}"))`).join('');
-  return `(version 1)\n(allow default)\n(deny file-write*)\n(allow file-write* (subpath "/dev")${allowed})\n`;
+  const dirs = Array.from({ length: hiddenDirs }, (_, index) => ` (subpath (param "HD${index}"))`).join('');
+  const files = Array.from({ length: hiddenFiles }, (_, index) => ` (literal (param "HF${index}"))`).join('');
+  const hide = hiddenDirs + hiddenFiles ? `(deny file-read* file-write*${dirs}${files})\n` : '';
+  return `(version 1)\n(allow default)\n(deny file-write*)\n(allow file-write* (subpath "/dev")${allowed})\n${hide}`;
 }
 
-export function sandboxExecInvocation(command: Invocation, writable: readonly string[]): Invocation {
+export function sandboxExecInvocation(command: Invocation, writable: readonly string[], hidden: HiddenPaths = { dirs: [], files: [] }): Invocation {
   return {
     file: '/usr/bin/sandbox-exec',
-    args: ['-p', seatbeltProfile(writable.length), ...writable.flatMap((dir, index) => ['-D', `W${index}=${dir}`]), command.file, ...command.args],
+    args: ['-p', seatbeltProfile(writable.length, hidden.dirs.length, hidden.files.length), ...writable.flatMap((dir, index) => ['-D', `W${index}=${dir}`]), ...hidden.dirs.flatMap((dir, index) => ['-D', `HD${index}=${dir}`]), ...hidden.files.flatMap((file, index) => ['-D', `HF${index}=${file}`]), command.file, ...command.args],
   };
 }
 
@@ -132,6 +150,8 @@ interface WrapRequest {
   exists?(path: string): boolean;
   /** Paths inside a writable dir that stay read-only (bwrap only): see linkedWorktreeGit. */
   readOnly?: readonly string[];
+  /** ClikCode's stored secrets, hidden from the command: see sandboxHiddenPaths. Only paths that exist are hidden. */
+  hidden?: HiddenPaths;
 }
 
 type SandboxWrap =
@@ -141,16 +161,23 @@ type SandboxWrap =
 /** The command as it should be spawned. `missing` names the sandbox tool
  * that was wanted and is not there: the caller says so once and runs the
  * command as it is. */
+/** The hidden paths that exist (bwrap cannot mount over a path that is not there). */
+function presentHidden(request: WrapRequest): HiddenPaths {
+  const hidden = request.hidden ?? { dirs: [], files: [] };
+  const exists = request.exists ?? (() => false);
+  return { dirs: hidden.dirs.filter(exists), files: hidden.files.filter(exists) };
+}
+
 export function wrapForSandbox(request: WrapRequest): SandboxWrap {
   if (request.mode !== 'workspace') return { sandboxed: false, invocation: request.command };
   if (request.platform === 'linux') {
     return request.available('bwrap')
-      ? { sandboxed: true, invocation: bwrapInvocation(request.command, request.writable, request.cwd, maskedDirs(request), request.readOnly) }
+      ? { sandboxed: true, invocation: bwrapInvocation(request.command, request.writable, request.cwd, maskedDirs(request), request.readOnly, presentHidden(request)) }
       : { sandboxed: false, invocation: request.command, missing: 'bubblewrap (bwrap)' };
   }
   if (request.platform === 'darwin') {
     return request.available('/usr/bin/sandbox-exec')
-      ? { sandboxed: true, invocation: sandboxExecInvocation(request.command, request.writable) }
+      ? { sandboxed: true, invocation: sandboxExecInvocation(request.command, request.writable, presentHidden(request)) }
       : { sandboxed: false, invocation: request.command, missing: 'sandbox-exec' };
   }
   return { sandboxed: false, invocation: request.command, missing: `a sandbox for ${request.platform}` };
@@ -250,5 +277,5 @@ export function sandboxCommand(mode: SandboxMode, command: Invocation, scope: { 
   const git = mode === 'workspace' ? linkedWorktreeGit(scope.cwd) : { writable: [], readOnly: [] };
   const named = sandboxWritableDirs({ ...scope, addDirs: [...scope.addDirs, ...git.writable], tmpDir: os.tmpdir(), env: process.env, platformDirs: platformDirs() });
   const resolved = [...new Set(named.map(realOrSame))];
-  return { ...wrapForSandbox({ mode, platform: process.platform, command, writable: resolved, cwd: scope.cwd, available: sandboxAvailable, exists: existsSync, readOnly: git.readOnly.map(realOrSame) }), writable: [...new Set([...resolved, ...named])] };
+  return { ...wrapForSandbox({ mode, platform: process.platform, command, writable: resolved, cwd: scope.cwd, available: sandboxAvailable, exists: existsSync, readOnly: git.readOnly.map(realOrSame), hidden: sandboxHiddenPaths(realOrSame(stateDirectory())) }), writable: [...new Set([...resolved, ...named])] };
 }

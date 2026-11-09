@@ -26,6 +26,7 @@
  * wait for the first, then find the binary already there.
  */
 
+import { installerEnv } from '../../../runtime/installer-env.js';
 import { quiet } from '../../../runtime/lifecycle-log.js';
 import { constants } from 'node:fs';
 import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
@@ -343,7 +344,7 @@ async function runInstallerScript(step: Extract<AiHarnessInstallStep, { kind: 's
   try {
     const script = join(directory, windows ? 'install.ps1' : 'install.sh');
     await downloadInstaller(step.url, script);
-    const env = { ...process.env, ...(step.env ?? {}) };
+    const env = installerEnv(process.env, step.env ?? {});
     let command: string;
     let args: string[];
     if (windows) {

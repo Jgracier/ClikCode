@@ -1,11 +1,11 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
-import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  bwrapInvocation, parseSandboxMode, SANDBOX_DENIAL_HINT, sandboxCommand, sandboxDenialHint, sandboxExecInvocation, sandboxWritableDirs, seatbeltProfile, sessionSandboxMode, wrapForSandbox,
+  bwrapInvocation, parseSandboxMode, SANDBOX_DENIAL_HINT, sandboxCommand, sandboxDenialHint, sandboxExecInvocation, sandboxHiddenPaths, sandboxWritableDirs, seatbeltProfile, sessionSandboxMode, wrapForSandbox,
 } from './sandbox.js';
 import { bashTool } from './tools/bash.js';
 import { disposeSessionState, sessionState } from './session-state.js';
@@ -344,5 +344,44 @@ describe.skipIf(!hasSandbox || outsideIsWritable)('linked agent worktree under t
     expect(sandboxed(wt, `echo x >> ${repo}/.git/config`).run.status).not.toBe(0);
 
     if (existsSync('/etc/ssh/ssh_config.d')) expect(sandboxed(wt, 'ls /etc/ssh/ssh_config.d | wc -l').run.stdout.trim()).toBe('0');
+  });
+});
+
+describe('ClikCode secrets are hidden from sandboxed commands', () => {
+  it('bwrap mounts the secret dirs and files over last, and Seatbelt denies reading them', () => {
+    const hidden = sandboxHiddenPaths('/home/u/.clikcode');
+    expect(hidden.dirs).toEqual(['/home/u/.clikcode/profiles', '/home/u/.clikcode/computer', '/home/u/.clikcode/mcp-oauth']);
+    expect(hidden.files).toEqual(['/home/u/.clikcode/api-key', '/home/u/.clikcode/secrets.json']);
+    const { args } = bwrapInvocation(shell, ['/home/u/.clikcode'], '/work', [], [], hidden);
+    const lastBind = args.lastIndexOf('/home/u/.clikcode');
+    expect(args.indexOf('/home/u/.clikcode/profiles')).toBeGreaterThan(lastBind);
+    expect(args).toEqual(expect.arrayContaining(['--tmpfs', '/home/u/.clikcode/computer', '--ro-bind', '/dev/null', '/home/u/.clikcode/api-key']));
+    expect(seatbeltProfile(1, 3, 2)).toContain('(deny file-read* file-write* (subpath (param "HD0"))');
+    expect(sandboxExecInvocation(shell, ['/w'], hidden).args).toEqual(expect.arrayContaining(['-D', 'HF0=/home/u/.clikcode/api-key']));
+  });
+
+  it('hides only paths that exist (bwrap cannot mount over a missing one)', () => {
+    const hidden = sandboxHiddenPaths('/s');
+    const wrap = wrapForSandbox({ mode: 'workspace', platform: 'linux', command: shell, writable: [], cwd: '/w', available: () => true, exists: (p) => p === '/s/api-key', hidden });
+    expect(wrap.invocation.args).toEqual(expect.arrayContaining(['--ro-bind', '/dev/null', '/s/api-key']));
+    expect(wrap.invocation.args).not.toContain('/s/profiles');
+  });
+
+  it.skipIf(!hasSandbox || process.platform !== 'linux')('for real: a sandboxed command cannot read them, even from a writable dir', async () => {
+    const state = await mkdtemp(join(tmpdir(), 'clikcode-hidden-'));
+    try {
+      await mkdir(join(state, 'profiles', 'acct'), { recursive: true });
+      await writeFile(join(state, 'profiles', 'acct', 'token.json'), 'SECRET-PROFILE');
+      await writeFile(join(state, 'api-key'), 'SECRET-KEY');
+      await writeFile(join(state, 'ok.txt'), 'visible');
+      const run = (cmd: string) => {
+        const wrap = wrapForSandbox({ mode: 'workspace', platform: 'linux', command: { file: '/bin/sh', args: ['-c', cmd] }, writable: [state], cwd: state, available: () => true, exists: existsSync, hidden: sandboxHiddenPaths(state) });
+        const r = spawnSync(wrap.invocation.file, wrap.invocation.args, { encoding: 'utf8' });
+        return `${r.stdout}${r.stderr}`;
+      };
+      expect(run(`cat ${join(state, 'ok.txt')}`)).toContain('visible');
+      expect(run(`cat ${join(state, 'api-key')}; cat ${join(state, 'profiles', 'acct', 'token.json')}`)).not.toContain('SECRET');
+      expect(run(`ls -A ${join(state, 'profiles')}`).trim()).toBe('');
+    } finally { await rm(state, { recursive: true, force: true }); }
   });
 });

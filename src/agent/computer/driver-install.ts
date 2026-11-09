@@ -11,6 +11,7 @@
  *   ~/.local/bin/cua-driver                        Linux: symlink into current/
  * macOS keeps Cua's .app-in-/Applications layout and the permission identity that goes with it, so there Cua's own
  * installer script does the placing, pinned to the version found here (a pin needs no API call either). */
+import { installerEnv } from '../../runtime/installer-env.js';
 import { quiet } from '../../runtime/lifecycle-log.js';
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
@@ -244,7 +245,7 @@ async function installViaOfficialScript(deps: InstallDeps, version: string): Pro
   if (!response.ok) throw new Error(`Could not download Cua's installer from ${OFFICIAL_INSTALLER} (HTTP ${response.status}).`);
   const script = await response.text();
   deps.log(`running Cua's macOS installer, pinned to ${version}`);
-  const code = await deps.runVisible('/bin/bash', ['-c', script, 'cua-driver-install'], { ...deps.env, CUA_DRIVER_RS_VERSION: version });
+  const code = await deps.runVisible('/bin/bash', ['-c', script, 'cua-driver-install'], installerEnv(deps.env, { CUA_DRIVER_RS_VERSION: version }));
   if (code !== 0) throw new Error(`Cua's installer exited with ${code}.`);
   return { action: 'delegated', version, notes: ['Accessibility and Screen Recording must be granted once: run `cua-driver permissions grant`.'] };
 }
