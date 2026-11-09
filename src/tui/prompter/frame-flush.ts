@@ -7,7 +7,7 @@ import { terminalModes } from '../restore.js';
 import { highlightWords } from '../render/search-focus.js';
 import { highlightSelectionAt, scrollShift, shiftedRow } from '../render/selection.js';
 import { logCursorEvent } from '../cursor-log.js';
-import { eraseInlineBlock, inlineBlock, inlineHistoryMode, CLEAR_SCREEN, CLEAR_SCREEN_AND_SCROLLBACK } from '../inline.js';
+import { eraseInlineBlock, inlineBlock, inlineHistoryMode, restoreMainBlock, CLEAR_SCREEN, CLEAR_SCREEN_AND_SCROLLBACK, ENTER_PAGE_SCREEN, LEAVE_PAGE_SCREEN } from '../inline.js';
 import { asciiMode, foldAscii } from '../glyphs.js';
 import { syncBegin, syncEnd } from '../probe.js';
 import { redrawPreamble, takeQueuedModes } from '../modes.js';
@@ -295,11 +295,6 @@ export function flushInlineFrame(
   const overlay = this.pickerOverlay;
   const chrome = this.chromeRows;
   const page = chrome > 0 && pending.live.length >= chrome && (this.surface === 'history' || overlay.length > 0);
-  if (page && !inlineBlock.page) {
-    // The conversation's rows on the visible screen are about to be cleared (not the saved lines): keep them to write again.
-    const above = Math.max(0, inlineBlock.top - inlineBlock.pad);
-    inlineBlock.tail = inlineBlock.rows > 0 && above > 0 ? this.alternateTranscript.slice(-above) : [];
-  }
   // Line numbers for the rows kept, as the alternate frame does; nothing is drawn from them.
   if (finished.length) {
     this.alternateTranscript.push(...finished);
@@ -315,14 +310,35 @@ export function flushInlineFrame(
     live = [...live.slice(0, at), ...overlay.map((row) => safeRow(row, limit)), ...live.slice(at)];
     if (cursorRow >= at) cursorRow += overlay.length;
   }
-  // The surface closed: the screen is cleared (not the saved lines) and the conversation written again with the block, ending
-  // on the last row. A conversation about to be written whole (clearNext) needs none of the kept rows.
+  // The surface closed: the alternate screen is left and the main screen is as it was (the conversation and its block, not
+  // touched while the page was up), the block's state put back. What the conversation retired meanwhile (`tail`) is written
+  // above the block, as any retired rows are. A conversation written whole meanwhile (a new width: `wipe`) clears the main
+  // screen and writes it again; one written whole in THIS frame (clearNext) already has every row in `finished`.
+  const dropTail = inlineBlock.clearNext;
   const leaving = inlineBlock.page;
-  const keptTail = leaving && !inlineBlock.clearNext ? inlineBlock.tail : [];
-  inlineBlock.page = false;
+  let leave = '';
+  if (leaving) {
+    const resizedWhile = inlineBlock.resized;
+    if (inlineBlock.wipe) inlineBlock.clearNext = true;
+    restoreMainBlock();
+    inlineBlock.resized = false;
+    inlineBlock.wipe = false;
+    terminalModes.alternateScreen = false;
+    leave = LEAVE_PAGE_SCREEN;
+    if (resizedWhile && !inlineBlock.clearNext && inlineBlock.rows > 0) {
+      // The main screen changed size while it was hidden, and what the terminal did with its rows is its own business: leave
+      // the page, then ask where the cursor is (the resize path) and draw the block from that answer.
+      inlineBlock.tail = [...inlineBlock.tail, ...finished];
+      output.write(`${syncBegin()}${leave}${syncEnd()}`);
+      this.anchorBlock();
+      return;
+    }
+  }
+  const carried = dropTail ? [] : inlineBlock.tail;
   inlineBlock.tail = [];
+  const retired = carried.length ? [...carried, ...finished] : finished;
   const wipe = inlineBlock.clearNext;
-  const clear = wipe || leaving;
+  const clear = wipe || (leaving && inlineBlock.rows === 0);
   inlineBlock.clearNext = false;
   // WHAT THE BLOCK OWNS. This writer owns the live block (composer, status, any open list) and nothing above it: the
   // conversation is the terminal's own, written once, and never moved, padded, or given a blank row. It assumes nothing about
@@ -349,17 +365,17 @@ export function flushInlineFrame(
   this.frameLayout = { live: [...live], tags: (pending as { tags?: Array<string | undefined> }).tags?.slice(-height) ?? [] };
   const showCursor = !pending.hideCursor;
   const signature = JSON.stringify([live, cursorRow, pending.cursorColumn, showCursor]);
-  const modes = takeQueuedModes();
+  const modes = `${leave}${takeQueuedModes()}`;
   const signals = this.pendingSignals;
   this.pendingSignals = '';
   // A change of height always redraws the block: the terminal may have dropped the rows under the cursor, and nothing says it did not.
   const resized = found !== undefined || lost;
-  if (!clear && !resized && !finished.length && !modes && !signals && signature === inlineBlock.last) return;
+  if (!clear && !resized && !retired.length && !modes && !signals && signature === inlineBlock.last) return;
   const previous = inlineBlock.liveRows;
   const columns = output.columns || 100;
   // Unchanged rows are never sent again: with the block already drawn, at the same width, and
   // nothing retired above it, only the rows that differ are rewritten, reached by relative motion.
-  const diff = anchored && !resized && !finished.length && previous.length === inlineBlock.rows && inlineBlock.columns === columns;
+  const diff = anchored && !resized && !retired.length && previous.length === inlineBlock.rows && inlineBlock.columns === columns;
   let lead = '';
   let text = '';
   let park: string;
@@ -398,7 +414,7 @@ export function flushInlineFrame(
     }
     park = `${move(cursorRow)}\u001b[${Math.max(1, pending.cursorColumn)}G`;
   } else {
-    const body = [...keptTail, ...finished, ...live];
+    const body = [...retired, ...live];
     let amount = 0;
     if (clear) {
       lead = wipe ? CLEAR_SCREEN_AND_SCROLLBACK : CLEAR_SCREEN;
@@ -447,18 +463,18 @@ export function flushInlineFrame(
   const frame = `${syncBegin()}${modes}${signals}\u001b[?25l\u001b[?7l${lead}${text}${park}${showCursor ? '\u001b[?25h' : ''}${syncEnd()}`;
   this.frameInFlight = true;
   terminalModes.painted = true;
-  logCursorEvent(`inline frame: block=${live.length} finished=${finished.length} composer=${cursorRow} col=${pending.cursorColumn}`);
+  logCursorEvent(`inline frame: block=${live.length} finished=${retired.length} composer=${cursorRow} col=${pending.cursorColumn}`);
   output.write(frame, () => {
     this.frameInFlight = false;
     if (this.pendingLive && !this.closed && !this.suspended) this.flushFrame();
   });
 }
 
-/** A modal surface, drawn as the whole visible screen: the list from the top row, blank rows below a short one, the composer
- * and status on the last rows. Opening it clears the visible screen only, so the conversation's saved lines stay for when
- * it closes; the rows the conversation retires meanwhile are kept (inlineBlock.tail) and written when it does. A change of
- * size is the terminal's own business with its saved lines (a smaller screen pushes the top rows of this page into them),
- * so it clears them too, and the conversation is written whole when the surface closes. */
+/** A modal surface, drawn as the whole screen on the ALTERNATE screen: the list from the top row, blank rows below a short one,
+ * the composer and status on the last rows. No saved lines exist behind it in any client, and the main screen (the
+ * conversation and its live block) is not touched while it is up: opening it saves that screen (`?1049h`), closing it shows
+ * it again (see flushInlineFrame). A change of size just draws the page again at the new size; the rows the conversation
+ * retires meanwhile are kept (inlineBlock.tail) and written when it closes. Nothing here clears the saved lines. */
 function flushInlinePage(
   this: TerminalHarnessPrompter,
   finished: readonly string[],
@@ -474,20 +490,35 @@ function flushInlinePage(
   const blank = Math.max(0, height - rows.length);
   rows.splice(rows.length - footer.length, 0, ...Array<string>(blank).fill(''));
   const cursorRow = Math.max(0, Math.min(rows.length - 1, rows.length - footer.length + Math.max(0, pending.cursorRow - at)));
-  const resized = inlineBlock.page && (inlineBlock.height !== height || inlineBlock.columns !== columns);
-  const fresh = !inlineBlock.page || resized || inlineBlock.clearNext;
+  const opening = !inlineBlock.page;
+  if (opening) {
+    // The main screen's block, as it stands: put back when the page closes.
+    const { rows: blockRows, cursorRow: blockCursor, last, liveRows, pad, top, height: blockHeight, columns: blockColumns } = inlineBlock;
+    inlineBlock.main = { rows: blockRows, cursorRow: blockCursor, last, liveRows: [...liveRows], pad, top, height: blockHeight, columns: blockColumns };
+    inlineBlock.tail = [];
+    inlineBlock.resized = false;
+    inlineBlock.wipe = false;
+    terminalModes.alternateScreen = true;
+  }
+  const resized = !opening && (inlineBlock.height !== height || inlineBlock.columns !== columns);
+  if (resized) inlineBlock.resized = true;
+  const fresh = opening || resized || inlineBlock.clearNext;
   const showCursor = !pending.hideCursor;
   const signature = JSON.stringify([rows, cursorRow, pending.cursorColumn, showCursor]);
   const modes = takeQueuedModes();
   const signals = this.pendingSignals;
   this.pendingSignals = '';
-  inlineBlock.tail.push(...finished);
-  if (resized || inlineBlock.clearNext) this.emitted.requestReseed();
+  if (inlineBlock.clearNext) {
+    // The conversation was written whole (a new width): `finished` is all of it, and the main screen is cleared and given it
+    // when the page closes. Not now: the main screen is not this page's to touch.
+    inlineBlock.wipe = true;
+    inlineBlock.tail = [...finished];
+  } else inlineBlock.tail.push(...finished);
   if (!fresh && !modes && !signals && signature === inlineBlock.last) return;
   const previous = fresh ? [] : inlineBlock.liveRows;
   let text = '';
   for (const [index, row] of rows.entries()) if (previous[index] !== row) text += `\u001b[${index + 1};1H${row}\u001b[K`;
-  const lead = resized || inlineBlock.clearNext ? CLEAR_SCREEN_AND_SCROLLBACK : fresh ? CLEAR_SCREEN : '';
+  const lead = opening ? ENTER_PAGE_SCREEN : fresh ? CLEAR_SCREEN : '';
   const park = `\u001b[${cursorRow + 1};${Math.max(1, pending.cursorColumn)}H`;
   this.frameLayout = { live: [...rows], tags: [] };
   inlineBlock.clearNext = false;

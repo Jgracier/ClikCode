@@ -442,80 +442,160 @@ describe('inline block stays on the bottom rows', () => {
   });
 });
 
-/** A modal surface (the board, the palette, a picker) is the whole visible screen: opening it clears the screen and not the
- * saved lines, it is drawn from the top row at the screen's height, and closing it writes the conversation's rows again. */
-describe('a modal surface is the whole visible screen', () => {
+/** A modal surface (the board, the palette, a picker) is the whole screen, drawn on the ALTERNATE screen: nothing is behind it in
+ * the saved lines of any client, the main screen is not touched while it is up, and closing it shows that screen again. */
+describe('a modal surface is the whole screen, on the alternate screen', () => {
   const ROWS = 30;
   let term: TestScreen;
   let reseeds: number;
+  let sent: string;
+  let args: { rows: string[]; overlay: string[]; finished: string[] };
   const footer = [rule, '> ', rule, '  claude  •  opus  •  ~/projects'];
   const list = ['Recent', '  first chat', '  second chat'];
   const message = (n: number): string => `message ${n}`;
-  const paint = (rows: string[], overlay: string[] = [], finished: string[] = []): void => {
-    host.pickerOverlay = overlay;
+  const run = (): void => {
+    host.pickerOverlay = args.overlay;
     host.chromeRows = footer.length;
-    host.surface = overlay.length ? 'history' : 'conversation';
+    host.surface = args.overlay.length ? 'history' : 'conversation';
     writes.length = 0;
-    flushInlineFrame.call(host as never, finished, { live: rows, cursorRow: rows.length - 3, cursorColumn: 3, hideCursor: false });
+    flushInlineFrame.call(host as never, args.finished, { live: args.rows, cursorRow: args.rows.length - 3, cursorColumn: 3, hideCursor: false });
+    sent += writes.join('');
     term.write(writes.join(''));
+    writes.length = 0;
+  };
+  const paint = (rows: string[], overlay: string[] = [], finished: string[] = []): void => {
+    args = { rows, overlay, finished };
+    sent = '';
+    run();
   };
   const withChat = (n: number): string[] => [...Array.from({ length: n }, (_, i) => `live ${i}`), ...footer];
+  /** The whole main screen as the client holds it: saved lines, then the visible rows. */
+  const main = (): string[] => [...term.scrollback, ...term.mainScreen()];
   beforeEach(() => {
-    writes = []; reseeds = 0;
+    writes = []; reseeds = 0; sent = '';
     Object.defineProperty(stdout, 'columns', { value: COLS, configurable: true });
     vi.spyOn(stdout, 'write').mockImplementation(((chunk: string, cb?: () => void) => { writes.push(String(chunk)); cb?.(); return true; }) as never);
     eraseInlineBlock();
-    Object.assign(inlineBlock, { clearNext: true, page: false, tail: [], height: 0 });
+    Object.assign(inlineBlock, { clearNext: true, page: false, tail: [], height: 0, main: undefined, resized: false, wipe: false });
     term = new TestScreen(ROWS, COLS);
     host = {
       alternateTranscript: [], alternateTrimmed: 0, viewportRows: () => term.height, pickerOverlay: [], chromeRows: 0, surface: 'conversation',
       emitted: { requestReseed: () => { reseeds += 1; } },
       pendingSignals: '', frameInFlight: false, closed: false, suspended: false, flushFrame: () => {},
+      // The resize path's cursor report, answered by the terminal under test, then the frame asked for again.
+      anchorBlock: () => {
+        term.write(writes.join('')); writes.length = 0;
+        inlineBlock.found = term.y - inlineBlock.cursorRow;
+        run();
+      },
     };
     paint(footer, [], []);
     for (let n = 1; n <= 60; n += 1) paint(footer, [], [message(n)]);
   });
-  afterEach(() => { vi.restoreAllMocks(); eraseInlineBlock(); Object.assign(inlineBlock, { page: false, tail: [] }); });
+  afterEach(() => {
+    vi.restoreAllMocks(); eraseInlineBlock();
+    Object.assign(inlineBlock, { page: false, tail: [], main: undefined, resized: false, wipe: false, found: undefined });
+  });
 
-  it('opens over the whole screen from the first row, leaving the saved lines alone and no row of the conversation beside it', () => {
-    const before = [...term.scrollback];
+  it('opens on the alternate screen from the first row, and the main screen is byte-for-byte what it was', () => {
+    const before = main();
     paint(withChat(4), list);
+    expect(term.alt).toBe(true);
     expect(term.screen()[0]).toBe('Recent');
     expect(term.screen()[ROWS - 3]).toBe('>');
     expect(term.screen()[ROWS - 1]).toContain('claude');
     expect(term.screen().some((row) => row.startsWith('message') || row.startsWith('live'))).toBe(false);
-    expect(term.scrollback).toEqual(before);
+    expect(main()).toEqual(before);
     expect(term.scrollback.length).toBeGreaterThan(20);
   });
 
-  it('closes by writing the conversation again, ending on the last row, with nothing of the surface left', () => {
-    const was = [...term.scrollback, ...term.screen()];
+  it('never clears the saved lines: no 3J anywhere on the page path, open, redraw, resize or close', () => {
     paint(withChat(4), list);
-    paint(footer, [], [message(61)]);
+    expect(sent).not.toContain('\u001b[3J');
+    paint(withChat(4), [...list, '  third chat']);
+    term.resize(ROWS + 20);
+    paint(withChat(4), list);
+    expect(sent).not.toContain('\u001b[3J');
     paint(footer);
-    const now = [...term.scrollback, ...term.screen()].filter((row) => row.startsWith('message'));
-    expect(now).toEqual(Array.from({ length: 61 }, (_, i) => message(i + 1)));
+    expect(sent).not.toContain('\u001b[3J');
+  });
+
+  it('closes by leaving the alternate screen: the conversation and block are as before, nothing of the surface left, nothing reseeded', () => {
+    const was = main();
+    paint(withChat(4), list);
+    paint(footer);
+    expect(term.alt).toBe(false);
+    expect(main()).toEqual(was);
     expect(term.screen().some((row) => row.includes('Recent') || row.includes('first chat'))).toBe(false);
     expect(term.screen()[ROWS - 3]).toBe('>');
-    expect(was.filter((row) => row.startsWith('message')).length).toBe(60);
+    expect(reseeds).toBe(0);
+    expect(sent).not.toContain('message');
+  });
+
+  it('writes the rows the conversation retired meanwhile above the block when it closes, none twice', () => {
+    paint(withChat(4), list);
+    paint(withChat(4), list, [message(61)]);
+    paint(withChat(4), list, [message(62)]);
+    paint(footer, [], [message(63)]);
+    const now = main().filter((row) => row.startsWith('message'));
+    expect(now).toEqual(Array.from({ length: 63 }, (_, i) => message(i + 1)));
+    expect(term.screen()[ROWS - 3]).toBe('>');
     expect(reseeds).toBe(0);
   });
 
-  it('draws again from the top at a new height, and has the conversation written whole when it closes', () => {
+  it('draws the page again at a new height without touching the main screen, and closing after a resize re-measures and keeps the block', () => {
+    const was = main();
     paint(withChat(4), list);
     term.resize(ROWS + 20);
     paint(withChat(4), list);
+    expect(term.alt).toBe(true);
     expect(term.screen()[0]).toBe('Recent');
     expect(term.screen()[ROWS + 20 - 1]).toContain('claude');
-    expect(term.screen().some((row) => row.startsWith('message'))).toBe(false);
-    expect(reseeds).toBe(1);
+    expect(reseeds).toBe(0);
+    paint(footer);
+    expect(term.alt).toBe(false);
+    const rows = main().filter((row) => row.startsWith('message'));
+    expect(rows).toEqual(Array.from({ length: 60 }, (_, i) => message(i + 1)));
+    expect(term.mainScreen().filter((row) => row.includes('claude')).length).toBe(1);
+    expect(term.mainScreen().filter((row) => row === '>').length).toBe(1);
+    expect(was.filter((row) => row.startsWith('message')).length).toBe(60);
+  });
+
+  it('closing after the screen got shorter and taller again still re-measures', () => {
+    paint(withChat(4), list);
+    term.resize(ROWS - 10);
+    paint(withChat(4), list);
+    term.resize(ROWS);
+    paint(withChat(4), list);
+    paint(footer);
+    expect(main().filter((row) => row.startsWith('message'))).toEqual(Array.from({ length: 60 }, (_, i) => message(i + 1)));
+    expect(term.mainScreen().filter((row) => row.includes('claude')).length).toBe(1);
+  });
+
+  it('has the conversation written whole, once, when a new width rewrote it while the page was up', () => {
+    paint(withChat(4), list);
+    inlineBlock.clearNext = true;
+    paint(withChat(4), list, Array.from({ length: 60 }, (_, i) => message(i + 1)));
+    expect(term.alt).toBe(true);
+    expect(sent).not.toContain('\u001b[3J');
+    paint(footer);
+    expect(main().filter((row) => row.startsWith('message'))).toEqual(Array.from({ length: 60 }, (_, i) => message(i + 1)));
+    expect(term.mainScreen().filter((row) => row.includes('claude')).length).toBe(1);
   });
 
   it('draws only the rows that changed while it stays open', () => {
     paint(withChat(4), list);
     paint(withChat(4), [...list, '  third chat']);
-    expect(writes.join('')).not.toContain('first chat');
-    expect(writes.join('')).toContain('third chat');
-    expect(writes.join('')).not.toContain('\u001b[2J');
+    expect(sent).not.toContain('first chat');
+    expect(sent).toContain('third chat');
+    expect(sent).not.toContain('\u001b[2J');
+    expect(sent).not.toContain('?1049');
+  });
+
+  it('enters the alternate screen once however many frames the page draws', () => {
+    paint(withChat(4), list);
+    paint(withChat(4), [...list, 'x']);
+    paint(withChat(4), [...list, 'x', 'y']);
+    expect(term.entered).toBe(1);
   });
 });

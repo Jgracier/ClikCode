@@ -6,7 +6,7 @@ into scrollback), no history lost or repeated, no row wider than the screen. No 
 (../fake-grok.mjs) plays the turns, in a throwaway HOME.
 
     node scripts/build.mjs
-    python3 scripts/tui-e2e/resize-matrix/matrix.py [--only NAME] [--emu xterm|xterm-no3j|xterm-mute|tmux] [--mode inline|full|auto] [--keep]
+    python3 scripts/tui-e2e/resize-matrix/matrix.py [--only NAME] [--emu xterm|xterm-no3j|xterm-keepback|xterm-nopull|xterm-mute|tmux] [--mode inline|full|auto] [--keep]
 
 Exit status 0 when every checked snapshot holds every invariant."""
 import argparse, base64, fcntl, json, os, pty, select, shutil, signal, struct, subprocess, sys, tempfile, termios, time

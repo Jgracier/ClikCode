@@ -1,8 +1,8 @@
 /** Taking the terminal, handing it over and giving it back: the screen, title and signal re-takes, Ctrl+Z, suspend/resume and close. */
 import { lifecycle } from '../../runtime/lifecycle-log.js';
 import { stdin as input, stdout as output } from 'node:process';
-import { eraseInlineBlock, inlineHistoryMode } from '../inline.js';
-import { enterAlternateScreen, giveBackTerminal, pushShellTitle, restoreTerminal, terminalModes } from '../restore.js';
+import { eraseInlineBlock, inlineBlock, inlineHistoryMode } from '../inline.js';
+import { enterAlternateScreen, giveBackTerminal, leavePage, pushShellTitle, restoreTerminal, terminalModes } from '../restore.js';
 import { notifySequence, progressSequence, shouldNotify, titleSequence, windowTitle } from '../terminal-signals.js';
 import { KEEP_STDIN_FLOWING } from '../input-decoder.js';
 import { popReadModes, sessionModesOff, sessionModesOn, setTerminalRawMode } from '../modes.js';
@@ -79,7 +79,8 @@ export function suspendToShell(this: TerminalHarnessPrompter): void {
   setTerminalRawMode(false);
   // Whoever takes the terminal takes the main screen with it: a vendor
   // login prompt drawn on our alternate screen would vanish with it.
-  output.write(`${eraseInlineBlock()}${sessionModesOff(true)}`);
+  const paged = inlineBlock.page; // its screen is left by leavePage, once
+  output.write(`${leavePage()}${eraseInlineBlock()}${sessionModesOff(!paged)}`);
   terminalModes.alternateScreen = false;
   process.once('SIGCONT', this.onContinue);
   process.kill(process.pid, 'SIGTSTP');
@@ -121,7 +122,7 @@ export function close(this: TerminalHarnessPrompter): void {
   input.pause();
   // The alternate screen is handed back and the shell's own screen returns
   // untouched. The conversation is on disk -- `/resume` reopens it.
-  giveBackTerminal(`${eraseInlineBlock()}${popReadModes()}`);
+  giveBackTerminal(`${leavePage()}${eraseInlineBlock()}${popReadModes()}`);
 }
 
 /** Hands the real terminal to a vendor CLI's own interactive flow (typically
@@ -141,7 +142,7 @@ export async function suspend(this: TerminalHarnessPrompter): Promise<void> {
   // across this UI's status rows. Handed over once the modes are written --
   // where a TTY write is asynchronous (Windows) the child must not start
   // ahead of them -- rather than after a guessed 50ms.
-  await new Promise<void>((resolveWritten) => { output.write(`${eraseInlineBlock()}${sessionModesOff(false)}`, () => resolveWritten()); });
+  await new Promise<void>((resolveWritten) => { output.write(`${leavePage()}${eraseInlineBlock()}${sessionModesOff(false)}`, () => resolveWritten()); });
 }
 
 export function resume(this: TerminalHarnessPrompter): void {
