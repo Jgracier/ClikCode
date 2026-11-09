@@ -197,7 +197,11 @@ export class LiveTurnInputBroker {
   /** Offers one message; a refusal, an error or the port going away all leave it where it is. */
   private async offer(port: SteerPort, submission: LiveTurnSubmission): Promise<boolean> {
     try {
-      const taken = await Promise.race([port.offer(submission.text, submission), this.portGone]);
+      // The port going away means the offer will not settle -- unless the vendor took the message and ended the turn in one read, which
+      // settles the offer in the same tick the port is cleared. Counting that as "not taken" left a message the vendor had answered in the
+      // queue, to be sent again as a turn of its own. So the port going away loses by one macrotask: an offer already settled wins.
+      const gone = this.portGone.then(() => new Promise<'gone'>((resolve) => setImmediate(() => resolve('gone'))));
+      const taken = await Promise.race([port.offer(submission.text, submission), gone]);
       return taken === true;
     } catch {
       return false;
