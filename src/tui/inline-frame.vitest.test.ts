@@ -218,6 +218,17 @@ describe('inline block stays on the bottom rows', () => {
     expect(term.scrollback.length).toBe(0);
   });
 
+  it('takes the blank rows above a short conversation back even when the block shrank in between: none reaches the saved lines', () => {
+    paint('');
+    paint('', [message(1), '']);
+    paint('', [], [...live(''), '  esc stop', '  working']);
+    paint('');
+    for (let n = 2; n <= 90; n += 1) paint('', [message(n)]);
+    expect(term.scrollback[0]).toBe(message(1));
+    expect([...term.scrollback, ...term.screen()].filter((r) => r.startsWith('message'))).toHaveLength(90);
+    expect(term.scrollback.filter((r) => r === '')).toEqual([]);
+  });
+
   it('reprints a replaced conversation at the bottom, and a long one from the top', () => {
     paint('');
     paint('', [message(1), '']);
