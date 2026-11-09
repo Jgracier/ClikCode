@@ -5,14 +5,11 @@ import { inlineBlock, inlineHistoryMode } from '../inline.js';
 import { terminalModes } from '../restore.js';
 import { logCursorEvent } from '../cursor-log.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
-import { RESIZE_SETTLE_MS } from './state.js';
+import { CURSOR_REPORT_MS, RESIZE_SETTLE_MS } from './state.js';
 import { askCursorRow } from '../input-decoder.js';
 
-/** Never taller than the screen actually is: a live region that overflows
- * makes the walk back up to the composer clamp at the top edge, which is
- * what parks the cursor on the status line and strands rows below it. The
- * announced size is the ceiling -- a terminal that answers with more rows
- * than it announced is not offering rows we may use. */
+/** The rows the screen announced, never fewer than five: the live block is never taller than this, so the walk back up to
+ * the composer cannot clamp at the top edge. */
 export function viewportRows(this: TerminalHarnessPrompter): number {
   return Math.max(5, output.rows || 30);
 }
@@ -71,10 +68,10 @@ export function rewrapIfWidthChanged(this: TerminalHarnessPrompter): boolean {
 
 /** A settled change of height, inline: the terminal moved its own rows when it resized (pulled saved lines back, added
  * blank rows at the bottom, dropped the rows below the cursor, pushed the top ones into the saved lines), and what it
- * did differs from one terminal to the next. So the screen is asked where its cursor is, and the live block (composer,
- * status, an open list) is put back to end on the last row: erased where it is and drawn again, a few rows. The
- * conversation above it is never touched, unless the block no longer fits the screen. (See flushInlineFrame for what is
- * done with the answer.) */
+ * did differs from one terminal to the next. So nothing is assumed about it: the screen is asked where its cursor is,
+ * and the live block (composer, status, an open list) is erased from its first row and drawn again there, a few rows.
+ * The conversation above it is never touched and never given a row, unless the block no longer fits the screen. (See
+ * flushInlineFrame for what is done with the answer.) */
 export function anchorBlock(this: TerminalHarnessPrompter): void {
   // A modal surface is drawn from the top row at the new size: nothing is measured (see flushInlinePage).
   if (!inlineBlock.rows || inlineBlock.page) { this.repaint(); return; }
@@ -83,12 +80,12 @@ export function anchorBlock(this: TerminalHarnessPrompter): void {
   const done = (row: number | undefined): void => {
     inlineBlock.measuring = false;
     logCursorEvent(`resize cursor report ${row === undefined ? 'timed out' : `answered row ${row}`} after ${Date.now() - asked} ms`);
-    // No answer is a defined failure, not a guess: the position the terminal moved the block to is unknown, so the next
-    // frame erases the block from the cursor and draws it there (see `lost` in flushInlineFrame). A late answer is
-    // dropped by the decoder (nobody is waiting for it).
+    // No answer is a defined failure, not a guess: the block is erased and drawn again relative to where it was last
+    // left, and nothing is zeroed or re-anchored (see `lost` in flushInlineFrame). A late answer is dropped by the
+    // decoder (nobody is waiting for it).
     if (row === undefined) inlineBlock.lost = true;
     else {
-      inlineBlock.found = row - inlineBlock.cursorRow;
+      inlineBlock.found = row - inlineBlock.cursorRow; // the block's first row, on the screen
       // The block is taller than the screen now: its top rows went into the saved lines, where nothing can take them out
       // again. The one case where the conversation is written again for a change of height.
       if (inlineBlock.found < 0) this.emitted.requestReseed();
@@ -96,7 +93,7 @@ export function anchorBlock(this: TerminalHarnessPrompter): void {
     if (this.closed || this.suspended) return;
     this.repaint();
   };
-  askCursorRow(done);
+  askCursorRow(done, CURSOR_REPORT_MS);
 }
 
 /** Empty the transcript before the conversation is written again. What is
