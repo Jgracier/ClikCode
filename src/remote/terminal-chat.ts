@@ -793,6 +793,8 @@ export async function runRemoteChat(
         if (!/^[/!]/.test(line)) setupSession = undefined;
         const complete = new Promise<void>((resolve, reject) => completions.set(id, { resolve, reject }));
         sending = line;
+        // Made before anything is awaited: Left can land while the images are copied, and a wake-up with nothing yet to wake is lost.
+        const stepped = new Promise<void>((resolve) => { wakeLeave = resolve; });
         // A message (not a command) is drawn now, with the turn's wait, as a
         // chat here draws one: the machine's answer is a round trip away.
         if (!/^[/!]/.test(line)) { early = line; typed.set(id, line); terminal.submitted(line); terminal.turnStarting(leave); }
@@ -811,7 +813,6 @@ export async function runRemoteChat(
         try { bridge.post({ type: 'send', text: pinnedUpdateLine(wire, localBuildCommit()), id, ...(mode ? { mode } : {}) }); images.handoff(wire); } catch (error) { dropEarly(); throw error; }
         // Until the machine says it is done -- which for a turn this message starts is when that turn ends -- or the user steps away from it
         // (Left): waiting on `complete` alone held the loop at the turn, so Left dropped the turn's screen and nothing answered the keys.
-        const stepped = new Promise<void>((resolve) => { wakeLeave = resolve; });
         await Promise.race([complete, stepped]);
         wakeLeave = undefined;
         sending = undefined;
