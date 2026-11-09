@@ -29,6 +29,10 @@ WIDE = ' 日本語 🎉 ok'
 # What a change of height alone may cost: the live block's rows, no more, and not one row of the conversation.
 BOUNDED = {'maxBytes': 3000, 'maxHistoryRows': 0, 'measure': True, 'sameAs': 'start 35', 'turns': True}
 
+# A conversation that began shorter than the screen was drawn on the last rows (the start-up anchor), so blank rows stand above it
+# on the screen; a shrink pushes those, and only those, into the saved lines. Not a row the program makes in the history.
+LEADING = {'leading': True}
+
 BOARD = {'noBlock': True, 'noHistory': True, 'board': True, 'surface': 'page', 'keeps': 'start'}
 BOARD_RESIZED = {**BOARD, 'keeps': None}
 
@@ -58,11 +62,11 @@ SCENARIOS = {
         ('resize', 69, 35), ('settle', SETTLE), ('check', f'keyboard shows {n + 1}: 67 to 35', BOUNDED, (1, 12)))]),
     # A conversation shorter than the screen: the blank rows above it are the screen's, never scrollback.
     'short-grow-shrink': dict(size=(69, 35), turns=[{'blocks': [marker_block(1, 6)]}], steps=[
-        ('type', 'go'), ('wait', 'H006', 40), ('settle', 1.5), ('check', 'start 35', {}, (1, 6)),
-        ('resize', 69, 67), ('settle', SETTLE), ('check', 'grow 67', {}, (1, 6)),
-        ('resize', 69, 35), ('settle', SETTLE), ('check', 'shrink 35', {}, (1, 6)),
-        ('resize', 69, 12), ('settle', SETTLE), ('check', 'shrink 12', {}, (1, 6)),
-        ('resize', 69, 67), ('settle', SETTLE), ('check', 'grow 67', {}, (1, 6)),
+        ('type', 'go'), ('wait', 'H006', 40), ('settle', 1.5), ('check', 'start 35', LEADING, (1, 6)),
+        ('resize', 69, 67), ('settle', SETTLE), ('check', 'grow 67', LEADING, (1, 6)),
+        ('resize', 69, 35), ('settle', SETTLE), ('check', 'shrink 35', LEADING, (1, 6)),
+        ('resize', 69, 12), ('settle', SETTLE), ('check', 'shrink 12', LEADING, (1, 6)),
+        ('resize', 69, 67), ('settle', SETTLE), ('check', 'grow 67', LEADING, (1, 6)),
     ]),
     # Nothing said yet: the empty composer, resized.
     'empty-grow-shrink': dict(size=(69, 35), turns=[{'blocks': ['x']}], steps=[
@@ -114,9 +118,9 @@ SCENARIOS = {
         turns=[{'emits': [{'op': 'text', 'text': marker_block(n, n) + '\n', 'ms': 60} for n in range(1, 61)]}], steps=[
         ('type', 'go'), ('wait', 'H010', 40),
         ('resize', 69, 67), ('settle', 0.8), ('resize', 69, 35), ('settle', 0.8), ('resize', 69, 67),
-        ('wait', 'H060', 60), ('settle', 2), ('check', 'after stream at 67', {}, (1, 60)),
-        ('resize', 69, 35), ('settle', SETTLE), ('check', 'shrink 35', {}, (1, 60)),
-        ('resize', 69, 67), ('settle', SETTLE), ('check', 'grow 67', {}, (1, 60)),
+        ('wait', 'H060', 60), ('settle', 2), ('check', 'after stream at 67', LEADING, (1, 60)),
+        ('resize', 69, 35), ('settle', SETTLE), ('check', 'shrink 35', LEADING, (1, 60)),
+        ('resize', 69, 67), ('settle', SETTLE), ('check', 'grow 67', LEADING, (1, 60)),
     ]),
     # The palette open (a list in the live block) while the screen changes.
     'palette': dict(size=(69, 35), turns=[{'blocks': [marker_block(1, 60)]}], steps=[

@@ -65,7 +65,7 @@ export function judge(snap, start) {
   }
   // Blank rows: only above the first content row, and only on the screen (never pushed into scrollback).
   const firstContent = all.findIndex((row) => !blank(row));
-  if (firstContent > 0 && firstContent <= scroll.length) problems.push(`${firstContent} blank row(s) at the top of the scrollback`);
+  if (!opts.leading && firstContent > 0 && firstContent <= scroll.length) problems.push(`${firstContent} blank row(s) at the top of the scrollback`);
   let run = 0;
   let worst = 0;
   let worstAt = -1;
