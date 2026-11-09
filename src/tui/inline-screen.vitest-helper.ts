@@ -19,15 +19,16 @@ export class TestScreen {
    * cursor first, whatever they hold, and then pushes the top rows into the saved lines. A taller one pulls saved lines
    * back in above the screen and, once there are none, adds blank rows at the bottom. xterm.js pulls only while the
    * cursor is on the last row (`pullsAnywhere` false): a program whose cursor is parked on its composer, with its
-   * footer below, gets blank rows added below instead. tmux pulls whatever the cursor does (`pullsAnywhere` true). */
-  resize(height: number, pullsAnywhere = false): void {
+   * footer below, gets blank rows added below instead. tmux pulls whatever the cursor does (`pullsAnywhere` true). A client
+   * that keeps its content top-aligned never pulls (`pullsAnywhere` 'never'): the new rows are always blank, below. */
+  resize(height: number, pullsAnywhere: boolean | 'never' = false): void {
     const cursorOnLastRow = this.y === this.rows.length - 1;
     while (this.rows.length > height) {
       if (this.y < this.rows.length - 1) this.rows.pop();
       else { this.scrollback.push(this.rows.shift()!.join('').trimEnd()); this.y -= 1; }
     }
     while (this.rows.length < height) {
-      const pulled = pullsAnywhere || cursorOnLastRow ? this.scrollback.pop() : undefined;
+      const pulled = pullsAnywhere === 'never' ? undefined : pullsAnywhere || cursorOnLastRow ? this.scrollback.pop() : undefined;
       if (pulled === undefined) this.rows.push(this.blank());
       else { this.rows.unshift([...pulled.padEnd(this.width)]); this.y += 1; }
     }

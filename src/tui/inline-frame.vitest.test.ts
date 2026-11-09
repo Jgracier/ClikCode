@@ -286,7 +286,7 @@ describe('inline block stays on the bottom rows', () => {
   // back to end on the last row, and what that costs is the block and not the conversation. How a terminal grows differs:
   // tmux pulls saved lines back in whatever the cursor does; xterm.js (a phone's web terminal) only with the cursor on the
   // last row, so with the composer's cursor above the footer it adds blank rows at the bottom instead.
-  describe.each([{ terminal: 'xterm.js', pulls: false }, { terminal: 'tmux', pulls: true }])('a change of height in $terminal', ({ pulls }) => {
+  describe.each([{ terminal: 'xterm.js', pulls: false }, { terminal: 'tmux', pulls: true }, { terminal: 'a client that never pulls saved lines back', pulls: 'never' as const }])('a change of height in $terminal', ({ pulls }) => {
     const toggle = (height: number): string => {
       term.resize(height, pulls);
       (host as { viewportRows: () => number }).viewportRows = () => height;
@@ -297,32 +297,61 @@ describe('inline block stays on the bottom rows', () => {
     };
     const shown = (): string[] => [...term.scrollback, ...term.screen()].filter((row) => row.startsWith('message'));
     const blockAt = (): number => term.screen().findLastIndex((row) => row.startsWith('>'));
-    /** The block ends on the last row, or on the last row the blank rows added below it leave. */
-    const blockRows = (height: number, floats: number): void => {
-      expect(term.screen()[height - 1 - floats]).toContain('claude');
-      expect(blockAt()).toBe(height - 3 - floats);
+    /** The block ends on the last row, whatever the terminal did with its own rows. */
+    const blockRows = (height: number): void => {
+      expect(term.screen()[height - 1]).toContain('claude');
+      expect(blockAt()).toBe(height - 3);
       expect(term.y).toBe(blockAt());
-      expect(term.screen().slice(height - floats).every((row) => row === '')).toBe(true);
     };
-    const noBlankInSavedLines = (): void => expect(term.scrollback.filter((row) => row === '')).toEqual([]);
+    // A terminal that pulls saved lines back puts no blank row into them. One that does not has the block pushed down by
+    // blank rows inserted at the top of the screen, which a later shrink pushes into the saved lines.
+    const noBlankInSavedLines = (): void => { if (pulls === true) expect(term.scrollback.filter((row) => row === '')).toEqual([]); };
 
     it('over 500 messages writes the block only and not one message, and puts no blank row into the saved lines', () => {
       paint('');
       for (let n = 1; n <= 500; n += 1) paint('', [message(n)]);
       const expected = Array.from({ length: 500 }, (_, i) => message(i + 1));
-      let was = ROWS;
-      let floats = 0;
       for (const next of [67, 40, 67, 40, 25, 67, 40, 30]) {
         const bytes = toggle(next);
-        // Grown without pulling, the block stays where it was, the blank rows below it; a shrink takes those rows first.
-        floats = pulls ? 0 : Math.max(0, floats + next - was);
-        blockRows(next, floats);
-        was = next;
+        blockRows(next);
         expect(shown()).toEqual(expected);
         expect(bytes).not.toContain('message');
         expect(Buffer.byteLength(bytes)).toBeLessThan(1000);
         expect(term.scrollback[0]).toBe(message(1));
         noBlankInSavedLines();
+      }
+    });
+
+    it('a burst of size changes settles into one layout: the last row holds the status line, no row of history lost or repeated', () => {
+      paint('');
+      for (let n = 1; n <= 100; n += 1) paint('', [message(n)]);
+      // The keyboard animation: several sizes in a row, the program asked once after the last.
+      for (const sizes of [[40, 52, 67], [67, 55, 44, 40], [40, 57], [57, 46, 35], [35, 57]]) {
+        for (const next of sizes) term.resize(next, pulls);
+        const final = sizes.at(-1)!;
+        (host as { viewportRows: () => number }).viewportRows = () => final;
+        inlineBlock.found = term.y - inlineBlock.cursorRow;
+        const bytes = frame('', [], live(''));
+        term.write(bytes);
+        blockRows(final);
+        expect(shown()).toEqual(Array.from({ length: 100 }, (_, i) => message(i + 1)));
+        expect(Buffer.byteLength(bytes)).toBeLessThan(1000);
+      }
+    });
+
+    it('a row retired in the same frame as a taller screen lands above the block, and the block ends on the last row', () => {
+      paint('');
+      for (let n = 1; n <= 100; n += 1) paint('', [message(n)]);
+      let count = 100;
+      for (const next of [67, 40, 57, 30, 57]) {
+        term.resize(next, pulls);
+        (host as { viewportRows: () => number }).viewportRows = () => next;
+        inlineBlock.found = term.y - inlineBlock.cursorRow;
+        count += 1;
+        term.write(frame('', [message(count)], live('')));
+        blockRows(next);
+        expect(term.screen()[blockAt() - 4]).toBe(message(count));
+        expect(shown()).toEqual(Array.from({ length: count }, (_, i) => message(i + 1)));
       }
     });
 
@@ -335,7 +364,7 @@ describe('inline block stays on the bottom rows', () => {
       expect(term.screen()[blockAt() - 4]).toBe(message(501));
       noBlankInSavedLines();
       toggle(40);
-      blockRows(40, 0);
+      blockRows(40);
       expect(shown()).toEqual(Array.from({ length: 501 }, (_, i) => message(i + 1)));
     });
 
@@ -344,7 +373,7 @@ describe('inline block stays on the bottom rows', () => {
       for (let n = 1; n <= 5; n += 1) paint('', [message(n)]);
       for (const next of [67, 40, 12, 67, 40]) {
         const bytes = toggle(next);
-        blockRows(next, 0);
+        blockRows(next);
         expect(shown()).toEqual([1, 2, 3, 4, 5].map(message));
         noBlankInSavedLines();
         expect(bytes).not.toContain('message');
