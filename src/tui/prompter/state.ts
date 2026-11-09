@@ -9,12 +9,16 @@ import type { TurnUsage } from '../../harness/protocol/turn-usage.js';
 export const EXIT_CONFIRM_MS = 2000;
 
 /** How long a resize burst is given to finish before the settled redraw: the redraw waits this long after the LAST size
- * change, and only then clears (or re-anchors) and draws once (onResize draws nothing itself). It only has to span the
- * gap between the sizes of one gesture: a dragged window sends them a few milliseconds apart, and the phone resizes its
- * pty once per keyboard change (it used to send two, 170-250 ms apart, which needed 350 ms). A keystroke typed during
- * the wait is not held back, so this is not echo latency; what a resize costs the person is this plus the cursor
- * report's round trip (askCursorRow). */
+ * change, and only then asks the terminal where its cursor is and draws the live block once (onResize draws nothing
+ * itself). It only has to span the gap between the sizes of one gesture: a dragged window sends them a few milliseconds
+ * apart, a phone's keyboard one size per change. A keystroke typed during the wait is not held back, so this is not echo
+ * latency; what a resize costs the person is this plus the cursor report's round trip. */
 export const RESIZE_SETTLE_MS = 100;
+
+/** How long the cursor report after a settled resize is waited for. A report that has not come by then is lost: the block is
+ * drawn again relative to where it was last left. Frames are held back meanwhile, so this is also the longest a lost report
+ * can stall output. */
+export const CURSOR_REPORT_MS = 120;
 
 /** The least a pending scroll moves in one frame, so a drain always finishes.
  * Claude Code's value. */

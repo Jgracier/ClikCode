@@ -58,22 +58,19 @@ export const CLEAR_SCREEN = '\u001b[H\u001b[K\u001b[2;1H\u001b[J\u001b[H';
  * drew and the row within it the cursor is parked on. */
 export const inlineBlock = {
   rows: 0, cursorRow: 0, clearNext: false, last: '', liveRows: [] as string[], columns: 0,
-  /** The blank rows above the conversation (a conversation shorter than the screen) that retired rows have not yet used. */
+  /** The blank rows above the conversation (a conversation shorter than the screen, drawn on the last rows at the start) that
+   * retired rows have not yet used. Only true while the block ends on the last row: a resize or a shrinking block zeroes it. */
   pad: 0,
-  /** The blank rows above the conversation stand over saved lines that hold part of it (a terminal that did not pull them
-   * back when its screen grew, and the block was pushed down instead): a shrink pushes them into the saved lines, which
-   * are not the blank rows of a short conversation and must never be cleared as if they were. */
-  padOverSaved: false,
-  /** The blank rows below the block that a terminal added when its screen grew and that nothing could take: the block is
-   * that many rows above the last, until output fills them. */
-  slack: 0,
-  /** The screen height the block was last placed for: it ended on the last row of a screen this tall. */
+  /** The screen row the block's first row is on: measured after a change of height, otherwise followed from where it was drawn. */
+  top: 0,
+  /** The screen height the block was last drawn for. */
   height: 0,
-  /** After a settled change of height, the screen row the terminal's cursor report puts the block's first row on (undefined
-   * when nothing was asked); the next frame consumes it. `measuring` holds frames back while the question is out. */
+  /** After a settled change of height, the screen row the block's first row is on, from the terminal's cursor report
+   * (negative: its top rows went into the saved lines); undefined when nothing was asked. The next frame consumes it.
+   * `measuring` holds frames back while the question is out. */
   found: undefined as number | undefined, measuring: false,
-  /** The cursor report never came back after a change of height: where the block stands is unknown, so the next frame
-   * erases and draws it from the cursor, with no vertical re-anchoring guessed (see anchorBlock). */
+  /** The cursor report never came back after a change of height: the block is erased and drawn again relative to where
+   * it was last left (see anchorBlock). */
   lost: false,
   /** A modal surface (the board, the palette, a picker) is on screen: it is the whole visible screen, drawn from its top
    * row, and the conversation is not (see flushInlineFrame). `tail` is what the conversation had on the visible rows when
@@ -92,7 +89,5 @@ export function eraseInlineBlock(): string {
   inlineBlock.last = '';
   inlineBlock.liveRows = [];
   inlineBlock.pad = 0;
-  inlineBlock.padOverSaved = false;
-  inlineBlock.slack = 0;
   return out;
 }
