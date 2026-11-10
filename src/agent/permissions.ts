@@ -215,6 +215,9 @@ function decide(request: PermissionRequest): PermissionDecision {
   const asked = request.rules.ask.find((rule) => ruleNamesCall([rule], request, resolved));
   if (asked) return { decision: 'ask', reason: `the ask rule ${asked.raw} requires approval` };
   if (command?.tier === 'ask' && command.always) return { decision: 'ask', reason: command.reason };
+  // A page script can read anything the signed-in page can; no filter can tell
+  // which scripts reach for a credential, so a human reads each one in full.
+  if (currentToolName(tool.name) === 'browser_use' && args.action === 'evaluate') return { decision: 'ask', reason: 'a script run in the page can read whatever the page can' };
 
   // 5. Persisted allow rules.
   if (allowedByRules(request, resolved)) return { decision: 'allow', reason: 'matches a saved allow rule' };

@@ -411,7 +411,7 @@ export const computerWebTool = defineTool<WebArgs>({
     }
   },
   paths: (args) => uploadPaths(args),
-  describe: async (args) => `ClikCode browser: ${args.action}${args.url ? ` ${args.url}` : ''}${args.target ? ` ${args.target}` : ''}${uploadPaths(args).length ? ` (sends ${uploadPaths(args).join(', ')})` : ''}${args.action === 'fill' ? ` (${args.text?.length ?? 0} characters)` : ''}${args.action === 'evaluate' ? ` ${JSON.stringify((args.expression ?? '').replace(/\s+/g, ' ').slice(0, 200))}` : ''}`,
+  describe: async (args) => `ClikCode browser: ${args.action}${args.url ? ` ${args.url}` : ''}${args.target ? ` ${args.target}` : ''}${uploadPaths(args).length ? ` (sends ${uploadPaths(args).join(', ')})` : ''}${args.action === 'fill' ? ` (${args.text?.length ?? 0} characters)` : ''}${args.action === 'evaluate' ? `\nscript (in full):\n${args.expression ?? ''}` : ''}`,
   // One chat's browser calls run in the order they were made. The model can send two at once (a capture and
   // the click that closes the dialog it reads), and a one-time key does not survive that race.
   run: (args, hostCtx) => {

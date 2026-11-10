@@ -99,8 +99,9 @@ describe('browser_use page control definition', () => {
     expect(label({ action: 'drag', target: 'e3' })).toBe('Drag e3');
     expect(label({ action: 'screenshot' })).toBe('Take a screenshot');
     expect(label({ action: 'scroll', direction: 'top' })).toBe('Scroll top');
-    // The plan shows what script will run.
-    expect(await computerWebTool.describe!({ action: 'evaluate', expression: 'document.title' } as never)).toContain('"document.title"');
+    // The approval shows the whole script that will run, however long.
+    const script = `(() => {\n  const x = 1;\n${'  void 0;\n'.repeat(60)}  return document.title;\n})()`;
+    expect(await computerWebTool.describe!({ action: 'evaluate', expression: script } as never)).toContain(script);
   });
   it('refuses a call by an unknown action name still', async () => {
     const result = await computerWebTool.run({ action: 'teleport' } as never, { stateDir: '/nonexistent-clikcode-test' } as never);
