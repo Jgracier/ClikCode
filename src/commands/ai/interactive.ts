@@ -8,6 +8,7 @@
  * a mobile SSH connection dropping mid-turn.
  */
 import { lifecycle, setLifecycleRole, quiet } from '../../runtime/lifecycle-log.js';
+import { startEventLoopMonitor } from '../../runtime/event-loop-monitor.js';
 import Conf from 'conf';
 import { adoptHandedOverDraft } from '../../session/ephemeral.js';
 import { openConversation } from '../../session/attach.js';
@@ -63,6 +64,7 @@ async function aiSessionInteractive(config: Conf, id: string): Promise<void> {
   process.on('SIGINT', ignoreInterrupt);
   setLifecycleRole('window', id);
   lifecycle('window.open', { cols: process.stdout.columns, rows: process.stdout.rows, tty: Boolean(process.stdin.isTTY) });
+  const stopMonitor = startEventLoopMonitor();
   try {
     await aiSessionInteractiveInner(config, id);
     lifecycle('window.exit', { how: 'left' });
@@ -70,6 +72,7 @@ async function aiSessionInteractive(config: Conf, id: string): Promise<void> {
     lifecycle('window.exit', { how: 'error', message: error instanceof Error ? error.message.slice(0, 300) : String(error) });
     throw error;
   } finally {
+    stopMonitor();
     process.off('SIGINT', ignoreInterrupt);
   }
 }
