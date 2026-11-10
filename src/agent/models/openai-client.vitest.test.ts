@@ -92,7 +92,7 @@ describe('OpenAIModelClient', () => {
       { id: 'x', object: 'chat.completion.chunk', model: 'qwen3-4b', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
     ] };
     const req = request();
-    const result = await new OpenAIModelClient({ baseUrl, model: 'auto', label: 'ClikDeploy Gateway' }).step(req);
+    const result = await new OpenAIModelClient({ baseUrl, model: 'auto', privateReasoning: true }).step(req);
     expect(req.deltas.join('')).toBe('**Final answer**');
     expect(req.reasoning).toEqual([]);
     expect(result.text).toBe('**Final answer**');
@@ -109,10 +109,17 @@ describe('OpenAIModelClient', () => {
       'data: [DONE]\n\n',
     ] };
     const req = request();
-    const result = await new OpenAIModelClient({ baseUrl, model: 'auto', label: 'ClikDeploy Gateway' }).step(req);
+    const result = await new OpenAIModelClient({ baseUrl, model: 'auto', privateReasoning: true }).step(req);
     expect(req.deltas.join('')).toBe('**Visible** `answer`');
     expect(req.reasoning).toEqual([]);
     expect(result.text).toBe('**Visible** `answer`');
+  });
+
+  it('branches on the privateReasoning option, not on the display name', async () => {
+    reply = { chunks: [delta({ content: '<think>x</think>ok' }), delta({ reasoning: 'r' }, 'stop'), 'data: [DONE]\n\n'] };
+    const req = request();
+    await new OpenAIModelClient({ baseUrl, model: 'auto', label: 'ClikDeploy Gateway' }).step(req);
+    expect(req.reasoning).toEqual(['r']);
   });
 
   it('accepts a base URL that already ends in /v1 and sends no auth header without a key', async () => {
