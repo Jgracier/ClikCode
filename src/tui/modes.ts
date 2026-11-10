@@ -25,8 +25,8 @@ const ENABLE_BRACKETED_PASTE = '\u001b[?2004h';
 const MOUSE_TRACKING_ON = '\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006l\u001b[?1006h';
 
 /** Alternate scroll (xterm `?1007`): with no mouse mode set, the client sends Up/Down for a wheel notch while the alternate screen is up. xterm.js and
- * most terminals do it on their own; this asks the ones that have it off by default. Left set on the way out (what it was before is not known,
- * and it only means anything in the alternate screen). */
+ * most terminals do it on their own; this asks the ones that have it off by default. Left set on the way out (what it was before is not known:
+ * terminalTeardown resets it, once, where this UI set it). */
 export const ALTERNATE_SCROLL_ON = '\u001b[?1007h';
 
 /** Whether the program asks for the mouse at all: only when opted in, and never inline (the client scrolls its own scrollback there). */
@@ -56,6 +56,7 @@ export function sessionModesOn(): string {
   terminalModes.wheelReporting = mouseWanted() && !SELECTION_MODE.active;
   const mouse = SELECTION_MODE.active ? '' : ENABLE_MOUSE_TRACKING();
   const scroll = mouseWanted() || inlineHistoryMode() ? '' : ALTERNATE_SCROLL_ON;
+  terminalModes.alternateScroll = scroll !== '';
   return `${ENABLE_BRACKETED_PASTE}${mouse}${scroll}${FOCUS_REPORTING_ON}`;
 }
 
