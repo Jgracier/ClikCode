@@ -37,7 +37,7 @@ const { readState } = await import('../session/state/read.js');
 const { writeState } = await import('../session/state/write.js');
 const { IdeBridge } = await import('./bridge.js');
 const { IDE_PROTOCOL } = await import('./protocol-version.js');
-const { ensureWorkersDirectory, writeWorkerRecord } = await import('../worker/registry.js');
+const { ensureWorkersDirectory, takeConversation, writeWorkerRecord } = await import('../worker/registry.js');
 
 const previousHome = process.env.CLIKCODE_HOME;
 afterEach(() => {
@@ -114,6 +114,7 @@ describe('the conversation list', () => {
     // Only the worker's own mark says a turn executes now: `stale` has a live worker and none.
     for (const id of ['running', 'stale']) {
       await writeWorkerRecord({ sessionId: id, pid: process.pid, socketPath: join(process.env.CLIKCODE_HOME!, `${id}.sock`), token: 't', installationId: 'install', build: 'test', startedAt: now, ...(id === 'running' ? { runningTurn: { since: now } } : {}) });
+      await takeConversation(id, 'worker');
     }
     const rows = await conversationList(await readState({ transcripts: [] }), undefined);
     const by = new Map(rows.map((row) => [row.id, row.activity]));
@@ -139,6 +140,7 @@ describe('the conversation list', () => {
       sessionId: 'asking', pid: process.pid, socketPath: join(process.env.CLIKCODE_HOME!, 'asking.sock'), token: 't', installationId: 'install', build: 'test', startedAt: now,
       awaitingApproval: { title: 'Run make release', since: now },
     });
+    await takeConversation('asking', 'worker');
     const rows = await conversationList(await readState(), undefined);
     expect(rows[0]).toMatchObject({ id: 'asking', needsYou: true, preview: 'deploy it' });
     expect(rows[0]).not.toHaveProperty('model');

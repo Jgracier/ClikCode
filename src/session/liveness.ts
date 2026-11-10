@@ -14,7 +14,7 @@
  * Liveness is the other question, and it is derived from the one registry
  * (worker/registry.ts) that already answers it and expires on its own:
  *
- *   - a worker record naming a pid, which either exists or does not;
+ *   - a worker record, alive while its worker's lease is (registry.ts workerAlive);
  *   - a presence record (`client`) for a terminal or editor chat open with no
  *     worker yet, judged by the same owner liveness rule as a worker's hold.
  *
@@ -25,7 +25,7 @@
 import { describeCommands } from '../harness/protocol/background-agents.js';
 import { quiet } from '../runtime/lifecycle-log.js';
 import type { HarnessSession } from './model.js';
-import { listWorkerRecords, liveOpenConversations, type WorkerRuntimeRecord } from '../worker/registry.js';
+import { liveOpenConversations, liveWorkerRecords, type WorkerRuntimeRecord } from '../worker/registry.js';
 import { readStoredPendingTurn } from './store/transcripts.js';
 
 type PendingTurn = NonNullable<HarnessSession['pendingTurn']>;
@@ -56,7 +56,7 @@ export function sessionIsLive(
 
 /** Which sessions still have a worker process behind them.
  *
- * Reads the worker directory once and checks those PIDs. Passing every chat
+ * Reads the worker directory once and checks those leases. Passing every chat
  * and opening each chat's record was O(conversations) for a handful of live
  * workers; the directory is O(workers). */
 export async function liveWorkerSessions(): Promise<(sessionId: string) => boolean> {
@@ -66,25 +66,17 @@ export async function liveWorkerSessions(): Promise<(sessionId: string) => boole
 /** The same pass, and which live workers have an approval waiting on the
  * user: the record a worker keeps beside its pid (onAwaitingApproval), so a
  * list can say a conversation needs the user without attaching to it. */
-export async function liveWorkers(): Promise<{ isLive: WorkerLiveness; isOpen: WorkerLiveness; awaitingYou: (sessionId: string) => boolean; background: BackgroundOf; runningTurn: RunningTurnLookup }> {
-  const live = new Set<string>();
-  const awaiting = new Set<string>();
-  const background = new Map<string, NonNullable<WorkerRuntimeRecord['background']>>();
-  const turns = new Map<string, string>();
-  const [records, isOpen] = await Promise.all([listWorkerRecords().catch(() => []), liveOpenConversations().catch(() => () => false)]);
-  await Promise.all(records.map(async (record) => {
-    try {
-      process.kill(record.pid, 0);
-    } catch (error) {
-      // EPERM means it exists and belongs to someone else, which still counts.
-      if ((error as NodeJS.ErrnoException).code !== 'EPERM') return;
-    }
-    live.add(record.sessionId);
-    if (record.awaitingApproval) awaiting.add(record.sessionId);
-    if (record.background) background.set(record.sessionId, record.background);
-    if (record.runningTurn?.since) turns.set(record.sessionId, record.runningTurn.since);
-  }));
-  return { isLive: (sessionId) => live.has(sessionId), isOpen, awaitingYou: (sessionId) => awaiting.has(sessionId), background: (sessionId) => background.get(sessionId), runningTurn: (sessionId) => turns.get(sessionId) };
+export async function liveWorkers(): Promise<{ isLive: WorkerLiveness; isOpen: WorkerLiveness; awaitingYou: (sessionId: string) => boolean; awaitingApproval: (sessionId: string) => WorkerRuntimeRecord['awaitingApproval']; background: BackgroundOf; runningTurn: RunningTurnLookup }> {
+  const [records, isOpen] = await Promise.all([liveWorkerRecords().catch(() => []), liveOpenConversations().catch(() => () => false)]);
+  const bySession = new Map(records.map((record) => [record.sessionId, record]));
+  return {
+    isLive: (sessionId) => bySession.has(sessionId),
+    isOpen,
+    awaitingYou: (sessionId) => Boolean(bySession.get(sessionId)?.awaitingApproval),
+    awaitingApproval: (sessionId) => bySession.get(sessionId)?.awaitingApproval,
+    background: (sessionId) => bySession.get(sessionId)?.background,
+    runningTurn: (sessionId) => bySession.get(sessionId)?.runningTurn?.since || undefined,
+  };
 }
 
 /** The turn each live-worker session is generating, read from its transcript.

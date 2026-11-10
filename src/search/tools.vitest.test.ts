@@ -6,7 +6,7 @@ import { resetHarnessStateCaches } from '../session/state/index-file.js';
 import { rm } from 'node:fs/promises';
 import { appendTurnChanges } from '../session/turn-changes.js';
 import { stateDirectory } from '../session/store/paths.js';
-import { workersDirectory, writeWorkerRecord } from '../worker/registry.js';
+import { takeConversation, workersDirectory, writeWorkerRecord } from '../worker/registry.js';
 import { resetCorpusCache } from './corpus.js';
 import { conversationTool } from './tools.js';
 import { deleteConversations } from '../session/state/deletions.js';
@@ -297,6 +297,7 @@ describe('active_conversations', () => {
       awaitingApproval: { title: 'Run pnpm test auth?', since: minutesAgo(1) },
       runningTurn: { since: minutesAgo(3) },
     });
+    await takeConversation(OTHER, 'worker');
     const result = await run('active_conversations', {}, CURRENT);
     expect(result.text).toContain('Auth refresh bug — id aaaaaaaa · codex · gpt-5 · working for 3m · last active just now');
     expect(result.text).toContain('WAITING FOR APPROVAL: Run pnpm test auth?');
