@@ -1236,7 +1236,7 @@ SCENARIOS = {
         'steps': [('type', '/select'), ('wait_for', 'Selection mode on', 10), ('settle', 1),
                   ('type', '/select'), ('wait_for', 'Selection mode off', 10), ('settle', 1)],
         'watch': [],
-        'raw_in_order': ['\x1b[?1000h', '\x1b[?1006l\x1b[?1016l\x1b[?1003l\x1b[?1002l\x1b[?1000l', '\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h'],
+        'raw_in_order': ['\x1b[?1000h', '\x1b[?1006l\x1b[?1016l\x1b[?1003l\x1b[?1002l\x1b[?1000l', '\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006l\x1b[?1006h'],
     },
     'select-and-copy': {
         'turns': [TWO_BLOCKS],
@@ -3089,6 +3089,7 @@ def run(name, spec, entry, keep):
         'PATH': ':'.join([fakebin, os.path.join(npm_prefix, 'bin'), nodebin, '/usr/bin', '/bin']),
         'npm_config_prefix': npm_prefix,
         'HOME': refuse_real_state(home), 'CLIKCODE_HOME': refuse_real_state(state), 'TERM': 'xterm-256color', 'LANG': 'C.UTF-8',
+        'CLIKCODE_MOUSE': '1',  # the opt-in mouse path is what this suite judges; the default (no mouse) is the resize matrix's
         'FAKE_TURNS': json.dumps(spec['turns']), 'FAKE_STATE': os.path.join(root, 'turn-counter'),
         'FAKE_FAMILY': spec.get('family', 'claude'), 'FAKE_LOG': os.path.join(root, 'argv.log'),
         **spec.get('env', {}),
@@ -3372,17 +3373,19 @@ def run(name, spec, entry, keep):
             # resize, all four mouse modes, then hide, clear and home, then
             # the rows -- as Claude Code sends it there. Without the clear,
             # a swipe stopped scrolling.
-            settled = b'\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[?25l\x1b[?7l\x1b[2J\x1b[H'
+            settled = b'\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006l\x1b[?1006h\x1b[?25l\x1b[?7l\x1b[2J\x1b[H'
             deadline = time.time() + 3
             while settled not in bytes(raw[before:]) and time.time() < deadline: pump(0.1)
             if settled not in bytes(raw[before:]):
                 problems.append('after a resize: not the mouse modes, then a clear and home, before the redraw')
-            mouse_reset = b'\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h'
+            mouse_reset = b'\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006l\x1b[?1006h'
+            # The first size is drawn at once and the rest of the burst settles into one more frame: two, never one per size.
+            expected = 2 if len(step[2] if len(step) > 2 else (63, 40, 32)) > 1 else 1
             resets = raw[before:].count(mouse_reset)
-            if resets != 1: problems.append(f'resize burst sent {resets} mouse resets, expected one')
+            if resets != expected: problems.append(f'resize burst sent {resets} mouse resets, expected {expected}')
             clears = raw[before:].count(b'\x1b[2J')
             if os.environ.get('SHOW_SNAPS'): print(f'RESIZE {len(raw) - before} bytes, {clears} clears')
-            if clears != 1: problems.append(f'resize burst cleared the screen {clears}x, expected once')
+            if clears != expected: problems.append(f'resize burst cleared the screen {clears}x, expected {expected}')
         elif step[0] == 'cursor_quiet':
             # The caret is left alone while frames draw under it (a spinner, a streaming answer): no hide and no show.
             before = len(raw)
