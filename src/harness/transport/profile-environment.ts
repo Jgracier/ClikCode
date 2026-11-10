@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { stateDirectory } from '../../session/store/paths.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../definition.js';
-import { readProfileKey } from '../accounts/profile-key.js';
+import { keyVariables, readProfileKey } from '../accounts/profile-key.js';
 
 /** Copilot with no sign-in of its own asks `gh auth token --hostname
  * github.com` and runs as the GitHub CLI's user -- verified on copilot 1.0.87:
@@ -86,19 +86,28 @@ function copilotProfileEnvironment(nativeProfile: NonNullable<AiHarnessAccount['
   return shim ? { ...isolated, PATH: [shim, process.env.PATH].filter(Boolean).join(':') } : isolated;
 }
 
-/** Environment for one account. API-key references stay in the parent
- * process, but a CLI can see many exported keys at once; mask the other keys
- * declared by this harness so selection is deterministic. */
+/** Environment for one account. Every spawn copies ClikCode's own
+ * environment, so a key the user exported (ANTHROPIC_API_KEY, XAI_API_KEY...)
+ * would reach every vendor process: an account signed in through the
+ * vendor's own login, in its own profile, would silently run on that key
+ * instead. Such an account sees none of the harness's key variables except
+ * one pasted into its profile; an API-key account sees only the one it
+ * names. An account with no profile is the user's own vendor setup and
+ * keeps the user's environment as it is. */
 export function nativeAccountEnvironment(
-  harness: Pick<AiLocalHarnessDefinition, 'authEnv'>,
+  harness: Pick<AiLocalHarnessDefinition, 'authEnv' | 'provider'>,
   account: Pick<AiHarnessAccount, 'nativeProfile' | 'authKind' | 'credentialRef'> | undefined,
 ): Record<string, string> {
   const environment = nativeProfileEnvironment(account?.nativeProfile);
-  if (account?.authKind !== 'api-key' || !account.credentialRef.startsWith('env:')) return environment;
-  const selected = account.credentialRef.slice(4);
-  if (!/^[A-Z][A-Z0-9_]*$/.test(selected)) return environment;
-  for (const name of harness.authEnv ?? []) {
-    if (name !== selected) environment[name] = '';
+  if (!account) return environment;
+  let selected: string | undefined;
+  if (account.authKind === 'api-key') {
+    if (!account.credentialRef.startsWith('env:')) return environment;
+    selected = account.credentialRef.slice(4);
+    if (!/^[A-Z][A-Z0-9_]*$/.test(selected)) return environment;
+  } else if (!account.nativeProfile) return environment;
+  for (const name of keyVariables(harness)) {
+    if (name !== selected && !(name in environment)) environment[name] = '';
   }
   return environment;
 }

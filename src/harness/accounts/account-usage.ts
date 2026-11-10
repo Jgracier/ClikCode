@@ -11,7 +11,7 @@ import { LOCK_TUNING, lockLooksStale } from '../../session/store/locks.js';
 import { stateDirectory } from '../../session/store/paths.js';
 import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
-import { nativeProfileEnvironment } from '../transport/profile-environment.js';
+import { nativeAccountEnvironment, nativeProfileEnvironment } from '../transport/profile-environment.js';
 import { localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import type { AiHarnessAccount } from '../definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
@@ -118,7 +118,10 @@ async function reportedNativeUsageReading(
   // never answers must still be seen as asked by every other process, or each
   // list would start another one.
   if (probe) await writeState(state).catch(quiet('harness/accounts/account-usage'));
-  const environment = nativeProfileEnvironment(account?.nativeProfile);
+  // The same environment a turn on this account gets: a key exported in
+  // ClikCode's shell must not answer for a profile signed in on its own.
+  const harness = localHarnessForProvider(account.provider);
+  const environment = harness ? nativeAccountEnvironment(harness, account) : nativeProfileEnvironment(account.nativeProfile);
   const settle = async (reading: UsageReading | undefined): Promise<UsageReading | undefined> => {
     // Carry the last known figure through a failure rather than blanking it --
     // but never past its own reset, when it stops describing anything. The
