@@ -58,6 +58,9 @@ export interface SignInUi {
 export interface SignInScreen extends SignInUi {
   signal: AbortSignal;
   stop(): void;
+  /** Takes the sign-in down without an answer: the window left the
+   * conversation it was asked for, or another window answered it. */
+  withdraw?(): void;
 }
 
 /** A screen no reader knows, answered from the catalog: when the vendor's

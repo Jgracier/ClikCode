@@ -18,6 +18,16 @@ export function signInScreen(this: TerminalHarnessPrompter, name: string): SignI
   const controller = new AbortController();
   const label = `waiting for you to sign in to ${name}`;
   const cancel = (): void => controller.abort();
+  // The sign-in belongs to the conversation it was asked in: its link is
+  // drawn in this window's band, and the window can move on to another
+  // conversation (prompter.render) while it waits.
+  const owner = this.currentSession?.id;
+  let withdrawn = false;
+  let stopped = false;
+  // Taken down at once, not when the vendor's login notices the abort: the
+  // link must be off this window's band before it draws the next conversation.
+  const withdraw = (): void => { withdrawn = true; cancel(); screenStop(); };
+  this.signInOwner = { session: owner, withdraw };
   const local = hasLocalDisplay();
   let opened = false;
   // The band: the link's lines, then the key offered beside it (alongside).
@@ -92,37 +102,42 @@ export function signInScreen(this: TerminalHarnessPrompter, name: string): SignI
     this.scheduleWaitingTick();
     this.updateWaiting();
   } else { this.startWaiting(label, cancel); this.pauseClock(); }
+  const screenStop = (): void => {
+    if (stopped) return;
+    stopped = true;
+    this.signInLines = [];
+    this.signInOwner = undefined;
+    // An unanswered code is dropped; what was typed for the conversation
+    // stays in the composer -- the turn's, or (outside one) the prompt's
+    // that opens next, by stopWaiting.
+    if (this.signInInput && !this.signInInput.alongside && this.turn) { this.turn.draft = ''; this.turn.cursor = 0; }
+    this.signInInput = undefined;
+    putBack();
+    this.signingIn = false;
+    // Not repainted here: the outcome line withSignIn writes next paints,
+    // and a paint between them drew the composer empty for a frame
+    // while a message sent under the sign-in waited for its turn.
+    // The message whose first use opened it is still on its way: its
+    // prompt stays drawn into the turn that starts next.
+    if (!turn) {
+      if (!withdrawn) this.signedInJustNow = true;
+      const prompt = this.submittedPrompt;
+      if (this.turn) this.stopWaiting(false);
+      this.submittedPrompt = prompt;
+      return;
+    }
+    if (this.turn !== turn) { this.schedulePaint(); return; }
+    // The user's time in the browser is not the turn's, nor its going quiet.
+    this.resumeClock();
+    turn.label = saved!.label;
+    turn.cancel = saved!.cancel;
+    turn.cancelled = saved!.cancelled;
+    this.scheduleWaitingTick();
+    this.updateWaiting();
+  };
   return {
     signal: controller.signal, show, ask, choose,
-    stop: () => {
-      this.signInLines = [];
-      // An unanswered code is dropped; what was typed for the conversation
-      // stays in the composer -- the turn's, or (outside one) the prompt's
-      // that opens next, by stopWaiting.
-      if (this.signInInput && !this.signInInput.alongside && this.turn) { this.turn.draft = ''; this.turn.cursor = 0; }
-      this.signInInput = undefined;
-      putBack();
-      this.signingIn = false;
-      // Not repainted here: the outcome line withSignIn writes next paints,
-      // and a paint between them drew the composer empty for a frame
-      // while a message sent under the sign-in waited for its turn.
-      // The message whose first use opened it is still on its way: its
-      // prompt stays drawn into the turn that starts next.
-      if (!turn) {
-        this.signedInJustNow = true;
-        const prompt = this.submittedPrompt;
-        if (this.turn) this.stopWaiting(false);
-        this.submittedPrompt = prompt;
-        return;
-      }
-      if (this.turn !== turn) { this.schedulePaint(); return; }
-      // The user's time in the browser is not the turn's, nor its going quiet.
-      this.resumeClock();
-      turn.label = saved!.label;
-      turn.cancel = saved!.cancel;
-      turn.cancelled = saved!.cancelled;
-      this.scheduleWaitingTick();
-      this.updateWaiting();
-    },
+    withdraw,
+    stop: screenStop,
   };
 }

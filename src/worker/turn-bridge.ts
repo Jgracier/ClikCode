@@ -27,6 +27,7 @@ import type { HarnessSession } from '../session/model.js';
 import { applyLiveEvent, drawJoinedTurn, newLiveTurnState, recordDecision, type LiveTurnState } from './joined-turn.js';
 import { withSignIn } from '../commands/account.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
+import type { SignInScreen } from '../gateway/login/vendor-sign-in.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import type { TakeBackOutcome } from '../turn/live-input.js';
 import { readState } from '../session/state/read.js';
@@ -339,6 +340,9 @@ async function driveWorkerTurn(
         if (settled) return;
         settled = true;
         lifecycle('window.follow.end', { why });
+        // Left unanswered: the worker still waits, so a return to this
+        // conversation is asked again (the tracker's unanswered).
+        for (const open of [...openSignIns.values()]) { open.withdraw(); tracker.unanswered.push(open.event); }
         delivery.dispose();
         client.off('event', onEvent);
         client.off('close', onClose);
@@ -346,6 +350,9 @@ async function driveWorkerTurn(
       };
       /** Approvals and questions this window has open, closed by `request-closed`. */
       const openPrompts = new Map<string, AbortController>();
+      /** Sign-ins this window runs for the worker: taken down (not answered)
+       * when the request closes elsewhere or this window leaves the conversation. */
+      const openSignIns = new Map<string, { event: WorkerEvent; withdraw: () => void }>();
       const handle = (event: WorkerEvent): void => {
         if (settled) return;
         switch (event.type) {
@@ -425,6 +432,7 @@ async function driveWorkerTurn(
             }
             openPrompts.get(event.id)?.abort();
             openPrompts.delete(event.id);
+            openSignIns.get(event.id)?.withdraw();
             return;
           }
           case 'sign-in-request': {
@@ -432,11 +440,24 @@ async function driveWorkerTurn(
             // sign-in runs here, and the worker retries the turn after.
             const harness = localHarnessForCommand(event.command);
             const signIn = harness ? { ...harness, loginArgv: event.argv } : undefined;
+            let withdrawn = false;
+            let screen: SignInScreen | undefined;
+            openSignIns.set(event.id, { event, withdraw: () => { withdrawn = true; openSignIns.delete(event.id); screen?.withdraw?.(); } });
+            const shown = {
+              activity: (message: string, key?: string) => rl.activity(message, key),
+              signInScreen: (name: string): SignInScreen => { screen = rl.signInScreen(name); if (withdrawn) screen.withdraw?.(); return screen; },
+            };
             void (signIn
-              ? withSignIn(rl, event.name, () => loginNativeHarness(signIn, event.environment))
+              ? withSignIn(shown, event.name, () => loginNativeHarness(signIn, event.environment))
               : Promise.reject(new Error(`unknown harness ${event.command}`)))
               .then(() => client.send({ type: 'sign-in-response', id: event.id }),
-                (error: unknown) => client.send({ type: 'sign-in-response', id: event.id, error: error instanceof Error ? error.message : String(error) }));
+                (error: unknown) => {
+                  // Taken down by this window moving on, or answered elsewhere:
+                  // not a refusal -- the worker still waits, and asks again on return.
+                  if (withdrawn) return;
+                  client.send({ type: 'sign-in-response', id: event.id, error: error instanceof Error ? error.message : String(error) });
+                })
+              .finally(() => openSignIns.delete(event.id));
             return;
           }
           case 'restore-draft':
