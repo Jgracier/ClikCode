@@ -7,7 +7,7 @@ import { terminalModes } from '../restore.js';
 import { highlightWords } from '../render/search-focus.js';
 import { highlightSelectionAt, scrollShift, shiftedRow } from '../render/selection.js';
 import { logCursorEvent } from '../cursor-log.js';
-import { eraseInlineBlock, inlineBlock, inlineHistoryMode, restoreMainBlock, CLEAR_SCREEN, CLEAR_SCREEN_AND_SCROLLBACK, ENTER_PAGE_SCREEN, LEAVE_PAGE_SCREEN } from '../inline.js';
+import { swallowsAlternateScreen, eraseInlineBlock, inlineBlock, inlineHistoryMode, restoreMainBlock, CLEAR_SCREEN, CLEAR_SCREEN_AND_SCROLLBACK, ENTER_PAGE_SCREEN, LEAVE_PAGE_SCREEN } from '../inline.js';
 import { asciiMode, foldAscii } from '../glyphs.js';
 import { syncBegin, syncEnd } from '../probe.js';
 import { redrawPreamble, takeQueuedModes } from '../modes.js';
@@ -199,11 +199,17 @@ export function flushAlternateFrame(
   //
   // Claude Code never rewrites whole rows either: 4,182 relative motions in
   // one captured session against 347 absolute jumps. This UI had zero.
-  // Only a transcript scroll hands the movement to the terminal. Other
-  // screens that happen to look shifted -- a palette opening, a picker
-  // closing -- are drawn, because SU inside a region discards what it pushes
-  // out and those are not rows this code can redraw from its own transcript.
-  const scrolling = this.paintingScroll;
+  // Only a transcript scroll, or a frame that retires lines (the answer
+  // streaming: the transcript moves up by exactly the rows retired), hands
+  // the movement to the terminal. Other screens that happen to look shifted
+  // -- a palette opening, a picker closing -- are drawn, because SU inside a
+  // region discards what it pushes out and those are not rows this code can
+  // redraw from its own transcript. For the retiring frame that is safe
+  // because scrollShift only answers when every row it moves is equal in the
+  // new screen, and the rows it exposes are drawn. Without it every retired
+  // line rewrote ~50 of 57 rows (3.7 KB against ~0.3 KB). GNU screen (no
+  // alternate screen, SU unverified) keeps the diff for streaming.
+  const scrolling = this.paintingScroll || (finished.length > 0 && !swallowsAlternateScreen());
   this.paintingScroll = false;
   // Only the rows above both boundaries are a transcript that moved; the ones between them were live
   // rows a moment ago (or are about to be) and are drawn. Taking the larger boundary found no clean shift
