@@ -54,12 +54,22 @@ describe('a turn\'s calls and thoughts, grouped while they happen', () => {
 });
 
 describe('the groups kept for expansion', () => {
-  it('keeps the newest fifty', () => {
+  it('keeps the newest four hundred', () => {
     const registry = new GroupRegistry();
-    for (let index = 0; index < 60; index += 1) registry.set({ id: `g${index}`, items: [], running: false });
-    expect(registry.size).toBe(50);
+    for (let index = 0; index < 410; index += 1) registry.set({ id: `g${index}`, items: [], running: false });
+    expect(registry.size).toBe(400);
     expect(registry.get('g9')).toBeUndefined();
-    expect(registry.latest()?.id).toBe('g59');
+    expect(registry.latest()?.id).toBe('g409');
+  });
+
+  it('puts the groups of older messages in front, so the latest stays the newest', () => {
+    const registry = new GroupRegistry();
+    registry.set({ id: 'new', items: [], running: false });
+    registry.older = true;
+    registry.set({ id: 'old', items: [], running: false });
+    registry.older = false;
+    expect(registry.get('old')).toBeDefined();
+    expect(registry.latest()?.id).toBe('new');
   });
 });
 

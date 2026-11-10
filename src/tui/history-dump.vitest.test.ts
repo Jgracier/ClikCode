@@ -3,11 +3,12 @@ import { HISTORY_DUMP_ROWS, takeHistoryDump } from './prompter/history-dump.js';
 import { historyDump, historyDumpSequence, enterAlternateScreenSequence } from './restore.js';
 import type { TerminalHarnessPrompter } from './prompter.js';
 
-type Fake = { alternateTranscript: string[]; pendingFinished: string[]; alternateTrimmed: number; dumpedThrough: number | undefined };
-const fake = (rows: string[], extra: Partial<Fake> = {}): Fake => ({ alternateTranscript: rows, pendingFinished: [], alternateTrimmed: 0, dumpedThrough: undefined, ...extra });
+type Fake = { alternateTranscript: string[]; pendingFinished: string[]; alternateTrimmed: number; dumpedThrough: number | undefined; scrollWindow: { source: undefined } };
+const fake = (rows: string[], extra: Partial<Fake> = {}): Fake => ({ alternateTranscript: rows, pendingFinished: [], alternateTrimmed: 0, dumpedThrough: undefined, scrollWindow: { source: undefined }, ...extra });
 const dump = (f: Fake): string => takeHistoryDump.call(f as unknown as TerminalHarnessPrompter);
 const rowsOf = (text: string): string[] => text.replaceAll('\u001b[?7h', '').split('\u001b[0m\r\n').slice(0, -1);
 
+/** Rows handed in directly, with no conversation behind them (the dump of a real conversation is in full-history.vitest.test.ts). */
 describe('the conversation written into the normal screen when the alternate screen is left', () => {
   afterEach(() => { historyDump.source = undefined; historyDump.suppressed = false; vi.unstubAllEnvs(); });
 
@@ -43,7 +44,8 @@ describe('the conversation written into the normal screen when the alternate scr
     expect(rowsOf(dump(f))).toEqual(['x', 'y', 'z']);
   });
 
-  it('is bounded, newest rows kept, and says how many earlier ones it left out', () => {
+  it('is bounded at 20000 rows, newest rows kept, and says how many earlier ones it left out', () => {
+    expect(HISTORY_DUMP_ROWS).toBe(20000);
     const rows = Array.from({ length: HISTORY_DUMP_ROWS + 5 }, (_, n) => `r${n}`);
     const out = rowsOf(dump(fake(rows)));
     expect(out).toHaveLength(HISTORY_DUMP_ROWS + 1);
