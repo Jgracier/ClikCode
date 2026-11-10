@@ -94,10 +94,6 @@ function sessionKey(sessionId: string): string {
   return createHash('sha256').update(sessionId).digest('hex').slice(0, 20);
 }
 
-function socketFileName(sessionId: string): string {
-  return `${sessionKey(sessionId)}.sock`;
-}
-
 /** What a worker being started writes to stderr, read by the window that started it when the
  * worker does not come up (client.ts): the reason it died at startup, not just that it did. */
 export function workerStartLogPath(sessionId: string): string {
@@ -131,13 +127,17 @@ const STARTUP_TMPDIR = tmpdir();
  * so the state directory is part of the name -- two users, or a portable
  * CLIKCODE_HOME beside the default one, never meet on the same pipe. */
 export function socketPathFor(sessionId: string, platform: NodeJS.Platform = process.platform): string {
+  return socketPathForKey(sessionKey(sessionId), platform);
+}
+
+function socketPathForKey(key: string, platform: NodeJS.Platform = process.platform): string {
   if (platform === 'win32') {
     const scope = createHash('sha256').update(stateDirectory()).digest('hex').slice(0, 12);
-    return `\\\\.\\pipe\\clikcode-${scope}-${socketFileName(sessionId).replace(/\.sock$/, '')}`;
+    return `\\\\.\\pipe\\clikcode-${scope}-${key}`;
   }
-  const standard = join(workersDirectory(), socketFileName(sessionId));
+  const standard = join(workersDirectory(), `${key}.sock`);
   if (standard.length < 100) return standard;
-  return join(STARTUP_TMPDIR, `cc-${socketFileName(sessionId)}`);
+  return join(STARTUP_TMPDIR, `cc-${key}.sock`);
 }
 
 export async function readWorkerRecord(sessionId: string): Promise<WorkerRuntimeRecord | undefined> {
@@ -285,7 +285,7 @@ function parseOwner(raw: string): ConversationOwner | undefined {
   }
 }
 
-async function ownerIsLive(sessionId: string, owner: ConversationOwner | undefined, path = ownerPath(sessionId)): Promise<boolean> {
+async function ownerIsLive(sessionId: string, owner: ConversationOwner | undefined, path = ownerPath(sessionId), socketPath = socketPathFor(sessionId)): Promise<boolean> {
   const modified = await stat(path).then((info) => info.mtimeMs, () => undefined);
   if (modified === undefined) return false;
   const fresh = Date.now() - modified < OWNER_STALE_MS;
@@ -294,7 +294,7 @@ async function ownerIsLive(sessionId: string, owner: ConversationOwner | undefin
   if (!owner || owner.host !== hostname()) return fresh;
   if (!pidIsAlive(owner.pid)) return false;
   if (fresh) return true;
-  return owner.kind === 'worker' && workerIsReachable(socketPathFor(sessionId));
+  return owner.kind === 'worker' && workerIsReachable(socketPath);
 }
 
 /** Whether the worker a record names is still running: the one liveness rule
@@ -339,6 +339,58 @@ export async function removeDeadWorkerRecord(record: WorkerRuntimeRecord): Promi
   };
   if (!sameRecord(raw)) return;
   await breakStaleLock(path, raw, async (current) => sameRecord(current) && !await workerAlive(record));
+}
+
+/** A temp a killed writer left (a staged lease, an atomic write's temp, a
+ * breaker's marker or set-aside copy), or a start log nobody reads: a live
+ * one exists for milliseconds, a start log for the seconds a worker takes to
+ * come up. */
+const WORKER_LEFTOVER_MS = 60_000;
+const START_LOG_MAX_AGE_MS = 10 * 60_000;
+
+/** What the workers directory keeps of workers that are gone: records whose
+ * worker is not alive, handoff requests past their freshness, leases and
+ * presence files nobody refreshes, sockets nothing listens on, and temps and
+ * start logs a killed process left. Everything else -- a live worker's
+ * record, lease, socket -- stays. Returns how many entries went. */
+export async function sweepWorkersDirectory(now = Date.now()): Promise<number> {
+  const directory = workersDirectory();
+  const names = await readdir(directory).catch(() => [] as string[]);
+  let removed = 0;
+  const ageOf = (path: string): Promise<number | undefined> => stat(path).then((info) => now - info.mtimeMs, () => undefined);
+  const remove = async (path: string): Promise<void> => {
+    await unlink(path).then(() => { removed += 1; }, quiet('worker/registry'));
+  };
+  const before = (await listWorkerRecords()).length;
+  const live = await liveWorkerRecords();
+  removed += before - live.length;
+  const liveSockets = new Set(live.map((record) => record.socketPath));
+  for (const name of names) {
+    const path = join(directory, name);
+    if (/\.(new|tmp|stale|breaking)$/.test(name)) {
+      const age = await ageOf(path);
+      if (age !== undefined && age > WORKER_LEFTOVER_MS) await remove(path);
+    } else if (name.endsWith('.handoff')) {
+      const age = await ageOf(path);
+      if (age !== undefined && age > HANDOFF_FRESH_MS) await remove(path);
+    } else if (name.endsWith('.start.log')) {
+      const age = await ageOf(path);
+      if (age !== undefined && age > START_LOG_MAX_AGE_MS) await remove(path);
+    } else if (name.endsWith('.owner') || name.endsWith('.open')) {
+      const raw = await readFile(path, 'utf8').catch(quiet('worker/registry'));
+      if (raw === undefined) continue;
+      const age = await ageOf(path);
+      const socket = socketPathForKey(name.slice(0, name.lastIndexOf('.')));
+      if (age === undefined || age < OWNER_STALE_MS || await ownerIsLive('', parseOwner(raw), path, socket)) continue;
+      // Re-judged in breakStaleLock's turn: a holder that refreshed or replaced it meanwhile keeps it.
+      await breakStaleLock(path, raw, async (current) => !await ownerIsLive('', parseOwner(current), path, socket));
+      if (!await stat(path).then(() => true, () => false)) removed += 1;
+    } else if (name.endsWith('.sock') && !liveSockets.has(path)) {
+      const age = await ageOf(path);
+      if (age !== undefined && age > WORKER_LEFTOVER_MS && !await workerIsReachable(path, 200)) await remove(path);
+    }
+  }
+  return removed;
 }
 
 /** Who runs the conversation's turns now, if anyone does. */

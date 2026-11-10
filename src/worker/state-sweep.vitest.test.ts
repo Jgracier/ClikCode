@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { sweepState, pathsInUse } from './state-sweep.js';
+import { ensureWorkersDirectory, listWorkerRecords, takeConversation, workersDirectory, writeWorkerRecord } from './registry.js';
 
 const DAY = 86_400_000;
 let home: string;
@@ -75,5 +76,36 @@ describe('state sweep', () => {
     } finally {
       process.chdir(before);
     }
+  });
+
+  it('clears what gone workers left in workers/, and keeps a live worker\'s record and lease', async () => {
+    await ensureWorkersDirectory();
+    const record = { socketPath: join(home, 'x.sock'), token: 't', installationId: 'install', build: 'test', startedAt: new Date().toISOString() };
+    await writeWorkerRecord({ ...record, sessionId: 'live', pid: process.pid });
+    const hold = await takeConversation('live', 'worker');
+    // Killed (SIGKILL by the stuck watchdog): its record stayed, its lease did not.
+    await writeWorkerRecord({ ...record, sessionId: 'killed', pid: process.pid });
+    const aged = (name: string, minutes: number, body = 'x'): string => {
+      const path = join(workersDirectory(), name);
+      writeFileSync(path, body);
+      const when = (Date.now() - minutes * 60_000) / 1000;
+      utimesSync(path, when, when);
+      return path;
+    };
+    const oldHandoff = aged('aaaa.handoff', 2);
+    const freshHandoff = aged('bbbb.handoff', 0);
+    const orphanNew = aged('aaaa.owner.123.abc.new', 2);
+    const orphanTmp = aged('aaaa.json.123.abc.tmp', 2);
+    const oldLog = aged('aaaa.start.log', 30);
+    const deadLease = aged('cccc.owner', 2, JSON.stringify({ pid: 2_147_483_646, host: 'elsewhere', kind: 'worker', nonce: 'n', at: '' }));
+    const deadSocket = aged('cccc.sock', 2);
+
+    await sweepState({ used: () => [] });
+
+    expect((await listWorkerRecords()).map((item) => item.sessionId)).toEqual(['live']);
+    for (const gone of [oldHandoff, orphanNew, orphanTmp, oldLog, deadLease, deadSocket]) expect(existsSync(gone)).toBe(false);
+    expect(existsSync(freshHandoff)).toBe(true);
+    expect('hold' in hold && await hold.hold.held()).toBe(true);
+    if ('hold' in hold) await hold.hold.release();
   });
 });

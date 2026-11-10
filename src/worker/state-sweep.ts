@@ -13,6 +13,10 @@
  *   from a week ago about memory is not advice.
  * - `io-guard-warnings/`: per-conversation warning timestamps older than a
  *   week, long past their rate limit.
+ * - `workers/`: what workers that are gone left (registry.ts
+ *   sweepWorkersDirectory) -- dead records, old handoff requests, unrefreshed
+ *   leases, dead sockets, orphaned temps and start logs. Only graceful
+ *   shutdown removed a record, so a killed worker's stayed for ever.
  *
  * It does not touch anything it did not make: vendor profiles, chat history,
  * and downloaded models are the user's. A sweep runs shortly after a worker
@@ -23,6 +27,7 @@ import { lstat, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import { join, sep } from 'node:path';
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import { stateDirectory } from '../session/store/paths.js';
+import { sweepWorkersDirectory } from './registry.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const TMP_MAX_AGE_MS = 3 * DAY_MS;
@@ -118,6 +123,8 @@ export async function sweepState(options: SweepOptions = {}): Promise<{ ran: boo
       }
     } catch { /* fail-open-ok: this kind of state was never written */ }
   }
+
+  removed += await sweepWorkersDirectory(now).catch(() => 0);
 
   lifecycle('state.sweep', { removed });
   return { ran: true, removed };
