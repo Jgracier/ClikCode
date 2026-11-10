@@ -73,7 +73,7 @@ export function onWaitingKey(this: TerminalHarnessPrompter, key: string): void {
   // its keyboard is up, so without this a running turn was the one time
   // the conversation could not be scrolled at all -- recorded: a long turn,
   // the keyboard came up, and every swipe after that did nothing.
-  if ((key === '\u001b[A' || key === '\u001b[B') && !turn.draft) {
+  if ((key === '\u001b[A' || key === '\u001b[B') && (!turn.draft || this.scrolledBack)) {
     if (this.scrollTranscript(key === '\u001b[A' ? SWIPE_ROWS : -SWIPE_ROWS)) return;
     if (key === '\u001b[B') this.noteReadingDirection();
     return;

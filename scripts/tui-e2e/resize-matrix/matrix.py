@@ -6,7 +6,7 @@ into scrollback), no history lost or repeated, no row wider than the screen. No 
 (../fake-grok.mjs) plays the turns, in a throwaway HOME.
 
     node scripts/build.mjs
-    python3 scripts/tui-e2e/resize-matrix/matrix.py [--only NAME] [--emu xterm|xterm-no3j|xterm-keepback|xterm-nopull|xterm-mute|tmux] [--mode inline|full|auto] [--keep]
+    python3 scripts/tui-e2e/resize-matrix/matrix.py [--only NAME] [--emu xterm|xterm-no3j|xterm-keepback|xterm-nopull|xterm-mute|xterm-noalt|xterm-libvterm|xterm-nowheel|tmux] [--mode inline|full|auto] [--keep]
 
 Exit status 0 when every checked snapshot holds every invariant."""
 import argparse, base64, fcntl, json, os, pty, select, shutil, signal, struct, subprocess, sys, tempfile, termios, time
@@ -166,6 +166,75 @@ SCENARIOS = {
     ]),
 }
 
+# The default (full-screen) model. After every step the composer and status are the LAST rows, no blank band, the newest rows directly above
+# the composer; scrolled back by key and by wheel the live block stays put; at exit the normal screen holds the conversation once, in order.
+FULL = {'modes': ['full', 'auto']}
+EXITED = {'afterExit': True, 'noBlock': True}
+SCENARIOS.update({
+    # Every size a keyboard goes through, one snapshot per size (not only after the settle): the composer is on the last row at each.
+    'full-keyboard-steps': dict(**FULL, size=(69, 57), turns=[{'blocks': [marker_block(1, 120)]}], steps=[
+        ('type', 'go'), ('wait', 'H120', 40), ('settle', 1.5), ('check', 'start 57', {}, (1, 120)),
+        ('burst-check', [57, 50, 44, 38, 35], 0.09, 'down', {}, (1, 120)),
+        ('burst-check', [38, 44, 50, 57], 0.09, 'up', {}, (1, 120)),
+        ('burst', [(69, 50), (69, 44), (69, 38), (69, 35)], 0.02), ('settle', SETTLE), ('check', 'fast burst down settled', {}, (1, 120)),
+        ('burst', [(69, 38), (69, 44), (69, 50), (69, 57)], 0.02), ('settle', SETTLE), ('check', 'fast burst up settled', {}, (1, 120)),
+    ]),
+    'full-keyboard-short': dict(**FULL, size=(69, 57), turns=[{'blocks': [marker_block(1, 5)]}], steps=[
+        ('type', 'go'), ('wait', 'H005', 40), ('settle', 1.5), ('check', 'start 57', {}, (1, 5)),
+        ('burst-check', [50, 44, 38, 35], 0.09, 'down', {}, (1, 5)),
+        ('burst-check', [38, 44, 50, 57], 0.09, 'up', {}, (1, 5)),
+        ('resize', 69, 24), ('settle', SETTLE), ('check', 'shrink 24', {}, (1, 5)),
+        ('resize', 69, 50), ('settle', SETTLE), ('check', 'grow 50', {}, (1, 5)),
+    ]),
+    'full-keyboard-empty': dict(**FULL, size=(69, 35), turns=[{'blocks': ['x']}], steps=[
+        ('settle', 1.5), ('check', 'start', {'noHistory': True}, None),
+        ('burst-check', [44, 50, 57], 0.09, 'grow', {'noHistory': True}, None),
+        ('burst-check', [50, 44, 35], 0.09, 'shrink', {'noHistory': True}, None),
+    ]),
+    # The whole conversation read back: PageUp to the top, Home/End, arrows, a wheel (the client's: arrows in the alternate screen), the composer
+    # on the last row all the way, and back to the newest.
+    'full-read-back': dict(**FULL, skip_emus=['tmux'], size=(69, 35), turns=[{'blocks': [marker_block(1, 160)]}], steps=[
+        ('type', 'go'), ('wait', 'H160', 40), ('settle', 1.5), ('check', 'start', {}, (1, 160)),
+        ('keys', '\x1b[5~'), ('settle', 0.4), ('check', 'one page back', {'scrolledBack': True}, (1, 160)),
+        ('keys', '\x01'), ('settle', 0.6), ('check', 'Home: the first row', {'scrolledBack': True, 'shows': [1]}, (1, 160)),
+        ('keys', '\x05'), ('settle', 0.6), ('check', 'End: the newest', {}, (1, 160)),
+        ('keys', '\x1b[A' * 10), ('settle', 0.6), ('check', 'ten Up arrows (a swipe)', {'scrolledBack': True}, (1, 160)),
+        ('wheel', -4), ('settle', 0.5), ('check', 'wheel down', {'scrolledBack': True}, (1, 160)),
+        ('wheel', 200), ('settle', 1.0), ('check', 'wheel up to the top', {'scrolledBack': True, 'shows': [1]}, (1, 160)),
+        ('resize', 69, 57), ('settle', SETTLE), ('check', 'keyboard hides while scrolled back', {'scrolledBack': True}, (1, 160)),
+        ('keys', '\x1b'), ('settle', 0.6), ('check', 'Esc: back at the newest', {}, (1, 160)),
+    ]),
+    # A client that sends nothing for a swipe: the keys still read the whole conversation (so a swipe on it is not the only way).
+    'full-read-back-keys': dict(**FULL, size=(69, 35), turns=[{'blocks': [marker_block(1, 160)]}], steps=[
+        ('type', 'go'), ('wait', 'H160', 40), ('settle', 1.5),
+        ('keys', '\x1b[5~' * 8), ('settle', 0.8), ('check', 'PageUp x8', {'scrolledBack': True, 'shows': [1]}, (1, 160)),
+        ('keys', '\x1b[6~' * 8), ('settle', 0.8), ('check', 'PageDown x8', {}, (1, 160)),
+    ]),
+    # Exit: the normal screen has the conversation, once, in order, after the shell's own screen; nothing of the program's screen is left.
+    'full-exit-long': dict(**FULL, size=(69, 35), turns=[{'blocks': [marker_block(1, 90)]}], steps=[
+        ('type', 'go'), ('wait', 'H090', 40), ('settle', 1.5), ('check', 'running', {}, (1, 90)),
+        ('exit',), ('settle', 0.5), ('check', 'after exit', EXITED, (1, 90)),
+    ]),
+    'full-exit-short': dict(**FULL, size=(69, 35), turns=[{'blocks': [marker_block(1, 6)]}], steps=[
+        ('type', 'go'), ('wait', 'H006', 40), ('settle', 1.5),
+        ('exit',), ('settle', 0.5), ('check', 'after exit', EXITED, (1, 6)),
+    ]),
+    'full-exit-after-resizes': dict(**FULL, size=(69, 57), turns=[{'blocks': [marker_block(1, 120, WIDE)]}], steps=[
+        ('type', 'go'), ('wait', 'H120', 40), ('settle', 1.5),
+        ('burst', [(69, 50), (69, 44), (69, 38), (69, 35)], 0.05), ('settle', SETTLE),
+        ('resize', 100, 35), ('settle', SETTLE), ('check', 'wider 100', {}, (1, 120)),
+        ('exit',), ('settle', 0.5), ('check', 'after exit at 100 wide', EXITED, (1, 120)),
+    ]),
+    # Ctrl+Z and back, then the exit: the scrollback has the conversation once (suspend wrote it, the exit only what came after).
+    'full-suspend-exit': dict(**FULL, skip_emus=['tmux'], size=(69, 35), turns=[{'blocks': [marker_block(1, 60)]}, {'blocks': [marker_block(61, 70)]}], steps=[
+        ('type', 'go'), ('wait', 'H060', 40), ('settle', 1.5),
+        ('suspend', 69, 50), ('settle', 1.5), ('check', 'resumed at 50', {}, (1, 60)),
+        ('type', 'more'), ('wait', 'H070', 40), ('settle', 1.5), ('check', 'second turn', {}, (1, 70)),
+        ('exit',), ('settle', 0.5), ('check', 'after exit', {**EXITED, 'turns': True}, (1, 70)),
+    ]),
+})
+
+
 def child_env(root, mode, turns, extra):
     home, state, fakebin, nodebin = (os.path.join(root, p) for p in ('home', 'state', 'bin', 'nb'))
     for path in (home, state, fakebin, nodebin, os.path.join(root, 'work')): os.makedirs(path, exist_ok=True)
@@ -280,6 +349,16 @@ def run_xterm(name, spec, mode, variant, keep):
         elif op == 'resize': term.size(step[1], step[2]); term.pump(0.05)
         elif op == 'burst':
             for cols, rows in step[1]: term.size(cols, rows); term.pump(step[2])
+        elif op == 'wheel': emulator.send({'k': 'wheel', 'n': step[1]}); term.pump(0.05)
+        elif op == 'exit':
+            for _ in range(2):
+                term.send('\x03')
+                if term.pump(0.8) is False: break
+            term.pump(1.0)
+        elif op == 'burst-check':
+            for rows in step[1]:
+                term.size(spec['size'][0], rows); term.pump(step[2])
+                emulator.send({'k': 'snap', 'label': f'{step[3]} {rows}'}); checks.append((f'{step[3]} {rows}', step[4], step[5]))
         elif op == 'suspend':
             term.send('\x1a'); term.pump(1.0)
             try: os.waitpid(term.pid, os.WUNTRACED | os.WNOHANG)
@@ -309,7 +388,7 @@ def run_tmux(name, spec, mode, keep):
     if spec.get('seed'): seed_conversations(root, spec['seed'], env, node)
     sock = f'rm-{os.getpid()}'
     tm = lambda *a: subprocess.run(['tmux', '-L', sock, *a], capture_output=True, text=True)
-    conf = os.path.join(root, 'tmux.conf'); open(conf, 'w').write('set -g history-limit 100000\nset -g status off\n')
+    conf = os.path.join(root, 'tmux.conf'); open(conf, 'w').write('set -g history-limit 100000\nset -g status off\nset -g remain-on-exit on\n')
     envargs = [f'{k}={v}' for k, v in env.items()]
     cols, rows = spec['size']
     subprocess.run(['tmux', '-L', sock, '-f', conf, 'new-session', '-d', '-x', str(cols), '-y', str(rows), '-c', os.path.join(root, 'work'),
@@ -323,6 +402,15 @@ def run_tmux(name, spec, mode, keep):
             time.sleep(0.2)
         return False
     snaps, checks = [], []
+    def snap_tmux(label):
+        info = tm('display-message', '-p', '#{history_size} #{pane_width} #{pane_height} #{cursor_x} #{cursor_y} #{alternate_on}').stdout.split()
+        hist, w, h, cx, cy, alt = int(info[0]), int(info[1]), int(info[2]), int(info[3]), int(info[4]), info[5] == '1'
+        allrows = tm('capture-pane', '-p', '-S', '-').stdout.split('\n')
+        if allrows and allrows[-1] == '': allrows.pop()
+        allrows += [''] * (hist + h - len(allrows))
+        rowobj = lambda t: {'text': t.rstrip(), 'wrapped': False}
+        snaps.append({'label': label, 'cols': w, 'rows': h, 'alt': alt, 'scrollback': [rowobj(t) for t in allrows[:hist]],
+                      'screen': [rowobj(t) for t in allrows[hist:hist + h]], 'cursor': {'x': cx, 'y': cy}})
     time.sleep(4)
     for step in spec['steps']:
         op = step[0]
@@ -335,25 +423,23 @@ def run_tmux(name, spec, mode, keep):
         elif op == 'resize': tm('resize-window', '-x', str(step[1]), '-y', str(step[2])); time.sleep(0.05)
         elif op == 'burst':
             for c, r in step[1]: tm('resize-window', '-x', str(c), '-y', str(r)); time.sleep(step[2])
+        elif op == 'exit':
+            tm('send-keys', 'C-c'); time.sleep(0.8); tm('send-keys', 'C-c'); time.sleep(1.5)
+        elif op == 'burst-check':
+            for rows in step[1]:
+                tm('resize-window', '-x', str(spec['size'][0]), '-y', str(rows)); time.sleep(step[2])
+                snap_tmux(f'{step[3]} {rows}'); checks.append((f'{step[3]} {rows}', step[4], step[5]))
         elif op == 'suspend': tm('resize-window', '-x', str(step[1]), '-y', str(step[2])); time.sleep(0.5)  # tmux has no job control to drive here
         elif op == 'check':
             time.sleep(0.3)
-            info = tm('display-message', '-p', '#{history_size} #{pane_width} #{pane_height} #{cursor_x} #{cursor_y} #{alternate_on}').stdout.split()
-            hist, w, h, cx, cy, alt = int(info[0]), int(info[1]), int(info[2]), int(info[3]), int(info[4]), info[5] == '1'
-            allrows = tm('capture-pane', '-p', '-S', '-').stdout.split('\n')
-            if allrows and allrows[-1] == '': allrows.pop()
-            allrows += [''] * (hist + h - len(allrows))
-            rowobj = lambda t: {'text': t.rstrip(), 'wrapped': False}
-            snaps.append({'label': step[1], 'cols': w, 'rows': h, 'alt': alt, 'scrollback': [rowobj(t) for t in allrows[:hist]],
-                          'screen': [rowobj(t) for t in allrows[hist:hist + h]], 'cursor': {'x': cx, 'y': cy}})
-            checks.append((step[1], step[2], step[3]))
+            snap_tmux(step[1]); checks.append((step[1], step[2], step[3]))
     tm('kill-server')
     snaps_path = os.path.join(root, 'snaps.json'); json.dump(snaps, open(snaps_path, 'w'))
     return root, snaps_path, checks
 
 def judge(snaps_path, checks, mode, emulator):
     snaps = json.load(open(snaps_path))
-    for snap, (label, opts, markers) in zip(snaps, checks): snap['opts'] = opts; snap['expectMarkers'] = markers; snap['pulls'] = emulator == 'tmux'; snap['mute'] = emulator == 'xterm-mute'
+    for snap, (label, opts, markers) in zip(snaps, checks): snap['opts'] = opts; snap['expectMarkers'] = markers; snap['pulls'] = emulator == 'tmux'; snap['mute'] = emulator == 'xterm-mute'; snap['noAlt'] = emulator == 'xterm-noalt'
     json.dump(snaps, open(snaps_path, 'w'))
     out = subprocess.run(['node', os.path.join(HERE, 'check.mjs'), snaps_path, mode], capture_output=True, text=True, cwd=REPO)
     if out.returncode: print(out.stderr); raise SystemExit(2)
@@ -371,7 +457,8 @@ def main():
     args = parser.parse_args()
     failures = 0; total = 0
     for name, spec in SCENARIOS.items():
-        if args.only and args.only != name: continue
+        if args.only and not any(name == o or (o.endswith('*') and name.startswith(o[:-1])) for o in args.only.split(',')): continue
+        if args.mode not in spec.get('modes', ['inline', 'full', 'auto']) or args.emu in spec.get('skip_emus', []): continue
         if args.emu == 'tmux': root, snaps_path, checks = run_tmux(name, spec, args.mode, args.keep)
         else: root, snaps_path, checks = run_xterm(name, spec, args.mode, args.emu, args.keep)
         verdicts, snaps = judge(snaps_path, checks, 'full' if args.mode == 'full' else 'inline', args.emu)

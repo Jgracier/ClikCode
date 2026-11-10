@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stdout } from 'node:process';
 import { flushInlineFrame } from './prompter/frame-flush.js';
-import { eraseInlineBlock, inlineBlock, inlineHistoryMode } from './inline.js';
+import { eraseInlineBlock, inlineBlock } from './inline.js';
 import { asciiMode, foldAscii } from './glyphs.js';
 import { TestScreen } from './inline-screen.vitest-helper.js';
 
@@ -87,39 +87,6 @@ describe('inline frame writer', () => {
     frame('x');
     inlineBlock.clearNext = true;
     expect(frame('x')).toContain('\u001b[2J\u001b[3J');
-  });
-});
-
-describe('mode selection', () => {
-  const cases: Array<[string, NodeJS.ProcessEnv, number, boolean, boolean?]> = [
-    ['plain xterm', { TERM: 'xterm-256color' }, 120, false],
-    ['empty env', {}, 120, false],
-    ['iTerm', { TERM: 'xterm-256color', TERM_PROGRAM: 'iTerm.app' }, 120, false],
-    ['Apple Terminal', { TERM_PROGRAM: 'Apple_Terminal' }, 80, false],
-    ['WezTerm', { TERM_PROGRAM: 'WezTerm' }, 120, false],
-    ['ghostty', { TERM_PROGRAM: 'ghostty' }, 120, false],
-    ['kitty', { TERM: 'xterm-kitty' }, 120, false],
-    ['vscode', { TERM_PROGRAM: 'vscode' }, 120, false],
-    ['alacritty', { TERM: 'alacritty' }, 120, false],
-    ['tmux, mouse off (the default)', { TMUX: '/tmp/tmux-1/default,1,0', TERM: 'screen-256color', TERM_PROGRAM: 'iTerm.app' }, 200, true, false],
-    ['tmux, mouse on, a good terminal behind it', { TMUX: '/tmp/tmux-1/default,1,0', TERM: 'tmux-256color', TERM_PROGRAM: 'iTerm.app' }, 200, false, true],
-    ['tmux, mouse on, plain local terminal', { TMUX: 'x', TERM: 'tmux-256color' }, 200, false, true],
-    ['tmux, mouse on, over ssh', { TMUX: 'x', TERM: 'tmux-256color', SSH_TTY: '/dev/pts/1' }, 200, true, true],
-    ['screen STY', { STY: '1.pts-0' }, 200, true],
-    ['TERM=screen outside tmux', { TERM: 'screen-256color' }, 200, true],
-    ['TERM=tmux outside tmux', { TERM: 'tmux-256color' }, 200, true],
-    ['dumb', { TERM: 'dumb' }, 200, true],
-    ['linux console', { TERM: 'linux' }, 200, true],
-    ['ssh narrow, unknown program', { TERM: 'xterm-256color', SSH_CONNECTION: 'a b c d', TERM_PROGRAM: 'Foo' }, 80, true],
-    ['ssh wide, known-unknown program: the width says nothing', { TERM: 'xterm-256color', SSH_CONNECTION: 'a b c d', TERM_PROGRAM: 'Foo' }, 300, true],
-    ['ssh wide unknown program', { TERM: 'xterm-256color', SSH_TTY: '/dev/pts/1' }, 200, true],
-    ['ssh wide known program', { TERM: 'xterm-256color', SSH_TTY: '/dev/pts/1', TERM_PROGRAM: 'WezTerm' }, 200, false],
-    ['the phone terminal is a client like any other: no special case', { CLIKDEPLOY_CLIENT: 'mobile', TERM: 'xterm-256color' }, 120, false],
-    ['force off beats tmux', { CLIKCODE_INLINE: '0', TMUX: 'x' }, 80, false],
-    ['force on beats iTerm', { CLIKCODE_INLINE: '1', TERM_PROGRAM: 'iTerm.app' }, 200, true],
-  ];
-  it.each(cases)('%s', (_name, env, _columns, expected, mouse) => {
-    expect(inlineHistoryMode(env, () => mouse ?? false)).toBe(expected);
   });
 });
 

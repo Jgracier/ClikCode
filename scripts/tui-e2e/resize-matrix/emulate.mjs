@@ -16,16 +16,28 @@
  *                  is up (what a client that keeps a copy of every cleared screen does). A page that drew on the main screen after a clear
  *                  would leave rows of the conversation directly above it, wherever the viewport is scrolled to.
  *   xterm-nopull a client that does not pull saved lines back when the window grows: the content stays top-aligned, blank rows appear below
- *   xterm-mute   a terminal that never answers a cursor position request (CSI 6n): the program's defined failure is exercised */
+ *   xterm-mute   a terminal that never answers a cursor position request (CSI 6n): the program's defined failure is exercised
+ *   xterm-noalt  GNU screen with `altscreen off`: ?1049/?1047/?47 are swallowed (everything is drawn on the one screen), CSI 3J and DEC 2026 are
+ *                ignored, and a window that shrinks is cropped and cleared (screen keeps no history of it) for the program to repaint
+ *   xterm-libvterm  a client like libvterm/SwiftTerm hosts: never pulls saved lines back on grow, ignores CSI 3J and DEC 2026
+ *   xterm-nowheel   a client that sends nothing for a wheel or swipe in the alternate screen unless the program asked for the mouse
+ * And, for every variant, a {k:'wheel', n} event: n notches toward OLDER output (negative: newer), turned into bytes the way the ClikDeploy
+ * page (scroll.js scrollKind) and xterm.js do: the alternate screen with mouse reporting on gets SGR wheel reports, without it Up/Down arrows;
+ * the normal screen scrolls its own saved lines (nothing is sent). */
 import { createInterface } from 'node:readline';
 import xterm from '@xterm/headless';
 
 const variant = process.argv[2] ?? 'xterm';
+const noPull = variant === 'xterm-nopull' || variant === 'xterm-libvterm';
+const noAlt = variant === 'xterm-noalt';
+const ignores3J = variant === 'xterm-no3j' || variant === 'xterm-noalt' || variant === 'xterm-libvterm';
+const ignores2026 = ignores3J;
 let term;
 const snaps = [];
 let bytes = 0;
 let historyRows = 0;
 const stash = [];
+const send = (data) => process.stdout.write(`${JSON.stringify({ k: 'reply', d: Buffer.from(data).toString('base64') })}\n`);
 const write = (data) => new Promise((resolve) => term.write(data, resolve));
 
 function lines(buffer, from, to) {
@@ -48,7 +60,8 @@ lineReader.on('line', (line) => chain(async () => {
     term = new xterm.Terminal({ cols: event.c, rows: event.r, scrollback: 100000, allowProposedApi: true });
     term.onData((data) => process.stdout.write(`${JSON.stringify({ k: 'reply', d: Buffer.from(data).toString('base64') })}\n`));
   } else if (event.k === 'resize') {
-    if (variant === 'xterm-nopull' && event.r > term.rows) {
+    if (noAlt && event.r < term.rows) await write('\u001b[2J\u001b[H');
+    if (noPull && event.r > term.rows) {
       // A client that keeps its content top-aligned when the window grows and adds blank rows below it: the saved lines stay
       // where they are (kept here, ahead of the terminal's own) and are not pulled back in.
       const normal = term.buffer.normal;
@@ -60,7 +73,7 @@ lineReader.on('line', (line) => chain(async () => {
   } else if (event.k === 'out') {
     let data = Buffer.from(event.d, 'base64');
     bytes += data.length;
-    if (variant === 'xterm-nopull' && data.includes('\u001b[3J')) stash.length = 0;
+    if (noPull && data.includes('\u001b[3J')) stash.length = 0;
     historyRows += (data.toString('latin1').replace(ESCAPES, '').match(/\bH\d{3}\b/g) ?? []).length;
     if (variant === 'xterm-keepback') {
       // Row-wise: 2J is kept only while the alternate screen is up (the alternate screen has no history to keep).
@@ -73,16 +86,27 @@ lineReader.on('line', (line) => chain(async () => {
       }
       data = Buffer.from(out.replaceAll('\u001b[?2026h', '').replaceAll('\u001b[?2026l', ''), 'latin1');
     }
-    if (variant === 'xterm-no3j') data = Buffer.from(data.toString('latin1').replaceAll('\u001b[3J', '').replaceAll('\u001b[?2026h', '').replaceAll('\u001b[?2026l', ''), 'latin1');
+    if (ignores3J) data = Buffer.from(data.toString('latin1').replaceAll('\u001b[3J', '').replaceAll('\u001b[?2026h', '').replaceAll('\u001b[?2026l', ''), 'latin1');
+    if (noAlt) data = Buffer.from(data.toString('latin1').replace(/\u001b\[\?(?:1049|1047|47)[hl]/g, ''), 'latin1');
     if (variant === 'xterm-mute') data = Buffer.from(data.toString('latin1').replaceAll('\u001b[6n', ''), 'latin1');
     await write(data);
+  } else if (event.k === 'wheel') {
+    const alternate = term.buffer.active.type === 'alternate';
+    const tracking = term.modes.mouseTrackingMode;
+    const up = event.n > 0;
+    const count = Math.abs(event.n);
+    if (alternate && tracking !== 'none') {
+      send(`\u001b[<${up ? 64 : 65};10;10M`.repeat(count));
+    } else if (alternate) {
+      if (variant !== 'xterm-nowheel') send((up ? '\u001b[A' : '\u001b[B').repeat(count));
+    } else term.scrollLines(up ? -count : count);
   } else if (event.k === 'snap') {
     const normal = term.buffer.normal;
     const active = term.buffer.active;
     snaps.push({
       label: event.label, cols: term.cols, rows: term.rows, alt: active.type === 'alternate', bytes, historyRows,
       scrollback: [...stash, ...lines(normal, 0, normal.baseY)], screen: lines(active, active.baseY, active.baseY + term.rows),
-      mainScreen: lines(normal, normal.baseY, normal.baseY + term.rows),
+      mainScreen: lines(normal, normal.baseY, normal.baseY + term.rows), mouse: term.modes.mouseTrackingMode,
       cursor: { x: active.cursorX, y: active.cursorY },
     });
     bytes = 0;

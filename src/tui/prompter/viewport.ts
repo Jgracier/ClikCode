@@ -28,6 +28,15 @@ export function onResize(this: TerminalHarnessPrompter): void {
     // just before the settled one. A frame asked for meanwhile (a keystroke's
     // echo, a streaming row) is an ordinary diff and is not held back.
     this.requestRedraw('resize');
+    // Full-screen: the first size of a burst is drawn at once (the client moved or cut its own rows when it resized, and a frame
+    // waiting for the burst to settle leaves the composer off the last row for as long as that takes); the ones that follow while
+    // the timer runs coalesce into one settled frame. Every frame is a whole repaint at absolute addresses, so each is right by itself.
+    if (!inlineHistoryMode() && !this.suspended && !this.resizePaintTimer) {
+      this.rewrapIfWidthChanged();
+      this.forgetScreenPosition();
+      this.repaint();
+      this.resizeSettled = true;
+    } else this.resizeSettled = false;
     // No height probe here: it jumps the cursor to the bottom-right corner
     // and asks, at exactly the moment a swipe is being recognised. The size
     // the terminal announces is what the layout uses.
@@ -41,6 +50,8 @@ export function repaintAfterResize(this: TerminalHarnessPrompter): void {
     this.resizePaintTimer = undefined;
     lifecycle('window.resize', { cols: output.columns, rows: output.rows });
     if (this.closed || this.suspended) return;
+    // One size in the burst, already drawn whole when it arrived: nothing more to draw.
+    if (this.resizeSettled && !inlineHistoryMode()) return;
     const rewritten = this.rewrapIfWidthChanged();
     // Whole: the preamble this frame carries clears the screen, once.
     this.forgetScreenPosition();
@@ -109,6 +120,8 @@ export function clearTranscript(this: TerminalHarnessPrompter): void {
   this.lastFinishedRow = undefined;
   this.secondLastFinishedRow = undefined;
   this.alternateScrollback = 0;
+  // What was written into the normal screen was the old text: the new one is written whole.
+  this.dumpedThrough = undefined;
   // Inline: the terminal's own scrollback holds the old conversation too.
   if (inlineHistoryMode()) inlineBlock.clearNext = true;
   this.messageLines.clear();

@@ -30,7 +30,7 @@ export function judge(snap, start) {
   const blank = (row) => row.trim() === '';
   const opts = snap.opts ?? {};
   // A modal surface is drawn on the alternate screen, in inline mode too; everything else, inline, is on the main screen.
-  const wantAlt = mode === 'full' || (opts.surface === 'page' && mode !== 'full');
+  const wantAlt = !opts.afterExit && !snap.noAlt && (mode === 'full' || (opts.surface === 'page' && mode !== 'full'));
   if (snap.alt !== wantAlt) problems.push(`alternate screen is ${snap.alt ? 'up' : 'down'} in ${mode} mode${opts.surface === 'page' ? ' with a surface open' : ''}`);
   // The composer and status are the last rows of the screen: a rule, the composer, a rule, the status line.
   if (!opts.noBlock) {
@@ -39,6 +39,7 @@ export function judge(snap, start) {
     // rows are below it. A client that does not pull shows blank space below the composer; that is the client's.
     let last = screen.length - 1;
     while (last > 0 && blank(screen[last])) last -= 1;
+    if (mode === 'full' && last !== screen.length - 1) problems.push(`blank band below the status line: it is row ${last + 1} of ${screen.length}`);
     if (blank(screen[last] ?? '') || !STATUS.test(screen[last] ?? '')) {
       const at = screen.findLastIndex((row) => STATUS.test(row));
       problems.push(`status line is not the last non-blank screen row (it is row ${at + 1} of ${screen.length}; the last is ${JSON.stringify(screen[last])})`);
@@ -86,11 +87,17 @@ export function judge(snap, start) {
   // Trailing blanks after the last content are a block that is not at the bottom (reported above), not a gap.
   if (!opts.board && !opts.turns && worst >= 2 && worstAt <= lastContent) problems.push(`a run of ${worst} blank rows inside the conversation (ending at row ${worstAt + 1} of ${all.length}, ${worstAt < scroll.length ? 'in scrollback' : 'on screen'})`);
   // History markers: each once, in order, none missing, for the ones the scenario has had printed.
-  if (!opts.noHistory && snap.expectMarkers && mode === 'full') {
+  if (opts.shows) for (const n of opts.shows) if (!screen.some((row) => new RegExp(`\\bH${String(n).padStart(3, '0')}\\b`).test(row))) problems.push(`H${String(n).padStart(3, '0')} is not on screen`);
+  if (opts.afterExit) {
+    // The program has ended: the normal screen and its scrollback hold the conversation once, in order, then the shell's own rows;
+    // nothing of the program's screen (status line, composer rules) is left.
+    if (all.some((row) => STATUS.test(row) && !MARKER.test(row)) || all.some((row) => RULE.test(row))) problems.push('a row of the program\'s own screen (status line or composer rule) is left after exit');
+  }
+  if (!opts.noHistory && snap.expectMarkers && mode === 'full' && !opts.afterExit) {
     // Full-screen: the viewport shows the newest rows, the older ones are scrolled back. The newest is shown, and what is shown has no hole.
-    const seen = all.map((row) => MARKER.exec(row)).filter(Boolean).map((match) => Number(match[1]));
-    if (opts.covered) { /* an open list covers the rows just above the composer by design */ } else if (!seen.length || Math.max(...seen) !== snap.expectMarkers[1]) problems.push(`the newest history row H${snap.expectMarkers[1]} is not on screen`);
-    else if (seen.some((value, index) => index > 0 && value !== seen[index - 1] + 1)) problems.push('a hole in the history shown');
+    const seen = (snap.alt ? screen : all).map((row) => MARKER.exec(row)).filter(Boolean).map((match) => Number(match[1]));
+    if (opts.covered || opts.scrolledBack) { if (opts.scrolledBack && seen.length && Math.max(...seen) === snap.expectMarkers[1]) problems.push('scrolled back, but the newest row is still on screen'); } else if (!seen.length || Math.max(...seen) !== snap.expectMarkers[1]) problems.push(`the newest history row H${snap.expectMarkers[1]} is not on screen`);
+    if (!opts.turns && seen.some((value, index) => index > 0 && value !== seen[index - 1] + 1)) problems.push('a hole in the history shown');
   } else if (!opts.noHistory && snap.expectMarkers) {
     const seen = [];
     for (const row of all) { const match = MARKER.exec(row); if (match) seen.push(Number(match[1])); }

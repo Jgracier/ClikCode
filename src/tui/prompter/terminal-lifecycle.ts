@@ -2,7 +2,7 @@
 import { lifecycle } from '../../runtime/lifecycle-log.js';
 import { stdin as input, stdout as output } from 'node:process';
 import { eraseInlineBlock, inlineBlock, inlineHistoryMode } from '../inline.js';
-import { enterAlternateScreen, giveBackTerminal, leavePage, pushShellTitle, restoreTerminal, terminalModes } from '../restore.js';
+import { enterAlternateScreen, giveBackTerminal, historyDumpSequence, leavePage, pushShellTitle, restoreTerminal, terminalModes } from '../restore.js';
 import { notifySequence, progressSequence, shouldNotify, titleSequence, windowTitle } from '../terminal-signals.js';
 import { KEEP_STDIN_FLOWING } from '../input-decoder.js';
 import { popReadModes, sessionModesOff, sessionModesOn, setTerminalRawMode } from '../modes.js';
@@ -80,7 +80,7 @@ export function suspendToShell(this: TerminalHarnessPrompter): void {
   // Whoever takes the terminal takes the main screen with it: a vendor
   // login prompt drawn on our alternate screen would vanish with it.
   const paged = inlineBlock.page; // its screen is left by leavePage, once
-  output.write(`${leavePage()}${eraseInlineBlock()}${sessionModesOff(!paged)}`);
+  output.write(`${leavePage()}${eraseInlineBlock()}${sessionModesOff(!paged)}${historyDumpSequence()}`);
   terminalModes.alternateScreen = false;
   process.once('SIGCONT', this.onContinue);
   process.kill(process.pid, 'SIGTSTP');
@@ -120,8 +120,8 @@ export function close(this: TerminalHarnessPrompter): void {
   process.off('exit', restoreTerminal);
   setTerminalRawMode(false);
   input.pause();
-  // The alternate screen is handed back and the shell's own screen returns
-  // untouched. The conversation is on disk -- `/resume` reopens it.
+  // The alternate screen is handed back and the shell's own screen returns, with the conversation written under what the shell had
+  // (giveBackTerminal): it is in the client's scrollback. It is on disk too -- `/resume` reopens it.
   giveBackTerminal(`${leavePage()}${eraseInlineBlock()}${popReadModes()}`);
 }
 
