@@ -5,6 +5,8 @@ export class TestScreen {
   scrollback: string[] = [];
   x = 0;
   y = 0;
+  /** The scroll region (`CSI t;b r`), rows 0-based inclusive; the whole screen when unset. */
+  private region: [number, number] | undefined;
   /** The alternate screen (`?1049h`): no saved lines, the main screen and its cursor kept for `?1049l`. */
   alt = false;
   private main: { rows: string[][]; x: number; y: number } | undefined;
@@ -87,6 +89,21 @@ export class TestScreen {
           }
         }
         break;
+      case 'r': {
+        const [top, bottom] = args.split(';').map((v) => Number.parseInt(v, 10));
+        this.region = Number.isFinite(top) && Number.isFinite(bottom) ? [Math.max(0, top! - 1), Math.min(this.height - 1, bottom! - 1)] : undefined;
+        this.x = 0; this.y = 0;
+        break;
+      }
+      // SU / SD inside the region: the rows move, the ones pushed out are gone (no saved lines for a region scroll).
+      case 'S': case 'T': {
+        const [top, bottom] = this.region ?? [0, this.height - 1];
+        for (let i = 0; i < count; i += 1) {
+          if (final === 'S') { this.rows.splice(top, 1); this.rows.splice(bottom, 0, this.blank()); }
+          else { this.rows.splice(bottom, 1); this.rows.splice(top, 0, this.blank()); }
+        }
+        break;
+      }
       case 'H': {
         const [r, c] = args.split(';').map((v) => Number.parseInt(v, 10));
         this.y = Math.min(this.height - 1, Math.max(0, (r || 1) - 1));
