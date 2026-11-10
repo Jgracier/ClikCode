@@ -50,8 +50,11 @@ export function repaintAfterResize(this: TerminalHarnessPrompter): void {
     this.resizePaintTimer = undefined;
     lifecycle('window.resize', { cols: output.columns, rows: output.rows });
     if (this.closed || this.suspended) return;
-    // One size in the burst, already drawn whole when it arrived: nothing more to draw.
-    if (this.resizeSettled && !inlineHistoryMode()) return;
+    // One size in the burst, already drawn whole when it arrived: nothing more to draw -- unless a paint (a streamed delta, a
+    // spinner tick) came due while the timer ran and was dropped for it; that change is on no screen yet.
+    const dropped = this.paintDropped;
+    this.paintDropped = false;
+    if (this.resizeSettled && !inlineHistoryMode()) { if (dropped) this.repaint(); return; }
     const rewritten = this.rewrapIfWidthChanged();
     // Whole: the preamble this frame carries clears the screen, once.
     this.forgetScreenPosition();
