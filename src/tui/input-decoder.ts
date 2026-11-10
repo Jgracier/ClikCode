@@ -19,6 +19,23 @@ type WaitingInputAction = 'take-back' | 'stop';
 
 const ESCAPE_SEQUENCE_TIMEOUT_MS = 120;
 
+/** How long a lone Esc waits once this link has been seen to split a sequence after its first byte (a rejoin happened): a late
+ * `[A` cannot then arrive after the Esc was already taken for a keypress. */
+const SLOW_LINK_ESCAPE_TIMEOUT_MS = 500;
+
+/** How long after an Esc was given up on (or an unfinished `ESC [ ...` dropped) the rest of its sequence is still taken as the rest. */
+const REJOIN_WINDOW_MS = 1_000;
+
+/** What a split sequence's remainder looks like when it arrives alone: the rest of a CSI (`[A`, `[1;5C`, `[200~` is a paste and
+ * not rejoined), or an SS3 cursor key (`OA`..`OD`, `OH`, `OF`). Never `OK`: a word typed after Esc must stay typed. */
+const CSI_REMAINDER = /^\[[\d;:?<]*[@-~]?$/;
+const SS3_REMAINDER = /^O[ABCDHF]$/;
+
+/** Set once any decoder has rejoined a split sequence: this link splits them, so a lone Esc waits longer from then on. */
+let slowLink = false;
+/** For tests: the link is not known to be slow. */
+export function forgetSlowLink(): void { slowLink = false; }
+
 /** An OSC reply longer than this without a terminator is not one. */
 const MAX_OSC_LENGTH = 4096;
 
@@ -114,10 +131,35 @@ function normalizeTerminalKey(key: string): string {
 export class TerminalInputDecoder {
   private readonly utf8 = new StringDecoder('utf8');
   private pending = '';
+  /** When a bare Esc was given up on at a flush (its sequence may still be on the wire). */
+  private loneEscAt: number | undefined;
+  /** An unfinished `ESC [ ...` dropped at a flush, and when. */
+  private orphan: { text: string; at: number } | undefined;
 
   push(chunk: Buffer | string): string[] {
-    this.pending += typeof chunk === 'string' ? chunk : this.utf8.write(chunk);
+    const text = typeof chunk === 'string' ? chunk : this.utf8.write(chunk);
+    this.rejoin(text);
+    this.pending += text;
     return this.drain(false);
+  }
+
+  /** A sequence whose first bytes were given up on and whose rest arrives within the window is one sequence: the rest is not
+   * typed text. An unfinished `ESC [ ...` that was dropped is put back in front of it. A bare Esc already delivered cannot be
+   * taken back, but the rest is read as the key it was and not typed as `[A`; and this link now waits longer for the next. */
+  private rejoin(text: string): void {
+    const now = Date.now();
+    const orphan = this.orphan;
+    const lone = this.loneEscAt;
+    this.orphan = undefined;
+    this.loneEscAt = undefined;
+    if (this.pending) return;
+    if (orphan && now - orphan.at <= REJOIN_WINDOW_MS && !text.startsWith('\u001b')) {
+      this.pending = orphan.text;
+      slowLink = true;
+    } else if (lone !== undefined && now - lone <= REJOIN_WINDOW_MS && (CSI_REMAINDER.test(text) || SS3_REMAINDER.test(text))) {
+      this.pending = '\u001b';
+      slowLink = true;
+    }
   }
 
   flush(): string[] {
@@ -129,7 +171,7 @@ export class TerminalInputDecoder {
    * pending, or undefined when nothing is. */
   flushDelayMs(): number | undefined {
     if (!this.pending) return undefined;
-    return this.pending.startsWith(PASTE_START) ? OPEN_PASTE_TIMEOUT_MS : ESCAPE_SEQUENCE_TIMEOUT_MS;
+    return this.pending.startsWith(PASTE_START) ? OPEN_PASTE_TIMEOUT_MS : slowLink ? SLOW_LINK_ESCAPE_TIMEOUT_MS : ESCAPE_SEQUENCE_TIMEOUT_MS;
   }
 
   private drain(flush: boolean): string[] {
@@ -142,7 +184,7 @@ export class TerminalInputDecoder {
         continue;
       }
       if (this.pending.length === 1) {
-        if (flush) { keys.push('\u001b'); this.pending = ''; }
+        if (flush) { keys.push('\u001b'); this.pending = ''; this.loneEscAt = Date.now(); }
         break;
       }
       if (this.pending.startsWith(PASTE_START)) {
@@ -195,7 +237,8 @@ export class TerminalInputDecoder {
         let end = 2;
         while (end < this.pending.length && !/[\x40-\x7e]/.test(this.pending[end]!)) end++;
         if (end >= this.pending.length) {
-          if (flush) { keys.push('\u001b'); this.pending = this.pending.slice(1); continue; }
+          // Unfinished: its tail is on the wire. Not an Esc followed by typed `[1;5`: kept for the rest to join.
+          if (flush) { this.orphan = { text: this.pending, at: Date.now() }; this.pending = ''; continue; }
           break;
         }
         keys.push(normalizeTerminalKey(this.pending.slice(0, end + 1)));
@@ -204,7 +247,7 @@ export class TerminalInputDecoder {
       }
       if (prefix === 'O') {
         if (this.pending.length < 3) {
-          if (flush) { keys.push('\u001b'); this.pending = this.pending.slice(1); continue; }
+          if (flush) { this.orphan = { text: this.pending, at: Date.now() }; this.pending = ''; continue; }
           break;
         }
         keys.push(normalizeTerminalKey(this.pending.slice(0, 3)));

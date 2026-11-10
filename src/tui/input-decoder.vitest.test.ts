@@ -1,6 +1,6 @@
 import { stdin, stdout } from 'node:process';
 import { describe, expect, it, vi } from 'vitest';
-import { KEEP_STDIN_FLOWING, TerminalInputDecoder, askCursorRow, takeTerminalKeys, waitingEnterAction } from './input-decoder';
+import { KEEP_STDIN_FLOWING, TerminalInputDecoder, forgetSlowLink, askCursorRow, takeTerminalKeys, waitingEnterAction } from './input-decoder';
 import { editWaitingComposer } from './composer-edit';
 import { terminalFacts } from './probe';
 
@@ -185,5 +185,68 @@ describe('asking the terminal where its cursor is', () => {
       const row = await new Promise<number | undefined>((resolve) => askCursorRow(resolve, 10));
       expect(row).toBeUndefined();
     } finally { write.mockRestore(); }
+  });
+});
+
+describe('a sequence split by a slow link is not an Esc and typed text', () => {
+  const at = (ms: number): void => { vi.setSystemTime(ms); };
+  const later = (decoder: TerminalInputDecoder): string[] => decoder.flush();
+  it.each([150, 400, 900])('ESC, then [A %i ms later: the arrow key, never typed "[A"', (gap) => {
+    vi.useFakeTimers(); forgetSlowLink();
+    try {
+      const decoder = new TerminalInputDecoder();
+      at(1_000);
+      expect(decoder.push('\u001b')).toEqual([]);
+      at(1_000 + 120);
+      expect(later(decoder)).toEqual(['\u001b']);
+      at(1_000 + gap);
+      expect(decoder.push('[A')).toEqual(['\u001b[A']);
+      // This link splits sequences: a lone Esc now waits longer before it counts.
+      expect(decoder.push('\u001b')).toEqual([]);
+      expect(decoder.flushDelayMs()).toBeGreaterThan(120);
+    } finally { vi.useRealTimers(); forgetSlowLink(); }
+  });
+
+  it('ESC [ then the rest later: one arrow key, no Esc at all', () => {
+    vi.useFakeTimers(); forgetSlowLink();
+    try {
+      const decoder = new TerminalInputDecoder();
+      at(1_000);
+      expect(decoder.push('\u001b[')).toEqual([]);
+      at(1_200);
+      expect(later(decoder)).toEqual([]);
+      at(1_700);
+      expect(decoder.push('B')).toEqual(['\u001b[B']);
+    } finally { vi.useRealTimers(); forgetSlowLink(); }
+  });
+
+  it('ESC O then the rest later: one arrow key', () => {
+    vi.useFakeTimers(); forgetSlowLink();
+    try {
+      const decoder = new TerminalInputDecoder();
+      at(1_000);
+      expect(decoder.push('\u001bO')).toEqual([]);
+      at(1_300);
+      expect(later(decoder)).toEqual([]);
+      at(1_500);
+      expect(decoder.push('A')).toEqual(['\u001b[A']);
+    } finally { vi.useRealTimers(); forgetSlowLink(); }
+  });
+
+  it('a genuinely lone Esc is delivered at 120 ms and the text typed after it stays text', () => {
+    vi.useFakeTimers(); forgetSlowLink();
+    try {
+      const decoder = new TerminalInputDecoder();
+      at(1_000);
+      decoder.push('\u001b');
+      expect(decoder.flushDelayMs()).toBe(120);
+      at(1_120);
+      expect(later(decoder)).toEqual(['\u001b']);
+      at(1_400);
+      expect(decoder.push('Okay')).toEqual(['O', 'k', 'a', 'y']);
+      // Past the window a "[A" is typed.
+      decoder.push('\u001b'); at(1_600); later(decoder); at(3_000);
+      expect(decoder.push('[A')).toEqual(['[', 'A']);
+    } finally { vi.useRealTimers(); forgetSlowLink(); }
   });
 });
