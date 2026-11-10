@@ -40,6 +40,16 @@ describe('classifyCommand', () => {
     expect(classifyCommand(command, scope).tier).toBe('safe');
   });
 
+  it('resolves plain arguments through symlinks, so a link into ~/.ssh is not read-only', async () => {
+    await fs.writeFile(path.join(scope.homeDir, '.ssh', 'id_ed25519'), 'secret');
+    await fs.symlink(path.join(scope.homeDir, '.ssh'), path.join(scope.cwd, 'keys'));
+    await fs.symlink(path.join(scope.homeDir, '.ssh', 'id_ed25519'), path.join(scope.cwd, 'key'));
+    expect(classifyCommand('cat keys/id_ed25519', scope)).toMatchObject({ tier: 'ask', reason: expect.stringMatching(/outside the workspace|protected/) });
+    expect(classifyCommand('grep x key', scope).tier).toBe('ask');
+    expect(classifyCommand('rg --file=keys/id_ed25519 x', scope).tier).toBe('ask');
+    expect(classifyCommand('cat notes.txt', scope).tier).toBe('safe');
+  });
+
   it('does not deny ordinary dd to a file or /dev/null', () => {
     expect(classifyCommand('dd if=/dev/zero of=./blob bs=1M count=1', scope).tier).toBe('ask');
     expect(classifyCommand('dd if=x of=/dev/null', scope).tier).toBe('ask');

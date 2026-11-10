@@ -128,9 +128,15 @@ function simpleCommandIsSafe(tokens: string[], scope?: PathScope): string | unde
   if (program.includes('/')) return `${program} is invoked by path`;
   if (!SAFE_PROGRAMS.has(program)) return `${program} is not on the read-only allowlist`;
   for (const arg of args) {
+    if (arg.startsWith('-') && !arg.includes('=')) continue;
     const value = arg.includes('=') && arg.startsWith('-') ? arg.slice(arg.indexOf('=') + 1) : arg;
-    if (!looksLikePath(value)) continue;
-    if (!scope) return `${arg} may point outside the workspace`;
+    if (!value) continue;
+    // With a scope every argument is resolved, not only ones that look like
+    // paths: `cat keys/id_ed25519` reads ~/.ssh when `keys` is a symlink to it.
+    if (!scope) {
+      if (looksLikePath(value)) return `${arg} may point outside the workspace`;
+      continue;
+    }
     try {
       const resolved = resolvePath(value, scope);
       if (!resolved.confined) return `${arg} is outside the workspace`;
