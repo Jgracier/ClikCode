@@ -44,11 +44,36 @@ export function logCursorEvent(line: string): void {
     if (cursorLogLines >= FRAME_LOG_LINES) return;
     cursorLogLines += 1;
   }
+  queued.push(`[${new Date().toISOString()}] pid ${process.pid} ${line}\n`);
+  scheduleFlush();
+}
+
+/** Lines wait here and are written together: a mkdir, a stat and an append for every control key (a swipe is a run of them) are
+ * three synchronous file calls on the thread that is drawing. One write a second, and one at exit. The only reader of the file
+ * is a person looking at a report; nothing in the program or its tests reads it. */
+const queued: string[] = [];
+const FLUSH_MS = 1_000;
+let flushTimer: NodeJS.Timeout | undefined;
+let exitHooked = false;
+
+function scheduleFlush(): void {
+  if (!exitHooked) { exitHooked = true; process.once('exit', flushCursorLog); }
+  if (flushTimer) return;
+  flushTimer = setTimeout(flushCursorLog, FLUSH_MS);
+  flushTimer.unref();
+}
+
+/** Write what is queued now (the timer, the process exit, a test). */
+export function flushCursorLog(): void {
+  if (flushTimer) clearTimeout(flushTimer);
+  flushTimer = undefined;
+  if (!queued.length) return;
+  const text = queued.splice(0).join('');
   try {
     const dir = stateDirectory();
     mkdirSync(dir, { recursive: true });
     rotateIfLarge(join(dir, 'cursor.log'));
-    appendFileSync(join(dir, 'cursor.log'), `[${new Date().toISOString()}] pid ${process.pid} ${line}\n`, { encoding: 'utf8', mode: 0o600 });
+    appendFileSync(join(dir, 'cursor.log'), text, { encoding: 'utf8', mode: 0o600 });
   } catch { /* fail-open-ok: diagnostics must never break the UI */ }
 }
 
