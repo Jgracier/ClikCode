@@ -29,7 +29,9 @@ import type { ActivityEntry } from './activity-log.js';
 /** Calls listed under a group while it is live. */
 const LIVE_SHOWN_CALLS = 3;
 /** Groups kept for expansion. */
-const GROUPS_KEPT = 50;
+/** Groups the registry keeps: the ones in the rows materialised around the viewport (history is rendered lazily, so an older
+ * group is registered when its rows are), newest last. */
+const GROUPS_KEPT = 400;
 
 export type GroupRow = { key: string; event: HarnessActivityEvent; thought?: GroupThought; responseOffset?: number; sequence?: number };
 
@@ -103,9 +105,21 @@ type GroupData = {
 export class GroupRegistry {
   private readonly groups = new Map<string, GroupData>();
 
+  /** Set while rows of OLDER messages are rendered (history-window.ts): their groups go in front, so `latest()` stays the newest. */
+  older = false;
+
   set(data: GroupData): void {
-    this.groups.delete(data.id);
-    this.groups.set(data.id, data);
+    if (this.older && !this.groups.has(data.id)) {
+      const kept = [...this.groups];
+      this.groups.clear();
+      this.groups.set(data.id, data);
+      for (const [id, group] of kept) this.groups.set(id, group);
+    } else if (this.older) {
+      this.groups.set(data.id, data);
+    } else {
+      this.groups.delete(data.id);
+      this.groups.set(data.id, data);
+    }
     while (this.groups.size > GROUPS_KEPT) this.groups.delete(this.groups.keys().next().value!);
   }
 

@@ -44,7 +44,7 @@ function linesOf(p: TerminalHarnessPrompter, group: string, item: string): numbe
 
 /** The screen row a transcript line is on now (negative: above the screen). */
 export function screenRowOfLine(p: TerminalHarnessPrompter, line: number): number {
-  const length = p.alternateTranscript.length + p.viewExtra.rows.length;
+  const length = p.alternateTranscript.length + p.viewExtra.rows.length + p.scrollWindow.rowsBelow;
   return line - p.alternateTrimmed - (length - p.alternateAbove - p.alternateScrollback);
 }
 

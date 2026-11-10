@@ -7,6 +7,7 @@ import { inKeyBatch, onKeyBatchEnd } from '../input-decoder.js';
 import { isMouseEvent, wheelScrollRows } from '../modes.js';
 import { userError } from '../../harness/protocol/errors.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
+import { followEnd, jumpForScroll, scrollReach } from './history-window.js';
 import { SCROLL_DRAIN_MIN, SCROLL_DRAIN_MS, SELECTION_SCROLL_MS } from './state.js';
 
 /** Move the viewport through the transcript. Positive scrolls back, and the
@@ -19,15 +20,25 @@ export function scrollTranscript(this: TerminalHarnessPrompter, rows: number): b
   // the end of what any frame would draw, and the rows a reader then had to
   // swipe back through before the view moved again were rows that were
   // never on it.
-  const furthest = Math.max(0, this.alternateTranscript.length + this.scrollTail.rows.length - this.alternateAbove);
+  // Counting the messages the window does not hold: they are rendered as the view gets to them (history-window.ts).
+  const furthest = scrollReach(this).all;
   const next = Math.max(0, Math.min(furthest, this.alternateScrollback + rows));
+  // Back to the live end from far away: the conversation is written from its list again, nothing between is drawn.
+  if (next === 0 && this.scrollWindow.detached && this.alternateScrollback > 0) {
+    followEnd(this);
+    this.alternateScrollback = 0;
+    this.paintingScroll = true;
+    this.scheduleScrollPaint();
+    return true;
+  }
   // What a report of "it did not move" needs to be answerable: whether the
   // key arrived (logged where keys are read), and whether there was anywhere
   // to go -- a screen tall enough to show the whole transcript has nothing
   // hidden above it, and refusing to move is then the right answer.
   logCursorEvent(`scroll by=${rows} from=${this.alternateScrollback} to=${next} furthest=${furthest} rows=${this.alternateTranscript.length} above=${this.alternateAbove}`);
   if (next === this.alternateScrollback) return false;
-  this.alternateScrollback = next;
+  // Further than a few batches reach (Home, a long drag): the window is built there directly.
+  if (!jumpForScroll(this, next)) this.alternateScrollback = next;
   this.paintingScroll = true;
   this.scheduleScrollPaint();
   return true;
@@ -95,6 +106,9 @@ export function handleScrollKey(this: TerminalHarnessPrompter, key: string): boo
   // Ctrl+O opens or minimises the latest group (the live one while it runs), in place.
   if (key === '\u000f') return this.toggleLatestGroup();
   const page = Math.max(1, this.viewportRows() - 3);
+  // Ctrl+Home and Ctrl+End: the first message, and the live end.
+  if (key === '\u001b[1;5H') { this.scrollTranscript(Number.MAX_SAFE_INTEGER); return true; }
+  if (key === '\u001b[1;5F') { this.scrollTranscript(-Number.MAX_SAFE_INTEGER); return true; }
   if (key === '\u001b[5~') { this.scrollTranscript(page); return true; }
   if (key === '\u001b[6~') { this.scrollTranscript(-page); return true; }
   // Ctrl+B and Ctrl+F, a page at a time, as less and vi have always read.
@@ -152,7 +166,7 @@ export function handleSelection(this: TerminalHarnessPrompter, action: MouseActi
  * reached the edge. */
 export function lineAtScreenRow(this: TerminalHarnessPrompter, row: number): number {
   return lineAtRow({
-    length: this.alternateTranscript.length + this.viewExtra.rows.length, trimmed: this.alternateTrimmed,
+    length: this.alternateTranscript.length + this.viewExtra.rows.length + this.scrollWindow.rowsBelow, trimmed: this.alternateTrimmed,
     above: this.alternateAbove, scrollback: this.alternateScrollback,
   }, row);
 }

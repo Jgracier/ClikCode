@@ -29,9 +29,10 @@ export const SCROLL_DRAIN_MIN = 4;
 /** One frame, roughly: the gap between drains of an outstanding scroll. */
 export const SCROLL_DRAIN_MS = 16;
 
-/** Rows kept above the viewport so scrolling back inside a conversation still
- * has somewhere to scroll to. */
-export const ALTERNATE_TRANSCRIPT_ROWS = 2000;
+/** Inline mode only: the rows kept for line numbers, and written again into the terminal's own scrollback on a reseed (the
+ * terminal holds the conversation there; nothing is drawn from them). The full-screen view has no such limit: it renders
+ * history from the persisted messages on demand (history-window.ts). */
+export const INLINE_TRANSCRIPT_ROWS = 2000;
 /** How often a drag held at the screen's edge scrolls the selection a line. */
 export const SELECTION_SCROLL_MS = 60;
 

@@ -56,7 +56,7 @@ export function createRowBuilders(p: TerminalHarnessPrompter, conversationInner:
    * same thing are still two rows -- and an entry that arrives after its
    * anchor has been passed is appended where it lands, which is the only
    * thing an append-only transcript can do with it. */
-  const standaloneActivity = (anchor: number): string[] => {
+  const standaloneActivity = (anchor: number, claim = true): string[] => {
     const rows: string[] = [];
     // Folded first: six reads in a row become one row, and the answer they
     // were serving stays on screen.
@@ -67,7 +67,7 @@ export function createRowBuilders(p: TerminalHarnessPrompter, conversationInner:
       if (entry.anchor !== anchor || entry.responseOffset !== undefined) continue;
       if (p.turn && entry.event?.agent && entry.event.kind === 'tool-start') continue;
       const id = entry.sequence;
-      if (!p.emitted.claimActivity(id)) continue;
+      if (claim ? !p.emitted.claimActivity(id) : false) continue;
       rows.push(...activityRows(entry.lines, entry.event?.category, !entry.event), '');
     }
     return rows;

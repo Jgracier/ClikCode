@@ -1,16 +1,19 @@
 /** Where a full-conversation reseed starts painting.
  *
- * Opening a long chat used to lay out every message before the first frame.
- * Older rows sit in `alternateTranscript` for scroll-up, which keeps a fixed
- * number of rows anyway, so painting from as far back as that cap reaches
- * costs O(cap) instead of O(history) and loses nothing scroll could show.
- * A smaller window (three screens) cut a phone's chat off at its last long
- * answer after every switch. */
+ * Opening a long chat used to lay out every message before the first frame. Only the recent
+ * messages are written here; older ones are rendered when the view scrolls up to them
+ * (prompter/history-window.ts), so nothing of the conversation is out of reach and the first
+ * frame costs O(viewport), not O(history). */
+
+/** Rows a reseed writes: six screens, so a long answer or two are in the window whole. */
+export function reseedRowsFor(viewportRows: number): number {
+  return Math.max(6 * viewportRows, 180);
+}
 
 /** Rough rows one message will take once wrapped at `columns`, plus the
  * blank gaps the painter puts around it. Exact layout can differ; this only
  * picks a start. */
-function estimatedRows(content: string, columns: number): number {
+export function estimatedRows(content: string, columns: number): number {
   let lines = 0;
   for (const line of content.split('\n')) {
     lines += Math.max(1, Math.ceil(Math.max(line.length, 1) / columns));

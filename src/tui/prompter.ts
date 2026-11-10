@@ -37,6 +37,7 @@ import { PlanEntry } from './render/plan-block.js';
 import { type ComposerFrame, EMPTY_COMPOSER, type WaitingTurn } from './prompter/state.js';
 import { takeHistoryDump } from './prompter/history-dump.js';
 import { retakeScreen, retakeTerminalSignals, takeTerminalTitle, terminalSignals, notifyIfAway, suspendToShell, onContinue, close, suspend, resume } from './prompter/terminal-lifecycle.js';
+import { HistoryWindow } from './prompter/history-window.js';
 import { scrollTranscript, drainScroll, queueScroll, drainAtBatchEnd, scheduleScrollPaint, handleScrollKey, handleSelection, lineAtScreenRow, selectionText, followSelectionEdge, stepSelectionScroll, stopSelectionScroll, redrawSelection, noteReadingDirection, forgetScreenPosition } from './prompter/scroll-selection.js';
 import { showMention, mentionKey, endMention, jumpToMention } from './prompter/mention.js';
 import { showTransientNotice, clearTransientNotice, panel, panelKey } from './prompter/notices.js';
@@ -176,9 +177,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   transcriptColumns = output.columns || 0;
   /** The first conversation row number (alternateTrimmed + index) not yet written into the normal screen; undefined: none of the current text has been. */
   dumpedThrough: number | undefined;
-  /** Where the history dump stood when the transcript was rewritten for a new width: by message, which rewrapping keeps (row
-   * numbers it does not). `into` is how many rows of that message were written. */
-  dumpResume: { session: string | undefined; message: number; into: number } | undefined;
+  /** Where the history dump stands, by message (which a rewrite at another width keeps; row numbers it does not): the messages
+   * before `message` are written, and `into` rows of the one at `message` (the answer that was still streaming). */
+  dumpCursor: { session: string | undefined; message: number; into: number } | undefined;
   /** Full-screen: the last size change was drawn whole the moment it arrived and no other came while the settle timer ran. */
   resizeSettled = false;
   /** A coalesced paint came due during a resize settle and was dropped; the settle repaints for it. */
@@ -229,7 +230,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * scrolled back: what holds the view still while rows arrive. */
   scrollBodyLength: number | undefined;
   /** The rows the view scrolls over beyond the transcript: the live tail, while scrolled back. */
-  get viewExtra(): ScrollTail { return this.alternateScrollback > 0 ? this.scrollTail : EMPTY_TAIL; }
+  get viewExtra(): ScrollTail { return this.alternateScrollback > 0 && !this.scrollWindow.detached ? this.scrollTail : EMPTY_TAIL; }
   /** What the composer's slash palette offers, remembered from the last
    * question() so a turn in flight can offer the same commands. A turn does
    * not change which commands exist; each is re-checked when it runs. */
@@ -315,9 +316,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** Rows retired out of the viewport, kept so the conversation above the
    * live region is still there to scroll back to on the alternate screen. */
   readonly alternateTranscript: string[] = [];
-  /** Rows the cap on alternateTranscript has kept out of the view, and the line of the notice that says so (undefined: none). */
-  capDropped = 0;
-  capMarkerLine: number | undefined;
+  /** The window of messages the transcript holds rows for, and what stands in for the rest (prompter/history-window.ts). */
+  readonly scrollWindow = new HistoryWindow();
   /** Exactly the rows the last alternate-screen frame left on screen, so the
    * next one writes only what differs. */
   alternatePrevious: string[] = [];
@@ -477,8 +477,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.planHold = 0;
       this.panelState = undefined;
       this.groupExpansion.clear();
-      // The conversation opened is the only one in the transcript.
+      // The conversation opened is the only one in the transcript, and it opens at its live end.
       this.emitted.requestReseed();
+      this.alternateScrollback = 0;
+      this.scrollWindow.anchor = undefined;
       // Rewritten whole, a turn still running included, once it is followed.
       this.steppedOut = undefined;
     }

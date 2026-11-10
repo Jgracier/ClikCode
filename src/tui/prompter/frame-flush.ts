@@ -12,21 +12,16 @@ import { asciiMode, foldAscii } from '../glyphs.js';
 import { syncBegin, syncEnd } from '../probe.js';
 import { redrawPreamble, takeQueuedModes } from '../modes.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
-import { ALTERNATE_TRANSCRIPT_ROWS } from './state.js';
+import { INLINE_TRANSCRIPT_ROWS } from './state.js';
+import { settleWindow } from './history-window.js';
 import { anchoredScrollback } from './group-actions.js';
-
-/** The first row of a conversation too long to keep whole in the window: how much is not there, and how to get it. The same words
- * the history written under the shell uses. */
-export function earlierRowsNotice(count: number): string {
-  return `\u001b[2m… ${count} earlier row${count === 1 ? '' : 's'} not shown; /resume reopens the whole conversation\u001b[0m`;
-}
 
 /** More rows than this in one frame and the caret is hidden for it. */
 export const BULK_ROWS = 8;
 
 /** A row as the terminal may be given it: only SGR escapes, one line, no hyperlink left open, and
  * never the last column. The one place a row is made safe. */
-function safeRow(row: string, limit: number): string {
+export function safeRow(row: string, limit: number): string {
   const clean = sanitizeTerminalText(row, { keepSgr: true, singleLine: true });
   return closeOpenHyperlink(visibleSlice(asciiMode() ? foldAscii(clean) : clean, limit));
 }
@@ -97,36 +92,22 @@ export function flushAlternateFrame(
 ): void {
   if (pending.tail) this.scrollTail = pending.tail;
   const lastBody = this.scrollBodyLength;
-  const trimmedBefore = this.alternateTrimmed;
-  if (finished.length) {
+  // Far back, the rows at the live end are not held: they are written from the list when the view comes back to it.
+  if (finished.length && this.scrollWindow.detached) this.scrollWindow.gap = true;
+  else if (finished.length) {
     this.alternateTranscript.push(...finished);
     // Someone reading stays where they are. The offset counts rows from the
     // end of the transcript, so rows arriving at that end move the window
     // forward by one per row -- the text walks out from under the reader
     // while a turn streams, which is what "scrolling slips through previous
     // messages" is. Growing the offset by the same count holds it still.
-    // Trimming the front does not move the end, so it leaves the offset be.
-    // Never past a /search mention being looked at: a long way back in a
-    // long chat is exactly where one can be.
-    const focusLine = this.mentionFocus ? this.messageLines.get(this.mentionFocus.messageIndex) : undefined;
-    const excess = Math.min(this.alternateTranscript.length - ALTERNATE_TRANSCRIPT_ROWS,
-      focusLine === undefined ? Number.POSITIVE_INFINITY : focusLine - this.alternateTrimmed);
-    if (excess > 0) {
-      const markerWasFirst = this.capMarkerLine === this.alternateTrimmed;
-      this.alternateTranscript.splice(0, excess);
-      this.alternateTrimmed += excess;
-      // The first row now is a notice, not a row of the conversation, so whoever scrolls to the top learns the rest was kept
-      // out of the view and where it is. It takes the place of the oldest row left (line numbers stay as they are).
-      this.capDropped += excess - (markerWasFirst ? 1 : 0) + 1;
-      this.alternateTranscript[0] = earlierRowsNotice(this.capDropped);
-      this.capMarkerLine = this.alternateTrimmed;
-    }
+    // Rows past the window's front are let go (history-window.ts), which does not move the end either.
   }
   // Held still while rows arrive at the end of what can be read: the
   // transcript's new rows, and the live conversation growing or retiring.
   const extra = this.viewExtra;
   if (this.alternateScrollback > 0 && lastBody !== undefined) {
-    this.alternateScrollback = Math.max(0, this.alternateScrollback + this.alternateTranscript.length + extra.rows.length - lastBody + (this.alternateTrimmed - trimmedBefore));
+    this.alternateScrollback = Math.max(0, this.alternateScrollback + this.alternateTranscript.length + extra.rows.length + this.scrollWindow.rowsBelow - lastBody);
   }
   const height = this.viewportRows();
   const live = pending.live.slice(-height);
@@ -150,13 +131,19 @@ export function flushAlternateFrame(
   // above it are unchanged, so the view is moved to put it back there.
   const target = this.anchorTarget;
   this.anchorTarget = undefined;
-  const bodyLength = this.alternateTranscript.length + extra.rows.length;
+  // The rows of messages the window does not hold are made to exist around the view (a few batches, within a frame's budget),
+  // and the window's far rows are let go, before anything is drawn from it.
+  settleWindow(this, above);
+  const body = this.viewExtra;
+  const bodyLength = this.alternateTranscript.length + body.rows.length + this.scrollWindow.rowsBelow;
   const anchored = target ? anchoredScrollback(target, { length: bodyLength, trimmed: this.alternateTrimmed, above }) : undefined;
   if (anchored !== undefined) this.alternateScrollback = anchored;
   this.jumpToMention(above);
   const furthest = Math.max(0, bodyLength - above);
-  this.alternateScrollback = Math.min(this.alternateScrollback, furthest);
-  const scrolled = this.alternateScrollback;
+  // Past what is held yet: drawn at the window's edge while the next batch is rendered (another frame is owed), kept as asked.
+  const shown = Math.max(Math.min(this.alternateScrollback, furthest), this.scrollWindow.rowsBelow);
+  if (this.scrollWindow.first === 0 || !this.scrollWindow.more) this.alternateScrollback = Math.min(this.alternateScrollback, furthest);
+  const scrolled = shown;
   this.scrollBodyLength = scrolled > 0 ? bodyLength : undefined;
   const first = Math.max(0, bodyLength - above - scrolled);
   const transcriptLength = this.alternateTranscript.length;
@@ -164,7 +151,7 @@ export function flushAlternateFrame(
     ...this.alternateTranscript.slice(first, Math.min(transcriptLength, bodyLength - scrolled)),
     // The end never below zero: a negative one counts from the end of the rows, and gave the first
     // step back (an offset past the live tail's length) one row too many.
-    ...(scrolled > 0 ? extra.rows.slice(Math.max(0, first - transcriptLength), Math.max(0, bodyLength - scrolled - transcriptLength)) : []),
+    ...(scrolled > 0 ? body.rows.slice(Math.max(0, first - transcriptLength), Math.max(0, bodyLength - scrolled - transcriptLength)) : []),
   ];
   const shownLive = scrolled > 0 ? live.slice(0, Math.max(0, height - above)) : live;
   let rows = [...shownTranscript, ...shownLive];
@@ -305,6 +292,12 @@ export function flushAlternateFrame(
     this.frameInFlight = false;
     if (this.pendingLive && !this.closed && !this.suspended) this.flushFrame();
   });
+  // More history is wanted under the view than one frame's budget rendered: the next batch is another frame, so the event loop
+  // is free between them (a key, a resize, the stream).
+  if (this.scrollWindow.more) {
+    const timer = setTimeout(() => { if (!this.closed && !this.suspended) this.redrawSelection(); }, 0);
+    timer.unref?.();
+  }
 }
 
 /** Append-only frame for inline-history mode. Finished rows are printed once,
@@ -326,7 +319,7 @@ export function flushInlineFrame(
   // Line numbers for the rows kept, as the alternate frame does; nothing is drawn from them.
   if (finished.length) {
     this.alternateTranscript.push(...finished);
-    const excess = this.alternateTranscript.length - ALTERNATE_TRANSCRIPT_ROWS;
+    const excess = this.alternateTranscript.length - INLINE_TRANSCRIPT_ROWS;
     if (excess > 0) { this.alternateTranscript.splice(0, excess); this.alternateTrimmed += excess; }
   }
   let live = pending.live;

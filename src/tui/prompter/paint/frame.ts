@@ -65,7 +65,7 @@ export function paint(this: TerminalHarnessPrompter, composer: string, options: 
   const retired = extractTags(written.finished);
   const finished = retired.rows;
   const firstLine = this.alternateTrimmed + this.alternateTranscript.length + this.pendingFinished.length;
-  for (const [index, tag] of retired.tags.entries()) if (tag) this.lineTags.set(firstLine + index, tag);
+  if (!this.scrollWindow.detached) for (const [index, tag] of retired.tags.entries()) if (tag) this.lineTags.set(firstLine + index, tag);
   // A toggled group's row, found in the rewritten transcript: the viewport is
   // anchored on it when this frame is flushed (flushAlternateFrame).
   if (this.groupAnchor && !this.emitted.pendingReseed()) {
@@ -81,7 +81,6 @@ export function paint(this: TerminalHarnessPrompter, composer: string, options: 
     }
     if (line !== undefined) this.anchorTarget = { line, height, row: anchor.row, fit: anchor.fit };
   }
-  if (this.lineTags.size > 4000) for (const line of this.lineTags.keys()) if (line < this.alternateTrimmed) this.lineTags.delete(line);
   // Decided from the rows this frame built: a steer leaves the bottom only
   // once its own row is in the answer.
   if (this.surface === 'conversation') {

@@ -5,14 +5,14 @@ import { rowOfOccurrence, type MentionFocus } from '../render/search-focus.js';
 import { takeTerminalKeys } from '../input-decoder.js';
 import { enterInputModes, popReadModes } from '../modes.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
+import { jumpTo } from './history-window.js';
 
 /** /search: show `session` at one mention, its words highlighted and
  * `focus.status` under it. The view moves to the mention on the frame
- * that draws it -- rewriting the conversation from an earlier message
- * first when the mention is older than what is on screen. */
+ * that draws it -- the window of history is built around the mention
+ * first when it is older than what is held (history-window.ts). */
 export function showMention(this: TerminalHarnessPrompter, session: HarnessSession, focus: MentionFocus): void {
   this.mentionFocus = { ...focus, sessionId: session.id, jumped: false };
-  if (this.currentSession?.id === session.id && !this.messageLines.has(focus.messageIndex)) this.emitted.requestReseed();
   this.render(session);
 }
 
@@ -56,8 +56,14 @@ export function endMention(this: TerminalHarnessPrompter): void {
 export function jumpToMention(this: TerminalHarnessPrompter, above: number): void {
   const focus = this.mentionFocus;
   if (!focus || focus.jumped || this.currentSession?.id !== focus.sessionId) return;
-  const start = this.messageLines.get(focus.messageIndex);
-  if (start === undefined) return;
+  let start = this.messageLines.get(focus.messageIndex);
+  if (start === undefined) {
+    // Older than what the window holds, or beyond it: the window is built around the message from the list.
+    if (!this.scrollWindow.source || focus.messageIndex >= this.scrollWindow.source.messages.length) return;
+    jumpTo(this, focus.messageIndex, 0, above);
+    start = this.messageLines.get(focus.messageIndex);
+    if (start === undefined) return;
+  }
   const from = start - this.alternateTrimmed;
   if (from < 0 || from >= this.alternateTranscript.length) return;
   const nextStart = this.messageLines.get(focus.messageIndex + 1);
@@ -65,6 +71,6 @@ export function jumpToMention(this: TerminalHarnessPrompter, above: number): voi
   const found = focus.words[0] ? rowOfOccurrence(this.alternateTranscript.slice(from, to), focus.words[0], focus.occurrence) : undefined;
   const row = from + (found ?? 0);
   const first = Math.max(0, row - 3);
-  this.alternateScrollback = Math.max(0, this.alternateTranscript.length - above - first);
+  this.alternateScrollback = Math.max(0, this.alternateTranscript.length + this.scrollWindow.rowsBelow - above - first);
   focus.jumped = true;
 }
