@@ -181,6 +181,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   dumpResume: { session: string | undefined; message: number; into: number } | undefined;
   /** Full-screen: the last size change was drawn whole the moment it arrived and no other came while the settle timer ran. */
   resizeSettled = false;
+  /** A coalesced paint came due during a resize settle and was dropped; the settle repaints for it. */
+  paintDropped = false;
   usageLabel?: string;
   /** The owner of a conversation reached over SSH, shown in the status line. */
   remoteMachineName?: string;
