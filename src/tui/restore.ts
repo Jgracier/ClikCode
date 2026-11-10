@@ -13,10 +13,12 @@ import { FOCUS_REPORTING_OFF, POP_TITLE, PUSH_TITLE, progressSequence } from './
 /** An in-place build reload inherits the current terminal screen and title. */
 export const REEXEC_TERMINAL_ENV = 'CLIKCODE_KEEP_TERMINAL_ON_REEXEC';
 
-/** Take the alternate screen and clear it. A client that swallows the alternate screen (GNU screen) is cleared the way that never
- * copies the screen into saved lines (see CLEAR_SCREEN). */
+/** Take the alternate screen and clear it. A client that swallows the alternate screen (GNU screen) has none to take: what is on its one
+ * screen (the shell's, or the conversation a suspend wrote) is scrolled into the saved lines with line feeds, not erased, and the screen
+ * is then cleared the way that never copies it into saved lines (see CLEAR_SCREEN). */
 export function enterAlternateScreenSequence(): string {
-  return `\u001b[?1049h${swallowsAlternateScreen() ? CLEAR_SCREEN : '\u001b[2J\u001b[H'}`;
+  if (!swallowsAlternateScreen()) return '\u001b[?1049h\u001b[2J\u001b[H';
+  return `\u001b[?1049h${'\r\n'.repeat(Math.max(1, output.rows || 24))}${CLEAR_SCREEN}`;
 }
 
 /** The conversation, to be written into the NORMAL screen whenever the alternate screen is left for good or for a while (exit, suspend,

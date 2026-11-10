@@ -72,7 +72,7 @@ export function judge(snap, start) {
   }
   // Blank rows: only above the first content row, and only on the screen (never pushed into scrollback).
   const firstContent = all.findIndex((row) => !blank(row));
-  if (!opts.leading && firstContent > 0 && firstContent <= scroll.length) problems.push(`${firstContent} blank row(s) at the top of the scrollback`);
+  if (!opts.leading && !snap.noAlt && firstContent > 0 && firstContent <= scroll.length) problems.push(`${firstContent} blank row(s) at the top of the scrollback`);
   let run = 0;
   let worst = 0;
   let worstAt = -1;
@@ -95,7 +95,7 @@ export function judge(snap, start) {
   }
   if (!opts.noHistory && snap.expectMarkers && mode === 'full' && !opts.afterExit) {
     // Full-screen: the viewport shows the newest rows, the older ones are scrolled back. The newest is shown, and what is shown has no hole.
-    const seen = (snap.alt ? screen : all).map((row) => MARKER.exec(row)).filter(Boolean).map((match) => Number(match[1]));
+    const seen = ((snap.alt || snap.noAlt) && !opts.afterExit ? screen : all).map((row) => MARKER.exec(row)).filter(Boolean).map((match) => Number(match[1]));
     if (opts.covered || opts.scrolledBack) { if (opts.scrolledBack && seen.length && Math.max(...seen) === snap.expectMarkers[1]) problems.push('scrolled back, but the newest row is still on screen'); } else if (!seen.length || Math.max(...seen) !== snap.expectMarkers[1]) problems.push(`the newest history row H${snap.expectMarkers[1]} is not on screen`);
     if (!opts.turns && seen.some((value, index) => index > 0 && value !== seen[index - 1] + 1)) problems.push('a hole in the history shown');
   } else if (!opts.noHistory && snap.expectMarkers) {

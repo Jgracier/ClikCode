@@ -6,7 +6,7 @@ into scrollback), no history lost or repeated, no row wider than the screen. No 
 (../fake-grok.mjs) plays the turns, in a throwaway HOME.
 
     node scripts/build.mjs
-    python3 scripts/tui-e2e/resize-matrix/matrix.py [--only NAME] [--emu xterm|xterm-no3j|xterm-keepback|xterm-nopull|xterm-mute|xterm-noalt|xterm-libvterm|xterm-nowheel|tmux] [--mode inline|full|auto] [--keep]
+    python3 scripts/tui-e2e/resize-matrix/matrix.py [--only NAME] [--emu xterm|xterm-no3j|xterm-keepback|xterm-nopull|xterm-mute|xterm-noalt|xterm-libvterm|xterm-nowheel|tmux] [--mode auto|full|inline] [--keep]
 
 Exit status 0 when every checked snapshot holds every invariant."""
 import argparse, base64, fcntl, json, os, pty, select, shutil, signal, struct, subprocess, sys, tempfile, termios, time
@@ -193,16 +193,23 @@ SCENARIOS.update({
     ]),
     # The whole conversation read back: PageUp to the top, Home/End, arrows, a wheel (the client's: arrows in the alternate screen), the composer
     # on the last row all the way, and back to the newest.
-    'full-read-back': dict(**FULL, skip_emus=['tmux'], size=(69, 35), turns=[{'blocks': [marker_block(1, 160)]}], steps=[
+    'full-read-back': dict(**FULL, size=(69, 35), turns=[{'blocks': [marker_block(1, 160)]}], steps=[
         ('type', 'go'), ('wait', 'H160', 40), ('settle', 1.5), ('check', 'start', {}, (1, 160)),
         ('keys', '\x1b[5~'), ('settle', 0.4), ('check', 'one page back', {'scrolledBack': True}, (1, 160)),
         ('keys', '\x01'), ('settle', 0.6), ('check', 'Home: the first row', {'scrolledBack': True, 'shows': [1]}, (1, 160)),
         ('keys', '\x05'), ('settle', 0.6), ('check', 'End: the newest', {}, (1, 160)),
         ('keys', '\x1b[A' * 10), ('settle', 0.6), ('check', 'ten Up arrows (a swipe)', {'scrolledBack': True}, (1, 160)),
-        ('wheel', -4), ('settle', 0.5), ('check', 'wheel down', {'scrolledBack': True}, (1, 160)),
-        ('wheel', 200), ('settle', 1.0), ('check', 'wheel up to the top', {'scrolledBack': True, 'shows': [1]}, (1, 160)),
         ('resize', 69, 57), ('settle', SETTLE), ('check', 'keyboard hides while scrolled back', {'scrolledBack': True}, (1, 160)),
         ('keys', '\x1b'), ('settle', 0.6), ('check', 'Esc: back at the newest', {}, (1, 160)),
+    ]),
+    # A wheel or swipe, as the client turns it into bytes (arrows in the alternate screen when no mouse mode is set). A client with no alternate
+    # screen (GNU screen) or one that sends nothing for it cannot do this; the keys above are what is left there.
+    'full-read-back-wheel': dict(**FULL, skip_emus=['tmux', 'xterm-noalt', 'xterm-nowheel'], size=(69, 35), turns=[{'blocks': [marker_block(1, 160)]}], steps=[
+        ('type', 'go'), ('wait', 'H160', 40), ('settle', 1.5), ('check', 'start', {}, (1, 160)),
+        ('wheel', 6), ('settle', 0.5), ('check', 'wheel up 6 notches', {'scrolledBack': True}, (1, 160)),
+        ('wheel', -2), ('settle', 0.5), ('check', 'wheel down 2', {'scrolledBack': True}, (1, 160)),
+        ('wheel', 200), ('settle', 1.0), ('check', 'wheel up to the top', {'scrolledBack': True, 'shows': [1]}, (1, 160)),
+        ('wheel', -300), ('settle', 1.0), ('check', 'wheel down to the newest', {}, (1, 160)),
     ]),
     # A client that sends nothing for a swipe: the keys still read the whole conversation (so a swipe on it is not the only way).
     'full-read-back-keys': dict(**FULL, size=(69, 35), turns=[{'blocks': [marker_block(1, 160)]}], steps=[
@@ -333,6 +340,7 @@ class Pty:
 def run_xterm(name, spec, mode, variant, keep):
     root = tempfile.mkdtemp(prefix=f'resize-matrix-{name}-')
     env, node = child_env(root, mode, spec['turns'], spec.get('env', {}))
+    if variant == 'xterm-noalt': env.update({'STY': '1234.pts-0.host', 'TERM': 'screen-256color'})  # what GNU screen gives its programs
     if spec.get('seed'): seed_conversations(root, spec['seed'], env, node)
     checks = []
     emulator = Emulator(variant, spec['size'])
@@ -452,7 +460,7 @@ def show(snap):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--only'); parser.add_argument('--emu', default='xterm'); parser.add_argument('--mode', default='inline')
+    parser.add_argument('--only'); parser.add_argument('--emu', default='xterm'); parser.add_argument('--mode', default='auto', help='auto: what ssh gives (the default model); full: forced full-screen; inline: the opt-in')
     parser.add_argument('--keep', action='store_true'); parser.add_argument('--show', action='store_true', help='print the screen of every failing snapshot')
     args = parser.parse_args()
     failures = 0; total = 0
@@ -461,7 +469,7 @@ def main():
         if args.mode not in spec.get('modes', ['inline', 'full', 'auto']) or args.emu in spec.get('skip_emus', []): continue
         if args.emu == 'tmux': root, snaps_path, checks = run_tmux(name, spec, args.mode, args.keep)
         else: root, snaps_path, checks = run_xterm(name, spec, args.mode, args.emu, args.keep)
-        verdicts, snaps = judge(snaps_path, checks, 'full' if args.mode == 'full' else 'inline', args.emu)
+        verdicts, snaps = judge(snaps_path, checks, 'inline' if args.mode == 'inline' else 'full', args.emu)
         bad = [v for v in verdicts if v['problems']]
         total += len(verdicts); failures += len(bad)
         print(f"{'FAIL' if bad else 'ok  '} {name} [{args.emu}/{args.mode}] {len(verdicts) - len(bad)}/{len(verdicts)} snapshots ({root})")
