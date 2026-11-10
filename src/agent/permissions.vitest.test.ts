@@ -13,6 +13,7 @@ import { sessionState } from './session-state.js';
 import { defaultTools } from './tools/registry.js';
 import { accountUseTool, computerWebTool } from './tools/computer-web.js';
 import { setComputerEnabled } from './computer/settings.js';
+import { trustWorkspace } from './workspace-trust.js';
 import type { ToolContext, ToolDefinition } from './tool-contract.js';
 import type { AiHarnessPermissionMode } from '../harness/definition.js';
 
@@ -171,18 +172,42 @@ describe('allow rules', () => {
     expect(judge('ask', parsePermissionRules(['mcp__web__lookup']))).toBe('allow');
   });
 
-  it('persists rules in <cwd>/.clikcode/settings.local.json without clobbering other keys', async () => {
-    expect((await loadPermissionRules(scope.cwd)).allow).toEqual([]);
-    const file = path.join(scope.cwd, '.clikcode', 'settings.local.json');
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(file, JSON.stringify({ theme: 'dark', permissions: { deny: ['x'], allow: ['Bash(ls:*)'] } }));
-    await addPermissionAllowRule(scope.cwd, 'Edit(src/**)');
-    await addPermissionAllowRule(scope.cwd, 'Edit(src/**)');
-    expect(JSON.parse(await fs.readFile(file, 'utf8'))).toEqual({ theme: 'dark', permissions: { deny: ['x'], allow: ['Bash(ls:*)', 'Edit(src/**)'] } });
-    expect((await loadPermissionRules(scope.cwd)).allow.map((rule) => rule.raw)).toEqual(['Bash(ls:*)', 'Edit(src/**)']);
-    await expect(addPermissionAllowRule(scope.cwd, '((')).rejects.toThrow(/Not a valid/);
+  it('persists allow rules in the state directory, keyed by the workspace, never in the repository', async () => {
+    expect((await loadPermissionRules(scope.cwd, scope.stateDir)).allow).toEqual([]);
+    await addPermissionAllowRule(scope.cwd, scope.stateDir, 'Edit(src/**)');
+    await addPermissionAllowRule(scope.cwd, scope.stateDir, 'Edit(src/**)');
+    await expect(fs.stat(path.join(scope.cwd, '.clikcode', 'settings.local.json'))).rejects.toThrow();
+    const file = path.join(scope.stateDir, 'permission-allow.json');
+    expect(JSON.parse(await fs.readFile(file, 'utf8'))).toEqual({ workspaces: { [scope.cwd]: ['Edit(src/**)'] } });
+    expect((await loadPermissionRules(scope.cwd, scope.stateDir)).allow.map((rule) => rule.raw)).toEqual(['Edit(src/**)']);
+    // Another workspace does not inherit them.
+    expect((await loadPermissionRules(scope.addDirs[0]!, scope.stateDir)).allow).toEqual([]);
+    await expect(addPermissionAllowRule(scope.cwd, scope.stateDir, '((')).rejects.toThrow(/Not a valid/);
     await fs.writeFile(file, '{corrupt');
-    expect((await loadPermissionRules(scope.cwd)).allow).toEqual([]);
+    expect((await loadPermissionRules(scope.cwd, scope.stateDir)).allow).toEqual([]);
+  });
+
+  it('ignores allow rules a repository ships in .clikcode/settings.local.json unless the workspace is trusted', async () => {
+    await fs.mkdir(path.join(scope.cwd, '.clikcode'), { recursive: true });
+    await fs.writeFile(path.join(scope.cwd, '.clikcode', 'settings.local.json'), JSON.stringify({ permissions: { allow: ['Bash(*)'], deny: ['Bash(curl:*)'] } }));
+    const untrusted = await loadPermissionRules(scope.cwd, scope.stateDir);
+    expect(untrusted.allow).toEqual([]);
+    expect(untrusted.deny.map((rule) => rule.raw)).toEqual(['Bash(curl:*)']);
+    // A rule added before trust does not migrate the file's rules either.
+    await addPermissionAllowRule(scope.cwd, scope.stateDir, 'Bash(ls:*)');
+    expect((await loadPermissionRules(scope.cwd, scope.stateDir)).allow.map((rule) => rule.raw)).toEqual(['Bash(ls:*)']);
+  });
+
+  it('migrates a trusted workspace\'s older local allow rules once', async () => {
+    await fs.mkdir(path.join(scope.cwd, '.clikcode'), { recursive: true });
+    const local = path.join(scope.cwd, '.clikcode', 'settings.local.json');
+    await fs.writeFile(local, JSON.stringify({ permissions: { allow: ['Bash(ls:*)'] } }));
+    await trustWorkspace(scope.stateDir, scope.cwd);
+    expect((await loadPermissionRules(scope.cwd, scope.stateDir)).allow.map((rule) => rule.raw)).toEqual(['Bash(ls:*)']);
+    await addPermissionAllowRule(scope.cwd, scope.stateDir, 'Edit(src/**)');
+    // Later edits to the repository file grant nothing more.
+    await fs.writeFile(local, JSON.stringify({ permissions: { allow: ['Bash(*)'] } }));
+    expect((await loadPermissionRules(scope.cwd, scope.stateDir)).allow.map((rule) => rule.raw)).toEqual(['Bash(ls:*)', 'Edit(src/**)']);
   });
 
   it('suggests the narrowest rule', () => {
@@ -257,11 +282,12 @@ describe('deny and ask rules', () => {
     expect(decide('write_file', { path: 'src/config/a.ts', content: '' }, 'bypass', { rules })).toBe('allow');
   });
 
-  it('reads deny and ask from the committed project settings, but allow only from the local file', async () => {
+  it('reads deny and ask from the committed project settings, but allow only from the user\'s record', async () => {
     await fs.mkdir(path.join(scope.cwd, '.clikcode'), { recursive: true });
     await fs.writeFile(path.join(scope.cwd, '.clikcode', 'settings.json'), JSON.stringify({ permissions: { allow: ['Bash(make:*)'], deny: ['Read(.env)'], ask: ['Bash(git commit:*)'] } }));
     await fs.writeFile(path.join(scope.cwd, '.clikcode', 'settings.local.json'), JSON.stringify({ permissions: { allow: ['Bash(ls:*)'], deny: ['Bash(curl:*)'] } }));
-    const rules = await loadPermissionRules(scope.cwd);
+    await addPermissionAllowRule(scope.cwd, scope.stateDir, 'Bash(ls:*)');
+    const rules = await loadPermissionRules(scope.cwd, scope.stateDir);
     expect(rules.allow.map((rule) => rule.raw)).toEqual(['Bash(ls:*)']);
     expect(rules.deny.map((rule) => rule.raw).sort()).toEqual(['Bash(curl:*)', 'Read(.env)']);
     expect(rules.ask.map((rule) => rule.raw)).toEqual(['Bash(git commit:*)']);
