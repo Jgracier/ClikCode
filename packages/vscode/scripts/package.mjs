@@ -19,7 +19,7 @@ const repo = join(root, '..', '..');
 /** The ClikCode that ships inside the extension, so one Marketplace install works with nothing
  * else on the machine (src/runtime.ts uses it only when no ClikCode is installed).
  *
- *   bundled/clikcode/dist/                         the CLI build (pnpm build:strict output)
+ *   bundled/clikcode/dist/                         the CLI build (pnpm build output)
  *   bundled/clikcode/package.json                  "type": "module", so dist/index.js loads as ESM
  *   bundled/clikcode/node_modules/<name>/index.mjs each package dist/ imports at runtime, bundled
  *                                                  with its own dependencies into ONE file

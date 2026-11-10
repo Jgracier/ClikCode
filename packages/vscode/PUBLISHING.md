@@ -1,20 +1,20 @@
 # Publishing ClikCode and the VS Code extension
 
 Both artifacts of this repository are published by **ClikDeploy**, automatically. Nobody runs
-`npm publish`, `vsce publish` or `ovsx publish` by hand in the normal flow, and this repository has no
+`npm publish` or `vsce publish` by hand in the normal flow, and this repository has no
 GitHub workflow: ClikDeploy runs the whole test gate before it publishes, and a second publisher would
 race it for version numbers.
 
 | Artifact | Where | Id |
 | --- | --- | --- |
 | CLI | npm, plus a GitHub release `v<version>` with `clikcode-<version>.tgz` and `clikcode.tgz` | `clikcode` |
-| Extension | Visual Studio Marketplace and Open VSX | `clikcode.clikcode` (publisher and namespace `clikcode`) |
+| Extension | Visual Studio Marketplace | `clikcode.clikcode` (publisher and namespace `clikcode`) |
 
 ## Tokens
 
-The npm token, the Marketplace personal access token (Azure DevOps, scope *Marketplace → Manage*,
-all accessible organizations) and the Open VSX access token live in the **ClikDeploy admin console →
-Resources → Platform**. Rotate them there; nothing in this repository holds a token.
+The npm token and the Marketplace personal access token (Azure DevOps, scope *Marketplace → Manage*,
+all accessible organizations) live in the **ClikDeploy admin console → Deployments → Build pipeline →
+Publishing**. Rotate them there; nothing in this repository holds a token.
 
 ## When a release happens
 
@@ -41,35 +41,9 @@ and the extension are versioned independently.
 
 ## What ClikDeploy runs
 
-CLI, from the repository root:
-
-```sh
-pnpm install --frozen-lockfile
-pnpm type-check
-pnpm test:all
-pnpm build:strict
-pnpm test:pack          # packs, npm install -g's the tarball into a clean prefix, runs
-                        # clikcode --version, --help, ide-bridge --help and doctor
-# stamp the version into package.json, then:
-npm publish --access public
-# then the GitHub release v<version> with clikcode-<version>.tgz and clikcode.tgz
-```
-
-Extension:
-
-```sh
-pnpm --dir packages/vscode type-check
-pnpm --dir packages/vscode test
-pnpm --dir packages/vscode run package    # must print no warnings
-# stamp the version into packages/vscode/package.json, package again, then:
-vsce publish --no-dependencies --packagePath clikcode-<version>.vsix
-ovsx publish clikcode-<version>.vsix
-```
-
-`vsce ls --no-dependencies` must list exactly: `CHANGELOG.md`, `LICENSE`, `README.md`,
-`package.json`, `dist/extension.js`, `dist/webview.js`, `media/activity.svg`, `media/chat.css`,
-`media/editor-dark.svg`, `media/editor-light.svg`, `media/icon.png` (`.vscodeignore` is an
-allowlist).
+The gate and the publish steps are ClikDeploy's `scripts/deploy/clikcode-publish/build.mjs` and
+`publish.mjs`; a run's steps and logs are in its history in the Publishing panel. `.vscodeignore` is
+an allowlist: `vsce ls --no-dependencies` shows what the `.vsix` carries.
 
 ## Extension ↔ ClikCode compatibility
 
@@ -108,13 +82,13 @@ which works because the repository is public.
 ## Manual fallback
 
 Only if ClikDeploy cannot publish, and never while it is publishing the same artifact. Pick a
-version above the latest published one (`npm view clikcode version`; the Marketplace and Open VSX
-listings for the extension), stamp it locally without committing it, and:
+version above the latest published one (`npm view clikcode version`; the Marketplace listing for the
+extension), stamp it locally without committing it, and:
 
 ```sh
 # CLI, from the repository root
 npm pkg set version=<version>
-pnpm build:strict && pnpm test:pack
+pnpm build && pnpm test:pack
 npm publish --access public --//registry.npmjs.org/:_authToken=<npm-token>
 gh release create v<version> clikcode-<version>.tgz clikcode.tgz --title "ClikCode <version>"
 git checkout package.json
@@ -124,7 +98,6 @@ cd packages/vscode
 npm pkg set version=<version>
 pnpm run package                                    # -> clikcode-<version>.vsix
 VSCE_PAT=<marketplace-token> ./node_modules/.bin/vsce publish --no-dependencies --packagePath clikcode-<version>.vsix
-./node_modules/.bin/ovsx publish clikcode-<version>.vsix -p <open-vsx-token>
 git checkout package.json
 ```
 
@@ -132,5 +105,4 @@ For the release assets, `npm pack` produces `clikcode-<version>.tgz`; copy it to
 well (the name `releases/latest/download/clikcode.tgz` resolves to).
 
 Listings: <https://www.npmjs.com/package/clikcode>,
-<https://marketplace.visualstudio.com/items?itemName=clikcode.clikcode>,
-<https://open-vsx.org/extension/clikcode/clikcode>.
+<https://marketplace.visualstudio.com/items?itemName=clikcode.clikcode>.
