@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { nativeAccountEnvironment, nativeProfileEnvironment } from './profile-environment';
 import { stateDirectory } from '../../session/store/paths';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 describe('native profile environments', () => {
   it('isolates HOME-based profiles through USERPROFILE on native Windows', () => {
@@ -17,14 +20,26 @@ describe('native profile environments', () => {
   });
 
   it('only exposes the API key referenced by the selected account', () => {
-    const harness = { authEnv: ['OPENROUTER_API_KEY', 'ANTHROPIC_API_KEY'] };
+    const harness = { provider: 'aider', authEnv: ['OPENROUTER_API_KEY', 'ANTHROPIC_API_KEY', 'VERTEXAI_PROJECT'] };
     const account = { authKind: 'api-key' as const, credentialRef: 'env:ANTHROPIC_API_KEY' };
     expect(nativeAccountEnvironment(harness, account)).toEqual({ OPENROUTER_API_KEY: '' });
   });
 
   it('does not mask provider credentials for native-login accounts', () => {
-    expect(nativeAccountEnvironment({ authEnv: ['ANTHROPIC_API_KEY'] }, {
+    expect(nativeAccountEnvironment({ provider: 'anthropic', authEnv: ['ANTHROPIC_API_KEY'] }, {
       authKind: 'vendor-cli', credentialRef: 'native:claude',
     })).toEqual({});
+  });
+
+  it('hides exported keys from an account signed in through its own profile', () => {
+    const profile = mkdtempSync(join(tmpdir(), 'cc-profile-env-'));
+    try {
+      const account = { authKind: 'vendor-cli' as const, credentialRef: 'native:claude', nativeProfile: { env: 'CLAUDE_CONFIG_DIR', path: profile } };
+      expect(nativeAccountEnvironment({ provider: 'anthropic', authEnv: ['ANTHROPIC_API_KEY'] }, account)).toMatchObject({ ANTHROPIC_API_KEY: '' });
+      expect(nativeAccountEnvironment({ provider: 'openai', authEnv: undefined }, { ...account, authKind: 'oauth' })).toMatchObject({ OPENAI_API_KEY: '' });
+      // A key pasted into the profile at sign-in is that account's own.
+      writeFileSync(join(profile, '.clikcode-key.json'), JSON.stringify({ ANTHROPIC_API_KEY: 'pasted' }));
+      expect(nativeAccountEnvironment({ provider: 'anthropic', authEnv: ['ANTHROPIC_API_KEY'] }, account)).toMatchObject({ ANTHROPIC_API_KEY: 'pasted' });
+    } finally { rmSync(profile, { recursive: true, force: true }); }
   });
 });
