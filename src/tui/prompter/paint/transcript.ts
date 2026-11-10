@@ -8,13 +8,14 @@ import type { MessageBlock } from '../../../harness/prompter.js';
 import { transientAssistantRequired } from '../../render/activity-log.js';
 import { turnEndLine } from '../../render/turn-end-line.js';
 import { accountSwitchLine } from '../../../turn/failover.js';
-import { reseedStartIndex } from '../../render/reseed-window.js';
+import { reseedRowsFor, reseedStartIndex } from '../../render/reseed-window.js';
 import { liveTurnSpan } from '../../render/steer-rows.js';
 import { pendingPromptText } from '../../render/pending-prompt.js';
 import { renderMessageBlocks } from '../../render/message-blocks.js';
 import { withoutOtherOrgThinkingNotice } from '../../../harness/protocol/claude-thinking-notice.js';
 import type { TerminalHarnessPrompter } from '../../prompter.js';
-import { ALTERNATE_TRANSCRIPT_ROWS } from '../state.js';
+import { inlineHistoryMode } from '../../inline.js';
+import { INLINE_TRANSCRIPT_ROWS } from '../state.js';
 import type { HarnessSession } from '../../../session/model.js';
 import { type RowBuilders, createRowBuilders, createToolRows, createTurnTools, type TurnSeam } from './rows.js';
 
@@ -99,10 +100,10 @@ function settleSeam(p: TerminalHarnessPrompter, finished: string[], session: Har
   // alternateTranscript (same trade-off as its row cap). The first frame
   // then costs O(viewport), not O(history).
   if (reseeding && firstUnwritten === 0 && persistedMessages.length > 0) {
-    // A /search mention further back than that starts the window there.
-    const focus = p.mentionFocus?.sessionId === session.id ? p.mentionFocus.messageIndex : undefined;
-    const recent = reseedStartIndex(persistedMessages, ALTERNATE_TRANSCRIPT_ROWS, conversationInner);
-    const from = focus === undefined ? recent : Math.min(recent, Math.max(0, focus - 1));
+    // Older messages are not written here at all: the window renders them on demand when the view scrolls up to them
+    // (history-window.ts), at any distance, so nothing of the conversation is out of reach.
+    const from = reseedStartIndex(persistedMessages, inlineHistoryMode() ? INLINE_TRANSCRIPT_ROWS : reseedRowsFor(p.viewportRows()), conversationInner);
+    p.scrollWindow.first = from;
     if (from > 0) {
       for (let index = 0; index < from; index += 1) p.emitted.wrote(persistedMessages[index]!);
       p.emitted.settle(from);
@@ -127,7 +128,7 @@ function writeMessages(
   let drewLiveTurn = false;
   for (let index = firstUnwritten; index < persistedMessages.length; index += 1) {
     let message = persistedMessages[index]!;
-    p.messageLines.set(index, p.alternateTrimmed + p.alternateTranscript.length + p.pendingFinished.length + finished.length);
+    if (!p.scrollWindow.detached) p.messageLines.set(index, p.alternateTrimmed + p.alternateTranscript.length + p.pendingFinished.length + finished.length);
     // Something ClikCode told the model (a background shell's exit) is not part of the conversation the user reads.
     if (message.role === 'user' && isClikCodeNotice(message.content)) {
       p.emitted.wrote(message);
@@ -180,7 +181,7 @@ function writeMessages(
       p.turnSteers.clear();
       // The steers and the answers after them were that same drawing.
       for (let covered = index + 1; covered <= spanEnd; covered += 1) {
-        p.messageLines.set(covered, p.messageLines.get(index) ?? 0);
+        if (!p.scrollWindow.detached) p.messageLines.set(covered, p.messageLines.get(index) ?? 0);
         p.emitted.wrote(persistedMessages[covered]!);
       }
       index = spanEnd;
@@ -196,6 +197,16 @@ function writeMessages(
     emit(standaloneActivity(index + 1));
   }
   p.emitted.settle(persistedMessages.length);
+}
+
+/** Settled blocks as rows at `inner` columns: the notice a vendor adds about another org's thinking never shows. */
+export function makeRenderBlocks(inner: number) {
+  return (blocks: readonly MessageBlock[], firstOfMessage: boolean): string[] =>
+    renderMessageBlocks(blocks.flatMap((block): MessageBlock[] => {
+      if (block.kind !== 'paragraph' && block.kind !== 'heading' && block.kind !== 'list-item') return [block];
+      const text = withoutOtherOrgThinkingNotice(block.text);
+      return text.trim() ? [{ ...block, text }] : [];
+    }), '·', inner, firstOfMessage);
 }
 
 /** One frame's transcript: the rows retired this frame (`finished`) and the
@@ -227,18 +238,16 @@ export function writeTranscript(p: TerminalHarnessPrompter, input: TranscriptInp
   const { userRows, noticeRows, messageRows, standaloneActivity } = builders;
   const seam: TurnSeam = { materializedPendingTurn: false };
   const { savedTools, turnTools } = createTurnTools(p, builders, createToolRows(p, builders), pending, seam);
-  const renderBlocks = (blocks: readonly MessageBlock[], firstOfMessage: boolean): string[] =>
-    renderMessageBlocks(blocks.flatMap((block): MessageBlock[] => {
-      if (block.kind !== 'paragraph' && block.kind !== 'heading' && block.kind !== 'list-item') return [block];
-      const text = withoutOtherOrgThinkingNotice(block.text);
-      return text.trim() ? [{ ...block, text }] : [];
-    }), '·', conversationInner, firstOfMessage);
+  const renderBlocks = makeRenderBlocks(conversationInner);
   const renderLive = (blocks: readonly MessageBlock[], firstOfMessage: boolean): string[] =>
     renderMessageBlocks(blocks, '·', conversationInner, firstOfMessage, true);
   const settled = settleSeam(p, finished, session, persistedMessages, conversationInner);
   seam.materializedPendingTurn = settled.materializedPendingTurn;
   const kit: Kit = { finished, emit, userRows, noticeRows, messageRows, standaloneActivity, savedTools, turnTools, renderBlocks, renderLive };
+  p.scrollWindow.source = { messages: persistedMessages, inner: conversationInner };
   writeMessages(p, kit, persistedMessages, settled.firstUnwritten, settled.liveAssistant);
+  // Where the rows of the answer still streaming begin: everything before is a persisted message (the dump writes those from the list).
+  p.scrollWindow.liveFrom = p.alternateTrimmed + p.alternateTranscript.length + p.pendingFinished.length + finished.length;
   const liveConversation: string[] = [];
   if (hasTransientAssistant) {
     p.emitted.liveAssistantIndex = p.emitted.writtenCount();
