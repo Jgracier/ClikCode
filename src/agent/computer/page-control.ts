@@ -328,8 +328,6 @@ export async function fillTarget(page: Page, target: Locator, text: string, name
 
 // ---------------------------------------------------------------------------------------------------- evaluate
 
-/** Words that reach for a credential field's value, or for a way round the hiding below. The hiding is the guard; this is a second lock. */
-const CREDENTIAL_SCRIPT = /type\s*[=:]?\s*\\?["']?password|one-time-code|current-password|new-password|autocomplete\W{0,4}cc-|cc-(?:number|csc|exp|name)|FormData|getOwnPropertyDescriptor|__lookupGetter__|Reflect\.get|\.elements\b|requestSubmit|\.password\b/i;
 const MAX_RESULT = 8_000;
 
 function encodedForms(value: string): string[] {
@@ -368,12 +366,12 @@ export function showResult(result: unknown): string {
 }
 
 /** Run a JavaScript expression or function in the page (or on the element a ref names, which the function receives) and return its JSON result.
- * A credential field reads as empty to the script, a script that goes looking for one is refused, and the answer is scrubbed like the page view. */
+ * A credential field reads as empty to the script and the answer is scrubbed like the page view. Neither stops a determined script, so
+ * every evaluate is approved by a human who sees the whole script (permissions.ts); no word list stands in for that. */
 export async function evaluateOnPage(page: Page, args: { expression?: string; target?: string }, deps: Pick<PageDeps, 'locate'>): Promise<string> {
   const code = args.expression?.trim();
   if (!code) throw new Error('evaluate needs an expression, e.g. "document.title" or "el => el.scrollHeight" (with a target, the function gets that element).');
   if (code.length > 20_000) throw new Error('The script is too long (20,000 characters at most).');
-  if (CREDENTIAL_SCRIPT.test(code)) throw new Error('evaluate does not read password, one-time-code or card fields, or form data. Fill those fields with fill (no text) and let the page do the rest.');
   const target = args.target?.trim() ? await deps.locate(page, args.target) : undefined;
   if (target && await target.evaluate((node, selector) => (node as unknown as { matches(selector: string): boolean }).matches(selector), SENSITIVE).catch(() => false)) throw new Error('That is a password, one-time-code or card field: its value is never read.');
   const held = [...await sensitiveValues(page), ...await keyFieldValues(page), ...(await pageSecrets(page)).map(item => item.value)];

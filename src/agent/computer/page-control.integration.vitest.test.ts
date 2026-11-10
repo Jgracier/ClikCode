@@ -107,7 +107,7 @@ describe.skipIf(!smoke)('page control in real Chrome', () => {
     view = (await run({ action: 'observe' })).output;
   }, 60_000);
 
-  it('evaluates scripts, hides credential values, and refuses to go looking for them', async () => {
+  it('evaluates scripts and hides credential values, however the script reaches for them', async () => {
     expect((await run({ action: 'evaluate', expression: 'document.title' })).output).toBe('"Start"');
     expect((await run({ action: 'evaluate', expression: '({ n: 1 + 1, list: [1, 2] })' })).output).toContain('"n": 2');
     expect((await run({ action: 'evaluate', expression: '(async () => { await new Promise(r => setTimeout(r, 50)); return 7; })()' })).output).toBe('7');
@@ -119,11 +119,11 @@ describe.skipIf(!smoke)('page control in real Chrome', () => {
     const direct = await run({ action: 'evaluate', expression: 'document.querySelector("#pw").value' });
     expect(direct.isError).toBeUndefined();
     expect(direct.output).toBe('""');
-    const refused = await run({ action: 'evaluate', expression: 'document.querySelector("input[type=password]").value' });
-    expect(refused.isError).toBe(true);
-    expect(refused.output).not.toContain(PASSWORD);
+    const byType = await run({ action: 'evaluate', expression: 'document.querySelector("input[type=password]").value' });
+    expect(byType.output).not.toContain(PASSWORD);
+    // Round the shadowed getter: the result is still scrubbed of what the field holds.
     const viaProto = await run({ action: 'evaluate', expression: 'Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").get.call(document.querySelector("#pw"))' });
-    expect(viaProto.isError).toBe(true);
+    expect(viaProto.output).not.toContain(PASSWORD);
     // A value that leaks through the page's own text is still hidden.
     const echoed = await run({ action: 'evaluate', expression: 'document.body.innerHTML.length > 0 ? document.querySelector("#pw").getAttribute("value") : ""' });
     expect(echoed.output).not.toContain(PASSWORD);
