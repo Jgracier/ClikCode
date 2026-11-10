@@ -23,10 +23,11 @@ export const PASTE_END = '\u001b[201~';
  * ordinary keystroke. Terminals deliver a pasted line break as a bare `\r`
  * (and Windows sources as `\r\n`), which drew as one row that kept rewinding
  * over itself instead of a multi-line draft; tabs and any escape sequences
- * smuggled inside the paste are neutralised by the same sanitizer. */
+ * smuggled inside the paste are neutralised by the same sanitizer. Tabs stay tabs: the model gets the text as pasted (code,
+ * a TSV), and only the composer's drawing expands them. */
 export function pastedText(key: string): string | undefined {
   return key.startsWith(PASTE_START) && key.endsWith(PASTE_END)
-    ? sanitizeTerminalText(key.slice(PASTE_START.length, key.length - PASTE_END.length))
+    ? sanitizeTerminalText(key.slice(PASTE_START.length, key.length - PASTE_END.length), { keepTabs: true })
     : undefined;
 }
 

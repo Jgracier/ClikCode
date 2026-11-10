@@ -1,7 +1,8 @@
 /** The composer's viewport: which rows of a multi-line draft are visible and
  * where the cursor sits in them. */
 
-import { nextCharacterIndex, terminalCellWidth } from './width.js';
+import { TAB_WIDTH, nextCharacterIndex, terminalCellWidth } from './width.js';
+import { expandTabs } from './text.js';
 
 interface ComposerLayout {
   rows: string[];
@@ -34,7 +35,8 @@ export function composerLayout(value: string, cursor: number, available: number,
       index = next;
       continue;
     }
-    const characterWidth = Math.max(1, terminalCellWidth(character));
+    // A tab advances to the next tab stop of its row; the row is drawn with the tabs expanded (below).
+    const characterWidth = character === '\t' ? TAB_WIDTH - (column % TAB_WIDTH) : Math.max(1, terminalCellWidth(character));
     if (column > 0 && column + characterWidth > width) {
       if (/\s/u.test(character)) {
         ranges.push({ start: rowStart, end: index });
@@ -80,6 +82,6 @@ export function composerLayout(value: string, cursor: number, available: number,
     break;
   }
   const start = Math.max(0, Math.min(position.row - maxRows + 1, rows.length - maxRows));
-  const visible = rows.slice(start, start + maxRows);
+  const visible = rows.slice(start, start + maxRows).map((row) => expandTabs(row));
   return { rows: visible, cursorRow: position.row - start, cursorWidth: position.column };
 }
