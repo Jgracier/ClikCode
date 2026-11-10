@@ -129,6 +129,8 @@ export function clearTranscript(this: TerminalHarnessPrompter): void {
   // can land on a row it did not mean.
   this.alternateTrimmed += this.alternateTranscript.length;
   this.alternateTranscript.length = 0;
+  this.capDropped = 0;
+  this.capMarkerLine = undefined;
   this.pendingFinished = [];
   this.lastFinishedRow = undefined;
   this.secondLastFinishedRow = undefined;
