@@ -80,7 +80,8 @@ describe('the conversation written into the normal screen when the alternate scr
     expect(out.endsWith('rows\r\n')).toBe(true);
     expect(out).not.toMatch(/\u001b\[[23]J/);
     expect(out.length).toBeGreaterThan('rows\r\n'.length);
-    expect(enterAlternateScreenSequence()).not.toContain('[2J');
+    expect(enterAlternateScreenSequence()).not.toMatch(/\u001b\[[23]J/);
+    expect(enterAlternateScreenSequence()).toContain('\r\n\r\n');
   });
 
   it('never wipes the user\'s saved lines to take the screen: no ESC[3J on the way in', () => {
