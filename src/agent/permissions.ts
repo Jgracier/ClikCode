@@ -11,7 +11,8 @@ import {
 } from './security.js';
 import type { ToolContext, ToolDefinition } from './tool-contract.js';
 import type { AiHarnessPermissionMode } from '../harness/definition.js';
-import { updateJsonFile } from '../session/store/json-file.js';
+import { objectOrEmpty, updateJsonFile } from '../session/store/json-file.js';
+import { canonicalWorkspace, isWorkspaceTrusted } from './workspace-trust.js';
 import { computerEnabledSync } from './computer/settings.js';
 import { currentToolName } from './computer/tool-names.js';
 
@@ -298,6 +299,11 @@ function permissionSettingsPath(cwd: string): string {
   return path.join(cwd, '.clikcode', 'settings.local.json');
 }
 
+/** The user's allow rules, keyed by each workspace's real path. It lives in
+ * the state directory, which the agent can neither read nor write and which no
+ * cloned repository contains, so a repository cannot grant itself anything. */
+const ALLOW_FILE = 'permission-allow.json';
+
 async function readPermissions(file: string): Promise<PermissionRules> {
   try {
     return parsePermissionSettings((JSON.parse(await fs.readFile(file, 'utf8')) as { permissions?: unknown } | null)?.permissions);
@@ -307,38 +313,65 @@ async function readPermissions(file: string): Promise<PermissionRules> {
   }
 }
 
-/** The workspace's rules. Allow rules come only from the user's own local
- * file: a repository must not be able to grant itself permissions. Deny and
- * ask rules only restrict, so the files a project commits (`.clikcode` and
- * Claude Code's `.claude`) may declare them too. */
-export async function loadPermissionRules(cwd: string): Promise<PermissionRules> {
+type AllowRecord = { workspaces: Record<string, string[]> };
+
+function allowRecord(raw: string | undefined): AllowRecord {
+  return { workspaces: allowedIn(raw) };
+}
+
+function allowedIn(raw: string | undefined): Record<string, string[]> {
+  const workspaces = objectOrEmpty(raw).workspaces;
+  if (!workspaces || typeof workspaces !== 'object' || Array.isArray(workspaces)) return {};
+  return Object.fromEntries(Object.entries(workspaces as Record<string, unknown>)
+    .filter((entry): entry is [string, unknown[]] => Array.isArray(entry[1]))
+    .map(([key, rules]) => [key, rules.filter((rule): rule is string => typeof rule === 'string')]));
+}
+
+/** The saved allow rules for `cwd`. A workspace with no entry yet takes the
+ * allow rules of its older `.clikcode/settings.local.json` -- but only when the
+ * user has trusted that folder, since a repository can ship that file itself. */
+async function savedAllowRules(cwd: string, stateDir: string, local: PermissionRules): Promise<string[]> {
+  const key = await canonicalWorkspace(cwd);
+  const file = path.join(stateDir, ALLOW_FILE);
+  // fail-open-ok: no record (or an unreadable one) allows nothing, the safe answer.
+  const saved = allowedIn(await fs.readFile(file, 'utf8').catch(quiet('agent/permissions')))[key];
+  if (saved) return saved;
+  if (local.allow.length === 0 || !await isWorkspaceTrusted(stateDir, cwd)) return [];
+  const migrated = local.allow.map((rule) => rule.raw);
+  await updateJsonFile(file, allowRecord, ({ workspaces }) => workspaces[key] ? undefined : { workspaces: { ...workspaces, [key]: migrated } })
+    .catch(quiet('agent/permissions'));
+  return migrated;
+}
+
+/** The workspace's rules. Allow rules come only from the user's own record in
+ * the state directory: a repository must not be able to grant itself
+ * permissions. Deny and ask rules only restrict, so the files a project
+ * commits (`.clikcode` and Claude Code's `.claude`) may declare them too. */
+export async function loadPermissionRules(cwd: string, stateDir: string): Promise<PermissionRules> {
   const restricting = await Promise.all([
     path.join(cwd, '.clikcode', 'settings.json'), path.join(cwd, '.claude', 'settings.json'), path.join(cwd, '.claude', 'settings.local.json'),
   ].map(readPermissions));
   const local = await readPermissions(permissionSettingsPath(cwd));
   const unique = (rules: readonly PermissionRule[]): PermissionRule[] => [...new Map(rules.map((rule) => [rule.raw, rule])).values()];
   return {
-    allow: local.allow,
+    allow: parsePermissionRules(await savedAllowRules(cwd, stateDir, local)).allow,
     deny: unique([...local.deny, ...restricting.flatMap((entry) => entry.deny)]),
     ask: unique([...local.ask, ...restricting.flatMap((entry) => entry.ask)]),
   };
 }
 
-/** Adds one allow rule, preserving every other key in the file. */
-export async function addPermissionAllowRule(cwd: string, rule: string): Promise<PermissionRules['allow']> {
+/** Adds one allow rule to the workspace's record in the state directory. */
+export async function addPermissionAllowRule(cwd: string, stateDir: string, rule: string): Promise<PermissionRules['allow']> {
   if (!parsePermissionRule(rule)) throw new Error(`Not a valid permission rule: ${rule}`);
-  const settings = await updateJsonFile(permissionSettingsPath(cwd), (raw): Record<string, unknown> => {
-    // A file that is there but is not a settings object is the user's to fix, never to overwrite.
-    const parsed: unknown = raw === undefined ? {} : JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(`${permissionSettingsPath(cwd)} is not a JSON object`);
-    return parsed as Record<string, unknown>;
-  }, (current) => {
-    const permissions = (current.permissions && typeof current.permissions === 'object' ? current.permissions : {}) as Record<string, unknown>;
-    const allow = Array.isArray(permissions.allow) ? permissions.allow.filter((value): value is string => typeof value === 'string') : [];
+  const key = await canonicalWorkspace(cwd);
+  // Seeds the record first, so a trusted workspace's older rules are kept beside the new one.
+  await savedAllowRules(cwd, stateDir, await readPermissions(permissionSettingsPath(cwd)));
+  const { workspaces } = await updateJsonFile(path.join(stateDir, ALLOW_FILE), allowRecord, (current) => {
+    const allow = current.workspaces[key] ?? [];
     if (allow.includes(rule.trim())) return undefined;
-    return { ...current, permissions: { ...permissions, allow: [...allow, rule.trim()] } };
+    return { workspaces: { ...current.workspaces, [key]: [...allow, rule.trim()] } };
   });
-  return parsePermissionRules((settings.permissions as { allow?: unknown } | undefined)?.allow).allow;
+  return parsePermissionRules(workspaces[key]).allow;
 }
 
 /** The narrowest rule that would have allowed this call, for "always allow". */

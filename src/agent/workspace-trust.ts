@@ -14,7 +14,8 @@ import { objectOrEmpty, updateJsonFile } from '../session/store/json-file.js';
 
 const TRUST_FILE = 'trusted-workspaces.json';
 
-async function canonical(dir: string): Promise<string> {
+/** The workspace's resolved real path: the key every per-workspace record in the state directory uses. */
+export async function canonicalWorkspace(dir: string): Promise<string> {
   const absolute = path.resolve(dir);
   return fs.realpath(absolute).catch(() => absolute);
 }
@@ -31,7 +32,7 @@ async function readTrusted(stateDir: string): Promise<string[]> {
 
 /** True when `cwd` is a trusted folder or inside one. */
 export async function isWorkspaceTrusted(stateDir: string, cwd: string): Promise<boolean> {
-  const target = await canonical(cwd);
+  const target = await canonicalWorkspace(cwd);
   return (await readTrusted(stateDir)).some((root) => {
     const relative = path.relative(root, target);
     return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
@@ -39,7 +40,7 @@ export async function isWorkspaceTrusted(stateDir: string, cwd: string): Promise
 }
 
 export async function trustWorkspace(stateDir: string, cwd: string): Promise<void> {
-  const target = await canonical(cwd);
+  const target = await canonicalWorkspace(cwd);
   await updateJsonFile(path.join(stateDir, TRUST_FILE), (raw) => ({ workspaces: trustedIn(raw) }),
     ({ workspaces }) => workspaces.includes(target) ? undefined : { workspaces: [...workspaces, target] });
 }

@@ -400,8 +400,8 @@ describe('in a turn', () => {
     };
     await turn('mcp-always-1');
     expect(rules).toEqual(['mcp__fake__fail', 'mcp__fake__picture']);
-    const saved = JSON.parse(await readFile(join(dir, '.clikcode', 'settings.local.json'), 'utf8'));
-    expect(saved.permissions.allow).toEqual(['mcp__fake__fail', 'mcp__fake__picture']);
+    const saved = JSON.parse(await readFile(join(stateDir, 'permission-allow.json'), 'utf8'));
+    expect(Object.values(saved.workspaces)).toEqual([['mcp__fake__fail', 'mcp__fake__picture']]);
     await turn('mcp-always-2');
     expect(rules).toHaveLength(2);
   });

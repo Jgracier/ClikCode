@@ -167,7 +167,7 @@ export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime
   let noSkills = false;
   const [loaded, savedRules, baseSystem, notebooksOnDisk] = await abortable(Promise.all([
     store.load(),
-    input.permissionRules ? Promise.resolve(input.permissionRules.current) : loadPermissionRules(cwd),
+    input.permissionRules ? Promise.resolve(input.permissionRules.current) : loadPermissionRules(cwd, input.stateDir),
     // A sub-agent keeps its own short prompt. Skills are listed only when the
     // tool that loads them is present.
     input.subagent ? input.subagent.system

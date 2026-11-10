@@ -183,7 +183,7 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInpu
       // already in force if this same call asks again -- and a failed write
       // only costs the remembering, never the approval they already gave.
       if (approved === 'always' && rule) {
-        turnRules.current = { ...turnRules.current, allow: await addPermissionAllowRule(ctx.cwd, rule).catch(() => [...turnRules.current.allow, ...parsePermissionRules([rule]).allow]) };
+        turnRules.current = { ...turnRules.current, allow: await addPermissionAllowRule(ctx.cwd, input.stateDir, rule).catch(() => [...turnRules.current.allow, ...parsePermissionRules([rule]).allow]) };
       }
     }
     return undefined;
