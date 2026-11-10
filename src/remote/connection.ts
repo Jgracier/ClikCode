@@ -21,6 +21,7 @@
 import { lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import type { ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { networkInterfaces } from 'node:os';
 import { createInterface } from 'node:readline';
 import { listedChats, type IdeConversation, type IdeEvent, type IdeHostEvent, type IdeHostRequest, type IdeRequest } from '../ide/protocol.js';
 import { IDE_PROTOCOL } from '../ide/protocol-version.js';
@@ -63,7 +64,16 @@ const READY_TIMEOUT_MS = 30_000;
 const REQUEST_TIMEOUT_MS = 60_000;
 /** How much of a bridge's stderr is held for the reason it ended; the end of it, where the cause is. */
 const STDERR_KEEP = 16_000;
-const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
+/** A machine that does not answer is tried quickly at first (a blip) and then ever less: 30 s, doubling to 10 minutes. One that was
+ * off for a week was tried 523 times, each a 10 s ssh timeout. It is tried at once, whatever the pause, on a user action (`wake()`,
+ * `reconnect()`: a list shows it) and when this machine's own network changes (NETWORK_POLL_MS). */
+const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000, 60_000, 120_000, 240_000, 480_000, 600_000];
+/** How often the network is looked at while a long pause runs: a new address (Wi-Fi joined, a VPN up) is a reason to try now. */
+const NETWORK_POLL_MS = 30_000;
+
+function networkSignature(): string {
+  return JSON.stringify(Object.values(networkInterfaces()).flatMap((list) => (list ?? []).filter((i) => !i.internal).map((i) => i.address)).sort());
+}
 const CACHE_WRITE_MS = 5_000;
 
 export interface LinkOptions {
@@ -71,6 +81,8 @@ export interface LinkOptions {
   spawn?: (target: string, script: string) => ChildProcess;
   localCommit?: string;
   backoffMs?: readonly number[];
+  /** What identifies this machine's network now (tests give their own); a change ends a long pause. */
+  networkSignature?: () => string;
   /** How long a request waits for its answer (tests shorten it). */
   requestTimeoutMs?: number;
   /** Update an outdated machine by its policy (default on). Off where the
@@ -173,6 +185,7 @@ export class RemoteLink {
   private connectedAt = 0;
 
   private connect(): void {
+    this.stopNetworkWatch();
     const machine = this.view.machine;
     this.connectedAt = Date.now();
     lifecycle('remote.connect', { machine: machine.name, attempt: this.attempt });
@@ -234,6 +247,29 @@ export class RemoteLink {
       this.connect();
     }, wait);
     this.retry.unref();
+    // A long pause is cut short by this machine's network changing.
+    if (wait >= NETWORK_POLL_MS * 2) {
+      const signature = this.options.networkSignature ?? networkSignature;
+      const before = signature();
+      this.netWatch = setInterval(() => {
+        if (signature() === before) return;
+        this.stopNetworkWatch();
+        clearTimeout(this.retry);
+        this.retry = undefined;
+        if (this.stopped || !this.wanted()) { this.parked = !this.stopped; return; }
+        this.attempt = 0;
+        lifecycle('remote.network-changed', { machine: this.view.machine.name });
+        this.set({ state: 'connecting', error: undefined });
+        this.connect();
+      }, NETWORK_POLL_MS);
+      this.netWatch.unref();
+    }
+  }
+
+  private netWatch: NodeJS.Timeout | undefined;
+  private stopNetworkWatch(): void {
+    if (this.netWatch) clearInterval(this.netWatch);
+    this.netWatch = undefined;
   }
 
   /** A list shows the machine again: one offline is tried at once, not after
@@ -455,6 +491,7 @@ export class RemoteLink {
   async stop(): Promise<void> {
     this.stopped = true;
     clearTimeout(this.retry);
+    this.stopNetworkWatch();
     clearTimeout(this.readyTimer);
     const child = this.child;
     this.child = undefined;
