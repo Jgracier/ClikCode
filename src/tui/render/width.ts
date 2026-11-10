@@ -87,13 +87,30 @@ const CLUSTER_WINDOW = 32;
 function isWideCodePoint(code: number): boolean {
   if (code < 0x1100) return false;
   return code <= 0x115f || code === 0x2329 || code === 0x232a
-    || (code >= 0x2e80 && code <= 0xa4cf) || (code >= 0xac00 && code <= 0xd7a3)
-    || (code >= 0xf900 && code <= 0xfaff)
+    // CJK radicals to Yi, less U+303F (narrow), U+3040 (unassigned) and the Yijing hexagrams U+4DC0-4DFF (narrow, between
+    // CJK extension A and the unified ideographs). Hangul jamo extended-A are wide like the syllables they build.
+    || (code >= 0x2e80 && code <= 0x303e) || (code >= 0x3041 && code <= 0x4dbf) || (code >= 0x4e00 && code <= 0xa4cf)
+    || (code >= 0xa960 && code <= 0xa97f) || (code >= 0xac00 && code <= 0xd7a3)
+    || (code >= 0xf900 && code <= 0xfaff) || (code >= 0xfe10 && code <= 0xfe19)
     // CJK compatibility forms and small forms, fullwidth forms and signs.
     || (code >= 0xfe30 && code <= 0xfe6f) || (code >= 0xff01 && code <= 0xff60) || (code >= 0xffe0 && code <= 0xffe6)
     // A regional-indicator pair renders as one two-cell flag.
     || (code >= 0x1f1e6 && code <= 0x1f1ff)
+    // Tangut, Nushu and kana supplements, the enclosed ideographic supplement: wide in the phone page's table too.
+    || (code >= 0x16fe0 && code <= 0x16fe4) || (code >= 0x17000 && code <= 0x18aff) || (code >= 0x1b000 && code <= 0x1b2ff)
+    || (code >= 0x1f200 && code <= 0x1f202) || (code >= 0x1f210 && code <= 0x1f23b) || (code >= 0x1f240 && code <= 0x1f248)
+    || (code >= 0x1f250 && code <= 0x1f251) || (code >= 0x1f260 && code <= 0x1f265)
     || (code >= 0x1f300 && code <= 0x1faff) || (code >= 0x20000 && code <= 0x3fffd);
+}
+
+/** Format characters (Unicode category Cf: soft hyphen, zero-width space and joiners, direction marks, the BOM, tags) and the line
+ * and paragraph separators draw nothing: no cell. The ones that PREPEND to what follows (Arabic number signs and the like) are
+ * not zero: they are the base of a cluster that does have width. */
+const FORMAT = /\p{Cf}/u;
+function drawsNothing(code: number, character: string): boolean {
+  if (code < 0xa0) return false;
+  if (code === 0x2028 || code === 0x2029) return true;
+  return FORMAT.test(character) && !((code >= 0x600 && code <= 0x605) || code === 0x6dd || code === 0x70f || code === 0x890 || code === 0x891 || code === 0x8e2);
 }
 
 /** Split into atomic display tokens: each SGR sequence stays whole (slicing
@@ -142,7 +159,7 @@ function oneCell(code: number): boolean {
       || (code >= 0x1100 && code <= 0x11ff) || (code >= 0xa960 && code <= 0xa97f) || (code >= 0xd7b0 && code <= 0xd7ff)
       || (code >= 0x600 && code <= 0x605) || code === 0x6dd || code === 0x70f || code === 0x890 || code === 0x891
       || code === 0x8e2 || code === 0xd4e || code === 0xe33 || code === 0xeb3 || code === 0x200d;
-    known = joins || isWideCodePoint(code) || MARK.test(character) || GRAPHEME_EXTEND.test(character)
+    known = joins || isWideCodePoint(code) || MARK.test(character) || GRAPHEME_EXTEND.test(character) || drawsNothing(code, character)
       || EMOJI_PRESENTATION.test(character) ? 2 : 1;
     ONE_CELL[code] = known;
   }
@@ -199,7 +216,7 @@ export function terminalCellWidth(value: string): number {
     // The base character decides the cell count; whatever the cluster attaches
     // to it (marks, variation selectors, joiners) draws inside those cells.
     const base = String.fromCodePoint(code);
-    if (MARK.test(base)) continue;
+    if (MARK.test(base) || drawsNothing(code, base)) continue;
     // Presentation is part of the width. U+FE0F asks for the emoji glyph, which
     // terminals draw two cells wide even for a symbol that is one cell as text
     // (U+2611 BALLOT BOX, U+2764 HEART); U+FE0E asks for the narrow text glyph.
