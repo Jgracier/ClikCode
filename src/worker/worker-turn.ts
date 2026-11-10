@@ -9,7 +9,7 @@ import { beginTurnClock, endTurnClock, markTurn } from '../runtime/turn-latency.
 import { isUsageExhaustedMessage } from '../turn/usage-exhausted.js';
 import { runSessionTurn } from '../turn/session-turn.js';
 import { LiveTurnInputBroker } from '../turn/live-input.js';
-import { discardInterruptedTurn, markFailedTurn, preserveInterruptedTurn } from '../turn/turn-journal.js';
+import { discardInterruptedTurn, markFailedTurn, preserveInterruptedTurn, type DurableTurnCheckpoint } from '../turn/turn-journal.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import { consumeSessionTurn } from '../turn/checkpoint.js';
@@ -20,6 +20,9 @@ import type { ClientCommand } from './protocol.js';
 import type { WorkerContext } from './worker-context.js';
 
 type SubmitCommand = Extract<ClientCommand, { type: 'submit' }>;
+
+/** How long a hard Stop waits for the stopped turn's write in flight. */
+const CLOSE_WAIT_MS = 2_000;
 
 async function pendingSteerCount(sessionId: string): Promise<number> {
   const state = await readState({ transcripts: [sessionId] }).catch(quiet('worker/worker-turn'));
@@ -188,8 +191,17 @@ export function createTurnRunner(ctx: WorkerContext) {
     ctx.activeLiveInput = liveInput;
     ctx.activeSubmissions = submissions;
     ctx.turnWorkDone = false;
-    // A hard Stop ends the turn here even when what it waits on never answers.
-    const forced = new Promise<never>((_, reject) => { ctx.forceStop = () => reject(turnCancelledError()); });
+    // A hard Stop ends the turn here even when what it waits on never answers. The turn runs on:
+    // its checkpoint is closed first, so nothing it still writes lands after the stop is settled
+    // (or after the next turn started) and puts the stopped turn back.
+    let checkpoint: DurableTurnCheckpoint | undefined;
+    let closing: Promise<void> | undefined;
+    const forced = new Promise<never>((_, reject) => {
+      ctx.forceStop = () => {
+        closing ??= checkpoint?.close().catch(quiet('worker/worker-turn')) ?? Promise.resolve();
+        reject(turnCancelledError());
+      };
+    });
     forced.catch(quiet('worker/worker-turn'));
     // A Stop that arrived before this turn started: applied now, and the turn
     // ends through the ordinary cancelled path.
@@ -226,6 +238,11 @@ export function createTurnRunner(ctx: WorkerContext) {
       const running = runSessionTurn(config, sessionId, command.text, controller.signal, {
         onWorkFinished: () => { ctx.turnWorkDone = true; },
         onCompletedHarness: (harness) => { lastHarness = harness; },
+        onCheckpoint: (opened) => {
+          checkpoint = opened;
+          // Opened after a hard Stop already ended the turn: closed at once.
+          if (closing) void opened.close().catch(quiet('worker/worker-turn'));
+        },
         persistentTransports: true,
         prompter: observer,
         liveInput,
@@ -239,6 +256,8 @@ export function createTurnRunner(ctx: WorkerContext) {
       const cancelled = isTurnCancelled(error);
       turnOutcome = cancelled ? 'cancelled' : `error: ${(error instanceof Error ? error.message : String(error)).slice(0, 200)}`;
       try {
+        // A write already under way lands before the stop is settled; a hung one is not waited on.
+        if (closing) await Promise.race([closing, new Promise<void>((resolveWait) => { setTimeout(resolveWait, CLOSE_WAIT_MS).unref(); })]);
         if (cancelled) await settleCancelledTurn(command);
         else await settleFailedTurn(command, error, resumed);
       } catch (settleError) {
