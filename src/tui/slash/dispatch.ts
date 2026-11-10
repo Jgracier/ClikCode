@@ -47,7 +47,7 @@ import { copyToClipboard } from '../../session/attachments.js';
 import { parseSlashInput, routeSlashInput, type SlashHandlerKey, type SlashRoute } from './registry.js';
 import { loginMcpServer, mcpServersText, mcpSignInUiFor } from '../../commands/mcp.js';
 import { forgetMcpOAuth } from '../../agent/mcp/oauth.js';
-import { stripAnsi } from '../../gateway/login/url.js';
+import { stripAnsi } from '../render/width.js';
 import { stateDirectory } from '../../session/store/paths.js';
 import { sessionHarness, slashRouteContextFor } from './context.js';
 import { enqueueCommandLine } from './queue.js';

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { terminalCellWidth, visiblePathTail } from './width.js';
+import { stripAnsi, terminalCellWidth, visiblePathTail } from './width.js';
 
 describe('terminalCellWidth', () => {
   it('measures plain text on the fast path the same as the full one', () => {
@@ -48,5 +48,15 @@ describe('a path cut to fit', () => {
     expect(visiblePathTail('~/projects/clikcode', 12)).toBe('…/clikcode');
     expect(visiblePathTail('~/projects/clikcode', 16)).toBe('…/clikcode');
     expect(visiblePathTail('~/a/projects/clikcode', 20)).toBe('…/projects/clikcode');
+  });
+});
+
+describe('stripAnsi', () => {
+  it('drops colour, OSC 8 links (ST or BEL) and cursor moves, keeping the text', () => {
+    expect(stripAnsi('\u001b[1;32mok\u001b[0m')).toBe('ok');
+    expect(stripAnsi('\u001b]8;;https://x.dev\u001b\\link\u001b]8;;\u001b\\')).toBe('link');
+    expect(stripAnsi('\u001b]8;;https://x.dev\u0007link\u001b]8;;\u0007')).toBe('link');
+    expect(stripAnsi('a\u001b[2Kb\u001b[?25lc')).toBe('abc');
+    expect(stripAnsi('plain')).toBe('plain');
   });
 });

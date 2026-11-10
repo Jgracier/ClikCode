@@ -25,6 +25,7 @@ import { standsAlone, type GroupThought } from '../../harness/protocol/call-grou
 import { thoughtRow } from './tool-rows.js';
 import { reasoningHeading } from '../../harness/protocol/turn-flow.js';
 import type { ActivityEntry } from './activity-log.js';
+import { stripAnsi } from './width.js';
 
 /** Calls listed under a group while it is live. */
 const LIVE_SHOWN_CALLS = 3;
@@ -153,6 +154,6 @@ export function liveItemLine(entry: ActivityEntry, ended: boolean): string {
   return event.kind === 'tool-error' ? look.paint.failed(label) : chalk.dim(`${label}${result ? ` · ${result}` : ''}`);
 }
 
-const plainThought = (thought: GroupThought): string => thoughtEntryRow(thought).replace(/\u001b\[[0-9;]*m/g, '').replace(new RegExp(`^${LOOK.glyph.thought} `), '');
+const plainThought = (thought: GroupThought): string => stripAnsi(thoughtEntryRow(thought)).replace(new RegExp(`^${LOOK.glyph.thought} `), '');
 
 export { LIVE_SHOWN_CALLS, standsAlone };
