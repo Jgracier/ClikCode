@@ -99,14 +99,20 @@ describe('scroll-back through a long conversation', () => {
   });
 
   it('holds a bounded number of messages at the top, the middle and the bottom of 5000', () => {
-    const { rl, settle } = setup();
+    const { term, rl, settle } = setup();
     try {
       rl.render(session(5000));
       settle();
       const held: Record<string, number> = { bottom: rl.scrollWindow.materialised };
-      rl.scrollTranscript(Math.floor(rl.scrollWindow.materialised * 0 + 12000));
+      // Already reading back when the long jump comes: what the last frame measured is not what the view is held against.
+      rl.scrollTranscript(40);
       settle();
+      rl.scrollTranscript(12000);
+      settle();
+      expect(idOf(term.screen())).toBeGreaterThan(500);
+      expect(idOf(term.screen())).toBeLessThan(2000);
       held.middle = rl.scrollWindow.materialised;
+      expect(held.middle).toBeGreaterThan(0);
       rl.handleScrollKey(HOME);
       settle();
       held.top = rl.scrollWindow.materialised;

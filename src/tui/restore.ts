@@ -72,6 +72,25 @@ export function historyDumpSequence(): string {
   return text || wipe ? `${wipe}${text}` : '';
 }
 
+/** The most one write of the dump carries. A conversation of up to 20000 rows is a couple of megabytes: written whole it would sit in
+ * one buffer behind everything else on a slow link, and a terminal that is not reading yet would be handed all of it at once. */
+export const HISTORY_DUMP_CHUNK_BYTES = 64 * 1024;
+
+/** `text` cut into writes of about HISTORY_DUMP_CHUNK_BYTES, each ending where a row does (after a line break) so no row is split
+ * across two writes. A terminal's stream is written synchronously (the call returns when the terminal has taken the bytes), so
+ * one write after another is the backpressure: the writer never runs ahead of the reader. */
+export function dumpChunks(text: string): string[] {
+  const chunks: string[] = [];
+  let at = 0;
+  while (at < text.length) {
+    let end = Math.min(text.length, at + HISTORY_DUMP_CHUNK_BYTES);
+    if (end < text.length) { const row = text.indexOf('\n', end); end = row < 0 ? text.length : row + 1; }
+    chunks.push(text.slice(at, end));
+    at = end;
+  }
+  return chunks;
+}
+
 export const terminalModes: {
   bracketedPaste: boolean;
   kittyKeyboard: boolean;
@@ -128,7 +147,9 @@ export function pushShellTitle(): boolean {
 /** The terminal handed back on a normal close: the read modes off, the
  * alternate screen left, the title and progress given back. */
 export function giveBackTerminal(readModesOff: string): void {
-  output.write(`${readModesOff}` + terminalTeardown(terminalModes.alternateScreen) + signalsTeardown() + historyDumpSequence());
+  const dump = historyDumpSequence();
+  output.write(`${readModesOff}` + terminalTeardown(terminalModes.alternateScreen) + signalsTeardown());
+  for (const chunk of dumpChunks(dump)) output.write(chunk);
   terminalModes.alternateScreen = false;
   terminalModes.painted = false;
 }
@@ -231,7 +252,7 @@ export function restoreTerminal(options: { sync?: boolean } = {}): void {
     const leavingAlternate = terminalModes.alternateScreen;
     sequence += terminalTeardown(leavingAlternate);
     sequence += signalsTeardown();
-    if (leavingAlternate) sequence += historyDumpSequence();
+    const dump = leavingAlternate ? historyDumpSequence() : '';
     const wasRaw = terminalModes.rawMode;
     terminalModes.uiStarted = false;
     terminalModes.painted = false;
@@ -249,6 +270,12 @@ export function restoreTerminal(options: { sync?: boolean } = {}): void {
       if (options.sync) {
         try { writeSync(output.fd, sequence); } catch { output.write(sequence); }
       } else output.write(sequence);
+      // The conversation, after the screen is given back, in writes of its own (see dumpChunks).
+      for (const chunk of dumpChunks(dump)) {
+        if (options.sync) {
+          try { writeSync(output.fd, chunk); } catch { output.write(chunk); }
+        } else output.write(chunk);
+      }
     }
     // `isRaw` covers reads (pickers) that entered raw mode without recording it.
     if ((wasRaw || input.isRaw) && input.isTTY && typeof input.setRawMode === 'function') input.setRawMode(false);

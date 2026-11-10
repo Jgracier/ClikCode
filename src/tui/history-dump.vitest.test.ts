@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HISTORY_DUMP_ROWS, takeHistoryDump } from './prompter/history-dump.js';
-import { historyDump, historyDumpSequence, enterAlternateScreenSequence } from './restore.js';
+import { historyDump, historyDumpSequence, enterAlternateScreenSequence, dumpChunks, HISTORY_DUMP_CHUNK_BYTES } from './restore.js';
 import type { TerminalHarnessPrompter } from './prompter.js';
 
 type Fake = { alternateTranscript: string[]; pendingFinished: string[]; alternateTrimmed: number; dumpedThrough: number | undefined; scrollWindow: { source: undefined } };
@@ -90,5 +90,14 @@ describe('the conversation written into the normal screen when the alternate scr
     vi.stubEnv('STY', ''); 
     expect(enterAlternateScreenSequence()).not.toContain('[3J');
     expect(enterAlternateScreenSequence().startsWith('\u001b[?1049h')).toBe(true);
+  });
+
+  it('is written in chunks that end on a row, and put back together are the dump', () => {
+    const text = Array.from({ length: 30000 }, (_, n) => `row number ${n}\u001b[0m\r\n`).join('');
+    const chunks = dumpChunks(text);
+    expect(chunks.length).toBeGreaterThan(5);
+    expect(chunks.join('')).toBe(text);
+    for (const chunk of chunks) { expect(chunk.endsWith('\n')).toBe(true); expect(chunk.length).toBeLessThan(HISTORY_DUMP_CHUNK_BYTES + 100); }
+    expect(dumpChunks('')).toEqual([]);
   });
 });
