@@ -252,6 +252,8 @@ export function jumpTo(p: TerminalHarnessPrompter, message: number, into: number
   p.lineTags.clear();
   p.selection = undefined;
   p.stopSelectionScroll();
+  // The body the last frame measured is another text now: what holds the view still while rows arrive must not compare with it.
+  p.scrollBodyLength = undefined;
   h.first = Math.max(0, Math.min(message, total - 1));
   h.end = h.first;
   h.gap = true;
@@ -336,7 +338,7 @@ function dropBelow(p: TerminalHarnessPrompter, above: number, keep: number): boo
   const total = totalOf(p);
   if (cut === undefined || cut >= total) return false;
   const cutRow = p.messageLines.get(cut)! - p.alternateTrimmed;
-  if (cutRow >= W.length) return false;
+  if (cutRow >= W.length || cutRow <= 0) return false;
   for (let index = cut; index < (h.end ?? total); index += 1) {
     if (p.messageLines.has(index)) h.counts.set(index, rowsOf(p, index));
   }
