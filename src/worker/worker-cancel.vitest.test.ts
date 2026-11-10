@@ -9,9 +9,14 @@ import type { WorkerEvent } from './protocol.js';
 const turn = vi.hoisted(() => ({
   run: undefined as undefined | ((signal: AbortSignal) => Promise<void>),
   signals: [] as AbortSignal[],
+  checkpoint: undefined as undefined | { close: () => Promise<void> },
 }));
 vi.mock('../turn/session-turn.js', () => ({
-  runSessionTurn: async (_config: unknown, _id: string, _text: string, signal: AbortSignal) => { turn.signals.push(signal); await turn.run?.(signal); },
+  runSessionTurn: async (_config: unknown, _id: string, _text: string, signal: AbortSignal, options: { onCheckpoint?: (checkpoint: unknown) => void } = {}) => {
+    turn.signals.push(signal);
+    if (turn.checkpoint) options.onCheckpoint?.(turn.checkpoint);
+    await turn.run?.(signal);
+  },
 }));
 vi.mock('../turn/turn-journal.js', () => ({
   discardInterruptedTurn: vi.fn(async () => undefined), preserveInterruptedTurn: vi.fn(async () => undefined), markFailedTurn: vi.fn(async () => undefined),
@@ -77,7 +82,7 @@ const waitForTurnEnd = (types: () => string[]): Promise<void> => vi.waitFor(() =
   expect(types().filter((type) => type === 'waiting-stop')).toHaveLength(1);
 }, { timeout: 5_000 });
 
-beforeEach(() => { turn.run = undefined; turn.signals = []; vendor.running = false; vendor.reaped = []; vendor.calls = []; });
+beforeEach(() => { turn.run = undefined; turn.signals = []; turn.checkpoint = undefined; vendor.running = false; vendor.reaped = []; vendor.calls = []; });
 
 describe('a Stop before the turn has started', () => {
   it('aborts the turn the moment it starts, and ends it cancelled with the draft restored', async () => {
@@ -213,6 +218,23 @@ describe('a Stop the turn does not honour', () => {
     expect(ctx.turnRunning).toBe(false);
     expect(types().filter((type) => type === 'waiting-stop')).toHaveLength(1);
     expect(types().filter((type) => type === 'stopping')).toHaveLength(1);
+  });
+
+  it('closes the stopped turn\'s checkpoint before the stop is settled, so the turn running on writes nothing', async () => {
+    const { send, types } = build();
+    const order: string[] = [];
+    turn.checkpoint = { close: async () => { order.push('closed'); } };
+    const { preserveInterruptedTurn, discardInterruptedTurn } = await import('../turn/turn-journal.js');
+    vi.mocked(discardInterruptedTurn).mockImplementationOnce(async () => { order.push('settled'); });
+    vi.mocked(preserveInterruptedTurn).mockImplementationOnce(async () => { order.push('settled'); });
+    turn.run = () => new Promise<void>(() => undefined);
+    await send({ type: 'submit', text: 'x', echo: true } as never);
+    await settle(20);
+    await send({ type: 'cancel', restoreDraft: false });
+    await settle(20);
+    await send({ type: 'cancel', restoreDraft: false });
+    await waitForTurnEnd(types);
+    expect(order).toEqual(['closed', 'settled']);
   });
 });
 

@@ -102,6 +102,8 @@ export class DurableTurnCheckpoint {
    *  (touch): the debounced write must be a full one. */
   private rowDirty = false;
   private saved = false;
+  /** close(): the turn was settled from outside; nothing more is written. */
+  private closed = false;
   /** complete() has written the turn's final record. */
   get finished(): boolean { return this.saved; }
   /** Also told every activity: the turn's record for /undo (session/turn-changes.ts). */
@@ -274,7 +276,21 @@ export class DurableTurnCheckpoint {
     await this.persistNow();
   }
 
+  /** The turn was ended from outside it (a hard Stop): what settles it reads
+   * and writes the conversation itself, so nothing this turn still does may
+   * write it after. Every later write is a no-op, a message queued into it is
+   * refused (it goes back to the composer); resolves once a write already
+   * under way has landed. */
+  async close(): Promise<void> {
+    this.closed = true;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = undefined;
+    this.dirty = false;
+    await this.writes;
+  }
+
   async persistNow(): Promise<void> {
+    if (this.closed) throw new Error('turn is over');
     this.dirty = true;
     await this.flush();
   }
@@ -283,6 +299,7 @@ export class DurableTurnCheckpoint {
   settleInput: (() => Promise<void>) | undefined;
 
   async complete(response: string): Promise<void> {
+    if (this.closed) return;
     // A steer still in flight lands before the final record, or finds the
     // turn over and falls back to the queue; never after, silently.
     if (this.settleInput) {
@@ -373,6 +390,7 @@ export class DurableTurnCheckpoint {
     // promise handed back to THIS caller still carries its own real failure.
     if (!transcriptOnly) this.rowDirty = false;
     const write = this.writes.catch(quiet('turn/turn-journal')).then(async () => {
+      if (this.closed) return;
       if (transcriptOnly && await writeTranscriptCheckpoint(this.state, this.session.id)) return;
       await writeState(this.state);
       this.saveFailureSaid = false;
@@ -387,6 +405,7 @@ export async function startTurnCheckpoint(
   state: HarnessState, session: HarnessSession, prompt: string, run: TurnRunOptions,
 ): Promise<DurableTurnCheckpoint> {
   const checkpoint = await DurableTurnCheckpoint.start(state, session, prompt, run.queuedTurnId, run.automatic);
+  run.onCheckpoint?.(checkpoint);
   // What the observer sees that no driver reports to the journal (a plan, a
   // notice, a thought, an approval's outcome) is kept with the turn.
   run.prompter?.bindJournal?.(checkpoint);

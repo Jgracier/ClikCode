@@ -21,7 +21,7 @@ import { sendDirectApiTurn } from './direct-turn.js';
 import { sendVendorTurn } from './vendor-turn.js';
 import { checkStoreAgainstIndex } from '../session/store-evidence.js';
 import { isTurnCancelled } from '../agent/cancellation.js';
-import { isQueuedTurnAlreadyRun } from './turn-journal.js';
+import { isQueuedTurnAlreadyRun, type DurableTurnCheckpoint } from './turn-journal.js';
 import { TurnRecorder } from '../session/turn-changes.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { beginTurnClock, currentTurnId, endTurnClock, markTurn, setTurnHarness } from '../runtime/turn-latency.js';
@@ -57,6 +57,8 @@ export interface TurnRunOptions {
   onWorkFinished?: () => void;
   /** The vendor that actually finished this turn, after any mid-turn handoffs. */
   onCompletedHarness?: (harness: string | undefined) => void;
+  /** The turn's journal exists (startTurnCheckpoint): a worker closes it when it ends the turn by force. */
+  onCheckpoint?: (checkpoint: DurableTurnCheckpoint) => void;
 }
 
 /** One turn through an account, as runAccountTurn hands it to the route that
