@@ -21,6 +21,9 @@ export function earlierRowsNotice(count: number): string {
   return `\u001b[2m… ${count} earlier row${count === 1 ? '' : 's'} not shown; /resume reopens the whole conversation\u001b[0m`;
 }
 
+/** More rows than this in one frame and the caret is hidden for it. */
+export const BULK_ROWS = 8;
+
 /** A row as the terminal may be given it: only SGR escapes, one line, no hyperlink left open, and
  * never the last column. The one place a row is made safe. */
 function safeRow(row: string, limit: number): string {
@@ -233,6 +236,7 @@ export function flushAlternateFrame(
   // -- a frame carrying the same row twice is a duplicated prompt on screen.
   let exposedFrom = -1;
   let exposedTo = -1;
+  let drawnRows = 0;
   if (shift !== 0) {
     const span = Math.abs(shift);
     // Region over the transcript only, so the live region stays put; reset
@@ -245,6 +249,7 @@ export function flushAlternateFrame(
     exposedTo = exposedFrom + span;
     for (const [offset, row] of exposed.entries()) {
       updates.push(`\u001b[${exposedFrom + offset + 1};1H${row}\u001b[K`);
+      drawnRows += 1;
     }
   }
   for (const [index, row] of rows.entries()) {
@@ -252,6 +257,7 @@ export function flushAlternateFrame(
     if (index >= exposedFrom && index < exposedTo) continue;
     if (shift !== 0 && index < moving && shiftedRow(this.alternatePrevious, index, shift) === row) continue;
     updates.push(`\u001b[${index + 1};1H${row}\u001b[K`);
+    drawnRows += 1;
   }
   this.alternatePrevious = rows;
   const composerRow = rows.length - live.length + pending.cursorRow + 1;
@@ -280,8 +286,12 @@ export function flushAlternateFrame(
   // again after it), by a list that asks for it, or never shown yet. A
   // frame that merely moves rows under a visible caret does not touch it.
   const visibleBefore = updates.length > 0 && redraw !== undefined ? false : this.cursorShown;
-  const hideFirst = !showCursor && visibleBefore !== false ? '\u001b[?25l' : '';
-  const cursor = showCursor && visibleBefore !== true ? '\u001b[?25h' : '';
+  // A frame that draws many rows hides the caret while it does (and shows it after, inside the same synchronized update): a client
+  // without synchronized output (GNU screen, an older tmux) would otherwise show it hopping down the screen row by row. A few
+  // rows -- a streamed line, a keystroke -- leave it alone, as above.
+  const bulk = drawnRows > BULK_ROWS;
+  const hideFirst = (!showCursor || bulk) && visibleBefore !== false ? '\u001b[?25l' : '';
+  const cursor = showCursor && (visibleBefore !== true || hideFirst !== '') ? '\u001b[?25h' : '';
   // One synchronized update (DEC 2026): a terminal that supports it shows
   // the frame whole or not at all, never half-drawn; one that does not
   // ignores the two sequences. restoreTerminal closes it on any exit.
