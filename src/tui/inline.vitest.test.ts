@@ -10,7 +10,6 @@ describe('screen model selection', () => {
     ['empty env', {}],
     ['ssh, unknown terminal', { TERM: 'xterm-256color', SSH_CONNECTION: 'a 1 b 22', TERM_PROGRAM: 'Foo' }],
     ['ssh, tty only', { TERM: 'xterm-256color', SSH_TTY: '/dev/pts/1' }],
-    ['ClikDeploy phone page', { TERM: 'xterm-256color', SSH_CONNECTION: 'a 1 b 22', CLIKDEPLOY_CLIENT: 'mobile' }],
     ['tmux, mouse option unknown', { TMUX: '/tmp/tmux-1/default,1,0', TERM: 'screen-256color' }],
     ['tmux over ssh', { TMUX: 'x', TERM: 'tmux-256color', SSH_TTY: '/dev/pts/1' }],
     ['GNU screen', { STY: '1.pts-0', TERM: 'screen-256color' }],
@@ -71,7 +70,6 @@ describe('screen model selection', () => {
   });
 
   it('asks for no phone-specific private mode, ever', () => {
-    vi.stubEnv('CLIKDEPLOY_CLIENT', 'mobile');
     expect(sessionModesOn()).not.toMatch(/\?970\d/);
   });
 

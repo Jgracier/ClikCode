@@ -70,10 +70,11 @@ export function handleCommandError(error: unknown): void {
 /** The CLIKCODE_* variables that choose how the terminal UI draws; one table, shown in --help. */
 const TERMINAL_ENVIRONMENT_HELP = `
 Terminal environment:
-  CLIKCODE_INLINE=1|0         Force inline-history mode (scrollback, no alternate screen or mouse) on or off.
-                              Unset: inline in GNU screen, in tmux unless its "mouse" option is on,
-                              TERM=dumb|linux, and over ssh from a terminal not known to be a good one;
-                              full-screen in iTerm, Terminal, WezTerm, ghostty, kitty, VS Code and Alacritty.
+  CLIKCODE_INLINE=1           Inline-history mode: the conversation is printed into the terminal's own scrollback and only
+                              the composer is redrawn. Unset: full-screen everywhere (the alternate screen; the conversation
+                              is written into your scrollback when ClikCode ends or is suspended).
+  CLIKCODE_MOUSE=1            Ask the terminal for mouse reporting (wheel and its own selection). Unset: none, so the
+                              terminal's selection and copy work; PageUp, PageDown, Home, End and the arrows scroll.
   CLIKCODE_ASCII=1|0          Force ASCII rules, box drawing and spinner on or off. Unset: on when the locale
                               (LC_ALL, LC_CTYPE, LANG) is not UTF-8 or TERM=linux.
   CLIKCODE_TUI=classic        Line-oriented output instead of the live terminal UI.

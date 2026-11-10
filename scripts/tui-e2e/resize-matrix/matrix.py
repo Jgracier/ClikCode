@@ -435,7 +435,7 @@ def run_tmux(name, spec, mode, keep):
             tm('send-keys', 'C-c'); time.sleep(0.8); tm('send-keys', 'C-c'); time.sleep(1.5)
         elif op == 'burst-check':
             for rows in step[1]:
-                tm('resize-window', '-x', str(spec['size'][0]), '-y', str(rows)); time.sleep(step[2])
+                tm('resize-window', '-x', str(spec['size'][0]), '-y', str(rows)); time.sleep(max(step[2], 0.35))  # tmux and its commands add their own latency
                 snap_tmux(f'{step[3]} {rows}'); checks.append((f'{step[3]} {rows}', step[4], step[5]))
         elif op == 'suspend': tm('resize-window', '-x', str(step[1]), '-y', str(step[2])); time.sleep(0.5)  # tmux has no job control to drive here
         elif op == 'check':

@@ -214,7 +214,9 @@ export function popReadModes(): string {
  * modes, because a client may have dropped them on its own. */
 export function setSelectionMode(active: boolean): string {
   if (!mouseWanted()) {
-    return 'The terminal\'s own selection is always on: select and copy as usual. PageUp, PageDown, Home, End and the arrows read the conversation back.';
+    return inlineHistoryMode()
+      ? 'The terminal\'s own selection is always on: select and copy as usual.'
+      : 'The terminal\'s own selection is always on: select and copy as usual. PageUp, PageDown, Home, End and the arrows read the conversation back.';
   }
   SELECTION_MODE.active = active;
   if (active) {

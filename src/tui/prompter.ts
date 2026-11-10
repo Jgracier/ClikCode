@@ -54,7 +54,7 @@ import { question } from './prompter/prompt-input.js';
 import { paint } from './prompter/paint/frame.js';
 
 /** Rows of the live conversation with their group tags. */
-export type ScrollTail = { rows: string[]; tags: Array<string | undefined> };
+type ScrollTail = { rows: string[]; tags: Array<string | undefined> };
 const EMPTY_TAIL: ScrollTail = { rows: [], tags: [] };
 
 export class TerminalHarnessPrompter implements HarnessPrompter {

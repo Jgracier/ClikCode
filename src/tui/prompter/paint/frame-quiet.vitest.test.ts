@@ -77,12 +77,20 @@ describe('frames', () => {
     expect(frame.lastIndexOf('?25h')).toBeGreaterThan(frame.indexOf('[2J'));
   });
 
-  it('a resize burst draws one frame, with one clear, and keys echo while it settles', () => {
+  it('a resize burst: the first size is drawn whole at once, the rest settle into one more frame, and keys echo meanwhile', () => {
     vi.useFakeTimers();
     const prompter = open();
     prompter.render(session());
     written.length = 0;
-    for (const rows of [30, 24, 20]) {
+    Object.assign(process.stdout, { rows: 30 });
+    prompter.onResize();
+    // The composer is on the last row of the first size straight away, not after the burst.
+    const first = written.join('');
+    expect(first.match(/\u001b\[2J/g)).toHaveLength(1);
+    expect(first).toContain('\u001b[30;1H');
+    expect(first).toContain('Grok Build');
+    written.length = 0;
+    for (const rows of [24, 20]) {
       Object.assign(process.stdout, { rows });
       prompter.onResize();
     }
@@ -96,24 +104,33 @@ describe('frames', () => {
     vi.advanceTimersByTime(RESIZE_SETTLE_MS + 80);
     const settled = written.join('');
     expect(settled.match(/\u001b\[2J/g)).toHaveLength(1);
-    expect(settled.match(/\?1000h/g)).toHaveLength(1);
+    expect(settled).toContain('\u001b[20;1H');
     expect(settled).toContain('typing');
+    expect(settled).not.toMatch(/\?100[0236]h/);
   });
 
-  it('two sizes inside one settle window (54 rows, then 32) are one redraw, not two', () => {
+  it('one size change is drawn once: the settle timer adds no second frame', () => {
     vi.useFakeTimers();
     const prompter = open();
     prompter.render(session());
     written.length = 0;
     Object.assign(process.stdout, { rows: 54 });
     prompter.onResize();
-    vi.advanceTimersByTime(RESIZE_SETTLE_MS / 2);
-    expect(written.join('')).toBe('');
-    Object.assign(process.stdout, { rows: 32 });
-    prompter.onResize();
+    expect(written.join('').match(/\u001b\[2J/g)).toHaveLength(1);
+    written.length = 0;
     vi.advanceTimersByTime(RESIZE_SETTLE_MS + 80);
-    const settled = written.join('');
-    expect(settled.match(/\u001b\[2J/g)).toHaveLength(1);
-    expect(settled.match(/\?1000h/g)).toHaveLength(1);
+    expect(written.join('')).toBe('');
+  });
+
+  it('the opt-in mouse is asked for again with the settled frame', () => {
+    vi.useFakeTimers();
+    vi.stubEnv('CLIKCODE_MOUSE', '1');
+    const prompter = open();
+    prompter.render(session());
+    written.length = 0;
+    Object.assign(process.stdout, { rows: 54 });
+    prompter.onResize();
+    expect(written.join('').match(/\?1000h/g)).toHaveLength(1);
+    vi.unstubAllEnvs();
   });
 });
