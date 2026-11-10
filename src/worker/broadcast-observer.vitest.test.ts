@@ -33,6 +33,20 @@ describe('sign-in from a worker', () => {
     await expect(signedIn).rejects.toThrow('hermes exited with status 1');
   });
 
+  it('tells every other window attached that the sign-in is over once one answers it', async () => {
+    const observer = new BroadcastObserver();
+    const first = fakeClient();
+    const second = fakeClient();
+    observer.attach(first.socket);
+    observer.attach(second.socket);
+    const signedIn = observer.signIn(request);
+    const sent = second.frames.find((frame) => frame.type === 'sign-in-request') as { id: string };
+    observer.resolveSignIn(sent.id);
+    await signedIn;
+    expect(first.frames).toContainEqual({ type: 'request-closed', id: sent.id });
+    expect(second.frames).toContainEqual({ type: 'request-closed', id: sent.id });
+  });
+
   it('fails at once with no window to run it in', async () => {
     await expect(new BroadcastObserver().signIn(request)).rejects.toThrow('needs an open ClikCode window');
   });

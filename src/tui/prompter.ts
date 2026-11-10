@@ -83,6 +83,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** A link sign-in's link and code, drawn above the waiting band while it
    * runs (linkWait). */
   signInLines: string[] = [];
+  /** The conversation the sign-in on screen was asked in, and how to take it down. */
+  signInOwner?: { session: string | undefined; withdraw(): void };
   /** What the waiting composer is for while a sign-in asks for a code or a
    * key: Enter hands the draft here instead of to the turn. */
   signInInput?: { secret: boolean; optional?: boolean; alongside?: boolean; submit: (text: string) => void };
@@ -460,6 +462,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       lifecycle('window.conversation', { from: this.currentSession?.id ?? null, harness: session.nativeHarness ?? session.route });
       // A /search mention belongs to the conversation it was found in.
       if (this.mentionFocus?.sessionId !== session.id) this.mentionFocus = undefined;
+      // A sign-in's link is the conversation's that asked for it: not carried
+      // into the next one this window opens (it showed there as if asked).
+      if (this.signInOwner && this.signInOwner.session !== session.id) this.signInOwner.withdraw();
       this.activityEntries = [];
       this.childEntries = [];
       this.liveChildren.reset();

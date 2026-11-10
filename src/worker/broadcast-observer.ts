@@ -591,6 +591,8 @@ export class BroadcastObserver implements TurnObserver {
     if (!pending) return;
     this.pendingSignIns.delete(id);
     this.userWaitChanged();
+    // Every other window attached asked the same question: it is over for them too.
+    this.broadcast({ type: 'request-closed', id });
     if (error) pending.reject(new Error(error));
     else pending.resolve();
   }
