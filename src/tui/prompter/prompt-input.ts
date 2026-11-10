@@ -46,6 +46,8 @@ class PromptSession {
   private cursor: number;
   private selected = 0;
   private historyIndex: number;
+  /** The draft as typed, kept while history is recalled over it (at index `history.length`), so Down past the newest entry restores it. */
+  private stashedDraft: DraftWithPastes | undefined;
   // Long pastes, held out of the draft as placeholders (held-pastes.ts)
   // and put back when it is sent.
   private held: HeldPaste[] = [];
@@ -260,7 +262,7 @@ class PromptSession {
     if (key === '\u0003') {
       // Ctrl+C clears a draft first. Leaving takes a second press, because
       // the same key also interrupts a turn and is pressed by reflex.
-      if (this.value) { this.value = ''; this.cursor = 0; this.held = []; this.selected = 0; this.historyIndex = p.history.length; this.draw(); return true; }
+      if (this.value) { this.value = ''; this.cursor = 0; this.held = []; this.selected = 0; this.historyIndex = p.history.length; this.stashedDraft = undefined; this.draw(); return true; }
       if (Date.now() - this.exitArmedAt <= EXIT_CONFIRM_MS) { this.finish('/exit'); return true; }
       this.exitArmedAt = Date.now();
       p.showTransientNotice('Press Ctrl+C again to exit', EXIT_CONFIRM_MS, () => this.draw());
@@ -314,9 +316,17 @@ class PromptSession {
   }
 
   private historyStep(direction: -1 | 1): void {
+    const live = this.p.history.length;
+    // Leaving the draft: it is kept, whatever it is, and comes back when Down returns past the newest entry.
+    if (direction < 0 && this.historyIndex === live && this.historyIndex > 0) this.stashedDraft = { value: this.value, cursor: this.cursor, held: [...this.held] };
     if (direction < 0 && this.historyIndex > 0) this.historyIndex -= 1;
-    else if (direction > 0) this.historyIndex = Math.min(this.p.history.length, this.historyIndex + 1);
+    else if (direction > 0) this.historyIndex = Math.min(live, this.historyIndex + 1);
     else return;
+    if (this.historyIndex === live) {
+      const draft = this.stashedDraft;
+      this.stashedDraft = undefined;
+      if (draft) { this.apply(draft); return; }
+    }
     this.value = this.p.history[this.historyIndex] ?? '';
     this.cursor = this.value.length;
   }
