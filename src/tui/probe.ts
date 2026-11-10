@@ -22,7 +22,7 @@ import { logCursorEvent } from './cursor-log.js';
 
 export const terminalFacts: { syncOutput?: boolean; name?: string; answered: boolean } = { answered: false };
 
-export const PROBE_QUERY = '\u001b[?2026$p\u001b[>0q\u001b[c';
+const PROBE_QUERY = '\u001b[?2026$p\u001b[>0q\u001b[c';
 
 const MODE_REPORT = /^\u001b\[\?(\d+);(\d)\$y$/;
 const PRIMARY_DA = /^\u001b\[\?[0-9;]*c$/;
