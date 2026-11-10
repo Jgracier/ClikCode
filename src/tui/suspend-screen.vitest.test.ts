@@ -54,4 +54,23 @@ describe('suspend() in full-screen mode', () => {
       expect(before).toBe(2);
     } finally { rl.close(); }
   });
+
+  it('Ctrl+Z, a new width, fg, exit: every message is written under the shell once', async () => {
+    const { rl, term } = open();
+    const words = (n: number): string => `MSG-${n} ` + Array.from({ length: 14 }, (_, i) => `word${n}x${i}`).join(' ');
+    try {
+      rl.render({ id: 's', route: 'local', accountId: null, provider: null, model: null, createdAt: '', updatedAt: '', status: 'active', messages: [1, 2, 3, 4, 5, 6].map((n) => (
+        { role: n % 2 ? 'user' : 'assistant', content: words(n) })) } as never);
+      vi.advanceTimersByTime(300);
+      await rl.suspend();
+      // fg after the window was made narrower while stopped.
+      Object.assign(process.stdout, { columns: 34 });
+      rl.resume();
+      (rl as unknown as { onResize(): void }).onResize();
+      vi.advanceTimersByTime(500);
+      rl.close();
+      const all = [...term.scrollback, ...term.mainScreen()].join('\n');
+      for (let n = 1; n <= 6; n += 1) expect(all.split(`MSG-${n} `).length - 1, `MSG-${n}`).toBe(1);
+    } finally { rl.close(); }
+  });
 });

@@ -176,6 +176,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   transcriptColumns = output.columns || 0;
   /** The first conversation row number (alternateTrimmed + index) not yet written into the normal screen; undefined: none of the current text has been. */
   dumpedThrough: number | undefined;
+  /** Where the history dump stood when the transcript was rewritten for a new width: by message, which rewrapping keeps (row
+   * numbers it does not). `into` is how many rows of that message were written. */
+  dumpResume: { session: string | undefined; message: number; into: number } | undefined;
   /** Full-screen: the last size change was drawn whole the moment it arrived and no other came while the settle timer ran. */
   resizeSettled = false;
   usageLabel?: string;
