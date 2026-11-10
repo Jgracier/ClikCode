@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { stdout } from 'node:process';
 import { fileLocksIdle, fileLocksHeld } from '../../session/store/locks.js';
 import { historyDump, REEXEC_TERMINAL_ENV, reexecHandover } from '../../tui/restore.js';
+import { popReadModes } from '../../tui/modes.js';
 import { REEXEC_DRAFT_ENV } from '../../session/ephemeral.js';
 import type { HarnessSession } from '../../session/model.js';
 
@@ -53,7 +54,9 @@ export function replaceCliWithNewBuild(input: BuildReplace): Promise<void> | und
     // frame until the new build paints, and repeated builds do not leave a
     // chain of blocked parent processes behind. Flush the last answer first.
     if (typeof process.execve === 'function') {
-      await new Promise<void>((resolve) => stdout.write('', () => resolve()));
+      // This process's kitty keyboard entry is popped before it is replaced: the stack belongs to the terminal, and the new process
+      // pushes its own, so each re-exec left one more entry on it (and a shell's Ctrl+C arriving as CSI-u after enough of them).
+      await new Promise<void>((resolve) => stdout.write(popReadModes(), () => resolve()));
       // Nothing may await between the idle check and the exec.
       await fileLocksIdle();
       try {

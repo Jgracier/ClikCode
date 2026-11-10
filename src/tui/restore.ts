@@ -7,6 +7,7 @@
 
 import { writeSync } from 'node:fs';
 import { stdin as input, stdout as output } from 'node:process';
+import { kittyKeyboardSafe } from './keys.js';
 import { CLEAR_SCREEN, CLEAR_SCREEN_AND_SCROLLBACK, inlineBlock, inlineHistoryMode, LEAVE_PAGE_SCREEN, restoreMainBlock, swallowsAlternateScreen } from './inline.js';
 import { FOCUS_REPORTING_OFF, POP_TITLE, PUSH_TITLE, progressSequence } from './terminal-signals.js';
 
@@ -76,6 +77,8 @@ export const terminalModes: {
   kittyKeyboard: boolean;
   /** Wheel reporting (`CSI ?1000h` + SGR), for reading the transcript back. */
   wheelReporting: boolean;
+  /** This UI asked for alternate scroll (`?1007h`) and owes the shell its reset. */
+  alternateScroll: boolean;
   /** The UI is drawing on the alternate screen and owes the shell its own back. */
   alternateScreen: boolean;
   rawMode: boolean;
@@ -90,7 +93,7 @@ export const terminalModes: {
   /** The tab shows a progress indicator this UI started. */
   progress: boolean;
 } = {
-  bracketedPaste: false, kittyKeyboard: false, wheelReporting: false, alternateScreen: false, rawMode: false, painted: false, uiStarted: false,
+  bracketedPaste: false, kittyKeyboard: false, wheelReporting: false, alternateScroll: false, alternateScreen: false, rawMode: false, painted: false, uiStarted: false,
   titlePushed: false, progress: false,
 };
 
@@ -155,8 +158,14 @@ export function signalsTeardown(): string {
  * included, is undone before this one asks for anything. Clearing a mode that
  * is already clear costs nothing. */
 export function terminalPrepare(): string {
-  return `${MOUSE_MODES_OFF}${READ_MODES_OFF}${LATCHED_OFF}`;
+  // The kitty keyboard stack is the terminal's, not the process's: a predecessor that died, or exec'd, left its entry on it. Popped
+  // here, where it is known to be alive, and only where the push is understood at all (an unaware terminal may echo the sequence).
+  const kitty = kittyKeyboardSafe() ? CLEAR_KITTY_KEYBOARD : '';
+  return `${kitty}${MOUSE_MODES_OFF}${READ_MODES_OFF}${LATCHED_OFF}`;
 }
+
+/** Pop up to 99 kitty keyboard flag entries: an empty stack stays empty. */
+const CLEAR_KITTY_KEYBOARD = '\x1b[<99u';
 
 /** Every mouse mode a client may hold, off -- `?1016` too, which this never
  * sets but whatever ran before may have. */
@@ -177,8 +186,12 @@ const LATCHED_OFF = '\x1b[>4m\x1b(B\x0f\x1b7\x1b[r\x1b8';
  * `?1016` and modifyOtherKeys are cleared although this never sets them, for
  * the same reason Claude Code does: whatever ran before may have. */
 export function terminalTeardown(leavingAlternateScreen: boolean): string {
-  return `${MOUSE_MODES_OFF}${READ_MODES_OFF}${leavingAlternateScreen ? '\x1b[?1049l' : ''}`
-    + `${MOUSE_MODES_OFF}${READ_MODES_OFF}${LATCHED_OFF}\x1b[?7h\x1b[?25h`;
+  // Alternate scroll is reset where this UI set it (both screens, like the rest): left on, a shell's `less` and `vim` keep turning a
+  // wheel notch into arrow keys after this program is gone.
+  const scroll = terminalModes.alternateScroll ? '\x1b[?1007l' : '';
+  terminalModes.alternateScroll = false;
+  return `${MOUSE_MODES_OFF}${READ_MODES_OFF}${scroll}${leavingAlternateScreen ? '\x1b[?1049l' : ''}`
+    + `${MOUSE_MODES_OFF}${READ_MODES_OFF}${scroll}${LATCHED_OFF}\x1b[?7h\x1b[?25h`;
 }
 
 /** Leave the terminal the way a shell expects it: synchronized update closed,
@@ -190,7 +203,7 @@ export function restoreTerminal(options: { sync?: boolean } = {}): void {
     // process that never drew must not write escape sequences into a shell it
     // was only ever piped through. This is also what keeps repeat calls silent.
     const touched = terminalModes.uiStarted || terminalModes.painted || terminalModes.kittyKeyboard
-      || terminalModes.bracketedPaste || terminalModes.wheelReporting
+      || terminalModes.bracketedPaste || terminalModes.wheelReporting || terminalModes.alternateScroll
       || terminalModes.alternateScreen || terminalModes.rawMode || terminalModes.titlePushed || terminalModes.progress;
     if (!touched) {
       if (input.isRaw && input.isTTY && typeof input.setRawMode === 'function') input.setRawMode(false);
