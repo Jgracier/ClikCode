@@ -11,6 +11,10 @@
  * the composer and status block is redrawn, with relative cursor motion. It depends on the client keeping its rows steady when
  * the window changes size, which no remote client promises, so nothing chooses it for you. */
 export function inlineHistoryMode(env: NodeJS.ProcessEnv = process.env): boolean {
+  // ClikDeploy's phone shells were all opened with CLIKCODE_INLINE=1 next to CLIKDEPLOY_CLIENT=mobile (a held shell keeps its
+  // environment for good), which chose inline for every phone session. Nobody who opts in by hand sets the client marker, so
+  // the pair is the platform's and is not a choice.
+  if (env.CLIKDEPLOY_CLIENT === 'mobile') return false;
   return env.CLIKCODE_INLINE === '1';
 }
 
