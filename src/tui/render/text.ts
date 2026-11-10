@@ -23,6 +23,8 @@ export const SAFE_LINK = /^(?:https?:\/\/|mailto:)[^\s\u0000-\u001f\u007f-\u009f
 
 const NEEDS_SANITIZING = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\t]/;
 
+const NEEDS_SANITIZING_KEEP_TABS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/;
+
 const UNSAFE_IN_STYLED_TEXT = /[\u0000-\u0009\u000b-\u001a\u001c-\u001f\u007f-\u009f]|\u001b(?!\[[0-9;]*m|\]8;[^\u0007\u001b\n]*\u001b\\)/;
 
 const CONTROL_CHARACTERS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
@@ -55,18 +57,19 @@ export function expandTabs(value: string, tabWidth = TAB_WIDTH): string {
  * move the cursor out of the live region and corrupt every later frame.
  *
  * `keepSgr` is for rows this UI styled itself; untrusted text never keeps any
- * escape. Newlines survive unless `singleLine` folds them into spaces. */
+ * escape. Newlines survive unless `singleLine` folds them into spaces. `keepTabs` is for text that is data (a paste on its way to
+ * the model, where a tab is a character): it stays one, and whatever draws it expands it for the screen. */
 export function sanitizeTerminalText(
-  value: string, options: { keepSgr?: boolean; singleLine?: boolean; tabWidth?: number } = {},
+  value: string, options: { keepSgr?: boolean; singleLine?: boolean; tabWidth?: number; keepTabs?: boolean } = {},
 ): string {
   // Styled rows are checked on every frame, so the common clean case must not
   // pay for a rewrite just because it carries this UI's own color codes.
-  const clean = options.keepSgr ? !UNSAFE_IN_STYLED_TEXT.test(value) : !NEEDS_SANITIZING.test(value);
+  const clean = options.keepSgr ? !UNSAFE_IN_STYLED_TEXT.test(value) : !(options.keepTabs ? NEEDS_SANITIZING_KEEP_TABS : NEEDS_SANITIZING).test(value);
   if (clean && !(options.singleLine && value.includes('\n'))) return value;
   let text = value.replace(/\r\n?/g, '\n');
   text = text.replace(ESCAPE_SEQUENCE, (sequence) => (
     options.keepSgr && (SGR_SEQUENCE.test(sequence) || OSC8_SEQUENCE.test(sequence)) ? sequence : ''));
   text = text.replace(CONTROL_CHARACTERS, (character) => (character === '\u001b' && options.keepSgr ? character : ''));
-  text = expandTabs(text, options.tabWidth ?? TAB_WIDTH);
+  if (!options.keepTabs) text = expandTabs(text, options.tabWidth ?? TAB_WIDTH);
   return options.singleLine ? text.replace(/\n/g, ' ') : text;
 }
