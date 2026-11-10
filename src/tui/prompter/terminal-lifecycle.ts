@@ -142,7 +142,16 @@ export async function suspend(this: TerminalHarnessPrompter): Promise<void> {
   // across this UI's status rows. Handed over once the modes are written --
   // where a TTY write is asynchronous (Windows) the child must not start
   // ahead of them -- rather than after a guessed 50ms.
-  await new Promise<void>((resolveWritten) => { output.write(`${leavePage()}${eraseInlineBlock()}${sessionModesOff(false)}`, () => resolveWritten()); });
+  //
+  // Full-screen, the child is given the MAIN screen, as Ctrl+Z gives it: the alternate screen is left, the conversation is
+  // written under the shell (once: the dump cursor remembers it), and every mode is off. Without that the child drew over this
+  // UI's rows, and a child that itself entered and left the alternate screen (`?1049h`, `?1049l`) dropped back to a main
+  // screen this UI knew nothing about. resume() takes the alternate screen again.
+  const paged = inlineBlock.page;
+  await new Promise<void>((resolveWritten) => {
+    output.write(`${leavePage()}${eraseInlineBlock()}${sessionModesOff(!paged)}${historyDumpSequence()}`, () => resolveWritten());
+    terminalModes.alternateScreen = false;
+  });
 }
 
 export function resume(this: TerminalHarnessPrompter): void {
