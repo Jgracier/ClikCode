@@ -7,7 +7,7 @@ import { stdout } from 'node:process';
 import { fileLocksIdle, fileLocksHeld } from '../../session/store/locks.js';
 import { historyDump, REEXEC_TERMINAL_ENV, reexecHandover } from '../../tui/restore.js';
 import { popReadModes } from '../../tui/modes.js';
-import { REEXEC_DRAFT_ENV } from '../../session/ephemeral.js';
+import { REEXEC_DRAFT_ENV, REEXEC_TYPED_ENV } from '../../session/ephemeral.js';
 import type { HarnessSession } from '../../session/model.js';
 
 /** argv after the node binary: this CLI, and the chat to reopen. */
@@ -28,6 +28,9 @@ interface BuildReplace {
   closeUi: () => void;
   /** Drop this process's claim and transports before the new one attaches. */
   release: () => Promise<void>;
+  /** What the composer holds now, asked for after release() and handed to the new process: the window was idle when this began, and
+   * what was typed while it let go is not lost with it. */
+  typed?: () => string;
 }
 
 let replacing: Promise<void> | undefined;
@@ -50,6 +53,12 @@ export function replaceCliWithNewBuild(input: BuildReplace): Promise<void> | und
     try { await input.release(); } catch { /* the new process is the point */ }
     // Released now, so there is no going back. Locks release() took end on
     // their own: every lock wait is bounded (locks.ts).
+    // Asked as late as the awaits allow: release() takes a while, and the keys typed meanwhile went into a composer that is about to go.
+    const handOverTyped = (): void => {
+      let text = '';
+      try { text = input.typed?.() ?? ''; } catch { /* fail-open-ok: without it the draft is simply not carried */ }
+      if (text) process.env[REEXEC_TYPED_ENV] = text; else delete process.env[REEXEC_TYPED_ENV];
+    };
     // On POSIX, replace this process itself. The terminal keeps its current
     // frame until the new build paints, and repeated builds do not leave a
     // chain of blocked parent processes behind. Flush the last answer first.
@@ -59,6 +68,7 @@ export function replaceCliWithNewBuild(input: BuildReplace): Promise<void> | und
       await new Promise<void>((resolve) => stdout.write(popReadModes(), () => resolve()));
       // Nothing may await between the idle check and the exec.
       await fileLocksIdle();
+      handOverTyped();
       try {
         process.execve(process.execPath, [process.execPath, ...relaunchArgv(entry, sessionId)],
           { ...process.env, [REEXEC_TERMINAL_ENV]: reexecHandover() });
@@ -69,6 +79,7 @@ export function replaceCliWithNewBuild(input: BuildReplace): Promise<void> | und
     try { input.closeUi(); } catch { /* the terminal is still handed over */ }
     // Nothing may await between this and the spawnSync.
     await fileLocksIdle();
+    handOverTyped();
     let status = 1;
     try {
       const result = spawnSync(process.execPath, relaunchArgv(entry, sessionId), { stdio: 'inherit' });

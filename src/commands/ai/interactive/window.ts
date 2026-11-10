@@ -13,7 +13,7 @@ import { stdin as input, stdout as output } from 'node:process';
 import type { HarnessPrompter, PickerOption } from '../../../harness/prompter.js';
 import type { HarnessSession, HarnessState } from '../../../session/model.js';
 import { readState } from '../../../session/state/read.js';
-import { ephemeralSession } from '../../../session/ephemeral.js';
+import { adoptHandedOverTyped, ephemeralSession } from '../../../session/ephemeral.js';
 import { writeState } from '../../../session/state/write.js';
 import { nativeUsageReading, recheckRecoveredAccounts } from '../../../harness/accounts/account-usage.js';
 import { warmNativeModelCatalog } from '../../../harness/accounts/model-catalog.js';
@@ -81,6 +81,9 @@ export async function openWindow(config: Conf, startId: string): Promise<ChatWin
   // `terminal` is the one test for "this is the terminal UI": the plain
   // readline below (no alternate screen) has no render, panel or notice.
   const terminal = terminalUiSupported() ? new TerminalHarnessPrompter() : undefined;
+  // What the window this replaced had typed and not sent comes back into the composer.
+  const handedTyped = adoptHandedOverTyped();
+  if (terminal && handedTyped) terminal.restoreDraft(handedTyped);
   const rl: HarnessPrompter = terminal
     ?? createInterface({
       input, output, terminal: false, historySize: 1_000, removeHistoryDuplicates: true,
@@ -210,6 +213,7 @@ function startBuildWatch(
       sessionId,
       ...(draft ? { draft } : {}),
       closeUi: () => terminal.close(),
+      typed: () => terminal.composer.text,
       release: async () => {
         await releaseWindow();
         // The chat stays. Discarding a blank one here would make the new
