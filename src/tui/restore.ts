@@ -190,8 +190,10 @@ export function terminalTeardown(leavingAlternateScreen: boolean): string {
   // wheel notch into arrow keys after this program is gone.
   const scroll = terminalModes.alternateScroll ? '\x1b[?1007l' : '';
   terminalModes.alternateScroll = false;
-  return `${MOUSE_MODES_OFF}${READ_MODES_OFF}${scroll}${leavingAlternateScreen ? '\x1b[?1049l' : ''}`
-    + `${MOUSE_MODES_OFF}${READ_MODES_OFF}${scroll}${LATCHED_OFF}\x1b[?7h\x1b[?25h`;
+  // Once per screen the program was on: the alternate one (only when it is being left) and then the main one. Not leaving the
+  // alternate screen, there is only the one, and writing the group twice said nothing the first did not.
+  const modesOff = `${MOUSE_MODES_OFF}${READ_MODES_OFF}${scroll}`;
+  return `${leavingAlternateScreen ? `${modesOff}\x1b[?1049l` : ''}${modesOff}${LATCHED_OFF}\x1b[?7h\x1b[?25h`;
 }
 
 /** Leave the terminal the way a shell expects it: synchronized update closed,

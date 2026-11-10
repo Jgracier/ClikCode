@@ -30,10 +30,13 @@ export function paint(this: TerminalHarnessPrompter, composer: string, options: 
   // that draws re-sends `\u001b[?7l`), which makes filling it safe on a
   // terminal that honours that -- but several mobile SSH clients, and
   // anything that filters the mode out in between, wrap eagerly instead and
-  // turn a full-width row into two. Every motion in a frame is relative, so
-  // each such row put the walk back up to the composer one row out, which is
-  // what parked the cursor on the status line below the composer instead of
-  // in it. Costing one column is a far better trade than that.
+  // turn a full-width row into two. Inline frames move the cursor relatively,
+  // so each such row put the walk back up to the composer one row out, which
+  // is what parked the cursor on the status line below the composer instead
+  // of in it. Full-screen frames address every row, so a wrapped row there
+  // only spills into the row below it (and, on the last row, scrolls the
+  // screen) -- and the clip is kept for both: costing one column is a far
+  // better trade than either.
   const width = Math.max(12, output.columns || 100);
   const rowWidth = width - 1;
   const inner = width - 4;

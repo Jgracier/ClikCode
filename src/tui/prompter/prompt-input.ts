@@ -334,8 +334,12 @@ class PromptSession {
   /** Arrows and history keys: true when the key was handled here.
    * Up/Down navigate palette options; otherwise they move through a
    * multi-line draft and fall through to input history from its first
-   * and last line. (Wheel/touch scrolling belongs to the terminal and
-   * never arrives as these keys.) Ctrl+P/Ctrl+N always mean history. */
+   * and last line. With the composer empty, or the view already scrolled
+   * back, they read the conversation instead: a swipe or wheel notch reaches
+   * the program as these keys (alternate scroll, `?1007`) and cannot be told
+   * from typing them. Recalling history over a draft keeps the draft (Down
+   * past the newest entry brings it back). Ctrl+P/Ctrl+N always mean
+   * history. */
   private navigationKey(key: string, { completing, options }: KeyContext): boolean {
     const { p, value, commands, settings } = this;
     if (key === '\u001b[A' || key === '\u001b[B') {

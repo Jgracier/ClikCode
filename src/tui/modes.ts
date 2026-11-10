@@ -77,10 +77,13 @@ export function sessionModesOff(leavingAlternateScreen: boolean): string {
  *
  *     ?1000h ?1002h ?1003h ?1006h  ?25l  ESC[2J ESC[H  ...rows
  *
- * Both halves matter. Without the modes a swipe stopped scrolling; without
- * the clear it stopped too (2026-10-03, when the clear was taken off every
- * full frame to keep a settling reply from flashing). The pty suite checks
- * this sequence after every resize burst.
+ * Both halves matter. Without the clear a swipe stopped scrolling
+ * (2026-10-03, when the clear was taken off every full frame to keep a
+ * settling reply from flashing). The mouse modes are part of it only when
+ * the program asks for the mouse (CLIKCODE_MOUSE=1, mouseWanted); by
+ * default they are not sent, and a swipe is the arrow keys the client
+ * makes of it under alternate scroll (`?1007`, sessionModesOn). The pty
+ * suite checks the sequence after every resize burst.
  *
  * `repair` (Ctrl+L) clears and homes, and a frame drawn for any other reason
  * (a reply settling) never clears. Autowrap goes off before any row. */
