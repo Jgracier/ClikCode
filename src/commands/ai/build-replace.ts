@@ -5,7 +5,7 @@
 import { spawnSync } from 'node:child_process';
 import { stdout } from 'node:process';
 import { fileLocksIdle, fileLocksHeld } from '../../session/store/locks.js';
-import { historyDump, REEXEC_TERMINAL_ENV } from '../../tui/restore.js';
+import { historyDump, REEXEC_TERMINAL_ENV, reexecHandover } from '../../tui/restore.js';
 import { REEXEC_DRAFT_ENV } from '../../session/ephemeral.js';
 import type { HarnessSession } from '../../session/model.js';
 
@@ -58,7 +58,7 @@ export function replaceCliWithNewBuild(input: BuildReplace): Promise<void> | und
       await fileLocksIdle();
       try {
         process.execve(process.execPath, [process.execPath, ...relaunchArgv(entry, sessionId)],
-          { ...process.env, [REEXEC_TERMINAL_ENV]: '1' });
+          { ...process.env, [REEXEC_TERMINAL_ENV]: reexecHandover() });
       } catch { /* The existing child path restores the terminal on failure. */ }
     }
     // The copy started below writes the whole conversation when it ends; this one writes none, or it would be there twice.

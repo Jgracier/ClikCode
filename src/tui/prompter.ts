@@ -8,8 +8,8 @@ import type { PaletteEntry } from './command-palette.js';
 import { stdin as input, stdout as output } from 'node:process';
 import { createStreamingBlockParser } from './render/markdown.js';
 import { ResponseReveal } from './render/response-reveal.js';
-import { CLEAR_SCREEN_AND_SCROLLBACK, inlineHistoryMode } from './inline.js';
-import { enterAlternateScreenSequence, historyDump, installTerminalRestoreSignals, REEXEC_TERMINAL_ENV, restoreTerminal, terminalModes, terminalPrepare } from './restore.js';
+import { inlineHistoryMode } from './inline.js';
+import { historyDump, installTerminalRestoreSignals, parseReexecHandover, REEXEC_TERMINAL_ENV, reconcileScreen, restoreTerminal, terminalModes, terminalPrepare } from './restore.js';
 import type { FocusState } from './terminal-signals.js';
 import { sessionTranscriptMessages, settledTranscriptMessages } from '../turn/checkpoint.js';
 import { TurnTranscript } from '../turn/transcript.js';
@@ -333,7 +333,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (!output.isTTY) {
       throw new Error('TerminalHarnessPrompter requires a TTY on stdout; construct it behind terminalUiSupported()');
     }
-    const inheritedScreen = process.env[REEXEC_TERMINAL_ENV] === '1';
+    const handover = parseReexecHandover(process.env[REEXEC_TERMINAL_ENV]);
+    const inheritedScreen = handover !== undefined;
     delete process.env[REEXEC_TERMINAL_ENV];
     terminalModes.uiStarted = true;
     // Focus and mouse reports can arrive as soon as their modes are enabled.
@@ -371,15 +372,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // makes SGR reporting a transition rather than a no-op, and a client
       // deciding how to route touches has something to notice.
       logProcessWarnings();
-      if (inlineHistoryMode()) {
-        // The shell's own screen stays. Screen and saved lines are cleared once,
-        // here, and the first frame starts on the LAST row so the composer sits
-        // at the bottom edge with the conversation printed above it.
-        output.write(`${CLEAR_SCREEN_AND_SCROLLBACK}\u001b[${Math.max(1, output.rows || 24)};1H`);
-      } else {
-        if (!inheritedScreen) output.write(enterAlternateScreenSequence());
-        terminalModes.alternateScreen = true;
-      }
+      // The terminal is made to match THIS process's screen model, whatever the predecessor drew with (restore.ts reconcileScreen).
+      // Inline: the shell's own screen stays; screen and saved lines are cleared once and the first frame starts on the LAST row so
+      // the composer sits at the bottom edge with the conversation printed above it.
+      output.write(reconcileScreen(handover, inlineHistoryMode(), output.rows || 24).write);
+      if (!inlineHistoryMode()) terminalModes.alternateScreen = true;
       // Asked for: bracketed paste, because pasted text must not be read as
       // keystrokes; the mouse, because that is how the transcript is read
       // back; and focus reports, because a turn that ends or an approval

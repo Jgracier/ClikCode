@@ -7,11 +7,43 @@
 
 import { writeSync } from 'node:fs';
 import { stdin as input, stdout as output } from 'node:process';
-import { CLEAR_SCREEN, inlineBlock, inlineHistoryMode, LEAVE_PAGE_SCREEN, restoreMainBlock, swallowsAlternateScreen } from './inline.js';
+import { CLEAR_SCREEN, CLEAR_SCREEN_AND_SCROLLBACK, inlineBlock, inlineHistoryMode, LEAVE_PAGE_SCREEN, restoreMainBlock, swallowsAlternateScreen } from './inline.js';
 import { FOCUS_REPORTING_OFF, POP_TITLE, PUSH_TITLE, progressSequence } from './terminal-signals.js';
 
 /** An in-place build reload inherits the current terminal screen and title. */
 export const REEXEC_TERMINAL_ENV = 'CLIKCODE_KEEP_TERMINAL_ON_REEXEC';
+
+/** Which screen model the predecessor drew with, carried across the exec: `inline` (the conversation printed into the normal screen's
+ * scrollback) or `alt` (a full-screen UI on the alternate screen). `1` is what builds from before this value existed send, whichever
+ * model they used, so it means UNKNOWN: an old inline process exec'ing into a full-screen build sends the same `1` as an old
+ * full-screen one. */
+export type ReexecScreen = 'inline' | 'alt' | '1';
+
+/** The value this process hands to the program it execs into. */
+export function reexecHandover(env: NodeJS.ProcessEnv = process.env): 'inline' | 'alt' {
+  return inlineHistoryMode(env) ? 'inline' : 'alt';
+}
+
+/** Reads the handover (undefined: a fresh start, or a value nobody sends). */
+export function parseReexecHandover(value: string | undefined): ReexecScreen | undefined {
+  return value === 'inline' || value === 'alt' || value === '1' ? value : undefined;
+}
+
+/** What a new process writes to make the terminal match its OWN screen model, and whether the predecessor's screen is kept.
+ * - fresh start: inline clears screen and saved lines; full-screen takes the alternate screen.
+ * - same model: inherited. alt -> alt writes nothing (no clear, no dump); inline -> inline repeats the clear it always does.
+ * - inline -> full-screen: the old conversation is in the normal screen's saved lines, so the normal screen and those lines are
+ *   erased BEFORE the alternate screen is taken; otherwise it stays above the new window.
+ * - unknown (`1`) -> full-screen: the terminal may be on either screen. The erase goes first and the alternate screen is taken after
+ *   it: on the normal screen that wipes the stale transcript; on the alternate screen it only clears that screen.
+ * - alt or unknown -> inline: the alternate screen is left first, then the inline clear. */
+export function reconcileScreen(handover: ReexecScreen | undefined, inline: boolean, rows: number): { write: string; inherited: boolean } {
+  const inlineStart = `${CLEAR_SCREEN_AND_SCROLLBACK}\u001b[${Math.max(1, rows)};1H`;
+  if (inline) return { write: `${handover === 'alt' || handover === '1' ? '\u001b[?1049l' : ''}${inlineStart}`, inherited: handover !== undefined };
+  if (handover === undefined) return { write: enterAlternateScreenSequence(), inherited: false };
+  if (handover === 'alt') return { write: '', inherited: true };
+  return { write: `${CLEAR_SCREEN_AND_SCROLLBACK}${enterAlternateScreenSequence()}`, inherited: true };
+}
 
 /** Take the alternate screen and clear it. A client that swallows the alternate screen (GNU screen) has none to take: what is on its one
  * screen (the shell's, or the conversation a suspend wrote) is scrolled into the saved lines with line feeds, not erased, and the screen
