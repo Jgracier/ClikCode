@@ -10,7 +10,7 @@ Requires Node.js 22.12 or newer and pnpm.
 pnpm install
 pnpm type-check
 pnpm test
-pnpm build:strict
+pnpm build
 ```
 
 All four must pass before a change is merged. `pnpm test:smoke` and
@@ -29,7 +29,7 @@ or setup, and prints which tests it skipped (those that need a download or a run
 - Add or update a test next to the code you change (`*.vitest.test.ts`).
 - Match the surrounding code's style and comment density.
 - Explain the *why* in the pull request description, not just the what.
-- The `dist/` bundle must keep its runtime dependencies minimal: `build:strict`
+- The `dist/` bundle must keep its runtime dependencies minimal: `pnpm build`
   fails on a missing or extra one.
 
 ## Reporting bugs

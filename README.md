@@ -58,7 +58,7 @@ registry, install the same release from GitHub:
 `npm install -g https://github.com/Jgracier/ClikCode/releases/latest/download/clikcode.tgz`.
 
 For VS Code (and VSCodium, Cursor, Windsurf), the **ClikCode** extension
-(`clikcode.clikcode`, on the Visual Studio Marketplace and Open VSX) puts the
+(`clikcode.clikcode`, on the Visual Studio Marketplace) puts the
 same chats in a panel beside your code; it runs the ClikCode you installed.
 The same slash commands work there. Its chat bar shows the account's usage and,
 where turns report a price, what the chat has cost so far ("$1.23 this chat").
@@ -609,9 +609,9 @@ If you want to work on ClikCode itself:
 
 ```sh
 pnpm install
-pnpm build          # dist/index.js (the entry), cli.js, harness-catalog.cjs, ai-router-runtime.cjs
+pnpm build          # dist/index.js (the entry), cli.js, harness-catalog.cjs, ai-router-runtime.cjs;
+                    #   fails on a missing or extra runtime dependency
 pnpm build:analyze  # + bundle report: top inputs by bytes, runtime packages
-pnpm build:strict   # + fail on a missing or extra runtime dependency
 pnpm type-check     # tsc over src/ and over packages/clikrouter
 pnpm test           # the ClikCode suite
 pnpm test:router    # the router package's suite
