@@ -21,6 +21,11 @@ describe('screen model selection', () => {
     expect(inlineHistoryMode(env)).toBe(false);
   });
 
+  it('the phone shells the platform opened with CLIKCODE_INLINE=1 and CLIKDEPLOY_CLIENT=mobile are not an opt-in', () => {
+    expect(inlineHistoryMode({ CLIKCODE_INLINE: '1', CLIKDEPLOY_CLIENT: 'mobile' })).toBe(false);
+    expect(inlineHistoryMode({ CLIKCODE_INLINE: '1' })).toBe(true);
+  });
+
   it('inline is an opt-in, and only CLIKCODE_INLINE=1 gives it', () => {
     expect(inlineHistoryMode({ CLIKCODE_INLINE: '1', SSH_CONNECTION: 'a 1 b 22' })).toBe(true);
     expect(inlineHistoryMode({ CLIKCODE_INLINE: '0', STY: '1.x' })).toBe(false);
