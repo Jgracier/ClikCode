@@ -102,3 +102,14 @@ export function adoptHandedOverDraft(): void {
     if (session && typeof session.id === 'string') holdEphemeral(session);
   } catch { /* fail-open-ok: without it the window opens a fresh chat */ }
 }
+
+/** What was typed into the composer while the old window was letting go (a re-exec awaits its workers and connections for a while, and
+ * the keys of that moment went into a window that was about to be replaced). Handed to the new process the same way. */
+export const REEXEC_TYPED_ENV = 'CLIKCODE_REEXEC_TYPED';
+
+/** The text a replaced window had typed and not sent. Read once; the variable goes, so no child inherits it. */
+export function adoptHandedOverTyped(): string | undefined {
+  const text = process.env[REEXEC_TYPED_ENV];
+  delete process.env[REEXEC_TYPED_ENV];
+  return text || undefined;
+}

@@ -59,3 +59,33 @@ describe('a re-exec', () => {
     }
   });
 });
+
+describe('a re-exec and what was typed while the window let go', () => {
+  it('hands the composer text, as it is after release(), to the new process, and the new one adopts it once', async () => {
+    // A re-exec is once per process: this one needs a fresh module.
+    vi.resetModules();
+    const { REEXEC_TYPED_ENV, adoptHandedOverTyped } = await import('../session/ephemeral.js');
+    const { replaceCliWithNewBuild: replaceFresh } = await import('../commands/ai/build-replace.js');
+    let seen: string | undefined;
+    const realExecve = (process as { execve?: unknown }).execve;
+    (process as { execve?: unknown }).execve = (_file: string, _argv: string[], env: Record<string, string>) => { seen = env[REEXEC_TYPED_ENV]; };
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation(((...args: unknown[]) => { for (const arg of args) if (typeof arg === 'function') (arg as () => void)(); return true; }) as never);
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    let composer = '';
+    try {
+      await replaceFresh({
+        sessionId: 's', entry: '/dev/null', closeUi: () => undefined,
+        // The keys arrive while release() awaits.
+        release: async () => { await Promise.resolve(); composer = 'half a thought typed meanwhile'; },
+        typed: () => composer,
+      });
+      expect(seen).toBe('half a thought typed meanwhile');
+      expect(adoptHandedOverTyped()).toBe('half a thought typed meanwhile');
+      expect(adoptHandedOverTyped()).toBeUndefined();
+    } finally {
+      write.mockRestore(); exit.mockRestore();
+      (process as { execve?: unknown }).execve = realExecve;
+      delete process.env[REEXEC_TYPED_ENV];
+    }
+  });
+});
