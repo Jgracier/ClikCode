@@ -33,7 +33,20 @@ export function onWaitingKey(this: TerminalHarnessPrompter, key: string): void {
   }
   // Before approvals and before the draft: a turn running is when someone
   // wants to read what went past.
-  if (!this.pendingApproval && this.handleScrollKey(key)) return;
+  // An approval does not stop the reading either: what the call is about is often a few rows up. Scrolling keys never answer
+  // it; the 400 ms guard and the answer keys are approvalKey's, below.
+  if (this.handleScrollKey(key)) return;
+  // A plain approval (no list, no text being typed to it) has no use for the arrows and Home/End, so they scroll.
+  if (this.pendingApproval && !this.pendingApproval.question && !this.tellingInstead) {
+    if (key === '\u001b[A' || key === '\u001b[B') {
+      if (!this.scrollTranscript(key === '\u001b[A' ? SWIPE_ROWS : -SWIPE_ROWS) && key === '\u001b[B') this.noteReadingDirection();
+      return;
+    }
+    if (key === '\u0001' || key === '\u0005') {
+      this.scrollTranscript(key === '\u0001' ? Number.MAX_SAFE_INTEGER : -Number.MAX_SAFE_INTEGER);
+      return;
+    }
+  }
   // Escape backs out one level. Scrolled back mid-turn it returns to the
   // live edge. At the edge a waiting message comes back to edit. With
   // none, a prompt that has no answer yet comes back too, and a turn that
