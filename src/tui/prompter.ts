@@ -315,6 +315,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** Rows retired out of the viewport, kept so the conversation above the
    * live region is still there to scroll back to on the alternate screen. */
   readonly alternateTranscript: string[] = [];
+  /** Rows the cap on alternateTranscript has kept out of the view, and the line of the notice that says so (undefined: none). */
+  capDropped = 0;
+  capMarkerLine: number | undefined;
   /** Exactly the rows the last alternate-screen frame left on screen, so the
    * next one writes only what differs. */
   alternatePrevious: string[] = [];

@@ -15,6 +15,12 @@ import type { TerminalHarnessPrompter } from '../prompter.js';
 import { ALTERNATE_TRANSCRIPT_ROWS } from './state.js';
 import { anchoredScrollback } from './group-actions.js';
 
+/** The first row of a conversation too long to keep whole in the window: how much is not there, and how to get it. The same words
+ * the history written under the shell uses. */
+export function earlierRowsNotice(count: number): string {
+  return `\u001b[2m… ${count} earlier row${count === 1 ? '' : 's'} not shown; /resume reopens the whole conversation\u001b[0m`;
+}
+
 /** A row as the terminal may be given it: only SGR escapes, one line, no hyperlink left open, and
  * never the last column. The one place a row is made safe. */
 function safeRow(row: string, limit: number): string {
@@ -103,8 +109,14 @@ export function flushAlternateFrame(
     const excess = Math.min(this.alternateTranscript.length - ALTERNATE_TRANSCRIPT_ROWS,
       focusLine === undefined ? Number.POSITIVE_INFINITY : focusLine - this.alternateTrimmed);
     if (excess > 0) {
+      const markerWasFirst = this.capMarkerLine === this.alternateTrimmed;
       this.alternateTranscript.splice(0, excess);
       this.alternateTrimmed += excess;
+      // The first row now is a notice, not a row of the conversation, so whoever scrolls to the top learns the rest was kept
+      // out of the view and where it is. It takes the place of the oldest row left (line numbers stay as they are).
+      this.capDropped += excess - (markerWasFirst ? 1 : 0) + 1;
+      this.alternateTranscript[0] = earlierRowsNotice(this.capDropped);
+      this.capMarkerLine = this.alternateTrimmed;
     }
   }
   // Held still while rows arrive at the end of what can be read: the
