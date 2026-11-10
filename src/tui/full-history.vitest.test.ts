@@ -2,9 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TerminalHarnessPrompter } from './prompter.js';
 import { TestScreen } from './inline-screen.vitest-helper.js';
+import { HISTORY_DUMP_ROWS } from './prompter/history-dump.js';
 
-import { appendFileSync } from 'node:fs';
-const dbg = (...a: unknown[]): void => appendFileSync('/home/justin-gracier/projects/cc-full-history/.dbg.txt', a.join(' ') + '\n');
 const realTty = process.stdout.isTTY;
 const realWrite = process.stdout.write.bind(process.stdout);
 
@@ -216,6 +215,63 @@ describe('scroll-back through a long conversation', () => {
       }
       expect(worst).toBeLessThanOrEqual(120);
       expect(rl.scrollWindow.rendered - start).toBeLessThan(2000);
+    } finally { rl.close(); }
+  });
+});
+
+describe('the history written under the shell when the screen is left', () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] }); vi.stubEnv('CLIKCODE_INLINE', ''); vi.stubEnv('STY', ''); });
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); Object.assign(process.stdout, { isTTY: realTty }); process.stdout.write = realWrite; });
+  const rowsOf = (text: string): string[] => text.replaceAll('\u001b[?7h', '').split('\u001b[0m\r\n').slice(0, -1);
+
+  it('writes the whole conversation when it is at most 20000 rows', () => {
+    const { rl, settle } = setup();
+    try {
+      rl.render(session(1000));
+      settle();
+      const out = rowsOf(rl.takeHistoryDump());
+      expect(out.length).toBeLessThanOrEqual(HISTORY_DUMP_ROWS);
+      expect(out.some((row) => row.includes('earlier row'))).toBe(false);
+      expect(out[0]).toBe('› question 1');
+      expect(out.join('\n')).toContain('answer 500');
+      expect(out.join('\n')).toContain('question 250');
+      expect(rl.takeHistoryDump()).toBe('');
+    } finally { rl.close(); }
+  });
+
+  it('writes the last 20000 rows and a note for a longer one', () => {
+    const { rl, settle } = setup();
+    try {
+      rl.render(session(8000));
+      settle();
+      const out = rowsOf(rl.takeHistoryDump());
+      expect(out).toHaveLength(HISTORY_DUMP_ROWS + 1);
+      expect(out[0]).toMatch(/earlier rows not shown; \/resume reopens the whole conversation/);
+      expect(out.at(-1)).toBe('');
+      expect(out.join('\n')).toContain('answer 4000');
+    } finally { rl.close(); }
+  });
+
+  it('writes only what is new after a suspend, a new width, and more messages: nothing twice', () => {
+    const { rl, settle } = setup();
+    try {
+      const s = session(40) as unknown as { messages: Array<{ role: string; content: string }> };
+      rl.render(s as never);
+      settle();
+      const first = rowsOf(rl.takeHistoryDump());
+      expect(first.join('\n')).toContain('answer 20');
+      // The conversation is written again at another width: what the dump holds is by message, so nothing repeats.
+      Object.assign(process.stdout, { columns: 60 });
+      (rl as unknown as { onResize(): void }).onResize();
+      settle();
+      expect(rl.takeHistoryDump()).toBe('');
+      s.messages.push({ role: 'user', content: 'one more question' }, { role: 'assistant', content: 'one more answer' });
+      rl.render(s as never);
+      settle();
+      const second = rowsOf(rl.takeHistoryDump());
+      expect(second.join('\n')).toContain('one more question');
+      expect(second.join('\n')).not.toContain('answer 20');
+      expect(rl.takeHistoryDump()).toBe('');
     } finally { rl.close(); }
   });
 });
