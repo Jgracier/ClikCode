@@ -88,6 +88,7 @@ export function gatewayModelClient(input: {
     apiKey: input.apiKey,
     model: input.model ?? 'auto',
     label: 'ClikDeploy Gateway',
+    privateReasoning: true,
     hosted: true,
     headers: {
       'x-client': `clikcode/${CLIKCODE_VERSION}`, ...(input.sessionId ? { 'x-session-id': input.sessionId } : {}),
@@ -155,8 +156,7 @@ async function gatewayModelFacts(session: HarnessSession, config: Conf): Promise
   }
 }
 
-/** How a model client for a model on this computer names itself in messages ("Could not reach The local model at …"). Never
- * 'ClikDeploy Gateway': the client branches on that label for the Gateway's own stream format. */
+/** How a model client for a model on this computer names itself in messages ("Could not reach The local model at …"). */
 const LOCAL_MODEL_LABEL = 'The local model';
 
 /** The model client for a session that runs ClikCode's own agent. Async

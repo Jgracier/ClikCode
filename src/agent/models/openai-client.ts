@@ -37,8 +37,11 @@ interface OpenAIModelClientOptions {
   headers?: Readonly<Record<string, string>>;
   /** Merged over the request body last, e.g. `{ temperature: 0.2 }`. */
   body?: Readonly<Record<string, unknown>>;
-  /** Display name for error messages. */
+  /** Display name for error messages. Only a name: nothing branches on it. */
   label?: string;
+  /** The ClikDeploy Gateway's stream: any served model may write inline
+   * `<think>` text, which is stripped, and reasoning deltas stay private. */
+  privateReasoning?: boolean;
   fetchImpl?: typeof fetch;
   /** Longest silence once the answer has started (STREAM_IDLE_TIMEOUT_MS). */
   idleTimeoutMs?: number;
@@ -367,11 +370,9 @@ export class OpenAIModelClient implements ModelClient {
     const blocks: ReasoningBlock[] = [];
     // `auto` and Gateway aliases do not always identify the selected model in
     // the request. The stream's `model` field is authoritative when present.
-    let inlineThink = this.label === 'ClikDeploy Gateway'
-      // Gateway aliases may resolve to any served model, and content can
-      // arrive before the stream identifies the selected model.
-      ? new InlineThinkFilter()
-      : undefined;
+    // Gateway aliases may resolve to any served model, and content can
+    // arrive before the stream identifies the selected model.
+    const inlineThink = options.privateReasoning ? new InlineThinkFilter() : undefined;
     const emitText = (chunk: string): void => { if (chunk) { text += chunk; request.onTextDelta(chunk); } };
 
     const handle = (event: SseEvent): void => {
@@ -396,8 +397,6 @@ export class OpenAIModelClient implements ModelClient {
       if (window) { servedWindow = window; this.servedWindow = window; }
       if (typeof frame.model === 'string' && frame.model && frame.model !== servedModel) {
         servedModel = frame.model;
-        // Also handle Gateway model IDs that arrive after initial content.
-        if (!inlineThink && this.label === 'ClikDeploy Gateway') inlineThink = new InlineThinkFilter();
         request.onServedModel?.(servedModel, servedWindow);
       }
       if (frame.usage && typeof frame.usage === 'object') usage = { ...usage, ...usageFrom(frame.usage as Record<string, unknown>) };
@@ -415,7 +414,7 @@ export class OpenAIModelClient implements ModelClient {
       // still uses the normal streaming Markdown renderer and tool calls remain
       // structured events. Other OpenAI-compatible providers keep their
       // existing reasoning activity behavior.
-      if (reasoning && this.label !== 'ClikDeploy Gateway') request.onReasoningDelta?.(reasoning);
+      if (reasoning && !options.privateReasoning) request.onReasoningDelta?.(reasoning);
       // The Gateway's finished blocks, with the signature that lets them be sent back.
       if (Array.isArray(delta.reasoning_details)) {
         for (const raw of delta.reasoning_details as Record<string, unknown>[]) {
