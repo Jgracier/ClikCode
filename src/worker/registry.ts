@@ -297,6 +297,50 @@ async function ownerIsLive(sessionId: string, owner: ConversationOwner | undefin
   return owner.kind === 'worker' && workerIsReachable(socketPathFor(sessionId));
 }
 
+/** Whether the worker a record names is still running: the one liveness rule
+ * for worker records. The record is a note the worker leaves; the lease
+ * (`.owner`) is what it keeps fresh while it lives (refreshed every 10 s,
+ * stale after 60 s, kept by a suspended worker that still answers). A record
+ * is alive only while the lease is a worker's and names the record's pid --
+ * a pid check on its own counted a recycled pid (or anyone's, via EPERM) as
+ * the worker, so a chat killed by the stuck watchdog showed "working" for ever. */
+export async function workerAlive(record: Pick<WorkerRuntimeRecord, 'pid' | 'sessionId'>): Promise<boolean> {
+  const path = ownerPath(record.sessionId);
+  const raw = await readFile(path, 'utf8').catch(quiet('worker/registry'));
+  const owner = raw === undefined ? undefined : parseOwner(raw);
+  if (!owner || owner.kind !== 'worker' || owner.pid !== record.pid) return false;
+  return ownerIsLive(record.sessionId, owner, path);
+}
+
+/** The worker records whose worker is alive (workerAlive). A record that
+ * fails the check is removed -- only while it is still the record judged, so
+ * one a new worker just wrote is never taken. */
+export async function liveWorkerRecords(): Promise<WorkerRuntimeRecord[]> {
+  const records = await listWorkerRecords();
+  const alive = await Promise.all(records.map(async (record) => {
+    if (await workerAlive(record)) return true;
+    await removeDeadWorkerRecord(record).catch(quiet('worker/registry'));
+    return false;
+  }));
+  return records.filter((_, index) => alive[index]);
+}
+
+/** Removes a record whose worker is gone, re-judged under breakStaleLock's
+ * turn-taking so a record rewritten meanwhile (a new worker's) stays. */
+export async function removeDeadWorkerRecord(record: WorkerRuntimeRecord): Promise<void> {
+  const path = recordPath(record.sessionId);
+  const raw = await readFile(path, 'utf8').catch(quiet('worker/registry'));
+  if (raw === undefined) return;
+  const sameRecord = (current: string): boolean => {
+    try {
+      const parsed = JSON.parse(current) as Partial<WorkerRuntimeRecord>;
+      return parsed.token === record.token && parsed.pid === record.pid;
+    } catch { return false; }
+  };
+  if (!sameRecord(raw)) return;
+  await breakStaleLock(path, raw, async (current) => sameRecord(current) && !await workerAlive(record));
+}
+
 /** Who runs the conversation's turns now, if anyone does. */
 export async function conversationHolder(sessionId: string): Promise<ConversationOwner | undefined> {
   const raw = await readFile(ownerPath(sessionId), 'utf8').catch(quiet('worker/registry'));

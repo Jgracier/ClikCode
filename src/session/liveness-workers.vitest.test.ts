@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { liveWorkers, liveWorkerSessions, livePendingTurns, sessionActivity } from './liveness.js';
 import type { HarnessSession } from './model.js';
-import { ensureWorkersDirectory, writeWorkerRecord } from '../worker/registry.js';
+import { ensureWorkersDirectory, listWorkerRecords, takeConversation, writeWorkerRecord } from '../worker/registry.js';
 
 const previousHome = process.env.CLIKCODE_HOME;
 let root: string | undefined;
@@ -30,6 +30,7 @@ describe('liveWorkerSessions reads the worker directory once', () => {
       build: 'test',
       startedAt: new Date().toISOString(),
     });
+    await takeConversation('alive', 'worker');
     await writeWorkerRecord({
       sessionId: 'dead',
       pid: 2_147_483_646,
@@ -43,6 +44,26 @@ describe('liveWorkerSessions reads the worker directory once', () => {
     expect(live('alive')).toBe(true);
     expect(live('dead')).toBe(false);
     expect(live('chat-0')).toBe(false);
+  });
+
+  it('does not take a record for a live worker on its pid alone, and removes a record whose worker is gone', async () => {
+    root = await mkdtemp(join(tmpdir(), 'clikcode-live-lease-'));
+    process.env.CLIKCODE_HOME = root;
+    await ensureWorkersDirectory();
+    const base = { socketPath: join(root, 'x.sock'), token: 't', installationId: 'install', build: 'test', startedAt: new Date().toISOString() };
+    // The pid is alive (this process: a reused pid), but no worker holds the conversation: the stuck
+    // watchdog SIGKILLed it, and the record stayed with its runningTurn mark.
+    await writeWorkerRecord({ ...base, sessionId: 'reused', pid: process.pid, runningTurn: { since: base.startedAt } });
+    // A lease that is another process's: the record is an older worker's.
+    await writeWorkerRecord({ ...base, sessionId: 'replaced', pid: process.pid + 1 });
+    await takeConversation('replaced', 'worker');
+    const workers = await liveWorkers();
+    expect(workers.isLive('reused')).toBe(false);
+    expect(workers.runningTurn('reused')).toBeUndefined();
+    expect(workers.isLive('replaced')).toBe(false);
+    const session = { id: 'reused', status: 'active' } as HarnessSession;
+    expect(sessionActivity(session, workers.isLive, undefined, workers.isOpen, workers.runningTurn)).toBeUndefined();
+    expect((await listWorkerRecords()).map((record) => record.sessionId)).toEqual([]);
   });
 });
 
@@ -63,6 +84,7 @@ describe('a chat whose turn is over but whose background work runs', () => {
     process.env.CLIKCODE_HOME = root;
     await ensureWorkersDirectory();
     const record = { sessionId: 'waiting', pid: process.pid, socketPath: join(root, 'w.sock'), token: 't', installationId: 'install', build: 'test', startedAt: new Date().toISOString() };
+    await takeConversation('waiting', 'worker');
     await writeWorkerRecord({ ...record, background: { agents: 2, terminals: 1, since: '2026-10-17T10:00:00.000Z' } });
     const session = { id: 'waiting', status: 'active' } as HarnessSession;
     let workers = await liveWorkers();
@@ -81,6 +103,7 @@ describe('a chat whose turn is over but whose background work runs', () => {
     process.env.CLIKCODE_HOME = root;
     await ensureWorkersDirectory();
     const record = { sessionId: 'spinning', pid: process.pid, socketPath: join(root, 's.sock'), token: 't', installationId: 'install', build: 'test', startedAt: new Date().toISOString() };
+    await takeConversation('spinning', 'worker');
     await writeWorkerRecord({ ...record, background: { terminals: 1, since: '2026-10-17T10:00:00.000Z', commands: [{ pid: 3555608, label: 'node scripts/pre-push-related.mjs', startedAt: Date.now() - 32 * 3_600_000, cpuPercent: 100 }] } });
     const workers = await liveWorkers();
     expect(workers.background('spinning')?.commands?.[0]?.pid).toBe(3555608);
@@ -92,6 +115,7 @@ describe('a chat whose turn is over but whose background work runs', () => {
     root = await mkdtemp(join(tmpdir(), 'clikcode-idle-worker-'));
     process.env.CLIKCODE_HOME = root;
     await ensureWorkersDirectory();
+    await takeConversation('idle', 'worker');
     await writeWorkerRecord({ sessionId: 'idle', pid: process.pid, socketPath: join(root, 'idle.sock'), token: 't', installationId: 'install', build: 'test', startedAt: new Date().toISOString() });
     const session = { id: 'idle', status: 'active', pendingTurn: { prompt: 'stale', startedAt: '2026-10-26T12:00:00.000Z', updatedAt: '2026-10-26T12:00:00.000Z', outputStarted: true } } as HarnessSession;
     const workers = await liveWorkers();

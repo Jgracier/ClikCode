@@ -7,8 +7,7 @@
  * is spawned, attached to or written. */
 
 import type { HarnessSession } from '../session/model.js';
-import { livePendingTurns, sessionActivity } from '../session/liveness.js';
-import { listWorkerRecords, liveOpenConversations } from '../worker/registry.js';
+import { livePendingTurns, liveWorkers, sessionActivity } from '../session/liveness.js';
 import { readTurnActivities } from '../turn/turn-activities.js';
 import { conversationGroups, conversationTitle } from './conversations.js';
 
@@ -65,43 +64,27 @@ function latest(updatedAt: string, updatedAtMs: number, turnAt: string | undefin
 
 export async function activeConversations(options: ActiveOptions = {}): Promise<ActiveConversation[]> {
   const now = options.now ?? Date.now();
-  const [groups, isOpen, records] = await Promise.all([
-    conversationGroups(), liveOpenConversations().catch(() => () => false), listWorkerRecords().catch(() => []),
-  ]);
-  const live = new Set<string>();
-  const approvals = new Map<string, { title: string; since: string }>();
-  const background = new Map<string, NonNullable<(typeof records)[number]['background']>>();
-  for (const record of records) {
-    try {
-      process.kill(record.pid, 0);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EPERM') continue;
-    }
-    live.add(record.sessionId);
-    if (record.awaitingApproval) approvals.set(record.sessionId, record.awaitingApproval);
-    if (record.background) background.set(record.sessionId, record.background);
-  }
-  const workerIsLive = (id: string): boolean => live.has(id);
+  const [groups, workers] = await Promise.all([conversationGroups(), liveWorkers()]);
+  const { isLive: workerIsLive, isOpen, runningTurn, background } = workers;
   const candidates = groups.filter((group) => group.id !== options.excludeConversationId
     && !group.branches.some((branch) => branch.id === options.excludeSessionId));
   const sessions = candidates.flatMap((group) => group.branches);
   const byId = new Map(sessions.map((session) => [session.id, session]));
-  const runningTurn = (id: string): string | undefined => records.find((record) => record.sessionId === id)?.runningTurn?.since;
-  const pending = await livePendingTurns(sessions, workerIsLive, (id) => background.get(id), runningTurn);
+  const pending = await livePendingTurns(sessions, workerIsLive, background, runningTurn);
   const out: ActiveConversation[] = [];
   for (const group of candidates) {
     let chosen: HarnessSession | undefined;
     let state: ActiveConversation['state'] | undefined;
     for (const branch of group.branches) {
       const session = byId.get(branch.id)!;
-      const doing = sessionActivity(session, workerIsLive, pending.get(session.id), isOpen, runningTurn, (id) => background.get(id));
+      const doing = sessionActivity(session, workerIsLive, pending.get(session.id), isOpen, runningTurn, background);
       if (doing === 'working') { chosen = session; state = 'working'; break; }
       if (doing && !state) { chosen = session; state = 'open'; }
     }
     if (!state && now - group.updatedAtMs <= RECENT_WITHIN_MS) { chosen = group.newest; state = 'recent'; }
     if (!chosen || !state) continue;
     const turn = state === 'working' ? pending.get(chosen.id) : undefined;
-    const approval = approvals.get(chosen.id);
+    const approval = workers.awaitingApproval(chosen.id);
     const ask = turn?.prompt ?? chosen.listPreview;
     out.push({
       conversationId: group.id, sessionId: chosen.id, title: conversationTitle(group.newest),
