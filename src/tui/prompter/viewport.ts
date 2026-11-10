@@ -107,6 +107,16 @@ export function anchorBlock(this: TerminalHarnessPrompter): void {
   askCursorRow(done, CURSOR_REPORT_MS);
 }
 
+/** The message the history dump stood in, and how far into it: the last message that starts before the dump's end. */
+function dumpPlace(p: TerminalHarnessPrompter): TerminalHarnessPrompter['dumpResume'] {
+  const end = p.dumpedThrough!;
+  let message: number | undefined;
+  let line = 0;
+  for (const [index, start] of p.messageLines) if (start < end && (message === undefined || index > message)) { message = index; line = start; }
+  if (message === undefined) return undefined;
+  return { session: p.currentSession?.id, message, into: end - line };
+}
+
 /** Empty the transcript before the conversation is written again. What is
  * above the live region is only ever the conversation being shown: another
  * one, or this one at an old width, is dropped -- not pushed up behind a
@@ -120,7 +130,9 @@ export function clearTranscript(this: TerminalHarnessPrompter): void {
   this.lastFinishedRow = undefined;
   this.secondLastFinishedRow = undefined;
   this.alternateScrollback = 0;
-  // What was written into the normal screen was the old text: the new one is written whole.
+  // What was written into the normal screen was the old text at the old width. The place is kept by message (rewrapping keeps
+  // those, not row numbers), so the next dump writes what the new text has after it and not the messages again.
+  this.dumpResume = this.dumpedThrough === undefined ? this.dumpResume : dumpPlace(this);
   this.dumpedThrough = undefined;
   // Inline: the terminal's own scrollback holds the old conversation too.
   if (inlineHistoryMode()) inlineBlock.clearNext = true;
