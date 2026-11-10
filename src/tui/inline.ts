@@ -1,48 +1,25 @@
-import { spawnSync } from 'node:child_process';
-
-/** Inline-history mode: the conversation is printed once into the terminal's own
- * scrollback and only the composer and status block is redrawn, with relative
- * cursor motion, at the bottom. No alternate screen and no mouse reporting, so
- * a touch scrolls the client's own scrollback.
+/** Which screen model runs.
  *
- * Which mode runs, first match wins:
- *   1. CLIKCODE_INLINE=1 / 0 forces inline / full-screen.
- *   2. GNU screen (STY set, or TERM screen* outside tmux) is inline: screen ships with `altscreen off`, so it
- *      swallows the alternate screen. tmux does not: it keeps the alternate screen, and what it does not do is pass
- *      the mouse to the program unless its `mouse` option is on, and full-screen scrolls by wheel. So inside tmux
- *      the mode follows that option (asked once, `tmux show-options -gv mouse`): mouse on, the rules below; off, inline.
- *   3. TERM=dumb or linux (the console has no reliable alternate screen or mouse) is inline.
- *   4. A known good local terminal (TERM_PROGRAM iTerm.app, Apple_Terminal, WezTerm, ghostty,
- *      kitty, vscode, Alacritty; or the matching TERM) is full-screen, even over ssh.
- *   5. Over ssh (SSH_CONNECTION or SSH_TTY) from a terminal not known to be a good one: inline. ssh does not carry
- *      TERM_PROGRAM, so this is every ssh session whose TERM does not name a good terminal. The width of the window says
- *      nothing about it (a wide window over ssh scrolls as badly as a narrow one), so it is not read.
- *   6. Otherwise full-screen. */
-const GOOD_TERMINAL_PROGRAMS = new Set(['iterm.app', 'apple_terminal', 'wezterm', 'ghostty', 'kitty', 'vscode', 'alacritty']);
-const GOOD_TERMS = new Set(['xterm-kitty', 'alacritty', 'xterm-ghostty', 'wezterm']);
-
-/** Whether the tmux this runs in forwards the mouse to programs (its `mouse` option), asked once per process. */
-let tmuxMouse: boolean | undefined;
-export function tmuxForwardsMouse(): boolean {
-  if (tmuxMouse === undefined) {
-    try {
-      tmuxMouse = spawnSync('tmux', ['show-options', '-gv', 'mouse'], { encoding: 'utf8', timeout: 500 }).stdout.trim() === 'on';
-    } catch { tmuxMouse = false; }
-  }
-  return tmuxMouse;
+ * The default is FULL-SCREEN everywhere (local, ssh, ClikDeploy's phone page, tmux, screen, plain terminals): the alternate screen,
+ * every row drawn at an absolute address on every frame and every resize, the composer and status on the last row, the
+ * conversation kept here and scrolled by key (PageUp, PageDown, arrows, Home, End) or by whatever the client turns a wheel or
+ * a swipe into (arrows, in the alternate screen). No mouse reporting, so the client's own selection and copy work. When the
+ * program ends, or is suspended, the conversation is written into the normal screen (restore.ts, historyDump) so it is in the
+ * client's scrollback and selectable.
+ *
+ * Inline-history mode is the opt-in, CLIKCODE_INLINE=1: the conversation is printed once into the terminal's own scrollback and only
+ * the composer and status block is redrawn, with relative cursor motion. It depends on the client keeping its rows steady when
+ * the window changes size, which no remote client promises, so nothing chooses it for you. */
+export function inlineHistoryMode(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.CLIKCODE_INLINE === '1';
 }
 
-export function inlineHistoryMode(env: NodeJS.ProcessEnv = process.env, tmuxMouseOn: () => boolean = tmuxForwardsMouse): boolean {
-  if (env.CLIKCODE_INLINE === '1') return true;
-  if (env.CLIKCODE_INLINE === '0') return false;
-  const term = (env.TERM ?? '').toLowerCase();
-  if (env.TMUX) { if (!tmuxMouseOn()) return true; }
-  else if (env.STY || term.startsWith('screen') || term.startsWith('tmux')) return true;
-  if (term === 'dumb' || term === 'linux') return true;
-  const program = (env.TERM_PROGRAM ?? '').toLowerCase();
-  const good = GOOD_TERMINAL_PROGRAMS.has(program) || GOOD_TERMS.has(term);
-  if (good) return false;
-  return Boolean(env.SSH_CONNECTION || env.SSH_TTY);
+/** A client that ignores the alternate screen: GNU screen ships with `altscreen off`, so `?1049h` and `?1049l` are swallowed. The program
+ * then draws on the one screen there is, and on the way out must erase what it drew before the conversation is written under the
+ * shell. STY is screen's own variable (TERM says nothing: tmux sets screen* too); tmux keeps the alternate screen, and a pane
+ * inside screen has both, so TMUX wins. */
+export function swallowsAlternateScreen(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(env.STY) && !env.TMUX;
 }
 
 /** Screen and saved lines, then home: replacing the conversation must leave none

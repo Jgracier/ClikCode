@@ -94,13 +94,13 @@ describe('keys typed between one reader and the next', () => {
 });
 
 describe('private-mode reports are the terminal talking, never typing', () => {
-  it('drops an old phone page\'s ?9701 size report and a DECRQM answer, however the link chunks them, and records the sync answer', () => {
+  it('drops a DECRQM answer, however the link chunks them, and records the sync answer', () => {
     stdin.on('data', KEEP_STDIN_FLOWING);
     const keys: string[] = [];
     const stop = takeTerminalKeys((key) => keys.push(key));
     try {
-      stdin.emit('data', Buffer.from('a\u001b[?97'));
-      stdin.emit('data', Buffer.from('01;31tb\u001b[?9701;31t\u001b[?2026;2$yc\u001bP>|xterm.js(5)\u001b\\\u001b[?62;4c'));
+      stdin.emit('data', Buffer.from('a\u001b[?20'));
+      stdin.emit('data', Buffer.from('26;2$yb\u001b[?2026;2$yc\u001bP>|xterm.js(5)\u001b\\\u001b[?62;4c'));
       expect(keys).toEqual(['a', 'b', 'c']);
       expect(terminalFacts.syncOutput).toBe(true);
       expect(terminalFacts.name).toBe('xterm.js(5)');

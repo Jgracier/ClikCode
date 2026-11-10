@@ -338,7 +338,9 @@ class PromptSession {
       // client this is the only way back through the conversation at all.
       // History keeps Ctrl+P and Ctrl+N, which is where it always was as
       // well, and the arrows still move through a draft once there is one.
-      if (!value) {
+      // Once the view is scrolled back the arrows keep reading, whatever is typed: a swipe is a run of them, and one that began on an
+      // empty composer must not turn into history recall under a draft typed meanwhile.
+      if (!value || p.scrolledBack) {
         if (p.scrollTranscript(direction === -1 ? SWIPE_ROWS : -SWIPE_ROWS)) return true;
         if (direction === 1 && p.noteReadingDirection()) return true;
       }
@@ -346,6 +348,11 @@ class PromptSession {
       if (moved !== undefined) this.cursor = moved;
       else this.historyStep(direction);
       this.draw();
+      return true;
+    }
+    // Home and End (the decoder reads them as Ctrl+A and Ctrl+E) on an empty composer go to the first and the last row of the conversation.
+    if (!value && !options.length && (key === '\u0001' || key === '\u0005')) {
+      p.scrollTranscript(key === '\u0001' ? Number.MAX_SAFE_INTEGER : -Number.MAX_SAFE_INTEGER);
       return true;
     }
     if (key === '\u0010' && !options.length) { this.historyStep(-1); this.draw(); return true; }

@@ -9,7 +9,7 @@ import { stdin as input, stdout as output } from 'node:process';
 import { createStreamingBlockParser } from './render/markdown.js';
 import { ResponseReveal } from './render/response-reveal.js';
 import { CLEAR_SCREEN_AND_SCROLLBACK, inlineHistoryMode } from './inline.js';
-import { ENTER_ALTERNATE_SCREEN, installTerminalRestoreSignals, REEXEC_TERMINAL_ENV, restoreTerminal, terminalModes, terminalPrepare } from './restore.js';
+import { enterAlternateScreenSequence, historyDump, installTerminalRestoreSignals, REEXEC_TERMINAL_ENV, restoreTerminal, terminalModes, terminalPrepare } from './restore.js';
 import type { FocusState } from './terminal-signals.js';
 import { sessionTranscriptMessages, settledTranscriptMessages } from '../turn/checkpoint.js';
 import { TurnTranscript } from '../turn/transcript.js';
@@ -35,6 +35,7 @@ import { sessionModesOn, setTerminalRawMode, type Redraw } from './modes.js';
 import { probeTerminal } from './probe.js';
 import { PlanEntry } from './render/plan-block.js';
 import { type ComposerFrame, EMPTY_COMPOSER, type WaitingTurn } from './prompter/state.js';
+import { takeHistoryDump } from './prompter/history-dump.js';
 import { retakeScreen, retakeTerminalSignals, takeTerminalTitle, terminalSignals, notifyIfAway, suspendToShell, onContinue, close, suspend, resume } from './prompter/terminal-lifecycle.js';
 import { scrollTranscript, drainScroll, queueScroll, drainAtBatchEnd, scheduleScrollPaint, handleScrollKey, handleSelection, lineAtScreenRow, selectionText, followSelectionEdge, stepSelectionScroll, stopSelectionScroll, redrawSelection, noteReadingDirection, forgetScreenPosition } from './prompter/scroll-selection.js';
 import { showMention, mentionKey, endMention, jumpToMention } from './prompter/mention.js';
@@ -173,6 +174,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** The width the transcript's rows were wrapped at. A resize to another
    * width wraps the whole conversation again (see rewrapTranscript). */
   transcriptColumns = output.columns || 0;
+  /** The first conversation row number (alternateTrimmed + index) not yet written into the normal screen; undefined: none of the current text has been. */
+  dumpedThrough: number | undefined;
+  /** Full-screen: the last size change was drawn whole the moment it arrived and no other came while the settle timer ran. */
+  resizeSettled = false;
   usageLabel?: string;
   /** The owner of a conversation reached over SSH, shown in the status line. */
   remoteMachineName?: string;
@@ -372,7 +377,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         // at the bottom edge with the conversation printed above it.
         output.write(`${CLEAR_SCREEN_AND_SCROLLBACK}\u001b[${Math.max(1, output.rows || 24)};1H`);
       } else {
-        if (!inheritedScreen) output.write(ENTER_ALTERNATE_SCREEN);
+        if (!inheritedScreen) output.write(enterAlternateScreenSequence());
         terminalModes.alternateScreen = true;
       }
       // Asked for: bracketed paste, because pasted text must not be read as
@@ -385,7 +390,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       //
       // Selection mode means the user asked for the mouse back; taking the
       // screen must not quietly take it again.
-      output.write(sessionModesOn(true));
+      output.write(sessionModesOn());
+      if (!inlineHistoryMode()) historyDump.source = () => this.takeHistoryDump();
       // Asked, not believed; never waited for (see probe.ts for the fallback when nothing answers).
       void probeTerminal();
     }
@@ -714,6 +720,7 @@ const methods = {
   rewrapIfWidthChanged,
   anchorBlock,
   clearTranscript,
+  takeHistoryDump,
   activity,
   setPlan,
   settlePlan,

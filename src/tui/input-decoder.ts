@@ -49,9 +49,9 @@ const FOCUS_EVENT = /^\u001b\[[IO]$/;
 /** `CSI ? ... c`: the terminal answering Primary DA. Never a keystroke. */
 const DEVICE_ATTRIBUTES_REPLY = /^\u001b\[\?[0-9;]*c$/;
 
-/** A private-mode report no one here asked for -- `CSI ? Pn $ y` (DECRQM), `CSI ? Pn ; Pn t` (a client's size report such
- * as the old phone page's `?9701;rows t`), `CSI ? Pn ; ... R` -- is a terminal talking, never typing. */
-const PRIVATE_REPORT = /^\u001b\[\?\d+(?:;\d+)*(?:\$y|t)$/;
+/** A private-mode report no one here asked for -- `CSI ? Pn $ y` (DECRQM) -- is a terminal talking, never typing. (The phone page's
+ * `CSI ? 9701 ; rows t` size report is no longer decoded: the page stopped sending it, ClikDeployMobile b5e31c7.) */
+const PRIVATE_REPORT = /^\u001b\[\?\d+(?:;\d+)*\$y$/;
 
 /** Readers attached now (listenForTerminalKeys), and what the terminal sent
  * while there were none: kept for the next one. */

@@ -14,50 +14,29 @@ import { inlineHistoryMode } from './inline.js';
  * fences the payload and the whole thing arrives as one key. */
 const ENABLE_BRACKETED_PASTE = '\u001b[?2004h';
 
-/** Mouse tracking: normal (1000), button-event (1002), any-event (1003), SGR
- * encoding (1006). All four, and a swipe does not scroll without all four.
+/** Mouse tracking: normal (1000), button-event (1002), any-event (1003), SGR encoding (1006). OPT-IN (CLIKCODE_MOUSE=1), never the default.
  *
- * Only motion and wheel reports are acted on, so 1002 and 1003 look
- * redundant. They are not: a client may require the tracking level it was
- * asked for before it routes a gesture to the application at all. Asking for
- * only 1000 and 1006 is click tracking, and a phone sends nothing for a swipe
- * under it -- with no page keys, that leaves no way to read a conversation
- * back. Verified against a capture of a working client on the target device,
- * which is the only thing that settles this; reading the tracking levels and
- * reasoning about which ones are needed gives the wrong answer.
- *
- * Presses and drags are decoded and dropped. What they cost is the client's
- * own selection gesture, hence the usual "hold Shift while selecting" advice.
- *
- * `?1006h` is the SGR encoding; the wheel arrives as button 64 and 65. */
-const MOUSE_TRACKING_ON = '\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006h';
+ * Any mouse reporting is what stops a client doing its own text selection, because every press and drag goes to the program
+ * instead; there is no setting that gives both. The default keeps the client's selection (long-press, drag, copy) and reads the
+ * conversation back by key and by what the client turns a wheel or swipe into when no mouse mode is set: arrows, in the alternate
+ * screen (see ALTERNATE_SCROLL_ON). Opting in gives the program the wheel and its own selection, the way a phone page that
+ * forwards a swipe only under tracking needs: all four modes, because a client may route a gesture to the program only at the
+ * level it was asked for. */
+const MOUSE_TRACKING_ON = '\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006l\u001b[?1006h';
 
-/** The opening form, used once when the program takes the screen. The `?1006l`
- * before `?1006h` is deliberate and comes from the bare script that receives
- * the gesture on this user's phone when ClikCode does not: it makes SGR
- * reporting a transition rather than a no-op, so a client deciding how to
- * route touches has something to notice.
- *
- * It exists as a named constant so that every enable site is greppable through
- * one name. Spelled out inline, this one escaped the first pass at gating the
- * modes behind SELECTION_MODE, and /select did nothing as a result. */
-const OPENING_MOUSE_TRACKING_ON = '\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006l\u001b[?1006h';
+/** Alternate scroll (xterm `?1007`): with no mouse mode set, the client sends Up/Down for a wheel notch while the alternate screen is up. xterm.js and
+ * most terminals do it on their own; this asks the ones that have it off by default. Left set on the way out (what it was before is not known,
+ * and it only means anything in the alternate screen). */
+export const ALTERNATE_SCROLL_ON = '\u001b[?1007h';
 
-/** Inline-history mode never asks for the mouse: the client scrolls its own scrollback. */
-const ENABLE_MOUSE_TRACKING = (): string => (inlineHistoryMode() ? '' : MOUSE_TRACKING_ON);
-const OPENING_MOUSE_TRACKING = (): string => (inlineHistoryMode() ? '' : OPENING_MOUSE_TRACKING_ON);
+/** Whether the program asks for the mouse at all: only when opted in, and never inline (the client scrolls its own scrollback there). */
+export function mouseWanted(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.CLIKCODE_MOUSE === '1' && !inlineHistoryMode(env);
+}
+const ENABLE_MOUSE_TRACKING = (): string => (mouseWanted() ? MOUSE_TRACKING_ON : '');
 
-/** Selection mode: the mouse handed back to the terminal.
- *
- * Any-event tracking (?1003h) is what makes a swipe scroll the transcript --
- * and it is also what stops the terminal performing its own text selection,
- * because every drag is delivered here instead. There is no setting that
- * gives both. So this releases all four modes on request: swipe-scroll stops
- * working, and selecting and copying chat text starts.
- *
- * Read by every place the mouse modes are asked for (sessionModesOn,
- * redrawPreamble), so neither taking the screen back nor a resize quietly
- * cancels it. */
+/** Selection mode, for the opt-in mouse only: the mouse handed back to the terminal for a while (`/select`). With the default there is
+ * nothing to hand back: the client's selection always works. */
 export const SELECTION_MODE = { active: false };
 
 /** The session's modes, as one thing: bracketed paste, the mouse (unless
@@ -71,13 +50,13 @@ export const SELECTION_MODE = { active: false };
  * switched the modes off and left the record saying on, and nothing ever
  * switched them back -- a swipe stopped scrolling and a paste was read as
  * keystrokes for the rest of the session.
- *
- * `opening` is the first taking of the screen (OPENING_MOUSE_TRACKING). */
-export function sessionModesOn(opening = false): string {
+ */
+export function sessionModesOn(): string {
   terminalModes.bracketedPaste = true;
-  terminalModes.wheelReporting = !SELECTION_MODE.active;
-  const mouse = SELECTION_MODE.active ? '' : opening ? OPENING_MOUSE_TRACKING() : ENABLE_MOUSE_TRACKING();
-  return `${ENABLE_BRACKETED_PASTE}${mouse}${FOCUS_REPORTING_ON}`;
+  terminalModes.wheelReporting = mouseWanted() && !SELECTION_MODE.active;
+  const mouse = SELECTION_MODE.active ? '' : ENABLE_MOUSE_TRACKING();
+  const scroll = mouseWanted() || inlineHistoryMode() ? '' : ALTERNATE_SCROLL_ON;
+  return `${ENABLE_BRACKETED_PASTE}${mouse}${scroll}${FOCUS_REPORTING_ON}`;
 }
 
 /** Every session mode off, and the title and progress handed back, for
@@ -198,7 +177,7 @@ export function enterInputModes(): string {
   // The flags were already tracked here. They were simply never read.
   let sequence = '';
   if (!terminalModes.bracketedPaste) { sequence += ENABLE_BRACKETED_PASTE; terminalModes.bracketedPaste = true; }
-  if (!terminalModes.wheelReporting && !SELECTION_MODE.active) {
+  if (!terminalModes.wheelReporting && !SELECTION_MODE.active && mouseWanted()) {
     sequence += ENABLE_MOUSE_TRACKING();
     terminalModes.wheelReporting = true;
   }
@@ -234,6 +213,9 @@ export function popReadModes(): string {
  * Idempotent per direction: setting it to what it already is still writes the
  * modes, because a client may have dropped them on its own. */
 export function setSelectionMode(active: boolean): string {
+  if (!mouseWanted()) {
+    return 'The terminal\'s own selection is always on: select and copy as usual. PageUp, PageDown, Home, End and the arrows read the conversation back.';
+  }
   SELECTION_MODE.active = active;
   if (active) {
     queuedModes += MOUSE_MODES_OFF;
@@ -241,7 +223,6 @@ export function setSelectionMode(active: boolean): string {
     return 'Selection mode on — select and copy with your terminal as usual. Swipe-scrolling is off until you run /select again.';
   }
   queuedModes += ENABLE_MOUSE_TRACKING();
-  terminalModes.wheelReporting = !inlineHistoryMode();
-  if (inlineHistoryMode()) return 'Selection mode off.';
+  terminalModes.wheelReporting = true;
   return 'Selection mode off — swipe-scrolling is back.';
 }

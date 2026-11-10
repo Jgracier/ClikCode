@@ -70,9 +70,10 @@ describe('the session modes, and selection mode', () => {
     const { SELECTION_MODE, redrawPreamble, sessionModesOff, sessionModesOn } = await import('../modes.js');
     const { terminalModes } = await import('../restore.js');
     const mouse = '\u001b[?1000h\u001b[?1002h\u001b[?1003h';
+    process.env.CLIKCODE_MOUSE = '1';
     try {
-      expect(sessionModesOn(true)).toContain(mouse);
-      expect(redrawPreamble('resize')).toBe('\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006h\u001b[?25l\u001b[?7l\u001b[2J\u001b[H');
+      expect(sessionModesOn()).toContain(mouse);
+      expect(redrawPreamble('resize')).toBe('\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006l\u001b[?1006h\u001b[?25l\u001b[?7l\u001b[2J\u001b[H');
       // A hand-over switches everything off and the record says so, so
       // taking the screen back switches it all on again.
       expect(sessionModesOff(false)).toContain('\u001b[?1000l');
@@ -85,6 +86,7 @@ describe('the session modes, and selection mode', () => {
       expect(redrawPreamble('resize')).toContain('\u001b[2J\u001b[H');
     } finally {
       SELECTION_MODE.active = false;
+      delete process.env.CLIKCODE_MOUSE;
     }
     expect(redrawPreamble('repair')).toBe('\u001b[?25l\u001b[?7l\u001b[2J\u001b[H');
     // A reply settling never clears.

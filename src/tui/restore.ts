@@ -7,14 +7,35 @@
 
 import { writeSync } from 'node:fs';
 import { stdin as input, stdout as output } from 'node:process';
-import { inlineBlock, inlineHistoryMode, LEAVE_PAGE_SCREEN, restoreMainBlock } from './inline.js';
+import { CLEAR_SCREEN, inlineBlock, inlineHistoryMode, LEAVE_PAGE_SCREEN, restoreMainBlock, swallowsAlternateScreen } from './inline.js';
 import { FOCUS_REPORTING_OFF, POP_TITLE, PUSH_TITLE, progressSequence } from './terminal-signals.js';
 
 /** An in-place build reload inherits the current terminal screen and title. */
 export const REEXEC_TERMINAL_ENV = 'CLIKCODE_KEEP_TERMINAL_ON_REEXEC';
 
-/** Take the alternate screen and clear it. */
-export const ENTER_ALTERNATE_SCREEN = '\u001b[?1049h\u001b[2J\u001b[H';
+/** Take the alternate screen and clear it. A client that swallows the alternate screen (GNU screen) is cleared the way that never
+ * copies the screen into saved lines (see CLEAR_SCREEN). */
+export function enterAlternateScreenSequence(): string {
+  return `\u001b[?1049h${swallowsAlternateScreen() ? CLEAR_SCREEN : '\u001b[2J\u001b[H'}`;
+}
+
+/** The conversation, to be written into the NORMAL screen whenever the alternate screen is left for good or for a while (exit, suspend,
+ * a crash handler): it is then in the client's scrollback and selectable, and nothing is lost when the program ends. The prompter
+ * installs `source`; it returns the text to write (rows, each ending in CRLF) and records that it was written, so a second call
+ * (a suspend, then the exit) writes only what is new. `suppressed` is for a hand-over to a copy of this program that will write
+ * the whole conversation itself when it ends. */
+export const historyDump: { source: (() => string) | undefined; suppressed: boolean } = { source: undefined, suppressed: false };
+
+/** What to write after the alternate screen is left. A client that swallowed the alternate screen still shows what was drawn on it, so
+ * that is erased first. Empty when there is nothing to write (a hand-over that suppressed it, an empty conversation, inline mode: the
+ * conversation is in the scrollback already). */
+export function historyDumpSequence(): string {
+  if (historyDump.suppressed || !historyDump.source || inlineHistoryMode()) return '';
+  let text = '';
+  try { text = historyDump.source(); } catch { /* fail-open-ok: a dump that cannot be built must not stop the terminal being given back */ }
+  const wipe = swallowsAlternateScreen() ? `${CLEAR_SCREEN}` : '';
+  return text || wipe ? `${wipe}${text}` : '';
+}
 
 export const terminalModes: {
   bracketedPaste: boolean;
@@ -42,7 +63,7 @@ export const terminalModes: {
 /** Take the alternate screen if this UI is not on it already. */
 export function enterAlternateScreen(): void {
   if (terminalModes.alternateScreen || inlineHistoryMode()) return;
-  output.write(ENTER_ALTERNATE_SCREEN);
+  output.write(enterAlternateScreenSequence());
   terminalModes.alternateScreen = true;
 }
 
@@ -70,7 +91,7 @@ export function pushShellTitle(): boolean {
 /** The terminal handed back on a normal close: the read modes off, the
  * alternate screen left, the title and progress given back. */
 export function giveBackTerminal(readModesOff: string): void {
-  output.write(`${readModesOff}` + terminalTeardown(terminalModes.alternateScreen) + signalsTeardown());
+  output.write(`${readModesOff}` + terminalTeardown(terminalModes.alternateScreen) + signalsTeardown() + historyDumpSequence());
   terminalModes.alternateScreen = false;
   terminalModes.painted = false;
 }
@@ -158,8 +179,10 @@ export function restoreTerminal(options: { sync?: boolean } = {}): void {
     // scrolling with the keyboard hidden and stayed broken across restarts,
     // and running Claude Code once -- which cleans the main screen -- fixed
     // the next ClikCode. Measured three times.
-    sequence += terminalTeardown(terminalModes.alternateScreen);
+    const leavingAlternate = terminalModes.alternateScreen;
+    sequence += terminalTeardown(leavingAlternate);
     sequence += signalsTeardown();
+    if (leavingAlternate) sequence += historyDumpSequence();
     const wasRaw = terminalModes.rawMode;
     terminalModes.uiStarted = false;
     terminalModes.painted = false;
