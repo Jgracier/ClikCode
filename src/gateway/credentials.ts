@@ -3,7 +3,7 @@
  * gateway (see constants.ts for the switch and the URL).
  *
  * Single source of truth for "which gateway URL" and "which API key for that
- * URL". Keep the import list tiny: constants + the canonical auth file reader
+ * URL". Keep the import list tiny: constants + the legacy auth file reader
  * only, so nothing here can reach back into a platform SDK.
  */
 import type Conf from 'conf';
@@ -16,7 +16,7 @@ import {
   type AuthByUrl,
 } from '../constants.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
-import { readCanonicalAuth, writeCanonicalAuth } from './local-auth.js';
+import { readCanonicalAuth } from './local-auth.js';
 
 /** Resolve the gateway base URL: env override, then a saved non-local URL, then the default. */
 export function getApiUrl(config: Conf): string {
@@ -44,15 +44,30 @@ export function getApiUrl(config: Conf): string {
 
 /**
  * Resolve the stored API key for a platform URL (defaults to the current one).
- * Order: canonical auth file for the same URL, then the per-URL map in config,
- * then the legacy single `apiKey`. A key is only ever sent to the URL it was
- * issued for: one that names no URL (the legacy `apiKey`, a canonical record
- * without `apiUrl`) goes only to the canonical gateway or the URL the user
- * saved, never to wherever an environment variable points.
+ * The per-URL map in config is the record. Copies older versions wrote
+ * beside it -- the canonical auth file, `~/.clikcode/api-key`, the single
+ * `apiKey` setting -- are read only when the map has nothing for this URL,
+ * and a key found that way is moved into the map. A key is only ever sent
+ * to the URL it was issued for: the canonical file names its URL, and one
+ * that names none (the key file, the `apiKey` setting) goes only to the
+ * canonical gateway or the URL the user saved, and never to a URL other
+ * than one the map already holds it for.
  */
 export function getApiKeyForUrl(config: Conf, url?: string): string | undefined {
   const normalized = normalizeApiUrl(url ?? getApiUrl(config));
-  const unscopedApplies = (): boolean => {
+  const authByUrl = (config.get(CONFIG_KEYS.AUTH_BY_URL) as AuthByUrl | undefined) ?? {};
+  const recorded = authByUrl[normalized]?.apiKey;
+  if (recorded) return recorded;
+  const migrated = legacyApiKeyForUrl(config, normalized, authByUrl);
+  if (!migrated) return undefined;
+  config.set(CONFIG_KEYS.AUTH_BY_URL, { ...authByUrl, [normalized]: { apiKey: migrated.apiKey, user: migrated.user ?? null } });
+  return migrated.apiKey;
+}
+
+function legacyApiKeyForUrl(config: Conf, normalized: string, authByUrl: AuthByUrl): { apiKey: string; user?: unknown } | undefined {
+  const issuedElsewhere = (apiKey: string): boolean => Object.entries(authByUrl).some(([other, record]) => other !== normalized && record?.apiKey === apiKey);
+  const unscopedApplies = (apiKey: string): boolean => {
+    if (issuedElsewhere(apiKey)) return false;
     if (normalized === normalizeApiUrl(DEFAULT_GATEWAY_URL)) return true;
     const saved = normalizeApiUrl(String((config.get(CONFIG_KEYS.API_URL) as string) || ''));
     return Boolean(saved) && saved === normalized;
@@ -60,23 +75,18 @@ export function getApiKeyForUrl(config: Conf, url?: string): string | undefined 
   const canonical = readCanonicalAuth();
   if (canonical?.apiKey) {
     const canonicalUrl = normalizeApiUrl(String(canonical.apiUrl || '').trim());
-    if (canonicalUrl ? canonicalUrl === normalized : unscopedApplies()) return canonical.apiKey;
+    if (canonicalUrl ? canonicalUrl === normalized : unscopedApplies(canonical.apiKey)) return canonical;
   }
-  const authByUrl = config.get(CONFIG_KEYS.AUTH_BY_URL) as AuthByUrl | undefined;
-  const key = authByUrl?.[normalized]?.apiKey;
-  if (key) return key;
-  return unscopedApplies() ? config.get(CONFIG_KEYS.API_KEY) as string | undefined : undefined;
+  const legacy = config.get(CONFIG_KEYS.API_KEY) as string | undefined;
+  return legacy && unscopedApplies(legacy) ? { apiKey: legacy, user: config.get('user') } : undefined;
 }
 
-/** Persist a verified credential exactly as AuthService.saveAuthForCurrentUrl does. */
+/** Persist a verified credential for the current URL: the per-URL record,
+ * and nothing else. */
 export function saveGatewayAuth(config: Conf, apiKey: string, user: unknown): void {
   const normalized = normalizeApiUrl(getApiUrl(config));
   const authByUrl = (config.get(CONFIG_KEYS.AUTH_BY_URL) as AuthByUrl) || {};
-  authByUrl[normalized] = { apiKey, user };
-  config.set(CONFIG_KEYS.AUTH_BY_URL, authByUrl);
-  config.set('apiKey', apiKey);
-  config.set('user', user);
-  writeCanonicalAuth({ apiUrl: normalized, apiKey, updatedAt: new Date().toISOString(), user });
+  config.set(CONFIG_KEYS.AUTH_BY_URL, { ...authByUrl, [normalized]: { apiKey, user } });
 }
 
 /** The API key for an account whose credential is an `env:NAME` reference. */

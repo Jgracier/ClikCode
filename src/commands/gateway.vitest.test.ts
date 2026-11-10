@@ -3,10 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../gateway/local-auth.js', () => ({
   readCanonicalAuth: vi.fn(() => null),
-  writeCanonicalAuth: vi.fn(),
 }));
 
-import { writeCanonicalAuth, readCanonicalAuth } from '../gateway/local-auth.js';
+import { readCanonicalAuth } from '../gateway/local-auth.js';
 import { getApiKeyForUrl, getApiUrl } from '../gateway/credentials.js';
 import { DEFAULT_GATEWAY_URL } from '../constants.js';
 import { gatewayLogin } from './gateway.js';
@@ -43,16 +42,20 @@ describe('gateway-credentials', () => {
     expect(getApiUrl(makeConfig({ apiUrl: 'https://self.example' }))).toBe('http://localhost:3000');
   });
 
-  it('resolves keys: canonical for a matching or unscoped URL, then per-URL, then legacy', () => {
+  it('resolves keys from the per-URL record, moving a legacy copy into it once', () => {
     const config = makeConfig({ authByUrl: { [DEFAULT_GATEWAY_URL]: { apiKey: 'per-url', user: {} } }, apiKey: 'legacy' });
     expect(getApiKeyForUrl(config)).toBe('per-url');
-    expect(getApiKeyForUrl(makeConfig({ apiKey: 'legacy' }))).toBe('legacy');
+    const legacy = makeConfig({ apiKey: 'legacy' });
+    expect(getApiKeyForUrl(legacy)).toBe('legacy');
+    expect(legacy._store.authByUrl).toEqual({ [DEFAULT_GATEWAY_URL]: { apiKey: 'legacy', user: null } });
     expect(getApiKeyForUrl(makeConfig({ apiKey: 'legacy', apiUrl: 'https://self.example/' }), 'https://self.example')).toBe('legacy');
     vi.mocked(readCanonicalAuth).mockReturnValue({ apiUrl: 'https://other.example', apiKey: 'canon', updatedAt: '' });
     expect(getApiKeyForUrl(config, 'https://other.example/')).toBe('canon');
     expect(getApiKeyForUrl(config)).toBe('per-url');
+    // The record wins over a stale file copy once it holds the URL.
     vi.mocked(readCanonicalAuth).mockReturnValue({ apiUrl: '', apiKey: 'canon-any', updatedAt: '' });
-    expect(getApiKeyForUrl(config)).toBe('canon-any');
+    expect(getApiKeyForUrl(config)).toBe('per-url');
+    expect(getApiKeyForUrl(makeConfig())).toBe('canon-any');
     vi.mocked(readCanonicalAuth).mockReturnValue(null);
   });
 
@@ -63,8 +66,14 @@ describe('gateway-credentials', () => {
     expect(getApiKeyForUrl(config, 'https://other.example')).toBeUndefined();
     vi.mocked(readCanonicalAuth).mockReturnValue({ apiUrl: '', apiKey: 'canon-any', updatedAt: '' });
     expect(getApiKeyForUrl(config)).toBeUndefined();
-    expect(getApiKeyForUrl(config, DEFAULT_GATEWAY_URL)).toBe('canon-any');
+    expect(getApiKeyForUrl(makeConfig(), DEFAULT_GATEWAY_URL)).toBe('canon-any');
     vi.mocked(readCanonicalAuth).mockReturnValue(null);
+  });
+
+  it('keeps a URL-less legacy key issued for a custom gateway away from the default one', () => {
+    const config = makeConfig({ authByUrl: { 'https://self.example': { apiKey: 'custom', user: {} } }, apiKey: 'custom' });
+    expect(getApiKeyForUrl(config, DEFAULT_GATEWAY_URL)).toBeUndefined();
+    expect(getApiKeyForUrl(config, 'https://self.example')).toBe('custom');
   });
 });
 
@@ -102,9 +111,9 @@ describe('gatewayLogin (embedded)', () => {
     expect(createHash('sha256').update(poll.body.codeVerifier, 'ascii').digest('base64url')).toBe(init.body.codeChallenge);
     expect(poll.url).not.toContain(poll.body.codeVerifier);
     expect(calls.at(-1)!.headers.Authorization).toBe('Bearer ck_live');
-    expect(config._store.apiKey).toBe('ck_live');
+    // The per-URL record only: no copy that names no URL.
+    expect(config._store.apiKey).toBeUndefined();
     expect(config._store.authByUrl).toEqual({ [DEFAULT_GATEWAY_URL]: { apiKey: 'ck_live', user: { email: 'u@x.com' } } });
-    expect(writeCanonicalAuth).toHaveBeenCalledWith(expect.objectContaining({ apiUrl: DEFAULT_GATEWAY_URL, apiKey: 'ck_live' }));
   });
 
   it('throws AUTH_EXPIRED when the flow expires and stores nothing', async () => {

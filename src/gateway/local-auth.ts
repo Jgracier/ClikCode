@@ -1,7 +1,8 @@
 /**
- * The on-disk gateway credential, under ClikCode's own config home.
- *
- * Writes land in ~/.config/clikcode (and ~/.clikcode/api-key).
+ * The gateway credential older versions kept on disk beside the config's
+ * per-URL record: ~/.config/clikcode/auth.json and ~/.clikcode/api-key.
+ * Read only, to move a key into that record (credentials.ts); nothing
+ * writes these any more.
  */
 import fs from 'fs';
 import os from 'os';
@@ -19,12 +20,6 @@ function resolveConfigHome(): string {
     return process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
   }
   return process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
-}
-
-function ensureDir(dir: string): void {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  }
 }
 
 function getCanonicalAuthPaths(): { authJsonPath: string; apiKeyPath: string } {
@@ -73,30 +68,3 @@ function readAuthFrom({ authJsonPath, apiKeyPath }: { authJsonPath: string; apiK
 
   return null;
 }
-
-export function writeCanonicalAuth(record: CanonicalAuthRecord): void {
-  const { authJsonPath, apiKeyPath } = getCanonicalAuthPaths();
-  const authDir = path.dirname(authJsonPath);
-  const keyDir = path.dirname(apiKeyPath);
-
-  ensureDir(authDir);
-  ensureDir(keyDir);
-
-  fs.writeFileSync(
-    authJsonPath,
-    JSON.stringify(
-      {
-        apiUrl: record.apiUrl,
-        apiKey: record.apiKey,
-        updatedAt: record.updatedAt,
-        ...(record.user !== undefined ? { user: record.user } : {}),
-      },
-      null,
-      2
-    ),
-    { mode: 0o600 }
-  );
-  fs.writeFileSync(apiKeyPath, record.apiKey, { mode: 0o600 });
-}
-
-
