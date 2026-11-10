@@ -21,12 +21,13 @@ export function onResize(this: TerminalHarnessPrompter): void {
     // a frame asked for (a key's echo, the spinner) is a diff against what
     // was drawn: a full frame per signal is what swallowed swipes.
     logCursorEvent(`resize screen=${output.columns}x${output.rows} raw=${terminalModes.rawMode} alternate=${terminalModes.alternateScreen}`);
-    // A phone sends several size changes while its keyboard moves. They are
-    // debounced into ONE repaint: the clear and the phone's mouse sequence go
-    // out once, inside that frame (redrawPreamble), and nothing is drawn full
-    // at an intermediate size first -- that was a second blank of the screen
-    // just before the settled one. A frame asked for meanwhile (a keystroke's
-    // echo, a streaming row) is an ordinary diff and is not held back.
+    // A phone sends several size changes while its keyboard moves. The first
+    // is drawn at once (below); the ones that follow inside the settle window
+    // are coalesced into ONE settled repaint: the clear and, where opted in, the
+    // mouse sequence go out once, inside that frame (redrawPreamble), so the
+    // screen is not blanked at every intermediate size. A frame asked for
+    // meanwhile (a keystroke's echo, a streaming row) is an ordinary diff and
+    // is not held back.
     this.requestRedraw('resize');
     // Full-screen: the first size of a burst is drawn at once (the client moved or cut its own rows when it resized, and a frame
     // waiting for the burst to settle leaves the composer off the last row for as long as that takes); the ones that follow while

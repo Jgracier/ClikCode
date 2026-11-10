@@ -89,3 +89,11 @@ describe('a re-exec and what was typed while the window let go', () => {
     }
   });
 });
+
+describe('the teardown', () => {
+  it('writes the mouse and read modes off once per screen it was on, not twice for one', async () => {
+    const { MOUSE_MODES_OFF } = await import('./restore.js');
+    expect(count(terminalTeardown(false), MOUSE_MODES_OFF)).toBe(1);
+    expect(count(terminalTeardown(true), MOUSE_MODES_OFF)).toBe(2);
+  });
+});
