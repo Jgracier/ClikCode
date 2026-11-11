@@ -10,6 +10,7 @@ import { takeTerminalKeys } from '../input-decoder.js';
 import { SWIPE_ROWS, enterInputModes, popReadModes } from '../modes.js';
 import { keyHint, keyHintFor } from '../../harness/protocol/wording.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
+import type { ArrowSource } from '../swipe-arrows.js';
 import { EXIT_CONFIRM_MS } from './state.js';
 
 type PromptSettings = { cancellable?: boolean; rightArrowPalette?: boolean; leftArrowCommand?: string; signal?: AbortSignal; secret?: boolean };
@@ -207,7 +208,14 @@ class PromptSession {
   }
 
   private handleKey(key: string): void {
+    // Up/Down: a swipe or a key press (swipe-arrows.ts). A held arrow reaches this prompt only while it is still open.
+    if (this.p.swipeArrows.route(key, (arrow, source) => { if (!this.finished) this.dispatchKey(arrow, source); })) return;
+    this.dispatchKey(key, 'key');
+  }
+
+  private dispatchKey(key: string, source: ArrowSource): void {
     const { p } = this;
+    if (source === 'swipe') return this.swipe(key);
     if (key === '\u000c') {
       p.requestRedraw('repair');
       p.forgetScreenPosition();
@@ -310,8 +318,19 @@ class PromptSession {
     return false;
   }
 
+  /** A swipe's arrow: it reads the conversation (or an open panel) and nothing else. It never recalls history, moves the draft's
+   * cursor, changes the palette's selection or touches the draft (swipe-arrows.ts). */
+  private swipe(key: string): void {
+    const { p } = this;
+    if (!this.value && !this.matches().length && p.panelKey(key)) { this.draw(); return; }
+    p.scrollTranscript(key === '\u001b[A' ? SWIPE_ROWS : -SWIPE_ROWS);
+  }
+
   private historyStep(direction: -1 | 1): void {
     const live = this.p.history.length;
+    // Down on the draft itself (no entry recalled) goes nowhere. It used to "step" to index `live` anyway, find no stash there and
+    // load `history[live]`, which is nothing: one Down (the first arrow of a downward swipe, or Ctrl+N) emptied the composer.
+    if (direction > 0 && this.historyIndex >= live) return;
     // Leaving the draft: it is kept, whatever it is, and comes back when Down returns past the newest entry.
     if (direction < 0 && this.historyIndex === live && this.historyIndex > 0) this.stashedDraft = { value: this.value, cursor: this.cursor, held: [...this.held] };
     if (direction < 0 && this.historyIndex > 0) this.historyIndex -= 1;
@@ -327,35 +346,15 @@ class PromptSession {
   }
 
   /** Arrows and history keys: true when the key was handled here.
-   * Up/Down navigate palette options; otherwise they move through a
-   * multi-line draft and fall through to input history from its first
-   * and last line. With the composer empty, or the view already scrolled
-   * back, they read the conversation instead: a swipe or wheel notch reaches
-   * the program as these keys (alternate scroll, `?1007`) and cannot be told
-   * from typing them. Recalling history over a draft keeps the draft (Down
-   * past the newest entry brings it back). Ctrl+P/Ctrl+N always mean
-   * history. */
+   * Up/Down pressed as keys (a swipe never gets here: swipe-arrows.ts, swipe()) navigate palette options; otherwise they move
+   * through a multi-line draft and fall through to input history from its first and last line, empty composer or not. Recalling
+   * history over a draft keeps the draft (Down past the newest entry brings it back). Ctrl+P/Ctrl+N always mean history. The
+   * conversation is read by a swipe or wheel, PageUp/PageDown, Ctrl+B/Ctrl+F, Shift+Up/Down, and Home/End on an empty composer. */
   private navigationKey(key: string, { completing, options }: KeyContext): boolean {
     const { p, value, commands, settings } = this;
     if (key === '\u001b[A' || key === '\u001b[B') {
       const direction = key === '\u001b[A' ? -1 : 1;
       if (options.length) { this.selected = (this.selected + direction + options.length) % options.length; this.draw(); return true; }
-      // An empty composer means the conversation is what is being looked
-      // at, so the arrows read it. Recorded from a real phone client: a
-      // swipe arrives as arrow keys and nothing else -- no mouse report in
-      // any encoding, and no page keys on the keyboard -- so on that
-      // client this is the only way back through the conversation at all.
-      // History keeps Ctrl+P and Ctrl+N, which is where it always was as
-      // well, and the arrows still move through a draft once there is one.
-      // Once the view is scrolled back the arrows keep reading, whatever is typed: a swipe is a run of them, and one that began on an
-      // empty composer must not turn into history recall under a draft typed meanwhile.
-      if (!value || p.scrolledBack) {
-        if (p.scrollTranscript(direction === -1 ? SWIPE_ROWS : -SWIPE_ROWS)) return true;
-        // Read back to the first row, a swipe goes no further: it is not history recall (the
-        // last message used to land in the composer at the top of the conversation).
-        if (p.scrolledBack) return true;
-        if (direction === 1 && p.noteReadingDirection()) return true;
-      }
       const moved = composerVerticalMove(value, this.cursor, direction);
       if (moved !== undefined) this.cursor = moved;
       else this.historyStep(direction);

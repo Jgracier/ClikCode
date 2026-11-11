@@ -46,6 +46,7 @@ import { activity, setPlan, settlePlan, activityEvent, settleThought, markDrawn,
 import { editTurnDraft, waitingUserMessages, enterAgainReady, turnHasAnswer, takeBackWaiting, submitWaiting, waitingLabel, updateWaitingLabel, joinedWaiting, startWaiting, turnStarting, adoptSubmission, toolStatus, turnWaits, waitingOnUser, scheduleWaitingTick, stepTokens, setTurnUsage, setBackgroundWork, pauseClock, resumeClock, flushWaitingSubmissions, leaveTurn, turnStopped, turnStopping, stopSettled, onWaitingEnded, stopWaiting, vendorAnswered, phase } from './prompter/waiting-turn.js';
 import { statusText, waitingLine, escStops, updateWaiting, schedulePaint, flushPaint, paintWaiting, waitingPalette, repaint } from './prompter/waiting-band.js';
 import { onWaitingKey } from './prompter/waiting-keys.js';
+import { SwipeArrowGate } from './swipe-arrows.js';
 import { openSubView, closeSubView, subViewKey, paintSubView, type SubView } from './prompter/subagent-host.js';
 import { viewportRows, onResize, repaintAfterResize, rewrapIfWidthChanged, anchorBlock, clearTranscript } from './prompter/viewport.js';
 import { signInScreen } from './prompter/sign-in.js';
@@ -279,6 +280,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   subAgentSteer?: (ref: import('../harness/protocol/activity-normalize.js').SubAgentRef, text: string) => Promise<string | undefined>;
   activityDetails?: (ids: string[], messageIndex: number) => Promise<import('../harness/prompter.js').HarnessActivityEvent[]>;
   subAgentRead?: (parentId: string) => Promise<import('../harness/subagent-read.js').SubAgentRow[]>;
+  /** Up/Down told apart as a swipe or a key press (swipe-arrows.ts), shared by the composer and the waiting band. */
+  readonly swipeArrows = new SwipeArrowGate();
   readonly onWaitingKey = (...args: Parameters<typeof onWaitingKey>): ReturnType<typeof onWaitingKey> => onWaitingKey.apply(this, args);
 
   readonly onResize = (...args: Parameters<typeof onResize>): ReturnType<typeof onResize> => onResize.apply(this, args);

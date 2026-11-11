@@ -28,12 +28,29 @@ const MOUSE_TRACKING_ON = '\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006l\
  * most terminals do it on their own; this asks the ones that have it off by default. Left set on the way out (what it was before is not known:
  * terminalTeardown resets it, once, where this UI set it). */
 export const ALTERNATE_SCROLL_ON = '\u001b[?1007h';
+const ALTERNATE_SCROLL_OFF = '\u001b[?1007l';
 
 /** Whether the program asks for the mouse at all: only when opted in, and never inline (the client scrolls its own scrollback there). */
 export function mouseWanted(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.CLIKCODE_MOUSE === '1' && !inlineHistoryMode(env);
 }
-const ENABLE_MOUSE_TRACKING = (): string => (mouseWanted() ? MOUSE_TRACKING_ON : '');
+
+/** Wheel reports only (`?1000` press/release + SGR `?1006`; no drag `?1002`, no motion `?1003`), for ClikDeploy's phone page
+ * (CLIKDEPLOY_CLIENT=mobile). That page owns every touch and makes its selection itself (term.select), so mouse reporting costs it
+ * nothing, and under tracking it sends a swipe as wheel reports instead of arrow keys: a swipe then has a channel of its own and can
+ * never be read as history recall or a cursor move (swipe-arrows.ts has the whole rule). Button reports (a tap's synthetic click)
+ * are consumed and ignored: they never select, focus or edit. */
+const WHEEL_TRACKING_ON = '\u001b[?1000h\u001b[?1006l\u001b[?1006h';
+
+export function wheelOnlyWanted(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.CLIKDEPLOY_CLIENT === 'mobile' && !mouseWanted(env) && !inlineHistoryMode(env);
+}
+
+/** The program reads a wheel as wheel reports (either mode above), so a swipe never arrives as arrow keys. */
+export function wheelWanted(env: NodeJS.ProcessEnv = process.env): boolean {
+  return mouseWanted(env) || wheelOnlyWanted(env);
+}
+const ENABLE_MOUSE_TRACKING = (): string => (mouseWanted() ? MOUSE_TRACKING_ON : wheelOnlyWanted() ? WHEEL_TRACKING_ON : '');
 
 /** Selection mode, for the opt-in mouse only: the mouse handed back to the terminal for a while (`/select`). With the default there is
  * nothing to hand back: the client's selection always works. */
@@ -53,10 +70,12 @@ export const SELECTION_MODE = { active: false };
  */
 export function sessionModesOn(): string {
   terminalModes.bracketedPaste = true;
-  terminalModes.wheelReporting = mouseWanted() && !SELECTION_MODE.active;
+  terminalModes.wheelReporting = wheelWanted() && !SELECTION_MODE.active;
   const mouse = SELECTION_MODE.active ? '' : ENABLE_MOUSE_TRACKING();
-  const scroll = mouseWanted() || inlineHistoryMode() ? '' : ALTERNATE_SCROLL_ON;
-  terminalModes.alternateScroll = scroll !== '';
+  // Under wheel reporting alternate scroll is cleared, not just left unasked: a predecessor this process re-exec'd from (an older
+  // build, or one started without the client marker) may have set it, and nothing would reset it on the way out.
+  const scroll = inlineHistoryMode() ? '' : wheelWanted() ? ALTERNATE_SCROLL_OFF : ALTERNATE_SCROLL_ON;
+  terminalModes.alternateScroll = scroll === ALTERNATE_SCROLL_ON;
   return `${ENABLE_BRACKETED_PASTE}${mouse}${scroll}${FOCUS_REPORTING_ON}`;
 }
 
@@ -80,8 +99,9 @@ export function sessionModesOff(leavingAlternateScreen: boolean): string {
  * Both halves matter. Without the clear a swipe stopped scrolling
  * (2026-10-03, when the clear was taken off every full frame to keep a
  * settling reply from flashing). The mouse modes are part of it only when
- * the program asks for the mouse (CLIKCODE_MOUSE=1, mouseWanted); by
- * default they are not sent, and a swipe is the arrow keys the client
+ * the program asks for the mouse (CLIKCODE_MOUSE=1, mouseWanted; or the
+ * wheel-only pair for ClikDeploy's phone page, wheelOnlyWanted); otherwise
+ * they are not sent, and a swipe is the arrow keys the client
  * makes of it under alternate scroll (`?1007`, sessionModesOn). The pty
  * suite checks the sequence after every resize burst.
  *
@@ -181,7 +201,7 @@ export function enterInputModes(): string {
   // The flags were already tracked here. They were simply never read.
   let sequence = '';
   if (!terminalModes.bracketedPaste) { sequence += ENABLE_BRACKETED_PASTE; terminalModes.bracketedPaste = true; }
-  if (!terminalModes.wheelReporting && !SELECTION_MODE.active && mouseWanted()) {
+  if (!terminalModes.wheelReporting && !SELECTION_MODE.active && wheelWanted()) {
     sequence += ENABLE_MOUSE_TRACKING();
     terminalModes.wheelReporting = true;
   }
@@ -220,7 +240,7 @@ export function setSelectionMode(active: boolean): string {
   if (!mouseWanted()) {
     return inlineHistoryMode()
       ? 'The terminal\'s own selection is always on: select and copy as usual.'
-      : 'The terminal\'s own selection is always on: select and copy as usual. PageUp, PageDown, Home, End and the arrows read the conversation back.';
+      : 'The terminal\'s own selection is always on: select and copy as usual. A swipe or wheel, PageUp, PageDown, Home and End read the conversation back.';
   }
   SELECTION_MODE.active = active;
   if (active) {

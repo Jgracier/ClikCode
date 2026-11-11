@@ -4,7 +4,7 @@ import { lineAtRow, lineText, orderedRange, selectedText, selectionAction, selec
 import { copyToClipboard } from '../../session/attachments.js';
 import { logCursorEvent } from '../cursor-log.js';
 import { inKeyBatch, onKeyBatchEnd } from '../input-decoder.js';
-import { isMouseEvent, wheelScrollRows } from '../modes.js';
+import { isMouseEvent, mouseWanted, wheelScrollRows } from '../modes.js';
 import { userError } from '../../harness/protocol/errors.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
 import { followEnd, jumpForScroll, scrollReach } from './history-window.js';
@@ -95,7 +95,9 @@ export function handleScrollKey(this: TerminalHarnessPrompter, key: string): boo
   if (isMouseEvent(key)) {
     // A left press, drag or release is a selection ClikCode makes itself:
     // with mouse reporting on, the terminal's own selection never sees it.
-    const action = selectionAction(key);
+    // Only with the full mouse (CLIKCODE_MOUSE=1). Wheel-only (the phone page, modes.ts wheelOnlyWanted) a button report is a
+    // tap's synthetic click: the page selects on its own, so the report is consumed and does nothing.
+    const action = mouseWanted() ? selectionAction(key) : undefined;
     if (action) { this.handleSelection(action); return true; }
     // Every other mouse report is consumed too, wheel or not: none of them
     // belongs to the composer.
