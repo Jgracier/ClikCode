@@ -137,7 +137,12 @@ function socketPathForKey(key: string, platform: NodeJS.Platform = process.platf
   }
   const standard = join(workersDirectory(), `${key}.sock`);
   if (standard.length < 100) return standard;
-  return join(STARTUP_TMPDIR, `cc-${key}.sock`);
+  const temporary = join(STARTUP_TMPDIR, `cc-${key}.sock`);
+  if (temporary.length < 100) return temporary;
+  // A TMPDIR this long too (a nested sandbox's): listen() fails with EINVAL past
+  // ~104 bytes. /tmp always exists; the uid keeps users apart, and a socket
+  // planted there is refused by the token check like any other.
+  return join('/tmp', `cc-${process.getuid?.() ?? 0}-${key}.sock`);
 }
 
 export async function readWorkerRecord(sessionId: string): Promise<WorkerRuntimeRecord | undefined> {

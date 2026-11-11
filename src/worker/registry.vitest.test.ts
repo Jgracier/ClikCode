@@ -55,6 +55,22 @@ describe('worker registry', () => {
     expect(socketPathFor(longId).length).toBeLessThan(100);
   });
 
+  it('keeps the socket path under the limit when the state directory and TMPDIR are both deep', async () => {
+    const deep = join('/tmp', 'x'.repeat(120));
+    const saved = { home: process.env.CLIKCODE_HOME, tmp: process.env.TMPDIR };
+    process.env.CLIKCODE_HOME = deep;
+    process.env.TMPDIR = deep;
+    vi.resetModules();
+    try {
+      const fresh = await import('./registry.js');
+      expect(fresh.socketPathFor('abc').length).toBeLessThan(100);
+    } finally {
+      process.env.CLIKCODE_HOME = saved.home;
+      process.env.TMPDIR = saved.tmp;
+      vi.resetModules();
+    }
+  });
+
   it('two different session ids never collide on the same socket path', () => {
     expect(socketPathFor('session-one')).not.toBe(socketPathFor('session-two'));
   });
