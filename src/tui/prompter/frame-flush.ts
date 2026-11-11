@@ -267,6 +267,10 @@ export function flushAlternateFrame(
   const signals = this.pendingSignals;
   this.pendingSignals = '';
   const showCursor = !pending.hideCursor;
+  // More history is wanted around the view than this frame's budget rendered: the next batch is another frame, so the event loop is
+  // free between them (a key, a resize, the stream). Owed whether or not this frame changed anything on screen -- a batch put in
+  // front of the rows kept moves nothing, and the frames after it were never asked for.
+  if (this.scrollWindow.more) this.schedulePaint(0);
   // Nothing changed: nothing is written. A clock that ticks every second
   // used to send a cursor hide, a park and a show each time regardless.
   if (!updates.length && !modes && !signals && park === this.lastPark && showCursor === this.cursorShown) return;
@@ -301,9 +305,6 @@ export function flushAlternateFrame(
     this.frameInFlight = false;
     if (this.pendingLive && this.canPaint('picker')) this.flushFrame();
   });
-  // More history is wanted under the view than one frame's budget rendered: the next batch is another frame, so the event loop
-  // is free between them (a key, a resize, the stream).
-  if (this.scrollWindow.more) this.schedulePaint(0);
 }
 
 /** Append-only frame for inline-history mode. Finished rows are printed once,

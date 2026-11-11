@@ -226,6 +226,21 @@ describe('scroll-back through a long conversation', () => {
     } finally { rl.close(); }
   });
 
+  it('keeps rendering the batches a frame had no time for, even when the frame they follow changed nothing on screen', () => {
+    const { rl, settle } = setup();
+    // Every frame's budget is spent after one batch: the rest is owed to the frames that follow.
+    let clock = 0;
+    const now = vi.spyOn(performance, 'now').mockImplementation(() => (clock += 100));
+    try {
+      rl.render(session(2000));
+      settle();
+      // To the top of what is held: the rows above it are a few batches away.
+      rl.scrollTranscript(rl.alternateTranscript.length);
+      settle();
+      expect(rl.scrollWindow.more).toBe(false);
+    } finally { now.mockRestore(); rl.close(); }
+  });
+
   it('renders a bounded number of messages per frame: work units, not time', () => {
     const { rl, settle } = setup();
     try {
