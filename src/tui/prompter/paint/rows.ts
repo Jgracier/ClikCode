@@ -6,7 +6,7 @@ import type { SettlingTool } from '../../../turn/transcript.js';
 import type { HarnessActivityEvent, ToolCategory } from '../../../harness/prompter.js';
 import type { TranscriptMessage, HarnessSession } from '../../../session/model.js';
 import { ActivityEntry, collapseToolRuns, settleDecisionEntry, upsertActivityEvent } from '../../render/activity-log.js';
-import { toolUses, liveWaitKind } from '../../../harness/protocol/activity-view.js';
+import { LIVE_OUTPUT_LINES, toolUses, liveWaitKind } from '../../../harness/protocol/activity-view.js';
 import { outputPreviewRows } from '../../../harness/protocol/activity-line.js';
 import { tensedLabel } from '../../../harness/protocol/turn-flow.js';
 import { CallGrouping, LIVE_SHOWN_CALLS, liveItemLine, type CallRun, type GroupRow } from '../../render/call-groups.js';
@@ -21,7 +21,6 @@ import { callRow, noteRows, underCallRow } from '../../render/tool-rows.js';
 import { callDecision, markThought, savedTurnRanks, turnMarkLines } from '../../render/turn-mark-rows.js';
 import { runningChatLine } from '../../render/waiting.js';
 import type { TerminalHarnessPrompter } from '../../prompter.js';
-import { LIVE_OUTPUT_LINES } from '../state.js';
 import { wrapWords } from '../../render/wrap.js';
 import { sanitizeTerminalText } from '../../render/text.js';
 

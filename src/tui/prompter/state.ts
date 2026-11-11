@@ -35,7 +35,6 @@ export const INLINE_TRANSCRIPT_ROWS = 2000;
 export const SELECTION_SCROLL_MS = 60;
 
 /** Lines of a running tool's newest output shown under its spinner. */
-export const LIVE_OUTPUT_LINES = 3;
 
 /** One paint's composer: its text and cursor, the prompt, and the options
  * (a picker's list or the slash palette) under it. */

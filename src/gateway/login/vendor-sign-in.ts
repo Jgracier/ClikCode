@@ -27,6 +27,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { spawnPortable as spawn, terminatePortable } from '../../harness/transport/spawn.js';
+import { BROWSER_OPENERS } from './link-info.js';
 import { runInPty, SIGN_IN_COLUMNS, SIGN_IN_ROWS } from './pty.js';
 import { forwardParentSignals } from '../../harness/transport/parent-signals.js';
 import { Screen, type ScreenState } from './screen.js';
@@ -472,14 +473,12 @@ function compact(text: string): string {
   return stripAnsi(text).replace(/\s+/g, '').toLowerCase();
 }
 
-const OPENERS = ['xdg-open', 'open', 'gio', 'sensible-browser', 'x-www-browser', 'www-browser'];
-
 /** Executables that record the URL they were asked to open, one per line. */
 async function openerStandIns(): Promise<{ dir: string; log: string }> {
   const dir = await mkdtemp(join(tmpdir(), 'clikcode-open-'));
   const log = join(dir, 'opened');
   const script = '#!/bin/sh\nfor a; do case "$a" in http://*|https://*) printf \'%s\\n\' "$a" >> "$CLIKCODE_OPENED";; esac; done\n';
-  await Promise.all(OPENERS.map(async (name) => {
+  await Promise.all(BROWSER_OPENERS.map(async (name) => {
     await writeFile(join(dir, name), script);
     await chmod(join(dir, name), 0o755);
   }));

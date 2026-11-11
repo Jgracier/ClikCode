@@ -19,6 +19,7 @@ import { killProcessTreePortable, spawnPortable } from '../transport/spawn.js';
 import { JsonRpcPeer, type JsonRpcPeerOptions } from '../transport/jsonrpc-peer.js';
 import { authEvidencePresent, hasAuthEvidence } from './auth-files.js';
 import { quiet } from '../../runtime/lifecycle-log.js';
+import { BROWSER_OPENERS } from '../../gateway/login/link-info.js';
 
 type Environment = Readonly<Record<string, string>>;
 
@@ -28,14 +29,12 @@ export const PROBE_DEADLINE_MS = 30_000;
 /** The longest one HTTP call of a probe may take. */
 const PROBE_FETCH_MS = 15_000;
 
-/** The names a CLI opens a browser through. */
-const OPENERS = ['xdg-open', 'open', 'gio', 'sensible-browser', 'x-www-browser', 'www-browser'];
 
 /** A directory of browser openers that do nothing, made once. */
 function noBrowserDirectory(): string | undefined {
   const directory = join(stateDirectory(), 'tools', 'probe-no-browser');
   try {
-    for (const name of OPENERS) {
+    for (const name of BROWSER_OPENERS) {
       const file = join(directory, name);
       if (existsSync(file)) continue;
       mkdirSync(directory, { recursive: true });
