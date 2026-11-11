@@ -49,6 +49,7 @@ import { ClikCodeController } from '../../src/controller';
 import { BridgePool } from '../../src/bridge-pool';
 import type { IdeEvent, IdeRequest } from '../../src/protocol';
 import type { Runtime } from '../../src/runtime';
+import { IDE_PROTOCOL } from '../../src/compat';
 
 /** A bridge that answers an `open` with the chat, and is told to leave or crash. */
 class FakeBridge extends BridgeEndpoint {
@@ -59,7 +60,7 @@ class FakeBridge extends BridgeEndpoint {
       setTimeout(() => { this.emit('log', crashesBeforeReady); this.markExited(137, null); }, 0);
       return;
     }
-    setTimeout(() => this.receive({ type: 'ready', version: 't', protocol: 1, revision: 3, pid: 1 }), 0);
+    setTimeout(() => this.receive({ type: 'ready', version: 't', protocol: IDE_PROTOCOL.version, revision: IDE_PROTOCOL.revision, pid: 1 }), 0);
   }
   send(request: IdeRequest): boolean {
     this.requests.push(request);
@@ -146,9 +147,9 @@ describe('the chat when its bridge leaves for a newer build', () => {
 const FAKE = `
 if (process.argv[2] !== 'ide-bridge') process.exit(2);
 const chats = new Set();
-process.send({ type: 'host-ready', version: 't', protocol: 1, revision: 3, pid: process.pid });
+process.send({ type: 'host-ready', version: 't', protocol: ${IDE_PROTOCOL.version}, revision: ${IDE_PROTOCOL.revision}, pid: process.pid });
 process.on('message', (m) => {
-  if (m.type === 'chat-attach') { chats.add(m.chat); process.send({ type: 'chat', chat: m.chat, event: { type: 'ready', version: 't', protocol: 1, revision: 3, pid: process.pid } }); }
+  if (m.type === 'chat-attach') { chats.add(m.chat); process.send({ type: 'chat', chat: m.chat, event: { type: 'ready', version: 't', protocol: ${IDE_PROTOCOL.version}, revision: ${IDE_PROTOCOL.revision}, pid: process.pid } }); }
   if (m.type === 'chat' && m.request.type === 'query' && m.request.query === 'retire') {
     process.send({ type: 'host-retiring', reason: 'newer-build' });
     for (const chat of chats) process.send({ type: 'chat-closed', chat });
