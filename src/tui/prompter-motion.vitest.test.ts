@@ -230,7 +230,7 @@ describe('answering an approval', () => {
       rl.key('t');
       for (const ch of 'use pnpm instead') rl.key(ch);
       rl.key('\r');
-      await expect(asked).resolves.toBe(false);
+      await expect(asked).resolves.toEqual({ told: 'use pnpm instead' });
       after(100);
       expect(rl.screen()).toContain('↳ told: use pnpm instead');
     } finally { rl.close(); }

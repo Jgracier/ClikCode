@@ -87,6 +87,19 @@ export interface HarnessActivityEvent {
   stopped?: boolean;
 }
 
+/** "No, and tell it what to do instead": a denial, and text the caller
+ * sends into the turn once its own denial has gone out, so the text never
+ * overtakes it. */
+export interface ToldInstead { readonly told: string }
+
+/** An approval's answer: allow, allow always, deny, or deny with text. */
+export type ApprovalAnswer = boolean | 'always' | ToldInstead;
+
+/** The decision the vendor is sent: being told something instead is a denial. */
+export function approvalDecision(answer: ApprovalAnswer): boolean | 'always' {
+  return typeof answer === 'object' ? false : answer;
+}
+
 export interface HarnessPrompter {
   question(
     prompt: string,
@@ -111,7 +124,7 @@ export interface HarnessPrompter {
    * tui/render/pending-prompt.ts for why a snapshot cannot carry it. */
   submitted?(prompt: string | undefined): void;
   response?(text: string, mode?: 'append' | 'replace'): void;
-  approval?(title: string, detail?: string, preview?: ApprovalPreview, rule?: string, signal?: AbortSignal, callId?: string): Promise<boolean | 'always'>;
+  approval?(title: string, detail?: string, preview?: ApprovalPreview, rule?: string, signal?: AbortSignal, callId?: string): Promise<ApprovalAnswer>;
   /** A vendor's question, drawn where approvals are. Absent where nothing can
    * ask; the turn then cancels it with a notice. */
   askQuestions?(request: import('./events/question.js').HarnessQuestionRequest, signal?: AbortSignal): Promise<import('./events/question.js').HarnessQuestionResult>;

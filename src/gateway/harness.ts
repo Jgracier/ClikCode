@@ -18,7 +18,7 @@ import { mcpToolsForTurn } from '../agent/mcp/manager.js';
 import { hooksForWorkspace, toolHooksFrom } from '../agent/hooks.js';
 import type { AgentTurnInput, AgentTurnResult, ModelClient, TokenUsage, UsageReport } from '../agent/model-client.js';
 import { turnStopReason, type TurnUsage } from '../harness/protocol/turn-usage.js';
-import type { HarnessActivityEvent as AgentActivityEvent } from '../harness/prompter.js';
+import { approvalDecision, type HarnessActivityEvent as AgentActivityEvent } from '../harness/prompter.js';
 import { GATEWAY_HARNESS_COMMAND, toolCategory } from '../harness/protocol/tools.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { diagnostic } from '../runtime/lifecycle-log.js';
@@ -95,7 +95,7 @@ export async function runAgentSessionTurn(
   const workspace = session.workspace ?? process.cwd();
   const hookConfig = await hooksForWorkspace({
     cwd: workspace, stateDir,
-    ...(prompter ? { ask: (title: string, detail: string) => prompter.approval(title, detail) } : {}),
+    ...(prompter ? { ask: async (title: string, detail: string) => approvalDecision(await prompter.approval(title, detail)) } : {}),
     notice: (message) => diagnostic('hooks.untrusted', message),
   });
   const hooks = toolHooksFrom(hookConfig, (message) => diagnostic('hooks.note', message));
@@ -151,7 +151,7 @@ export async function runAgentSessionTurn(
     // ask what they would prefer; told the truth, it carries on without.
     // The gateway path runs ClikCode's OWN agent, so a rule can be
     // remembered here: the third answer is passed straight through.
-    ...(prompter ? { onApproval: async (title: string, detail?: string, rule?: string, preview?: ApprovalPreview) => (await prompter.approval(title, detail, preview, rule)) ?? false } : {}),
+    ...(prompter ? { onApproval: async (title: string, detail?: string, rule?: string, preview?: ApprovalPreview) => approvalDecision(await prompter.approval(title, detail, preview, rule)) } : {}),
     ...(prompter?.askQuestions ? { onPrivateLogin: (site: string, fields: readonly import('../agent/computer/login-fields.js').LoginField[], signal?: AbortSignal) => askPrivateLogin(prompter, site, fields, signal) } : {}),
     ...(prompter?.askQuestions ? { onPrivateSecret: (name: string, hint: string, signal?: AbortSignal) => askPrivateSecret(prompter, name, hint, signal) } : {}),
     ...(input.onSteerReady ? { onSteerReady: input.onSteerReady } : {}),

@@ -117,6 +117,8 @@ export function createVendorObserver(ctx: VendorTurnContext) {
     // remember on its behalf -- and with no rule offered the prompter never
     // returns 'always' anyway. Collapsed to a boolean here so that boundary
     // is stated rather than implied.
+    // Told-instead never reaches here: the worker's observer answers only yes
+    // or no, and a window sends the told text itself after the denial.
     onApproval: async (title: string, detail?: string, preview?: ApprovalPreview, signal?: AbortSignal, callId?: string) => (await prompter?.approval(title, detail, preview, undefined, signal, callId)) === true,
     // Only where the screen can ask: a missing member is how a transport
     // learns to cancel the question with a notice instead of hanging on it.

@@ -23,7 +23,7 @@ export type ApprovalRequest = {
   title: string; detail?: string; preview?: ApprovalPreview; rule?: string;
   /** The vendor's id of the call this asks about (see settleDecisionEntry). */
   callId?: string;
-  resolve: (accepted: boolean | 'always') => void;
+  resolve: (accepted: import('../../harness/prompter.js').ApprovalAnswer) => void;
   /** Set when this is a harness's question (question-block.ts) rather than a
    * yes or no: it is drawn and keyed as one, and shares the queue so a
    * question and an approval never overlap. `done` takes the values chosen
