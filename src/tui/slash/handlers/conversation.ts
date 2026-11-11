@@ -4,7 +4,6 @@ import { searchConversations } from '../../../search/engine.js';
 import { searchResultsPayload } from '../../../search/navigate.js';
 import { runsOn } from '../../../search/format.js';
 import { hindsightPanelText } from '../hindsight-panel.js';
-import { shownSummary } from '../../../session/conversation-summary.js';
 import { changesPath, fileTurnRows, fileTurnsText, isChangesPath } from '../file-changes.js';
 import { GATEWAY_LABEL, isClikCodeAgent } from '../../../session/route.js';
 import { randomUUID } from 'node:crypto';
@@ -72,13 +71,7 @@ export const conversationHandlers = {
     else await sendSessionTurn(created.id, args);
     return created.id;
   },
-  history: async ({ session }) => {
-    const summary = shownSummary(session);
-    return emitHarnessOutput({
-      panel: 'history', messages: textTranscript(sessionTranscriptMessages(session)),
-      ...(summary ? { summary: { through: summary.through, source: summary.source, text: summary.text } } : {}),
-    });
-  },
+  history: async ({ session }) => emitHarnessOutput({ panel: 'history', messages: textTranscript(sessionTranscriptMessages(session)) }),
   hindsight: async ({ session }) => {
     const records = await readTurnChanges(stateDirectory(), session.id);
     const originFallback = runsOn({ provider: session.provider ?? null, model: session.model ?? null, ...(session.nativeHarness ? { harness: session.nativeHarness } : {}) });

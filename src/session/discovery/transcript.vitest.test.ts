@@ -4,12 +4,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ADOPTED_TRANSCRIPT_READERS } from './registry.js';
 import { readClaudeFsTranscript, readClaudeFsTranscriptForSync } from './vendors/claude.js';
-import { mergeNativeTranscript, reconcileNativeTranscript, visibleNativeUserText, type NativeTranscriptMessage } from './transcript.js';
+import { reconcileNativeTranscript, visibleNativeUserText, type NativeTranscriptMessage } from './transcript.js';
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 
 const message = (role: NativeTranscriptMessage['role'], content: string): NativeTranscriptMessage => ({ role, content });
 
-describe('mergeNativeTranscript', () => {
+/** What reconciling leaves: the merged messages. */
+const mergeNativeTranscript = (cached: readonly NativeTranscriptMessage[], source: readonly NativeTranscriptMessage[]) => reconcileNativeTranscript(cached, source).messages;
+
+describe('reconciling a native transcript with the cached copy', () => {
   it('reconciles long repeated histories and chooses their most recent overlap', () => {
     const repeated = Array.from({ length: 10_000 }, () => message('assistant', 'repeated'));
     const cached = [message('user', 'missing prefix'), ...repeated];

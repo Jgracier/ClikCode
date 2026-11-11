@@ -57,10 +57,6 @@ export function reconcileNativeTranscript(
   return { messages: [...cached], appendedFrom: cached.length, overlapLength: 0 };
 }
 
-export function mergeNativeTranscript(cached: readonly NativeTranscriptMessage[], source: readonly NativeTranscriptMessage[]): NativeTranscriptMessage[] {
-  return reconcileNativeTranscript(cached, source).messages;
-}
-
 /** Both Claude Code and Codex represent a message's content as either a plain
  * string or a list of content blocks ({type:'text', text:'...'}, possibly
  * mixed with non-text blocks like tool calls) — real API message shapes, not
