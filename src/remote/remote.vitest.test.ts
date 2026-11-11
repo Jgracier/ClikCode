@@ -784,6 +784,25 @@ describe('/machine and the tailnet', () => {
     expect(seen.lines.at(-1)).toMatch(/^devbox is added/);
   }, 120_000);
 
+  it('opens the list at once and adds the tailnet rows when Tailscale answers, rather than waiting for it', async () => {
+    await updateMachines(() => []);
+    let first: readonly PickerOption<unknown>[] = [];
+    let after: readonly PickerOption<unknown>[] = [];
+    const prompter = {
+      select: async <T>(_title: string, options: readonly PickerOption<T>[], _onAction: unknown, settings?: PickerSettings<T>) => {
+        first = options as readonly PickerOption<unknown>[];
+        await Promise.all([settings?.refresh ?? []].flat());
+        after = (settings?.refreshedOptions?.() ?? options) as readonly PickerOption<unknown>[];
+        return undefined;
+      },
+      activity: () => undefined,
+      close: () => undefined,
+    } as unknown as HarnessPrompter;
+    await moveTerminalChat(prompter, { local: 'x' }, 'x', false, localMoveEnd());
+    expect(first.some((row) => row.group === 'On your tailnet')).toBe(false);
+    expect(after.filter((row) => row.group === 'On your tailnet').map((row) => row.label)).toEqual(['devbox', 'imac', 'winbox', 'macbook']);
+  });
+
   it('moves nothing to an offline or Windows machine', async () => {
     await updateMachines(() => []);
     const seen = { rows: [] as readonly PickerOption<unknown>[], lines: [] as string[] };
