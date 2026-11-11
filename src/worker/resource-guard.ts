@@ -81,7 +81,8 @@ interface ResourceGuardOptions {
   sliceDir?: string;
   /** This worker's command names, kept after the shell process exits. */
   remembered?: { scopeDir: string; labels: ReadonlyMap<string, string> };
-  deliver: (note: string) => void;
+  /** To the conversation of the worker with this pid (one guard acts for every worker: guardian.ts). */
+  deliver: (note: string, worker: number) => void;
   probe?: Probe;
 }
 /** When a Linux scope isn't delegated, or on macOS/Windows, use the process
@@ -113,18 +114,18 @@ export function startResourceGuard(options: ResourceGuardOptions): () => void {
     if (budget.ratio < NUDGE_AT || Date.now() - lastStopAt() < STOP_INTERVAL_MS || pending) return;
     const inventory = await probe.inventory();
     const action = decideAction(budget, inventory);
-    if (action.kind === 'none' || action.worker !== process.pid) return;
+    if (action.kind === 'none') return;
     const conversations = inventory.workers.length;
     if (action.kind === 'stop' && !ineffective()) {
       if (!await probe.stop(action.unit.target)) return;
       try { mkdirSync(stateDirectory(), { recursive: true }); writeFileSync(marker(), String(Date.now())); } catch { /* fail-open-ok */ }
       pending = { unit: action.unit, before: budget.used, at: Date.now() };
       lifecycle('resource.stop', { session: sessionId, kind: action.unit.kind, label: action.unit.label, held: action.unit.freeable, used: budget.used, limit: budget.limit });
-      if (action.unit.owner === process.pid) deliver(stopNote(budget, conversations, action.unit) + ramTmpNote());
+      if (action.unit.owner !== undefined) deliver(stopNote(budget, conversations, action.unit) + ramTmpNote(), action.unit.owner);
     } else if (!nudged) {
       nudged = true;
       lifecycle('resource.nudge', { session: sessionId, ...(action.unit ? { label: action.unit.label, held: action.unit.freeable } : {}), used: budget.used, limit: budget.limit });
-      deliver(nudgeNote(budget, conversations, action.unit) + ramTmpNote());
+      deliver(nudgeNote(budget, conversations, action.unit) + ramTmpNote(), action.worker);
     }
   };
   let running = false;

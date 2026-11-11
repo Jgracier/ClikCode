@@ -65,12 +65,12 @@ describe('state sweep', () => {
     expect(await sweepState({ used: () => [], force: true })).toEqual({ ran: true, removed: 1 });
   });
 
-  it('sees a directory this very process is working in', () => {
+  it('sees a directory this very process is working in', async () => {
     const dir = make('t/cccccccc/cwd-here', 0, true);
     const before = process.cwd();
     try {
       process.chdir(dir);
-      const used = pathsInUse(join(home, 't'));
+      const used = await pathsInUse(join(home, 't'));
       if (used === undefined) return; // no /proc here: nothing to assert
       expect(used.some((path) => path === dir || path.startsWith(`${dir}/`))).toBe(true);
     } finally {

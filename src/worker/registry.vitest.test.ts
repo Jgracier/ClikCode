@@ -1,10 +1,10 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createServer } from 'node:net';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import { conversationHandoffRequested, ensureWorkersDirectory, listWorkerRecords, readWorkerRecord, removeWorkerRecord, requestConversationHandoff, socketPathFor, takeConversation, workerIsReachable, writeWorkerRecord } from './registry.js';
+import { watchHandoffRequest, conversationHandoffRequested, ensureWorkersDirectory, listWorkerRecords, readWorkerRecord, removeWorkerRecord, requestConversationHandoff, socketPathFor, takeConversation, workerIsReachable, writeWorkerRecord } from './registry.js';
 
 const previousHome = process.env.CLIKCODE_HOME;
 let root: string | undefined;
@@ -70,6 +70,22 @@ describe('worker registry', () => {
     expect(await requestConversationHandoff('chat')).toBe(true);
     expect(await conversationHandoffRequested('chat', 'remote-machine')).toBe(true);
     expect(await conversationHandoffRequested('chat', hostname())).toBe(false);
+  });
+
+  it('tells the worker of a handoff request as it is written, without waiting for its timer', async () => {
+    const home = await isolatedHome();
+    await ensureWorkersDirectory();
+    const key = createHash('sha256').update('chat').digest('hex').slice(0, 20);
+    await writeFile(join(home, 'workers', `${key}.owner`), JSON.stringify({
+      pid: 42, host: 'remote-machine', kind: 'worker', nonce: 'remote', at: new Date().toISOString(),
+    }));
+    let told = 0;
+    const stop = watchHandoffRequest('chat', () => { told += 1; });
+    try {
+      await writeFile(join(home, 'workers', 'other.handoff'), '{}');
+      await requestConversationHandoff('chat');
+      await vi.waitFor(() => expect(told).toBeGreaterThan(0));
+    } finally { stop(); }
   });
 
   it('uses a named pipe on Windows, scoped to the state directory', async () => {
