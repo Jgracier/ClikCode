@@ -6,7 +6,7 @@ import { writeState } from '../session/state/write.js';
 import { resetHarnessStateCaches } from '../session/state/index-file.js';
 import { sessionFilePath, sessionLogPath } from '../session/store/paths.js';
 import { conversationGroups } from './conversations.js';
-import { conversationView, corpusBuilds, resetCorpusCache, sessionDoc } from './corpus.js';
+import { conversationView, corpusBuilds, corpusCacheSize, resetCorpusCache, sessionDoc, setCorpusCacheCharsForTests } from './corpus.js';
 import { parseQuery, parseSince, recencyBoost, searchConversations, titleMatch } from './engine.js';
 import { hitSnippets, mentionCount, snippet } from './format.js';
 import { maskSecrets } from './secrets.js';
@@ -225,6 +225,32 @@ describe('the transcript cache', () => {
     const hit = (await searchConversations('papaya', { now: NOW }))!.hits[0];
     expect(hit?.conversationId).toBe('cached');
     expect(corpusBuilds()).toBe(built + 1);
+  });
+
+  it('holds transcripts up to a character budget, dropping the least recently used', async () => {
+    await store(chat('lru-a', [user('a'.repeat(40))]), chat('lru-b', [user('b'.repeat(40))]), chat('lru-c', [user('c'.repeat(40))]));
+    setCorpusCacheCharsForTests(100);
+    try {
+      await sessionDoc('lru-a');
+      await sessionDoc('lru-b');
+      await sessionDoc('lru-a');
+      await sessionDoc('lru-c');
+      expect(corpusCacheSize()).toEqual({ docs: 2, chars: 80 });
+      // `a` was used after `b`, so `b` went: reading `a` again builds nothing.
+      const built = corpusBuilds();
+      await sessionDoc('lru-a');
+      expect(corpusBuilds()).toBe(built);
+      await sessionDoc('lru-b');
+      expect(corpusBuilds()).toBe(built + 1);
+    } finally { setCorpusCacheCharsForTests(32 * 1024 * 1024); }
+  });
+
+  it('matches without regard to case and points at the original text', async () => {
+    await store(chat('cased', [user('We Deployed the KIWI build')]));
+    const hit = (await searchConversations('kiwi build', { now: NOW }))!.hits[0];
+    expect(hit?.conversationId).toBe('cased');
+    const mention = hit!.mentions[0]!;
+    expect('We Deployed the KIWI build'.slice(mention.offset, mention.offset + mention.length)).toBe('KIWI build');
   });
 
   it('notices a change by mtime even at the same size', async () => {
