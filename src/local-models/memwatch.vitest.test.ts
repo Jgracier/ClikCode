@@ -1,6 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { Script } from 'node:vm';
-import { SUPERVISOR_SCRIPT } from './lifecycle.js';
 import {
   memoryStep, mergeFootprint, parseMeminfo, parseMemoryPressure, parseProcStatus, parseVmStatMac, parseVmstatSwapOut,
   type MemorySample, type ShrinkOption, type WatchDecision, type WatchInput, type WatchState,
@@ -185,30 +183,5 @@ describe('memory readers', () => {
     expect(decision.spareBytes).toBe(7 * GB);
     expect(decision.level).toBe('ok');
     expect(decision.othersBytes).toBe(29 * GB);
-  });
-});
-
-describe('the supervisor\'s embedded copies', () => {
-  it('compiles', () => {
-    expect(() => new Script(SUPERVISOR_SCRIPT)).not.toThrow();
-  });
-
-  it('decides as the module does: nothing outside their bodies is referenced', () => {
-    // Evaluated alone, as the supervisor does, with no module scope around them.
-    const embedded = new Function(`${SUPERVISOR_SCRIPT.slice(SUPERVISOR_SCRIPT.indexOf('const memoryStep'), SUPERVISOR_SCRIPT.indexOf('const config'))}
-      return { memoryStep, parseMeminfo, parseMemoryPressure, parseProcStatus, parseVmstatSwapOut, parseVmStatMac, mergeFootprint };`)() as {
-      memoryStep: typeof memoryStep; parseMeminfo: typeof parseMeminfo; parseMemoryPressure: typeof parseMemoryPressure; parseProcStatus: typeof parseProcStatus;
-    };
-    let state: WatchState = {};
-    let last: WatchDecision | undefined;
-    for (let index = 0; index < 10; index++) {
-      last = embedded.memoryStep({ sample: sample(index * 2000, 7 * GB), state, bufferBytes: BUFFER, busy: false, shrinks: SHRINKS });
-      state = last.state;
-      if (last.action !== 'none') break;
-    }
-    expect(last).toMatchObject({ action: 'shrink', shrinkIndex: 2 });
-    expect(embedded.parseMeminfo('MemTotal: 2 kB\nMemAvailable: 1 kB\n')).toEqual({ totalBytes: 2048, availableBytes: 1024 });
-    expect(embedded.parseMemoryPressure('some avg10=1.44 avg60=0.24')).toBe(1.44);
-    expect(embedded.parseProcStatus('RssAnon:\t1 kB\nRssFile:\t2 kB\n')).toEqual({ anonBytes: 1024, fileBytes: 2048 });
   });
 });

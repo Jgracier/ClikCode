@@ -1,12 +1,8 @@
 /** Watching the machine's memory while a model runs, and deciding what the
  * model gives back when other programs need it.
  *
- * The functions here are pure, and self-contained on purpose: the
- * supervisor (lifecycle.ts) is an inline script with no imports, and it
- * embeds them by their source text (`String(fn)`). So none of them may
- * refer to anything outside its own body -- no module constants, no
- * helpers -- or the embedded copy would fail where the tested one works.
- * A test runs the embedded copies to hold that line.
+ * The functions here are pure; the supervisor (supervisor.ts, a process of
+ * its own) imports them.
  *
  * What counts as whose memory. On the CPU the server reads its weights
  * into its own memory (see usesMmap in launch.ts), so its footprint is its
