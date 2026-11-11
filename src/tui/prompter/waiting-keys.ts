@@ -48,10 +48,12 @@ export function onWaitingKey(this: TerminalHarnessPrompter, key: string): void {
     }
   }
   // Escape backs out one level. Scrolled back mid-turn it returns to the
-  // live edge. At the edge a waiting message comes back to edit. With
-  // none, a prompt that has no answer yet comes back too, and a turn that
-  // has started answering stops. Ctrl+C stops either way.
-  if (!this.pendingApproval && key === '\u001b' && this.scrolledBack) {
+  // live edge -- with an approval or a question waiting too: the arrows
+  // read back over one, and the Esc that came back from reading denied it
+  // and stopped the turn. At the edge a waiting message comes back to edit.
+  // With none, a prompt that has no answer yet comes back too, and a turn
+  // that has started answering stops. Ctrl+C stops either way.
+  if (key === '\u001b' && this.scrolledBack) {
     this.scrollTranscript(-Number.MAX_SAFE_INTEGER);
     return;
   }
