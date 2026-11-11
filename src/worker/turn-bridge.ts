@@ -160,11 +160,14 @@ export function signInClaims(tracker: Pick<WorkerTracker, 'signIns'>, kind: 'sig
 }
 
 async function connect(sessionId: string, spawn: boolean): Promise<WorkerClient | undefined> {
-  const existing = clients.get(sessionId);
-  if (existing) return existing;
-  // One connection per session, however many callers race to make it.
-  const pending = connecting.get(sessionId);
-  if (pending) {
+  // One connection per session, however many callers race to make it. A
+  // look that found no worker wakes every caller waiting on it: the first
+  // that may start one does, and the rest wait on that instead.
+  for (;;) {
+    const existing = clients.get(sessionId);
+    if (existing) return existing;
+    const pending = connecting.get(sessionId);
+    if (!pending) break;
     const joined = await pending;
     if (joined || !spawn) return joined;
   }
