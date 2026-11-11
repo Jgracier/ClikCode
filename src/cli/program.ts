@@ -119,9 +119,9 @@ export function buildBaseProgram(): Command {
   }
   process.on('uncaughtException', (err) => onCrash('uncaughtException', err));
 
+  // The description is the entry's (index.ts): this builds the program, that says what it is.
   program
     .name('clikcode')
-    .description('The terminal harness for all your AI coding providers')
     .version(CLIKCODE_VERSION)
     .addHelpText('after', TERMINAL_ENVIRONMENT_HELP)
     .option('--json', 'Write results as JSON, one record per line (the default when output is not a terminal)')

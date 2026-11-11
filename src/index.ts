@@ -10,7 +10,6 @@ import { registerClikCodeCommands } from './cli/register.js';
 
 const config = new Conf({ projectName: 'clikcode', configFileMode: 0o600 });
 const program = buildBaseProgram()
-  .name('clikcode')
   .description('The terminal harness that logs in all your favorite AI coding providers. Chats you can resume in any of them, and automatic account switching when you hit a usage limit.')
   .option('-c, --continue', 'reopen your latest chat (in this folder, if there is one)')
   .action((options: { continue?: boolean }) => import('./commands/ai/interactive.js').then((module) => module.aiSessionOpenDefault(config, options)));
