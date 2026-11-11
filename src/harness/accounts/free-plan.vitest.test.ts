@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { localHarnessForCommand } from '@clikcode/router/ai-local-harness';
-import { freePlanModels, planIsFree } from './free-plan';
-import { opencodeVerboseModels } from './opencode-discovery';
-import { antigravityQuotaReading } from './cli-usage-probes';
+import { freePlanModels, planIsFree } from './free-plan.js';
+import { opencodeVerboseModels } from './opencode-discovery.js';
+import { antigravityQuotaReading } from './cli-usage-probes.js';
 
 const harness = (command: string) => localHarnessForCommand(command)!;
 

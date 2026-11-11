@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { allLocalHarnesses } from '@clikcode/router/ai-local-harness';
-import { createStreamState, parseHarnessLine } from './adapters';
+import { createStreamState, parseHarnessLine } from './adapters.js';
 
 /** The live assistant text one line carries. */
 const responseOf = (...line: Parameters<typeof parseHarnessLine>) => parseHarnessLine(...line).response;

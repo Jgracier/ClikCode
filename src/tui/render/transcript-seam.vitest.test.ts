@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   firstUnwritten, liveAssistantAt, materializedPendingTurn, messageKey,
-} from './transcript-seam';
+} from './transcript-seam.js';
 
 const user = (content: string) => ({ role: 'user', content });
 const assistant = (content: string) => ({ role: 'assistant', content });

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   customCommandPrompt, discoverCustomCommands, expandCustomCommand, parseCustomCommandFile, resetCustomCommandCache,
   splitCommandArguments,
-} from './custom-commands';
+} from './custom-commands.js';
 
 describe('custom command files', () => {
   it('parses optional frontmatter', () => {

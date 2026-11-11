@@ -2,8 +2,8 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { authEvidencePresent, authFilesStamp, expandAuthPath, prepareAuthFilesForLogin, harnessCanLogout, removableAuthFiles, removeAuthFiles } from './auth-files';
-import type { AiLocalHarnessDefinition } from '../definition';
+import { authEvidencePresent, authFilesStamp, expandAuthPath, prepareAuthFilesForLogin, harnessCanLogout, removableAuthFiles, removeAuthFiles } from './auth-files.js';
+import type { AiLocalHarnessDefinition } from '../definition.js';
 import { AI_LOCAL_HARNESSES } from '@clikcode/router/ai-local-harness';
 
 const harness = (fields: Partial<AiLocalHarnessDefinition>): AiLocalHarnessDefinition => ({

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { opencodeConnect } from './opencode-discovery';
+import { opencodeConnect } from './opencode-discovery.js';
 
 describe('opencode discovery', () => {
   it('offers every known provider that has no connected model, common ones first', () => {

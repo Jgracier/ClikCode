@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { createStreamState, parseHarnessLine } from './adapters';
-import { nativeSessionIdsFromValues } from '../protocol/session-ids';
-import { parseJsonLines } from '../protocol/json-lines';
+import { createStreamState, parseHarnessLine } from './adapters.js';
+import { nativeSessionIdsFromValues } from '../protocol/session-ids.js';
+import { parseJsonLines } from '../protocol/json-lines.js';
 
 /** The session ids in a turn's json-lines output. */
 const nativeSessionIds = (output: string): Set<string> => nativeSessionIdsFromValues(parseJsonLines(output).values);
-import { codex } from '../protocol/vendor-fixtures.vitest';
-import type { AiLocalHarnessDefinition } from '../definition';
+import { codex } from '../protocol/vendor-fixtures.vitest.js';
+import type { AiLocalHarnessDefinition } from '../definition.js';
 import { localHarnessForCommand } from '@clikcode/router/ai-local-harness';
 
 /** The live assistant text one line carries. */

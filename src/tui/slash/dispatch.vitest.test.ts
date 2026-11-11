@@ -3,11 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type Conf from 'conf';
-import { dispatchLine, type SlashHost } from './dispatch';
-import { readState } from '../../session/state/read';
-import { writeState } from '../../session/state/write';
-import type { HarnessSession, HarnessState } from '../../session/model';
-import { nativeAvailableCommands } from '../../turn/vendor-process';
+import { dispatchLine, type SlashHost } from './dispatch.js';
+import { readState } from '../../session/state/read.js';
+import { writeState } from '../../session/state/write.js';
+import type { HarnessSession, HarnessState } from '../../session/model.js';
+import { nativeAvailableCommands } from '../../turn/vendor-process.js';
 
 const chat = (overrides: Partial<HarnessSession> = {}): HarnessSession => ({
   id: 's1', conversationId: 's1', route: 'local', accountId: null, provider: 'anthropic', model: null, effort: 'medium',

@@ -5,16 +5,16 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AiLocalHarnessDefinition } from '../../harness/definition';
-import type { HarnessSession } from '../../session/model';
-import { readState } from '../../session/state/read';
-import { writeState } from '../../session/state/write';
-import { forceStoreSession, unforceStoreSession } from '../../session/ephemeral';
-import { leaveProvider } from '../../session/native-thread';
+import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
+import type { HarnessSession } from '../../session/model.js';
+import { readState } from '../../session/state/read.js';
+import { writeState } from '../../session/state/write.js';
+import { forceStoreSession, unforceStoreSession } from '../../session/ephemeral.js';
+import { leaveProvider } from '../../session/native-thread.js';
 
 const moves = vi.hoisted(() => ({ count: 0 }));
 vi.mock('../../commands/ai/conversations', async (original) => ({
-  ...await original<typeof import('../../commands/ai/conversations')>(),
+  ...await original<typeof import('../../commands/ai/conversations.js')>(),
   moveToProvider: async (id: string, command: string) => {
     moves.count += 1;
     // Slow enough that an unlocked second caller would read before this write.
@@ -26,7 +26,7 @@ vi.mock('../../commands/ai/conversations', async (original) => ({
     await writeState(state);
   },
 }));
-const { resumeIn } = await import('./resume-in');
+const { resumeIn } = await import('./resume-in.js');
 
 const saved = process.env.CLIKCODE_HOME;
 let root: string;

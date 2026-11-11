@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { HarnessSession } from '../../session/model';
+import type { HarnessSession } from '../../session/model.js';
 
 // The engine is mocked throughout: what is under test is when the commands
 // take and let go of a session's model, not llama.cpp.
@@ -18,14 +18,14 @@ const files = vi.hoisted(() => ({ missingBytes: vi.fn(async () => 0) }));
 // The Gateway's own list, which a name typed on a chat running a model on this computer is checked against.
 const gateway = vi.hoisted(() => ({ models: [{ id: 'claude-opus-5.5' }, { id: 'claude-sonnet-5.5' }] as Array<{ id: string }> }));
 vi.mock('../../gateway/models', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../../gateway/models')>(),
+  ...await importOriginal<typeof import('../../gateway/models.js')>(),
   gatewayModels: async () => ({ models: gateway.models }),
 }));
 vi.mock('../../local-models/models', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../../local-models/models')>(), missingBytes: files.missingBytes,
+  ...await importOriginal<typeof import('../../local-models/models.js')>(), missingBytes: files.missingBytes,
 }));
 vi.mock('../../local-models/index', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../../local-models/index')>(),
+  ...await importOriginal<typeof import('../../local-models/index.js')>(),
   ensureLocalModel: engine.ensureLocalModel,
   releaseLocalModel: engine.releaseLocalModel,
   releaseLocalModelTurn: engine.releaseLocalModelTurn,
@@ -45,15 +45,15 @@ vi.mock('../../runtime/lazy-bridge', async (importOriginal) => {
 
 const {
   holdLocalModelAfterTurn, localModelChosen, localModelTurnHooks, localProgressText, reconcileLocalModelLeases, releaseHeldLocalModel, resetLocalModelHeldForTests,
-} = await import('./local-model');
-const { aiSessionClose, aiSessionCreate, aiSessionSet, applyClikCodeLocalSessionPolicy } = await import('./sessions');
-const { aiSessionCommand } = await import('../../tui/slash/handlers');
-const { resolveLocalModelId, localModelLabel } = await import('../../local-models/catalog');
-const { resolveSlashCommand, routeSlashInput, slashRouteAppliesDuringTurn } = await import('../../tui/slash/registry');
-const { readState } = await import('../../session/state/read');
-const { startOrResumeChat } = await import('./harness');
-const { loadIndex } = await import('../../session/state/index-file');
-const { writeState } = await import('../../session/state/write');
+} = await import('./local-model.js');
+const { aiSessionClose, aiSessionCreate, aiSessionSet, applyClikCodeLocalSessionPolicy } = await import('./sessions.js');
+const { aiSessionCommand } = await import('../../tui/slash/handlers.js');
+const { resolveLocalModelId, localModelLabel } = await import('../../local-models/catalog.js');
+const { resolveSlashCommand, routeSlashInput, slashRouteAppliesDuringTurn } = await import('../../tui/slash/registry.js');
+const { readState } = await import('../../session/state/read.js');
+const { startOrResumeChat } = await import('./harness.js');
+const { loadIndex } = await import('../../session/state/index-file.js');
+const { writeState } = await import('../../session/state/write.js');
 
 const session = (overrides: Partial<HarnessSession> = {}): HarnessSession => ({
   id: 's1', conversationId: 's1', route: 'clikcode-local', accountId: null, provider: 'clikcode-local', model: null, effort: 'auto',
@@ -129,7 +129,7 @@ describe('a turn on a model on this computer', () => {
   });
 
   it('moves only the label of a band already up, and gives it back: the band never drops, its clock never restarts', async () => {
-    const { TERMINAL } = await import('../../tui/active-terminal');
+    const { TERMINAL } = await import('../../tui/active-terminal.js');
     const calls: string[] = [];
     let label: string | undefined = 'thinking';
     TERMINAL.active = {
@@ -341,7 +341,7 @@ describe('/model --download while the window is free to do other things', () => 
   let failWith: ((error: Error) => void) | undefined;
 
   beforeEach(async () => {
-    const { onDownloadOutcome, allowBackgroundDownloads } = await import('../../local-models/downloads');
+    const { onDownloadOutcome, allowBackgroundDownloads } = await import('../../local-models/downloads.js');
     outcomes = [];
     stopOutcomes = onDownloadOutcome((outcome) => outcomes.push(outcome));
     withdraw = allowBackgroundDownloads();
@@ -356,7 +356,7 @@ describe('/model --download while the window is free to do other things', () => 
   afterEach(async () => {
     stopOutcomes(); withdraw();
     // A download a test left running must not be the next test's.
-    const { modelDownloads } = await import('../../local-models/downloads');
+    const { modelDownloads } = await import('../../local-models/downloads.js');
     for (const job of modelDownloads()) { job.cancel(); await job.done.catch(() => undefined); }
     release = undefined; failWith = undefined;
   });
@@ -379,7 +379,7 @@ describe('/model --download while the window is free to do other things', () => 
 
     await waitFor(() => release !== undefined);
     // Shown in the chat that asked, and in no other.
-    expect([...(await import('../../local-models/downloads')).modelDownloads()[0]!.askers]).toEqual(['s1']);
+    expect([...(await import('../../local-models/downloads.js')).modelDownloads()[0]!.askers]).toEqual(['s1']);
     release!();
     await waitFor(() => outcomes.length === 2);
     expect(outcomes[1]).toMatchObject({ switched: true, level: 'info', sessionId: 's1' });
@@ -423,7 +423,7 @@ describe('/model --download while the window is free to do other things', () => 
     await waitFor(() => release !== undefined);
     expect(engine.prefetchLocalModel).toHaveBeenCalledTimes(1);
     // One download, shown in each of the two chats that asked for it and in no third.
-    expect([...(await import('../../local-models/downloads')).modelDownloads()[0]!.askers]).toEqual(['s1', 's2']);
+    expect([...(await import('../../local-models/downloads.js')).modelDownloads()[0]!.askers]).toEqual(['s1', 's2']);
     release!();
     await waitFor(() => outcomes.filter((outcome) => outcome.switched).length === 2);
     expect((await readState()).sessions.map((chat) => [chat.id, chat.route, chat.model])).toEqual([['s1', 'clikcode-local', 'qwen3.5-9b'], ['s2', 'clikcode-local', 'qwen3.5-9b']]);

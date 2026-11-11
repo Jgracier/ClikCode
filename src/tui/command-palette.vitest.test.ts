@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { commandPaletteMatches, composerRightArrowValue, pickerConfirmsSelection, pickerDeletesSelection, completedCommandLine } from './command-palette';
+import { commandPaletteMatches, composerRightArrowValue, pickerConfirmsSelection, pickerDeletesSelection, completedCommandLine } from './command-palette.js';
 
 describe('command palette layout', () => {
   it('opens the main slash choices from Right Arrow only when the composer is empty', () => {

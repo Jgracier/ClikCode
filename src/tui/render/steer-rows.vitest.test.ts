@@ -6,7 +6,7 @@
  * cannot take it back.
  */
 import { describe, expect, it } from 'vitest';
-import { enterAgainSends, hasDurableSteer, liveTurnSpan, steerTranscriptRows, type LiveSubmission } from './steer-rows';
+import { enterAgainSends, hasDurableSteer, liveTurnSpan, steerTranscriptRows, type LiveSubmission } from './steer-rows.js';
 
 const render = (text: string) => [`row:${text}`];
 const live = (text: string, sequence: number, state: LiveSubmission['state'] = 'steered'): LiveSubmission =>
@@ -119,7 +119,7 @@ describe('where a steer sits among the rows around it', () => {
   });
 
   it('sorts rows that began before the acknowledgement above it and later ones below', async () => {
-    const { TurnTranscript } = await import('../../turn/transcript');
+    const { TurnTranscript } = await import('../../turn/transcript.js');
     const [steer] = rows({ live: [{ ...live('steer', 1), ack: { sequence: 10, responseOffset: 0 } }] });
     const tool = (id: string, seq: number) => ({ id, done: true, responseOffset: 0, seq, lines: [id] });
     const step = new TurnTranscript().advance({

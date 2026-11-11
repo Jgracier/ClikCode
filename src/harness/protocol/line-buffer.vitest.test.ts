@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LineBuffer } from './json-lines';
+import { LineBuffer } from './json-lines.js';
 
 describe('lines out of a chunked stream', () => {
   it('splits on \\n and \\r\\n, holding a partial line for the next chunk', () => {

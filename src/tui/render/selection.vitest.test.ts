@@ -77,7 +77,7 @@ describe('the highlight', () => {
 
 describe('a selection kept in conversation lines', () => {
   it('highlights the lines it covers wherever they are on screen', async () => {
-    const { highlightSelectionAt } = await import('./selection');
+    const { highlightSelectionAt } = await import('./selection.js');
     // Screen rows 0..2 show lines 41..43 after the view scrolled; the
     // selection began on line 40, now off screen above.
     const rows = ['alpha', 'bravo', 'charlie'];

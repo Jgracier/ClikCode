@@ -5,12 +5,12 @@ import { mkdtemp, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/prom
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { carryNativeSession, moveThreadToAccount, reconcileNativeThread } from './carry';
-import { resetNativeSessionDiscoveryCache } from './discovery/cache';
-import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition';
-import type { HarnessSession } from './model';
+import { carryNativeSession, moveThreadToAccount, reconcileNativeThread } from './carry.js';
+import { resetNativeSessionDiscoveryCache } from './discovery/cache.js';
+import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
+import type { HarnessSession } from './model.js';
 import { allLocalHarnesses, localHarnessForCommand } from '@clikcode/router/ai-local-harness';
-import { NATIVE_SESSION_STORES } from './discovery/registry';
+import { NATIVE_SESSION_STORES } from './discovery/registry.js';
 
 const harnessFor = (command: string): AiLocalHarnessDefinition => ({ command } as AiLocalHarnessDefinition);
 const WORKSPACE = '/home/someone/projects/thing';

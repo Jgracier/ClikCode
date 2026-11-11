@@ -10,9 +10,9 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AiHarnessAccount } from '../../harness/definition';
-import type { HarnessSession } from '../../session/model';
-import { resetNativeSessionDiscoveryCache } from '../../session/discovery/cache';
+import type { AiHarnessAccount } from '../../harness/definition.js';
+import type { HarnessSession } from '../../session/model.js';
+import { resetNativeSessionDiscoveryCache } from '../../session/discovery/cache.js';
 
 // The bridge loads the bundled router; the catalog's own functions stand in.
 vi.mock('../../runtime/lazy-bridge', async (importOriginal) => {
@@ -21,11 +21,11 @@ vi.mock('../../runtime/lazy-bridge', async (importOriginal) => {
   return Object.fromEntries(Object.keys(original).map((name) => [name, router[name] ?? original[name]]));
 });
 
-const { aiSessionCommand } = await import('./handlers');
-const { readState } = await import('../../session/state/read');
-const { writeState } = await import('../../session/state/write');
-const { reconcileNativeThread } = await import('../../session/carry');
-const { localHarnessForCommand } = await import('../../runtime/lazy-bridge');
+const { aiSessionCommand } = await import('./handlers.js');
+const { readState } = await import('../../session/state/read.js');
+const { writeState } = await import('../../session/state/write.js');
+const { reconcileNativeThread } = await import('../../session/carry.js');
+const { localHarnessForCommand } = await import('../../runtime/lazy-bridge.js');
 
 const saved = { ...process.env };
 let root: string;

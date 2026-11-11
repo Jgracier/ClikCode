@@ -1,13 +1,13 @@
 import type { Socket } from 'node:net';
 import { describe, expect, it, vi } from 'vitest';
-import { MarkSequencer } from '../turn/turn-marks';
+import { MarkSequencer } from '../turn/turn-marks.js';
 
 /** Where a history stands in its log: every one placed, but the ones a test marks as not. */
 const unplaced = vi.hoisted(() => new WeakSet<object>());
 vi.mock('../session/store/transcripts.js', () => ({
   transcriptPosition: (messages: unknown[]) => unplaced.has(messages) ? undefined : { gen: 'g1', end: messages.length },
 }));
-import { BroadcastObserver, windowReadsSaved } from './broadcast-observer';
+import { BroadcastObserver, windowReadsSaved } from './broadcast-observer.js';
 
 function fakeClient(): { socket: Socket; frames: Record<string, unknown>[] } {
   const frames: Record<string, unknown>[] = [];

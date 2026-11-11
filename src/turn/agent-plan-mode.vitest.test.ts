@@ -11,7 +11,7 @@ import type { HarnessSession } from '../session/model.js';
 
 const engine = vi.hoisted(() => ({ ensureLocalModel: vi.fn() }));
 vi.mock('../local-models/index', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../local-models/index')>(),
+  ...await importOriginal<typeof import('../local-models/index.js')>(),
   ensureLocalModel: engine.ensureLocalModel,
   releaseLocalModelsOnExit: () => undefined,
 }));

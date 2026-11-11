@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { terminalUiSupported } from './capabilities';
+import { terminalUiSupported } from './capabilities.js';
 
 describe('terminal capabilities', () => {
   it('uses the inline renderer only on ANSI-capable interactive terminals', () => {

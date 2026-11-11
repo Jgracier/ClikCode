@@ -4,10 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import snapshot from './catalog.snapshot.json' with { type: 'json' };
-import { CATALOG_URL, catalogDiagnostics, loadCatalog, noteRefresh, refreshCatalog, REFRESH_INTERVAL_MS, TRUSTED_CATALOG_KEYS, type CatalogCache } from './catalog-source';
+import { CATALOG_URL, catalogDiagnostics, loadCatalog, noteRefresh, refreshCatalog, REFRESH_INTERVAL_MS, TRUSTED_CATALOG_KEYS, type CatalogCache } from './catalog-source.js';
 import { diagnostic } from '../runtime/lifecycle-log.js';
-import { canonicalJson, signLocalCatalog, trustedKeyFrom } from './shared/catalog-signature';
-import type { LocalCatalog } from './shared/index';
+import { canonicalJson, signLocalCatalog, trustedKeyFrom } from './shared/catalog-signature.js';
+import type { LocalCatalog } from './shared/index.js';
 
 vi.mock('../runtime/lifecycle-log.js', async (importOriginal) => ({ ...(await importOriginal<typeof import('../runtime/lifecycle-log.js')>()), diagnostic: vi.fn() }));
 

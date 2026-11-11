@@ -5,19 +5,19 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { canonicalRecord } from './canonical';
+import { canonicalRecord } from './canonical.js';
 import {
   copilotThreadCompaction, grokThreadCompaction, kiroThreadCompaction,
   claudeSummaryText, turnsHash, validSummary, shownSummary, listedSummary, summaryHeadline,
-} from './conversation-summary';
-import { exportTranscript } from '../tui/slash/export-transcript';
-import { conversationOption } from './options';
-import { claudeThreadRecords } from './discovery/vendors/claude-thread';
-import { ConversationStore } from '../agent/conversation';
-import { seedAgentConversation } from '../turn/agent-history';
-import { startConversationThread } from '../turn/thread-start';
-import type { HarnessSession, TranscriptMessage } from './model';
-import type { AiLocalHarnessDefinition } from '../harness/definition';
+} from './conversation-summary.js';
+import { exportTranscript } from '../tui/slash/export-transcript.js';
+import { conversationOption } from './options.js';
+import { claudeThreadRecords } from './discovery/vendors/claude-thread.js';
+import { ConversationStore } from '../agent/conversation.js';
+import { seedAgentConversation } from '../turn/agent-history.js';
+import { startConversationThread } from '../turn/thread-start.js';
+import type { HarnessSession, TranscriptMessage } from './model.js';
+import type { AiLocalHarnessDefinition } from '../harness/definition.js';
 
 const claude = { harness: 'claude', route: 'local' as const, provider: 'anthropic', model: 'opus' };
 const exchange = (request: string, answer: string): TranscriptMessage[] => [

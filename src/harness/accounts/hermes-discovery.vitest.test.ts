@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hermesCachedModels, hermesInstallDirectory, hermesInventory, hermesToolsetNames } from './hermes-discovery';
+import { hermesCachedModels, hermesInstallDirectory, hermesInventory, hermesToolsetNames } from './hermes-discovery.js';
 
 describe('hermes discovery', () => {
   it('reads model ids out of the provider cache', () => {

@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { terminalCellWidth } from './width';
-import { liveConversationLines, rightLabeledRule, runningChatLine } from './waiting';
-import { appendThought, liveWaitKind, waitingSpinnerGlyph, withWorkspacePaths } from '../../harness/protocol/activity-view';
-import { waitingSpinnerFrame } from '../../harness/protocol/activity-view';
-import { visibleTail } from './width';
-import { thoughtLabel } from '../../harness/protocol/activity-events';
+import { terminalCellWidth } from './width.js';
+import { liveConversationLines, rightLabeledRule, runningChatLine } from './waiting.js';
+import { appendThought, liveWaitKind, waitingSpinnerGlyph, withWorkspacePaths } from '../../harness/protocol/activity-view.js';
+import { waitingSpinnerFrame } from '../../harness/protocol/activity-view.js';
+import { visibleTail } from './width.js';
+import { thoughtLabel } from '../../harness/protocol/activity-events.js';
 
 describe('the waiting band', () => {
   it('packs four animation phases of a logical 4x4 grid into two Braille cells', () => {

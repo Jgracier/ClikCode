@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { usageNextReset, usageWindowsDetail, usageResetLabel, accountBackAt, outOfUsageText } from './usage-reading';
+import { usageNextReset, usageWindowsDetail, usageResetLabel, accountBackAt, outOfUsageText } from './usage-reading.js';
 import type { AiHarnessAccount } from '../definition.js';
 
 // Local times, so the wording ("5:34PM", the weekday) holds in any timezone.

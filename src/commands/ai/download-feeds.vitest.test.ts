@@ -1,9 +1,9 @@
 /** Where a download shows while it runs and when it ends: in the chat that asked for it, and in no other. */
 import { afterEach, describe, expect, it } from 'vitest';
-import { downloadsByChat, downloadText, followModelDownloads, followModelDownloadsInEditor } from './local-model';
-import { backgroundDownloadsAllowed, modelDownloads, reportDownloadOutcome, startModelDownload } from '../../local-models/downloads';
+import { downloadsByChat, downloadText, followModelDownloads, followModelDownloadsInEditor } from './local-model.js';
+import { backgroundDownloadsAllowed, modelDownloads, reportDownloadOutcome, startModelDownload } from '../../local-models/downloads.js';
 import type { LocalModelProgress } from '../../local-models';
-import type { HarnessSession } from '../../session/model';
+import type { HarnessSession } from '../../session/model.js';
 
 afterEach(async () => { for (const job of modelDownloads()) { job.cancel(); await job.done.catch(() => undefined); } });
 

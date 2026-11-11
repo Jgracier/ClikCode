@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { ACTIVE_WITHIN_MS, conversationRows, recencySection } from './conversation-rows';
-import type { HarnessSession } from './model';
+import { ACTIVE_WITHIN_MS, conversationRows, recencySection } from './conversation-rows.js';
+import type { HarnessSession } from './model.js';
 
 const NOW = Date.parse('2026-10-03T12:00:00.000Z');
 const ago = (ms: number) => new Date(NOW - ms).toISOString();

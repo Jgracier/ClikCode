@@ -197,7 +197,7 @@ createdAt: now, updatedAt: now, status: 'active', workspace: '/w',
 
 describe("a writer's version gate", () => {
   it('trusts a release line by default, and only the proven build when exact', async () => {
-    const { testedVersion } = await import('../session/discovery/vendors/thread-writer-files');
+    const { testedVersion } = await import('../session/discovery/vendors/thread-writer-files.js');
     expect(testedVersion(['1.74.1'])({ version: '1.74.3' })).toBe(true);
     expect(testedVersion(['1.74.1'], { exact: true })({ version: '1.74.3' })).toBe(false);
     expect(testedVersion(['1.74.1'], { exact: true })({ version: '1.74.1' })).toBe(true);

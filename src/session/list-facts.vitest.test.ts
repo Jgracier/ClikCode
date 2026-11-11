@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { markFromIndex, markTranscriptLoaded, stampListFacts } from './list-facts';
-import type { HarnessSession } from './model';
+import { markFromIndex, markTranscriptLoaded, stampListFacts } from './list-facts.js';
+import type { HarnessSession } from './model.js';
 
 function session(overrides: Partial<HarnessSession> = {}): HarnessSession {
   return {

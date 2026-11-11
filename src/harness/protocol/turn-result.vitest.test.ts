@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { nativeTurnFailure, nativeTurnResult } from './turn-result';
+import { nativeTurnFailure, nativeTurnResult } from './turn-result.js';
 import { classifyAccountFailure } from '../../turn/failover.js';
 import { localHarnessForCommand } from '@clikcode/router/ai-local-harness';
-import { codex } from './vendor-fixtures.vitest';
+import { codex } from './vendor-fixtures.vitest.js';
 
 describe('native harness turn results', () => {
   it('never treats assistant prose as a session identity for a text harness', () => {

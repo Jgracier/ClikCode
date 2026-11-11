@@ -9,18 +9,18 @@ import { readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { runSessionTurn } from './session-turn';
-import { readState } from '../session/state/read';
-import { writeState } from '../session/state/write';
-import { redoFrom } from '../session/redo';
-import { ConversationStore } from '../agent/conversation';
-import { agentItemsFromTurn, agentSeedBudget, seedAgentConversation } from './agent-history';
-import { canonicalRecord } from '../session/canonical';
-import type { HarnessSession, TranscriptMessage } from '../session/model';
+import { runSessionTurn } from './session-turn.js';
+import { readState } from '../session/state/read.js';
+import { writeState } from '../session/state/write.js';
+import { redoFrom } from '../session/redo.js';
+import { ConversationStore } from '../agent/conversation.js';
+import { agentItemsFromTurn, agentSeedBudget, seedAgentConversation } from './agent-history.js';
+import { canonicalRecord } from '../session/canonical.js';
+import type { HarnessSession, TranscriptMessage } from '../session/model.js';
 
 const engine = vi.hoisted(() => ({ ensureLocalModel: vi.fn() }));
 vi.mock('../local-models/index', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../local-models/index')>(),
+  ...await importOriginal<typeof import('../local-models/index.js')>(),
   ensureLocalModel: engine.ensureLocalModel,
   releaseLocalModelsOnExit: () => undefined,
 }));

@@ -2,10 +2,10 @@ import { mkdtemp, readdir, readFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { markProviderBoundaries, type CanonicalOrigin, type CanonicalRecord, type CanonicalToolCall, type CanonicalTurn } from '../../canonical';
-import type { NativeThreadWriteContext } from '../stores';
-import { nativeSessionStore } from '../registry';
-import { codexCallFor, codexRolloutRecords, codexRolloutRelativePath, codexThreadWriter, uuidv7 } from './codex-writer';
+import { markProviderBoundaries, type CanonicalOrigin, type CanonicalRecord, type CanonicalToolCall, type CanonicalTurn } from '../../canonical.js';
+import type { NativeThreadWriteContext } from '../stores.js';
+import { nativeSessionStore } from '../registry.js';
+import { codexCallFor, codexRolloutRecords, codexRolloutRelativePath, codexThreadWriter, uuidv7 } from './codex-writer.js';
 
 const sqlite = await import('node:sqlite').then((m) => m, () => undefined);
 

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { heldByLiveProcess, removeLeases, removeTurnLeases, serverDir, sessionHeldElsewhere, writeLease, writeTurnLease } from './lifecycle';
+import { heldByLiveProcess, removeLeases, removeTurnLeases, serverDir, sessionHeldElsewhere, writeLease, writeTurnLease } from './lifecycle.js';
 
 const previous = process.env.CLIKCODE_LOCAL_MODELS_HOME;
 beforeEach(() => { process.env.CLIKCODE_LOCAL_MODELS_HOME = mkdtempSync(join(tmpdir(), 'cc-leases-')); });
@@ -62,7 +62,7 @@ describe('a turn\'s lease', () => {
   });
 
   it('keeps a running turn\'s model up when the window leaves the chat, and lets it go when the turn ends', async () => {
-    const { startSupervisor } = await import('./lifecycle');
+    const { startSupervisor } = await import('./lifecycle.js');
     const dir = serverDir('lease-test');
     // The window shows the chat; a turn is running on the model.
     await writeLease('lease-test', 's');
@@ -93,8 +93,8 @@ describe('a turn\'s lease', () => {
 
 describe('measured footprints', () => {
   it('are read per machine and model, keyed by configuration', async () => {
-    const { footprintKey, readFootprints } = await import('./measure');
-    const { footprintsFile } = await import('./paths');
+    const { footprintKey, readFootprints } = await import('./measure.js');
+    const { footprintsFile } = await import('./paths.js');
     const run = { context: 65_536, cacheType: 'f16', parallel: 2, vision: false, anonBytes: 3.9e9, fileBytes: 2.1e9, at: 'now' };
     mkdirSync(serverDir('qwen3.5-4b'), { recursive: true });
     writeFileSync(footprintsFile('qwen3.5-4b'), JSON.stringify({ here: { [footprintKey(run)]: run }, elsewhere: { x: { ...run, anonBytes: 1 } } }));
@@ -117,7 +117,7 @@ describe('whether anyone holds a model', () => {
 
 describe('the supervisor\'s logs', () => {
   it('moves a large server.log aside at start, and trims one the server grows while running', async () => {
-    const { startSupervisor, SUPERVISOR_SCRIPT } = await import('./lifecycle');
+    const { startSupervisor, SUPERVISOR_SCRIPT } = await import('./lifecycle.js');
     const { readFileSync, statSync, existsSync } = await import('node:fs');
     expect(SUPERVISOR_SCRIPT).toContain('rotateLogs');
     const dir = serverDir('rotate-test');

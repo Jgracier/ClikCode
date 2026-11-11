@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { buttonTitle, keyHint } from './wording';
-import { turnStopReason } from './turn-usage';
+import { buttonTitle, keyHint } from './wording.js';
+import { turnStopReason } from './turn-usage.js';
 
 describe('one verb per action', () => {
   it('says stop, in the band and on the button', () => {

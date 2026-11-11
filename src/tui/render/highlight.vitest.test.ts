@@ -1,9 +1,9 @@
 import chalk from 'chalk';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { highlightLines, highlightsLanguage, type HighlightSpan } from './highlight';
-import { createStreamingBlockParser, splitIntoBlocks } from './markdown';
-import { renderMessageBlocks } from './message-blocks';
-import { TurnTranscript } from '../../turn/transcript';
+import { highlightLines, highlightsLanguage, type HighlightSpan } from './highlight.js';
+import { createStreamingBlockParser, splitIntoBlocks } from './markdown.js';
+import { renderMessageBlocks } from './message-blocks.js';
+import { TurnTranscript } from '../../turn/transcript.js';
 
 /** `kind:text` for every coloured span of one line. */
 const kinds = (spans: readonly HighlightSpan[]): string[] => spans.filter((span) => span.kind).map((span) => `${span.kind}:${span.text}`);

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { piConnect, piModels, piProviderLabel } from './pi-discovery';
-import { gooseConnect, gooseModelsDevModels, gooseProviders, modelsDevProvider } from './goose-discovery';
-import { acpSessionModels } from './acp-query';
+import { piConnect, piModels, piProviderLabel } from './pi-discovery.js';
+import { gooseConnect, gooseModelsDevModels, gooseProviders, modelsDevProvider } from './goose-discovery.js';
+import { acpSessionModels } from './acp-query.js';
 
 describe('pi discovery', () => {
   it('reads provider/model from the --list-models table', () => {

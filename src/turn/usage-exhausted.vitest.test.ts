@@ -1,7 +1,7 @@
 /** One sentence for running out, whatever the harness called it. */
 import { describe, expect, it } from 'vitest';
-import { usageExhaustedMessage, nextQuotaReset, isUsageExhaustedMessage } from './usage-exhausted';
-import { quotaResetPhrase } from '../harness/protocol/format';
+import { usageExhaustedMessage, nextQuotaReset, isUsageExhaustedMessage } from './usage-exhausted.js';
+import { quotaResetPhrase } from '../harness/protocol/format.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
 
 const NOW = Date.parse('2026-09-21T14:00:00');
@@ -33,21 +33,21 @@ describe('being out of quota', () => {
 
 describe('a vendor error that says it in its own words', () => {
   it('recognises Grok Build running out of balance', async () => {
-    const { classifyAccountFailure } = await import('./failover');
+    const { classifyAccountFailure } = await import('./failover.js');
     // The real shape: no status field anywhere, the code buried in the text.
     const failure = new Error('Grok Build: Internal error: {\n  "message": "API error (status 402 Payment Required): Grok Build usage balance exhausted",\n  "http_status": 402\n}');
     expect(classifyAccountFailure(failure, { isResultError: true })).toBe('quota-exhausted');
   });
 
   it('still recognises the wordings that carry no status at all', async () => {
-    const { classifyAccountFailure } = await import('./failover');
+    const { classifyAccountFailure } = await import('./failover.js');
     for (const text of ['insufficient balance', 'your credit is exhausted', 'weekly limit reached']) {
       expect(classifyAccountFailure(new Error(text), { isResultError: true }), text).toBe('quota-exhausted');
     }
   });
 
   it('does not mistake an ordinary failure for running out', async () => {
-    const { classifyAccountFailure } = await import('./failover');
+    const { classifyAccountFailure } = await import('./failover.js');
     expect(classifyAccountFailure(new Error('connection reset by peer'), { isResultError: true })).not.toBe('quota-exhausted');
     // 404 is embedded the same way a 402 is, and is not a quota problem.
     expect(classifyAccountFailure(new Error('API error (status 404 Not Found)'), { isResultError: true })).not.toBe('quota-exhausted');

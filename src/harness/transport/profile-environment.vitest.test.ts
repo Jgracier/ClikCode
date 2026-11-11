@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { nativeAccountEnvironment, nativeProfileEnvironment } from './profile-environment';
-import { stateDirectory } from '../../session/store/paths';
+import { nativeAccountEnvironment, nativeProfileEnvironment } from './profile-environment.js';
+import { stateDirectory } from '../../session/store/paths.js';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

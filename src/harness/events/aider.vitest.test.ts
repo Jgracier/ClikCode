@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { aiderFooterUsage, aiderHistoryNotice, aiderHistoryReply, aiderLine, aiderStdoutReply } from './aider';
-import { createStreamState } from './adapters';
+import { aiderFooterUsage, aiderHistoryNotice, aiderHistoryReply, aiderLine, aiderStdoutReply } from './aider.js';
+import { createStreamState } from './adapters.js';
 
 // Real Aider 0.86.2 output for `--message "Reply with only the word ok"`.
 const STDOUT = [

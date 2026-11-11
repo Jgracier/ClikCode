@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { conversationState, SECTION_TITLES, turnActiveAt, turnFacts } from './conversation-state';
+import { conversationState, SECTION_TITLES, turnActiveAt, turnFacts } from './conversation-state.js';
 
 const NOW = Date.parse('2026-09-29T12:00:00');
 const ago = (ms: number) => new Date(NOW - ms).toISOString();

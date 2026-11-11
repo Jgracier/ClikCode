@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { mcpToolsForTurn, prepareMcp, releaseMcp } from './manager';
-import { IMPORT_MARKER_FILE } from './import';
+import { mcpToolsForTurn, prepareMcp, releaseMcp } from './manager.js';
+import { IMPORT_MARKER_FILE } from './import.js';
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/fake-mcp-server.mjs', import.meta.url));
 

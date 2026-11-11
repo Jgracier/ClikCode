@@ -1,9 +1,9 @@
 import { changed } from '../../agent/line-diff.test-support.js';
 import { describe, expect, it } from 'vitest';
-import { activityOutput, fileChangeActivity, parseNativeActivityEventsFromValue } from './activity-events';
-import type { AiLocalHarnessDefinition } from '../definition';
-import { renderActivityLine } from './activity-line';
-import { codex } from './vendor-fixtures.vitest';
+import { activityOutput, fileChangeActivity, parseNativeActivityEventsFromValue } from './activity-events.js';
+import type { AiLocalHarnessDefinition } from '../definition.js';
+import { renderActivityLine } from './activity-line.js';
+import { codex } from './vendor-fixtures.vitest.js';
 
 /** The first activity one stdout line describes. */
 const parseNativeActivityEvent = (harness: AiLocalHarnessDefinition, line: string) => parseNativeActivityEventsFromValue(harness, JSON.parse(line))[0];

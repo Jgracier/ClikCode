@@ -1,8 +1,8 @@
 import { stdin, stdout } from 'node:process';
 import { describe, expect, it, vi } from 'vitest';
-import { KEEP_STDIN_FLOWING, TerminalInputDecoder, forgetSlowLink, askCursorRow, retakeKeyboard, takeTerminalKeys, waitingEnterAction } from './input-decoder';
-import { editWaitingComposer } from './composer-edit';
-import { terminalFacts } from './probe';
+import { KEEP_STDIN_FLOWING, TerminalInputDecoder, forgetSlowLink, askCursorRow, retakeKeyboard, takeTerminalKeys, waitingEnterAction } from './input-decoder.js';
+import { editWaitingComposer } from './composer-edit.js';
+import { terminalFacts } from './probe.js';
 
 describe('terminal input decoding', () => {
   it('buffers fragmented Termius escape sequences and UTF-8 characters', () => {

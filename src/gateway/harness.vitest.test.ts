@@ -2,12 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runAgentSessionTurn } from './harness';
-import { ScriptedModelClient } from '../agent/testing';
-import type { HarnessSession } from '../session/model';
-import { diagnostic } from '../runtime/lifecycle-log';
+import { runAgentSessionTurn } from './harness.js';
+import { ScriptedModelClient } from '../agent/testing.js';
+import type { HarnessSession } from '../session/model.js';
+import { diagnostic } from '../runtime/lifecycle-log.js';
 
-vi.mock('../runtime/lifecycle-log', async (importOriginal) => ({ ...(await importOriginal<typeof import('../runtime/lifecycle-log')>()), diagnostic: vi.fn() }));
+vi.mock('../runtime/lifecycle-log', async (importOriginal) => ({ ...(await importOriginal<typeof import('../runtime/lifecycle-log.js')>()), diagnostic: vi.fn() }));
 
 // A turn saves its conversation under the state directory; without its own,
 // every run appended to ~/.clikcode/sessions/gw-1 and the next run's model
@@ -112,7 +112,7 @@ describe('a headless turn', () => {
       });
     } finally {
       spy.mockRestore();
-      const { releaseMcp } = await import('../agent/mcp/manager');
+      const { releaseMcp } = await import('../agent/mcp/manager.js');
       await releaseMcp();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }

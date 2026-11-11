@@ -2,12 +2,12 @@ import { chmod, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { markProviderBoundaries, type CanonicalOrigin, type CanonicalRecord, type CanonicalToolCall, type CanonicalTurn } from '../../canonical';
-import type { NativeThreadWriteContext } from '../stores';
-import { nativeSessionStore } from '../registry';
+import { markProviderBoundaries, type CanonicalOrigin, type CanonicalRecord, type CanonicalToolCall, type CanonicalTurn } from '../../canonical.js';
+import type { NativeThreadWriteContext } from '../stores.js';
+import { nativeSessionStore } from '../registry.js';
 import {
   kiloThreadWriter, openCodeCallsFor, openCodeExport, openCodeFamilyThreadWriter, openCodeId, openCodeThreadWriter,
-} from './opencode-writer';
+} from './opencode-writer.js';
 
 const CODEX: CanonicalOrigin = { sessionId: 's1', harness: 'codex', route: 'native', provider: 'openai', model: 'gpt-5.6-luna' };
 

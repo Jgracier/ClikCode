@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { conversationLabel } from './conversation-activity';
+import { conversationLabel } from './conversation-activity.js';
 
 const strip = (text: string) => text.replace(/\u001b\[[0-9;]*m/g, '');
 

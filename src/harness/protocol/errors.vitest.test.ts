@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { errorText, userError } from './errors';
+import { errorText, userError } from './errors.js';
 
 describe('a failure, put to a person', () => {
   it('says what could not be done, then why', () => {

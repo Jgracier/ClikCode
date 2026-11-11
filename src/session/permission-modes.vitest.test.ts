@@ -12,7 +12,7 @@ vi.mock('../runtime/lazy-bridge', async () => {
   };
 });
 
-const { sessionPermissionModes } = await import('./options');
+const { sessionPermissionModes } = await import('./options.js');
 
 describe('the approval modes a conversation can use', () => {
   it('are all three on the Gateway route, where the agent is ClikCode\'s own', () => {

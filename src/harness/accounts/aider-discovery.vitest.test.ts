@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { aiderListedModels, openRouterModels, parseEnvFile } from './aider-discovery';
+import { aiderListedModels, openRouterModels, parseEnvFile } from './aider-discovery.js';
 
 describe('aider discovery', () => {
   it('reads the OpenRouter key Aider’s sign-in writes', () => {
