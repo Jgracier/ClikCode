@@ -78,8 +78,6 @@ export function importJournal(key: string, data: JournalData): void {
   journals.set(key, { host: data.host, steps: data.steps.map(s => ({ ...s })), visited: new Set(data.visited), ...(data.spoiled ? { spoiled: data.spoiled } : {}), signedIn: data.signedIn });
 }
 
-export const journalOf = (key: string): Journal | undefined => journals.get(key);
-
 const routeOf = (journal: Journal): LoginRoute => journal.visited.has('accounts.google.com') ? 'google' : journal.visited.has('github.com') ? 'github' : 'email';
 
 export type VerifiedEvent = { kind: 'login' } | { kind: 'capture'; url: string; hint?: string };

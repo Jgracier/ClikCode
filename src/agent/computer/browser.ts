@@ -319,14 +319,9 @@ export async function openNewComputerPage(stateDir: string, tab?: string): Promi
   return page;
 }
 
-/** Tabs whose pending page calls were abandoned (a fill that did not finish) and that are being reloaded. */
-const recovering = sharedState('browser-recovering', () => new Set<Page>());
-export const isRecovering = (page: Page): boolean => recovering.has(page);
-
-/** After abandoning a stuck page call: mark the tab 'recovering' and reload it. A tab that will not reload in time is replaced by a
+/** After abandoning a stuck page call: reload the tab. A tab that will not reload in time is replaced by a
  * fresh one at the same address (the old one is closed) and takes its place as this chat's tab. Returns the page to use. */
 export async function recoverComputerPage(stateDir: string, page: Page, tab?: string): Promise<Page> {
-  recovering.add(page);
   const address = page.url();
   const within = <T>(work: Promise<T>, ms: number): Promise<T> => new Promise<T>((resolve, reject) => { const timer = setTimeout(() => reject(new Error('recover timed out')), ms); work.then(value => { clearTimeout(timer); resolve(value); }, error => { clearTimeout(timer); reject(error); }); });
   try {
@@ -337,7 +332,7 @@ export async function recoverComputerPage(stateDir: string, page: Page, tab?: st
     if (/^https?:/i.test(address)) await within(fresh.goto(address, { timeout: 8_000, waitUntil: 'domcontentloaded' }), 10_000).catch(quiet('agent/computer/browser'));
     void page.close({ runBeforeUnload: false }).catch(quiet('agent/computer/browser'));
     return fresh;
-  } finally { recovering.delete(page); }
+  }
 }
 
 /** This chat's tab, opened in the shared Chrome the first time it is needed. */
