@@ -11,7 +11,7 @@ const ALL_AT_ONCE = /^(?:select all|check all|grant all|all scopes|all permissio
 const DESTRUCTIVE = /\b(?:delete|remove|close|deactivate|terminate|cancel|destroy|erase|wipe|revoke)\b|danger|\bdisable (?:my )?account\b/i;
 
 /** How broad an option reads: 0 means it is not recognised as broad (or is destructive). */
-export function breadth(option: string): number {
+function breadth(option: string): number {
   const o = option.replace(/\s+/g, ' ').trim();
   if (!o || o.length > 80 || DESTRUCTIVE.test(o)) return 0;
   if (/\b(?:full access|all scopes|all permissions|unrestricted|everything|read[ ,/&-]+write[ ,/&-]+admin)\b/i.test(o)) return 100;

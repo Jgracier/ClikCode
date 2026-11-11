@@ -49,7 +49,7 @@ export async function chromeIsHostChild(stateDir: string, chromePid: number): Pr
 }
 
 /** The message for a browser that is running and ours but did not answer in time: retry later, it is not blocked. */
-export const BROWSER_BUSY = 'ClikCode browser is busy and did not answer in time (the machine is stalled). Retry shortly; nothing is blocking it.';
+const BROWSER_BUSY = 'ClikCode browser is busy and did not answer in time (the machine is stalled). Retry shortly; nothing is blocking it.';
 
 async function ownChromeAlive(stateDir: string): Promise<boolean> {
   try {
@@ -234,7 +234,7 @@ const lastSweep = sharedState('browser-last-sweep', () => new Map<string, number
 const ownerLabel = (): string => `worker ${process.pid}${process.env.CLIKCODE_SESSION_ID ? ` (session ${process.env.CLIKCODE_SESSION_ID.slice(0, 8)})` : ''}`;
 
 /** The browser's own id for a page, or undefined when it cannot say. */
-export function targetIdOf(page: Page): Promise<string | undefined> {
+function targetIdOf(page: Page): Promise<string | undefined> {
   return (async () => {
     const session = await page.context().newCDPSession(page);
     try { return ((await session.send('Target.getTargetInfo')) as { targetInfo: { targetId: string } }).targetInfo.targetId; }

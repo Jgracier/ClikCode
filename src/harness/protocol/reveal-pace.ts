@@ -9,7 +9,7 @@
 /** A backlog this small is shown whole: it is what ordinary streaming leaves between two frames. */
 export const REVEAL_IMMEDIATE_CHARS = 60;
 /** The backlog shrinks by 1 - 1/e every this long. */
-export const REVEAL_TIME_CONSTANT_MS = 350;
+const REVEAL_TIME_CONSTANT_MS = 350;
 /** The longest the end of a turn waits for the reveal to catch up. */
 export const REVEAL_MAX_HOLD_MS = 2500;
 /** How often a reveal steps. */

@@ -135,7 +135,7 @@ export function shortKeyText(text: string): boolean {
 }
 
 /** What kind of text the value is, never the text: enough for the agent to notice an id where a secret should be. */
-export function describeShape(value: string): string {
+function describeShape(value: string): string {
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) return 'a UUID';
   if (/^[\w-]+\.[\w-]+\.[\w-]+$/.test(value) && value.startsWith('eyJ')) return 'a JWT';
   if (/^\s*\{/.test(value)) return 'JSON';

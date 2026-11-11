@@ -7,8 +7,8 @@ import { hideKeyLikeText } from './secret-finder.js';
 import { scrubSecrets } from './secret-scrubber.js';
 import { sharedState } from './shared-state.js';
 
-export const MAX_DOCUMENT_BYTES = 50 * 1024 * 1024;
-export const MAX_DOCUMENT_CHARS = 30_000;
+const MAX_DOCUMENT_BYTES = 50 * 1024 * 1024;
+const MAX_DOCUMENT_CHARS = 30_000;
 
 type Cached = { url: string; kind: 'pdf'; pages: string[]; total: number } | { url: string; kind: 'text'; text: string } | { url: string; kind: 'other'; note: string };
 const cache = sharedState('page-document-text', () => new WeakMap<Page, Cached>());
@@ -64,7 +64,7 @@ export function renderPdf(pages: readonly string[], spec: string | undefined, ca
 const TEXTLIKE = /^(?:text\/[\w.+-]+|application\/(?:json|[\w.+-]+\+json|xml|[\w.+-]+\+xml|javascript|x-ndjson|yaml|x-yaml|csv))$/i;
 
 /** The content type of the document in the tab, or undefined for an ordinary web page. */
-export async function documentType(page: Page): Promise<string | undefined> {
+async function documentType(page: Page): Promise<string | undefined> {
   let type: string;
   try { type = String(await page.evaluate(() => (globalThis as unknown as { document: { contentType: string } }).document.contentType)).split(';')[0]!.trim().toLowerCase(); }
   catch { return undefined; }

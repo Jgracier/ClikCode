@@ -1,6 +1,6 @@
 /** The files-and-environment half of browser_use: its action names, arguments and help text. Kept apart from
  * computer-web.ts so that file only wires them in. */
-export const FILES_ENV_ACTIONS = ['downloads', 'dialog', 'auth', 'permissions', 'viewport', 'pdf', 'cookies'] as const;
+const FILES_ENV_ACTIONS = ['downloads', 'dialog', 'auth', 'permissions', 'viewport', 'pdf', 'cookies'] as const;
 export type FilesEnvAction = typeof FILES_ENV_ACTIONS[number];
 
 export type FilesEnvArgs = { http_auth?: boolean | string; clear?: boolean; grant?: string[] | string; deny?: string[] | string; pages?: string;

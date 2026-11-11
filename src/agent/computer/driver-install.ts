@@ -23,7 +23,7 @@ import { pipeline } from 'node:stream/promises';
 import { driverHome, findDriverBinary } from './driver.js';
 import { sleep } from '../../runtime/sleep.js';
 
-export const DRIVER_REPO = 'trycua/cua';
+const DRIVER_REPO = 'trycua/cua';
 const TAG_PREFIX = 'cua-driver-rs-v';
 /** Releases Cua withdrew; never selected. Mirrors the installer's own list. */
 const WITHDRAWN = new Set(['0.28.3']);
@@ -33,7 +33,7 @@ const KEEP_RELEASES = 3;
 const BAKED_SOURCE = `https://raw.githubusercontent.com/${DRIVER_REPO}/main/libs/cua-driver/scripts/_install-rust.sh`;
 const OFFICIAL_INSTALLER = 'https://cua.ai/driver/install.sh';
 
-export type DriverTarget = { platform: 'linux' | 'darwin' | 'win32'; label: string; triple: string; binary: string; ext: 'tar.gz' | 'zip' };
+type DriverTarget = { platform: 'linux' | 'darwin' | 'win32'; label: string; triple: string; binary: string; ext: 'tar.gz' | 'zip' };
 
 /** The release asset family for this machine; undefined where Cua ships none. */
 export function driverTarget(platform: NodeJS.Platform = process.platform, arch: string = process.arch): DriverTarget | undefined {
@@ -49,9 +49,9 @@ export function assetName(version: string, target: DriverTarget): string {
   return target.platform === 'linux' ? `cua-driver-rs-${version}-${target.label}-binary.tar.gz` : `cua-driver-rs-${version}-${target.label}.${target.ext}`;
 }
 
-export const releaseTag = (version: string): string => `${TAG_PREFIX}${version}`;
+const releaseTag = (version: string): string => `${TAG_PREFIX}${version}`;
 export const releaseUrl = (version: string, name: string): string => `https://github.com/${DRIVER_REPO}/releases/download/${releaseTag(version)}/${name}`;
-export const releaseDirName = (version: string, target: DriverTarget): string => `${version}-${target.triple}`;
+const releaseDirName = (version: string, target: DriverTarget): string => `${version}-${target.triple}`;
 
 const VERSION = /^\d+\.\d+\.\d+$/;
 export function compareVersions(a: string, b: string): number {
@@ -59,7 +59,7 @@ export function compareVersions(a: string, b: string): number {
   for (let i = 0; i < 3; i++) if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) - (y[i] ?? 0);
   return 0;
 }
-export const versionOf = (output: string): string | undefined => output.match(/(\d+\.\d+\.\d+)/)?.[1];
+const versionOf = (output: string): string | undefined => output.match(/(\d+\.\d+\.\d+)/)?.[1];
 
 /** "<sha256>  <asset>" lines, bare or inside a Markdown fence (Cua's checksums.txt). */
 export function parseChecksums(text: string): Map<string, string> {
@@ -148,7 +148,7 @@ async function linkTarget(path: string): Promise<string | undefined> {
 }
 
 /** The release directories on disk for this target, newest version first, and which one is current. */
-export async function installedReleases(deps: InstallDeps, target: DriverTarget): Promise<{ versions: Array<{ version: string; dir: string }>; current?: string; previous?: string }> {
+async function installedReleases(deps: InstallDeps, target: DriverTarget): Promise<{ versions: Array<{ version: string; dir: string }>; current?: string; previous?: string }> {
   const releases = join(packagesDir(deps), 'releases');
   const names = await readdir(releases).catch(() => [] as string[]);
   const suffix = `-${target.triple}`;
@@ -328,7 +328,7 @@ export async function rollbackDriver(deps: InstallDeps): Promise<InstallResult> 
   return { action: 'rolled-back', version: wanted.slice(0, wanted.length - target.triple.length - 1), dir: join(packagesDir(deps), 'releases', wanted), notes: [] };
 }
 
-export type DriverStatus = {
+type DriverStatus = {
   supported: boolean; target?: string; binary?: string; version?: string;
   releases: string[]; current?: string; previous?: string;
   latest?: string; latestSource?: string; latestError?: string; upToDate?: boolean;

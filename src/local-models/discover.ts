@@ -136,7 +136,7 @@ export const TENSOR_LAYOUT = new Map<number, [number, number]>([
 ]);
 
 /** A candidate's id: its repo, its revision and its file -- all of which pin the header, so a header read once is known for good. */
-export function candidateId(repo: Pick<HubModel, 'id' | 'sha'>, file: Pick<HubFile, 'rfilename'>): string {
+function candidateId(repo: Pick<HubModel, 'id' | 'sha'>, file: Pick<HubFile, 'rfilename'>): string {
   return `hf:${repo.id}:${repo.sha.slice(0, 12)}:${file.rfilename}`;
 }
 

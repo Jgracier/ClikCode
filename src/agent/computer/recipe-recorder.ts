@@ -80,7 +80,7 @@ export function importJournal(key: string, data: JournalData): void {
 
 const routeOf = (journal: Journal): LoginRoute => journal.visited.has('accounts.google.com') ? 'google' : journal.visited.has('github.com') ? 'github' : 'email';
 
-export type VerifiedEvent = { kind: 'login' } | { kind: 'capture'; url: string; hint?: string };
+type VerifiedEvent = { kind: 'login' } | { kind: 'capture'; url: string; hint?: string };
 
 /** The sequence ended in a verified outcome: save it as the host's recipe, newest per host and route. Returns the saved recipe,
  * or undefined when nothing was saved (no journal, a spoiled one, or a plain login that would replace a richer capture recipe). */

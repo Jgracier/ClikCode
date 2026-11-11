@@ -28,7 +28,7 @@ const LC_BUILD_VERSION = 0x32;
 const PLATFORM_MACOS = 1;
 const HEADER_SIZE = 32;
 
-export interface MachOLayout {
+interface MachOLayout {
   commands: { cmd: number; size: number; offset: number }[];
   ncmds: number;
   sizeofcmds: number;
@@ -122,7 +122,7 @@ export interface CompatDeps {
   stateDir: string;
 }
 
-export interface CompatLaunch {
+interface CompatLaunch {
   /** The `claude` that starts the prepared copy: first on PATH while ClikCode runs. */
   launcher: string;
   /** The folder holding it, for PATH. */
@@ -135,12 +135,12 @@ export interface CompatLaunch {
 const LIBRARY = 'libclikcode-compat-x64.dylib';
 
 /** Where the library is: next to the program in a build (dist/), or in the repository's native folder when run from source. */
-export function compatLibrary(from: string = fileURLToPath(import.meta.url)): string | undefined {
+function compatLibrary(from: string = fileURLToPath(import.meta.url)): string | undefined {
   const here = dirname(from);
   return [join(here, LIBRARY), join(here, '..', '..', '..', 'native', 'macos-compat', LIBRARY)].find(existsSync);
 }
 
-export function findOnPath(name: string, path = process.env.PATH ?? ''): string | undefined {
+function findOnPath(name: string, path = process.env.PATH ?? ''): string | undefined {
   for (const directory of path.split(delimiter)) {
     if (!directory) continue;
     const candidate = join(directory, name);

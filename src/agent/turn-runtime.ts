@@ -33,7 +33,7 @@ import { TASK_TOOL_NAME } from './tools/task.js';
 import { abortable } from './turn-support.js';
 
 /** What the last step reported, carried on every usage report after it. */
-export type LastContext = { contextTokens?: number; contextWindow?: number; servedModel?: string; contextProfile: ReturnType<typeof resolveContextProfile>['name']; stopReason?: string };
+type LastContext = { contextTokens?: number; contextWindow?: number; servedModel?: string; contextProfile: ReturnType<typeof resolveContextProfile>['name']; stopReason?: string };
 
 export interface TurnRuntime {
   readonly input: AgentTurnInput;

@@ -13,7 +13,7 @@ export const PRESSABLE = 'button, [role=button], a, [role=link], input[type=subm
 /** What can be pressed on a vendor's own site: menus and tabs too, but no bare click handlers. */
 export const PRESSABLE_SITE = 'button, [role=button], a, [role=link], [role=menuitem], [role=tab], input[type=submit], input[type=button], summary';
 
-export interface PageControlsOptions {
+interface PageControlsOptions {
   pressable: string;
   /** Source of OPENS_ANOTHER_APP. */
   otherApp: string;

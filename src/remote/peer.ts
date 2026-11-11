@@ -113,7 +113,7 @@ async function readInstallationId(): Promise<string | undefined> {
 }
 
 /** This machine as a peer: read once per process. */
-export function selfAsPeer(): Promise<PeerMachine | undefined> {
+function selfAsPeer(): Promise<PeerMachine | undefined> {
   self ??= (async () => {
     const [{ status }, installationId] = await Promise.all([
       readTailscaleStatus(),
@@ -187,7 +187,7 @@ function wouldAdd(machines: readonly RemoteMachine[], forgotten: readonly Forgot
 
 /** Whether this machine can log in to the peer: a machine it could not
  * reach (a tailnet policy that allows one way only) is not listed at all. */
-export type ReachBack = (target: string) => Promise<boolean>;
+type ReachBack = (target: string) => Promise<boolean>;
 const sshReachBack: ReachBack = async (target) => (await runSsh(target, 'true', { timeoutMs: 20_000 })).code === 0;
 
 /** A `host-peer` arrived (ide/bridge-mux.ts): recorded in machines.json. */

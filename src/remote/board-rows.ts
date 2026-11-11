@@ -13,7 +13,7 @@ import { conversationState, SECTION_TITLES, type ConversationSection } from '../
 import { recencySection } from '../session/conversation-rows.js';
 import type { MachineView } from './connection.js';
 
-export const REMOTE_VALUE_PREFIX = 'remote:';
+const REMOTE_VALUE_PREFIX = 'remote:';
 
 /** A remote row's value: which machine, which chat. */
 export function remoteRowValue(machineId: string, chatId: string): string {

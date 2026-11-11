@@ -16,10 +16,10 @@ import { sleep } from '../../runtime/sleep.js';
 
 export const EMAIL_TOKEN_SECRET = 'email/gmail';
 export const EMAIL_CLIENT_SECRET = 'email/google-client';
-export const GMAIL_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
+const GMAIL_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
 
 export interface GoogleEndpoints { auth: string; token: string; gmail: string }
-export const GOOGLE: GoogleEndpoints = {
+const GOOGLE: GoogleEndpoints = {
   auth: 'https://accounts.google.com/o/oauth2/v2/auth',
   token: 'https://oauth2.googleapis.com/token',
   gmail: 'https://gmail.googleapis.com/gmail/v1/users/me',
@@ -31,7 +31,7 @@ const cached = new Map<string, { token: string; expires: number }>();
 // `cacheKey` below keys it by state directory and address.
 
 /** The OAuth client this install asks consent with: the vault, else the environment. */
-export async function emailClient(stateDir: string): Promise<Client> {
+async function emailClient(stateDir: string): Promise<Client> {
   try {
     const client = JSON.parse(await readNamedSecret(stateDir, EMAIL_CLIENT_SECRET)) as Partial<Client>;
     if (client.clientId && client.clientSecret) return { clientId: client.clientId, clientSecret: client.clientSecret };
@@ -48,7 +48,7 @@ export async function emailClient(stateDir: string): Promise<Client> {
 const norm = (address: string): string => address.trim().toLowerCase();
 const MAILBOX_PREFIX = 'email/gmail/';
 /** The secret one mailbox is kept under: names allow no "@", so the address is spelled safely, and hashed when it would not fit. */
-export function mailboxSecretName(address: string): string {
+function mailboxSecretName(address: string): string {
   const slug = norm(address).replace(/[^a-z0-9._-]/g, '_');
   return `${MAILBOX_PREFIX}${slug.length <= 40 ? slug : createHash('sha256').update(norm(address)).digest('hex').slice(0, 40)}`;
 }
@@ -83,7 +83,7 @@ async function defaultStored(stateDir: string, all: Stored[]): Promise<Stored | 
   return all.find(s => norm(s.email) === mine) ?? all[0];
 }
 
-export interface Mailbox { email: string; connectedAt: string; default: boolean }
+interface Mailbox { email: string; connectedAt: string; default: boolean }
 /** Which mailboxes are connected (never a token). `email` / `connectedAt` are those of the default one. */
 export async function emailStatus(stateDir: string): Promise<{ connected: boolean; email?: string; connectedAt?: string; mailboxes: Mailbox[] }> {
   const all = await allStored(stateDir);
@@ -197,8 +197,8 @@ async function accessToken(stateDir: string, endpoints: GoogleEndpoints, address
   return body.access_token;
 }
 
-export interface FoundEmail { id: string; from: string; subject: string; text: string; links: string[]; /** The same links with their text, for choosing among them. */ anchors?: MailAnchor[]; receivedAt: number; /** The mailbox it was found in. */ mailbox?: string }
-export interface MailAnchor { href: string; text: string; button?: boolean; image?: boolean }
+interface FoundEmail { id: string; from: string; subject: string; text: string; links: string[]; /** The same links with their text, for choosing among them. */ anchors?: MailAnchor[]; receivedAt: number; /** The mailbox it was found in. */ mailbox?: string }
+interface MailAnchor { href: string; text: string; button?: boolean; image?: boolean }
 type Part = { mimeType?: string; body?: { data?: string }; parts?: Part[] };
 const decode = (data?: string): string => (data ? Buffer.from(data, 'base64url').toString('utf8') : '');
 function collect(part: Part | undefined, kind: string, out: string[] = []): string[] {
@@ -227,7 +227,7 @@ export class EmailAmbiguous extends Error {}
 
 /** Newsletters and promotions: never the wanted message, and not counted as "the email that arrived". */
 export const MARKETING = /newsletter|webinar|new features|what'?s new|promo|% off|sale\b|digest|unsubscribe from (?:these|all)|view (?:this )?in (?:your )?browser/i;
-export const isMarketing = (mail: Pick<FoundEmail, 'subject' | 'text'>): boolean => MARKETING.test(mail.subject) || MARKETING.test(mail.text.slice(0, 200));
+const isMarketing = (mail: Pick<FoundEmail, 'subject' | 'text'>): boolean => MARKETING.test(mail.subject) || MARKETING.test(mail.text.slice(0, 200));
 
 /** The start of the body that names the vendor: 400 characters, or 1500 when `widen` (a lone email after the request, sent by an unrelated mail service). */
 const BODY_START = 400;
@@ -301,7 +301,7 @@ export async function waitForEmail(stateDir: string, query: { address?: string; 
 }
 
 /** How long the chosen mailbox is waited on alone before the other connected mailboxes are tried too. */
-export const OWN_MAILBOX_MS = 20_000;
+const OWN_MAILBOX_MS = 20_000;
 
 /**
  * waitForEmail across mailboxes. The mailbox is the one asked for (`address`), else the first of `hints` that is connected, else the

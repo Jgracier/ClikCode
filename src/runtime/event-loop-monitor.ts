@@ -4,8 +4,8 @@
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { lifecycle } from './lifecycle-log.js';
 
-export const BLOCKED_THRESHOLD_MS = 100;
-export const BLOCKED_LOG_GAP_MS = 10_000;
+const BLOCKED_THRESHOLD_MS = 100;
+const BLOCKED_LOG_GAP_MS = 10_000;
 const SAMPLE_MS = 1_000;
 
 /** Decides which stalls are written: over the threshold, and not within the gap of the last one written. The ones skipped are counted

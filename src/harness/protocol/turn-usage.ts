@@ -15,7 +15,7 @@ export type TurnStopReason = 'completed' | 'max-tokens' | 'max-turns' | 'refusal
  * The one type every transport reports through (`onUsage`), the worker sends
  * to its clients and the status line reads. Persisted records (invocations)
  * keep their own older field names. */
-export interface CostBreakdown {
+interface CostBreakdown {
   meteredUsd?: number;
   gpuUsd?: number;
 }

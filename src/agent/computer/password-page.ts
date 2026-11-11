@@ -2,7 +2,7 @@
  * one an account already has (a sign-in). One rule for both, so the answer is the same wherever it is asked, and the reason is named. */
 import type { Page } from 'playwright-core';
 
-export type PasswordPageContext = {
+type PasswordPageContext = {
   url: string;
   /** Visible password boxes on the page. */
   boxes: number;
@@ -19,7 +19,7 @@ export type PasswordPageContext = {
 };
 
 /** The sign-up and sign-in cues of the form (the password box's own form, else the page), read from the page. */
-export type FormSignals = {
+type FormSignals = {
   /** Label, name, id, placeholder and autocomplete of every visible non-password text box, joined with " | ". */
   fieldText: string;
   /** Visible text boxes, selects and password boxes. */
@@ -34,7 +34,7 @@ export type FormSignals = {
   hintText: string;
 };
 
-export type PasswordPageKind = { kind: 'signup' | 'signin'; reason: string };
+type PasswordPageKind = { kind: 'signup' | 'signin'; reason: string };
 
 const STRONG = /\b(?:new|create|set|choose|pick|make)\b[^.]{0,20}\bpassword\b|\bpassword\b[^.]{0,12}\b(?:new|create)\b|\bconfirm(?:ation)?\b[^.]{0,12}\bpassword\b|\bre-?(?:enter|type)\b[^.]{0,12}\bpassword\b|new-password/i;
 const WEAK_TEXT = /\bwelcome(?!\s+back)\b|complete your (?:account|profile|registration)|finish (?:setting up|your (?:account|profile))|you(?:'|’)?ve been invited|accept (?:your )?invit/i;
@@ -52,7 +52,7 @@ const COMPANY_FIELD = /company|empresa|organi[sz]ation|entreprise|societe|untern
 const PASSWORD_RULES = /\d+\s*(?:characters?|caracteres?|zeichen|caratteri|chars?)|\b\d+\s*(?:y|a|-|to|and|e|et|und|bis)\s*\d+\b|at least|minimum|minimo|mindestens|au moins|almeno|pelo menos|one number|uppercase|mayuscula|maiuscol|majuscule|grossbuchstabe|un numero|special character|simbolo/;
 
 /** Sign-up cues of a form other than an email that is filled in. Empty when it shows none. */
-export function signUpCues(form: FormSignals | undefined): string[] {
+function signUpCues(form: FormSignals | undefined): string[] {
   if (!form) return [];
   const fields = plain(form.fieldText).replace(/username|user name|nombre de usuario/g, '');
   const cues: string[] = [];

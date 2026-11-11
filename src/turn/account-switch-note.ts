@@ -10,7 +10,7 @@ import type { HarnessSession, HarnessState } from '../session/model.js';
 import { accountFailureReason, type AccountFailureKind } from './failover.js';
 import { wrapResourceNote } from './resource-note-text.js';
 
-export interface AccountSwitch { from: string; to: string; reason: string }
+interface AccountSwitch { from: string; to: string; reason: string }
 
 export function accountSwitchNoteText(change: AccountSwitch, usage?: string): string {
   const why = change.reason === 'quota-exhausted'

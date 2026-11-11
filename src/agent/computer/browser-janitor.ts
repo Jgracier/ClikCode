@@ -10,7 +10,7 @@ import path from 'node:path';
 import { lifecycle, quiet } from '../../runtime/lifecycle-log.js';
 import { ACTIVE_MS, readTabRecords, sweepTabs, writeTabRecord, type TabRecord } from './tab-registry.js';
 
-export interface RecycleLimits { renderers: number; bytes: number }
+interface RecycleLimits { renderers: number; bytes: number }
 
 const GIB = 2 ** 30;
 
@@ -20,10 +20,10 @@ export function recycleLimits(env: NodeJS.ProcessEnv = process.env): RecycleLimi
   return { renderers: Math.floor(number('CLIKCODE_BROWSER_MAX_RENDERERS', 40)), bytes: number('CLIKCODE_BROWSER_MAX_GB', 6) * GIB };
 }
 
-export interface BrowserLoad { renderers: number; bytes: number }
+interface BrowserLoad { renderers: number; bytes: number }
 
 /** Only tabs used within this long come back after a recycle. */
-export const RESTORE_WITHIN_MS = 10 * 60_000;
+const RESTORE_WITHIN_MS = 10 * 60_000;
 
 /** Why the browser should be restarted now, or undefined. A tab used in the last seconds defers it, unless the browser is
  * over twice a ceiling: a restart mid-call costs that call; a runaway browser costs the machine. */
@@ -96,7 +96,7 @@ function readFileSyncOr(file: string): string | undefined {
 
 export const recycleFile = (stateDir: string): string => path.join(stateDir, 'computer', 'recycle.json');
 
-export interface SavedTab { tab: string; url: string }
+interface SavedTab { tab: string; url: string }
 
 /** The named tabs used within RESTORE_WITHIN_MS that have an address worth reopening. */
 export function tabsToRestore(records: readonly TabRecord[], now: number): SavedTab[] {
@@ -110,7 +110,7 @@ export function tabsToRestore(records: readonly TabRecord[], now: number): Saved
   return saved;
 }
 
-export async function saveRecycle(stateDir: string, tabs: readonly SavedTab[], now: number): Promise<void> {
+async function saveRecycle(stateDir: string, tabs: readonly SavedTab[], now: number): Promise<void> {
   await fs.writeFile(recycleFile(stateDir), JSON.stringify({ at: now, tabs }), { mode: 0o600 });
 }
 
@@ -125,7 +125,7 @@ export async function takeRecycle(stateDir: string, now: number = Date.now()): P
 }
 
 /** What the host needs of Chrome: open a page and say its id. */
-export interface RestoreHost { openPage(url: string): Promise<string | undefined> }
+interface RestoreHost { openPage(url: string): Promise<string | undefined> }
 
 /** Reopen the saved tabs, each as an unclaimed record for the worker that names that label. */
 export async function restoreTabs(stateDir: string, tabs: readonly SavedTab[], host: RestoreHost, now: number = Date.now()): Promise<number> {
@@ -142,7 +142,7 @@ export async function restoreTabs(stateDir: string, tabs: readonly SavedTab[], h
 
 // ── the loop the host runs ───────────────────────────────────────────────────────────────────────────────────
 
-export interface JanitorDeps {
+interface JanitorDeps {
   stateDir: string;
   hostPid: number;
   /** End Chrome so the host exits; the next worker that needs the browser starts a new host. */
@@ -168,7 +168,7 @@ export async function janitorTick(deps: JanitorDeps): Promise<string | undefined
   return reason;
 }
 
-export const JANITOR_INTERVAL_MS = 30_000;
+const JANITOR_INTERVAL_MS = 30_000;
 
 export function startBrowserJanitor(deps: JanitorDeps): () => void {
   let running = false;

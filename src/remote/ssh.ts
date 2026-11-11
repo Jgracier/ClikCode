@@ -13,7 +13,7 @@ import { userInfo } from 'node:os';
 import { remoteShell, targetHost, targetUser, validateSshTarget } from './shell.js';
 import { failureText } from '../harness/protocol/stderr-line.js';
 
-export const SSH_OPTIONS: readonly string[] = [
+const SSH_OPTIONS: readonly string[] = [
   '-o', 'BatchMode=yes',
   '-o', 'ConnectTimeout=10',
   // A machine's first connection trusts its host key and remembers it, as
@@ -27,7 +27,7 @@ export const SSH_OPTIONS: readonly string[] = [
 export interface SshResult { code: number; stdout: string; stderr: string }
 
 /** Why ssh itself failed (exit 255), from what it printed. */
-export type SshFailure = 'auth' | 'unreachable' | 'host-key' | 'other';
+type SshFailure = 'auth' | 'unreachable' | 'host-key' | 'other';
 
 export function sshFailure(result: SshResult): SshFailure | undefined {
   if (result.code !== 255) return undefined;

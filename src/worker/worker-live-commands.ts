@@ -37,7 +37,7 @@ function subAgentStopNote(labels: readonly string[]): string {
 }
 
 /** What a Stop that ended background commands says: each by pid. */
-export function stoppedCommandsNote(commands: readonly { pid: number; label: string }[]): string {
+function stoppedCommandsNote(commands: readonly { pid: number; label: string }[]): string {
   const named = commands.slice(0, 4).map((item) => `${item.pid} "${item.label.replace(/\s+/g, ' ').trim().slice(0, 60)}"`).join(', ') + (commands.length > 4 ? ` and ${commands.length - 4} more` : '');
   return `Stopped ${commands.length} background command${commands.length === 1 ? '' : 's'} and their process groups: ${named}.`;
 }

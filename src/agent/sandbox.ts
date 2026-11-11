@@ -77,7 +77,7 @@ export function sandboxWritableDirs(input: WritableInput): string[] {
 /** What a sandboxed command must never read: ClikCode's own stored sign-ins and secrets. A shell command a model runs can be steered by
  * text it read (a web page, an email, a repo), and with the network open anything it can read it can send. ClikCode's own tools read these
  * outside the sandbox, so hiding them costs a command nothing it should need. */
-export interface HiddenPaths { dirs: string[]; files: string[] }
+interface HiddenPaths { dirs: string[]; files: string[] }
 export function sandboxHiddenPaths(stateDir: string): HiddenPaths {
   return {
     dirs: ['profiles', 'computer', 'mcp-oauth'].map((name) => path.join(stateDir, name)),
@@ -93,7 +93,7 @@ interface Invocation { file: string; args: string[] }
  * `tailscale ssh` then failed inside the sandbox. An empty private directory has no such file to refuse, and
  * the system's own ssh_config still applies; what is lost is only the distribution's drop-ins (on Ubuntu, the
  * systemd `vsock/` and `unix/` host proxies). */
-export const SSH_CONFIG_DROPINS = '/etc/ssh/ssh_config.d';
+const SSH_CONFIG_DROPINS = '/etc/ssh/ssh_config.d';
 
 function maskedDirs(request: WrapRequest): string[] {
   return request.exists?.(SSH_CONFIG_DROPINS) ? [SSH_CONFIG_DROPINS] : [];
@@ -262,7 +262,7 @@ function platformDirs(): string[] {
  * packed-refs lock files in the second), but the shared `config` and `hooks` stay read-only, so a sandboxed
  * command cannot plant a hook or rewrite config that later runs unsandboxed. A plain repo (git dir == common
  * dir, inside the workspace) and a non-repo yield nothing. */
-export function linkedWorktreeGit(cwd: string): { writable: string[]; readOnly: string[] } {
+function linkedWorktreeGit(cwd: string): { writable: string[]; readOnly: string[] } {
   const result = spawnSync('git', ['rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir'], { cwd, encoding: 'utf8', timeout: 5000 });
   if (result.status !== 0) return { writable: [], readOnly: [] };
   const [gitDir, common] = result.stdout.trim().split('\n');

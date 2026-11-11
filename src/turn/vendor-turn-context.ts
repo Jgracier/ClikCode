@@ -15,7 +15,7 @@ import { withResourceNotes } from './resource-notes.js';
 
 /** What this turn has already tried: each recovery runs once per turn (or,
  * for a fresh native thread, once per account). */
-export interface AttemptState {
+interface AttemptState {
   /** Bounded to one attempt: signing in again is a reactive fallback, and
    * retrying more than once would risk a loop if login does not fix it. */
   authRetried: boolean;

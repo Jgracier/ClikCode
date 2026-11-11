@@ -1,6 +1,6 @@
 /** What the phone may send to the live view, checked before any of it reaches the browser. Pure, so it is tested without one. */
 
-export type Point = { id: number; x: number; y: number };
+type Point = { id: number; x: number; y: number };
 
 /** A finger can leave the picture mid-drag (up over the bar, down past the edge) and the drag goes on: positions a good way outside it are real. */
 export const OUTSIDE = 5_000;

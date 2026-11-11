@@ -6,7 +6,7 @@
 import { spawn } from 'node:child_process';
 import { mergeVault, snapshotVault, type VaultSnapshot } from './credential-vault.js';
 
-export interface SyncResult { sent: { added: number; updated: number; same: number }; received: { added: number; updated: number; same: number } }
+interface SyncResult { sent: { added: number; updated: number; same: number }; received: { added: number; updated: number; same: number } }
 
 /** The remote end: merges what arrived, answers with this vault as it was before (so the sender can merge it back). */
 export async function exchangeVault(stateDir: string, incoming: string): Promise<string> {
@@ -16,7 +16,7 @@ export async function exchangeVault(stateDir: string, incoming: string): Promise
 }
 
 /** Moves one message to the other computer and brings back its answer. */
-export type Transport = (payload: string) => Promise<string>;
+type Transport = (payload: string) => Promise<string>;
 
 export async function syncVault(stateDir: string, transport: Transport): Promise<SyncResult> {
   const mine = await snapshotVault(stateDir);

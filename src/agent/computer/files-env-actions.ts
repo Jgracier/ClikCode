@@ -6,7 +6,7 @@ import { denyByDefault, describePermissions, parsePermissions, permissionOrigin,
 import { emulate, printPdf, siteCookies, type DeviceArgs, type DevicePreset } from './page-environment.js';
 import { disableHttpAuth, enableHttpAuth, httpAuthOrigin, httpCredentialsFor } from './http-auth.js';
 
-export type EnvArgs = { label?: string; http_auth?: boolean | string; clear?: boolean; grant?: string[] | string; deny?: string[] | string; url?: string };
+type EnvArgs = { label?: string; http_auth?: boolean | string; clear?: boolean; grant?: string[] | string; deny?: string[] | string; url?: string };
 
 /** Turns on HTTP Basic/Digest sign-in for the origin of `url`, using its saved login. Never returns the credentials. */
 export async function applyHttpAuth(page: Page, url: string, args: EnvArgs, ctx: ToolContext): Promise<string> {

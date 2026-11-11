@@ -13,7 +13,7 @@
 import { createHash, createPrivateKey, createPublicKey, sign, verify, type KeyObject } from 'node:crypto';
 import { parseLocalCatalog, type LocalCatalog } from './catalog-schema.js';
 
-export interface CatalogSignature {
+interface CatalogSignature {
   algorithm: 'ed25519';
   /** Which trusted key signed it: the first 16 hex characters of SHA-256 of the raw public key. */
   keyId: string;
@@ -21,7 +21,7 @@ export interface CatalogSignature {
   value: string;
 }
 
-export interface SignedLocalCatalog {
+interface SignedLocalCatalog {
   catalog: LocalCatalog;
   signature: CatalogSignature;
 }
@@ -55,7 +55,7 @@ function rawPublicKey(key: KeyObject): Buffer {
   return (key.export({ type: 'spki', format: 'der' }) as Buffer).subarray(SPKI_PREFIX.length);
 }
 
-export function catalogKeyId(publicKey: string): string {
+function catalogKeyId(publicKey: string): string {
   return createHash('sha256').update(Buffer.from(publicKey, 'base64')).digest('hex').slice(0, 16);
 }
 

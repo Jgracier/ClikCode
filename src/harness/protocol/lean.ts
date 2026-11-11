@@ -15,7 +15,7 @@ const COST_INLINE_MIN_USD = 0.05;
 const CALL_DURATION_MIN_MS = 5_000;
 /** The usage figure sits in the footer when this much or less is left. */
 /** Under a failed call: the last this many lines of its output. */
-export const FAILED_OUTPUT_LINES = 3;
+const FAILED_OUTPUT_LINES = 3;
 /** One `Edited path +N −M` line per file, this many files, then `+K more files`. */
 export const EDIT_FILES_SHOWN = 4;
 

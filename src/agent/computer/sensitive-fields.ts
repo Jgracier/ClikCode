@@ -54,7 +54,7 @@ export async function keyFieldValues(page: Page): Promise<string[]> {
 }
 
 
-export type PageSecret = { value: string; label: string };
+type PageSecret = { value: string; label: string };
 
 /** Runs in each frame: every credential the page shows as text. A value in a table cell, definition list or label/value pair
  * whose column header, row label or term names a key, secret, token, password or API; an opaque high-entropy token in a code block,

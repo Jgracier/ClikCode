@@ -10,7 +10,7 @@ const GOOGLE_HOST = /(^|\.)accounts\.google\.com$/i;
 /** A click that may open a sign-in popup a moment later (the button fetches before it opens the window). */
 export const SIGN_IN_CLICK = /google|sign ?in|log ?in|continue with|connect with/i;
 
-export interface PopupOutcome {
+interface PopupOutcome {
   /** The page the chat is on after the popup: the opener once the popup closed, else the popup itself. */
   page: Page;
   /** One line for the agent, or undefined when the popup was not a Google sign-in. */

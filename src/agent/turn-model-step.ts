@@ -26,7 +26,7 @@ type ModelStepOutcome =
 
 /** Calls shown while they were being written, by id, with the label
  * last shown: one that never runs is settled, not left spinning. */
-export function settleUnrun(rt: TurnRuntime, ran: ReadonlySet<string>, why: string): void {
+function settleUnrun(rt: TurnRuntime, ran: ReadonlySet<string>, why: string): void {
   for (const [id, label] of rt.shownCalls) {
     if (!ran.has(id)) rt.input.onActivity?.({ kind: 'tool-error', label, id, output: [why] });
   }
@@ -297,7 +297,7 @@ export async function recordStep(
 
 /** Calls run in one step. A model that sent 139 reads in one reply (measured) put about 180K tokens of results into a 131K window and
  * then answered without them; twenty-four is more than any real step needs, and the rest are asked for again. */
-export const MAX_CALLS_PER_STEP = 24;
+const MAX_CALLS_PER_STEP = 24;
 
 function withCutOffNotes(toolCalls: readonly ModelToolCall[], cutOff: boolean) {
   return withUniqueIds(toolCalls).map((call, index) => index >= MAX_CALLS_PER_STEP

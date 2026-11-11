@@ -38,7 +38,7 @@ import { allLocalHarnesses, localHarnessCapabilityManifest } from '../../runtime
 
 /** One vendor file, as the catalog records it (managers.mcp.serverFiles),
  * with the vendor it belongs to. */
-export type VendorSource = AiHarnessMcpServerFile & { vendor: string; command: string };
+type VendorSource = AiHarnessMcpServerFile & { vendor: string; command: string };
 
 /** Every vendor's MCP files, in precedence order: on a name conflict the
  * earlier source wins, and the catalog lists Claude Code first. Only Claude's

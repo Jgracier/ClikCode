@@ -223,7 +223,7 @@ export function codexErrorKind(error: unknown): { errorKind: CodexErrorKind; sta
 
 /** The adapter for a Codex sub-agent thread's final `turn/completed`: a failed turn is the agent cut
  * off, and its error is the evidence -- `codexErrorInfo` and the HTTP status, read by codexErrorKind. */
-export function codexAgentEnd(agent: { id: string; label: string; prompt?: string }, turn: JsonObject): EndedWork {
+function codexAgentEnd(agent: { id: string; label: string; prompt?: string }, turn: JsonObject): EndedWork {
   const work: RunningWork = { id: agent.id, kind: 'agent', label: agent.label, ...(agent.prompt ? { prompt: agent.prompt } : {}) };
   if (turn.status !== 'failed' && turn.status !== 'interrupted') return { ...work, outcome: 'finished', tail: '' };
   const error = asRecord(turn.error);

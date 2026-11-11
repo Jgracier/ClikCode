@@ -9,7 +9,7 @@ import type { Download, Page } from 'playwright-core';
 import { sharedState } from './shared-state.js';
 import { sleep } from '../../runtime/sleep.js';
 
-export type SavedDownload = { name: string; path: string; size: number };
+type SavedDownload = { name: string; path: string; size: number };
 
 type Tab = { stateDir: string; chat: string; inflight: Set<Promise<void>>; fresh: SavedDownload[]; failed: string[] };
 const tabs = sharedState('page-downloads', () => new WeakMap<Page, Tab>());
@@ -34,7 +34,7 @@ export function safeFileName(suggested: string): string {
 }
 
 const chatFolder = (chat: string): string => chat.replace(/[^A-Za-z0-9._-]/g, '_').replace(/^\.+/, '_').slice(0, 80) || 'chat';
-export function downloadsRoot(stateDir: string): string { return path.join(stateDir, 'computer', 'downloads'); }
+function downloadsRoot(stateDir: string): string { return path.join(stateDir, 'computer', 'downloads'); }
 export function downloadsDir(stateDir: string, chat: string | undefined): string { return path.join(downloadsRoot(stateDir), chatFolder(chat || 'chat')); }
 
 export async function freeName(dir: string, name: string): Promise<string> {
@@ -86,7 +86,7 @@ export function sizeText(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
-export const describeDownload = (file: SavedDownload): string => `${file.name} (${sizeText(file.size)}) at ${file.path}`;
+const describeDownload = (file: SavedDownload): string => `${file.name} (${sizeText(file.size)}) at ${file.path}`;
 
 /** Waits for downloads the page has started, and says which files arrived since the last report. Empty when none. */
 export async function downloadNotes(page: Page, waitMs = 30_000, expectStart = false): Promise<string[]> {

@@ -9,7 +9,7 @@ import type { LoginField } from './login-fields.js';
 import { registerSecret } from './secret-scrubber.js';
 import { sharedState } from './shared-state.js';
 
-export type HttpCredentials = { username: string; password: string };
+type HttpCredentials = { username: string; password: string };
 type Active = { origin: string; session: CDPSession; attempts: Map<string, number> };
 const active = sharedState('page-http-auth', () => new WeakMap<Page, Active>());
 

@@ -14,7 +14,7 @@ export const BROWSER_HOST_UNIT = 'clikcode-browser-host';
 const SIZE = /^(?:\d+(?:\.\d+)?[KMGT]?|infinity)$/i;
 const setting = (value: string | undefined, fallback: string): string => (value && SIZE.test(value.trim()) ? value.trim() : fallback);
 
-export interface BrowserHostLimits { memoryHigh: string; memoryMax: string; tasksMax: string; cpuQuota: string }
+interface BrowserHostLimits { memoryHigh: string; memoryMax: string; tasksMax: string; cpuQuota: string }
 
 /** 8 GB soft, 10 GB hard, 16384 tasks (threads count), 4 cores. CLIKCODE_BROWSER_MEMORY_HIGH / _MEMORY_MAX / _TASKS_MAX / _CPU_PERCENT change them. */
 export function browserHostLimits(env: NodeJS.ProcessEnv = process.env): BrowserHostLimits {
@@ -27,7 +27,7 @@ export function browserHostLimits(env: NodeJS.ProcessEnv = process.env): Browser
   };
 }
 
-export interface HostLaunchContext {
+interface HostLaunchContext {
   platform: NodeJS.Platform;
   env: NodeJS.ProcessEnv;
   /** /proc/self/cgroup of the process that starts the host. */
@@ -37,7 +37,7 @@ export interface HostLaunchContext {
   busExists: (path: string) => boolean;
 }
 
-export interface HostLaunch { argv: string[]; env: NodeJS.ProcessEnv; /** systemd-run exits as soon as the unit is started (a service), not when the host ends (a scope). */ detachesAtOnce: boolean }
+interface HostLaunch { argv: string[]; env: NodeJS.ProcessEnv; /** systemd-run exits as soon as the unit is started (a service), not when the host ends (a scope). */ detachesAtOnce: boolean }
 
 /** The command that starts `hostArgv` in its own unit, or undefined where it should start plainly. */
 export function browserHostLaunch(hostArgv: readonly string[], context: HostLaunchContext, limits: BrowserHostLimits = browserHostLimits(context.env)): HostLaunch | undefined {

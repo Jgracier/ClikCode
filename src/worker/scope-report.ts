@@ -10,16 +10,16 @@ import { cgroupFacts, isKept, killCgroup, realReaders, type CgroupFacts, type Cg
 import { COMMAND_GROUP } from './command-groups.js';
 import { sleep } from '../runtime/sleep.js';
 
-export type ScopeKind = 'worker' | 'browser-host' | 'other';
+type ScopeKind = 'worker' | 'browser-host' | 'other';
 
-export interface CommandRow {
+interface CommandRow {
   group: string;
   dir: string;
   facts: CgroupFacts;
   cpuPercent?: number;
 }
 
-export interface ScopeRow {
+interface ScopeRow {
   unit: string;
   dir: string;
   kind: ScopeKind;
@@ -43,15 +43,15 @@ export function parseScopeName(unit: string): { kind: ScopeKind; sessionId?: str
 }
 
 /** Every pid in `dir` and below it. */
-export function treePids(dir: string, read: CgroupReaders, list: (dir: string) => string[] = listDirectories): number[] {
+function treePids(dir: string, read: CgroupReaders, list: (dir: string) => string[] = listDirectories): number[] {
   return [...read.pids(dir), ...list(dir).flatMap((child) => treePids(join(dir, child), read, list))];
 }
 
-export function listDirectories(dir: string): string[] {
+function listDirectories(dir: string): string[] {
   try { return readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name); } catch { return []; }
 }
 
-export interface ScanOptions {
+interface ScanOptions {
   now?: number;
   read?: CgroupReaders;
   list?: (dir: string) => string[];
@@ -112,7 +112,7 @@ export async function scanSlice(sliceDir: string, options: ScanOptions = {}): Pr
 }
 
 /** Hours for a long age, minutes for a short one. */
-export const hours = (ms: number): string => (ms >= 3_600_000 ? `${(ms / 3_600_000).toFixed(ms >= 36_000_000 ? 0 : 1)} h` : `${Math.round(ms / 60_000)} min`);
+const hours = (ms: number): string => (ms >= 3_600_000 ? `${(ms / 3_600_000).toFixed(ms >= 36_000_000 ? 0 : 1)} h` : `${Math.round(ms / 60_000)} min`);
 const gb = (bytes: number | undefined): string => (bytes === undefined ? '-' : bytes >= 2 ** 30 ? `${(bytes / 2 ** 30).toFixed(1)}G` : `${Math.round(bytes / 2 ** 20)}M`);
 const cpu = (value: number | undefined): string => (value === undefined ? '-' : `${Math.round(value)}%`);
 

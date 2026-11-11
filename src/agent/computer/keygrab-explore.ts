@@ -5,9 +5,9 @@
  * billing). It only drives the small `ExploreDeps` surface, so it is tested with fake pages. */
 import type { KeyControl, KeyView } from './keygrab.js';
 
-export const KEY_WORDS = /\b(?:api|developers?|keys?|tokens?|integrations?|access|credentials?)\b/i;
+const KEY_WORDS = /\b(?:api|developers?|keys?|tokens?|integrations?|access|credentials?)\b/i;
 /** Never pressed, whatever else the item says. */
-export const DESTRUCTIVE = /\b(?:delete|remove|cancel|sign ?out|log ?out|logout|billing|invoices?|upgrade|downgrade|subscriptions?|plans?|payments?|pricing|deactivate|close (?:my )?account|disconnect|unsubscribe|purchase|buy|checkout|revoke|reset|regenerat\w*|rotate|roll|deauthori[sz]e|leave)\b/i;
+const DESTRUCTIVE = /\b(?:delete|remove|cancel|sign ?out|log ?out|logout|billing|invoices?|upgrade|downgrade|subscriptions?|plans?|payments?|pricing|deactivate|close (?:my )?account|disconnect|unsubscribe|purchase|buy|checkout|revoke|reset|regenerat\w*|rotate|roll|deauthori[sz]e|leave)\b/i;
 /** Places a key page tends to hide behind. */
 const SETTINGS_WORDS = /\b(?:settings|account|profile|organi[sz]ations?|workspaces?|team|admin|preferences|security|my account|manage|console|dashboard|projects?)\b/i;
 /** The button that opens an avatar, account, settings, organisation or workspace menu. */
@@ -15,7 +15,7 @@ const OPENER_WORDS = /\b(?:account|profile|avatar|user(?: menu)?|my account|sett
 const SKIP_ONBOARDING = /^(?:skip(?: for now| this step| tour)?|maybe later|not now|no,? thanks|remind me later)$/i;
 const SEARCH_FIELD = /search|find/i;
 
-export interface ExploreDeps {
+interface ExploreDeps {
   /** The page as it is now (a wall on it ends the run by throwing). */
   look(): Promise<KeyView>;
   click(name: string): Promise<boolean>;
@@ -28,7 +28,7 @@ export interface ExploreDeps {
   sleep(ms: number): Promise<void>;
   say?(line: string): void;
 }
-export interface ExploreResult { found?: KeyView; visited: string[]; menus: string[]; tried: string[]; last: KeyView; needsSignIn?: boolean }
+interface ExploreResult { found?: KeyView; visited: string[]; menus: string[]; tried: string[]; last: KeyView; needsSignIn?: boolean }
 
 interface Candidate { name: string; href?: string; from: string; via?: string; rank: number }
 

@@ -136,7 +136,7 @@ tok.save_pretrained(merged)
 print(f"[ft] saved {merged}", flush=True)
 `;
 
-export interface LocalFineTuneInput {
+interface LocalFineTuneInput {
   /** The training data: JSONL (chat `messages`, `prompt`/`completion`, or `text`) or CSV. */
   dataset: string;
   /** The base model's Hugging Face repo (safetensors), e.g. Qwen/Qwen2.5-0.5B-Instruct. */
@@ -148,7 +148,7 @@ export interface LocalFineTuneInput {
   license?: RegisterTunedInput['license'];
 }
 
-export interface LocalFineTuneDeps {
+interface LocalFineTuneDeps {
   /** Runs `docker <args>`, calling `onLine` for each output line; resolves its exit code. */
   docker?: (args: string[], onLine: (line: string) => void) => Promise<number>;
   register?: (input: RegisterTunedInput) => Promise<CatalogModel>;

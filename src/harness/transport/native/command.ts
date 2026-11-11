@@ -7,7 +7,7 @@ import { ensureNativeHarness } from './inspect.js';
 import { failureText } from '../../protocol/stderr-line.js';
 import { notInstalledMessage, spawnFailure } from '../../../runtime/machine-folder.js';
 
-export function run(command: string, args: readonly string[], envOverrides: Readonly<Record<string, string>> = {}): Promise<void> {
+function run(command: string, args: readonly string[], envOverrides: Readonly<Record<string, string>> = {}): Promise<void> {
   return new Promise((resolve, reject) => {
     // stdio must be fully 'inherit', not partially piped: confirmed live that
     // Antigravity's login (and plausibly others) checks that BOTH stdin and

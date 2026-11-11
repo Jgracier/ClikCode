@@ -36,7 +36,7 @@ export async function readPasswordPolicy(page: Page): Promise<PasswordPolicy> {
 }
 
 /** An error the page shows next to a password box about its length, characters or symbols; '' when there is none. */
-export async function readPasswordRejection(page: Page): Promise<string> {
+async function readPasswordRejection(page: Page): Promise<string> {
   try {
     return await page.locator(PASSWORD_BOX).evaluateAll((boxes) => {
       type El = { getAttribute(name: string): string | null; parentElement: El | null; closest(selector: string): El | null; querySelectorAll(selector: string): ArrayLike<El>; innerText?: string; textContent: string | null;
@@ -65,7 +65,7 @@ export async function readPasswordRejection(page: Page): Promise<string> {
 }
 
 /** Types a password into every visible password box, as keystrokes (the page checks each one). */
-export async function typePassword(page: Page, password: string): Promise<number> {
+async function typePassword(page: Page, password: string): Promise<number> {
   const boxes = page.locator(PASSWORD_BOX);
   const count = await boxes.count();
   for (let index = 0; index < count; index++) {
@@ -84,7 +84,7 @@ export function rememberGenerated(page: Page, password: string, policy: Password
   generated.set(page, { password, policy, attempts: before?.attempts ?? 0, past: new Set([...(before?.past ?? []), ...(before ? [before.password] : [])]) });
 }
 
-export type RetryOptions = {
+type RetryOptions = {
   stateDir: string; page: Page; username: string | undefined;
   /** Press the control again (the Create account button) after a new password is typed. */
   resubmit?: () => Promise<unknown>;

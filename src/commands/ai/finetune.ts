@@ -13,7 +13,7 @@ import { quiet } from '../../runtime/lifecycle-log.js';
 import { CLIKCODE_USER_AGENT } from '../../version.js';
 import { sleep as sleepFor } from '../../runtime/sleep.js';
 
-export interface FineTuneOptions {
+interface FineTuneOptions {
   /** The base model: a Hugging Face repo id, e.g. Qwen/Qwen2.5-0.5B-Instruct. */
   base?: string;
   hardware?: string;
@@ -25,7 +25,7 @@ export interface FineTuneOptions {
   wait?: boolean;
 }
 
-export interface FineTuneDeps {
+interface FineTuneDeps {
   fetchImpl?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
   /** Where progress lines go while the job runs (stderr: stdout is the result). */

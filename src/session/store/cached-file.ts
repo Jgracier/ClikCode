@@ -15,7 +15,7 @@ export function fileIdentity(info: { ino: number; size: number; mtimeMs: number;
   return `${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`;
 }
 
-export interface CachedFile<T> {
+interface CachedFile<T> {
   /** The parsed file, or undefined when it does not exist. `parse` may throw. */
   load(): Promise<T | undefined>;
   /** Records what this process just wrote, so the next load need not read it. */

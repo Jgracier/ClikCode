@@ -17,7 +17,7 @@ export const BROWSER_CHANNELS = ['chrome', 'msedge'] as const;
 export class NoBrowserError extends Error {}
 
 const NOT_INSTALLED = /executable doesn't exist|is not found at|distribution .* is not found/i;
-export const isNotInstalled = (error: unknown): boolean => NOT_INSTALLED.test(error instanceof Error ? error.message : String(error));
+const isNotInstalled = (error: unknown): boolean => NOT_INSTALLED.test(error instanceof Error ? error.message : String(error));
 
 export async function launchFirst<T>(launch: (channel: string) => Promise<T>, channels: readonly string[] = BROWSER_CHANNELS): Promise<T> {
   let first: unknown;
@@ -50,7 +50,7 @@ export function shouldRunHeadless(options: { env?: NodeJS.ProcessEnv; platform?:
 
 // ── what the detached host is doing ─────────────────────────────────────────
 
-export type HostStatus = { pid: number; state: 'starting' | 'installing' | 'running' | 'failed'; text?: string };
+type HostStatus = { pid: number; state: 'starting' | 'installing' | 'running' | 'failed'; text?: string };
 export const installMarkerFile = (stateDir: string): string => path.join(stateDir, 'computer', 'chromium-install.json');
 export const hostStatusFile = (stateDir: string): string => path.join(stateDir, 'computer', 'host-status.json');
 
@@ -77,7 +77,7 @@ export async function liveHostStatus(stateDir: string): Promise<HostStatus | und
 // ── fetching Chromium ───────────────────────────────────────────────────────
 
 /** Where Playwright's command line lives (its `exports` do not list it, but package.json is). */
-export function playwrightCli(): string {
+function playwrightCli(): string {
   return path.join(path.dirname(createRequire(import.meta.url).resolve('playwright-core/package.json')), 'cli.js');
 }
 

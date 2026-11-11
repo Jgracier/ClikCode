@@ -149,7 +149,7 @@ const PIN_SHARE = 0.25;
  *
  * Undefined when the latest request and what follows it do not fit the window either: the caller's own fit then decides.
  */
-export function stableTail(
+function stableTail(
   input: { system: string; items: readonly ConversationItem[]; tools: readonly ToolSpec[]; scale: number; maxItems: number },
   windowBudget: number, readBudget: number, options: { pinRequests?: boolean } = {},
 ): ContextView | undefined {

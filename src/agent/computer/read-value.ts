@@ -9,7 +9,7 @@ import { keyShaped } from './secret-finder.js';
 
 const SECRET_LABEL = /key|secret|token|password|passcode|credential|private/i;
 /** A label for the id of a thing ("API key id" is still refused: it names a key). */
-export type ValueJudgement = { ok: true; hidden: boolean } | { ok: false; reason: string };
+type ValueJudgement = { ok: true; hidden: boolean } | { ok: false; reason: string };
 
 const entropy = (text: string): number => {
   const counts = new Map<string, number>();
@@ -64,7 +64,7 @@ export async function labelledCandidates(page: Page, label: string): Promise<str
   }, label);
 }
 
-export type ReadValueResult = { kind: 'value'; value: string } | { kind: 'hidden'; value: string; reason?: undefined } | { kind: 'refused'; reason: string };
+type ReadValueResult = { kind: 'value'; value: string } | { kind: 'hidden'; value: string; reason?: undefined } | { kind: 'refused'; reason: string };
 
 /** The first candidate that passes; if there are candidates and none passes, the reason of the first. */
 export function chooseValue(label: string, candidates: readonly string[]): ReadValueResult & { alternatives?: number } {

@@ -55,7 +55,7 @@ export async function updateRemoteMachine(machine: RemoteMachine, reporter: Inst
   return outcome;
 }
 
-export type AutoUpdateDecision =
+type AutoUpdateDecision =
   | { update: true; commit: string }
   | { update: false; reason: 'current' | 'ask' | 'no-commit' | 'attempted' };
 

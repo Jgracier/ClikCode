@@ -17,7 +17,7 @@ export type GroupItem = { id: string; event?: HarnessActivityEvent; thought?: Gr
 /** Output lines an expanded call shows. */
 const DETAIL_OUTPUT_LINES = 20;
 /** Output lines an expanded call that failed shows: all that was kept. */
-export const FAILED_OUTPUT_LINES = 60;
+const FAILED_OUTPUT_LINES = 60;
 /** Lines of a sub-agent's answer an expansion shows. */
 export const AGENT_RESULT_LINES = 20;
 /** Diff lines an expanded edit shows before `+N more lines`. */

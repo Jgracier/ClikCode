@@ -22,7 +22,7 @@ function realStateDirectory(): string | undefined {
  * reaches the real ~/.clikcode once erased every saved conversation and
  * account. A test process (vitest sets VITEST) never gets that directory: it
  * is refused here, by every reader and writer, however the home was lost. */
-export function assertNotRealStateUnderTest(dir: string): void {
+function assertNotRealStateUnderTest(dir: string): void {
   if (!process.env.VITEST) return;
   const real = realStateDirectory();
   if (real && resolve(dir) === real) {

@@ -32,7 +32,7 @@ import { readMachines, updateMachine, type RemoteMachine } from './machines.js';
 import { startBridge, type PeerMachine } from './peer.js';
 import { failureText } from '../harness/protocol/stderr-line.js';
 
-export type MachineState = 'connecting' | 'connected' | 'offline';
+type MachineState = 'connecting' | 'connected' | 'offline';
 
 export interface MachineView {
   machine: RemoteMachine;
@@ -76,7 +76,7 @@ function networkSignature(): string {
 }
 const CACHE_WRITE_MS = 5_000;
 
-export interface LinkOptions {
+interface LinkOptions {
   /** Starts the remote bridge; ssh by default. */
   spawn?: (target: string, script: string) => ChildProcess;
   localCommit?: string;

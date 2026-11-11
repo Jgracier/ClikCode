@@ -129,7 +129,7 @@ function splitSession(session: HarnessSession): { meta: SessionMeta; transcript:
 // Baseline
 // ---------------------------------------------------------------------------
 
-export interface BaselineSession {
+interface BaselineSession {
   meta: SessionMeta;
   transcript: SessionTranscript;
   /** The working array `transcript.messages` was copied from. */

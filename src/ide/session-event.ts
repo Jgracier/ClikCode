@@ -8,7 +8,7 @@ import type { IdeEvent } from './protocol.js';
 
 /** What `choose provider` calls the provider a session runs on, and its
  * name as the provider list shows it (IdeProvider `id` and `name`). */
-export function sessionProvider(session: HarnessSession): { id?: string; name?: string } {
+function sessionProvider(session: HarnessSession): { id?: string; name?: string } {
   if (session.route === 'gateway') return { id: 'gateway', name: GATEWAY_LABEL };
   // A model on this computer is hosted AI under the Gateway: the same provider (hosted-models/).
   if (session.route === 'clikcode-local') return { id: 'gateway', name: GATEWAY_LABEL };

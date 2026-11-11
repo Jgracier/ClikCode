@@ -2,8 +2,8 @@
  * It is a Shell extension, so it loads only at the next log-in, and Cua disabled it on GNOME 50 where it crashed the
  * Shell. This only decides whether running its bundled installer is sensible; nothing here runs it by itself. */
 
-export const HELPER_MIN_GNOME = 45;
-export const HELPER_MAX_GNOME = 49;
+const HELPER_MIN_GNOME = 45;
+const HELPER_MAX_GNOME = 49;
 
 /** The major version in `gnome-shell --version` output ("GNOME Shell 49.2"). */
 export function gnomeMajor(versionOutput: string): number | undefined {
@@ -11,7 +11,7 @@ export function gnomeMajor(versionOutput: string): number | undefined {
   return major === undefined ? undefined : Number(major);
 }
 
-export type HelperVerdict = { ok: true; major: number } | { ok: false; reason: string };
+type HelperVerdict = { ok: true; major: number } | { ok: false; reason: string };
 
 export function waylandHelperVerdict(input: { platform: NodeJS.Platform; desktop?: string; sessionType?: string; gnomeShellOutput?: string }): HelperVerdict {
   if (input.platform !== 'linux') return { ok: false, reason: 'The Wayland helper is a GNOME Shell extension; it applies to Linux only.' };

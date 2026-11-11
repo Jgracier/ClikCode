@@ -84,7 +84,7 @@ export const macosScreenRecordingNotice = 'cua-driver does not have the macOS Sc
 export const macosPermissionsPendingNotice = 'cua-driver has not been given its macOS permissions yet (Accessibility and Screen Recording), so it sees no windows. Run `cua-driver permissions grant` and turn on CuaDriver in the System Settings pages it opens, then try again.';
 export const noWindowFrameNotice = 'x and y in a window need a screenshot of it first: observe that window (pid and window_id) again and take x, y from its picture. When this model cannot see images, act on an element_token instead (click, double_click, right_click and type take one); drag has only a pixel form.';
 export const windowsElevatedNotice = 'Windows refused the input: the target window most likely runs as administrator (elevated), and a program that is not elevated, as ClikCode is, cannot drive it. Ask the user to close it and open it again without "Run as administrator", or to start ClikCode elevated.';
-export const windowsSessionNotice = 'cua-driver is running in Windows session 0 (a service or SSH session) where there is no desktop to read. Start it from the user\'s signed-in desktop session (`schtasks /Run /TN cua-driver-serve`), then try again.';
+const windowsSessionNotice = 'cua-driver is running in Windows session 0 (a service or SSH session) where there is no desktop to read. Start it from the user\'s signed-in desktop session (`schtasks /Run /TN cua-driver-serve`), then try again.';
 
 /** An error Cua gave in its own words, replaced by what to do about it. The first lines of Cua's text stay, because
  * these patterns come from its documentation and a wrong guess must not hide the real cause. */

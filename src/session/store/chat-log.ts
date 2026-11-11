@@ -59,7 +59,7 @@ export interface LogRecord {
   legacy?: LegacyBase;
 }
 
-export const LOG_VERSION = 2;
+const LOG_VERSION = 2;
 
 /** One version of a log file, parsed. Never changed: a newer version is a new object. */
 export interface ChatLog {
@@ -240,7 +240,7 @@ export async function appendChatLog(id: string, log: ChatLog, records: readonly 
   STATS.appends += 1;
 }
 
-export interface LogContent {
+interface LogContent {
   messages?: readonly TranscriptMessage[];
   pending?: PendingTurn;
   legacy?: LegacyBase;

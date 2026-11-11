@@ -32,7 +32,7 @@ const CLAUDE_ORIGIN = 'claude';
 
 interface ClaudeToolUse { name: string; input: Record<string, unknown> }
 
-export interface ClaudeThreadOptions {
+interface ClaudeThreadOptions {
   /** The new session's id: the file's name and every record's sessionId. */
   sessionId: string;
   /** The folder the thread resumes in (absolute). */

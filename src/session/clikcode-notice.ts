@@ -10,7 +10,7 @@
  * below begin with a bracketed tag no person types. */
 
 /** What every notice ClikCode writes itself begins with. */
-export const CLIKCODE_NOTICE_TAG = '[ClikCode] ';
+const CLIKCODE_NOTICE_TAG = '[ClikCode] ';
 /** formatShellNotifications (agent/session-state.ts): `[background shell <id> exited ...] <command>`, a monitor's
  * `... output]`, `[background agent <id> finished]` and a `[scheduled wakeup <id>]`; and work a vendor process ran on
  * after the conversation left it (worker/handed-off-work.ts): `[background command <id> finished]`, `[background agent

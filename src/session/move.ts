@@ -48,7 +48,7 @@ const MOVED_ALREADY = (session: HarnessSession): string => `This chat moved to $
 /** How the exporting side knows whether a turn runs: a client that follows
  * the chat's worker already says (the editor's bridge); else its worker is
  * asked -- only when one is running at all. */
-export interface ExportOptions { turnRunning?: () => Promise<boolean> }
+interface ExportOptions { turnRunning?: () => Promise<boolean> }
 
 /** A chat's messages as it exports them: every one keeps whose it was, as
  * when a provider takes a conversation over (leaveProvider). What a target
@@ -67,7 +67,7 @@ function canonicalJson(value: unknown): string {
 }
 
 /** A hash of messages, as `chat-have` and a delta's `base` name them. */
-export function chatMessagesHash(messages: readonly unknown[]): string {
+function chatMessagesHash(messages: readonly unknown[]): string {
   const hash = createHash('sha256');
   for (const message of messages) hash.update(canonicalJson(message)).update('\n');
   return hash.digest('hex');
@@ -202,7 +202,7 @@ export interface MoveFacts {
   home(): string;
 }
 
-export function machineFacts(config: Conf | undefined): MoveFacts {
+function machineFacts(config: Conf | undefined): MoveFacts {
   return {
     installed: async (harness) => (await import('../harness/transport/native/inspect.js')).inspectNativeHarnessForPicker(harness).then((found) => found.installed, () => false),
     gatewaySignedIn: () => Boolean(config && getApiKeyForUrl(config, getApiUrl(config))),
@@ -312,7 +312,7 @@ export async function planImport(state: HarnessState, chat: ChatExport, facts: M
 }
 
 /** The note the agent is given, unseen, with the chat's first turn here. */
-export function moveNoteText(names: MoveNames, from: string | undefined, to: string): string {
+function moveNoteText(names: MoveNames, from: string | undefined, to: string): string {
   return `This conversation moved from ${names.source}${from ? ` (folder ${from})` : ''} to ${names.target} (folder ${to}). `
     + 'Files, processes and anything started before the move are on the previous machine; paths may differ. '
     + 'Check the state here before relying on earlier findings.';

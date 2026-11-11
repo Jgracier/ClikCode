@@ -100,7 +100,7 @@ export function callCommand(call: CanonicalToolCall): string | undefined {
  * tools take; each vendor's mapper names them in its own words. Undefined
  * for a call with no such part, or without what its kind needs: that one is
  * told as text. `file` and `where` are absolute. */
-export type CallShape =
+type CallShape =
   | { kind: 'run'; command: string }
   | { kind: 'read'; file: string }
   | { kind: 'write'; file: string; content: string }

@@ -15,7 +15,7 @@ import type { RemoteMachine } from './machines.js';
 import { targetHost } from './shell.js';
 import { failureText } from '../harness/protocol/stderr-line.js';
 
-export const DISCOVERY_RECENT_MS = 30 * 24 * 60 * 60 * 1000;
+const DISCOVERY_RECENT_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** The part of a node in `tailscale status --json` this reads. */
 interface TailscaleNode {
@@ -65,7 +65,7 @@ const DESKTOP_OS: Readonly<Record<string, DiscoveredMachine['os']>> = { linux: '
 
 /** A machine's name with the differences between two nodes of it taken out:
  * case, punctuation, apostrophes (`Justin’s-iMac`, `justins-imac`). */
-export function baseMachineName(name: string): string {
+function baseMachineName(name: string): string {
   return name.toLowerCase().replace(/['’`]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
 

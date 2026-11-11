@@ -16,7 +16,7 @@ import { defineTool } from '../tool-contract.js';
 interface WaitArgs { shell_ids?: string[]; output?: string; path?: string; seconds?: number }
 
 /** The user sent a message while a wait ran. */
-export const STEERED_NOTE = 'Returned early because the user sent a message; read it before anything else. Nothing was stopped: call wait again if you still need to.';
+const STEERED_NOTE = 'Returned early because the user sent a message; read it before anything else. Nothing was stopped: call wait again if you still need to.';
 const DEFAULT_SECONDS = 300;
 const MAX_SECONDS = 1800;
 /** How much of a shell's recent output an `output` pattern is matched against. */

@@ -3,7 +3,7 @@
  * verify / confirm / sign-in words, a button-like anchor and a long opaque token score up; a logo image, the site root,
  * unsubscribe, privacy, terms and social links score down. Same mail, same pick, every time.
  */
-export interface MailLink { href: string; text: string; /** The anchor is styled as a button, or holds only an image. */ button?: boolean; image?: boolean }
+interface MailLink { href: string; text: string; /** The anchor is styled as a button, or holds only an image. */ button?: boolean; image?: boolean }
 
 const WANTED = /verif|confirm|activat|validat|magic|login|log-in|sign-?in|token|code|reset|accept|invite/i;
 const UNWANTED = /unsubscribe|accounts\.google\.com|mail\.google\.com|privacy|terms|preferences|manage[-_ ]?(?:email|subscri)|view[-_ ]?in[-_ ]?browser/i;
@@ -12,7 +12,7 @@ const SOCIAL = /(?:^|\.)(?:twitter|x|facebook|linkedin|instagram|youtube|tiktok|
 function parse(href: string): URL | undefined { try { return new URL(href); } catch { return undefined; } }
 const opaque = (s: string): boolean => /[A-Za-z0-9_-]{20,}/.test(s) && /\d/.test(s);
 
-export function scoreLink(link: MailLink): number {
+function scoreLink(link: MailLink): number {
   const url = parse(link.href);
   if (!url) return -100;
   const text = link.text.trim();

@@ -9,7 +9,7 @@ import { readConsole, watchConsole } from './console-log.js';
 import { safeUrl } from './network-capture.js';
 import { sleep } from '../../runtime/sleep.js';
 
-export type Problem = { kind: 'failed' | 'blocked' | 'status' | 'pending'; url: string; thirdParty: boolean; detail: string; type: string };
+type Problem = { kind: 'failed' | 'blocked' | 'status' | 'pending'; url: string; thirdParty: boolean; detail: string; type: string };
 
 const MAX_LINES = 12;
 const BLOCKED = /BLOCKED_BY_CLIENT|BLOCKED_BY_RESPONSE|BLOCKED_BY_ORB|BLOCKED_BY_CSP|CORS|ERR_NETWORK_ACCESS_DENIED|ERR_INSECURE_PRIVATE/i;

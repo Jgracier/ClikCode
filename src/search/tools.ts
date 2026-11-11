@@ -24,7 +24,7 @@ import { maskSecrets } from './secrets.js';
 /** How long a turn has run, or `unknown` for a start that does not parse. */
 const workingFor = (ms: number): string => (Number.isFinite(ms) ? formatElapsed(ms) : 'unknown');
 
-export interface ConversationToolContext {
+interface ConversationToolContext {
   /** The chat the calling agent is in, when known. */
   currentSessionId?: string;
   now?: number;

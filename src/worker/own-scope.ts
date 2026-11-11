@@ -53,7 +53,7 @@ export function scopeUnitName(sessionId: string, pid: number): string {
  * the whole conversation, vendor included, 2026-10-12, which is why it is not tight). No MemoryMax: a hard kill of the scope
  * would end the worker; worker/resource-guard.ts stops the one large command instead. TasksMax is the fork-bomb brake.
  * CLIKCODE_WORKER_MEMORY_HIGH_SHARE (0-1; 0 turns it off) and CLIKCODE_WORKER_TASKS_MAX change them. */
-export interface WorkerLimits { memoryHigh?: number; tasksMax: number }
+interface WorkerLimits { memoryHigh?: number; tasksMax: number }
 
 export function workerLimits(ramBytes: number = totalmem(), env: NodeJS.ProcessEnv = process.env): WorkerLimits {
   const share = env.CLIKCODE_WORKER_MEMORY_HIGH_SHARE === undefined ? 0.5 : Number(env.CLIKCODE_WORKER_MEMORY_HIGH_SHARE);

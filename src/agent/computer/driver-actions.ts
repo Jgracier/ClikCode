@@ -7,7 +7,7 @@ export const DESKTOP_ACTIONS = [
   'windows', 'apps', 'observe', 'click', 'double_click', 'right_click', 'drag', 'type', 'key', 'hotkey', 'scroll', 'zoom',
   'launch_app', 'bring_to_front', 'invoke_menu', 'set_window_frame', 'screen_size', 'clipboard_read', 'clipboard_write',
 ] as const;
-export type DesktopAction = typeof DESKTOP_ACTIONS[number];
+type DesktopAction = typeof DESKTOP_ACTIONS[number];
 
 export type DesktopArgs = {
   action: DesktopAction;
@@ -19,14 +19,14 @@ export type DesktopArgs = {
   delivery?: 'background' | 'foreground';
 };
 
-export type DriverRequest = { name: string; args: Record<string, unknown> };
+type DriverRequest = { name: string; args: Record<string, unknown> };
 
 /** Actions that send input and so can ask to be delivered in the foreground. */
 const INPUT_ACTIONS: ReadonlySet<string> = new Set(['click', 'double_click', 'right_click', 'drag', 'type', 'key', 'hotkey', 'scroll']);
 
 /** How long Cua may walk a window's accessibility tree. Its default (1 second) cuts off big Electron apps. */
-export const WINDOW_STATE_TIMEOUT_MS = 10_000;
-export const WINDOW_STATE_MAX_ELEMENTS = 1500;
+const WINDOW_STATE_TIMEOUT_MS = 10_000;
+const WINDOW_STATE_MAX_ELEMENTS = 1500;
 
 const simpleKeys = (keys: unknown): keys is string[] =>
   Array.isArray(keys) && keys.length >= 2 && keys.length <= 4 && keys.every((key) => typeof key === 'string' && /^[a-z0-9_-]{1,20}$/i.test(key));

@@ -8,7 +8,7 @@ import { cleanPoints, cleanSize, keyEvent, MAX_REPEAT, MAX_TEXT, OUTSIDE, type K
 import type { LiteSocket } from './ws-lite.js';
 
 /** Runs in every page of the tab: says what a control is, as what the phone needs to show a matching one. A password's value is never read. */
-export const DESCRIBE_SCRIPT = `(() => {
+const DESCRIBE_SCRIPT = `(() => {
   if (window.__clikDescribe) return;
   const TEXT = /^(text|search|url|tel|email|password|number)$/;
   const NATIVE = /^(date|time|datetime-local|month|week|color)$/;
@@ -32,7 +32,7 @@ export const DESCRIBE_SCRIPT = `(() => {
 
 /** The fields on the page a person can fill, in the page's order, with where each is on the phone's screen. Each keeps one number for as long as
  * the page keeps it, and the elements are remembered by it, so the phone can name one. */
-export const FIELDS_SCRIPT = `(() => {
+const FIELDS_SCRIPT = `(() => {
   const describe = window.__clikDescribe;
   const v = window.visualViewport;
   if (!describe || !v) return '[]';
@@ -98,7 +98,7 @@ type Message = { t?: string; [key: string]: unknown };
  * page through a visual viewport that can be zoomed out (a page with no mobile layout tag is laid out 980px wide and shown at about 0.4)
  * or pinched in and panned. A finger at (x, y) on the screen is at offset + (x, y) / scale in the page. Sent as-is, a tap lands above and
  * left of the finger, by more the lower and further right it is, and pinch and drag do nothing. */
-export interface PageView { scale: number; x: number; y: number }
+interface PageView { scale: number; x: number; y: number }
 export const SAME_VIEW: PageView = { scale: 1, x: 0, y: 0 };
 export function toPage(view: PageView, x: number, y: number): { x: number; y: number } {
   const scale = view.scale > 0.05 && view.scale < 20 ? view.scale : 1;

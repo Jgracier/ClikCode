@@ -27,7 +27,7 @@ import { localMachineName } from './board-rows.js';
 import { localRunner, runManagedUpdate, stepper, UPDATE_STEPS, type InstallReporter, type ScriptRunner } from './install.js';
 import { failureText } from '../harness/protocol/stderr-line.js';
 
-export type InstallKind =
+type InstallKind =
   | { kind: 'managed' }
   | { kind: 'npm'; packageRoot: string }
   | { kind: 'checkout'; repo?: string };
@@ -55,7 +55,7 @@ export async function detectInstall(entry: string, home = homedir()): Promise<In
   return { kind: 'checkout', ...(await exists(join(packageRoot, '.git')) ? { repo: packageRoot } : {}) };
 }
 
-export interface SelfUpdateOptions {
+interface SelfUpdateOptions {
   /** A commit to update to (a ClikCode Remote install only); main by default. */
   commit?: string;
   /** Each step as it finishes, and what it found. */
@@ -70,7 +70,7 @@ export interface SelfUpdateOptions {
   hostName?: string;
 }
 
-export interface SelfUpdateResult {
+interface SelfUpdateResult {
   kind: InstallKind['kind'];
   /** What to say: what changed, that nothing needed to, or what to run. */
   text: string;

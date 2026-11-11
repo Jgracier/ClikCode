@@ -124,7 +124,7 @@ function titleAbove(lines: readonly string[], start: number, fallback = ''): str
 }
 
 /** Keys for `send` (see SignInStep). */
-export function keystrokes(send: string): string {
+function keystrokes(send: string): string {
   return send.replace(/\{[a-z-]+\}/g, (token) => KEYS[token] ?? token);
 }
 

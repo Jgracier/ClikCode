@@ -13,13 +13,13 @@ import { OPENS_ANOTHER_APP, PRESSABLE, readPageControls } from './page-controls.
 import { saveTask, type TaskReason } from './work-queue.js';
 
 /** One press: a control whose visible name matches `name`, only while the page text matches `when` (if given). */
-export interface ConsentAction { note: string; name: RegExp; when?: RegExp; /** `leaf`: also a plain text element (Google's "Advanced"), not only buttons and links. */ leaf?: boolean; /** A notice to get past (Advanced, Go to (unsafe)), not a grant: scope boxes are not ticked for it. */ notice?: boolean }
-export interface ConsentProvider { id: string; host: RegExp; actions: readonly ConsentAction[] }
+interface ConsentAction { note: string; name: RegExp; when?: RegExp; /** `leaf`: also a plain text element (Google's "Advanced"), not only buttons and links. */ leaf?: boolean; /** A notice to get past (Advanced, Go to (unsafe)), not a grant: scope boxes are not ticked for it. */ notice?: boolean }
+interface ConsentProvider { id: string; host: RegExp; actions: readonly ConsentAction[] }
 
 /** Names that are never pressed, whatever else matches. */
 const NEVER = /\b(deny|cancel|decline|reject|no thanks|not now|sign out|log ?out|remove|delete|back|create (?:an )?account|sign ?up|forgot)\b/i;
 
-export const CONSENT_PROVIDERS: readonly ConsentProvider[] = [
+const CONSENT_PROVIDERS: readonly ConsentProvider[] = [
   { id: 'google', host: /(^|\.)accounts\.google\.com$|(^|\.)google\.com$/i, actions: [
     { note: 'Continued past the unverified-app notice.', name: /^go to .*\(unsafe\)$/i, notice: true },
     { note: 'Opened Advanced.', name: /^advanced$/i, leaf: true, notice: true },
@@ -59,14 +59,14 @@ export { OPENS_ANOTHER_APP };
 const NOT_CHOOSER = /\b(sign out|log ?out|switch|remove|use another|add (?:an )?account|different account)\b/i;
 
 /** The platform's own name as a vendor's consent page shows it ("Authorize ClikDeploy"). */
-export const PLATFORM_APP = 'ClikDeploy';
+const PLATFORM_APP = 'ClikDeploy';
 
 /** An affirmative consent control: Authorize [app], Allow [access], Approve, Accept, Grant access, Continue as <account>. Never "Continue with <provider>" (a sign-in). */
 const AFFIRMATIVE = /^(?:authori[sz]e(?: [\w .'&-]{1,60})?|allow(?: access| all)?|approve(?: [\w .'&-]{1,40})?|accept(?: and continue)?|grant(?: access| permission)?|continue as [\w .'@+-]{1,80})$/i;
 /** A refusal that a real consent page sits beside its affirmative control. */
 const NEGATIVE = /^(?:cancel|deny|decline|reject|no,? thanks|not now|do not allow)$/i;
 
-export interface ConsentReading { consent: boolean; /** index into controls of the control to press */ index?: number }
+interface ConsentReading { consent: boolean; /** index into controls of the control to press */ index?: number }
 
 /** Whether a page is a consent screen, and which control grants it: the page names the platform (or its callback), offers an affirmative
  * control and a negative one. Not vendor-specific. A payment, missing credits, unknown-client or captcha page never qualifies. */
@@ -115,10 +115,10 @@ const SIGN_IN_PROVIDERS = [/^(?:continue|sign ?(?:in|up)|log ?in)\s+(?:in\s+)?(?
 export interface PressOptions { email?: string; skipAccount?: boolean; account?: boolean; appNames?: readonly string[]; redirectHost?: string }
 
 /** Which kind of press: `account` (an account tile), `notice` (Advanced, Go to (unsafe), I understand), `grant` (Continue, Allow, Authorize...), `sign-in`. */
-export type PressPhase = 'account' | 'notice' | 'grant' | 'sign-in';
+type PressPhase = 'account' | 'notice' | 'grant' | 'sign-in';
 
 /** Where Google's flow is (the caller has checked the host is Google's), from the address path and the page's own words, never from the order things happened in. */
-export type GoogleStep = 'chooser' | 'warning' | 'identity' | 'consent' | 'challenge' | 'error';
+type GoogleStep = 'chooser' | 'warning' | 'identity' | 'consent' | 'challenge' | 'error';
 export function googleStep(url: string, pageText: string): GoogleStep | undefined {
   let path = '';
   try { path = new URL(url).pathname; } catch { return undefined; }
@@ -157,7 +157,7 @@ export function nextPress(host: string, controls: readonly Control[], pageText: 
 }
 
 /** A choice the consent page needs made (organization, account, project): its label and what it offers. */
-export interface Selector { label: string; options: readonly string[]; /** the option already chosen, when one is */ selected?: string }
+interface Selector { label: string; options: readonly string[]; /** the option already chosen, when one is */ selected?: string }
 
 /** What to do about the selectors on a consent page: nothing to choose, a pick of the only option, or a stop listing the options (never a guess). */
 export function decideSelectors(selectors: readonly Selector[]): { stop: string } | { choose: { selector: number; option: string }[] } {
@@ -239,8 +239,8 @@ export function startFailure(text: string): string {
   return said ?? text.trim().split('\n').slice(-3).join(' ').slice(0, 200);
 }
 
-export interface ConnectStart { url: string; stop: () => void }
-export interface OAuthConsentOptions {
+interface ConnectStart { url: string; stop: () => void }
+interface OAuthConsentOptions {
   /** The state directory: where a payment-class stop is recorded in the human work queue (absent: not recorded). */ stateDir?: string;
   email?: string; /** Closes the given (stale) tab and opens a fresh one the caller owns and closes later; with it, a Google re-verify or error page is retried once from the authorization URL in the fresh tab. */ reopen?: (old: Page) => Promise<Page>; /** Treat every page as this provider's host (a test stands a fake vendor in for accounts.google.com). */ providerHost?: string; timeoutMs?: number; signal?: AbortSignal; progress?: (line: string) => void;
   /** Starts the connect and returns the authorization URL (default: `clikdeploy integrations connect <id> --no-browser`). */
@@ -250,7 +250,7 @@ export interface OAuthConsentOptions {
 }
 
 /** Runs the clikdeploy CLI (the saved admin key is its own sign-in) and waits for it to print the authorization URL. */
-export function startViaCli(connector: string, signal?: AbortSignal): Promise<ConnectStart> {
+function startViaCli(connector: string, signal?: AbortSignal): Promise<ConnectStart> {
   return new Promise((resolve, reject) => {
     const child = spawn('clikdeploy', ['integrations', 'connect', connector, '--no-browser'], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     let text = '';
@@ -398,7 +398,7 @@ export async function press(page: Page, control: Control): Promise<boolean> {
 }
 
 /** What a stuck page is, from its own words (and a JSON error body's): the plain label and, when a person must act, the work-queue reason. */
-export interface StuckKind { kind: 'unrecognized-client' | 'payment' | 'captcha' | 'mfa'; label: string; reason?: TaskReason }
+interface StuckKind { kind: 'unrecognized-client' | 'payment' | 'captcha' | 'mfa'; label: string; reason?: TaskReason }
 
 const UNRECOGNIZED_CLIENT = /unrecogni[sz]ed[\s_-]*client|unknown[\s_-]*client|invalid[_\s-]*client|client[_\s-]*id[^.\n]{0,40}(?:not found|invalid|unknown|unrecogni|does not exist)|no such (?:oauth )?(?:client|app)|(?:oauth )?(?:client|app) (?:not found|does not exist|is not registered)/i;
 const NO_CREDITS = /\bno (?:api )?credits?\b|(?:add|buy|purchase|top up) (?:more )?credits?|out of credits|insufficient (?:credits?|funds|balance)|payment required|credit balance|billing|add (?:a )?payment method|upgrade (?:your )?(?:plan|account)\b|card number|\bsubscribe\b.{0,40}\bto continue/i;
@@ -419,7 +419,7 @@ export function pageExcerpt(text: string, max = 300): string {
 }
 
 /** A JSON error body the page is showing (an API's `{"message": ...}` or `{"error": ...}`), or undefined. */
-export function jsonErrorBody(text: string): string | undefined {
+function jsonErrorBody(text: string): string | undefined {
   const t = text.trim();
   if (!t.startsWith('{')) return undefined;
   try {
@@ -446,7 +446,7 @@ function stuckOn(page: Page, controls: readonly Control[], pageText = ''): strin
 export class ConsentStop extends Error { constructor(message: string, readonly reason?: TaskReason, readonly detail?: StopDetail) { super(message); this.name = 'ConsentStop'; } }
 
 /** Where consent stopped, as data (for a runner that records or hands it on): what the page is, never a field value. */
-export interface StopDetail {
+interface StopDetail {
   kind: StuckKind['kind'] | 'password' | 'choice' | 'unknown';
   /** The address without its query. */ url: string;
   /** About 300 characters of the page's text, masked. */ pageText: string;
@@ -454,7 +454,7 @@ export interface StopDetail {
 }
 
 /** The stop as data. */
-export function stopDetail(page: Page, controls: readonly Control[], pageText: string, kind?: StopDetail['kind']): StopDetail {
+function stopDetail(page: Page, controls: readonly Control[], pageText: string, kind?: StopDetail['kind']): StopDetail {
   let url = '';
   try { const u = new URL(page.url()); url = `${u.origin}${u.pathname}`; } catch { /* no address */ }
   const known = classifyStuck(pageText)?.kind;

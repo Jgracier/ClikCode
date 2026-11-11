@@ -120,7 +120,7 @@ export interface MoveEnd {
   call<T>(request: MoveRequest): Promise<T>;
 }
 
-export interface MoveOutcome {
+interface MoveOutcome {
   moved: true; sessionId: string; folder: string; changes: string[];
   /** Messages the target already held and kept (not sent), and how many were sent. */
   reused: number; sent: number;

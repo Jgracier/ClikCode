@@ -41,7 +41,7 @@ const WINDOW_FRAME_BUDGET_MS = 6;
 const BATCH_MESSAGES = 40;
 
 /** Rows kept materialised above and below the viewport: three screens. */
-export function reach(p: { viewportRows(): number }): number {
+function reach(p: { viewportRows(): number }): number {
   return Math.max(3 * p.viewportRows(), 90);
 }
 

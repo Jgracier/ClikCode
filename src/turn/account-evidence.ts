@@ -26,7 +26,7 @@ import { nextUsableFailoverAccount, turnBackendForAccount } from './account-rout
 
 /** The error a piece of evidence stands for: its words with its fields beside them, as a failed
  * attempt carries them (the classifier reads `statusCode`, `errorKind`, `rateLimitStatus`). */
-export function evidenceError(evidence: FailureEvidence): Error {
+function evidenceError(evidence: FailureEvidence): Error {
   const { statusCode, errorKind, rateLimitStatus, text } = evidence;
   return Object.assign(new Error(text ?? ''), {
     ...(statusCode !== undefined ? { statusCode } : {}), ...(errorKind ? { errorKind } : {}), ...(rateLimitStatus ? { rateLimitStatus } : {}),

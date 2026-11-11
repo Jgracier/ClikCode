@@ -16,7 +16,7 @@ import { gatewayConnection } from '../agent/models/for-session.js';
 import { CLIKCODE_USER_AGENT } from '../version.js';
 import { gatewaySubscriptionsOn, subscriptionsHeader } from './subscriptions.js';
 
-export interface GatewayModel {
+interface GatewayModel {
   id: string;
   /** The lab that made it (`anthropic`, `meta`), as the Gateway names it; absent when unknown. Never who serves it. */
   maker?: string;
@@ -62,7 +62,7 @@ const MAKER_NAMES: Readonly<Record<string, string>> = {
 };
 
 /** The group of the user's own models in a list: first, above every maker. */
-export const OWN_MODELS_GROUP = 'Your models';
+const OWN_MODELS_GROUP = 'Your models';
 
 /** Where a model sits in a list of models: the user's own, its maker's name, or "Other". */
 export function gatewayMakerName(model: GatewayModel): string {

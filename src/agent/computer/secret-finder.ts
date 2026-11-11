@@ -5,8 +5,8 @@
 import type { Page } from 'playwright-core';
 import { isSecretRef, secretRef } from './secret-scrubber.js';
 
-export type Found = { value: string; keyName?: string };
-export type Decision = { kind: 'found'; value: string } | { kind: 'none' } | { kind: 'ambiguous' };
+type Found = { value: string; keyName?: string };
+type Decision = { kind: 'found'; value: string } | { kind: 'none' } | { kind: 'ambiguous' };
 
 /** The longest opaque token taken as a key (a personal access token can be a signed JWT of 1,000 characters or more). */
 export const MAX_KEY_LENGTH = 8000;

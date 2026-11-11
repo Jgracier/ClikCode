@@ -24,7 +24,7 @@ import { writeState } from './state/write.js';
 
 type Said = { role: 'user' | 'assistant'; content: string };
 
-export interface EvidenceSource {
+interface EvidenceSource {
   source: 'index' | 'record' | 'older-record' | 'claude-thread' | 'codex-thread';
   /** The file, or the index row. */
   path: string;
@@ -107,7 +107,7 @@ export function layAgainst(store: ReadonlyArray<TranscriptMessage>, evidence: re
 }
 
 /** A piece of evidence that can make up a conversation's log. */
-export interface Piece { source: EvidenceSource['source'] | 'store'; path: string; at: string; messages: ReadonlyArray<TranscriptMessage | Said> }
+interface Piece { source: EvidenceSource['source'] | 'store'; path: string; at: string; messages: ReadonlyArray<TranscriptMessage | Said> }
 
 /** The conversation as the evidence has it. The piece with most requests is the backbone; where the store
  * holds a request of it, the store's own turn stands (its tool calls, attachments, origins), and the
@@ -305,7 +305,7 @@ export async function auditConversations(only?: readonly string[]): Promise<Audi
 // Repair
 // ---------------------------------------------------------------------------
 
-export interface RepairPlan {
+interface RepairPlan {
   id: string;
   /** The store now, null when its log is missing. */
   from: { messages: number; userTurns: number } | null;

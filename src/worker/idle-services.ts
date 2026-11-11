@@ -33,7 +33,7 @@ const CLOCK_TICKS = 100;
 
 export interface ServiceReading { unit: string; owner: number | undefined; ageMs: number; held: number; cpuUsec: number }
 
-export interface Watched { cpuUsec: number; at: number }
+interface Watched { cpuUsec: number; at: number }
 
 /** Idle: old enough, big enough, and used almost no CPU over the whole watch. */
 export function isIdle(reading: ServiceReading, since: Watched | undefined, now: number): boolean {

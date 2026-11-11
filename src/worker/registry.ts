@@ -378,7 +378,7 @@ async function ownerIsLive(sessionId: string, owner: ConversationOwner | undefin
  * is alive only while the lease is a worker's and names the record's pid --
  * a pid check on its own counted a recycled pid (or anyone's, via EPERM) as
  * the worker, so a chat killed by the stuck watchdog showed "working" for ever. */
-export async function workerAlive(record: Pick<WorkerRuntimeRecord, 'pid' | 'sessionId'>): Promise<boolean> {
+async function workerAlive(record: Pick<WorkerRuntimeRecord, 'pid' | 'sessionId'>): Promise<boolean> {
   const path = ownerPath(record.sessionId);
   const raw = await readFile(path, 'utf8').catch(quiet('worker/registry'));
   const owner = raw === undefined ? undefined : parseOwner(raw);
@@ -401,7 +401,7 @@ export async function liveWorkerRecords(): Promise<WorkerRuntimeRecord[]> {
 
 /** Removes a record whose worker is gone, re-judged under breakStaleLock's
  * turn-taking so a record rewritten meanwhile (a new worker's) stays. */
-export async function removeDeadWorkerRecord(record: WorkerRuntimeRecord): Promise<void> {
+async function removeDeadWorkerRecord(record: WorkerRuntimeRecord): Promise<void> {
   const path = recordPath(record.sessionId);
   const raw = await readFile(path, 'utf8').catch(quiet('worker/registry'));
   if (raw === undefined) return;

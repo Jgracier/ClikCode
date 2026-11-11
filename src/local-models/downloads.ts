@@ -71,7 +71,7 @@ export const backgroundDownloadsAllowed = (): boolean => hosts > 0;
 
 /** How a download a chat asked for ended: the model is on this machine and the chat moved to it (`switched`), or it is not and
  * the chat is as it was. `text` is what to tell the user. */
-export interface DownloadOutcome {
+interface DownloadOutcome {
   sessionId: string;
   modelId: string;
   switched: boolean;

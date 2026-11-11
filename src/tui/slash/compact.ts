@@ -33,7 +33,7 @@ export async function compactConversation(
 /** The slash command that compacts this conversation in its harness, if it has one: `/compact` for a
  * harness that takes its own slash commands, else whatever compaction command the agent itself
  * advertised this session (ACP `available_commands_update`: `compact`, or Gemini's `compress`). */
-export function compactCommand(id: string, session: HarnessSession): string | undefined {
+function compactCommand(id: string, session: HarnessSession): string | undefined {
   if (!session.nativeSessionId) return undefined;
   if (sessionHarness(session)?.nativeSlashPassthrough) return '/compact';
   const advertised = (nativeAvailableCommands.get(id) ?? []).find((command) => command.name === 'compact' || command.name === 'compress');
