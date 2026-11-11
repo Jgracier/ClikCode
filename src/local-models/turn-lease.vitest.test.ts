@@ -1,4 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { rmSync } from 'node:fs';
+import { useSourceSupervisor } from './supervisor.vitest-helper.js';
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -11,6 +13,9 @@ const MODEL = 'qwen3.5-4b';
 const previous = process.env.CLIKCODE_LOCAL_MODELS_HOME;
 let running: { supervisorPid: number; serverPid: number } | undefined;
 
+let supervisorBuild = '';
+beforeAll(async () => { supervisorBuild = await useSourceSupervisor(); }, 30_000);
+afterAll(() => { rmSync(supervisorBuild, { force: true }); delete process.env.CLIKCODE_SUPERVISOR_ENTRY; });
 beforeEach(() => { process.env.CLIKCODE_LOCAL_MODELS_HOME = mkdtempSync(join(tmpdir(), 'cc-turn-lease-')); });
 afterEach(() => {
   for (const pid of [running?.serverPid, running?.supervisorPid]) { try { if (pid) process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }

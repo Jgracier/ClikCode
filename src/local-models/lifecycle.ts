@@ -16,10 +16,10 @@
  * it (sweepOrphan). */
 
 import { execFile, spawn } from 'node:child_process';
-import { readdirSync, rmSync } from 'node:fs';
+import { existsSync, readdirSync, rmSync } from 'node:fs';
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { memoryStep, mergeFootprint, parseMeminfo, parseMemoryPressure, parseProcStatus, parseVmStatMac, parseVmstatSwapOut } from './memwatch.js';
+import { fileURLToPath } from 'node:url';
 import { safeName, serversDir } from './paths.js';
 import { pidIsAlive, tryLease, type Lease } from '../session/store/locks.js';
 import { sleep } from '../runtime/sleep.js';
@@ -220,7 +220,7 @@ export interface ShrinkStep {
   footprintKey: string;
 }
 
-interface MemoryWatchConfig {
+export interface MemoryWatchConfig {
   /** Spare memory (see memwatch.ts) kept for other programs. */
   bufferBytes: number;
   sampleMs: number;
@@ -239,7 +239,7 @@ interface MemoryWatchConfig {
   shrinks: ShrinkStep[];
 }
 
-interface SupervisorConfig {
+export interface SupervisorConfig {
   modelId: string;
   alias: string;
   context: number;
@@ -274,268 +274,19 @@ export interface MemoryEvent {
 
 export function memoryStopFile(modelId: string): string { return join(serverDir(modelId), 'memory-stop.json'); }
 
-/** The supervisor, run as `node -e SUPERVISOR_SCRIPT <config.json>`.
- * Plain CommonJS JavaScript with no imports from ClikCode, so the bundler
- * never has to know about it; the memory logic it runs is memwatch.ts's,
- * embedded by source text (see there). Idle is judged from llama-server's
- * /slots: each request gets a new task id, so a changed id or a busy slot
- * means work happened since the last look, even between polls.
- *
- * Memory is sampled every few seconds (Linux: /proc; macOS: vm_stat and
- * ps; Windows: the OS's available figure only). Each sample goes through
- * memoryStep, which may restart the server smaller or stop it. Once the
- * server answers, its peak RssAnon and RssFile are recorded per
- * configuration, which is what later fit checks use in place of the
- * estimate. Nothing is judged while the server loads: its memory is still
- * climbing, and the start's own fit check covered it. */
-export const SUPERVISOR_SCRIPT = String.raw`
-const fs = require('fs'), path = require('path'), http = require('http'), os = require('os'), cp = require('child_process');
-const memoryStep = (${String(memoryStep)});
-const parseMeminfo = (${String(parseMeminfo)});
-const parseVmstatSwapOut = (${String(parseVmstatSwapOut)});
-const parseMemoryPressure = (${String(parseMemoryPressure)});
-const parseProcStatus = (${String(parseProcStatus)});
-const parseVmStatMac = (${String(parseVmStatMac)});
-const mergeFootprint = (${String(mergeFootprint)});
-const config = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
-const memory = config.memory;
-const leases = path.join(config.dir, 'leases');
-const recordFile = path.join(config.dir, 'supervisor.json');
-const WINDOWS = process.platform === 'win32';
-const note = (text) => { try { fs.appendFileSync(path.join(config.dir, 'supervisor.log'), new Date().toISOString() + ' ' + text + '\n'); } catch {} };
-const alive = (pid) => { if (!(pid > 0)) return false; try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
-const gb = (bytes) => (bytes / 1e9).toFixed(1) + ' GB';
-function liveLeases() {
-  let names = [];
-  try { names = fs.readdirSync(leases); } catch { return 0; }
-  let count = 0;
-  for (const name of names) {
-    if (!name.endsWith('.json')) continue;
-    if (alive(Number(name.split('-')[0]))) count++;
-    else { try { fs.rmSync(path.join(leases, name), { force: true }); } catch {} }
-  }
-  return count;
+/** The supervisor's own bundle (src/local-models/supervisor.ts, built by
+ * scripts/build.mjs): beside this code in dist/, or -- run from source -- the
+ * build's. CLIKCODE_SUPERVISOR_ENTRY names another (a test's own build). */
+function supervisorEntry(): string {
+  const candidates = [
+    process.env.CLIKCODE_SUPERVISOR_ENTRY,
+    fileURLToPath(new URL('./local-model-supervisor.cjs', import.meta.url)),
+    fileURLToPath(new URL('../../dist/local-model-supervisor.cjs', import.meta.url)),
+  ];
+  const found = candidates.find((candidate) => candidate && existsSync(candidate));
+  if (!found) throw new Error('The local model supervisor is not built (dist/local-model-supervisor.cjs); run the build.');
+  return found;
 }
-// Lowered before the server starts, so it inherits the priority on POSIX
-// and on Windows (a below-normal parent's children are below-normal); set
-// on the child as well in case the platform does not pass it on.
-try { os.setPriority(0, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch {}
-// The server's log and this supervisor's own are kept to LOG_LIMIT each: the
-// older half moves to <name>.1 (replacing the one before). llama-server
-// holds server.log open, appending, so it is copied aside and truncated in
-// place rather than renamed out from under it.
-const LOG_LIMIT = 5 * 1024 * 1024;
-const serverLog = path.join(config.dir, 'server.log');
-const supervisorLog = path.join(config.dir, 'supervisor.log');
-function rotateLogs(fd) {
-  try {
-    if (fd === undefined) { if (fs.statSync(serverLog).size > LOG_LIMIT) fs.renameSync(serverLog, serverLog + '.1'); }
-    else if (fs.fstatSync(fd).size > LOG_LIMIT) { fs.copyFileSync(serverLog, serverLog + '.1'); fs.ftruncateSync(fd, 0); }
-  } catch {}
-  try { if (fs.statSync(supervisorLog).size > LOG_LIMIT) fs.renameSync(supervisorLog, supervisorLog + '.1'); } catch {}
-}
-rotateLogs();
-const log = fs.openSync(serverLog, 'a');
-setInterval(() => rotateLogs(log), config.logCheckMs || 60000).unref();
-const record = {
-  supervisorPid: process.pid, serverPid: 0, port: config.port, modelId: config.modelId,
-  alias: config.alias, context: config.context, startedAt: new Date().toISOString(),
-};
-const writeRecord = () => fs.writeFileSync(recordFile, JSON.stringify(record));
-let child, stopping = false, restartArgs = null;
-function launch(args) {
-  const self = cp.spawn(config.command, args, {
-    cwd: config.dir, env: Object.assign({}, process.env, config.env), stdio: ['ignore', log, log], windowsHide: true,
-  });
-  child = self;
-  try { os.setPriority(self.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch {}
-  record.serverPid = self.pid;
-  delete record.restarting;
-  writeRecord();
-  note('started llama-server pid ' + self.pid + ' on port ' + config.port + ' at ' + Math.round(record.context / 1024) + 'K context');
-  self.on('exit', (code, signal) => {
-    if (self !== child || stopping) return;
-    if (restartArgs) { const next = restartArgs; restartArgs = null; launch(next); return; }
-    stopping = true;
-    finish('llama-server exited (' + (code !== null ? code : signal) + ')');
-  });
-  self.on('error', (error) => {
-    if (self !== child || stopping) return;
-    stopping = true;
-    finish('llama-server could not start: ' + error.message);
-  });
-}
-function killChild(target) {
-  if (WINDOWS) cp.spawnSync('taskkill', ['/PID', String(target.pid), '/T', '/F'], { windowsHide: true });
-  else { try { target.kill('SIGTERM'); } catch {} }
-}
-function finish(reason) {
-  writeFootprint();
-  note('stopped: ' + reason);
-  try {
-    const current = JSON.parse(fs.readFileSync(recordFile, 'utf8'));
-    if (current.supervisorPid === process.pid) fs.rmSync(recordFile, { force: true });
-  } catch {}
-  process.exit(0);
-}
-function stop(reason) {
-  if (stopping) return;
-  stopping = true;
-  if (child.exitCode !== null || child.signalCode !== null) return finish(reason);
-  killChild(child);
-  const deadline = Date.now() + 10000;
-  const wait = setInterval(() => {
-    if (child.exitCode !== null || child.signalCode !== null || !alive(child.pid)) { clearInterval(wait); finish(reason); }
-    else if (Date.now() > deadline) { try { child.kill('SIGKILL'); } catch {} }
-  }, 200);
-}
-for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) { try { process.on(signal, () => stop('signal ' + signal)); } catch {} }
-function slots() {
-  return new Promise((resolve) => {
-    const request = http.get({ host: '127.0.0.1', port: config.port, path: '/slots', timeout: 5000 }, (response) => {
-      let text = '';
-      response.on('data', (chunk) => { text += chunk; });
-      response.on('end', () => { try { resolve(JSON.parse(text)); } catch { resolve(undefined); } });
-    });
-    request.on('timeout', () => request.destroy());
-    request.on('error', () => resolve(undefined));
-  });
-}
-
-// ---- memory ----------------------------------------------------------------
-let current = memory ? memory.current : null;
-let shrinks = memory ? memory.shrinks : [];
-let watch = {}, healthy = false, busy = false, baseline = null, lastLog = '', lastStatusAt = 0;
-let peak = { anon: 0, file: 0 }, written = 0;
-const read = (file) => { try { return fs.readFileSync(file, 'utf8'); } catch { return ''; } };
-function sampleMemory(pid) {
-  const at = Date.now();
-  if (process.platform === 'linux') {
-    const mem = parseMeminfo(read('/proc/meminfo'));
-    if (!mem.totalBytes || mem.availableBytes === undefined) return undefined;
-    const own = parseProcStatus(read('/proc/' + pid + '/status'));
-    const swapOutPages = parseVmstatSwapOut(read('/proc/vmstat'));
-    const pressureSomeAvg10 = parseMemoryPressure(read('/proc/pressure/memory'));
-    return Object.assign({ at, totalBytes: mem.totalBytes, availableBytes: mem.availableBytes, ourAnonBytes: own.anonBytes, ourFileBytes: memory.mmap ? own.fileBytes : 0 },
-      swapOutPages === undefined ? {} : { swapOutPages }, pressureSomeAvg10 === undefined ? {} : { pressureSomeAvg10 });
-  }
-  if (process.platform === 'darwin') {
-    let vm = {}, rss = 0;
-    try { vm = parseVmStatMac(cp.execFileSync('vm_stat', { encoding: 'utf8', timeout: 3000 })); } catch {}
-    try { rss = Number(cp.execFileSync('ps', ['-o', 'rss=', '-p', String(pid)], { encoding: 'utf8', timeout: 3000 }).trim()) * 1024 || 0; } catch {}
-    if (vm.availableBytes === undefined) return undefined;
-    // Metal keeps the weights in allocations, not a file mapping, so RSS
-    // is all the model's own and none of it is page cache.
-    return Object.assign({ at, totalBytes: os.totalmem(), availableBytes: vm.availableBytes, ourAnonBytes: rss, ourFileBytes: 0 },
-      vm.swapOutPages === undefined ? {} : { swapOutPages: vm.swapOutPages });
-  }
-  // Windows: os.freemem() is the available figure (free plus standby);
-  // the server's own use is not sampled, so no footprint is recorded.
-  return { at, totalBytes: os.totalmem(), availableBytes: os.freemem(), ourAnonBytes: 0, ourFileBytes: 0 };
-}
-function writeFootprint() {
-  if (!memory || !current || !(peak.anon > 0)) return;
-  if (peak.anon + peak.file <= written) return;
-  try {
-    let store = {};
-    try { store = JSON.parse(fs.readFileSync(memory.footprintsFile, 'utf8')); } catch {}
-    const machine = store[memory.machine] || (store[memory.machine] = {});
-    machine[current.footprintKey] = mergeFootprint(machine[current.footprintKey], {
-      context: current.context, cacheType: memory.cacheType, parallel: memory.parallel, vision: memory.vision,
-      anonBytes: peak.anon, fileBytes: peak.file, mmap: Boolean(memory.mmap), at: new Date().toISOString(),
-    });
-    const temporary = memory.footprintsFile + '.' + process.pid + '.tmp';
-    fs.writeFileSync(temporary, JSON.stringify(store, null, 2));
-    fs.renameSync(temporary, memory.footprintsFile);
-    written = peak.anon + peak.file;
-  } catch (error) { note('footprint not recorded: ' + error.message); }
-}
-function shrinkTo(option, reason) {
-  writeFootprint();
-  const event = { at: new Date().toISOString(), action: 'shrink', modelId: config.modelId, fromContext: record.context, toContext: option.context, reason };
-  current = option;
-  healthy = false; baseline = null; peak = { anon: 0, file: 0 }; written = 0;
-  restartArgs = option.args;
-  record.context = option.context;
-  record.restarting = true;
-  record.memoryEvent = event;
-  writeRecord();
-  note('restarting llama-server at ' + Math.round(option.context / 1024) + 'K context, prompt cache ' + option.cacheRamMib + ' MiB');
-  const target = child;
-  killChild(target);
-  setTimeout(() => { if (target === child && alive(target.pid)) { try { target.kill('SIGKILL'); } catch {} } }, 10000);
-}
-function memoryTick() {
-  if (stopping || restartArgs || !memory || !child) return;
-  const sample = sampleMemory(child.pid);
-  if (!sample) return;
-  if (!healthy) return;
-  if (baseline === null) baseline = sample.ourAnonBytes;
-  peak = { anon: Math.max(peak.anon, sample.ourAnonBytes), file: Math.max(peak.file, sample.ourFileBytes) };
-  // Rewritten when the peak has grown by 64 MiB: small enough to track a
-  // prompt cache filling, large enough not to write every sample.
-  if (peak.anon + peak.file > written + 64 * 1024 * 1024) writeFootprint();
-  const growth = Math.max(0, sample.ourAnonBytes - baseline);
-  const options = shrinks.map((option) => ({
-    context: option.context,
-    freesBytes: Math.max(0, current.kvBytes - option.kvBytes) + (current.cacheRamMib > option.cacheRamMib ? growth : 0),
-  }));
-  const decision = memoryStep({ sample, state: watch, bufferBytes: memory.bufferBytes, busy, shrinks: options });
-  watch = decision.state;
-  const summary = 'memory ' + decision.level + ': ' + gb(decision.spareBytes) + ' spare (buffer ' + gb(memory.bufferBytes) + '), others hold '
-    + gb(decision.othersBytes) + ', model ' + gb(sample.ourAnonBytes) + (memory.mmap ? ' own + ' + gb(sample.ourFileBytes) + ' mapped weights' : '')
-    + (sample.pressureSomeAvg10 ? ', memory stalls ' + sample.pressureSomeAvg10.toFixed(1) + '%' : '')
-    + (decision.swapOutPerSecond ? ', swapping out ' + Math.round(decision.swapOutPerSecond) + ' pages/s' : '');
-  const key = decision.level + ' ' + decision.action;
-  if (key !== lastLog || decision.action === 'shrink' || decision.action === 'stop' || sample.at - lastStatusAt > 300000) {
-    note(summary + (decision.action !== 'none' ? ' -> ' + decision.action + (decision.reason ? ': ' + decision.reason : '') : ''));
-    lastLog = key; lastStatusAt = sample.at;
-  }
-  if (decision.action === 'shrink') {
-    const option = shrinks[decision.shrinkIndex];
-    shrinks = shrinks.slice(decision.shrinkIndex + 1);
-    shrinkTo(option, decision.reason);
-  } else if (decision.action === 'stop') {
-    const event = { at: new Date().toISOString(), action: 'stop', modelId: config.modelId, fromContext: record.context, reason: decision.reason };
-    try { fs.writeFileSync(path.join(config.dir, 'memory-stop.json'), JSON.stringify(event)); } catch {}
-    stop('to leave memory for other programs: ' + decision.reason);
-  }
-}
-
-// How long the server outlives its last lease: a ClikCode run that starts
-// right after another one joins it, instead of loading the model again
-// beside a copy that is still shutting down.
-const LEASE_GRACE_MS = config.leaseGraceMs || 10000;
-let lastActive = Date.now(), lastSignature = '', leaselessSince;
-async function tick() {
-  if (stopping) return;
-  if (liveLeases() === 0) {
-    leaselessSince ??= Date.now();
-    if (Date.now() - leaselessSince >= LEASE_GRACE_MS) return stop('no live ClikCode process holds a lease');
-  } else leaselessSince = undefined;
-  if (restartArgs) { lastActive = Date.now(); return; }
-  const list = await slots();
-  if (Array.isArray(list)) {
-    if (!healthy) {
-      healthy = true;
-      // A restart is judged from when its server answers, not from when it
-      // was decided: loading takes seconds to a minute.
-      if (watch.lastActionAt !== undefined) watch.lastActionAt = Date.now();
-    }
-    busy = list.some((slot) => slot.is_processing);
-    const signature = JSON.stringify(list.map((slot) => [slot.id, slot.id_task, slot.is_processing]));
-    if (signature !== lastSignature || busy) lastActive = Date.now();
-    lastSignature = signature;
-  } else {
-    // Still loading, or busy enough not to answer: not idle.
-    lastActive = Date.now();
-  }
-  if (config.idleMs > 0 && Date.now() - lastActive > config.idleMs) stop('idle for ' + Math.round(config.idleMs / 1000) + ' s');
-}
-launch(config.args);
-setInterval(() => { tick().catch((error) => note('tick failed: ' + error.message)); }, config.pollMs);
-if (memory) setInterval(() => { try { memoryTick(); } catch (error) { note('memory check failed: ' + error.message); } }, memory.sampleMs);
-`;
 
 /** Start the supervisor for one model, detached so it outlives nothing
  * it is not told to: it watches the leases, and a ClikCode exit is what
@@ -545,7 +296,7 @@ export async function startSupervisor(config: SupervisorConfig): Promise<ServerR
   await rm(join(config.dir, 'supervisor.json'), { force: true });
   const configFile = join(config.dir, 'supervisor-config.json');
   await writeFile(configFile, JSON.stringify(config));
-  const child = spawn(process.execPath, ['-e', SUPERVISOR_SCRIPT, configFile], {
+  const child = spawn(process.execPath, [supervisorEntry(), configFile], {
     cwd: config.dir, detached: true, stdio: 'ignore', windowsHide: true,
     // Whatever flags started ClikCode (a loader, an inspector) are not the
     // supervisor's.

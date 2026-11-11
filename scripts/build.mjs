@@ -168,6 +168,15 @@ const catalog = await build({
   outfile: 'dist/harness-catalog.cjs',
 });
 
+// The local model supervisor: a process of its own that outlives the window that started it
+// (src/local-models/lifecycle.ts startSupervisor spawns this file by path).
+await build({
+  ...common,
+  entryPoints: ['src/local-models/supervisor.ts'],
+  format: 'cjs',
+  outfile: 'dist/local-model-supervisor.cjs',
+});
+
 const router = await build({
   ...common,
   entryPoints: ['src/runtime/router.ts'],

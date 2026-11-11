@@ -1,10 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { rmSync } from 'node:fs';
+import { useSourceSupervisor } from './supervisor.vitest-helper.js';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { heldByLiveProcess, removeLeases, removeTurnLeases, serverDir, sessionHeldElsewhere, writeLease, writeTurnLease } from './lifecycle.js';
 
 const previous = process.env.CLIKCODE_LOCAL_MODELS_HOME;
+let supervisorBuild = '';
+beforeAll(async () => { supervisorBuild = await useSourceSupervisor(); }, 30_000);
+afterAll(() => { rmSync(supervisorBuild, { force: true }); delete process.env.CLIKCODE_SUPERVISOR_ENTRY; });
 beforeEach(() => { process.env.CLIKCODE_LOCAL_MODELS_HOME = mkdtempSync(join(tmpdir(), 'cc-leases-')); });
 afterEach(() => {
   if (previous === undefined) delete process.env.CLIKCODE_LOCAL_MODELS_HOME;
@@ -117,9 +122,8 @@ describe('whether anyone holds a model', () => {
 
 describe('the supervisor\'s logs', () => {
   it('moves a large server.log aside at start, and trims one the server grows while running', async () => {
-    const { startSupervisor, SUPERVISOR_SCRIPT } = await import('./lifecycle.js');
+    const { startSupervisor } = await import('./lifecycle.js');
     const { readFileSync, statSync, existsSync } = await import('node:fs');
-    expect(SUPERVISOR_SCRIPT).toContain('rotateLogs');
     const dir = serverDir('rotate-test');
     mkdirSync(join(dir, 'leases'), { recursive: true });
     writeFileSync(join(dir, 'leases', `${process.pid}-s.json`), '{}');
