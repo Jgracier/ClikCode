@@ -6,9 +6,8 @@
  * Each vendor's own layout stays in its store file; this holds only what
  * would otherwise be copied six times. */
 
-import { randomBytes } from 'node:crypto';
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join } from 'node:path';
+import { atomicWriteFile } from '../../store/files.js';
+import { isAbsolute, join } from 'node:path';
 import { withProviderNote, type CanonicalToolCall, type CanonicalTurn } from '../../canonical.js';
 import type { NativeThreadWriteContext } from '../stores.js';
 
@@ -41,18 +40,9 @@ export function testedVersion(tested: readonly string[], options: { exact?: bool
   };
 }
 
-/** Writes `content` at `path` through a temporary sibling and a rename, so
- * a reader never sees half a thread. Parent directories are created. */
-export async function writeFileAtomic(path: string, content: string): Promise<void> {
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  const temporary = `${path}.${randomBytes(4).toString('hex')}.tmp`;
-  try {
-    await writeFile(temporary, content, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
-    await rename(temporary, path);
-  } catch (error) {
-    await rm(temporary, { force: true });
-    throw error;
-  }
+/** A vendor's file written whole or not at all, into the vendor's own directory (left at its mode). */
+export function writeFileAtomic(path: string, content: string): Promise<void> {
+  return atomicWriteFile(path, content, { directory: 'vendor' });
 }
 
 /** The request as the vendor's user message: the provider note at a

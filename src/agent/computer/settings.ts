@@ -2,6 +2,7 @@
 import fs from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { atomicWriteFile } from '../../session/store/files.js';
 
 export function computerSettingsPath(stateDir: string): string {
   return path.join(stateDir, 'computer', 'settings.json');
@@ -23,9 +24,7 @@ async function writeSettings(stateDir: string, change: Record<string, boolean>):
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   let current: Record<string, unknown> = {};
   try { current = JSON.parse(await fs.readFile(file, 'utf8')) as Record<string, unknown>; } catch { /* none yet */ }
-  const temp = `${file}.${process.pid}.tmp`;
-  await fs.writeFile(temp, `${JSON.stringify({ ...current, ...change })}\n`, { mode: 0o600 });
-  await fs.rename(temp, file);
+  await atomicWriteFile(file, `${JSON.stringify({ ...current, ...change })}\n`);
 }
 
 export async function setComputerEnabled(stateDir: string, enabled: boolean): Promise<void> {

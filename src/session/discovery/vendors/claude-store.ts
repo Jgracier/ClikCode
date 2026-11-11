@@ -7,7 +7,7 @@
  * an if-chain in locations.ts; the behaviour is unchanged. */
 
 import { randomUUID } from 'node:crypto';
-import { mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, relative } from 'node:path';
 import type { CanonicalRecord } from '../../canonical.js';
@@ -20,6 +20,7 @@ import { claudeProjectDirectoryNames } from './claude.js';
 import { testedVersion, versionNumber } from './thread-writer-files.js';
 import { claudeProjectDirectoryName, claudeThreadJsonl } from './claude-thread.js';
 import { placeArtifact } from '../../carry-artifact.js';
+import { atomicWriteFile } from '../../store/files.js';
 
 const CLAUDE_TESTED_VERSIONS = ['2.1.288'] as const;
 
@@ -36,20 +37,12 @@ async function writeClaudeThread(record: CanonicalRecord, context: NativeThreadW
   const sessionId = randomUUID();
   const directory = join(claudeConfigDir(context.environment), 'projects', claudeProjectDirectoryName(context.workspace));
   const path = join(directory, `${sessionId}.jsonl`);
-  const staged = `${path}.clikcode-write`;
   const text = claudeThreadJsonl(record, {
     sessionId, cwd: context.workspace,
     model: context.model && /^claude-/.test(context.model) ? context.model : null,
     version: versionNumber(context.version) ?? CLAUDE_TESTED_VERSIONS[0],
   });
-  await mkdir(directory, { recursive: true });
-  try {
-    await writeFile(staged, text, { flag: 'wx', mode: 0o600 });
-    await rename(staged, path);
-  } catch (error) {
-    await rm(staged, { force: true });
-    throw error;
-  }
+  await atomicWriteFile(path, text, { directory: 'vendor' });
   return { nativeId: sessionId };
 }
 

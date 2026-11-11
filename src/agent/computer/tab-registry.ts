@@ -13,6 +13,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { lifecycle, quiet } from '../../runtime/lifecycle-log.js';
 import { pidIsAlive } from '../../session/store/locks.js';
+import { atomicWriteFile } from '../../session/store/files.js';
 
 export interface TabRecord {
   /** The browser's own id for the page (CDP target id). */
@@ -55,11 +56,7 @@ const tabFile = (stateDir: string, id: string): string => path.join(tabsDirector
 
 export async function writeTabRecord(stateDir: string, record: TabRecord): Promise<void> {
   try {
-    await fs.mkdir(tabsDirectory(stateDir), { recursive: true, mode: 0o700 });
-    const file = tabFile(stateDir, record.id);
-    const temp = `${file}.${process.pid}.tmp`;
-    await fs.writeFile(temp, JSON.stringify(record), { mode: 0o600 });
-    await fs.rename(temp, file);
+    await atomicWriteFile(tabFile(stateDir, record.id), JSON.stringify(record), { durable: false });
   } catch (error) { quiet('agent/computer/tab-registry')(error); }
 }
 

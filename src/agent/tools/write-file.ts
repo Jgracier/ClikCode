@@ -1,10 +1,10 @@
 import fs from 'node:fs/promises';
-import path from 'node:path';
 import { eventDiff } from '../line-diff.js';
 import { defineTool, type ToolContext } from '../tool-contract.js';
 import { displayPath, looksBinary, resolveForWrite } from './fs-helpers.js';
 import { formatToolRow } from '../../harness/protocol/tools.js';
 import { errorsAfterEdit } from './lsp.js';
+import { atomicWriteFile } from '../../session/store/files.js';
 
 interface WriteFileArgs { path: string; content: string }
 
@@ -22,18 +22,10 @@ async function readExisting(file: string): Promise<{ text: string; mode: number;
 }
 
 /** Write through a sibling temp file so a crash never leaves a half file,
- * keeping the original permission bits. */
-export async function writeTextAtomic(file: string, content: string, mode?: number): Promise<void> {
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  const temp = path.join(path.dirname(file), `.${path.basename(file)}.clikcode-${process.pid}-${Date.now()}.tmp`);
-  try {
-    await fs.writeFile(temp, content, { mode: mode ?? 0o644 });
-    if (mode !== undefined) await fs.chmod(temp, mode);
-    await fs.rename(temp, file);
-  } catch (error) {
-    await fs.rm(temp, { force: true });
-    throw error;
-  }
+ * keeping the original permission bits. The user's directory: never chmodded,
+ * and no fsync per edit. */
+export function writeTextAtomic(file: string, content: string, mode?: number): Promise<void> {
+  return atomicWriteFile(file, content, { directory: 'user', durable: false, ...(mode === undefined ? {} : { mode }) });
 }
 
 export async function rememberWritten(file: string, ctx: ToolContext): Promise<void> {
