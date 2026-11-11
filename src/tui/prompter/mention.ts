@@ -1,9 +1,8 @@
 /** Browsing a /search mention in its conversation: showing it, its keys, and jumping the transcript to it. */
-import { stdout as output } from 'node:process';
 import type { HarnessSession } from '../../session/model.js';
 import { rowOfOccurrence, type MentionFocus } from '../render/search-focus.js';
 import { takeTerminalKeys } from '../input-decoder.js';
-import { SWIPE_ROWS, enterInputModes, popReadModes } from '../modes.js';
+import { SWIPE_ROWS } from '../modes.js';
 import type { ArrowSource } from '../swipe-arrows.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
 import { jumpTo } from './history-window.js';
@@ -37,14 +36,12 @@ export function mentionKey(this: TerminalHarnessPrompter): Promise<'next' | 'pre
       }
       done = true;
       stop();
-      output.write(popReadModes());
       resolve(action);
     };
     const listen = (): void => {
       stop = takeTerminalKeys((key) => {
         if (!this.swipeArrows.route(key, onKey)) onKey(key, 'key');
       }, () => { stop(); listen(); });
-      output.write(enterInputModes());
     };
     listen();
   });

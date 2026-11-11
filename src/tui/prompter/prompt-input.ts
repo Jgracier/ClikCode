@@ -2,10 +2,10 @@
 import { lifecycle } from '../../runtime/lifecycle-log.js';
 import { backslashNewline } from '../composer-edit.js';
 import { commandPaletteMatches, completedCommandLine, composerRightArrowValue, exactPaletteCommand, type PaletteEntry } from '../command-palette.js';
-import { stdin as input, stdout as output } from 'node:process';
+import { stdin as input } from 'node:process';
 import { nextCharacterIndex, previousCharacterIndex } from '../render/width.js';
 import { takeTerminalKeys } from '../input-decoder.js';
-import { SWIPE_ROWS, enterInputModes, popReadModes } from '../modes.js';
+import { SWIPE_ROWS } from '../modes.js';
 import { keyHint, keyHintFor } from '../../harness/protocol/wording.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
 import type { ArrowSource } from '../swipe-arrows.js';
@@ -113,9 +113,8 @@ class PromptSession {
     p.paint(settings?.secret ? '•'.repeat(value.length) : value, [], 0, prompt, cursor);
   }
 
-  /** The prompt is over, however it ended: the keyboard and the read
-   * modes are given back, once, and its notice (Ctrl+C's) goes with it.
-   * False when it had already ended. */
+  /** The prompt is over, however it ended: the keyboard is given back, once, and its notice (Ctrl+C's) goes with it. Nothing is
+   * written: the modes are the session's, and the caret is the next frame's. False when it had already ended. */
   private release(): boolean {
     if (this.finished) return false;
     this.finished = true;
@@ -125,8 +124,6 @@ class PromptSession {
     p.clearTransientNotice();
     // A secret typed and not sent is not kept anywhere.
     if (this.settings?.secret) this.composer.clear();
-    output.write(`${popReadModes()}\u001b[?25h`);
-    p.cursorShown = true;
     return true;
   }
 
@@ -166,7 +163,6 @@ class PromptSession {
 
   private listen(): void {
     this.stopInput = takeTerminalKeys((key) => { if (!this.finished) this.handleKey(key); }, () => { this.stopInput(); if (!this.finished) this.listen(); });
-    output.write(enterInputModes());
   }
 
   start(): void {

@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { stdout } from 'node:process';
 import { fileLocksIdle, fileLocksHeld } from '../../session/store/locks.js';
 import { historyDump, REEXEC_TERMINAL_ENV, reexecHandover } from '../../tui/restore.js';
-import { popReadModes } from '../../tui/modes.js';
+import { popKittyKeyboard } from '../../tui/modes.js';
 import { REEXEC_DRAFT_ENV, REEXEC_TYPED_ENV } from '../../session/ephemeral.js';
 import type { HarnessSession } from '../../session/model.js';
 import { swallowed } from '../../runtime/lifecycle-log.js';
@@ -66,7 +66,7 @@ export function replaceCliWithNewBuild(input: BuildReplace): Promise<void> | und
     if (typeof process.execve === 'function') {
       // This process's kitty keyboard entry is popped before it is replaced: the stack belongs to the terminal, and the new process
       // pushes its own, so each re-exec left one more entry on it (and a shell's Ctrl+C arriving as CSI-u after enough of them).
-      await new Promise<void>((resolve) => stdout.write(popReadModes(), () => resolve()));
+      await new Promise<void>((resolve) => stdout.write(popKittyKeyboard(), () => resolve()));
       // Nothing may await between the idle check and the exec.
       await fileLocksIdle();
       handOverTyped();
