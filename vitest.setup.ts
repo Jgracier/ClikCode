@@ -21,6 +21,9 @@ process.env.HOME = root;
 process.env.CLIKCODE_HOME = join(root, '.clikcode');
 process.env.TMPDIR = scratch;
 process.env.CLIKCODE_LIFECYCLE_LOG = '0';
+// The shell running the suite does not choose the screen model: a ClikDeploy phone shell carries
+// CLIKDEPLOY_CLIENT=mobile, which turns inline off (inline.ts), and a user's own opt-ins would too.
+for (const name of ['CLIKDEPLOY_CLIENT', 'CLIKCODE_INLINE', 'CLIKCODE_MOUSE']) delete process.env[name];
 // No test asks clikdeploy.com for the model catalog; catalog-source tests pass their own fetch.
 process.env.CLIKCODE_LOCAL_CATALOG_REFRESH = '0';
 // Never the machine's own Tailscale: every list of machines asks it which
