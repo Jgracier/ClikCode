@@ -10,12 +10,8 @@
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
 import { parseAmpUsage, parseCommandCodeApiWhoami, parseKimiUserInfo } from './vendor-identity.js';
 import type { AiLocalHarnessDefinition } from '../definition.js';
+import { emailIn as email } from './droid-identity.js';
 
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-function email(value: unknown): string | undefined {
-  return typeof value === 'string' && EMAIL.test(value.trim()) ? value.trim() : undefined;
-}
 
 function json(text: string): unknown {
   try { return JSON.parse(text); } catch { return undefined; }

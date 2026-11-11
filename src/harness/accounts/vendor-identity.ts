@@ -50,16 +50,11 @@ import { join } from 'node:path';
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
 import { nativeProfileEnvironment } from '../transport/profile-environment.js';
 import { captureMistralVibeCredential, mistralVibeAccountEmail } from './mistral-vibe-identity.js';
-import { droidAccountEmail } from './droid-identity.js';
+import { droidAccountEmail, emailIn as email } from './droid-identity.js';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import { stripAnsi } from '../../tui/render/width.js';
 import { sleep } from '../../runtime/sleep.js';
 
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-function email(value: unknown): string | undefined {
-  return typeof value === 'string' && EMAIL.test(value.trim()) ? value.trim() : undefined;
-}
 
 /** First `<label> <email>` line in human-readable status output. */
 function emailAfter(text: string, label: RegExp): string | undefined {

@@ -341,7 +341,8 @@ function zoneOffsetMs(at: number, timeZone: string): number {
   return Date.UTC(part('year'), part('month') - 1, part('day'), part('hour'), part('minute'), part('second')) - at;
 }
 
-const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+/** Month names as vendors' reset times abbreviate them, lower-cased. */
+export const MONTHS: readonly string[] = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 
 /** A vendor's reset in its named zone -- "Oct 1, 1:50pm" or just "11am" in
  * "America/Denver" -- as an instant. Claude words both its `/usage` lines and

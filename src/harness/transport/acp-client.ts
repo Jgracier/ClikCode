@@ -33,6 +33,7 @@ import { backgroundWork, type BackgroundWork } from '../protocol/background-agen
 import { markTurn } from '../../runtime/turn-latency.js';
 import { OTHER_ORG_THINKING_TITLE } from '../protocol/claude-thinking-notice.js';
 import { classifyEvidence } from '../../turn/account-evidence.js';
+import { ACP_AUTH_REQUIRED_CODE } from '../../turn/failover.js';
 
 type Json = Record<string, any>;
 
@@ -606,6 +607,9 @@ const TURN_BOOKKEEPING_UPDATES: ReadonlySet<string> = new Set(['usage_update', '
 const toolRunning = (update: Json): boolean => update.status === 'pending' || update.status === 'in_progress' || update.status === undefined;
 const toolSettled = (update: Json): boolean => update.status === 'completed' || update.status === 'failed';
 
+/** One agent process kept alive across turns: initialize once, open or resume
+ * the session once, then one session/prompt per turn. If the child dies (or
+ * its launch arguments change) the next turn respawns and resumes. */
 class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, BackgroundRun> implements AcpSession {
   /** What the vendor runs (background-work.ts). Items: tool calls not yet settled, in the turn or
    * background turn receiving updates. Level: claude-agent-acp's `background_tasks_changed`, kept
@@ -1808,17 +1812,11 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
   }
 }
 
-/** One agent process kept alive across turns: initialize once, open or resume
- * the session once, then one session/prompt per turn. If the child dies (or
- * its launch arguments change) the next turn respawns and resumes. */
 /** A load/resume of the wanted thread that the agent says does not exist. Claude Code's ACP
  * answers `Resource not found: <id>` (JSON-RPC -32002, the ACP "resource not found" code): its
  * own store lost the thread (chat de679bc3 failed six turns in a row on it, 2026-10-08, each
  * classified `other`). The thread is gone, not the account, so the turn starts a fresh one and
  * retells ClikCode's transcript (failover.ts `native-thread-invalid`). */
-/** JSON-RPC -32000: ACP's "authentication required". */
-const ACP_AUTH_REQUIRED_CODE = -32000;
-
 export function markMissingThread(error: unknown, wanted: string): unknown {
   if (!(error instanceof Error)) return error;
   const code = (error as { rpcCode?: unknown }).rpcCode;
