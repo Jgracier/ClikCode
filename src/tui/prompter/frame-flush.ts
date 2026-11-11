@@ -65,7 +65,7 @@ export function renderFrame(
 }
 
 export function flushFrame(this: TerminalHarnessPrompter): void {
-  if (this.closed || this.suspended || inlineBlock.measuring) return;
+  if (!this.canPaint('picker') || inlineBlock.measuring) return;
   const pending = this.pendingLive;
   if (!pending) return;
   this.pendingLive = undefined;
@@ -290,7 +290,7 @@ export function flushAlternateFrame(
   logCursorEvent(`alternate frame: height=${height} rows=${updates.length}/${rows.length} composer=${composerRow} col=${pending.cursorColumn}`);
   output.write(frame, () => {
     this.frameInFlight = false;
-    if (this.pendingLive && !this.closed && !this.suspended) this.flushFrame();
+    if (this.pendingLive && this.canPaint('picker')) this.flushFrame();
   });
   // More history is wanted under the view than one frame's budget rendered: the next batch is another frame, so the event loop
   // is free between them (a key, a resize, the stream).
@@ -484,7 +484,7 @@ export function flushInlineFrame(
   logCursorEvent(`inline frame: block=${live.length} finished=${retired.length} composer=${cursorRow} col=${pending.cursorColumn}`);
   output.write(frame, () => {
     this.frameInFlight = false;
-    if (this.pendingLive && !this.closed && !this.suspended) this.flushFrame();
+    if (this.pendingLive && this.canPaint('picker')) this.flushFrame();
   });
 }
 
@@ -560,6 +560,6 @@ function flushInlinePage(
   logCursorEvent(`inline page: rows=${rows.length} list=${list.length} composer=${cursorRow}`);
   output.write(frame, () => {
     this.frameInFlight = false;
-    if (this.pendingLive && !this.closed && !this.suspended) this.flushFrame();
+    if (this.pendingLive && this.canPaint('picker')) this.flushFrame();
   });
 }

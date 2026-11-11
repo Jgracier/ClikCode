@@ -76,7 +76,7 @@ export function drainAtBatchEnd(this: TerminalHarnessPrompter): void {
 export function scheduleScrollPaint(this: TerminalHarnessPrompter): void {
   const draw = (): void => {
     this.scrollPaintQueued = false;
-    if (this.closed || this.suspended) return;
+    if (!this.canPaint()) return;
     this.repaint();
   };
   // Inside a batch the frame waits for the end of the chunk; outside one --
@@ -220,7 +220,7 @@ export function stopSelectionScroll(this: TerminalHarnessPrompter): void {
 
 /** The current frame again, so the highlight follows the pointer. */
 export function redrawSelection(this: TerminalHarnessPrompter): void {
-  if (this.closed || this.suspended || this.selecting) return;
+  if (!this.canPaint()) return;
   if (this.turn) this.paintWaiting(this.turn);
   else this.repaint();
 }

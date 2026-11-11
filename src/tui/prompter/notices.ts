@@ -8,7 +8,7 @@ export function showTransientNotice(this: TerminalHarnessPrompter, text: string,
   this.transientNoticeTimer = setTimeout(() => {
     this.transientNoticeTimer = undefined;
     this.transientNotice = undefined;
-    if (!this.closed && !this.suspended) redraw();
+    if (this.canPaint('picker')) redraw();
   }, durationMs);
   this.transientNoticeTimer.unref();
 }

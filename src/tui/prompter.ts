@@ -54,6 +54,8 @@ import { clearInteractiveFrame, select, board, pickerHost } from './prompter/pic
 import { question } from './prompter/prompt-input.js';
 import { paint } from './prompter/paint/frame.js';
 
+/** Who has the screen (see TerminalHarnessPrompter.screenOwner). */
+type ScreenOwner = 'chat' | 'picker' | 'held' | 'suspended' | 'closed';
 /** Rows of the live conversation with their group tags. */
 type ScrollTail = { rows: string[]; tags: Array<string | undefined> };
 const EMPTY_TAIL: ScrollTail = { rows: [], tags: [] };
@@ -526,7 +528,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // one renders the status line (harness/output.ts), and painting the
     // composer here would draw it over the list being used; the state is kept
     // and the frame repaints with it when the picker closes.
-    if (this.selecting) return;
+    if (!this.canPaint()) return;
     // A running turn's composer is its draft, not empty. While it runs the
     // frame goes through the coalescing scheduler: a snapshot, a queue change
     // and a stop arrive together, and a direct paint drew each in between.
@@ -610,8 +612,27 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   }
 
   paint(...args: Parameters<typeof paint>): ReturnType<typeof paint> {
-    if (this.paintsHeld) return;
+    // The primitive both the chat and an open picker draw through (a picker's frames, and a prompt one of its actions asks).
+    if (!this.canPaint('picker')) return;
     return paint.apply(this, args);
+  }
+
+  /** Who has the screen, the one thing every paint path asks. A closed window draws nothing; a suspended one has handed the
+   * terminal over; a held one (joining a running turn) draws once, when released; an open picker draws its own frames;
+   * otherwise the chat does. Frames in flight and resize coalescing are scheduling, not ownership. */
+  get screenOwner(): ScreenOwner {
+    if (this.closed) return 'closed';
+    if (this.suspended) return 'suspended';
+    if (this.paintsHeld) return 'held';
+    if (this.selecting) return 'picker';
+    return 'chat';
+  }
+
+  /** Whether a frame drawn by `by` may reach the screen: the chat's own paths only while it owns the screen, a picker's while
+   * it or the chat does. */
+  canPaint(by: 'chat' | 'picker' = 'chat'): boolean {
+    const owner = this.screenOwner;
+    return owner === 'chat' || (by === 'picker' && owner === 'picker');
   }
 
   /** True from a window starting to join a running turn until the turn is drawn. Every step of a
@@ -623,6 +644,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   releasePaints(): void {
     if (!this.paintsHeld) return;
     this.paintsHeld = false;
+    if (!this.canPaint()) return;
     if (this.turn) this.paintWaiting(this.turn);
     else this.repaint();
   }
@@ -695,7 +717,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** Nothing is using this terminal: no turn, no picker, and no typed or
    * queued draft (an open palette is a typed `/`). A newer build may replace the process here. */
   idleForBuildReplace(): boolean {
-    return !this.closed && !this.suspended && !this.selecting
+    return this.screenOwner === 'chat'
       && !this.turn && !this.composer.text && !this.queuedDraft;
   }
 
