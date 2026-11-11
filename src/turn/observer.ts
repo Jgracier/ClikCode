@@ -74,11 +74,10 @@ export class SignInEnded extends Error {
   constructor(message: string, readonly outcome: SignInOutcome) { super(message); }
 }
 
-export interface SignInRequest {
-  /** Harness command, resolved again where the sign-in runs. */
-  command: string;
-  argv: readonly string[];
-  environment: Record<string, string>;
-  /** What the user is signing in to (`Hermes › nous`). */
-  name: string;
-}
+/** A sign-in a turn needs, run where the user is (TurnObserver.signIn).
+ * `name`: what the user is signing in to (`Hermes › nous`). */
+export type SignInRequest =
+  /** A vendor's own login. `command`: the harness, resolved again where it runs. */
+  | { kind?: 'vendor'; command: string; argv: readonly string[]; environment: Record<string, string>; name: string }
+  /** The Gateway's device sign-in (gateway/sign-in-for-turn.ts). */
+  | { kind: 'gateway'; name: string };

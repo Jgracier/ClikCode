@@ -75,3 +75,16 @@ describe('a sign-in a window runs for its worker', () => {
     ]);
   });
 });
+
+describe('the Gateway sign-in a window runs for its worker', () => {
+  it('runs on the window\'s own sign-in screen and is answered like a vendor\'s', async () => {
+    const answers: ClientCommand[] = [];
+    const gateway = vi.fn(async (_screen: SignInScreen | undefined) => undefined);
+    const signIns = new WindowSignIns(async () => { throw new Error('not a vendor'); }, gateway);
+    const shown = window();
+    signIns.run({ type: 'sign-in-request', id: 'g', kind: 'gateway', name: 'ClikCode Gateway' }, shown, (response) => { answers.push(response); });
+    await settle();
+    expect(gateway).toHaveBeenCalledWith(shown.screens[0]);
+    expect(answers).toEqual([{ type: 'sign-in-response', id: 'g' }]);
+  });
+});

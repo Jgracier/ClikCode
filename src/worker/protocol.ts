@@ -15,7 +15,7 @@ import type { HarnessSession, TurnActivity, TurnMark } from '../session/model.js
 import type { PlanEntry } from '../tui/render/plan-block.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { TakeBackOutcome } from '../turn/live-input.js';
-import type { SignInOutcome } from '../turn/observer.js';
+import type { SignInOutcome, SignInRequest } from '../turn/observer.js';
 import type { LiveSettingsFields } from '../turn/live-settings.js';
 import { swallowed } from '../runtime/lifecycle-log.js';
 
@@ -268,7 +268,7 @@ export type WorkerEvent =
    * sign-in on, so ONE client runs it on its own and answers with
    * `sign-in-response`; the worker then retries the turn. Sent only to the
    * window that runs it: the turn's sender, or the first to claim it. */
-  | { type: 'sign-in-request'; id: string; command: string; argv: readonly string[]; environment: Record<string, string>; name: string }
+  | ({ type: 'sign-in-request'; id: string } & SignInRequest)
   /** To every window attached: the conversation waits on a sign-in. A window
    * showing it claims it (`sign-in-claim`); one showing another keeps the id,
    * to claim it when it opens this conversation. `request-closed` ends it. */
