@@ -30,6 +30,9 @@ async function latest(): Promise<Map<string, ToolDefinition> | undefined> {
   return loaded.tools;
 }
 
+/** Every tool of the installed build's copy, in its order (undefined without a built copy). */
+export async function latestToolSet(): Promise<ToolDefinition[] | undefined> { const tools = await latest(); return tools && [...tools.values()]; }
+
 /** The rebuilt copy of one tool, if the installed build has one: its schema is the one callers must be checked against. */
 export async function latestTool(name: string): Promise<ToolDefinition | undefined> { return (await latest())?.get(name); }
 
