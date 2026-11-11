@@ -8,8 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { canonicalRecord } from './canonical';
 import {
   copilotThreadCompaction, grokThreadCompaction, kiroThreadCompaction,
-  agentMemoryCompaction, alignPrompts, claudeSummaryText, claudeThreadCompaction, conversationSummary,
-  placeCompaction, summarizedRecord, turnsHash, validSummary, shownSummary, listedSummary, summaryHeadline,
+  claudeSummaryText, turnsHash, validSummary, shownSummary, listedSummary, summaryHeadline,
 } from './conversation-summary';
 import { exportTranscript } from '../tui/slash/export-transcript';
 import { conversationOption } from './options';
@@ -31,39 +30,12 @@ const session = (messages: TranscriptMessage[], extra: Partial<HarnessSession> =
   status: 'active', workspace: '/w', messages, ...extra,
 } as HarnessSession);
 
-/** A Claude Code transcript that compacted after `before` requests and then took `after` more. */
-function claudeTranscript(before: number, after: number, summary = 'Turns 1-6: built the parser and fixed the tests.'): string {
-  const line = (entry: Record<string, unknown>): string => JSON.stringify(entry);
-  const prompt = (n: number): string => line({ type: 'user', message: { role: 'user', content: `request number ${n}` } });
-  return [
-    ...Array.from({ length: before }, (_, i) => prompt(i + 1)),
-    line({ type: 'system', subtype: 'compact_boundary', parentUuid: null }),
-    line({ type: 'user', isMeta: true, message: { role: 'user', content: '<command-name>/compact</command-name>' } }),
-    line({ type: 'user', isCompactSummary: true, isVisibleInTranscriptOnly: true, message: { role: 'user', content: `This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\n${summary}\n\nIf you need specific details from before compaction (like exact code snippets), read the full transcript at: /x.jsonl\n\nContinue the conversation from where it left off without asking the user any further questions.` } }),
-    line({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't', content: 'ok' }] } }),
-    ...Array.from({ length: after }, (_, i) => prompt(before + i + 1)),
-  ].join('\n');
-}
-
-describe('reading a summary a harness made', () => {
-  it("takes Claude Code's summary without its own framing, and the requests after it", () => {
-    const found = claudeThreadCompaction(claudeTranscript(6, 2));
-    expect(found).toEqual({ text: 'Turns 1-6: built the parser and fixed the tests.', prompts: ['request number 7', 'request number 8'] });
+describe("reading the summaries other vendors keep (shapes from their real session files)", () => {
+  it("takes Claude Code's words without its own framing", () => {
+    expect(claudeSummaryText('This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\nBuilt the parser.\n\nIf you need specific details from before compaction, read x')).toBe('Built the parser.');
     expect(claudeSummaryText('no framing at all')).toBe('no framing at all');
   });
 
-  it("takes ClikCode's own agent compaction and the requests it kept, not its notes", () => {
-    const memory = [
-      JSON.stringify({ kind: 'item', item: { type: 'text', role: 'user', text: 'request number 1' } }),
-      JSON.stringify({ kind: 'compaction', summary: 'Built the parser.', keep: [{ type: 'text', role: 'user', text: '<environment>\nDate: x' }, { type: 'text', role: 'user', text: 'request number 5' }] }),
-      JSON.stringify({ kind: 'item', item: { type: 'text', role: 'user', text: '[ClikCode] a shell finished' } }),
-      JSON.stringify({ kind: 'item', item: { type: 'text', role: 'user', text: 'request number 6' } }),
-    ].join('\n');
-    expect(agentMemoryCompaction(memory)).toEqual({ text: 'Built the parser.', prompts: ['request number 5', 'request number 6'] });
-  });
-});
-
-describe("reading the summaries other vendors keep (shapes from their real session files)", () => {
   const lines = (...rows: unknown[]): string => rows.map((row) => JSON.stringify(row)).join('\n');
 
   it("Grok: the compaction_meta row in Claude Code's words, and every unmarked request left in the rewritten history", () => {
@@ -102,49 +74,10 @@ describe("reading the summaries other vendors keep (shapes from their real sessi
   });
 });
 
-describe('placing a summary among the turns', () => {
-  const record = canonicalRecord(session(turns(8)));
-
-  it('finds where the kept requests begin, and keeps the turn before it for a vendor', () => {
-    expect(alignPrompts(record.turns, ['request number 7', 'request number 8'])).toBe(6);
-    // A vendor that compacted mid-turn: the turn before the first kept request stays as it is.
-    expect(placeCompaction({ text: 's', prompts: ['request number 7', 'request number 8'] }, record, 'claude')?.through).toBe(5);
-    expect(placeCompaction({ text: 's', prompts: ['request number 7', 'request number 8'] }, record, 'clikcode')?.through).toBe(6);
-  });
-
-  it('is not used when its end cannot be placed', () => {
-    expect(placeCompaction({ text: 's', prompts: ['something never asked'] }, record, 'claude')).toBeUndefined();
-    // Requests too short to tell apart ("yes", "ok") recur: no placement on them alone.
-    const terse = canonicalRecord(session([...turns(3), ...exchange('yes', 'a'), ...exchange('ok', 'b'), ...exchange('yes', 'c')]));
-    expect(alignPrompts(terse.turns, ['yes', 'ok'])).toBeUndefined();
-  });
-
-  it('stands for the turns it covers, keeps the newest, and retires when those turns change', () => {
-    const summary = { text: 'Opening summarized.', through: 6, hash: turnsHash(record.turns, 6), source: 'claude', at: 'now' };
-    const handed = summarizedRecord(record, summary);
-    expect(handed.summary).toEqual({ text: 'Opening summarized.', through: 6, source: 'claude' });
-    expect(handed.turns.map((turn) => turn.user)).toEqual(['request number 7', 'request number 8']);
-    // A redo that rewrote turn 3: the summary no longer describes the conversation.
-    const changed = canonicalRecord(session([...turns(2), ...exchange('a different request', 'x'), ...turns(8).slice(6)]));
-    expect(validSummary(summary, changed)).toBeUndefined();
-    expect(summarizedRecord(changed, summary)).toBe(changed);
-  });
-});
-
 describe('handing a summarized conversation to the next provider', () => {
   const dirs: string[] = [];
   afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
   const tmp = (): string => { const dir = mkdtempSync(join(tmpdir(), 'cc-summary-')); dirs.push(dir); return dir; };
-
-  it("writes Claude Code's own compaction into a Claude thread, which reads back as the same summary", () => {
-    const record = summarizedRecord(canonicalRecord(session(turns(8))), { text: 'Opening summarized.', through: 6, hash: turnsHash(canonicalRecord(session(turns(8))).turns, 6), source: 'clikcode', at: 'now' });
-    const records = claudeThreadRecords(record, { sessionId: 's', cwd: '/w', version: '2.1.289' });
-    expect(records[0]).toMatchObject({ type: 'system', subtype: 'compact_boundary', parentUuid: null });
-    expect(records[1]).toMatchObject({ type: 'user', isCompactSummary: true, parentUuid: records[0]!.uuid });
-    const back = claudeThreadCompaction(records.map((entry) => JSON.stringify(entry)).join('\n'));
-    expect(back?.text).toBe('Opening summarized.');
-    expect(back?.prompts).toEqual(['request number 7', 'request number 8']);
-  });
 
   it('carries the turns themselves: a summary a provider made is not put in place of them', async () => {
     const full = canonicalRecord(session(turns(8)));
@@ -171,6 +104,15 @@ describe('handing a summarized conversation to the next provider', () => {
     const texts = memory.flatMap((item) => (item.type === 'text' ? [item.text] : []));
     expect(texts.some((text) => text.includes('request number 2'))).toBe(true);
     expect(texts.some((text) => text.includes('request number 6'))).toBe(true);
+  });
+});
+
+describe('a summary an older build stored', () => {
+  it('is no longer in force once the turns it covers changed', () => {
+    const record = canonicalRecord(session(turns(4)));
+    const summary = { text: 's', through: 3, hash: turnsHash(record.turns, 3), source: 'claude', at: 'now' };
+    expect(validSummary(summary, record)).toBe(summary);
+    expect(validSummary(summary, canonicalRecord(session([...turns(2), ...exchange('a different request', 'x'), ...turns(4).slice(6)])))).toBeUndefined();
   });
 });
 

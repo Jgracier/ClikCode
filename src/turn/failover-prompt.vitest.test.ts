@@ -3,7 +3,9 @@ import { failoverPromptRequest, LEGACY_INTERRUPTED_TURN_REQUEST, normalizeImport
 import { transferPrompt } from './transfer.js';
 import { canonicalRecord } from '../session/canonical.js';
 import { conversationTitle } from '../session/discovery/conversation-title.js';
-import { mergeNativeTranscript } from '../session/discovery/transcript.js';
+import { reconcileNativeTranscript } from '../session/discovery/transcript.js';
+
+const mergeNativeTranscript = (cached: Parameters<typeof reconcileNativeTranscript>[0], source: Parameters<typeof reconcileNativeTranscript>[1]) => reconcileNativeTranscript(cached, source).messages;
 import { sessionTranscriptMessages } from './checkpoint.js';
 import type { HarnessSession } from '../session/model.js';
 

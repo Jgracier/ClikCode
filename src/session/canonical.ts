@@ -104,8 +104,7 @@ export interface CanonicalTurn {
   interrupted: boolean;
   origin: CanonicalOrigin;
   /** A line a writer puts before this turn's request (withProviderNote): set
-   * by markProviderBoundaries for ClikCode's own agent's seed, and by the
-   * summary note of a thread written for a vendor. Never a provider-boundary
+   * by markProviderBoundaries for ClikCode's own agent's seed. Never a provider-boundary
    * note in a vendor's thread. */
   providerNote?: string;
 }
@@ -127,9 +126,6 @@ export interface CanonicalRecord {
   plan?: HarnessPlanEntry[];
   /** Plan entries not completed. */
   openTodos: HarnessPlanEntry[];
-  /** Set only on a record about to be handed over (summarizedRecord): the
-   * summary standing for the `through` turns before `turns`. */
-  summary?: { text: string; through: number; source: string };
 }
 
 /** A row's verb and target, from formatToolRow's shape (`Verb target`,
