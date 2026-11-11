@@ -3,7 +3,7 @@
  *
  * The `gateway` group is the only part that talks to a remote platform.
  */
-import { untilStopped } from './stop-signal.js';
+import { serveThenExit, untilStopped } from './stop-signal.js';
 import { Option, type Command } from 'commander';
 import type Conf from 'conf';
 
@@ -31,8 +31,9 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   // (binds a socket, writes a runtime record) that only makes sense as a
   // spawn target.
   program.command('session-worker <id>', { hidden: true }).option('--warm').action((id: string, options: { warm?: boolean }) => later(() => import('../worker/session-worker.js'), 'runSessionWorker')(id, { warm: Boolean(options.warm) }));
-  program.command('mcp-serve').description("Serve ClikCode's computer tools to a harness over MCP (stdio); started for you in every harness session")
-    .action(async () => (await import('../commands/mcp-serve.js')).mcpServe());
+  // ClikCode's computer tools over MCP (stdio), started for every harness session: a spawn target, not a command to type.
+  program.command('mcp-serve', { hidden: true })
+    .action(async () => { const { mcpServe } = await import('../commands/mcp-serve.js'); await serveThenExit(mcpServe); });
   // Servers ClikCode no longer provides, still named in a vendor config that was missed
   // (commands/retired-mcp.ts): answered as empty servers rather than failed.
   for (const retired of ['conversations-mcp', 'swarm-mcp']) {
@@ -120,7 +121,10 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .option('--ids <a,b,c>', 'vendors to check').option('--next <n>', 'the next N vendors waiting for an agent').option('--parallel <n>', 'vendors at once, 1-4 (default 1)').option('--report', 'write the verdict into the work item note at ClikDeploy').option('--dump <dir>', 'save each rendered page\'s text there, to see what the verdict was read from')
     .action(async (flags: import('../commands/connectors.js').ConnectorsQualifyFlags) => (await import('../commands/connectors.js')).connectorsQualify(flags));
   connectors.command('agent-mcp', { hidden: true }).requiredOption('--tab <name>').requiredOption('--max-calls <n>').option('--counter <file>').option('--connector <id>')
-    .action(async (flags: { tab: string; maxCalls: string; counter?: string; connector?: string }) => (await import('../agent/computer/connector-micro-agent-mcp.js')).agentMcpServe({ tab: flags.tab, ...(flags.connector ? { connector: flags.connector } : {}), maxCalls: Number(flags.maxCalls), ...(flags.counter ? { counter: flags.counter } : {}) }));
+    .action(async (flags: { tab: string; maxCalls: string; counter?: string; connector?: string }) => {
+      const { agentMcpServe } = await import('../agent/computer/connector-micro-agent-mcp.js');
+      await serveThenExit((signal) => agentMcpServe({ tab: flags.tab, ...(flags.connector ? { connector: flags.connector } : {}), maxCalls: Number(flags.maxCalls), ...(flags.counter ? { counter: flags.counter } : {}) }, signal));
+    });
   connectors.command('resume <id>').description('Carry on with a connector whose keygrab could not finish: reattach to its parked hidden tab, optionally press one thing or go to one address, and continue getting the API key')
     .option('--click <text>', 'Press the control with this visible text first')
     .option('--goto <url>', 'Go to this https address in the parked tab first')

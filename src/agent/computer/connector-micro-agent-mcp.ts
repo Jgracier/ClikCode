@@ -3,6 +3,7 @@
  * past the budget a call is refused with the instruction to give a RESULT line. The count is written to a file for the caller's log. */
 import { quiet } from '../../runtime/lifecycle-log.js';
 import { createInterface } from 'node:readline';
+import { untilInputEnds } from '../../cli/stop-signal.js';
 import { writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { stateDirectory } from '../../session/store/paths.js';
@@ -87,7 +88,8 @@ export function agentMcpHandler(options: AgentMcpOptions): (message: Rpc) => Pro
   };
 }
 
-export async function agentMcpServe(options: AgentMcpOptions): Promise<void> {
+/** Serves until stdin closes or `signal` stops it, then closes its tab; the caller exits after (mcp-serve.ts). */
+export async function agentMcpServe(options: AgentMcpOptions, signal?: AbortSignal): Promise<void> {
   const handle = agentMcpHandler(options);
   const lines = createInterface({ input: process.stdin });
   const pending = new Set<Promise<void>>();
@@ -98,7 +100,7 @@ export async function agentMcpServe(options: AgentMcpOptions): Promise<void> {
     pending.add(work);
     void work.finally(() => pending.delete(work));
   });
-  await new Promise<void>(resolve => lines.once('close', resolve));
+  await untilInputEnds(lines, signal);
   await Promise.allSettled([...pending]);
   const { closeComputerPage, releaseComputerBrowser } = await import('./browser.js');
   await closeComputerPage(options.stateDir ?? stateDirectory(), options.tab).catch(quiet('agent/computer/connector-micro-agent-mcp'));

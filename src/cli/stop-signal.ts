@@ -1,3 +1,5 @@
+import type { Interface } from 'node:readline';
+
 /** A command's work, stopped by what stops a process.
  *
  * Ctrl+C, SIGTERM (`timeout`, a supervisor) and SIGHUP (a closed terminal)
@@ -19,4 +21,20 @@ export async function untilStopped<T>(work: (signal: AbortSignal) => Promise<T>)
   } finally {
     for (const [name, handler] of handlers) process.off(name, handler);
   }
+}
+
+/** A stdio server's input is over: the client closed stdin, or the process was told to stop. */
+export function untilInputEnds(lines: Interface, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    lines.once('close', resolve);
+    if (signal?.aborted) resolve();
+    signal?.addEventListener('abort', () => { lines.close(); resolve(); }, { once: true });
+  });
+}
+
+/** Run a stdio server, then end the process: a connection it opened (a worker socket, a browser) would
+ * otherwise keep it alive after its client left, until something killed it with no exit line logged. */
+export async function serveThenExit(serve: (signal: AbortSignal) => Promise<void>): Promise<never> {
+  await untilStopped(serve);
+  process.exit(process.exitCode ?? 0);
 }

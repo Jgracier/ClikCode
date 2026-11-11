@@ -3,18 +3,28 @@
  * so computer use and secret capture work in any harness, not only ClikCode's
  * agent. It holds no state: each call is forwarded to the chat's worker. */
 import { createInterface } from 'node:readline';
-import { SHARED_COMPUTER_TOOLS } from '../worker/computer-tool.js';
-import { installedBuildStamp, latestTool } from '../agent/computer/hot-tools.js';
-import { callWorkerTool } from './computer-tool-client.js';
+import { installedBuildStamp, latestToolSet } from '../agent/computer/hot-tools.js';
+import type { ToolDefinition } from '../agent/tool-contract.js';
+import type { callWorkerTool } from './computer-tool-client.js';
 import { currentToolName } from '../agent/computer/tool-names.js';
+import { untilInputEnds } from '../cli/stop-signal.js';
 
 type Rpc = { jsonrpc: '2.0'; id?: number | string; method?: string; params?: Record<string, any> };
 const VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 
 /** The tool list of the installed build, not of the code this process started with: a rebuilt ClikCode changes arguments. */
-async function tools(): Promise<unknown[]> {
-  return Promise.all(SHARED_COMPUTER_TOOLS.map(async tool => { const fresh = await latestTool(tool.name) ?? tool; return { name: tool.name, description: fresh.description, inputSchema: fresh.parameters }; }));
+async function toolSet(): Promise<readonly ToolDefinition[]> {
+  // The built copy (dist/computer-tools.js) is one file; the program's own copy is the whole computer
+  // implementation in many, so it is loaded only where there is no built copy (tests, a source checkout).
+  return await latestToolSet() ?? (await import('../worker/computer-tool.js')).SHARED_COMPUTER_TOOLS;
 }
+
+async function tools(): Promise<unknown[]> {
+  return (await toolSet()).map(tool => ({ name: tool.name, description: tool.description, inputSchema: tool.parameters }));
+}
+
+/** The worker connection, loaded with the first call: a session that never calls a tool does not pay for it. */
+const callInWorker: typeof callWorkerTool = async (input) => (await import('./computer-tool-client.js')).callWorkerTool(input);
 
 /** The installed build as of the last tool list this process gave out. */
 let listedStamp: number | undefined;
@@ -28,7 +38,7 @@ export async function buildChangedSinceListed(): Promise<boolean> {
   return true;
 }
 
-export async function handleMcpRequest(message: Rpc, call = callWorkerTool): Promise<Record<string, unknown> | undefined> {
+export async function handleMcpRequest(message: Rpc, call = callInWorker): Promise<Record<string, unknown> | undefined> {
   if (message.id === undefined) return undefined; // a notification wants no answer
   const reply = (result: unknown): Record<string, unknown> => ({ jsonrpc: '2.0', id: message.id, result });
   switch (message.method) {
@@ -40,7 +50,7 @@ export async function handleMcpRequest(message: Rpc, call = callWorkerTool): Pro
     case 'tools/list': { listedStamp = await installedBuildStamp(); return reply({ tools: await tools() }); }
     case 'tools/call': {
       const name = currentToolName(String(message.params?.name ?? ''));
-      if (!SHARED_COMPUTER_TOOLS.some(tool => tool.name === name)) return { jsonrpc: '2.0', id: message.id, error: { code: -32602, message: `Unknown tool "${name}".` } };
+      if (!(await toolSet()).some(tool => tool.name === name)) return { jsonrpc: '2.0', id: message.id, error: { code: -32602, message: `Unknown tool "${name}".` } };
       try {
         const result = await call({ tool: name, args: (message.params?.arguments ?? {}) as Record<string, unknown> });
         // A rejected call after a rebuild is most likely the caller's cached tool list: say so, and say what to do.
@@ -55,7 +65,10 @@ export async function handleMcpRequest(message: Rpc, call = callWorkerTool): Pro
   }
 }
 
-export async function mcpServe(): Promise<void> {
+/** Serves until the harness closes stdin or `signal` stops it (untilStopped: SIGTERM, SIGINT, SIGHUP), then
+ * finishes the calls in flight. The caller exits after: the worker connection would otherwise keep the
+ * process alive, and a harness that has to kill it leaves a start with no end in the lifecycle log. */
+export async function mcpServe(signal?: AbortSignal): Promise<void> {
   const lines = createInterface({ input: process.stdin });
   const pending = new Set<Promise<void>>();
   lines.on('line', line => {
@@ -70,6 +83,6 @@ export async function mcpServe(): Promise<void> {
     pending.add(work);
     void work.finally(() => pending.delete(work));
   });
-  await new Promise<void>(resolve => lines.once('close', resolve));
+  await untilInputEnds(lines, signal);
   await Promise.allSettled([...pending]);
 }
