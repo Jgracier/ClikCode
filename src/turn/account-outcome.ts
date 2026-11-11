@@ -1,5 +1,6 @@
 /** What a turn's outcome records on its account. */
-import { clearQuotaMark, markQuotaExhausted, quotaScopeForModel, vendorWindows, windowKey, windowSpent } from '../harness/accounts/usage-reading.js';
+import { clearQuotaMark, markQuotaExhausted, vendorWindows, windowKey, windowSpent } from '../harness/accounts/usage-reading.js';
+import { quotaScopeForModel } from '../harness/accounts/quota-scope.js';
 import { quotaRetryHint, quotaRollingWindowMs } from './failover.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessState } from '../session/model.js';
