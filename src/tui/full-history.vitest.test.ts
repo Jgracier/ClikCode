@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TerminalHarnessPrompter } from './prompter.js';
 import { TestScreen } from './inline-screen.vitest-helper.js';
 import { HISTORY_DUMP_ROWS } from './prompter/history-dump.js';
-import { followEnd } from './prompter/history-window.js';
+import { followEnd, renderChunk } from './prompter/history-window.js';
 
 const realTty = process.stdout.isTTY;
 const realWrite = process.stdout.write.bind(process.stdout);
@@ -239,6 +239,18 @@ describe('scroll-back through a long conversation', () => {
       settle();
       expect(rl.scrollWindow.more).toBe(false);
     } finally { now.mockRestore(); rl.close(); }
+  });
+
+  it('draws a message scrolled back to exactly as it was written: one writer for both', () => {
+    const { rl, settle } = setup(60);
+    try {
+      const s = session(12);
+      (s as { messages: Array<Record<string, unknown>> }).messages[5] = { role: 'assistant', content: 'answer 3', accountSwitch: { from: 'a@x', to: 'b@x', reason: 'limit' } };
+      rl.render(s);
+      settle();
+      expect(rl.scrollWindow.first).toBe(0);
+      expect(renderChunk(rl, 0, 12).rows).toEqual(rl.alternateTranscript.slice(0, renderChunk(rl, 0, 12).rows.length));
+    } finally { rl.close(); }
   });
 
   it('renders a bounded number of messages per frame: work units, not time', () => {

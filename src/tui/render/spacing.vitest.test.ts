@@ -2,6 +2,17 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import chalk from 'chalk';
 import { composerUsageLabel, paintTitleRule, paintUsageRule, usageRemainingPercent } from './waiting.js';
+import { makeRenderBlocks, savedMessageRows } from '../prompter/paint/transcript.js';
+import { createRowBuilders } from '../prompter/paint/rows.js';
+import { TerminalHarnessPrompter } from '../prompter.js';
+
+const strip = (text: string): string => text.replace(/\u001b\[[0-9;]*m/g, '');
+/** A saved message's writer at 80 columns, on a prompter with nothing else in it. */
+function kitFor() {
+  const p = Object.create(TerminalHarnessPrompter.prototype) as TerminalHarnessPrompter;
+  Object.assign(p, { activityEntries: [], emitted: { claimActivity: () => true } });
+  return { builders: createRowBuilders(p, 78), savedTools: () => [], renderBlocks: makeRenderBlocks(78) };
+}
 
 // Colour is off by default with no TTY, which would make every assertion
 // below vacuously pass. These tests are about which colour is chosen.
@@ -23,12 +34,16 @@ describe('the composer has room to breathe', () => {
     expect(firstPush, 'the footer must open with a blank row').toContain("footer.push(''");
   });
 
-  it('gives a change of speaker a bigger break than a change of paragraph', async () => {
+  it('gives a change of speaker a bigger break than a change of paragraph', () => {
     // Every gap was one row -- between messages and between the paragraphs
     // inside them alike -- so a new question read as one more paragraph of
     // the answer above it. Reported four times as "no buffer".
-    const source = await readFile(new URL('../prompter/paint/transcript.ts', import.meta.url), 'utf8');
-    expect(source).toContain("if (message.role === 'user' && index > 0) emit([''])");
+    const rows = (
+      [{ role: 'user', content: 'first question' }, { role: 'assistant', content: 'one paragraph\n\nanother paragraph' }, { role: 'user', content: 'next question' }] as const
+    ).flatMap((_, index, messages) => savedMessageRows(kitFor(), messages, index)).map(strip);
+    const at = (text: string): number => rows.findIndex((row) => row.includes(text));
+    expect(at('another paragraph') - at('one paragraph')).toBe(2);
+    expect(rows.slice(at('another paragraph') + 1, at('next question'))).toEqual(['', '']);
   });
 
   it('keeps the footer the same height on both sides of a turn', async () => {

@@ -17,20 +17,13 @@
  * first row where it was. */
 import { performance } from 'node:perf_hooks';
 import { stdout as output } from 'node:process';
-import chalk from 'chalk';
 import { isClikCodeNotice } from '../../session/clikcode-notice.js';
-import { stripRepeatedTitles } from '../../session/title.js';
-import { TurnTranscript } from '../../turn/transcript.js';
 import type { TranscriptMessage } from '../../session/model.js';
-import { accountSwitchLine } from '../../turn/failover.js';
-import { withoutOtherOrgThinkingNotice } from '../../harness/protocol/claude-thinking-notice.js';
-import { sanitizeTerminalText } from '../render/text.js';
-import { turnEndLine } from '../render/turn-end-line.js';
 import { estimatedRows } from '../render/reseed-window.js';
 import { extractTags } from '../render/row-tags.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
 import { createRowBuilders, createToolRows, createTurnTools } from './paint/rows.js';
-import { makeRenderBlocks } from './paint/transcript.js';
+import { blankCollapser, makeRenderBlocks, savedMessageRows } from './paint/transcript.js';
 import { safeRow } from './frame-flush.js';
 import { RowSums } from './row-sums.js';
 
@@ -166,39 +159,15 @@ export function renderChunk(
   const { messages, inner } = h.source!;
   const builders = createRowBuilders(p, inner);
   const { savedTools } = createTurnTools(p, builders, createToolRows(p, builders), undefined, { materializedPendingTurn: false });
-  const renderBlocks = makeRenderBlocks(inner);
+  const kit = { builders, savedTools, renderBlocks: makeRenderBlocks(inner) };
   const rows: string[] = [];
-  const emit = (list: readonly string[]): void => {
-    for (const row of list) {
-      const last = rows.length ? rows[rows.length - 1] : seed.last;
-      const before = rows.length > 1 ? rows[rows.length - 2] : rows.length ? seed.last : seed.before;
-      if (row === '' && (last === undefined || (last === '' && (before === '' || before === undefined)))) continue;
-      rows.push(row);
-    }
-  };
+  const emit = blankCollapser(rows, seed);
   const starts: number[] = [];
   p.callGroups.older = true;
   try {
     for (let index = from; index < to; index += 1) {
       starts.push(rows.length);
-      const message = messages[index]!;
-      if (message.role === 'user' && isClikCodeNotice(message.content)) { emit(builders.standaloneActivity(index + 1, false)); continue; }
-      const tools = message.role === 'assistant' ? savedTools(message, index) : [];
-      if (tools.length) {
-        emit(new TurnTranscript().advance({
-          content: sanitizeTerminalText(stripRepeatedTitles(message.content)), tools, turnEnded: true, renderBlocks,
-        }).finished);
-      } else {
-        if (message.role === 'user' && index > 0) emit(['']);
-        emit(message.role === 'assistant'
-          ? builders.messageRows(withoutOtherOrgThinkingNotice(stripRepeatedTitles(message.content)), '·')
-          : message.automatic ? builders.noticeRows(message.automatic) : builders.userRows(message.content));
-      }
-      if (message.role === 'assistant' && message.accountSwitch) emit(['', `  ${chalk.yellow(accountSwitchLine(message.accountSwitch))}`]);
-      const ended = message.role === 'assistant' ? turnEndLine(messages, index) : undefined;
-      if (ended) emit(['', `  ${chalk.dim(`─ ${ended} ─`)}`]);
-      emit(['']);
-      emit(builders.standaloneActivity(index + 1, false));
+      emit(savedMessageRows(kit, messages, index));
     }
     const next = messages[to];
     if (next && next.role === 'user' && to > 0 && !isClikCodeNotice(next.content)) emit(['']);

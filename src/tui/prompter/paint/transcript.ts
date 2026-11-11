@@ -16,7 +16,7 @@ import { withoutOtherOrgThinkingNotice } from '../../../harness/protocol/claude-
 import type { TerminalHarnessPrompter } from '../../prompter.js';
 import { inlineHistoryMode } from '../../inline.js';
 import { INLINE_TRANSCRIPT_ROWS } from '../state.js';
-import type { HarnessSession } from '../../../session/model.js';
+import type { HarnessSession, TranscriptMessage } from '../../../session/model.js';
 import { type RowBuilders, createRowBuilders, createToolRows, createTurnTools, type TurnSeam } from './rows.js';
 
 
@@ -56,13 +56,75 @@ type TranscriptInput = {
   hasTransientAssistant: boolean; conversationInner: number;
 };
 
-type Kit = {
-  finished: string[]; emit: (rows: readonly string[]) => void;
-  userRows: RowBuilders['userRows']; noticeRows: RowBuilders['noticeRows']; messageRows: RowBuilders['messageRows']; standaloneActivity: RowBuilders['standaloneActivity'];
-  savedTools: ReturnType<typeof createTurnTools>['savedTools']; turnTools: ReturnType<typeof createTurnTools>['turnTools'];
+/** What turns a saved message into rows at one width: the row builders, its saved calls, and settled blocks. `claim`: the activity
+ * between messages is being written for good, each entry once (the transcript); unset, it is only being drawn again (history). */
+export type MessageKit = {
+  builders: RowBuilders;
+  claim?: boolean;
+  savedTools: ReturnType<typeof createTurnTools>['savedTools'];
   renderBlocks: (blocks: readonly MessageBlock[], firstOfMessage: boolean) => string[];
-  renderLive: (blocks: readonly MessageBlock[], firstOfMessage: boolean) => string[];
 };
+
+type Kit = MessageKit & {
+  finished: string[]; emit: (rows: readonly string[]) => void;
+  turnTools: ReturnType<typeof createTurnTools>['turnTools'];
+};
+
+/** The rows of saved message `index`: THE way a message becomes rows, for the transcript as it is written (writeMessages), the
+ * history the view scrolls back into (history-window.ts renderChunk) and the dump written under the shell (through renderChunk).
+ * One writer, so a message scrolled back to reads as it did when it was written, and its measured height is the height it had.
+ *
+ * A notice ClikCode gave the model is not the user's to read: only the activity after it. Otherwise a blank row before a user's
+ * message (a change of speaker is a bigger break than a paragraph), the message -- with its saved calls back between its
+ * paragraphs, or as text -- then what the turn needed on the way (another account), its closing line, a blank row and the activity
+ * after it. `body`: rows already decided for the message (the answer that streamed live), and `closedBy`: the message whose
+ * closing lines end it (the last of a steered turn's span). `tools: false`: its calls are on screen already (the live turn's).
+ * Blank rows are collapsed by whoever emits them (blankCollapser). */
+export function savedMessageRows(
+  kit: MessageKit, messages: readonly TranscriptMessage[], index: number,
+  options: { body?: readonly string[]; closedBy?: number; tools?: boolean } = {},
+): string[] {
+  const { builders, savedTools, renderBlocks } = kit;
+  const message = messages[index]!;
+  const claim = kit.claim ?? false;
+  if (message.role === 'user' && isClikCodeNotice(message.content)) return builders.standaloneActivity(index + 1, claim);
+  const rows: string[] = [];
+  const tools = options.body || options.tools === false || message.role !== 'assistant' ? [] : savedTools(message, index);
+  if (options.body) rows.push(...options.body);
+  else if (tools.length) {
+    rows.push(...new TurnTranscript().advance({
+      content: sanitizeTerminalText(stripRepeatedTitles(message.content)), tools, turnEnded: true, renderBlocks,
+    }).finished);
+  } else {
+    if (message.role === 'user' && index > 0) rows.push('');
+    // A title tag never renders, however it got into the saved reply: a vendor that repeated its first reply's tag, or an older
+    // transcript. An older automatic /compact record is its notice, not the user's words.
+    rows.push(...(message.role === 'assistant'
+      ? builders.messageRows(withoutOtherOrgThinkingNotice(stripRepeatedTitles(message.content)), '·')
+      : message.automatic ? builders.noticeRows(message.automatic) : builders.userRows(message.content)));
+  }
+  const closing = options.closedBy ?? index;
+  const last = messages[closing]!;
+  if (last.role === 'assistant' && last.accountSwitch) rows.push('', `  ${chalk.yellow(accountSwitchLine(last.accountSwitch))}`);
+  const ended = last.role === 'assistant' ? turnEndLine(messages, closing) : undefined;
+  if (ended) rows.push('', `  ${chalk.dim(`─ ${ended} ─`)}`);
+  rows.push('', ...builders.standaloneActivity(closing + 1, claim));
+  return rows;
+}
+
+/** Appends rows to `into`, an empty row on each side of a message at most: two of them separate a message from the answer under it
+ * and from the message after it, never a third, and never a leading one at the top. `seed`: the two rows before `into` (what was
+ * written before it), so the rule holds across the boundary. */
+export function blankCollapser(into: string[], seed: { last?: string; before?: string } = {}): (rows: readonly string[]) => void {
+  return (rows) => {
+    for (const row of rows) {
+      const last = into.length ? into[into.length - 1] : seed.last;
+      const before = into.length > 1 ? into[into.length - 2] : into.length ? seed.last : seed.before;
+      if (row === '' && (last === undefined || (last === '' && (before === '' || before === undefined)))) continue;
+      into.push(row);
+    }
+  };
+}
 
 /** Where this list carries on from, whether the pending turn is already in
  * it, and where the live answer landed (a reseed first, if one is owed). */
@@ -119,82 +181,41 @@ function settleSeam(p: TerminalHarnessPrompter, finished: string[], session: Har
 function writeMessages(
   p: TerminalHarnessPrompter, kit: Kit, persistedMessages: TranscriptInput['persistedMessages'], firstUnwritten: number, startLiveAssistant: number | undefined,
 ): void {
-  const { finished, emit, userRows, noticeRows, messageRows, standaloneActivity, savedTools, turnTools, renderBlocks } = kit;
+  const { finished, emit, turnTools, renderBlocks } = kit;
   let liveAssistant = startLiveAssistant;
-  emit(standaloneActivity(firstUnwritten));
+  emit(kit.builders.standaloneActivity(firstUnwritten));
   // The turn this window drew live has all its calls on screen already: a
   // steer splits its saved answer into several messages, and the ones after
   // the first must not draw those calls a second time.
   let drewLiveTurn = false;
   for (let index = firstUnwritten; index < persistedMessages.length; index += 1) {
-    let message = persistedMessages[index]!;
-    if (!p.scrollWindow.detached) p.messageLines.set(index, p.alternateTrimmed + p.alternateTranscript.length + p.pendingFinished.length + finished.length);
-    // Something ClikCode told the model (a background shell's exit) is not part of the conversation the user reads.
-    if (message.role === 'user' && isClikCodeNotice(message.content)) {
+    const message = persistedMessages[index]!;
+    const line = p.alternateTrimmed + p.alternateTranscript.length + p.pendingFinished.length + finished.length;
+    if (!p.scrollWindow.detached) p.messageLines.set(index, line);
+    if (index !== liveAssistant || message.role !== 'assistant') {
+      emit(savedMessageRows(kit, persistedMessages, index, { tools: !drewLiveTurn }));
       p.emitted.wrote(message);
-      emit(standaloneActivity(index + 1));
       continue;
     }
-    const pastTools = message.role === 'assistant' && index !== liveAssistant && !drewLiveTurn ? savedTools(message, index) : [];
-    // A steered turn is saved as several messages and was drawn live as
-    // one answer: the span of them is that answer, written once.
-    const spanEnd = index === liveAssistant && message.role === 'assistant'
-      ? liveTurnSpan(persistedMessages, index, [...p.turnSteers.values()]) : index;
-    if (index === liveAssistant && message.role === 'assistant') {
-      // The answer that just streamed. Its rows are already in scrollback and
-      // the transcript knows exactly which blocks it still owes, so a
-      // persisted copy that runs longer than what streamed -- a re-derived
-      // answer, an interrupted turn -- contributes only its tail, and one
-      // identical to what streamed contributes nothing at all.
-      const answer = persistedMessages.slice(index, spanEnd + 1).filter((item) => item.role === 'assistant').map((item) => item.content).join('');
-      emit(p.turnTranscript.advance({
-        content: sanitizeTerminalText(answer), tools: turnTools(true), turnEnded: true, renderBlocks,
-      }).finished);
-    } else if (pastTools.length) {
-      // A saved turn: its calls go back where they happened, between the
-      // paragraphs, as they were drawn while it ran.
-      emit(new TurnTranscript().advance({
-        content: sanitizeTerminalText(stripRepeatedTitles(message.content)), tools: pastTools,
-        turnEnded: true, renderBlocks,
-      }).finished);
-    } else {
-      // A change of speaker is a bigger break than a change of paragraph.
-      // Every gap in the transcript was one row -- between messages and
-      // between the blocks inside them alike -- so a new question read as
-      // just another paragraph of the answer above it. Reported as "no
-      // buffer" repeatedly, and it was: the buffer was there, it just
-      // measured the same as everything else. Never at the very top, where
-      // there is nothing to separate from.
-      if (message.role === 'user' && index > 0) emit(['']);
-      // A title tag never renders, however it got into the saved reply: a
-      // vendor that repeated its first reply's tag, or an older transcript.
-      // An older automatic /compact record is its notice, not the user's words.
-      emit(message.role === 'assistant'
-        ? messageRows(withoutOtherOrgThinkingNotice(stripRepeatedTitles(message.content)), '·')
-        : message.automatic ? noticeRows(message.automatic) : userRows(message.content));
+    // The answer that just streamed. Its rows are already in scrollback and the transcript knows exactly which blocks it still
+    // owes, so a persisted copy that runs longer than what streamed -- a re-derived answer, an interrupted turn -- contributes only
+    // its tail, and one identical to what streamed contributes nothing at all. A steered turn is saved as several messages and was
+    // drawn live as one answer: the span of them is that answer, written once.
+    const spanEnd = liveTurnSpan(persistedMessages, index, [...p.turnSteers.values()]);
+    const answer = persistedMessages.slice(index, spanEnd + 1).filter((item) => item.role === 'assistant').map((item) => item.content).join('');
+    const body = p.turnTranscript.advance({ content: sanitizeTerminalText(answer), tools: turnTools(true), turnEnded: true, renderBlocks }).finished;
+    p.emitted.liveAnswerSettled();
+    liveAssistant = undefined;
+    drewLiveTurn = true;
+    p.turnTranscript.reset();
+    p.turnSteers.clear();
+    // The steers and the answers after them were that same drawing.
+    for (let covered = index; covered <= spanEnd; covered += 1) {
+      if (!p.scrollWindow.detached) p.messageLines.set(covered, line);
+      p.emitted.wrote(persistedMessages[covered]!);
     }
-    if (index === liveAssistant) {
-      p.emitted.liveAnswerSettled();
-      liveAssistant = undefined;
-      drewLiveTurn = true;
-      p.turnTranscript.reset();
-      p.turnSteers.clear();
-      // The steers and the answers after them were that same drawing.
-      for (let covered = index + 1; covered <= spanEnd; covered += 1) {
-        if (!p.scrollWindow.detached) p.messageLines.set(covered, p.messageLines.get(index) ?? 0);
-        p.emitted.wrote(persistedMessages[covered]!);
-      }
-      index = spanEnd;
-      message = persistedMessages[index]!;
-    }
-    // What the turn needed on the way -- a sign-in, another account --
-    // saved with its answer, then its closing line.
-    if (message.role === 'assistant' && message.accountSwitch) emit(['', `  ${chalk.yellow(accountSwitchLine(message.accountSwitch))}`]);
-    const ended = message.role === 'assistant' ? turnEndLine(persistedMessages, index) : undefined;
-    if (ended) emit(['', `  ${chalk.dim(`─ ${ended} ─`)}`]);
-    p.emitted.wrote(message);
-    emit(['']);
-    emit(standaloneActivity(index + 1));
+    emit(savedMessageRows(kit, persistedMessages, index, { body, closedBy: spanEnd }));
+    index = spanEnd;
   }
   p.emitted.settle(persistedMessages.length);
 }
@@ -222,20 +243,8 @@ export function writeTranscript(p: TerminalHarnessPrompter, input: TranscriptInp
   // decision.
   // -------------------------------------------------------------------
   const finished: string[] = [];
-  const emit = (rows: readonly string[]): void => {
-    for (const row of rows) {
-      const last = finished.length ? finished[finished.length - 1] : p.lastFinishedRow;
-      const before = finished.length > 1 ? finished[finished.length - 2]
-        : finished.length ? p.lastFinishedRow : p.secondLastFinishedRow;
-      // An empty row on each side of a message, so two of them separate a
-      // message from the answer under it and from the message after it.
-      // Never a third, and never a leading one at the top of a transcript.
-      if (row === '' && (last === undefined || (last === '' && (before === '' || before === undefined)))) continue;
-      finished.push(row);
-    }
-  };
+  const emit = blankCollapser(finished, { ...(p.lastFinishedRow !== undefined ? { last: p.lastFinishedRow } : {}), ...(p.secondLastFinishedRow !== undefined ? { before: p.secondLastFinishedRow } : {}) });
   const builders = createRowBuilders(p, conversationInner);
-  const { userRows, noticeRows, messageRows, standaloneActivity } = builders;
   const seam: TurnSeam = { materializedPendingTurn: false };
   const { savedTools, turnTools } = createTurnTools(p, builders, createToolRows(p, builders), pending, seam);
   const renderBlocks = makeRenderBlocks(conversationInner);
@@ -243,7 +252,7 @@ export function writeTranscript(p: TerminalHarnessPrompter, input: TranscriptInp
     renderMessageBlocks(blocks, '·', conversationInner, firstOfMessage, true);
   const settled = settleSeam(p, finished, session, persistedMessages, conversationInner);
   seam.materializedPendingTurn = settled.materializedPendingTurn;
-  const kit: Kit = { finished, emit, userRows, noticeRows, messageRows, standaloneActivity, savedTools, turnTools, renderBlocks, renderLive };
+  const kit: Kit = { finished, emit, builders, claim: true, savedTools, turnTools, renderBlocks };
   p.scrollWindow.source = { messages: persistedMessages, inner: conversationInner, conversation: session.id };
   writeMessages(p, kit, persistedMessages, settled.firstUnwritten, settled.liveAssistant);
   // Where the rows of the answer still streaming begin: everything before is a persisted message (the dump writes those from the list).
@@ -265,5 +274,5 @@ export function writeTranscript(p: TerminalHarnessPrompter, input: TranscriptInp
     emit(step.finished);
     liveConversation.push(...step.live);
   }
-  return { finished, liveConversation, userRows, materializedPendingTurn: settled.materializedPendingTurn };
+  return { finished, liveConversation, userRows: builders.userRows, materializedPendingTurn: settled.materializedPendingTurn };
 }
