@@ -238,6 +238,26 @@ describe('a stdio server', () => {
     expect((await find(tools, 'mcp__fake__echo').run({ text: 'again' }, ctx())).output).toMatch(/^echo: again/);
   });
 
+  it('a call to a server that died and will not restart fails at once until the backoff passes, then retries once', async () => {
+    let clock = 0;
+    const pidFile = join(dir, 'pid');
+    const failFlag = join(dir, 'fail');
+    const { tools } = await manager([fake('fake', { FAKE_MCP_PID_FILE: pidFile, FAKE_MCP_FAIL_IF: failFlag })], { now: () => clock }).toolset();
+    const first = Number(await readFile(pidFile, 'utf8'));
+    await writeFile(failFlag, '');
+    process.kill(-first, 'SIGKILL');
+    await until(() => !alive(first));
+    const echo = find(tools, 'mcp__fake__echo');
+    await expect(echo.run({ text: 'a' }, ctx())).rejects.toThrow(/could not open the database/);
+    const failedStart = await readFile(pidFile, 'utf8');
+    // Within the backoff: no new start, the same reason.
+    await expect(echo.run({ text: 'b' }, ctx())).rejects.toThrow(/could not open the database/);
+    expect(await readFile(pidFile, 'utf8')).toBe(failedStart);
+    clock += 61_000;
+    await rm(failFlag);
+    expect((await echo.run({ text: 'c' }, ctx())).output).toMatch(/^echo: c/);
+  });
+
   it('a server that will not start costs only its own tools, with its reason', async () => {
     let clock = 0;
     const mcp = manager([fake('broken', { FAKE_MCP_FAIL_START: '1' }), fake('good')], { now: () => clock });
