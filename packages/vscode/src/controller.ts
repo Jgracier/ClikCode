@@ -555,6 +555,12 @@ export class ClikCodeController implements vscode.Disposable {
     const previous = this.bridge;
     this.bridge = undefined;
     previous?.dispose();
+    // What that bridge asked dies with it, as on any exit: its exit is not
+    // heard (it is no longer this chat's bridge), and a sign-in card left up
+    // kept a hidden chat from ever letting its bridge go (park). The new
+    // bridge asks again what still waits.
+    this.dropQuestions();
+    this.setModel({ ...this.model, approvals: [], busy: undefined, signIn: undefined });
     // The chat on screen, as a reconnect resumes it: start reads it, and a
     // blank one never stored opens new (naming it here resumed it, which
     // failed with "no chat matches" and left no conversation open).
