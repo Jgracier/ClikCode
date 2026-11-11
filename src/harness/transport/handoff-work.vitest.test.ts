@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAcpSession } from './acp-client.js';
-import { agentResult, endedAgentWork, VendorTasks, type EndedWork } from './handoff-work.js';
+import { endedAgentWork, VendorTasks, type EndedWork, type RunningWork } from './handoff-work.js';
 import { formatEndedWork } from '../../worker/handed-off-work.js';
 
 const LIMIT = "You've hit your session limit · resets 7:50am (America/Denver)";
@@ -50,6 +50,7 @@ describe('Claude\'s background tasks', () => {
         { type: 'assistant', message: { model: 'sonnet', content: [{ type: 'text', text: 'All 12 endpoints answer.' }] } },
         { type: 'assistant', isApiErrorMessage: true, message: { model: '<synthetic>', content: [{ type: 'text', text: LIMIT }] } },
       ].map((line) => JSON.stringify(line)).join('\n'));
+      const agentResult = async (output: string): Promise<string> => (await endedAgentWork({ id: 'a1', kind: 'agent', label: 'Open B5' } as RunningWork, 'completed', '', output)).tail;
       expect(await agentResult(file)).toBe('All 12 endpoints answer.');
       expect(await agentResult(join(dir, 'missing.jsonl'))).toBe('');
     } finally { await rm(dir, { recursive: true, force: true }); }

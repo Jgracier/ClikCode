@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { createStreamState, parseHarnessLine } from './adapters';
-import { nativeSessionIds } from '../protocol/session-ids';
+import { nativeSessionIdsFromValues } from '../protocol/session-ids';
+import { parseJsonLines } from '../protocol/json-lines';
+
+/** The session ids in a turn's json-lines output. */
+const nativeSessionIds = (output: string): Set<string> => nativeSessionIdsFromValues(parseJsonLines(output).values);
 import { codex } from '../protocol/vendor-fixtures.vitest';
 import type { AiLocalHarnessDefinition } from '../definition';
 import { localHarnessForCommand } from '@clikcode/router/ai-local-harness';
@@ -15,7 +19,7 @@ describe('native harness response streams', () => {
   it('extracts documented Antigravity deltas and conversation ids', () => {
     const line = JSON.stringify({ event: 'step_update', step_update: { conversation_id: 'c3b66b04-872b-4fbe-a3a4-058a026ef20a', step_type: 'agent_response', text_delta: 'chunk' } });
     expect(responseOf(harness('antigravity'), line, createStreamState())).toEqual({ text: 'chunk', mode: 'append' });
-    expect([...nativeSessionIds(line, 'json-lines')]).toContain('c3b66b04-872b-4fbe-a3a4-058a026ef20a');
+    expect([...nativeSessionIds(line)]).toContain('c3b66b04-872b-4fbe-a3a4-058a026ef20a');
   });
 
   it('prioritizes explicit thread identities over nested item ids', () => {
@@ -23,7 +27,7 @@ describe('native harness response streams', () => {
       JSON.stringify({ type: 'item.completed', item: { id: 'item-first', type: 'reasoning' } }),
       JSON.stringify({ type: 'thread.started', thread_id: 'thread-source' }),
     ].join('\n');
-    expect([...nativeSessionIds(output, 'json-lines')][0]).toBe('thread-source');
+    expect([...nativeSessionIds(output)][0]).toBe('thread-source');
   });
 
   it('extracts Claude/Qwen stream events, Cursor deltas, and Cline snapshots', () => {

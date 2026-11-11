@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { AiLocalHarnessDefinition, ModelCatalogConnect } from '../definition.js';
+import { stripAnsi } from '../../tui/render/width.js';
 
 /** Providers OpenCode (and its fork Kilo) can sign in to but has not.
  *
@@ -51,7 +52,7 @@ export async function discoverOpencodeConnect(
 export function opencodeVerboseModels(raw: string): { models: string[]; free: string[] } {
   const models: string[] = [];
   const free: string[] = [];
-  const blocks = raw.replace(/\u001b\[[0-9;]*m/g, '').split(/^([^\s{}"]+\/\S+)[ \t]*$/m);
+  const blocks = stripAnsi(raw).split(/^([^\s{}"]+\/\S+)[ \t]*$/m);
   for (let index = 1; index < blocks.length; index += 2) {
     const id = blocks[index]!;
     models.push(id);

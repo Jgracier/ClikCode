@@ -29,6 +29,7 @@ import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../definition.j
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
 import { harnessBinaryIdentity } from '../transport/native/version-memo.js';
 import { jsonMemo } from '../../session/store/json-memo.js';
+import { stripAnsi } from '../../tui/render/width.js';
 
 interface EffortChoices {
   values: string[];
@@ -58,7 +59,7 @@ const LEVEL = /^[a-z][a-z0-9-]{0,15}$/;
  * least one of low/medium/high to count, which every effort scale does and
  * no stray comma list in a description will. */
 export function parseHelpEffortChoices(help: string, flag: string): string[] {
-  const lines = help.replace(/\u001b\[[0-9;]*m/g, '').split(/\r?\n/);
+  const lines = stripAnsi(help).split(/\r?\n/);
   const named = new RegExp(`(^|[\\s,\\[])${flag.replace(/-/g, '\\-')}(?=$|[\\s<=\\]])`);
   const listed = (raw: string, separator: RegExp): string[] => {
     const words = raw.split(separator).map((word) => word.trim().replace(/^["']|["']$/g, '').replace(/^or\s+/, ''))

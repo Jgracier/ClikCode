@@ -24,6 +24,7 @@ import { acpConfigOptionValues, acpDiscoverySession, acpProbeArgv, acpSessionMod
 import { localHarnessForCommand, modelDisplayId, modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
 import { modelLabel } from '../model-label.js';
 import { jsonMemo } from '../../session/store/json-memo.js';
+import { stripAnsi } from '../../tui/render/width.js';
 
 /** Provider-specific model naming belongs to account metadata, not generic
  * session pickers or terminal renderers. Unknown models always pass through. */
@@ -463,7 +464,7 @@ function discoveredModelsFrom(raw: string): string[] {
     };
     visit(JSON.parse(raw));
   } catch {
-    for (const line of raw.replace(/\u001b\[[0-9;]*m/g, '').split(/\r?\n/)) {
+    for (const line of stripAnsi(raw).split(/\r?\n/)) {
       const clean = line.trim().replace(/^[•*✓✔❯>\-]+\s*/, '');
       if (!clean) continue;
       // "Claude Fable 5.1 [fable-5.1]" -- the display name leads and the real

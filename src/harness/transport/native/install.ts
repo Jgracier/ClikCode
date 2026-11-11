@@ -41,6 +41,7 @@ import { spawnPortable as spawn, terminatePortable } from '../spawn.js';
 import { resolveBinaryPath } from './binary.js';
 import { addToProcessPath, expandInstallDir, managedNpmPrefix, npmPrefixBinDir } from './install-locations.js';
 import { harnessInstallRoute, manualInstallCommand, type HarnessInstallRoute, type InstallSpec } from './install-route.js';
+import { pidIsAlive } from '../../../session/store/locks.js';
 
 /** Who is shown an install happening. `start` when it begins (or begins
  * waiting on another process's install), `done` when the harness is there,
@@ -399,10 +400,6 @@ async function installUvTool(step: Extract<AiHarnessInstallStep, { kind: 'uv-too
 const LOCK_STALE_MS = INSTALL_TIMEOUT_MS + 5 * 60_000;
 const LOCK_POLL_MS = 250;
 
-function processAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
-}
-
 /** Longest a live holder is waited on before the install gives up with a clear error. */
 const LOCK_MAX_WAIT_MS = 10 * 60 * 1000;
 
@@ -431,7 +428,7 @@ export async function withInstallLock<T>(
     let holder: { pid?: number; at?: number } | undefined;
     try { holder = JSON.parse(await readFile(owner, 'utf8')) as { pid?: number; at?: number }; } catch { holder = undefined; }
     const since = holder?.at ?? (await stat(lock).then((info) => info.mtimeMs).catch(() => Date.now()));
-    const dead = holder?.pid !== undefined && !processAlive(holder.pid);
+    const dead = holder?.pid !== undefined && !pidIsAlive(holder.pid);
     if (dead || Date.now() - since > (options.staleMs ?? LOCK_STALE_MS)) {
       await rm(lock, { recursive: true, force: true }).catch(quiet('harness/transport/native/install'));
       continue;
