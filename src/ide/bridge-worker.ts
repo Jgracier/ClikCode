@@ -2,13 +2,11 @@
  * events, and stop a turn and see that it lands. */
 import { quiet } from '../runtime/lifecycle-log.js';
 import { noticeLevel } from './notice-level.js';
-import { withSignIn } from '../commands/account.js';
-import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
-import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { WorkerClient } from '../worker/client.js';
+import { WindowSignIns } from '../worker/window-sign-in.js';
 import { cancelOrigin, MOVED_REASON, type WorkerEvent } from '../worker/protocol.js';
 import { CONVERSATION_HANDOFF_REASON } from '../worker/registry.js';
-import { messageOf, TurnFailed, WorkerRetiring } from './bridge-support.js';
+import { TurnFailed, WorkerRetiring } from './bridge-support.js';
 import type { BridgeHost } from './bridge-host.js';
 
 export class WorkerLink {
@@ -20,6 +18,9 @@ export class WorkerLink {
   stopped = false;
   /** `taken`: the worker has said it has the submit (a turn started, queued, or failed). Until then it may only be in the socket. */
   turnWaiter: { resolve: () => void; reject: (error: Error) => void; error?: Error; taken?: boolean } | undefined;
+  /** Sign-ins the panel runs for its worker: only for the conversation it
+   * shows, and taken down when it stops showing it or the request closes. */
+  readonly signIns = new WindowSignIns();
 
   constructor(private readonly host: Pick<BridgeHost, 'channel' | 'prompter' | 'sessionId' | 'closed' | 'shown' | 'enqueue' | 'report' | 'refreshUsage' | 'scheduleDrain'>) {}
 
@@ -40,6 +41,8 @@ export class WorkerLink {
     });
     client.on('close', () => {
       if (this.worker?.client !== client) return;
+      // What it asked dies with it; the worker that replaces it asks again.
+      this.signIns.withdrawAll();
       const midTurn = this.workerTurnRunning || Boolean(this.turnWaiter);
       const untaken = this.untakenSubmit();
       this.worker = undefined;
@@ -76,6 +79,9 @@ export class WorkerLink {
     if (!worker) return;
     this.worker = undefined;
     this.workerTurnRunning = false;
+    // The panel no longer shows that conversation: its sign-ins come down,
+    // and the worker gives them to a window that does (its detach).
+    this.signIns.withdrawAll();
     try { worker.client.send({ type: 'detach' }); worker.client.close(); } catch { /* fail-open-ok: already gone */ }
   }
 
@@ -91,21 +97,21 @@ export class WorkerLink {
         return;
       case 'sign-in-pending':
         // The panel shows this conversation: it runs the sign-in unless a window already does.
-        client.send({ type: 'sign-in-claim', id: event.id });
+        if (this.host.sessionId === sessionId) client.send({ type: 'sign-in-claim', id: event.id });
         return;
       case 'sign-in-request':
+        // Not the conversation the panel shows: given back, for a window that shows it.
+        if (this.host.sessionId !== sessionId) { client.send({ type: 'sign-in-release', id: event.id }); return; }
         // The worker has no terminal; the editor has one. The worker retries
         // the turn once this answers.
         // The sign-in runs here and shows in the panel, like every other. It
         // is the turn's, which holds the queue anyway: not the job that
         // happened to attach this worker.
-        void this.host.prompter.holding(undefined, () => withSignIn(this.host.prompter, event.name, async () => {
-          const harness = localHarnessForCommand(event.command);
-          if (!harness) throw new Error(`unknown harness ${event.command}`);
-          await loginNativeHarness({ ...harness, loginArgv: event.argv }, event.environment);
-        }))
-          .then(() => client.send({ type: 'sign-in-response', id: event.id }),
-            (error: unknown) => client.send({ type: 'sign-in-response', id: event.id, error: messageOf(error) }));
+        this.signIns.run(event, this.host.prompter, (response) => client.send(response), (work) => this.host.prompter.holding(undefined, work));
+        return;
+      case 'request-closed':
+        // Answered in another window, or the turn ended: taken down here.
+        this.signIns.withdraw(event.id);
         return;
       case 'turn-error':
         if (this.turnWaiter) this.turnWaiter.error = new TurnFailed(event.message);

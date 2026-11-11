@@ -22,14 +22,15 @@ export class WindowSignIns {
   /** Each running here, by request id: its withdraw. */
   private readonly open = new Map<string, () => void>();
 
-  constructor(
-    private readonly answer: (response: Response) => void,
-    private readonly login: typeof loginNativeHarness = loginNativeHarness,
-  ) {}
+  constructor(private readonly login: typeof loginNativeHarness = loginNativeHarness) {}
 
   /** Runs the request on `prompter`'s sign-in screen, unless it already
-   * runs here. `around` wraps the whole sign-in (the editor's queue hold). */
-  run(event: Request, prompter: Shown, around: <T>(work: () => Promise<T>) => Promise<T> = (work) => work()): void {
+   * runs here, and gives the worker that asked its `answer`. `around` wraps
+   * the whole sign-in (the editor's queue hold). */
+  run(
+    event: Request, prompter: Shown, answer: (response: Response) => void,
+    around: <T>(work: () => Promise<T>) => Promise<T> = (work) => work(),
+  ): void {
     if (this.open.has(event.id)) return;
     let withdrawn = false;
     let screen: SignInScreen | undefined;
@@ -55,10 +56,10 @@ export class WindowSignIns {
       if (!harness) throw new Error(`unknown harness ${event.command}`);
       await this.login({ ...harness, loginArgv: event.argv }, event.environment);
     })).then(
-      () => { if (!withdrawn) this.answer({ type: 'sign-in-response', id: event.id }); },
+      () => { if (!withdrawn) answer({ type: 'sign-in-response', id: event.id }); },
       (error: unknown) => {
         if (withdrawn) return;
-        this.answer({
+        answer({
           type: 'sign-in-response', id: event.id,
           error: error instanceof Error ? error.message : String(error),
           outcome: signInOutcomeSaid(error) === 'cancelled' ? 'cancelled' : 'failed',

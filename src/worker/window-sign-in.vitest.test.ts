@@ -32,12 +32,13 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 describe('a sign-in a window runs for its worker', () => {
   it('signed in: answered once, and a repeated request is not run again', async () => {
     const answers: ClientCommand[] = [];
+    const answer = (response: ClientCommand) => { answers.push(response); };
     let finish!: () => void;
     const login = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
-    const signIns = new WindowSignIns((response) => answers.push(response), login);
+    const signIns = new WindowSignIns(login);
     const shown = window();
-    signIns.run(request('a'), shown);
-    signIns.run(request('a'), shown);
+    signIns.run(request('a'), shown, answer);
+    signIns.run(request('a'), shown, answer);
     await settle();
     expect(login).toHaveBeenCalledTimes(1);
     finish();
@@ -47,10 +48,11 @@ describe('a sign-in a window runs for its worker', () => {
 
   it('taken down: its login is stopped and nothing is answered, even if the login then reports signed in', async () => {
     const answers: ClientCommand[] = [];
+    const answer = (response: ClientCommand) => { answers.push(response); };
     let finish!: () => void;
-    const signIns = new WindowSignIns((response) => answers.push(response), () => new Promise<void>((resolve) => { finish = resolve; }));
+    const signIns = new WindowSignIns(() => new Promise<void>((resolve) => { finish = resolve; }));
     const shown = window();
-    signIns.run(request('a'), shown);
+    signIns.run(request('a'), shown, answer);
     await settle();
     expect(signIns.withdrawAll()).toEqual(['a']);
     expect(shown.screens[0]!.signal.aborted).toBe(true);
@@ -61,10 +63,11 @@ describe('a sign-in a window runs for its worker', () => {
 
   it('says whether it was cancelled or failed', async () => {
     const answers: ClientCommand[] = [];
+    const answer = (response: ClientCommand) => { answers.push(response); };
     const outcomes = [new SignInCancelled('Claude Code'), new Error('claude exited with status 1')];
-    const signIns = new WindowSignIns((response) => answers.push(response), async () => { throw outcomes.shift(); });
-    signIns.run(request('a'), window());
-    signIns.run(request('b'), window());
+    const signIns = new WindowSignIns(async () => { throw outcomes.shift(); });
+    signIns.run(request('a'), window(), answer);
+    signIns.run(request('b'), window(), answer);
     await settle();
     expect(answers).toEqual([
       { type: 'sign-in-response', id: 'a', error: 'sign-in to Claude Code was cancelled', outcome: 'cancelled' },
