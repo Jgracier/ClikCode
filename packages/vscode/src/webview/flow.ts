@@ -3,7 +3,7 @@
  * a webview makes -- which colour class a status wears. Pure, and free of
  * anything that styles a terminal, so the page bundles it. */
 import { describeCommands } from '../../../../src/harness/protocol/background-agents';
-import { answerWriting, backgroundTerminalsLabel, decisionRow, endsWithSummary, exploreRuns, explores, exploreSummary, liveTokenTarget, smoothTokens, tensedLabel, tokenMeterLabel, turnStatus, turnSummary, type Decision, type StatusTone } from '../../../../src/harness/protocol/turn-flow';
+import { answerWriting, backgroundTerminalsLabel, decisionRow, endsWithSummary, explores, liveTokenTarget, smoothTokens, tensedLabel, tokenMeterLabel, turnStatus, turnSummary, type Decision, type StatusTone } from '../../../../src/harness/protocol/turn-flow';
 import { shimmerCycleMs, SPIN_MS } from '../../../../src/harness/protocol/timings';
 import { TOOL_CATEGORY } from '../../../../src/harness/protocol/tool-category';
 import type { HarnessActivityEvent, ToolCategory } from '../../../../src/harness/prompter';
