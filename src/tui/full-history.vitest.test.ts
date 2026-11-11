@@ -273,7 +273,7 @@ describe('the history written under the shell when the screen is left', () => {
       settle();
       const out = rowsOf(rl.takeHistoryDump());
       expect(out).toHaveLength(HISTORY_DUMP_ROWS + 1);
-      expect(out[0]).toMatch(/earlier rows not shown; \/resume reopens the whole conversation/);
+      expect(out[0]).toMatch(/earlier rows not shown; `clikcode sessions resume s1` reopens the whole conversation/);
       expect(out.at(-1)).toBe('');
       expect(out.join('\n')).toContain('answer 4000');
     } finally { rl.close(); }

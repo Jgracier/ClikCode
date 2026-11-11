@@ -15,9 +15,11 @@ const ROW_END = '\u001b[0m\r\n';
 /** Messages rendered together while the dump is built from its end. */
 const DUMP_BATCH = 64;
 
-/** The note that says how many earlier rows the dump left out. */
-export function earlierRowsNote(count: number): string {
-  return `\u001b[2m… ${count} earlier row${count === 1 ? '' : 's'} not shown; /resume reopens the whole conversation\u001b[0m`;
+/** The note that says how many earlier rows the dump left out, and how to get them back. It is read in the shell's scrollback after
+ * ClikCode has exited, where `/resume` is no command: it names the shell command that reopens this conversation. */
+function earlierRowsNote(count: number, session: string | undefined): string {
+  const reopen = session ? `clikcode sessions resume ${session}` : 'clikcode sessions resume last';
+  return `\u001b[2m… ${count} earlier row${count === 1 ? '' : 's'} not shown; \`${reopen}\` reopens the whole conversation\u001b[0m`;
 }
 
 /** Rows of the dump as one string, each closed with a reset and a line break, autowrap on first. */
@@ -35,7 +37,8 @@ function dumpText(rows: readonly string[], note: readonly string[]): string {
  * Rows keep the width they were drawn for; a client at a narrower width wraps a long one, and nothing is cut. */
 export function takeHistoryDump(this: TerminalHarnessPrompter): string {
   const h = this.scrollWindow;
-  if (!h.source) return legacyDump(this);
+  // Nothing drawn yet: every retired row comes from a drawn conversation (paint/transcript.ts sets the source first).
+  if (!h.source) return '';
   const { messages } = h.source;
   const written = Math.min(messages.length, this.emitted.writtenCount());
   const session = this.currentSession?.id;
@@ -65,18 +68,5 @@ export function takeHistoryDump(this: TerminalHarnessPrompter): string {
   const sameAnswer = cursor.message === written;
   const liveRows = live.slice(sameAnswer ? Math.min(cursor.into, live.length) : 0);
   this.dumpCursor = { session, message: written, into: live.length };
-  return dumpText([...rows, ...liveRows], cut > 0 ? [earlierRowsNote(cut)] : []);
-}
-
-/** No conversation to draw from (rows were handed in directly): the retired rows, numbered for good (alternateTrimmed + index), with
- * `dumpedThrough` the first number not written. */
-function legacyDump(p: TerminalHarnessPrompter): string {
-  const trimmed = p.alternateTrimmed;
-  const all = [...p.alternateTranscript, ...p.pendingFinished];
-  const from = p.dumpedThrough === undefined ? 0 : Math.max(0, p.dumpedThrough - trimmed);
-  p.dumpedThrough = trimmed + all.length;
-  const fresh = all.slice(from);
-  const shown = fresh.slice(-HISTORY_DUMP_ROWS);
-  const cut = fresh.length - shown.length;
-  return dumpText(shown, cut > 0 ? [earlierRowsNote(cut)] : []);
+  return dumpText([...rows, ...liveRows], cut > 0 ? [earlierRowsNote(cut, session)] : []);
 }

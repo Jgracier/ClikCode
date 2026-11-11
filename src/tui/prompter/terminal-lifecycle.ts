@@ -121,7 +121,7 @@ export function close(this: TerminalHarnessPrompter): void {
   setTerminalRawMode(false);
   input.pause();
   // The alternate screen is handed back and the shell's own screen returns, with the conversation written under what the shell had
-  // (giveBackTerminal): it is in the client's scrollback. It is on disk too -- `/resume` reopens it.
+  // (giveBackTerminal): it is in the client's scrollback. It is on disk too -- `clikcode sessions resume <id>` reopens it.
   giveBackTerminal(`${leavePage()}${eraseInlineBlock()}${popReadModes()}`);
 }
 

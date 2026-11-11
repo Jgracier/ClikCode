@@ -179,8 +179,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** The width the transcript's rows were wrapped at. A resize to another
    * width wraps the whole conversation again (see rewrapTranscript). */
   transcriptColumns = output.columns || 0;
-  /** The first conversation row number (alternateTrimmed + index) not yet written into the normal screen; undefined: none of the current text has been. */
-  dumpedThrough: number | undefined;
   /** Where the history dump stands, by message (which a rewrite at another width keeps; row numbers it does not): the messages
    * before `message` are written, and `into` rows of the one at `message` (the answer that was still streaming). */
   dumpCursor: { session: string | undefined; message: number; into: number } | undefined;
