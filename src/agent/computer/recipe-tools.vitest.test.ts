@@ -70,9 +70,10 @@ describe('compactSavedRecipes and the recorder', () => {
 
 /** A fake probely key page: Add API key opens the form, the selectors open their options. Records every press. */
 function fakeProbely(over: { missing?: string[] } = {}): { port: DryRunPort; pressed: string[]; opened: string[] } {
-  let state: 'list' | 'form' | 'team' | 'role' = 'list';
+  type State = 'list' | 'form' | 'team' | 'role';
+  let state: State = 'list' as State;
   const pressed: string[] = [], opened: string[] = [];
-  const views: Record<typeof state, DryView> = {
+  const views: Record<State, DryView> = {
     list: { text: 'API keys', controls: [{ name: 'Add API key' }], fields: [] },
     form: { text: 'New key', controls: [{ name: 'Select a team' }, { name: 'Select a role' }, { name: 'Generate key' }], fields: ['Name'] },
     team: { text: 'New key', controls: [{ name: 'Select a team' }, { name: 'Global (account)' }, { name: 'Select a role' }, { name: 'Generate key' }], fields: ['Name'] },

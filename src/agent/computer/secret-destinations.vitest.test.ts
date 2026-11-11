@@ -2,7 +2,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import { addDestination, declaredAuthKind, declaredConnectionValues, destinationProblem, loadDestinations, normalizeSendTo, removeDestination, sendToDestinations, slotsOf } from './secret-destinations.js';
+import { addDestination, declaredAuthKind, declaredConnectionValues, destinationProblem, loadDestinations, normalizeSendTo, removeDestination, sendToDestinations, slotsOf, type DeclaredValues } from './secret-destinations.js';
 import { forgetSecrets, registerSecret } from './secret-scrubber.js';
 import { forgetCliStdinSupport, versionAtLeast } from './cli-stdin-support.js';
 import { lockCredentialVault, saveNamedSecret } from './credential-vault.js';
@@ -303,7 +303,7 @@ it('connectionValues keeps the read-back: NOT connected when nothing is stored, 
 });
 
 it('values is the plain name for connectionValues, checked against the connector\'s declared values, with the allowed names and format in the error', async () => {
-  const declared = async (id: string) => id === 'knack' ? { app_id: { label: 'Application ID', description: 'Settings, API & Code' } } : id === 'plain' ? {} : undefined;
+  const declared = async (id: string): Promise<DeclaredValues | undefined> => id === 'knack' ? { app_id: { label: 'Application ID', description: 'Settings, API & Code' } } : id === 'plain' ? {} : undefined;
   const plan = normalizeSendTo({ to: 'clikdeploy-connection', with: { integration: 'knack' }, values: { app_id: ' 5f1c2d3e4a ' } })!;
   expect(plan[0]).toMatchObject({ connectionValues: { app_id: ' 5f1c2d3e4a ' } });
   expect(plan[0]).not.toHaveProperty('values');

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { arrangeSnapshot } from './computer-web.js';
-import { capSections, condenseSnapshot, dedupeLinks, shortenText } from './snapshot-condense.js';
+import { capSections, dedupeLinks, shortenText } from './snapshot-condense.js';
 
 const link = (name: string, ref: number, url: string, indent = 6): string => `${' '.repeat(indent)}- link "${name}" [ref=e${ref}] [cursor=pointer]:\n${' '.repeat(indent + 2)}- /url: ${url}`;
 

@@ -36,7 +36,7 @@ describe('computer_use foreground delivery', () => {
     expect(computerDriverAction({ ...win, action: 'key', key: 'Enter' }).args).not.toHaveProperty('delivery_mode');
     expect(computerDriverAction({ ...win, action: 'key', key: 'Enter', delivery: 'background' }).args).not.toHaveProperty('delivery_mode');
     const requests = [
-      { action: 'key', key: 'Enter' }, { action: 'hotkey', keys: ['ctrl', 'a'] }, { action: 'scroll', direction: 'down' },
+      { action: 'key', key: 'Enter' }, { action: 'hotkey', keys: ['ctrl', 'a'] as string[] }, { action: 'scroll', direction: 'down' },
       { action: 'click', x: 1, y: 1 }, { action: 'double_click', x: 1, y: 1 }, { action: 'right_click', x: 1, y: 1 },
       { action: 'type', text: 'hi', x: 1, y: 1 }, { action: 'drag', x: 1, y: 1, to_x: 2, to_y: 2 },
     ] as const;

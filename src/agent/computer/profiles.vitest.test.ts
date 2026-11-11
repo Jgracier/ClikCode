@@ -6,6 +6,8 @@ import { lockCredentialVault } from './credential-vault.js';
 import { isUnfillable, bestProfileFor, defaultProfile, birthdayFor, customFieldFor, describeProfile, listProfiles, normalizePhone, phoneFor, profileEmail, profileKeyFor, readProfileSecret, removeProfile, saveProfile, saveProfileSecret, secretFieldFor } from './profiles.js';
 import { namedSecretNames } from './credential-vault.js';
 
+type SavedProfile = Awaited<ReturnType<typeof listProfiles>>[number];
+
 type ProfileKeyName = NonNullable<ReturnType<typeof profileKeyFor>>;
 let stateDir = '';
 afterEach(async () => { if (stateDir) { lockCredentialVault(stateDir); await rm(stateDir, { recursive: true, force: true }); stateDir = ''; } });
@@ -207,9 +209,9 @@ describe('profile secrets', () => {
 
 
 describe('bestProfileFor: several profiles never mean asking', () => {
-  const personal = { id: 'p', label: 'Personal', fields: { given_name: 'J', email: 'gracierdigital@gmail.com', phone: '1', address_line1: 'x' }, custom: {} } as never;
-  const admin = { id: 'a', label: 'ClikDeploy admin', fields: { given_name: 'J', email: 'admin@x.test' }, custom: {} } as never;
-  const railway = { id: 'r', label: 'Railway', fields: { given_name: 'J', organization: 'R' }, custom: { railway_email: { label: 'Railway email', value: 'justin@webpro.ai', match: ['email'] } } } as never;
+  const personal: SavedProfile = { id: 'p', label: 'Personal', fields: { given_name: 'J', email: 'gracierdigital@gmail.com', phone: '1', address_line1: 'x' }, custom: {} };
+  const admin: SavedProfile = { id: 'a', label: 'ClikDeploy admin', fields: { given_name: 'J', email: 'admin@x.test' }, custom: {} };
+  const railway: SavedProfile = { id: 'r', label: 'Railway', fields: { given_name: 'J', organization: 'R' }, custom: { railway_email: { label: 'Railway email', value: 'justin@webpro.ai', match: ['email'] } } };
   const hint = (text: string) => ({ text, type: 'text', autocomplete: '' });
 
   it('uses the default profile (Personal) whatever the form asks for', () => {
@@ -222,24 +224,24 @@ describe('bestProfileFor: several profiles never mean asking', () => {
     const picked = bestProfileFor([railway, personal], [hint('Email')], undefined, 'example-signup.test');
     expect(picked?.label).toBe('Personal');
     expect(picked?.fields.email).toBe('gracierdigital@gmail.com');
-    expect(customFieldFor(picked as never, hint('Email'))).toBeUndefined();
+    expect(customFieldFor(picked, hint('Email'))).toBeUndefined();
   });
 
   it('another profile is used only on the site it declares (by its label or its website)', () => {
     expect(bestProfileFor([railway, personal], [hint('Email')], undefined, 'railway.com')?.label).toBe('Railway');
     expect(bestProfileFor([railway, personal], [hint('Email')], undefined, 'login.railway.app')?.label).toBe('Railway');
     expect(bestProfileFor([admin, personal], [hint('Email')], undefined, 'admin.example.com')?.label).toBe('Personal');
-    const site = { id: 's', label: 'Hosting', fields: { website: 'https://www.hoster.test/x' }, custom: {} } as never;
+    const site: SavedProfile = { id: 's', label: 'Hosting', fields: { website: 'https://www.hoster.test/x' }, custom: {} };
     expect(bestProfileFor([site, personal], [], undefined, 'app.hoster.test')?.label).toBe('Hosting');
   });
 
   it('real profile shapes (AWS, ClikDeploy admin, Personal, Railway): cliengo.com gets Personal; each declared site its own', () => {
-    const aws = { id: 'w', label: 'AWS', fields: { email: 'aws@x.test' }, custom: {} } as never;
+    const aws: SavedProfile = { id: 'w', label: 'AWS', fields: { email: 'aws@x.test' }, custom: {} };
     const all = [aws, admin, personal, railway];
     for (const host of ['cliengo.com', 'app.cliengo.com', 'www.cliengo.com.ar', 'us.cliengo.io']) expect(bestProfileFor(all, [hint('Email')], undefined, host)?.label).toBe('Personal');
     expect(bestProfileFor(all, [], undefined, 'console.aws.amazon.com')?.label).toBe('AWS');
     expect(bestProfileFor(all, [], undefined, 'railway.com')?.label).toBe('Railway');
-    const listed = { id: 'l', label: 'Other', fields: {}, custom: { sites: { label: 'sites', value: 'cliengo.com, foo.test' } } } as never;
+    const listed: SavedProfile = { id: 'l', label: 'Other', fields: {}, custom: { sites: { label: 'sites', value: 'cliengo.com, foo.test' } } };
     expect(bestProfileFor([listed, personal], [], undefined, 'app.cliengo.com')?.label).toBe('Other');
   });
 
@@ -251,7 +253,7 @@ describe('bestProfileFor: several profiles never mean asking', () => {
 });
 
 describe('defaultProfile: no label never means a second profile', () => {
-  const mk = (label: string, fields: Record<string, string>) => ({ id: label, label, fields }) as never;
+  const mk = (label: string, fields: Record<string, string>): SavedProfile => ({ id: label, label, fields });
   it('is Personal, else the profile with the most standard fields', () => {
     const admin = mk('ClikDeploy admin', { email: 'admin@x.test', given_name: 'A', family_name: 'B', phone: '1' });
     expect(defaultProfile([admin, mk('Personal', { email: 'me@x.test' })])?.label).toBe('Personal');

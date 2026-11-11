@@ -23,7 +23,7 @@ describe('apply_patch', () => {
     ctx = {
       cwd: root, addDirs: [], sessionId: `patch-${Math.random()}`, turnId: 'turn-1', stateDir, homeDir: stateDir,
       checkpoints: new FileCheckpointStore(stateDir),
-    } as ToolContext;
+    } as unknown as ToolContext;
     ctx = { ...ctx, session: sessionState(stateDir, ctx.sessionId) } as ToolContext;
     await writeFile(path.join(root, 'a.ts'), 'const a = 1;\nfunction f() {\n  return a;\n}\nconst z = 9;\n');
     await writeFile(path.join(root, 'old.txt'), 'bye\n');

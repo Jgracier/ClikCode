@@ -19,7 +19,7 @@ describe('edit_file and multi_edit', () => {
     ctx = {
       cwd: root, addDirs: [], sessionId: `edit-${Math.random()}`, turnId: 'turn-1', stateDir, homeDir: stateDir,
       checkpoints: new FileCheckpointStore(stateDir),
-    } as ToolContext;
+    } as unknown as ToolContext;
     ctx = { ...ctx, session: sessionState(stateDir, ctx.sessionId) } as ToolContext;
     await writeFile(path.join(root, 'a.ts'), 'import { calcTotal } from "./x";\nexport const t = calcTotal(1) + calcTotal(2);\n');
   });

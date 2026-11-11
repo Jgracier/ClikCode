@@ -3,10 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { listTasks } from './work-queue.js';
-import { OPENS_ANOTHER_APP, authorizationUrl, classifyStuck, oauthConnect, type ConsentStop, startFailure, callbackState, GENERIC_ACTIONS, nextPress, readConsent, decideSelectors, providerFor, scopeTicks, scopesTicked, googleStep, type ScopeBox, stopReason, type Control } from './oauth-consent.js';
+import { OPENS_ANOTHER_APP, authorizationUrl, classifyStuck, oauthConnect, type ConsentStop, startFailure, callbackState, GENERIC_ACTIONS, nextPress, readConsent, decideSelectors, providerFor, scopeTicks, scopesTicked, googleStep, type ScopeBox, stopReason, type Control, type PressOptions } from './oauth-consent.js';
 
 const press = (...names: string[]): Control[] => names.map(name => ({ name, leaf: false }));
-const pick = (host: string, controls: Control[], text = '', options: { email?: string; skipAccount?: boolean } = {}): string | undefined => {
+const pick = (host: string, controls: Control[], text = '', options: PressOptions = {}): string | undefined => {
   const next = nextPress(host, controls, text, options);
   return next ? controls[next.index]!.name : undefined;
 };

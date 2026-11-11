@@ -5,7 +5,7 @@ import { createServer, request as httpRequest } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { chromium, type Browser, type Page } from 'playwright-core';
+import { chromium, type Browser } from 'playwright-core';
 import { expect, it } from 'vitest';
 import { closeComputerBrowser, openComputerPage } from './browser.js';
 import { runTailnetHandoff, tailnetAddress } from './tailnet-handoff.js';

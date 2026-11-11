@@ -164,7 +164,7 @@ describe('a task no rule knows: read the rendered pages first, then one agent mi
 
 
 describe('micro-agent account routing', () => {
-  const account = (provider: string, env: string, quotaState = 'available') => ({ id: provider, provider, label: provider, authKind: 'vendor-cli', status: 'ready', quotaState, ...(quotaState === 'exhausted' ? { quotaExhaustedAt: new Date().toISOString(), quotaRetryAt: new Date(Date.now() + 3_600_000).toISOString() } : {}), models: [], nativeProfile: { env, path: `/profiles/${provider}` } }) as import('../../harness/definition.js').AiHarnessAccount;
+  const account = (provider: string, env: string, quotaState: 'available' | 'exhausted' = 'available'): import('../../harness/definition.js').AiHarnessAccount => ({ id: provider, provider, label: provider, authKind: 'vendor-cli', credentialRef: provider, status: 'ready', quotaState, ...(quotaState === 'exhausted' ? { quotaExhaustedAt: new Date().toISOString(), quotaRetryAt: new Date(Date.now() + 3_600_000).toISOString() } : {}), models: [], nativeProfile: { env, path: `/profiles/${provider}` } });
   it('uses the saved Codex profile when Claude is spent', () => {
     const codex = account('openai', 'CODEX_HOME');
     expect(microAccount([account('anthropic', 'CLAUDE_CONFIG_DIR', 'exhausted'), codex])?.id).toBe('openai');

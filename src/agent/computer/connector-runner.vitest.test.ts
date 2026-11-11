@@ -37,7 +37,7 @@ describe('connectors run', () => {
     for (const task of [oauthTask('oauth-wall'), keyAt('key-wall')]) {
       const c = fakeClient([task]);
       const d = fakeDriver([]);
-      d.driver.qualify = async () => ({ lane: 'human', summary: 'captcha on signup', human: { kind: 'captcha', url: 'https://vendor.example/signup', instructions: 'Solve the captcha' } });
+      d.driver.qualify = async () => ({ lane: 'human', summary: 'captcha on signup', human: { kind: 'captcha', url: 'https://vendor.example/signup', instructions: 'Solve the captcha', reasonCode: 'captcha' } });
       const { outcomes } = await runConnectors(c.client, d.driver, quick);
       expect(outcomes[0]?.status).toBe('human');
       expect(d.driven).toEqual([]);
@@ -202,7 +202,7 @@ describe('connectors run', () => {
   });
 
   it('records a human step ClikDeploy already holds without reporting it again', async () => {
-    const human: OnboardResult = { id: 'stripe', state: 'needs-human', stage: 'connect', reason: 'needs a card', next: { kind: 'human', task: 'sign up', humanStep: { kind: 'payment', url: 'https://stripe.example/signup' } } };
+    const human: OnboardResult = { id: 'stripe', state: 'needs-human', stage: 'connect', reason: 'needs a card', next: { kind: 'human', task: 'sign up', humanStep: { kind: 'payment', url: 'https://stripe.example/signup', reasonCode: 'payment' } } };
     const c = fakeClient([human]);
     const { outcomes } = await runConnectors(c.client, fakeDriver([]).driver, quick);
     expect(outcomes[0]).toMatchObject({ status: 'human', humanStep: { kind: 'payment' } });
@@ -232,7 +232,7 @@ describe('connectors run', () => {
   it('works several vendors, taking the browser one at a time', async () => {
     const c = fakeClient([oauthTask('a'), oauthTask('b'), oauthTask('c')], { a: [published('a')], b: [published('b')], c: [published('c')] });
     let active = 0, peak = 0;
-    const driver: BrowserDriver = { hasRecipe: async () => false, captureKey: async () => ({ ok: true }), oauthConnect: async () => { peak = Math.max(peak, ++active); await new Promise(r => setTimeout(r, 5)); active--; return { ok: true }; } };
+    const driver: BrowserDriver = { hasRecipe: async () => false, captureKey: async () => ({ ok: true }), oauthConnect: async () => { peak = Math.max(peak, ++active); await new Promise(r => setTimeout(r, 5)); active--; return { ok: true }; }, keygrab: async () => ({ ok: true }) };
     const { outcomes } = await runConnectors(c.client, driver, { ...quick, parallel: 3 });
     expect(outcomes.map(o => o.status)).toEqual(['published', 'published', 'published']);
     expect(peak).toBe(1);
@@ -240,7 +240,7 @@ describe('connectors run', () => {
 
   it('turns an error into an outcome and never prints a held secret', async () => {
     const c = fakeClient([oauthTask('x')]);
-    const driver: BrowserDriver = { hasRecipe: async () => false, captureKey: async () => ({ ok: true }), oauthConnect: async () => { throw new Error('boom'); } };
+    const driver: BrowserDriver = { hasRecipe: async () => false, captureKey: async () => ({ ok: true }), oauthConnect: async () => { throw new Error('boom'); }, keygrab: async () => ({ ok: true }) };
     expect((await runConnectors(c.client, driver, quick)).outcomes[0]).toMatchObject({ status: 'error', summary: expect.stringContaining('boom') });
   });
 });
@@ -435,7 +435,7 @@ describe('warm hand-off and rate-limit back-off', () => {
   it('a wall that is not a captcha starts no back-off', async () => {
     let started = false;
     const c = fakeClient([keyAt('appcenter-ms')]);
-    const d = fakeDriver([{ ok: false, stop: stop({ kind: 'mfa', message: 'sms', human: { kind: 'sms', instructions: 'a phone verification' } }) }]);
+    const d = fakeDriver([{ ok: false, stop: stop({ kind: 'mfa', message: 'sms', human: { kind: 'sms', instructions: 'a phone verification', reasonCode: 'verification-code' } }) }]);
     await runConnectors(c.client, { ...d.driver, recordBackoff: async () => { started = true; return new Date(); } }, quick);
     expect(started).toBe(false);
   });
