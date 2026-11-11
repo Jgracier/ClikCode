@@ -23,3 +23,6 @@ export function loginPortForwardHint(url: string): string | undefined {
   const port = loginCallbackPort(url);
   return port ? `Consent callback port ${port} · over SSH forward with ssh -L ${port}:127.0.0.1:${port} <host>` : undefined;
 }
+
+/** The names a CLI opens a browser through: a sign-in records what they were asked to open, a probe makes them do nothing. */
+export const BROWSER_OPENERS = ['xdg-open', 'open', 'gio', 'sensible-browser', 'x-www-browser', 'www-browser'] as const;
