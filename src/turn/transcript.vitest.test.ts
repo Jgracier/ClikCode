@@ -429,7 +429,7 @@ describe('a steer acknowledged inside a block', () => {
 
 describe('a paragraph after a call that opened the turn', () => {
   it('has its own blank row above it, as the paragraph after any call does', () => {
-    const renderBlocks = (blocks: readonly MessageBlock[], first: boolean): string[] => text(blocks, first);
+    const renderBlocks = (blocks: readonly MessageBlock[]): string[] => text(blocks);
     const step = new TurnTranscript().advance({
       content: 'All done.', tools: [{ id: 'a', done: true, responseOffset: 0, lines: ['', 'call a'] }], turnEnded: true, renderBlocks,
     });

@@ -18,7 +18,7 @@ vi.mock('../agent/models/for-session.js', async (importOriginal) => {
   return {
     ...actual,
     gatewayConnection: () => ({ baseUrl: gateway.url, apiKey: gateway.key }),
-    modelClientForSession: async (session: HarnessSession) => modelClients.push(`${session.effort}/${session.speed}`) && actual.gatewayModelClient({ baseUrl: gateway.url, apiKey: gateway.key, sessionId: session.id, contextWindow: 32768 }),
+    modelClientForSession: async (session: HarnessSession) => modelClients.push(`${session.effort}/${session.speed ?? 'default'}`) && actual.gatewayModelClient({ baseUrl: gateway.url, apiKey: gateway.key, sessionId: session.id, contextWindow: 32768 }),
   };
 });
 vi.mock('../gateway/mcp.js', () => ({ routeMcpServers: () => [] }));
@@ -73,7 +73,7 @@ describe('a Gateway turn refused for the account', () => {
     state.sessions.push({
       id: 's1', conversationId: 's1', route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'auto',
       permissionMode: 'auto', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
-      status: 'active', workspace: home, title: 'named', name: 'named', nameSource: 'user',
+      status: 'active', workspace: home, name: 'named', nameSource: 'user',
     } as HarnessSession);
     await writeState(state);
   });
@@ -128,7 +128,7 @@ describe('settings changed while a Gateway turn runs', () => {
     const home = mkdtempSync(join(tmpdir(), 'cc-agent-live-'));
     process.env.CLIKCODE_HOME = home;
     let calls = 0;
-    const liveSettings = new LiveSettings({ route: 'gateway', model: null, effort: 'low', speed: undefined, permissionMode: 'bypass' });
+    const liveSettings = new LiveSettings({ route: 'gateway', accountId: null, model: null, effort: 'low', speed: undefined, permissionMode: 'bypass' });
     const server = createServer((req, res) => {
       req.resume();
       req.on('end', async () => {
@@ -153,9 +153,9 @@ describe('settings changed while a Gateway turn runs', () => {
     try {
       const state = await readState();
       state.sessions.push({
-        id: 's1', conversationId: 's1', route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'low', speed: 'default',
+        id: 's1', conversationId: 's1', route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'low',
         permissionMode: 'bypass', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
-        status: 'active', workspace: home, title: 'named', name: 'named', nameSource: 'user',
+        status: 'active', workspace: home, name: 'named', nameSource: 'user',
       } as HarnessSession);
       await writeState(state);
       await runSessionTurn(config, 's1', 'go', undefined, { liveSettings });

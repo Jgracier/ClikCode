@@ -30,7 +30,7 @@ beforeEach(async () => {
 afterEach(async () => {
   silent?.kill('SIGKILL');
   silent = undefined;
-  await new Promise((resolve) => { if (!server) resolve(undefined); else { server.close(resolve); server.closeAllConnections?.(); } });
+  await new Promise((resolve) => { if (!server) resolve(undefined); else server.close(resolve); });
   server = undefined;
   if (previous.home === undefined) delete process.env.CLIKCODE_HOME; else process.env.CLIKCODE_HOME = previous.home;
   if (previous.entry === undefined) delete process.env.CLIKCODE_WORKER_ENTRY; else process.env.CLIKCODE_WORKER_ENTRY = previous.entry;

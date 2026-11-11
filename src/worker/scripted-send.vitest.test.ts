@@ -17,7 +17,7 @@ import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import type { HarnessSession } from '../session/model.js';
 import { WorkerClient } from './client.js';
-import { conversationHolder, readWorkerRecord } from './registry.js';
+import { readWorkerRecord } from './registry.js';
 import type { WorkerEvent } from './protocol.js';
 import { sendScriptedTurn } from './scripted-send.js';
 

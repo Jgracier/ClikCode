@@ -275,7 +275,7 @@ describe('Amp stream-json', () => {
     const turn = createAmpStreamTurn({
       prompt: 'go', write: () => true, close: () => undefined,
       agentEnded: (ended) => reportEndedWork(SESSION, [ended], owner),
-    } as never);
+    } as Parameters<typeof createAmpStreamTurn>[0]);
     turn.note({ type: 'user', message: { content: [{ type: 'text', text: 'go' }] } });
     turn.note({ type: 'assistant', message: { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'task-1', name: 'Task', input: { mode: 'async', description: 'Open B5', prompt: TASK } }] } });
     turn.note({ type: 'system', subtype: 'subagent_finished', tool_use_id: 'task-1', status: 'error', error: "You've hit your usage limit. Try again at 10:35 AM." });

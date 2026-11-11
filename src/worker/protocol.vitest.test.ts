@@ -40,17 +40,17 @@ describe('encodeFrame/FrameDecoder', () => {
     // A snapshot of a long conversation: 4 MB in 4 KB chunks. Re-splitting
     // everything pending on each chunk took the square of this.
     const text = 'x'.repeat(4 * 1024 * 1024);
-    const frame = encodeFrame({ type: 'notice', message: text });
+    const frame = encodeFrame({ type: 'note', message: text });
     const frames = new FrameDecoder();
     const started = performance.now();
     let decoded: unknown[] = [];
     for (let offset = 0; offset < frame.length; offset += 4096) decoded = decoded.concat(frames.push(frame.slice(offset, offset + 4096)));
-    expect(decoded).toEqual([{ type: 'notice', message: text }]);
+    expect(decoded).toEqual([{ type: 'note', message: text }]);
     expect(performance.now() - started).toBeLessThan(2_000);
   });
 
   it('keeps four-byte characters whole when a chunk ends anywhere inside them', () => {
-    const message = { type: 'delta', text: '\u65e5\u672c \u{1F680} done', mode: 'append' };
+    const message = { type: 'delta', text: '\u65e5\u672c \u{1F680} done', mode: 'append' } as const;
     const bytes = Buffer.from(encodeFrame(message) + encodeFrame(message));
     const frames = new FrameDecoder();
     expect([...bytes].flatMap((byte) => frames.push(Buffer.from([byte])))).toEqual([message, message]);

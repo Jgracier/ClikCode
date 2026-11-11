@@ -7,7 +7,7 @@ import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessSession } from '../session/model.js';
 import type { EndedWork } from '../harness/transport/handoff-work.js';
 
-const account = (id: string, path: string): AiHarnessAccount => ({ id, provider: 'anthropic', label: id, authKind: 'vendor-cli', status: 'ready', models: [], nativeProfile: { env: 'CLAUDE_CONFIG_DIR', path } });
+const account = (id: string, path: string): AiHarnessAccount => ({ id, provider: 'anthropic', label: id, authKind: 'vendor-cli', credentialRef: id, status: 'ready', models: [], nativeProfile: { env: 'CLAUDE_CONFIG_DIR', path } });
 
 describe('a blocked subagent moving to the available account', () => {
   it('refreshes only its transcript and identity, preserving other agents on both accounts', async () => {

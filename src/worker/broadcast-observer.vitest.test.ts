@@ -175,7 +175,7 @@ describe('a window joining a running turn', () => {
     observer.activityEvent(started);
     observer.activityEvent({ ...started, output: ['file 1 passed', 'file 2 passed'] });
     expect(client.frames.filter((frame) => frame.type === 'activity')).toHaveLength(2);
-    expect(observer.liveSnapshot()?.activities.at(-1)?.event.output).toEqual(['file 1 passed', 'file 2 passed']);
+    expect(observer.liveSnapshot()?.activities?.at(-1)?.event.output).toEqual(['file 1 passed', 'file 2 passed']);
   });
 
   it('is given the turn\'s tool rows, where they fell in its answer, and its plan', () => {

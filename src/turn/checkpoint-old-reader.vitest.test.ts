@@ -123,7 +123,7 @@ describe('steering a turn', () => {
   it('records the steer and drops its queued copy in one write', async () => {
     const { checkpoint, session } = await started();
     const submission = { id: 'held', text: 'steer me', submittedAt: new Date().toISOString() };
-    await checkpoint.queue(submission, { held: true });
+    await checkpoint.queue(submission, true);
     await checkpoint.steer(submission);
     expect((await stored()).pending?.steers).toHaveLength(1);
     expect(session.queuedTurns ?? []).toHaveLength(0);

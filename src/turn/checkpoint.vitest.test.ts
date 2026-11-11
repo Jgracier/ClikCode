@@ -30,14 +30,14 @@ describe('a turn that left background agents running', () => {
   it('says so on the answer it ends on, once, and only when there were some', () => {
     const left = session();
     beginPendingTurn(left, 'go', stamp(1));
-    updatePendingResponse(left, 'Started them.');
+    updatePendingResponse(left, 'Started them.', 'append', stamp(2));
     left.pendingTurn!.pendingBackground = 2;
     finishPendingTurn(left, 'Started them.', stamp(9));
     expect(left.messages!.at(-1)!.turnEnd).toMatchObject({ pendingBackground: 2 });
 
     const none = session();
     beginPendingTurn(none, 'go', stamp(1));
-    updatePendingResponse(none, 'Done.');
+    updatePendingResponse(none, 'Done.', 'append', stamp(2));
     finishPendingTurn(none, 'Done.', stamp(9));
     expect(none.messages!.at(-1)!.turnEnd).not.toHaveProperty('pendingBackground');
   });
@@ -45,7 +45,7 @@ describe('a turn that left background agents running', () => {
   it('carries the work by kind (agents, workflows) onto the answer, for the end line', () => {
     const left = session();
     beginPendingTurn(left, 'go', stamp(1));
-    updatePendingResponse(left, 'Started them.');
+    updatePendingResponse(left, 'Started them.', 'append', stamp(2));
     left.pendingTurn!.pendingBackground = 2;
     left.pendingTurn!.background = { agents: 2, workflows: 1 };
     finishPendingTurn(left, 'Started them.', stamp(9));

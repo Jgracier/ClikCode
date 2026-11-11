@@ -86,7 +86,7 @@ describe('startConversationThread', () => {
     const goose = {
       command: 'goose', provider: 'goose', displayName: 'Goose', modelProviderSeparator: '/',
       turn: { output: 'json-lines', statelessProviders: ['claude-code'] },
-    } as AiLocalHarnessDefinition;
+    } as unknown as AiLocalHarnessDefinition;
     const { writer, seen } = fakeWriter();
     const reasons: string[] = [];
     const start = await startConversationThread(input({ writer, harness: goose, model: 'claude-code/sonnet', onFallback: (reason) => reasons.push(reason) }));
@@ -102,7 +102,7 @@ describe('startConversationThread', () => {
     const claw = {
       command: 'openclaw', provider: 'openclaw', displayName: 'OpenClaw', modelProviderSeparator: '/',
       turn: { output: 'json', statelessRoute: { path: ['meta'], values: ['claude-cli'] } },
-    } as AiLocalHarnessDefinition;
+    } as unknown as AiLocalHarnessDefinition;
     const { writer, seen } = fakeWriter();
     const start = await startConversationThread(input({ writer, harness: claw, model: 'claude-cli/claude-opus-4-7' }));
     expect(start.kind).toBe('transfer');
@@ -175,7 +175,8 @@ createdAt: now, updatedAt: now, status: 'active', workspace: '/w',
     const fitted = fitRecord(heavy, 26_000);
     expect(fitted.omitted).toBe(0);
     // The newest keeps its call and output; older ones say what ran, in words.
-    expect((fitted.record.turns[19]!.parts.at(-1) as { call: typeof call }).call.output).toHaveLength(1);
+    const newest = fitted.record.turns[19]!.parts.at(-1);
+    expect(newest?.type === 'tool' ? newest.call.output : undefined).toHaveLength(1);
     expect(fitted.record.turns[0]!.tools).toEqual([]);
     // What ran is told on the user side, never as the assistant's own words.
     const older = fitted.record.turns[0]!;

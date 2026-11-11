@@ -14,7 +14,7 @@ const failoverPrompt = (messages: HarnessSession['messages'], request: string): 
   transferPrompt(canonicalRecord({ id: 's', messages } as HarnessSession), request);
 /** The same, continuing an interrupted turn; `requestContext` is what its
  * request carried besides its words. */
-const interruptedTurnFailoverPrompt = (session: HarnessSession, options: { requestContext?: string } = {}): string => {
+const interruptedTurnFailoverPrompt = (session: Omit<HarnessSession, 'id'>, options: { requestContext?: string } = {}): string => {
   const record = canonicalRecord({ id: 's', ...session });
   const last = record.turns.at(-1)!;
   if (options.requestContext) last.user += options.requestContext;

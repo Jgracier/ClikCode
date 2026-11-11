@@ -2,6 +2,7 @@
  * from the account's own burn (account-burn.ts), through the choice a turn starts with. */
 import { describe, expect, it } from 'vitest';
 import type { AiHarnessAccount } from '../harness/definition.js';
+import type { AccountUsageReading } from '../harness/accounts/usage-reading.js';
 import type { HarnessState } from '../session/model.js';
 import { burnPerTurn } from './account-burn.js';
 import { initialAccountChoice } from './account-routing.js';
@@ -11,10 +12,13 @@ const HOUR = 3_600_000;
 /** The weekly window of an account that resets in a day: it opened six days ago. */
 const resetsAt = new Date(NOW + 24 * HOUR).toISOString();
 
-const account = (id: string, usedPct: number, readAgeMs = 0, window = 'weekly'): AiHarnessAccount => ({
+/** An account as stored, its usage with the windows persisted alongside. */
+type Account = AiHarnessAccount & { usage?: AccountUsageReading };
+
+const account = (id: string, usedPct: number, readAgeMs = 0, window = 'weekly'): Account => ({
   id, provider: 'fake', label: id, status: 'ready', authKind: 'vendor-cli', models: [], credentialRef: 'native:fake',
   usage: { at: new Date(NOW - readAgeMs).toISOString(), windows: [{ name: window, usedPct, resetsAt }] },
-} as AiHarnessAccount);
+});
 
 /** `turns` invocations of `id`, spread over the last five days of its window. */
 const invocations = (id: string, turns: number): HarnessState['invocations'] =>
