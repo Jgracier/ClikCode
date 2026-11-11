@@ -351,6 +351,9 @@ class PromptSession {
       // empty composer must not turn into history recall under a draft typed meanwhile.
       if (!value || p.scrolledBack) {
         if (p.scrollTranscript(direction === -1 ? SWIPE_ROWS : -SWIPE_ROWS)) return true;
+        // Read back to the first row, a swipe goes no further: it is not history recall (the
+        // last message used to land in the composer at the top of the conversation).
+        if (p.scrolledBack) return true;
         if (direction === 1 && p.noteReadingDirection()) return true;
       }
       const moved = composerVerticalMove(value, this.cursor, direction);

@@ -116,6 +116,15 @@ export function flushAlternateFrame(
   // leaving it takes them back, so the boundary moves in the frame the scroll begins and ends.
   const aboveBefore = this.alternateAbove;
   this.alternateAbove = above;
+  // Read back, the band growing or shrinking under the history (a sign-in's
+  // link, an approval, the agents' rows, a thought, the composer's lines)
+  // moves the boundary, not the text: the top row read stays on its screen
+  // row. Held at the bottom instead, a six-row sign-in card moved every row
+  // being read up by six. A height change (a phone's keyboard) is the
+  // resize's to place (viewport.ts).
+  if (this.alternateScrollback > 0 && lastBody !== undefined && above !== aboveBefore && this.alternatePrevious.length === height) {
+    this.alternateScrollback = Math.max(1, this.alternateScrollback + aboveBefore - above);
+  }
   // Scrolled back, the live region gives up its rows to the transcript:
   // looking at what went past is the whole point, and the composer is not
   // what is being read. A frame at offset zero is the conversation as it
