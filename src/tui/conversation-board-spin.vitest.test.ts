@@ -98,14 +98,14 @@ describe('closing the board', () => {
 
   it('leaves its frame for the next paint to replace, when the host can: clearing it showed the conversation being left, bare', async () => {
     const calls: string[] = [];
-    await closeBoardWith('\u001b[D', { clearFrame: () => calls.push('clear'), keepFrame: () => calls.push('keep') });
-    expect(calls).toEqual(['keep']);
+    await closeBoardWith('\u001b[D', { clearFrame: () => calls.push('clear'), keepsFrame: true });
+    expect(calls).toEqual([]);
   });
 
   it('chooses a conversation the same way, then hands it on', async () => {
     const calls: string[] = [];
-    const result = await closeBoardWith('\r', { clearFrame: () => calls.push('clear'), keepFrame: () => calls.push('keep') });
-    expect(calls).toEqual(['keep']);
+    const result = await closeBoardWith('\r', { clearFrame: () => calls.push('clear'), keepsFrame: true });
+    expect(calls).toEqual([]);
     expect(result).toEqual({ open: 'a' });
   });
 

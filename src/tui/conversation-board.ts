@@ -344,7 +344,7 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
       // The next paint is the conversation chosen (or the one left, on Esc), drawn with its
       // composer in one change; clearing the board first drew the conversation being left, bare.
       // Adding a machine is not that: its questions and steps are drawn on the chat.
-      if (host.keepFrame && !(result && 'addMachine' in result)) host.keepFrame(); else host.clearFrame();
+      if (!host.keepsFrame || (result && 'addMachine' in result)) host.clearFrame();
       resolve(result);
     };
     const listen = (): void => {

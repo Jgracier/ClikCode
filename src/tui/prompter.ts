@@ -38,7 +38,7 @@ import { type ComposerFrame, EMPTY_COMPOSER, type WaitingTurn } from './prompter
 import { takeHistoryDump } from './prompter/history-dump.js';
 import { retakeScreen, retakeTerminalSignals, takeTerminalTitle, terminalSignals, notifyIfAway, suspendToShell, onContinue, close, suspend, resume } from './prompter/terminal-lifecycle.js';
 import { HistoryWindow } from './prompter/history-window.js';
-import { scrollTranscript, drainScroll, queueScroll, drainAtBatchEnd, scheduleScrollPaint, handleScrollKey, handleSelection, lineAtScreenRow, selectionText, followSelectionEdge, stepSelectionScroll, stopSelectionScroll, noteReadingDirection, forgetScreenPosition } from './prompter/scroll-selection.js';
+import { scrollTranscript, drainScroll, queueScroll, drainAtBatchEnd, scheduleScrollPaint, handleScrollKey, handleSelection, lineAtScreenRow, selectionText, followSelectionEdge, stepSelectionScroll, stopSelectionScroll, forgetScreenPosition } from './prompter/scroll-selection.js';
 import { showMention, mentionKey, endMention, jumpToMention } from './prompter/mention.js';
 import { showTransientNotice, clearTransientNotice, panel, panelKey } from './prompter/notices.js';
 import { answerApproval, restoreTellingDraft, approval, withdrawApproval, askQuestions, questionKey, openQuestionCall, presentNextApproval, settleApprovals } from './prompter/approvals.js';
@@ -820,7 +820,6 @@ const methods = {
   followSelectionEdge,
   stepSelectionScroll,
   stopSelectionScroll,
-  noteReadingDirection,
   forgetScreenPosition,
   showTransientNotice,
   clearTransientNotice,

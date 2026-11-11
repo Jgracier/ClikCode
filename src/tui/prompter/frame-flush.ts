@@ -166,9 +166,8 @@ export function flushAlternateFrame(
   this.jumpToMention(above);
   const furthest = Math.max(0, bodyLength - above);
   // Past what is held yet: drawn at the window's edge while the next batch is rendered (another frame is owed), kept as asked.
-  const shown = Math.max(Math.min(this.alternateScrollback, furthest), this.scrollWindow.rowsBelow);
+  const scrolled = Math.max(Math.min(this.alternateScrollback, furthest), this.scrollWindow.rowsBelow);
   if (this.scrollWindow.first === 0 || !this.scrollWindow.more) this.alternateScrollback = Math.min(this.alternateScrollback, furthest);
-  const scrolled = shown;
   this.scrollBodyLength = scrolled > 0 ? bodyLength : undefined;
   const first = Math.max(0, bodyLength - above - scrolled);
   const transcriptLength = this.alternateTranscript.length;

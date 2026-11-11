@@ -121,7 +121,7 @@ export function handleScrollKey(this: TerminalHarnessPrompter, key: string): boo
   // A phone keyboard has no page keys, but its key bar has ctrl, so these
   // two are reachable by hand where PageUp and PageDown are not.
   if (key === '\u0002') { this.scrollTranscript(page); return true; }
-  if (key === '\u0006') { if (!this.scrollTranscript(-page)) this.noteReadingDirection(); return true; }
+  if (key === '\u0006') { this.scrollTranscript(-page); return true; }
   return false;
 }
 
@@ -220,14 +220,6 @@ export function stopSelectionScroll(this: TerminalHarnessPrompter): void {
   if (!this.selectionScroll) return;
   clearInterval(this.selectionScroll.timer);
   this.selectionScroll = undefined;
-}
-
-/** Down at the live end moves nothing: there is nothing newer than the
- * newest. The key is still taken (inverting it was tried and nothing then
- * settled at the live end), and it no longer prints a hint: how to read back
- * -- Up or Ctrl+B -- is in /help. */
-export function noteReadingDirection(this: TerminalHarnessPrompter): boolean {
-  return !this.scrolledBack && this.alternateTranscript.length > 0;
 }
 
 /** Forget where on screen the live block sits: whoever writes next (the
