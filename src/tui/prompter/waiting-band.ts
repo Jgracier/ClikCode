@@ -107,7 +107,7 @@ export function escStops(this: TerminalHarnessPrompter): boolean {
 }
 
 export function updateWaiting(this: TerminalHarnessPrompter): void {
-  if (!this.turn || this.closed || this.selecting) return;
+  if (!this.turn || !this.canPaint()) return;
   this.schedulePaint();
 }
 
@@ -116,13 +116,13 @@ export function updateWaiting(this: TerminalHarnessPrompter): void {
  * those signals into a single atomic frame instead of queueing competing
  * terminal writes that briefly expose half-updated cursor/footer state. */
 export function schedulePaint(this: TerminalHarnessPrompter, delay = PAINT_COALESCE_MS): void {
-  if (this.responsePaintTimer || this.closed || this.suspended || this.selecting) return;
+  if (this.responsePaintTimer || !this.canPaint()) return;
   this.responsePaintTimer = setTimeout(() => {
     this.responsePaintTimer = undefined;
     // A resize burst in progress: the settled repaint draws the turn at its final size. A key's echo
     // does not come through here, so typing is never held.
     if (this.resizePaintTimer) { this.paintDropped = true; return; }
-    if (!this.closed && !this.selecting) {
+    if (this.canPaint()) {
       if (this.turn) this.paintWaiting(this.turn);
       else this.repaint();
     }
@@ -137,7 +137,7 @@ export function flushPaint(this: TerminalHarnessPrompter): void {
   if (!this.responsePaintTimer) return;
   clearTimeout(this.responsePaintTimer);
   this.responsePaintTimer = undefined;
-  if (this.closed || this.suspended || this.selecting) return;
+  if (!this.canPaint()) return;
   if (this.resizePaintTimer) { this.paintDropped = true; return; }
   if (this.turn) this.paintWaiting(this.turn);
   else this.repaint();

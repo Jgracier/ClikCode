@@ -51,7 +51,7 @@ export function repaintAfterResize(this: TerminalHarnessPrompter): void {
   this.resizePaintTimer = setTimeout(() => {
     this.resizePaintTimer = undefined;
     lifecycle('window.resize', { cols: output.columns, rows: output.rows });
-    if (this.closed || this.suspended) return;
+    if (!this.canPaint('picker')) return;
     // One size in the burst, already drawn whole when it arrived: nothing more to draw -- unless a paint (a streamed delta, a
     // spinner tick) came due while the timer ran and was dropped for it; that change is on no screen yet.
     const dropped = this.paintDropped;
@@ -106,7 +106,7 @@ export function anchorBlock(this: TerminalHarnessPrompter): void {
       // again. The one case where the conversation is written again for a change of height.
       if (inlineBlock.found < 0) this.emitted.requestReseed();
     }
-    if (this.closed || this.suspended) return;
+    if (!this.canPaint('picker')) return;
     this.repaint();
   };
   askCursorRow(done, CURSOR_REPORT_MS);

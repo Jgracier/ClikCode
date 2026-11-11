@@ -10,7 +10,7 @@ const { inlineBlock } = await import('./inline.js');
  * width), a new height writes none of it and only puts the live block back (anchorBlock). */
 describe('what a settled resize owes the transcript', () => {
   let requested: number;
-  let host: { transcriptColumns: number; emitted: { requestReseed: () => void }; repaint: () => void; closed: boolean; suspended: boolean };
+  let host: { transcriptColumns: number; emitted: { requestReseed: () => void }; repaint: () => void; closed: boolean; suspended: boolean; canPaint: () => boolean };
   let repainted: number;
   const size = (columns: number, rows: number): void => {
     Object.defineProperty(stdout, 'columns', { value: columns, configurable: true });
@@ -18,7 +18,7 @@ describe('what a settled resize owes the transcript', () => {
   };
   beforeEach(() => {
     requested = 0; repainted = 0; asked.count = 0; asked.answer = undefined;
-    host = { transcriptColumns: 69, emitted: { requestReseed: () => { requested += 1; } }, repaint: () => { repainted += 1; }, closed: false, suspended: false };
+    host = { transcriptColumns: 69, emitted: { requestReseed: () => { requested += 1; } }, repaint: () => { repainted += 1; }, closed: false, suspended: false, canPaint: () => !host.closed && !host.suspended };
     size(69, 35);
     Object.assign(inlineBlock, { rows: 6, cursorRow: 3, found: undefined, measuring: false });
   });
