@@ -2,8 +2,11 @@
 // `def NAME` defines NAME; a line with ERROR or WARN gets a diagnostic there.
 // FAKE_LSP_CHUNKED=1 writes every message a few bytes at a time.
 // FAKE_LSP_SILENT=1 never publishes diagnostics and reports indexing instead.
+// FAKE_LSP_PID_DIR=<dir> writes an empty file named for its pid there.
+// FAKE_LSP_SLOW_INIT=<ms> answers initialize only after that long.
 import { writeFileSync } from 'node:fs';
 
+if (process.env.FAKE_LSP_PID_DIR) writeFileSync(`${process.env.FAKE_LSP_PID_DIR}/${process.pid}`, '');
 const docs = new Map();
 let buffer = Buffer.alloc(0);
 const chunked = process.env.FAKE_LSP_CHUNKED === '1';
@@ -58,6 +61,10 @@ function handle(message) {
   }
   switch (method) {
     case 'initialize':
+      if (process.env.FAKE_LSP_SLOW_INIT) return void setTimeout(() => handle({ ...message, method: 'initialize-now' }), Number(process.env.FAKE_LSP_SLOW_INIT));
+      return send(
+        { id, result: { capabilities: { textDocumentSync: 1, definitionProvider: true, referencesProvider: true, hoverProvider: true, documentSymbolProvider: true, workspaceSymbolProvider: true }, serverInfo: { name: 'fake', root: params.rootUri } } });
+    case 'initialize-now':
       return send({ id, result: { capabilities: { textDocumentSync: 1, definitionProvider: true, referencesProvider: true, hoverProvider: true, documentSymbolProvider: true, workspaceSymbolProvider: true }, serverInfo: { name: 'fake', root: params.rootUri } } });
     case 'initialized':
       send({ id: nextId++, method: 'workspace/configuration', params: { items: [{ section: 'fake' }, { section: 'other' }] } });
