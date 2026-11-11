@@ -22,7 +22,10 @@ describe('honest account status', () => {
     expect(nativeStatusSignedIn('{"loggedIn":true}')).toBe(true);
     expect(nativeStatusSignedIn('{"isAuthenticated":false}')).toBe(false);
     expect(nativeStatusSignedIn('Not logged in')).toBe(false);
+    expect(nativeStatusSignedIn('You are not currently logged in to Augment.')).toBe(false);
+    expect(nativeStatusSignedIn('Logged in using ChatGPT')).toBe(true);
     expect(nativeStatusSignedIn('Logged in as justin@example.com')).toBe(true);
+    expect(nativeStatusSignedIn('{"planName":"Free Plan","amountRemaining":"0"}')).toBe(true);
     expect(nativeStatusSignedIn('Account usage: 10% remaining')).toBeUndefined();
   });
 

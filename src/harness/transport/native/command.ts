@@ -80,7 +80,10 @@ export async function captureNativeHarnessOutput(spec: NativeHarnessSpec, args: 
       if (timer) clearTimeout(timer);
       signal?.removeEventListener('abort', onAbort);
       if (error) reject(error);
-      else resolve(stdout);
+      // Codex prints `login status` on stderr with an empty stdout. Prefer
+      // stdout when the helper wrote any; otherwise keep stderr so status
+      // checks are not silently empty.
+      else resolve(stdout.trim() ? stdout : (stderr.trim() ? stderr : stdout));
     };
     child.stdout!.setEncoding('utf8');
     child.stderr!.setEncoding('utf8');
