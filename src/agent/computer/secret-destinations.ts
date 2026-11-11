@@ -306,13 +306,20 @@ export async function connectionState(integration: string, signal?: AbortSignal)
   return { connected: false, reason: statuses.length ? `${integration} shows a connection with status "${statuses[0]}", not active` : `ClikDeploy shows no connection for ${integration}` };
 }
 
-/** Wait before the one retry of an empty reply (tests set it to 0). */
-let retryDelayMs = 1_500;
-export function setSendRetryDelay(ms: number): void { retryDelayMs = ms; }
+/** Wait before the one retry of an empty reply. */
+const SEND_RETRY_DELAY_MS = 1_500;
 
 const JSON_FAILURE = /Unexpected end of JSON input|Unexpected token[^\n]*JSON|is not valid JSON|JSON\.parse|non-JSON/i;
-/** The connect call gave back nothing usable: no words at all with a failing exit, a JSON parse failure, or a bad-gateway family status. */
+/** The HTTP status the clikdeploy CLI put in its JSON error (`httpStatus`, its --json error shape); undefined when it printed none. */
+function replyStatus(text: string): number | undefined {
+  const parsed = firstJsonObject<{ status?: string; httpStatus?: unknown }>(text);
+  return parsed?.status === 'error' && typeof parsed.httpStatus === 'number' ? parsed.httpStatus : undefined;
+}
+/** The connect call gave back nothing usable: a bad-gateway family status, or -- from a CLI that printed no JSON error -- no words at
+ * all with a failing exit, a JSON parse failure, or a bad-gateway status in its words. */
 function emptyReply(result: { code: number | null; text: string }): boolean {
+  const status = replyStatus(result.text);
+  if (status !== undefined) return status >= 500 && status <= 504;
   const text = result.text.trim();
   if (!text) return result.code !== 0;
   if (result.code === 0 && !JSON_FAILURE.test(text)) return false;
@@ -320,11 +327,11 @@ function emptyReply(result: { code: number | null; text: string }): boolean {
 }
 function describeEmptyReply(result: { code: number | null; text: string }): string {
   const text = result.text.replace(/\s+/g, ' ').trim();
-  const status = /\b(?:HTTP\s*)?([45]\d\d)\b/.exec(text)?.[1];
+  const status = replyStatus(result.text) ?? /\b(?:HTTP\s*)?([45]\d\d)\b/.exec(text)?.[1];
   return `ClikDeploy's connect call returned an empty or non-JSON reply (${status ? `HTTP ${status}` : 'HTTP status not shown by the command'}, exit ${result.code ?? 'none'}${text ? `, it said: "${text.slice(0, 160)}"` : ', it printed nothing'})`;
 }
 
-export async function sendToDestinations(stateDir: string, list: readonly Destination[], value: string, signal?: AbortSignal): Promise<Delivery[]> {
+export async function sendToDestinations(stateDir: string, list: readonly Destination[], value: string, signal?: AbortSignal, options: { retryDelayMs?: number } = {}): Promise<Delivery[]> {
   const all = await loadDestinations(stateDir);
   const out: Delivery[] = [];
   for (const d of list) {
@@ -380,7 +387,7 @@ export async function sendToDestinations(stateDir: string, list: readonly Destin
     let result = await runCli(program!, args, { ...(stdin !== undefined ? { stdin } : {}), signal, timeoutMs: 90_000 });
     // An empty or non-JSON reply (a 502 while the proxy restarts) is retried once; the CLI cannot say more than its own words.
     if (!result.missing && template.verify === 'connection' && emptyReply(result)) {
-      await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+      await new Promise(resolve => setTimeout(resolve, options.retryDelayMs ?? SEND_RETRY_DELAY_MS));
       result = await runCli(program!, args, { ...(stdin !== undefined ? { stdin } : {}), signal, timeoutMs: 90_000 });
     }
     if (result.missing) { out.push({ label, ok: false, message: `The ${program} command is not installed on this computer.` }); continue; }
