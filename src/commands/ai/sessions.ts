@@ -73,7 +73,7 @@ export async function chooseGatewayModel(value: string): Promise<string | null> 
   if (!found) {
     const wanted = value.trim().toLowerCase();
     const near = models.filter((model) => model.id.toLowerCase().includes(wanted)).slice(0, 5).map((model) => model.id);
-    throw new Error(`"${value.trim()}" is not a model ClikDeploy Gateway offers you${near.length ? `. Did you mean: ${near.join(', ')}` : '; see `' + harnessCommand() + ' gateway models`'}.`);
+    throw new Error(`"${value.trim()}" is not a model ClikDeploy Gateway offers you${near.length ? `. Did you mean: ${near.join(', ')}` : '; see `' + harnessCommand() + ' models --gateway`'}.`);
   }
   return found.id;
 }

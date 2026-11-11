@@ -196,7 +196,7 @@ export async function chatSettings(state: HarnessState, session: HarnessSession)
 }
 
 /** Whether the Gateway is connected, and the credit its calls are paid from
- * (`GET /v1/credits`, the same ledger `clikcode gateway usage` reads). */
+ * (`GET /v1/credits`, the same ledger `clikcode usage --gateway` reads). */
 export async function gatewayStatus(config: Conf, fetchImpl: typeof fetch = fetch): Promise<IdeGateway> {
   const apiUrl = getApiUrl(config);
   const apiKey = getApiKeyForUrl(config, apiUrl);

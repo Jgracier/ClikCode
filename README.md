@@ -183,7 +183,7 @@ so ClikCode points those back at your real home. Turns still commit, push and
 install as you.
 
 Switch by hand with `/account` in a session, or
-`clikcode sessions set <id> --account <label>`.
+`clikcode sessions command <id> /account <label>`.
 
 ### An older Intel Mac
 
@@ -398,8 +398,8 @@ when you would rather type than pick.
 | `clikcode mcp add` / `list` / `remove` / `login` / `logout` | MCP servers for ClikCode's own agent (below) |
 | `clikcode plugin list` / `enable <plugin>` / `disable <plugin>` | Which of Claude Code's plugins ClikCode's own agent uses |
 | `clikcode acp add <command> <binary> [-- <flags>]` / `acp list` / `acp remove` | An ACP agent the catalog does not ship |
-| `clikcode gateway login [--github]` / `gateway status` / `gateway models` | ClikDeploy Gateway sign-in (Google by default), and the models it offers |
-| `clikcode gateway usage [--days N]` | Your AI use and credit as ClikDeploy Gateway records it: every call, by surface and model |
+| `clikcode gateway login [--github]` / `gateway status` / `clikcode models --gateway` | ClikDeploy Gateway sign-in (Google by default), and the models it offers |
+| `clikcode usage --gateway [--days N]` | Your AI use and credit as ClikDeploy Gateway records it: every call, by surface and model |
 | `clikcode gateway credit [--amount USD]` | Add AI credit: opens a Stripe checkout ($5–$500). Paying it also saves your card for automatic top-ups when credit runs low |
 | `clikcode gateway credit --auto-topup on\|off` | Turn those automatic top-ups on or off |
 

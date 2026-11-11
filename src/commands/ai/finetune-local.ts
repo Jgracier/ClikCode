@@ -1,5 +1,5 @@
 /** `clikcode finetune`: teach a model from the user's own data on this computer and use it again here as a local model. The cloud
- * counterpart is `clikcode gateway finetune` (ClikDeploy trains it and stores the weights). */
+ * counterpart is `clikcode finetune --cloud` (ClikDeploy trains it and stores the weights). */
 import { emitResult } from '../../cli/structured-output.js';
 import { forgetTunedModel, listTunedModels, tunedModelId } from '../../local-models/tuned.js';
 

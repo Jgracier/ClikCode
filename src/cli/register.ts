@@ -4,6 +4,7 @@
  * The `gateway` group is the only part that talks to a remote platform.
  */
 import { serveThenExit, untilStopped } from './stop-signal.js';
+import { registerOperatorCommands } from './register-ops.js';
 import { Option, type Command } from 'commander';
 import type Conf from 'conf';
 
@@ -34,12 +35,6 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   // ClikCode's computer tools over MCP (stdio), started for every harness session: a spawn target, not a command to type.
   program.command('mcp-serve', { hidden: true })
     .action(async () => { const { mcpServe } = await import('../commands/mcp-serve.js'); await serveThenExit(mcpServe); });
-  // Servers ClikCode no longer provides, still named in a vendor config that was missed
-  // (commands/retired-mcp.ts): answered as empty servers rather than failed.
-  for (const retired of ['conversations-mcp', 'swarm-mcp']) {
-    program.command(retired, { hidden: true }).allowUnknownOption().allowExcessArguments()
-      .action(async () => (await import('../commands/retired-mcp.js')).serveRetiredMcp(retired));
-  }
   program.command('computer-host <stateDir>', { hidden: true }).action(async (stateDir: string) => (await import('../agent/computer/browser-host.js')).runComputerHost(stateDir));
   // An editor extension's client (ide/bridge.ts), over an IPC channel the
   // extension opens; and the terminal it runs a vendor sign-in in. Hidden for
@@ -82,7 +77,6 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   computer.command('status').description('Show whether computer use is on').action(async () => (await import('../commands/computer.js')).computerStatus());
   computer.command('on').description('Make computer use available for new turns').action(async () => (await import('../commands/computer.js')).computerSetEnabled(true));
   computer.command('off').description('Stop offering computer tools in new turns').action(async () => (await import('../commands/computer.js')).computerSetEnabled(false));
-  computer.command('unattended [setting]').description('on or off: park what needs you (a password, a code, an account choice) in the queue and go on, instead of asking (default off)').action(async (setting?: string) => (await import('../commands/computer.js')).computerUnattended(setting));
   computer.command('headless [setting]').description('on or off: run the browser with no window (a Linux computer with no display does this by itself; CLIKCODE_BROWSER_HEADLESS=1 forces it)').action(async (setting?: string) => (await import('../commands/computer.js')).computerHeadless(setting));
   computer.command('passwords [setting]').description('on or off: let the browser tool make up and keep a strong password for signup forms (default off)').action(async (setting?: string) => (await import('../commands/computer.js')).computerGeneratedPasswords(setting));
   const driver = computer.command('driver').description('Install, update and inspect cua-driver, which computer_use needs to control the desktop');
@@ -95,49 +89,6 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   email.command('connect').description('Open Google consent in the ClikCode browser and add the mailbox (--address: another Google account; it must be signed in there); no further steps').option('--address <email>', 'the Google account to connect (default: the profile email)').action(async (opts: { address?: string }) => (await import('../commands/computer.js')).computerEmail('connect', opts));
   email.command('status').description('Show which mailboxes are connected').action(async () => (await import('../commands/computer.js')).computerEmail('status'));
   email.command('disconnect').description('Forget a connected mailbox (--address when several are connected)').option('--address <email>', 'the mailbox to forget').action(async (opts: { address?: string }) => (await import('../commands/computer.js')).computerEmail('disconnect', opts));
-  computer.command('oauth-connect <connector>').description("Connect a ClikDeploy connector: start its OAuth, press through the vendor's consent in the ClikCode browser (stops at a password, code or captcha), confirm it is active").action(async (connector: string) => (await import('../commands/computer.js')).computerOauthConnect(connector));
-  const connectors = program.command('connectors').description('Complete ClikDeploy connector onboarding with minimal agent use');
-  connectors.command('run').description('Advance queued connectors without a model: connect test accounts through the consent driver, capture keys by saved recipes, call pipeline tools; hand unknown screens to an agent and record human-only walls')
-    .option('--limit <n>', 'How many queued vendors to take (default 5, at most 25)')
-    .option('--ids <ids>', 'Comma-separated connector ids instead of the next queued ones')
-    .option('--parallel <n>', 'Vendors worked at once (default 1, at most 4; the browser still takes turns)')
-    .option('--max-steps <n>', 'Most actions per vendor (default 12)')
-    .option('--max-minutes <n>', 'Most minutes per vendor (default 5)')
-    .option('--published', 'With --ids: connect only. Send each id straight to the consent driver, even when it is already published to users and developers (onboarding refuses those)')
-    .option('--dry-run', 'Show the plan per vendor and change nothing')
-    .option('--loop', 'Run as a daemon that never needs a person: claim due vendors from the queue, each in its own named tab under a step, minute and call budget; report success or a typed wall; cooldown per vendor; pause when the machine stalls. Log: ~/.clikcode/connector-loop.log')
-    .option('--max-calls <n>', 'With --loop: most ClikDeploy calls per vendor (default 60)')
-    .option('--max-hours <n>', 'With --loop: stop starting vendors after this many hours (default 8, at most 168)')
-    .option('--cooldown-hours <n>', 'With --loop: hours before the same vendor is tried again (default 6; a wall holds 24)')
-    .action(async (flags: import('../commands/connectors.js').ConnectorsRunFlags & import('../commands/connectors.js').ConnectorsLoopFlags & { loop?: boolean }) => {
-      const commands = await import('../commands/connectors.js');
-      if (!flags.loop) return commands.connectorsRun(flags);
-      if (flags.ids || flags.dryRun || flags.published || flags.limit) throw new Error('--loop takes its vendors from the queue: leave out --ids, --limit, --published and --dry-run.');
-      return commands.connectorsLoop(flags);
-    });
-  connectors.command('status').description('Whether the connector loop is running, what it is working on, what it finished, the machine pressure, the queue and the last log lines').option('--lines <n>', 'log lines to show (default 10)')
-    .action(async (flags: { lines?: string }) => (await import('../commands/connectors.js')).connectorsStatus(flags));
-  connectors.command('qualify').description('Render each vendor\'s sign-up, pricing and developer pages (20 s a page, in its own named tab) and classify walls from the rendered text: JSON {id, lane auto|human|dead, kinds, evidence}')
-    .option('--ids <a,b,c>', 'vendors to check').option('--next <n>', 'the next N vendors waiting for an agent').option('--parallel <n>', 'vendors at once, 1-4 (default 1)').option('--report', 'write the verdict into the work item note at ClikDeploy').option('--dump <dir>', 'save each rendered page\'s text there, to see what the verdict was read from')
-    .action(async (flags: import('../commands/connectors.js').ConnectorsQualifyFlags) => (await import('../commands/connectors.js')).connectorsQualify(flags));
-  connectors.command('agent-mcp', { hidden: true }).requiredOption('--tab <name>').requiredOption('--max-calls <n>').option('--counter <file>').option('--connector <id>')
-    .action(async (flags: { tab: string; maxCalls: string; counter?: string; connector?: string }) => {
-      const { agentMcpServe } = await import('../agent/computer/connector-micro-agent-mcp.js');
-      await serveThenExit((signal) => agentMcpServe({ tab: flags.tab, ...(flags.connector ? { connector: flags.connector } : {}), maxCalls: Number(flags.maxCalls), ...(flags.counter ? { counter: flags.counter } : {}) }, signal));
-    });
-  connectors.command('resume <id>').description('Carry on with a connector whose keygrab could not finish: reattach to its parked hidden tab, optionally press one thing or go to one address, and continue getting the API key')
-    .option('--click <text>', 'Press the control with this visible text first')
-    .option('--goto <url>', 'Go to this https address in the parked tab first')
-    .option('--only', 'Press or go, then show the page and stop (no keygrab): for a form that needs several plain presses')
-    .option('--max-steps <n>', 'Most browser actions (default 60)')
-    .option('--max-minutes <n>', 'Most minutes (default 4)')
-    .action(async (id: string, flags: import('../commands/connectors.js').ConnectorsResumeFlags) => (await import('../commands/connectors.js')).connectorsResume(id, flags));
-  const recipe = computer.command('recipe').description('Saved signup and key-capture recipes: list, show, lint, compact, dry-run');
-  recipe.command('list').description('List the saved recipes with their step counts and lint findings').action(async () => (await import('../commands/computer-recipes.js')).recipeList());
-  recipe.command('show <host>').description("Show a host's recipe steps").action(async (host: string) => (await import('../commands/computer-recipes.js')).recipeShow(host));
-  recipe.command('lint <host>').description('Flag repeated laps, consecutive duplicate clicks (toggles), a trailing click back to the start, and a missing capture step').action(async (host: string) => (await import('../commands/computer-recipes.js')).recipeLintCommand(host));
-  recipe.command('compact <host>').description('Remove retry laps and toggle pairs, keeping the last successful sequence (the earlier file is kept as <host>.json.bak)').action(async (host: string) => (await import('../commands/computer-recipes.js')).recipeCompactCommand(host));
-  recipe.command('dry-run <host>').description("Replay the recipe's selectors against the live page in the hidden browser and check every step's target exists, without submitting").action(async (host: string) => (await import('../commands/computer-recipes.js')).recipeDryRunCommand(host));
   computer.command('inspect').description('Show visible login field names without their values').action(async () => (await import('../commands/computer.js')).computerInspect());
   computer.command('login [url]').description('Open a login URL if given, then ask privately in the current chat')
     .option('--chat <chat>', 'Chat id, prefix or name when run outside a chat')
@@ -174,17 +125,9 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
       const params = Object.fromEntries((options.with ?? []).map(pair => { const at = pair.indexOf('='); if (at < 1) throw new Error('--with is slot=value'); return [pair.slice(0, at), pair.slice(at + 1)]; }));
       await (await import('../commands/computer.js')).computerTool('account_use', { action: 'send_secret', secret, send_to: [{ to: options.to, ...(Object.keys(params).length ? { with: params } : {}), ...(Object.keys(values).length ? { values } : {}) }] }, options.chat);
     });
-  computer.command('preflight').description('Check this computer can do onboarding work: browser, Google sign-in, Gmail, build id, installed deps link. Prints JSON; exits 1 when anything fails')
-    .option('--no-post', 'do not report the result to ClikDeploy\'s connector_preflight tool')
-    .action(async (options: { post?: boolean }) => (await import('../commands/computer.js')).computerPreflight(options));
   computer.command('profile').description('Autofill profiles an agent fills forms from (name, email, phone, address, and custom details): list, --set key=value, --custom key=value, --delete')
     .option('--create', 'Ask for the details and save them as a profile').option('--label <name>', 'Which profile (default Personal)').option('--set <pair...>', 'key=value, for example phone=719-555-0123').option('--custom <pair...>', 'key=value of a detail beyond the standard ones, for example app_name="My App" (details only, never a key)').option('--secret <name>', 'Keep a secret with the profile, typed hidden (password = the password used for sign-ups); never shown to an agent').option('--delete <label>', 'Remove a profile')
     .action(async (options: { label?: string; set?: string[]; custom?: string[]; delete?: string; create?: boolean; secret?: string }) => (await import('../commands/computer.js')).computerProfile(options));
-  computer.command('queue').description('The vendor set-up queue (OAuth apps, API keys, test accounts): list it, filter with --status/--reason, record with --set <status> --vendor <name>')
-    .option('--status <status>', 'Only this status').option('--reason <reason>', 'Only tasks waiting for this reason').option('--set <status>', 'Record a status for --vendor').option('--vendor <name>').option('--kind <kind>').option('--note <text>').option('--owner <email>').option('--import-ledger <file>', 'Load a vendor ledger JSON ({vendor: {ids, status, note}})')
-    .action(async (options: { status?: string; reason?: string; set?: string; vendor?: string; kind?: string; note?: string; owner?: string; importLedger?: string }) => (await import('../commands/computer.js')).computerQueue(options));
-  computer.command('proof <id>').description('Read ClikDeploy’s current connector proof verdict and sync the local work queue')
-    .action(async (id: string) => (await import('../commands/computer.js')).computerConnectorProof(id));
   computer.command('secrets').description('List the names of saved secrets, or delete one (values are never shown)')
     .option('--delete <name>', 'Delete this secret').option('--backfill', 'Record a vendor (and --owner) on secrets saved before records existed').option('--owner <email>', 'With --backfill: the account these belong to')
     .option('--export <file>', 'Write an encrypted backup of every login, secret and profile (passphrase typed hidden)').option('--import <file>', 'Restore a backup written by --export (passphrase typed hidden)').option('--overwrite', 'With --import: replace items that are already here')
@@ -215,6 +158,7 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .action(async (options: { chat?: string; remove?: string; account?: string }) => options.remove
       ? (await import('../commands/computer.js')).computerLoginsRemove(options.remove, options.account)
       : (await import('../commands/computer.js')).computerLogin(options.chat, { manage: true }));
+  registerOperatorCommands(program, computer);
   program.command('logs').description('What every ClikCode window, worker and editor bridge did, in order (the lifecycle log)')
     .option('--session <id>', 'Only this conversation (an id or the start of one)')
     .option('--role <role>', 'Only window, worker, bridge or command')
@@ -261,8 +205,13 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
       await later(accountCommands, 'aiAccountAdd')({ ...options, provider, credentialRef });
     });
   accounts.command('remove <labelOrId>').alias('rm').description('Remove a local account alias, not the provider credential').action(later(accountCommands, 'aiAccountRemove'));
-  program.command('models').description('List normalized models available through local accounts').action(later(statusCommands, 'aiModelsList'));
-  program.command('usage').description('Show normalized local AI invocation usage').action(later(statusCommands, 'aiUsage'));
+  program.command('models').description('List the models your local accounts offer (--gateway: the ones ClikDeploy Gateway offers you, cheapest access first)')
+    .option('--gateway', 'ClikDeploy Gateway\'s models instead')
+    .action((options: { gateway?: boolean }) => options.gateway ? later(statusCommands, 'aiGatewayModels')(config) : later(statusCommands, 'aiModelsList')());
+  program.command('usage').description('Your AI use, per day, provider and model (--gateway: your use and credit as ClikDeploy Gateway records it)')
+    .option('--gateway', 'ClikDeploy Gateway\'s record instead')
+    .option('--days <days>', 'With --gateway: window in days, 1-90 (default 30)')
+    .action((options: { gateway?: boolean; days?: string }) => options.gateway ? later(statusCommands, 'aiGatewayUsage')(config, options) : later(statusCommands, 'aiUsage')());
   // One command for "ask something from a script": a new chat (or --chat to
   // continue one), bound to an account, and the message sent. It took four
   // before -- sessions create, accounts add, sessions set, sessions send.
@@ -319,38 +268,33 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .action(async (name: string) => (await import('../commands/plugin.js')).pluginSetEnabled(name, false));
   const gateway = program.command('gateway').description('Connect ClikDeploy Gateway for models and private agents');
   gateway.command('status').description('Show the gateway connection state').action(() => later(statusCommands, 'aiGatewayStatus')(config));
-  gateway.command('models').description('List the models ClikDeploy Gateway offers you, cheapest access first')
-    .action(() => later(statusCommands, 'aiGatewayModels')(config));
-  gateway.command('usage').description('Show your AI use and credit as ClikDeploy Gateway records it')
-    .option('--days <days>', 'Window in days, 1-90 (default 30)')
-    .action((options: { days?: string }) => later(statusCommands, 'aiGatewayUsage')(config, options));
   gateway.command('credit').description('Add AI credit to your ClikDeploy Gateway account (opens a Stripe checkout)')
     .option('--amount <usd>', 'Whole dollars, 5-500 (default: your account\'s top-up amount)')
     .option('--auto-topup <on|off>', 'Turn automatic top-up of your saved card on or off, instead of buying')
     .action((options: { amount?: string; autoTopup?: string }) => later(statusCommands, 'aiGatewayCredit')(config, options));
-  gateway.command('finetune <dataset>').description('Fine-tune a model on your data (JSONL or CSV) with ClikDeploy: a GPU (billed), or --hardware cpu: your own connected machine at no charge, else a rented CPU (small models)')
-    .requiredOption('--base <model>', 'The base model, e.g. Qwen/Qwen2.5-0.5B-Instruct')
-    .option('--hardware <gpu|cpu>', 'Where to train (default gpu)')
-    .option('--epochs <count>', 'Passes over the data, 1-10')
-    .option('--name <name>', 'A name for the job')
-    .option('--yes', 'Start at the quoted price; without it the quote is shown and nothing starts')
-    .option('--no-wait', 'Start it and return, instead of following it to its end')
-    .action((dataset: string, options: Record<string, unknown>) => later(() => import('../commands/ai/finetune.js'), 'aiGatewayFineTune')(config, dataset, options));
   gateway.command('login').description('Sign in to ClikDeploy Gateway')
     .option('--github', 'Use GitHub OAuth instead of Google OAuth')
     .action(async (options) => { await later(() => import('../commands/gateway.js'), 'gatewayLogin')(config, { google: !options.github, github: Boolean(options.github) }); });
-  program.command('finetune <dataset>').description('Fine-tune a small model on your data (JSONL or CSV) on this computer and use it again here as a local model (the cloud version: gateway finetune)')
+  // One command, two places to train: this computer (the default), or ClikDeploy with --cloud.
+  const CLOUD_ONLY = ['hardware', 'yes'] as const;
+  const LOCAL_ONLY = ['rank', 'license'] as const;
+  program.command('finetune <dataset>').description('Fine-tune a model on your data (JSONL or CSV): on this computer, used again here as a local model; or --cloud, with ClikDeploy on a GPU (billed) or a CPU')
     .requiredOption('--base <repo>', 'The base model\'s Hugging Face repo, e.g. Qwen/Qwen2.5-0.5B-Instruct (original weights, not a GGUF)')
-    .requiredOption('--name <name>', 'The name you will choose it by: it becomes tuned:<name>')
+    .option('--name <name>', 'The name you will choose it by: it becomes tuned:<name> (required on this computer)')
     .option('--epochs <count>', 'Passes over the data, 1-10 (default 2)')
     .option('--rank <rank>', 'LoRA rank, 4-128 (default 8)')
     .option('--license <license>', 'The base model\'s license: apache-2.0 (default) or mit')
-    .action((dataset: string, options: Record<string, unknown>) => later(() => import('../commands/ai/finetune-local.js'), 'aiLocalFineTune')(dataset, options));
-  const tuned = program.command('local').description('Models ClikCode Local runs on this computer')
-    .command('tuned').description('List the models fine-tuned on this computer (clikcode finetune)')
-    .action(() => later(() => import('../commands/ai/finetune-local.js'), 'aiLocalTunedList')());
-  tuned.command('rm <name>').alias('remove').description('Forget a fine-tuned model and delete its weights')
-    .action((name: string) => later(() => import('../commands/ai/finetune-local.js'), 'aiLocalTunedRemove')(name));
+    .option('--cloud', 'Train with ClikDeploy instead of on this computer')
+    .option('--hardware <gpu|cpu>', 'With --cloud: where to train (default gpu; cpu: your own connected machine at no charge, else a rented CPU)')
+    .option('--yes', 'With --cloud: start at the quoted price; without it the quote is shown and nothing starts')
+    .option('--no-wait', 'With --cloud: start it and return, instead of following it to its end')
+    .action((dataset: string, options: Record<string, unknown>) => {
+      const misplaced = (options.cloud ? LOCAL_ONLY : CLOUD_ONLY).filter((name) => options[name] !== undefined);
+      if (misplaced.length) throw new Error(`--${misplaced[0]} is ${options.cloud ? 'for this computer only (leave out --cloud)' : 'for --cloud only'}.`);
+      return options.cloud
+        ? later(() => import('../commands/ai/finetune.js'), 'aiGatewayFineTune')(config, dataset, options)
+        : later(() => import('../commands/ai/finetune-local.js'), 'aiLocalFineTune')(dataset, options);
+    });
   const sessions = program.command('sessions').alias('session').description('Create and resume persistent coding sessions');
   sessions.command('list').alias('ls').description('List saved sessions').action(later(sessionCommands, 'aiSessionsList'));
   sessions.command('audit').description('Check every conversation against the evidence of how long it was (its index row, its saved records, the vendor threads that carried it); changes nothing')
@@ -360,25 +304,15 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .option('--apply', 'Write the rebuilt log')
     .action((id, options) => later(() => import('../commands/ai/sessions-audit.js'), 'aiSessionsRepair')(id, options));
   sessions.command('show <id>').description('Show a saved session').action(later(sessionCommands, 'aiSessionShow'));
-  // `send --chat <chat>`, under its older name.
-  sessions.command('send <chat> <prompt...>').alias('chat').description('Send a turn through a saved chat (its id or the start of it, its name, or last)')
-    .action((chat: string, prompt: string[]) => send(prompt, { chat }));
-  sessions.command('command <id> <slash...>').alias('slash').description('Run /claude, /accounts, or another session slash command')
+  sessions.command('command <id> <slash...>').description('Run /claude, /accounts, or another session slash command')
     .action(async (id, slash: string[]) => { await later(() => import('../tui/slash/handlers.js'), 'aiSessionCommand')(id, slash.join(' ')); });
   // `open` and `resume` were two commands for one thing.
-  sessions.command('resume <chat>').aliases(['open', 'interactive']).description('Resume a chat -- its id or the start of it, its name, or `last` -- and its exact native chat when available')
+  sessions.command('resume <chat>').alias('open').description('Resume a chat -- its id or the start of it, its name, or `last` -- and its exact native chat when available')
     .action((chat) => later(interactiveCommands, 'aiSessionResume')(config, chat));
   sessions.command('close <id>').description('Close a session without deleting its local history')
     .action((id) => later(sessionCommands, 'aiSessionClose')(id));
-  sessions.command('set <id>').description('Change route, account, provider, model, agent, or effort')
-    .option('--route <route>', 'local, gateway, or clikcode-local').option('--account <account>', 'Local account label or id')
-    .option('--provider <provider>', 'Provider id').option('--model <model>', 'Model id')
-    .option('--agent <id>', 'Gateway agent ID, or none to use the normal Gateway')
-    .option('--native-session <id>', 'Verified native session id to resume through its adapter')
-    .option('--effort <effort>', 'low, medium, high, or xhigh').option('--permissions <mode>', 'ask, bypass, or auto')
-    .option('--sandbox <mode>', "workspace (the default) or off: ClikCode's own agent's shell commands write only the workspace, temp and caches")
-    .action((id, options) => later(sessionCommands, 'aiSessionSet')(id, options));
-  sessions.command('create').description('Create a session')
+  // A chat with no turn yet, for tests that open one (packages/vscode integration). Everyone else: send.
+  sessions.command('create', { hidden: true })
     .option('--route <route>', 'local, gateway, or clikcode-local', 'local').option('--account <account>', 'Local account label or id')
     .option('--provider <provider>', 'Provider id').option('--model <model>', 'Model id')
     .option('--agent <id>', 'Gateway agent ID')
