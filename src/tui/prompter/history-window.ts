@@ -32,6 +32,7 @@ import type { TerminalHarnessPrompter } from '../prompter.js';
 import { createRowBuilders, createToolRows, createTurnTools } from './paint/rows.js';
 import { makeRenderBlocks } from './paint/transcript.js';
 import { safeRow } from './frame-flush.js';
+import { RowSums } from './row-sums.js';
 
 /** The longest one frame spends rendering older messages. A batch is a few messages, so it overshoots by about one of them. */
 export const WINDOW_FRAME_BUDGET_MS = 6;
@@ -59,14 +60,18 @@ export class HistoryWindow {
   liveFrom = 0;
   /** A place to put the view back at after the conversation is written again (a new width, a toggled group). */
   anchor: Anchor | undefined;
-  /** What the last frame drew from: the persisted messages and the width. Absent until a conversation has been drawn. */
-  source: { messages: readonly TranscriptMessage[]; inner: number } | undefined;
+  /** What the last frame drew from: the persisted messages, the width and whose conversation. Absent until one has been drawn. */
+  source: { messages: readonly TranscriptMessage[]; inner: number; conversation?: string } | undefined;
   /** More batches are wanted than this frame's budget allowed; another frame is owed. */
   more = false;
   /** Messages rendered on demand, ever, and the most held at once (for tests and measurement). */
   rendered = 0;
   peak = 0;
-  readonly counts = new Map<number, number>();
+  /** Measured rows of the messages rendered so far, by message, and the sums of every message's rows (measured where known,
+   * else estimated) -- both for one conversation at one width, kept across rewrites of it so the scroll range stops drifting. */
+  private readonly counts = new Map<number, number>();
+  private readonly sums = new RowSums();
+  private summed: { conversation?: string; inner: number } | undefined;
 
   get detached(): boolean { return this.end !== undefined; }
 
@@ -82,26 +87,70 @@ export class HistoryWindow {
     this.rowsBelow = 0;
     this.gap = false;
     this.more = false;
+  }
+
+  /** The measured rows of message `index`, if it has been rendered. */
+  measured(index: number): number | undefined {
+    this.sync();
+    return this.counts.get(index);
+  }
+
+  /** A real count of message `index`'s rows, replacing its estimate. */
+  measure(index: number, rows: number): void {
+    this.sync();
+    this.counts.set(index, rows);
+    if (index < this.sums.size) this.sums.set(index, rows);
+  }
+
+  /** Rows of messages [from, to): measured where known, else estimated. */
+  rowsBetween(from: number, to: number): number {
+    if (to <= from) return 0;
+    this.fill();
+    return this.sums.before(to) - this.sums.before(from);
+  }
+
+  /** The message whose rows hold row `row` of the conversation, and how far into it. */
+  messageAt(row: number): Anchor | undefined {
+    this.fill();
+    const found = this.sums.at(row);
+    return found && { message: found.index, into: found.into };
+  }
+
+  /** Another conversation or another width: what was counted no longer holds. */
+  private sync(): void {
+    const source = this.source;
+    if (!source) return;
+    const summed = this.summed;
+    if (summed && summed.inner === source.inner && summed.conversation === source.conversation) {
+      // A shorter list (rewound, compacted, a pending prompt gone): the messages past its end are not those that were counted.
+      if (this.sums.size > source.messages.length) {
+        this.sums.truncate(source.messages.length);
+        for (const index of [...this.counts.keys()]) if (index >= source.messages.length) this.counts.delete(index);
+      }
+      return;
+    }
     this.counts.clear();
+    this.sums.clear();
+    this.summed = { conversation: source.conversation, inner: source.inner };
+  }
+
+  private fill(): void {
+    this.sync();
+    const source = this.source;
+    if (!source) return;
+    for (let index = this.sums.size; index < source.messages.length; index += 1) {
+      this.sums.push(this.counts.get(index) ?? estimatedRows(source.messages[index]!.content, source.inner));
+    }
   }
 }
 
-/** Rows of message `index`: measured when it was, else from its neighbours' lines, else estimated. */
+/** Rows of message `index`: from its own and the next message's lines while it is held, else measured when it was, else estimated. */
 function rowsOf(p: TerminalHarnessPrompter, index: number): number {
   const h = p.scrollWindow;
-  const known = h.counts.get(index);
-  if (known !== undefined) return known;
   const start = p.messageLines.get(index);
   const next = p.messageLines.get(index + 1);
   if (start !== undefined && next !== undefined) return Math.max(0, next - start);
-  const message = h.source?.messages[index];
-  return message ? estimatedRows(message.content, h.source!.inner) : 0;
-}
-
-function sumRows(p: TerminalHarnessPrompter, from: number, to: number): number {
-  let rows = 0;
-  for (let index = from; index < to; index += 1) rows += rowsOf(p, index);
-  return rows;
+  return h.measured(index) ?? h.rowsBetween(index, index + 1);
 }
 
 const totalOf = (p: TerminalHarnessPrompter): number => p.scrollWindow.source?.messages.length ?? 0;
@@ -193,7 +242,7 @@ function prependBatch(p: TerminalHarnessPrompter, want: number): void {
   const chunk = renderChunk(p, lo, h.first);
   const base = p.alternateTrimmed - chunk.rows.length;
   spliceFront(p.alternateTranscript, chunk.rows);
-  for (const [i, start] of chunk.starts.entries()) { p.messageLines.set(lo + i, base + start); h.counts.set(lo + i, chunk.counts[i]!); }
+  for (const [i, start] of chunk.starts.entries()) { p.messageLines.set(lo + i, base + start); h.measure(lo + i, chunk.counts[i]!); }
   for (const [i, tag] of chunk.tags.entries()) if (tag) p.lineTags.set(base + i, tag);
   p.alternateTrimmed = base;
   h.first = lo;
@@ -212,10 +261,10 @@ function appendBatch(p: TerminalHarnessPrompter, want: number): void {
   const chunk = renderChunk(p, from, hi, { last: W[W.length - 1], before: W[W.length - 2] });
   const base = p.alternateTrimmed + W.length;
   pushAll(W, chunk.rows);
-  for (const [i, start] of chunk.starts.entries()) { p.messageLines.set(from + i, base + start); h.counts.set(from + i, chunk.counts[i]!); }
+  for (const [i, start] of chunk.starts.entries()) { p.messageLines.set(from + i, base + start); h.measure(from + i, chunk.counts[i]!); }
   for (const [i, tag] of chunk.tags.entries()) if (tag) p.lineTags.set(base + i, tag);
   h.end = hi;
-  h.rowsBelow = sumRows(p, hi, total);
+  h.rowsBelow = h.rowsBetween(hi, total);
 }
 
 /** Give back the live end: the conversation is written from its list again, and the view put back where it is (or at the end). */
@@ -257,7 +306,7 @@ export function jumpTo(p: TerminalHarnessPrompter, message: number, into: number
   h.first = Math.max(0, Math.min(message, total - 1));
   h.end = h.first;
   h.gap = true;
-  h.rowsBelow = sumRows(p, h.first, total);
+  h.rowsBelow = h.rowsBetween(h.first, total);
   const need = into + above + reach(p);
   while (h.end < total && W.length < need) {
     appendBatch(p, Math.max(need - W.length, above));
@@ -291,7 +340,7 @@ export function settleWindow(p: TerminalHarnessPrompter, above: number): void {
   if (h.detached) {
     // Messages arrived while the view was back: they are below it, and the view stays where it is.
     const top = topIndex(p, above);
-    h.rowsBelow = sumRows(p, h.end!, total);
+    h.rowsBelow = h.rowsBetween(h.end!, total);
     holdTop(p, above, top);
     // Following the end again (a new turn, Esc): the live end is written from the list, and the view goes with it.
     if (p.alternateScrollback === 0) { h.reset(); toLive(p, undefined); return; }
@@ -340,14 +389,14 @@ function dropBelow(p: TerminalHarnessPrompter, above: number, keep: number): boo
   const cutRow = p.messageLines.get(cut)! - p.alternateTrimmed;
   if (cutRow >= W.length || cutRow <= 0) return false;
   for (let index = cut; index < (h.end ?? total); index += 1) {
-    if (p.messageLines.has(index)) h.counts.set(index, rowsOf(p, index));
+    if (p.messageLines.has(index)) h.measure(index, rowsOf(p, index));
   }
   W.length = cutRow;
   for (const index of [...p.messageLines.keys()]) if (index >= cut) p.messageLines.delete(index);
   for (const line of [...p.lineTags.keys()]) if (line >= p.alternateTrimmed + cutRow) p.lineTags.delete(line);
   h.end = cut;
   h.gap = true;
-  h.rowsBelow = sumRows(p, cut, total);
+  h.rowsBelow = h.rowsBetween(cut, total);
   holdTop(p, above, top);
   return true;
 }
@@ -381,7 +430,7 @@ function trimFront(p: TerminalHarnessPrompter, above: number, near: number): voi
     upTo += 1;
   }
   if (upTo === h.first || drop <= 0) return;
-  for (let index = h.first; index < upTo; index += 1) { h.counts.set(index, rowsOf(p, index)); p.messageLines.delete(index); }
+  for (let index = h.first; index < upTo; index += 1) { h.measure(index, rowsOf(p, index)); p.messageLines.delete(index); }
   p.alternateTranscript.splice(0, drop);
   p.alternateTrimmed += drop;
   for (const line of [...p.lineTags.keys()]) if (line < p.alternateTrimmed) p.lineTags.delete(line);
@@ -393,28 +442,23 @@ export function scrollReach(p: TerminalHarnessPrompter): { held: number; all: nu
   const h = p.scrollWindow;
   const extra = h.detached ? 0 : p.scrollTail.rows.length;
   const held = Math.max(0, p.alternateTranscript.length + extra + h.rowsBelow - p.alternateAbove);
-  return { held, all: held + (h.source ? sumRows(p, 0, h.first) : 0) };
+  return { held, all: held + (h.source ? h.rowsBetween(0, h.first) : 0) };
 }
 
 /** A scroll to row-offset `next` that is further back than the window can reach in a few batches: go there directly. The message
  * is found from the rows the messages above the window are thought to take. Returns whether it jumped. */
-export function jumpForScroll(p: TerminalHarnessPrompter, next: number): boolean {
+export function jumpForScroll(p: TerminalHarnessPrompter, next: number, reachable = scrollReach(p)): boolean {
   const h = p.scrollWindow;
   if (!h.source) return false;
-  const { held, all } = scrollReach(p);
+  const { held, all } = reachable;
   if (next <= held + 3 * reach(p)) return false;
-  const absTop = all - next;
-  let before = 0;
-  const total = totalOf(p);
-  let target = 0;
-  let into = 0;
-  for (let index = 0; index < total; index += 1) {
-    const rows = rowsOf(p, index);
-    if (absTop < before + rows || index === total - 1) { target = index; into = Math.max(0, absTop - before); break; }
-    before += rows;
-  }
+  // Further back than everything held, so above the window: among the messages before `first`.
+  const target = h.messageAt(all - next);
+  if (!target) return false;
+  const message = Math.min(target.message, Math.max(0, h.first - 1));
+  const into = message === target.message ? target.into : Math.max(0, all - next - h.rowsBetween(0, message));
   p.alternateScrollback = next;
-  jumpTo(p, target, into, p.alternateAbove);
+  jumpTo(p, message, into, p.alternateAbove);
   return true;
 }
 

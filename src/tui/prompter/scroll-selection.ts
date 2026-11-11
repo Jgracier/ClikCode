@@ -21,7 +21,8 @@ export function scrollTranscript(this: TerminalHarnessPrompter, rows: number): b
   // swipe back through before the view moved again were rows that were
   // never on it.
   // Counting the messages the window does not hold: they are rendered as the view gets to them (history-window.ts).
-  const furthest = scrollReach(this).all;
+  const reachable = scrollReach(this);
+  const furthest = reachable.all;
   const next = Math.max(0, Math.min(furthest, this.alternateScrollback + rows));
   // Back to the live end from far away: the conversation is written from its list again, nothing between is drawn.
   if (next === 0 && this.scrollWindow.detached && this.alternateScrollback > 0) {
@@ -38,7 +39,7 @@ export function scrollTranscript(this: TerminalHarnessPrompter, rows: number): b
   logCursorEvent(`scroll by=${rows} from=${this.alternateScrollback} to=${next} furthest=${furthest} rows=${this.alternateTranscript.length} above=${this.alternateAbove}`);
   if (next === this.alternateScrollback) return false;
   // Further than a few batches reach (Home, a long drag): the window is built there directly.
-  if (!jumpForScroll(this, next)) this.alternateScrollback = next;
+  if (!jumpForScroll(this, next, reachable)) this.alternateScrollback = next;
   this.paintingScroll = true;
   this.scheduleScrollPaint();
   return true;
