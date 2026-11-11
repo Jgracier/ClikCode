@@ -16,8 +16,8 @@ const world = vi.hoisted(() => ({
   held: 0,
   /** Whether m1 answers. */
   reach: true,
-  /** The revision every fake bridge says it is. */
-  revision: 4,
+  /** The revision every fake bridge says it is; unset, the current one (also the oldest the extension accepts). */
+  revision: undefined as number | undefined,
   /** This computer's steer-or-queue choice, and what was set on it. */
   localSend: 'steer' as 'steer' | 'queue',
 }));
@@ -105,6 +105,7 @@ vi.mock('../../src/chat-machine', () => {
 import { BridgeEndpoint } from '../../src/bridge-client';
 import { ClikCodeController } from '../../src/controller';
 import { commandMenu } from '../../src/webview/composer';
+import { IDE_PROTOCOL } from '../../src/compat';
 import type { IdeEvent, IdeRequest } from '../../src/protocol';
 
 const session = (id: string, messages: number, extra: Record<string, unknown> = {}) => ({
@@ -118,7 +119,7 @@ class FakeBridge extends BridgeEndpoint {
   constructor(readonly machine: string, private readonly chat: { messages: number; changes?: string[]; movedTo?: unknown }) {
     super({ node: 'node', entry: '/fake/index.js', env: {}, nodeSource: 'path', entrySource: 'path' }, 'build-1');
     world.bridges.push(this);
-    setTimeout(() => this.receive({ type: 'ready', version: 't', protocol: 1, revision: world.revision, pid: 1 }), 0);
+    setTimeout(() => this.receive({ type: 'ready', version: 't', protocol: 1, revision: world.revision ?? IDE_PROTOCOL.revision, pid: 1 }), 0);
   }
   send(request: IdeRequest): boolean {
     this.requests.push(request as never);
@@ -146,7 +147,7 @@ const until = async (check: () => boolean, ms = 3_000): Promise<void> => {
 };
 
 const controllers: ClikCodeController[] = [];
-afterEach(() => { for (const controller of controllers.splice(0)) controller.dispose(); world.bridges = []; world.warnings = []; world.answer = undefined; world.notes = []; world.channel = undefined; world.held = 0; world.reach = true; world.revision = 4; world.localSend = 'steer'; });
+afterEach(() => { for (const controller of controllers.splice(0)) controller.dispose(); world.bridges = []; world.warnings = []; world.answer = undefined; world.notes = []; world.channel = undefined; world.held = 0; world.reach = true; world.revision = undefined; world.localSend = 'steer'; });
 
 const startChat = async (local: { messages: number; movedTo?: unknown }, remote: { messages: number; changes?: string[] } = { messages: 2 }) => {
   world.next = { local: () => new FakeBridge('local', local), m1: () => new FakeBridge('m1', remote) };
@@ -205,7 +206,8 @@ describe('the machine chip', () => {
     await controller.moveToMachine('m1');
     await until(() => controller.state.connection === 'ready' && controller.state.machine === 'prod');
     expect(requestsOf('local')).toEqual(expect.arrayContaining(['open', 'export-chat', 'mark-moved']));
-    expect(requestsOf('m1').filter((type) => type !== 'visible')).toEqual(['import-chat', 'open']);
+    // Asked first what it already holds of the chat (every accepted bridge answers chat-have).
+    expect(requestsOf('m1').filter((type) => type !== 'visible')).toEqual(['chat-have', 'import-chat', 'open']);
     const mark = world.bridges.flatMap((bridge) => bridge.requests).find((request) => request.type === 'mark-moved');
     expect(mark).toMatchObject({ sessionId: 's1', movedTo: { machine: 'prod', sessionId: 's1', installationId: 'prod-install' } });
     // The chat there is resumed, with no folder of this computer's.
@@ -305,7 +307,6 @@ describe('the machine chip', () => {
 
   it('the machine it moved to does not answer: the copy here goes on, and one line says so', async () => {
     world.reach = false;
-    world.revision = 6;
     const controller = await startChat({ messages: 2, movedTo: { machine: 'prod', installationId: 'prod-install', sessionId: 'there-1', at: '' } });
     await until(() => requestsOf('local').includes('reclaim-moved'));
     await until(() => said(controller).length > 0);

@@ -41,13 +41,14 @@ vi.mock('../../src/chat-machine', () => {
 import { BridgeEndpoint } from '../../src/bridge-client';
 import { ClikCodeController } from '../../src/controller';
 import type { IdeEvent, IdeRequest } from '../../src/protocol';
+import { IDE_PROTOCOL } from '../../src/compat';
 
 /** A bridge that answers an `open` with the chat, and is told to leave or crash. */
 class FakeBridge extends BridgeEndpoint {
   readonly requests: IdeRequest[] = [];
   constructor() {
     super({ node: 'node', entry: '/fake/index.js', env: {}, nodeSource: 'path', entrySource: 'path' }, 'build-1');
-    setTimeout(() => this.receive({ type: 'ready', version: 't', protocol: 1, revision: 3, pid: 1 }), 0);
+    setTimeout(() => this.receive({ type: 'ready', version: 't', protocol: IDE_PROTOCOL.version, revision: IDE_PROTOCOL.revision, pid: 1 }), 0);
   }
   send(request: IdeRequest): boolean {
     this.requests.push(request);
