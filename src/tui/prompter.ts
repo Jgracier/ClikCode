@@ -182,10 +182,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** Where the history dump stands, by message (which a rewrite at another width keeps; row numbers it does not): the messages
    * before `message` are written, and `into` rows of the one at `message` (the answer that was still streaming). */
   dumpCursor: { session: string | undefined; message: number; into: number } | undefined;
-  /** Full-screen: the last size change was drawn whole the moment it arrived and no other came while the settle timer ran. */
-  resizeSettled = false;
-  /** A coalesced paint came due during a resize settle and was dropped; the settle repaints for it. */
-  paintDropped = false;
   usageLabel?: string;
   /** The owner of a conversation reached over SSH, shown in the status line. */
   remoteMachineName?: string;
@@ -285,7 +281,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   readonly onResize = (...args: Parameters<typeof onResize>): ReturnType<typeof onResize> => onResize.apply(this, args);
 
-  /** The repaint a resize needs, once the resize is over.
+  /** The settled frame a resize burst ends with (viewport.ts onResize): the burst's one clear, after its last size.
    *
    * A keyboard sliding away is not one SIGWINCH, it is a burst of them -- the
    * session log has 70x55, 70x63, 70x40, 70x32 inside four hundred
@@ -301,9 +297,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * a bare script whose repaint is a tenth the size. Everything that slows or
    * shrinks this write makes the gesture arrive.
    *
-   * So the burst is coalesced into the one repaint it always meant, drawn once
-   * the size has stopped changing. Short enough not to be seen, long enough to
-   * land after the client has finished. */
+   * So the burst blanks the screen once, in the frame drawn once the size has
+   * stopped changing (its first size is drawn at once, without a clear). Short
+   * enough not to be seen, long enough to land after the client has finished. */
   resizePaintTimer?: NodeJS.Timeout;
 
   /** Rows retired out of the viewport, kept so the conversation above the

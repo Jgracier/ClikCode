@@ -68,7 +68,9 @@ export function renderFrame(
 }
 
 export function flushFrame(this: TerminalHarnessPrompter): void {
-  if (!this.canPaint('picker') || inlineBlock.measuring) return;
+  // Inline, a resize settling or the cursor report it asked for: where the block is on the screen is not known yet, and the
+  // frame waits (kept whole, retired rows included) for the one drawn once it is.
+  if (!this.canPaint('picker') || inlineBlock.measuring || (inlineHistoryMode() && this.resizePaintTimer)) return;
   const pending = this.pendingLive;
   if (!pending) return;
   this.pendingLive = undefined;
@@ -279,9 +281,10 @@ export function flushAlternateFrame(
   if (!updates.length && !modes && !signals && park === this.lastPark && showCursor === this.cursorShown) return;
   // The preamble goes with rows, never alone: a clear with nothing after
   // it would only blank the screen, so a resize or repair waits for them.
-  // While a resize burst is still settling a frame (a keystroke's echo, a
-  // streaming row) is an ordinary diff; the clear and the mouse modes go with
-  // the one settled repaint, so the screen is blanked once per burst.
+  // While a resize burst is still settling a frame (its first size, a
+  // keystroke's echo, a streaming row) is an ordinary one; the clear and the
+  // mouse modes go with the one settled frame, so the screen is blanked once
+  // per burst (onResize).
   const redraw = this.resizePaintTimer && this.pendingRedraw === 'resize' ? undefined : this.pendingRedraw;
   const draw = updates.length ? `${redrawPreamble(redraw)}${updates.join('')}` : '';
   if (updates.length && redraw === this.pendingRedraw) this.pendingRedraw = undefined;
