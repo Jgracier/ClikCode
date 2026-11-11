@@ -3703,6 +3703,8 @@ def run(name, spec, entry, keep):
     for phrase in spec.get('same_row', []):
         rows, boarded = {}, False
         for i, t, text in complete_frames():
+            # After the end mark comes the harness's exit, whose scrollback dump moves every row.
+            if marked_end_at is not None and i >= marked_end_at: break
             if board_frame(text): boarded = True; continue
             if not boarded or 'Press Ctrl+C again' in text or '─ Stopped ─' in text or 'Stop held' in text: continue  # the harness's own shutdown
             for n, line in enumerate(text.split('\n')):
