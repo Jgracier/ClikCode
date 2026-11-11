@@ -14,6 +14,14 @@ export const WORKER = 'cc-runner';
 /** An error message in full (every line, whitespace folded), scrubbed of secrets; cut only at a length no real message reaches. */
 export const fullMessage = (text: string): string => scrubSecrets(text.trim().replace(/\s+/g, ' ')).slice(0, 4_000);
 
+/** A ClikDeploy tool's refusal, with the platform's error code when it sent one (`LEASE_REQUIRED`). */
+export class ClikDeployToolError extends Error {
+  constructor(message: string, readonly code?: string) { super(message); this.name = 'ClikDeployToolError'; }
+}
+
+/** A refusal for want of the work item's lease, by its code: the step is retried once after claiming it again. */
+export const needsLease = (error: unknown): boolean => error instanceof ClikDeployToolError && /LEASE/i.test(error.code ?? '');
+
 /** The `data` of a `clikdeploy tools run` answer, or the error it gave. */
 export function unwrapTool(text: string): unknown {
   const start = text.indexOf('{');
@@ -24,7 +32,7 @@ export function unwrapTool(text: string): unknown {
     const said = envelope.error?.message ?? envelope.message ?? (typeof envelope.data?.error === 'string' ? envelope.data.error : (envelope.data?.error as { message?: string } | undefined)?.message);
     const code = envelope.error?.code ? ` [${envelope.error.code}]` : '';
     const hint = envelope.error?.hint ? ` (${envelope.error.hint})` : '';
-    throw new Error(`${fullMessage(String(said ?? 'ClikDeploy refused'))}${code}${hint}`);
+    throw new ClikDeployToolError(`${fullMessage(String(said ?? 'ClikDeploy refused'))}${code}${hint}`, envelope.error?.code);
   }
   return envelope.data && 'data' in envelope.data ? envelope.data.data : envelope.data ?? envelope;
 }
@@ -49,7 +57,7 @@ export function liveClient(signal?: AbortSignal): DeployClient {
   };
   const withLease = async (id: string, run: () => Promise<unknown>): Promise<void> => {
     try { await run(); } catch (error) {
-      if (!/lease/i.test(error instanceof Error ? error.message : String(error))) throw error;
+      if (!needsLease(error)) throw error;
       await call('connector_work_claim', { id, worker: WORKER });
       await run();
     }

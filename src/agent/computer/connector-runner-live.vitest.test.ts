@@ -27,3 +27,13 @@ it('accepts terminal platform replies without next instead of retrying a release
  expect(result).toMatchObject({ id: 'systemeio', state: 'attention', next: { kind: 'none' } });
  expect(findOnboard({ id: 'working', state: 'needs-agent' })).toBeUndefined();
 });
+
+it('a refusal for the lease is known by its code, not by the word in its message', async () => {
+  const { ClikDeployToolError, needsLease } = await import('./connector-runner-live.js');
+  const refusal = (body: unknown): unknown => { try { unwrapTool(JSON.stringify(body)); } catch (error) { return error; } return undefined; };
+  const lease = refusal({ status: 'error', error: { message: 'Worker cc-runner does not hold it', code: 'LEASE_REQUIRED' } });
+  expect(lease).toBeInstanceOf(ClikDeployToolError);
+  expect(needsLease(lease)).toBe(true);
+  expect(needsLease(refusal({ status: 'error', error: { message: 'the lease of the domain ran out', code: 'VENDOR_DOMAIN' } }))).toBe(false);
+  expect(needsLease(new Error('lease'))).toBe(false);
+});

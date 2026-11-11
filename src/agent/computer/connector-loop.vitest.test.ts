@@ -253,3 +253,11 @@ describe('the loop itself', () => {
     expect(claimable(rows, new Set(['e']), now, 3)).toEqual(['a', 'd']);
   });
 });
+
+it('knows browser trouble by the error\'s name or code first, and by its words only for a plain error', async () => {
+  const { browserTrouble } = await import('./connector-loop.js');
+  expect(browserTrouble(Object.assign(new Error('Target closed'), { name: 'TargetClosedError' }))).toBe(true);
+  expect(browserTrouble(Object.assign(new Error('connect failed'), { code: 'ECONNREFUSED' }))).toBe(true);
+  expect(browserTrouble(new Error('browser has been closed'))).toBe(true);
+  expect(browserTrouble(new Error('the vendor rejected the email address'))).toBe(false);
+});

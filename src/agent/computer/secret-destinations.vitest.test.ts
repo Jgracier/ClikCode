@@ -2,7 +2,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import { addDestination, declaredAuthKind, declaredConnectionValues, destinationProblem, loadDestinations, normalizeSendTo, removeDestination, sendToDestinations, setSendRetryDelay, slotsOf } from './secret-destinations.js';
+import { addDestination, declaredAuthKind, declaredConnectionValues, destinationProblem, loadDestinations, normalizeSendTo, removeDestination, sendToDestinations, slotsOf } from './secret-destinations.js';
 import { forgetSecrets, registerSecret } from './secret-scrubber.js';
 import { forgetCliStdinSupport, versionAtLeast } from './cli-stdin-support.js';
 import { lockCredentialVault, saveNamedSecret } from './credential-vault.js';
@@ -209,7 +209,7 @@ const fakeConnect = async (connectOut: string, showOut: string): Promise<void> =
 };
 const pretty = (value: unknown): string => JSON.stringify(value, null, 2);
 const shown = (connection: unknown): string => pretty({ status: 'success', command: 'integrations show', data: { id: 'cloudmersive-ocr', connection, accounts: connection ? [connection] : [] } });
-const sendKey = (): ReturnType<typeof sendToDestinations> => sendToDestinations(dir, [{ to: 'clikdeploy-connection', with: { integration: 'cloudmersive-ocr' } }], VALUE);
+const sendKey = (): ReturnType<typeof sendToDestinations> => sendToDestinations(dir, [{ to: 'clikdeploy-connection', with: { integration: 'cloudmersive-ocr' } }], VALUE, undefined, { retryDelayMs: 0 });
 
 it('clikdeploy-connection says `connected` only when ClikDeploy lists an active connection, not from the command\'s output', async () => {
   // The real command prints a nested object with no message: it used to be reported as its last lines, `} } }`.
@@ -391,7 +391,6 @@ it('basic auth with the key as the username and a blank password, and one error 
 });
 
 it('clikdeploy-connection with an empty reply from the connect route is retried once, then reports status and a short excerpt instead of a JSON parse error', async () => {
-  setSendRetryDelay(0);
   await fake('clikdeploy', `case "$1" in tools) echo x >> "${dir}/calls"; echo 'Error: 502 Bad Gateway: Unexpected end of JSON input' >&2; exit 1;; integrations) cat "${dir}/show.out";; esac`);
   await writeFile(join(dir, 'show.out'), shown(null));
   const [result] = await sendKey();
@@ -403,8 +402,22 @@ it('clikdeploy-connection with an empty reply from the connect route is retried 
   expect((await readFile(join(dir, 'calls'), 'utf8')).trim().split('\n')).toHaveLength(2);
 });
 
+it('clikdeploy-connection reads the HTTP status from the CLI\'s JSON error: a 503 is retried once and said, a 400 is not retried', async () => {
+  await fake('clikdeploy', `case "$1" in tools) echo x >> "${dir}/calls"; echo '{"status":"error","message":"Request failed","httpStatus":'"$(cat "${dir}/status")"'}'; exit 1;; integrations) cat "${dir}/show.out";; esac`);
+  await writeFile(join(dir, 'show.out'), shown(null));
+  await writeFile(join(dir, 'status'), '503');
+  const [unavailable] = await sendKey();
+  expect(unavailable!.message).toContain('HTTP 503');
+  expect((await readFile(join(dir, 'calls'), 'utf8')).trim().split('\n')).toHaveLength(2);
+  await writeFile(join(dir, 'calls'), '');
+  await writeFile(join(dir, 'status'), '400');
+  const [refused] = await sendKey();
+  expect(refused!.ok).toBe(false);
+  expect(refused!.message).not.toContain('empty or non-JSON');
+  expect((await readFile(join(dir, 'calls'), 'utf8')).trim().split('\n')).toHaveLength(1);
+});
+
 it('clikdeploy-connection treats a silent failing connect call as a connection when ClikDeploy lists one', async () => {
-  setSendRetryDelay(0);
   await fake('clikdeploy', `case "$1" in tools) exit 1;; integrations) cat "${dir}/show.out";; esac`);
   await writeFile(join(dir, 'show.out'), shown({ id: 'c1', status: 'active' }));
   const [result] = await sendKey();

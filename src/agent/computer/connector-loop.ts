@@ -117,6 +117,13 @@ export interface LoopPorts {
 }
 export interface LoopSummary { vendors: number; done: Record<string, number>; walls: Record<string, number>; pauses: number; restarts: number; renewals: number }
 
+/** The browser (not the vendor) failed the task: by what the error is when it says -- Playwright's TargetClosedError, a refused or reset
+ * connection to the browser -- else by its words, for an error our own code wrapped in a plain one. */
+export function browserTrouble(error: unknown): boolean {
+  const { name, code } = (error ?? {}) as { name?: unknown; code?: unknown };
+  if (name === 'TargetClosedError' || code === 'ECONNREFUSED' || code === 'ECONNRESET' || code === 'EPIPE') return true;
+  return BROWSER_HANG.test(error instanceof Error ? error.message : String(error));
+}
 const BROWSER_HANG = /target (?:page, context or browser has been )?closed|browser has been closed|browser(?: process)? (?:disconnected|crashed)|connection closed|websocket|cdp|session closed|page crashed|has no open tab|econnrefused/i;
 
 export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<LoopSummary> {
@@ -176,7 +183,7 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
         // Close only this task’s tabs and resume once if time remains; other tasks share the browser host.
         if (raced !== 'timeout' && 'failed' in raced) {
           const message = raced.failed instanceof Error ? raced.failed.message : String(raced.failed);
-          if (BROWSER_HANG.test(message) && now() < ctx.deadline) {
+          if (browserTrouble(raced.failed) && now() < ctx.deadline) {
             ports.log(`${new Date(now()).toISOString()} id=${id} browser trouble (${scrubSecrets(message).slice(0, 80)}); closing this task’s tabs and resuming`);
             await ports.closeTab(id).catch(quiet('agent/computer/connector-loop'));
             raced = await Promise.race([run().catch((e: unknown) => ({ failed: e })), hard]);
@@ -188,7 +195,7 @@ export async function runLoop(ports: LoopPorts, limits: LoopLimits): Promise<Loo
           outcome = { id, status: 'budget', steps: 0, browserActions: 0, stage: '', summary: `hard time limit of ${Math.round((limits.maxMs + limits.graceMs) / 1000)}s: the browser did not answer; the task was cancelled and its own tabs were closed`, actions: [] };
         } else if ('failed' in raced) {
           const message = scrubSecrets(raced.failed instanceof Error ? raced.failed.message : String(raced.failed));
-          if (BROWSER_HANG.test(message)) await ports.closeTab(id).catch(quiet('agent/computer/connector-loop'));
+          if (browserTrouble(raced.failed)) await ports.closeTab(id).catch(quiet('agent/computer/connector-loop'));
           outcome = { id, status: 'error', steps: 0, browserActions: 0, stage: '', summary: message.slice(0, 300), actions: [] };
         } else outcome = raced;
       } finally { await ports.closeTab(id).catch(quiet('agent/computer/connector-loop')); }
