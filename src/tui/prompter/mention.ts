@@ -32,13 +32,11 @@ export function mentionKey(this: TerminalHarnessPrompter): Promise<'next' | 'pre
           return;
         }
         stop();
-        this.resumeInput = undefined;
         output.write(popReadModes());
         resolve(action);
-      });
+      }, () => { stop(); listen(); });
       output.write(enterInputModes());
     };
-    this.resumeInput = () => { stop(); listen(); };
     listen();
   });
 }

@@ -4,7 +4,7 @@ import { stdin as input, stdout as output } from 'node:process';
 import { eraseInlineBlock, inlineBlock, inlineHistoryMode } from '../inline.js';
 import { enterAlternateScreen, giveBackTerminal, historyDumpSequence, leavePage, pushShellTitle, restoreTerminal, terminalModes } from '../restore.js';
 import { notifySequence, progressSequence, shouldNotify, titleSequence, windowTitle } from '../terminal-signals.js';
-import { KEEP_STDIN_FLOWING } from '../input-decoder.js';
+import { KEEP_STDIN_FLOWING, retakeKeyboard } from '../input-decoder.js';
 import { popReadModes, sessionModesOff, sessionModesOn, setTerminalRawMode } from '../modes.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
 
@@ -89,7 +89,7 @@ export function suspendToShell(this: TerminalHarnessPrompter): void {
 export function onContinue(this: TerminalHarnessPrompter): void {
   if (this.closed) return;
   this.retakeScreen();
-  this.resumeInput?.();
+  retakeKeyboard();
   if (this.turn) this.paint(this.turn.draft, [], 0, '› ', this.turn.cursor);
   else this.repaint();
 }

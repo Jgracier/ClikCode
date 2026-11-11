@@ -263,11 +263,10 @@ export function startWaiting(
   }
   if (input.isTTY) {
     const listen = (): void => {
-      turn.stopInput = takeTerminalKeys(this.onWaitingKey);
+      turn.stopInput = takeTerminalKeys(this.onWaitingKey, () => { turn.stopInput?.(); listen(); });
       output.write(enterInputModes());
     };
     listen();
-    this.resumeInput = () => { turn.stopInput?.(); listen(); };
   }
   // With the draft it carried in (an early start's, or one typed under a
   // sign-in): painted empty, it vanished until the next keystroke or tick.
@@ -465,7 +464,6 @@ export function stopWaiting(this: TerminalHarnessPrompter, refresh = true, why?:
     if (turn.timer) clearTimeout(turn.timer);
     turn.timer = undefined;
     turn.stopInput?.();
-    this.resumeInput = undefined;
   }
   // Settled while the turn is still the current one: a "tell it instead"
   // draft goes back into its composer, handed off below.

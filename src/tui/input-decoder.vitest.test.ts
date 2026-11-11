@@ -1,6 +1,6 @@
 import { stdin, stdout } from 'node:process';
 import { describe, expect, it, vi } from 'vitest';
-import { KEEP_STDIN_FLOWING, TerminalInputDecoder, forgetSlowLink, askCursorRow, takeTerminalKeys, waitingEnterAction } from './input-decoder';
+import { KEEP_STDIN_FLOWING, TerminalInputDecoder, forgetSlowLink, askCursorRow, retakeKeyboard, takeTerminalKeys, waitingEnterAction } from './input-decoder';
 import { editWaitingComposer } from './composer-edit';
 import { terminalFacts } from './probe';
 
@@ -89,6 +89,35 @@ describe('keys typed between one reader and the next', () => {
     } finally {
       stdin.off('data', KEEP_STDIN_FLOWING);
       stdin.pause();
+    }
+  });
+});
+
+describe('the keyboard back after Ctrl+Z', () => {
+  it('is re-taken by the reader on top, never by one under it', () => {
+    const isTty = stdin.isTTY;
+    Object.assign(stdin, { isTTY: false });
+    stdin.on('data', KEEP_STDIN_FLOWING);
+    try {
+      const turnKeys: string[] = [];
+      const pickerKeys: string[] = [];
+      const turnRetake = vi.fn();
+      const stopTurn = takeTerminalKeys((key) => turnKeys.push(key), turnRetake);
+      // A picker opened over the turn, with nothing to redo after a suspend.
+      const stopPicker = takeTerminalKeys((key) => pickerKeys.push(key));
+      retakeKeyboard();
+      expect(turnRetake).not.toHaveBeenCalled();
+      stdin.emit('data', Buffer.from('j'));
+      expect(pickerKeys).toEqual(['j']);
+      expect(turnKeys).toEqual([]);
+      stopPicker();
+      retakeKeyboard();
+      expect(turnRetake).toHaveBeenCalledTimes(1);
+      stopTurn();
+    } finally {
+      stdin.off('data', KEEP_STDIN_FLOWING);
+      stdin.pause();
+      Object.assign(stdin, { isTTY: isTty });
     }
   });
 });

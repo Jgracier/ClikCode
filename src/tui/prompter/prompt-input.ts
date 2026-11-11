@@ -132,7 +132,6 @@ class PromptSession {
     this.stopInput();
     output.write(`${popReadModes()}\u001b[?25h`);
     this.p.cursorShown = true;
-    this.p.resumeInput = undefined;
     return true;
   }
 
@@ -177,7 +176,7 @@ class PromptSession {
   }
 
   private listen(): void {
-    this.stopInput = takeTerminalKeys((key) => { if (!this.finished) this.handleKey(key); });
+    this.stopInput = takeTerminalKeys((key) => { if (!this.finished) this.handleKey(key); }, () => { this.stopInput(); if (!this.finished) this.listen(); });
     output.write(enterInputModes());
   }
 
@@ -189,7 +188,6 @@ class PromptSession {
       return;
     }
     settings?.signal?.addEventListener('abort', () => this.interrupt(), { once: true });
-    p.resumeInput = () => { this.stopInput(); if (!this.finished) this.listen(); };
     // Typed ahead under a sign-in: before anything the terminal sends
     // next (listen() hands that on, on a later tick than this one). What
     // follows an Enter that sent this prompt is the next prompt's draft.
