@@ -18,10 +18,15 @@ import { leaveProvider, parkNativeThread } from '../../session/native-thread.js'
 import { aiHarnessSelect } from './harness.js';
 import { preferredAccountId } from './preferred-account.js';
 import { isClikCodeAgent, isGatewayService } from '../../session/route.js';
+import { resolveSessionModel } from '../../session/attach.js';
 
 /** A fresh conversation on exactly the setup of the one it came from: same
- * provider, same harness, same model, same effort, permissions and vendor
- * options. /new means "clear the conversation", not "start configuring".
+ * provider, same harness, effort, permissions and vendor options. /new means
+ * "clear the conversation", not "start configuring". The model is the
+ * provider's chosen one; with none chosen it is left unset for
+ * resolveNativeModel (on open, or at the first turn) -- that is where the
+ * user's own harness setting outranks the catalog default, and a default
+ * stamped here bypassed it.
  *
  * `nativeHarness` used to be left out, so an empty session would not look
  * deliberately configured to the old empty-session prune. That prune judges
@@ -39,9 +44,7 @@ export function newConversationSession(
     id, conversationId: id, route: source.route,
     accountId: isClikCodeAgent(source) ? null : source.accountId ?? null,
     provider: source.provider,
-    model: source.provider
-      ? state.providerSettings[source.provider]?.model ?? (source.nativeHarness ? localHarnessForCommand(source.nativeHarness)?.defaultModel ?? null : null)
-      : null,
+    model: source.provider ? state.providerSettings[source.provider]?.model ?? null : null,
     ...(!isClikCodeAgent(source) && source.nativeHarness ? { nativeHarness: source.nativeHarness } : {}),
     ...(source.harnessOptions ? { harnessOptions: { ...source.harnessOptions } } : {}),
     effort: source.effort ?? defaults.effort,
@@ -94,6 +97,7 @@ export async function newConversation(
   if (options.sameModel && current.model) created.model = current.model;
   state.sessions.push(created);
   await writeState(state);
+  await resolveSessionModel(created.id);
   return created.id;
 }
 

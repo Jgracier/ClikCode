@@ -17,10 +17,10 @@ const source = {
 } as unknown as HarnessSession;
 
 describe('/new', () => {
-  it('keeps the provider, harness and model -- it clears the conversation, not the setup', () => {
+  it('keeps the provider, harness and settings -- it clears the conversation, not the setup', () => {
     const fresh = newConversationSession(state, source);
     expect(fresh).toMatchObject({
-      provider: 'anthropic', nativeHarness: 'claude', model: 'opus', accountId: 'acct',
+      provider: 'anthropic', nativeHarness: 'claude', accountId: 'acct',
       effort: 'xhigh', permissionMode: 'bypass', workspace: '/work',
       harnessOptions: { verbose: true },
     });
@@ -37,5 +37,11 @@ describe('/new', () => {
     const fresh = newConversationSession(state, source);
     (fresh.harnessOptions as Record<string, unknown>).verbose = false;
     expect(source.harnessOptions).toEqual({ verbose: true });
+  });
+
+  it('stamps no catalog default: an unchosen model is left for resolveNativeModel, where the user\'s own harness setting wins', () => {
+    expect(newConversationSession(state, source).model).toBeNull();
+    const chosen = { ...state, providerSettings: { anthropic: { model: 'sonnet' } } } as unknown as HarnessState;
+    expect(newConversationSession(chosen, source).model).toBe('sonnet');
   });
 });
