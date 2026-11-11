@@ -1,14 +1,14 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, hostname, tmpdir } from 'node:os';
-import { machineName } from '../runtime/machine-folder';
+import { machineName } from '../runtime/machine-folder.js';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { afterTurnFailure, claimConversation, leaveConversation, openConversation, releaseConversationClaim } from './attach';
-import { readState } from './state/read';
-import { writeState } from './state/write';
-import { liveOpenConversations } from '../worker/registry';
-import type { HarnessSession, HarnessState } from './model';
+import { afterTurnFailure, claimConversation, leaveConversation, openConversation, releaseConversationClaim } from './attach.js';
+import { readState } from './state/read.js';
+import { writeState } from './state/write.js';
+import { liveOpenConversations } from '../worker/registry.js';
+import type { HarnessSession, HarnessState } from './model.js';
 
 const session = (overrides: Partial<HarnessSession> = {}): HarnessSession => ({
   id: 's1', conversationId: 's1', route: 'local', accountId: null, provider: 'vendor', model: 'm', effort: 'high',

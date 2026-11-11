@@ -3,28 +3,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { GATEWAY_LABEL, isAiHarnessRoute, isClikCodeAgent, isGatewayService } from './route';
-import { sessionPermissionModes, VALID_PERMISSION_MODES } from './options';
-import { providerPickerOptions } from '../tui/pickers/engine';
-import { sessionProviderLabel } from '../harness/protocol/labels';
-import { applyClikCodeLocalSessionPolicy, applyGatewaySessionPolicy } from '../commands/ai/sessions';
-import { newConversationSession } from '../commands/ai/conversations';
-import { resolveSlashCommand } from '../tui/slash/registry';
-import { compactConversation } from '../tui/slash/compact';
-import { capabilitiesText } from '../tui/slash/capabilities-text';
-import { contextUsageText } from '../tui/slash/cost';
-import { modelClientForSession } from '../agent/models/for-session';
-import { OpenAIModelClient } from '../agent/models/openai-client';
-import { runSessionTurn } from '../turn/session-turn';
-import { readState } from './state/read';
-import { writeState } from './state/write';
-import type { HarnessSession, HarnessState } from './model';
+import { GATEWAY_LABEL, isAiHarnessRoute, isClikCodeAgent, isGatewayService } from './route.js';
+import { sessionPermissionModes, VALID_PERMISSION_MODES } from './options.js';
+import { providerPickerOptions } from '../tui/pickers/engine.js';
+import { sessionProviderLabel } from '../harness/protocol/labels.js';
+import { applyClikCodeLocalSessionPolicy, applyGatewaySessionPolicy } from '../commands/ai/sessions.js';
+import { newConversationSession } from '../commands/ai/conversations.js';
+import { resolveSlashCommand } from '../tui/slash/registry.js';
+import { compactConversation } from '../tui/slash/compact.js';
+import { capabilitiesText } from '../tui/slash/capabilities-text.js';
+import { contextUsageText } from '../tui/slash/cost.js';
+import { modelClientForSession } from '../agent/models/for-session.js';
+import { OpenAIModelClient } from '../agent/models/openai-client.js';
+import { runSessionTurn } from '../turn/session-turn.js';
+import { readState } from './state/read.js';
+import { writeState } from './state/write.js';
+import type { HarnessSession, HarnessState } from './model.js';
 
 // The engine is mocked: these tests are about what the seam does with it,
 // and the real one would probe this machine and start a llama-server.
 const engine = vi.hoisted(() => ({ ensureLocalModel: vi.fn() }));
 vi.mock('../local-models/index', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../local-models/index')>(),
+  ...await importOriginal<typeof import('../local-models/index.js')>(),
   ensureLocalModel: engine.ensureLocalModel,
   releaseLocalModelsOnExit: () => undefined,
 }));

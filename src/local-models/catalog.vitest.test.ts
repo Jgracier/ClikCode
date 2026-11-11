@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { memoryBudget, MIN_CONTEXT } from './shared/index.js';
-import { catalogModels } from './catalog-source';
-import type { CatalogModel } from './catalog';
-import type { HardwareProfile } from './hardware';
-import { buildServerArgs, threadPlan, usesMmap } from './launch';
-import { selectRuntimeBuild, noRuntimeReason } from './runtime';
+import { catalogModels } from './catalog-source.js';
+import type { CatalogModel } from './catalog.js';
+import type { HardwareProfile } from './hardware.js';
+import { buildServerArgs, threadPlan, usesMmap } from './launch.js';
+import { selectRuntimeBuild, noRuntimeReason } from './runtime.js';
 
 const GIB = 1024 ** 3;
 const LOCAL_MODEL_CATALOG = catalogModels();

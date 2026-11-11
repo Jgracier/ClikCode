@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { coalescedListRefresh, watchConversationList, type ListWatch } from './list-watch';
+import { coalescedListRefresh, watchConversationList, type ListWatch } from './list-watch.js';
 
 let root: string | undefined;
 let watcher: ListWatch | undefined;

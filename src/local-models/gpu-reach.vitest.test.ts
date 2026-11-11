@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { matchDevice, parseListedDevices } from './gpu-reach';
+import { matchDevice, parseListedDevices } from './gpu-reach.js';
 
 const MIB = 1024 ** 2;
 

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ensureWorkersDirectory, liveOpenConversations, takeConversation, workersDirectory } from './registry';
+import { ensureWorkersDirectory, liveOpenConversations, takeConversation, workersDirectory } from './registry.js';
 
 const file = (id: string): string => join(workersDirectory(), `${createHash('sha256').update(id).digest('hex').slice(0, 20)}.open`);
 const record = (id: string, pid: number, host = hostname()): void => {

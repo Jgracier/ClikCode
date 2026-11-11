@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { HarnessSession } from '../session/model';
-import { diagnostic } from '../runtime/lifecycle-log';
+import type { HarnessSession } from '../session/model.js';
+import { diagnostic } from '../runtime/lifecycle-log.js';
 
-vi.mock('../runtime/lifecycle-log', async (importOriginal) => ({ ...(await importOriginal<typeof import('../runtime/lifecycle-log')>()), diagnostic: vi.fn() }));
+vi.mock('../runtime/lifecycle-log', async (importOriginal) => ({ ...(await importOriginal<typeof import('../runtime/lifecycle-log.js')>()), diagnostic: vi.fn() }));
 
 const mocks = vi.hoisted(() => ({ impl: { current: (async (_session: unknown): Promise<unknown> => undefined) }, calls: [] as unknown[], reads: 0 }));
 vi.mock('../agent/models/for-session.js', () => ({ modelClientForSession: (session: unknown) => { mocks.calls.push(session); return mocks.impl.current(session); } }));
@@ -10,8 +10,8 @@ vi.mock('../agent/models/for-session.js', () => ({ modelClientForSession: (sessi
 vi.mock('../session/state/read.js', () => ({ readState: async () => { mocks.reads += 1; throw new Error('the turn must not read the state file'); } }));
 vi.mock('../session/state/index-file.js', () => ({ loadIndex: async () => { mocks.reads += 1; throw new Error('the turn must not read the index'); } }));
 
-import { stepClientRefresher } from './agent-turn';
-import { LiveSettings, liveCallsForSwitch } from './live-settings';
+import { stepClientRefresher } from './agent-turn.js';
+import { LiveSettings, liveCallsForSwitch } from './live-settings.js';
 
 const base = { id: 's1', route: 'gateway', model: null, effort: 'auto', speed: undefined } as unknown as HarnessSession;
 

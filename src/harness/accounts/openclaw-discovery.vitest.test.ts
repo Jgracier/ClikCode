@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { openClawInventory } from './openclaw-discovery';
+import { openClawInventory } from './openclaw-discovery.js';
 
 describe('openclaw discovery', () => {
   it('lists runnable models and offers a sign-in for providers with none', () => {

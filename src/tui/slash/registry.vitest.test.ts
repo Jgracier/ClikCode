@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   SLASH_COMMANDS, SLASH_HANDLER_KEYS, SLASH_PALETTE_PINNED, parseSlashInput, resolveSlashCommand, routeSlashInput, slashControls,
   slashHelpText, slashPalette, suggestSlashCommand, unknownSlashMessage,
-} from './registry';
+} from './registry.js';
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessSession } from '../../session/model.js';
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { GGMLQuantizationType, type GGUFParseOutput } from '@huggingface/gguf';
-import { remoteModelFromHeader, TENSOR_LAYOUT } from './discover';
+import { remoteModelFromHeader, TENSOR_LAYOUT } from './discover.js';
 
 const repo = {
   id: 'example/model-GGUF', sha: 'a'.repeat(40), cardData: { license: 'apache-2.0' },

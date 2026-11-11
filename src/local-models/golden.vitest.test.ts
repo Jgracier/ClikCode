@@ -8,8 +8,8 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { catalogModels } from './catalog-source';
-import { chooseModel, memoryBudget, rankModels, type GpuInfo, type HardwareProfile } from './shared/index';
+import { catalogModels } from './catalog-source.js';
+import { chooseModel, memoryBudget, rankModels, type GpuInfo, type HardwareProfile } from './shared/index.js';
 
 const GIB = 1024 ** 3;
 const GOLDEN = join(dirname(fileURLToPath(import.meta.url)), 'golden.json');

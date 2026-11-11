@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { localHarnessForCommand } from '@clikcode/router/ai-local-harness';
-import { parseNativeActivityEventsFromValue } from '../harness/protocol/activity-events';
-import type { AiLocalHarnessDefinition } from '../harness/definition';
-import { addTurnUsage } from '../harness/protocol/turn-usage';
-import { createPendingWorkTracker } from './pending-work';
+import { parseNativeActivityEventsFromValue } from '../harness/protocol/activity-events.js';
+import type { AiLocalHarnessDefinition } from '../harness/definition.js';
+import { addTurnUsage } from '../harness/protocol/turn-usage.js';
+import { createPendingWorkTracker } from './pending-work.js';
 
 /** The first activity one stdout line describes. */
 const parseNativeActivityEvent = (harness: AiLocalHarnessDefinition, line: string) => parseNativeActivityEventsFromValue(harness, JSON.parse(line))[0];

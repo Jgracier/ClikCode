@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { sessionActivity, sessionIsLive } from './liveness';
-import type { HarnessSession } from './model';
+import { sessionActivity, sessionIsLive } from './liveness.js';
+import type { HarnessSession } from './model.js';
 
 const NOW = Date.parse('2026-09-22T18:00:00.000Z');
 const ago = (ms: number) => new Date(NOW - ms).toISOString();

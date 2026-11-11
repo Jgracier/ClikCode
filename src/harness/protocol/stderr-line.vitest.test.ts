@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { failureText, FAILURE_TEXT_LIMIT } from './stderr-line';
+import { failureText, FAILURE_TEXT_LIMIT } from './stderr-line.js';
 
 describe('a failed process or turn put to a person', () => {
   it("leaves out Codex's startup banners and keeps the error under them", () => {

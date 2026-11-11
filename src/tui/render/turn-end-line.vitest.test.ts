@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { turnEndLine } from './turn-end-line';
-import { finishPendingTurn } from '../../turn/checkpoint';
-import type { HarnessSession } from '../../session/model';
+import { turnEndLine } from './turn-end-line.js';
+import { finishPendingTurn } from '../../turn/checkpoint.js';
+import type { HarnessSession } from '../../session/model.js';
 
 const call = (id: string, extra: Record<string, unknown> = {}) => ({ event: { kind: 'tool-done' as const, label: 'Bash', id, ...extra }, responseOffset: 0 });
 

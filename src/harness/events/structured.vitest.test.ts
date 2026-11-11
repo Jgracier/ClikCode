@@ -6,10 +6,10 @@
  * happened to handle. Twelve of the twenty-four catalogued harnesses use this
  * transport, which made it the largest gap in what the UI could rely on. */
 import { describe, expect, it } from 'vitest';
-import { reportStructuredLine } from './structured';
-import { createStreamState } from './adapters';
-import type { HarnessTurnObserver } from './turn-observer';
-import type { AiLocalHarnessDefinition } from '../definition';
+import { reportStructuredLine } from './structured.js';
+import { createStreamState } from './adapters.js';
+import type { HarnessTurnObserver } from './turn-observer.js';
+import type { AiLocalHarnessDefinition } from '../definition.js';
 
 const harness = { command: 'claude', parser: 'claude-stream-json' } as unknown as AiLocalHarnessDefinition;
 

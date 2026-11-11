@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compactCount, dollars, formatDuration, formatElapsed, relativeTime, tildePath } from './format';
+import { compactCount, dollars, formatDuration, formatElapsed, relativeTime, tildePath } from './format.js';
 
 const S = 1000;
 const M = 60 * S;

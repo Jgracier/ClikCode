@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { Script } from 'node:vm';
-import { SUPERVISOR_SCRIPT } from './lifecycle';
+import { SUPERVISOR_SCRIPT } from './lifecycle.js';
 import {
   memoryStep, mergeFootprint, parseMeminfo, parseMemoryPressure, parseProcStatus, parseVmStatMac, parseVmstatSwapOut,
   type MemorySample, type ShrinkOption, type WatchDecision, type WatchInput, type WatchState,
-} from './memwatch';
+} from './memwatch.js';
 
 const GB = 1e9;
 const BUFFER = 5.76 * GB;

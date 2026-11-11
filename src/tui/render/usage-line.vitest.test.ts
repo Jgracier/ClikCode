@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatTurnUsage } from './usage-line';
+import { formatTurnUsage } from './usage-line.js';
 
 describe('the turn usage line', () => {
   it('shows a percentage-only context and a credit cost (Kiro)', () => {

@@ -4,7 +4,7 @@ import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { downloadVerified } from './download';
+import { downloadVerified } from './download.js';
 
 /** A file server that redirects /file to /blob (as Hugging Face redirects
  * to its CDN) and honours Range, counting what it sends. */

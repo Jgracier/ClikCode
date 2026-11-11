@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { AiHarnessAccount } from '../../harness/definition';
-import type { HarnessState } from '../../session/model';
-import { signedInAccountId } from './preferred-account';
+import type { AiHarnessAccount } from '../../harness/definition.js';
+import type { HarnessState } from '../../session/model.js';
+import { signedInAccountId } from './preferred-account.js';
 
 function account(id: string, extra: Partial<AiHarnessAccount> = {}): AiHarnessAccount {
   return { id, provider: 'antigravity', label: id, authKind: 'vendor-cli', models: [], status: 'ready', credentialRef: `native:${id}`, ...extra };

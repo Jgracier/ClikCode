@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { allLocalHarnesses, localHarnessCapabilityManifest } from '@clikcode/router/ai-local-harness';
-import { commonControlFor, OPTION_NORMALIZATION, optionIdsForControl, vendorFacingOptions } from './options';
+import { commonControlFor, OPTION_NORMALIZATION, optionIdsForControl, vendorFacingOptions } from './options.js';
 
 type Opt = { id: string; category?: string; description?: string };
 const harnesses = allLocalHarnesses() as unknown as Array<{ command: string; displayName: string }>;

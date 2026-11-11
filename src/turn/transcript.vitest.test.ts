@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { TurnTranscript, settledAnswerBlocks } from './transcript';
+import { TurnTranscript, settledAnswerBlocks } from './transcript.js';
 import type { MessageBlock } from '../harness/prompter.js';
 import { createStreamingBlockParser, splitIntoBlocks } from '../tui/render/markdown.js';
 import { renderMessageBlocks } from '../tui/render/message-blocks.js';

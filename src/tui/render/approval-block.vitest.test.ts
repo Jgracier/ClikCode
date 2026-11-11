@@ -5,8 +5,8 @@
  * an answer and does not is worse than no key at all.
  */
 import { describe, expect, it } from 'vitest';
-import { approvalBlockRows } from './approval-block';
-import { APPROVAL_GUARD_MS, approvalKeyAction } from './approval-keys';
+import { approvalBlockRows } from './approval-block.js';
+import { APPROVAL_GUARD_MS, approvalKeyAction } from './approval-keys.js';
 
 const past = APPROVAL_GUARD_MS + 1;
 const key = (k: string, hasRule = false) => approvalKeyAction(k, past, false, false, hasRule);

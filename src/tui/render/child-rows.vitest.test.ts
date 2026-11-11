@@ -2,8 +2,8 @@
  * never above text emitted before them (standard section 5). */
 import { describe, expect, it } from 'vitest';
 import type { HarnessActivityEvent } from '../../harness/prompter.js';
-import { TurnTranscript, type SettlingTool } from '../../turn/transcript';
-import { CHILDREN_SHOWN, LiveChildren } from './child-rows';
+import { TurnTranscript, type SettlingTool } from '../../turn/transcript.js';
+import { CHILDREN_SHOWN, LiveChildren } from './child-rows.js';
 
 const ev = (kind: HarnessActivityEvent['kind'], id: string, label = id): HarnessActivityEvent =>
   ({ kind, id, label, parentId: 'P' } as HarnessActivityEvent);

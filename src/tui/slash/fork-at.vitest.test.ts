@@ -5,22 +5,22 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { HarnessSession, TranscriptMessage } from '../../session/model';
-import { LEGACY_INTERRUPTED_TURN_REQUEST } from '../../turn/failover-prompt';
-import { forkPoint, forkPointOptions, messagesThrough } from './fork-at';
+import type { HarnessSession, TranscriptMessage } from '../../session/model.js';
+import { LEGACY_INTERRUPTED_TURN_REQUEST } from '../../turn/failover-prompt.js';
+import { forkPoint, forkPointOptions, messagesThrough } from './fork-at.js';
 
 vi.mock('../../runtime/lazy-bridge', async (importOriginal) => {
   const router = await import('@clikcode/router/ai-local-harness') as Record<string, unknown>;
   const original = await importOriginal<Record<string, unknown>>();
   return Object.fromEntries(Object.keys(original).map((name) => [name, router[name] ?? original[name]]));
 });
-const { aiSessionCommand } = await import('./handlers');
-const { readState } = await import('../../session/state/read');
-const { writeState } = await import('../../session/state/write');
-const { forceStoreSession, unforceStoreSession } = await import('../../session/ephemeral');
+const { aiSessionCommand } = await import('./handlers.js');
+const { readState } = await import('../../session/state/read.js');
+const { writeState } = await import('../../session/state/write.js');
+const { forceStoreSession, unforceStoreSession } = await import('../../session/ephemeral.js');
 const { readFile } = await import('node:fs/promises');
-const { parseChatLog } = await import('../../session/store/chat-log');
-const { sessionLogPath } = await import('../../session/store/paths');
+const { parseChatLog } = await import('../../session/store/chat-log.js');
+const { sessionLogPath } = await import('../../session/store/paths.js');
 
 const conversation: TranscriptMessage[] = [
   { role: 'user', content: 'first question' }, { role: 'assistant', content: 'first answer' },

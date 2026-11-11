@@ -3,8 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ensureLocalModel, holdRunningLocalModel, releaseLocalModelTurn } from './index';
-import { serverDir, startSupervisor } from './lifecycle';
+import { ensureLocalModel, holdRunningLocalModel, releaseLocalModelTurn } from './index.js';
+import { serverDir, startSupervisor } from './lifecycle.js';
 
 // A model already running (a supervisor over a stand-in server that answers /health), joined the way a turn worker and a window join it.
 const MODEL = 'qwen3.5-4b';

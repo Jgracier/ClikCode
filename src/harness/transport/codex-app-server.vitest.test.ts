@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { codexActivityForItem, codexErrorKind, codexPermissionSettings, codexSteerParams, completedAgentMessageUpdate } from './codex-app-server';
+import { codexActivityForItem, codexErrorKind, codexPermissionSettings, codexSteerParams, completedAgentMessageUpdate } from './codex-app-server.js';
 
 describe('Codex app-server protocol mapping', () => {
   it('distinguishes a spent subscription from a transient HTTP 429', () => {

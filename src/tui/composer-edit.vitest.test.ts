@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { editWaitingComposer } from './composer-edit';
+import { editWaitingComposer } from './composer-edit.js';
 
 const BACKSPACE = '\u007f';
 

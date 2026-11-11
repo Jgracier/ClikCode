@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { relaunchArgv } from './build-replace';
+import { relaunchArgv } from './build-replace.js';
 
 describe('relaunch argv', () => {
   it('reopens the same chat', () => {
@@ -17,7 +17,7 @@ describe('file locks before a re-exec', () => {
     const { mkdtemp, rm, stat } = await import('node:fs/promises');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
-    const { fileLocksIdle, withFileLock } = await import('../../session/store/locks');
+    const { fileLocksIdle, withFileLock } = await import('../../session/store/locks.js');
     const dir = await mkdtemp(join(tmpdir(), 'clikcode-lock-idle-'));
     const lock = join(dir, 'state.lock');
     try {
@@ -45,8 +45,8 @@ describe('file locks before a re-exec', () => {
     const { mkdtemp, rm } = await import('node:fs/promises');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
-    const { withFileLock } = await import('../../session/store/locks');
-    const { replaceCliWithNewBuild } = await import('./build-replace');
+    const { withFileLock } = await import('../../session/store/locks.js');
+    const { replaceCliWithNewBuild } = await import('./build-replace.js');
     const dir = await mkdtemp(join(tmpdir(), 'clikcode-lock-idle-'));
     try {
       let release!: () => void;

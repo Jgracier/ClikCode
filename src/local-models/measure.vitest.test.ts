@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { latestMeasurement, writeMeasurement } from './measure';
+import { latestMeasurement, writeMeasurement } from './measure.js';
 
 const previous = process.env.CLIKCODE_LOCAL_MODELS_HOME;
 beforeEach(() => { process.env.CLIKCODE_LOCAL_MODELS_HOME = mkdtempSync(join(tmpdir(), 'cc-measure-')); });

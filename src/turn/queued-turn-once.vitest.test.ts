@@ -8,16 +8,16 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { runSessionTurn } from './session-turn';
-import { enqueueSessionTurn } from './checkpoint';
-import { readState } from '../session/state/read';
-import { writeState } from '../session/state/write';
-import type { HarnessSession } from '../session/model';
+import { runSessionTurn } from './session-turn.js';
+import { enqueueSessionTurn } from './checkpoint.js';
+import { readState } from '../session/state/read.js';
+import { writeState } from '../session/state/write.js';
+import type { HarnessSession } from '../session/model.js';
 
 const engine = vi.hoisted(() => ({ ensureLocalModel: vi.fn() }));
 const disk = vi.hoisted(() => ({ failWrites: false }));
 vi.mock('../session/state/write', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../session/state/write')>();
+  const actual = await importOriginal<typeof import('../session/state/write.js')>();
   return {
     ...actual,
     writeState: async (state: never) => {
@@ -27,7 +27,7 @@ vi.mock('../session/state/write', async (importOriginal) => {
   };
 });
 vi.mock('../local-models/index', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../local-models/index')>(),
+  ...await importOriginal<typeof import('../local-models/index.js')>(),
   ensureLocalModel: engine.ensureLocalModel,
   releaseLocalModelsOnExit: () => undefined,
 }));

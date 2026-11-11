@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { HarnessSession } from './model';
-import { chatNamed, latestChat } from './options';
+import type { HarnessSession } from './model.js';
+import { chatNamed, latestChat } from './options.js';
 
 const chat = (id: string, fields: Partial<HarnessSession> = {}): HarnessSession => ({
   id, conversationId: id, route: 'local', accountId: null, provider: 'anthropic', model: null, effort: '', permissionMode: 'ask',

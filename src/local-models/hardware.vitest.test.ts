@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   isIntegratedAmd, parseAmdSmi, parseCpuinfoPhysicalCores, parseLinuxMeminfo, parseNvidiaSmi, parseRocmSmi, parseVmStat, parseWindowsProbe,
-} from './hardware';
+} from './hardware.js';
 
 const GIB = 1024 ** 3;
 

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import type { PickerOption } from '../harness/prompter';
-import { boardCapacity, boardHint, boardKey, boardRows, boardSessionsSettled, boardSettlePending, boardStartRow, type BoardState } from './conversation-board';
+import type { PickerOption } from '../harness/prompter.js';
+import { boardCapacity, boardHint, boardKey, boardRows, boardSessionsSettled, boardSettlePending, boardStartRow, type BoardState } from './conversation-board.js';
 
 const UP = '\u001b[A';
 const DOWN = '\u001b[B';

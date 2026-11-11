@@ -2,7 +2,7 @@ import { mkdtemp, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { hermesSessionStore } from './hermes-store';
+import { hermesSessionStore } from './hermes-store.js';
 
 /** node:sqlite needs --experimental-sqlite on this package's Node 22 floor,
  *  and the store is written to decline rather than throw when it is missing --

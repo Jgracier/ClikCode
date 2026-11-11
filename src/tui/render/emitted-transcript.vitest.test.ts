@@ -7,7 +7,7 @@
  * so neither could be taken back.
  */
 import { describe, expect, it } from 'vitest';
-import { EmittedTranscript } from './emitted-transcript';
+import { EmittedTranscript } from './emitted-transcript.js';
 
 const user = (content: string) => ({ role: 'user', content });
 const assistant = (content: string) => ({ role: 'assistant', content });

@@ -2,14 +2,14 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { HarnessSession, HarnessState } from './model';
+import type { HarnessSession, HarnessState } from './model.js';
 
 // The engine that loads a model on this computer: a turn's preparation must never wait on it.
 const engine = vi.hoisted(() => ({ ensureLocalModel: vi.fn(async () => { throw new Error('the model was loaded before the turn'); }) }));
-vi.mock('../local-models/index', async (original) => ({ ...await original<typeof import('../local-models/index')>(), ensureLocalModel: engine.ensureLocalModel }));
+vi.mock('../local-models/index', async (original) => ({ ...await original<typeof import('../local-models/index.js')>(), ensureLocalModel: engine.ensureLocalModel }));
 
-const { prepareTurn } = await import('./attach');
-const { writeState } = await import('./state/write');
+const { prepareTurn } = await import('./attach.js');
+const { writeState } = await import('./state/write.js');
 
 const local: HarnessSession = {
   id: 's1', conversationId: 's1', route: 'clikcode-local', accountId: null, provider: 'clikcode-local', model: 'qwen3.8-27b', effort: 'auto',

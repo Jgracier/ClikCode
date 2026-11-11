@@ -2,7 +2,7 @@ import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { isRemoteTarget, mcpConfigEntry, removeMcpConfigEntry, writeMcpConfigEntry } from './mcp-registry';
+import { isRemoteTarget, mcpConfigEntry, removeMcpConfigEntry, writeMcpConfigEntry } from './mcp-registry.js';
 
 const read = async (path: string) => JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
 const scratch = async (): Promise<string> => join(await mkdtemp(join(tmpdir(), 'mcp-registry-')), 'mcp.json');

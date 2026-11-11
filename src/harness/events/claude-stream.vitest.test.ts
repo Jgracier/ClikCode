@@ -5,11 +5,11 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { localHarnessForCommand } from '@clikcode/router/ai-local-harness';
-import { reportStructuredLine } from './structured';
-import { createStreamState } from './adapters';
-import type { HarnessTurnObserver } from './turn-observer';
-import type { HarnessActivityEvent } from '../prompter';
-import type { TurnUsage } from '../protocol/turn-usage';
+import { reportStructuredLine } from './structured.js';
+import { createStreamState } from './adapters.js';
+import type { HarnessTurnObserver } from './turn-observer.js';
+import type { HarnessActivityEvent } from '../prompter.js';
+import type { TurnUsage } from '../protocol/turn-usage.js';
 
 const fixture = readFileSync(new URL('../transport/native/fixtures/claude-partial-messages.jsonl', import.meta.url), 'utf8')
   .split('\n').filter(Boolean);

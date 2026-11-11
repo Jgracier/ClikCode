@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { allLocalHarnesses } from '@clikcode/router/ai-local-harness';
-import { MODEL_OWNER_NAMES, modelLabel } from './model-label';
+import { MODEL_OWNER_NAMES, modelLabel } from './model-label.js';
 
 describe('modelLabel: a prefix that repeats the provider is dropped', () => {
   it('drops the harness own prefix in either spelling', () => {

@@ -6,10 +6,10 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import type Conf from 'conf';
-import { writeState } from '../session/state/write';
-import type { HarnessSession, HarnessState } from '../session/model';
-import { machineName } from '../runtime/machine-folder';
-import { runSessionTurn } from './session-turn';
+import { writeState } from '../session/state/write.js';
+import type { HarnessSession, HarnessState } from '../session/model.js';
+import { machineName } from '../runtime/machine-folder.js';
+import { runSessionTurn } from './session-turn.js';
 
 const previousHome = process.env.CLIKCODE_HOME;
 beforeEach(() => { process.env.CLIKCODE_HOME = mkdtempSync(join(tmpdir(), 'cc-missing-folder-')); });

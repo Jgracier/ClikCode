@@ -5,7 +5,7 @@
  * is worth pinning.
  */
 import { describe, expect, it } from 'vitest';
-import { APPROVAL_MIN_ROWS, fitFooterForApproval, frameRowBudget } from './frame-budget';
+import { APPROVAL_MIN_ROWS, fitFooterForApproval, frameRowBudget } from './frame-budget.js';
 
 const budget = (over: Partial<Parameters<typeof frameRowBudget>[0]> = {}) =>
   frameRowBudget({ targetHeight: 40, waiting: false, requestedPaletteCapacity: 0, ...over });

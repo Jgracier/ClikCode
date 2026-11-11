@@ -34,7 +34,7 @@ vi.mock('../runtime/lazy-bridge', () => ({
 import {
   applyDefaultSetting, conversationOption, optionForControl, optionForHarness,
   parseHarnessOption, setSessionHarnessOption, VALID_EFFORTS, VALID_PERMISSION_MODES,
-} from './options';
+} from './options.js';
 import type { AiHarnessOptionDefinition, AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessDefaultSettings, HarnessSession } from './model.js';
 import type { ConversationRow } from './conversation-rows.js';

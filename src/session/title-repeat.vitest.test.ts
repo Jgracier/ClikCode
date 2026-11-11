@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { stripRepeatedTitles } from './title';
+import { stripRepeatedTitles } from './title.js';
 
 describe('a title repeated by a later step', () => {
   it('is removed wherever a step began with it, and nothing else is', () => {
