@@ -76,6 +76,10 @@ async function main(): Promise<void> {
   chmodSync(join(fakeBin, 'grok'), 0o755);
   chmodSync(join(fakeBin, 'xdg-open'), 0o755);
   process.env.FAKE_LOGIN_HOLD = join(root, 'hold-login');
+  // A ClikCode on a build replaced under it leaves once it has been quiet
+  // (src/worker/build-retire.ts): every 15 s it looks, and it waits for 30 s
+  // of quiet, longer than the test that rewrites the entry waits for it.
+  const retire = { CLIKCODE_WORKER_BUILD_WATCH_MS: '1000', CLIKCODE_WORKER_RETIRE_QUIET_MS: '3000' };
   const local = process.env.CLIKCODE_TEST_VSCODE ?? '/usr/share/code/code';
   // On the X display the runner was given (xvfb-run), never a Wayland
   // session the machine happens to have: the window would open on the
@@ -88,7 +92,7 @@ async function main(): Promise<void> {
     ...(existsSync(local) ? { vscodeExecutablePath: local } : {}),
     extensionDevelopmentPath,
     extensionTestsPath,
-    extensionTestsEnv: { CLIKCODE_IT_BUNDLED: process.env.CLIKCODE_IT_BUNDLED ?? '', CLIKCODE_IT_VENDOR: process.env.CLIKCODE_IT_VENDOR ?? '', CLIKCODE_IT_GREP: process.env.CLIKCODE_IT_GREP ?? '', CLIKCODE_IT_LOG: process.env.CLIKCODE_IT_LOG ?? join(root, 'extension.log'), CLIKCODE_IT_SUITE: suite, CLIKCODE_IT_THEME: process.env.CLIKCODE_IT_THEME ?? 'dark', CLIKCODE_HOME: home, XDG_DATA_HOME: join(root, 'vendor-data'), XDG_STATE_HOME: join(root, 'vendor-state'), XDG_CONFIG_HOME: join(root, 'vendor-config'), XDG_CACHE_HOME: join(root, 'vendor-cache'), CLIKCODE_IT_WORKSPACE: workspace, CLIKCODE_IT_OPENED: join(root, 'opened'), CLIKCODE_IT_HOLD: join(root, 'hold-login'), CLIKCODE_IT_FAKE_BIN: fakeBin, FAKE_LOGIN_HOLD: process.env.FAKE_LOGIN_HOLD ?? '', CLIKCODE_IT_SCREENSHOT_DIR: process.env.CLIKCODE_IT_SCREENSHOT_DIR ?? '' },
+    extensionTestsEnv: { ...retire, CLIKCODE_IT_BUNDLED: process.env.CLIKCODE_IT_BUNDLED ?? '', CLIKCODE_IT_VENDOR: process.env.CLIKCODE_IT_VENDOR ?? '', CLIKCODE_IT_GREP: process.env.CLIKCODE_IT_GREP ?? '', CLIKCODE_IT_LOG: process.env.CLIKCODE_IT_LOG ?? join(root, 'extension.log'), CLIKCODE_IT_SUITE: suite, CLIKCODE_IT_THEME: process.env.CLIKCODE_IT_THEME ?? 'dark', CLIKCODE_HOME: home, XDG_DATA_HOME: join(root, 'vendor-data'), XDG_STATE_HOME: join(root, 'vendor-state'), XDG_CONFIG_HOME: join(root, 'vendor-config'), XDG_CACHE_HOME: join(root, 'vendor-cache'), CLIKCODE_IT_WORKSPACE: workspace, CLIKCODE_IT_OPENED: join(root, 'opened'), CLIKCODE_IT_HOLD: join(root, 'hold-login'), CLIKCODE_IT_FAKE_BIN: fakeBin, FAKE_LOGIN_HOLD: process.env.FAKE_LOGIN_HOLD ?? '', CLIKCODE_IT_SCREENSHOT_DIR: process.env.CLIKCODE_IT_SCREENSHOT_DIR ?? '' },
     launchArgs: [
       workspace,
       '--user-data-dir', join(root, 'user-data'),
