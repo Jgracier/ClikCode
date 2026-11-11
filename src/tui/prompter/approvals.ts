@@ -6,6 +6,7 @@ import { ApprovalPreview, ApprovalRequest } from '../render/approval-block.js';
 import { APPROVAL_GUARD_MS, approvalKeyAction } from '../render/approval-keys.js';
 import { questionKeyAction, questionRows, questionValues, startsTyping, type QuestionPromptState } from '../render/question-block.js';
 import type { HarnessQuestionRequest, HarnessQuestionResult } from '../../harness/events/question.js';
+import { approvalDecision, type ApprovalAnswer } from '../../harness/prompter.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
 import { WaitingTurn } from './state.js';
 
@@ -13,13 +14,13 @@ import { WaitingTurn } from './state.js';
  * back to what the turn was doing. */
 export function answerApproval(
   this: TerminalHarnessPrompter,
-  pending: NonNullable<TerminalHarnessPrompter['pendingApproval']>, answer: boolean | 'always', settled?: Parameters<typeof decisionRow>[0],
+  pending: NonNullable<TerminalHarnessPrompter['pendingApproval']>, answer: ApprovalAnswer, settled?: Parameters<typeof decisionRow>[0],
 ): void {
-  lifecycle('window.approval.answer', { answer: answer === 'always' ? 'always' : answer ? 'allow' : 'deny' });
+  lifecycle('window.approval.answer', { answer: typeof answer === 'object' ? 'told' : answer === 'always' ? 'always' : answer ? 'allow' : 'deny' });
   this.pendingApproval = undefined;
   // The decision stays on the page where it was made: the block is gone,
   // and a call that was denied or approved leaves no other trace.
-  this.settleDecision(settled ?? (answer
+  this.settleDecision(settled ?? (approvalDecision(answer)
     ? { kind: 'approved', label: pending.title, ...(answer === 'always' ? { always: true } : {}) }
     : { kind: 'denied', label: pending.title }), pending.callId);
   this.approvalsAnswered += 1;
@@ -43,10 +44,10 @@ export function restoreTellingDraft(this: TerminalHarnessPrompter): void {
   }
 }
 
-export function approval(this: TerminalHarnessPrompter, title: string, detail?: string, preview?: ApprovalPreview, rule?: string, signal?: AbortSignal, callId?: string): Promise<boolean | 'always'> {
+export function approval(this: TerminalHarnessPrompter, title: string, detail?: string, preview?: ApprovalPreview, rule?: string, signal?: AbortSignal, callId?: string): Promise<ApprovalAnswer> {
   lifecycle('window.approval.ask', { title: title.slice(0, 80) });
   if (signal?.aborted) return Promise.resolve(false);
-  return new Promise<boolean | 'always'>((resolveApproval) => {
+  return new Promise<ApprovalAnswer>((resolveApproval) => {
     if (!this.pendingApproval) this.approvalRestoreLabel = isApprovalWaitPhase(this.turn?.label) ? '' : this.turn?.label ?? '';
     const request: ApprovalRequest = {
       title, ...(detail === undefined ? {} : { detail }), ...(preview === undefined ? {} : { preview }),
@@ -62,7 +63,8 @@ export function approval(this: TerminalHarnessPrompter, title: string, detail?: 
 /** Closes a prompt nobody answered: on screen it is answered `no` (which
  * brings up the next); queued it is simply dropped. */
 export function withdrawApproval(this: TerminalHarnessPrompter, request: ApprovalRequest): void {
-  if (this.pendingApproval === request) {
+  // On screen it is a copy (presentNextApproval adds its guard state): matched by its resolver.
+  if (this.pendingApproval?.resolve === request.resolve) {
     const asking = request.question ? { ...this.pendingApproval, callId: request.callId ?? this.openQuestionCall() } : this.pendingApproval;
     this.answerApproval(asking, false, { kind: 'declined', label: request.title });
     return;
@@ -281,10 +283,9 @@ export function approvalKey(
     if (key === '\r') {
       const text = turn.draft.trim();
       if (!text) return;
-      this.answerApproval(pending, false, { kind: 'told', text });
-      // After the denial is on its way: the answer's own send is queued
-      // behind this resolve, and the steer must not overtake it.
-      setImmediate(() => this.submitWaiting(text, false));
+      // The text goes with the answer: whoever sends the denial sends it
+      // after, so the steer cannot overtake it.
+      this.answerApproval(pending, { told: text }, { kind: 'told', text });
       return;
     }
     if (key === '\u001b' || key === '\u0003') {

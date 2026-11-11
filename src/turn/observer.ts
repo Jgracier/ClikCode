@@ -14,6 +14,7 @@ import type { BackgroundWork } from '../harness/protocol/background-agents.js';
 import type { HarnessSession } from '../session/model.js';
 import type { PlanEntry } from '../tui/render/plan-block.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
+import type { ApprovalAnswer } from '../harness/prompter.js';
 import type { LiveTurnInputResult, TakeBackOutcome } from './live-input.js';
 import type { TurnMarkJournal } from './turn-marks.js';
 
@@ -23,7 +24,7 @@ export interface TurnObserver {
   activity(message: string): void;
   activityEvent(event: HarnessActivityEvent): void;
   phase(message: string): void;
-  approval(title: string, detail?: string, preview?: ApprovalPreview, rule?: string, signal?: AbortSignal, callId?: string): Promise<boolean | 'always'>;
+  approval(title: string, detail?: string, preview?: ApprovalPreview, rule?: string, signal?: AbortSignal, callId?: string): Promise<ApprovalAnswer>;
   /** A vendor's question (options, several questions, free text). Absent where
    * the surface cannot ask: the turn then cancels the question with a notice. */
   askQuestions?(request: import('../harness/events/question.js').HarnessQuestionRequest, signal?: AbortSignal): Promise<import('../harness/events/question.js').HarnessQuestionResult>;

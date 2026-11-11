@@ -125,6 +125,17 @@ describe('a harness question in the terminal', () => {
     } finally { rl.close(); }
   });
 
+  it('closes an approval already on screen when its signal aborts', async () => {
+    const { rl } = open();
+    try {
+      const closing = new AbortController();
+      const asked = rl.approval('Run make?', undefined, undefined, undefined, closing.signal);
+      closing.abort();
+      await expect(asked).resolves.toBe(false);
+      expect((rl as unknown as { pendingApproval?: unknown }).pendingApproval).toBeUndefined();
+    } finally { rl.close(); }
+  });
+
   it('is cancelled when the turn ends', async () => {
     const { rl } = open();
     try {

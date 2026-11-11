@@ -18,6 +18,7 @@ import { diagnostic, lifecycle, quiet } from '../runtime/lifecycle-log.js';
 import { randomUUID } from 'node:crypto';
 import { commandDuringTurn } from '../tui/slash/queue.js';
 import type { TerminalHarnessPrompter } from '../tui/prompter.js';
+import { answerWorkerApproval } from './approval-answer.js';
 import { WorkerClient } from './client.js';
 import { workersDirectory } from './registry.js';
 import { watchConversationList } from '../session/list-watch.js';
@@ -405,11 +406,8 @@ async function driveWorkerTurn(
           case 'approval-request': {
             const closing = new AbortController();
             openPrompts.set(event.id, closing);
-            void rl.approval(event.title, event.detail, event.preview, event.rule, closing.signal, event.callId).then((approved) => {
-              openPrompts.delete(event.id);
-              // Decided here: the row is drawn by this window, not again from a snapshot.
-              if (!closing.signal.aborted) { rl.markDrawn?.(`outcome:${event.id}`); client.send({ type: 'approval-response', id: event.id, approved }); }
-            });
+            void answerWorkerApproval(rl, event, closing.signal, (approved) => client.send({ type: 'approval-response', id: event.id, approved }))
+              .finally(() => openPrompts.delete(event.id));
             return;
           }
           case 'question-request': {

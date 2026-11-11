@@ -23,6 +23,7 @@ import { isTranscriptActivity, type WorkerEvent } from '../worker/protocol.js';
 import { backgroundWorkOf } from '../harness/protocol/background-agents.js';
 import type { PaletteEntry } from '../tui/command-palette.js';
 import type { TerminalHarnessPrompter } from '../tui/prompter.js';
+import { answerWorkerApproval } from '../worker/approval-answer.js';
 import { interactiveSessionPicker } from '../tui/pickers/session.js';
 import { BOARD_LINE, BOARD_OWNS } from '../commands/ai/interactive/board.js';
 import { remoteTerminalScript } from './install.js';
@@ -548,11 +549,8 @@ export async function runRemoteChat(
           else if (worker.type === 'approval-request') {
             const closing = new AbortController();
             openPrompts.set(worker.id, closing);
-            void terminal.approval(worker.title, worker.detail, worker.preview, worker.rule, closing.signal, worker.callId).then((approved) => {
-              openPrompts.delete(worker.id);
-              // Decided here: the row is drawn by this window, not again from a snapshot.
-              if (!closing.signal.aborted) { terminal.markDrawn?.(`outcome:${worker.id}`); bridge.post({ type: 'approval-response', id: worker.id, approved }); }
-            });
+            void answerWorkerApproval(terminal, worker, closing.signal, (approved) => bridge.post({ type: 'approval-response', id: worker.id, approved }))
+              .finally(() => openPrompts.delete(worker.id));
           } else if (worker.type === 'question-request') {
             const closing = new AbortController();
             openPrompts.set(worker.id, closing);
