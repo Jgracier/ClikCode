@@ -155,7 +155,7 @@ describe('a chat on another machine whose bridge leaves for a newer build', () =
     // A connection that is lost, not retired: said, then connected to again, the same chat resumed.
     bridges[1]!.drop();
     await until(() => bridges.length === 3 && prompts.length === 4);
-    expect(said.join('\n')).toContain('Connection to devbox lost: Connection to devbox closed');
+    expect(said.join('\n')).toContain('Connection to devbox lost: The connection to devbox ended');
     expect(bridges[2]!.requests[0]).toMatchObject({ type: 'open', mode: 'resume', sessionId: 'c1' });
     prompts[3]!.answer('/exit');
     expect(await outcome).toBe('returned');
@@ -210,7 +210,7 @@ describe('a chat on another machine\'s slash menu', () => {
     expect(bridges[0]!.requests.find((request) => request.type === 'send')).toMatchObject({ text: '/model sonnet' });
     expect(queries()).toBe(2);
     bridges[0]!.drop();
-    expect(await outcome).toBe('Connection to devbox closed');
+    expect(await outcome).toBe('The connection to devbox ended');
   }, 20_000);
 
   it('/machine is offered even by a machine that does not list it; /resume is Left\'s', () => {
@@ -280,7 +280,7 @@ describe('a message typed in a chat on another machine', () => {
     // It became a turn: nothing taken off the screen.
     expect(named(calls, 'submitted').map((call) => call[1])).not.toContain(undefined);
     bridge.drop();
-    expect(await outcome).toBe('Connection to devbox closed');
+    expect(await outcome).toBe('The connection to devbox ended');
   }, 20_000);
 
   it('stopped or refused before it ran: off the screen again, and back in the composer', async () => {
@@ -298,7 +298,7 @@ describe('a message typed in a chat on another machine', () => {
     expect(order).toEqual(expect.arrayContaining(['submitted never ran', 'turnStarting', 'restoreDraft never ran', 'submitted', 'stopWaiting']));
     expect(order.indexOf('submitted')).toBeGreaterThan(order.indexOf('restoreDraft never ran'));
     bridge.drop();
-    expect(await outcome).toBe('Connection to devbox closed');
+    expect(await outcome).toBe('The connection to devbox ended');
   }, 20_000);
 
   it('a command is not drawn early: it may never be a message', async () => {
@@ -308,7 +308,7 @@ describe('a message typed in a chat on another machine', () => {
     await until(() => prompts.length === 2);
     expect(named(calls, 'turnStarting')).toEqual([]);
     bridge.drop();
-    expect(await outcome).toBe('Connection to devbox closed');
+    expect(await outcome).toBe('The connection to devbox ended');
   }, 20_000);
 
   it('joins a turn already running as "thinking", and the vendor\'s own background work as what it is', async () => {
@@ -320,7 +320,7 @@ describe('a message typed in a chat on another machine', () => {
       await until(() => named(calls, 'startWaiting').length === 1);
       const label = named(calls, 'startWaiting')[0]![1];
       bridge.drop();
-      expect(await outcome).toBe('Connection to devbox closed');
+      expect(await outcome).toBe('The connection to devbox ended');
       return label;
     };
     // An ordinary live turn: the model is working.
@@ -348,7 +348,7 @@ describe('a message typed in a chat on another machine', () => {
     await until(() => named(calls, 'activityEvent').length === 1);
     expect(named(calls, 'activityEvent')[0]![2]).toMatchObject({ index: 3 });
     bridge.drop();
-    expect(await outcome).toBe('Connection to devbox closed');
+    expect(await outcome).toBe('The connection to devbox ended');
   }, 20_000);
 
   it('an approval answered in another window closes here, drawn as that window\'s decision, and nothing is sent back', async () => {
@@ -366,7 +366,7 @@ describe('a message typed in a chat on another machine', () => {
     expect((named(calls, 'joinMark')[0]![1] as { id: string }).id).toBe('outcome:ask-1');
     expect(bridge.requests.some((request) => (request as { type: string }).type === 'approval-response')).toBe(false);
     bridge.drop();
-    expect(await outcome).toBe('Connection to devbox closed');
+    expect(await outcome).toBe('The connection to devbox ended');
   }, 20_000);
 
   it('draws a stop as the local window does: stopping, settled, and a turn another window stopped ends as stopped', async () => {
@@ -382,7 +382,7 @@ describe('a message typed in a chat on another machine', () => {
     expect(named(calls, 'turnStopping')[0]![1]).toBe(true);
     expect(named(calls, 'stopSettled')).toHaveLength(1);
     bridge.drop();
-    expect(await outcome).toBe('Connection to devbox closed');
+    expect(await outcome).toBe('The connection to devbox ended');
   }, 20_000);
 
   it('a message typed while the turn runs is sent under the window\'s own id and shown as what the machine says became of it', async () => {
@@ -752,7 +752,7 @@ describe('a message typed in a chat on another machine', () => {
     expect(renders.at(-1)!.messages.map((message) => message.content)).toEqual(['a', 'b', 'c', 'd']);
     expect(renders.at(-1)!.name).toBe('Renamed');
     bridge.drop();
-    expect(await outcome).toBe('Connection to devbox closed');
+    expect(await outcome).toBe('The connection to devbox ended');
   }, 20_000);
 });
 
